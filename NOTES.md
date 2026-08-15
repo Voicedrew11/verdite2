@@ -54,8 +54,10 @@ are mapped to the runtime's HLE — 63 patches. A steady-state second of
 
 — one frame off the ring, one buffer flip, one ordering table, repeating.
 
-Not yet done: the movie has no sound (XA audio is routed but unverified), only
-the first area has actually been played, and `END.EXE` has never run.
+Two areas have been played, half an hour in one sitting, across an area-module
+swap and a memory-card save, and the audio sounds right. Not yet done: the loop
+runs at about twice the console's rate (see "Frame pacing"), a save has never
+been loaded back, and `END.EXE` has never run — see "Next steps".
 
 ## Layout
 
@@ -598,9 +600,25 @@ $RC --generate-function-file -linear-sweep -disc disc/KingsField2.cue \
     -out config/funcmaps/fdat02.json
 ```
 
-Still open: the archive has 70 entries and only these nine are code — the group
-pattern breaks down after entry 23, so more module families may be hiding in the
-later entries, and `END.EXE`'s equivalents have not been looked for at all.
+**Nine is all of them, and the disc has no other code.** Every one of `FDAT.T`'s
+70 entries was tested for the shape that identifies a module — a table of
+absolute pointers into itself — and exactly the nine above match, at 16 words out
+of 16. The group pattern does not break down after entry 23 as previously
+suspected; entries 24–29 and 33–46 are simply **empty** (zero length), and 30/31/32
+is one more group of the same 66 KB / 28 KB / 6 KB shape. From 47 on the entries
+are large asset blobs with no pointer table.
+
+The same test run over every other file on the disc — `RTIM.T`, `RTMD.T`, `MO.T`,
+`VAB.T`, `ITEM.T`, `TALK.T`, `FN.D`, `OP.D`, `OPU.D` — finds **zero** module
+tables at any sector boundary. `FDAT.T` is the only file that carries code.
+
+The other static source of `unmapped call` is closed too. Scanning all three
+executables for words that point into their own text at a plausible function
+start (preceded by `jr ra` + delay slot, or opening `addiu sp,sp,-N`) and are not
+already a known start returns **0 in all three** — so every indirect dispatch
+target that exists statically is mapped, on top of every `jal` target. What can
+still surface is an address computed at run time, which nothing static can
+predict.
 
 ## The SDK naming problem
 
@@ -768,21 +786,90 @@ delivery is load-bearing for far more than frames. Second, the phantom is
 readable: when the game hangs, the last pad state in the log is the button that
 was held at the last drawn frame, which points straight at the input path.
 
+## Frame pacing: the port is pinned to the fastest band
+
+King's Field's game speed **is** its frame rate — everything advances a fixed
+amount per loop iteration — and the loop always waits an integer number of
+vblanks, so the achievable rates are quantised to 60/n. That quantisation is the
+"banding" the game is known for: on NTSC hardware a frame costs 2, 3 or 4 vblanks
+depending on scene load, so the game runs at 30, 20 or 15 fps and *plays* at
+correspondingly different speeds. (PAL bands off 50 Hz instead — 25, 16.7, 12.5 —
+which is where its ~17 fps ceiling comes from: more consistent, slower, and the
+reason the PAL release feels different.)
+
+Counting `VSync(0)` calls between consecutive `DrawOTag`s over a 30-minute
+session, 49,570 rendered frames, is a direct measurement of which band each frame
+landed in:
+
+| vblanks charged | rate | frames | share |
+|---|---|---|---|
+| 1 | 60 fps | 6,960 | 14.0% |
+| 2 | 30 fps | 42,460 | 85.7% |
+| 3 | 20 fps | 30 | 0.1% |
+| 4+ | ≤15 fps | ~120 | 0.2% |
+
+**The port sits in the top band essentially always.** In an area it is 87% at
+30 fps and 13% at 60 — the intro and title screens are ~99% at 60, because there
+the loop only asks for one vblank. Nothing here is a throttle doing its job;
+`DrawOTag` returns immediately on an HLE GPU and the MIPS is native code, so no
+frame ever costs enough to fall into a slower band the way a real PlayStation
+would under load.
+
+So the earlier framing of "twice as fast as the console" was too blunt. Precisely:
+**in light scenes the port matches hardware's best case exactly, in heavy scenes
+it is up to 2× faster because it never bands down, and for one frame in eight it
+runs at 60 fps — twice the NTSC ceiling, which is faster than the game can go on
+any console.** That last group is the part that is unambiguously wrong.
+
+That reading makes the work much smaller than it first looked, because the
+reference speed is not some variable hardware average — it is **the top band,
+30 fps**, which is both the design ceiling and where the port already spends 87%
+of its frames.
+
+**Step one is a floor, not a scale factor.** Enforce a minimum of two vblanks
+(33.3 ms) per rendered frame and the port is a constant 30 fps: exactly NTSC's
+fastest band, never above it, and without the banding that made the original's
+speed wander. That is one change in `FrameClock`, no game knowledge, no constants
+touched — and it is strictly more consistent than hardware ever was.
+
+**Step two, if 60 fps rendering is wanted**, is then a clean factor of two rather
+than four: run at one vblank per frame, halve every per-tick movement delta, and
+*double* the thresholds of per-tick counters (spell duration, torch burn,
+i-frames). The asymmetry is the trap — dividing a counter's step instead of
+multiplying its threshold makes it expire early. The cheaper variant, which gets
+most of the feel in a first-person game, is to run the player's movement and view
+at 60 with halved deltas and gate the world update to every other tick: smooth
+camera, enemy timing untouched, and a 2:1 gate is far safer than 4:1.
+
+Full decoupling — logic at 30, rendering interpolated at 60 — still needs
+decomp-level knowledge of which state is positional, and is still not worth it.
+
+Either way the prerequisite is the same: know which functions advance what. The
+main loop is `game_entry → func_80013634 → func_8001369C`; profiling it by
+sampling `dotnet-stack` a few hundred times while the game idles in an area gives
+the per-frame call structure with hit counts, which is the input to any of this.
+
 ## Next steps
 
-1. **Cross an area boundary.** Only `fdat02` has run. The swap from one area
-   module to the next is the untested half of the overlay mechanism, and it is
-   where a wrong `base` or a missed entry point in the other eight maps will
-   show up — as `unmapped call`, or as a module running against the wrong map.
-2. **Look for the module families the group-of-three pattern misses.** It holds
-   for `FDAT.T` entries 0–23 and breaks down after; entry 32 is already a second
-   family at its own base. The rest of the archive has not been classified, and
-   `END.EXE` has not been checked for the same trick at all.
-3. Check the movie's audio. XA sectors are routed to `XaRouter` and the runtime
-   has an XA thread, but nothing has been verified by ear.
-4. Correct linear-sweep damage as it surfaces. Coverage is only ~56% of `open`
-   and ~86% of `game`, so expect more gaps; `scripts/add_call_targets.py`
-   re-derives starts from the code and can be re-run at any time.
+1. ~~**Cross an area boundary.**~~ Done — a 30-minute session loaded `fdat05`
+   over `fdat02` with no `unmapped call`, no VRAM collision and no exception, so
+   the swap mechanism and the derived base hold for a second module. Saving works
+   too: three files written to `carda.sav`. **Loading one back has not been
+   tried**, and that is a different path — title screen into an area that is not
+   the starting one.
+2. ~~**Look for the module families the group-of-three pattern misses.**~~ Done —
+   all 70 `FDAT.T` entries and every other file on the disc were tested for the
+   module signature; the nine declared modules are the only code, and every
+   static indirect-dispatch target is already a known function start. See
+   "GAME.EXE loads code". **The statically findable `unmapped call` sources are
+   exhausted**; what remains can only come from an address computed at run time.
+3. ~~Check the audio.~~ Verified by ear during play — it sounds right. Note the
+   two paths are independent: in-game music and effects come from the SPU, while
+   the intro and ending movies are **XA** sectors routed to `XaRouter` on the
+   runtime's own thread. Good SPU output says nothing about XA, so if the movies
+   have not been listened to specifically, that half is still open.
+4. **Fix the frame pacing** — see below; the loop runs at roughly twice the
+   console's rate, which is the one known deviation from the original.
 5. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
