@@ -162,9 +162,11 @@ def main() -> int:
             size_dec, size_hex = str(entry["size"]), f"0x{entry['size']:X}"
         print(f"{entry['lba']:>8}  {size_dec:>10}  {size_hex:>12}  {entry['path']}")
 
-    print("\nNote: overlay entries in config/kf2.json take 'lba' as a decimal")
-    print("number and 'size' as a hex string -- use the SIZE(hex) column, and")
-    print("pass the same hex form to -size when running a linear sweep.")
+    print("\nNote: the JSON config and the CLI disagree on number bases.")
+    print("  config/kf2.json : 'lba', 'size', 'skip', 'offset' are decimal JSON")
+    print("                    numbers; 'base' is a hex STRING (\"0x80011000\").")
+    print("  --generate-function-file : -size, -skip, -offset are HEX; -lba is decimal.")
+    print("Use the SIZE column for the config and SIZE(hex) for the CLI.")
     return 0
 
 

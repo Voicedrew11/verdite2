@@ -15,12 +15,21 @@
     </ItemGroup>
 
     <!--
-      The recompiler emits C# into generated/. That directory is gitignored and does
-      not exist until the first successful recompile, so glob it rather than listing
-      files, and tolerate its absence.
+      The recompiler emits C# into generated/, and hand-written function
+      replacements live in patches/. Both sit under the project root, so the
+      SDK's default item globs pick them up automatically. Adding an explicit
+      Compile Include for them causes NETSDK1022 (duplicate Compile items).
+
+      That same default glob is why tools/ must be removed explicitly: the
+      RecompOne checkout is nested inside this project directory, so without
+      this the build would compile RecompOne's own sources and the AssemblyInfo
+      files under its obj/, producing CS0579 duplicate-attribute errors.
+      RecompOne.Runtime is consumed through the ProjectReference above instead.
     -->
     <ItemGroup>
-        <Compile Include="generated/**/*.cs" />
+        <Compile Remove="tools/**" />
+        <EmbeddedResource Remove="tools/**" />
+        <None Remove="tools/**" />
     </ItemGroup>
 
 </Project>
