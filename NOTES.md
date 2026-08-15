@@ -21,10 +21,20 @@ that is a *different game* and every address and function map here is wrong for 
 
 ## Status
 
-Working end to end: the port builds and launches, initialises the GPU, mounts the
-disc, executes the recompiled boot stub and transitions into the `open` overlay,
-and stays running. **How much actually renders is not yet verified** — that is
-the next thing to check.
+Boots into the game's own code and runs PSY-Q startup. Nothing renders yet, and
+the cause is understood: **no SDK function is HLE'd**, because the recompiler
+matches them by name and a linear sweep produces no names. See "The SDK naming
+problem" below — that is the main remaining work.
+
+Boot currently reaches:
+
+```
+open_entry -> func_80011AE0 (main) -> func_8001AD90 -> func_8001C044 -> func_8001BD08
+```
+
+and spins in `func_8001BD08`, a CD state machine polling a status word at
+`0x8003E92C` for 2 or 5. It never advances because the PSY-Q CD library is
+running as raw recompiled MIPS instead of being routed to the runtime's `LibCd`.
 
 ## Layout
 
@@ -101,11 +111,21 @@ strips the header itself.)
 
 ## Workflow
 
-### 1. Build the recompiler
+### 1. Set up the tools
 
 ```bash
-dotnet build tools/RecompOne/RecompOne.Recompiler -c Release
+bash scripts/setup_tools.sh
 ```
+
+Clones RecompOne, applies everything in `patches/recompone/`, and builds the
+recompiler. Idempotent, so it is also the way to re-apply local fixes after
+pulling upstream.
+
+**`patches/recompone/0001-bios-load-return-1.patch` is required to boot.** The
+runtime's BIOS `Load` (A(42h)) returned the header pointer, but the real BIOS
+returns 1 on success. King's Field's boot stub compares the result against 1
+exactly and retries forever otherwise, so unpatched it spins in the loader
+(~12,900 `Load` calls in 30 seconds) and never reaches `Exec`.
 
 ### 2. Generate function maps
 
@@ -173,12 +193,64 @@ Two escape hatches, both per-function and both overlay-aware:
 
 Hand-written replacements live in `patches/`.
 
+## The SDK naming problem (main open issue)
+
+`SdkPatches.cs` routes PSY-Q library calls to the runtime's HLE implementations
+by matching **exact function names** — `VSync`, `DrawOTag`, `DrawSync`,
+`PutDrawEnv`, `PutDispEnv`, `CdInit`, `CdRead`, `PadInitDirect` and so on. A
+linear sweep names everything `func_800xxxxx`, so nothing matches and the
+recompiler reports:
+
+```
+[Recompiler] it was applied 0 reimplementations
+```
+
+Consequences, in order of severity:
+
+1. **Nothing can ever be presented.** `Runtime.PresentFrame()` has exactly one
+   caller in the entire runtime: the HLE `LibEtc.VSync`. If `VSync` is not
+   reimplemented, no frame is ever pushed to the window regardless of what the
+   game draws.
+2. **Interrupts are never delivered.** `DispatchIrq` is called from
+   `PresentFrame`, so anything waiting on an IRQ-updated counter waits forever.
+   This is circular with (1).
+3. **CD loading stalls**, which is where boot currently stops.
+
+Raw GPU register writes are *not* a problem — `PSMemory.cs:163-164` traps
+`0x1F801810`/`0x1F801814` and forwards to the emulated GPU, and DMA is emulated
+too. So drawing works at the hardware level; presentation and the CD/pad
+libraries are what need HLE.
+
+Upstream's guidance for this case is manual: "you need to map each SDK address to
+its runtime counterpart yourself, using `patches` with a `replace` that targets
+the runtime function." So each identified function gets a `patches[]` entry, e.g.
+
+```json
+{ "overlay": "open", "address": "0x8001BD08",
+  "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" }
+```
+
+Identifying them is ordinary PS1 RE work. Options, roughly in order of payoff:
+
+- **PSY-Q signature matching.** The libraries are statically linked and identical
+  across games, so hash/FLIRT-style matching against the official SDK objects
+  identifies them wholesale. This is what `ghidra_psx_ldr` and hash-based
+  matchers do, and it is the only approach that scales.
+- **Behavioural fingerprinting.** Each library function touches characteristic
+  hardware: `DrawOTag` programs DMA channel 2 in linked-list mode, `DrawSync`
+  polls GPUSTAT, the CD functions hit `0x1F801800`-`0x1F801803`. Note the
+  generated C# builds MMIO addresses at runtime from a `0x1F800000` base rather
+  than emitting literals, so grep for the base plus offset, not the full address.
+- **Follow the call graph from the stall.** `func_8001BD08` and its helpers
+  (`func_8001B5AC`, `func_8001B5CC`, `func_8001B664`) are the CD library.
+
 ## Next steps
 
-1. Confirm what the `open` overlay actually renders, and whether it reaches the
-   title screen and hands off to `game`.
-2. Correct linear-sweep damage as it surfaces — misidentified data-as-code is the
-   expected failure mode, especially around the jump tables.
+1. Identify the PSY-Q SDK functions and add `patches[]` entries for them, VSync
+   first — without it nothing can ever appear on screen.
+2. Correct linear-sweep damage as it surfaces. Coverage is only ~56% of `open`
+   and ~86% of `game`, so expect more gaps; `scripts/add_call_targets.py`
+   re-derives starts from the code and can be re-run at any time.
 3. Work out the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,

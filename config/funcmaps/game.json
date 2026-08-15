@@ -2636,6 +2636,11 @@
       "size": 8
     },
     {
+      "address": "0x8004A628",
+      "name": "func_8004A628",
+      "size": 16
+    },
+    {
       "address": "0x8004A638",
       "name": "func_8004A638",
       "size": 244

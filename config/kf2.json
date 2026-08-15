@@ -28,26 +28,40 @@
   // header, so each needs "skip": 2048 to step over the 0x800-byte header.
   // "base" is the header's text address, read with scripts/extract_file.py.
   "overlays": [
+    // Each overlay's entry point comes from its PS-X EXE header and must be
+    // declared explicitly: the recompiler auto-adds the entry point only for the
+    // main executable, and the linear sweep did not land a function start on any
+    // of these three. Without them, BIOS Exec jumps to an address the dispatcher
+    // has no function for and the run dies with "unmapped call".
     {
       "name": "open",
       "file": "OPEN.EXE",
       "base": "0x80011000",
       "skip": 2048,
-      "funcMap": "funcmaps/open.json"
+      "funcMap": "funcmaps/open.json",
+      "functions": [
+        { "address": "0x80013DB8", "name": "open_entry" }
+      ]
     },
     {
       "name": "game",
       "file": "GAME.EXE",
       "base": "0x80011000",
       "skip": 2048,
-      "funcMap": "funcmaps/game.json"
+      "funcMap": "funcmaps/game.json",
+      "functions": [
+        { "address": "0x8004A628", "name": "game_entry" }
+      ]
     },
     {
       "name": "end",
       "file": "END.EXE",
       "base": "0x80011000",
       "skip": 2048,
-      "funcMap": "funcmaps/end.json"
+      "funcMap": "funcmaps/end.json",
+      "functions": [
+        { "address": "0x80011CB4", "name": "end_entry" }
+      ]
     }
   ],
 

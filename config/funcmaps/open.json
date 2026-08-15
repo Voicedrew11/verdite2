@@ -3,7 +3,12 @@
     {
       "address": "0x80011AD4",
       "name": "func_80011AD4",
-      "size": 1260
+      "size": 12
+    },
+    {
+      "address": "0x80011AE0",
+      "name": "func_80011AE0",
+      "size": 1248
     },
     {
       "address": "0x80011FC0",
@@ -94,6 +99,11 @@
       "address": "0x80013DB0",
       "name": "func_80013DB0",
       "size": 8
+    },
+    {
+      "address": "0x80013DB8",
+      "name": "func_80013DB8",
+      "size": 16
     },
     {
       "address": "0x80013DC8",

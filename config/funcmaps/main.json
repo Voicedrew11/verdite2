@@ -11,6 +11,11 @@
       "size": 8
     },
     {
+      "address": "0x80010128",
+      "name": "func_80010128",
+      "size": 188
+    },
+    {
       "address": "0x800101E4",
       "name": "func_800101E4",
       "size": 16
