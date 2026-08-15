@@ -15,6 +15,7 @@ tools/RecompOne/
 # Written by the runtime at play time: memory card saves and host settings.
 *.sav
 settings.json
+interface.ini
 
 # Optional runtime asset-replacement packs
 packs/

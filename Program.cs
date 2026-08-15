@@ -139,6 +139,20 @@ if (!string.IsNullOrWhiteSpace(autopad))
     }) { IsBackground = true, Name = "kf2-autopad" }.Start();
 }
 
+// Frame pacing. The game's speed is its frame rate and the port never bands down
+// off the fastest one, so a rendered frame is held to a minimum number of
+// vblanks; see patches/FramePacing.cs for the measurement behind the default.
+//
+//     KF2_MINVBLANKS=2     30 fps, NTSC's top band (default); 1 disables the floor
+//     KF2_FRAMESTATS=10    report fps and the vblank-per-frame histogram every 10 s
+if (int.TryParse(Environment.GetEnvironmentVariable("KF2_MINVBLANKS"), out var minVBlanks))
+    Kf2.FramePacing.MinVBlanks = minVBlanks;
+if (double.TryParse(Environment.GetEnvironmentVariable("KF2_FRAMESTATS"), out var statsSeconds))
+    Kf2.FramePacing.StatsSeconds = statsSeconds;
+Kf2.FramePacing.Install();
+Console.WriteLine($"[KF2] frame floor: {Kf2.FramePacing.MinVBlanks} vblank(s) " +
+                  $"({(Kf2.FramePacing.MinVBlanks <= 1 ? "off" : $"{60.0 / Kf2.FramePacing.MinVBlanks:F1} fps")})");
+
 var memory = new PSMemory();
 Entry.Run(memory, args.Length > 0 ? args[0] : null);
 return 0;

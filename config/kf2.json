@@ -386,6 +386,19 @@
     { "overlay": "end", "address": "0x80013EF8",
       "target": "RecompOne.Runtime.Sdk.LibGpu.PutDispEnv", "mode": "replace" },
 
+    // ---- frame pacing -------------------------------------------------------
+    //
+    // DrawOTag is the frame boundary -- past it the frame's drawing is done --
+    // so it is where a minimum frame duration can be enforced. `post` runs after
+    // the replacement above, so the ordering table is already walked and only the
+    // wait is added. See patches/FramePacing.cs for why the floor is two vblanks.
+    { "overlay": "open", "address": "0x80016078",
+      "target": "Kf2.FramePacing.AfterDrawOTag", "mode": "post" },
+    { "overlay": "game", "address": "0x80060818",
+      "target": "Kf2.FramePacing.AfterDrawOTag", "mode": "post" },
+    { "overlay": "end", "address": "0x80013D80",
+      "target": "Kf2.FramePacing.AfterDrawOTag", "mode": "post" },
+
     // ---- libcdstream --------------------------------------------------------
     //
     // The intro and ending are STR movies streamed off the disc, and this is the

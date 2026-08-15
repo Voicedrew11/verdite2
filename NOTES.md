@@ -41,7 +41,7 @@ polled from `VSync`**, so the menu's wait-for-button-release loop — which draw
 nothing and never vsyncs — could never see the release.
 
 `libetc` (VSync), `libcd`, `libgpu`, `libcdstream` and libapi's `DMACallback`
-are mapped to the runtime's HLE — 63 patches. A steady-state second of
+are mapped to the runtime's HLE — 66 patches. A steady-state second of
 `KF2_LOG=sdk` looks like this, and is what "working" should look like:
 
 ```
@@ -55,9 +55,10 @@ are mapped to the runtime's HLE — 63 patches. A steady-state second of
 — one frame off the ring, one buffer flip, one ordering table, repeating.
 
 Two areas have been played, half an hour in one sitting, across an area-module
-swap and a memory-card save, and the audio sounds right. Not yet done: the loop
-runs at about twice the console's rate (see "Frame pacing"), a save has never
-been loaded back, and `END.EXE` has never run — see "Next steps".
+swap and a memory-card save, and the audio sounds right. **The frame rate is
+pinned to 30 fps**, NTSC's fastest band — the port used to burst past it (see
+"Frame pacing"). Not yet done: a save has never been loaded back, and `END.EXE`
+has never run — see "Next steps".
 
 ## Layout
 
@@ -829,8 +830,104 @@ of its frames.
 **Step one is a floor, not a scale factor.** Enforce a minimum of two vblanks
 (33.3 ms) per rendered frame and the port is a constant 30 fps: exactly NTSC's
 fastest band, never above it, and without the banding that made the original's
-speed wander. That is one change in `FrameClock`, no game knowledge, no constants
-touched — and it is strictly more consistent than hardware ever was.
+speed wander. No game knowledge, no constants touched — and it is strictly more
+consistent than hardware ever was. **Done**; see below.
+
+### The floor, as built
+
+`patches/FramePacing.cs`, wired in as a `post` hook on `DrawOTag` in all three
+overlays. Three things about the shape of it are worth keeping:
+
+**It is not a change to `FrameClock`.** The runtime's throttle paces per *`VSync`
+call*, and from inside it a one-vblank frame is indistinguishable from the first
+half of a two-vblank one — the information it needs (where the frame ends)
+arrives at `DrawOTag`, which `FrameClock` never sees. The floor therefore keeps
+its own deadline and lets the two clocks coexist: for a frame the floor extends,
+`FrameClock`'s deadline simply falls behind real time and its wait collapses to
+nothing (it resyncs on the `wait < -100` path every few frames), so the floor
+ends up the sole pacer for exactly the frames that need one, and a no-op for the
+frames that were already two vblanks long.
+
+**The recompiler's `mode: "post"` means this needed no RecompOne patch at all.**
+`ApplyPatches` allows a `post` hook on a function that a `replace` already
+covers, and `FunctionEmmiter` emits the replacement followed by the hooks:
+
+```csharp
+public static void func_80060818(CpuContext c, IMemory m)
+{
+    RecompOne.Runtime.Sdk.LibGpu.DrawOTag(c, m);
+    Kf2.FramePacing.AfterDrawOTag(c, m);
+}
+```
+
+So game-specific behaviour that hangs off an SDK call belongs in `patches/*.cs`
+with a `post` entry in the config, **not** in `patches/recompone/`. Nothing to
+re-apply, nothing to conflict with `0003`, which already owns those lines of
+`LibGpu.cs`. Note the namespace trap: generated code is `Recompiled.KingsField2`,
+a *class* named after the project, which shadows any namespace called
+`KingsField2` — hence `Kf2`.
+
+**The vblank defines the frame boundary, not the `DrawOTag` call.** A second
+ordering table with no `VSync` between it and the first belongs to the frame
+already in flight; charging the floor per call would halve the rate of any screen
+that draws more than one OT. King's Field draws exactly one (no zero-vblank gap
+appears in any measurement), but the guard is free — the hook counts vblanks off
+a `VSyncEvent` listener and returns early when the count is zero.
+
+The deadline is absolute rather than `now + 33.3`, so a frame that overruns is
+paid for out of the next one instead of the rate drifting down by the accumulated
+jitter, with one frame of debt as the limit: past that the game has *stopped*
+drawing (a disc read, a module swap) rather than run late, and the cadence
+restarts instead of running flat out to catch up.
+
+Two env vars, both read in `Program.cs`:
+
+```bash
+KF2_MINVBLANKS=2    # 30 fps, the default; 1 disables the floor
+KF2_FRAMESTATS=15   # report fps + the vblank-per-frame histogram every 15 s
+```
+
+`KF2_FRAMESTATS` is the measurement above, made cheap — it is the same count of
+`VSync(0)`s between `DrawOTag`s that produced the band table, without the
+gigabytes of `KF2_LOG=sdk`. Use it to check any pacing change; bands are per
+report window, so consecutive lines separate the title screen from an area.
+
+### What the floor actually changed — and a correction
+
+Measuring with `KF2_MINVBLANKS=1` (floor off) makes the deviation look different
+from the aggregate above, and more specific. In an area the port is **already at
+exactly 30 fps, asking for two vblanks on every single frame**, for minutes at a
+time — then it flips into a burst where it asks for one:
+
+```
+floor off                                        floor on
+30.0 fps  450 frames  2:100.0%                   30.0 fps  300 frames  2:100.0%
+28.3 fps  424 frames  1:8.5%  2:91.5%            30.0 fps  300 frames  2:100.0%
+30.0 fps  450 frames  2:100.0%                   30.0 fps  301 frames  2:100.0%
+39.1 fps  587 frames  1:83.8% 2:14.0%  ...       30.0 fps  301 frames  2:100.0%
+51.6 fps  775 frames  1:87.7% 2:11.0%  ...       30.0 fps  300 frames  2:100.0%
+30.0 fps  451 frames  2:100.0%                   30.0 fps  300 frames  2:100.0%
+```
+
+So the one-vblank frames are **not spread evenly through play** the way "14% of
+frames" implies — they cluster, and while a cluster lasts the whole game runs at
+about 1.7× speed for half a minute at a stretch. That is a worse bug than a
+uniform overspeed and an easier one to feel: the world lurches, then settles.
+
+The floor removes them. Over 3,200 frames of the floor-on run **no report window
+came out above 30.0 fps**, and eight consecutive in-area windows were 30.0 fps at
+`2:100.0%` exactly. Windows *below* 30 stay below it — the title screen and the
+intro are CD-bound at 7–15 fps with the floor on or off, which is right: a floor
+is a ceiling on speed, not a promise of one.
+
+Two things the measurement says that are worth keeping in mind for step two:
+
+- **The game asks for two vblanks on its own almost all the time.** Whatever
+  decides that count is not measuring host time; it is the game's own pacing
+  logic, and the port's job is only to stop it going faster than the top band.
+- **The band histogram is unchanged by the floor** in steady state (`2:100%` in
+  both columns), which is the evidence that the floor is not fighting the game's
+  loop or the runtime's `FrameClock` — it just absorbs the slack.
 
 **Step two, if 60 fps rendering is wanted**, is then a clean factor of two rather
 than four: run at one vblank per frame, halve every per-tick movement delta, and
@@ -868,8 +965,11 @@ the per-frame call structure with hit counts, which is the input to any of this.
    the intro and ending movies are **XA** sectors routed to `XaRouter` on the
    runtime's own thread. Good SPU output says nothing about XA, so if the movies
    have not been listened to specifically, that half is still open.
-4. **Fix the frame pacing** — see below; the loop runs at roughly twice the
-   console's rate, which is the one known deviation from the original.
+4. ~~**Fix the frame pacing.**~~ Step one done — `patches/FramePacing.cs` holds
+   every rendered frame to two vblanks, so the port is a constant 30 fps and no
+   longer bursts past NTSC's top band. See "Frame pacing"; the measurement is
+   `KF2_FRAMESTATS`. **Step two (60 fps rendering) has not been started**, and
+   needs the per-frame call structure first.
 5. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
