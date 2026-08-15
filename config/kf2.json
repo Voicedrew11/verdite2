@@ -152,6 +152,67 @@
     { "overlay": "end", "address": "0x80017810",
       "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" },
 
+    // CdReady(mode, result) and CdGetSector(addr, nword) -- the polled read path.
+    //
+    // Once the intro is over, OPEN.EXE loads OP/OPU.D with its own sector loop:
+    // CdControl(CdlSetmode, 0x80), CdControl(CdlReadN, &loc), then per sector
+    // `while (CdReady(0,0) != CdlDataReady)` followed by CdGetSector(buf, 0x200).
+    // Neither is a callback, so libcdstream and the DMA-callback patch do not
+    // cover it, and the raw routines cannot work: CdReady spins on a global that
+    // only libcd's IRQ handler writes, and a static recompilation never runs one.
+    // That spin is where the game hung after the movie -- no VSync, no CD command,
+    // nothing in any log channel.
+    //
+    // Identified from the thunk bodies: CdReady tail-calls the internal wait loop
+    // (0x8001BC7C in `open`) that polls the intr-result global, copies 8 result
+    // bytes when it is set and, when mode == 0, loops forever otherwise;
+    // CdGetSector tail-calls the routine that programs DMA channel 3 from the CD
+    // FIFO (D3_MADR = addr, D3_BCR = nword | 0x10000, D3_CHCR = 0x11000000) and
+    // returns success as (result < 1).
+    //
+    // Both are 8-instruction thunks and match in several places, so the other two
+    // overlays come from the delta the unambiguous rows of the same object agree
+    // on (game = open + 0x2FDBC, end = open - 0x3A34 -- the delta CdControl,
+    // CdRead and CdGetSector itself all share). Confirmed by the call each thunk
+    // makes: game's lands on 0x8004BA38 and end's on 0x80018248, both exactly the
+    // internal wait loop carried across by the same offset. Note CdInit is *not*
+    // at this delta (+0x315B0): libcd is split over several objects.
+    { "overlay": "open", "address": "0x8001AF5C",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdReady", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001B224",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdGetSector", "mode": "replace" },
+
+    { "overlay": "game", "address": "0x8004AD18",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdReady", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004AFE0",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdGetSector", "mode": "replace" },
+
+    { "overlay": "end", "address": "0x80017528",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdReady", "mode": "replace" },
+    { "overlay": "end", "address": "0x800177F0",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdGetSector", "mode": "replace" },
+
+    // CdReadSync(mode, result) -- the other half of the same problem, and where
+    // GAME.EXE hung on the "now loading" screen. libcd's own file reader is
+    //     CdRead(...); while (CdReadSync(1, 0) > 0) ;
+    // and CdReadSync returns a sectors-remaining counter that only the CD
+    // interrupt decrements, so with no interrupt path the loop never ends. In
+    // OPEN.EXE the same routine happened to read that counter as 0 and fell
+    // straight through, which is why the intro survived without this and the
+    // main game did not -- a reminder that an unmapped SDK wait can look fine
+    // purely by accident.
+    //
+    // Same 8-instruction thunk family as CdReady, resolved the same way: the
+    // internal it forwards to (open 0x8001C268, 47 instructions) matches
+    // uniquely across the three overlays, and each thunk lands on it at the
+    // object's delta -- 0x8004C024 in `game`, 0x80018834 in `end`.
+    { "overlay": "open", "address": "0x8001AF7C",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdReadSync", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004AD38",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdReadSync", "mode": "replace" },
+    { "overlay": "end", "address": "0x80017548",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdReadSync", "mode": "replace" },
+
     // ---- libgpu -------------------------------------------------------------
     //
     // The whole PSY-Q GPU library is linked at a constant offset between the

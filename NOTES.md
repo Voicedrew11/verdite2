@@ -140,6 +140,11 @@ exactly and retries forever otherwise, so unpatched it spins in the loader
 movie.** It adds `RecompOne.Runtime.Sdk.LibApi` so DMA-completion callbacks are
 delivered at all; see "DMA callbacks" below for why nothing works without it.
 
+**`patches/recompone/0005-libcd-interrupt-driven-reads.patch` is required to get
+past the title screen.** It gives `LibCd` a polled read path and makes it deliver
+CD-ROM kernel events, and gives `LibEtc.VSync` the vblank root-counter event. See
+"The three ways a CD read can hang" for what each one unblocks.
+
 The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
 names the function behind a CD register access (`KF2_CDTRACE=1`), and
 `0003-libgpu-sdk-trace.patch` gives `LibGpu` the `Log.Sdk` tracing the other SDK
@@ -254,7 +259,8 @@ out at a **constant offset per object file**:
 | object | `game` − `open` | `end` − `open` |
 |---|---|---|
 | `libgpu` (both layers) | `+0x4A7A0` | `-0x22F8` |
-| `libcd` (`cdio`) | `+0x315B0` | `-0x3A34` |
+| `libcd` (`cdinit`) | `+0x315B0` | `-0x3A34` |
+| `libcd` (`cdio`, the thunk block) | `+0x2FDBC` | `-0x3A34` |
 | `libcd` (`stream`) | `+0x30AB4` | `-0x3A34` |
 | `libetc` (`vsync`) | `+0x41140` | — |
 
@@ -444,6 +450,74 @@ title sequence, in both framebuffers. (Window capture is not available in this
 session — the compositor screenshots the lock screen — so the check was on VRAM
 rather than on the presented frame.)
 
+## The three ways a CD read can hang
+
+Every one of these is the same root cause as the DMA callbacks — **a static
+recompilation has no interrupt path** — and each one presents completely
+differently. The game uses all three, so all three had to be fixed, and each was
+hidden behind the one before it.
+
+**1. Polled `ReadN`.** `OPEN.EXE`'s title-screen loader issues
+`CdControl(CdlSetmode, 0x80)` and `CdControl(CdlReadN, &loc)`, then per sector
+runs `while (CdReady(0,0) != CdlDataReady) ;` followed by
+`CdGetSector(buf, 0x200)`. The raw `CdReady` spins on a global only libcd's
+interrupt handler writes. Symptom: **total silence** — the log stops dead, no
+VSync, nothing, because the CPU never leaves the loop.
+
+Fixed by mapping `CdReady` and `CdGetSector` and teaching the HLE that a read
+with no callback registered always has its next sector ready; `CdGetSector`
+advances the drive one sector, which is what makes the loop walk the file.
+
+**2. `CdReadSync`.** libcd's own file reader is
+`CdRead(...); while (CdReadSync(1, 0) > 0) ;`, and `CdReadSync` returns a
+sectors-remaining counter that only the interrupt decrements. Same silent spin.
+The instructive part: `OPEN.EXE` runs this identical routine and *survived*,
+because the counter happened to read 0 and the loop fell straight through.
+`GAME.EXE` read it as garbage and hung. **An unmapped SDK wait can look fine
+purely by accident** — do not treat "the intro works" as evidence the library is
+mapped.
+
+**3. Kernel events.** `GAME.EXE`'s loader is event-driven. Its init opens, in
+`EvMdINTR` (callback) mode:
+
+| class | spec | handler | what it does |
+|---|---|---|---|
+| `HwCdRom` `0xF0000003` | `EvSpCOMP` `0x20` | `0x8001794C` | job state machine; issues each `CdRead` |
+| `HwCdRom` | `EvSpDR` `0x40` | `0x80017A98` | `CdGetSector(job->buf, 0x200)` per sector |
+| `HwCdRom` | `EvSpERROR` `0x8000` | `0x80017B14` | |
+| `RCntCNT3` `0xF2000003` | `EvSpINT` `0x02` | `0x80017850` | frame counter the CD timeout rides on |
+
+On hardware libcd's interrupt handler turns each CD interrupt into a
+`DeliverEvent`. The runtime already has the whole event manager — `OpenEvent`,
+`EnableEvent`, `DeliverEventIntr` with `EvMdINTR` dispatch, used by the memory
+card — but **nothing ever delivered `HwCdRom` or root-counter events**, so the
+job queue never took a step.
+
+This one does *not* present as a freeze. The main loop keeps running and the
+loading screen animates happily forever, which reads like a slow load rather
+than a bug. Symptom: **everything alive, nothing progressing.**
+
+`0005` delivers them at VSync rather than inside the command, so a handler that
+issues the next command does not recurse on top of the one that called it; new
+events queued by a handler are drained in the same tick, up to a bound. `EvSpACK`
+goes out for every command and `EvSpCOMP` only for the commands with a second
+response (`Init`/`Stop`/`Pause`/`SeekL`/`SeekP`/`Standby`), plus one at the end
+of an HLE `CdRead` — modelling the pause real libcd issues once the last sector
+is in, which is the completion the caller actually waits for.
+
+| function | `open` | `game` | `end` |
+|---|---|---|---|
+| `CdReady` | `0x8001AF5C` | `0x8004AD18` | `0x80017528` |
+| `CdReadSync` | `0x8001AF7C` | `0x8004AD38` | `0x80017548` |
+| `CdGetSector` | `0x8001B224` | `0x8004AFE0` | `0x800177F0` |
+
+These are 8-instruction thunks that match in several places, so `game` and `end`
+come from the delta the unambiguous rows of the same object agree on
+(`+0x2FDBC` / `-0x3A34`), confirmed by the internal routine each thunk forwards
+to. **Note that is not the delta in the table below**: `CdInit` sits at
+`+0x315B0`, so libcd is split over more than one object and its thunk block and
+`cdinit` move independently.
+
 ## The SDK naming problem
 
 `SdkPatches.cs` routes PSY-Q library calls to the runtime's HLE implementations
@@ -461,11 +535,13 @@ function."
   "target": "RecompOne.Runtime.Sdk.LibGpu.DrawOTag", "mode": "replace" }
 ```
 
-Done so far, across all three overlays — 54 patches: `libetc` (VSync), `libcd`
-(CdInit, CdControl/F/B, CdSync, CdRead), all four HLE'd `libgpu` entry points,
-six of `libcdstream`, and libapi's `DMACallback`. Still unmapped: `libpad`, and
-`libcdstream`'s `StSetMask`/`StGetBackloc` (never called by this game, so not
-identified either).
+Done so far, across all three overlays — 63 patches: `libetc` (VSync), `libcd`
+(CdInit, CdControl/F/B, CdSync, CdRead, CdReady, CdReadSync, CdGetSector), all
+four HLE'd `libgpu` entry points, six of `libcdstream`, and libapi's
+`DMACallback`. Still unmapped: `libpad` — and it may never be needed, since the
+game reads the pad through the BIOS (`B(16) PAD_dr` in the trace, not
+`PadInitDirect`) — and `libcdstream`'s `StSetMask`/`StGetBackloc` (never called
+by this game, so not identified either).
 
 What worked for identifying them, roughly in order of payoff:
 
