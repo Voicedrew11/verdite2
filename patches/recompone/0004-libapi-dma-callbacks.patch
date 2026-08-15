@@ -13,42 +13,6 @@ index dd10142..c1c0c94 100644
          ("RecompOne.Runtime.Sdk.LibCdStream", new[]
          {
              "StSetRing", "StClearRing", "StUnSetRing", "StSetStream",
-diff --git a/RecompOne.Runtime/Hardware/Interrupts.cs b/RecompOne.Runtime/Hardware/Interrupts.cs
-index 6027c49..bd105c6 100644
---- a/RecompOne.Runtime/Hardware/Interrupts.cs
-+++ b/RecompOne.Runtime/Hardware/Interrupts.cs
-@@ -7,13 +7,28 @@ namespace RecompOne.Runtime;
- 
- public static class Interrupts
- {
-+    static readonly HashSet<int> _reported = new();
-+
-+    static void ReportOnce(int irq, string why)
-+    {
-+        lock (_reported)
-+            if (_reported.Add(irq))
-+                Log.Bios($"IRQ {irq} dropped: {why}");
-+    }
-+
-     public static void Deliver(int irq, CpuContext cpu, IMemory mem)
-     {
-         uint intrEnv = BiosB.IntrEnvInInterruptAddr;
--        if (intrEnv == 0) return;
-+        if (intrEnv == 0) { ReportOnce(irq, "no intr env (HookEntryInt never ran)"); return; }
- 
--        uint handler = mem.ReadU32(intrEnv + 2u + (uint)irq * 4u);
--        if (handler == 0) return;
-+        uint slot = intrEnv + 2u + (uint)irq * 4u;
-+        uint handler = mem.ReadU32(slot);
-+        // Worth saying out loud: a missing handler is silent otherwise, and the
-+        // symptom lands somewhere else entirely -- a callback that never fires,
-+        // not an error. The interrupt-environment layout differs between PSY-Q
-+        // versions, so a run where every IRQ misses usually means the offset
-+        // BiosB derives from HookEntryInt does not fit this game's library.
-+        if (handler == 0) { ReportOnce(irq, $"no handler at 0x{slot:X8}"); return; }
- 
-         //takes a snap, apparently interrupt callbacks dont operate at the same context? could be wrong in mips3000, need to check furter TODO, seens to be accurate
-         var snap = cpu.Snapshot();
 diff --git a/RecompOne.Runtime/Memory/Dma.cs b/RecompOne.Runtime/Memory/Dma.cs
 index c376f15..f9aa684 100644
 --- a/RecompOne.Runtime/Memory/Dma.cs

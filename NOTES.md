@@ -33,6 +33,13 @@ loaded off the disc at run time (see "GAME.EXE loads code"). The area modules
 are confirmed by play, not just by static analysis: walking around is `fdat02`
 executing.
 
+The in-game menu opens. It used to hang the port dead, and the two bugs behind
+that are worth reading before touching anything interrupt- or input-related:
+the runtime was **guessing the address of PSY-Q's interrupt-callback table** and
+eventually called a game data word as a function, and **host input was only
+polled from `VSync`**, so the menu's wait-for-button-release loop — which draws
+nothing and never vsyncs — could never see the release.
+
 `libetc` (VSync), `libcd`, `libgpu`, `libcdstream` and libapi's `DMACallback`
 are mapped to the runtime's HLE — 63 patches. A steady-state second of
 `KF2_LOG=sdk` looks like this, and is what "working" should look like:
@@ -150,6 +157,13 @@ delivered at all; see "DMA callbacks" below for why nothing works without it.
 past the title screen.** It gives `LibCd` a polled read path and makes it deliver
 CD-ROM kernel events, and gives `LibEtc.VSync` the vblank root-counter event. See
 "The three ways a CD read can hang" for what each one unblocks.
+
+**`patches/recompone/0006-irq-callback-table.patch` and
+`0007-pad-poll-outside-frame-loop.patch` are required to open the menu.** The
+first lets a game point the runtime at PSY-Q's real interrupt-callback table
+instead of deriving one that lands in game data; the second lets `PAD_dr` poll
+the host, so a game waiting on the pad without vsyncing is not waiting forever.
+See "The interrupt-callback table cannot be guessed" and "The menu deadlock".
 
 The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
 names the function behind a CD register access (`KF2_CDTRACE=1`), and
@@ -639,6 +653,120 @@ What worked for identifying them, roughly in order of payoff:
   everything wholesale (`ghidra_psx_ldr` and FLIRT-style matchers do this) and is
   the only approach that really scales — still worth setting up if the remaining
   libraries fight back.
+- **The managed stack of the running process.** A recompiled function keeps its
+  address in its name, so a stack trace of the hung game names the MIPS routine
+  it is spinning in — no logging, no rebuild, no reproduction in a debugger:
+
+  ```bash
+  dotnet tool install -g dotnet-stack        # once
+  ~/.dotnet/tools/dotnet-stack report -p $(pgrep -f net10.0/KingsField2)
+  ```
+
+  This is the fastest tool in the box for a silent hang. It is what identified
+  the menu deadlock below in one shot, after a static hunt had gone nowhere:
+  `func_80022EFC → func_8005F564 → func_8005FE64 → BiosB.PadRead` is the whole
+  diagnosis, read off the top four frames. Note the process must be started from
+  the same shell environment you run `dotnet-stack` in, or the diagnostic socket
+  in `TMPDIR` will not be found.
+
+## The interrupt-callback table cannot be guessed
+
+**Symptom:** `unmapped call: 0x0BFF0FFE` from `Runtime.PresentFrame` →
+`Interrupts.Deliver`, arriving on the loading screen after minutes of correct
+play. The address is not code; it is not even aligned.
+
+`Interrupts.Deliver(irq)` finds the handler to call by reading
+`BiosB.IntrEnvInInterruptAddr + 2 + irq*4`, where that base comes from the
+argument the game passed to BIOS `B(19h) HookEntryInt`, minus `0x36`. That
+argument is a **jmp_buf**, not a callback table — in `GAME.EXE` it is
+`0x8007437C`, and the word above it (`jb[1]`, the interrupt stack pointer) is
+`0x8007535C`, 4 KB higher. Where the callback table sits relative to that buffer
+is a property of one link of one PSY-Q version, so here the derived slot,
+`0x80074348`, is an ordinary game variable. For most of the run it happens to
+read zero and the delivery is dropped silently; the moment the game stores
+something there, the runtime calls it.
+
+The real table is the one libapi's `InterruptCallback(irq, func)` indexes. That
+function is easy to recognise and gives the address directly: it computes
+`table + irq*4`, returns the previous entry, ORs `1 << irq` into `I_MASK` through
+the pointer in its `.data`, and clears the slot when passed null.
+`ResetCallback` next to it zeroes 11 consecutive slots — `irq` 0 to 10 — which is
+what fixes the base rather than leaving it one word ambiguous.
+
+| overlay | `InterruptCallback` | callback table |
+|---|---|---|
+| `open` | `0x8001E75C` | `0x8003DD48` |
+| `game` | `0x8005F8CC` | `0x8006E3D4` |
+| `end` | `0x8001AD28` | `0x80038D90` |
+
+Two independent checks. **Statically**, `table + 11*4` lands exactly on the DMA
+callback table the DMA interrupt dispatcher walks (`0x8003DD74` in `open`,
+`0x8006E400` in `game`) — the two tables are adjacent, as the 11-slot layout
+predicts. **At run time**, the slots read back as the functions they should be:
+`game` slot 3 is `0x8005FAE0`, which is that same DMA dispatcher (it masks DICR
+with `0x7F000000`, walks seven channels, clears each flag and calls the
+channel's callback), and slot 0 is `0x8005F45C`, the vblank handler that bumps
+the frame counter and runs the registered `VSyncCallback`.
+
+`patches/recompone/0006-irq-callback-table.patch` adds
+`Interrupts.CallbackTable` for a game to set, and — for the case where nothing
+has — makes the derived path refuse a handler that is not a word-aligned
+function the dispatcher knows, reporting it once instead of calling it. The
+addresses themselves are game knowledge, so they live in `Program.cs`, rebound
+per overlay from `OverlayLoadedEvent`.
+
+Note what this fixes beyond the crash: those two handlers had **never run**. The
+vblank callback the game registers now fires once a frame, which is what
+`VSyncCallback` users expect.
+
+## The menu deadlock: input only moved when the game drew
+
+**Symptom:** press the button that opens the in-game menu and everything stops —
+last frame still on screen, no error, no log output on any channel, process
+alive and burning CPU. Exactly the "total silence" signature of the polled CD
+read, and just as misleading.
+
+`dotnet-stack` named it immediately:
+
+```
+BiosB.PadRead → func_8005FE64 → func_8005F564 → func_80022EFC → func_80018E80
+```
+
+`func_8005FE64` is the `B(16h) PAD_dr` thunk and `func_8005F564` is libetc's
+`PadRead(id)` — `PAD_dr`, then `~*(u_long*)0x8006EAE4`, the buffer the game
+registered with `PAD_init2`. `func_80022EFC` is the caller that matters:
+
+```c
+do { } while (PadRead(1) != 0);      /* wait for every button to come up */
+```
+
+It draws nothing and it never calls `VSync`. **In the runtime, host input is
+polled only inside `PresentFrame`, which only runs from `VSync`** — so the pad
+word this loop reads is a snapshot frozen at the last frame drawn, taken while
+the button that opened the menu was still down. The release can never arrive.
+The game had walked into a wait that, in this port, nothing could ever satisfy.
+
+On hardware the BIOS fills that buffer from its own VBlank interrupt, so
+`PAD_dr` is fresh whether or not the game vsyncs — the loop is perfectly
+reasonable code.
+
+`patches/recompone/0007-pad-poll-outside-frame-loop.patch` makes `PAD_dr` pump
+the host itself, rate-limited to 4 ms (a game in this loop calls it ~200,000
+times a second; a VBlank is 16 ms, so 4 ms is still fresher than hardware).
+`HostWindow.PumpInput` takes in events and re-polls input, and redraws at most
+every 16 ms so the window stays live while the game is stuck outside its frame
+loop — `Present` stamps the same clock, so a normally running game never renders
+twice in a frame.
+
+This is a general RecompOne bug, not a King's Field one: any game that waits on
+the pad without vsyncing deadlocks the same way. Worth an upstream issue.
+
+Two things to take from it. First, **a wait loop that reads state the runtime
+only refreshes elsewhere is the recurring shape of this port's bugs** — the three
+CD hangs were the same mistake in a different library, and `VSync`-driven
+delivery is load-bearing for far more than frames. Second, the phantom is
+readable: when the game hangs, the last pad state in the log is the button that
+was held at the last drawn frame, which points straight at the input path.
 
 ## Next steps
 
@@ -659,6 +787,16 @@ What worked for identifying them, roughly in order of payoff:
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
    `.map` or ELF, so it does not help the function maps).
+6. **Report the two runtime bugs upstream as issues** (not PRs — see below):
+   input polled only from `PresentFrame`, which deadlocks any game that waits on
+   the pad without vsyncing, and `Interrupts.Deliver` deriving a callback-table
+   address from the `HookEntryInt` jmp_buf, which calls whatever the resulting
+   game variable holds. Both are in `patches/recompone/0006` and `0007` with the
+   reasoning; the second at minimum should refuse a handler that is not a known
+   function.
+7. Play further in. Now that the menu opens, the parts of the game it reaches —
+   inventory, equipment, magic, the map — have never run, and each is a screen
+   with its own code path.
 
 ## Upstream contribution policy
 
