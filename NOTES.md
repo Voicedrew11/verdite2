@@ -193,6 +193,42 @@ Two escape hatches, both per-function and both overlay-aware:
 
 Hand-written replacements live in `patches/`.
 
+## VSync: found and mapped
+
+| Overlay | `VSync` |
+|---|---|
+| `open` | `0x8001EB88` |
+| `game` | `0x8005FCC8` |
+| `end`  | `0x8001B154` |
+
+Found by fingerprinting the function's *contract* rather than its name, since a
+linear sweep provides no names. `VSync(mode)` returns a counter when `mode < 0`,
+returns early when `mode == 1`, and otherwise waits — which shows up in the
+generated C# as a register copied from `A0`, sign-tested, then compared against 1.
+Exactly one function per overlay matches, each 79 lines with identical structure:
+the same statically linked routine, linked at a different address in each
+executable.
+
+**Confirmed, not guessed:** the helper immediately after it counts down and, on
+expiry, calls the `printf` thunk with the string at `0x800117B4`, which reads
+`VSync: timeout` — PSY-Q's own timeout message.
+
+Mapped via `patches[]` in `config/kf2.json`; the recompiler reports `applied 3
+patches` and emits the body as a forwarding call:
+
+```csharp
+public static void func_8001EB88(CpuContext c, IMemory m) => RecompOne.Runtime.Sdk.LibEtc.VSync(c, m);
+```
+
+Note this does **not** yet change what you see: boot still stalls in the CD
+library before it ever reaches a VSync call (`KF2_LOG=sdk` shows zero VSync
+calls). VSync was a necessary fix, not a sufficient one.
+
+Useful technique for the remaining SDK functions: `func_80014C0C` is the `printf`
+thunk (BIOS A(3Fh), 69 call sites). Library routines pass diagnostic strings to
+it, so following its arguments names the surrounding function for free — that is
+how `VSync` was confirmed.
+
 ## The SDK naming problem (main open issue)
 
 `SdkPatches.cs` routes PSY-Q library calls to the runtime's HLE implementations

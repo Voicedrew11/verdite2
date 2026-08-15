@@ -70,7 +70,31 @@
 
   "stubs": [],
   "ignored": [],
-  "patches": [],
+
+  // PSY-Q SDK functions routed to the runtime's HLE implementations.
+  //
+  // SdkPatches.cs binds these by exact NAME, and a linear sweep produces no
+  // names, so every SDK call has to be mapped by address here instead.
+  //
+  // VSync is the one that matters most: Runtime.PresentFrame() has exactly one
+  // caller in the whole runtime -- the HLE LibEtc.VSync -- so until this is
+  // mapped, no frame is ever pushed to the window no matter what the game draws.
+  // DispatchIrq also runs from PresentFrame, so interrupt-driven waits (the CD
+  // library included) cannot make progress either.
+  //
+  // Identified by contract fingerprint rather than by name: VSync(mode) returns a
+  // counter when mode < 0, returns early when mode == 1, and otherwise waits.
+  // Exactly one function per overlay matches, each 79 lines of generated C# with
+  // identical structure -- the same statically linked routine in all three.
+  // Addresses differ per overlay because each executable is linked separately.
+  "patches": [
+    { "overlay": "open", "address": "0x8001EB88",
+      "target": "RecompOne.Runtime.Sdk.LibEtc.VSync", "mode": "replace" },
+    { "overlay": "game", "address": "0x8005FCC8",
+      "target": "RecompOne.Runtime.Sdk.LibEtc.VSync", "mode": "replace" },
+    { "overlay": "end", "address": "0x8001B154",
+      "target": "RecompOne.Runtime.Sdk.LibEtc.VSync", "mode": "replace" }
+  ],
 
   // Diagnostics: annotate generated C# with addresses and disassembly. Very
   // verbose, so keep off unless chasing a specific bad function.
