@@ -1,0 +1,13 @@
+# Copyrighted game data -- never commit these.
+disc/*
+!disc/README.md
+
+# Recompiler output: derived from the disc, so it is also copyrighted.
+generated/
+
+# .NET build artifacts
+bin/
+obj/
+
+# Tool checkout (cloned, not vendored)
+tools/RecompOne/
