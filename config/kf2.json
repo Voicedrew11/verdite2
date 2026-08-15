@@ -209,7 +209,97 @@
     { "overlay": "end", "address": "0x80013DD8",
       "target": "RecompOne.Runtime.Sdk.LibGpu.PutDrawEnv", "mode": "replace" },
     { "overlay": "end", "address": "0x80013EF8",
-      "target": "RecompOne.Runtime.Sdk.LibGpu.PutDispEnv", "mode": "replace" }
+      "target": "RecompOne.Runtime.Sdk.LibGpu.PutDispEnv", "mode": "replace" },
+
+    // ---- libcdstream --------------------------------------------------------
+    //
+    // The intro and ending are STR movies streamed off the disc, and this is the
+    // library that feeds them. It is a different object from the rest of libcd,
+    // so it sits at its own offset: game = open + 0x30AB4, end = open - 0x3A34.
+    //
+    // The ring layout is what identifies these, and it is the same layout the
+    // runtime's LibCdStream already assumes: `slots` 32-byte headers first, then
+    // `slots` 2016-byte data blocks. StGetNext computes its data pointer as
+    // ring + slots*32 + idx*2016 (visible as idx*63 << 5) and its header pointer
+    // as ring + idx*32; StFreeRing divides back by 0x1F8 words to recover idx,
+    // requires the slot's status word to be 4, and clears the `n` headers whose
+    // count it reads from header+6 -- the STR frame header's sector count.
+    //
+    // The call sites settle the argument shapes:
+    //   0x8001422C  StSetRing(0x800927F0, 0x20)         64 KiB ring, 32 slots
+    //               StSetStream(0, 1, 0x0FFFFFFF, 0, 0)
+    //   0x80014440  StGetNext(&addr, &header) until it returns 0, then checks
+    //               data[0]/data[1] against header+0x14/+0x18 -- the STR header's
+    //               copy of the first two bitstream words -- and StFreeRing()s
+    //               the slot when they disagree.
+    //
+    // StClearRing and StUnSetRing have no call sites in any overlay; they are
+    // mapped anyway so a raw one can never run against an HLE-managed ring.
+    // StSetMask and StGetBackloc are not called either and are not identified.
+    { "overlay": "open", "address": "0x8001C584",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StSetRing", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001C5DC",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StClearRing", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001C62C",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StUnSetRing", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001C6CC",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StSetStream", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001C7A0",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StFreeRing", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001C8A8",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StGetNext", "mode": "replace" },
+
+    { "overlay": "game", "address": "0x8004D038",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StSetRing", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004D090",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StClearRing", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004D0E0",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StUnSetRing", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004D180",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StSetStream", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004D254",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StFreeRing", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004D35C",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StGetNext", "mode": "replace" },
+
+    { "overlay": "end", "address": "0x80018B50",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StSetRing", "mode": "replace" },
+    { "overlay": "end", "address": "0x80018BA8",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StClearRing", "mode": "replace" },
+    { "overlay": "end", "address": "0x80018BF8",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StUnSetRing", "mode": "replace" },
+    { "overlay": "end", "address": "0x80018C98",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StSetStream", "mode": "replace" },
+    { "overlay": "end", "address": "0x80018D6C",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StFreeRing", "mode": "replace" },
+    { "overlay": "end", "address": "0x80018E74",
+      "target": "RecompOne.Runtime.Sdk.LibCdStream.StGetNext", "mode": "replace" },
+
+    // ---- libapi -------------------------------------------------------------
+    //
+    // DMACallback(ch, func). On hardware a finished DMA raises IRQ 3 and PSY-Q's
+    // interrupt entry reads DICR and calls the channel's callback. A static
+    // recompilation has no exception path, so that entry never runs and every
+    // DMA callback is dead. It is not obvious that anything is wrong, because
+    // the transfers themselves are emulated and complete fine -- only the work
+    // the game does *in* the callback goes missing.
+    //
+    // For the intro that work is the whole picture: the movie's DMA channel 1
+    // (MDEC out) callback is the function that calls LoadImage on the decoded
+    // frame. Without it the movie decodes 320x240 frames at full rate into RAM
+    // and not one of them ever reaches VRAM.
+    //
+    // Identified by its DICR arithmetic: it indexes a callback table by channel,
+    // returns the previous entry, and on install ORs 0x00800000 | (0x01010000 <<
+    // ch) into DICR -- master enable plus that channel's enable and flag bits --
+    // clearing them again when passed a null callback. The runtime records the
+    // table itself and Dma.Complete runs the callback.
+    { "overlay": "open", "address": "0x8001EAF0",
+      "target": "RecompOne.Runtime.Sdk.LibApi.DMACallback", "mode": "replace" },
+    { "overlay": "game", "address": "0x8005FC30",
+      "target": "RecompOne.Runtime.Sdk.LibApi.DMACallback", "mode": "replace" },
+    { "overlay": "end", "address": "0x8001B0BC",
+      "target": "RecompOne.Runtime.Sdk.LibApi.DMACallback", "mode": "replace" }
   ],
 
   // Diagnostics: annotate generated C# with addresses and disassembly. Very

@@ -21,39 +21,28 @@ that is a *different game* and every address and function map here is wrong for 
 
 ## Status
 
-Boots, opens a window, and runs `OPEN.EXE` through PSY-Q startup into its main
-loop. `libetc` (VSync), `libcd` and `libgpu` are mapped to the runtime's HLE;
-the display is configured and enabled.
+**The intro movie plays.** Boot runs `OPEN.EXE` through PSY-Q startup, streams
+`\OP\OP0.S` off the disc, decodes it through the MDEC and puts it on screen —
+the From Software logo and the flying-glyph title sequence, at ~13 movie frames
+a second against 60 VSyncs.
 
-The viewport is black because the game has not drawn anything yet, not because
-drawing is broken. `KF2_LOG=gpu,sdk` shows the full double-buffer setup —
-
-```
-[GPU] GP1(00) 0x000000        reset
-[GPU] GP1(08) 0x000000
-[GPU] GP1(03) 0x000000        display ENABLED
-[SDK] PutDrawEnv  clip=(0,0)-640x240   ofs=(0,0)   isbg=1
-[SDK] PutDispEnv  disp=(0,240)-640x240
-[SDK] PutDrawEnv  clip=(0,240)-640x240 ofs=(0,240) isbg=1
-[SDK] PutDispEnv  disp=(0,0)-640x240
-```
-
-— two 640×240 buffers, display on, and then **zero `DrawOTag` calls ever**. The
-game sets up graphics and goes straight into playing the intro movie, which is
-where it stops:
+`libetc` (VSync), `libcd`, `libgpu`, `libcdstream` and libapi's `DMACallback`
+are mapped to the runtime's HLE — 54 patches. A steady-state second of
+`KF2_LOG=sdk` looks like this, and is what "working" should look like:
 
 ```
-[SDK] Cd cmd 0x02 (SetLoc)  04:42:43
-[SDK] Cd cmd 0x15 (SeekL)
-[SDK] Cd cmd 0x0E (SetMode)
-[SDK] Cd cmd 0x1B (ReadS)      <- streaming read starts, and nothing follows
+[SDK] StFreeRing
+[SDK] DrawSync(0)
+[SDK] PutDrawEnv env=0x800A8044 clip=(0,240)-320x240 ofs=(0,240) isbg=0
+[SDK] PutDispEnv env=0x800A80A0 disp=(0,0)-320x240
+[SDK] DrawOTag   ot=0x800A80B4
 ```
 
-No DMA channel 3 transfer ever happens after `CdlReadS`, so no sector is
-delivered, `libcdstream`'s ring buffer never fills and the movie never starts.
-`OPEN.EXE` is essentially a movie player — it calls `DrawOTag` exactly once in
-the whole executable — so nothing will appear on screen until streaming works.
-That is the next blocker, and it is a CD/stream problem, not a GPU one.
+— one frame off the ring, one buffer flip, one ordering table, repeating.
+
+Not yet done: the movie has no sound (XA audio is routed but unverified), and
+nothing past the intro has been exercised, so `GAME.EXE` is still untested. Its
+patch addresses are derived rather than observed; see "The overlay delta".
 
 ## Layout
 
@@ -146,6 +135,10 @@ runtime's BIOS `Load` (A(42h)) returned the header pointer, but the real BIOS
 returns 1 on success. King's Field's boot stub compares the result against 1
 exactly and retries forever otherwise, so unpatched it spins in the loader
 (~12,900 `Load` calls in 30 seconds) and never reaches `Exec`.
+
+**`patches/recompone/0004-libapi-dma-callbacks.patch` is required for the intro
+movie.** It adds `RecompOne.Runtime.Sdk.LibApi` so DMA-completion callbacks are
+delivered at all; see "DMA callbacks" below for why nothing works without it.
 
 The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
 names the function behind a CD register access (`KF2_CDTRACE=1`), and
@@ -256,17 +249,19 @@ how `VSync` was confirmed.
 
 The three executables are three separate links of the *same* PSY-Q libraries, so
 every library routine exists in all three at a different address. They are laid
-out at a **constant offset per library**:
+out at a **constant offset per object file**:
 
-| | offset from `open` |
-|---|---|
-| `game` | `+0x4A7A0` |
-| `end` | `-0x22F8` |
+| object | `game` − `open` | `end` − `open` |
+|---|---|---|
+| `libgpu` (both layers) | `+0x4A7A0` | `-0x22F8` |
+| `libcd` (`cdio`) | `+0x315B0` | `-0x3A34` |
+| `libcd` (`stream`) | `+0x30AB4` | `-0x3A34` |
+| `libetc` (`vsync`) | `+0x41140` | — |
 
-for all of `libgpu`. The offset is not the same for every library — `libcd` sits
-at `+0x315B0` and `libetc` at `+0x41140` — because each object is linked in a
-different place, but *within* one library it is uniform, so one identification
-plus one subtraction gives the other two.
+The granularity is the translation unit, not the library: `libcd`'s `cdio` and
+`stream` modules are at different offsets from each other. So one identification
+plus one subtraction gives the other two, but only for functions in the *same*
+object — do not extrapolate a delta across a module boundary.
 
 `scripts/match_overlays.py` does this mechanically. It matches on a
 relocation-insensitive normal form — `j`/`jal` targets, `lui` immediates and the
@@ -362,6 +357,93 @@ place `KF2_LOG=gpu,sdk` shows `PutDrawEnv`/`PutDispEnv` reporting a coherent
 directly instead of programming the DMA controller), and `GP1(03) 0x000000`
 confirms the display is switched on.
 
+## libcdstream: found and mapped
+
+The intro and ending are STR movies streamed off the disc. KF2 drives them
+through `CdRead2(mode | 0x100)`, which is `stream.c`'s own entry point: it sends
+`CdlSetmode`, installs the stream module's DMA-3 and ready callbacks, and issues
+`CdlReadS`. Six public functions matter.
+
+| function | `open` | `game` | `end` | call sites in `open` |
+|---|---|---|---|---|
+| `StSetRing` | `0x8001C584` | `0x8004D038` | `0x80018B50` | 1 |
+| `StClearRing` | `0x8001C5DC` | `0x8004D090` | `0x80018BA8` | 0 |
+| `StUnSetRing` | `0x8001C62C` | `0x8004D0E0` | `0x80018BF8` | 0 |
+| `StSetStream` | `0x8001C6CC` | `0x8004D180` | `0x80018C98` | 1 |
+| `StFreeRing` | `0x8001C7A0` | `0x8004D254` | `0x80018D6C` | 2 |
+| `StGetNext` | `0x8001C8A8` | `0x8004D35C` | `0x80018E74` | 1 |
+
+The ring layout identifies them, and it is exactly the layout the runtime's
+`LibCdStream` already assumed: `slots` 32-byte headers first, then `slots`
+2016-byte data blocks. `StGetNext` computes its data pointer as
+`ring + slots*32 + idx*2016` (in the disassembly, `idx*63 << 5`) and its header
+pointer as `ring + idx*32`; `StFreeRing` divides back by `0x1F8` words to
+recover the index, requires the slot's status word to be 4, and clears the `n`
+headers whose count it reads from `header+6` — the STR frame header's sector
+count. The call sites settle the argument shapes: `StSetRing(0x800927F0, 0x20)`
+(a 64 KiB ring, 32 slots) and `StGetNext(&addr, &header)` polled until it
+returns 0.
+
+Mapping these was necessary but **not sufficient** — see the next section.
+
+## DMA callbacks: the thing that was actually missing
+
+With libcdstream mapped, the movie ran end to end and the screen stayed black.
+Everything looked right: `StFreeRing`/`DrawSync`/`PutDrawEnv`/`DrawOTag` cycling
+once per frame, and `KF2_LOG=mdec` showing real decodes —
+
+```
+[MDEC] decode depth=3 signed=False bit15=True mbs=300 wordsOut=38400
+```
+
+300 macroblocks, 38400 words = 320×240×2 bytes, a full frame, 312 of them. The
+decoded frames were landing in RAM and never reaching VRAM.
+
+The reason is a general problem with static recompilation, not a King's Field
+one. **On hardware a finished DMA raises IRQ 3 and PSY-Q's interrupt entry reads
+DICR and calls the channel's callback. A recompiled build has no exception path,
+so that entry never runs and every DMA callback is dead.** Nothing errors; the
+transfers themselves are emulated and complete fine. Only the work the game does
+*inside* the callback silently disappears — and here that work is the whole
+picture:
+
+```
+DMACallback(1, 0x800142A0)        <- MDEC-out DMA completion callback
+0x800142A0:  LoadImage(rect, buf) <- uploads one 16x240 strip
+             rect.x += rect.w     <- 20 strips = one 320x240 frame
+             DecDCTout(buf, n)    <- decode the next strip
+```
+
+`DMACallback` is `0x8001EAF0` / `0x8005FC30` / `0x8001B0BC`, reached indirectly
+through a per-channel wrapper and libapi's own driver table, so it has no direct
+`jal` anywhere — `KF2_TRACECALL` on the dispatcher is what caught it. It is
+identified by its DICR arithmetic: it indexes a callback table by channel,
+returns the previous entry, and on install ORs `0x00800000 | (0x01010000 << ch)`
+into DICR, clearing those bits again when passed null.
+
+`patches/recompone/0004-libapi-dma-callbacks.patch` adds
+`RecompOne.Runtime.Sdk.LibApi`, which records the table and runs the callback
+from `Dma.Complete`. It is deliberately **not** gated on DICR: the routine that
+would have set those bits is the one being replaced, and a registered callback
+already encodes the same intent.
+
+Two things to know if this misbehaves later. The transfer completes inside the
+store that starts it, so the callback runs re-entrantly on top of the caller —
+`LibApi.Complete` snapshots and restores the CPU context the way
+`Interrupts.Deliver` does, and the strip loop above therefore recurses about 20
+deep per frame instead of iterating. And `Interrupts.Deliver` now reports a
+dropped IRQ once per line; a run where *every* IRQ misses means the
+interrupt-environment offset `BiosB` derives from `HookEntryInt` (`A0 - 0x36`)
+does not fit this game's PSY-Q version. For KF2 the real interrupt-callback
+table is at `0x8003DD44 + irq*4` and the DMA callback table at
+`0x8003DD74 + ch*4`, neither of which the runtime's offset finds — which is why
+routing `DMACallback` to the runtime beats trying to fix the offset.
+
+Verified by dumping the VRAM shadow mid-playback: the From Software logo and the
+title sequence, in both framebuffers. (Window capture is not available in this
+session — the compositor screenshots the lock screen — so the check was on VRAM
+rather than on the presented frame.)
+
 ## The SDK naming problem
 
 `SdkPatches.cs` routes PSY-Q library calls to the runtime's HLE implementations
@@ -379,10 +461,11 @@ function."
   "target": "RecompOne.Runtime.Sdk.LibGpu.DrawOTag", "mode": "replace" }
 ```
 
-Done so far: `libetc` (VSync), `libcd` (CdInit, CdControl/F/B, CdSync, CdRead)
-and all four HLE'd `libgpu` entry points, across all three overlays — 33
-patches. Still unmapped: `libcdstream` (`StSetRing`, `StGetNext`, …) and
-`libpad`.
+Done so far, across all three overlays — 54 patches: `libetc` (VSync), `libcd`
+(CdInit, CdControl/F/B, CdSync, CdRead), all four HLE'd `libgpu` entry points,
+six of `libcdstream`, and libapi's `DMACallback`. Still unmapped: `libpad`, and
+`libcdstream`'s `StSetMask`/`StGetBackloc` (never called by this game, so not
+identified either).
 
 What worked for identifying them, roughly in order of payoff:
 
@@ -401,6 +484,11 @@ What worked for identifying them, roughly in order of payoff:
   and copies `0x5C` bytes is handling a `DRAWENV`; one that clamps to
   `[0x1F4, 0xCDA]` is doing PSY-Q's horizontal-range arithmetic. Two independent
   offsets agreeing is what turns a guess into an identification.
+- **Indirect-call tracing.** PSY-Q reaches whole modules through driver tables
+  filled in at init, so a public entry point can have *zero* `jal` references in
+  the image. `libgpu`'s 15-slot table and libapi's `DMACallback` are both like
+  this. When a function you expect to be called has no callers, log the address
+  in `Dispatcher.Call` and watch for it instead of searching statically.
 - **PSY-Q signature matching** against the official SDK objects would identify
   everything wholesale (`ghidra_psx_ldr` and FLIRT-style matchers do this) and is
   the only approach that really scales — still worth setting up if the remaining
@@ -408,13 +496,12 @@ What worked for identifying them, roughly in order of payoff:
 
 ## Next steps
 
-1. **Make CD streaming deliver sectors.** `CdlReadS` (`0x1B`) is issued and
-   nothing follows it — no DMA channel 3 transfer, so `libcdstream`'s ring never
-   fills and the intro movie never plays. This is what is holding up the first
-   frame; see "Status".
-2. Map `libcdstream` (`StSetRing`, `StGetNext`, `StFreeRing`, …) and `libpad`
-   the same way as `libgpu`, seeding from `open` and carrying across with
-   `scripts/match_overlays.py`.
+1. **Get past the intro into `GAME.EXE`.** Nothing beyond `OPEN.EXE` has run, so
+   the `game` patch addresses are derived from the overlay delta and never
+   executed. Expect `libpad` to be the next thing needed — the intro presumably
+   wants a Start press to skip, and no pad function is mapped.
+2. Check the movie's audio. XA sectors are routed to `XaRouter` and the runtime
+   has an XA thread, but nothing has been verified by ear.
 3. Correct linear-sweep damage as it surfaces. Coverage is only ~56% of `open`
    and ~86% of `game`, so expect more gaps; `scripts/add_call_targets.py`
    re-derives starts from the code and can be re-run at any time.
