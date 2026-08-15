@@ -50,7 +50,13 @@ steady-state `KF2_LOG=sdk` excerpt in `NOTES.md`).
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
+KF2_MODS=fps=60,framestats=15          # mods/ -- see "Mods" in NOTES.md
 ```
+
+`KF2_MODS` names the mods in `mods/`, which is where optional behaviour changes
+go. `fps` is on by default at 30 and is load-bearing: without it the port runs
+faster than the game can on hardware. `framestats` and `loopprobe` are the two
+measurement tools — prefer them to `KF2_LOG=sdk`, which is gigabytes a minute.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
 its clock starts when the first area module loads, which is the only point in the
@@ -93,6 +99,7 @@ harvesting `jal` targets; run it when a call dies with "unmapped call: 0x…".
 config/kf2.json          recompiler config: overlays, funcMaps, stubs[], patches[]
 config/funcmaps/*.json   swept function maps (address/name/size; size is mandatory)
 patches/                 hand-written C# replacing recompiled functions
+mods/                    optional behaviour changes, toggled by KF2_MODS at run time
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection and address-hunting tooling

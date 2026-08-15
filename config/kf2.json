@@ -386,18 +386,59 @@
     { "overlay": "end", "address": "0x80013EF8",
       "target": "RecompOne.Runtime.Sdk.LibGpu.PutDispEnv", "mode": "replace" },
 
-    // ---- frame pacing -------------------------------------------------------
+    // ---- mod hook points ----------------------------------------------------
+    //
+    // These are the only entries mods need; which mod claims which hook is
+    // decided at run time in mods/, so turning a mod on or off costs no
+    // recompile. A new *attachment site* still does, because the hook is emitted
+    // into the function body.
     //
     // DrawOTag is the frame boundary -- past it the frame's drawing is done --
-    // so it is where a minimum frame duration can be enforced. `post` runs after
-    // the replacement above, so the ordering table is already walked and only the
-    // wait is added. See patches/FramePacing.cs for why the floor is two vblanks.
+    // so it is where a minimum frame duration can be enforced. `post` composes
+    // with the `replace` above: the emitter calls the HLE DrawOTag and then the
+    // hook, so only the wait is added.
     { "overlay": "open", "address": "0x80016078",
-      "target": "Kf2.FramePacing.AfterDrawOTag", "mode": "post" },
+      "target": "Kf2.Mods.Hooks.AfterDrawOTag", "mode": "post" },
     { "overlay": "game", "address": "0x80060818",
-      "target": "Kf2.FramePacing.AfterDrawOTag", "mode": "post" },
+      "target": "Kf2.Mods.Hooks.AfterDrawOTag", "mode": "post" },
     { "overlay": "end", "address": "0x80013D80",
-      "target": "Kf2.FramePacing.AfterDrawOTag", "mode": "post" },
+      "target": "Kf2.Mods.Hooks.AfterDrawOTag", "mode": "post" },
+
+    // The thirteen calls GAME.EXE's main loop makes each iteration, in loop order.
+    // The loop is the tail of func_8001369C: a flat list of calls with a backward
+    // branch at 0x80013918 and the renderer (0x800342D8) last. See "The main
+    // loop, stage by stage" in NOTES.md.
+    //
+    // These are `pre` hooks, and a pre hook that returns false makes the
+    // recompiled body not run at all -- PreHook.Run propagates the bool. That is
+    // the mechanism a 60 fps mod needs: render every iteration, advance the world
+    // every other one.
+    { "overlay": "game", "address": "0x8002C944",
+      "target": "Kf2.Mods.Hooks.Stage_8002C944", "mode": "pre" },
+    { "overlay": "game", "address": "0x80037C0C",
+      "target": "Kf2.Mods.Hooks.Stage_80037C0C", "mode": "pre" },
+    { "overlay": "game", "address": "0x8002A550",
+      "target": "Kf2.Mods.Hooks.Stage_8002A550", "mode": "pre" },
+    { "overlay": "game", "address": "0x80040348",
+      "target": "Kf2.Mods.Hooks.Stage_80040348", "mode": "pre" },
+    { "overlay": "game", "address": "0x80046A60",
+      "target": "Kf2.Mods.Hooks.Stage_80046A60", "mode": "pre" },
+    { "overlay": "game", "address": "0x8004910C",
+      "target": "Kf2.Mods.Hooks.Stage_8004910C", "mode": "pre" },
+    { "overlay": "game", "address": "0x8001689C",
+      "target": "Kf2.Mods.Hooks.Stage_8001689C", "mode": "pre" },
+    { "overlay": "game", "address": "0x80025A1C",
+      "target": "Kf2.Mods.Hooks.Stage_80025A1C", "mode": "pre" },
+    { "overlay": "game", "address": "0x800140AC",
+      "target": "Kf2.Mods.Hooks.Stage_800140AC", "mode": "pre" },
+    { "overlay": "game", "address": "0x8002CA74",
+      "target": "Kf2.Mods.Hooks.Stage_8002CA74", "mode": "pre" },
+    { "overlay": "game", "address": "0x80016FC8",
+      "target": "Kf2.Mods.Hooks.Stage_80016FC8", "mode": "pre" },
+    { "overlay": "game", "address": "0x80014534",
+      "target": "Kf2.Mods.Hooks.Stage_80014534", "mode": "pre" },
+    { "overlay": "game", "address": "0x800342D8",
+      "target": "Kf2.Mods.Hooks.Stage_800342D8", "mode": "pre" },
 
     // ---- libcdstream --------------------------------------------------------
     //

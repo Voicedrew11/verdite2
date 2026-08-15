@@ -139,19 +139,31 @@ if (!string.IsNullOrWhiteSpace(autopad))
     }) { IsBackground = true, Name = "kf2-autopad" }.Start();
 }
 
-// Frame pacing. The game's speed is its frame rate and the port never bands down
-// off the fastest one, so a rendered frame is held to a minimum number of
-// vblanks; see patches/FramePacing.cs for the measurement behind the default.
+// Mods: behaviour changes that can be turned on and off without a recompile.
+// They hang off the hook points in mods/Hooks.cs, which are what config/kf2.json
+// names; adding or removing a mod that uses an existing hook costs nothing.
 //
-//     KF2_MINVBLANKS=2     30 fps, NTSC's top band (default); 1 disables the floor
-//     KF2_FRAMESTATS=10    report fps and the vblank-per-frame histogram every 10 s
+//     KF2_MODS=fps=60,framestats=15,loopprobe
+//
+// `fps` is on by default at 30, which is the frame-pacing floor -- the game's
+// speed is its frame rate and the port would otherwise burst past NTSC's fastest
+// band. See "Frame pacing" in NOTES.md.
+Kf2.Mods.Hooks.Install();
+Kf2.Mods.ModHost.Register(new Kf2.Mods.FpsMod());
+Kf2.Mods.ModHost.Register(new Kf2.Mods.FrameStatsMod());
+Kf2.Mods.ModHost.Register(new Kf2.Mods.LoopProbeMod());
+
+Kf2.Mods.ModHost.Load(Environment.GetEnvironmentVariable("KF2_MODS"));
+
+// The env vars that predate the mod list, kept working: they are what NOTES.md
+// documents and what any saved command line uses.
 if (int.TryParse(Environment.GetEnvironmentVariable("KF2_MINVBLANKS"), out var minVBlanks))
-    Kf2.FramePacing.MinVBlanks = minVBlanks;
-if (double.TryParse(Environment.GetEnvironmentVariable("KF2_FRAMESTATS"), out var statsSeconds))
-    Kf2.FramePacing.StatsSeconds = statsSeconds;
-Kf2.FramePacing.Install();
-Console.WriteLine($"[KF2] frame floor: {Kf2.FramePacing.MinVBlanks} vblank(s) " +
-                  $"({(Kf2.FramePacing.MinVBlanks <= 1 ? "off" : $"{60.0 / Kf2.FramePacing.MinVBlanks:F1} fps")})");
+    Kf2.Mods.ModHost.Load(minVBlanks <= 1 ? "fps=60" : $"fps={60 / minVBlanks}");
+if (Environment.GetEnvironmentVariable("KF2_FRAMESTATS") is { Length: > 0 } stats)
+    Kf2.Mods.ModHost.Load($"framestats={stats}");
+
+Kf2.Mods.ModHost.PrintStatus();
+Kf2.Mods.ModHost.Get<Kf2.Mods.FpsMod>().Validate();
 
 var memory = new PSMemory();
 Entry.Run(memory, args.Length > 0 ? args[0] : null);

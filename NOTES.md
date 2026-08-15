@@ -66,6 +66,7 @@ has never run — see "Next steps".
 config/kf2.json          recompiler config (schema: RecompOne.Recompiler/Config/ConfigLoader.cs)
 config/funcmaps/         generated function maps (address/name/size)
 patches/                 hand-written C# replacing recompiled functions
+mods/                    optional behaviour changes, toggled by KF2_MODS
 scripts/inspect_disc.py  SYSTEM.CNF + ISO9660 listing from a .cue/.bin
 scripts/extract_file.py  extract a disc file and dump its PS-X EXE header
 scripts/match_overlays.py  carry a function identified in one overlay to the other two
@@ -787,6 +788,106 @@ delivery is load-bearing for far more than frames. Second, the phantom is
 readable: when the game hangs, the last pad state in the log is the button that
 was held at the last drawn frame, which points straight at the input path.
 
+## Mods
+
+Anything that changes how the game behaves lives in `mods/` and can be switched
+on and off at run time:
+
+```bash
+KF2_MODS=fps=60,framestats=15,loopprobe=20      # name[=value], comma separated
+KF2_MODS=fps=off                                # `off` disables; unknown names throw
+```
+
+| mod | default | what it does |
+|---|---|---|
+| `fps` | on, `30` | frame-rate floor; `60` also gates stages, `off` is the raw port |
+| `framestats` | off | fps and the vblank-per-frame histogram, every N seconds |
+| `loopprobe` | off | attributes per-frame memory writes to main-loop stages |
+
+The shape is worth keeping. A mod is a class with a name, a `Configure(value)`
+and enable/disable; `ModHost` owns the list and the env parsing. Mods attach to
+the hook points in `mods/Hooks.cs` — `FrameDrawn`, `VBlank`, `StageEntered` and
+the stage gate — and **those hook points are the only names `config/kf2.json`
+knows**. Turning a mod on or off, or writing a new one against an existing hook,
+therefore costs nothing: no config edit, no recompile.
+
+The one thing that does cost a recompile is a *new attachment site*, because the
+hook is emitted into the function body. So the useful thing to do when adding a
+site is to add it generously — all thirteen loop stages are hooked whether or not
+anything currently gates them.
+
+`patches/*.cs` is the other half of the same idea and predates it: a `replace`
+that stands in for a recompiled function. Prefer a mod when the behaviour is
+optional and a patch when the function simply has to be reimplemented. Neither
+belongs in `patches/recompone/` — see the note in CLAUDE.md about `mode: "post"`.
+
+## The main game loop, stage by stage
+
+`GAME.EXE`'s per-frame loop is the tail of `func_8001369C` — everything before it
+in that function is area setup, starting with nine `memset`s that are the game's
+own declaration of where its per-area state lives. The loop itself is a **flat
+list of thirteen calls with a backward branch at `0x80013918`, and the renderer
+is last**:
+
+| # | stage | instrs | subtree | reaches | words/entry | into |
+|---|---|---|---|---|---|---|
+| 1 | `func_8002C944` | 76 | 1 | — | 0.0 | — |
+| 2 | `func_80037C0C` | 1917 | 224 | VSync DrawOTag CdControl | 4.0 | buf5 (5 words) |
+| 3 | `func_8002A550` | 1113 | 452 | VSync DrawOTag CdControl | 0.4 | buf2 buf3 |
+| 4 | `func_80040348` | 119 | 118 | — | 12–16 | buf6 buf7 |
+| 5 | `func_80046A60` | 63 | 110 | — | 0–7 | buf7 |
+| 6 | `func_8004910C` | 12 | 1 | — | 0.0 | — |
+| 7 | `func_8001689C` | 429 | 77 | VSync DrawSync CdControl | 0.0 | — (66 while loading) |
+| 8 | `func_80025A1C` | 30 | 1 | — | 0.0 | — |
+| 9 | `func_800140AC` | 43 | 2 | — | 3.0 | buf8 (5 words) |
+| 10 | `func_8002CA74` | 32 | 2 | — | 0.0 | — (81 while loading) |
+| 11 | `func_80016FC8` | 159 | 13 | DrawSync CdControl | 0.0 | — |
+| 12 | `func_80014534` | 79 | 35 | CdControl | 0.0 | — |
+| 13 | `func_800342D8` | 253 | 159 | VSync DrawOTag … | 310–470 | buf1 |
+
+**Take the write counts from a steady window, not the first one.** Stages 7 and
+10 look like the busiest state writers in the window where the area loads (66 and
+81 words a frame) and write *nothing at all* once it has — that is loading work,
+and reading it as per-frame behaviour is the easy mistake here.
+
+"subtree" is how many distinct functions the stage can reach, "reaches" is which
+mapped SDK entry points are in that subtree — both from the emitted C#, so they
+are static facts, not guesses. The renderer is confirmed dynamically as well: a
+managed stack taken mid-frame reads
+`func_8001369C → func_800342D8 → func_8002E0FC → func_80060818 (DrawOTag)`.
+
+The nine buffers, straight out of the `memset` arguments:
+
+```
+buf0 0x8017E05C 0x0007    buf3 0x801B3084 0x0E46    buf6 0x8016C544 0x24F3
+buf1 0x8017E084 0x5F3C    buf4 0x801C8484 0x4611    buf7 0x8019C5EC 0x0AA3
+buf2 0x80199414 0x0058    buf5 0x80175914 0x21D1    buf8 0x80198574 0x03A7
+```
+
+The write counts come from the `loopprobe` mod, which snapshots those 66 KB at
+every stage boundary and attributes each changed word to the stage that ran
+before it. What a steady in-area window says:
+
+- **buf1 is the display list**, and stage 13 is the only thing that fills it —
+  310 to 470 words a frame, varying with what is on screen, which is also how you
+  can tell the camera is moving while the demo plays.
+- **Almost nothing else moves.** Outside the display list the entire per-frame
+  churn across all nine buffers is about **twenty words**: five in buf5 from stage
+  2, five in buf8 from stage 9, a dozen in buf6/buf7 from stages 4 and 5. Those
+  are counters, not state.
+- **So the player's position is not in these buffers.** The demo is visibly
+  walking — the display list changes every frame — and the game's own per-area
+  clears do not cover whatever holds the camera. Two places to look next: the
+  gaps between the nine buffers (`0x8017E068`, the area-module pointer, falls in
+  one), and the area module's own data at `0x8019F07C`.
+- **Stage 2 is the biggest function in the loop by far** — 1,917 instructions,
+  224 functions reachable, `VSync` and `DrawOTag` in its subtree — and writes four
+  words. Whatever it does, it does somewhere else.
+
+The probe is not free — 220k memory reads a frame drops the port to ~26 fps and
+shifts the band histogram — so it is a diagnostic to run deliberately, not to
+leave on.
+
 ## Frame pacing: the port is pinned to the fastest band
 
 King's Field's game speed **is** its frame rate — everything advances a fixed
@@ -941,10 +1042,83 @@ camera, enemy timing untouched, and a 2:1 gate is far safer than 4:1.
 Full decoupling — logic at 30, rendering interpolated at 60 — still needs
 decomp-level knowledge of which state is positional, and is still not worth it.
 
-Either way the prerequisite is the same: know which functions advance what. The
-main loop is `game_entry → func_80013634 → func_8001369C`; profiling it by
-sampling `dotnet-stack` a few hundred times while the game idles in an area gives
-the per-frame call structure with hit counts, which is the input to any of this.
+### 60 fps: the mechanism exists, the map is half drawn
+
+**There is room.** Sampling the game thread 200 times in an area puts 161 samples
+in the pacing sleep, 23 in `Present`, and six in game code — so a frame is about a
+millisecond of MIPS and thirty-two of waiting. Rendering twice as often costs
+nothing this port has not already got.
+
+**The gate works.** A `pre` hook that returns `false` makes the recompiled body
+not run — `PreHook.Run` propagates the bool and the emitter writes
+
+```csharp
+public static void func_80037C0C(CpuContext c, IMemory m)
+{
+    if (!RecompOne.Runtime.Context.PreHook.Run(Kf2.Mods.Hooks.Stage_80037C0C, c, m)) return;
+    func_80037C0C_Impl(c, m);
+}
+```
+
+All thirteen stages carry one of these, so any subset of the loop can be run every
+other iteration by flipping a flag, with no recompile:
+
+```bash
+KF2_MODS=fps=60:gate=80037C0C+8002A550
+```
+
+**What is missing is which stages to name**, and the probe has narrowed it to a
+hypothesis rather than settled it.
+
+*Established.* Over ten consecutive windows in an area, exactly four words outside
+the display list change on **every single frame**, and one stage writes all four:
+
+```
+8017783C (buf5)  changed 656x/656 frames  mean -0.18   now -13348   by 80037C0C
+80177848 (buf5)  changed 656x             0xNN000000               by 80037C0C
+801778F8 (buf5)  changed 656x             0xNN800001               by 80037C0C
+8017793C (buf5)  changed 656x             0xNN800001               by 80037C0C
+```
+
+Three are packed `u16:u16` pairs whose high halves range `0x0000`–`0x0E80` across
+samples; the fourth is a signed scalar that sits between −13,226 and −13,352 in
+every window, jitters by tens, and has a mean signed change of about zero — it
+does not drift over four minutes. Separately, stage 4 (`func_80040348`) writes a
+*marching* set of buf6 addresses — `8016C654`, `8016CBC0`, `8016CFA4`, `8016D1F4`,
+`8016CCA0` in successive windows — rather than a fixed set.
+
+*Inferred, not confirmed.* A 0–4096 range is the PSY-Q angle scale, so the buf5
+four look like a **view/camera block** and stage 2 like the stage that maintains
+it; a set of addresses that walks through a 9 KB buffer looks like **iteration
+over an entity table**, making stage 4 a world updater. That would give the split
+the cheap variant needs: gate stage 4, leave stage 2 alone, and the camera runs at
+60 while the world stays at 30.
+
+Note this reverses the reading of the write-count table above, where stage 2 looks
+inert because it writes four words. It writes four words and they are *the* four.
+
+*The experiment that settles it* is scripted input, which has not successfully run
+yet — the port exited before `KF2_AUTOPAD`'s first press each time it was tried:
+
+```bash
+KF2_MODS=loopprobe=5 KF2_AUTOPAD=20:Up:5000,40:Right:5000
+```
+
+If `0x8017783C` steps monotonically under held Up, it is positional; if the three
+packed words swing under held Right and not under Up, they are the view angles.
+Either result names the stage, and the gate follows immediately. Until then
+`fps=60` with no gate list runs everything at double speed — the mod says so at
+startup rather than pretending otherwise.
+
+**No clock exists in these buffers.** Every busy word has a mean signed change of
+about zero, so there is no frame counter to watch, and the verification idea of
+"gate a stage and see a counter's rate halve" needs a counter found somewhere else
+first. The area module's data at `0x8019F07C` is the next place to point the probe.
+
+The delta-halving is still owed regardless — a view stage running at 60 with
+unhalved deltas moves twice as fast, and `KF2_MODS` cannot fix that from outside.
+That is the one part of 60 fps that needs a constant identified in the game's own
+code rather than a stage gated from outside it.
 
 ## Next steps
 
@@ -965,23 +1139,27 @@ the per-frame call structure with hit counts, which is the input to any of this.
    the intro and ending movies are **XA** sectors routed to `XaRouter` on the
    runtime's own thread. Good SPU output says nothing about XA, so if the movies
    have not been listened to specifically, that half is still open.
-4. ~~**Fix the frame pacing.**~~ Step one done — `patches/FramePacing.cs` holds
-   every rendered frame to two vblanks, so the port is a constant 30 fps and no
-   longer bursts past NTSC's top band. See "Frame pacing"; the measurement is
-   `KF2_FRAMESTATS`. **Step two (60 fps rendering) has not been started**, and
-   needs the per-frame call structure first.
-5. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
+4. ~~**Fix the frame pacing.**~~ Step one done — the `fps` mod holds every
+   rendered frame to two vblanks, so the port is a constant 30 fps and no longer
+   bursts past NTSC's top band. See "Frame pacing"; the measurement is the
+   `framestats` mod.
+5. **Confirm the buf5 view block**, which is all 60 fps is now blocked on. Run
+   `KF2_MODS=loopprobe=5 KF2_AUTOPAD=20:Up:5000,40:Right:5000` and watch
+   `0x8017783C`–`0x8017793C`: monotonic under Up means positional, swinging under
+   Right means view angle. Either names stage 2 and the gate follows. See "60 fps:
+   the mechanism exists, the map is half drawn".
+6. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
    `.map` or ELF, so it does not help the function maps).
-6. **Report the two runtime bugs upstream as issues** (not PRs — see below):
+7. **Report the two runtime bugs upstream as issues** (not PRs — see below):
    input polled only from `PresentFrame`, which deadlocks any game that waits on
    the pad without vsyncing, and `Interrupts.Deliver` deriving a callback-table
    address from the `HookEntryInt` jmp_buf, which calls whatever the resulting
    game variable holds. Both are in `patches/recompone/0006` and `0007` with the
    reasoning; the second at minimum should refuse a handler that is not a known
    function.
-7. Play further in. Now that the menu opens, the parts of the game it reaches —
+8. Play further in. Now that the menu opens, the parts of the game it reaches —
    inventory, equipment, magic, the map — have never run, and each is a screen
    with its own code path.
 
