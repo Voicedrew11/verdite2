@@ -93,7 +93,64 @@
     { "overlay": "game", "address": "0x8005FCC8",
       "target": "RecompOne.Runtime.Sdk.LibEtc.VSync", "mode": "replace" },
     { "overlay": "end", "address": "0x8001B154",
-      "target": "RecompOne.Runtime.Sdk.LibEtc.VSync", "mode": "replace" }
+      "target": "RecompOne.Runtime.Sdk.LibEtc.VSync", "mode": "replace" },
+
+    // CdInit -- where boot stalls. The raw routine retries a low-level init four
+    // times, then installs the sync/ready/read callbacks; the init never reports
+    // success against the emulated drive, so it spins.
+    //
+    // Identified dynamically: PSY-Q reaches I/O through a base pointer in a
+    // global rather than a literal address, so static scans find nothing. Tracing
+    // the first access to the CD registers (0x1F801800-03) named the calling
+    // function, and its failure string reads "CdInit: Init failed".
+    { "overlay": "open", "address": "0x8001AD90",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdInit", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004C340",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdInit", "mode": "replace" },
+    { "overlay": "end", "address": "0x8001735C",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdInit", "mode": "replace" },
+
+    // The CdControl family. All three variants are thin wrappers that mask the
+    // command byte and delegate to a shared internal command-write, so they are
+    // told apart by what they pass it: CdControlF sends no result buffer and
+    // sets the async flag, CdControlB issues the command and then waits (which
+    // is what identifies CdSync), and plain CdControl does neither.
+    { "overlay": "open", "address": "0x8001B18C",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControl", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001B1B0",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControlF", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001B1D8",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControlB", "mode": "replace" },
+    { "overlay": "open", "address": "0x8001BBCC",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdSync", "mode": "replace" },
+
+    { "overlay": "game", "address": "0x8004AF48",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControl", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004AF6C",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControlF", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004AF94",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControlB", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004B988",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdSync", "mode": "replace" },
+
+    { "overlay": "end", "address": "0x80017758",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControl", "mode": "replace" },
+    { "overlay": "end", "address": "0x8001777C",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControlF", "mode": "replace" },
+    { "overlay": "end", "address": "0x800177A4",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdControlB", "mode": "replace" },
+    { "overlay": "end", "address": "0x80018198",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdSync", "mode": "replace" },
+
+    // CdRead(sectors, buf, mode). Identified by how it derives the DMA transfer
+    // length from the mode's sector-size bits (A2 & 0x30), selecting 0x200,
+    // 0x249 or 0x246 words -- 2048, 2340 or 2328 bytes. Unique per overlay.
+    { "overlay": "open", "address": "0x8001B244",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" },
+    { "overlay": "game", "address": "0x8004B000",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" },
+    { "overlay": "end", "address": "0x80017810",
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" }
   ],
 
   // Diagnostics: annotate generated C# with addresses and disassembly. Very
