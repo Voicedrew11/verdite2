@@ -62,11 +62,125 @@
       "functions": [
         { "address": "0x80011CB4", "name": "end_entry" }
       ]
+    },
+
+    // ---- runtime-loaded modules from CD/COM/FDAT.T -------------------------
+    //
+    // GAME.EXE is not the whole game. Per-area logic is MIPS code linked to run
+    // at 0x8019F07C and loaded off the disc into RAM at run time -- this is what
+    // crashed the port with "unmapped call: 0x8019F1C8" the moment the first
+    // area came up, because that address is in nobody's function map.
+    //
+    // FDAT.T is an archive: u16 count, then a u16 table of start sectors in
+    // 2048-byte units. Entries run in groups of three per area (~66 KB of data,
+    // ~28 KB of data, then a 4-8 KB code module), so the code lives at entries
+    // 3n+2. Each module is a 32-plus-slot table of function pointers followed by
+    // the functions themselves; GAME.EXE keeps the module pointer at 0x8017E068
+    // and dispatches through it (`(*mod)[8]` is the call that crashed), falling
+    // back to a static table of no-ops at 0x80064B64 when no module is loaded.
+    //
+    // Two things pin the load address, neither of them a guess. The pointer
+    // table holds absolute addresses inside the module, so the file is linked
+    // for one fixed address; and scoring every candidate base by how many of the
+    // module's own `jal` targets land on a real function start (preceded by
+    // `jr ra` + delay slot, or opening with `addiu sp,sp,-N`) peaks exactly at
+    // 0x8019F07C for all eight area modules -- the same address GAME.EXE writes
+    // into 0x8017E068 -- and at 0x80193B38 for the one at entry 32, which is a
+    // different module family. Both scores are unanimous, 4/4 to 8/8.
+    //
+    // `base` is the address of the byte at offset+skip, so it is the module base
+    // plus its pointer table, and the overlay's LBA works out to the archive's
+    // LBA plus the entry's start sector. That LBA is what arms the swap: the CD
+    // read of the module's first sector marks the overlay pending and the write
+    // that lands it in RAM activates it. Function maps are a linear sweep with
+    // the pointer-table targets and every internal `jal` merged in, since the
+    // sweep alone missed real entry points in five of the nine modules.
+    {
+      "name": "fdat02",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x8019F0FC",
+      "offset": 98304,
+      "skip": 128,
+      "size": 3968,
+      "funcMap": "funcmaps/fdat02.json"
+    },
+    {
+      "name": "fdat05",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x8019F110",
+      "offset": 200704,
+      "skip": 148,
+      "size": 8044,
+      "funcMap": "funcmaps/fdat05.json"
+    },
+    {
+      "name": "fdat08",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x8019F0FC",
+      "offset": 307200,
+      "skip": 128,
+      "size": 3968,
+      "funcMap": "funcmaps/fdat08.json"
+    },
+    {
+      "name": "fdat11",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x8019F118",
+      "offset": 409600,
+      "skip": 156,
+      "size": 5988,
+      "funcMap": "funcmaps/fdat11.json"
+    },
+    {
+      "name": "fdat14",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x8019F118",
+      "offset": 512000,
+      "skip": 156,
+      "size": 8036,
+      "funcMap": "funcmaps/fdat14.json"
+    },
+    {
+      "name": "fdat17",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x8019F148",
+      "offset": 616448,
+      "skip": 204,
+      "size": 5940,
+      "funcMap": "funcmaps/fdat17.json"
+    },
+    {
+      "name": "fdat20",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x8019F2B8",
+      "offset": 720896,
+      "skip": 572,
+      "size": 5572,
+      "funcMap": "funcmaps/fdat20.json"
+    },
+    {
+      "name": "fdat23",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x8019F0FC",
+      "offset": 821248,
+      "skip": 128,
+      "size": 8064,
+      "funcMap": "funcmaps/fdat23.json"
+    },
+    {
+      "name": "fdat32",
+      "file": "CD/COM/FDAT.T",
+      "base": "0x80193BCC",
+      "offset": 925696,
+      "skip": 148,
+      "size": 5996,
+      "funcMap": "funcmaps/fdat32.json"
     }
   ],
 
-  // CD/COM/*.T and OP/*.S are data and streamed media, not code -- they stay out
-  // of the overlay list and are read by the runtime through the CD interface.
+  // The rest of CD/COM/*.T and all of OP/*.S are data and streamed media -- they
+  // stay out of the overlay list and are read through the CD interface. FDAT.T
+  // is the exception: it carries code as well as data, hence the entries above.
 
   "stubs": [],
   "ignored": [],

@@ -21,13 +21,20 @@ that is a *different game* and every address and function map here is wrong for 
 
 ## Status
 
-**The intro movie plays.** Boot runs `OPEN.EXE` through PSY-Q startup, streams
-`\OP\OP0.S` off the disc, decodes it through the MDEC and puts it on screen —
-the From Software logo and the flying-glyph title sequence, at ~13 movie frames
-a second against 60 VSyncs.
+**The game is playable.** `OPEN.EXE` streams the intro movies off the disc
+through the MDEC, the title screen loads and runs, the boot stub swaps in
+`GAME.EXE`, the main game gets through its data load and memory-card check, and
+the first area comes up and can be walked around in.
+
+Reaching that took three CD paths that a static recompilation breaks in three
+different ways — see "The three ways a CD read can hang" — and it turned up the
+fact that **`GAME.EXE` is not the whole game**: per-area logic is MIPS code
+loaded off the disc at run time (see "GAME.EXE loads code"). The area modules
+are confirmed by play, not just by static analysis: walking around is `fdat02`
+executing.
 
 `libetc` (VSync), `libcd`, `libgpu`, `libcdstream` and libapi's `DMACallback`
-are mapped to the runtime's HLE — 54 patches. A steady-state second of
+are mapped to the runtime's HLE — 63 patches. A steady-state second of
 `KF2_LOG=sdk` looks like this, and is what "working" should look like:
 
 ```
@@ -40,9 +47,8 @@ are mapped to the runtime's HLE — 54 patches. A steady-state second of
 
 — one frame off the ring, one buffer flip, one ordering table, repeating.
 
-Not yet done: the movie has no sound (XA audio is routed but unverified), and
-nothing past the intro has been exercised, so `GAME.EXE` is still untested. Its
-patch addresses are derived rather than observed; see "The overlay delta".
+Not yet done: the movie has no sound (XA audio is routed but unverified), only
+the first area has actually been played, and `END.EXE` has never run.
 
 ## Layout
 
@@ -518,6 +524,70 @@ to. **Note that is not the delta in the table below**: `CdInit` sits at
 `+0x315B0`, so libcd is split over more than one object and its thunk block and
 `cdinit` move independently.
 
+## GAME.EXE loads code
+
+`GAME.EXE` is not the whole game. Per-area logic is **MIPS code linked to run at
+`0x8019F07C` and loaded off the disc into RAM at run time**. The port died on it
+with `unmapped call: 0x8019F1C8` the moment the first area came up.
+
+`CD/COM/FDAT.T` is an archive: `u16` count, then a `u16` table of start sectors
+in 2048-byte units. Entries run in groups of three per area — ~66 KB of data,
+~28 KB of data, then a 4–8 KB code module — so the code lives at entries `3n+2`.
+Each module is a table of function pointers (32 slots and up) followed by the
+functions. `GAME.EXE` holds the current module at `0x8017E068` and dispatches
+through it; the crash was slot 8, `(*mod)[8]`. With no module loaded the same
+pointer holds `0x80064B64`, a static table of 32 identical pointers to a bare
+`jr ra` — which is how the shape of the object was confirmed before any of the
+loaded ones were read.
+
+Two independent things pin the load address:
+
+- The pointer table holds **absolute** addresses inside the module, so the file
+  is linked for one fixed address. Searching the whole disc image for the crash
+  address `0x8019F1C8` returns exactly one hit, inside `FDAT.T`, `0x20` bytes
+  into entry 2 — the table slot the crash dispatched through.
+- Scoring every candidate base by how many of a module's own `jal` targets land
+  on a plausible function start (preceded by `jr ra` + delay slot, or opening
+  `addiu sp,sp,-N`) peaks **unanimously** at `0x8019F07C` for all eight area
+  modules — the address `GAME.EXE` itself writes into `0x8017E068` — and at
+  `0x80193B38` for entry 32, which is a different module family.
+
+| entry | file offset | size | base | LBA |
+|---|---|---|---|---|
+| 2 | `0x018000` | 4096 | `0x8019F07C` | 457 |
+| 5 | `0x031000` | 8192 | `0x8019F07C` | 507 |
+| 8 | `0x04B000` | 4096 | `0x8019F07C` | 559 |
+| 11 | `0x064000` | 6144 | `0x8019F07C` | 609 |
+| 14 | `0x07D000` | 8192 | `0x8019F07C` | 659 |
+| 17 | `0x096800` | 6144 | `0x8019F07C` | 710 |
+| 20 | `0x0B0000` | 6144 | `0x8019F07C` | 761 |
+| 23 | `0x0C8800` | 8192 | `0x8019F07C` | 810 |
+| 32 | `0x0E2000` | 6144 | `0x80193B38` | 861 |
+
+They are declared as overlays like any other. `base` is the address of the byte
+at `offset + skip`, so it is the module base plus its pointer table, and
+`ResolveOverlay` derives the LBA as the archive's LBA plus the entry's start
+sector. **That LBA is what arms the swap**: the CD read of the module's first
+sector marks the overlay pending (`Dispatcher.LoadByLba`) and the write that
+lands it in RAM activates it (`NotifyWrite`) — which only works because the HLE
+`CdRead`/`CdGetSector` call `LoadByLba` per sector and write through `PSMemory`.
+
+Function maps are a linear sweep of each module with the pointer-table targets
+and every internal `jal` merged in. Do not skip the merge: the sweep alone
+missed real entry points in **five of the nine** modules, and each of those is a
+future `unmapped call`. `scripts/add_call_targets.py`'s `merge()` does the
+splicing, and re-running the sweep is:
+
+```bash
+$RC --generate-function-file -linear-sweep -disc disc/KingsField2.cue \
+    -file "CD/COM/FDAT.T" -base 8019F0FC -offset 18000 -skip 80 -size F80 \
+    -out config/funcmaps/fdat02.json
+```
+
+Still open: the archive has 70 entries and only these nine are code — the group
+pattern breaks down after entry 23, so more module families may be hiding in the
+later entries, and `END.EXE`'s equivalents have not been looked for at all.
+
 ## The SDK naming problem
 
 `SdkPatches.cs` routes PSY-Q library calls to the runtime's HLE implementations
@@ -572,16 +642,20 @@ What worked for identifying them, roughly in order of payoff:
 
 ## Next steps
 
-1. **Get past the intro into `GAME.EXE`.** Nothing beyond `OPEN.EXE` has run, so
-   the `game` patch addresses are derived from the overlay delta and never
-   executed. Expect `libpad` to be the next thing needed — the intro presumably
-   wants a Start press to skip, and no pad function is mapped.
-2. Check the movie's audio. XA sectors are routed to `XaRouter` and the runtime
+1. **Cross an area boundary.** Only `fdat02` has run. The swap from one area
+   module to the next is the untested half of the overlay mechanism, and it is
+   where a wrong `base` or a missed entry point in the other eight maps will
+   show up — as `unmapped call`, or as a module running against the wrong map.
+2. **Look for the module families the group-of-three pattern misses.** It holds
+   for `FDAT.T` entries 0–23 and breaks down after; entry 32 is already a second
+   family at its own base. The rest of the archive has not been classified, and
+   `END.EXE` has not been checked for the same trick at all.
+3. Check the movie's audio. XA sectors are routed to `XaRouter` and the runtime
    has an XA thread, but nothing has been verified by ear.
-3. Correct linear-sweep damage as it surfaces. Coverage is only ~56% of `open`
+4. Correct linear-sweep damage as it surfaces. Coverage is only ~56% of `open`
    and ~86% of `game`, so expect more gaps; `scripts/add_call_targets.py`
    re-derives starts from the code and can be re-run at any time.
-4. Work out the `CD/COM/*.T` archive formats when asset work starts.
+5. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
    `.map` or ELF, so it does not help the function maps).
