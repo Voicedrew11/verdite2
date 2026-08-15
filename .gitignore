@@ -11,3 +11,13 @@ obj/
 
 # Tool checkout (cloned, not vendored)
 tools/RecompOne/
+
+# Written by the runtime at play time: memory card saves and host settings.
+*.sav
+settings.json
+
+# Optional runtime asset-replacement packs
+packs/
+
+__pycache__/
+*.pyc
