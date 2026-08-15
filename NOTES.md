@@ -21,20 +21,39 @@ that is a *different game* and every address and function map here is wrong for 
 
 ## Status
 
-Boots into the game's own code and runs PSY-Q startup. Nothing renders yet, and
-the cause is understood: **no SDK function is HLE'd**, because the recompiler
-matches them by name and a linear sweep produces no names. See "The SDK naming
-problem" below — that is the main remaining work.
+Boots, opens a window, and runs `OPEN.EXE` through PSY-Q startup into its main
+loop. `libetc` (VSync), `libcd` and `libgpu` are mapped to the runtime's HLE;
+the display is configured and enabled.
 
-Boot currently reaches:
+The viewport is black because the game has not drawn anything yet, not because
+drawing is broken. `KF2_LOG=gpu,sdk` shows the full double-buffer setup —
 
 ```
-open_entry -> func_80011AE0 (main) -> func_8001AD90 -> func_8001C044 -> func_8001BD08
+[GPU] GP1(00) 0x000000        reset
+[GPU] GP1(08) 0x000000
+[GPU] GP1(03) 0x000000        display ENABLED
+[SDK] PutDrawEnv  clip=(0,0)-640x240   ofs=(0,0)   isbg=1
+[SDK] PutDispEnv  disp=(0,240)-640x240
+[SDK] PutDrawEnv  clip=(0,240)-640x240 ofs=(0,240) isbg=1
+[SDK] PutDispEnv  disp=(0,0)-640x240
 ```
 
-and spins in `func_8001BD08`, a CD state machine polling a status word at
-`0x8003E92C` for 2 or 5. It never advances because the PSY-Q CD library is
-running as raw recompiled MIPS instead of being routed to the runtime's `LibCd`.
+— two 640×240 buffers, display on, and then **zero `DrawOTag` calls ever**. The
+game sets up graphics and goes straight into playing the intro movie, which is
+where it stops:
+
+```
+[SDK] Cd cmd 0x02 (SetLoc)  04:42:43
+[SDK] Cd cmd 0x15 (SeekL)
+[SDK] Cd cmd 0x0E (SetMode)
+[SDK] Cd cmd 0x1B (ReadS)      <- streaming read starts, and nothing follows
+```
+
+No DMA channel 3 transfer ever happens after `CdlReadS`, so no sector is
+delivered, `libcdstream`'s ring buffer never fills and the movie never starts.
+`OPEN.EXE` is essentially a movie player — it calls `DrawOTag` exactly once in
+the whole executable — so nothing will appear on screen until streaming works.
+That is the next blocker, and it is a CD/stream problem, not a GPU one.
 
 ## Layout
 
@@ -44,6 +63,7 @@ config/funcmaps/         generated function maps (address/name/size)
 patches/                 hand-written C# replacing recompiled functions
 scripts/inspect_disc.py  SYSTEM.CNF + ISO9660 listing from a .cue/.bin
 scripts/extract_file.py  extract a disc file and dump its PS-X EXE header
+scripts/match_overlays.py  carry a function identified in one overlay to the other two
 disc/                    your own dump (gitignored)
 generated/               recompiler output (gitignored, derived from the disc)
 tools/RecompOne/         upstream tool checkout (gitignored)
@@ -126,6 +146,13 @@ runtime's BIOS `Load` (A(42h)) returned the header pointer, but the real BIOS
 returns 1 on success. King's Field's boot stub compares the result against 1
 exactly and retries forever otherwise, so unpatched it spins in the loader
 (~12,900 `Load` calls in 30 seconds) and never reaches `Exec`.
+
+The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
+names the function behind a CD register access (`KF2_CDTRACE=1`), and
+`0003-libgpu-sdk-trace.patch` gives `LibGpu` the `Log.Sdk` tracing the other SDK
+libraries already had, plus a `Log.Gpu` line for every GP1 write. GP1 is
+display/control only — a handful of writes per mode change — so tracing all of it
+is cheap, and it is the only way to see whether the game ever enabled the display.
 
 ### 2. Generate function maps
 
@@ -220,74 +247,178 @@ patches` and emits the body as a forwarding call:
 public static void func_8001EB88(CpuContext c, IMemory m) => RecompOne.Runtime.Sdk.LibEtc.VSync(c, m);
 ```
 
-Note this does **not** yet change what you see: boot still stalls in the CD
-library before it ever reaches a VSync call (`KF2_LOG=sdk` shows zero VSync
-calls). VSync was a necessary fix, not a sufficient one.
-
 Useful technique for the remaining SDK functions: `func_80014C0C` is the `printf`
 thunk (BIOS A(3Fh), 69 call sites). Library routines pass diagnostic strings to
 it, so following its arguments names the surrounding function for free — that is
 how `VSync` was confirmed.
 
-## The SDK naming problem (main open issue)
+## The overlay delta: identify once, get all three
+
+The three executables are three separate links of the *same* PSY-Q libraries, so
+every library routine exists in all three at a different address. They are laid
+out at a **constant offset per library**:
+
+| | offset from `open` |
+|---|---|
+| `game` | `+0x4A7A0` |
+| `end` | `-0x22F8` |
+
+for all of `libgpu`. The offset is not the same for every library — `libcd` sits
+at `+0x315B0` and `libetc` at `+0x41140` — because each object is linked in a
+different place, but *within* one library it is uniform, so one identification
+plus one subtraction gives the other two.
+
+`scripts/match_overlays.py` does this mechanically. It matches on a
+relocation-insensitive normal form — `j`/`jal` targets, `lui` immediates and the
+16-bit displacement of loads, stores and `addiu` masked out, leaving opcodes and
+register numbers. Absolute addresses are exactly what differs between the links,
+so masking them is the point:
+
+```bash
+# where is open's DrawOTag in the other two?
+python3 scripts/match_overlays.py disc/KingsField2.cue 0x80016078
+
+# re-derive the whole libgpu map and emit the config patches
+python3 scripts/match_overlays.py disc/KingsField2.cue --libgpu
+```
+
+Short functions (a 12-instruction table dispatch, say) match in several places;
+the tool reports that rather than guessing, and settles them against the delta
+the unambiguous rows agree on. Run against the already-known `libcd`/`libetc`
+addresses it reproduces every one of them, which is what makes it trustworthy
+for the ones that are not known yet.
+
+## libgpu: found and mapped
+
+libgpu is **two layers**, and only the outer one is worth patching.
+
+The public API never touches hardware. It dispatches through a 15-slot driver
+table (`0x8003D610` in `open`, reached via a pointer at `0x8003E790`) whose
+entries are the routines that do: `_ctl` writes GP1 and shadows the value,
+`_cwc` pushes words to GP0, `_dma` programs DMA channel 2 in linked-list mode,
+`_otc` uses channel 6, `_load`/`_store` issue GP0 `0xA0`/`0xC0`. Patching a
+public function replaces the whole path below it, and the runtime already
+emulates every register the driver layer would have written.
+
+This indirection is also why the library is invisible to the obvious searches:
+**nothing in the image ever forms a GPU register address**. There are five
+`lui …, 0x1F80` instructions in all of `OPEN.EXE` and none of them is the GPU.
+The register addresses live in a data table (`0x8003E7A8`: GP0, GP1, D2_MADR,
+D2_BCR, D2_CHCR, D6_MADR, D6_BCR, D6_CHCR, DPCR) that the driver layer loads
+through. Finding that table by searching the *data* for the dword `0x1F801810`
+is what unpicked the whole library, and the same trick found `libcd` earlier.
+
+| function | `open` | `game` | `end` | HLE |
+|---|---|---|---|---|
+| `ResetGraph` | `0x80015A8C` | `0x8006022C` | `0x80013794` | |
+| `SetGraphDebug` | `0x80015D28` | `0x800604C8` | `0x80013A30` | |
+| `GetGraphDebug` | `0x80015D9C` | `0x8006053C` | `0x80013AA4` | |
+| `SetDispMask` | `0x80015DC4` | `0x80060564` | `0x80013ACC` | |
+| `DrawSync` | `0x80015E04` | `0x800605A4` | `0x80013B0C` | ✔ |
+| `ClearImage` | `0x80015E34` | `0x800605D4` | `0x80013B3C` | |
+| `LoadImage` | `0x80015E84` | `0x80060624` | `0x80013B8C` | |
+| `StoreImage` | `0x80015EC0` | `0x80060660` | `0x80013BC8` | |
+| `MoveImage` | `0x80015EFC` | `0x8006069C` | `0x80013C04` | |
+| `ClearOTag` | `0x80015F68` | `0x80060708` | `0x80013C70` | |
+| `ClearOTagR` | `0x80015FBC` | `0x8006075C` | `0x80013CC4` | |
+| `DrawPrim` | `0x80015FF4` | `0x80060794` | `0x80013CFC` | |
+| `DrawOTag` | `0x80016078` | `0x80060818` | `0x80013D80` | ✔ |
+| `PutDrawEnv` | `0x800160D0` | `0x80060870` | `0x80013DD8` | ✔ |
+| `GetDrawEnv` | `0x80016190` | `0x80060930` | `0x80013E98` | |
+| `PutDispEnv` | `0x800161F0` | `0x80060990` | `0x80013EF8` | ✔ |
+
+Only the four marked `HLE` are patched, because those are the only four
+`RecompOne.Runtime.Sdk.LibGpu` implements. The rest run as recompiled MIPS and
+work: their register writes are trapped by `PSMemory` and their DMA (channels 2
+and 6, including OTC) is emulated.
+
+How each of the four was pinned down:
+
+- **`PutDispEnv`** computes `hStart = scrX*10 + 0x260` and clamps it to
+  `[0x1F4, 0xCDA]` — the same two magic numbers as the runtime's own
+  `LibGpu.PutDispEnv` (`Math.Clamp(hStart, 500, 3290)`). It finishes with
+  `GP1(0x08)` and a 20-byte copy of the DISPENV to the current-env global.
+- **`PutDrawEnv`** builds the `DR_ENV` packet at `env+0x1C`, which is precisely
+  where that packet sits inside a 92-byte `DRAWENV`; it then sends the packet
+  through the driver's `_dma` slot, copies `0x5C` bytes to the current draw env
+  and returns its argument. Two independent struct offsets agreeing is what
+  makes this one certain rather than plausible.
+- **`DrawOTag`** calls the `_dma` slot — the routine that writes `D2_MADR`,
+  `D2_BCR = 0` and `D2_CHCR = 0x01000401` — with the ordering table.
+- **`DrawSync`** tail-calls the slot that polls `D2_CHCR` and GPUSTAT and, on
+  expiry, prints `GPU timeout:QUE=(%2d,%2d),CODE=(%d,%d,%08X)`.
+
+`SetGraphDebug` is confirmed the same way: it is the only caller of
+`SetGraphDebug:level:%d,type:%d reverse:%d`, and `DrawPrim` passes the literal
+string `"DrawPrim"` as the `%s` of `%s: bad prim:addr=%08X,type=%s,len=%d`.
+
+`GetDrawEnv` and `GetDispEnv` have **zero** call sites in all three overlays, so
+the current-env copies that the HLE versions skip are never read back.
+
+Verification is in the log rather than in the reasoning: with the patches in
+place `KF2_LOG=gpu,sdk` shows `PutDrawEnv`/`PutDispEnv` reporting a coherent
+640×240 double buffer (garbage struct offsets would give nonsense), the
+`[DMA] ch2` linked-list transfers disappear (the HLE `DrawOTag` writes GP0
+directly instead of programming the DMA controller), and `GP1(03) 0x000000`
+confirms the display is switched on.
+
+## The SDK naming problem
 
 `SdkPatches.cs` routes PSY-Q library calls to the runtime's HLE implementations
 by matching **exact function names** — `VSync`, `DrawOTag`, `DrawSync`,
 `PutDrawEnv`, `PutDispEnv`, `CdInit`, `CdRead`, `PadInitDirect` and so on. A
 linear sweep names everything `func_800xxxxx`, so nothing matches and the
-recompiler reports:
-
-```
-[Recompiler] it was applied 0 reimplementations
-```
-
-Consequences, in order of severity:
-
-1. **Nothing can ever be presented.** `Runtime.PresentFrame()` has exactly one
-   caller in the entire runtime: the HLE `LibEtc.VSync`. If `VSync` is not
-   reimplemented, no frame is ever pushed to the window regardless of what the
-   game draws.
-2. **Interrupts are never delivered.** `DispatchIrq` is called from
-   `PresentFrame`, so anything waiting on an IRQ-updated counter waits forever.
-   This is circular with (1).
-3. **CD loading stalls**, which is where boot currently stops.
-
-Raw GPU register writes are *not* a problem — `PSMemory.cs:163-164` traps
-`0x1F801810`/`0x1F801814` and forwards to the emulated GPU, and DMA is emulated
-too. So drawing works at the hardware level; presentation and the CD/pad
-libraries are what need HLE.
-
-Upstream's guidance for this case is manual: "you need to map each SDK address to
-its runtime counterpart yourself, using `patches` with a `replace` that targets
-the runtime function." So each identified function gets a `patches[]` entry, e.g.
+recompiler always reports `applied 0 reimplementations`. Every SDK function has
+to be mapped **by address** in `patches[]` instead, which is upstream's own
+advice for this case: "you need to map each SDK address to its runtime
+counterpart yourself, using `patches` with a `replace` that targets the runtime
+function."
 
 ```json
-{ "overlay": "open", "address": "0x8001BD08",
-  "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" }
+{ "overlay": "open", "address": "0x80016078",
+  "target": "RecompOne.Runtime.Sdk.LibGpu.DrawOTag", "mode": "replace" }
 ```
 
-Identifying them is ordinary PS1 RE work. Options, roughly in order of payoff:
+Done so far: `libetc` (VSync), `libcd` (CdInit, CdControl/F/B, CdSync, CdRead)
+and all four HLE'd `libgpu` entry points, across all three overlays — 33
+patches. Still unmapped: `libcdstream` (`StSetRing`, `StGetNext`, …) and
+`libpad`.
 
-- **PSY-Q signature matching.** The libraries are statically linked and identical
-  across games, so hash/FLIRT-style matching against the official SDK objects
-  identifies them wholesale. This is what `ghidra_psx_ldr` and hash-based
-  matchers do, and it is the only approach that scales.
-- **Behavioural fingerprinting.** Each library function touches characteristic
-  hardware: `DrawOTag` programs DMA channel 2 in linked-list mode, `DrawSync`
-  polls GPUSTAT, the CD functions hit `0x1F801800`-`0x1F801803`. Note the
-  generated C# builds MMIO addresses at runtime from a `0x1F800000` base rather
-  than emitting literals, so grep for the base plus offset, not the full address.
-- **Follow the call graph from the stall.** `func_8001BD08` and its helpers
-  (`func_8001B5AC`, `func_8001B5CC`, `func_8001B664`) are the CD library.
+What worked for identifying them, roughly in order of payoff:
+
+- **The overlay delta.** Identify once, get the other two for free — see above.
+  This is worth doing first because it makes every other technique 3× cheaper.
+- **Data-side search for hardware addresses.** PSY-Q reaches I/O through pointer
+  tables in `.data`, not through literals in code — there are only five
+  `lui …, 0x1F80` instructions in all of `OPEN.EXE`. Searching the *data* for a
+  register address (`0x1F801810` for the GPU, `0x1F801800` for the CD) finds the
+  table, and the functions that load through it are the library.
+- **Diagnostic strings.** `func_80014C0C` is the `printf` thunk (BIOS A(3Fh), 69
+  call sites) and the PSY-Q libraries are full of `$Id:` tags and error text —
+  `VSync: timeout`, `CdInit: Init failed`, `GPU timeout:QUE=…`,
+  `SetGraphDebug:level:%d,…`. Following an argument names the caller for free.
+- **Struct offsets as evidence.** A function that writes a packet at `env+0x1C`
+  and copies `0x5C` bytes is handling a `DRAWENV`; one that clamps to
+  `[0x1F4, 0xCDA]` is doing PSY-Q's horizontal-range arithmetic. Two independent
+  offsets agreeing is what turns a guess into an identification.
+- **PSY-Q signature matching** against the official SDK objects would identify
+  everything wholesale (`ghidra_psx_ldr` and FLIRT-style matchers do this) and is
+  the only approach that really scales — still worth setting up if the remaining
+  libraries fight back.
 
 ## Next steps
 
-1. Identify the PSY-Q SDK functions and add `patches[]` entries for them, VSync
-   first — without it nothing can ever appear on screen.
-2. Correct linear-sweep damage as it surfaces. Coverage is only ~56% of `open`
+1. **Make CD streaming deliver sectors.** `CdlReadS` (`0x1B`) is issued and
+   nothing follows it — no DMA channel 3 transfer, so `libcdstream`'s ring never
+   fills and the intro movie never plays. This is what is holding up the first
+   frame; see "Status".
+2. Map `libcdstream` (`StSetRing`, `StGetNext`, `StFreeRing`, …) and `libpad`
+   the same way as `libgpu`, seeding from `open` and carrying across with
+   `scripts/match_overlays.py`.
+3. Correct linear-sweep damage as it surfaces. Coverage is only ~56% of `open`
    and ~86% of `game`, so expect more gaps; `scripts/add_call_targets.py`
    re-derives starts from the code and can be re-run at any time.
-3. Work out the `CD/COM/*.T` archive formats when asset work starts.
+4. Work out the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
    `.map` or ELF, so it does not help the function maps).

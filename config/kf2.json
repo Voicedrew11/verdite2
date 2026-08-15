@@ -150,7 +150,66 @@
     { "overlay": "game", "address": "0x8004B000",
       "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" },
     { "overlay": "end", "address": "0x80017810",
-      "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" }
+      "target": "RecompOne.Runtime.Sdk.LibCd.CdRead", "mode": "replace" },
+
+    // ---- libgpu -------------------------------------------------------------
+    //
+    // The whole PSY-Q GPU library is linked at a constant offset between the
+    // three executables: game = open + 0x4A7A0, end = open - 0x22F8. Every
+    // address below was found in `open` and carried across by matching the
+    // functions' relocation-independent instruction shape, so all three columns
+    // are the same routine (scripts/find_libgpu.py re-derives the whole table).
+    //
+    // libgpu is two layers. The public API (0x80015A64.. in `open`) never
+    // touches hardware directly: it dispatches through a driver table at
+    // 0x8003D610 whose 15 slots are the routines that do (_ctl writes GP1, _dma
+    // programs DMA channel 2 in linked-list mode, _otc uses channel 6, and so
+    // on). Only the public layer is patched -- the driver layer is what the
+    // patched functions replace, and the runtime already emulates the registers
+    // it would have written.
+    //
+    // Identification, in order of how much it pins things down:
+    //   PutDispEnv  computes hStart = scrX*10 + 0x260 and clamps it to
+    //               [0x1F4, 0xCDA], the same two constants the runtime's HLE
+    //               PutDispEnv uses; it ends by writing GP1(0x08) and copying
+    //               the 20-byte DISPENV to the current-env global.
+    //   PutDrawEnv  builds the DR_ENV packet at env+0x1C -- which is where the
+    //               packet sits in a 92-byte DRAWENV -- sends it through the
+    //               driver's _dma slot, then copies 0x5C bytes to the current
+    //               draw env and returns the argument.
+    //   DrawOTag    calls the driver's _dma slot (the one that writes D2_MADR /
+    //               D2_BCR=0 / D2_CHCR=0x01000401) with the ordering table.
+    //   DrawSync    tail-calls the driver slot that polls D2_CHCR and GPUSTAT
+    //               and prints "GPU timeout:QUE=(%2d,%2d)..." on expiry.
+    //
+    // GetDrawEnv and GetDispEnv have zero call sites in all three overlays, so
+    // nothing reads the copies the HLE versions do not write.
+    { "overlay": "open", "address": "0x80016078",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.DrawOTag", "mode": "replace" },
+    { "overlay": "open", "address": "0x80015E04",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.DrawSync", "mode": "replace" },
+    { "overlay": "open", "address": "0x800160D0",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.PutDrawEnv", "mode": "replace" },
+    { "overlay": "open", "address": "0x800161F0",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.PutDispEnv", "mode": "replace" },
+
+    { "overlay": "game", "address": "0x80060818",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.DrawOTag", "mode": "replace" },
+    { "overlay": "game", "address": "0x800605A4",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.DrawSync", "mode": "replace" },
+    { "overlay": "game", "address": "0x80060870",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.PutDrawEnv", "mode": "replace" },
+    { "overlay": "game", "address": "0x80060990",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.PutDispEnv", "mode": "replace" },
+
+    { "overlay": "end", "address": "0x80013D80",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.DrawOTag", "mode": "replace" },
+    { "overlay": "end", "address": "0x80013B0C",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.DrawSync", "mode": "replace" },
+    { "overlay": "end", "address": "0x80013DD8",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.PutDrawEnv", "mode": "replace" },
+    { "overlay": "end", "address": "0x80013EF8",
+      "target": "RecompOne.Runtime.Sdk.LibGpu.PutDispEnv", "mode": "replace" }
   ],
 
   // Diagnostics: annotate generated C# with addresses and disassembly. Very
