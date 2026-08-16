@@ -665,6 +665,78 @@ a straight localization of the Japanese KFII would look like.
 not only when the game writes a save, so a fresh timestamp means the port booted
 — nothing more. Check the directory entries or the titles instead.
 
+### The card code is all in GAME.EXE, and loading is one call
+
+`OPEN.EXE` has **no card code at all** — no `BASLUS`, no `bu00:`, no `cdrom:`
+string anywhere in it. Everything works off the filename template `BASLUS-00158`
+at `0x80067564` and the title template at `0x80067574`, both in `GAME.EXE`:
+
+| function | role |
+|---|---|
+| `func_80023638(slot)` | **load** |
+| `func_80023764(...)` | save — builds the `SC` header, the title, the filename |
+| `func_80023CC0(hdr, slot)` | stamps the slot, EXP and level into the title |
+| `func_8001B4F4` | the load-slot menu; `func_8001B35C` is the start menu above it |
+| `func_80023DD0(buf)` | the checksum |
+| `func_8004A040(buf)` | unpacks a loaded block into game state |
+
+`func_80023638` is short enough to state whole: build
+`bu00:BASLUS-00158<slot+'0'>`, `open` it (retrying up to three times), read
+`0x4000` bytes into `*(u32*)0x8006E98C`, checksum `buf+0x400` and compare against
+`buf+0x200`, unpack with `func_8004A040`, record the slot, return **0 / 1 (no
+file) / 2 (bad checksum)**. On a non-zero return the unpack never ran, so a
+failed load leaves game state untouched.
+
+**`0x8006E5D4` (u8) is "the current save slot".** Both the load and the save
+write it, and it is zero in the executable image, so zero means neither has run.
+Slots are 1–3; the `2−N` in a save's title is this number.
+
+### The game can load a save without leaving the area
+
+Worth knowing before building anything that reloads: `func_80029CBC` handles the
+in-game menu's result, and its `-3` arm — "the menu loaded a save" — is twelve
+instructions at `0x80029E0C`:
+
+```c
+func_800240B8();                    /* post-load fixup: music, equipment, and
+                                       func_80023FCC to re-zero the deltas    */
+area = *(u8*)0x8017E060;            /* the loaded save's area, in buf0        */
+func_80024154(area, area, area, area, /*sp+0x10*/ area, /*sp+0x14*/ 0xFF);
+func_80025D38();
+```
+
+So a complete reload from anywhere is `func_80023638(slot)` followed by that,
+with **no overlay swap and no title screen**. That is what the `autoreload` mod
+does; see "Auto reload".
+
+`func_80029CBC` itself is dispatched only from the state machine's arms for
+states 1 and 2, so it stops being called the moment the player dies — anything
+that wants to run at that point has to hook stage 3 instead.
+
+### The boot stub's handoff, and the other way back to the title
+
+Found while looking for a return-to-title path, and worth having written down
+even though the mod does not use it.
+
+`SLUS_001.58` picks its next executable from `*(u32*)0x80010268`, an index into
+the filename table at `0x80010254` — **0 = `OPEN.EXE`, 1 = `GAME.EXE`,
+2 = `END.EXE`**. After each `Exec` returns it refills that index from
+`*(u8*)0x800102F0` (reached through the pointer at `0x8001026C`).
+
+`GAME.EXE` is the only executable that writes it, from the tail of the main loop
+at `0x800139CC`–`0x800139EC`, off an **exit-reason global at `0x80199574`**:
+
+| `*(u32*)0x80199574` | effect |
+|---|---|
+| `0` | keep looping — this is the normal state |
+| `1` | `*(u8*)0x800102F0 = 2` → `END.EXE` |
+| `9` | `*(u8*)0x800102F0 = 0` → `OPEN.EXE`, and `*(u8*)0x800102F8 = 1` |
+| anything else | no write; the index stays `1`, so `GAME.EXE` re-execs |
+
+`*(u8*)0x800102F8` is read by `OPEN.EXE` at `0x80011BCC` and **skips the three
+intro movies** when it is 1 — the only thing `OPEN.EXE` ever reads from the stub.
+The in-game menu's "quit" is what writes 9, via `func_80018E80` returning −2.
+
 ## The SDK naming problem
 
 `SdkPatches.cs` routes PSY-Q library calls to the runtime's HLE implementations
@@ -850,6 +922,7 @@ mods/widescreen/mod.json + Widescreen.cs     wider picture, and the census that 
 mods/nodither/mod.json   + NoDither.cs       clears the GPU dither bit; see "Dithering"
 mods/analog/mod.json     + Analog.cs,
                            AnalogProbe.cs    analog twin-stick control; see "Analog twin-stick control"
+mods/autoreload/mod.json + AutoReload.cs     reload the last save on death; see "Auto reload"
 ```
 
 ```csharp
@@ -1057,6 +1130,47 @@ angle_or_position += vel;
 
 That shape is the whole reason analog control is cheap here — see "Analog
 twin-stick control".
+
+### The character's stats are buf2, and the memory card is what found them
+
+The position-and-angles block above is the *camera*. HP, MP, EXP and level are
+somewhere else entirely, and the route in was the **save title**. Every save's
+64-byte Shift-JIS name carries the decimal EXP and level — `ＥＸＰ　３１３　ＬＶ　５`
+— so the routine that stamps those digits has to read both from RAM.
+`func_80023CC0` is it, and it reads `0x80199414` and `0x8019941C`. That address
+is **`buf2`**, the 0x58-byte buffer already in the `memset` list above.
+
+| address | width | what |
+|---|---|---|
+| `0x80199414` | u32 | EXP |
+| `0x8019941C` | u8 | level |
+| `0x80199426` / `0x80199428` | u16 | max HP / **current HP** |
+| `0x8019942A` / `0x8019942C` | u16 | max MP / current MP |
+| `0x801994E1` | u8 | player action state; `0x11` is **dead** |
+
+Which pair is HP and which is MP is not a guess — three things agree:
+
+1. **`func_80024F90(delta)` is "add `delta` to HP".** It reads `0x80199428`,
+   and when the sum is `<= 0` it clamps to zero **and calls `func_8002A264(0)`**.
+   It touches no other stat, and nothing else in the block has a death branch.
+2. **State `0x11`'s handler opens by forcing `*(u16*)0x80199428 = 0`.**
+3. **The HUD reads the four in bar order** — current HP, max HP, current MP, max
+   MP — which is the order the two bars are drawn in.
+
+Two more shapes in the block confirm the pairing generally: a full heal is
+`cur = max` for both pairs written back to back, and a level-up writes the new
+maxima and then refills from them.
+
+`func_8002A264` is the death **latch**: it returns immediately if the state byte
+is already `0x11`, otherwise sets it, plays sound `(0x0B, 0x6E)` and zeroes two
+timers. `func_80024FE0`, the take-damage routine, tests the same byte on entry
+and returns early — once you are dead you take no more damage, which is also why
+the byte is a safe thing for a mod to key off.
+
+The state byte drives a **jump table at `0x80011300`**, `0x80011300 + state*4`,
+states `0x00`–`0x12`, dispatched from stage 3. `0x11` lands at `0x8002ADAC`.
+`func_80029E5C` is its inverse: it clears the byte to 0 along with eleven timers,
+which is the game's own "back to normal" reset.
 
 ## Frame pacing: the port is pinned to the fastest band
 
@@ -1602,6 +1716,99 @@ two clean bands and would settle it immediately.
 Measured with the mod loaded alongside `widescreen` and `nodither`:
 `loaded 3/3 mod(s), 9 function(s) hooked`, no replace conflict, 300 frames per
 10-second window — the pacing floor is untouched.
+
+## Auto reload
+
+`mods/autoreload` reloads the last save when the player dies. King's Field has no
+retry; without it a death costs the menu, then the load screen, then the slot.
+
+The mod is small because it adds **no loading path of its own**. Both halves were
+already in the game and both are written up above: the death latch under "The
+character's stats are buf2", and the in-game load sequence under "The game can
+load a save without leaving the area". The mod is the wiring between them.
+
+**One hook, `[PostHook("game", Address = 0x8002A550)]`** — the end of main-loop
+stage 3. Not `func_80029CBC`, which is where the game does its own load from:
+that is dispatched only from the state machine's arms for states 1 and 2, so it
+stops being called the moment the state byte latches to `0x11`. Stage 3 itself
+runs every frame, dead or alive, because the death sequence *is* one of its arms.
+
+Per frame it reads one byte, `0x801994E1`. Not `0x11` and it clears its arming
+and returns, so a live player pays a single read for the whole mod. On the
+edge into `0x11` it additionally requires `HP == 0`, which is what separates a
+death from any other reason that byte could hold `0x11`, then starts a clock. The
+reload fires once, after a configurable delay (default 2 s) during which the
+game's own death sequence plays.
+
+### The game is already reloading, and it wins the race
+
+The thing that nearly sank this, and the reason the delay is not just a sleep.
+**Death is a timeline, not a state**, clocked by a `u16` frame counter at
+`0x8019951A`. `func_8002A264` zeroes it, state `0x11`'s handler increments it,
+and those three sites are its only uses in `GAME.EXE`:
+
+| counter | what the handler does |
+|---|---|
+| 1–31 | the death animation |
+| 32–64 | fade to black, amount `(n − 32) << 7` |
+| **65** | `func_80024154(0, 0, 0, 0, 0, 0xFF)` |
+
+That last call is **the same area-entry routine the mod calls, with area 0** —
+the game's own respawn, and what "you died, start again" actually is. (The branch
+above it, at `0x8002AFBC`, is the resurrection-item path: a literal position and
+yaw `0x0C00` into area 1. It is the debug-looking warp already noted at that
+address.)
+
+65 frames is **2.17 s at 30 fps** — and the mod's default delay was 2.0 s. Five
+frames of margin. The first run reloaded correctly and the second went back to
+the beginning of the game, from identical code and an identical log line, which
+is exactly what a race that tight looks like. At `KF2_FPS=60` the same 65 frames
+is 1.08 s and the mod would always lose.
+
+So the mod **holds the counter at 31** while it waits. The animation finishes,
+the fade never starts, the respawn never comes due, and the delay becomes ours
+rather than a bet against the game's clock. The reload logs the counter it fired
+at for exactly this reason: `held at frame 31` is the assertion, and anything
+near 65 would mean the hold had failed.
+
+The reload is `func_80023638(slot)` and then `0x80029E0C`'s arm transcribed, with
+a `c.SP -= 0x20` window for `func_80024154`'s fifth and sixth arguments — MIPS
+passes those on the caller's frame at `sp+0x10` and `sp+0x14`. `c.Snapshot()` /
+`c.Restore()` bracket the whole thing so the hooked function's caller sees the
+registers it left.
+
+Two details that are the mod's and not the game's:
+
+- **`func_80029E5C` afterwards, but only if the state byte survived.** The game
+  reaches that arm from a live state and so never has to clear the death latch;
+  coming from `0x11`, something must.
+- **The slot.** `0x8006E5D4` is the game's own record and is what "last used"
+  means, but it is zero until a save or a load has run. Dying on a fresh New Game
+  therefore has nothing to reload, and the mod logs once and leaves the death
+  alone rather than inventing a slot. A fixed slot can be pinned in the panel.
+
+`KF2_AUTORELOAD`, `KF2_AUTORELOAD_DELAY` and `KF2_AUTORELOAD_SLOT` mirror the
+three settings, which persist to `interface.ini` under `kf2.autoreload.*`.
+
+**Dying on demand is the hard part of testing this**, so the panel has a
+*Simulate death* button: it zeroes HP and calls `func_8002A264(0)`, which is
+exactly what the damage path does. It refuses when max HP is zero, since buf2 is
+clear until an area is up.
+
+**Status: working on the attract demo, which dies on its own and is therefore a
+free test rig** — leave the port running and it will kill the character for you.
+Three consecutive deaths in one session each reloaded slot 2 into area 1 at
+`HP 46/86, LV 6`, `held at frame 31` every time, with no `unmapped call` and no
+exception.
+
+`fdat02` in the overlay log is the tell for the failure: the game's own respawn
+loads it, so a run that reloads correctly never does. With the mod off it appears
+right after the death, and with the mod on it does not appear at all.
+
+Still wanted from a real session: a death in a *different* area from the save,
+which is the case that makes `func_80024154` re-enter a `fdat` module other than
+the resident one, and a save written mid-session to confirm `0x8006E5D4` tracks
+saves as well as loads.
 
 ## Next steps
 

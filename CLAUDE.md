@@ -57,6 +57,7 @@ KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect override, and the margin ce
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # twin-stick control
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
+KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
 ```
 
 Frame pacing is load-bearing: without it the port runs faster than the game can on
