@@ -1516,6 +1516,13 @@ after the game's own accumulate, so the clamp branch is not taken.
 
 Four things worth keeping:
 
+* **The camera accelerates while the stick is held out.** A d-pad is down or it
+  is not, so the game has no notion of a ramp; a stick held at the edge for half
+  a second should be sweeping faster than one just pushed. The mod ramps a
+  look-speed multiplier to 2.2× over half a second past 80% deflection and drops
+  it three times faster, which — with the cap lifted above — is what took the
+  camera from "stiff" to something like a modern shooter's. Fine aim near centre
+  is untouched, because the ramp never starts there.
 * **The fractional carry is not optional.** At 30 fps a small deflection rounds
   to a zero step every frame; without carrying the remainder the player simply
   does not move below about a third of stick.
@@ -1529,6 +1536,17 @@ Four things worth keeping:
   the right stick idle. The mod therefore owns the turn bits with a zero step
   whenever the left stick is deflected, and leaves them alone when both sticks
   are centred — so the D-pad still plays exactly as it did.
+* **The per-frame speed limit only exists in the two button branches.** The
+  branch that runs with *neither* button down decays the velocity by the same
+  step and then applies whatever is left, unclamped — so writing `target + accel`
+  and asserting nothing lands on `target` however large it is, while writing
+  `target - accel` and asserting the button is capped at the game's own rate.
+  That is the whole difference between a camera that tops out at the d-pad's
+  74°/s and one that does not, and it costs one branch in `Drive`. Confirmed in
+  play: mean yaw steps of 39 against a frame rate limit of 28, and a `turnVel` of
+  37 sitting in memory, which no button can produce. Nothing else gameplay-side
+  reads the turn masks — the only other readers are the control-config screen —
+  so dropping the button for a frame is free.
 * **A released velocity ramps down, and on a stick that reads as inertia.** The
   game drops nothing: pitch decays by 3 a frame from a limit of 32, so releasing
   the stick keeps the view moving for about eleven frames — a third of a second,
@@ -1548,6 +1566,38 @@ table above — with one gap it cannot close: it names the button behind an acti
 but not which way the view moves. That cost the first build an inverted look
 axis, fixed by playing it; **increasing pitch looks down**. The "Invert look Y"
 toggle is now a preference rather than a guess.
+
+### Open: the camera does not feel consistent in every direction
+
+Reported from play and **not yet diagnosed** — the camera's speed does not feel
+even across directions, and not all the time. Nothing below is confirmed; these
+are the candidates worth measuring first, and three of them are certain to be
+*real* effects whether or not they are the one being felt:
+
+1. **The game turns you slower while you walk.** Stage 3 sets the turn rate to
+   `0x1C` (28) when a movement button is down and `0x23` (35) when none is, so
+   horizontal speed drops by a fifth the moment you move. The mod inherits this
+   because it reads the rate out of `0x8019955C` each frame. This is the best fit
+   for "not all the time" and it is the game's own rule, so overriding it is a
+   decision, not a fix.
+2. **Vertical and horizontal are not the same scale, and the ratio moves.** Yaw
+   steps by up to `rate` (28 or 35) and pitch by a fixed 32, so the vertical
+   speed is constant while the horizontal one changes with what you are doing.
+   Standing still the camera is relatively faster sideways than it is walking.
+3. **Diagonals reach full deflection sooner than cardinals.** `AxisToByte` gains
+   the axis by 1.3 and clamps *per axis*, so a stick pushed to a corner reads
+   (1, 1) — radial magnitude 1.41, not 1. `Shape` renormalises the direction
+   correctly, but the deadzone and curve are applied to a magnitude that saturates
+   at a different point depending on the angle, which makes mid-deflection
+   diagonals proportionally quicker than mid-deflection cardinals.
+4. **The acceleration ramp is radial and applies to both axes.** Sweeping hard
+   sideways speeds the vertical axis up too, so a diagonal flick during a sweep
+   is faster than the same flick from rest.
+
+The measurement to take is the mod's own: hold a fixed deflection at eight
+directions in turn with `KF2_ANALOG_PROBE=1` and compare mean |yaw step| and the
+pitch total, once standing still and once walking. Candidate 1 will show up as
+two clean bands and would settle it immediately.
 
 Measured with the mod loaded alongside `widescreen` and `nodither`:
 `loaded 3/3 mod(s), 9 function(s) hooked`, no replace conflict, 300 frames per

@@ -75,13 +75,36 @@ public sealed class AnalogMod : IMod
     const int PitchAccel = 3;
     const int PitchVelMax = 32;
 
+    // How far past the game's own per-frame limit the camera may be driven.
+    // The limit only exists in the two branches that read a button; the branch
+    // that runs with neither button down applies the velocity unclamped, having
+    // first decayed it by the same step. So writing target+accel with no button
+    // asserted lands on target however large it is -- see Drive. Four times is a
+    // ceiling to keep a bad sensitivity from spinning the view.
+    const int OverspeedCap = 4;
+
     static bool _enabled = true;
     static bool _analogLook = true;
     static bool _analogMove = true;
 
+    // Look acceleration: hold the stick out and the camera keeps speeding up for
+    // the first half second, instead of sitting at one rate the moment you touch
+    // it. This is what a modern shooter's stick does and what the game, built for
+    // a d-pad that is either down or not, has no notion of. Fine aim near centre
+    // stays fine -- the ramp only starts past _lookAccelThreshold -- and it falls
+    // away three times faster than it builds, so easing off is immediate.
+    static bool _lookAccel = true;
+    static float _lookAccelMax = 2.2f;
+    static float _lookAccelTime = 0.5f;
+    static float _lookAccelThreshold = 0.8f;
+    static float _accelT;
+    static long _accelTick;
+
     static float _lookDeadzone = 0.15f;
     static float _moveDeadzone = 0.15f;
-    static float _lookCurve = 1.6f;
+    // Nearly linear. A steeper curve plus a hard speed cap is what "stiff" is:
+    // slow to get going and never fast.
+    static float _lookCurve = 1.35f;
     static float _moveCurve = 1.0f;
     static float _turnSens = 1.0f;
     static float _pitchSens = 1.0f;
@@ -132,6 +155,9 @@ public sealed class AnalogMod : IMod
         ReadEnv("KF2_ANALOG_PITCH", ref _pitchSens);
         ReadEnv("KF2_ANALOG_MOVE", ref _moveSens);
         ReadEnv("KF2_ANALOG_INSTANTSTOP", ref _cameraInstantStop);
+        ReadEnv("KF2_ANALOG_ACCEL", ref _lookAccel);
+        ReadEnv("KF2_ANALOG_ACCELMAX", ref _lookAccelMax);
+        ReadEnv("KF2_ANALOG_ACCELTIME", ref _lookAccelTime);
 
         AnalogProbe.Configure();
 
@@ -154,6 +180,15 @@ public sealed class AnalogMod : IMod
             ImGui.SetTooltip("The game ramps a released look velocity down over about a third of a " +
                              "second, which reads as inertia on a stick. Off restores that ramp. " +
                              "Walking momentum is the game's own and is not affected either way.");
+
+        ImGui.Separator();
+        ImGui.Checkbox("Look acceleration", ref _lookAccel);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Holding the stick out keeps speeding the camera up for the first " +
+                             "half second, the way a modern shooter's does. Fine aim near centre " +
+                             "is unaffected; the ramp only starts past 80% deflection.");
+        ImGui.SliderFloat("Acceleration x", ref _lookAccelMax, 1f, 4f);
+        ImGui.SliderFloat("Acceleration time (s)", ref _lookAccelTime, 0.1f, 2f);
 
         ImGui.Separator();
         ImGui.SliderFloat("Turn sensitivity", ref _turnSens, 0.1f, 3f);
@@ -198,7 +233,14 @@ public sealed class AnalogMod : IMod
         // would otherwise ramp down; _ownedTurn/_ownedPitch are what keep us in
         // the hook for that frame and out of it afterwards.
         bool release = _cameraInstantStop && (_ownedTurn || _ownedPitch);
-        if (x == 0f && y == 0f && !leftActive && !release) return;
+        if (x == 0f && y == 0f && !leftActive && !release)
+        {
+            _accelT = 0f;
+            _accelTick = 0;
+            return;
+        }
+
+        float mult = Accelerate(RawMag(Controller.RightX, Controller.RightY, _lookDeadzone));
 
         ushort pad = m.ReadU16(Pad);
         int rate = (int)m.ReadU32(TurnRate);
@@ -209,8 +251,9 @@ public sealed class AnalogMod : IMod
             // Stick right turns right, and turning right is the *decreasing*
             // branch: the mask that increases yaw is the game's Left, which the
             // probe's table dump is the evidence for. Hence the negation.
-            int step = Step(-x * rate * _turnSens * (_invertTurn ? -1f : 1f), ref _turnCarry, rate);
-            pad = Drive(m, pad, TurnVel, step, rate >> 2, MaskTurnInc, MaskTurnDec);
+            int step = Step(-x * rate * _turnSens * mult * (_invertTurn ? -1f : 1f),
+                            ref _turnCarry, rate * OverspeedCap);
+            pad = Drive(m, pad, TurnVel, step, rate >> 2, rate, MaskTurnInc, MaskTurnDec);
             _ownedTurn = step != 0;
         }
 
@@ -222,9 +265,9 @@ public sealed class AnalogMod : IMod
             // evidence settled -- the mask table gives the button but not which
             // way the view tips -- so it was fixed by playing it, and the sticks
             // agree with the D-pad's own L2/R2 now.
-            int step = Step(y * PitchVelMax * _pitchSens * (_invertPitch ? -1f : 1f),
-                            ref _pitchCarry, PitchVelMax);
-            pad = Drive(m, pad, PitchVel, step, PitchAccel, MaskPitchInc, MaskPitchDec);
+            int step = Step(y * PitchVelMax * _pitchSens * mult * (_invertPitch ? -1f : 1f),
+                            ref _pitchCarry, PitchVelMax * OverspeedCap);
+            pad = Drive(m, pad, PitchVel, step, PitchAccel, PitchVelMax, MaskPitchInc, MaskPitchDec);
             _ownedPitch = step != 0;
         }
 
@@ -251,13 +294,13 @@ public sealed class AnalogMod : IMod
         if (y != 0f)
         {
             int step = Step(-y * speed * _moveSens * (_invertForward ? -1f : 1f), ref _fwdCarry, speed);
-            pad = Drive(m, pad, FwdVel, step, accel, MaskFwdInc, MaskFwdDec);
+            pad = Drive(m, pad, FwdVel, step, accel, speed, MaskFwdInc, MaskFwdDec);
         }
 
         if (x != 0f)
         {
             int step = Step(x * speed * _moveSens * (_invertStrafe ? -1f : 1f), ref _strafeCarry, speed);
-            pad = Drive(m, pad, StrafeVel, step, accel, MaskStrafeInc, MaskStrafeDec);
+            pad = Drive(m, pad, StrafeVel, step, accel, speed, MaskStrafeInc, MaskStrafeDec);
         }
 
         m.WriteU16(Pad, pad);
@@ -270,22 +313,71 @@ public sealed class AnalogMod : IMod
     /// both buttons and zeroes the velocity, which is the game's idle state --
     /// not its decay, because the stick is the authority while it is deflected.
     /// </summary>
-    static ushort Drive(IMemory m, ushort pad, uint velAddr, int step, int accel, uint maskInc, uint maskDec)
+    static ushort Drive(IMemory m, ushort pad, uint velAddr, int step, int accel, int clamp,
+                        uint maskInc, uint maskDec)
     {
         ushort inc = (ushort)m.ReadU32(maskInc);
         ushort dec = (ushort)m.ReadU32(maskDec);
         pad = (ushort)(pad & ~(inc | dec));
 
-        if (step > 0) { m.WriteU16(velAddr, (ushort)(short)(step - accel)); pad |= inc; }
-        else if (step < 0) { m.WriteU16(velAddr, (ushort)(short)(step + accel)); pad |= dec; }
-        else m.WriteU16(velAddr, 0);
+        if (step == 0) { m.WriteU16(velAddr, 0); return pad; }
+
+        if (Math.Abs(step) <= clamp)
+        {
+            // Inside the game's own limit: assert the button and let its
+            // accumulate carry the pre-load up to the target.
+            m.WriteU16(velAddr, (ushort)(short)(step > 0 ? step - accel : step + accel));
+            pad |= step > 0 ? inc : dec;
+        }
+        else
+        {
+            // Past it. The limit lives only in the two button branches -- the
+            // branch that runs with neither button down decays the velocity by
+            // the same step and applies whatever is left, unclamped. So pre-load
+            // the other way and assert nothing: the decay lands on the target and
+            // the camera goes faster than any button could drive it.
+            m.WriteU16(velAddr, (ushort)(short)(step > 0 ? step + accel : step - accel));
+        }
 
         return pad;
     }
 
     /// <summary>
+    /// The look-speed multiplier for this frame: 1 at rest, rising to
+    /// _lookAccelMax over _lookAccelTime while the stick is held past the
+    /// threshold, and falling back three times faster than it built.
+    /// </summary>
+    static float Accelerate(float mag)
+    {
+        if (!_lookAccel) { _accelT = 0f; return 1f; }
+
+        long now = Environment.TickCount64;
+        float dt = _accelTick == 0 ? 0f : Math.Clamp((now - _accelTick) / 1000f, 0f, 0.1f);
+        _accelTick = now;
+
+        _accelT = Math.Clamp(mag >= _lookAccelThreshold ? _accelT + dt : _accelT - dt * 3f,
+                             0f, _lookAccelTime);
+
+        float t = _lookAccelTime <= 0f ? 1f : _accelT / _lookAccelTime;
+        return 1f + (_lookAccelMax - 1f) * t;
+    }
+
+    /// <summary>
+    /// A stick's deflection as 0..1 past the deadzone, before any curve. The
+    /// acceleration ramp keys off this rather than the shaped value, so the curve
+    /// and the ramp stay independent settings.
+    /// </summary>
+    static float RawMag(byte bx, byte by, float deadzone)
+    {
+        float x = (bx - 128) / 127f;
+        float y = (by - 128) / 127f;
+        float mag = MathF.Sqrt(x * x + y * y);
+        return mag <= deadzone ? 0f : Math.Clamp((mag - deadzone) / (1f - deadzone), 0f, 1f);
+    }
+
+    /// <summary>
     /// Integer part of the wanted step, with the fraction carried to next frame
-    /// and the result held inside the game's own clamp.
+    /// and the result held inside the given ceiling.
     /// </summary>
     static int Step(float want, ref float carry, int limit)
     {
