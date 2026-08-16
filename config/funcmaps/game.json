@@ -2423,12 +2423,7 @@
     {
       "address": "0x80042A08",
       "name": "func_80042A08",
-      "size": 56
-    },
-    {
-      "address": "0x80042A40",
-      "name": "func_80042A40",
-      "size": 116
+      "size": 172
     },
     {
       "address": "0x80042AB4",
@@ -2453,12 +2448,7 @@
     {
       "address": "0x80042FD0",
       "name": "func_80042FD0",
-      "size": 32
-    },
-    {
-      "address": "0x80042FF0",
-      "name": "func_80042FF0",
-      "size": 364
+      "size": 396
     },
     {
       "address": "0x8004315C",

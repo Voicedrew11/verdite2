@@ -103,12 +103,14 @@ $RC --generate-function-file -linear-sweep -disc disc/KingsField2.cue \
     -file OPEN.EXE -base 80011000 -skip 800 -out config/funcmaps/open.json
 ```
 
-An `unmapped call: 0x…` has two causes and two scripts, so check which it is
-before reaching for either. **Is the address a function start the map is missing,
-or an address inside a function that already exists?**
+An `unmapped call: 0x…` has three causes, so check which it is before reaching
+for a script. **Is the address a function start the map is missing, an address
+inside a function that already exists, or a few instructions past a mapped start
+that has no prologue?**
 
 - Missing start — `scripts/add_call_targets.py` recovers it by harvesting `jal`
-  targets and splicing them into the map.
+  targets and splicing them into the map. Only sites already inside a known
+  function are harvested; a `.data` word that decodes as `jal` is not a call.
 - Interior address — the sweep split one real function in two, because it ends a
   function at any `jr`/`j` plus delay slot and PSY-Q emits both *inside* a
   function (a `jr` through a switch table, a `j` to a shared epilogue). A
@@ -117,6 +119,13 @@ or an address inside a function that already exists?**
   on jump-table entries), checks nothing `jal`s a start it swallowed, and is
   idempotent — run it after any sweep. See "The sweep splits a switch" in
   `NOTES.md`.
+- False split from data — `add_call_targets.py` once treated a table word as
+  `jal` and cut a real function. The crash address sits just past a mapped start
+  that has no prologue and that nothing in code `jal`s; the previous function
+  falls through into it. `merge_branch_spans.py` cannot see a fallthrough, so
+  rejoin by hand (the previous start's size should reach the next real function).
+  See "add_call_targets can split a function" in `NOTES.md`. The script no longer
+  harvests sites outside a known function, so re-running it will not re-cut.
 
 ```bash
 python3 scripts/merge_branch_spans.py --dry-run   # all overlays, writes nothing

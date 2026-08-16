@@ -57,6 +57,11 @@ def scan_call_targets(base: int, text: bytes, intervals: list) -> set:
     function start when the jump crosses out of its own function -- a tail call.
     A J landing inside the function that issued it is an ordinary local branch,
     and splitting a function there would sever its fallthrough.
+
+    Only harvest a site that already sits inside a known function. A word in
+    .data can decode as `jal` without being one -- GAME.EXE's table past
+    0x80064B30 encodes `jal 0x80042A40` and `jal 0x80042FF0`, and treating
+    those as calls split two real functions (see NOTES.md).
     """
     end = base + len(text)
     targets = set()
@@ -66,6 +71,8 @@ def scan_call_targets(base: int, text: bytes, intervals: list) -> set:
         if op not in (OP_J, OP_JAL):
             continue
         pc = base + offset
+        if containing(intervals, pc) is None:
+            continue
         target = (pc & 0xF0000000) | ((word & 0x03FFFFFF) << 2)
         # Targets out of range are BIOS vectors or other overlays; not ours to name.
         if not (base <= target < end) or target % 4:

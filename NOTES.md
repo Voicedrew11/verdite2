@@ -668,8 +668,11 @@ python3 scripts/merge_branch_spans.py fdat17
 
 It found the bug in **five of the nine modules** — `fdat05`, `fdat11`, `fdat14`,
 `fdat17`, `fdat20`, `fdat32` — i.e. four more areas were carrying the identical
-crash. The three executables are clean, which is why this never showed up before
-the area modules went in. Merging drops fdat17 from 29 functions to 13.
+crash. The three executables are clean of *this* class of split, which is why
+it never showed up before the area modules went in. Merging drops fdat17 from
+29 functions to 13. They were not clean of the next class: a `.data` word that
+decodes as `jal` can still cut a GAME.EXE function, and `merge_branch_spans.py`
+will not see it. See "add_call_targets can split a function" below.
 
 Two things have to hold for a merge to be safe, and the script checks both:
 
@@ -693,6 +696,41 @@ a register in any module is the unreachable `default:` arm of a resolved switch.
 
 `fdat32` was the exception, and it turned out not to be a bug at all. It is
 covered in "fdat32 is a cut area" below.
+
+### add_call_targets can split a function when `.data` looks like `jal`
+
+Loading area 7 died with `unmapped call: 0x80042A48` from `func_80042A08`. The
+address is not missing from the map and it is not a switch case: it is eight
+bytes into `func_80042A40`, which `scripts/add_call_targets.py` had carved out of
+`func_80042A08` because a word at `0x8006AAE0` decodes as `jal 0x80042A40`.
+
+That word is not a call. `GAME.EXE`'s text segment runs `0x80011000`–`0x8006F000`,
+but the last real function ends at `0x80064B30`; everything after that is data.
+A packed signed-16 table in that tail happens to look like a run of `j`/`jal`
+instructions. Almost every decoded target lands outside the executable
+(`0x81882874` and friends). The two that do not — `0x80042A40` and `0x80042FF0`
+— both landed in the middle of a real function.
+
+The split is fatal for a small extra reason. `func_80042A08` falls through two
+nops into `mult a0, a2` at `0x80042A48`. The recompiler skips leading nops, so
+the fallthrough became `Dispatcher.Call(0x80042A48)` rather than a call to the
+mapped start at `0x80042A40`. `merge_branch_spans.py` cannot see it: there is no
+conditional branch across the cut, only fallthrough, and the start it would have
+to swallow is not a `jal` target from any instruction that is actually code.
+
+The sibling split `func_80042FD0` / `func_80042FF0` is the same table
+(`0x80069FD8` = `jal 0x80042FF0`) and the same script. That one happens to fall
+through onto the mapped start, so it had not crashed yet; nothing in code `jal`s
+`0x80042FF0` either, and the second half has no prologue of its own.
+
+Fix: rejoin both pairs in `config/funcmaps/game.json` (`0x80042A08` size 172,
+`0x80042FD0` size 396) and stop `add_call_targets.py` harvesting a `jal` or `j`
+whose site is not already inside a known function. Re-running the script after
+that change adds nothing.
+
+The four real `jal`s to `0x80042A08` and the twenty-odd to `0x80042FD0` all live
+in `func_80043388`, which is the area-7 entity update — that is why this waited
+for the final boss.
 
 ## fdat32 is a cut area, and nothing can load it
 
@@ -2207,8 +2245,10 @@ way autoreload does when it arrives from state `0x11`.
    all 70 `FDAT.T` entries and every other file on the disc were tested for the
    module signature; the nine declared modules are the only code, and every
    static indirect-dispatch target is already a known function start. See
-   "GAME.EXE loads code". **The statically findable `unmapped call` sources are
-   exhausted**; what remains can only come from an address computed at run time.
+   "GAME.EXE loads code". A later, narrower static source was not exhausted:
+   `add_call_targets.py` treating a `.data` word as `jal` and splitting a
+   GAME.EXE function. Area 7 died on that; see "add_call_targets can split a
+   function". What remains after that class is an address computed at run time.
 3. ~~Check the audio.~~ Verified by ear during play — it sounds right. Note the
    two paths are independent: in-game music and effects come from the SPU, while
    the intro and ending movies are **XA** sectors routed to `XaRouter` on the
