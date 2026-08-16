@@ -1205,7 +1205,54 @@ that clips its own polygons.
 **Trap, learned while measuring:** with the session locked, KWin stops sending
 frame callbacks and the port blocks in `SwapBuffers` forever with `VSync=True` —
 0% CPU, no log output, and it looks exactly like a hang. Set `VSync=False` in
-`interface.ini` to run it without a visible window.
+`interface.ini` to run it without a visible window. Note the runtime only presents
+through the widened render target if that target was drawn into within the last
+**4** presented frames (`GlCore.PresentDisplay`); with `VSync=False` the host
+presents far faster than the game draws, so most frames fall back to the plain
+VRAM texture at 4:3. That is an artefact of running headless rather than a bug in
+the mod — but it is also what a real stall would look like on screen.
+
+### The HUD does not widen with the world, and finding it is the problem
+
+The world gets wider; the HUD is drawn in screen space, so it keeps the 4:3 box it
+was authored in and sits visibly inset from the new edges. Moving it means telling
+a HUD primitive from a world one, and `RenderPrimEvent` carries no such flag. Two
+whole-frame dumps in `fdat02` (599 and 522 primitives, before and after turning on
+the spot) locate it:
+
+* It is **two fixed clusters** — x 5..91 for the HP/MP panel, x 269..310 for the
+  equipment icons, both y 11..60 — and 42 of its 66 primitives are pixel-identical
+  across the two frames; the rest are digits and an icon that animate in place.
+* It is always in the **last ordering-table entries**, from about 65 from the end
+  of a ~9,400-entry table. That is the front of the OT, where a painter's
+  algorithm has to put whatever goes on top. A frame is a single `DrawOTag` call,
+  the game alternates two tables (`0x801860A4`, `0x8018E0A4`) one per frame, and
+  the HUD has no table of its own.
+
+**The rule that looked right and was not: the palette.** In the first dump every
+HUD primitive used a CLUT in VRAM **column 0** (rows 493-495) and no world
+primitive did — world palettes sat at (8,492), (16,506), (20,496), (36,258..260).
+Anchoring on "the first column-0 palette opens the HUD tail" worked in the
+starting corridor and wrecked the frame elsewhere: further into the area, world
+geometry uses column-0 palettes all the way back through the table, so the tail
+opened early and half the world moved sideways. **The artefact named the cause —
+the missing wedges of floor and ceiling were 54 pixels across, which is the
+margin.** Holes exactly one margin wide mean geometry is being shifted that should
+not be.
+
+What replaced it is structural and positional: a primitive is HUD if it is in the
+last 128 OT entries *and* its box falls in one of the two clusters. The OT gate is
+why the mod replaces `DrawOTag` and walks the table itself — one pass to count the
+entries, one to emit them, mirroring `LibGpu.DrawOTag` including its
+custom-primitive branch. `HookManager.Invoke` runs pre-hooks, then the replacement,
+then post-hooks, so the frame pacing's `DrawOTag` post-hook still runs. Being
+wrong now costs one small triangle in a corner instead of the whole frame after it,
+and the anchoring has its own toggle.
+
+**Compile a mod without launching the game.** Roslyn compiles mods at load, so a
+typo costs a whole boot to find. A throwaway csproj that compiles the mod source
+against `bin/Release/net10.0/RecompOne.Runtime.dll` and `ImGui.NET.dll`, with
+`ImplicitUsings` disabled to match `ModCompiler`, catches it in three seconds.
 
 ## Next steps
 
