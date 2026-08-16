@@ -23,32 +23,7 @@
     {
       "address": "0x80193FC0",
       "name": "func_80193FC0",
-      "size": 256
-    },
-    {
-      "address": "0x801940C0",
-      "name": "func_801940C0",
-      "size": 56
-    },
-    {
-      "address": "0x801940F8",
-      "name": "func_801940F8",
-      "size": 40
-    },
-    {
-      "address": "0x80194120",
-      "name": "func_80194120",
-      "size": 24
-    },
-    {
-      "address": "0x80194138",
-      "name": "func_80194138",
-      "size": 24
-    },
-    {
-      "address": "0x80194150",
-      "name": "func_80194150",
-      "size": 268
+      "size": 668
     },
     {
       "address": "0x8019425C",

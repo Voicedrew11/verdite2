@@ -23,32 +23,7 @@
     {
       "address": "0x8019F504",
       "name": "func_8019F504",
-      "size": 268
-    },
-    {
-      "address": "0x8019F610",
-      "name": "func_8019F610",
-      "size": 40
-    },
-    {
-      "address": "0x8019F638",
-      "name": "func_8019F638",
-      "size": 40
-    },
-    {
-      "address": "0x8019F660",
-      "name": "func_8019F660",
-      "size": 24
-    },
-    {
-      "address": "0x8019F678",
-      "name": "func_8019F678",
-      "size": 24
-    },
-    {
-      "address": "0x8019F690",
-      "name": "func_8019F690",
-      "size": 252
+      "size": 648
     },
     {
       "address": "0x8019F78C",

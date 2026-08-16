@@ -103,8 +103,30 @@ $RC --generate-function-file -linear-sweep -disc disc/KingsField2.cue \
     -file OPEN.EXE -base 80011000 -skip 800 -out config/funcmaps/open.json
 ```
 
-`scripts/add_call_targets.py` recovers function starts the sweep missed by
-harvesting `jal` targets; run it when a call dies with "unmapped call: 0x…".
+An `unmapped call: 0x…` has two causes and two scripts, so check which it is
+before reaching for either. **Is the address a function start the map is missing,
+or an address inside a function that already exists?**
+
+- Missing start — `scripts/add_call_targets.py` recovers it by harvesting `jal`
+  targets and splicing them into the map.
+- Interior address — the sweep split one real function in two, because it ends a
+  function at any `jr`/`j` plus delay slot and PSY-Q emits both *inside* a
+  function (a `jr` through a switch table, a `j` to a shared epilogue). A
+  conditional branch that crosses a boundary proves it, since MIPS branches never
+  leave their function. `scripts/merge_branch_spans.py` merges on that proof (and
+  on jump-table entries), checks nothing `jal`s a start it swallowed, and is
+  idempotent — run it after any sweep. See "The sweep splits a switch" in
+  `NOTES.md`.
+
+```bash
+python3 scripts/merge_branch_spans.py --dry-run   # all overlays, writes nothing
+python3 scripts/merge_branch_spans.py fdat17
+```
+
+The FDAT overlays deliberately use `"skip": 0` so the overlay covers the module
+header: the modules' switch jump tables live in it, past the 32 dispatch slots,
+and the recompiler reads a jump table out of the overlay's own bytes. Raising
+`skip` past them makes every `jr` through a table dispatch to nothing at run time.
 
 ## Architecture
 

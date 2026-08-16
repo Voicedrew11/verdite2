@@ -88,92 +88,104 @@
     // into 0x8017E068 -- and at 0x80193B38 for the one at entry 32, which is a
     // different module family. Both scores are unanimous, 4/4 to 8/8.
     //
-    // `base` is the address of the byte at offset+skip, so it is the module base
-    // plus its pointer table, and the overlay's LBA works out to the archive's
-    // LBA plus the entry's start sector. That LBA is what arms the swap: the CD
-    // read of the module's first sector marks the overlay pending and the write
-    // that lands it in RAM activates it. Function maps are a linear sweep with
-    // the pointer-table targets and every internal `jal` merged in, since the
-    // sweep alone missed real entry points in five of the nine modules.
+    // `base` is the address of the byte at offset+skip, and the overlay's LBA
+    // works out to the archive's LBA plus the entry's start sector. That LBA is
+    // what arms the swap: the CD read of the module's first sector marks the
+    // overlay pending and the write that lands it in RAM activates it.
+    //
+    // `skip` is 0 and `base` is the module's own load address, so the overlay
+    // covers the header table as well as the code. It has to: the words past the
+    // 32 dispatch slots are the modules' switch jump tables, and JumpTableAnalyzer
+    // reads a table out of the overlay's own bytes. With the header skipped it
+    // could not read them, every `jr` through one stayed an unresolved register
+    // dispatch, and the cases it should have jumped to died at run time with
+    // "unmapped call". Nothing disassembles the header -- only addresses named in
+    // the function map are emitted -- so covering it costs nothing.
+    //
+    // Function maps are a linear sweep with the pointer-table targets and every
+    // internal `jal` merged in, since the sweep alone missed real entry points in
+    // five of the nine modules, and then run through
+    // scripts/merge_branch_spans.py to undo the splits the sweep makes at a `jr`
+    // through a jump table or a `j` to a shared epilogue.
     {
       "name": "fdat02",
       "file": "CD/COM/FDAT.T",
-      "base": "0x8019F0FC",
+      "base": "0x8019F07C",
       "offset": 98304,
-      "skip": 128,
-      "size": 3968,
+      "skip": 0,
+      "size": 4096,
       "funcMap": "funcmaps/fdat02.json"
     },
     {
       "name": "fdat05",
       "file": "CD/COM/FDAT.T",
-      "base": "0x8019F110",
+      "base": "0x8019F07C",
       "offset": 200704,
-      "skip": 148,
-      "size": 8044,
+      "skip": 0,
+      "size": 8192,
       "funcMap": "funcmaps/fdat05.json"
     },
     {
       "name": "fdat08",
       "file": "CD/COM/FDAT.T",
-      "base": "0x8019F0FC",
+      "base": "0x8019F07C",
       "offset": 307200,
-      "skip": 128,
-      "size": 3968,
+      "skip": 0,
+      "size": 4096,
       "funcMap": "funcmaps/fdat08.json"
     },
     {
       "name": "fdat11",
       "file": "CD/COM/FDAT.T",
-      "base": "0x8019F118",
+      "base": "0x8019F07C",
       "offset": 409600,
-      "skip": 156,
-      "size": 5988,
+      "skip": 0,
+      "size": 6144,
       "funcMap": "funcmaps/fdat11.json"
     },
     {
       "name": "fdat14",
       "file": "CD/COM/FDAT.T",
-      "base": "0x8019F118",
+      "base": "0x8019F07C",
       "offset": 512000,
-      "skip": 156,
-      "size": 8036,
+      "skip": 0,
+      "size": 8192,
       "funcMap": "funcmaps/fdat14.json"
     },
     {
       "name": "fdat17",
       "file": "CD/COM/FDAT.T",
-      "base": "0x8019F148",
+      "base": "0x8019F07C",
       "offset": 616448,
-      "skip": 204,
-      "size": 5940,
+      "skip": 0,
+      "size": 6144,
       "funcMap": "funcmaps/fdat17.json"
     },
     {
       "name": "fdat20",
       "file": "CD/COM/FDAT.T",
-      "base": "0x8019F2B8",
+      "base": "0x8019F07C",
       "offset": 720896,
-      "skip": 572,
-      "size": 5572,
+      "skip": 0,
+      "size": 6144,
       "funcMap": "funcmaps/fdat20.json"
     },
     {
       "name": "fdat23",
       "file": "CD/COM/FDAT.T",
-      "base": "0x8019F0FC",
+      "base": "0x8019F07C",
       "offset": 821248,
-      "skip": 128,
-      "size": 8064,
+      "skip": 0,
+      "size": 8192,
       "funcMap": "funcmaps/fdat23.json"
     },
     {
       "name": "fdat32",
       "file": "CD/COM/FDAT.T",
-      "base": "0x80193BCC",
+      "base": "0x80193B38",
       "offset": 925696,
-      "skip": 148,
-      "size": 5996,
+      "skip": 0,
+      "size": 6144,
       "funcMap": "funcmaps/fdat32.json"
     }
   ],

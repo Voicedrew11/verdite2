@@ -584,12 +584,20 @@ Two independent things pin the load address:
 | 32 | `0x0E2000` | 6144 | `0x80193B38` | 861 |
 
 They are declared as overlays like any other. `base` is the address of the byte
-at `offset + skip`, so it is the module base plus its pointer table, and
-`ResolveOverlay` derives the LBA as the archive's LBA plus the entry's start
-sector. **That LBA is what arms the swap**: the CD read of the module's first
-sector marks the overlay pending (`Dispatcher.LoadByLba`) and the write that
-lands it in RAM activates it (`NotifyWrite`) — which only works because the HLE
-`CdRead`/`CdGetSector` call `LoadByLba` per sector and write through `PSMemory`.
+at `offset + skip`, and `ResolveOverlay` derives the LBA as the archive's LBA
+plus the entry's start sector. **That LBA is what arms the swap**: the CD read of
+the module's first sector marks the overlay pending (`Dispatcher.LoadByLba`) and
+the write that lands it in RAM activates it (`NotifyWrite`) — which only works
+because the HLE `CdRead`/`CdGetSector` call `LoadByLba` per sector and write
+through `PSMemory`.
+
+Every module now takes `skip: 0` and its own load address as `base`, so the
+overlay covers the header table as well as the code. The reason is in "The sweep
+splits a switch" below: the words past the header's 32 dispatch slots are the
+modules' **switch jump tables**, and the recompiler reads a jump table out of the
+overlay's own bytes. Skipping the header hid them. Nothing disassembles the
+header — only addresses named in the function map are emitted — so covering it
+costs nothing.
 
 Function maps are a linear sweep of each module with the pointer-table targets
 and every internal `jal` merged in. Do not skip the merge: the sweep alone
@@ -621,7 +629,72 @@ start (preceded by `jr ra` + delay slot, or opening `addiu sp,sp,-N`) and are no
 already a known start returns **0 in all three** — so every indirect dispatch
 target that exists statically is mapped, on top of every `jal` target. What can
 still surface is an address computed at run time, which nothing static can
-predict.
+predict — and, as the next section covers, an address that is not a function
+start at all.
+
+### The sweep splits a switch, and the split crashes
+
+A room off the main hall died with `unmapped call: 0x8019F578`, six frames deep
+in `fdat17`. The address is not missing from the map: it is *inside*
+`func_8019F564`, 20 bytes past its start. Nothing calls it. `func_8019F374`
+**branches** to it — `beq s0, a1, 0x8019F578` — and the recompiler turns a branch
+that leaves its own function into a `Dispatcher.Call`, which only knows entry
+points.
+
+The real function is `0x8019F374`–`0x8019F5A4`: prologue `addiu sp,sp,-48`,
+epilogue `jr ra` + `addiu sp,sp,48`, and in between a 14-case switch whose case
+bodies and shared epilogue the sweep chopped into twelve "functions". **The sweep
+ends a function at any `jr` or `j` plus its delay slot.** That is right for
+`jr ra` and for a tail call, and wrong for the two forms PSY-Q emits *inside* a
+function — a `jr` through a jump table, and a `j` to a shared epilogue — so every
+switch in the game is a candidate.
+
+The proof that a split is wrong is cheap and total: **a MIPS conditional branch
+never leaves the function that issues it.** There is no conditional tail call and
+the range is only ±128 KB. So a conditional branch crossing a boundary in the map
+means the map is wrong, and the two functions plus everything laid out between
+them are one function. `scripts/merge_branch_spans.py` applies exactly that rule,
+and jump-table entries as a second source of the same proof:
+
+```bash
+python3 scripts/merge_branch_spans.py --dry-run    # every overlay
+python3 scripts/merge_branch_spans.py fdat17
+```
+
+It found the bug in **five of the nine modules** — `fdat05`, `fdat11`, `fdat14`,
+`fdat17`, `fdat20`, `fdat32` — i.e. four more areas were carrying the identical
+crash. The three executables are clean, which is why this never showed up before
+the area modules went in. Merging drops fdat17 from 29 functions to 13.
+
+Two things have to hold for a merge to be safe, and the script checks both:
+
+- Nothing may `jal` a start the merge swallowed. A label is not callable, so that
+  would trade one unmapped call for another. (Nothing does; every swallowed start
+  is a switch case or an epilogue.)
+- The `jr` has to resolve, or the switch dispatches to nothing at run time.
+  `JumpTableAnalyzer` reads the table out of the overlay's bytes and only accepts
+  entries inside the function — which is why **the merge and the `skip: 0` change
+  above are one fix, not two.** The tables live in the module header, past the 32
+  dispatch slots, so with the header skipped the recompiler could not read a
+  single one.
+
+Finding the table needs the same dataflow the recompiler does, not a peephole:
+`fdat14` hoists its `lui`/`addiu` pair to the top of the function, **33
+instructions** above the `jr` that uses it.
+
+After the fix every switch in every module resolves — `fdat17` alone goes from
+zero resolved tables to two, 19 entries — and the only `Dispatcher.Call` left on
+a register in any module is the unreachable `default:` arm of a resolved switch.
+
+**`fdat32` is the exception and is still open.** Scoring each module's *external*
+`jal` targets against the three executables the way the load address was
+originally pinned gives 17/17, 19/19, 22/22, 38/38 … for the eight area modules
+against `GAME.EXE` — and **0/15 for `fdat32` against all three**. Its fifteen
+outbound calls all land mid-function in `GAME.EXE` on words like `sw s1,0x6C(sp)`.
+So either `0x80193B38` is the wrong base for it or it is not linked against any of
+the three, and every one of those fifteen is a future `unmapped call`. It is the
+entry-32 "different module family", so whatever loads it is presumably late in
+the game and this has never been reached in play.
 
 ## Saving and loading
 
@@ -1716,6 +1789,46 @@ two clean bands and would settle it immediately.
 Measured with the mod loaded alongside `widescreen` and `nodither`:
 `loaded 3/3 mod(s), 9 function(s) hooked`, no replace conflict, 300 frames per
 10-second window — the pacing floor is untouched.
+
+### Open: the twin-stick controls broke after the dragon stone went into the fountain
+
+Reported from play and **not yet reproduced or diagnosed**. Putting the dragon
+stone into the fountain — a scripted world event — and the sticks stopped
+working afterwards. Unknown so far: whether it was both sticks or one, whether
+the D-pad still worked, and whether it survived leaving the area or a reload.
+Those three answers narrow it to one of the candidates below on their own, so
+they are worth capturing next time before anything else.
+
+What makes this worth writing down rather than guessing at: the mod has **two
+silent bail-outs that a scripted event is exactly the thing to trigger**.
+
+1. **The rate guards.** `BeforeLook` returns when `*(u32*)0x8019955C <= 0` and
+   `BeforeMove` when `*(u32*)0x80199558 <= 0` (`Analog.cs:247,291`). They exist so
+   the mod never divides a scale by a zero the game is holding, and the game
+   plausibly zeroes exactly these while a scripted sequence has the camera. If
+   the event leaves either at zero, that axis is dead until something sets it
+   back — and the mod would be *reporting* the game's state faithfully rather
+   than having a bug of its own. **This is the first thing to check** and it is
+   one read each.
+2. **The action-mask table.** `Drive` reads the button masks out of
+   `0x8006E568`–`0x8006E5D0` every frame rather than hardcoding them, which is
+   what makes the mod follow the control-config screen. If the event rewrites or
+   clears that table, `inc`/`dec` come back zero, no button is asserted, and the
+   game takes its neither-button branch — which *decays* the velocity instead of
+   accumulating it. That reads as controls that are alive but weak and wrong,
+   not as controls that are dead, so it is distinguishable from candidate 1 by
+   feel alone.
+3. **The player action state.** `0x801994E1` drives the jump table at
+   `0x80011300`; states other than the ordinary ones take arms that need not call
+   `func_80028DB8` and `func_800290D4` at all. If the event parks the player in
+   such a state, the mod's hooks simply never run — and neither does the game's
+   own control code, so the D-pad would be dead too. **That is the question the
+   "did the D-pad still work?" answer settles**, and it is the one case where
+   nothing is wrong with the mod.
+
+Cheap next step: reproduce with `KF2_ANALOG_PROBE=1`, which already reports the
+control state, and read `0x8019955C` / `0x80199558` / `0x801994E1` at the moment
+it breaks. All three candidates are one memory read apart.
 
 ## Auto reload
 
