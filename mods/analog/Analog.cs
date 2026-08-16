@@ -216,10 +216,13 @@ public sealed class AnalogMod : IMod
 
         if (y != 0f || (_cameraInstantStop && _ownedPitch))
         {
-            // Screen up is a negative stick Y and the increasing branch is the
-            // game's R2. Which of L2/R2 looks up is the one direction here that
-            // no static evidence settles -- flip "Invert look Y" if it is wrong.
-            int step = Step(-y * PitchVelMax * _pitchSens * (_invertPitch ? -1f : 1f),
+            // Screen up is a negative stick Y, and looking up is the pitch
+            // velocity going *down*: the increasing branch is the game's R2,
+            // which looks down. That is the one sign in this mod no static
+            // evidence settled -- the mask table gives the button but not which
+            // way the view tips -- so it was fixed by playing it, and the sticks
+            // agree with the D-pad's own L2/R2 now.
+            int step = Step(y * PitchVelMax * _pitchSens * (_invertPitch ? -1f : 1f),
                             ref _pitchCarry, PitchVelMax);
             pad = Drive(m, pad, PitchVel, step, PitchAccel, MaskPitchInc, MaskPitchDec);
             _ownedPitch = step != 0;

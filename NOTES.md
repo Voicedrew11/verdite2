@@ -1032,10 +1032,13 @@ this) it reads:
 | `0x8006E59C` / `0x8006E598` | Left / Right | turn: yaw += / −= `rate>>2` |
 | `0x8006E590` / `0x8006E594` | Up / Down | walk forward / back |
 | `0x8006E580` / `0x8006E588` | R1 / L1 | strafe right / left |
-| `0x8006E584` / `0x8006E58C` | R2 / L2 | pitch += / −= 3 |
+| `0x8006E584` / `0x8006E58C` | R2 / L2 | pitch += / −= 3 (R2 looks **down**) |
 
-So **yaw increases when you turn left**, which is the sort of sign a mod gets
-backwards until it reads this table.
+So **yaw increases when you turn left** and **pitch increases when you look
+down**, which is the sort of sign a mod gets backwards until it reads this table.
+The table settles the buttons but not which way the view tips: that half of the
+pitch sign came from playing it, after the first build had the look axis
+inverted.
 
 ### Every control axis has the same three branches
 
@@ -1541,8 +1544,10 @@ Four things worth keeping:
 `KF2_ANALOG_PROBE=1` reports the velocities, the yaw and pitch steps, the walk
 speed and turn rate next to the stick deflection that produced them, and dumps
 the mask table once. That dump is the evidence for the sign conventions in the
-table above; **the one direction it does not settle is which of L2/R2 looks up**,
-so pitch has an "Invert look Y" toggle and the default is a coin toss.
+table above — with one gap it cannot close: it names the button behind an action
+but not which way the view moves. That cost the first build an inverted look
+axis, fixed by playing it; **increasing pitch looks down**. The "Invert look Y"
+toggle is now a preference rather than a guess.
 
 Measured with the mod loaded alongside `widescreen` and `nodither`:
 `loaded 3/3 mod(s), 9 function(s) hooked`, no replace conflict, 300 frames per

@@ -140,8 +140,8 @@ internal static class AnalogProbe
         {
             [AnalogMod.MaskTurnInc]   = "turn +   (yaw increases)",
             [AnalogMod.MaskTurnDec]   = "turn -   (yaw decreases)",
-            [AnalogMod.MaskPitchInc]  = "pitch +  (look up)",
-            [AnalogMod.MaskPitchDec]  = "pitch -  (look down)",
+            [AnalogMod.MaskPitchInc]  = "pitch +  (look down)",
+            [AnalogMod.MaskPitchDec]  = "pitch -  (look up)",
             [AnalogMod.MaskFwdInc]    = "walk +   (forward)",
             [AnalogMod.MaskFwdDec]    = "walk -   (back)",
             [AnalogMod.MaskStrafeInc] = "strafe + (yaw-0x400)",
