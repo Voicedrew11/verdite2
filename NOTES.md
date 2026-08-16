@@ -848,6 +848,8 @@ mods/framestats/mod.json + FrameStats.cs     fps and the vblank-per-frame histog
 mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loop stages
 mods/widescreen/mod.json + Widescreen.cs     wider picture, and the census that justifies it
 mods/nodither/mod.json   + NoDither.cs       clears the GPU dither bit; see "Dithering"
+mods/analog/mod.json     + Analog.cs,
+                           AnalogProbe.cs    analog twin-stick control; see "Analog twin-stick control"
 ```
 
 ```csharp
@@ -962,6 +964,96 @@ before it. What a steady in-area window says:
 The probe is not free — 220k memory reads a frame drops the port to ~26 fps and
 shifts the band histogram — so it is a diagnostic to run deliberately, not to
 leave on.
+
+## Player state: found, and it was in stage 3 all along
+
+The probe above could not find the player because it was watching the wrong 66 KB
+— the per-area buffers do not contain it. Reading the *emitted C#* found it in
+an afternoon, and the route in was the pad: `func_8005F564` is libetc's
+`PadRead(id)`, it has 17 call sites in `GAME.EXE`, and exactly one of them is a
+main-loop stage. That stage is **3, `func_8002A550`**, and everything the player
+does hangs off it. **Stage 2 was the wrong guess**; the four busy `buf5` words it
+writes are not the view block.
+
+The pad word is read once a frame and stored to **`0x80199554`**; every consumer
+reads that global, and the `fdat` area modules never touch it, so all player
+control is `GAME.EXE` code. The word is active *high* — libetc returns
+`~*(u_long*)buf` — and its two button bytes are in the opposite order to the
+runtime's `Controller` bit layout, so a mask decoded straight comes out as
+Triangle/Cross/Square/Circle where the game means Up/Down/Left/Right.
+
+Stage 3's own body, in order:
+
+```
+func_80023FCC        zero the three delta vectors, copy base angles to composed
+PadRead(1)        -> 0x80199554
+func_8002957C        player control: attacks, items, magic (reads pad + masks)
+func_80028DB8        turn and look
+func_800290D4        walk and strafe
+func_80029EE0        base angles += delta vector A, then zero A
+0x8002B330           composed = base + A + B + C
+```
+
+### The state, by address
+
+| address | width | what |
+|---|---|---|
+| `0x801994EC` / `F0` / `F4` | u32 ×3 | position X / height Y / Z — the triple the collision queries (`func_8002C330`, `func_8002C700`) take with radius `0x320` |
+| `0x8019950C` / `0E` / `10` | s16 ×3 | base view angles: pitch / **yaw** / roll |
+| `0x8019951C` / `1E` / `20` | s16 ×3 | delta vector A — zeroed each frame, folded into the base by `func_80029EE0` |
+| `0x80199514` / `16` / `18` | s16 ×3 | delta vector B |
+| `0x80199524` / `26` / `28` | s16 ×3 | delta vector C |
+| `0x80199504` / `06` / `08` | s16 ×3 | composed view = base + A + B + C, what the renderer reads |
+| `0x8019953E` / `0x80199540` | s16 | strafe velocity / forward velocity |
+| `0x80199542` | s16 | resulting walk magnitude, `sqrt(vx² + vz²)` via `func_8005B890` |
+| `0x80199544` / `0x80199546` | s16 | turn velocity / pitch velocity |
+| `0x80199554` / `0x80199556` | u16 | this frame's pad word / its companion for edge detection |
+| `0x80199558` / `0x8019955C` | u32 | this frame's walk speed (`0xC8`) / turn rate (`0x1C`, `0x23` standing still) |
+
+Yaw is not a guess: `func_800290D4` turns the two velocities into a heading by
+calling `func_80028080` with `yaw`, `(yaw + 0x800) & 0xFFF`, or `yaw ∓ 0x400` —
+180° for backwards and 90° either side for strafing, which only makes sense for a
+facing angle. A debug warp at `0x8002AFBC` writes the same three words as
+`0, 0x0C00, 0` alongside a literal position, which confirms the triple's order.
+
+**You turn faster standing still than walking** — 35 units a frame against 28 —
+and that is the game's own rule, set in stage 3 from whether a movement button is
+down. Worth knowing before blaming a mod for it.
+
+### The action-mask table, and why nothing should hardcode a pad bit
+
+The control code never tests a pad bit directly. It tests `pad & mask[i]` against
+a table of 24 words at **`0x8006E568`–`0x8006E5D0`**, which is what makes the
+game's own control-config screen work. Dumped at run time (the `analog` mod does
+this) it reads:
+
+| mask word | button | action |
+|---|---|---|
+| `0x8006E59C` / `0x8006E598` | Left / Right | turn: yaw += / −= `rate>>2` |
+| `0x8006E590` / `0x8006E594` | Up / Down | walk forward / back |
+| `0x8006E580` / `0x8006E588` | R1 / L1 | strafe right / left |
+| `0x8006E584` / `0x8006E58C` | R2 / L2 | pitch += / −= 3 |
+
+So **yaw increases when you turn left**, which is the sort of sign a mod gets
+backwards until it reads this table.
+
+### Every control axis has the same three branches
+
+Turn, pitch, forward and strafe are all velocity based and all written the same
+way:
+
+```c
+if      (pad & maskInc)  vel += rate >> 2;   /* clamped to +rate */
+else if (pad & maskDec)  vel -= rate >> 2;   /* clamped to -rate */
+else                     vel decays toward 0;
+angle_or_position += vel;
+```
+
+(pitch steps by a flat 3 to a limit of 32, and the angle itself is held inside
+±`0x2BC`; forward decays at `speed>>3` and everything else at `>>2`.)
+
+That shape is the whole reason analog control is cheap here — see "Analog
+twin-stick control".
 
 ## Frame pacing: the port is pinned to the fastest band
 
@@ -1391,6 +1483,62 @@ entirely. Five later runs of the same pair of mods committed instantly. Worth
 recognising rather than chasing: if a build stalls at mod load, the stack will show
 the main thread in `ModLoader.LoadAll → HostWindow.Pump`.
 
+## Analog twin-stick control
+
+`mods/analog` gives the game continuous analog turning, looking and walking on a
+modern layout — left stick walks and strafes, right stick turns and looks — and
+it does it **without replacing any of the game's own movement code**.
+
+The sticks were always there: `InputManager` fills
+`Controller.LeftX/LeftY/RightX/RightY` from SDL every poll. Nothing consumed
+them, because the game reads `PAD_dr` and gets a digital word, and the runtime's
+default binding just wires the left stick to the D-pad
+(`GamepadBindings.Up = [11, 104]`) — which in this game means the left stick
+*turns*, at the fixed rate, like the D-pad does.
+
+**The trick is the three-branch velocity shape** documented under "Player state".
+Because each axis is `vel += rate>>2` on a held button and then
+`angle_or_position += vel`, a mod can pre-load the velocity word with
+`target - accel` and assert the matching button in the game's pad global: the
+game's own next instruction adds `accel`, lands exactly on `target`, and then
+applies it through its own path. Collision, the pitch limit, the walk
+normalisation, footsteps and animation all run untouched, on an amount the stick
+chose. Nothing is replaced, nothing is `[Replace]`d — two `[PreHook]`s, on
+`func_80028DB8` (turn/look) and `func_800290D4` (walk/strafe), plus one
+`[PostHook]` on stage 3 for the probe.
+
+The clamps are never fought: with `|target| ≤ rate` and the button asserted in
+the direction of `target`'s sign, the pre-loaded value is always inside `±rate`
+after the game's own accumulate, so the clamp branch is not taken.
+
+Four things worth keeping:
+
+* **The fractional carry is not optional.** At 30 fps a small deflection rounds
+  to a zero step every frame; without carrying the remainder the player simply
+  does not move below about a third of stick.
+* **Buttons come from the mask table, never hardcoded**, so the mod follows the
+  game's own control-config screen — and gets the byte order right by
+  construction, since it ORs the game's own mask words back into the game's own
+  pad word.
+* **The left stick leaks into turning** unless the turn masks are taken away from
+  it, because the runtime binds the left stick to the D-pad and the D-pad *is*
+  the turn control. Measured before the fix: 168 yaw steps in 300 frames with
+  the right stick idle. The mod therefore owns the turn bits with a zero step
+  whenever the left stick is deflected, and leaves them alone when both sticks
+  are centred — so the D-pad still plays exactly as it did.
+* **Sticks idle means mod idle.** Both hooks return before touching memory, which
+  is what keeps D-pad and keyboard play identical to an unloaded mod.
+
+`KF2_ANALOG_PROBE=1` reports the velocities, the yaw and pitch steps, the walk
+speed and turn rate next to the stick deflection that produced them, and dumps
+the mask table once. That dump is the evidence for the sign conventions in the
+table above; **the one direction it does not settle is which of L2/R2 looks up**,
+so pitch has an "Invert look Y" toggle and the default is a coin toss.
+
+Measured with the mod loaded alongside `widescreen` and `nodither`:
+`loaded 3/3 mod(s), 9 function(s) hooked`, no replace conflict, 300 frames per
+10-second window — the pacing floor is untouched.
+
 ## Next steps
 
 1. ~~**Cross an area boundary.**~~ ~~**Load a save back.**~~ Both done — a
@@ -1416,11 +1564,16 @@ the main thread in `ModLoader.LoadAll → HostWindow.Pump`.
    rendered frame to two vblanks, so the port is a constant 30 fps and no longer
    bursts past NTSC's top band. See "Frame pacing"; the measurement is the
    `framestats` mod.
-5. **Confirm the buf5 view block**, which is all 60 fps is now blocked on. Run
-   `KF2_LOOPPROBE=5 KF2_AUTOPAD=20:Up:5000,40:Right:5000` and watch
-   `0x8017783C`–`0x8017793C`: monotonic under Up means positional, swinging under
-   Right means view angle. Either names stage 2 and the gate follows. See "60 fps:
-   the mechanism exists, the map is half drawn".
+5. ~~**Confirm the buf5 view block**, which is all 60 fps is now blocked on.~~
+   Overtaken: the player state was found by reading the emitted C# instead, and
+   it is not in `buf5` at all — see "Player state". The stage to gate is **3**
+   (`func_8002A550`), which holds the pad read, the turn, the walk and the angle
+   fold, and every per-tick delta it produces is now a named address. What 60 fps
+   still needs is the delta halving, and that is now a small edit rather than a
+   hunt: halve the turn rate at `0x8019955C` and the walk speed at `0x80199558`
+   on alternate frames, or scale them the way `mods/analog` already scales the
+   velocities they feed. The buf5 four are presumably the *rendered* camera and
+   can be left alone.
 6. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
