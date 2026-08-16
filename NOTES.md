@@ -2168,6 +2168,31 @@ authoritative position, since the floor clamp rewrites `Y` every frame and
 integrating from memory would leave you hovering a step above the ground instead
 of climbing.
 
+### Area warp cannot run from the panel
+
+The first build called `func_80024154` from the Warp button. That is
+`IPanel.Draw`, which runs inside `HostWindow.Present`, which runs from `VSync`.
+`func_80024154` waits for the CD by looping `func_80017818`, and that calls
+`VSync`. So the button nested `DoRender` / ImGui, and once the overlay swapped it
+returned to a frame still drawing the area that had just unloaded.
+
+The same six-argument call from a `[PostHook]` on stage 3 is the game's own load
+path (`func_80029CBC` at `0x80029E0C`, and `mods/autoreload`) and is safe: VSync
+is then a child of the game loop, not of Present. The panel only queues the
+index; the hook does the work.
+
+A second failure survives that move. `func_80024154` floor-snaps at the current
+X/Z via `func_80025DA8`. The 80×80 tile map at `0x801C8484` is indexed by
+`X>>11, Z>>11` with no clamp, and the renderer then walks object indices for
+tiles the new module does not own — the same death as flying out of the loaded
+geometry. After the load, the warp sits the player on the centroid of the new
+area's object table (`0x80177714`, `0x44`-byte records, empty when `+4 == 0xFF`)
+and runs `func_80025DA8` there. A noclip position that has already left the tile
+map is parked on the new-game spawn (`func_80025B4C`: `0x11800, -12800, 0x18000`)
+for the duration of the load, so the first snap cannot OOB. Empty tiles in the
+new map can still trip the below-floor latch; `func_80029E5C` clears it, the same
+way autoreload does when it arrives from state `0x11`.
+
 ## Next steps
 
 1. ~~**Cross an area boundary.**~~ ~~**Load a save back.**~~ Both done — a

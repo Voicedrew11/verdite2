@@ -82,6 +82,7 @@ public sealed class DebugMod : IMod
         Noclip.Reset();
         Cheats.Reset();
         Hotkeys.Reset();
+        Warp.Reset();
 
         DebugPanel.Instance.IsOpen = false;
         _panelRegistered = false;

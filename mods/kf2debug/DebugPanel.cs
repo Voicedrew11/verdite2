@@ -225,9 +225,11 @@ internal sealed class DebugPanel : IPanel
         ImGui.SameLine();
         if (ImGui.Button("Warp to area")) Warp.ToArea(_warpArea);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Runs the game's own area-entry routine -- the same call the load "
-                           + "path makes. This unloads the current area module and reads another "
-                           + "off the disc, so it is a real transition and it takes a moment.");
+            ImGui.SetTooltip("Queues the game's own area-entry routine -- the same call the load "
+                           + "path makes -- for the end of the next player-stage. This unloads "
+                           + "the current area module and reads another off the disc, so it is a "
+                           + "real transition and it takes a moment. You land on the new area's "
+                           + "geometry, not at the coordinates you left.");
 
         ImGui.TextWrapped("Areas 0-7 are the eight real ones. Areas 8 and 9 have no data, and "
                         + "area 10 (fdat32) is cut content the loader cannot reach -- warping "
