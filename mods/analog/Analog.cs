@@ -92,6 +92,24 @@ public sealed class AnalogMod : IMod
     static bool _invertStrafe;
     static bool _invertForward;
 
+    // The camera stops when the stick is released rather than coasting.
+    //
+    // The game ramps a released velocity down instead of dropping it -- pitch by
+    // 3 a frame from a limit of 32, so a released stick keeps looking for about
+    // eleven frames, a third of a second and some 16 degrees. That is fine for a
+    // held button, which cannot be released halfway, and wrong for a stick: it
+    // reads as inertia on the look axis and nowhere else, because the turn axis
+    // is already being zeroed by the left-stick leak fix below.
+    //
+    // Movement is deliberately *not* included. Its ramp-down is the walking
+    // momentum the game has always had, and stopping the player dead would be a
+    // change to how the game plays rather than to how the stick reads.
+    static bool _cameraInstantStop = true;
+
+    // Which camera axes the sticks were driving last frame, so the release can be
+    // handed back to the D-pad and L2/R2 after exactly one zeroing frame.
+    static bool _ownedTurn, _ownedPitch;
+
     // Fractional remainders. Not optional: at 30 fps a small stick deflection
     // rounds to a zero step every frame, and the player would simply not move.
     static float _turnCarry, _pitchCarry, _fwdCarry, _strafeCarry;
@@ -113,6 +131,7 @@ public sealed class AnalogMod : IMod
         ReadEnv("KF2_ANALOG_TURN", ref _turnSens);
         ReadEnv("KF2_ANALOG_PITCH", ref _pitchSens);
         ReadEnv("KF2_ANALOG_MOVE", ref _moveSens);
+        ReadEnv("KF2_ANALOG_INSTANTSTOP", ref _cameraInstantStop);
 
         AnalogProbe.Configure();
 
@@ -130,6 +149,11 @@ public sealed class AnalogMod : IMod
         ImGui.Checkbox("Enabled", ref _enabled);
         ImGui.Checkbox("Analog look (right stick)", ref _analogLook);
         ImGui.Checkbox("Analog move (left stick)", ref _analogMove);
+        ImGui.Checkbox("Camera stops on release", ref _cameraInstantStop);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The game ramps a released look velocity down over about a third of a " +
+                             "second, which reads as inertia on a stick. Off restores that ramp. " +
+                             "Walking momentum is the game's own and is not affected either way.");
 
         ImGui.Separator();
         ImGui.SliderFloat("Turn sensitivity", ref _turnSens, 0.1f, 3f);
@@ -170,22 +194,27 @@ public sealed class AnalogMod : IMod
         var (lx, ly) = Shape(Controller.LeftX, Controller.LeftY, _moveDeadzone, _moveCurve);
         bool leftActive = _analogMove && (lx != 0f || ly != 0f);
 
-        if (x == 0f && y == 0f && !leftActive) return;
+        // A released axis still needs one frame to stop the velocity the game
+        // would otherwise ramp down; _ownedTurn/_ownedPitch are what keep us in
+        // the hook for that frame and out of it afterwards.
+        bool release = _cameraInstantStop && (_ownedTurn || _ownedPitch);
+        if (x == 0f && y == 0f && !leftActive && !release) return;
 
         ushort pad = m.ReadU16(Pad);
         int rate = (int)m.ReadU32(TurnRate);
         if (rate <= 0) return;
 
-        if (x != 0f || leftActive)
+        if (x != 0f || leftActive || (_cameraInstantStop && _ownedTurn))
         {
             // Stick right turns right, and turning right is the *decreasing*
             // branch: the mask that increases yaw is the game's Left, which the
             // probe's table dump is the evidence for. Hence the negation.
             int step = Step(-x * rate * _turnSens * (_invertTurn ? -1f : 1f), ref _turnCarry, rate);
             pad = Drive(m, pad, TurnVel, step, rate >> 2, MaskTurnInc, MaskTurnDec);
+            _ownedTurn = step != 0;
         }
 
-        if (y != 0f)
+        if (y != 0f || (_cameraInstantStop && _ownedPitch))
         {
             // Screen up is a negative stick Y and the increasing branch is the
             // game's R2. Which of L2/R2 looks up is the one direction here that
@@ -193,6 +222,7 @@ public sealed class AnalogMod : IMod
             int step = Step(-y * PitchVelMax * _pitchSens * (_invertPitch ? -1f : 1f),
                             ref _pitchCarry, PitchVelMax);
             pad = Drive(m, pad, PitchVel, step, PitchAccel, MaskPitchInc, MaskPitchDec);
+            _ownedPitch = step != 0;
         }
 
         m.WriteU16(Pad, pad);

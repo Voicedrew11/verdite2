@@ -1526,6 +1526,15 @@ Four things worth keeping:
   the right stick idle. The mod therefore owns the turn bits with a zero step
   whenever the left stick is deflected, and leaves them alone when both sticks
   are centred — so the D-pad still plays exactly as it did.
+* **A released velocity ramps down, and on a stick that reads as inertia.** The
+  game drops nothing: pitch decays by 3 a frame from a limit of 32, so releasing
+  the stick keeps the view moving for about eleven frames — a third of a second,
+  some 16°. That is reasonable for a button, which cannot be released halfway,
+  and wrong for a stick, and it showed up *only* on pitch because the leak fix
+  above was already zeroing turn whenever the left stick moved. The mod therefore
+  drives a released camera axis to zero for one frame and then hands it back, so
+  L2/R2 and the D-pad still work. Movement is deliberately left alone: its
+  ramp-down is the walking momentum the game has always had.
 * **Sticks idle means mod idle.** Both hooks return before touching memory, which
   is what keeps D-pad and keyboard play identical to an unloaded mod.
 
