@@ -53,13 +53,19 @@ KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:hold
 KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pacing"
 KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other frame
 KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
+KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect override, and the margin census
 ```
 
 Frame pacing is load-bearing: without it the port runs faster than the game can on
-hardware, so it lives in `patches/` and is always on. The two measurement tools
-are real mods under `mods/` — **enable them in the game's Mods panel**, since mods
-default to off and load silently when disabled. Prefer them to `KF2_LOG=sdk`,
-which is gigabytes a minute.
+hardware, so it lives in `patches/` and is always on. The measurement tools and
+the widescreen support are real mods under `mods/` — **enable them in the game's
+Mods panel**, since mods default to off and load silently when disabled. Prefer
+them to `KF2_LOG=sdk`, which is gigabytes a minute.
+
+Widescreen is `Display.WideAspect` and nothing else: the runtime renders a margin
+either side of the display buffer and presents it, the projection is untouched, so
+the sides show geometry the game submitted and the GPU used to clip — a quarter of
+its primitives in an area. See "Widescreen" in `NOTES.md`.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
 its clock starts when the first area module loads, which is the only point in the

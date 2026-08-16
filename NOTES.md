@@ -803,6 +803,7 @@ A mod is a folder (or zip) under `mods/` with a `mod.json` and C# sources,
 ```
 mods/framestats/mod.json + FrameStats.cs     fps and the vblank-per-frame histogram
 mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loop stages
+mods/widescreen/mod.json + Widescreen.cs     wider picture, and the census that justifies it
 ```
 
 ```csharp
@@ -1139,6 +1140,72 @@ The delta-halving is still owed regardless — a view stage running at 60 with
 unhalved deltas moves twice as fast, and no amount of gating fixes that from outside.
 That is the one part of 60 fps that needs a constant identified in the game's own
 code rather than a stage gated from outside it.
+
+## Widescreen: the runtime renders the margin, the game fills a quarter of it
+
+**The runtime already implements widescreen; nothing in the game had to be
+touched.** `GpuHle.WideMargin` sizes a margin of extra columns either side of the
+display buffer, `GlCore` builds the display render target that wide
+(`GlDisplayRt.Wide1x`), and the pieces that would otherwise fight it are already
+handled: only the original columns are blitted back to VRAM (`Writeback` starts at
+`rt.Margin`), the GPU clip is widened to the whole target when the game clips to
+the whole framebuffer, `PutDrawEnv` extends an `isbg` background clear across the
+margin, and `PresentDisplay` returns `WideAspect` instead of `SourceAspect`
+whenever the margin is non-zero. So `mods/widescreen` sets one number:
+
+```csharp
+Display.WideAspect = 16f / 9f;      // 320 -> 428, 54 columns a side
+Display.WideAspect = 21f / 9f;      // 120 columns a side
+```
+
+**This is not a stretch, and the difference is the whole point.** The projection
+is untouched — no GTE control register is written, `H` and the rotation matrix are
+the game's own — so pixels keep their aspect and the HUD keeps its authored size.
+Which means the extra picture is not synthesised: it is only there if the game
+submits geometry past the screen edge and expects the GPU to clip it. A game that
+culls per polygon against its own screen rectangle would gain black bars and
+nothing else.
+
+So the mod counts. It listens on `RenderPrimEvent` and classifies every primitive
+by whether a vertex falls outside the game's own clip rectangle
+(`KF2_WIDESCREEN_PROBE=1`, or the checkbox in its settings panel):
+
+```
+[widescreen] 25.4% of 480 prims reach the margin (239/s)      title screen (open)
+[widescreen] 0.0% of 600 prims reach the margin (300/s)       GAME.EXE menus
+[widescreen] 25.4% of 58064 prims reach the margin (28787/s)  fdat02, in an area
+[widescreen] 25.1% of 70500 prims reach the margin (35145/s)  fdat02, next window
+```
+
+**A quarter of everything King's Field draws in an area was being thrown away at
+`x=0` and `x=319`** — about 1,000 primitives a frame, of which ~250 crossed the
+edge. It culls per object and by depth and leaves the screen edge to the GPU,
+which is exactly the property the margin needs. The 0.0% on the GAME.EXE menus is
+the same measurement giving the other answer: those are 2D, authored 320 wide, and
+no aspect ratio widens them.
+
+**What has not been done is looking at it.** The measurement above ran with the
+desktop session locked, so this is a primitive census, not a visual check. Two
+things to check by eye first:
+
+1. **2D screens and fades.** The margin is cleared only by the `isbg` path. A
+   full-screen rectangle the game draws itself is 320 wide and will leave the
+   sides showing the previous frame.
+2. **Pop-in at the edges.** Per-object culling still uses the game's 4:3 frustum,
+   so an object can be dropped while its polygons would have been visible in the
+   margin. The counter cannot see this — it only counts what was submitted.
+
+If either turns out to be bad enough to matter, the alternative is the classic
+hor+ hack: scale the X row of the GTE rotation matrix by `source/target` so the
+projection itself narrows, and present stretched. That needs the address of
+whatever loads the matrix, costs correct HUD proportions, and — given a quarter of
+the frame already crosses the edge — buys much less here than it does on a game
+that clips its own polygons.
+
+**Trap, learned while measuring:** with the session locked, KWin stops sending
+frame callbacks and the port blocks in `SwapBuffers` forever with `VSync=True` —
+0% CPU, no log output, and it looks exactly like a hang. Set `VSync=False` in
+`interface.ini` to run it without a visible window.
 
 ## Next steps
 
