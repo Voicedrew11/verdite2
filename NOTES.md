@@ -1058,7 +1058,20 @@ mods/nodither/mod.json   + NoDither.cs       clears the GPU dither bit; see "Dit
 mods/analog/mod.json     + Analog.cs,
                            AnalogProbe.cs    analog twin-stick control; see "Analog twin-stick control"
 mods/autoreload/mod.json + AutoReload.cs     reload the last save on death; see "Auto reload"
+mods/kf2debug/mod.json   + GameState.cs,     noclip, invincibility, warp and a live state
+                           Noclip.cs,        readout; see "Debug tools"
+                           Cheats.cs, Warp.cs,
+                           Hotkeys.cs, DebugPanel.cs, DebugMod.cs
 ```
+
+Two things the debug mod needed that are not obvious from the mods above:
+**`PanelManager.Register(IPanel)` is public**, so a mod can add a dockable window
+next to CPU State rather than living inside the Mods popup — but panels do *not*
+auto-populate the menu bar (`MainMenuBar` declares each built-in one by hand), so
+it also needs a `MenuRegistry.Menu(...).Panel<T>(...)` entry. And
+**`HostWindow.IsKeyDown(Key)` is public**, which is the route to real hotkeys;
+note it lives in `RecompOne.Runtime.Host`, not `.Host.Window` like everything
+else in that folder. F1 and F11 are the host's own.
 
 ```csharp
 [PostHook("game", Address = 0x80060818)]
@@ -1206,7 +1219,7 @@ func_80029EE0        base angles += delta vector A, then zero A
 
 | address | width | what |
 |---|---|---|
-| `0x801994EC` / `F0` / `F4` | u32 ×3 | position X / height Y / Z — the triple the collision queries (`func_8002C330`, `func_8002C700`) take with radius `0x320` |
+| `0x801994EC` / `F0` / `F4` | u32 ×3 | position X / height Y / Z — the triple the collision queries (`func_8002C330`, `func_8002C700`) take with radius `0x320`. Read as **signed**: a normal Y is negative. Written by `func_80028080` (X/Z), `func_80028560` (Y) and `func_80028B0C`; nothing after stage 3 writes it — see "Debug tools" |
 | `0x8019950C` / `0E` / `10` | s16 ×3 | base view angles: pitch / **yaw** / roll |
 | `0x8019951C` / `1E` / `20` | s16 ×3 | delta vector A — zeroed each frame, folded into the base by `func_80029EE0` |
 | `0x80199514` / `16` / `18` | s16 ×3 | delta vector B |
@@ -1288,6 +1301,9 @@ Which pair is HP and which is MP is not a guess — three things agree:
 1. **`func_80024F90(delta)` is "add `delta` to HP".** It reads `0x80199428`,
    and when the sum is `<= 0` it clamps to zero **and calls `func_8002A264(0)`**.
    It touches no other stat, and nothing else in the block has a death branch.
+   (It is *an* add-HP routine, not *the* damage path — see "A correction:
+   `func_80024F90` is not the damage path" under "Debug tools". `func_80024FE0`
+   is what a monster's hit goes through, and it writes HP itself.)
 2. **State `0x11`'s handler opens by forcing `*(u16*)0x80199428 = 0`.**
 3. **The HUD reads the four in bar order** — current HP, max HP, current MP, max
    MP — which is the order the two bars are drawn in.
@@ -1985,6 +2001,173 @@ which is the case that makes `func_80024154` re-enter a `fdat` module other than
 the resident one, and a save written mid-session to confirm `0x8006E5D4` tracks
 saves as well as loads.
 
+## Debug tools
+
+`mods/kf2debug` is noclip flight, invincibility, infinite MP, a speed multiplier,
+position bookmarks and area warp, behind a dockable panel and a set of hotkeys.
+Most of it is a front end for addresses already in "Player state" and "The
+character's stats are buf2" — but building it turned up seven things those sections
+did not have, and one correction.
+
+### The player's own movement is three routines, not one
+
+Stage 3's `func_800290D4` is **only velocity bookkeeping**. It never writes the
+position. The three that do:
+
+| function | what it writes | called from |
+|---|---|---|
+| `func_80028080` | X and Z — the horizontal move and the **wall slide** | `func_800290D4`, up to three times a frame with `yaw`, `yaw+0x800`, `yaw±0x400` |
+| `func_80028560` | Y only, eight sites — **gravity, the floor clamp and the step** | **stage 3 directly**, not through the walk; every walking arm converges on it |
+| `func_80028B0C` | all three — the thrown/knockback mover | stage 3's knockback states |
+
+`func_80028080` commits only when `func_8002C700` returns zero, and latches the
+surface id into `0x8019953C` when it does. `func_80028560` opens with
+`func_8002C330` on the position triple and integrates against the fall velocity
+at **`0x8019954E`**.
+
+**`func_80028560` is also where the game kills you**, which is what makes it worth
+knowing: it carries fall damage (`func_80024FE0`), the bottomless-pit check
+(`func_800284BC`) and the crushed-or-below-the-floor check (`func_80023ECC`).
+
+### `func_8002C3A8` is the floor-height query
+
+`func_8002C3A8(mode, x, z, radius, /*sp+0x10*/ height)` returns the ground `Y` for
+an X/Z column. Two independent call sites prove it: `func_80025DA8` calls it with
+the player's own position, radius `0x320` and height `0x6A4` and stores the result
+straight into the height word, and the entity code at `0x800355F0` calls it the
+same way and adds a per-object offset. It is the game's own "put this thing on the
+floor", and it is what the debug mod's "snap to floor" uses.
+
+### Death has exactly one chokepoint
+
+**`func_8002A264` is the only writer of state `0x11` in the whole game.** Seven
+callers, and only three of them are about HP:
+
+| caller | condition |
+|---|---|
+| `func_80024F90` | HP reached 0 |
+| `func_80024FE0` | HP reached 0 |
+| `func_8002A3DC` | HP reached 0 |
+| `func_80023ECC` ×2 | crushed against the ceiling, or below the floor |
+| `func_800284BC` | bottomless pit — `floor − Y > 32000`, and it also sets `0x801994E9 = 1`. Called unconditionally from `func_80028560`'s falling arms, so the drop distance is the whole test |
+| `func_80028B0C` | the same pit test in the thrown path |
+
+**The last four kill you at full HP**, so nothing that watches `0x80199428` sees
+them coming. A `[PreHook]` returning `false` on `func_8002A264` is therefore the
+whole of invincibility in one hook; the HP-side hooks only exist to stop the bar
+visibly draining.
+
+### A correction: `func_80024F90` is not the damage path
+
+"The character's stats are buf2" presents `func_80024F90` as *the* add-HP routine.
+It is one of three, and it is not the one a monster's hit takes:
+
+- `func_80024F90(delta)` — **one** call site, inside stage 3, always `delta = -1`.
+  The poison/starvation tick.
+- `func_8002A3DC(delta)` — the same shape but clamped to max HP as well. The
+  per-tick equipment regen/drain, called with `+1` and with `-1`; **its `-1` arm
+  reaches neither of the other two**.
+- `func_80024FE0(a0, dmg, flags)` — **two** call sites and the real one: every
+  weapon, trap and fall. It computes `hp - dmg`, clamps at zero and writes
+  `0x80199428` itself, never through `func_80024F90`.
+
+`func_80024FE0`'s second branch is `if (dmg == 0) goto <tail>`, which skips the
+subtraction, the clamp and the store while still running the hit reaction — so
+zeroing the *argument* blocks a hit without making it look like it missed.
+
+HP is written from ten sites in the direct form alone, spread over `GAME.EXE`,
+`fdat05` and `fdat11`, and most of them are *heals* — items, spells, rest, the
+level-up refill, area scripts. That is why a `PSMemory.Freeze` on the HP word is
+the wrong tool: it would drop every one of them silently, and the failure would
+read as a bug in the game.
+
+```bash
+grep -n "WriteU16((c\.\w* - 0x6BD8u)" generated/*.cs   # direct form
+grep -n -- "- 0x6BD8u;" generated/*.cs                 # register-base form
+```
+
+### The rate words are written before they are read, inside stage 3
+
+`0x80199558` (walk speed, `0xC8`) and `0x8019955C` (turn rate, `0x1C` moving /
+`0x23` standing) are written **early in stage 3's own body**, at `0x8002A6E4` and
+`0x8002A724` — *before* it dispatches to `func_80028DB8` (turn) and then
+`func_800290D4` (walk). Anything scaling them has to sit between, and ahead of the
+turn: hooking the walk scales the turn rate after the turn has already used it,
+and stage 3 overwrites it before the next one. One pre-hook on `func_80028DB8`
+covers both consumers, since nothing writes either word in between.
+
+### Nothing after stage 3 writes the position
+
+Taking the static call closure of each of the thirteen main-loop stages and
+intersecting it with the set of routines that write `0x801994EC/F0/F4`:
+
+```
+stage 2  func_80037C0C   writes X/Z (area-transition placement)
+stage 3  func_8002A550   every player-side writer there is
+stage 4  func_80040348   none in its whole subtree -- it only READS the position
+stage 7  func_8001689C   the area loader
+stage 13 func_800342D8   none in its whole subtree
+```
+
+So a `[PostHook]` on stage 3 is the last word on both the position and the
+composed view angles, and that is where the debug mod writes. Stage 2 runs before
+stage 3 in the same iteration, so it loses. A pre-hook on the renderer would be
+worse, not safer — `func_800342D8` has two dozen call sites and fires repeatedly
+during menus and transitions.
+
+The exception is **area 7 (`fdat23`)**, whose scripted sequences displace the
+position themselves and call the renderer directly to draw their own frames.
+Stage 3 is not running during those, so a position hook is simply suspended for
+the cutscene.
+
+### `func_80024154`'s six arguments
+
+It is a wrapper around three calls to `0x800162DC`, which is "request these five
+resource slots", where **`0xFF` in a slot means keep the current one**:
+
+| arg | slot | when |
+|---|---|---|
+| 1 | 0 — **the area index** | first pass |
+| 2 | 1 | first pass |
+| 3 | 2 | first pass |
+| 6 | 2 again, on its own | intermediate pass, **skipped entirely when `0xFF`** |
+| 4 | 3 | final pass |
+| 5 | 4 | final pass |
+
+Slot 0 is the area index, and the evidence is `0x800162DC`'s own
+`if (*(u8*)0x801B3088 < s4) *(u8*)0x801B3088 = s4` — a furthest-reached
+high-water mark, which only makes sense for an area. `s4` is the first argument:
+it is `s1 = a0` on the path that takes a new area, and the currently-loaded area
+byte `*(u8*)0x8017E060` on the path where the caller passed `0xFF` to keep it.
+
+`func_80024154(area, area, area, area, area, 0xFF)` is not a guess either:
+`func_800474D0`, the game's own door warp, calls `0x800162DC` twice with exactly
+that split.
+
+**Valid areas are 0–7.** `FDAT.T` is groups of three with the code module at
+`3n+2`, and the modules are entries 2, 5, 8, 11, 14, 17, 20, 23 — areas 0–7.
+Entries 24–29 are zero length, so areas 8 and 9 do not exist, and area 10 is
+entry 32, the cut one.
+
+### Noclip's hard limit is the loaded area
+
+Flying far enough leaves the geometry the game has in RAM, and the crash is
+immediate and specific: `func_80032CD8` reads an object pointer from the table at
+`0x8018E1A0` for an index past its 104 static entries, gets a stale word, and
+`func_80017764` dies dereferencing it — reached from the renderer as
+`func_800342D8 → func_800331B4 → func_80032CD8`.
+
+Nothing a mod does from outside fixes that; the neighbouring area's module and
+data are simply not loaded. **Area warp is the supported way to change area**, and
+the mod says so where it will be read. The first build also skipped
+`func_800290D4` and `func_80028560` while flying, which was a mistake for a
+different reason: those routines are the engine's own bookkeeping, and switching
+them off makes it less self-consistent, not more. They now run and the mod
+overwrites the result — which means the flight has to keep its **own**
+authoritative position, since the floor clamp rewrites `Y` every frame and
+integrating from memory would leave you hovering a step above the ground instead
+of climbing.
+
 ## Next steps
 
 1. ~~**Cross an area boundary.**~~ ~~**Load a save back.**~~ Both done — a
@@ -2033,7 +2216,10 @@ saves as well as loads.
    function.
 8. Play further in. Now that the menu opens, the parts of the game it reaches —
    inventory, equipment, magic, the map — have never run, and each is a screen
-   with its own code path.
+   with its own code path. `mods/kf2debug` is the instrument for this: its state
+   readout is how the rest of `buf2` gets named, and its area warp reaches an
+   area without walking there. Inventory, equipment, magic and the entity table
+   are all still unmapped.
 
 ## Upstream contribution policy
 
