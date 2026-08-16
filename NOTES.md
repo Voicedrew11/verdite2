@@ -55,10 +55,11 @@ are mapped to the runtime's HLE — 66 patches. A steady-state second of
 — one frame off the ring, one buffer flip, one ordering table, repeating.
 
 Two areas have been played, half an hour in one sitting, across an area-module
-swap and a memory-card save, and the audio sounds right. **The frame rate is
-pinned to 30 fps**, NTSC's fastest band — the port used to burst past it (see
-"Frame pacing"). Not yet done: a save has never been loaded back, and `END.EXE`
-has never run — see "Next steps".
+swap and a memory-card save, and the audio sounds right. **A save has now been
+loaded back** — slot 2, from the title screen, correct area and correct character
+state (see "Saving and loading"). **The frame rate is pinned to 30 fps**, NTSC's
+fastest band — the port used to burst past it (see "Frame pacing"). Not yet done:
+`END.EXE` has never run — see "Next steps".
 
 ## Layout
 
@@ -621,6 +622,48 @@ already a known start returns **0 in all three** — so every indirect dispatch
 target that exists statically is mapped, on top of every `jal` target. What can
 still surface is an address computed at run time, which nothing static can
 predict.
+
+## Saving and loading
+
+Both halves of the memory card now work. Saving was confirmed first — three files
+written to `carda.sav` across a 30-minute session — and **loading one back has now
+been confirmed too**: slot 2, entered from the title screen, came up in the right
+area with the right character state, and the process ran on past it without an
+`unmapped call`, a VRAM collision or an exception.
+
+Loading is worth calling out separately because it is *not* the same path as
+saving. It reaches an area module from the **title screen** rather than from an
+area already running, so it drives the module load described in "GAME.EXE loads
+code" from a cold start rather than as a swap over a resident module.
+
+The card image is a stock PS1 memory card and can be read without the game
+running, which makes it the cheap way to check what is on it:
+
+```
+$ python3 - <<'EOF'
+d = open('carda.sav','rb').read()            # 131072 bytes, block 0 = directory
+for i in range(1, 16):                        # 15 dir entries, 128 bytes each
+    e = d[i*128:(i+1)*128]
+    if int.from_bytes(e[0:4],'little') == 0xA0: continue      # free
+    print(i, e[10:30].split(b'\x00')[0].decode())             # filename
+for blk in (1, 3, 5):                         # each save's first block
+    print(d[blk*8192+4:blk*8192+68].split(b'\x00')[0].decode('shift_jis'))
+EOF
+BASLUS-001581 / BASLUS-001582 / BASLUS-001583
+ＫＩＮＧ’Ｓ　ＦＩＥＬＤ　２−１　ＥＸＰ　　　３１３　ＬＶ　５
+ＫＩＮＧ’Ｓ　ＦＩＥＬＤ　２−２　ＥＸＰ　　　２６１　ＬＶ　４
+ＫＩＮＧ’Ｓ　ＦＩＥＬＤ　２−３　ＥＸＰ　　　２９１　ＬＶ　５
+```
+
+Three saves, each two blocks (16 KB), `state=0x51` first-block-in-use, `0x53`
+continuation — all well-formed. The trailing `2−N` in the title is the **slot
+number, not the area**; the level and EXP are the only per-save state visible from
+outside. Titles are full-width Shift-JIS even in the NTSC-U release, which is what
+a straight localization of the Japanese KFII would look like.
+
+**`carda.sav`'s mtime is useless as evidence.** It is rewritten at process start,
+not only when the game writes a save, so a fresh timestamp means the port booted
+— nothing more. Check the directory entries or the titles instead.
 
 ## The SDK naming problem
 
