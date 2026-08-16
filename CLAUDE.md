@@ -54,6 +54,7 @@ KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pa
 KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other frame
 KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect override, and the margin census
+KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 ```
 
 Frame pacing is load-bearing: without it the port runs faster than the game can on

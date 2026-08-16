@@ -804,6 +804,7 @@ A mod is a folder (or zip) under `mods/` with a `mod.json` and C# sources,
 mods/framestats/mod.json + FrameStats.cs     fps and the vblank-per-frame histogram
 mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loop stages
 mods/widescreen/mod.json + Widescreen.cs     wider picture, and the census that justifies it
+mods/nodither/mod.json   + NoDither.cs       clears the GPU dither bit; see "Dithering"
 ```
 
 ```csharp
@@ -1254,14 +1255,109 @@ typo costs a whole boot to find. A throwaway csproj that compiles the mod source
 against `bin/Release/net10.0/RecompOne.Runtime.dll` and `ImGui.NET.dll`, with
 `ImplicitUsings` disabled to match `ModCompiler`, catches it in three seconds.
 
+## Dithering: one flag, and it lives in the draw environment
+
+The 4x4 crosshatch over every shaded surface is the GPU's ordered dither, and the
+port reproduces it faithfully on both render paths — the software rasterizer adds
+the table entry in `GpuRaster.Plot`, the hardware backend packs it into the vertex
+texpage word and applies it in `quant5` in the fragment shader. Both read the same
+single bit of GPU state, `Gpu._dither`, and `SetDrawMode` sets that from bit 9 of a
+GP0(E1) word and from nowhere else.
+
+So removing the dithering is not a rendering change at all. It is one question:
+**can an E1 word with bit 9 set still reach the GPU?** There are three routes, and
+they are worth separating because only two of them are hookable:
+
+1. **`PutDrawEnv`**, from `DRAWENV.dtd` at `env+0x16` — `LibGpu.GetMode` turns that
+   byte straight into bit 9. **This is the only route this game uses**: exactly one
+   dithered draw env per frame, 30 a second at 30 fps, on the title screen and in
+   `fdat02` alike.
+2. **A `DR_MODE` or `DR_TPAGE` packet linked into the ordering table.** Measured
+   over the same two, **zero** — the game sets the mode once a frame and never
+   mid-frame. (`SetDrawTPage` would build one with the bit already clear;
+   `SetDrawMode` is the one that could set it.)
+3. **Recompiled MIPS writing GP0 through the trapped register**, from the parts of
+   libgpu that are not mapped to the runtime's HLE. **No mod can hook this**, so it
+   is checked instead of intercepted: `KF2_NODITHER_PROBE=1` samples GPUSTAT bit 9
+   after every frame, and it read 0 for whole sessions of title screen and play.
+   That register read is what closes the loop — without it, "the two hooks fire"
+   would only be evidence about the two routes that were already known.
+
+`mods/nodither` covers routes 1 and 2 and reports on all three. It **restores what
+it clears** — the `dtd` byte and any E1 word are cleared in the pre-hook and put
+back in the post-hook — so game memory is identical either side of the call and
+nothing survives unloading the mod. That matters most for the packet buffer: some
+of it is built once and re-sent for the rest of the run, so a bit cleared in place
+would stay cleared long after the mod was switched off.
+
+The ordering-table scan steps **command by command** using the GP0 command lengths
+rather than searching for bytes that look like E1: a colour or a vertex word can
+perfectly well carry 0xE1 in its top byte, and clearing bit 9 of a coordinate moves
+geometry. It stops at the two commands whose length depends on data that follows (a
+polyline, and an image load); neither occurs in this game's tables.
+
+**It is a pre/post hook, not a replacement, and that is deliberate.**
+`HookManager` allows exactly one `Replace` owner per function — a second mod's
+replacement is refused with `replace conflict on …` — and the widescreen mod owns
+`DrawOTag`. Pre- and post-hooks compose with a replacement and with each other, so
+both mods load together (`loaded 2/2 mod(s), 6 function(s) hooked`) and the frame
+pacing's own post-hook still runs.
+
+### Getting pixels out without a screenshot
+
+The window cannot be captured from a headless shell, but the frame buffer can:
+`GpuHle.Backend.ReadVram` reads the back buffer straight out of the hardware
+backend from a `DrawOTag` post-hook, and `Assets.PngWriter.WriteRgba` writes it
+out. The rectangle to read is the clip rect from the last `PutDrawEnv` — which is
+also how you can see the game alternating buffers, `(0,0)` and `(0,240)`.
+
+**Getting a like-for-like pair is the hard part, and two obvious ways don't work.**
+Consecutive frames of one run are different views — the attract demo is walking —
+and it also leaves open which frame a given draw env applies to. The same frame
+*number* in two runs is not the same view either: the demo drives itself into
+`fdat02` every time but not on the same schedule, so frame 175 was a wall in one
+run and a staircase in the next. Both comparisons still showed the effect
+(12% of adjacent pixels one 5-bit step apart against 49%), but scene and setting
+were confounded.
+
+What works is drawing **one ordering table twice**: replace `DrawOTag`, write an
+E1 built from GPUSTAT with bit 9 clear, call the original, dump; then write the
+same E1 with bit 9 set, call the original again, dump. Identical geometry,
+lighting and textures, one bit apart. The only caveat is that the second pass
+draws over the first, so semi-transparent primitives blend twice; opaque geometry
+simply overwrites.
+
+That pair, in `fdat02`:
+
+| | dither off | dither on |
+| --- | --- | --- |
+| adjacent pixels one 5-bit step apart | 11.7% | 41.6% |
+| mean step between adjacent pixels | 0.264 | 0.608 |
+| PNG of that frame | 19.7 KB | 30.2 KB |
+
+Two fifths of all neighbouring pixels landing exactly one quantization step apart
+is the dither pattern stated numerically, and the same picture compressing 53%
+larger is the same fact seen by a compressor. Zoomed, the pair is unambiguous:
+identical rock and identical lighting, one smooth and one carrying the crosshatch.
+`mods/dithershot` was the throwaway that produced these; it is not kept.
+
+**Seen once, not reproduced:** the very first run with the mod hung after both mods
+reported their hooks and before `ModLoader.LoadAll` printed `loaded N/N` — i.e. in
+`HookManager.Commit`, with the worker thread absent from `dotnet-stack` output
+entirely. Five later runs of the same pair of mods committed instantly. Worth
+recognising rather than chasing: if a build stalls at mod load, the stack will show
+the main thread in `ModLoader.LoadAll → HostWindow.Pump`.
+
 ## Next steps
 
-1. ~~**Cross an area boundary.**~~ Done — a 30-minute session loaded `fdat05`
-   over `fdat02` with no `unmapped call`, no VRAM collision and no exception, so
-   the swap mechanism and the derived base hold for a second module. Saving works
-   too: three files written to `carda.sav`. **Loading one back has not been
-   tried**, and that is a different path — title screen into an area that is not
-   the starting one.
+1. ~~**Cross an area boundary.**~~ ~~**Load a save back.**~~ Both done — a
+   30-minute session loaded `fdat05` over `fdat02` with no `unmapped call`, no
+   VRAM collision and no exception, so the swap mechanism and the derived base
+   hold for a second module; three files were written to `carda.sav`; and slot 2
+   has since been loaded back from the title screen into the right area with the
+   right character state. See "Saving and loading". The memory card is closed as
+   far as playing goes — what has *not* been exercised is creating a save on an
+   empty card, deleting one, or a card the game considers corrupt.
 2. ~~**Look for the module families the group-of-three pattern misses.**~~ Done —
    all 70 `FDAT.T` entries and every other file on the disc were tested for the
    module signature; the nine declared modules are the only code, and every

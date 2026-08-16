@@ -1,0 +1,7 @@
+{
+  "id": "kf2.nodither",
+  "name": "No dithering",
+  "version": "1.0",
+  "author": "KFII-PC",
+  "description": "Clears the GPU's dither bit, so shaded surfaces quantize to 15-bit cleanly instead of through the 4x4 crosshatch. Reports which of the two draw-mode sources each frame's dither actually came from."
+}
