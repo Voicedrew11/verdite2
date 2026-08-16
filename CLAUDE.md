@@ -50,13 +50,16 @@ steady-state `KF2_LOG=sdk` excerpt in `NOTES.md`).
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
-KF2_MODS=fps=60,framestats=15          # mods/ -- see "Mods" in NOTES.md
+KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pacing"
+KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other frame
+KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
 ```
 
-`KF2_MODS` names the mods in `mods/`, which is where optional behaviour changes
-go. `fps` is on by default at 30 and is load-bearing: without it the port runs
-faster than the game can on hardware. `framestats` and `loopprobe` are the two
-measurement tools — prefer them to `KF2_LOG=sdk`, which is gigabytes a minute.
+Frame pacing is load-bearing: without it the port runs faster than the game can on
+hardware, so it lives in `patches/` and is always on. The two measurement tools
+are real mods under `mods/` — **enable them in the game's Mods panel**, since mods
+default to off and load silently when disabled. Prefer them to `KF2_LOG=sdk`,
+which is gigabytes a minute.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
 its clock starts when the first area module loads, which is the only point in the
@@ -99,7 +102,7 @@ harvesting `jal` targets; run it when a call dies with "unmapped call: 0x…".
 config/kf2.json          recompiler config: overlays, funcMaps, stubs[], patches[]
 config/funcmaps/*.json   swept function maps (address/name/size; size is mandatory)
 patches/                 hand-written C# replacing recompiled functions
-mods/                    optional behaviour changes, toggled by KF2_MODS at run time
+mods/<id>/               runtime-loaded mods (mod.json + C#, Roslyn-compiled)
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection and address-hunting tooling
@@ -127,20 +130,21 @@ mapped by address in `patches[]`:
   "target": "RecompOne.Runtime.Sdk.LibGpu.DrawOTag", "mode": "replace" }
 ```
 
-54 such patches exist today (`libetc`, `libcd`, four `libgpu` entry points, six
+63 such patches exist today (`libetc`, `libcd`, four `libgpu` entry points, six
 `libcdstream`, libapi's `DMACallback`). `libpad` is the notable gap. Only map a
 function the runtime actually implements — check
 `tools/RecompOne/RecompOne.Runtime/sdk/Lib*.cs` first; unmapped library routines
 run fine as recompiled MIPS because `PSMemory` traps their register writes.
 
-`mode` is `"replace"`, `"pre"` or `"post"`, and a `post` hook composes with a
-`replace` on the same address — the emitter calls the replacement and then each
-hook. So **game-specific behaviour that hangs off an SDK call belongs in a
-`patches/*.cs` with a `post` entry, not in `patches/recompone/`**: nothing to
-re-apply after a fresh clone and nothing to conflict with a patch that already
-owns those lines. `patches/FramePacing.cs` is the worked example. Watch the
-namespace — generated code is `Recompiled.KingsField2`, a *class* named after the
-project, which shadows any namespace called `KingsField2`.
+`mode` is `"replace"`, `"pre"` or `"post"`. **Use config patches for `replace`
+only** — binding an SDK entry point, which has to happen before any mod could
+load. For anything else, do not add a config entry: RecompOne's `HookManager`
+detours a recompiled function by address at run time, so a hook needs neither a
+config entry nor a recompile. See "Mods" in `NOTES.md`; `patches/FramePacing.cs`
+is the in-project example and `mods/` holds the loadable ones.
+
+Watch the namespace — generated code is `Recompiled.KingsField2`, a *class* named
+after the project, which shadows any namespace called `KingsField2`.
 
 ### Identifying an address: the techniques that work
 

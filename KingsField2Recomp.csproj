@@ -32,4 +32,19 @@
         <None Remove="tools/**" />
     </ItemGroup>
 
+    <!--
+      mods/ is RecompOne's ModLoader root, not project source. Its .cs files are
+      read from disk and compiled by Roslyn at run time, so the default glob must
+      not also compile them into this assembly: that would produce a second, inert
+      copy of every mod type and let the two drift apart.
+
+      Anything that must always be on does NOT belong here. It goes in patches/
+      and attaches through HookManager; patches/FramePacing.cs is the example.
+    -->
+    <ItemGroup>
+        <Compile Remove="mods/**" />
+        <EmbeddedResource Remove="mods/**" />
+        <None Remove="mods/**" />
+    </ItemGroup>
+
 </Project>

@@ -22,3 +22,6 @@ packs/
 
 __pycache__/
 *.pyc
+
+# ModLoader compiles mods/ at run time and caches the assemblies here.
+mods/.cache/

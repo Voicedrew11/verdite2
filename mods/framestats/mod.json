@@ -1,0 +1,7 @@
+{
+  "id": "kf2.framestats",
+  "name": "Frame stats",
+  "version": "1.0",
+  "author": "KFII-PC",
+  "description": "Reports fps and the vblank-per-frame histogram, which is how the game's own frame pacing is measured. Toggle here rather than trawling KF2_LOG=sdk."
+}

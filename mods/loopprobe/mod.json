@@ -1,0 +1,7 @@
+{
+  "id": "kf2.loopprobe",
+  "name": "Loop probe",
+  "version": "1.0",
+  "author": "KFII-PC",
+  "description": "Attributes per-frame memory writes to the main-loop stage that made them. This is the tool for finding which stage advances the world, which is what 60 fps is blocked on. Costs ~6% of a frame."
+}

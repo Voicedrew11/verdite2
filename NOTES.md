@@ -66,7 +66,7 @@ has never run — see "Next steps".
 config/kf2.json          recompiler config (schema: RecompOne.Recompiler/Config/ConfigLoader.cs)
 config/funcmaps/         generated function maps (address/name/size)
 patches/                 hand-written C# replacing recompiled functions
-mods/                    optional behaviour changes, toggled by KF2_MODS
+mods/<id>/               runtime-loaded mods (mod.json + C#), toggled in-game
 scripts/inspect_disc.py  SYSTEM.CNF + ISO9660 listing from a .cue/.bin
 scripts/extract_file.py  extract a disc file and dump its PS-X EXE header
 scripts/match_overlays.py  carry a function identified in one overlay to the other two
@@ -790,36 +790,66 @@ was held at the last drawn frame, which points straight at the input path.
 
 ## Mods
 
-Anything that changes how the game behaves lives in `mods/` and can be switched
-on and off at run time:
+**RecompOne has a modding system; use it.** `RecompOne.Runtime/Modding/` is 839
+lines of `ModLoader`, `HookManager`, `SymbolRegistry`, hook attributes and a
+`ModsPopup` UI, and the generated `Entry.cs` already calls `ModLoader.LoadAll()`.
+It was missed on the first pass here and a parallel one was built by hand; that
+was wasted work and two wrong beliefs, both recorded below so they are not
+re-derived.
 
-```bash
-KF2_MODS=fps=60,framestats=15,loopprobe=20      # name[=value], comma separated
-KF2_MODS=fps=off                                # `off` disables; unknown names throw
+A mod is a folder (or zip) under `mods/` with a `mod.json` and C# sources,
+**compiled at run time by Roslyn** and hooked by address:
+
+```
+mods/framestats/mod.json + FrameStats.cs     fps and the vblank-per-frame histogram
+mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loop stages
 ```
 
-| mod | default | what it does |
-|---|---|---|
-| `fps` | on, `30` | frame-rate floor; `60` also gates stages, `off` is the raw port |
-| `framestats` | off | fps and the vblank-per-frame histogram, every N seconds |
-| `loopprobe` | off | attributes per-frame memory writes to main-loop stages |
+```csharp
+[PostHook("game", Address = 0x80060818)]
+static void AfterDrawOTag(CpuContext c, IMemory m) { ... }
 
-The shape is worth keeping. A mod is a class with a name, a `Configure(value)`
-and enable/disable; `ModHost` owns the list and the env parsing. Mods attach to
-the hook points in `mods/Hooks.cs` — `FrameDrawn`, `VBlank`, `StageEntered` and
-the stage gate — and **those hook points are the only names `config/kf2.json`
-knows**. Turning a mod on or off, or writing a new one against an existing hook,
-therefore costs nothing: no config edit, no recompile.
+[PreHook("game", Address = 0x80037C0C)]        // return false to skip the original
+static bool BeforeStage(CpuContext c, IMemory m) => ...;
+```
 
-The one thing that does cost a recompile is a *new attachment site*, because the
-hook is emitted into the function body. So the useful thing to do when adding a
-site is to add it generously — all thirteen loop stages are hooked whether or not
-anything currently gates them.
+`HookManager` detours the emitted method through MonoMod, so **a hook site costs
+no config entry and no recompile** — `SymbolRegistry` resolves `overlay + address`
+(or `overlay + function name`) against the dispatcher's tables, which are all
+registered up front in `Entry.Run`. `[Replace]` also exists, and can take a
+leading `orig` parameter to call through to the original.
 
-`patches/*.cs` is the other half of the same idea and predates it: a `replace`
-that stands in for a recompiled function. Prefer a mod when the behaviour is
-optional and a patch when the function simply has to be reimplemented. Neither
-belongs in `patches/recompone/` — see the note in CLAUDE.md about `mode: "post"`.
+Mods are toggled in the game's own Mods panel, with reload, and `IMod.DrawSettings`
+puts an ImGui panel under each one. State persists to `interface.ini` as
+`mods.<id>.enabled`.
+
+### What belongs in a mod, and what does not
+
+`patches/FramePacing.cs` is deliberately **not** a mod. It is a correctness fix
+that has to be on: as a loaded package it could be absent, disabled, or fail to
+compile, and the failure mode would just be the game running too fast. It still
+attaches through `HookManager` — the same runtime detour, no config entry — just
+from `Program.cs` with its own `ModInfo`, so it cannot be turned off by accident.
+Measurement tools, which are genuinely optional and expensive, are real mods.
+
+Config `patches[]` entries are still the right tool for **`replace`**, which is
+how the whole SDK is bound: those are needed before any mod could load, and there
+are 63 of them.
+
+### Four things that will bite
+
+1. **`ModCompiler` does not enable implicit usings.** Every mod file must name
+   `System`, `System.Collections.Generic`, `System.Linq` itself. This is the real
+   cost of runtime compilation: it is a *runtime* error, printed as
+   `[Mods] <id>: ... error CS0103` and then the mod silently does not load.
+2. **`mods/**` must be removed from the csproj `Compile` glob**, exactly like
+   `tools/**`. Otherwise the SDK compiles every mod into the main assembly *as
+   well as* Roslyn compiling it at run time, giving two copies that can drift.
+3. **Mods default to disabled** (`IsEnabled` falls back to `false`), and
+   `LoadAll` returns silently when nothing is enabled — no log line at all. A mod
+   that appears to do nothing is probably just off.
+4. **`mods/.cache/`** holds the compiled assemblies and is written into the repo;
+   it is gitignored.
 
 ## The main game loop, stage by stage
 
@@ -936,8 +966,9 @@ consistent than hardware ever was. **Done**; see below.
 
 ### The floor, as built
 
-`patches/FramePacing.cs`, wired in as a `post` hook on `DrawOTag` in all three
-overlays. Three things about the shape of it are worth keeping:
+`patches/FramePacing.cs`, attached as a post hook on `DrawOTag` in all three
+overlays through `HookManager` at run time. Three things about the shape of it
+are worth keeping:
 
 **It is not a change to `FrameClock`.** The runtime's throttle paces per *`VSync`
 call*, and from inside it a one-vblank frame is indistinguishable from the first
@@ -949,24 +980,20 @@ nothing (it resyncs on the `wait < -100` path every few frames), so the floor
 ends up the sole pacer for exactly the frames that need one, and a no-op for the
 frames that were already two vblanks long.
 
-**The recompiler's `mode: "post"` means this needed no RecompOne patch at all.**
-`ApplyPatches` allows a `post` hook on a function that a `replace` already
-covers, and `FunctionEmmiter` emits the replacement followed by the hooks:
+**It needed no RecompOne patch and no config entry.** `SymbolRegistry.Resolve`
+turns `("game", 0x80060818)` into the emitted method and `HookManager.AddPost`
+detours it, so the hook is installed at run time. It composes with the `replace`
+that binds `LibGpu.DrawOTag`: `HookManager.Invoke` runs pres, then the
+replacement, then posts.
 
-```csharp
-public static void func_80060818(CpuContext c, IMemory m)
-{
-    RecompOne.Runtime.Sdk.LibGpu.DrawOTag(c, m);
-    Kf2.FramePacing.AfterDrawOTag(c, m);
-}
-```
+The attach is deferred to the first `OverlayLoadedEvent`, because the dispatcher
+tables `SymbolRegistry` reads are registered inside `Entry.Run` — after
+`Program.cs` has run, but before anything is loaded, so the first load event is
+the earliest moment every overlay resolves.
 
-So game-specific behaviour that hangs off an SDK call belongs in `patches/*.cs`
-with a `post` entry in the config, **not** in `patches/recompone/`. Nothing to
-re-apply, nothing to conflict with `0003`, which already owns those lines of
-`LibGpu.cs`. Note the namespace trap: generated code is `Recompiled.KingsField2`,
-a *class* named after the project, which shadows any namespace called
-`KingsField2` — hence `Kf2`.
+Note the namespace trap: generated code is `Recompiled.KingsField2`, a *class*
+named after the project, which shadows any namespace called `KingsField2` — hence
+`Kf2`.
 
 **The vblank defines the frame boundary, not the `DrawOTag` call.** A second
 ordering table with no `VSync` between it and the first belongs to the frame
@@ -984,18 +1011,18 @@ restarts instead of running flat out to catch up.
 Two env vars, both read in `Program.cs`:
 
 ```bash
-KF2_MINVBLANKS=2    # 30 fps, the default; 1 disables the floor
-KF2_FRAMESTATS=15   # report fps + the vblank-per-frame histogram every 15 s
+KF2_FPS=30          # 30 fps, the default; 60, or off for no floor
+KF2_FPS_GATE=80040348+8002A550   # at 60, stages to run every other frame
 ```
 
-`KF2_FRAMESTATS` is the measurement above, made cheap — it is the same count of
+The `framestats` mod is the measurement above, made cheap — it is the same count of
 `VSync(0)`s between `DrawOTag`s that produced the band table, without the
 gigabytes of `KF2_LOG=sdk`. Use it to check any pacing change; bands are per
 report window, so consecutive lines separate the title screen from an area.
 
 ### What the floor actually changed — and a correction
 
-Measuring with `KF2_MINVBLANKS=1` (floor off) makes the deviation look different
+Measuring with `KF2_FPS=off` makes the deviation look different
 from the aggregate above, and more specific. In an area the port is **already at
 exactly 30 fps, asking for two vblanks on every single frame**, for minutes at a
 time — then it flips into a burst where it asks for one:
@@ -1049,23 +1076,16 @@ in the pacing sleep, 23 in `Present`, and six in game code — so a frame is abo
 millisecond of MIPS and thirty-two of waiting. Rendering twice as often costs
 nothing this port has not already got.
 
-**The gate works.** A `pre` hook that returns `false` makes the recompiled body
-not run — `PreHook.Run` propagates the bool and the emitter writes
-
-```csharp
-public static void func_80037C0C(CpuContext c, IMemory m)
-{
-    if (!RecompOne.Runtime.Context.PreHook.Run(Kf2.Mods.Hooks.Stage_80037C0C, c, m)) return;
-    func_80037C0C_Impl(c, m);
-}
-```
-
-All thirteen stages carry one of these, so any subset of the loop can be run every
-other iteration by flipping a flag, with no recompile:
+**The gate works.** A `pre` hook that returns `false` skips the original —
+`HookManager.Invoke` honours it — and hooks attach by address at run time, so any
+subset of the loop can be gated with no recompile and no config entry:
 
 ```bash
-KF2_MODS=fps=60:gate=80037C0C+8002A550
+KF2_FPS=60 KF2_FPS_GATE=80040348+8002A550
 ```
+
+Nothing is hooked when no gate list is given, so the mechanism costs nothing
+while it is unused.
 
 **What is missing is which stages to name**, and the probe has narrowed it to a
 hypothesis rather than settled it.
@@ -1101,7 +1121,7 @@ inert because it writes four words. It writes four words and they are *the* four
 yet — the port exited before `KF2_AUTOPAD`'s first press each time it was tried:
 
 ```bash
-KF2_MODS=loopprobe=5 KF2_AUTOPAD=20:Up:5000,40:Right:5000
+KF2_LOOPPROBE=5 KF2_AUTOPAD=20:Up:5000,40:Right:5000
 ```
 
 If `0x8017783C` steps monotonically under held Up, it is positional; if the three
@@ -1116,7 +1136,7 @@ about zero, so there is no frame counter to watch, and the verification idea of
 first. The area module's data at `0x8019F07C` is the next place to point the probe.
 
 The delta-halving is still owed regardless — a view stage running at 60 with
-unhalved deltas moves twice as fast, and `KF2_MODS` cannot fix that from outside.
+unhalved deltas moves twice as fast, and no amount of gating fixes that from outside.
 That is the one part of 60 fps that needs a constant identified in the game's own
 code rather than a stage gated from outside it.
 
@@ -1144,7 +1164,7 @@ code rather than a stage gated from outside it.
    bursts past NTSC's top band. See "Frame pacing"; the measurement is the
    `framestats` mod.
 5. **Confirm the buf5 view block**, which is all 60 fps is now blocked on. Run
-   `KF2_MODS=loopprobe=5 KF2_AUTOPAD=20:Up:5000,40:Right:5000` and watch
+   `KF2_LOOPPROBE=5 KF2_AUTOPAD=20:Up:5000,40:Right:5000` and watch
    `0x8017783C`–`0x8017793C`: monotonic under Up means positional, swinging under
    Right means view angle. Either names stage 2 and the gate follows. See "60 fps:
    the mechanism exists, the map is half drawn".

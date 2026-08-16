@@ -139,31 +139,21 @@ if (!string.IsNullOrWhiteSpace(autopad))
     }) { IsBackground = true, Name = "kf2-autopad" }.Start();
 }
 
-// Mods: behaviour changes that can be turned on and off without a recompile.
-// They hang off the hook points in mods/Hooks.cs, which are what config/kf2.json
-// names; adding or removing a mod that uses an existing hook costs nothing.
+// Frame pacing. The game's speed is its frame rate and the port would otherwise
+// burst past NTSC's fastest band, so a rendered frame is held to two vblanks:
 //
-//     KF2_MODS=fps=60,framestats=15,loopprobe
+//     KF2_FPS=30                       30 fps (default); 60, or off for no floor
+//     KF2_FPS_GATE=80040348+8002A550   at 60, stages to run every other frame
 //
-// `fps` is on by default at 30, which is the frame-pacing floor -- the game's
-// speed is its frame rate and the port would otherwise burst past NTSC's fastest
-// band. See "Frame pacing" in NOTES.md.
-Kf2.Mods.Hooks.Install();
-Kf2.Mods.ModHost.Register(new Kf2.Mods.FpsMod());
-Kf2.Mods.ModHost.Register(new Kf2.Mods.FrameStatsMod());
-Kf2.Mods.ModHost.Register(new Kf2.Mods.LoopProbeMod());
-
-Kf2.Mods.ModHost.Load(Environment.GetEnvironmentVariable("KF2_MODS"));
-
-// The env vars that predate the mod list, kept working: they are what NOTES.md
-// documents and what any saved command line uses.
-if (int.TryParse(Environment.GetEnvironmentVariable("KF2_MINVBLANKS"), out var minVBlanks))
-    Kf2.Mods.ModHost.Load(minVBlanks <= 1 ? "fps=60" : $"fps={60 / minVBlanks}");
-if (Environment.GetEnvironmentVariable("KF2_FRAMESTATS") is { Length: > 0 } stats)
-    Kf2.Mods.ModHost.Load($"framestats={stats}");
-
-Kf2.Mods.ModHost.PrintStatus();
-Kf2.Mods.ModHost.Get<Kf2.Mods.FpsMod>().Validate();
+// This is a correctness fix rather than an optional extra, so it lives in the
+// project rather than in mods/ -- see the class comment. It attaches through
+// RecompOne's HookManager, which detours a recompiled function by address at run
+// time, so it needs no entry in config/kf2.json. The measurement tools *are*
+// optional and are real mods: mods/framestats and mods/loopprobe, loaded by
+// ModLoader and toggled in the game's own Mods panel.
+Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
+                          Environment.GetEnvironmentVariable("KF2_FPS_GATE"));
+Kf2.FramePacing.Install();
 
 var memory = new PSMemory();
 Entry.Run(memory, args.Length > 0 ? args[0] : null);
