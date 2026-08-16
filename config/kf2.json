@@ -179,6 +179,14 @@
       "size": 8192,
       "funcMap": "funcmaps/fdat23.json"
     },
+    // Entry 32 is a cut area and is never loaded. The area loader at 0x8001689C
+    // passes 0x8019F07C as the code module's destination -- a literal argument,
+    // the same for every area -- and this module is linked for 0x80193B38, which
+    // no executable on the disc names in code or in data. Its fifteen calls into
+    // GAME.EXE all land mid-function, because the host it was built against is
+    // not the one that shipped. Declared anyway: it is correctly based, it costs
+    // 13 dead functions, and it is the evidence. See "fdat32 is a cut area" in
+    // NOTES.md.
     {
       "name": "fdat32",
       "file": "CD/COM/FDAT.T",

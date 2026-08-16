@@ -583,6 +583,11 @@ Two independent things pin the load address:
 | 23 | `0x0C8800` | 8192 | `0x8019F07C` | 810 |
 | 32 | `0x0E2000` | 6144 | `0x80193B38` | 861 |
 
+Entry 32 is the odd one out and is **dead content** — a cut area the loader cannot
+reach, since every code module this game loads goes to `0x8019F07C` and entry 32
+is linked for `0x80193B38`. See "fdat32 is a cut area" below before spending any
+time on it.
+
 They are declared as overlays like any other. `base` is the address of the byte
 at `offset + skip`, and `ResolveOverlay` derives the LBA as the archive's LBA
 plus the entry's start sector. **That LBA is what arms the swap**: the CD read of
@@ -686,15 +691,72 @@ After the fix every switch in every module resolves — `fdat17` alone goes from
 zero resolved tables to two, 19 entries — and the only `Dispatcher.Call` left on
 a register in any module is the unreachable `default:` arm of a resolved switch.
 
-**`fdat32` is the exception and is still open.** Scoring each module's *external*
-`jal` targets against the three executables the way the load address was
+`fdat32` was the exception, and it turned out not to be a bug at all. It is
+covered in "fdat32 is a cut area" below.
+
+## fdat32 is a cut area, and nothing can load it
+
+Scoring each module's *external* `jal` targets the way the load address was
 originally pinned gives 17/17, 19/19, 22/22, 38/38 … for the eight area modules
-against `GAME.EXE` — and **0/15 for `fdat32` against all three**. Its fifteen
-outbound calls all land mid-function in `GAME.EXE` on words like `sw s1,0x6C(sp)`.
-So either `0x80193B38` is the wrong base for it or it is not linked against any of
-the three, and every one of those fifteen is a future `unmapped call`. It is the
-entry-32 "different module family", so whatever loads it is presumably late in
-the game and this has never been reached in play.
+against `GAME.EXE` — and **0/15 for `fdat32` against all three executables**. Its
+fifteen outbound calls land mid-function on words like `bltz v0`, `sw s1,0x6C(sp)`
+and `lw v0,72(sp)`. No constant delta fixes them either: the best offset over
+±32 KB puts 4 of 15 on a function start, which is what chance gives.
+
+The base is not the problem. `fdat32`'s **internal** calls are 4/4 on a prologue,
+its header pointer table holds `0x80193BCC`–`0x80194954`, and `0x80193BD4`
+disassembles as a clean function. `0x80193B38` is right. The module is real,
+correctly based code whose calls into the host resolve to nothing.
+
+**The loader settles it.** `CD/COM/FDAT.T` is registered as archive 5 by
+`func_800185A0` at `0x80015E7C`, and the area loader at `0x8001689C` reads a
+group of three with the area index taken from the byte at `0x8017E06C`:
+
+| entry | destination | site |
+|---|---|---|
+| `area*3` | `0x801B6FA8` | `0x80016968` |
+| `area*3 + 1` | `0x801B6FA8` | `0x80016A88` |
+| `area*3 + 2` (the code module) | **`0x8019F07C`** | `0x800169C0` |
+
+The code module's destination is a **literal argument**, built by
+`lui a2,0x801A` / `addiu a2,a2,-3972` right before the call. So every code module
+this game can load, loads at `0x8019F07C` — and `fdat32` is linked for
+`0x80193B38`. Reading entry 32 through this path would drop it 46 KB from where
+its own pointer table says it is, and `(*mod)[8]` would dispatch to `0x80194624`
+with nothing there. It would break on hardware exactly as it breaks here.
+
+And nothing names it. Scanning all three executables for `lui`/`addiu`/`ori`
+pairs and for raw data words:
+
+| address | OPEN.EXE | GAME.EXE | END.EXE |
+|---|---|---|---|
+| `0x8019F07C` (live module base) | 0 | **2 code refs** | 0 |
+| `0x80193B38` (fdat32 base) | 0 | **0** | 0 |
+| `0x80193BCC` (fdat32 first function) | 0 | **0** | 0 |
+
+`OPEN.EXE` and `END.EXE` do not contain the string `COM\FDAT.T` at all, so
+`GAME.EXE` is the only thing that ever reads the archive.
+
+So `fdat32` is **leftover content**: an area whose data (entries 30 and 31, 66 KB
+and 28 KB, the normal group shape) and code were left on the disc after the host
+it was linked against moved on. The two empty groups before it — entries 24–29,
+zero length — are two more areas cut without leaving anything behind. `fdat32`
+only survives because a cut area's files were not stripped.
+
+Consequences for the port, all of them "nothing to do":
+
+- **The fifteen mid-function calls can never fire.** Nothing reads LBA 861 and
+  nothing writes `0x80193B38`, so the overlay is never armed and never activated.
+- Entry 31 ends at LBA 860, one sector short of 861, so no neighbouring read
+  overruns into it.
+- The overlay stays declared. It is correctly based, it costs 13 dead functions,
+  and it is the evidence for this entry — removing it would only make the next
+  person redo the work.
+
+Worth remembering as a general point: **a module's internal `jal` targets confirm
+its base, and its external ones confirm its host.** `fdat32` passes the first and
+fails the second, and only the second test distinguishes live content from
+abandoned content.
 
 ## Saving and loading
 
