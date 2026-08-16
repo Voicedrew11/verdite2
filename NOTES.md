@@ -58,8 +58,9 @@ Two areas have been played, half an hour in one sitting, across an area-module
 swap and a memory-card save, and the audio sounds right. **A save has now been
 loaded back** — slot 2, from the title screen, correct area and correct character
 state (see "Saving and loading"). **The frame rate is pinned to 30 fps**, NTSC's
-fastest band — the port used to burst past it (see "Frame pacing"). Not yet done:
-`END.EXE` has never run — see "Next steps".
+fastest band — the port used to burst past it (see "Frame pacing"). **The ending
+runs**: `END.EXE` plays the two STR movies and holds "The End" — see "The ending
+screen".
 
 ## Layout
 
@@ -909,6 +910,38 @@ at `0x800139CC`–`0x800139EC`, off an **exit-reason global at `0x80199574`**:
 `*(u8*)0x800102F8` is read by `OPEN.EXE` at `0x80011BCC` and **skips the three
 intro movies** when it is 1 — the only thing `OPEN.EXE` ever reads from the stub.
 The in-game menu's "quit" is what writes 9, via `func_80018E80` returning −2.
+
+### The ending screen
+
+`END.EXE` is a movie player. `func_800119A4` inits the GPU, then calls
+`func_80011CC4` twice: `\OP\ED0.S` (1700 frames, timer `0x06A2` = 1698) and
+`\OP\ED1.S` (2673 frames, timer `0x0A6D` = 2669). The last displayed frame of
+the second file is the still with "The End" and the two copyright lines. After
+that it waits 150 × 6 `VSync`s, `CdControl(CdlStop)`, and falls into
+`while(1);` at `0x80011A50`.
+
+On hardware that spin is the ending: the GPU keeps scanning out the last
+framebuffer and the picture stays. Here a frame reaches the window only from
+`PresentFrame`, which only runs from `VSync`, so the same loop leaves the
+image up but the window dead — no events, no close, 100% of a core. That is
+what "it crashed on The End" was. `patches/EndingHold.cs` hooks
+`func_80011CC4` and, after the second movie returns, `VSync(0)`s forever
+instead of reaching the spin.
+
+Two dispatcher leftovers ride in with the executable swap and are the same
+shape of bug, even though they were not what froze the window:
+
+- `HandleRegionOverwrites` only dropped an overlay that was **fully contained**
+  in the new one. `GAME.EXE` is `0x5E000` bytes at `0x80011000`, `END.EXE` is
+  `0x29000` at the same base, so GAME was not contained and stayed mapped —
+  every `GAME.EXE` function past `0x8003A000` remained callable. The same hole
+  hits a smaller FDAT module loading over a larger one, and quit-to-title
+  (`OPEN.EXE` over `GAME.EXE`). `patches/recompone/0008` unloads on any
+  overlap.
+- The FDAT modules sit at `0x8019F07C`, which does not overlap any executable,
+  so even with that fix they would survive into `END.EXE`. Its heap starts at
+  `0x80100000` and covers that RAM. `Program.cs` unloads every `fdat*` overlay
+  when `open` or `end` loads.
 
 ## The SDK naming problem
 
@@ -2252,8 +2285,8 @@ way autoreload does when it arrives from state `0x11`.
 3. ~~Check the audio.~~ Verified by ear during play — it sounds right. Note the
    two paths are independent: in-game music and effects come from the SPU, while
    the intro and ending movies are **XA** sectors routed to `XaRouter` on the
-   runtime's own thread. Good SPU output says nothing about XA, so if the movies
-   have not been listened to specifically, that half is still open.
+   runtime's own thread. `END.EXE` has now run (see "The ending screen"); XA on
+   those two files still wants a listen.
 4. ~~**Fix the frame pacing.**~~ Step one done — the `fps` mod holds every
    rendered frame to two vblanks, so the port is a constant 30 fps and no longer
    bursts past NTSC's top band. See "Frame pacing"; the measurement is the

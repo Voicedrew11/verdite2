@@ -64,6 +64,19 @@ RecompOne.Runtime.Events.Event.AddListener<RecompOne.Runtime.Events.OverlayLoade
         "end"  => 0x80038D90u,
         _ => 0u,   // the FDAT.T code modules share the resident executable's libapi
     };
+
+    // FDAT.T modules sit at 0x8019F07C, which does not overlap OPEN/GAME/END, so
+    // the dispatcher's region-overwrite path will not drop them on an executable
+    // swap. END.EXE's heap starts at 0x80100000 and covers that RAM; leaving the
+    // area module mapped would keep its functions callable from a table the
+    // ending never owns.
+    if (e.Name is "open" or "end")
+    {
+        foreach (var n in RecompOne.Runtime.Dispatch.Dispatcher.ActiveNames)
+            if (n.StartsWith("fdat", StringComparison.Ordinal))
+                RecompOne.Runtime.Dispatch.Dispatcher.Unload(n);
+    }
+
     if (table == 0) return;
     RecompOne.Runtime.Interrupts.CallbackTable = table;
     Console.WriteLine($"[KF2] irq callback table: {e.Name} 0x{table:X8}");
@@ -154,6 +167,7 @@ if (!string.IsNullOrWhiteSpace(autopad))
 Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_FPS_GATE"));
 Kf2.FramePacing.Install();
+Kf2.EndingHold.Install();
 
 var memory = new PSMemory();
 Entry.Run(memory, args.Length > 0 ? args[0] : null);

@@ -236,8 +236,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Five of
-the seven are load-bearing; `0002` and `0003` are diagnostics:
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Six of
+the eight are load-bearing; `0002` and `0003` are diagnostics:
 
 - `0001-bios-load-return-1.patch` — BIOS `Load` must return 1, not the header
   pointer. Without it the boot stub spins in the loader forever.
@@ -257,10 +257,16 @@ the seven are load-bearing; `0002` and `0003` are diagnostics:
   inside `PresentFrame`, so a game busy-waiting on the pad without vsyncing read
   a frozen snapshot forever. King's Field's screen transitions all begin with
   such a wait; this is what hung the in-game menu.
+- `0008-unload-overlapping-overlays.patch` — `HandleRegionOverwrites` only
+  dropped an overlay fully contained in the new one. `END.EXE` is smaller than
+  `GAME.EXE` at the same base, so GAME's functions past `0x8003A000` stayed
+  mapped after the ending loaded. Any overlap is now an overwrite.
 
-The last two are the shape to keep in mind generally: **anything the runtime
-refreshes only at `VSync` is invisible to a game that stops calling `VSync`**,
-and that failure mode is always silent.
+The last two plus `patches/EndingHold.cs` are the shape to keep in mind
+generally: **anything the runtime refreshes only at `VSync` is invisible to a
+game that stops calling `VSync`**, and that failure mode is always silent.
+`END.EXE` ends in `while(1);` with no `VSync`; on hardware the last frame stays
+on the CRT, here the window dies. See "The ending screen" in `NOTES.md`.
 
 Upstream **rejects AI-authored pull requests outright**. Recompiler fixes go
 upstream as issues, never as PRs, unless the user writes the patch themselves.
