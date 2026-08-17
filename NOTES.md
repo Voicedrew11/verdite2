@@ -60,6 +60,12 @@ loaded back** — slot 2, from the title screen, correct area and correct charac
 state (see "Saving and loading"). **Textures are perspective-correct** — the depth
 the GPU never receives is recovered from the GTE and matched back by screen
 position, which changes 76.6% of a frame's pixels (see "Perspective correction").
+The same table now also recovers the **sub-pixel position** the GTE truncates, so
+vertices need not snap to whole pixels; that one is off by default until its
+picture has been measured the way the textures were (see "Sub-pixel vertex
+positioning"). Nearby walls and floors no longer pop back to affine the moment
+one vertex clamps off-screen, and a pixel that two vertices share no longer
+hands one polygon the other's depth (see "The table is not unique").
 **The frame rate is pinned to 30 fps**, NTSC's
 fastest band — the port used to burst past it (see "Frame pacing"). **The ending
 runs**: `END.EXE` plays the two STR movies and holds "The End" — see "The ending
@@ -152,6 +158,17 @@ Clones RecompOne, applies everything in `patches/recompone/`, and builds the
 recompiler. Idempotent, so it is also the way to re-apply local fixes after
 pulling upstream.
 
+It gets that idempotency by **peeling the stack off newest-first and then applying
+it oldest-first**. Asking each patch on its own "are you already applied?" — which
+is what it used to do — only works while no patch touches lines another one added,
+and `0010` edits the `GteDepth.cs` that `0009` creates. The symptom was `0009`
+reverse-checking against text `0010` had since changed, failing, and being reported
+as upstream having moved. `0011` edits that same file again. Undoing in the opposite
+order to applying cannot hit that. A patch that will not reverse stops the peeling
+instead of being forced, so a fresh clone peels nothing, and an uncaptured edit
+inside the checkout — the normal way a new patch gets written — stops it rather
+than being rolled over.
+
 **`patches/recompone/0001-bios-load-return-1.patch` is required to boot.** The
 runtime's BIOS `Load` (A(42h)) returned the header pointer, but the real BIOS
 returns 1 on success. King's Field's boot stub compares the result against 1
@@ -180,6 +197,19 @@ fills as it projects and the GPU reads as it decodes a vertex word, and teaches
 both renderers to use the depth it recovers. Nothing depends on it to run — every
 vertex it misses is drawn exactly as before — but it is the largest single change
 to the picture in the port. See "Perspective correction".
+
+**`patches/recompone/0010-subpixel-vertex-positions.patch` is the other half of
+that same recovered number** — the fraction of a pixel the GTE truncates off a
+projected vertex, which is what makes geometry twitch as it moves. It extends
+`GteDepth`'s slots rather than adding a table, and it is the reason `setup_tools.sh`
+peels the stack before applying it: two patches now edit the same file. Off by
+default. See "Sub-pixel vertex positioning".
+
+**`patches/recompone/0011-gte-depth-collisions.patch` is the rest of that table.**
+Screen position is not a unique key, and dropping saturated vertices made every
+large nearby polygon fall back to affine. The table now keeps several samples per
+pixel, records the clamp, and picks per primitive; a leftover far Z is refused
+rather than applied. See "The table is not unique".
 
 The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
 names the function behind a CD register access (`KF2_CDTRACE=1`), and
@@ -2066,11 +2096,16 @@ makes this a default rather than an experiment:
 - **A primitive is all-or-nothing.** Correction is applied only when *every*
   vertex of the triangle hit. One vertex left at W = 1 among two real depths would
   shear the triangle's texture in half, which is worse than the problem.
-- **Saturated coordinates are never recorded.** A vertex projecting off screen
-  clamps to ±1024, where several vertices at different depths collapse onto one
-  key; recording those would hand one polygon another's depth. They are dropped,
-  so a polygon with a vertex off screen simply stays affine. This is the main
-  reason the hit rate is 90% rather than 100%, and it is a deliberate 10%.
+- **Saturated coordinates used to be dropped, and that was the remaining pop.**
+  A vertex projecting off screen clamps to ±1024, so several different vertices
+  at different depths can share one key. The first version of the table refused
+  to record those at all, which made every large nearby wall and floor — the
+  polygons that want correction most — fall back to affine the moment one vertex
+  left the window. The clamp is still the key, because that is what the packet
+  carries; uniqueness is recovered by keeping the last few samples at each key
+  and picking the set whose depths belong on this primitive. A leftover that is
+  still an obvious high outlier is dropped, so that triangle stays affine rather
+  than tearing. See "The table is not unique" below.
 - **Nothing is corrected bit-differently.** A vertex with no depth carries W
   exactly 1 and the vertex shader writes the *original* expression for that case
   (`vec4(p, 0, 1)`, not `vec4(p*1, 0, 1)`), so untouched geometry lands on the
@@ -2140,6 +2175,198 @@ work.** Consecutive frames of one run are different views, and the same frame
 number in two runs is not the same view — disc timing drifts, and frame 120 was a
 320-wide menu in one run and a 640-wide screen in the next. One ordering table,
 twice, in one run is the only honest comparison.
+
+## Sub-pixel vertex positioning: the same number's other half
+
+The depth is not the only thing `Gte.Rtp` computes and the packet does not carry.
+The projection is done in **16.16 fixed point** — `sx` and `sy` in that function
+are exact to a 65536th of a pixel — and then `SX2`/`SY2` keep the whole part and
+drop the rest. The game copies the whole part into the GP0 packet, and so a vertex
+that should drift a twentieth of a pixel per frame holds still for twenty frames
+and then jumps a whole one. Every corner of a polygon jumps on its own schedule, so
+the polygon twitches and shears between jumps; walk slowly towards a wall and its
+edges crawl. That is the wobble, and it is the other recognisable half of a
+PlayStation picture.
+
+It is the *same discarded number* as the depth, one shift earlier in the same
+expression, so it needs no new mechanism at all:
+
+```csharp
+int rx = (int)(sx >> 16), ry = (int)(sy >> 16);
+...
+if (GteDepth.Active)
+    GteDepth.Record(nx, ny, sz, sx * (1f / 65536f), sy * (1f / 65536f), rx != nx || ry != ny);
+```
+
+`GteDepth` grew two floats per slot and a second switch; `Enabled` serves the depth
+and `Subpixel` serves the fraction, one probe of the table either way. Everything
+that makes the depth safe to recover makes the fraction safe too — a miss leaves
+the vertex on the whole pixel the packet named, 2D never hits the table so the HUD
+stays on the pixel grid it wants, and a vertex that saturated off screen is still
+recorded for its depth against the clamped key, and left on the packet coordinate
+so a shared edge does not open (see "The table is not unique"). **A vertex behind
+the eye is dropped for both halves rather than one**, which is what keeps turning
+the fraction on from changing which vertices carry a depth.
+
+Note `>> 16` on a negative `long` floors, so `nx + fx` is the projected position on
+the left of the screen exactly as it is on the right; a truncation-toward-zero
+shift would have put the left half of every polygon a pixel out.
+
+### The rule that is deliberately not carried over
+
+Perspective correction is **all-or-nothing per primitive** — one vertex left at
+W = 1 among two real depths shears the triangle's texture in half. The fraction is
+**per vertex**, and the difference is what the two things are. W is an
+interpolation parameter, so a corner disagreeing about it corrupts the whole
+surface. A fraction is just where a corner is: a triangle with one corner moved a
+half pixel is a triangle with one corner moved a half pixel.
+
+The thing that could have gone wrong here is a **crack along a shared edge**, if
+two triangles disagreed about where their common vertices are. They cannot: both
+look up the same key and get the same answer, so a shared edge keeps identical
+endpoints on both sides of it.
+
+### The software rasterizer had to learn a finer grid
+
+The hardware backend needed **nothing**. `HleVertex.X` has been a `float` the whole
+time and `GlCore` passes it straight through, so adding the fraction in
+`GpuHleForward.HV` is the entire hardware path.
+
+`GpuRaster` is the one that walks whole pixels with integer edge functions, and it
+now works in **sixteenths of a pixel** for any triangle where some vertex recovered
+a fraction. What makes that a safe edit rather than a rewrite is that scaling every
+coordinate by 16 scales the three edge functions and the area by 256 and leaves
+every ratio taken from them — the barycentrics, the UVs, the Gouraud colours —
+identical. So:
+
+- a triangle where nothing was recovered runs at **shift zero**, which is the
+  arithmetic the file always did, to the bit;
+- the pixel is still sampled at its own coordinate, and the bounds are shifted back
+  down with an arithmetic shift, which floors, so the covered pixels are the ones
+  whose sample point lies inside the span;
+- the `-1` fill-rule bias stays `-1`. It is applied to the edge *function*, not to
+  a coordinate, so at either shift it breaks an exact tie on a shared edge and
+  nothing else;
+- 1024 pixels is the widest primitive the GPU accepts, so a coordinate stays under
+  2^15 and the products stay far short of overflowing the `long` they already used.
+
+`IsTopLeft` takes coordinates rather than vertices now, because by that point the
+triangle is in the rasterizer's units and those may not be pixels.
+
+**Exercising that path at all takes an edit.** `HostWindow` sets
+`GpuHle.Active = _glBackend.Ready`, so on any machine where GL comes up — which is
+every machine this has run on, Gl45 here — `GpuRaster.RasterTriangle` is dead code
+and a change to it will be silently untested. Forcing it is one throwaway line in
+`Program.cs`:
+
+```csharp
+Event.AddListener<RuntimeReadyEvent>(_ => RecompOne.Runtime.Hle.GpuHle.Active = false);
+```
+
+Both renderers were run that way for this: the software path holds 30 fps in the
+attract demo and reports the same offsets as the hardware one.
+
+### What it measures
+
+`KF2_SUBPIXEL_PROBE=1` reports the **displacement**, not the hit rate — a different
+question from the one `KF2_PERSPECTIVE_PROBE` asks, and it reads and resets only its
+own counters so the two probes can be on at once without eating each other's
+windows.
+
+Steady state in the attract demo:
+
+```
+[KF2] subpixel: 47480 vertices/s carrying a fraction, mean offset 0.770 px, max 1.411 px, over 30 frames/s
+```
+
+**The mean is the measurement.** A point spread evenly inside a pixel sits
+0.7652 of a pixel from that pixel's corner on average, and at most √2 = 1.4142 from
+it. Measured across the demo: **0.760–0.773, max 1.413**. That is the recovered
+fraction being a genuinely uniform fraction rather than a table full of zeroes or a
+rounding artefact, and it is the number that says the low sixteen bits really were
+being thrown away.
+
+The hit rate is shared with perspective correction and is the same 90%: 47k
+vertices a second recovered at 30 fps, so the second half costs nothing measurable
+either. With the setting **off**, the perspective probe reports what it always did
+(85–94%, 30 fps) — the extra table lookups only happen for untextured polygons when
+the fraction is actually wanted.
+
+### Why it is off by default, unlike its sibling
+
+Not because it is riskier. The "a miss is the old behaviour" argument that licensed
+perspective correction covers this identically, and the mechanism above is
+measured. What is *not* done is **the picture**: perspective correction became a
+default on the strength of an ordering table drawn twice and the two frames
+differenced (76.6% of pixels, HUD provably untouched), and that pair has not been
+taken for this.
+
+It is takeable the same way and should be, since the flag is read at vertex-decode
+time and so can be flipped between two `DrawOTag` passes exactly as the dither bit
+was — see "Getting pixels out without a screenshot". What to expect is *not* a large
+pixel count: a change of at most one pixel on a polygon edge will move far fewer
+pixels than a texture-mapping change that repaints every interior texel. The honest
+measurement is probably edges only, and a still frame is the wrong instrument for
+an artefact that is defined by motion. **Flip the default once that pair exists.**
+
+## The table is not unique: remaining wobble and the "far away" pop
+
+The 90% hit rate was never "10% of vertices the two ends disagreed about". It was
+almost entirely vertices the first version of the table **refused to record**:
+anything `SatX`/`SatY` had clamped to ±1024. Walk up to a wall, turn past a long
+floor, and one corner of a large quad leaves that window. All-or-nothing then
+drops the whole primitive back to affine, and affine on a floor you are standing
+on looks exactly like the camera jumped to the horizon — the foreshortening
+vanishes and the texture lies down. The same primitive, a step later, has every
+vertex on-screen again and pops back to corrected. That is the "suddenly far
+away" texture.
+
+The other half is a collision, not a miss. Screen position is the key because it
+is what survives into the packet, but it is not unique. Two vertices of different
+depths land on the same pixel constantly — a distant wall behind a nearby
+column, two off-screen corners stuck on the same clamp — and last-write-wins
+hands one polygon the other's W. A nearby surface that inherits a far Z is
+interpolated as if that corner were at the horizon, which is the same picture,
+only tearing instead of flattening. The fraction is stolen the same way, so an
+edge jumps by up to a pixel every time the winner changes, which is wobble that
+sub-pixel recovery cannot kill because the vertex is being given *someone else's*
+fraction.
+
+`patches/recompone/0011-gte-depth-collisions.patch` is the rest of the same
+mechanism, not a new one:
+
+- **Saturated vertices are recorded for their depth**, so a large nearby polygon
+  can stay perspective-correct instead of falling back to affine. They are **not**
+  moved off the clamp wall. The first version of this patch placed them at the
+  GTE's true 16.16 position; any neighbour still stuck at ±1024 then failed to
+  meet, which showed as gaps in the geometry. The packet coordinate is what the
+  GPU would have drawn, and a shared edge has to agree with it. Only the
+  [0, 1) fraction of an on-screen vertex is served, and it is a function of the
+  key alone — two triangles that share a vertex look up the same fraction even
+  when they pick different depths.
+- **Each key keeps the last four samples**, not the last one. A primitive is
+  bound all at once: newest-at-the-key is the first guess, then any key with
+  several samples is rebound to the depth that sits with the rest of the
+  primitive (closest in log Z to the geometric mean of the hits).
+- **A leftover high outlier is dropped.** Two depths in geometric progression
+  (a corridor floor at 100, 500, 2000) pass; a cliff (100, 120, 8000) is a
+  collision, that corner loses its W, and the triangle stays affine rather than
+  tearing. Only the far end is tested — a vertex next to the camera among two
+  distant ones is legitimate.
+
+2D still corrects itself: a HUD sprite was never in the table, so it still
+misses. The title-screen 0.0% hit rate is the control that this has not started
+correcting menus.
+
+What this does *not* do is follow the value through memory. That is PGXP proper,
+and it is what would recover a vertex the game copied, offset, or interpolated
+on the CPU after `RTPS`. The remaining wobble after 0011, if any, is that case,
+or a primitive whose colliding samples are all similarly wrong so the pick has
+nothing true to choose.
+
+`KF2_PERSPECTIVE_PROBE=1` now also reports `saturated/s`, `refined/s` and
+`rejected/s`. Saturated is the extra vertices that used to miss on purpose;
+refined is a collision the pick resolved; rejected is a cliff it refused.
 
 ## Analog twin-stick control
 
@@ -2770,7 +2997,18 @@ way autoreload does when it arrives from state `0x11`.
    game variable holds. Both are in `patches/recompone/0006` and `0007` with the
    reasoning; the second at minimum should refuse a handler that is not a known
    function.
-8. Play further in. Now that the menu opens, the parts of the game it reaches —
+8. **Take the twice-drawn pair for sub-pixel vertex positioning, and flip its
+   default if it holds up.** The mechanism is measured — 47k vertices a second
+   recovered, offsets uniform across the pixel, no frame-rate cost — but the
+   picture is not, and that is the only thing keeping it off by default while its
+   sibling is on. `GteDepth.Subpixel` is read at vertex-decode time, so it can be
+   flipped between two `DrawOTag` passes exactly as the dither bit was. Expect a
+   much smaller pixel count than the dither or the textures got: this moves polygon
+   edges, not interiors, and the artefact is really about motion, so a still pair
+   may undersell it. See "Sub-pixel vertex positioning". **Walk a wall after 0011
+   with both switches on** — that patch is what should have killed the remaining
+   crawl and the far-away pop, and the picture is the test.
+9. Play further in. Now that the menu opens, the parts of the game it reaches —
    inventory, equipment, magic, the map — have never run, and each is a screen
    with its own code path. `mods/kf2debug` is the instrument for this: its state
    readout is how the rest of `buf2` gets named, and its area warp reaches an

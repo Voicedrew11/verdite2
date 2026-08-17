@@ -37,9 +37,10 @@ namespace Kf2;
 ///     so they keep the affine mapping 2D work actually wants.
 ///   * A polygon is corrected **only if every one of its vertices hit**, so it can
 ///     never mix a recovered depth with a fallback and shear itself apart.
-///   * A vertex that projected **off screen** saturates at ±1024, where several
-///     different vertices share one key; those are never recorded, so such a
-///     polygon simply stays as it was.
+///   * Several vertices can share a screen pixel (and off-screen vertices share
+///     the ±1024 clamp). The table keeps the last few at each key and picks the
+///     depths that belong on this primitive; a leftover far Z is dropped so the
+///     triangle stays affine rather than looking as if the camera jumped.
 ///
 /// Both renderers honour it. The software rasterizer interpolates U/W, V/W and 1/W
 /// and divides per pixel; the hardware backend puts the depth in
@@ -162,14 +163,18 @@ public static class Perspective
 
         long hits = GteDepth.Hits, misses = GteDepth.Misses, recorded = GteDepth.Recorded;
         long asked = hits + misses;
+        long clipped = GteDepth.Saturated, refined = GteDepth.Refined, rejected = GteDepth.Rejected;
 
         // The hit rate is the whole measurement: it says the coordinate the GTE
         // saturates into SX2/SY2 really is the coordinate that reaches the packet.
         // A rate near zero would mean the two ends never agreed on a key and every
-        // polygon quietly stayed affine.
+        // polygon quietly stayed affine. Saturated / refined / rejected are the
+        // extra accounting for vertices that used to miss on purpose (the clamp)
+        // and for collisions that Apply had to pick among or refuse.
         Console.WriteLine($"[KF2] perspective: {recorded / window:F0} vertices projected/s, " +
                           $"{asked / window:F0} looked up/s, {(asked == 0 ? 0.0 : 100.0 * hits / asked):F1}% hit, " +
-                          $"over {_frames / window:F0} frames/s");
+                          $"{clipped / window:F0} saturated/s, {refined / window:F0} refined/s, " +
+                          $"{rejected / window:F0} rejected/s, over {_frames / window:F0} frames/s");
 
         GteDepth.ResetCounters();
         _frames = 0;

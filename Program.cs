@@ -195,6 +195,23 @@ Kf2.Perspective.Configure(Environment.GetEnvironmentVariable("KF2_PERSPECTIVE"),
                           Environment.GetEnvironmentVariable("KF2_PERSPECTIVE_PROBE"));
 Kf2.Perspective.Install();
 
+// Sub-pixel vertex positioning, which is the other half of the same discarded
+// number: the GTE projects to 16.16 and keeps only the whole part, so a vertex
+// drifting slowly sits still and then jumps a pixel, and its polygon twitches. The
+// fraction is recovered through the same table and the same key, one shift earlier
+// in the same expression, and served independently of the depth:
+//
+//     KF2_SUBPIXEL=1        on; 0 or unset leaves vertices on whole pixels
+//     KF2_SUBPIXEL_PROBE=1  report how far vertices are actually moving
+//
+// Off by default where perspective correction is on -- not because it is riskier,
+// the same "a miss is the old behaviour" argument covers both, but because that one
+// was measured before it became a default and this one has not been. Its switch is
+// under Video with the others.
+Kf2.Subpixel.Configure(Environment.GetEnvironmentVariable("KF2_SUBPIXEL"),
+                       Environment.GetEnvironmentVariable("KF2_SUBPIXEL_PROBE"));
+Kf2.Subpixel.Install();
+
 // Auto reload. One post-hook on the end of main-loop stage 3 watches for the
 // player's death and reloads the last save through the game's own loader, so a
 // death costs a couple of seconds instead of four screens of menu:

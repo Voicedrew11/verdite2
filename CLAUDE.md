@@ -57,6 +57,8 @@ KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect override, and the margin ce
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex table's hit rate
+KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
+KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
@@ -92,7 +94,12 @@ correction is a patch for that same reason and is on by default**, beside it und
 Video. Unlike the others its work is not in `patches/` at all: a texture
 coordinate is decided far below anything `HookManager` can reach, so the mechanism
 is `patches/recompone/0009` (`GteDepth`, the rasterizer and the prim shaders) and
-`patches/Perspective.cs` is only the switch and the probe. Auto reload is a
+`patches/Perspective.cs` is only the switch and the probe. **Sub-pixel vertex
+positioning is the other half of the same recovered number** and is shaped the same
+way — mechanism in `patches/recompone/0010`, switch and probe in
+`patches/Subpixel.cs`, checkbox under Video — but defaults to *off*, because the
+mechanism has been measured and the picture has not. See "Sub-pixel vertex
+positioning" in `NOTES.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
 default and its knobs are under Gameplay. Analog twin-stick control is the same
@@ -275,8 +282,18 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Seven of
-the nine are load-bearing; `0002` and `0003` are diagnostics:
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Nine of
+the eleven are load-bearing; `0002` and `0003` are diagnostics.
+
+`setup_tools.sh` **peels the stack off newest-first before applying it
+oldest-first**, rather than asking each patch on its own whether it is already
+applied. A per-patch reverse-check breaks the moment one patch edits lines another
+added — `0010` and `0011` edit the `GteDepth.cs` that `0009` creates — and the
+symptom is `0009` being reported as "FAILED TO APPLY (upstream likely changed)" on
+the second run of a script that is supposed to be idempotent. Undoing in the
+opposite order to applying has no such problem. A patch that will not reverse stops
+the peeling rather than being forced, so a fresh clone peels nothing and an
+uncaptured edit inside the checkout is left where it is.
 
 - `0001-bios-load-return-1.patch` — BIOS `Load` must return 1, not the header
   pointer. Without it the boot stub spins in the loader forever.
@@ -309,6 +326,24 @@ the nine are load-bearing; `0002` and `0003` are diagnostics:
   the two halves are reunited without following a register or a store. A miss is
   the old affine behaviour, which is what makes it safe on by default. See
   "Perspective correction" in `NOTES.md`.
+
+- `0010-subpixel-vertex-positions.patch` — the GTE projects to 16.16 and then keeps
+  only the whole part, so a vertex drifting slowly holds still and then jumps a
+  pixel and its polygon twitches. The fraction is the low sixteen bits of the same
+  expression `0009` takes the depth from, so `GteDepth` carries both and serves them
+  independently. The hardware backend needed nothing — its vertex position was
+  always a float — and the software rasterizer now works in sixteenths of a pixel
+  for any triangle that recovered a fraction, which scales its edge functions and
+  its area by 256 and changes no ratio taken from them. See "Sub-pixel vertex
+  positioning" in `NOTES.md`.
+
+- `0011-gte-depth-collisions.patch` — screen position is not a unique key, and
+  dropping saturated vertices made every large nearby polygon fall back to affine
+  (the texture looking as if the camera jumped). The table keeps several samples
+  per pixel, records the clamp for depth only, and picks per primitive; a leftover
+  far Z is refused rather than applied. Positions stay on the packet — moving a
+  clamped vertex to its true projection opened holes. See "The table is not unique"
+  in `NOTES.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

@@ -20,13 +20,33 @@ fi
 
 echo "==> applying local patches"
 shopt -s nullglob
-for patch in "$ROOT"/patches/recompone/*.patch; do
+patches=("$ROOT"/patches/recompone/*.patch)
+
+# The stack is peeled off newest-first before it is applied oldest-first.
+#
+# Asking each patch on its own "are you already applied?" -- reverse-check it and
+# see -- only works while no patch touches lines an earlier one added. 0010 edits
+# GteDepth.cs, which 0009 creates, so on an already-patched checkout 0009 reverses
+# against text 0010 has since changed, fails, and gets reported as upstream having
+# moved. Undoing the stack in the exact opposite order to the one it was applied in
+# has no such problem, and leaves a tree every patch applies to cleanly.
+#
+# A patch that does not reverse stops the peeling rather than forcing it: on a
+# fresh clone the first check fails at once and nothing is undone, and an
+# uncaptured edit inside the checkout stops it at that patch instead of being
+# rolled over.
+for (( i=${#patches[@]}-1 ; i>=0 ; i-- )); do
+    git -C "$TOOLS" apply --reverse --check "${patches[i]}" 2>/dev/null || break
+    git -C "$TOOLS" apply --reverse "${patches[i]}"
+done
+
+for patch in "${patches[@]}"; do
     name="$(basename "$patch")"
-    if git -C "$TOOLS" apply --reverse --check "$patch" 2>/dev/null; then
-        echo "    $name: already applied"
-    elif git -C "$TOOLS" apply --check "$patch" 2>/dev/null; then
+    if git -C "$TOOLS" apply --check "$patch" 2>/dev/null; then
         git -C "$TOOLS" apply "$patch"
         echo "    $name: applied"
+    elif git -C "$TOOLS" apply --reverse --check "$patch" 2>/dev/null; then
+        echo "    $name: already applied"
     else
         echo "    $name: FAILED TO APPLY (upstream likely changed)" >&2
         exit 1
