@@ -333,6 +333,11 @@ public static class Widescreen
         // new aspect is what puts anything in the margin at the sides rather than
         // only in the corners the game happened to overdraw. See Kf2.CullCone.
         CullCone.Apply();
+
+        // And the game's own view-space clip volume, which cuts the near floor and
+        // ceiling with a straight edge 320 pixels from centre -- outside the picture
+        // until about 8:3, inside it after. See Kf2.ViewClip.
+        ViewClip.Apply();
     }
 
     // One listener serves both jobs, so it is attached exactly when one of them

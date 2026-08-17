@@ -69,6 +69,7 @@ KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the 
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
 KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
 KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, capacity, overflows
+KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate

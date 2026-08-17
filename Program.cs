@@ -297,6 +297,20 @@ Kf2.CullCone.Install();
 Kf2.PrimBuffer.Configure(Environment.GetEnvironmentVariable("KF2_PRIMBUF_PROBE"));
 Kf2.PrimBuffer.Install();
 
+// The game's other cull: a six-plane view-space clipper (func_8005CAC8) that only
+// the near floor and ceiling are big enough to reach, set to twice the screen
+// frustum as a guard band against the GPU's 1023-pixel limit. Twice the frustum is
+// 320 px either side of centre, which the picture passes at about 8:3 -- and what a
+// plane removes has a straight edge, which is how this was told apart from the
+// per-tile cull:
+//
+//     KF2_VIEWCLIP=0          leave the clip volume at its 4:3 shape
+//     KF2_VIEWCLIP=1.5        force a widening factor instead of the aspect's
+//     KF2_VIEWCLIP_PROBE=1    what it wrote, and where the cut lands on screen
+Kf2.ViewClip.Configure(Environment.GetEnvironmentVariable("KF2_VIEWCLIP"),
+                       Environment.GetEnvironmentVariable("KF2_VIEWCLIP_PROBE"));
+Kf2.ViewClip.Install();
+
 // Where the patches' own settings live. A patch registers a page against one of
 // the runtime's settings sections and is drawn inside it, so the frame rate is in
 // System > Settings > Video beside vsync rather than in a box of its own; the one

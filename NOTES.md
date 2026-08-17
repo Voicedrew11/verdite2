@@ -2234,9 +2234,9 @@ this is the cull that governs exactly the bottom corners of the picture.
 The vertex record is `+0x08` X, `+0x0C` Y, `+0x10` Z, and the clip bounds are
 carried per vertex: `+0x24 = (Z · *0x800FC97C) >> 12` and
 `+0x28 = (Z · *0x800FC98C) >> 12`, i.e. `±X` and `±Y` limits at that depth. The
-six planes are near (`*0x8012E99C`), far (`*0x8017E07C`), then `Y` against `±+0x28`
-and `X` against `±+0x24`. `0x8010367C` / `0x8010366C` hold the reciprocals, used
-when interpolating a clipped vertex.
+six planes are far (`Z < *0x8012E99C`, `0x10000`), near (`Z < *0x8017E07C`, `0`),
+then `Y` against `±+0x28` and `X` against `±+0x24`. `0x800FC984` / `0x800FC994`
+hold the reciprocals, used when interpolating a clipped vertex.
 
 Those four words come from one call, `func_8005D7CC(ws, 0x140, 0xF0, 0x64)` —
 **320 × 240 with a projection distance of 100**:
@@ -2244,8 +2244,8 @@ Those four words come from one call, `func_8005D7CC(ws, 0x140, 0xF0, 0x64)` —
 ```
 0x800FC97C = (320/2) << 12 / 100 = 6553   tan of the horizontal half-angle, 12.12
 0x800FC98C = (240/2) << 12 / 100 = 4915   the vertical one
-0x8010367C = 100 << 12 / 160     = 2560   and their reciprocals
-0x8010366C = 100 << 12 / 120     = 3413
+0x800FC984 = 100 << 12 / 160     = 2560   and their reciprocals
+0x800FC994 = 100 << 12 / 120     = 3413
 ```
 
 **But the GTE's projection distance is 200, not 100** — `func_8005B2D4` is
@@ -2265,9 +2265,9 @@ Two things follow.
   lands at `200 × 1.6 = 320` pixels either side of centre. 4:3 reaches 160, 16:9
   reaches 214, 21:9 (64/27) reaches 284 — all inside. Only past **2.67:1** does
   the picture reach the guard band, and `Widescreen.Widest` is 3.0, so the top of
-  the allowed range does. Widening it is one number and its reciprocal, with room
-  to spare: the span at 3:1 would be 1040 pixels against the 1023 limit, so the
-  guard has to shrink rather than scale.
+  the allowed range does. Widening it is one number and its reciprocal, which is
+  `patches/ViewClip.cs`; the guard band has to shrink rather than scale, since
+  `GpuRaster` drops a primitive spanning more than 1023 pixels.
 
 ### Is the 24-tile window worth lifting? Measured: binding, and barely
 
@@ -2345,13 +2345,42 @@ drawn yet, which is the right shape for "occasionally". It simply never runs out
 it is the cheapest way to re-ask the question after anything that submits more
 geometry.
 
-**What is left is the runtime, not the game.** `GlCore.cs:588` widens the GPU
-scissor to the whole render target only when the game's clip spans the framebuffer;
-anything that narrows it loses the margin. The discriminator is one look rather
-than another counter, and it is the kind of thing only a person can answer: **a
-straight vertical edge to the missing region means a clip rectangle** — the
-backend's scissor, or the game's own clipper — **while ragged, per-polygon popping
-means something is still culling per object or per tile.**
+**The edge was reported as straight**, which says a clip plane or a clip rectangle
+rather than a per-object test. Two of those were then checked.
+
+**The backend scissor is not it.** `GlCore.cs:588` widens the GPU scissor to the
+whole render target only when the game's clip spans the framebuffer, so a batch
+that misses the condition is confined to the game's own 320 columns — a straight
+vertical edge exactly. A temporary probe in the checkout counted them: over a
+200-second session at 21:9, **one** narrow batch and **three** targetless ones, all
+during boot, none in play. Two shapes are worth recording anyway, since they are
+real and will matter to something:
+
+```
+[scissor] no render target: clip (0,0)..(639,239) — no margin at all
+[scissor] NOT widened: rt=(0,0) 640w margin=240, game clip x 0..319
+```
+
+The second is `Classify()` matching the clip against a **640-wide** display rect
+(`clipInside` is satisfied by any rect that contains the clip), so the target is
+built 640 wide with a 240 margin and the widen test then wants `clipX1 >= 639`
+against the game's 319. Boot-only here, and left alone.
+
+**And the game's own clipper is not it below 8:3** — see the section above: it cuts
+at 320 px from centre and 21:9 reaches 284. `patches/ViewClip.cs` opens it anyway,
+because it is one word and the cut *is* inside the picture at 3:1, but at every one
+of the four presets it writes the shipped value back and changes nothing:
+
+```
+21:9  tan 1.6  (cut at ±319 px), picture reaches ±280 — the game's own, unchanged
+3:1   tan 1.92 (cut at ±384 px), picture reaches ±360
+```
+
+So the corner culling at 21:9 is **still unexplained**, and the honest position is
+that every clip plane and clip rectangle found so far is outside the picture at that
+aspect. `KF2_VIEWCLIP=1.5` forces the clip volume open at any aspect and is the test
+that would implicate it regardless of the arithmetic; if that does not change the
+picture, the straight edge belongs to something not yet found.
 
 Also still open, and cheap if the cone ever comes back into suspicion: the bottom
 corners are the most extreme lateral-to-forward ratio anywhere in the frame, so a
