@@ -1190,6 +1190,56 @@ are 63 of them.
 4. **`mods/.cache/`** holds the compiled assemblies and is written into the repo;
    it is gitignored.
 
+## Patch settings: a patch's knobs go in the runtime's own sections
+
+A mod gets a settings UI for free — `IMod.DrawSettings` is drawn under the gear
+button in the Mods popup — and a patch got nothing, so a patch's only knob was an
+environment variable read once at startup. That is the real cost of moving
+something out of `mods/` and into `patches/`: the code keeps working and the whole
+panel disappears. `patches/settings/` is the replacement.
+
+**It is not a panel of its own.** `SettingsRegistry.Extend(sectionId, draw)` takes
+a section id and a callback and runs it after that section's own content, which
+means a patch's settings can go where a user would already look for them. The
+frame rate belongs under Display beside vsync and render scale; a King's Field box
+off to one side would be a worse place to keep it. So a patch registers a page
+against a section:
+
+```csharp
+PatchSettings.Register("display", new FramePacingPage());   // IPatchPage: Id, Title, Draw()
+```
+
+The section ids are the runtime's own — `interface`, `input`, `display`, `paths`,
+`audio`. Registration is deferred to `RuntimeReadyEvent`, which is late enough
+that `HostWindow`'s `Load` has registered all five, so an id matching no section
+is reported at startup instead of silently drawing nothing. A page is plain ImGui,
+which is what makes this the landing site for a converted mod: its `DrawSettings`
+body moves across unchanged.
+
+Settings persist through `PatchSettings.Get/Set`, which is `Runtime.View` plus an
+immediate `SaveView` — the same `interface.ini` store the mods use, keyed
+`kf2.<patch>.<name>`. **A persisted default cannot be read in `Configure`:**
+`ConfigManager.Load()` runs inside `HostWindow.Initialize`, which is inside
+`Runtime.Initialize`, which is *after* `Program.cs`, and `Load` replaces the whole
+`ViewConfig` — so an early read sees an empty config and an early write is thrown
+away. Read it on `RuntimeReadyEvent`, dispatched at the end of that same
+`Initialize`. `FramePacing` does this and keeps the precedence the mods use:
+`KF2_FPS` beats the saved value.
+
+### 60 fps became a setting
+
+For the setting to offer 60, the stage gate has to already be hooked — hooks are
+installed at the first overlay load and the rate is chosen long after. So
+`FramePacing` now hooks `0x80040348` and `0x8002A550` (the pair under "60 fps"
+below) whether or not 60 was asked for, and `BeforeStage` returns "run the
+original" at any rate below 60. `KF2_FPS_GATE` replaces that default pair rather
+than adding to it. At 30 this changes nothing; without it, choosing 60 from the
+settings would run the whole game at double speed.
+
+Two further consequences of the rate being live rather than fixed at startup:
+`Attach` no longer skips when the floor is off, since "uncapped" is now a choice
+that can be taken back, and `AfterDrawOTag` tests `Enabled` itself.
+
 ## The main game loop, stage by stage
 
 `GAME.EXE`'s per-frame loop is the tail of `func_8001369C` — everything before it
@@ -1331,6 +1381,30 @@ down**, which is the sort of sign a mod gets backwards until it reads this table
 The table settles the buttons but not which way the view tips: that half of the
 pitch sign came from playing it, after the first build had the look axis
 inverted.
+
+**The table can be read straight out of `GAME.EXE`, and the first six entries are
+the ones the movement code never touches.** The values are stored in the *game's*
+byte order, which is `Hardware.Controller`'s with the halves swapped, because
+`BiosB.PadRead` writes `(s >> 8) | (s << 8)` into the pad buffer and libetc hands
+the game `~buffer`. Swap back and the whole table decodes:
+
+| entry | value | button | action |
+|---|---|---|---|
+| `0x8006E568` | `0x0040` | Cross | confirm |
+| `0x8006E56C` | `0x0020` | **Circle** | **open the in-game menu** |
+| `0x8006E570` | `0x0080` | Square | |
+| `0x8006E574` | `0x0010` | Triangle | |
+| `0x8006E578` | `0x0100` | Select | |
+| `0x8006E57C` | `0x0800` | Start | |
+
+The swap is not a guess: it is what turns entries 12/13 (`0x2000`/`0x8000`) into
+Right/Left, which is the turn pair the movement table above already names.
+
+Entry 1 is read at `0x80029D8C`, in `func_80029CBC`, as a just-pressed test
+guarding the one `jal` to **`func_80018E80` — the in-game menu**, whose −2 return
+is what writes the quit-to-title exit reason. One call site, behind a
+just-pressed edge, means that function blocks for the whole menu session rather
+than being re-entered per frame.
 
 ### Every control axis has the same three branches
 

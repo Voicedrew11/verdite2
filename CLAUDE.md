@@ -60,6 +60,13 @@ KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-sta
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
 ```
 
+Patch settings live in `patches/settings/`. A patch registers an `IPatchPage`
+against one of the runtime's own settings sections —
+`PatchSettings.Register("display", new FramePacingPage())` — and is drawn inside
+it, so the frame rate sits in System ▸ Settings ▸ Display beside vsync rather than
+in a panel of its own. That is where a mod's `DrawSettings` body goes when the mod
+becomes a patch. See "Patch settings" in `NOTES.md`.
+
 Frame pacing is load-bearing: without it the port runs faster than the game can on
 hardware, so it lives in `patches/` and is always on. The measurement tools and
 the widescreen support are real mods under `mods/` — **enable them in the game's

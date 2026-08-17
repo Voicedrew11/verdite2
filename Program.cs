@@ -169,6 +169,11 @@ Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
 Kf2.FramePacing.Install();
 Kf2.EndingHold.Install();
 
+// Where the patches' own settings live. A patch registers a page against one of
+// the runtime's settings sections and is drawn inside it, so the frame rate is in
+// System > Settings > Display beside vsync rather than in a box of its own.
+Kf2.Settings.PatchSettings.Install();
+
 var memory = new PSMemory();
 Entry.Run(memory, args.Length > 0 ? args[0] : null);
 return 0;

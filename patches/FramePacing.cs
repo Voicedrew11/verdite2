@@ -15,6 +15,11 @@ namespace Kf2;
 ///     KF2_FPS=off     no floor: the raw port, which bursts past 60
 ///     KF2_FPS_GATE=80040348+8002A550   stages to skip on odd frames at 60
 ///
+/// It is also a setting, under Display -- see Kf2.Settings.FramePacingPage.
+/// The saved choice is read on RuntimeReadyEvent rather than in Configure, since
+/// ConfigManager only loads inside HostWindow.Initialize, after Program.cs; the
+/// environment variable still wins over it.
+///
 /// King's Field's speed *is* its frame rate -- everything advances a fixed amount
 /// per loop iteration, and the loop waits a whole number of vblanks, so rates
 /// quantise to 60/n. On hardware a frame costs 2, 3 or 4 vblanks, which is the
@@ -54,8 +59,23 @@ public static class FramePacing
     /// <summary>False disables the floor entirely -- the raw port.</summary>
     public static bool Enabled { get; private set; } = true;
 
+    /// <summary>Where the chosen rate is kept between runs.</summary>
+    public const string VBlankKey = "kf2.framepacing.vblanks";
+
     /// <summary>Main-loop stages skipped on odd frames when rendering at 60.</summary>
     static readonly List<uint> _gated = [];
+
+    /// <summary>
+    /// The stages to gate at 60 when <c>KF2_FPS_GATE</c> named none. These two are
+    /// the pair NOTES.md records as the working 60 fps configuration; hooking them
+    /// unconditionally is what makes 60 a setting rather than a launch argument,
+    /// and costs nothing at 30, where <see cref="BeforeStage"/> always runs the
+    /// original.
+    /// </summary>
+    static readonly uint[] DefaultGate = [0x80040348, 0x8002A550];
+
+    /// <summary>True once KF2_FPS has spoken, so the saved rate does not overrule it.</summary>
+    static bool _fromEnv;
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
 
@@ -65,6 +85,13 @@ public static class FramePacing
     static double _due;
     static long _frames;
     static int _vblanks;
+
+    /// <summary>Frames a second over the last window, so the settings can show whether
+    /// the chosen rate is the one being achieved. Zero until the first window ends.</summary>
+    public static double Measured { get; private set; }
+
+    static double _windowStart;
+    static long _windowFrames;
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
     // in-project rather than a loaded package, so it declares its own identity.
@@ -84,6 +111,8 @@ public static class FramePacing
             else if (int.TryParse(fps, out int rate))
                 MinVBlanks = rate switch { >= 60 => 1, >= 30 => 2, >= 20 => 3, _ => 4 };
             else throw new ArgumentException($"KF2_FPS: cannot read '{fps}'");
+
+            _fromEnv = true;
         }
 
         if (!string.IsNullOrWhiteSpace(gate))
@@ -102,14 +131,45 @@ public static class FramePacing
     {
         Event.AddListener<VSyncEvent>(_ => _vblanks++);
 
+        // The saved rate can only be read once ConfigManager has loaded, which
+        // happens inside HostWindow.Initialize -- after Program.cs called Configure.
+        Event.AddListener<RuntimeReadyEvent>(_ =>
+        {
+            if (_fromEnv) return;
+            SetCap(RecompOne.Runtime.Runtime.View.GetInt(VBlankKey, MinVBlanks));
+        });
+
+        // Attached whether or not the floor is on: "uncapped" is a choice that can
+        // be taken back, and hooks cannot be added once the game is running past the
+        // overlay loads.
         bool attached = false;
         Event.AddListener<OverlayLoadedEvent>(_ =>
         {
-            if (attached || !Enabled) return;
+            if (attached) return;
             attached = true;
             Attach();
         });
     }
+
+    /// <summary>
+    /// Change the rate at run time. 0 is uncapped, otherwise the minimum vblanks a
+    /// frame may occupy: 1 is 60 fps, 2 is 30, 4 is 15. Safe at any moment -- both
+    /// readers of this state are per frame.
+    /// </summary>
+    public static void SetCap(int vblanks)
+    {
+        if (vblanks <= 0)
+        {
+            Enabled = false;
+            return;
+        }
+
+        Enabled = true;
+        MinVBlanks = Math.Clamp(vblanks, 1, 4);
+    }
+
+    /// <summary>0 when uncapped, else the vblank floor. The form <see cref="SetCap"/> takes.</summary>
+    public static int Cap => Enabled ? MinVBlanks : 0;
 
     static void Attach()
     {
@@ -130,10 +190,14 @@ public static class FramePacing
             if (HookManager.AddPost(_self, target, frameDrawn)) n++;
         }
 
-        // Gating costs nothing when it is not asked for: with no gate list, no
-        // stage is hooked at all. Any address in `game` can be named, not just the
-        // thirteen main-loop stages -- experimenting is the point.
-        foreach (uint addr in _gated)
+        // The gate is hooked even at 30, where BeforeStage always lets the original
+        // run, so that 60 can be chosen later from the settings. KF2_FPS_GATE replaces
+        // the default pair rather than adding to it, and can name any address in
+        // `game`, not just the thirteen main-loop stages -- experimenting is the
+        // point.
+        var gate = _gated.Count > 0 ? _gated : (IReadOnlyList<uint>)DefaultGate;
+        int gated = 0;
+        foreach (uint addr in gate)
         {
             var target = SymbolRegistry.Resolve("game", null, addr);
             if (target == null)
@@ -141,18 +205,16 @@ public static class FramePacing
                 Console.Error.WriteLine($"[KF2] pacing: no game function at 0x{addr:X8}, not gated");
                 continue;
             }
-            if (HookManager.AddPre(_self, target, stageGate)) n++;
+            if (HookManager.AddPre(_self, target, stageGate)) { n++; gated++; }
         }
 
         HookManager.Commit();
-        Console.WriteLine($"[KF2] pacing: {(MinVBlanks <= 1 ? "60" : (60 / MinVBlanks).ToString())} fps, " +
-                          $"{n} hook(s)" + (_gated.Count > 0
-                              ? $", gating {string.Join(" ", _gated.Select(g => g.ToString("X8")))}"
-                              : ""));
+        Console.WriteLine($"[KF2] pacing: {(Enabled ? (MinVBlanks <= 1 ? "60" : (60 / MinVBlanks).ToString()) : "uncapped")} fps, " +
+                          $"{n} hook(s), gating {string.Join(" ", gate.Select(g => g.ToString("X8")))}");
 
-        if (MinVBlanks <= 1 && _gated.Count == 0)
-            Console.WriteLine("[KF2] pacing: 60 fps with no gated stages -- the whole game runs at " +
-                              "DOUBLE SPEED. Rendering-only 60 fps; see \"60 fps\" in NOTES.md.");
+        if (gated == 0)
+            Console.WriteLine("[KF2] pacing: no stage could be gated -- selecting 60 fps would run " +
+                              "the whole game at DOUBLE SPEED. See \"60 fps\" in NOTES.md.");
     }
 
     /// <summary>
@@ -167,15 +229,29 @@ public static class FramePacing
         _vblanks = 0;
         _frames++;
 
+        _windowFrames++;
+        double elapsed = _clock.Elapsed.TotalMilliseconds - _windowStart;
+        if (elapsed >= 1000.0)
+        {
+            Measured = _windowFrames * 1000.0 / elapsed;
+            _windowFrames = 0;
+            _windowStart = _clock.Elapsed.TotalMilliseconds;
+        }
+
         // At one vblank there is nothing to enforce: the runtime's FrameClock
         // already holds a single VSync to a vblank, which is why the unfloored
         // port tops out around 50 fps rather than running away entirely.
-        if (MinVBlanks > 1) Floor();
+        if (Enabled && MinVBlanks > 1) Floor();
     }
 
-    /// <summary>Skips a gated stage on odd frames. Returning false makes the
-    /// recompiled body not run -- HookManager's Invoke honours it.</summary>
-    public static bool BeforeStage(CpuContext c, IMemory m) => (_frames & 1) == 0;
+    /// <summary>
+    /// Skips a gated stage on odd frames, but only at 60 -- at any lower rate the
+    /// frame already spans the two vblanks the stage would have run over, so it
+    /// runs every time. Returning false makes the recompiled body not run;
+    /// HookManager's Invoke honours it.
+    /// </summary>
+    public static bool BeforeStage(CpuContext c, IMemory m)
+        => !Enabled || MinVBlanks > 1 || (_frames & 1) == 0;
 
     static void Floor()
     {
