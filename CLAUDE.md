@@ -76,6 +76,8 @@ KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
 KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
 KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
+KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off by default)
+KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-tested
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
@@ -118,8 +120,12 @@ which several vertices share and which `0009`-`0011` could only guess between.
 **Sub-pixel vertex positioning is the other half of the same recovered number** and
 is shaped the same way — mechanism in `patches/recompone/0010` and `0012`, switch and probe in
 `patches/Subpixel.cs`, checkbox under Video — but defaults to *off*, because the
-mechanism has been measured and the picture has not. See "Sub-pixel vertex
-positioning" in `NOTES.md`. Auto reload is a
+mechanism has been measured and the picture has not. **The Z-buffer is the same
+depth used as occlusion** rather than as a texture denominator: the GPU has none,
+so intersecting surfaces take turns in front of each other on the ordering table,
+and `patches/recompone/0014` tests the recovered SZ per pixel instead. Off by
+default for the sub-pixel reason; its switch sits with the others under Video.
+See "Sub-pixel vertex positioning" and "Z-buffer" in `NOTES.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
 default and its knobs are under Gameplay. Analog twin-stick control is the same
@@ -349,14 +355,14 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Ten of
-the thirteen are load-bearing; `0002` and `0003` are diagnostics and `0013` is a
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Eleven of
+the fourteen are load-bearing; `0002` and `0003` are diagnostics and `0013` is a
 settings-placement hook.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
 applied. A per-patch reverse-check breaks the moment one patch edits lines another
-added — `0010`, `0011` and `0012` all edit the `GteDepth.cs` that `0009` creates — and the
+added — `0010`, `0011`, `0012` and `0014` all edit the `GteDepth.cs` that `0009` creates — and the
 symptom is `0009` being reported as "FAILED TO APPLY (upstream likely changed)" on
 the second run of a script that is supposed to be idempotent. Undoing in the
 opposite order to applying has no such problem. A patch that will not reverse stops
@@ -431,6 +437,13 @@ uncaptured edit inside the checkout is left where it is.
   section, after the render scale, which is where the widescreen aspect goes.
   Register with `PatchSettings.RegisterSlot`, not `Register`. UI only — **no
   recompile**.
+
+- `0014-gte-zbuffer.patch` — a depth buffer from the same recovered SZ3
+  perspective correction already follows through memory. The GPU has none, so
+  intersecting surfaces take turns in front of each other on the ordering table;
+  both rasterizers now test the recovered view depth per pixel. A miss is
+  painter's order, so the HUD is untouched. Off by default. See "Z-buffer" in
+  `NOTES.md`. **No recompile** — the lookup is the one `0012` already does.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

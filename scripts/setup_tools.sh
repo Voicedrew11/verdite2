@@ -26,10 +26,11 @@ patches=("$ROOT"/patches/recompone/*.patch)
 #
 # Asking each patch on its own "are you already applied?" -- reverse-check it and
 # see -- only works while no patch touches lines an earlier one added. 0010 edits
-# GteDepth.cs, which 0009 creates, so on an already-patched checkout 0009 reverses
-# against text 0010 has since changed, fails, and gets reported as upstream having
-# moved. Undoing the stack in the exact opposite order to the one it was applied in
-# has no such problem, and leaves a tree every patch applies to cleanly.
+# GteDepth.cs, which 0009 creates, and 0011, 0012 and 0014 edit it again, so on an
+# already-patched checkout 0009 reverses against text a later patch has since
+# changed, fails, and gets reported as upstream having moved. Undoing the stack in
+# the exact opposite order to the one it was applied in has no such problem, and
+# leaves a tree every patch applies to cleanly.
 #
 # A patch that does not reverse stops the peeling rather than forcing it: on a
 # fresh clone the first check fails at once and nothing is undone, and an

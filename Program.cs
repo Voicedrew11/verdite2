@@ -216,6 +216,23 @@ Kf2.Subpixel.Configure(Environment.GetEnvironmentVariable("KF2_SUBPIXEL"),
                        Environment.GetEnvironmentVariable("KF2_SUBPIXEL_PROBE"));
 Kf2.Subpixel.Install();
 
+// Z-buffer. The GPU is handed polygons with no depth in them, so occlusion is
+// whatever order the game stuffed the ordering table in — one OTZ per polygon,
+// back to front. Interpenetrating surfaces can only take turns in front of each
+// other. The depth still exists one step earlier, in the GTE, and the same map
+// that feeds perspective correction hands it to both rasterizers as a per-pixel
+// test:
+//
+//     KF2_ZBUFFER=1        on; 0 or unset leaves the ordering table in charge
+//     KF2_ZBUFFER_PROBE=1  report how many triangles actually depth-tested
+//
+// Off by default where perspective correction is on -- the recovered number is
+// the same one, but the picture has not been checked by eye. Its switch is under
+// Video with the others.
+Kf2.ZBuffer.Configure(Environment.GetEnvironmentVariable("KF2_ZBUFFER"),
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_PROBE"));
+Kf2.ZBuffer.Install();
+
 // Auto reload. One post-hook on the end of main-loop stage 3 watches for the
 // player's death and reloads the last save through the game's own loader, so a
 // death costs a couple of seconds instead of four screens of menu:

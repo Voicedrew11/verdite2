@@ -63,7 +63,9 @@ position, which changes 76.6% of a frame's pixels (see "Perspective correction")
 The same table now also recovers the **sub-pixel position** the GTE truncates, so
 vertices need not snap to whole pixels; that one is off by default until its
 picture has been measured the way the textures were (see "Sub-pixel vertex
-positioning"). Nearby walls and floors no longer pop back to affine the moment
+positioning"). **A Z-buffer is available from the same recovered depth** — per-pixel
+occlusion instead of the ordering table — and is off by default for the same
+reason (see "Z-buffer"). Nearby walls and floors no longer pop back to affine the moment
 one vertex clamps off-screen, and a pixel that two vertices share no longer
 hands one polygon the other's depth (see "The table is not unique").
 **The frame rate is pinned to 30 fps**, NTSC's
@@ -163,7 +165,7 @@ it oldest-first**. Asking each patch on its own "are you already applied?" — w
 is what it used to do — only works while no patch touches lines another one added,
 and `0010` edits the `GteDepth.cs` that `0009` creates. The symptom was `0009`
 reverse-checking against text `0010` had since changed, failing, and being reported
-as upstream having moved. `0011` edits that same file again. Undoing in the opposite
+as upstream having moved. `0011`, `0012` and `0014` edit that same file again. Undoing in the opposite
 order to applying cannot hit that. A patch that will not reverse stops the peeling
 instead of being forced, so a fresh clone peels nothing, and an uncaptured edit
 inside the checkout — the normal way a new patch gets written — stops it rather
@@ -210,6 +212,12 @@ Screen position is not a unique key, and dropping saturated vertices made every
 large nearby polygon fall back to affine. The table now keeps several samples per
 pixel, records the clamp, and picks per primitive; a leftover far Z is refused
 rather than applied. See "The table is not unique".
+
+**`patches/recompone/0014-gte-zbuffer.patch` is a depth buffer from that same
+number.** The GPU walks the ordering table back to front with no per-pixel test,
+so two surfaces that actually interpenetrate take turns in front of each other.
+The recovered SZ is interpolated per pixel and tested; a miss is painter's order,
+so the HUD is untouched. Off by default. See "Z-buffer".
 
 The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
 names the function behind a CD register access (`KF2_CDTRACE=1`), and
@@ -1298,7 +1306,7 @@ the prose became a hover tooltip and the counters stayed on the console.
 **Pages sharing a `Title` share one heading.** `SeparatorText` over a lone
 checkbox is the checkbox's own label written twice with a rule through it, so the
 dither switch is titled `Enhancements` and anything else of that size can join it
-there — perspective correction and sub-pixel positioning both did;
+there — perspective correction, sub-pixel positioning and the Z-buffer all did;
 `FramePacingPage`, which is a combo plus a live measurement, keeps its own. The
 list is already sorted by title, so drawing a heading only when it changes is the
 whole implementation.
@@ -2902,20 +2910,70 @@ vertices the map missed. It is off by default and exists to A/B the two in one
 build; `refined/s` and `rejected/s` are gone from the report because there is
 nothing left to pick between.
 
-**Open, and probably not this:** the cave section shows polygons alternating in
-front of and behind each other. Nothing here can cause it — the map changes W and
-the sub-pixel position, and the draw order is the game's ordering table, which the
-GPU walks back to front with no depth buffer at all. Two coplanar surfaces the game
-sorted by a single OTZ per polygon will flicker on hardware too. Worth confirming
-with `KF2_PERSPECTIVE=0 KF2_SUBPIXEL=0` in the same spot before spending anything on
-it.
+**Open, and this is now an option:** the cave section shows polygons alternating in
+front of and behind each other. The map changes W and the sub-pixel position, and
+the draw order is the game's ordering table, which the GPU walks back to front with
+no depth buffer at all. Two coplanar surfaces the game sorted by a single OTZ per
+polygon will flicker on hardware too. `patches/recompone/0014` is a Z-buffer from
+the same recovered SZ; it is off by default until the picture has been looked at
+in that cave. See "Z-buffer".
 
 The cost lands on `ReadU32`/`WriteU32`, which is the hottest path in the port, so
-it is gated twice: on `GteVertexMap.Active` (a static bool, false when both
-perspective correction and sub-pixel positioning are off) and then on one bit of a
+it is gated twice: on `GteVertexMap.Active` (a static bool, false when perspective
+correction, sub-pixel positioning and the Z-buffer are all off) and then on one bit of a
 presence bitmap — 64 KB for the retail 2 MB of RAM. The attribute array itself is
 10 MB, allocated on first use, and only touched on a bitmap hit. The frame rate
 does not move.
+
+## Z-buffer: the same depth, used as occlusion
+
+The GPU has no depth buffer. The game sorts every polygon into an ordering table
+by one number — the GTE's OTZ, the average of its vertices — and `DrawOTag` walks
+that table back to front. Two surfaces that actually interpenetrate can only take
+turns in front of each other, because each polygon is wholly in front or wholly
+behind. That is the cave flicker above, and it is what a Z-buffer turns off.
+
+The depth is the same SZ3 perspective correction already recovers. Nothing new is
+caught; the rasterizer is just allowed to test it per pixel instead of throwing
+it away after the texture divide. `GteVertexMap` already follows the word from
+`Gte.Rtp` into the packet, and `DrawPolygon` already asks by the address the
+coordinate was read from. `patches/recompone/0014` is the rest:
+
+- **All-or-nothing per triangle**, same rule as W. A corner left at ndc.z = 0
+  among two real depths would punch a hole, so that triangle keeps painter's
+  order.
+- **2D never hits**, so the HUD, the menus and the death fade still draw on top
+  in table order with the depth test off.
+- **Semi-transparent tests and does not write**, so two overlapping additives
+  still blend in the order the table named.
+- **Untextured geometry is tested too.** Perspective correction only cares about
+  textured polygons; a flat-shaded wall still has a view depth. `HasPersp` and
+  `HasGteZ` are independent on `HleVertex` so putting SZ into clip W does not
+  turn perspective correction on as a side effect.
+- **Equal depths prefer the later table entry** (`GL_LEQUAL` / `>` reject), which
+  is the painter's-algorithm tie the console had, so coplanar surfaces the game
+  stacked on purpose keep their order.
+- **The hardware path** attaches a 24-bit depth renderbuffer to each display RT
+  and writes `ndc.z = SZ/32768 - 1`. A vertex with no depth still emits
+  `vec4(p, 0, 1)`, bit-identical to before. The first draw onto an RT after
+  `Present` — or after the setting is flipped — clears the attachment, because
+  this game's `PutDrawEnv` has `isbg=0` and would otherwise test against last
+  frame.
+- **The software path** keeps a float per VRAM pixel and tests it in the same
+  inner loop that plots. Punch-through (texel 0) and a mask-bit reject skip the
+  write, so a hole in the texture does not occlude what is behind it. Dead on
+  any machine where GL comes up, as `GpuRaster.RasterTriangle` always was.
+
+`KF2_ZBUFFER_PROBE=1` reports triangles tested against painter's-order fallbacks
+per two-second window. The tested rate is the measurement: a rate near zero would
+mean every triangle quietly kept the ordering table. Pixel rejects are a
+software-rasterizer number and stay at zero on the hardware path.
+
+**Off by default.** The recovered number is the one perspective correction already
+measures at 92% hit, but the picture has not been checked by eye — and a twice-
+drawn ordering table cannot take this pair, because the second pass would fail
+every test against the first. The cave is the test. The switch is under Video
+with the others; `KF2_ZBUFFER=1` forces it on for the run.
 
 ## Analog twin-stick control
 
@@ -3557,7 +3615,13 @@ way autoreload does when it arrives from state `0x11`.
    may undersell it. See "Sub-pixel vertex positioning". **Walk a wall after 0011
    with both switches on** — that patch is what should have killed the remaining
    crawl and the far-away pop, and the picture is the test.
-9. Play further in. Now that the menu opens, the parts of the game it reaches —
+9. **Look at the Z-buffer in the cave.** The mechanism is the recovered SZ
+   perspective correction already measures, but a twice-drawn OT cannot take this
+   pair (the second pass would fail every test against the first), so the picture
+   is the only test, and it is what is keeping the default off. Interpenetrating
+   rocks should sit still; coplanar floors should not z-fight; the HUD should be
+   identical. See "Z-buffer".
+10. Play further in. Now that the menu opens, the parts of the game it reaches —
    inventory, equipment, magic, the map — have never run, and each is a screen
    with its own code path. `mods/kf2debug` is the instrument for this: its state
    readout is how the rest of `buf2` gets named, and its area warp reaches an
