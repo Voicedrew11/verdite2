@@ -217,7 +217,9 @@ rather than applied. See "The table is not unique".
 number.** The GPU walks the ordering table back to front with no per-pixel test,
 so two surfaces that actually interpenetrate take turns in front of each other.
 The recovered SZ is interpolated per pixel and tested; a miss is painter's order,
-so the HUD is untouched. Off by default. See "Z-buffer".
+so the HUD is untouched. Window depth is a fragment value rather than clip-space
+Z, because putting SZ into `gl_Position.z` far-clipped the already-projected
+triangle. Off by default. See "Z-buffer".
 
 The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
 names the function behind a CD register access (`KF2_CDTRACE=1`), and
@@ -2939,8 +2941,8 @@ it away after the texture divide. `GteVertexMap` already follows the word from
 `Gte.Rtp` into the packet, and `DrawPolygon` already asks by the address the
 coordinate was read from. `patches/recompone/0014` is the rest:
 
-- **All-or-nothing per triangle**, same rule as W. A corner left at ndc.z = 0
-  among two real depths would punch a hole, so that triangle keeps painter's
+- **All-or-nothing per triangle**, same rule as W. A corner left without a depth
+  among two real ones would punch a hole, so that triangle keeps painter's
   order.
 - **2D never hits**, so the HUD, the menus and the death fade still draw on top
   in table order with the depth test off.
@@ -2954,11 +2956,14 @@ coordinate was read from. `patches/recompone/0014` is the rest:
   is the painter's-algorithm tie the console had, so coplanar surfaces the game
   stacked on purpose keep their order.
 - **The hardware path** attaches a 24-bit depth renderbuffer to each display RT
-  and writes `ndc.z = SZ/32768 - 1`. A vertex with no depth still emits
-  `vec4(p, 0, 1)`, bit-identical to before. The first draw onto an RT after
-  `Present` — or after the setting is flipped — clears the attachment, because
-  this game's `PutDrawEnv` has `isbg=0` and would otherwise test against last
-  frame.
+  and writes window depth `SZ/65536` from the fragment shader. Clip-space Z stays
+  0, same as before this existed: these vertices are already projected, and
+  putting SZ into `gl_Position.z` lets OpenGL clip them against a far plane the
+  GPU never had — a hard line across the floor, far closer than the game's own
+  fog. A vertex with no depth still emits `vec4(p, 0, 1)`, bit-identical to
+  before. The first draw onto an RT after `Present` — or after the setting is
+  flipped — clears the attachment, because this game's `PutDrawEnv` has `isbg=0`
+  and would otherwise test against last frame.
 - **The software path** keeps a float per VRAM pixel and tests it in the same
   inner loop that plots. Punch-through (texel 0) and a mask-bit reject skip the
   write, so a hole in the texture does not occlude what is behind it. Dead on

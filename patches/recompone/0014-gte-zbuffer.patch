@@ -196,25 +196,49 @@ diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/RecompOne.Runt
  
          // vUV is the one thing that wants correcting: handing gl_Position a real W
          // makes the rasterizer interpolate it in 1/W, which is exactly the
-@@ -87,7 +88,16 @@
+@@ -71,6 +72,7 @@
+         noperspective out vec4 vColor;
+         out vec2 vUV;
++        out float vDepth;
+         flat out ivec2 clutBase;
+         flat out ivec2 pageBase;
+         flat out int   texMode;
+         flat out int   vDither;
+@@ -87,7 +89,12 @@
              // Exactly 1 is the "no depth was recovered" case, and it is written out
              // as the original expression rather than as p*1/1, so a primitive
              // without perspective data lands on the same pixels to the last bit.
--            gl_Position = inW == 1.0 ? vec4(p, 0.0, 1.0) : vec4(p * inW, 0.0, inW);
-+            // inZ is the same recovered SZ offered to the depth buffer: 0 means
-+            // this vertex is 2D (or the Z-buffer is off) and ndc.z stays 0, which
-+            // is what the shader wrote before the Z-buffer existed.
-+            if (inW == 1.0 && inZ <= 0.0) {
-+                gl_Position = vec4(p, 0.0, 1.0);
-+            } else {
-+                float w = inW == 1.0 ? 1.0 : inW;
-+                float zNdc = inZ > 0.0 ? inZ * (1.0/32768.0) - 1.0 : 0.0;
-+                gl_Position = vec4(p * w, zNdc * w, w);
-+            }
++            // Depth is a fragment value, not clip-space Z: these vertices are
++            // already projected, and putting SZ into gl_Position.z lets OpenGL
++            // clip them against a far plane the GPU never had — a hard line
++            // across the floor where the cave used to continue.
+             gl_Position = inW == 1.0 ? vec4(p, 0.0, 1.0) : vec4(p * inW, 0.0, inW);
++            vDepth = inZ > 0.0 ? inZ * (1.0/65536.0) : 0.0;
  
              int inClut = int(inClutF + 0.5);
              int inTexpage = int(inTexpageF + 0.5);
-@@ -317,6 +327,7 @@
+@@ -109,6 +116,7 @@
+         #version 330 core
+         noperspective in vec4 vColor;
+         in vec2 vUV;
++        in float vDepth;
+         flat in ivec2 clutBase;
+         flat in ivec2 pageBase;
+         flat in int   texMode;
+@@ -164,6 +172,12 @@
+         }
+ 
+         void main() {
++            // Written on every path so a 3D triangle's recovered SZ is the
++            // window depth, and a 2D primitive (vDepth == 0, test off) keeps
++            // the interpolated clip Z it has always had. Assigning this also
++            // turns off early-Z, so a punch-through discard cannot occlude
++            // whatever is behind the hole.
++            gl_FragDepth = vDepth > 0.0 ? vDepth : gl_FragCoord.z;
+             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
+ 
+             if (texMode == 4) {
+@@ -317,10 +332,12 @@
          attribute float inTexpageF;
          attribute vec2  inUV;
          attribute float inW;
@@ -222,23 +246,40 @@ diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/RecompOne.Runt
  
          varying vec4  vColor;
          varying vec2  vUV;
-@@ -338,7 +349,14 @@
++        varying float vDepth;
+         varying vec2  vClutBase;
+         varying vec2  vPageBase;
+         varying float vTexMode;
+         varying float vDither;
+@@ -338,7 +355,11 @@
              // correctly. GLSL 120 has no `noperspective`, so on this backend alone
              // vColor is corrected along with it -- visible only as a slightly
              // different Gouraud gradient on a steeply angled textured polygon.
--            gl_Position = inW == 1.0 ? vec4(p, 0.0, 1.0) : vec4(p * inW, 0.0, inW);
-+            // inZ is the Z-buffer's copy of the same SZ; 0 keeps ndc.z at 0.
-+            if (inW == 1.0 && inZ <= 0.0) {
-+                gl_Position = vec4(p, 0.0, 1.0);
-+            } else {
-+                float w = inW == 1.0 ? 1.0 : inW;
-+                float zNdc = inZ > 0.0 ? inZ * (1.0/32768.0) - 1.0 : 0.0;
-+                gl_Position = vec4(p * w, zNdc * w, w);
-+            }
++            // Depth is a fragment value, not clip-space Z: these vertices are
++            // already projected, and putting SZ into gl_Position.z lets OpenGL
++            // clip them against a far plane the GPU never had.
+             gl_Position = inW == 1.0 ? vec4(p, 0.0, 1.0) : vec4(p * inW, 0.0, inW);
++            vDepth = inZ > 0.0 ? inZ * (1.0/65536.0) : 0.0;
  
              float tp = floor(inTexpageF + 0.5);
              float clut = floor(inClutF + 0.5);
-@@ -507,7 +525,7 @@
+@@ -387,6 +406,7 @@
+         #version 120
+         varying vec4  vColor;
+         varying vec2  vUV;
++        varying float vDepth;
+         varying vec2  vClutBase;
+         varying vec2  vPageBase;
+         varying float vTexMode;
+@@ -447,6 +467,7 @@
+         void main() {
++            gl_FragDepth = vDepth > 0.0 ? vDepth : gl_FragCoord.z;
+             vec2 destUv = gl_FragCoord.xy / uDestSize;
+             vec4 dstTexel = texture2D(uDest, destUv);
+             if (uCheckMask > 0.5 && dstTexel.a >= 0.5) discard;
+ 
+             vec3 rgb;
+@@ -507,7 +528,7 @@
  
      static readonly (uint Index, string Name)[] PrimAttribs =
      [

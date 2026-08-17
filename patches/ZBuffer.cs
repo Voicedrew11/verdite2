@@ -42,7 +42,8 @@ namespace Kf2;
 ///     about textured polygons; a flat-shaded wall still has a view depth.
 ///
 /// Both renderers honour it. The hardware backend attaches a 24-bit depth buffer
-/// to each display render target and writes ndc.z from SZ; the software
+/// to each display render target and writes window depth from SZ in the fragment
+/// shader, so OpenGL does not clip the already-projected triangle; the software
 /// rasterizer keeps a float per VRAM pixel and tests it in the same inner loop
 /// that plots. Turning the setting off is an exact no-op: the attachment is
 /// never tested, the clip W is unchanged, and a vertex with no depth still

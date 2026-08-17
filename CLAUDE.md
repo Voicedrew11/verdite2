@@ -441,9 +441,11 @@ uncaptured edit inside the checkout is left where it is.
 - `0014-gte-zbuffer.patch` — a depth buffer from the same recovered SZ3
   perspective correction already follows through memory. The GPU has none, so
   intersecting surfaces take turns in front of each other on the ordering table;
-  both rasterizers now test the recovered view depth per pixel. A miss is
-  painter's order, so the HUD is untouched. Off by default. See "Z-buffer" in
-  `NOTES.md`. **No recompile** — the lookup is the one `0012` already does.
+  both rasterizers now test the recovered view depth per pixel. Window depth is
+  a fragment value, not clip-space Z, so OpenGL does not far-clip the already-
+  projected triangle. A miss is painter's order, so the HUD is untouched. Off
+  by default. See "Z-buffer" in `NOTES.md`. **No recompile** — the lookup is
+  the one `0012` already does.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
