@@ -24,10 +24,11 @@ namespace Kf2;
 /// The fraction is not computed and lost, it is computed and *truncated* — the low
 /// sixteen bits of the same expression <see cref="Perspective"/> takes the depth
 /// from, one shift earlier. So it is caught in the same place and carried the same
-/// way: <c>Gte.Rtp</c> records (x, y) -> (z, fx, fy) into <see cref="GteDepth"/>
-/// and the GPU asks for it again as it decodes a vertex word, keyed on the screen
-/// position because that is the thing that survives into the packet. The two halves
-/// share one table and one lookup and are switched on independently.
+/// way: <c>Gte.Rtp</c> hands (z, fx, fy) to <see cref="GteVertexMap"/> as the
+/// coordinate leaves the GTE, the map follows the word into the primitive packet by
+/// the address it is stored at, and the GPU asks for it again by the address it read
+/// the word back from. The two halves share one map and one lookup and are switched
+/// on independently.
 ///
 /// Everything that makes the depth safe to recover makes the fraction safe too — a
 /// miss leaves the vertex on the whole pixel the packet named, 2D never hits, and a
@@ -37,9 +38,9 @@ namespace Kf2;
 /// *not* carried over: correction is per vertex here, where W is all-or-nothing per
 /// primitive. W is an interpolation parameter and one corner disagreeing about it
 /// tears the texture across the whole triangle; a fraction is just where a corner
-/// is. And because two triangles sharing a vertex look up the same key and get the
-/// same answer, a shared edge keeps identical endpoints on both sides — no crack
-/// can open along one.
+/// is. And because two triangles sharing a vertex read the same word out of the same
+/// address, a shared edge keeps identical endpoints on both sides — no crack can open
+/// along one.
 ///
 /// Both renderers honour it. The hardware backend needed nothing at all: its vertex
 /// position has been a float the whole time, so the fraction is simply added before
@@ -60,7 +61,7 @@ namespace Kf2;
 /// not been taken for this. See "Sub-pixel vertex positioning" in NOTES.md.
 ///
 /// As with perspective correction this patch is only the switch and the report; the
-/// work is in the runtime (<c>patches/recompone/0010</c>), because where a vertex
+/// work is in the runtime (<c>patches/recompone/0010</c> and <c>0012</c>), because where a vertex
 /// lands is decided far below anything <c>HookManager</c> can reach. The one hook is
 /// on <c>DrawOTag</c>, purely to have a frame boundary to count against, and it is a
 /// post-hook so it composes with the widescreen mod's replacement of the same

@@ -179,26 +179,30 @@ Kf2.NoDither.Configure(Environment.GetEnvironmentVariable("KF2_NODITHER_PROBE"))
 Kf2.NoDither.Install();
 
 // Perspective-correct textures. The GPU is handed polygons with no depth in them,
-// so it interpolates U and V linearly and the texture swims; the depth still
-// exists one step earlier, in the GTE, and the screen position is the key that
-// reunites the two. All of the work is in the runtime (GteDepth, the rasterizer
-// and the prim shaders) because a texture coordinate is decided far below anything
-// HookManager can reach -- this is the switch and the report:
+// so it interpolates U and V linearly and the texture swims; the depth still exists
+// one step earlier, in the GTE, and the address the coordinate is stored at is what
+// ties the two back together -- the same word is copied into the packet and read
+// back out of it by DrawOTag. All of the work is in the runtime (GteVertexMap, the
+// rasterizer and the prim shaders) because a texture coordinate is decided far below
+// anything HookManager can reach -- this is the switch and the report:
 //
-//     KF2_PERSPECTIVE=0        off, for the console's own affine mapping
-//     KF2_PERSPECTIVE_PROBE=1  report the vertex table's hit rate
+//     KF2_PERSPECTIVE=0           off, for the console's own affine mapping
+//     KF2_PERSPECTIVE_PROBE=1     report the vertex map's hit rate
+//     KF2_PERSPECTIVE_FALLBACK=1  also guess by screen position on a miss, which is
+//                                 the mechanism the map replaced, kept for comparison
 //
 // A patch rather than a mod for the same reason the dither switch is one: it is a
 // picture the port should be able to offer without a package having to load. Its
 // switch is under Video beside that one.
 Kf2.Perspective.Configure(Environment.GetEnvironmentVariable("KF2_PERSPECTIVE"),
-                          Environment.GetEnvironmentVariable("KF2_PERSPECTIVE_PROBE"));
+                          Environment.GetEnvironmentVariable("KF2_PERSPECTIVE_PROBE"),
+                          Environment.GetEnvironmentVariable("KF2_PERSPECTIVE_FALLBACK"));
 Kf2.Perspective.Install();
 
 // Sub-pixel vertex positioning, which is the other half of the same discarded
 // number: the GTE projects to 16.16 and keeps only the whole part, so a vertex
 // drifting slowly sits still and then jumps a pixel, and its polygon twitches. The
-// fraction is recovered through the same table and the same key, one shift earlier
+// fraction is recovered through the same map and the same address, one shift earlier
 // in the same expression, and served independently of the depth:
 //
 //     KF2_SUBPIXEL=1        on; 0 or unset leaves vertices on whole pixels

@@ -2368,6 +2368,102 @@ nothing true to choose.
 `rejected/s`. Saturated is the extra vertices that used to miss on purpose;
 refined is a collision the pick resolved; rejected is a cliff it refused.
 
+## Following the value through memory: the address is the vertex
+
+The heuristics above did not fix the collision, they scored it, and a wrong score
+is not a slightly wrong texture — W is the denominator of the perspective divide,
+so a corner given a stranger's depth throws its texture across the screen. The
+same wrong pick hands a corner a stranger's sub-pixel fraction, which is a vertex
+that snaps a pixel for no reason the player can see. Both were still happening
+after `0011`.
+
+So the thing the previous section called "PGXP proper" and put out of scope turned
+out to be the smaller change, because the recompilation makes the association
+findable. What the disassembly says:
+
+- **A screen coordinate leaves the GTE only through `swc2`.** There is not one
+  `mfc2` of SXY0/1/2 in the whole recompilation (`Gte.Read(12|13|14)` has zero
+  call sites; `Gte.StoreWord(12|13|14)` has thirteen). It emits as
+  `m.WriteU32(addr, Gte.StoreWord(14))` — **the destination address is in hand at
+  the store, and C# evaluates the argument before the call**, which is the entire
+  plumbing. No `InstructionEmitter` change, so nothing has to be recompiled.
+- **The game keeps a transform cache.** `func_8005D8E8` (`RotTransPers`) and
+  `func_8005D914` (`RotTransPers3`) write the coordinate wherever the caller
+  points them, and the caller is a loop like `func_8002E650` filling an
+  8-byte-per-vertex array at `0x8018EB94` with `{sxy, otz, fog}` for a whole
+  vertex list at once. Polygons are assembled afterwards, out of that array —
+  which is why "the newest depth at this pixel" carried no information about the
+  polygon being drawn: the table held the entire scene at once.
+- **The assembler copies the coordinate as a whole word.** In `func_80030540`,
+  `c.V0 = m.ReadU32(c.S4); m.WriteU32((c.S0 + 0x8u), c.V0);` and the same again at
+  `+0x14`, `+0x20`, `+0x2C` — `xy0..xy3` of a POLY_GT3/POLY_GT4. Load and store are
+  adjacent instructions. Only the UVs and the CLUT go by halfword.
+- **The packet reaches the GPU from an address the runtime knows.**
+  `LibGpu.DrawOTag` and `Dma.TransferGpu` both do
+  `gpu.WriteGp0(m.ReadU32(addr…))`.
+
+`patches/recompone/0012-exact-gte-vertex-map.patch` connects those four facts.
+`GteVertexMap` is a map from **RAM word address** to `(z, fx, fy, the packed XY
+word)`, filled by three exact hops:
+
+1. `Gte.Rtp` keeps the depth and the truncated 16.16 fraction per screen-coordinate
+   FIFO slot, shifted with `SX`/`SY`, so a read of SXY0/1/2 hands out the numbers
+   belonging to *that* slot. `Gte.Read` of one of those registers publishes
+   `(value, attributes)` into a small pending ring.
+2. `PSMemory.WriteU32` of a value sitting in that ring binds the destination
+   address to those attributes; `PSMemory.ReadU32` of an address the map knows
+   publishes it again, so the attributes follow the game's `lw`/`sw` out of the
+   transform cache and into the packet. A store with no match *clears* the
+   destination, so a rewritten word stops answering.
+3. `Gpu` keeps `_fifoSrc` beside `_fifo` — the address each command word was read
+   from — and `DrawPolygon` asks the map for each vertex by its own address,
+   **verifying the stored word against the word it is about to draw**.
+
+The ring is what avoids tainting registers, which would have meant instrumenting
+every instruction the recompiler emits. It is searched newest-first, preferring an
+entry nothing has taken yet, so three `swc2`s of three coordinates that clamped
+onto the same pixel still bind in the order they were stored.
+
+Loading a coordinate *back into* the GTE invalidates the slot (`Write` cases
+12-15). `func_8005DC6C` is `NormalClip` and hands all three vertices of a polygon
+back for the cross product; without that, a later read would publish a stale depth
+against a value that matches.
+
+What this buys, measured at the attract-mode flythrough with
+`KF2_PERSPECTIVE_PROBE=1`:
+
+```
+52k vertices projected/s, 52k caught/s, 87k copied/s, 94k looked up/s, 92.5% hit
+```
+
+`caught` equals `projected`, so every coordinate the GTE produced is picked up;
+`copied` is half again as many, which is the assembler re-reading a shared vertex
+for each polygon that uses it. The **92.5% hit rate is the same as the screen
+position table's 92.0%** on the same scene (`KF2_PERSPECTIVE_FALLBACK=1` reports
+both), so exactness costs no coverage — and the position table's figure was never
+all correct answers, since a HUD quad it "hit" was being handed some 3D vertex's
+depth. The remaining ~8% is 2D and anything the CPU computed, which wants affine.
+
+`KF2_PERSPECTIVE_FALLBACK=1` keeps the old table filling and consults it for
+vertices the map missed. It is off by default and exists to A/B the two in one
+build; `refined/s` and `rejected/s` are gone from the report because there is
+nothing left to pick between.
+
+**Open, and probably not this:** the cave section shows polygons alternating in
+front of and behind each other. Nothing here can cause it — the map changes W and
+the sub-pixel position, and the draw order is the game's ordering table, which the
+GPU walks back to front with no depth buffer at all. Two coplanar surfaces the game
+sorted by a single OTZ per polygon will flicker on hardware too. Worth confirming
+with `KF2_PERSPECTIVE=0 KF2_SUBPIXEL=0` in the same spot before spending anything on
+it.
+
+The cost lands on `ReadU32`/`WriteU32`, which is the hottest path in the port, so
+it is gated twice: on `GteVertexMap.Active` (a static bool, false when both
+perspective correction and sub-pixel positioning are off) and then on one bit of a
+presence bitmap — 64 KB for the retail 2 MB of RAM. The attribute array itself is
+10 MB, allocated on first use, and only touched on a bitmap hit. The frame rate
+does not move.
+
 ## Analog twin-stick control
 
 `patches/Analog.cs` (was `patches/Analog.cs`) gives the game continuous analog turning,

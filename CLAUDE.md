@@ -56,7 +56,8 @@ KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect override, and the margin census
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
-KF2_PERSPECTIVE_PROBE=1                # the GTE vertex table's hit rate
+KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
+KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
 KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
@@ -93,10 +94,13 @@ package having to load — and defaults to *off* (no crosshatch). **Perspective
 correction is a patch for that same reason and is on by default**, beside it under
 Video. Unlike the others its work is not in `patches/` at all: a texture
 coordinate is decided far below anything `HookManager` can reach, so the mechanism
-is `patches/recompone/0009` (`GteDepth`, the rasterizer and the prim shaders) and
-`patches/Perspective.cs` is only the switch and the probe. **Sub-pixel vertex
-positioning is the other half of the same recovered number** and is shaped the same
-way — mechanism in `patches/recompone/0010`, switch and probe in
+is `patches/recompone/0009` and `0012` (`GteVertexMap`, the rasterizer and the prim
+shaders) and `patches/Perspective.cs` is only the switch and the probe. The depth is
+tied to its vertex by **the address the screen coordinate is stored at**, followed
+through the game's own copy into the primitive packet — not by the screen position,
+which several vertices share and which `0009`-`0011` could only guess between.
+**Sub-pixel vertex positioning is the other half of the same recovered number** and
+is shaped the same way — mechanism in `patches/recompone/0010` and `0012`, switch and probe in
 `patches/Subpixel.cs`, checkbox under Video — but defaults to *off*, because the
 mechanism has been measured and the picture has not. See "Sub-pixel vertex
 positioning" in `NOTES.md`. Auto reload is a
@@ -282,13 +286,13 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Nine of
-the eleven are load-bearing; `0002` and `0003` are diagnostics.
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Ten of
+the twelve are load-bearing; `0002` and `0003` are diagnostics.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
 applied. A per-patch reverse-check breaks the moment one patch edits lines another
-added — `0010` and `0011` edit the `GteDepth.cs` that `0009` creates — and the
+added — `0010`, `0011` and `0012` all edit the `GteDepth.cs` that `0009` creates — and the
 symptom is `0009` being reported as "FAILED TO APPLY (upstream likely changed)" on
 the second run of a script that is supposed to be idempotent. Undoing in the
 opposite order to applying has no such problem. A patch that will not reverse stops
@@ -344,6 +348,17 @@ uncaptured edit inside the checkout is left where it is.
   far Z is refused rather than applied. Positions stay on the packet — moving a
   clamped vertex to its true projection opened holes. See "The table is not unique"
   in `NOTES.md`.
+
+- `0012-exact-gte-vertex-map.patch` — screen position was never an identity, so
+  `0011`'s picking between samples was scoring a collision rather than avoiding one,
+  and a wrong W throws a texture across the screen. `GteVertexMap` keys on the
+  **address** the coordinate is stored at instead: a `swc2` publishes the depth and
+  the fraction, a store binds them to its destination, a load of a bound address
+  republishes them so they follow the game's whole-word `lw`/`sw` into the packet,
+  and `DrawPolygon` asks by the address `DrawOTag` read the word from — verifying the
+  word before answering. No codegen change, so **this one needs no recompile**. The
+  old table stays behind `KF2_PERSPECTIVE_FALLBACK` for comparison only. See
+  "Following the value through memory" in `NOTES.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
