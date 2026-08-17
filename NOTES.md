@@ -1164,7 +1164,6 @@ A mod is a folder (or zip) under `mods/` with a `mod.json` and C# sources,
 ```
 mods/framestats/mod.json + FrameStats.cs     fps and the vblank-per-frame histogram
 mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loop stages
-mods/widescreen/mod.json + Widescreen.cs     wider picture, and the census that justifies it
 mods/kf2debug/mod.json   + GameState.cs,     noclip, invincibility, warp and a live state
                            Noclip.cs,        readout; see "Debug tools"
                            Cheats.cs, Warp.cs,
@@ -1236,6 +1235,13 @@ a patch": **sticks centred means the hooks return before touching memory**, so
 keyboard and D-pad play with it on is identical to play with it off, and the cost
 of shipping it enabled is nothing at all.
 
+`patches/Widescreen.cs` is the dither test again — an aspect ratio is a picture
+the port should offer without a package having to load — and it is the case that
+separates that test from the *default*. Being a patch decides where the switch
+lives; it does not decide which way the switch points, and this one ships pointing
+at 4:3 because the picture has never been checked by eye. See "Widescreen became a
+patch".
+
 Config `patches[]` entries are still the right tool for **`replace`**, which is
 how the whole SDK is bound: those are needed before any mod could load, and there
 are 63 of them.
@@ -1292,9 +1298,27 @@ the prose became a hover tooltip and the counters stayed on the console.
 **Pages sharing a `Title` share one heading.** `SeparatorText` over a lone
 checkbox is the checkbox's own label written twice with a rule through it, so the
 dither switch is titled `Enhancements` and anything else of that size can join it
-there; `FramePacingPage`, which is a combo plus a live measurement, keeps its own.
-The list is already sorted by title, so drawing a heading only when it changes is
-the whole implementation.
+there — perspective correction and sub-pixel positioning both did;
+`FramePacingPage`, which is a combo plus a live measurement, keeps its own. The
+list is already sorted by title, so drawing a heading only when it changes is the
+whole implementation.
+
+**A page could not get *inside* a runtime section, and now it can.** `Extend`
+draws after the section's whole body, so an option that is one of the section's
+*ordinary* options — an aspect ratio, which is the same kind of choice as the
+render scale — could only land in a block underneath everything, below the GPU
+backend combo, which reads as the port's box rather than as a picture setting.
+`patches/recompone/0013` is the fix and it is six lines:
+`SettingsRegistry.DrawSlot(slotId)` walks the same `Extend` table by an arbitrary
+id, and `DisplaySettingsSection` calls it once, right after the render scale, as
+`"display.render_scale"`. `PatchSettings.RegisterSlot` is the port-side half; a
+slot page draws **bare**, with no `SeparatorText`, so it sits in line with
+fullscreen, vsync and render scale rather than under a heading.
+
+The asymmetry to know about: `Register` reports an unknown *section* id at
+startup, because the sections are enumerable. **An unknown slot id is silent** —
+`Extend` takes any string and nothing lists the slots — so a typo there costs a
+control that simply never appears.
 
 **A page big enough to need shaping is the point where two rules stop scaling.**
 `AnalogPage` is eighteen knobs in the `input` section, under the button-binding
@@ -1842,7 +1866,7 @@ handled: only the original columns are blitted back to VRAM (`Writeback` starts 
 `rt.Margin`), the GPU clip is widened to the whole target when the game clips to
 the whole framebuffer, `PutDrawEnv` extends an `isbg` background clear across the
 margin, and `PresentDisplay` returns `WideAspect` instead of `SourceAspect`
-whenever the margin is non-zero. So `mods/widescreen` sets one number:
+whenever the margin is non-zero. So `patches/Widescreen.cs` sets one number:
 
 ```csharp
 Display.WideAspect = 16f / 9f;      // 320 -> 428, 54 columns a side
@@ -1857,9 +1881,9 @@ submits geometry past the screen edge and expects the GPU to clip it. A game tha
 culls per polygon against its own screen rectangle would gain black bars and
 nothing else.
 
-So the mod counts. It listens on `RenderPrimEvent` and classifies every primitive
-by whether a vertex falls outside the game's own clip rectangle
-(`KF2_WIDESCREEN_PROBE=1`, or the checkbox in its settings panel):
+So it counts. It listens on `RenderPrimEvent` and classifies every primitive by
+whether a vertex falls outside the game's own clip rectangle
+(`KF2_WIDESCREEN_PROBE=1`):
 
 ```
 [widescreen] 25.4% of 480 prims reach the margin (239/s)      title screen (open)
@@ -1933,7 +1957,7 @@ not be.
 
 What replaced it is structural and positional: a primitive is HUD if it is in the
 last 128 OT entries *and* its box falls in one of the two clusters. The OT gate is
-why the mod replaces `DrawOTag` and walks the table itself — one pass to count the
+why this replaces `DrawOTag` and walks the table itself — one pass to count the
 entries, one to emit them, mirroring `LibGpu.DrawOTag` including its
 custom-primitive branch. `HookManager.Invoke` runs pre-hooks, then the replacement,
 then post-hooks, so the frame pacing's `DrawOTag` post-hook still runs. Being
@@ -1944,6 +1968,65 @@ and the anchoring has its own toggle.
 typo costs a whole boot to find. A throwaway csproj that compiles the mod source
 against `bin/Release/net10.0/RecompOne.Runtime.dll` and `ImGui.NET.dll`, with
 `ImplicitUsings` disabled to match `ModCompiler`, catches it in three seconds.
+(Moot for this one now that it is a patch and the project build type-checks it,
+but it still applies to everything under `mods/`.)
+
+### Widescreen became a patch, and the default stayed 4:3
+
+`mods/widescreen` is now `patches/Widescreen.cs` plus
+`patches/settings/WidescreenPage.cs`, for the reason the dither switch is a patch:
+an aspect ratio is a picture the port should be able to offer without a package
+having to load, and Video is where a player looks for it rather than a gear button
+in the Mods popup. The conversion is the usual one — `[Replace]` attributes became
+`SymbolRegistry.Resolve` plus `HookManager.AddReplace` from an `Attach` deferred to
+the first `OverlayLoadedEvent`, and `OnLoad`'s config read became a
+`RuntimeReadyEvent` listener. The `interface.ini` keys are unchanged
+(`kf2.widescreen.aspect`, `kf2.widescreen.anchorhud`), so a player who had the mod
+on keeps the picture they had.
+
+**Where it differs from the four conversions before it: the switch stays off.**
+Those flipped their default *on*, each with the same argument — a mod that can be
+absent, whose absence is a defect the port should have dealt with. That argument
+does not hold here. The census says a quarter of every frame in an area is there
+to recover, but the two things that can go wrong at the sides are exactly the ones
+a primitive counter cannot see (a 2D screen the game draws 320 wide; per-object
+culling against the game's own 4:3 frustum), and **the picture has still never been
+checked by eye**. That is the sub-pixel test, not the dither test, and it gives the
+same answer: mechanism measured, picture not, so the default is 4:3 —
+`WideAspect = 0`, which is the untouched path — and the presets are one click away
+under Video. The census left the settings page with it and stayed on the console
+under `KF2_WIDESCREEN_PROBE=1`, as the dither counters did.
+
+**The page is a combo and a checkbox, drawn directly under the render scale** —
+inside the runtime's own display section, not in a group of the port's below it.
+An aspect ratio is an ordinary picture option and belongs among the ordinary
+picture options; getting there is `patches/recompone/0013` and
+`PatchSettings.RegisterSlot` (see "Patch settings"). There is no
+slider — the four presets are what a display actually is, an arbitrary ratio is a
+number to type rather than to drag for, and `KF2_WIDESCREEN` still takes any of
+them; a value that is none of the four shows in the combo as `Custom (1.9:1)`
+instead of being rounded onto a preset.
+
+**The conversion found a bug the mod had: the replacement dropped the source
+address.** `LibGpu.DrawOTag` calls `gpu.WriteGp0(word, src)` — the address the word
+was read from, which is what `GteVertexMap` keys the recovered depth and sub-pixel
+fraction on (`patches/recompone/0012`). The mod's copy of that walk predates 0012
+and called the one-argument `WriteGp0(word)`, i.e. `src = 0`, so **every frame with
+the HUD anchored would have quietly gone back to affine texturing** — perspective
+correction silently off, with nothing in any log to say so. Anything that mirrors a
+runtime SDK function has this failure mode: the copy stops tracking the original
+and the divergence is invisible. Fixed in the patch, and it is the first thing to
+check if a future hook re-implements a libgpu walk.
+
+Verified with the disc, 16:9 with the HUD anchored: `[KF2] widescreen: 3 hook(s)`
+alongside the dither patch's 12 and perspective's 3 on the same function, no
+`replace conflict`, and `KF2_PERSPECTIVE_PROBE=1` reporting **88-93% hit** over
+30 fps in `fdat05` — which is the source-address fix stated as a measurement,
+since without it that number is zero. The census through the same run: 25.4% of 465
+prims on the title screen, 0.0% and 4.4% on the GAME.EXE menus, 19-55% per window
+in an area, which is the same shape as the mod measured. At 4:3 the replacement is
+a straight call to the original and no `RenderPrimEvent` listener is attached at
+all, so the default costs nothing per primitive rather than merely little.
 
 ## Dithering: one flag, and it lives in the draw environment
 
@@ -1998,10 +2081,10 @@ polyline, and an image load); neither occurs in this game's tables.
 
 **It is a pre/post hook, not a replacement, and that is deliberate.**
 `HookManager` allows exactly one `Replace` owner per function — a second owner's
-replacement is refused with `replace conflict on …` — and the widescreen mod owns
+replacement is refused with `replace conflict on …` — and the widescreen patch owns
 `DrawOTag`. Pre- and post-hooks compose with a replacement and with each other, so
 the patch (`dither: off, 12 hook(s)` — pre and post on both entry points in all
-three overlays), the widescreen mod and the frame pacing's own `DrawOTag`
+three overlays), the widescreen patch and the frame pacing's own `DrawOTag`
 post-hook all coexist.
 
 Steady state with the patch in, probe on: `30 draw envs/s and 0 ordering-table
@@ -2081,7 +2164,7 @@ the emulator world; PGXP proper follows the values through memory, which buys th
 cases below and needs far more machinery.
 
 `Gpu._drawOffsetX/Y` is added *after* the lookup and the `RenderPrimEvent` fires
-after that, so a mod is still free to move X — widescreen does — and the depth
+after that, so a hook is still free to move X — widescreen does — and the depth
 stays attached to the vertex.
 
 ### Why leaving it on is safe: a miss is the old behaviour

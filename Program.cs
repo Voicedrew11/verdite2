@@ -249,6 +249,26 @@ Kf2.AutoReload.Install();
 Kf2.Analog.Configure();
 Kf2.Analog.Install();
 
+// Widescreen. The runtime already renders a margin either side of the display
+// buffer and presents the whole thing at Display.WideAspect, so setting that one
+// number is the entire hookup; the replacement of DrawOTag here is only for the
+// HUD, which is drawn in screen space and would otherwise sit inset from the new
+// edges:
+//
+//     KF2_WIDESCREEN=16:9     aspect for the run; "1.777" and "off" also parse
+//     KF2_WIDESCREEN_PROBE=1  the margin census, on the console
+//
+// A patch rather than a mod because an aspect ratio is a picture the port should
+// be able to offer without a package having to load, and Video is where a player
+// looks for it. It still defaults to 4:3: the census says a quarter of every frame
+// in an area crosses the screen edge and is there to recover, but the two ways it
+// can go wrong -- a 2D screen the game draws 320 wide, and per-object culling
+// against the game's own 4:3 frustum -- are invisible to a primitive counter and
+// have never been checked by eye.
+Kf2.Widescreen.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN"),
+                         Environment.GetEnvironmentVariable("KF2_WIDESCREEN_PROBE"));
+Kf2.Widescreen.Install();
+
 // Where the patches' own settings live. A patch registers a page against one of
 // the runtime's settings sections and is drawn inside it, so the frame rate is in
 // System > Settings > Video beside vsync rather than in a box of its own; the one

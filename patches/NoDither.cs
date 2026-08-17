@@ -73,9 +73,9 @@ namespace Kf2;
 /// can be compared without a restart; the hooks stay attached and do nothing.
 ///
 /// It is a pre/post hook and not a replacement on purpose. <c>HookManager</c>
-/// allows one <c>Replace</c> owner per function and the widescreen mod owns
+/// allows one <c>Replace</c> owner per function and the widescreen patch owns
 /// <c>DrawOTag</c>; pre- and post-hooks compose with a replacement and with each
-/// other, so this, that mod and the frame pacing's own post-hook all coexist.
+/// other, so this, that patch and the frame pacing's own post-hook all coexist.
 /// </summary>
 public static class NoDither
 {
@@ -233,8 +233,8 @@ public static class NoDither
     //
     // The walk is DrawOTag's own: follow the header's `next` field until the end
     // marker, and read each packet's words out of the count in its top byte. The
-    // pre-hook runs before any mod's replacement of this function, so this
-    // composes with the widescreen mod, which owns the replacement.
+    // pre-hook runs before any replacement of this function, so this composes
+    // with the widescreen patch, which owns the replacement.
 
     public static void BeforeDrawOTag(CpuContext c, IMemory m)
     {

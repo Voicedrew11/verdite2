@@ -58,6 +58,7 @@ public interface IPatchPage
 public static class PatchSettings
 {
     static readonly Dictionary<string, List<IPatchPage>> _pages = new(StringComparer.OrdinalIgnoreCase);
+    static readonly Dictionary<string, List<IPatchPage>> _slots = new(StringComparer.OrdinalIgnoreCase);
 
     static bool _installed;
     static bool _registered;
@@ -80,6 +81,34 @@ public static class PatchSettings
     }
 
     /// <summary>
+    /// Add a page **inside** a section's own body, at a slot the section draws.
+    ///
+    /// <see cref="Register"/> appends after the section has drawn everything it
+    /// has, which is where a group of the port's own belongs. An option that is
+    /// one of the section's ordinary options does not belong there: an aspect
+    /// ratio is the same kind of choice as the render scale and wants to be next
+    /// to it, above the backend combo, not in a block underneath the lot.
+    /// <c>SettingsRegistry.DrawSlot</c> is that — <c>patches/recompone/0013</c>,
+    /// which is the only reason this needs the checkout patched at all.
+    ///
+    /// A slot page draws **bare**: no <c>SeparatorText</c>, no heading, so it sits
+    /// in line with the section's own widgets and <see cref="IPatchPage.Title"/>
+    /// goes unused. Note the one asymmetry with <see cref="Register"/>: a section
+    /// id that does not exist is reported at startup, and a **slot id nothing
+    /// draws is silent** — there is no list of slots to check it against.
+    /// </summary>
+    public static void RegisterSlot(string slotId, IPatchPage page)
+    {
+        if (string.IsNullOrWhiteSpace(slotId) || page == null) return;
+
+        if (!_slots.TryGetValue(slotId, out var list))
+            _slots[slotId] = list = [];
+
+        list.RemoveAll(p => p.Id == page.Id);
+        list.Add(page);
+    }
+
+    /// <summary>
     /// Hand the pages to the settings UI. Waits for <c>RuntimeReadyEvent</c>, which
     /// is dispatched at the end of <c>Runtime.Initialize</c> -- after the host
     /// window's Load has run, so the runtime's own sections are all registered and
@@ -94,6 +123,7 @@ public static class PatchSettings
         Register("display", new NoDitherPage());
         Register("display", new PerspectivePage());
         Register("display", new SubpixelPage());
+        RegisterSlot("display.render_scale", new WidescreenPage());
         Register("input", new AnalogPage());
         Register("gameplay", new AutoReloadPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
@@ -158,6 +188,14 @@ public static class PatchSettings
             var group = pages;
             SettingsRegistry.Extend(sectionId, () => Draw(group));
         }
+
+        // Slots go through the same Extend table, keyed by the slot id the section
+        // passes to DrawSlot rather than by a section id, and draw without headings.
+        foreach (var (slotId, pages) in _slots)
+        {
+            var group = pages;
+            SettingsRegistry.Extend(slotId, () => DrawBare(group));
+        }
     }
 
     static bool SectionExists(string sectionId)
@@ -184,6 +222,19 @@ public static class PatchSettings
                 ImGui.SeparatorText(heading);
             }
 
+            ImGui.PushID(page.Id);
+            page.Draw();
+            ImGui.PopID();
+        }
+    }
+
+    /// <summary>A slot's pages, drawn in line with the section's own controls —
+    /// no heading, since the point of a slot is that the option is one of the
+    /// section's ordinary options.</summary>
+    static void DrawBare(List<IPatchPage> pages)
+    {
+        foreach (var page in pages)
+        {
             ImGui.PushID(page.Id);
             page.Draw();
             ImGui.PopID();

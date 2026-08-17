@@ -60,7 +60,7 @@ namespace Kf2;
 /// runtime, since a texture coordinate is decided a long way below anything
 /// <c>HookManager</c> can reach. The one hook is on <c>DrawOTag</c>, purely to have
 /// a frame boundary to count against, and it is a post-hook so it composes with the
-/// widescreen mod's replacement of the same function.
+/// widescreen patch's replacement of the same function.
 /// </summary>
 public static class Perspective
 {

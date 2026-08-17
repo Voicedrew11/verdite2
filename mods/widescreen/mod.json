@@ -1,7 +1,0 @@
-{
-  "id": "kf2.widescreen",
-  "name": "Widescreen",
-  "version": "1.0",
-  "author": "KFII-PC",
-  "description": "Widens the picture past the 320-pixel screen instead of stretching it. The runtime renders a margin either side of the display area; this mod sizes that margin and reports how much geometry the game actually puts in it."
-}

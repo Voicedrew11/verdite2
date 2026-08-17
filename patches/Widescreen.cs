@@ -1,0 +1,446 @@
+using System.Reflection;
+using RecompOne.Runtime.Context;
+using RecompOne.Runtime.Events;
+using RecompOne.Runtime.Hle;
+using RecompOne.Runtime.Memory;
+using RecompOne.Runtime.Modding;
+
+namespace Kf2;
+
+/// <summary>
+/// Renders the game wider than its 320-pixel screen.
+///
+///     KF2_WIDESCREEN=16:9       aspect for the run; "1.777" and "off" also parse
+///     KF2_WIDESCREEN_PROBE=1    the margin census, on the console
+///
+/// It is a setting, under Video — see Kf2.Settings.WidescreenPage. The saved
+/// aspect is read on RuntimeReadyEvent rather than in <see cref="Configure"/>,
+/// since ConfigManager only loads inside HostWindow.Initialize, after Program.cs.
+///
+/// The runtime already knows how to do this: a display buffer is drawn into a
+/// render target that carries a margin of extra columns either side
+/// (<c>GpuHle.WideMargin</c>), only the original 320 are written back to VRAM, and
+/// the whole widened target is presented at <c>Display.WideAspect</c>. Setting
+/// that one number is the whole hookup — 16:9 gives 54 columns a side.
+///
+/// What that buys depends entirely on the game, and this is the distinction worth
+/// keeping straight:
+///
+///   * It is *not* a stretch. The projection is untouched, so pixels keep their
+///     aspect and the HUD is drawn at its authored size, sitting inset from the
+///     new edges rather than smeared 33% wide across them.
+///   * The extra picture is real only where the game submits geometry it expects
+///     the GPU to clip. Anything the game culls itself, against its own idea of
+///     the screen, never reaches the margin however wide the target is.
+///
+/// So this carries its own evidence: <c>KF2_WIDESCREEN_PROBE=1</c> classifies
+/// every primitive by whether any vertex falls outside the game's own clip
+/// rectangle. Measured in the first area (`fdat02`), it is **a quarter** — 25.4%
+/// and 25.1% of about 1,000 primitives a frame in consecutive windows, and 22-25%
+/// on the title screen. King's Field culls per object and by depth and leaves the
+/// screen edge to the GPU, so a quarter of every frame it draws was being thrown
+/// away at x=0 and x=319. That is the picture the margin recovers, and it is why
+/// this is worth doing on this game specifically.
+///
+/// The census is the thing to look at if a scene looks wrong at the sides. The
+/// GAME.EXE menus measure 0.0% — they are 2D, authored 320 wide, and no aspect
+/// will widen them; what the sides show there is whatever the frame's background
+/// clear covered, since PutDrawEnv extends an `isbg` clear across the margin but
+/// nothing extends a full-screen rectangle the game drew itself.
+///
+/// ## Why a patch, and why it is still off by default
+///
+/// It is a patch for the reason the dither switch is one: an aspect ratio is a
+/// picture the port should be able to offer without a package having to load, and
+/// a player looking for it will look in Video, not in a Mods popup. That is an
+/// argument about *where the switch lives*, and it is the whole argument — it
+/// says nothing about which way the switch should point.
+///
+/// Which way it points is the sub-pixel argument rather than the dither one: the
+/// mechanism has been measured and the picture has not. The census says a quarter
+/// of the frame is there to recover; what has never been checked by eye is the two
+/// places it can go wrong — a full-screen rectangle the game draws itself is 320
+/// wide and leaves the sides showing the previous frame, and per-object culling
+/// still uses the game's own 4:3 frustum, so an object can pop at an edge the
+/// margin would have shown it in. Neither is visible to a primitive counter. So
+/// the default aspect is 4:3, which is <c>WideAspect = 0</c> and the untouched
+/// path, and the presets are one click away in the combo Video draws below the
+/// render scale. See "Widescreen" in NOTES.md.
+///
+/// ## Anchoring the HUD
+///
+/// The world gets wider; the HUD does not, because it is drawn in screen space
+/// and screen space is still 320 wide. Left alone it sits inset from the new
+/// edges, hugging the 4:3 box it was authored in. Anchoring moves each element to
+/// the edge it belongs to — which needs a way to tell a HUD primitive from a
+/// world one, and the primitive stream carries no such flag.
+///
+/// Two measurements, both in `fdat02`, say what it is and what it is not:
+///
+///   * **Where the HUD is.** Whole-frame dumps put it in two fixed clusters —
+///     x 5..91 for the HP/MP panel, x 269..310 for the equipment icons, both at
+///     y 11..60 — and always in the **last ordering-table entries**, from about
+///     65 from the end. That is the front of the OT, which is where a painter's
+///     algorithm has to put anything that goes on top.
+///   * **What it is not: the palette.** Every HUD primitive in that first dump
+///     used a CLUT in VRAM column 0, and no world primitive in that frame did,
+///     which looked like a clean test and is not one: walking further into the
+///     area finds world geometry using column-0 palettes all the way back through
+///     the OT. Anchoring on that rule shifted half the world sideways by exactly
+///     the margin — 54-pixel wedges of missing floor and ceiling, which is what
+///     the artefact looks like when a rule like this is wrong.
+///
+/// So the test is structural and positional, not palette-based: a primitive is
+/// HUD if it is in the last <see cref="HudTailEntries"/> ordering-table entries
+/// *and* its box falls inside one of the two clusters. The OT gate is why this
+/// replaces <c>DrawOTag</c> and walks the table itself — the primitive event
+/// cannot say which entry a primitive came from. Being wrong now costs one small
+/// triangle in a corner rather than the whole frame after it.
+///
+/// Each HUD primitive then moves to its own side: entirely left of screen centre
+/// moves out by the margin, entirely right moves out the other way, and anything
+/// straddling the middle is left where it is, which is where centred text and
+/// full-width elements want to be.
+///
+/// ## What it costs at 4:3
+///
+/// Nothing that runs per primitive, which is what makes the default-off case free
+/// rather than merely cheap. The replacement's two-pass walk and the
+/// <c>RenderPrimEvent</c> listener are both gated on the margin actually being
+/// non-zero: with no margin the replacement is a straight call to the original and
+/// no listener is attached at all, so <c>GpuRaster</c> skips the whole dispatch on
+/// <c>HasAnyListeners</c>. The hooks are still installed, because a hook cannot be
+/// added once the game is running past its overlay loads and the aspect is a
+/// setting that can be changed mid-session.
+/// </summary>
+public static class Widescreen
+{
+    // libgpu DrawOTag, per overlay -- the same three addresses NoDither,
+    // Perspective and Subpixel hook. This is the one owner of the *replacement*;
+    // those three are pre/post hooks and compose with it.
+    static readonly (string Overlay, uint Addr)[] DrawOTagSites =
+    [
+        ("open", 0x80016078), ("game", 0x80060818), ("end", 0x80013D80),
+    ];
+
+    /// <summary>Where the choices are kept between runs. Named as the mod named
+    /// them, so a player who had the mod on keeps the picture they had.</summary>
+    public const string AspectKey = "kf2.widescreen.aspect";
+
+    /// <summary>See <see cref="AspectKey"/>.</summary>
+    public const string AnchorKey = "kf2.widescreen.anchorhud";
+
+    /// <summary>The game's own aspect, and the one that means "off".</summary>
+    public const float FourThree = 4f / 3f;
+
+    /// <summary>As wide as an aspect is allowed to get. Past 3:1 the margin is
+    /// wider than the screen and the frame is mostly things the game never meant
+    /// to draw.</summary>
+    public const float Widest = 3f;
+
+    /// <summary>What the settings page offers. <c>KF2_WIDESCREEN</c> takes any
+    /// ratio, and one that is none of these keeps its own entry in the combo.</summary>
+    public static readonly (string Name, float Ratio)[] Presets =
+    [
+        ("4:3 (off)", FourThree),
+        ("16:10",     16f / 10f),
+        ("16:9",      16f / 9f),
+        ("21:9",      64f / 27f),
+    ];
+
+    /// <summary>The target aspect. 4:3 is off, and off is the default.</summary>
+    public static float Aspect { get; private set; } = FourThree;
+
+    /// <summary>Move the HP/MP panel and the equipment icons out to the new edges.
+    /// Costs nothing while <see cref="Aspect"/> is 4:3.</summary>
+    public static bool AnchorHud { get; private set; } = true;
+
+    /// <summary>Whether the aspect is actually widening anything.</summary>
+    public static bool On => Display.WideAspect > 0f;
+
+    /// <summary>Extra columns a side, by the runtime's own sizing rule — so the
+    /// number the settings page shows and the number the render target is built
+    /// with are the same one. 320 is this game's display width.</summary>
+    public static int Margin => Display.WideMargin(320);
+
+    /// <summary>KF2_WIDESCREEN: an explicit aspect for the run, which wins over
+    /// the saved setting.</summary>
+    static float? _forced;
+
+    /// <summary>KF2_WIDESCREEN_PROBE: count primitives reaching the margin and
+    /// report to the console.</summary>
+    static bool _measure;
+
+    // The HUD measured 65 entries from the end of the ordering table; this is that
+    // with room to spare, and still a thousandth of the ~9,400-entry table, so
+    // world geometry has to be practically touching the camera to reach it.
+    const int HudTailEntries = 128;
+
+    // Screen-space boxes the HUD was measured in, padded. Clip-relative, so they
+    // do not care where in VRAM the frame buffer sits.
+    const int HudBottom = 70;
+    const int HudLeftEdge = 110;      // left cluster: x 5..91
+    const int HudRightEdge = 250;     // right cluster: x 269..310
+
+    // How far the current primitive is from the end of the OT walk; -1 outside it.
+    static int _fromEnd = -1;
+
+    // Per report window, split by whether the primitive crossed into the margin.
+    static long _inside, _margin;
+    static double _windowStart;
+
+    static double Now => Environment.TickCount64 / 1000.0;
+
+    // HookManager attributes hooks to a mod so they can be removed again. This is
+    // in-project rather than a loaded package, so it declares its own identity.
+    static readonly ModInfo _self = new()
+    {
+        Id = "kf2.widescreen",
+        Name = "Widescreen",
+        Version = "1.0",
+        Description = "Renders a margin either side of the game's 320-pixel screen.",
+    };
+
+    public static void Configure(string? aspect, string? probe)
+    {
+        if (Parse(aspect) is { } ratio) _forced = ratio;
+
+        if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
+            _measure = true;
+    }
+
+    /// <summary>
+    /// Apply the aspect and attach the hook. The saved settings are read on
+    /// <c>RuntimeReadyEvent</c> — ConfigManager only loads inside
+    /// HostWindow.Initialize, which is after Program.cs, so reading them here
+    /// would read an empty config and then write it back over the real one. An
+    /// aspect from the environment is applied immediately, so a run started for
+    /// the picture is wide from the first frame of the title screen.
+    /// </summary>
+    public static void Install()
+    {
+        _windowStart = Now;
+        if (_forced is { } forced) { Aspect = forced; Apply(); }
+
+        Event.AddListener<RuntimeReadyEvent>(_ =>
+        {
+            Aspect = _forced ?? RecompOne.Runtime.Runtime.View.GetFloat(AspectKey, FourThree);
+            AnchorHud = RecompOne.Runtime.Runtime.View.GetBool(AnchorKey, true);
+            Apply();
+            Console.WriteLine(On
+                ? $"[KF2] widescreen: {Aspect:0.###}:1, margin {Margin} px a side, " +
+                  $"HUD {(AnchorHud ? "anchored" : "left in its 4:3 box")}"
+                : "[KF2] widescreen: off (4:3)");
+        });
+
+        // Attached whether or not an aspect is set, for the same reason the dither
+        // hooks are: the aspect is a setting that can be changed mid-session, and
+        // hooks cannot be added once the game is running past the overlay loads.
+        bool attached = false;
+        Event.AddListener<OverlayLoadedEvent>(_ =>
+        {
+            if (attached) return;
+            attached = true;
+            Attach();
+        });
+    }
+
+    /// <summary>Change the aspect at run time. Safe at any moment — the render
+    /// target is rebuilt when its margin no longer matches.</summary>
+    public static void SetAspect(float aspect)
+    {
+        Aspect = Math.Clamp(aspect, FourThree, Widest);
+        Apply();
+    }
+
+    /// <summary>Change the HUD anchoring at run time.</summary>
+    public static void SetAnchorHud(bool on)
+    {
+        AnchorHud = on;
+        Listen();
+    }
+
+    static void Apply()
+    {
+        // 4:3 means off, and off is 0 rather than 1.333 -- WideMargin returns no
+        // margin for a non-positive aspect, and a zero-margin target presents at
+        // SourceAspect, which is the untouched path.
+        Display.WideAspect = Aspect > FourThree + 0.001f ? Aspect : 0f;
+        Listen();
+    }
+
+    // One listener serves both jobs, so it is attached exactly when one of them
+    // needs it -- the raster skips the whole dispatch when nothing is listening,
+    // which is what makes 4:3 free rather than cheap.
+    static void Listen()
+    {
+        Event.RemoveListener<RenderPrimEvent>(OnPrim);
+        if (_measure || (AnchorHud && On)) Event.AddListener<RenderPrimEvent>(OnPrim);
+    }
+
+    static void Attach()
+    {
+        SymbolRegistry.Build();
+        var replace = typeof(Widescreen).GetMethod(nameof(DrawOTag), BindingFlags.Public | BindingFlags.Static)!;
+
+        int n = 0;
+        foreach (var (overlay, addr) in DrawOTagSites)
+        {
+            var target = SymbolRegistry.Resolve(overlay, null, addr);
+            if (target == null)
+            {
+                Console.Error.WriteLine($"[KF2] widescreen: no function at {overlay}/0x{addr:X8}");
+                continue;
+            }
+            if (HookManager.AddReplace(_self, target, replace)) n++;
+        }
+
+        HookManager.Commit();
+        Console.WriteLine($"[KF2] widescreen: {n} hook(s)");
+
+        if (n == 0)
+            Console.Error.WriteLine("[KF2] widescreen: nothing hooked — the picture still widens, " +
+                                    "but the HUD will stay in its 4:3 box. See \"Widescreen\" in NOTES.md.");
+    }
+
+    /// <summary>
+    /// The same walk libgpu's DrawOTag does, with the entries numbered. Two passes:
+    /// the first only follows the `next` pointers to learn the length, which is what
+    /// makes "how far from the end" answerable while the primitives are being
+    /// emitted. Everything else here mirrors the runtime's own implementation,
+    /// including the custom-primitive ordering an asset pack relies on.
+    ///
+    /// <c>HookManager.Invoke</c> runs pre-hooks, then the replacement, then
+    /// post-hooks, so the dither patch's pre/post pair and the frame pacing's,
+    /// perspective's and sub-pixel's post-hooks on this same function all still run.
+    /// </summary>
+    public static void DrawOTag(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
+    {
+        var gpu = RecompOne.Runtime.Runtime.Gpu;
+        if (!AnchorHud || !On || gpu == null) { orig(c, m); return; }
+
+        uint addr = c.A0 & 0x1FFFFCu;
+        int entries = 0;
+        for (int guard = 0; guard < 0x100000; guard++)
+        {
+            uint header = m.ReadU32(addr);
+            entries++;
+            uint next = header & 0xFFFFFFu;
+            if (next == 0xFFFFFFu || (next & 0x800000u) != 0) break;
+            addr = next & 0x1FFFFCu;
+        }
+
+        bool custom = GpuPrims.Any && GpuPrims.OtLength > 0;
+        uint otBase = GpuPrims.OtBase & 0x1FFFFCu;
+        uint otEnd = otBase + (uint)GpuPrims.OtLength * 4u;
+
+        addr = c.A0 & 0x1FFFFCu;
+        for (int guard = 0; guard < 0x100000; guard++)
+        {
+            _fromEnd = entries - 1 - guard;
+
+            if (custom && addr >= otBase && addr < otEnd)
+                gpu.EmitCustomOrder((int)((addr - otBase) >> 2));
+
+            uint header = m.ReadU32(addr);
+            uint count = header >> 24;
+            for (uint i = 0; i < count; i++)
+            {
+                // The address the word was read from, not just the word: that is
+                // what GteVertexMap keys the recovered depth and sub-pixel fraction
+                // on (patch 0012), so dropping it would quietly turn perspective
+                // correction back off for every frame the HUD is anchored in.
+                uint src = addr + 4u + i * 4u;
+                gpu.WriteGp0(m.ReadU32(src), src);
+            }
+
+            uint next = header & 0xFFFFFFu;
+            if (next == 0xFFFFFFu || (next & 0x800000u) != 0) break;
+            addr = next & 0x1FFFFCu;
+        }
+
+        _fromEnd = -1;
+        if (custom) GpuPrims.Clear();
+    }
+
+    // The draw area is the game's clip rect in VRAM coordinates and the primitive's
+    // are already offset into the same space, so "reaches the margin" is just a
+    // vertex outside the clip -- no assumption about where the display buffer sits.
+    static void OnPrim(RenderPrimEvent e)
+    {
+        if (AnchorHud && On && _fromEnd >= 0 && _fromEnd < HudTailEntries) Anchor(e);
+
+        if (!_measure) return;
+
+        bool outside = false;
+        for (int i = 0; i < e.Count; i++)
+            if (e.X[i] < e.DrawLeft || e.X[i] > e.DrawRight) { outside = true; break; }
+
+        if (outside) _margin++; else _inside++;
+
+        double window = Now - _windowStart;
+        if (window < 2.0) return;
+
+        long total = _inside + _margin;
+
+        // A scene with no margin primitives is one the game clipped itself; widening
+        // the target cannot recover it.
+        Console.WriteLine(total == 0
+            ? "[KF2] widescreen: no primitives in the last window"
+            : $"[KF2] widescreen: {_margin * 100.0 / total:F1}% of {total} prims reach the margin " +
+              $"({total / window:F0}/s)");
+
+        _inside = _margin = 0;
+        _windowStart = Now;
+    }
+
+    // Move a HUD element out to the side of the screen it sits on. The clip
+    // rectangle is the screen, so everything here is relative to it: the boxes, the
+    // dividing line, and the width the margin was sized from.
+    static void Anchor(RenderPrimEvent e)
+    {
+        int width = e.DrawRight - e.DrawLeft + 1;
+        int margin = Display.WideMargin(width);
+        if (margin <= 0) return;
+
+        int lo = int.MaxValue, hi = int.MinValue, top = int.MaxValue, bottom = int.MinValue;
+        for (int i = 0; i < e.Count; i++)
+        {
+            lo = Math.Min(lo, e.X[i]); hi = Math.Max(hi, e.X[i]);
+            top = Math.Min(top, e.Y[i]); bottom = Math.Max(bottom, e.Y[i]);
+        }
+
+        lo -= e.DrawLeft; hi -= e.DrawLeft;
+        top -= e.DrawTop; bottom -= e.DrawTop;
+        if (top < 0 || bottom > HudBottom) return;
+
+        // A box that crosses the middle -- centred text, a full-width bar -- has no
+        // side to move to.
+        int shift = hi <= HudLeftEdge ? -margin : lo >= HudRightEdge ? margin : 0;
+        if (shift == 0) return;
+
+        for (int i = 0; i < e.Count; i++) e.X[i] += shift;
+    }
+
+    /// <summary>"16:9" and "1.777" both, since the environment variable is typed by
+    /// hand; "off" is 4:3. Null for anything else, which leaves the saved setting
+    /// in charge rather than silently picking a ratio.</summary>
+    static float? Parse(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        value = value.Trim();
+
+        if (value.Equals("off", StringComparison.OrdinalIgnoreCase)) return FourThree;
+
+        int colon = value.IndexOf(':');
+        if (colon > 0)
+        {
+            if (float.TryParse(value[..colon], out float w) &&
+                float.TryParse(value[(colon + 1)..], out float h) && h > 0f)
+                return w / h;
+            return null;
+        }
+
+        return float.TryParse(value, out float ratio) && ratio > 0f ? ratio : null;
+    }
+}

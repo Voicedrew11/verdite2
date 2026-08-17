@@ -53,7 +53,7 @@ KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:hold
 KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pacing"
 KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other frame
 KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
-KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect override, and the margin census
+KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
@@ -111,15 +111,27 @@ test applied to the pad — without it a modern controller's left stick is wired
 the D-pad and *turns* rather than walking — so it is on by default too, and its
 knobs are under Input, below the button-binding table. It costs nothing when a
 stick is centred: both hooks return before touching memory, so keyboard and D-pad
-play are identical to having it off. The measurement
-tools and the widescreen support are real mods under `mods/` — **enable them in
-the game's Mods panel**, since mods default to off and load silently when
-disabled. Prefer them to `KF2_LOG=sdk`, which is gigabytes a minute.
+play are identical to having it off. **Widescreen is a patch for the dither
+reason** — an aspect ratio is a picture the port should be able to offer without a
+package having to load, and Video is where a player looks for it — but it is the
+one patch that defaults to *doing nothing*, for the sub-pixel reason: the picture
+has never been checked by eye. The measurement tools are the mods that are left
+under `mods/` — **enable them in the game's Mods panel**, since mods default to
+off and load silently when disabled. Prefer them to `KF2_LOG=sdk`, which is
+gigabytes a minute.
 
 Widescreen is `Display.WideAspect` and nothing else: the runtime renders a margin
 either side of the display buffer and presents it, the projection is untouched, so
 the sides show geometry the game submitted and the GPU used to clip — a quarter of
-its primitives in an area. See "Widescreen" in `NOTES.md`.
+its primitives in an area. The one piece of machinery in `patches/Widescreen.cs`
+is a **replacement of `DrawOTag`**, and it is there for the HUD rather than for
+the picture: anchoring the HP/MP panel and the equipment icons to the new edges
+needs to know which ordering-table entry a primitive came from, and the primitive
+event cannot say. That replacement is the reason every other `DrawOTag` hook in
+`patches/` is a pre or a post — `HookManager` allows one `Replace` owner per
+function. It must also pass the **source address** to `WriteGp0`, or the recovered
+GTE depth misses and perspective correction quietly turns itself off whenever the
+HUD is anchored. See "Widescreen" in `NOTES.md`.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
 its clock starts when the first area module loads, which is the only point in the
@@ -287,7 +299,8 @@ AssemblyInfo files (CS0579).
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
 `patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Ten of
-the twelve are load-bearing; `0002` and `0003` are diagnostics.
+the thirteen are load-bearing; `0002` and `0003` are diagnostics and `0013` is a
+settings-placement hook.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -359,6 +372,14 @@ uncaptured edit inside the checkout is left where it is.
   word before answering. No codegen change, so **this one needs no recompile**. The
   old table stays behind `KF2_PERSPECTIVE_FALLBACK` for comparison only. See
   "Following the value through memory" in `NOTES.md`.
+
+- `0013-settings-slot-in-section.patch` — `SettingsRegistry.Extend` only draws
+  *after* a section's whole body, so a port option that belongs beside one of the
+  runtime's own controls could only ever land in a block underneath the lot. This
+  adds `SettingsRegistry.DrawSlot(slotId)` and one call to it in the display
+  section, after the render scale, which is where the widescreen aspect goes.
+  Register with `PatchSettings.RegisterSlot`, not `Register`. UI only — **no
+  recompile**.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
