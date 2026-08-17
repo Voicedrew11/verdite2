@@ -1127,7 +1127,6 @@ mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loo
 mods/widescreen/mod.json + Widescreen.cs     wider picture, and the census that justifies it
 mods/analog/mod.json     + Analog.cs,
                            AnalogProbe.cs    analog twin-stick control; see "Analog twin-stick control"
-mods/autoreload/mod.json + AutoReload.cs     reload the last save on death; see "Auto reload"
 mods/kf2debug/mod.json   + GameState.cs,     noclip, invincibility, warp and a live state
                            Noclip.cs,        readout; see "Debug tools"
                            Cheats.cs, Warp.cs,
@@ -1184,6 +1183,12 @@ deferred to the first `OverlayLoadedEvent`, hook bodies had to become `public`,
 `IPatchPage`. Nothing about the hooking changed, because `HookManager` is the same
 detour either way.
 
+`patches/AutoReload.cs` moved for a third reason, which is the same test applied
+to behaviour rather than to a picture: **four screens of menu after every death is
+not a taste a player should have to find a package to fix.** It is the first patch
+whose settings are not a machine option at all, and it is why the port has a
+Gameplay section — see "Auto reload became a patch".
+
 Config `patches[]` entries are still the right tool for **`replace`**, which is
 how the whole SDK is bound: those are needed before any mod could load, and there
 are 63 of them.
@@ -1223,9 +1228,12 @@ PatchSettings.Register("display", new FramePacingPage());   // IPatchPage: Id, T
 ```
 
 The section ids are the runtime's own — `interface`, `input`, `display`, `paths`,
-`audio`. Registration is deferred to `RuntimeReadyEvent`, which is late enough
-that `HostWindow`'s `Load` has registered all five, so an id matching no section
-is reported at startup instead of silently drawing nothing. A page is plain ImGui,
+`audio` — plus `gameplay`, the one section the port registers itself, for patches
+that change how the game plays rather than how the machine behaves (see "Auto
+reload became a patch"). Registration is deferred to `RuntimeReadyEvent`, which is
+late enough that `HostWindow`'s `Load` has registered the runtime's five — so the
+port's own section can join them there, and an id matching no section is reported
+at startup instead of silently drawing nothing. A page is plain ImGui,
 which is what makes this the landing site for a converted mod: its `DrawSettings`
 body moves across unchanged. `NoDitherPage` is the first one that arrived that
 way — `mods/nodither`'s checkbox, in Video under the frame rate, with the mod's
@@ -2137,16 +2145,17 @@ it breaks. All three candidates are one memory read apart.
 
 ## Auto reload
 
-`mods/autoreload` reloads the last save when the player dies. King's Field has no
-retry; without it a death costs the menu, then the load screen, then the slot.
+`patches/AutoReload.cs` reloads the last save when the player dies. King's Field
+has no retry; without it a death costs the menu, then the load screen, then the
+slot. (It began as `mods/autoreload` and became a patch — see "Auto reload became
+a patch" below.)
 
-The mod is small because it adds **no loading path of its own**. Both halves were
+It is small because it adds **no loading path of its own**. Both halves were
 already in the game and both are written up above: the death latch under "The
 character's stats are buf2", and the in-game load sequence under "The game can
-load a save without leaving the area". The mod is the wiring between them.
+load a save without leaving the area". This is the wiring between them.
 
-**One hook, `[PostHook("game", Address = 0x8002A550)]`** — the end of main-loop
-stage 3. Not `func_80029CBC`, which is where the game does its own load from:
+**One post-hook on `game` at `0x8002A550`** — the end of main-loop stage 3. Not `func_80029CBC`, which is where the game does its own load from:
 that is dispatched only from the state machine's arms for states 1 and 2, so it
 stops being called the moment the state byte latches to `0x11`. Stage 3 itself
 runs every frame, dead or alive, because the death sequence *is* one of its arms.
@@ -2171,19 +2180,19 @@ and those three sites are its only uses in `GAME.EXE`:
 | 32–64 | fade to black, amount `(n − 32) << 7` |
 | **65** | `func_80024154(0, 0, 0, 0, 0, 0xFF)` |
 
-That last call is **the same area-entry routine the mod calls, with area 0** —
+That last call is **the same area-entry routine the patch calls, with area 0** —
 the game's own respawn, and what "you died, start again" actually is. (The branch
 above it, at `0x8002AFBC`, is the resurrection-item path: a literal position and
 yaw `0x0C00` into area 1. It is the debug-looking warp already noted at that
 address.)
 
-65 frames is **2.17 s at 30 fps** — and the mod's default delay was 2.0 s. Five
+65 frames is **2.17 s at 30 fps** — and the default delay was 2.0 s. Five
 frames of margin. The first run reloaded correctly and the second went back to
 the beginning of the game, from identical code and an identical log line, which
 is exactly what a race that tight looks like. At `KF2_FPS=60` the same 65 frames
-is 1.08 s and the mod would always lose.
+is 1.08 s and the reload would always lose.
 
-So the mod **holds the counter at 31** while it waits. The animation finishes,
+So it **holds the counter at 31** while it waits. The animation finishes,
 the fade never starts, the respawn never comes due, and the delay becomes ours
 rather than a bet against the game's clock. The reload logs the counter it fired
 at for exactly this reason: `held at frame 31` is the assertion, and anything
@@ -2195,20 +2204,20 @@ passes those on the caller's frame at `sp+0x10` and `sp+0x14`. `c.Snapshot()` /
 `c.Restore()` bracket the whole thing so the hooked function's caller sees the
 registers it left.
 
-Two details that are the mod's and not the game's:
+Two details that are the patch's and not the game's:
 
 - **`func_80029E5C` afterwards, but only if the state byte survived.** The game
   reaches that arm from a live state and so never has to clear the death latch;
   coming from `0x11`, something must.
 - **The slot.** `0x8006E5D4` is the game's own record and is what "last used"
   means, but it is zero until a save or a load has run. Dying on a fresh New Game
-  therefore has nothing to reload, and the mod logs once and leaves the death
-  alone rather than inventing a slot. A fixed slot can be pinned in the panel.
+  therefore has nothing to reload, and it logs once and leaves the death alone
+  rather than inventing a slot. A fixed slot can be pinned in the settings.
 
 `KF2_AUTORELOAD`, `KF2_AUTORELOAD_DELAY` and `KF2_AUTORELOAD_SLOT` mirror the
 three settings, which persist to `interface.ini` under `kf2.autoreload.*`.
 
-**Dying on demand is the hard part of testing this**, so the panel has a
+**Dying on demand is the hard part of testing this**, so the settings page has a
 *Simulate death* button: it zeroes HP and calls `func_8002A264(0)`, which is
 exactly what the damage path does. It refuses when max HP is zero, since buf2 is
 clear until an area is up.
@@ -2220,13 +2229,67 @@ Three consecutive deaths in one session each reloaded slot 2 into area 1 at
 exception.
 
 `fdat02` in the overlay log is the tell for the failure: the game's own respawn
-loads it, so a run that reloads correctly never does. With the mod off it appears
-right after the death, and with the mod on it does not appear at all.
+loads it, so a run that reloads correctly never does. With the setting off it
+appears right after the death, and with it on it does not appear at all.
 
 Still wanted from a real session: a death in a *different* area from the save,
 which is the case that makes `func_80024154` re-enter a `fdat` module other than
 the resident one, and a save written mid-session to confirm `0x8006E5D4` tracks
 saves as well as loads.
+
+### Auto reload became a patch, and the port grew a Gameplay tab
+
+The reason is the one under "What belongs in a mod, and what does not": a mod is
+something a player can reasonably be without, and *four screens of menu after
+every death* is not a taste. A player who installs this port expects the retry to
+be there, and a mod defaults to off and loads silently when disabled — the failure
+mode is a death that just costs the menu, with nothing said. So `mods/autoreload`
+is now `patches/AutoReload.cs`, on by default.
+
+The port has done this conversion three times now (dither, frame pacing, this) and
+the mechanical part is settled:
+
+- `[PostHook("game", Address = …)]` becomes an explicit `SymbolRegistry.Resolve` +
+  `HookManager.AddPost` under a `ModInfo` the patch declares for itself, attached
+  on the **first `OverlayLoadedEvent`** — that is the earliest moment every
+  overlay resolves, and hooks cannot be added once the game is past the loads.
+- `IMod.OnLoad`'s config read becomes a `RuntimeReadyEvent` listener, because
+  `ConfigManager.Load()` runs after `Program.cs`. The env vars move up into
+  `Configure(…)` called from `Program.cs`, and each one sets a `…FromEnv` flag so
+  the saved value cannot overwrite it — the same precedence `FramePacing` keeps.
+- `IMod.DrawSettings` becomes an `IPatchPage`; instance fields become static
+  properties with `Set…` methods, so the page reads live state instead of a copy.
+- `OnUnload` has nowhere to go and needs nowhere: a patch is never unloaded, and
+  this one never wrote game memory it had to put back.
+
+**Where the page went is the part that was not mechanical.** The frame rate and
+the dither switch extend the runtime's `display` section because they genuinely
+are video options. Auto reload is not: it is a rule about what happens when you
+die. The runtime's five sections are all about the machine — interface, input,
+display, paths, audio — and none of them is that, so the port adds a sixth.
+
+`ISettingsSection` is public and `SettingsRegistry.Register` replaces by id, so a
+**new section needs no patch to the checkout** any more than renaming one did.
+`patches/settings/GameplaySection.cs` is `Id = "gameplay"`, `Order = 7` (between
+Video's 5 and Audio's 10, so the runtime's own order is untouched and the tab
+sits among them rather than after Paths) and a `Draw()` that does nothing at all:
+`SettingsPopup` draws a section's own content and *then* its extensions, so the
+pages registered against `"gameplay"` are the entire pane. Registration happens in
+`PatchSettings.RegisterUi`, on `RuntimeReadyEvent` — after `HostWindow`'s `Load`
+has registered the five, before the popup is first drawn.
+
+One difference from the `display` rename: `settings.gameplay` is a **new** key, so
+`Localization.Merge` has to supply all three languages. An override of an existing
+key can leave the others alone, since what is already there is what you wanted; a
+new key with only `en` behind it makes pt-BR and es-419 warn on every lookup and
+then show the key itself.
+
+Verified in a run: the section list came back
+`-10:interface | 0:input | 5:display=Video | 7:gameplay=Gameplay | 10:audio | 20:paths`,
+and *Simulate death* from the new tab logged
+`reloaded slot 2 into area 1 (HP 46/86, LV 6, held at frame 31)` — the same
+result the mod gave, so the hook, the config read and the reload path all survived
+the move.
 
 ## Debug tools
 
@@ -2404,7 +2467,7 @@ The first build called `func_80024154` from the Warp button. That is
 returned to a frame still drawing the area that had just unloaded.
 
 The same six-argument call from a `[PostHook]` on stage 3 is the game's own load
-path (`func_80029CBC` at `0x80029E0C`, and `mods/autoreload`) and is safe: VSync
+path (`func_80029CBC` at `0x80029E0C`, and `patches/AutoReload.cs`) and is safe: VSync
 is then a child of the game loop, not of Present. The panel only queues the
 index; the hook does the work.
 

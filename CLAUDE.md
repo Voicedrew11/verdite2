@@ -72,10 +72,22 @@ instead of each getting a rule of its own. That section is the runtime's
 through `Localization.Merge`, which needs no patch to the checkout. See "Patch
 settings" in `NOTES.md`.
 
+**`gameplay` is the one section the port adds itself**, for patches that change
+how the *game* behaves rather than how the machine does — auto reload is not a
+video option and not an input option. `ISettingsSection` is public and
+`SettingsRegistry.Register` takes any implementation, so it needs no patch to the
+checkout either; `patches/settings/GameplaySection.cs` is an empty shell and
+everything in the pane is a page registered against `"gameplay"`. A new key has to
+supply all three of the runtime's languages, unlike an override of an existing
+one.
+
 Frame pacing is load-bearing: without it the port runs faster than the game can on
 hardware, so it lives in `patches/` and is always on. Dithering is a patch for a
 different reason — it is a picture the port should be able to offer without a
-package having to load — and defaults to *off* (no crosshatch). The measurement
+package having to load — and defaults to *off* (no crosshatch). Auto reload is a
+patch for the same kind of reason: a death costing four screens of menu is
+something a player expects the port itself to have dealt with, so it is on by
+default and its knobs are under Gameplay. The measurement
 tools and the widescreen support are real mods under `mods/` — **enable them in
 the game's Mods panel**, since mods default to off and load silently when
 disabled. Prefer them to `KF2_LOG=sdk`, which is gigabytes a minute.

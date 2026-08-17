@@ -1,7 +1,0 @@
-{
-  "id": "kf2.autoreload",
-  "name": "Auto reload",
-  "version": "1.0",
-  "author": "KFII-PC",
-  "description": "Reloads the save you last used when you die, through the game's own load path. King's Field has no retry; this is the four screens of menu between a death and being back where you were, taken out."
-}

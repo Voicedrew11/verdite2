@@ -41,8 +41,11 @@ public interface IPatchPage
 /// </code>
 ///
 /// The section ids are the runtime's own: <c>interface</c>, <c>input</c>,
-/// <c>display</c>, <c>paths</c>, <c>audio</c>. An id that matches no section is
-/// reported at startup rather than silently drawing nothing.
+/// <c>display</c>, <c>paths</c>, <c>audio</c> — plus <c>gameplay</c>, the one
+/// section the port adds itself (see <see cref="GameplaySection"/>), for patches
+/// that change how the game plays rather than how the machine behaves. An id that
+/// matches no section is reported at startup rather than silently drawing
+/// nothing.
 ///
 /// Settings persist through <see cref="Set(string,bool)"/> and friends, which is
 /// <c>Runtime.View</c> plus an immediate <c>SaveView</c> -- the same
@@ -89,6 +92,7 @@ public static class PatchSettings
 
         Register("display", new FramePacingPage());
         Register("display", new NoDitherPage());
+        Register("gameplay", new AutoReloadPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
     }
 
@@ -101,15 +105,26 @@ public static class PatchSettings
     /// checkout: the tab is drawn from <c>Localization.T("settings.display")</c>,
     /// and <c>Merge</c> is public and overwrites by key.
     ///
-    /// Only English is overridden, because the runtime's other two languages
-    /// already say exactly this — pt-BR "Vídeo", es-419 "Video". The **id stays
-    /// <c>display</c>**, so <see cref="Register"/>, <c>SettingsRegistry</c> and the
-    /// runtime's own section are untouched; only the label moves.
+    /// Only English is overridden for that one, because the runtime's other two
+    /// languages already say exactly this — pt-BR "Vídeo", es-419 "Video". The
+    /// **id stays <c>display</c>**, so <see cref="Register"/>,
+    /// <c>SettingsRegistry</c> and the runtime's own section are untouched; only
+    /// the label moves.
+    ///
+    /// <c>settings.gameplay</c> is the opposite case: a key the runtime has never
+    /// heard of, for the section the port adds. A new key has to supply every
+    /// language, since <c>Localization.T</c> falls back to English with a warning
+    /// and then to printing the key itself.
     /// </summary>
     const string SectionNames = """
     {
       "strings": {
-        "settings.display": { "en": "Video" }
+        "settings.display": { "en": "Video" },
+        "settings.gameplay": {
+          "en": "Gameplay",
+          "pt-BR": "Jogabilidade",
+          "es-419": "Jugabilidad"
+        }
       }
     }
     """;
@@ -120,6 +135,13 @@ public static class PatchSettings
         _registered = true;
 
         Localization.Merge(SectionNames);
+
+        // Before the section-id check below, and before the sidebar is first
+        // drawn: the runtime's five sections are registered inside HostWindow's
+        // Load, and RuntimeReadyEvent is dispatched after it, so this is the
+        // earliest moment a sixth can join them and still be in place for the
+        // first frame of the settings popup.
+        SettingsRegistry.Register(new GameplaySection());
 
         foreach (var (sectionId, pages) in _pages)
         {

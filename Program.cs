@@ -178,9 +178,26 @@ Kf2.EndingHold.Install();
 Kf2.NoDither.Configure(Environment.GetEnvironmentVariable("KF2_NODITHER_PROBE"));
 Kf2.NoDither.Install();
 
+// Auto reload. One post-hook on the end of main-loop stage 3 watches for the
+// player's death and reloads the last save through the game's own loader, so a
+// death costs a couple of seconds instead of four screens of menu:
+//
+//     KF2_AUTORELOAD=1        on (the default); 0 leaves the death alone
+//     KF2_AUTORELOAD_DELAY=2  seconds of the game's death sequence first
+//     KF2_AUTORELOAD_SLOT=0   0 = the game's own "last used" slot, 1..3 pins one
+//
+// A patch rather than a mod because it answers a design of the original that a
+// package should not have to be present to fix; its settings are under Gameplay.
+Kf2.AutoReload.Configure(Environment.GetEnvironmentVariable("KF2_AUTORELOAD"),
+                         Environment.GetEnvironmentVariable("KF2_AUTORELOAD_DELAY"),
+                         Environment.GetEnvironmentVariable("KF2_AUTORELOAD_SLOT"));
+Kf2.AutoReload.Install();
+
 // Where the patches' own settings live. A patch registers a page against one of
 // the runtime's settings sections and is drawn inside it, so the frame rate is in
-// System > Settings > Display beside vsync rather than in a box of its own.
+// System > Settings > Video beside vsync rather than in a box of its own; the one
+// section the port adds itself is Gameplay, for patches that change how the game
+// plays rather than how the machine behaves.
 Kf2.Settings.PatchSettings.Install();
 
 var memory = new PSMemory();
