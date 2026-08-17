@@ -57,7 +57,10 @@ are mapped to the runtime's HLE — 66 patches. A steady-state second of
 Two areas have been played, half an hour in one sitting, across an area-module
 swap and a memory-card save, and the audio sounds right. **A save has now been
 loaded back** — slot 2, from the title screen, correct area and correct character
-state (see "Saving and loading"). **The frame rate is pinned to 30 fps**, NTSC's
+state (see "Saving and loading"). **Textures are perspective-correct** — the depth
+the GPU never receives is recovered from the GTE and matched back by screen
+position, which changes 76.6% of a frame's pixels (see "Perspective correction").
+**The frame rate is pinned to 30 fps**, NTSC's
 fastest band — the port used to burst past it (see "Frame pacing"). **The ending
 runs**: `END.EXE` plays the two STR movies and holds "The End" — see "The ending
 screen".
@@ -170,6 +173,13 @@ first lets a game point the runtime at PSY-Q's real interrupt-callback table
 instead of deriving one that lands in game data; the second lets `PAD_dr` poll
 the host, so a game waiting on the pad without vsyncing is not waiting forever.
 See "The interrupt-callback table cannot be guessed" and "The menu deadlock".
+
+**`patches/recompone/0009-perspective-correct-textures.patch` is what stops the
+textures swimming.** It adds `GteDepth`, a screen-position-keyed table the GTE
+fills as it projects and the GPU reads as it decodes a vertex word, and teaches
+both renderers to use the depth it recovers. Nothing depends on it to run — every
+vertex it misses is drawn exactly as before — but it is the largest single change
+to the picture in the port. See "Perspective correction".
 
 The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
 names the function behind a CD register access (`KF2_CDTRACE=1`), and
@@ -2012,6 +2022,124 @@ reported their hooks and before `ModLoader.LoadAll` printed `loaded N/N` — i.e
 entirely. Five later runs of the same pair of mods committed instantly. Worth
 recognising rather than chasing: if a build stalls at mod load, the stack will show
 the main thread in `ModLoader.LoadAll → HostWindow.Pump`.
+
+## Perspective correction: the depth is one step upstream, and the screen position is the key
+
+The swimming, rippling texture on every floor and wall — the most recognisable
+thing about a PlayStation picture — is not a bug in anything here. **The GPU has
+no depth at all.** The GTE does the perspective divide, the game writes the
+resulting 2D screen coordinate into a GP0 packet, and what arrives at the GPU is
+screen positions, UVs and colours with nothing left to say how far away any of it
+is. Linear interpolation of U and V across the screen is the only thing it *can*
+do, and that is exact only for a surface square-on to the camera. Hence the
+sliding texture on a floor you walk over, and the crease down the diagonal of a
+quad where its two triangles disagree about where the middle of the texture went.
+
+So it cannot be fixed at the GPU. It has to be fixed by not losing the depth in
+the first place, and the useful observation is that **one function knows both
+halves at the same moment**: `Gte.Rtp` computes the screen coordinate *and* the
+view depth `SZ3` that produced it, in the same call. Better, the screen coordinate
+it produces is bit-for-bit what turns up in the packet — `SatX`/`SatY` clamp it to
+11 bits signed, which is exactly the 11 bits `GpuRaster.CoordX` decodes back out.
+
+That makes the screen position a key the two ends can share. `GteDepth` is a hash
+table of `(x, y) -> z` that the GTE writes as it projects and the GPU reads as it
+decodes a vertex word, and it reunites the two halves **without following a single
+register or store** — no tracking of the game's own copies, no knowledge of its
+packet layout, nothing to identify. This is the cheap half of what PGXP does in
+the emulator world; PGXP proper follows the values through memory, which buys the
+cases below and needs far more machinery.
+
+`Gpu._drawOffsetX/Y` is added *after* the lookup and the `RenderPrimEvent` fires
+after that, so a mod is still free to move X — widescreen does — and the depth
+stays attached to the vertex.
+
+### Why leaving it on is safe: a miss is the old behaviour
+
+Every route out of the table falls back to what the port did before, which is what
+makes this a default rather than an experiment:
+
+- **2D corrects itself.** A HUD sprite, a menu box, a font glyph — the CPU
+  computed those coordinates and they were never in the table, so they miss and
+  keep the affine mapping 2D actually wants. Measured: the title screen, which is
+  entirely 2D, asks the table ~930 times a second and hits **0.0%**.
+- **A primitive is all-or-nothing.** Correction is applied only when *every*
+  vertex of the triangle hit. One vertex left at W = 1 among two real depths would
+  shear the triangle's texture in half, which is worse than the problem.
+- **Saturated coordinates are never recorded.** A vertex projecting off screen
+  clamps to ±1024, where several vertices at different depths collapse onto one
+  key; recording those would hand one polygon another's depth. They are dropped,
+  so a polygon with a vertex off screen simply stays affine. This is the main
+  reason the hit rate is 90% rather than 100%, and it is a deliberate 10%.
+- **Nothing is corrected bit-differently.** A vertex with no depth carries W
+  exactly 1 and the vertex shader writes the *original* expression for that case
+  (`vec4(p, 0, 1)`, not `vec4(p*1, 0, 1)`), so untouched geometry lands on the
+  same pixels to the last bit.
+
+The table itself has no frame boundary in it and never gets cleared: entries carry
+a monotonic sequence number and go stale once a table's worth of vertices — 16384,
+about a frame or two of geometry — has been written past them. That deliberately
+keeps double buffering, `DrawOTag` and the frame loop out of the file entirely.
+
+### Both renderers, two different mechanisms
+
+The software rasterizer interpolates U/W, V/W and 1/W with the barycentrics it
+already has and divides per pixel. The hardware backend does not interpolate
+anything by hand: it puts the recovered depth in `gl_Position.w` and lets the
+rasterizer's own perspective divide do it, which is exact and free. Colour is
+marked `noperspective` in the core-profile shaders so Gouraud shading stays as
+flat-interpolated as the console's — the only thing corrected is the texture
+coordinate. GLSL 120 has no `noperspective`, so on the **GL 2.1 backend alone**
+colour is corrected along with the texture; that shows as a slightly different
+Gouraud gradient on a steeply angled textured polygon, and that backend was not
+available to test on (Mesa gives 4.6 here).
+
+### What it measures, and what it looks like
+
+`KF2_PERSPECTIVE_PROBE=1` reports the table's hit rate per two-second window. The
+hit rate is the whole measurement: it is the only thing that says the coordinate
+the GTE saturates into SX2/SY2 really is the coordinate that reaches the packet.
+A rate near zero would mean the two ends never agreed on a key and every polygon
+had quietly stayed affine.
+
+Steady state in `fdat05`, walking:
+
+```
+[KF2] perspective: 46576 vertices projected/s, 91878 looked up/s, 92.3% hit, over 30 frames/s
+```
+
+— 85–94% in the world, **0.0%** on the title screen, and 30 fps throughout, so it
+costs nothing measurable.
+
+The picture: one ordering table drawn twice, once with the table live and once
+with it switched off, so the pair is identical geometry, lighting and textures one
+bit apart — the same trick "Getting pixels out without a screenshot" describes for
+the dither.
+
+| | affine (off) | corrected (on) |
+| --- | --- | --- |
+| pixels differing from the other | 76.6% | — |
+| mean absolute difference | 22.7/255 | — |
+| the HUD panel, glyphs and bars | identical | identical |
+
+76.6% of the frame changing is what "the largest single change to the picture"
+means numerically. In `fdat05` the stone wall in the middle distance goes from a
+curved smear to straight courses of brick, and the vaulted ceiling stops sliding.
+
+**Run the control before believing a pair.** Drawing the ordering table twice can
+itself change the picture — a semi-transparent primitive blends twice on the
+second pass — so the same shot was taken with *both* passes left on: **0.0% of
+pixels differ, 0 in the HUD box**. That is what licenses reading the 76.6% as the
+setting and not the method. It also turned a false alarm around: 3298 pixels
+differ inside a 120x40 box over the HUD, which looked like the HUD being corrected
+until the crop showed the panel, the glyphs and both bars pixel-identical and the
+*wall showing through the semi-transparent panel* carrying all of the difference.
+
+**Two things that do not work for the pair, both already learned from the dither
+work.** Consecutive frames of one run are different views, and the same frame
+number in two runs is not the same view — disc timing drifts, and frame 120 was a
+320-wide menu in one run and a 640-wide screen in the next. One ordering table,
+twice, in one run is the only honest comparison.
 
 ## Analog twin-stick control
 

@@ -55,6 +55,8 @@ KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other f
 KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect override, and the margin census
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
+KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
+KF2_PERSPECTIVE_PROBE=1                # the GTE vertex table's hit rate
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
@@ -85,7 +87,12 @@ one.
 Frame pacing is load-bearing: without it the port runs faster than the game can on
 hardware, so it lives in `patches/` and is always on. Dithering is a patch for a
 different reason — it is a picture the port should be able to offer without a
-package having to load — and defaults to *off* (no crosshatch). Auto reload is a
+package having to load — and defaults to *off* (no crosshatch). **Perspective
+correction is a patch for that same reason and is on by default**, beside it under
+Video. Unlike the others its work is not in `patches/` at all: a texture
+coordinate is decided far below anything `HookManager` can reach, so the mechanism
+is `patches/recompone/0009` (`GteDepth`, the rasterizer and the prim shaders) and
+`patches/Perspective.cs` is only the switch and the probe. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
 default and its knobs are under Gameplay. Analog twin-stick control is the same
@@ -268,8 +275,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Six of
-the eight are load-bearing; `0002` and `0003` are diagnostics:
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Seven of
+the nine are load-bearing; `0002` and `0003` are diagnostics:
 
 - `0001-bios-load-return-1.patch` — BIOS `Load` must return 1, not the header
   pointer. Without it the boot stub spins in the loader forever.
@@ -294,7 +301,16 @@ the eight are load-bearing; `0002` and `0003` are diagnostics:
   `GAME.EXE` at the same base, so GAME's functions past `0x8003A000` stayed
   mapped after the ending loaded. Any overlap is now an overwrite.
 
-The last two plus `patches/EndingHold.cs` are the shape to keep in mind
+- `0009-perspective-correct-textures.patch` — the GPU is handed polygons with no
+  depth in them, so it can only interpolate U and V linearly and every texture
+  swims. The depth still exists one step earlier: `Gte.Rtp` produces the screen
+  position and the view depth in the same call, and that screen position is
+  bit-for-bit what reaches the GP0 packet. `GteDepth` keys a small table on it, so
+  the two halves are reunited without following a register or a store. A miss is
+  the old affine behaviour, which is what makes it safe on by default. See
+  "Perspective correction" in `NOTES.md`.
+
+`0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.
 `END.EXE` ends in `while(1);` with no `VSync`; on hardware the last frame stays

@@ -178,6 +178,23 @@ Kf2.EndingHold.Install();
 Kf2.NoDither.Configure(Environment.GetEnvironmentVariable("KF2_NODITHER_PROBE"));
 Kf2.NoDither.Install();
 
+// Perspective-correct textures. The GPU is handed polygons with no depth in them,
+// so it interpolates U and V linearly and the texture swims; the depth still
+// exists one step earlier, in the GTE, and the screen position is the key that
+// reunites the two. All of the work is in the runtime (GteDepth, the rasterizer
+// and the prim shaders) because a texture coordinate is decided far below anything
+// HookManager can reach -- this is the switch and the report:
+//
+//     KF2_PERSPECTIVE=0        off, for the console's own affine mapping
+//     KF2_PERSPECTIVE_PROBE=1  report the vertex table's hit rate
+//
+// A patch rather than a mod for the same reason the dither switch is one: it is a
+// picture the port should be able to offer without a package having to load. Its
+// switch is under Video beside that one.
+Kf2.Perspective.Configure(Environment.GetEnvironmentVariable("KF2_PERSPECTIVE"),
+                          Environment.GetEnvironmentVariable("KF2_PERSPECTIVE_PROBE"));
+Kf2.Perspective.Install();
+
 // Auto reload. One post-hook on the end of main-loop stage 3 watches for the
 // player's death and reloads the last save through the game's own loader, so a
 // death costs a couple of seconds instead of four screens of menu:
