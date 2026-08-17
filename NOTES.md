@@ -1125,8 +1125,6 @@ A mod is a folder (or zip) under `mods/` with a `mod.json` and C# sources,
 mods/framestats/mod.json + FrameStats.cs     fps and the vblank-per-frame histogram
 mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loop stages
 mods/widescreen/mod.json + Widescreen.cs     wider picture, and the census that justifies it
-mods/analog/mod.json     + Analog.cs,
-                           AnalogProbe.cs    analog twin-stick control; see "Analog twin-stick control"
 mods/kf2debug/mod.json   + GameState.cs,     noclip, invincibility, warp and a live state
                            Noclip.cs,        readout; see "Debug tools"
                            Cheats.cs, Warp.cs,
@@ -1189,6 +1187,15 @@ not a taste a player should have to find a package to fix.** It is the first pat
 whose settings are not a machine option at all, and it is why the port has a
 Gameplay section — see "Auto reload became a patch".
 
+`patches/Analog.cs` is the same test applied to the *pad*, and it is the clearest
+case of the four: with the patch absent, a modern controller's left stick is bound
+to the D-pad, and the D-pad in this game turns rather than walks — so the port's
+answer to "I plugged a controller in" is a stick that spins the camera. That is
+not a taste either. It defaults to on for the reason under "Analog control became
+a patch": **sticks centred means the hooks return before touching memory**, so
+keyboard and D-pad play with it on is identical to play with it off, and the cost
+of shipping it enabled is nothing at all.
+
 Config `patches[]` entries are still the right tool for **`replace`**, which is
 how the whole SDK is bound: those are needed before any mod could load, and there
 are 63 of them.
@@ -1248,6 +1255,27 @@ dither switch is titled `Enhancements` and anything else of that size can join i
 there; `FramePacingPage`, which is a combo plus a live measurement, keeps its own.
 The list is already sorted by title, so drawing a heading only when it changes is
 the whole implementation.
+
+**A page big enough to need shaping is the point where two rules stop scaling.**
+`AnalogPage` is eighteen knobs in the `input` section, under the button-binding
+table, and it broke both of the small pages' habits:
+
+- *Static properties with `Set…` methods* are how the other patches expose live
+  state, and they exist to clamp. Eighteen of them would clamp nothing a slider
+  had not already, so `Analog`'s settings are plain **public static fields** —
+  which is also what lets the page pass them straight to `ImGui.SliderFloat` by
+  `ref` instead of copying a value out and back. The clamp that a slider does
+  *not* do is ctrl+click typing, and `ImGuiSliderFlags.AlwaysClamp` is that.
+- *A flat list of switches* is right for three of them and wrong for eighteen. The
+  three that matter — the master switch and the two sensitivities — stay at the
+  top, and the deadzones, curves, acceleration ramp, axis inversions and the probe
+  go under an `ImGui.TreeNode`, with `BeginDisabled` greying the lot when the
+  master switch is off.
+
+It also carries the first thing in a patch page that is **not** a setting: a live
+readout of both sticks, drawn dimmed at the bottom. Deadzone is the setting people
+get wrong, and the number that decides it is how far the pad in hand rests from
+centre — without the readout that is a guess, checked by walking into a wall.
 
 ### Renaming a runtime section without patching the checkout
 
@@ -1987,9 +2015,10 @@ the main thread in `ModLoader.LoadAll → HostWindow.Pump`.
 
 ## Analog twin-stick control
 
-`mods/analog` gives the game continuous analog turning, looking and walking on a
-modern layout — left stick walks and strafes, right stick turns and looks — and
-it does it **without replacing any of the game's own movement code**.
+`patches/Analog.cs` (was `patches/Analog.cs`) gives the game continuous analog turning,
+looking and walking on a modern layout — left stick walks and strafes, right stick
+turns and looks — and it does it **without replacing any of the game's own
+movement code**.
 
 The sticks were always there: `InputManager` fills
 `Controller.LeftX/LeftY/RightX/RightY` from SDL every poll. Nothing consumed
@@ -2000,14 +2029,14 @@ default binding just wires the left stick to the D-pad
 
 **The trick is the three-branch velocity shape** documented under "Player state".
 Because each axis is `vel += rate>>2` on a held button and then
-`angle_or_position += vel`, a mod can pre-load the velocity word with
+`angle_or_position += vel`, a hook can pre-load the velocity word with
 `target - accel` and assert the matching button in the game's pad global: the
 game's own next instruction adds `accel`, lands exactly on `target`, and then
 applies it through its own path. Collision, the pitch limit, the walk
 normalisation, footsteps and animation all run untouched, on an amount the stick
-chose. Nothing is replaced, nothing is `[Replace]`d — two `[PreHook]`s, on
-`func_80028DB8` (turn/look) and `func_800290D4` (walk/strafe), plus one
-`[PostHook]` on stage 3 for the probe.
+chose. Nothing is replaced, no `HookManager.AddReplace` — two pre-hooks, on
+`func_80028DB8` (turn/look) and `func_800290D4` (walk/strafe), plus one post-hook
+on stage 3 (`func_8002A550`) for the probe.
 
 The clamps are never fought: with `|target| ≤ rate` and the button asserted in
 the direction of `target`'s sign, the pre-loaded value is always inside `±rate`
@@ -2017,7 +2046,7 @@ Four things worth keeping:
 
 * **The camera accelerates while the stick is held out.** A d-pad is down or it
   is not, so the game has no notion of a ramp; a stick held at the edge for half
-  a second should be sweeping faster than one just pushed. The mod ramps a
+  a second should be sweeping faster than one just pushed. The patch ramps a
   look-speed multiplier to 2.2× over half a second past 80% deflection and drops
   it three times faster, which — with the cap lifted above — is what took the
   camera from "stiff" to something like a modern shooter's. Fine aim near centre
@@ -2025,14 +2054,14 @@ Four things worth keeping:
 * **The fractional carry is not optional.** At 30 fps a small deflection rounds
   to a zero step every frame; without carrying the remainder the player simply
   does not move below about a third of stick.
-* **Buttons come from the mask table, never hardcoded**, so the mod follows the
+* **Buttons come from the mask table, never hardcoded**, so the patch follows the
   game's own control-config screen — and gets the byte order right by
   construction, since it ORs the game's own mask words back into the game's own
   pad word.
 * **The left stick leaks into turning** unless the turn masks are taken away from
   it, because the runtime binds the left stick to the D-pad and the D-pad *is*
   the turn control. Measured before the fix: 168 yaw steps in 300 frames with
-  the right stick idle. The mod therefore owns the turn bits with a zero step
+  the right stick idle. The patch therefore owns the turn bits with a zero step
   whenever the left stick is deflected, and leaves them alone when both sticks
   are centred — so the D-pad still plays exactly as it did.
 * **The per-frame speed limit only exists in the two button branches.** The
@@ -2051,12 +2080,12 @@ Four things worth keeping:
   the stick keeps the view moving for about eleven frames — a third of a second,
   some 16°. That is reasonable for a button, which cannot be released halfway,
   and wrong for a stick, and it showed up *only* on pitch because the leak fix
-  above was already zeroing turn whenever the left stick moved. The mod therefore
+  above was already zeroing turn whenever the left stick moved. The patch therefore
   drives a released camera axis to zero for one frame and then hands it back, so
   L2/R2 and the D-pad still work. Movement is deliberately left alone: its
   ramp-down is the walking momentum the game has always had.
-* **Sticks idle means mod idle.** Both hooks return before touching memory, which
-  is what keeps D-pad and keyboard play identical to an unloaded mod.
+* **Sticks idle means the patch is idle.** Both hooks return before touching memory, which
+  is what keeps D-pad and keyboard play identical to having it switched off — which is why it can default to on.
 
 `KF2_ANALOG_PROBE=1` reports the velocities, the yaw and pitch steps, the walk
 speed and turn rate next to the stick deflection that produced them, and dumps
@@ -2065,6 +2094,87 @@ table above — with one gap it cannot close: it names the button behind an acti
 but not which way the view moves. That cost the first build an inverted look
 axis, fixed by playing it; **increasing pitch looks down**. The "Invert look Y"
 toggle is now a preference rather than a guess.
+
+### Analog control became a patch, under Input
+
+The fourth conversion, and the reason is "What belongs in a mod, and what does
+not" applied to the pad: **a controller plugged into the port without this has its
+left stick bound to the D-pad, and the D-pad in this game turns rather than
+walking.** A player is not going to guess that the fix is a package under `mods/`
+that ships disabled. So `patches/Analog.cs` is now `patches/Analog.cs` plus
+`patches/AnalogProbe.cs`, on by default.
+
+Defaulting it *on* costs nothing, and that is a property of the design rather than
+a hope: both hooks test the shaped stick vector first and return before reading
+game memory, so with the sticks centred — every keyboard player, every D-pad
+player — the patch is two float comparisons a frame and the game plays exactly as
+it did. The mod could not have shipped that way at all, being off by default.
+
+The mechanical part was the same as the three before it, with one addition:
+
+- `[PreHook]`/`[PostHook]` became `SymbolRegistry.Resolve` plus
+  `HookManager.AddPre/AddPost` in an `Attach` deferred to the first
+  `OverlayLoadedEvent`, hook bodies became `public`, and `OnLoad`'s env reads
+  became `Configure()` from `Program.cs` with the config read moved to
+  `RuntimeReadyEvent`.
+- **`Configure` reads its own environment** instead of being handed the strings
+  the way `NoDither.Configure(probe)` and `AutoReload.Configure(a, b, c)` are.
+  Eighteen string parameters would be a worse index of which variable sets what
+  than the table in the class comment already is, so `Program.cs` keeps the list
+  in its own comment and calls `Configure()` bare.
+- Precedence is the same rule, spelled once instead of per knob: `Env(name, key,
+  ref value)` records the *key* in a `_fromEnv` set, and `Saved(key, ref value)`
+  skips any key in it. Eighteen `…FromEnv` bools would have been the alternative.
+- `AnalogProbe` stayed a separate class and kept its own switch, because it is
+  the only half of the pair that costs anything when idle — its hook runs once a
+  frame whether or not a stick moved.
+
+Verified in a run with the disc: `[KF2] analog: on, 3 hook(s)`, alongside
+`pacing: 5 hook(s)`, `dither: 12 hook(s)` and `autoreload`, with no replace
+conflict — note that the probe's post-hook and auto reload's post-hook are on the
+*same* function (`func_8002A550`, the end of stage 3) and both run, since
+`HookManager` keeps a list per function and only `Replace` is exclusive. Writing
+`kf2.analog.turn=2.5` and `kf2.analog.lookdeadzone=0.3` into `interface.ini` came
+back as `(deadzone 0.3, turn x2.5, move x1)` on the next start, which is the
+`RuntimeReadyEvent` read landing before `Attach` — the ordering the whole settings
+mechanism depends on. With the probe on, the mask table dumped once and the
+windows reported the patch driving the game: `look 185 move 279` frames out of
+300, `mean |step| 58` against a turn rate of 28, which is the overspeed path (see
+the per-frame speed limit above) working exactly as it did as a mod.
+
+### Open: the page is under the fold, and the fix is a section rather than a hoist
+
+The page is in the right *section* and the wrong *place in it*. `Extend` draws
+after a section's own content, and the input section's own content is two tab
+bars, sixteen binding rows and a reset button — around 450px of a 500px window —
+so "Analog sticks" starts below the fold and is only found by scrolling past every
+button in the game. Left as it is for now; the options were weighed and two of
+three were rejected on their merits:
+
+- **Wrapping the input section** to draw the page above the binding table works —
+  `Register` replaces by id, so a wrapper forwarding `Id`/`TitleKey`/`Order` can
+  draw first and then delegate — but it has the port taking ownership of a section
+  the runtime registers, in a checkout that is gitignored and moves under us. That
+  is the same pattern already tried and dropped under "Renaming a runtime section",
+  and it was rejected again here.
+- **Moving it to `gameplay`** puts deadzone, curve and invert-Y under a heading
+  that means rules of play, and leaves the pane about controls with no sign the
+  sticks are configurable at all.
+- **A `controls` section of the port's own**, `Order = 1` so it sits beside Input,
+  is the one to build: a sidebar entry rather than a hoist, and no wrapper, since
+  registering a *new* id needs no patch to the checkout — the `gameplay` lever.
+  The intended shape is a tab bar inside it, one tab per control page, which also
+  makes the id and the label agree from the start (`controls` / "Controls", and
+  "Controles" covers both pt-BR and es-419). Note a tab bar cannot be added to the
+  runtime's *own* Input pane: `InputSettingsSection.Draw` opens and closes both of
+  its bars inside itself, so a third tab beside Keyboard/Gamepad needs the wrapper
+  above. With one page the tab bar should stay off — a lone tab promises siblings
+  that do not exist, the same objection as a `SeparatorText` over a lone checkbox,
+  and it would sit directly on the rule the page's own `Title` already draws.
+
+The underlying gap is upstream's: **`SettingsRegistry.Extend` has no ordering
+argument**, so an extension can only ever land at the bottom of a pane. Worth an
+issue, and it is the gap behind all three options above.
 
 ### Open: the camera does not feel consistent in every direction
 
@@ -2075,7 +2185,7 @@ are the candidates worth measuring first, and three of them are certain to be
 
 1. **The game turns you slower while you walk.** Stage 3 sets the turn rate to
    `0x1C` (28) when a movement button is down and `0x23` (35) when none is, so
-   horizontal speed drops by a fifth the moment you move. The mod inherits this
+   horizontal speed drops by a fifth the moment you move. The patch inherits this
    because it reads the rate out of `0x8019955C` each frame. This is the best fit
    for "not all the time" and it is the game's own rule, so overriding it is a
    decision, not a fix.
@@ -2093,15 +2203,16 @@ are the candidates worth measuring first, and three of them are certain to be
    sideways speeds the vertical axis up too, so a diagonal flick during a sweep
    is faster than the same flick from rest.
 
-The measurement to take is the mod's own: hold a fixed deflection at eight
+The measurement to take is the patch's own: hold a fixed deflection at eight
 directions in turn with `KF2_ANALOG_PROBE=1` and compare mean |yaw step| and the
 pitch total, once standing still and once walking. Candidate 1 will show up as
 two clean bands and would settle it immediately.
 
-Measured with the mod loaded alongside `widescreen` (and the dither patch, then still
-`mods/nodither`):
-`loaded 3/3 mod(s), 9 function(s) hooked`, no replace conflict, 300 frames per
-10-second window — the pacing floor is untouched.
+Measured as a mod, loaded alongside `widescreen` (and the dither patch, then still
+`mods/nodither`): `loaded 3/3 mod(s), 9 function(s) hooked`, no replace conflict,
+300 frames per 10-second window — the pacing floor is untouched. As a patch the
+probe reports the same 300 frames per window, now with the frame pacing, the
+dither patch and auto reload all hooked as well.
 
 ### Open: the twin-stick controls broke after the dragon stone went into the fountain
 
@@ -2112,20 +2223,20 @@ the D-pad still worked, and whether it survived leaving the area or a reload.
 Those three answers narrow it to one of the candidates below on their own, so
 they are worth capturing next time before anything else.
 
-What makes this worth writing down rather than guessing at: the mod has **two
+What makes this worth writing down rather than guessing at: it has **two
 silent bail-outs that a scripted event is exactly the thing to trigger**.
 
 1. **The rate guards.** `BeforeLook` returns when `*(u32*)0x8019955C <= 0` and
    `BeforeMove` when `*(u32*)0x80199558 <= 0` (`Analog.cs:247,291`). They exist so
-   the mod never divides a scale by a zero the game is holding, and the game
+   the patch never divides a scale by a zero the game is holding, and the game
    plausibly zeroes exactly these while a scripted sequence has the camera. If
    the event leaves either at zero, that axis is dead until something sets it
-   back — and the mod would be *reporting* the game's state faithfully rather
+   back — and the patch would be *reporting* the game's state faithfully rather
    than having a bug of its own. **This is the first thing to check** and it is
    one read each.
 2. **The action-mask table.** `Drive` reads the button masks out of
    `0x8006E568`–`0x8006E5D0` every frame rather than hardcoding them, which is
-   what makes the mod follow the control-config screen. If the event rewrites or
+   what makes it follow the control-config screen. If the event rewrites or
    clears that table, `inc`/`dec` come back zero, no button is asserted, and the
    game takes its neither-button branch — which *decays* the velocity instead of
    accumulating it. That reads as controls that are alive but weak and wrong,
@@ -2134,10 +2245,10 @@ silent bail-outs that a scripted event is exactly the thing to trigger**.
 3. **The player action state.** `0x801994E1` drives the jump table at
    `0x80011300`; states other than the ordinary ones take arms that need not call
    `func_80028DB8` and `func_800290D4` at all. If the event parks the player in
-   such a state, the mod's hooks simply never run — and neither does the game's
+   such a state, the patch's hooks simply never run — and neither does the game's
    own control code, so the D-pad would be dead too. **That is the question the
    "did the D-pad still work?" answer settles**, and it is the one case where
-   nothing is wrong with the mod.
+   nothing is wrong with the patch.
 
 Cheap next step: reproduce with `KF2_ANALOG_PROBE=1`, which already reports the
 control state, and read `0x8019955C` / `0x80199558` / `0x801994E1` at the moment
@@ -2517,7 +2628,7 @@ way autoreload does when it arrives from state `0x11`.
    fold, and every per-tick delta it produces is now a named address. What 60 fps
    still needs is the delta halving, and that is now a small edit rather than a
    hunt: halve the turn rate at `0x8019955C` and the walk speed at `0x80199558`
-   on alternate frames, or scale them the way `mods/analog` already scales the
+   on alternate frames, or scale them the way `patches/Analog.cs` already scales the
    velocities they feed. The buf5 four are presumably the *rendered* camera and
    can be left alone.
 6. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.

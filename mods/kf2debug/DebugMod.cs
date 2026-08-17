@@ -15,8 +15,8 @@ namespace Kf2.Mods.Debug;
 /// position bookmarks and area warp, with a live readout of the player state.
 ///
 /// Everything here is off until it is turned on, and every hook returns on a
-/// bool test plus one memory read when it is off -- the standard mods/analog and
-/// mods/autoreload hold themselves to.
+/// bool test plus one memory read when it is off -- the standard patches/Analog.cs and
+/// patches/AutoReload.cs hold themselves to.
 ///
 /// The state this reads is not new. NOTES.md "Player state: found, and it was in
 /// stage 3 all along" and "The character's stats are buf2" between them give

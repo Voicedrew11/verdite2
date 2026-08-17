@@ -117,7 +117,7 @@ internal static class Noclip
     // the player at a negative Y (the resurrection warp at 0x8002AFBC uses
     // -9344, the other at 0x80025C44 uses -12800), and PSY-Q world space follows
     // screen space in having +Y point down, so "up" subtracts. That is a
-    // convention, not a proof, and it is exactly the kind of sign mods/analog got
+    // convention, not a proof, and it is exactly the kind of sign patches/Analog.cs got
     // backwards on the pitch axis and had to settle by playing -- hence the
     // toggle rather than a hardcoded sign.
     internal static bool InvertVertical;
@@ -127,7 +127,7 @@ internal static class Noclip
     // Authoritative while flying, and it has to be: the game's floor clamp
     // rewrites Y every frame, so integrating from what is in memory would mean
     // adding a step to a snapped value and hovering rather than climbing. Floats
-    // rather than ints for the same reason mods/analog carries a fraction -- at
+    // rather than ints for the same reason patches/Analog.cs carries a fraction -- at
     // 30 fps a small stick deflection truncates to no movement at all.
     static double _x, _y, _z;
 
@@ -226,7 +226,7 @@ internal static class Noclip
     {
         int yaw = GameState.ReadS16(m, GameState.Yaw);
 
-        // Left stick walks and strafes, matching mods/analog's layout so the two
+        // Left stick walks and strafes, matching patches/Analog.cs's layout so the two
         // read the same way. The D-pad is bound to the left stick by the
         // runtime's default mapping, so the keyboard drives this too.
         var (sx, sy) = Shape(Controller.LeftX, Controller.LeftY);
@@ -314,7 +314,7 @@ internal static class Noclip
 
     /// <summary>
     /// One stick as a radial-deadzoned, curved vector. Same shape as
-    /// mods/analog/Analog.cs -- the bytes are the runtime's 0..255 with 0x80
+    /// patches/Analog.cs -- the bytes are the runtime's 0..255 with 0x80
     /// centre, and InputManager already applies a 1.3x gain, so the byte
     /// saturates a little before the stick does.
     /// </summary>

@@ -193,6 +193,24 @@ Kf2.AutoReload.Configure(Environment.GetEnvironmentVariable("KF2_AUTORELOAD"),
                          Environment.GetEnvironmentVariable("KF2_AUTORELOAD_SLOT"));
 Kf2.AutoReload.Install();
 
+// Analog twin-stick control. Two pre-hooks on the game's own turn/look and
+// walk/strafe routines pre-load the velocities those routines are about to
+// accumulate, so the sticks pick the amount and the game's own movement code
+// still applies it:
+//
+//     KF2_ANALOG=1                on (the default); 0 hands the sticks back
+//     KF2_ANALOG_TURN/PITCH/MOVE  sensitivities; DEADZONE, CURVE, ACCEL* the feel
+//     KF2_ANALOG_INVERTY=1        look-Y inversion, and INVERTTURN/STRAFE/FWD
+//     KF2_ANALOG_PROBE=1          the control-state report
+//
+// A patch rather than a mod because a pad without it has its left stick wired to
+// the D-pad, which in this game turns instead of walking — working sticks are not
+// a taste a player should have to find a package to fix. Configure reads its own
+// environment here rather than being handed the strings: there are eighteen of
+// them and they are listed above its own class. Its settings are under Input.
+Kf2.Analog.Configure();
+Kf2.Analog.Install();
+
 // Where the patches' own settings live. A patch registers a page against one of
 // the runtime's settings sections and is drawn inside it, so the frame rate is in
 // System > Settings > Video beside vsync rather than in a box of its own; the one

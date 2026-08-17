@@ -1,7 +1,0 @@
-{
-  "id": "kf2.analog",
-  "name": "Analog Twin-Stick Control",
-  "version": "1.0",
-  "author": "KFII-PC",
-  "description": "True analog camera and movement on a modern twin-stick layout: left stick walks and strafes, right stick turns and looks. The game's own control code still runs -- the mod writes the per-frame turn, pitch, forward and strafe velocities the game would have accumulated from held buttons, so collision, animation and speed limits are untouched and only the amount is continuous."
-}

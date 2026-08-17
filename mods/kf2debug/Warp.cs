@@ -140,7 +140,7 @@ internal static class Warp
     // Present, which is already inside VSync, so running the loader from the
     // button nested DoRender / ImGui and swapped the overlay under a frame that
     // was still drawing the area that had just unloaded. Stage 3 is the game's
-    // own load path -- func_80029CBC and mods/autoreload both call it from here.
+    // own load path -- func_80029CBC and patches/AutoReload.cs both call it from here.
     static int _pendingArea = -1;
 
     // New-game spawn, written by func_80025B4C. Used only as a parking spot
@@ -164,7 +164,7 @@ internal static class Warp
     /// Queue an area re-entry through the game's own routine.
     ///
     /// The call itself is func_80024154, the same six-argument wrapper the
-    /// in-game menu's load path and mods/autoreload use. MIPS o32 passes the
+    /// in-game menu's load path and patches/AutoReload.cs use. MIPS o32 passes the
     /// fifth and sixth on the caller's stack at sp+0x10 and sp+0x14. No overlay
     /// swap is driven by hand: func_8001689C, inside that wrapper, reads the
     /// module off the disc and the CD read is what arms the overlay.

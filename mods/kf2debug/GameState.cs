@@ -11,7 +11,7 @@ namespace Kf2.Mods.Debug;
 /// Every address here is already in NOTES.md -- "Player state: found, and it was
 /// in stage 3 all along" for the position, angles and velocities, and "The
 /// character's stats are buf2" for HP, MP, EXP and level. Nothing in this file is
-/// a new identification; it is the same map `mods/analog` and `mods/autoreload`
+/// a new identification; it is the same map `patches/Analog.cs` and `patches/AutoReload.cs`
 /// each carry a copy of, written down once.
 ///
 /// `IMemory` has no signed accessors -- it is ReadU16/ReadU32 and the caller
@@ -62,7 +62,7 @@ internal static class GameState
 
     // The pad word PadRead(1) stored this frame. Active HIGH, and its two button
     // bytes are in the opposite order to the runtime's Controller layout -- see
-    // mods/analog/AnalogProbe.cs. Read here only for the readout.
+    // patches/AnalogProbe.cs. Read here only for the readout.
     internal const uint Pad       = 0x80199554;   // u16
 
     // ---- stats: buf2, the 0x58-byte per-area buffer at 0x80199414 ----
@@ -151,7 +151,7 @@ internal static class GameState
     /// buf2 is cleared until an area is up, so a zero max HP means there is no
     /// character at all, while current HP is legitimately zero on the frame you
     /// die. Without this every feature here fires during the attract demo, which
-    /// runs stage 3 like anything else -- the bug mods/autoreload hit on its
+    /// runs stage 3 like anything else -- the bug patches/AutoReload.cs hit on its
     /// first run.
     /// </summary>
     internal static bool IsInGame(IMemory m) => m.ReadU16(MaxHp) != 0;

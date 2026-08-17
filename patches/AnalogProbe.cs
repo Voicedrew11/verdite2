@@ -1,38 +1,46 @@
-// ModCompiler compiles mods with no implicit usings, so every namespace the
-// file needs must be named here -- including System.
-using System;
-using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
-using ImGuiNET;
 using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Memory;
 using RecompOne.Runtime.Modding;
 
-namespace Kf2.Mods.Analog;
+namespace Kf2;
 
 /// <summary>
-/// The measurement that justifies the mod, and the thing to turn on when an axis
-/// runs the wrong way.
+/// The measurement that justifies <see cref="Analog"/>, and the thing to turn on
+/// when an axis runs the wrong way.
+///
+///     KF2_ANALOG_PROBE=1     report the control state to the console
 ///
 /// It reports what the game's control state actually did this window -- the
 /// velocities, the yaw and pitch steps, the walk speed and turn rate the game
-/// picked -- next to the stick deflection the mod fed in. Proportionality
+/// picked -- next to the stick deflection the patch fed in. Proportionality
 /// between the two is the whole claim: a stick at 30% must produce about 30% of
 /// the yaw step that full deflection does, and must not produce *zero* steps,
 /// which is what the fractional carry exists to prevent.
 ///
 /// It also dumps the action-mask table once. Those 24 words are the game's own
 /// control-config mapping, so the dump is the ground truth for which pad bit
-/// means "turn left" in this save -- the mod reads the same words rather than
+/// means "turn left" in this save -- the patch reads the same words rather than
 /// hardcoding bits, and the dump is how you check it agreed with reality.
 ///
-/// A plain static class, not a second IMod: ModLoader instantiates every IMod in
-/// the assembly, but it scans every type for hooks.
+/// A separate class from <see cref="Analog"/> because it is the only part of the
+/// pair that costs anything when idle: its hook runs once a frame whether or not
+/// a stick moved, so it stays behind its own switch and its own hook, added only
+/// alongside the two that do the work.
 /// </summary>
 internal static class AnalogProbe
 {
-    static bool _on;
-    static float _seconds = 10f;
+    // End of main-loop stage 3, after the whole input stage has run: this is
+    // where the angles have their final value for the frame. AutoReload posts to
+    // the same address; HookManager keeps a list per function, so both run.
+    const uint InputStage = 0x8002A550;
+
+    public const string OnKey = "kf2.analog.probe";
+    public const string IntervalKey = "kf2.analog.probeinterval";
+
+    public static bool On;
+    public static float Seconds = 10f;
 
     static bool _dumped;
     static double _windowStart;
@@ -47,48 +55,54 @@ internal static class AnalogProbe
 
     internal static void Configure()
     {
-        string? v = Environment.GetEnvironmentVariable("KF2_ANALOG_PROBE");
-        if (!string.IsNullOrWhiteSpace(v))
-        {
-            v = v.Trim().ToLowerInvariant();
-            _on = v is "1" or "on" or "true" or "yes";
-        }
+        Analog.Env("KF2_ANALOG_PROBE", OnKey, ref On);
         _windowStart = Now;
-        if (_on) Console.WriteLine($"[analog] probe on, reporting every {_seconds:0.#}s");
+        if (On) Console.WriteLine($"[KF2] analog probe: on, reporting every {Seconds:0.#}s");
     }
 
-    internal static void DrawSettings()
+    internal static void LoadSaved()
     {
-        ImGui.Checkbox("Probe (report control state to the console)", ref _on);
-        ImGui.SliderFloat("Probe interval (s)", ref _seconds, 2f, 60f);
+        Analog.Saved(OnKey, ref On);
+        Analog.Saved(IntervalKey, ref Seconds);
+    }
+
+    internal static int Attach(ModInfo self)
+    {
+        var target = SymbolRegistry.Resolve("game", null, InputStage);
+        if (target == null)
+        {
+            Console.Error.WriteLine($"[KF2] analog: no function at game/0x{InputStage:X8}; no probe");
+            return 0;
+        }
+
+        var impl = typeof(AnalogProbe)
+            .GetMethod(nameof(AfterInputStage), BindingFlags.Public | BindingFlags.Static)!;
+        return HookManager.AddPost(self, target, impl) ? 1 : 0;
     }
 
     internal static void NoteLook(float x, float y, int rate)
     {
-        if (!_on) return;
+        if (!On) return;
         _lookFrames++;
         _lastRx = x; _lastRy = y; _lastRate = rate;
     }
 
     internal static void NoteMove(float x, float y, int speed)
     {
-        if (!_on) return;
+        if (!On) return;
         _moveFrames++;
         _lastLx = x; _lastLy = y; _lastSpeed = speed;
     }
 
-    // Once per frame, after the whole input stage has run: this is where the
-    // angles have their final value for the frame.
-    [PostHook("game", Address = 0x8002A550)]
-    static void AfterInputStage(CpuContext c, IMemory m)
+    public static void AfterInputStage(CpuContext c, IMemory m)
     {
-        if (!_on) return;
+        if (!On) return;
 
         if (!_dumped) { DumpMasks(m); _dumped = true; }
 
         _frames++;
-        int yaw = m.ReadU16(AnalogMod.Yaw);
-        int pitch = (short)m.ReadU16(AnalogMod.Pitch);
+        int yaw = m.ReadU16(Analog.Yaw);
+        int pitch = (short)m.ReadU16(Analog.Pitch);
         if (_lastYaw >= 0)
         {
             int dYaw = ((yaw - _lastYaw + 0x800) & 0xFFF) - 0x800;   // shortest way round
@@ -101,7 +115,7 @@ internal static class AnalogProbe
         _lastYaw = yaw;
         _lastPitch = pitch;
 
-        if (Now - _windowStart < _seconds) return;
+        if (Now - _windowStart < Seconds) return;
         Report(m);
     }
 
@@ -111,13 +125,13 @@ internal static class AnalogProbe
         _windowStart = Now;
 
         Console.WriteLine(
-            $"[analog] {_frames} frames in {window:0.#}s | " +
+            $"[KF2] analog: {_frames} frames in {window:0.#}s | " +
             $"look {_lookFrames} move {_moveFrames} | " +
             $"stick R({_lastRx:+0.00;-0.00;0.00},{_lastRy:+0.00;-0.00;0.00}) " +
             $"L({_lastLx:+0.00;-0.00;0.00},{_lastLy:+0.00;-0.00;0.00})");
 
         Console.WriteLine(
-            $"           yaw {m.ReadU16(AnalogMod.Yaw),5}  pitch {(short)m.ReadU16(AnalogMod.Pitch),5}  " +
+            $"           yaw {m.ReadU16(Analog.Yaw),5}  pitch {(short)m.ReadU16(Analog.Pitch),5}  " +
             $"turnVel {(short)m.ReadU16(0x80199544),4}  pitchVel {(short)m.ReadU16(0x80199546),4}  " +
             $"fwdVel {(short)m.ReadU16(0x80199540),5}  strafeVel {(short)m.ReadU16(0x8019953E),5}");
 
@@ -132,24 +146,25 @@ internal static class AnalogProbe
         _yawSteps = _yawStepSum = _pitchStepSum = 0;
     }
 
-    // The game's action -> button mask table. Word-spaced, and the eight the mod
-    // drives are named; the rest are printed so the whole table is on the record.
+    // The game's action -> button mask table. Word-spaced, and the eight the
+    // patch drives are named; the rest are printed so the whole table is on the
+    // record.
     static void DumpMasks(IMemory m)
     {
         var named = new Dictionary<uint, string>
         {
-            [AnalogMod.MaskTurnInc]   = "turn +   (yaw increases)",
-            [AnalogMod.MaskTurnDec]   = "turn -   (yaw decreases)",
-            [AnalogMod.MaskPitchInc]  = "pitch +  (look down)",
-            [AnalogMod.MaskPitchDec]  = "pitch -  (look up)",
-            [AnalogMod.MaskFwdInc]    = "walk +   (forward)",
-            [AnalogMod.MaskFwdDec]    = "walk -   (back)",
-            [AnalogMod.MaskStrafeInc] = "strafe + (yaw-0x400)",
-            [AnalogMod.MaskStrafeDec] = "strafe - (yaw+0x400)",
+            [Analog.MaskTurnInc]   = "turn +   (yaw increases)",
+            [Analog.MaskTurnDec]   = "turn -   (yaw decreases)",
+            [Analog.MaskPitchInc]  = "pitch +  (look down)",
+            [Analog.MaskPitchDec]  = "pitch -  (look up)",
+            [Analog.MaskFwdInc]    = "walk +   (forward)",
+            [Analog.MaskFwdDec]    = "walk -   (back)",
+            [Analog.MaskStrafeInc] = "strafe + (yaw-0x400)",
+            [Analog.MaskStrafeDec] = "strafe - (yaw+0x400)",
         };
 
-        Console.WriteLine("[analog] action mask table 0x8006E568..0x8006E5D0 " +
-                          "(the game's own control config; the mod reads these, it does not assume bits)");
+        Console.WriteLine("[KF2] analog: action mask table 0x8006E568..0x8006E5D0 " +
+                          "(the game's own control config; the patch reads these, it does not assume bits)");
         for (uint a = 0x8006E568; a <= 0x8006E5D0; a += 4)
         {
             uint v = m.ReadU32(a);
@@ -176,8 +191,9 @@ internal static class AnalogProbe
     /// read Up/Down/Left/Right with L1/R1 strafing and L2/R2 looking, which is
     /// King's Field's actual control scheme.
     ///
-    /// The mod itself never needs this: it ORs the game's own mask words back
-    /// into the game's own pad word, so it is layout-agnostic. Only the label is.
+    /// <see cref="Analog"/> itself never needs this: it ORs the game's own mask
+    /// words back into the game's own pad word, so it is layout-agnostic. Only the
+    /// label is.
     /// </summary>
     static string Buttons(uint mask)
     {

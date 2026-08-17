@@ -92,6 +92,7 @@ public static class PatchSettings
 
         Register("display", new FramePacingPage());
         Register("display", new NoDitherPage());
+        Register("input", new AnalogPage());
         Register("gameplay", new AutoReloadPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
     }

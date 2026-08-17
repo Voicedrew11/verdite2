@@ -60,7 +60,7 @@ internal static class Cheats
     internal static bool SpeedEnabled;
 
     // 1.0 is the game's own speed. The scale clamps to at least 1 unit, because
-    // mods/analog treats a rate word of zero or less as "not controllable" and
+    // patches/Analog.cs treats a rate word of zero or less as "not controllable" and
     // returns -- a multiplier that rounded a rate to zero would silently switch
     // analog control off.
     internal static float SpeedMultiplier = 2f;
@@ -189,7 +189,7 @@ internal static class Cheats
     /// the next one. Nothing writes either word between here and the walk, so
     /// one hook on the turn covers both consumers.
     ///
-    /// This composes with mods/analog, which reads the same two words to size
+    /// This composes with patches/Analog.cs, which reads the same two words to size
     /// its velocities and so inherits the multiplier -- subject to which mod's
     /// pre-hook on this address runs first, which is registration order.
     /// </summary>

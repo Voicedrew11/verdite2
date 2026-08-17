@@ -55,7 +55,8 @@ KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other f
 KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect override, and the margin census
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
-KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # twin-stick control
+KF2_ANALOG=0                             # twin-stick control off (it is on by default)
+KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
 ```
@@ -87,7 +88,12 @@ different reason — it is a picture the port should be able to offer without a
 package having to load — and defaults to *off* (no crosshatch). Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
-default and its knobs are under Gameplay. The measurement
+default and its knobs are under Gameplay. Analog twin-stick control is the same
+test applied to the pad — without it a modern controller's left stick is wired to
+the D-pad and *turns* rather than walking — so it is on by default too, and its
+knobs are under Input, below the button-binding table. It costs nothing when a
+stick is centred: both hooks return before touching memory, so keyboard and D-pad
+play are identical to having it off. The measurement
 tools and the widescreen support are real mods under `mods/` — **enable them in
 the game's Mods panel**, since mods default to off and load silently when
 disabled. Prefer them to `KF2_LOG=sdk`, which is gigabytes a minute.
