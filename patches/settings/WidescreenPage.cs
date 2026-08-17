@@ -74,5 +74,19 @@ public sealed class WidescreenPage : IPatchPage
                              "the sides. On, the HP/MP panel and the equipment icons move out to the " +
                              "edge they belong to. Only those two corners move, and only what the " +
                              "game draws in front of everything else — the world is never touched.");
+
+        bool effects = Widescreen.StretchEffects;
+        if (ImGui.Checkbox("Stretch full-screen effects to the new edges", ref effects))
+        {
+            Widescreen.SetStretchEffects(effects);
+            PatchSettings.Set(Widescreen.EffectsKey, effects);
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The fade to black when you die, the flash when you are hit, and every " +
+                             "other whole-screen tint are drawn as one 320-pixel-wide quad. Off, they " +
+                             "cover only the middle of a wide picture and the sides carry on showing " +
+                             "the world. On, they are widened to the margin. 2D pictures — the title, " +
+                             "the menus — are opaque and are left at their authored width either way.");
     }
 }

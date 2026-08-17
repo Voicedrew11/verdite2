@@ -1905,7 +1905,8 @@ things to check by eye first:
 
 1. **2D screens and fades.** The margin is cleared only by the `isbg` path. A
    full-screen rectangle the game draws itself is 320 wide and will leave the
-   sides showing the previous frame.
+   sides showing the previous frame. **This one happened** — see "The screen-space
+   effects are 320 wide too" below, where it is also fixed.
 2. **Pop-in at the edges.** Per-object culling still uses the game's 4:3 frustum,
    so an object can be dropped while its polygons would have been visible in the
    margin. The counter cannot see this — it only counts what was submitted.
@@ -1970,6 +1971,92 @@ against `bin/Release/net10.0/RecompOne.Runtime.dll` and `ImGui.NET.dll`, with
 `ImplicitUsings` disabled to match `ModCompiler`, catches it in three seconds.
 (Moot for this one now that it is a patch and the project build type-checks it,
 but it still applies to everything under `mods/`.)
+
+### The screen-space effects are 320 wide too, and one drawer makes all of them
+
+The first of the two things the census could not see, reported from a real
+session: **the black fade on death and the red flash when you are hit covered only
+the middle of a wide picture**, with the world carrying on brightly in the two
+54-pixel margins. Reproduced and photographed — the fade blacks out a 4:3 box and
+leaves a lit strip either side of it, which is a worse picture than no widescreen
+at all.
+
+**Every whole-screen effect in this game comes out of one request block and one
+drawer**, so the whole class is a single finding rather than a list:
+
+| address | what it is |
+|---|---|
+| `0x80192D45` | four bytes: blend mode, then R, G, B. Mode `0xFF` means "no tint" |
+| `func_8003220C(mode, r, g, b)` | the only writer of that block — every tint goes through it |
+| `func_8003214C` | reads it once a frame and, unless the mode is `0xFF`, submits the quad |
+| `func_80031EE8(x0, y0, x1, y1, …)` | the 2D quad builder: a `POLY_FT4`, code `0x2C` or `0x2E`, `AddPrim`ed at the depth its last stack argument names |
+
+`func_8003214C` calls it as `func_80031EE8(0, 0, 0x140, 0xF0)` — **(0,0) to
+(320,240), the framebuffer exactly** — with UV `(0x80,0xD0)` over a 15×15 patch of
+flat colour, CLUT `0x7BDC`, and the tpage word `((mode & 3) << 5) | 0x17`. That
+last expression is the effect: the low two bits of the mode are the GPU's
+semi-transparency mode, so `0x82` is `B−F`, subtractive, the fade to black, and
+`0x81` is `B+F`, additive, a flash. Bit 7 picks the OT depth, 1 rather than `0x0C`,
+which is why it lands at the very front of the table on top of the HUD.
+
+Three sibling functions — `func_8003202C`, `func_800320BC`, `func_80032234` —
+build the same `(0, y, 0x140, 0xF0)` quad for the other whole-screen washes. All
+four pass the semi-transparent flag. The blocking fade loop `func_80037B5C(mode,
+start, …)` ramps `min((n·n) >> 16, 255)` into `func_8003220C` and vsyncs, and
+`fdat23` has its own copy of that loop with mode `0x81`; the death handler's
+`32 ≤ n < 65` arm feeds it `(n − 32) << 7` directly.
+
+**So the fix is a shape, not an address.** `patches/Widescreen.cs` widens, in its
+`RenderPrimEvent` listener, any primitive that is **semi-transparent, flat
+(non-Gouraud), and spans the clip rectangle's full width**; the vertices sitting on
+either edge are snapped out to `left − margin` and `right + margin`. Keying on the
+shape rather than on `func_80031EE8` covers OPEN.EXE's and END.EXE's own links of
+the same drawer without hunting two more addresses, and it is checked per
+primitive anyway.
+
+Why those three tests and no more:
+
+* **Semi-transparent** is what an *effect* is. A 2D picture authored 320 wide — a
+  title screen, the menus, the FROM SOFTWARE logo — is opaque, and is deliberately
+  left at its authored width: stretching a picture distorts it, pillar-boxing one
+  does not.
+* **Flat** separates the tint from the world. Every wide primitive measured in an
+  area is Gouraud-shaded, semi-transparent ones included; the tints are `POLY_FT4`
+  and never are.
+* **Full width** is the definition of the thing being fixed, and the texture is a
+  15×15 patch already stretched over 320 pixels, so another 108 of them cost
+  nothing and show nothing.
+
+The OT position was tempting as a fourth test — the tint is measured at entry 1
+from the front — and is not used, so an effect drawn outside a `DrawOTag` walk is
+still caught.
+
+**The counter is the evidence.** `KF2_WIDESCREEN_PROBE=1` now reports the tints it
+stretched alongside the margin census, and the three numbers are exactly right:
+19 and 14 in the two windows straddling an area load (the fade-in), **zero in
+every window of ordinary play** — the negative control that says no world geometry
+is being caught — and then 60 per two-second window during a death, which is one a
+frame at 30 fps. By eye, at `KF2_WIDESCREEN_EFFECTS=0` the fade stops at the old
+edges and at the default it does not.
+
+**Dying on demand, without a player.** The attract demo walks itself into `fdat05`
+about a minute after boot, which is a whole live session with no input; from there
+`AutoReload.Simulate()` (already in the tree, for the same reason) latches the
+death, and holding the death clock at `0x8019951A` part-way through the `32..64`
+fade arm freezes the screen mid-fade for as long as the shot takes. That rig was
+temporary and is not in the tree — it was a `KF2_KILL` env var, a thread that set a
+flag, and a call from inside the `DrawOTag` replacement so that the latch ran on
+the game's own thread.
+
+`KF2_WIDESCREEN_PROBE=2` is the listing the identification came from: every
+primitive covering most of the clip rectangle, once per distinct shape, with its
+flags, CLUT and OT position. It is a page of output per scene, which is why the
+plain `=1` no longer includes it.
+
+**The switch** is `kf2.widescreen.stretcheffects` / `KF2_WIDESCREEN_EFFECTS=0`, a
+checkbox under Video below the HUD anchoring, **on by default**. This one is not
+the sub-pixel argument: the picture *has* been looked at, before and after, and
+the default-off picture is a defect rather than a taste.
 
 ### Widescreen became a patch, and the default stayed 4:3
 

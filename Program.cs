@@ -255,8 +255,9 @@ Kf2.Analog.Install();
 // HUD, which is drawn in screen space and would otherwise sit inset from the new
 // edges:
 //
-//     KF2_WIDESCREEN=16:9     aspect for the run; "1.777" and "off" also parse
-//     KF2_WIDESCREEN_PROBE=1  the margin census, on the console
+//     KF2_WIDESCREEN=16:9       aspect for the run; "1.777" and "off" also parse
+//     KF2_WIDESCREEN_PROBE=1    the margin census, on the console
+//     KF2_WIDESCREEN_EFFECTS=0  leave the death fade and the damage flash 320 wide
 //
 // A patch rather than a mod because an aspect ratio is a picture the port should
 // be able to offer without a package having to load, and Video is where a player
@@ -266,7 +267,8 @@ Kf2.Analog.Install();
 // against the game's own 4:3 frustum -- are invisible to a primitive counter and
 // have never been checked by eye.
 Kf2.Widescreen.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN"),
-                         Environment.GetEnvironmentVariable("KF2_WIDESCREEN_PROBE"));
+                         Environment.GetEnvironmentVariable("KF2_WIDESCREEN_PROBE"),
+                         Environment.GetEnvironmentVariable("KF2_WIDESCREEN_EFFECTS"));
 Kf2.Widescreen.Install();
 
 // Where the patches' own settings live. A patch registers a page against one of

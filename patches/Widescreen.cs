@@ -12,6 +12,8 @@ namespace Kf2;
 ///
 ///     KF2_WIDESCREEN=16:9       aspect for the run; "1.777" and "off" also parse
 ///     KF2_WIDESCREEN_PROBE=1    the margin census, on the console
+///     KF2_WIDESCREEN_PROBE=2    the census plus every wide primitive, once per shape
+///     KF2_WIDESCREEN_EFFECTS=0  leave the death fade and the damage flash 320 wide
 ///
 /// It is a setting, under Video — see Kf2.Settings.WidescreenPage. The saved
 /// aspect is read on RuntimeReadyEvent rather than in <see cref="Configure"/>,
@@ -47,6 +49,20 @@ namespace Kf2;
 /// will widen them; what the sides show there is whatever the frame's background
 /// clear covered, since PutDrawEnv extends an `isbg` clear across the margin but
 /// nothing extends a full-screen rectangle the game drew itself.
+///
+/// ## The screen-space tints
+///
+/// That last sentence was a real defect, not a footnote: the death fade and the
+/// damage flash blacked out and reddened the middle of the picture only, with the
+/// world carrying on brightly in the margins. The game draws every whole-screen
+/// effect the same way — <c>func_8003220C</c> leaves a blend mode and a colour in a
+/// request block, <c>func_8003214C</c> reads it once a frame and submits
+/// <c>func_80031EE8(0, 0, 320, 240)</c>, a flat semi-transparent POLY_FT4 at the
+/// front of the ordering table whose tpage carries the mode (subtractive for the
+/// fade, additive for a flash). <see cref="Stretch"/> widens that quad, keyed on
+/// its shape rather than on the drawer's address so that OPEN.EXE's and END.EXE's
+/// own links of it need no addresses of their own. See "The screen-space effects
+/// are 320 wide too" in NOTES.md.
 ///
 /// ## Why a patch, and why it is still off by default
 ///
@@ -130,6 +146,9 @@ public static class Widescreen
     /// <summary>See <see cref="AspectKey"/>.</summary>
     public const string AnchorKey = "kf2.widescreen.anchorhud";
 
+    /// <summary>See <see cref="AspectKey"/>.</summary>
+    public const string EffectsKey = "kf2.widescreen.stretcheffects";
+
     /// <summary>The game's own aspect, and the one that means "off".</summary>
     public const float FourThree = 4f / 3f;
 
@@ -155,6 +174,11 @@ public static class Widescreen
     /// Costs nothing while <see cref="Aspect"/> is 4:3.</summary>
     public static bool AnchorHud { get; private set; } = true;
 
+    /// <summary>Widen the game's full-screen tints — the death fade, the damage
+    /// flash — across the margin. Costs nothing while <see cref="Aspect"/> is
+    /// 4:3.</summary>
+    public static bool StretchEffects { get; private set; } = true;
+
     /// <summary>Whether the aspect is actually widening anything.</summary>
     public static bool On => Display.WideAspect > 0f;
 
@@ -171,6 +195,13 @@ public static class Widescreen
     /// report to the console.</summary>
     static bool _measure;
 
+    /// <summary>KF2_WIDESCREEN_EFFECTS, which wins over the saved setting the way
+    /// <see cref="_forced"/> does.</summary>
+    static bool? _forcedEffects;
+
+    /// <summary>KF2_WIDESCREEN_PROBE=2: also list the wide primitives themselves.</summary>
+    static bool _listWide;
+
     // The HUD measured 65 entries from the end of the ordering table; this is that
     // with room to spare, and still a thousandth of the ~9,400-entry table, so
     // world geometry has to be practically touching the camera to reach it.
@@ -182,12 +213,23 @@ public static class Widescreen
     const int HudLeftEdge = 110;      // left cluster: x 5..91
     const int HudRightEdge = 250;     // right cluster: x 269..310
 
+    // How far off the screen edge a vertex may sit and still count as being on it.
+    // The game's own tints land exactly on 0 and 320, so this is only insurance.
+    const int EdgeSlack = 2;
+
+    // Full-width tints stretched in the current report window.
+    static long _stretched;
+
     // How far the current primitive is from the end of the OT walk; -1 outside it.
     static int _fromEnd = -1;
 
     // Per report window, split by whether the primitive crossed into the margin.
     static long _inside, _margin;
     static double _windowStart;
+
+    // The census's second half: every primitive wide enough to be a screen-space
+    // overlay, once per distinct shape, so a fade or a flash names itself.
+    static readonly HashSet<long> _seenWide = [];
 
     static double Now => Environment.TickCount64 / 1000.0;
 
@@ -201,12 +243,21 @@ public static class Widescreen
         Description = "Renders a margin either side of the game's 320-pixel screen.",
     };
 
-    public static void Configure(string? aspect, string? probe)
+    public static void Configure(string? aspect, string? probe, string? effects = null)
     {
         if (Parse(aspect) is { } ratio) _forced = ratio;
 
         if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
+        {
             _measure = true;
+            // =2 additionally lists the wide primitives themselves, which is how
+            // the full-screen tint was identified. It is a page of output per
+            // scene, so it is not what a plain =1 asks for.
+            _listWide = probe.Equals("2", StringComparison.Ordinal);
+        }
+
+        if (!string.IsNullOrWhiteSpace(effects))
+            _forcedEffects = !effects.Equals("0", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -226,10 +277,12 @@ public static class Widescreen
         {
             Aspect = _forced ?? RecompOne.Runtime.Runtime.View.GetFloat(AspectKey, FourThree);
             AnchorHud = RecompOne.Runtime.Runtime.View.GetBool(AnchorKey, true);
+            StretchEffects = _forcedEffects ?? RecompOne.Runtime.Runtime.View.GetBool(EffectsKey, true);
             Apply();
             Console.WriteLine(On
                 ? $"[KF2] widescreen: {Aspect:0.###}:1, margin {Margin} px a side, " +
-                  $"HUD {(AnchorHud ? "anchored" : "left in its 4:3 box")}"
+                  $"HUD {(AnchorHud ? "anchored" : "left in its 4:3 box")}, " +
+                  $"screen tints {(StretchEffects ? "stretched across it" : "left 320 wide")}"
                 : "[KF2] widescreen: off (4:3)");
         });
 
@@ -260,6 +313,13 @@ public static class Widescreen
         Listen();
     }
 
+    /// <summary>Change the tint stretching at run time.</summary>
+    public static void SetStretchEffects(bool on)
+    {
+        StretchEffects = on;
+        Listen();
+    }
+
     static void Apply()
     {
         // 4:3 means off, and off is 0 rather than 1.333 -- WideMargin returns no
@@ -275,7 +335,7 @@ public static class Widescreen
     static void Listen()
     {
         Event.RemoveListener<RenderPrimEvent>(OnPrim);
-        if (_measure || (AnchorHud && On)) Event.AddListener<RenderPrimEvent>(OnPrim);
+        if (_measure || (On && (AnchorHud || StretchEffects))) Event.AddListener<RenderPrimEvent>(OnPrim);
     }
 
     static void Attach()
@@ -317,7 +377,12 @@ public static class Widescreen
     public static void DrawOTag(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
     {
         var gpu = RecompOne.Runtime.Runtime.Gpu;
-        if (!AnchorHud || !On || gpu == null) { orig(c, m); return; }
+        // The listing wants the entry number too, so it walks for that as well as
+        // for the anchoring -- at 4:3 included, since "where is this drawn from" is
+        // a question asked before the aspect is changed. The plain census does not
+        // need it, and the tint stretch does not either: a screen-space tint is
+        // recognised by its shape, not by where in the table it sits.
+        if (!((AnchorHud && On) || _listWide) || gpu == null) { orig(c, m); return; }
 
         uint addr = c.A0 & 0x1FFFFCu;
         int entries = 0;
@@ -368,10 +433,22 @@ public static class Widescreen
     // vertex outside the clip -- no assumption about where the display buffer sits.
     static void OnPrim(RenderPrimEvent e)
     {
+        // Measured first, before anything below moves a vertex: the census is about
+        // what the game submitted and the listing is about recognising it, and
+        // neither is a question about where this patch then put it.
+        if (_measure)
+        {
+            if (_listWide) ProbeWide(e);
+            Census(e);
+        }
+
+        if (StretchEffects && On) Stretch(e);
+
         if (AnchorHud && On && _fromEnd >= 0 && _fromEnd < HudTailEntries) Anchor(e);
+    }
 
-        if (!_measure) return;
-
+    static void Census(RenderPrimEvent e)
+    {
         bool outside = false;
         for (int i = 0; i < e.Count; i++)
             if (e.X[i] < e.DrawLeft || e.X[i] > e.DrawRight) { outside = true; break; }
@@ -388,10 +465,92 @@ public static class Widescreen
         Console.WriteLine(total == 0
             ? "[KF2] widescreen: no primitives in the last window"
             : $"[KF2] widescreen: {_margin * 100.0 / total:F1}% of {total} prims reach the margin " +
-              $"({total / window:F0}/s)");
+              $"({total / window:F0}/s)" +
+              (_stretched > 0 ? $"; {_stretched} full-screen tint(s) stretched" : ""));
 
-        _inside = _margin = 0;
+        _inside = _margin = _stretched = 0;
         _windowStart = Now;
+    }
+
+    // A screen-space overlay -- a fade, a flash, a letterbox bar -- is a primitive
+    // as wide as the screen, so this lists every primitive that covers most of the
+    // clip rectangle, once per distinct shape. What comes out is the rule for
+    // widening them.
+    static void ProbeWide(RenderPrimEvent e)
+    {
+        int lo = int.MaxValue, hi = int.MinValue, top = int.MaxValue, bottom = int.MinValue;
+        for (int i = 0; i < e.Count; i++)
+        {
+            lo = Math.Min(lo, e.X[i]); hi = Math.Max(hi, e.X[i]);
+            top = Math.Min(top, e.Y[i]); bottom = Math.Max(bottom, e.Y[i]);
+        }
+
+        int width = e.DrawRight - e.DrawLeft + 1;
+        // The part of it that is actually on screen: a world polygon a thousand
+        // pixels wide off to one side is not an overlay, and there are thousands
+        // of those a second.
+        if (Math.Min(hi, e.DrawRight) - Math.Max(lo, e.DrawLeft) < width * 9 / 10) return;
+
+        lo -= e.DrawLeft; hi -= e.DrawLeft;
+        top -= e.DrawTop; bottom -= e.DrawTop;
+
+        long key = ((long)(lo & 0x3FF) << 40) | ((long)(hi & 0x3FF) << 30) |
+                   ((long)(top & 0x1FF) << 21) | ((long)(bottom & 0x1FF) << 12) |
+                   ((long)e.Count << 8) | (e.Textured ? 1 : 0) | (e.SemiTransparent ? 2 : 0) |
+                   (e.Gouraud ? 4 : 0) | (e.Raw ? 8 : 0);
+        if (!_seenWide.Add(key)) return;
+
+        Console.WriteLine($"[KF2] widescreen: wide prim x {lo}..{hi} y {top}..{bottom} " +
+                          $"verts={e.Count} tex={(e.Textured ? 1 : 0)} semi={(e.SemiTransparent ? 1 : 0)} " +
+                          $"gouraud={(e.Gouraud ? 1 : 0)} raw={(e.Raw ? 1 : 0)} clut=0x{e.Clut:X4} " +
+                          $"ot={_fromEnd} clip={width}x{e.DrawBottom - e.DrawTop + 1}");
+    }
+
+    // Stretch a full-screen tint across the margin.
+    //
+    // The game paints the death fade, the damage flash and every other whole-screen
+    // effect the same way: one flat, textured, semi-transparent quad from (0,0) to
+    // (320,240), submitted at the front of the ordering table by func_80031EE8 from
+    // a colour and a blend mode left in the request block at 0x80192D45. The
+    // blend mode is the effect -- subtractive for the fade to black, additive for a
+    // flash -- and the texture is a fifteen-pixel patch of flat colour already
+    // stretched over the whole screen, so widening the quad costs nothing and shows
+    // nothing.
+    //
+    // The test is that shape rather than that address: OPEN.EXE and END.EXE hold
+    // their own links of the same drawer, and a primitive is checked here anyway.
+    // Semi-transparent and flat is what separates the tint from the world -- one
+    // colour laid over the whole frame is exactly what an effect is, while world
+    // geometry is Gouraud-shaded to the last polygon (measured: every wide
+    // primitive in an area, semi-transparent or not, is Gouraud). A 2D picture
+    // authored 320 wide -- a title, a menu -- is opaque and is deliberately left
+    // where it is: stretching a picture distorts it, and pillar-boxing one does not.
+    static void Stretch(RenderPrimEvent e)
+    {
+        if (!e.SemiTransparent || e.Gouraud) return;
+
+        int width = e.DrawRight - e.DrawLeft + 1;
+        int margin = Display.WideMargin(width);
+        if (margin <= 0) return;
+
+        // Right is exclusive here: the game's own tint runs 0..320 over a 320-pixel
+        // screen, which is the last column plus one, and a rectangle's second point
+        // is x + w for the same reason.
+        int left = e.DrawLeft, right = e.DrawRight + 1;
+
+        int lo = int.MaxValue, hi = int.MinValue;
+        for (int i = 0; i < e.Count; i++) { lo = Math.Min(lo, e.X[i]); hi = Math.Max(hi, e.X[i]); }
+        if (lo > left + EdgeSlack || hi < right - EdgeSlack) return;
+
+        // Snapped to the new edges rather than shifted by the margin, so a tint that
+        // was a pixel short of the screen still covers all of it.
+        for (int i = 0; i < e.Count; i++)
+        {
+            if (e.X[i] <= left + EdgeSlack) e.X[i] = left - margin;
+            else if (e.X[i] >= right - EdgeSlack) e.X[i] = right + margin;
+        }
+
+        _stretched++;
     }
 
     // Move a HUD element out to the side of the screen it sits on. The clip

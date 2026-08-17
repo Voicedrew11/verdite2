@@ -54,6 +54,8 @@ KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pa
 KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other frame
 KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
+KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
+KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
@@ -115,7 +117,9 @@ play are identical to having it off. **Widescreen is a patch for the dither
 reason** — an aspect ratio is a picture the port should be able to offer without a
 package having to load, and Video is where a player looks for it — but it is the
 one patch that defaults to *doing nothing*, for the sub-pixel reason: the picture
-has never been checked by eye. The measurement tools are the mods that are left
+has never been checked by eye. (Its two sub-options are on by default, since they
+only do anything once an aspect has been chosen; the tint stretch is on because
+the picture without it *was* checked and was wrong.) The measurement tools are the mods that are left
 under `mods/` — **enable them in the game's Mods panel**, since mods default to
 off and load silently when disabled. Prefer them to `KF2_LOG=sdk`, which is
 gigabytes a minute.
@@ -131,7 +135,22 @@ event cannot say. That replacement is the reason every other `DrawOTag` hook in
 `patches/` is a pre or a post — `HookManager` allows one `Replace` owner per
 function. It must also pass the **source address** to `WriteGp0`, or the recovered
 GTE depth misses and perspective correction quietly turns itself off whenever the
-HUD is anchored. See "Widescreen" in `NOTES.md`.
+HUD is anchored. Its other job is the **screen-space tints** — the death fade, the
+damage flash, the wash on an area load — which the game draws as one 320-wide quad
+and which therefore covered only the middle of a wide picture. All of them come out
+of one drawer (`func_8003220C` fills a request block, `func_8003214C` submits
+`func_80031EE8(0,0,320,240)`), but the fix is keyed on the *shape* — semi-transparent,
+flat, full clip width, snapped out to the margin in the primitive listener — so that
+OPEN.EXE's and END.EXE's own links of the same drawer need no addresses. Opaque
+full-screen pictures (titles, menus) are left at their authored width on purpose.
+See "Widescreen" in `NOTES.md`.
+
+**The attract demo is a free live session**: leave the port at the title and it
+walks itself into an area about a minute later, with a character, an HP bar and
+(eventually) a death. That is how in-game behaviour gets tested without a human
+driving the menus — `AutoReload.Simulate()` kills on demand from there, and the
+death clock at `0x8019951A` can be pinned to hold any frame of the death sequence
+still.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
 its clock starts when the first area module loads, which is the only point in the
