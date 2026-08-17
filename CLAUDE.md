@@ -44,6 +44,14 @@ There are no tests. Verification is empirical: run the game with log channels on
 and check the trace against what the SDK sequence should look like (see the
 steady-state `KF2_LOG=sdk` excerpt in `NOTES.md`).
 
+**Anything that has to be judged by eye is the user's job, not yours.** Do not
+try to capture, screenshot or otherwise scrape the game window — it burns a lot
+of context and produces nothing a person could not tell you in one sentence.
+Measure what a counter can measure, then say plainly what still needs looking at
+and ask. That distinction is already all over `NOTES.md`, which repeatedly
+separates "mechanism measured" from "picture never checked"; keep writing it down
+that way.
+
 ### Diagnostics
 
 ```bash
@@ -56,6 +64,10 @@ KF2_FRAMESTATS=15 KF2_LOOPPROBE=20     # report intervals for the two mods
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
+KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3 shape
+KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the aspect's
+KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
+KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
@@ -144,6 +156,24 @@ flat, full clip width, snapped out to the margin in the primitive listener — s
 OPEN.EXE's and END.EXE's own links of the same drawer need no addresses. Opaque
 full-screen pictures (titles, menus) are left at their authored width on purpose.
 See "Widescreen" in `NOTES.md`.
+
+**The cull the margin runs into is `patches/CullCone.cs`**, and it is the other
+half of widescreen rather than an option beside it. The game gates every object
+and every geometry block on a **24×24 byte grid of tile visibility** at
+`0x80192EAC`, rebuilt each frame by `func_8002D3A8` as a top-down trapezoid — the
+4:3 frustum flattened onto the map — whose corners are seven `s16` pairs in
+GAME.EXE's data at `0x80068760`. Widening the picture without widening that leaves
+the sides showing only what the game happened to overdraw. Two things about it are
+load-bearing: the 24×24 window fits the shipped cone *exactly* (`0/60 frames reach
+the grid edge` at stock, measured), and the game's scanline fill
+(`func_8002CF0C`) scans in from both sides, so a row whose edge left the grid gets
+**no fill at all** — widening the table alone loses whole ranks of tiles. Hence the
+post-hook that re-rasterises the recorded edges and fills what the game dropped.
+The 24-tile window is stride and bounds baked into nine routines, so growing it is
+a reimplementation of the visibility system whose only correctness check is a
+person looking at the screen; `KF2_WIDESCREEN_CULL_PROBE=2` measured what that
+would buy and the answer was **3.5% of lit tiles, at the far corners** — binding,
+barely, and not worth it. See "The cull the margin runs into" in `NOTES.md`.
 
 **The attract demo is a free live session**: leave the port at the title and it
 walks itself into an area about a minute later, with a character, an HP bar and

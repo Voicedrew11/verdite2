@@ -327,6 +327,12 @@ public static class Widescreen
         // SourceAspect, which is the untouched path.
         Display.WideAspect = Aspect > FourThree + 0.001f ? Aspect : 0f;
         Listen();
+
+        // The margin only shows what the game submitted, and the game submits
+        // against a top-down trapezoid sized for a 4:3 screen. Opening that to the
+        // new aspect is what puts anything in the margin at the sides rather than
+        // only in the corners the game happened to overdraw. See Kf2.CullCone.
+        CullCone.Apply();
     }
 
     // One listener serves both jobs, so it is attached exactly when one of them

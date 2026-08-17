@@ -271,6 +271,22 @@ Kf2.Widescreen.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN"),
                          Environment.GetEnvironmentVariable("KF2_WIDESCREEN_EFFECTS"));
 Kf2.Widescreen.Install();
 
+// The cull the margin runs into. King's Field decides what to draw from a 24x24
+// grid of tile visibility, rebuilt each frame as a top-down trapezoid whose corners
+// are seven s16 pairs in GAME.EXE's data -- the 4:3 frustum, flattened onto the
+// map. Widening the picture without widening that leaves the sides showing only
+// what the game happened to overdraw, so this scales the trapezoid's four lateral
+// corners by the same ratio the margin widens by, and fixes the game's scanline
+// fill so a cone that now leaves the 24x24 window does not lose whole ranks of
+// tiles:
+//
+//     KF2_WIDESCREEN_CULL=0        leave the cone at its 4:3 shape
+//     KF2_WIDESCREEN_CULL=1.5      pin a widening factor instead of the aspect's
+//     KF2_WIDESCREEN_CULL_PROBE=1  the cone's shape and what the grid clipped
+Kf2.CullCone.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN_CULL"),
+                       Environment.GetEnvironmentVariable("KF2_WIDESCREEN_CULL_PROBE"));
+Kf2.CullCone.Install();
+
 // Where the patches' own settings live. A patch registers a page against one of
 // the runtime's settings sections and is drawn inside it, so the frame rate is in
 // System > Settings > Video beside vsync rather than in a box of its own; the one

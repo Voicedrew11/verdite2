@@ -2115,6 +2115,236 @@ in an area, which is the same shape as the mod measured. At 4:3 the replacement 
 a straight call to the original and no `RenderPrimEvent` listener is attached at
 all, so the default costs nothing per primitive rather than merely little.
 
+### The cull the margin runs into: a 24×24 tile grid, and a trapezoid drawn on it
+
+The margin only ever shows what the game submitted, and the second of the two
+things the primitive census could not see — "per-object culling still uses the
+game's 4:3 frustum, so an object can be dropped while its polygons would have been
+visible in the margin" — turned out to be the whole story, reported from a real
+session: **things pop in and out at the sides of a wide picture.**
+
+The cull is not per polygon and it is not a frustum test per object. King's Field
+keeps **a 24×24 byte grid of tile visibility at `0x80192EAC`**, one byte per
+2048-unit map tile, and rebuilds it every frame at the top of the renderer. Every
+part of the frame is gated on it:
+
+| address | what it does |
+|---|---|
+| `func_800342D8` | the renderer; its first call is the grid build |
+| `func_8002D3A8` | builds the grid: clear, four edges, fill, then an occlusion flood |
+| `func_8002CCE4` | clears the 576 bytes |
+| `func_8002CD0C` | one Bresenham edge into the grid, dropping cells outside it |
+| `func_8002CF0C` | the scanline fill between those edges |
+| `func_80032D78` | *is this tile lit* — the point query, `grid[z][x] & mask` |
+| `func_80032DE8` | the same over a box, for an object with extent |
+| `func_800331B4` | the two renderer walks, both gated on those two queries |
+
+`0x80192E98` / `0x80192E9C` are the per-axis offsets that turn `world >> 11` into
+a grid index; they are written as words and read back as `u16`, so the arithmetic
+is 16 bits wide and a negative index wraps out of the `< 0x18` bounds check rather
+than failing it.
+
+**The shape is the 4:3 frustum flattened onto the map.** `func_8002D3A8` reads
+seven `s16` pairs from GAME.EXE's data at **`0x80068760`**, lerps each pair by
+`0x1000 - rcos(pitch)` so the shape opens out as you look up or down, rotates the
+result by the yaw, and hands four corners to `func_8002CD0C`. In units of 1/256 of
+a tile, level:
+
+| index | level | pitched | what it is |
+|---|---|---|---|
+| 0 | 1280 | 0 | how far ahead of the player the 24×24 window is centred (5 tiles) |
+| 1, 2 | -2272, 2336 | -1248, 1312 | the far edge, left and right (±9 tiles) |
+| 3 | 2688 | 1152 | the far edge's depth (10.5 tiles) |
+| 4, 5 | -224, 288 | -1248, 1312 | the near edge, left and right (±1 tile) |
+| 6 | -128 | -1152 | the near edge's depth (half a tile behind you) |
+
+Nine tiles wide at ten and a half out is a half-angle of 36°, which is `160/H` for
+`H ≈ 220` — the screen's own half-width, plus a tile of slack at the near end. So
+widening the cull is four numbers: scale indices 1, 2, 4 and 5 by the ratio the
+margin widens the picture by, and the trapezoid opens to the new screen edges. The
+depths and the forward push are left alone; the cone gets wider, not longer, and
+the push is where the occlusion flood starts.
+
+**The 24×24 window fits that cone exactly and not one tile more.** Its centre sits
+5 tiles ahead of the player, so the far corners are `sqrt(5.5² + 9²) = 10.55` tiles
+from it against a reach of 11. That is not slack, it is a fit, and it is a designed
+one — measured rather than argued: `KF2_WIDESCREEN_CULL_PROBE=1` at the stock table
+reports **`0/60 frames reached the grid edge`**, every window, through a whole
+attract-demo session. Any widening at all puts a corner off the grid at some yaw.
+
+**Which breaks the fill, not merely clips it.** `func_8002CF0C` takes each of the
+24 rows, scans in from the left for the first run of the marker and in from the
+right for the other, and fills between them; `func_8002CD0C` drops the cells that
+fall outside the grid. A row whose left edge left the grid therefore has *one*
+boundary, the two scans meet, and **the row is not filled at all** — a whole rank
+of tiles vanishes rather than being clipped. Widening the table on its own would
+trade pop-in at the edges for chunks of the world blinking out.
+
+So `patches/CullCone.cs` is the two halves together: the table scaled by
+`(320 + 2·margin) / 320`, and a **post-hook on the fill** that re-walks the four
+edges a pre-hook on `func_8002CD0C` recorded — with the game's own Bresenham, the
+same major-axis choice and the same halved error term — takes each row's true span,
+clamps it to the grid and writes the marker over it. It runs after the fill and
+before the occlusion flood, exactly where the game's own fill sits, so recovered
+tiles are shadowed by walls like every other tile. It returns immediately unless a
+corner actually fell outside, so 4:3 is bit-identical: the cone fits, nothing is
+recorded as clipped, and the hook has read four integers.
+
+The table is read back and matched against the shipped values before anything is
+written, and a mismatch refuses the patch rather than corrupting the renderer's
+idea of what is visible. It is only written while GAME.EXE is the resident overlay
+— OPEN.EXE and END.EXE link at the same base — and rewritten on every load of it.
+
+**What it cannot buy, and what that is worth.** The window is 24 tiles and stays
+24 tiles, which caps the cone at about 9.5 tiles from the centre in the worst yaw
+against the 9 it ships with. 16:9 wants 12 and 21:9 wants 15, so the near and
+middle distance — where edge pop-in is actually visible — widens fully and the far
+corners of a very wide aspect stay clipped. The probe says how much that costs in
+the window it just measured:
+
+```
+[cullcone] x1:     130.4 of 576 tiles lit,  0/60 frames reached the grid edge
+[cullcone] x1.338: 171.5 of 576 tiles lit, 58/60 frames reached the grid edge,
+                   97 tiles recovered over 6 rows the game's own fill dropped
+[cullcone] x1.781: 211.7 of 576 tiles lit, 60/60 frames reached the grid edge,
+                   3437 tiles recovered over 181 rows the game's own fill dropped
+```
+
+"Tiles lit" is the measurement that matters, and it is taken where the game itself
+reads it — the count of non-zero cells straight after the fill, before the occlusion
+pass. It answers "did the cull open" without depending on what the camera happens
+to be pointed at, which the widescreen census's primitive count does. (The primitive
+count moves the same way — about a quarter more submitted per window with the cone
+widened — but the attract demo does not run in lockstep between sessions, so it is
+the weaker of the two numbers.)
+
+### The second cull: a view-space clipper, and it is set to twice the screen
+
+The tile grid is not the only thing that removes geometry. `func_80030540` checks
+every polygon's screen-space vertex deltas against the GPU's own limits — `|dy| ≤
+511`, `|dx| ≤ 1023`, the `+0x1FF < 0x3FF` / `+0x3FF < 0x7FF` chains — and anything
+too big goes to **`func_8005CAC8`**, which clips it in view space and re-projects
+the pieces (`func_8005CCD8` builds 0x2C-byte vertex records, `func_8005CE98` is a
+six-plane Sutherland–Hodgman, `func_8005D8E8` re-projects). A result of fewer than
+three vertices is dropped.
+
+**Which polygons are too big for the GPU? The near-camera floor and ceiling.** So
+this is the cull that governs exactly the bottom corners of the picture.
+
+The vertex record is `+0x08` X, `+0x0C` Y, `+0x10` Z, and the clip bounds are
+carried per vertex: `+0x24 = (Z · *0x800FC97C) >> 12` and
+`+0x28 = (Z · *0x800FC98C) >> 12`, i.e. `±X` and `±Y` limits at that depth. The
+six planes are near (`*0x8012E99C`), far (`*0x8017E07C`), then `Y` against `±+0x28`
+and `X` against `±+0x24`. `0x8010367C` / `0x8010366C` hold the reciprocals, used
+when interpolating a clipped vertex.
+
+Those four words come from one call, `func_8005D7CC(ws, 0x140, 0xF0, 0x64)` —
+**320 × 240 with a projection distance of 100**:
+
+```
+0x800FC97C = (320/2) << 12 / 100 = 6553   tan of the horizontal half-angle, 12.12
+0x800FC98C = (240/2) << 12 / 100 = 4915   the vertical one
+0x8010367C = 100 << 12 / 160     = 2560   and their reciprocals
+0x8010366C = 100 << 12 / 120     = 3413
+```
+
+**But the GTE's projection distance is 200, not 100** — `func_8005B2D4` is
+`SetGeomScreen` and is called with `0xC8` just before, `func_8005B2BC` is
+`SetGeomOffset(160, 120)`. So the real frustum is `tan = 160/200 = 0.8` and the
+clipper is set to `tan = 1.6`: **the clip volume is exactly twice the screen
+frustum**, deliberately, as a guard band that keeps a subdivided polygon under the
+GPU's 1023-pixel limit without ever cutting anything a 4:3 player could see.
+
+Two things follow.
+
+* **It confirms the tile cone's geometry independently.** `H = 200` gives a
+  half-angle of 38.7°, against the cone's 36° plus its one-tile near offset — so
+  the cone is a superset of the frustum right out to its 10.5-tile far edge, which
+  is what a conservative tile cull has to be.
+* **It is not aspect-aware, and it starts cutting the picture at 8:3.** The clip
+  lands at `200 × 1.6 = 320` pixels either side of centre. 4:3 reaches 160, 16:9
+  reaches 214, 21:9 (64/27) reaches 284 — all inside. Only past **2.67:1** does
+  the picture reach the guard band, and `Widescreen.Widest` is 3.0, so the top of
+  the allowed range does. Widening it is one number and its reciprocal, with room
+  to spare: the span at 3:1 would be 1040 pixels against the 1023 limit, so the
+  guard has to shrink rather than scale.
+
+### Is the 24-tile window worth lifting? Measured: binding, and barely
+
+The window is not a constant anyone can patch. It is *stride and bounds*, baked
+into immediates across nine routines — `func_8002CCE4` (clear), `func_8002CD0C`
+(edge), `func_8002CEA8` and `func_8002CF0C` (fill), `func_8002CFC8` and
+`func_8002D15C` (the occlusion steps), `func_80032D78` and `func_80032DE8` (the
+queries), and `func_8002D3A8` itself, whose ring loop passes the eight neighbour
+offsets `±1, ±0x17, ±0x18, ±0x19` and the row step `0x18` as about forty
+immediates. Lifting it means reimplementing all nine in C# against an N×N array
+of our own, including the flood's map lookups (`0x801C8484 + 800·z + 10·x`, an
+80×80 grid of 10-byte tile records, bit 0x80 of `+4` being "see through"). Note
+the grid is addressed through a stored cursor at `0x801B69D0` rather than by its
+base, so relocating it is not the hard part — the stride is.
+
+Nine functions, one of them large, and **no oracle but a person looking at the
+screen**: a wrong bit in the flood is a wall you can see through or a room that
+vanishes, and no counter here can tell the difference between that and correct
+occlusion.
+
+So the question is whether the window is binding at all, and that *is* a counter's
+question. `KF2_WIDESCREEN_CULL_PROBE=2` censuses the grid **after** the flood — the
+grid exactly as `func_80032D78` will read it — by Chebyshev ring from the middle.
+At 16:9, through `fdat05`:
+
+```
+lit per ring: 0:1.0  1:8.0  2:16.0  3:23.7  4:26.7  5:25.9
+              6:22.4 7:17.9 8:12.0  9:9.0   10:6.1  11:6.1
+```
+
+Rings 0-3 are **saturated** — every cell within three tiles is lit, always — and it
+falls away from there. The outermost ring the window has is occupied, ~6 cells of
+its 88, so the window *is* binding: the cone genuinely reaches the edge and is cut
+there. But ring 11 is 3.5% of the ~175 lit tiles, at eleven tiles out where the
+game's own fog is, and a bigger window would extend that tail rather than open it
+up — ring 12 and beyond would be smaller still.
+
+**Conclusion: not necessary, and not worth it on these numbers.** Nine
+reimplemented routines and an eyes-only correctness check, to recover a few percent
+of tiles at the extreme far corners. Revisit only if the picture at 21:9 shows
+something obviously missing out there — which is the one thing the census cannot
+answer.
+
+Worth separating from that: **the fill fix is load-bearing regardless of the window
+size.** At x1.781 the probe reports 181 rows dropped over 60 frames, three of the
+24 rows per frame, and those rows are wherever the trapezoid happens to leave the
+grid — near the camera as readily as far from it. That is the failure that loses
+chunks of the world, and it is not a far-corner problem.
+
+**The switch** is `kf2.widescreen.widencull` / `KF2_WIDESCREEN_CULL`, a checkbox on
+the widescreen page under Video, **on by default**: a wide picture whose cull is
+still 4:3 shows the margin filling in and emptying as you turn, which is a worse
+picture than no widescreen at all. It costs nothing at 4:3, where the factor is 1
+and the table is written back as its own values. `KF2_WIDESCREEN_CULL=1.5` pins a
+factor for measuring against the aspect's own.
+
+**Looked at, and not finished.** Reported from a real session with this patch in:
+**the corners of the screen still cull visibly.** So the tile cone was a real cull
+and is not the only one, and the next move is the test that separates them —
+`KF2_WIDESCREEN_CULL=2.5` pins the cone far wider than any aspect asks for, and
+whether the corners fill in says whether what is left is the cone's calibration or
+something else. The two other candidates are already named: the view-space clipper
+above (which the arithmetic says has ~36 pixels of headroom at 21:9, so probably
+not), and `GlCore.cs:588`, where the backend widens the GPU clip **only** when the
+game's clip covers the whole framebuffer — any frame that narrows it loses the
+whole margin, which would fit "sometimes". Worth noting the bottom corners are the
+most extreme lateral-to-forward ratio anywhere in the frame, so a flat lateral scale
+of the trapezoid may simply be the wrong shape for them: the near end needs
+proportionally more than the far end does.
+
+**Trap found while measuring:** `KF2_WIDESCREEN=16:9` was overridden mid-session by
+the saved `kf2.widescreen.aspect`, part-way through the run — the console showed the
+cone factor stepping from x1.338 to x1.781 with no other cause. Env-forced aspects
+are not as forced as the `_forced ?? saved` in `Widescreen.Install` reads; anything
+A/B-ing two aspects should pin the *saved* setting instead, and this is worth
+tracking down.
+
 ## Dithering: one flag, and it lives in the draw environment
 
 The 4x4 crosshatch over every shaded surface is the GPU's ordered dither, and the

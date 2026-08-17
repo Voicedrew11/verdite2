@@ -75,6 +75,20 @@ public sealed class WidescreenPage : IPatchPage
                              "edge they belong to. Only those two corners move, and only what the " +
                              "game draws in front of everything else — the world is never touched.");
 
+        bool cull = CullCone.Enabled;
+        if (ImGui.Checkbox("Widen the game's cull cone to match", ref cull))
+        {
+            CullCone.SetEnabled(cull);
+            PatchSettings.Set(CullCone.Key, cull);
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The game decides what to draw from a top-down trapezoid shaped for a " +
+                             "4:3 screen, so off, the extra columns show only what it happened to " +
+                             "overdraw and objects pop in at the sides as you turn. On, the trapezoid " +
+                             "opens to the same ratio the picture does. Its 24-tile working grid caps " +
+                             "how far that can go, so the far corners of a very wide aspect still clip.");
+
         bool effects = Widescreen.StretchEffects;
         if (ImGui.Checkbox("Stretch full-screen effects to the new edges", ref effects))
         {
