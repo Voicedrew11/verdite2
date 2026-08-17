@@ -3,7 +3,7 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The rate the port runs at, under Display beside vsync and render scale.
+/// The rate the port runs at, under Video beside vsync and render scale.
 ///
 /// It sits there because that is where a user looks for a frame rate, but it is
 /// not the graphics option it resembles: King's Field's speed *is* its frame

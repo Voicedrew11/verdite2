@@ -63,15 +63,22 @@ KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the la
 Patch settings live in `patches/settings/`. A patch registers an `IPatchPage`
 against one of the runtime's own settings sections —
 `PatchSettings.Register("display", new FramePacingPage())` — and is drawn inside
-it, so the frame rate sits in System ▸ Settings ▸ Display beside vsync rather than
-in a panel of its own. That is where a mod's `DrawSettings` body goes when the mod
-becomes a patch. See "Patch settings" in `NOTES.md`.
+it, so the frame rate and the dither switch sit in System ▸ Settings ▸ Video
+beside vsync rather than in a panel of their own. That is where a mod's
+`DrawSettings` body goes when the mod becomes a patch. Pages that give the same
+`Title` share one heading, so single checkboxes group under "Enhancements"
+instead of each getting a rule of its own. That section is the runtime's
+`display` — still that id everywhere in code; the port renames only its *label*,
+through `Localization.Merge`, which needs no patch to the checkout. See "Patch
+settings" in `NOTES.md`.
 
 Frame pacing is load-bearing: without it the port runs faster than the game can on
-hardware, so it lives in `patches/` and is always on. The measurement tools and
-the widescreen support are real mods under `mods/` — **enable them in the game's
-Mods panel**, since mods default to off and load silently when disabled. Prefer
-them to `KF2_LOG=sdk`, which is gigabytes a minute.
+hardware, so it lives in `patches/` and is always on. Dithering is a patch for a
+different reason — it is a picture the port should be able to offer without a
+package having to load — and defaults to *off* (no crosshatch). The measurement
+tools and the widescreen support are real mods under `mods/` — **enable them in
+the game's Mods panel**, since mods default to off and load silently when
+disabled. Prefer them to `KF2_LOG=sdk`, which is gigabytes a minute.
 
 Widescreen is `Display.WideAspect` and nothing else: the runtime renders a margin
 either side of the display buffer and presents it, the projection is untouched, so

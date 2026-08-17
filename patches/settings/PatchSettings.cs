@@ -11,7 +11,11 @@ public interface IPatchPage
     /// <summary>Stable id; also the ImGui id scope the page is drawn under.</summary>
     string Id { get; }
 
-    /// <summary>The heading the page sits under, inside the section it joins.</summary>
+    /// <summary>The heading the page sits under, inside the section it joins.
+    /// **Pages that give the same title share one heading** — a single checkbox
+    /// does not deserve a rule and a name of its own, so several of them can sit
+    /// together under "Enhancements" while something with real structure, like the
+    /// frame rate, keeps its own.</summary>
     string Title { get; }
 
     void Draw();
@@ -29,7 +33,7 @@ public interface IPatchPage
 /// The replacement is not a panel of our own. <c>SettingsRegistry.Extend</c> takes
 /// a section id and a draw callback and runs it after that section's own content,
 /// so a patch's settings can go where a user would already look for them -- the
-/// frame rate belongs under Display, beside vsync and render scale, and not in a
+/// frame rate belongs under Video, beside vsync and render scale, and not in a
 /// King's Field box off to one side. A patch registers a page against a section:
 ///
 /// <code>
@@ -84,13 +88,38 @@ public static class PatchSettings
         _installed = true;
 
         Register("display", new FramePacingPage());
+        Register("display", new NoDitherPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
     }
+
+    /// <summary>
+    /// The section the port adds to is called Video, not Display.
+    ///
+    /// "Display" reads as where the window lives; everything in that section is how
+    /// the picture is made, and the port puts a frame rate and a dither switch in
+    /// beside vsync and render scale. Renaming it needs no patch to the RecompOne
+    /// checkout: the tab is drawn from <c>Localization.T("settings.display")</c>,
+    /// and <c>Merge</c> is public and overwrites by key.
+    ///
+    /// Only English is overridden, because the runtime's other two languages
+    /// already say exactly this — pt-BR "Vídeo", es-419 "Video". The **id stays
+    /// <c>display</c>**, so <see cref="Register"/>, <c>SettingsRegistry</c> and the
+    /// runtime's own section are untouched; only the label moves.
+    /// </summary>
+    const string SectionNames = """
+    {
+      "strings": {
+        "settings.display": { "en": "Video" }
+      }
+    }
+    """;
 
     static void RegisterUi()
     {
         if (_registered) return;
         _registered = true;
+
+        Localization.Merge(SectionNames);
 
         foreach (var (sectionId, pages) in _pages)
         {
@@ -115,14 +144,21 @@ public static class PatchSettings
 
     /// <summary>
     /// Drawn after the section's own content, so the rule above it is what marks
-    /// where the runtime's settings end and the port's begin.
+    /// where the runtime's settings end and the port's begin. Pages are sorted by
+    /// title, so pages sharing one get drawn together under a single heading.
     /// </summary>
     static void Draw(List<IPatchPage> pages)
     {
+        string? heading = null;
         foreach (var page in pages)
         {
-            ImGui.Spacing();
-            ImGui.SeparatorText(page.Title);
+            if (page.Title != heading)
+            {
+                heading = page.Title;
+                ImGui.Spacing();
+                ImGui.SeparatorText(heading);
+            }
+
             ImGui.PushID(page.Id);
             page.Draw();
             ImGui.PopID();

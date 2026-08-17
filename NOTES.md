@@ -1125,7 +1125,6 @@ A mod is a folder (or zip) under `mods/` with a `mod.json` and C# sources,
 mods/framestats/mod.json + FrameStats.cs     fps and the vblank-per-frame histogram
 mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loop stages
 mods/widescreen/mod.json + Widescreen.cs     wider picture, and the census that justifies it
-mods/nodither/mod.json   + NoDither.cs       clears the GPU dither bit; see "Dithering"
 mods/analog/mod.json     + Analog.cs,
                            AnalogProbe.cs    analog twin-stick control; see "Analog twin-stick control"
 mods/autoreload/mod.json + AutoReload.cs     reload the last save on death; see "Auto reload"
@@ -1171,6 +1170,20 @@ attaches through `HookManager` — the same runtime detour, no config entry — 
 from `Program.cs` with its own `ModInfo`, so it cannot be turned off by accident.
 Measurement tools, which are genuinely optional and expensive, are real mods.
 
+`patches/NoDither.cs` moved the other way — it was `mods/nodither` — and the
+reason is not correctness. It is that **a mod is a package that can be absent, and
+a picture the port offers should not be**: the dither switch is a graphics option
+like vsync, it costs nothing when off, and a player looking for it in Display
+should find it there rather than have to know a package exists. That is the
+general test for the move. Being a patch is also what lets it default to *on*
+(dither cleared) — a mod defaults to disabled and would have shipped doing
+nothing. The conversion itself was mechanical: `[PreHook]`/`[PostHook]` attributes
+became `SymbolRegistry.Resolve` plus `HookManager.AddPre/AddPost` in an `Attach`
+deferred to the first `OverlayLoadedEvent`, hook bodies had to become `public`,
+`OnLoad`'s config read moved to `RuntimeReadyEvent`, and `DrawSettings` became an
+`IPatchPage`. Nothing about the hooking changed, because `HookManager` is the same
+detour either way.
+
 Config `patches[]` entries are still the right tool for **`replace`**, which is
 how the whole SDK is bound: those are needed before any mod could load, and there
 are 63 of them.
@@ -1201,8 +1214,8 @@ panel disappears. `patches/settings/` is the replacement.
 **It is not a panel of its own.** `SettingsRegistry.Extend(sectionId, draw)` takes
 a section id and a callback and runs it after that section's own content, which
 means a patch's settings can go where a user would already look for them. The
-frame rate belongs under Display beside vsync and render scale; a King's Field box
-off to one side would be a worse place to keep it. So a patch registers a page
+frame rate belongs under Video beside vsync and render scale; a King's Field
+box off to one side would be a worse place to keep it. So a patch registers a page
 against a section:
 
 ```csharp
@@ -1214,7 +1227,60 @@ The section ids are the runtime's own — `interface`, `input`, `display`, `path
 that `HostWindow`'s `Load` has registered all five, so an id matching no section
 is reported at startup instead of silently drawing nothing. A page is plain ImGui,
 which is what makes this the landing site for a converted mod: its `DrawSettings`
-body moves across unchanged.
+body moves across unchanged. `NoDitherPage` is the first one that arrived that
+way — `mods/nodither`'s checkbox, in Video under the frame rate, with the mod's
+`_on` field now `NoDither.Enabled` and its `Runtime.View` calls now
+`PatchSettings.Set`. Its explanatory paragraphs did *not* come across: a mod's
+panel is a place to explain itself, a settings section is a list of switches, so
+the prose became a hover tooltip and the counters stayed on the console.
+
+**Pages sharing a `Title` share one heading.** `SeparatorText` over a lone
+checkbox is the checkbox's own label written twice with a rule through it, so the
+dither switch is titled `Enhancements` and anything else of that size can join it
+there; `FramePacingPage`, which is a combo plus a live measurement, keeps its own.
+The list is already sorted by title, so drawing a heading only when it changes is
+the whole implementation.
+
+### Renaming a runtime section without patching the checkout
+
+"Display" is where the window lives; everything in that section is how the picture
+is made, and the port only adds to it — a frame rate and a dither switch beside
+vsync and render scale. Renaming it to **Video** turns out not to need
+`patches/recompone/` at all: `SettingsPopup` draws each tab from
+`Localization.T(section.TitleKey)`, and `Localization.Merge(json)` is public and
+overwrites by key, so `PatchSettings` merges one string for `settings.display` at
+the same `RuntimeReadyEvent` it registers the pages.
+
+**Only English is overridden**, because the runtime's other two languages already
+say exactly this: pt-BR is `Vídeo` and es-419 is `Video`. Overriding a key means
+supplying every language that key has, or the ones left out keep the old word —
+here the old word is already the new one.
+
+The **id stays `display`**. Only the label moves, so `Register("display", …)`,
+`SettingsRegistry.Extend` and the runtime's own section are all untouched. Two
+things make this safe: `Merge` calls `EnsureBase` first, so the embedded table is
+loaded before the override lands on top of it rather than being loaded over it
+afterwards; and the override goes into the per-language tables themselves, so a
+later `SetLanguage` re-points at a table that already carries it. Verified against
+`RecompOne.Runtime.dll` directly — the sibling keys (`settings.display.vsync`,
+`settings.input`) are untouched, and `settings.display` has exactly one consumer
+in the runtime, that section's own `TitleKey`.
+
+This is worth knowing generally: **anything the runtime shows through
+`Localization.T` can be renamed from the port**, which is a much cheaper lever
+than a patch to a gitignored checkout.
+
+**A heading over the runtime's own controls was tried and dropped.**
+`SettingsPopup` draws one `SeparatorText` per pane, from the section's
+`TitleKey`, and then the section's content bare, so fullscreen and vsync end up
+the only unlabelled controls on a page whose other groups are named. Wrapping the
+section works — `ISettingsSection` is public, `SettingsRegistry.Register` replaces
+by id, and a wrapper forwarding `Id`/`TitleKey`/`Order` can draw a heading before
+delegating `Draw` — but it buys a rule and a word for four controls the pane title
+already names, and it is one more thing to keep working against an upstream that
+does not know about it. The pane is `Video` and the port's groups are named under
+it. If the runtime ever grows more sections worth grouping, the missing per-group
+heading is upstream's to fix and is worth an issue rather than a wrapper.
 
 Settings persist through `PatchSettings.Get/Set`, which is `Runtime.View` plus an
 immediate `SaveView` — the same `interface.ini` store the mods use, keyed
@@ -1825,18 +1891,28 @@ they are worth separating because only two of them are hookable:
    mid-frame. (`SetDrawTPage` would build one with the bit already clear;
    `SetDrawMode` is the one that could set it.)
 3. **Recompiled MIPS writing GP0 through the trapped register**, from the parts of
-   libgpu that are not mapped to the runtime's HLE. **No mod can hook this**, so it
-   is checked instead of intercepted: `KF2_NODITHER_PROBE=1` samples GPUSTAT bit 9
-   after every frame, and it read 0 for whole sessions of title screen and play.
-   That register read is what closes the loop — without it, "the two hooks fire"
-   would only be evidence about the two routes that were already known.
+   libgpu that are not mapped to the runtime's HLE. **Nothing here can hook this**,
+   so it is checked instead of intercepted: `KF2_NODITHER_PROBE=1` samples GPUSTAT
+   bit 9 after every frame, and it read 0 for whole sessions of title screen and
+   play. That register
+   read is what closes the loop — without it, "the two hooks fire" would only be
+   evidence about the two routes that were already known.
 
-`mods/nodither` covers routes 1 and 2 and reports on all three. It **restores what
-it clears** — the `dtd` byte and any E1 word are cleared in the pre-hook and put
-back in the post-hook — so game memory is identical either side of the call and
-nothing survives unloading the mod. That matters most for the packet buffer: some
-of it is built once and re-sent for the rest of the run, so a bit cleared in place
-would stay cleared long after the mod was switched off.
+`patches/NoDither.cs` covers routes 1 and 2 and reports on all three under
+`KF2_NODITHER_PROBE=1`; the switch itself is in System ▸ Settings ▸ Video. It
+**restores what it clears** — the `dtd` byte and any E1 word are cleared in the
+pre-hook and put back in the post-hook — so game memory is identical either side
+of the call and nothing survives switching it off. That matters most for the
+packet buffer: some of it is built once and re-sent for the rest of the run, so a
+bit cleared in place would stay cleared long after the setting was turned off.
+
+It was `mods/nodither` first, and the conversion left the measurement exactly
+where it was: **the counters and the GPUSTAT sample stay behind
+`KF2_NODITHER_PROBE=1`, on the console.** The settings page is one checkbox and a
+tooltip. A per-frame report is what you want while establishing which of the three
+routes a game uses; it is not what belongs in a graphics settings window next to
+vsync, and putting it there would have been the conversion quietly promoting a
+diagnostic into UI.
 
 The ordering-table scan steps **command by command** using the GP0 command lengths
 rather than searching for bytes that look like E1: a colour or a vertex word can
@@ -1845,11 +1921,16 @@ geometry. It stops at the two commands whose length depends on data that follows
 polyline, and an image load); neither occurs in this game's tables.
 
 **It is a pre/post hook, not a replacement, and that is deliberate.**
-`HookManager` allows exactly one `Replace` owner per function — a second mod's
+`HookManager` allows exactly one `Replace` owner per function — a second owner's
 replacement is refused with `replace conflict on …` — and the widescreen mod owns
 `DrawOTag`. Pre- and post-hooks compose with a replacement and with each other, so
-both mods load together (`loaded 2/2 mod(s), 6 function(s) hooked`) and the frame
-pacing's own post-hook still runs.
+the patch (`dither: off, 12 hook(s)` — pre and post on both entry points in all
+three overlays), the widescreen mod and the frame pacing's own `DrawOTag`
+post-hook all coexist.
+
+Steady state with the patch in, probe on: `30 draw envs/s and 0 ordering-table
+words/s asked for dither, over 30 frames/s; GPUSTAT dither bit 0` — one dithered
+draw env per frame intercepted, route 2 unused, route 3 never taken.
 
 ### Getting pixels out without a screenshot
 
@@ -1889,7 +1970,7 @@ larger is the same fact seen by a compressor. Zoomed, the pair is unambiguous:
 identical rock and identical lighting, one smooth and one carrying the crosshatch.
 `mods/dithershot` was the throwaway that produced these; it is not kept.
 
-**Seen once, not reproduced:** the very first run with the mod hung after both mods
+**Seen once, not reproduced:** the very first run with the dither mod hung after both mods
 reported their hooks and before `ModLoader.LoadAll` printed `loaded N/N` — i.e. in
 `HookManager.Commit`, with the worker thread absent from `dotnet-stack` output
 entirely. Five later runs of the same pair of mods committed instantly. Worth
@@ -2009,7 +2090,8 @@ directions in turn with `KF2_ANALOG_PROBE=1` and compare mean |yaw step| and the
 pitch total, once standing still and once walking. Candidate 1 will show up as
 two clean bands and would settle it immediately.
 
-Measured with the mod loaded alongside `widescreen` and `nodither`:
+Measured with the mod loaded alongside `widescreen` (and the dither patch, then still
+`mods/nodither`):
 `loaded 3/3 mod(s), 9 function(s) hooked`, no replace conflict, 300 frames per
 10-second window — the pacing floor is untouched.
 

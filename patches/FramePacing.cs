@@ -15,7 +15,7 @@ namespace Kf2;
 ///     KF2_FPS=off     no floor: the raw port, which bursts past 60
 ///     KF2_FPS_GATE=80040348+8002A550   stages to skip on odd frames at 60
 ///
-/// It is also a setting, under Display -- see Kf2.Settings.FramePacingPage.
+/// It is also a setting, under Video -- see Kf2.Settings.FramePacingPage.
 /// The saved choice is read on RuntimeReadyEvent rather than in Configure, since
 /// ConfigManager only loads inside HostWindow.Initialize, after Program.cs; the
 /// environment variable still wins over it.
