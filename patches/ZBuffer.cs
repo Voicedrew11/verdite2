@@ -99,13 +99,22 @@ public static class ZBuffer
         Description = "Per-pixel occlusion from recovered GTE depth, instead of the ordering table.",
     };
 
+    /// <summary>KF2_ZBUFFER_PROBE=2: also take the frame's occlusion census — which
+    /// large primitive is standing in front of which, and how much of the picture
+    /// that costs.</summary>
+    static bool _census;
+
     public static void Configure(string? on, string? probe)
     {
         if (!string.IsNullOrWhiteSpace(on))
             _forced = !on.Equals("0", StringComparison.Ordinal);
 
         if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
+        {
             _toConsole = true;
+            _census = !probe.Equals("1", StringComparison.Ordinal);
+            GteDepth.TriCensus = _census;
+        }
     }
 
     public static void Install()
@@ -163,7 +172,9 @@ public static class ZBuffer
     {
         _frames++;
         double window = Now - _windowStart;
-        if (window < 2.0) return;
+        if (window < 2.0) { if (_census) GteDepth.ResetCensus(); return; }
+
+        if (_census) { ReportCensus(); GteDepth.ResetCensus(); }
 
         long tested = GteDepth.ZTris, skipped = GteDepth.ZSkipped, rejected = GteDepth.ZRejects;
         long total = tested + skipped;
@@ -183,4 +194,165 @@ public static class ZBuffer
         _frames = 0;
         _windowStart = Now;
     }
+
+    /// <summary>
+    /// One frame's occlusion census, for the question a rate cannot answer: when a
+    /// depth-tested surface disappears, <i>what is standing in front of it</i>.
+    ///
+    /// <c>DrawOTag</c> walks back to front, so a primitive submitted earlier is one
+    /// the game itself sorted as farther away. An early entry whose recovered depth
+    /// puts it entirely in front of a later one is therefore a disagreement between
+    /// the depth this port recovered and the game's own OTZ sort — and wherever the
+    /// two disagree over a wide area, the later surface vanishes and the picture
+    /// shows the earlier one instead. Blockers are ranked by how much of the picture
+    /// they take that way, which is the hole, in pixels.
+    /// </summary>
+    static void ReportCensus()
+    {
+        var all = GteDepth.Census.ToArray();
+        int tested = 0, clamped = 0, bigCount = 0;
+        float near = float.MaxValue, far = 0f;
+        foreach (var t in all)
+        {
+            if (t.Clamped) clamped++;
+            if (t.Area >= GteDepth.CensusBigArea) bigCount++;
+            if (!t.Tested) continue;
+            tested++;
+            if (t.MinZ < near) near = t.MinZ;
+            if (t.MaxZ > far) far = t.MaxZ;
+        }
+
+        Console.WriteLine($"[KF2] zbuffer census: {GteDepth.CensusSubmitted} polys submitted, " +
+                          $"{all.Length} kept ({bigCount} at least {GteDepth.CensusBigArea}px, " +
+                          $"{tested} depth-tested, {clamped} with a clamped corner)" +
+                          $"{(GteDepth.CensusDropped == 0 ? "" : $", {GteDepth.CensusDropped} dropped")}" +
+                          $"{(tested == 0 ? "" : $", z {near:F0}..{far:F0}")}" +
+                          $", table {GteDepth.OtLength} entries");
+
+        // The head of the table in submission order. A skybox lives here: linked at
+        // the far end so it draws first, and projecting near because it is a small
+        // box around the camera. `ot` against `z` is the disagreement, in one line.
+        int heads = 0;
+        foreach (var t in all)
+        {
+            if (t.Area < GteDepth.CensusBigArea) continue;
+            Console.WriteLine("    head " + Describe(t));
+            if (++heads == 3) break;
+        }
+
+        // The frame's largest surfaces, whatever their table position. A skybox is
+        // by construction one of these — it is the thing behind everything, so it
+        // covers whatever the world does not — and this is the line that says
+        // whether it depth-tested and at what depth. Sorted by area, so it does not
+        // matter where in the table it turned up.
+        var byArea = new int[all.Length];
+        for (int i = 0; i < byArea.Length; i++) byArea[i] = i;
+        Array.Sort(byArea, (a, b) => all[b].Area.CompareTo(all[a].Area));
+        for (int i = 0; i < byArea.Length && i < 6; i++)
+        {
+            if (all[byArea[i]].Area < GteDepth.CensusBigArea) break;
+            Console.WriteLine("    largest " + Describe(all[byArea[i]]));
+        }
+
+        // Entirely in front of, and overlapping: the later polygon loses every pixel
+        // the two share. Every polygon is a candidate victim regardless of size — a
+        // wall at distance is a crowd of small triangles, and one large surface
+        // standing in front of the crowd is exactly the shape of a hole. Partial
+        // overlaps in depth are left out on purpose: those are the interpenetrations
+        // the Z-buffer exists to sort out.
+        var cost = new long[all.Length];
+        var hides = new int[all.Length];
+        long hiddenArea = 0;
+        int hiddenCount = 0;
+        for (int i = 0; i < all.Length; i++)
+        {
+            if (!all[i].Tested) continue;
+            bool lost = false;
+            for (int j = 0; j < all.Length; j++)
+            {
+                if (j == i || !all[j].Tested) continue;
+                // j is earlier in the walk, so the game sorted it as farther away.
+                if (j > i) continue;
+                if (all[j].MaxZ >= all[i].MinZ || !all[j].Overlaps(all[i])) continue;
+                long w = Math.Min(all[j].X1, all[i].X1) - Math.Max(all[j].X0, all[i].X0) + 1;
+                long h = Math.Min(all[j].Y1, all[i].Y1) - Math.Max(all[j].Y0, all[i].Y0) + 1;
+                cost[j] += w * h;
+                hides[j]++;
+                lost = true;
+            }
+            if (lost) { hiddenCount++; hiddenArea += all[i].Area; }
+        }
+
+        var rank = new int[all.Length];
+        for (int i = 0; i < rank.Length; i++) rank[i] = i;
+        Array.Sort(rank, (a, b) => cost[b].CompareTo(cost[a]));
+
+        int shown = 0;
+        foreach (int i in rank)
+        {
+            if (cost[i] == 0 || shown++ == 6) break;
+            Console.WriteLine($"    hides {Describe(all[i])} " +
+                              $"-> in front of {hides[i]} later, {cost[i]}px hidden");
+        }
+
+        if (shown == 0)
+            Console.WriteLine("    nothing is entirely in front of anything the table put nearer — " +
+                              "the hole is not one primitive winning the depth test");
+        else
+            Console.WriteLine($"    {hiddenCount} polys ({hiddenArea}px of bbox) lose ground to " +
+                              "something the table sorted farther away");
+
+        ReportDepthMap();
+        GteDepth.WantDepthMap = true;
+    }
+
+    /// <summary>
+    /// The depth buffer the frame actually ended up with, as a picture made of
+    /// digits: the nearest surface in each cell of the screen, on a scale from the
+    /// frame's own nearest to its farthest. `.` is a cell nothing depth-tested at
+    /// all — 2D, or geometry that stayed on painter's order.
+    ///
+    /// This is the one measurement that does not depend on reasoning about what
+    /// should have happened. A hole in the picture with a *near* digit sitting in it
+    /// is something claiming the foreground there; a hole with `.` in it was never
+    /// depth-tested and the Z-buffer is not what emptied it.
+    /// </summary>
+    static void ReportDepthMap()
+    {
+        var map = GteDepth.DepthMap;
+        if (map == null) return;
+
+        float lo = float.MaxValue, hi = 0f;
+        foreach (float v in map)
+        {
+            if (v >= GteDepth.DepthMapEmpty) continue;
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+        Console.WriteLine($"    depth batches: {GteDepth.ZBatchRt} to a target with a depth buffer, " +
+                          $"{GteDepth.ZBatchVram} to VRAM, which has none" +
+                          $"{(GteDepth.ZRtRecreated == 0 ? "" : $"; {GteDepth.ZRtRecreated} targets rebuilt, each losing its depth")}");
+        GteDepth.ZBatchRt = GteDepth.ZBatchVram = GteDepth.ZRtRecreated = 0;
+
+        if (lo > hi) { Console.WriteLine("    depth map: nothing written — no pixel depth-tested"); return; }
+
+        Console.WriteLine($"    depth map (0 = nearest {lo:F0}, 9 = farthest {hi:F0}, . = untested):");
+        float span = Math.Max(1f, hi - lo);
+        var line = new char[GteDepth.DepthMapCols];
+        for (int r = 0; r < GteDepth.DepthMapRows; r++)
+        {
+            for (int c = 0; c < GteDepth.DepthMapCols; c++)
+            {
+                float v = map[r * GteDepth.DepthMapCols + c];
+                line[c] = v >= GteDepth.DepthMapEmpty ? '.' : (char)('0' + (int)Math.Min(9, (v - lo) * 10f / span));
+            }
+            Console.WriteLine("      " + new string(line));
+        }
+    }
+
+    static string Describe(in GteDepth.BigTri t) =>
+        $"#{t.Order,-4} ot {t.Ot,-5} {(t.Tested ? "z" : "PAINTER'S, z")} {t.MinZ,6:F0}..{t.MaxZ,-6:F0} " +
+        $"({t.X0},{t.Y0})-({t.X1},{t.Y1}) {t.Area,6}px " +
+        $"{(t.Tex ? "tex " : "flat")}{(t.Semi ? " semi" : "     ")}" +
+        $"{(t.Clamped ? " CLAMPED" : "        ")} rgb({t.R},{t.G},{t.B})";
 }

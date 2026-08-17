@@ -1,4 +1,5 @@
 using System.Reflection;
+using RecompOne.Runtime;
 using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Hle;
@@ -414,6 +415,9 @@ public static class Widescreen
         for (int guard = 0; guard < 0x100000; guard++)
         {
             _fromEnd = entries - 1 - guard;
+            // The same number libgpu's own walk publishes, so a primitive's table
+            // position is answerable whether or not this replacement is in charge.
+            GteDepth.OtEntry = guard;
 
             if (custom && addr >= otBase && addr < otEnd)
                 gpu.EmitCustomOrder((int)((addr - otBase) >> 2));
@@ -436,6 +440,8 @@ public static class Widescreen
         }
 
         _fromEnd = -1;
+        if (GteDepth.OtEntry >= 0) GteDepth.OtLength = GteDepth.OtEntry + 1;
+        GteDepth.OtEntry = -1;
         if (custom) GpuPrims.Clear();
     }
 

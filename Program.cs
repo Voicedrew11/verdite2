@@ -225,6 +225,9 @@ Kf2.Subpixel.Install();
 //
 //     KF2_ZBUFFER=1        on; 0 or unset leaves the ordering table in charge
 //     KF2_ZBUFFER_PROBE=1  report how many triangles actually depth-tested
+//     KF2_ZBUFFER_PROBE=2  also the frame's occlusion census: which large primitive
+//                          is standing in front of which, and how much of the
+//                          picture that costs
 //
 // Off by default where perspective correction is on -- the recovered number is
 // the same one, but the picture has not been checked by eye. Its switch is under
