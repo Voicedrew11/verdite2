@@ -2980,6 +2980,68 @@ drawn ordering table cannot take this pair, because the second pass would fail
 every test against the first. The cave is the test. The switch is under Video
 with the others; `KF2_ZBUFFER=1` forces it on for the run.
 
+### The clear landed at the tail of the frame, not the head
+
+Reported symptom: with the Z-buffer on, a large region of the picture shows the
+background instead of the geometry in front of it — the sky drawn over houses and
+walls a few metres ahead outdoors, a black hole in a cave. It moves with the
+camera and it is not every frame.
+
+`GlCore.PresentDisplay` opened with `_frame++; Flush();`. The depth clear above
+keys on `rt.LastDrawFrame != _frame`, so incrementing first made that **trailing**
+flush — the tail of the frame that is ending — look like the head of the next
+one:
+
+1. Frame N's draws stamp `LastDrawFrame = N`.
+2. `PresentDisplay` sets `_frame = N+1`, then flushes. The guard sees `N != N+1`,
+   **clears the depth buffer**, draws the last batch, stamps `LastDrawFrame = N+1`.
+3. Frame N+1's first real draw sees `N+1 == N+1` and **skips its clear**.
+
+So the clear happened one flush too late and suppressed the one that mattered.
+Frame N+1 began with whatever depth frame N's trailing batch left. Nothing
+rescues it: `PutDrawEnv` has `isbg=0` here, so there is no game-side full-screen
+fill to reach `FillRtFull` and clear the attachment by another route. The trailing
+batch is usually the 2D HUD, which does not write depth — that case leaves the
+buffer wiped and looks correct, which is why the fault is intermittent. When the
+last batch is 3D it stamps *near* depths, and the next frame's geometry is
+rejected wherever they landed, leaving the earliest-drawn thing — the far
+background — on screen. `patches/recompone/0016` swaps the two statements.
+
+**The confirmation is a counter, not a screenshot.** `KF2_ZBUFFER_PROBE=2` reads
+the depth attachment of the target the frame's depth batches actually went to and
+prints a 32×16 min-per-cell map. Before: **67 of 91 blocks read `nothing
+written`** on a target taking ~1500 depth batches a window, which had been written
+off as a broken instrument. After: **11 of 11 populated**, a smooth near-to-far
+gradient with no untested cells. The empty reads were the defect — the buffer was
+being cleared at the end of every frame.
+
+Two theories died on the way, both on the census's own evidence, and both worth
+not re-deriving:
+
+- *An early-sorted primitive claims a near depth.* Ruled out by `head` and
+  `largest`: the far end of the table holds far depths (`ot 7492, z 5002..6088`)
+  and the near end holds near ones (`ot 8490, z 803..3047`), in every area
+  measured. The frame-wide maxima (22266, 23215) sit on small primitives.
+- *A big surface wins the depth test against another.* `nothing is entirely in
+  front of anything the table put nearer`, every block. The blocker was never in
+  the frame.
+
+The ordering table and the recovered SZ agree, so the "where they disagree, trust
+the table" fix sketched for this would have had nothing to act on. **Note the OT
+length varies per area** (8348, 8898, 9101, 9162, 9315 measured), so an `ot` is
+only comparable inside its own frame.
+
+`patches/recompone/0015` is the census itself: `GteDepth` keeps every polygon's
+bbox, depth range, table position and flags for the window; `LibGpu.DrawOTag` and
+`Widescreen`'s replacement of it publish the walk position (`OtEntry`, counted
+from the far end); `GlCore` remembers which RT the depth batches went to, since
+the presented one is last frame's under double buffering and the most recently
+drawn one may have just been cleared by a fill. Diagnostic only.
+
+**Still not checked by eye**: whether the picture is now right. The measurement
+says the depth buffer survives the frame it was written in; it does not say the
+result looks correct, and the Z-buffer stays off by default until someone looks.
+
 ## Analog twin-stick control
 
 `patches/Analog.cs` (was `patches/Analog.cs`) gives the game continuous analog turning,

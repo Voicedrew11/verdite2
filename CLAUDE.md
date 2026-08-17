@@ -78,6 +78,7 @@ KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by defa
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
 KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off by default)
 KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-tested
+KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map of the depth buffer
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
@@ -355,9 +356,9 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Eleven of
-the fourteen are load-bearing; `0002` and `0003` are diagnostics and `0013` is a
-settings-placement hook.
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twelve of
+the sixteen are load-bearing; `0002`, `0003` and `0015` are diagnostics and `0013`
+is a settings-placement hook.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -446,6 +447,24 @@ uncaptured edit inside the checkout is left where it is.
   projected triangle. A miss is painter's order, so the HUD is untouched. Off
   by default. See "Z-buffer" in `NOTES.md`. **No recompile** — the lookup is
   the one `0012` already does.
+
+- `0015-zbuffer-occlusion-census.patch` — diagnostic behind `KF2_ZBUFFER_PROBE=2`.
+  Every polygon's bbox, depth range, table position and flags for the window, the
+  `DrawOTag` walk position (`GteDepth.OtEntry`, counted from the far end — so
+  `Widescreen`'s replacement of `DrawOTag` has to publish it too), and a 32×16 map
+  read back from the depth attachment. It reads the RT the depth batches went to,
+  not the presented one (last frame's, under double buffering) and not the most
+  recently drawn (a fill stamps `LastDrawFrame` too, so that can be a buffer just
+  cleared). **No recompile.**
+
+- `0016-zbuffer-clear-at-frame-head.patch` — `PresentDisplay` incremented `_frame`
+  before its trailing `Flush`, so the depth clear (keyed on `LastDrawFrame !=
+  _frame`) fired on the tail of the *outgoing* frame and was then skipped at the
+  head of the next one, which inherited the last batch's depths. Nothing rescues
+  it — `isbg=0` here, so no game-side fill reaches `FillRtFull`. Swapping the two
+  statements took the depth-map readback from 67-of-91 empty to 11-of-11
+  populated. This is what made the sky show through nearby walls. **No
+  recompile.** See "The clear landed at the tail of the frame" in `NOTES.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
