@@ -287,6 +287,16 @@ Kf2.CullCone.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN_CULL")
                        Environment.GetEnvironmentVariable("KF2_WIDESCREEN_CULL_PROBE"));
 Kf2.CullCone.Install();
 
+// How close the frame's primitive buffer comes to running out. The game hands out
+// 0x19000 bytes a frame -- 1969 POLY_GT4 packets -- and func_80030540 abandons the
+// rest of the call when the bump passes the end, so a busier frame silently loses
+// whatever it had not drawn yet. Widening the cull cone spends that budget, which
+// makes this the thing to check when geometry goes missing in a wide picture:
+//
+//     KF2_PRIMBUF_PROBE=1     peak usage, capacity and overflows, on the console
+Kf2.PrimBuffer.Configure(Environment.GetEnvironmentVariable("KF2_PRIMBUF_PROBE"));
+Kf2.PrimBuffer.Install();
+
 // Where the patches' own settings live. A patch registers a page against one of
 // the runtime's settings sections and is drawn inside it, so the frame rate is in
 // System > Settings > Video beside vsync rather than in a box of its own; the one

@@ -2324,19 +2324,43 @@ picture than no widescreen at all. It costs nothing at 4:3, where the factor is 
 and the table is written back as its own values. `KF2_WIDESCREEN_CULL=1.5` pins a
 factor for measuring against the aspect's own.
 
-**Looked at, and not finished.** Reported from a real session with this patch in:
-**the corners of the screen still cull visibly.** So the tile cone was a real cull
-and is not the only one, and the next move is the test that separates them —
-`KF2_WIDESCREEN_CULL=2.5` pins the cone far wider than any aspect asks for, and
-whether the corners fill in says whether what is left is the cone's calibration or
-something else. The two other candidates are already named: the view-space clipper
-above (which the arithmetic says has ~36 pixels of headroom at 21:9, so probably
-not), and `GlCore.cs:588`, where the backend widens the GPU clip **only** when the
-game's clip covers the whole framebuffer — any frame that narrows it loses the
-whole margin, which would fit "sometimes". Worth noting the bottom corners are the
-most extreme lateral-to-forward ratio anywhere in the frame, so a flat lateral scale
-of the trapezoid may simply be the wrong shape for them: the near end needs
-proportionally more than the far end does.
+### There is a third cull and it is none of the obvious ones
+
+Reported from a real session with the cone widening in: **the corners still cull
+visibly**, floor and ceiling, occasionally. Three candidates have since been
+eliminated, each with a number rather than an argument:
+
+| candidate | verdict | evidence |
+|---|---|---|
+| the tile cone above | **ruled out** | `KF2_WIDESCREEN_CULL=2.5` pins it far wider than any aspect asks for and the corners still drop |
+| the view-space clipper | **ruled out** | it cuts at `200 × 1.6 = 320` px either side of centre; 21:9 reaches 284. `SetGeomScreen` is called with `0xC8` at all three sites, so `H = 200` throughout and the guard band really is 2× |
+| the primitive buffer | **ruled out** | peak 1108 of 1969 packets through the attract demo at a 2.5× cone, and **~25% spinning the camera at full speed in a real area** — four times the headroom, zero overflows |
+
+That last one deserved the check it got: `func_8002DF80` hands out `0x19000` bytes
+a frame from `0x800FC99C` and `0x8011599C`, `func_80030540` bumps a descriptor at
+`0x8017E0A4` per polygon, and when the bump passes `end` it **returns, abandoning
+the rest of the call** — a frame that runs out silently loses whatever it had not
+drawn yet, which is the right shape for "occasionally". It simply never runs out.
+`patches/PrimBuffer.cs` / `KF2_PRIMBUF_PROBE=1` is that measurement, kept because
+it is the cheapest way to re-ask the question after anything that submits more
+geometry.
+
+**What is left is the runtime, not the game.** `GlCore.cs:588` widens the GPU
+scissor to the whole render target only when the game's clip spans the framebuffer;
+anything that narrows it loses the margin. The discriminator is one look rather
+than another counter, and it is the kind of thing only a person can answer: **a
+straight vertical edge to the missing region means a clip rectangle** — the
+backend's scissor, or the game's own clipper — **while ragged, per-polygon popping
+means something is still culling per object or per tile.**
+
+Also still open, and cheap if the cone ever comes back into suspicion: the bottom
+corners are the most extreme lateral-to-forward ratio anywhere in the frame, so a
+flat lateral scale of the trapezoid is arguably the wrong shape for them — the near
+end wants proportionally more than the far end. Pulling the near edge back widens
+every positive depth (±2.09 → ±3.37 tiles at z=1 for `zn` from −0.5 to −3), but it
+is dominated by the 2.5× test that already failed, and cells strictly behind the
+camera can never hold visible geometry: the cells partition the world, so the cell
+one step back ends at the camera's own position.
 
 **Trap found while measuring:** `KF2_WIDESCREEN=16:9` was overridden mid-session by
 the saved `kf2.widescreen.aspect`, part-way through the run — the console showed the
