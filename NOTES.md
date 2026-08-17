@@ -3038,9 +3038,23 @@ from the far end); `GlCore` remembers which RT the depth batches went to, since
 the presented one is last frame's under double buffering and the most recently
 drawn one may have just been cleared by a fill. Diagnostic only.
 
-**Still not checked by eye**: whether the picture is now right. The measurement
-says the depth buffer survives the frame it was written in; it does not say the
-result looks correct, and the Z-buffer stays off by default until someone looks.
+**This did not fix the picture.** Checked by eye after `0016`: the sky still
+draws over walls a few metres ahead. So the clear timing was a real defect —
+the buffer measurably did not survive its own frame, and now does — but it is
+not the cause of the reported symptom, or not the only one. A second cause
+remains and the Z-buffer stays off by default.
+
+That rules out a whole class of explanation, which is worth keeping: **the
+depth the world is being tested against is now known to be this frame's**. Any
+remaining theory has to work with a correctly cleared buffer, correct per-frame
+depths, a table position that agrees with the recovered SZ everywhere measured,
+and no primitive standing entirely in front of one the table put nearer. What
+has *not* been measured is the geometry the depth is interpolated across
+between the vertices — every census number above is per polygon, taken from its
+corners, and the map is a 32×16 minimum-per-cell reduction. Screen-linear
+interpolation of a view depth is wrong (it is 1/z that is linear in screen
+space), which biases a polygon's interior; whether that bias is large enough to
+lose a wall in front of the sky is the next thing to measure, not to assume.
 
 ## Analog twin-stick control
 

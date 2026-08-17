@@ -463,8 +463,9 @@ uncaptured edit inside the checkout is left where it is.
   head of the next one, which inherited the last batch's depths. Nothing rescues
   it — `isbg=0` here, so no game-side fill reaches `FillRtFull`. Swapping the two
   statements took the depth-map readback from 67-of-91 empty to 11-of-11
-  populated. This is what made the sky show through nearby walls. **No
-  recompile.** See "The clear landed at the tail of the frame" in `NOTES.md`.
+  populated. Real and measured, but **it did not cure the sky showing through
+  nearby walls** — a second cause remains. **No recompile.** See "The clear
+  landed at the tail of the frame" in `NOTES.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
