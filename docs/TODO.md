@@ -63,14 +63,20 @@ useful than the question was.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
    `.map` or ELF, so it does not help the function maps).
-7. **Report the two runtime bugs upstream as issues** (not PRs — see "Upstream
+7. **Report the runtime bugs upstream as issues** (not PRs — see "Upstream
    contribution policy" in [RUNTIME.md](RUNTIME.md)):
    input polled only from `PresentFrame`, which deadlocks any game that waits on
    the pad without vsyncing, and `Interrupts.Deliver` deriving a callback-table
    address from the `HookEntryInt` jmp_buf, which calls whatever the resulting
    game variable holds. Both are in `patches/recompone/0006` and `0007` with the
    reasoning; the second at minimum should refuse a handler that is not a known
-   function.
+   function. A third is `QueryDpiScale` taking the *primary* monitor's content
+   scale once at startup, so the interface is scaled for a monitor the window may
+   not be on and never follows it across; and a fourth is not RecompOne's at all
+   but Silk.NET's — the integer division in
+   `ImGuiController.SetPerFrameImGuiData` that `patches/recompone/0018` works
+   around, which breaks every fractionally scaled display and belongs in
+   `dotnet/Silk.NET`.
 8. **Take the twice-drawn pair for sub-pixel vertex positioning, and flip its
    default if it holds up.** The mechanism is measured — 47k vertices a second
    recovered, offsets uniform across the pixel, no frame-rate cost — but the
@@ -89,7 +95,18 @@ useful than the question was.
    is the only test, and it is what is keeping the default off. Interpenetrating
    rocks should sit still; coplanar floors should not z-fight; the HUD should be
    identical. See "Z-buffer" in [RENDERING.md](RENDERING.md).
-10. Play further in. Now that the menu opens, the parts of the game it reaches —
+10. **Decide what the interface should be scaled by, and by eye.**
+   `patches/recompone/0018` fixed *where* the interface is drawn; how large it is
+   is a second defect and still ours. `QueryDpiScale` returns the primary
+   monitor's integer `wl_output` scale — 2.0 for a monitor KDE runs at 1.15 — so
+   `Theme.Scale` and the 26 px icon font are wrong on both screens at once, and
+   the only reason the port looks usable is a hand-set `UiScale=0.6999999`. The
+   mechanism to write is known: prefer the framebuffer/window ratio, re-evaluate
+   per frame, rebuild the font atlas and re-apply `Theme` on a change. What no
+   counter answers is whether the result *looks* right, or whether the atlas
+   rebuild is cheap enough to do on a monitor change. See "The interface only
+   fits a monitor whose scale is a whole number" in [RUNTIME.md](RUNTIME.md).
+11. Play further in. Now that the menu opens, the parts of the game it reaches —
    inventory, equipment, magic, the map — have never run, and each is a screen
    with its own code path. `mods/kf2debug` is the instrument for this: its state
    readout is how the rest of `buf2` gets named, and its area warp reaches an

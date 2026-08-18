@@ -280,7 +280,7 @@ shape of bug, even though they were not what froze the window:
 
 ## The patches to the checkout, one by one
 
-Thirteen of the seventeen are load-bearing; `0002`, `0003` and `0015` are
+Fourteen of the eighteen are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. Several need **no recompile**
 — they change runtime behaviour only — and that is noted where it applies.
 
@@ -375,6 +375,84 @@ frame" in [RENDERING.md](RENDERING.md).
 `TakeMouseMotion` and `IsMouseButtonDown` on `InputManager`, forwarded from
 `HostWindow`. **No recompile.** See "What the runtime had to grow" in
 [INPUT.md](INPUT.md).
+
+**`0018-imgui-fractional-framebuffer-scale.patch`** recomputes
+`io.DisplayFramebufferScale` as a float in `HostWindow.OnRender`, because Silk's
+divides two ints. **No recompile.** See "The interface only fits a monitor whose
+scale is a whole number" below.
+
+## The interface only fits a monitor whose scale is a whole number
+
+Reported as "the UI does not display correctly on my 1440p monitor, but correctly
+on my 1080p one". It is neither the resolution nor the monitor: it is the
+**compositor's scale factor being fractional**, and the port draws its whole
+interface into the bottom-left corner of the window whenever it is.
+
+`Silk.NET.OpenGL.Extensions.ImGui` 2.22.0, `ImGuiController.SetPerFrameImGuiData`:
+
+```csharp
+io.DisplayFramebufferScale = new Vector2(_view.FramebufferSize.X / _windowWidth,
+    _view.FramebufferSize.Y / _windowHeight);
+```
+
+Both sides of each division are `int`, so the ratio truncates before it is ever a
+float. `RenderImDrawData` then sizes **both** its GL viewport and every scissor
+rectangle from it:
+
+```csharp
+int framebufferWidth = (int) (drawDataPtr.DisplaySize.X * drawDataPtr.FramebufferScale.X);
+SetupRenderState(drawDataPtr, framebufferWidth, framebufferHeight);   // -> gl.Viewport(0, 0, fbW, fbH)
+```
+
+A GL viewport is anchored bottom-left, so a viewport smaller than the framebuffer
+leaves dead margins along the **top and right** and clips every panel that
+crosses them. An integer scale divides exactly and nothing is lost, which is the
+whole of why one monitor is fine and the other is not — 2.0 is as safe as 1.0.
+
+Measured, with the window fullscreen on the reporter's 2560×1440 monitor, which
+KDE runs at `"scale": 1.15` (`~/.config/kwinoutputconfig.json`; the 1920×1080 one
+is at `1`):
+
+```
+window.Size=2226x1252  FramebufferSize=2559x1439  ratio=1.1496
+io.DisplayFramebufferScale = 1x1                      <- 1.1496 truncated
+drawData -> ImGui GL viewport 2226x1252  (framebuffer is 2559x1439) => SHORT BY 333x187 px
+```
+
+GLFW 3.4 honours a fractional scale for the window's framebuffer (`wp_fractional_
+scale_v1`), so the framebuffer really is 1.15× the logical window; it is only the
+arithmetic that loses it. The reported screenshot agrees to a few pixels: a
+1467×824 client area with the interface 1276 px wide (= 1467 / 1.15), a 188 px
+dead strip on the right and a 131 px band at the top, both showing the GL clear
+colour `(27,27,29)` — `Theme.Background`, i.e. nothing drew there.
+
+The fix recomputes the ratio in floating point between `Update()` and `Render()`.
+That window is the right one: `Update()` has already run `NewFrame`, so the
+frame's layout is fixed and still in logical units — **input is untouched**, since
+`io.MousePosition` and `io.DisplaySize` are both logical and stay that way — and
+`ImGui::Render()` reads `io.DisplayFramebufferScale` when it fills the draw data,
+so a value set anywhere between the two is what the backend sees. It cannot be
+set *before* `Update()`, which overwrites it, nor after `Render()`, which has
+already copied it. With it, the viewport goes to 2559×1439 — exactly the
+framebuffer.
+
+**The chrome is separately too large, and that one is ours.**
+`HostWindow.QueryDpiScale()` reads `glfwGetMonitorContentScale` of the *primary*
+monitor, once, at startup, and GLFW's Wayland path returns the **integer**
+`wl_output` scale — so the 1.15 monitor reports **2.0**, and `Theme.Scale =
+2.0 × UiScale` with the icon font baked at 26 px applies on *both* monitors no
+matter which one the window is on. The reporter had already compensated by hand
+with `UiScale=0.6999999` in `interface.ini`. Two things would fix it: prefer the
+framebuffer/window ratio (1.15 here) over the monitor's content scale, and
+re-evaluate it per frame, rebuilding the font atlas and re-applying `Theme` when
+it changes — `Theme.Apply()` sets absolute sizes before `ScaleAllSizes`, so it is
+safe to call again. Both are unwritten: the numbers above are measured, but how
+large the interface *should* look is a judgement by eye.
+
+One loose end, measured and not chased: a **programmatic** `IWindow.Size` set does
+not raise Silk's `Resize` event under GLFW-on-Wayland, so `io.DisplaySize` goes
+stale. Compositor-driven resizes do raise it — the reported screenshot has the
+correct logical width — so nothing in the port depends on it.
 
 ## Two general shapes worth keeping
 

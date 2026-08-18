@@ -414,8 +414,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirteen of
-the seventeen are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Fourteen of
+the eighteen are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
@@ -524,6 +524,21 @@ uncaptured edit inside the checkout is left where it is.
   populated. Real and measured, but **it did not cure the sky showing through
   nearby walls** — a second cause remains. **No recompile.** See "The clear
   landed at the tail of the frame" in `docs/RENDERING.md`.
+
+- `0018-imgui-fractional-framebuffer-scale.patch` — Silk's `ImGuiController`
+  computes `io.DisplayFramebufferScale` by dividing two `int`s, so a compositor
+  running a display at a *fractional* scale (KDE's 1.15) truncates to 1 and
+  `RenderImDrawData` sizes its GL viewport and every scissor from the logical
+  window instead of the framebuffer — the whole interface lands in the bottom-left
+  corner, with dead margins top and right. Recomputed as a float between
+  `Update()` and `Render()`, which is the only window where it is read: layout is
+  already fixed and still logical, so **input is untouched**. An integer scale
+  divides exactly, which is why a 1:1 monitor never shows it. Its sibling defect
+  is ours and unfixed — `QueryDpiScale()` reads the *primary* monitor's content
+  scale once at startup, and GLFW's Wayland path returns the integer `wl_output`
+  scale, so a 1.15 monitor reports 2.0 and the chrome is oversized on both
+  screens. **No recompile.** See "The interface only fits a monitor whose scale is
+  a whole number" in `docs/RUNTIME.md`.
 
 - `0017-mouse-capture-and-motion.patch` — `InputManager` owns the `IMouse` and is
   `internal`, so a port could not reach the cursor at all. Adds `MouseCaptured`
