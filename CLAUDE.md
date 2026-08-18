@@ -82,6 +82,10 @@ KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map o
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
+KF2_MOUSE=1                              # mouse look (off by default; Escape captures the pointer)
+KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
+KF2_MOUSE_BUTTONS=Cross,Triangle,Square  # left, right, middle, as pad buttons
+KF2_MOUSE_KEY=Escape                     # the key that captures and releases
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
 ```
 
@@ -134,8 +138,21 @@ test applied to the pad — without it a modern controller's left stick is wired
 the D-pad and *turns* rather than walking — so it is on by default too, and its
 knobs are under Input, below the button-binding table. It costs nothing when a
 stick is centred: both hooks return before touching memory, so keyboard and D-pad
-play are identical to having it off. **Widescreen is a patch for the dither
-reason** — an aspect ratio is a picture the port should be able to offer without a
+play are identical to having it off. **Mouse look is the other half of that
+patch rather than a patch beside it** (`patches/Mouse.cs`): a mouse and a stick
+both ask for the same per-frame turn and pitch step, so the mouse's number is
+spent inside `Analog.BeforeLook` and one routine writes the velocity word. Its
+buttons take the other route entirely — `PadReadEvent`, so they are pressed *as
+pad buttons* at the moment the game reads the pad, which needs no address, follows
+the game's own control-config screen and works in its menus. It is **off by
+default**, though not for the sub-pixel reason: the path *is* measured end to end
+— the angle asked for and the angle the game applied agree within a few percent
+over four windows of real play — but a pointer that disappears into the game
+unasked is worse than one switch to find. What no counter can answer is the feel
+(0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
+`NOTES.md`.
+
+**Widescreen is a patch for the dither reason** — an aspect ratio is a picture the port should be able to offer without a
 package having to load, and Video is where a player looks for it — but it is the
 one patch that defaults to *doing nothing*, for the sub-pixel reason: the picture
 has never been checked by eye. (Its two sub-options are on by default, since they
@@ -356,9 +373,9 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twelve of
-the sixteen are load-bearing; `0002`, `0003` and `0015` are diagnostics and `0013`
-is a settings-placement hook.
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirteen of
+the seventeen are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`0013` is a settings-placement hook.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -466,6 +483,15 @@ uncaptured edit inside the checkout is left where it is.
   populated. Real and measured, but **it did not cure the sky showing through
   nearby walls** — a second cause remains. **No recompile.** See "The clear
   landed at the tail of the frame" in `NOTES.md`.
+
+- `0017-mouse-capture-and-motion.patch` — `InputManager` owns the `IMouse` and is
+  `internal`, so a port could not reach the cursor at all. Adds `MouseCaptured`
+  (`CursorMode.Raw`, or `Disabled` where raw is unsupported — both make GLFW
+  report an unbounded virtual position, which is what turns successive positions
+  into motion), `TakeMouseMotion` and `IsMouseButtonDown`, forwarded from
+  `HostWindow` beside the `IsKeyDown` that already plays that role for the
+  keyboard, and gives the cursor back in `Shutdown`. Everything else about mouse
+  look is `patches/Mouse.cs`. **No recompile.** See "Mouse look" in `NOTES.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

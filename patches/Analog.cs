@@ -53,6 +53,12 @@ namespace Kf2;
 /// rather than hardcoded, so it follows whatever the player set in the game's own
 /// control-config screen.
 ///
+/// The look hook is shared with <see cref="Mouse"/>, which is the same idea
+/// applied to a device that gives displacement rather than a rate: it hands
+/// <see cref="BeforeLook"/> a step and this class writes the word, so the two
+/// devices cannot fight over it. That is also why the look hook runs with
+/// <see cref="Enabled"/> off — keyboard and mouse is a scheme of its own.
+///
 /// Sticks idle == patch idle: the hooks return before touching anything, so the
 /// D-pad and keyboard behave exactly as they do with <see cref="Enabled"/> off.
 /// That is also why this can default to *on*: a keyboard player never reaches the
@@ -186,8 +192,11 @@ public static class Analog
     public static bool CameraInstantStop = true;
 
     // Which camera axes the sticks were driving last frame, so the release can be
-    // handed back to the D-pad and L2/R2 after exactly one zeroing frame.
+    // handed back to the D-pad and L2/R2 after exactly one zeroing frame, and the
+    // same for the mouse -- kept apart because the mouse's release does not go
+    // through CameraInstantStop.
     static bool _ownedTurn, _ownedPitch;
+    static bool _mouseTurn, _mousePitch;
 
     // Fractional remainders. Not optional: at 30 fps a small stick deflection
     // rounds to a zero step every frame, and the player would simply not move.
@@ -331,49 +340,73 @@ public static class Analog
     // Turning and looking. The function reads the pad, accumulates turn and
     // pitch velocity, then does `yaw = (yaw + turnVel) & 0xFFF` and the same for
     // pitch with a ±0x2BC limit -- so setting the velocity here is the whole job.
+    //
+    // It is also where the mouse's motion is spent (see <see cref="Mouse"/>): a
+    // mouse and a stick are two ways of asking for the same per-frame step, and
+    // one routine deciding it is what keeps them from writing the same word twice
+    // in a frame. That is why this runs with the sticks switched off -- keyboard
+    // and mouse is a scheme of its own, not a variant of the pad one.
     public static void BeforeLook(CpuContext c, IMemory m)
     {
-        if (!Enabled || !AnalogLook) return;
+        // Taken unconditionally: the accumulator has to be emptied whether or not
+        // anything here is going to spend it.
+        var (mTurn, mPitch) = Mouse.TakeLook();
+        bool sticks = Enabled && AnalogLook;
+        if (!sticks && mTurn == 0f && mPitch == 0f && !_mouseTurn && !_mousePitch) return;
 
-        var (x, y) = Shape(Controller.RightX, Controller.RightY, LookDeadzone, LookCurve);
+        var (x, y) = sticks ? Shape(Controller.RightX, Controller.RightY, LookDeadzone, LookCurve)
+                            : (0f, 0f);
 
         // The runtime binds the left stick to the D-pad by default, and the game's
         // turn actions *are* D-pad left/right -- so a left stick pushed sideways
         // turns as well as strafes unless the turn bits are taken away from it.
         // Owning them with a zero step is exactly that: buttons cleared, velocity
         // zeroed, and the D-pad still turns when neither stick is deflected.
-        var (lx, ly) = Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve);
-        bool leftActive = AnalogMove && (lx != 0f || ly != 0f);
+        var (lx, ly) = sticks ? Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve)
+                              : (0f, 0f);
+        bool leftActive = sticks && AnalogMove && (lx != 0f || ly != 0f);
 
         // A released axis still needs one frame to stop the velocity the game
         // would otherwise ramp down; _ownedTurn/_ownedPitch are what keep us in
         // the hook for that frame and out of it afterwards.
-        bool release = CameraInstantStop && (_ownedTurn || _ownedPitch);
-        if (x == 0f && y == 0f && !leftActive && !release)
+        //
+        // For the mouse that frame is not optional. A stick can be *held* still at
+        // the centre, so leaving the ramp-down alone is a defensible feel and an
+        // option; a mouse that has stopped moving has said nothing at all, and a
+        // camera that carries on for a third of a second afterwards is simply
+        // wrong. Hence the separate flags, which ignore CameraInstantStop.
+        bool releaseTurn  = (CameraInstantStop && _ownedTurn)  || _mouseTurn;
+        bool releasePitch = (CameraInstantStop && _ownedPitch) || _mousePitch;
+
+        if (x == 0f && y == 0f && !leftActive && mTurn == 0f && mPitch == 0f &&
+            !releaseTurn && !releasePitch)
         {
             _accelT = 0f;
             _accelTick = 0;
             return;
         }
 
-        float mult = Accelerate(RawMag(Controller.RightX, Controller.RightY, LookDeadzone));
+        // The ramp is a held stick's, so it is neither fed nor applied by a mouse.
+        float mult = sticks ? Accelerate(RawMag(Controller.RightX, Controller.RightY, LookDeadzone)) : 1f;
 
         ushort pad = m.ReadU16(Pad);
         int rate = (int)m.ReadU32(TurnRate);
         if (rate <= 0) return;
 
-        if (x != 0f || leftActive || (CameraInstantStop && _ownedTurn))
+        if (x != 0f || leftActive || mTurn != 0f || releaseTurn)
         {
             // Stick right turns right, and turning right is the *decreasing*
             // branch: the mask that increases yaw is the game's Left, which the
-            // probe's table dump is the evidence for. Hence the negation.
-            int step = Step(-x * rate * TurnSens * mult * (InvertTurn ? -1f : 1f),
-                            ref _turnCarry, rate * OverspeedCap);
+            // probe's table dump is the evidence for. Hence the negation. The
+            // mouse arrives already in that convention, from Mouse.TakeLook.
+            int step = Step(-x * rate * TurnSens * mult * (InvertTurn ? -1f : 1f) + mTurn,
+                            ref _turnCarry, Ceiling(rate * OverspeedCap, mTurn));
             pad = Drive(m, pad, TurnVel, step, rate >> 2, rate, MaskTurnInc, MaskTurnDec);
             _ownedTurn = step != 0;
+            _mouseTurn = mTurn != 0f;
         }
 
-        if (y != 0f || (CameraInstantStop && _ownedPitch))
+        if (y != 0f || mPitch != 0f || releasePitch)
         {
             // Screen up is a negative stick Y, and looking up is the pitch
             // velocity going *down*: the increasing branch is the game's R2,
@@ -381,15 +414,28 @@ public static class Analog
             // evidence settled -- the mask table gives the button but not which
             // way the view tips -- so it was fixed by playing it, and the sticks
             // agree with the D-pad's own L2/R2 now.
-            int step = Step(y * PitchVelMax * PitchSens * mult * (InvertPitch ? -1f : 1f),
-                            ref _pitchCarry, PitchVelMax * OverspeedCap);
+            int step = Step(y * PitchVelMax * PitchSens * mult * (InvertPitch ? -1f : 1f) + mPitch,
+                            ref _pitchCarry, Ceiling(PitchVelMax * OverspeedCap, mPitch));
             pad = Drive(m, pad, PitchVel, step, PitchAccel, PitchVelMax, MaskPitchInc, MaskPitchDec);
             _ownedPitch = step != 0;
+            _mousePitch = mPitch != 0f;
         }
 
         m.WriteU16(Pad, pad);
         if (x != 0f || y != 0f) AnalogProbe.NoteLook(x, y, rate);
+        if (mTurn != 0f || mPitch != 0f) AnalogProbe.NoteMouse(mTurn, mPitch);
     }
+
+    /// <summary>
+    /// The per-frame ceiling for an axis: the stick's, or the mouse's larger one
+    /// while the mouse is driving.
+    ///
+    /// A stick asks for a *rate*, and four times the game's own is already faster
+    /// than any button can turn. A mouse asks for an *amount*, and a flick that
+    /// takes a tenth of a second arrives here as three or four very large frames,
+    /// so the stick's ceiling would turn every fast turn into a slow one.
+    /// </summary>
+    static int Ceiling(int stick, float mouse) => mouse == 0f ? stick : Math.Max(stick, Mouse.StepCap);
 
     // Walking and strafing. Same three-branch shape, twice, off this frame's
     // walk speed; the two velocities are then turned into a heading off the yaw
@@ -532,15 +578,24 @@ public static class Analog
 
     // ---- environment, then interface.ini ------------------------------------
 
-    internal static void Env(string name, string key, ref bool value)
+    // The set is a parameter rather than always this class's own, because
+    // <see cref="Mouse"/> keeps the same precedence over the same store and
+    // there is no reason for two copies of the rule -- only for two records of
+    // which variables were actually set.
+
+    internal static void Env(string name, string key, ref bool value) => Env(name, key, ref value, _fromEnv);
+
+    internal static void Env(string name, string key, ref float value) => Env(name, key, ref value, _fromEnv);
+
+    internal static void Env(string name, string key, ref bool value, HashSet<string> from)
     {
         string? v = Environment.GetEnvironmentVariable(name);
         if (string.IsNullOrWhiteSpace(v)) return;
         value = v.Trim().ToLowerInvariant() is "1" or "on" or "true" or "yes";
-        _fromEnv.Add(key);
+        from.Add(key);
     }
 
-    internal static void Env(string name, string key, ref float value)
+    internal static void Env(string name, string key, ref float value, HashSet<string> from)
     {
         string? v = Environment.GetEnvironmentVariable(name);
         if (string.IsNullOrWhiteSpace(v)) return;
@@ -548,17 +603,26 @@ public static class Analog
                             System.Globalization.CultureInfo.InvariantCulture, out float f))
             throw new ArgumentException($"{name}: cannot read '{v}'");
         value = f;
-        _fromEnv.Add(key);
+        from.Add(key);
     }
 
     /// <summary>The saved value, unless the environment already set this key.</summary>
-    internal static void Saved(string key, ref bool value)
+    internal static void Saved(string key, ref bool value) => Saved(key, ref value, _fromEnv);
+
+    internal static void Saved(string key, ref float value) => Saved(key, ref value, _fromEnv);
+
+    internal static void Saved(string key, ref bool value, HashSet<string> from)
     {
-        if (!_fromEnv.Contains(key)) value = RecompOne.Runtime.Runtime.View.GetBool(key, value);
+        if (!from.Contains(key)) value = RecompOne.Runtime.Runtime.View.GetBool(key, value);
     }
 
-    internal static void Saved(string key, ref float value)
+    internal static void Saved(string key, ref float value, HashSet<string> from)
     {
-        if (!_fromEnv.Contains(key)) value = RecompOne.Runtime.Runtime.View.GetFloat(key, value);
+        if (!from.Contains(key)) value = RecompOne.Runtime.Runtime.View.GetFloat(key, value);
+    }
+
+    internal static void Saved(string key, ref int value, HashSet<string> from)
+    {
+        if (!from.Contains(key)) value = RecompOne.Runtime.Runtime.View.GetInt(key, value);
     }
 }

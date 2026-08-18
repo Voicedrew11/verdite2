@@ -269,6 +269,24 @@ Kf2.AutoReload.Install();
 Kf2.Analog.Configure();
 Kf2.Analog.Install();
 
+// Mouse look, and the mouse buttons. The look half is not a hook of its own: a
+// mouse is another way of choosing the same per-frame turn and pitch step, so it
+// is spent inside Analog's look hook and runs even with the sticks handed back.
+// The buttons take the other route, through PadReadEvent, so they are pressed as
+// pad buttons at the moment the game reads the pad -- which is what makes them
+// follow the game's own control-config screen and work in its menus:
+//
+//     KF2_MOUSE=1                              on; off by default
+//     KF2_MOUSE_TURN/LOOK=1.0                  sensitivities; INVERTY=1 flips look Y
+//     KF2_MOUSE_BUTTONS=Cross,Triangle,Square  left, right, middle, as pad buttons
+//     KF2_MOUSE_KEY=Escape                     the key that captures and releases
+//
+// Off by default, unlike the sticks: nothing is broken about playing this with the
+// keyboard, and a pointer that vanishes into the game unasked is worse than one
+// switch to find. Its settings sit under Input beside the stick ones.
+Kf2.Mouse.Configure();
+Kf2.Mouse.Install();
+
 // Widescreen. The runtime already renders a margin either side of the display
 // buffer and presents the whole thing at Display.WideAspect, so setting that one
 // number is the entire hookup; the replacement of DrawOTag here is only for the

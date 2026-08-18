@@ -50,6 +50,8 @@ internal static class AnalogProbe
     static long _yawSteps, _yawStepSum, _pitchStepSum;
     static int _lastYaw = -1, _lastPitch;
     static int _lastRate, _lastSpeed;
+    static int _mouseFrames;
+    static double _mouseTurnSum, _mousePitchSum;
 
     static double Now => Environment.TickCount64 / 1000.0;
 
@@ -85,6 +87,20 @@ internal static class AnalogProbe
         if (!On) return;
         _lookFrames++;
         _lastRx = x; _lastRy = y; _lastRate = rate;
+    }
+
+    /// <summary>
+    /// The mouse's contribution to the same two axes, in the same yaw units the
+    /// stick's step is measured in -- so the report's "mean |step|" can be read
+    /// against it, which is how a sensitivity that is quietly hitting
+    /// <see cref="Mouse.StepCap"/> shows itself.
+    /// </summary>
+    internal static void NoteMouse(float turn, float pitch)
+    {
+        if (!On) return;
+        _mouseFrames++;
+        _mouseTurnSum += Math.Abs(turn);
+        _mousePitchSum += Math.Abs(pitch);
     }
 
     internal static void NoteMove(float x, float y, int speed)
@@ -126,7 +142,10 @@ internal static class AnalogProbe
 
         Console.WriteLine(
             $"[KF2] analog: {_frames} frames in {window:0.#}s | " +
-            $"look {_lookFrames} move {_moveFrames} | " +
+            $"look {_lookFrames} move {_moveFrames} mouse {_mouseFrames}" +
+            (_mouseFrames == 0 ? "" :
+                $" (mean |turn| {_mouseTurnSum / _mouseFrames:0.0}, |pitch| {_mousePitchSum / _mouseFrames:0.0}" +
+                $", capture {(Mouse.Captured ? "on" : "off")})") + " | " +
             $"stick R({_lastRx:+0.00;-0.00;0.00},{_lastRy:+0.00;-0.00;0.00}) " +
             $"L({_lastLx:+0.00;-0.00;0.00},{_lastLy:+0.00;-0.00;0.00})");
 
@@ -142,7 +161,8 @@ internal static class AnalogProbe
             $"{(_yawSteps == 0 ? 0.0 : (double)_yawStepSum / _yawSteps):0.00}, " +
             $"pitch total {_pitchStepSum}");
 
-        _frames = _lookFrames = _moveFrames = 0;
+        _frames = _lookFrames = _moveFrames = _mouseFrames = 0;
+        _mouseTurnSum = _mousePitchSum = 0;
         _yawSteps = _yawStepSum = _pitchStepSum = 0;
     }
 

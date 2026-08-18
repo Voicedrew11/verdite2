@@ -3129,6 +3129,10 @@ Four things worth keeping:
   ramp-down is the walking momentum the game has always had.
 * **Sticks idle means the patch is idle.** Both hooks return before touching memory, which
   is what keeps D-pad and keyboard play identical to having it switched off — which is why it can default to on.
+* **The look hook is now shared with the mouse.** `Mouse.TakeLook` hands
+  `BeforeLook` a step in the same yaw units and this class writes the word, so
+  two devices cannot fight over one velocity; the look hook therefore also runs
+  with the sticks switched off. See "Mouse look".
 
 `KF2_ANALOG_PROBE=1` reports the velocities, the yaw and pitch steps, the walk
 speed and turn rate next to the stick deflection that produced them, and dumps
@@ -3296,6 +3300,203 @@ silent bail-outs that a scripted event is exactly the thing to trigger**.
 Cheap next step: reproduce with `KF2_ANALOG_PROBE=1`, which already reports the
 control state, and read `0x8019955C` / `0x80199558` / `0x801994E1` at the moment
 it breaks. All three candidates are one memory read apart.
+
+## Mouse look
+
+`patches/Mouse.cs` steers with the mouse, and presses pad buttons with its
+buttons. It is **off by default** and its knobs are under Input, below the stick
+ones.
+
+**The look half is not a hook.** A mouse and a stick are two ways of asking for
+the same thing — the per-frame turn and pitch step — and `Analog.BeforeLook`
+already owns that word: it pre-loads the velocity the game is about to accumulate
+into and asserts the matching button out of the game's own mask table. So the
+mouse hands that hook a number and nothing else, added to the stick's term before
+a single `Step` call rounds and carries the remainder. Two devices, one decision,
+one write. The one change to the surrounding logic is that the hook now runs with
+the sticks switched *off*: keyboard-and-mouse is a scheme of its own, not a
+variant of the pad one.
+
+### Three things a mouse is not
+
+* **It is displacement, not a rate.** A stick deflection says "turn at this speed
+  while I hold it"; mouse motion says "turn by this much, once". Everything on
+  the stick page that shapes a held rate — deadzone, response curve, the
+  acceleration ramp — is therefore absent here and deliberately so, and neither
+  feeds nor reads the ramp.
+* **Its release is not optional.** The game ramps a released look velocity down
+  by 3 a frame from a limit of 32 — about eleven frames. On a stick that is a
+  defensible feel and is the `CameraInstantStop` option; on a mouse the hand has
+  stopped and the camera has not, so the axis is put down the frame motion stops
+  whatever that setting says. Hence the second pair of ownership flags in
+  `Analog` (`_mouseTurn`, `_mousePitch`): they exist to make the release ignore
+  the stick's option, and to hand the axis straight back to the D-pad and L2/R2
+  one frame later.
+* **The pointer runs out of desktop.** An absolute pointer stops at the edge of
+  the screen halfway through a turn, so motion is only motion while the cursor is
+  locked to the window. That lock is the only part of this that the runtime had
+  to grow — `patches/recompone/0017`.
+
+### The angle scale, and where it comes from
+
+Yaw is 12 bits to the circle (`yaw & 0xFFF`), and the game's own numbers confirm
+it: the D-pad's turn rate of `0x1C` a frame at 30 fps is 74°/s, which is the
+figure the frame-pacing work already measured. Pitch is in the same units, held
+inside ±`0x2BC` — about 62° either side of level.
+
+The default is **0.15° a pixel**, so a quarter turn is about 600 px of movement
+at sensitivity 1. Window pixels, not mouse counts: the host reports the pointer
+in the window's own space, so a larger window turns slightly slower for the same
+movement of the hand. Raw cursor mode takes the desktop's pointer acceleration
+out of it, but not that.
+
+Two ceilings the stick does not need:
+
+* **`StepCap`, 1024 yaw units (a quarter turn) a frame.** The stick's ceiling is
+  four times the game's own per-frame rate, which is generous for something
+  asking for a *rate* and much too small for a flick, which arrives as three or
+  four very large frames. A cap is still wanted: a mouse knocked off the desk
+  should not spin the view eleven times.
+* **`StaleMs`, 250 ms.** The accumulator fills whenever the pointer moves and is
+  only spent by a routine that runs while the game is walking around. The in-game
+  menu blocks inside its own call, an area load takes seconds — and coming back
+  out with every pixel moved in the meantime still queued would swing the camera
+  through whatever the hand did while the player was reading. Motion older than
+  this is dropped rather than applied.
+
+### The buttons go through PAD_dr, and that is the whole design
+
+`PadReadEvent` fires inside the BIOS's `PAD_dr` and its `Buttons` field is read
+back, so a held mouse button is ORed into the word the game is *about* to read.
+That is worth more than a hook would be:
+
+* it needs no address and no mask — nothing here knows what "attack" is;
+* the **game's own control-config screen** decides what the button does, exactly
+  as it does for the pad, so remapping in-game moves the mouse with it;
+* it works in the menus, on the title screen and anywhere else the game reads the
+  pad, none of which the control hooks reach.
+
+The buffer is active low and carries the two button bytes the opposite way round
+from `Controller`'s layout (libetc hands the game `~buffer`), which is the same
+swap the mask table is stored under — so pressing a button is *clearing* the
+swapped bit. See `AnalogProbe.Buttons` for the same rule stated from the other
+end.
+
+The listener is attached when the pointer is captured and dropped when it is let
+go. `PAD_dr` is the busiest call in this game — every screen transition
+busy-waits on it, hundreds of thousands of times a second — and a listener on
+that bus is a cost every player would pay for a device most of them are not
+using.
+
+**Which pad buttons the defaults are, and why.** `func_8002957C` — the routine
+`NOTES` already listed as "player control: attacks, items, magic" — reads exactly
+four entries of the action-mask table, against the pad word at `0x80199554` and
+the previous frame's at `0x80199556`:
+
+| mask word | entry | button | tested | what the branch does |
+|---|---|---|---|---|
+| `0x8006E568` | 0 | Cross | **held** (this frame and last) | subtracts 500 a frame from two `u16` counters at `0x8019942E` and `0x80199432`, clamping at 0, and sets the state byte `0x8019941F` |
+| `0x8006E574` | 3 | Triangle | just pressed | `func_80027DC0`, which indexes 26-byte records at `0x8019C5EC` and compares `0x8019942C` against the record's `+0x16` before it runs |
+| `0x8006E578` | 4 | Select | just pressed | the same routine on a second slot, plus `func_800197D4` / `func_800474D0` through a table at `0x8009B52C` |
+| `0x8006E570` | 2 | Square | just pressed | `func_800262C8(0)` |
+
+A held button draining a pair of counters is a swing and its charge; a routine
+that checks a record's cost against a pool before it will run is a spell. So the
+defaults are **left = Cross, right = Triangle, middle = Square**, and Circle is
+deliberately not among them — it opens the in-game menu (entry 1, `0x8006E56C`),
+and a menu on a mouse button under a captured pointer is a trap.
+
+Note what that table does *not* say: it names the button behind a branch, not the
+word the manual would use. The settings page therefore says "Left button →
+Cross", not "Left button → Attack", which is also the truthful description of
+what the patch does.
+
+### Capture, and getting out again
+
+Escape, by default. The game's own keymap is Z X A S Q W E R F G, Enter, right
+shift and the arrows, and the host claims F1 and F11, so Escape is both free and
+where a hand goes to get a pointer back. Three things release it:
+
+* pressing the key again;
+* opening any popup — settings, the mods list, the disc picker are all drawn over
+  a running game and all want a cursor. This is the one state change nothing
+  announces, so it is polled (throttled to 1 ms) off the pad listener, which is
+  the one thing the game keeps doing wherever it is;
+* switching mouse look off in the settings page.
+
+The key comes off `KeyboardEvent` rather than being polled through
+`HostWindow.IsKeyDown`, unlike the debug mod's hotkeys, and that is not a
+preference: every hook this port owns is in the walking-around part of the game,
+and a pointer captured and then swallowed by the in-game menu has to be
+releasable *from inside it*.
+
+### What the runtime had to grow: `0017`
+
+`InputManager` owns the `IMouse` and is `internal`, so the port could not reach
+the cursor at all. The patch adds three things to it and forwards them from
+`HostWindow`, beside the `IsKeyDown` that already plays this role for the
+keyboard:
+
+* `MouseCaptured` — `CursorMode.Raw` where the platform has it, `Disabled`
+  otherwise. Both make GLFW report an unbounded virtual position; Raw is the same
+  thing with the desktop's pointer acceleration taken out. It is a property that
+  can be *read back*, because a platform may refuse, and `Mouse.SetCaptured`
+  trusts the read rather than the write.
+* `TakeMouseMotion` — the accumulated difference between successive `MouseMove`
+  callbacks, cleared by the call. It accumulates whether or not anything has
+  asked for capture (one subtraction per callback) and is zeroed on the mode
+  change, because the pointer teleports when the cursor is locked or released and
+  that jump is not motion anyone asked for.
+* `IsMouseButtonDown`.
+
+`Shutdown` gives the cursor back, so a crash on the way out does not leave a
+hidden pointer behind.
+
+### What is measured, and what is not
+
+**Measured, and the whole path ran.** `KF2_ANALOG_PROBE=1` now reports the
+mouse's mean turn and pitch step per frame beside the stick's, and four
+consecutive ten-second windows of real play read:
+
+```
+mouse 135 (mean |turn| 72.6, |pitch|  6.3, capture on) | yaw stepped 131/300 frames, mean |step| 74.82, pitch total  820
+mouse 191 (mean |turn| 72.0, |pitch| 16.4, capture on) | yaw stepped 181/300 frames, mean |step| 75.85, pitch total 2955
+mouse 141 (mean |turn| 61.6, |pitch| 11.1, capture on) | yaw stepped 137/300 frames, mean |step| 63.31, pitch total 1575
+mouse 189 (mean |turn| 64.0, |pitch| 10.7, capture on) | yaw stepped 187/300 frames, mean |step| 64.58, pitch total 2017
+```
+
+Three claims come out of that, and they are the ones that matter:
+
+* **The frames agree.** 135 frames of mouse motion against 131 frames in which
+  the yaw angle actually moved, 191 against 181, 141 against 137, 189 against
+  187. The shortfall is the fractional carry holding a small step back a frame,
+  which is what it is for.
+* **The amount agrees.** The angle the mouse asked for and the angle the game
+  applied are within a few percent in every window — 72.6 asked, 74.82 applied;
+  61.6 asked, 63.31 applied. So the pixels-to-units conversion, the pre-loaded
+  velocity and the game's own accumulate are all landing where the arithmetic
+  says.
+* **The overspeed branch is doing its job.** `turnVel -70` sitting in memory with
+  the turn rate at `0x1C`: no button on the pad can produce that, which is
+  `Drive`'s no-button branch — the same mechanism the stick's sensitivity above
+  1.0 uses.
+
+Also measured: the host accepts the cursor lock and releases it again on this
+machine (`MouseAvailable: True`, `capture accepted: True`, and false again after
+the release), the capture key engages it from the real key path, and the four
+mask-table reads in `func_8002957C` above are read out of the emitted code rather
+than guessed.
+
+**Not measured, and it needs a person to say.** Whether 0.15°/px is the right
+*feel*, and whether the pitch runs the right way round — the sign is inherited
+from the stick's, and that one the analog work had to fix by playing it, so it is
+exactly the sort of thing a counter cannot answer. The mouse buttons have not
+been pressed at a door or a monster: the injection is one `&=` on a word the
+BIOS is about to hand over, but nobody has watched a swing come out of it.
+
+It stays **off by default** anyway, and for a reason the measurements do not
+touch: a pointer that disappears into the game unasked is worse than one switch
+to find.
 
 ## Auto reload
 
