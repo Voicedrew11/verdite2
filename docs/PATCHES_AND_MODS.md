@@ -15,6 +15,7 @@ lives here — frame pacing and auto reload.
 | `Widescreen.cs`, `CullCone.cs`, `ViewClip.cs`, `PrimBuffer.cs` | aspect ratio and the culls it runs into | [WIDESCREEN.md](WIDESCREEN.md) |
 | `Analog.cs`, `AnalogProbe.cs`, `Mouse.cs`, `KeyLayout.cs` | pad, mouse and keyboard | [INPUT.md](INPUT.md) |
 | `EndingHold.cs` | keeps the window alive through `END.EXE`'s final spin | [RUNTIME.md](RUNTIME.md) |
+| `UiScale.cs` | forces and saves the interface scale, for a config too large to edit in | [RUNTIME.md](RUNTIME.md) |
 | `settings/*` | the pages all of the above draw into | this file |
 
 `mods/framestats`, `mods/loopprobe` and `mods/kf2debug` are the measurement tools

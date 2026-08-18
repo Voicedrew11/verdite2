@@ -107,6 +107,7 @@ KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities 
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
+KF2_UISCALE=1                            # force the interface scale, and save it
 ```
 
 Patch settings live in `patches/settings/`. A patch registers an `IPatchPage`
@@ -414,8 +415,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Fourteen of
-the eighteen are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Sixteen of
+the twenty are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
@@ -549,6 +550,34 @@ uncaptured edit inside the checkout is left where it is.
   keyboard, and gives the cursor back in `Shutdown`. Everything else about mouse
   look is `patches/Mouse.cs`. **No recompile.** See "Mouse look" in
   `docs/INPUT.md`.
+
+- `0019-popups-cannot-leave-the-window.patch` — every popup is centred and pinned
+  with `SetNextWindowPos`, which is the flag that suppresses ImGui's own clamp
+  into the viewport, and its size (`Size * Theme.Scale`) is capped against
+  nothing, with `NoResize`, `NoMove` and `NoScrollWithMouse` closing the ways
+  back. The 780x500 settings popup therefore outgrows a 1280x720 window at a
+  `Theme.Scale` of 1.44 and takes the UI-scale field — the one control that would
+  undo it — off-screen with it, permanently, since the value is saved. Reachable
+  from the slider alone (0.5-3), and reached at `UiScale` 1 on the monitor whose
+  `DpiScale` misreads as 2.0. The size is now clamped to the viewport, so an
+  oversized scale costs scrolling instead of the controls, and `Debug > Reset
+  view` re-applies `FontGlobalScale` and `Theme` instead of leaving giant text
+  behind small windows. **No recompile.** See "The scale can put the settings out
+  of reach" in `docs/RUNTIME.md`; `patches/UiScale.cs` (`KF2_UISCALE`) is the
+  port's own way back for a config already past that point.
+
+- `0020-theme-apply-compounds-the-style.patch` — `Theme.Apply` ends in
+  `ScaleAllSizes`, which multiplies *every* size field, but only resets some of
+  them first, so each accent, background or scale change multiplies the rest
+  again: measured, `WindowMinSize` 32 -> 44 -> 88 -> 528 -> 1056 over five calls.
+  ImGui floors every non-child, non-`AlwaysAutoResize` window at `WindowMinSize`
+  **after** applying a size constraint, so that overrides `0019`'s clamp and the
+  popup grows off the bottom of the screen — a 1264x704 clamp measured coming out
+  1264x1056 on a 1280x720 viewport. `Apply` now restores the style ImGui built
+  before re-theming, which stays correct whatever upstream adds to
+  `ScaleAllSizes`. Latent since long before `0019`; changing the *accent*
+  compounds it too. **No recompile.** See "The scale can put the settings out of
+  reach" in `docs/RUNTIME.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

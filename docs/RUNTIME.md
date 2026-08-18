@@ -280,7 +280,7 @@ shape of bug, even though they were not what froze the window:
 
 ## The patches to the checkout, one by one
 
-Fourteen of the eighteen are load-bearing; `0002`, `0003` and `0015` are
+Sixteen of the twenty are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. Several need **no recompile**
 — they change runtime behaviour only — and that is noted where it applies.
 
@@ -381,6 +381,17 @@ frame" in [RENDERING.md](RENDERING.md).
 divides two ints. **No recompile.** See "The interface only fits a monitor whose
 scale is a whole number" below.
 
+**`0019-popups-cannot-leave-the-window.patch`** clamps a popup's size to the
+viewport and finishes what `Debug ▸ Reset view` starts, so no interface scale can
+put the controls out of reach. **No recompile.** See "The scale can put the
+settings out of reach" below.
+
+**`0020-theme-apply-compounds-the-style.patch`** restores the style ImGui built
+before `Theme.Apply` re-themes it, because `ScaleAllSizes` multiplies every size
+field and `Apply` only resets some — leaving a `WindowMinSize` that grows on each
+call and eventually floors a window past the screen, over `0019`'s clamp. **No
+recompile.** See "The scale can put the settings out of reach" below.
+
 ## The interface only fits a monitor whose scale is a whole number
 
 Reported as "the UI does not display correctly on my 1440p monitor, but correctly
@@ -453,6 +464,170 @@ One loose end, measured and not chased: a **programmatic** `IWindow.Size` set do
 not raise Silk's `Resize` event under GLFW-on-Wayland, so `io.DisplaySize` goes
 stale. Compositor-driven resizes do raise it — the reported screenshot has the
 correct logical width — so nothing in the port depends on it.
+
+## The scale can put the settings out of reach
+
+The other half of the same report, and the worse half: at a large enough
+interface scale the settings popup grows past the window, and the parts that left
+cannot be reached at all — including the UI-scale field itself, which is the one
+control that would undo it. Nothing recovers on its own, because the value is
+saved to `interface.ini` and read back at the next start.
+
+Two things have to be true at once for a window to be unrecoverable, and both
+were:
+
+```csharp
+// Popups/Popup.cs
+ImGui.SetNextWindowPos(viewport.GetCenter(), ImGuiCond.Always, new Vector2(0.5f, 0.5f));
+ImGui.SetNextWindowSize(Size * Theme.Scale, ImGuiCond.Always);
+// flags: NoTitleBar | NoResize | NoMove | NoDocking | NoSavedSettings
+//      | NoScrollbar | NoScrollWithMouse
+```
+
+The **size is never capped** against anything, and `SetNextWindowPos` is what sets
+ImGui's `window_pos_set_by_api` — which is precisely the flag that suppresses
+ImGui's own clamp of a window into its viewport (`Begin` only calls
+`ClampWindowPos` when the position was *not* set by the API). So the popup is
+re-centred every frame and overflows symmetrically off all four edges, with
+`NoResize`, `NoMove` and `NoScrollWithMouse` closing the three ways back.
+
+The arithmetic, for the settings popup at its declared 780×500 logical against
+the default 1280×720 window:
+
+```
+Theme.Scale = HostWindow.DpiScale * ConfigManager.View.UiScale
+780 * Scale > 1280  =>  Scale > 1.64      horizontally
+500 * Scale >  720  =>  Scale > 1.44      vertically      <- binds first
+```
+
+`UiScale` alone ranges 0.5–3 (`ViewConfig.cs`), so the slider reaches it on any
+monitor. On the reporter's it is reached at a `UiScale` of **1**, because
+`QueryDpiScale` returns 2.0 there — measured, `[Host] display scale: 2x` — for a
+display KDE runs at 1.15, which is the defect the section above is about. The
+compensating `UiScale=0.6999999` in that `interface.ini` puts `Theme.Scale` at
+1.40: the value was found by hand and sits just under the threshold, which is why
+the interface was cramped rather than gone.
+
+**Clamping the size to the viewport is what makes this impossible rather than
+unlikely.** An oversized scale should cost scrolling, not cost the controls:
+
+```csharp
+var room = viewport.WorkSize - style.WindowPadding * 2f;
+var size = Vector2.Min(Size * Theme.Scale, room);
+if (Size.Y <= 0f) size.Y = 0f;                 // auto-height: ImGui picks it
+```
+
+The `##body` child scrolls by default — the `NoScrollbar` flags belong to the
+popup window, not to it — so a fixed-height popup that had to be cut short stays
+whole for free. An **auto-height** popup (`Size.Y == 0`, which is `Popup`'s
+default and what the disc picker, the mods list and the notices use) needs the
+ceiling stated twice: once on the window and once as a max size constraint on the
+child, because an `AutoResizeY` child sizes itself to its content and would
+otherwise grow straight past the clamped window and be clipped silently. A
+constraint is how ImGui caps an auto-resizing child, and at the cap it scrolls.
+
+The **escape hatch was also half-built**. `Debug ▸ Reset view` puts a default
+`ViewConfig` back, but nothing reads the scale or the colours *out of* the config
+after startup: the scale lives on in `io.FontGlobalScale` and in the sizes
+`ScaleAllSizes` baked into the style, and the accent and background live on in
+`Theme`'s own fields. Popups take `Theme.Scale` live and shrink the same frame, so
+the reset landed half-done — small windows, giant text — and the one thing a
+person reaches for that item to undo was the one thing left behind. It now
+re-applies both (`Theme.Apply` sets absolute sizes before `ScaleAllSizes`, so
+calling it again does not compound). That item is reachable at any scale: the menu
+bar is anchored at the top-left corner and is the last thing to leave the window.
+
+The third way out is the port's, `patches/UiScale.cs`:
+
+```
+KF2_UISCALE=1     force the interface scale for this run, and save it
+```
+
+It **writes** the value as well as applying it, so one run repairs a settings file
+that is already past the point of being editable in the interface, rather than
+having to be kept around forever. It applies on `RuntimeReadyEvent` rather than in
+`Configure`: `ConfigManager.Load` runs inside `HostWindow.Initialize`, after
+`Program.cs`, so anything set earlier is read straight back off disk. By that
+event the ImGui context exists and the window loop has not started, and both are
+on the same thread — the game and the interface share one here. Measured:
+
+```
+$ KF2_UISCALE=1.0 dotnet run …
+[Host] display scale: 2x
+[KF2] ui scale: 0.85x -> 1x (saved)
+```
+
+### The clamp is not the last word on a window's size
+
+The clamp above holds until the scale is changed a few times, and then a popup
+grows off the bottom of the screen — reported as "make the UI scale smaller and
+then larger". The clamp is not what fails; it is overridden.
+
+`Theme.Apply()` is called again on every accent, background and UI-scale change,
+and ends in `style.ScaleAllSizes(Scale)`, which multiplies **every** size field in
+the style. The block above it resets only some of them — `WindowPadding`,
+`FramePadding`, `ItemSpacing`, `IndentSpacing`, `ScrollbarSize`, `GrabMinSize`,
+the roundings. Everything else it does not name is multiplied again from the value
+the last call left, and compounds. Measured, replaying `Apply` at 1.4, 2, 1, 6, 2
+against ImGui.NET 1.90 (Silk 2.22.0):
+
+```
+default   WindowMinSize=<32, 32>   WindowPadding=<8, 8>
+Apply(1.4)  WindowMinSize=<44, 44>   WindowPadding=<16, 14>   SafeArea=<4, 4>
+Apply(  2)  WindowMinSize=<88, 88>   WindowPadding=<24, 20>   SafeArea=<8, 8>
+Apply(  1)  WindowMinSize=<88, 88>   WindowPadding=<12, 10>   SafeArea=<8, 8>
+Apply(  6)  WindowMinSize=<528,528>  WindowPadding=<72, 60>   SafeArea=<48,48>
+Apply(  2)  WindowMinSize=<1056,…>   WindowPadding=<24, 20>   SafeArea=<96,96>
+```
+
+`WindowPadding` is right at every step, which is why nothing about the *spacing*
+ever looked wrong. `WindowMinSize` is not, and it is the one that matters: ImGui
+floors every window that is neither a child nor `AlwaysAutoResize` at it, in
+`CalcWindowSizeAfterConstraint`, and does it **after** applying a size constraint:
+
+```cpp
+if (g.NextWindowData.HasFlags & ImGuiNextWindowDataFlags_HasSizeConstraint) { ...clamp... }
+// Minimum size
+if (!(flags & (ImGuiWindowFlags_ChildWindow | ImGuiWindowFlags_AlwaysAutoResize)))
+    new_size = ImMax(new_size, g.Style.WindowMinSize);
+```
+
+So a compounded minimum beats both `SetNextWindowSize` and
+`SetNextWindowSizeConstraints` — the two things `0019` clamps a popup with.
+Measured on a 1280×720 viewport, asking for the clamped 1264×704:
+
+```
+WindowMinSize=  32  -> window 1264x704      with max-constraint 1264x704
+WindowMinSize=  88  -> window 1264x704      with max-constraint 1264x704
+WindowMinSize= 528  -> window 1264x704      with max-constraint 1264x704
+WindowMinSize=1056  -> window 1264x1056     with max-constraint 1264x1056
+```
+
+Vertically only, because 1056 is past 720 but not past 1280 — which is exactly the
+shape of the report. Each scale change is one more multiplication, so it takes a
+few before the minimum passes the viewport height; going *down* and back up is
+simply the quickest way to make several.
+
+The fix is `0020`: snapshot the style ImGui built, once, before the first
+`ScaleAllSizes`, and restore it at the top of `Apply` before re-theming. Listing
+the fields `Apply` forgets would work only until upstream adds one to
+`ScaleAllSizes`. Verified idempotent — replaying 1.4, 2, 1, 6, 2, 6, 6 gives
+`WindowMinSize` 44, 64, 32, 192, 64, 192, 192: a function of the scale alone, with
+the themed colours surviving the restore.
+
+This was always latent — `Apply` has never been idempotent, and changing the
+*accent* compounds it just as well as changing the scale. It only became visible
+when the popups stopped being unbounded, since a window that already overflowed
+had nothing left to reveal.
+
+### What is measured and what is not
+
+The geometry: the 1.44 threshold, the scale the runtime reports, the compounding,
+that a compounded `WindowMinSize` beats the clamp, that the restore is idempotent,
+and that the clamp and all three escape hatches fire. **How the clamped popup
+reads at a large scale has not been checked by eye**, and neither has the
+underlying question of what the chrome *should* look like on this monitor, which
+is the unwritten fix in the section above.
 
 ## Two general shapes worth keeping
 

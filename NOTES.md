@@ -148,7 +148,7 @@ Making the recompiler produce correct code: config, overlays, function maps, SDK
 
 ### [RUNTIME.md](docs/RUNTIME.md)
 
-What a static recompilation loses (interrupts, VSync-driven work) and the eighteen patches to the checkout.
+What a static recompilation loses (interrupts, VSync-driven work) and the twenty patches to the checkout.
 
 - DMA callbacks: the thing that was actually missing
 - The three ways a CD read can hang
@@ -157,6 +157,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the eighte
 - The ending screen
 - The patches to the checkout, one by one
 - The interface only fits a monitor whose scale is a whole number
+- The scale can put the settings out of reach
 - Two general shapes worth keeping
 - Upstream contribution policy
 

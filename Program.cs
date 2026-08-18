@@ -152,6 +152,21 @@ if (!string.IsNullOrWhiteSpace(autopad))
     }) { IsBackground = true, Name = "kf2-autopad" }.Start();
 }
 
+// The way back from an interface scaled too large to use:
+//
+//     KF2_UISCALE=1     force the interface scale for this run, and save it
+//
+// Theme.Scale is the runtime's DpiScale times the saved UiScale, and every popup is
+// sized from it, so the 780x500 settings popup stops fitting a 1280x720 window at
+// 1.44 -- inside UiScale's own range, and reachable at a UiScale of 1 by itself,
+// since QueryDpiScale reads the primary monitor's GLFW content scale and GLFW's
+// Wayland path reports the integer wl_output scale (a 1.15 display arrives as 2).
+// patches/recompone/0019 clamps a popup to the viewport so the controls can no
+// longer leave the window; this repairs a settings file that is already past that
+// point, by writing the value as well as applying it.
+Kf2.UiScale.Configure(Environment.GetEnvironmentVariable("KF2_UISCALE"));
+Kf2.UiScale.Install();
+
 // The keyboard layout the port ships. RecompOne's defaults are a console's
 // defaults spelled on a keyboard -- face buttons on Z X A S, D-pad on the arrows
 // -- and this game walks *and turns* on the D-pad, so the arrows alone are a tank
