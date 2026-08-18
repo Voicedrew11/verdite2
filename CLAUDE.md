@@ -82,6 +82,7 @@ KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map o
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
+KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
 KF2_MOUSE=1                              # mouse look (off by default; Escape captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
 KF2_MOUSE_BUTTONS=Cross,Triangle,Square  # left, right, middle, as pad buttons
@@ -151,6 +152,21 @@ over four windows of real play — but a pointer that disappears into the game
 unasked is worse than one switch to find. What no counter can answer is the feel
 (0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
 `NOTES.md`.
+
+**The port ships its own keyboard layout** (`patches/KeyLayout.cs`), because
+RecompOne's defaults are a console's spelled on a keyboard — face buttons on
+Z X A S, D-pad on the arrows — and this game walks *and turns* on the D-pad, so
+the arrows alone are a tank control. W/S walk, A/D strafe (the game strafes on
+L1/R1), the arrows still walk and turn, R/F look, Space attacks, E uses, Q casts,
+Tab opens the menu. **Changing a runtime default needs no patch to the checkout**:
+`ConfigManager.Game.Keys` is settable and `Configure()` runs *before*
+`ConfigManager.Load`, which saves the in-memory object when there is no
+`settings.json` — so it is a default rather than an override. An existing config
+is migrated once, only if every binding in it is still stock, and the fact is
+recorded in `interface.ini` (`kf2.keys.layout`). Up and Down carry a **second**
+key each — the arrows — which the runtime's one-string-per-button schema cannot
+hold, so they are ORed in at `PAD_dr` like the mouse buttons; without them the
+in-game menu would scroll on W and S. See "The keyboard layout" in `NOTES.md`.
 
 **Widescreen is a patch for the dither reason** — an aspect ratio is a picture the port should be able to offer without a
 package having to load, and Video is where a player looks for it — but it is the

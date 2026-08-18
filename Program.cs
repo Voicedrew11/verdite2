@@ -152,6 +152,22 @@ if (!string.IsNullOrWhiteSpace(autopad))
     }) { IsBackground = true, Name = "kf2-autopad" }.Start();
 }
 
+// The keyboard layout the port ships. RecompOne's defaults are a console's
+// defaults spelled on a keyboard -- face buttons on Z X A S, D-pad on the arrows
+// -- and this game walks *and turns* on the D-pad, so the arrows alone are a tank
+// control and a mouse in the other hand has nothing to do. W and S walk, A and D
+// strafe (the game strafes on L1/R1), the arrows turn and look:
+//
+//     KF2_KEYS=stock    leave RecompOne's own bindings alone
+//
+// Configure must run before ConfigManager.Load, which is inside HostWindow's
+// Initialize: Load overwrites these from settings.json when there is one and saves
+// them when there is not, which is exactly what a default should do. Install then
+// migrates an existing settings.json once, and only if every binding in it is
+// still stock.
+Kf2.KeyLayout.Configure();
+Kf2.KeyLayout.Install();
+
 // Frame pacing. The game's speed is its frame rate and the port would otherwise
 // burst past NTSC's fastest band, so a rendered frame is held to two vblanks:
 //

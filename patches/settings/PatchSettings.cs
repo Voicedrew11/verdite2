@@ -125,6 +125,7 @@ public static class PatchSettings
         Register("display", new SubpixelPage());
         Register("display", new ZBufferPage());
         RegisterSlot("display.render_scale", new WidescreenPage());
+        Register("input", new KeyLayoutPage());
         Register("input", new AnalogPage());
         Register("input", new MousePage());
         Register("gameplay", new AutoReloadPage());

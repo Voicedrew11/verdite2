@@ -3301,6 +3301,91 @@ Cheap next step: reproduce with `KF2_ANALOG_PROBE=1`, which already reports the
 control state, and read `0x8019955C` / `0x80199558` / `0x801994E1` at the moment
 it breaks. All three candidates are one memory read apart.
 
+## The keyboard layout, and changing a default RecompOne provides
+
+`patches/KeyLayout.cs`. RecompOne's default keyboard bindings are a *console's*
+defaults spelled on a keyboard — face buttons on Z X A S, shoulders on Q W E R,
+the D-pad on the arrows. That is the right generic answer for a runtime that has
+to run any PS1 game and the wrong one for this one, because King's Field walks
+**and turns** on the D-pad: the arrows alone are a tank control, and mouse look
+in the other hand has nothing sensible to do.
+
+Read through the action-mask table, the pad means:
+
+| pad | action | pad | action |
+|---|---|---|---|
+| Up / Down | walk forward / back | L1 / R1 | strafe left / right |
+| Left / Right | turn | L2 / R2 | look up / down |
+| Cross | attack (held, and it charges) | Circle | the in-game menu |
+| Square | use what is in front of you | Triangle | cast |
+
+which rearranges into the layout every first-person game has used since Quake:
+
+```
+W A S D  walk and strafe        mouse   turn and look
+arrows   walk and turn          R / F   look up / down
+Space    attack     E  use      Q cast  Tab  menu
+```
+
+### Yes, and it needs no patch to the checkout
+
+`ConfigManager.Game` is public, `Keys` is a settable property and `SaveGame()` is
+public, so the port can decide its own bindings. **What matters is when.**
+
+* **`Configure()` runs from Program.cs, before `ConfigManager.Load`.** Load either
+  overwrites `Game` from `settings.json`, or — when there is no such file —
+  *saves the object it finds in memory*. So writing the bindings before it makes
+  them the port's **defaults**, in exactly the relationship RecompOne's own
+  defaults have with the file: a fresh install gets them, and after that the
+  player's file wins. Nothing is overridden and nothing needs a marker.
+* **`Install()` migrates an existing `settings.json`, once.** Anyone who has
+  already run the port has a file full of stock bindings, and a default that only
+  reaches new installs is not much of a default. The rewrite is guarded twice: it
+  happens only if every one of the sixteen bindings is *exactly* stock (one key
+  someone chose stops it), and it records `kf2.keys.layout=1` in `interface.ini`
+  so that a deliberate return to stock is not undone on the next launch.
+
+Measured, by running the port against a config in each state:
+
+| config | marker | result |
+|---|---|---|
+| stock | unset | migrated — `Up` becomes `W` |
+| stock | set | untouched: the player asked for stock |
+| stock with one key changed | unset | untouched: it is a customised file |
+| none at all | — | Load saves the port's layout as its defaults |
+| any | — | `KF2_KEYS=fps` overrides both guards |
+
+The marker lives in `interface.ini` rather than in `settings.json` because
+`settings.json` is the thing being migrated, and a flag inside it would mean
+growing the runtime's own config schema.
+
+**The one thing this cannot do** is change what the runtime's *own* "Reset to
+defaults" button under Input resets to — that is `new KeyBindings()` inside
+`InputSettingsSection`, and reaching it would mean patching the checkout to hold
+an opinion about one game. So the port adds its own pair of buttons instead
+(`Kf2.Settings.KeyLayoutPage`): "King's Field layout" and "RecompOne layout",
+beside the table they both write.
+
+### The second binding the schema cannot hold
+
+`KeyBindings` is one key per button — a `string`, not a list, unlike
+`GamepadBindings`, which is `int[]`. So binding W to Up *takes the up arrow off
+it*, and the up arrow is how the in-game menu moves: a straight WASD swap leaves
+menus scrolling on W and S while their horizontal movement is still on the
+arrows.
+
+The port adds the arrows back the same way the mouse buttons arrive — by ORing
+the bit into the word inside `PAD_dr`, where nothing asks which device set it.
+Up and Down therefore have two keys each, which the binding table cannot show and
+does not need to. It costs one keyboard poll a millisecond, not one per `PAD_dr`,
+and it only runs while the port's own layout is the one in place: a player who
+went back to stock, or who bound the arrows themselves, has already said what
+those keys do.
+
+The bit order is the same swap the mouse buttons use, and the mask dump confirms
+it for this pair specifically: `0x8006E590` reads `0x1000`, which is
+`Controller.Up` (`0x0010`) with its halves exchanged.
+
 ## Mouse look
 
 `patches/Mouse.cs` steers with the mouse, and presses pad buttons with its
