@@ -16,10 +16,29 @@ this repo is *reverse engineering*, not application coding: find an SDK function
 address in the disc image, map it to the runtime's HLE implementation, re-run the
 recompiler, run the game, read the logs.
 
-**`NOTES.md` is the working log and the primary reference.** It carries the
-current status, every identified address, the reasoning behind each
-identification, and the next steps. Read it before starting anything and update it
-when you learn something — that is where findings belong, not in commit messages.
+**`NOTES.md` is the index, and `docs/` is the working log.** `NOTES.md` carries
+what the project is and where it stands, plus a map of the nine documents under
+`docs/` and the exact section titles in each. Read the index before starting
+anything, then the one or two documents your task touches — they are split by what
+you would be doing when you need them:
+
+| file | when |
+|---|---|
+| `docs/DEVELOPMENT.md` | build, run, diagnose, measure |
+| `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
+| `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
+| `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
+| `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
+| `docs/GAME_INTERNALS.md` | the game's own addresses and routines |
+| `docs/PATCHES_AND_MODS.md` | hooking, settings UI, frame pacing, auto reload |
+| `docs/INPUT.md` | pad, sticks, keyboard, mouse |
+| `docs/TODO.md` | next steps and open, undiagnosed questions |
+
+Update the right document when you learn something — that is where findings
+belong, not in commit messages. Source comments still say `See "X" in NOTES.md`,
+and **the text they name is not in `NOTES.md` any more** — the titles are
+unchanged, so the index resolves X to a document, but it is a hop rather than a
+direct hit. Grep `docs/` for the title, not `NOTES.md`.
 
 ## Build and run
 
@@ -42,13 +61,13 @@ recompile time.
 
 There are no tests. Verification is empirical: run the game with log channels on
 and check the trace against what the SDK sequence should look like (see the
-steady-state `KF2_LOG=sdk` excerpt in `NOTES.md`).
+steady-state `KF2_LOG=sdk` excerpt under "Status" in `NOTES.md`).
 
 **Anything that has to be judged by eye is the user's job, not yours.** Do not
 try to capture, screenshot or otherwise scrape the game window — it burns a lot
 of context and produces nothing a person could not tell you in one sentence.
 Measure what a counter can measure, then say plainly what still needs looking at
-and ask. That distinction is already all over `NOTES.md`, which repeatedly
+and ask. That distinction is already all over `docs/`, which repeatedly
 separates "mechanism measured" from "picture never checked"; keep writing it down
 that way.
 
@@ -100,7 +119,7 @@ beside vsync rather than in a panel of their own. That is where a mod's
 instead of each getting a rule of its own. That section is the runtime's
 `display` — still that id everywhere in code; the port renames only its *label*,
 through `Localization.Merge`, which needs no patch to the checkout. See "Patch
-settings" in `NOTES.md`.
+settings" in `docs/PATCHES_AND_MODS.md`.
 
 **`gameplay` is the one section the port adds itself**, for patches that change
 how the *game* behaves rather than how the machine does — auto reload is not a
@@ -131,7 +150,7 @@ depth used as occlusion** rather than as a texture denominator: the GPU has none
 so intersecting surfaces take turns in front of each other on the ordering table,
 and `patches/recompone/0014` tests the recovered SZ per pixel instead. Off by
 default for the sub-pixel reason; its switch sits with the others under Video.
-See "Sub-pixel vertex positioning" and "Z-buffer" in `NOTES.md`. Auto reload is a
+See "Sub-pixel vertex positioning" and "Z-buffer" in `docs/RENDERING.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
 default and its knobs are under Gameplay. Analog twin-stick control is the same
@@ -151,7 +170,7 @@ default**, though not for the sub-pixel reason: the path *is* measured end to en
 over four windows of real play — but a pointer that disappears into the game
 unasked is worse than one switch to find. What no counter can answer is the feel
 (0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
-`NOTES.md`.
+`docs/INPUT.md`.
 
 **The port ships its own keyboard layout** (`patches/KeyLayout.cs`), because
 RecompOne's defaults are a console's spelled on a keyboard — face buttons on
@@ -170,7 +189,7 @@ in-game menu would scroll on W and S. Changing the layout *after* it has shipped
 costs one piece of bookkeeping — bump `Version` and record the old layout in
 `Superseded`, or an existing config reads as customised and is never corrected;
 that is how v1's swapped attack/use was fixed. See "The keyboard layout" in
-`NOTES.md`.
+`docs/INPUT.md`.
 
 **Widescreen is a patch for the dither reason** — an aspect ratio is a picture the port should be able to offer without a
 package having to load, and Video is where a player looks for it — but it is the
@@ -201,7 +220,7 @@ of one drawer (`func_8003220C` fills a request block, `func_8003214C` submits
 flat, full clip width, snapped out to the margin in the primitive listener — so that
 OPEN.EXE's and END.EXE's own links of the same drawer need no addresses. Opaque
 full-screen pictures (titles, menus) are left at their authored width on purpose.
-See "Widescreen" in `NOTES.md`.
+See "Widescreen" in `docs/WIDESCREEN.md`.
 
 **The cull the margin runs into is `patches/CullCone.cs`**, and it is the other
 half of widescreen rather than an option beside it. The game gates every object
@@ -219,7 +238,8 @@ The 24-tile window is stride and bounds baked into nine routines, so growing it 
 a reimplementation of the visibility system whose only correctness check is a
 person looking at the screen; `KF2_WIDESCREEN_CULL_PROBE=2` measured what that
 would buy and the answer was **3.5% of lit tiles, at the far corners** — binding,
-barely, and not worth it. See "The cull the margin runs into" in `NOTES.md`.
+barely, and not worth it. See "The cull the margin runs into" in
+`docs/WIDESCREEN.md`.
 
 **The attract demo is a free live session**: leave the port at the title and it
 walks itself into an area about a minute later, with a character, an HP bar and
@@ -246,7 +266,7 @@ Start the game from the same shell you run that in, or the diagnostic socket in
 `TMPDIR` will not be found.
 
 `Program.cs` is hand-owned (RecompOne would otherwise generate one into
-`generated/`); add new env-var-driven diagnostics there. Note `NOTES.md` mentions
+`generated/`); add new env-var-driven diagnostics there. Note the docs mention
 `KF2_TRACECALL` — that was an ad-hoc local edit to the dispatcher and is *not* in
 any committed patch; re-add it by hand if you need indirect-call tracing.
 
@@ -275,13 +295,13 @@ that has no prologue?**
   leave their function. `scripts/merge_branch_spans.py` merges on that proof (and
   on jump-table entries), checks nothing `jal`s a start it swallowed, and is
   idempotent — run it after any sweep. See "The sweep splits a switch" in
-  `NOTES.md`.
+  `docs/RECOMPILATION.md`.
 - False split from data — `add_call_targets.py` once treated a table word as
   `jal` and cut a real function. The crash address sits just past a mapped start
   that has no prologue and that nothing in code `jal`s; the previous function
   falls through into it. `merge_branch_spans.py` cannot see a fallthrough, so
   rejoin by hand (the previous start's size should reach the next real function).
-  See "add_call_targets can split a function" in `NOTES.md`. The script no longer
+  See "add_call_targets can split a function" in `docs/RECOMPILATION.md`. The script no longer
   harvests sites outside a known function, so re-running it will not re-cut.
 
 ```bash
@@ -338,7 +358,7 @@ run fine as recompiled MIPS because `PSMemory` traps their register writes.
 only** — binding an SDK entry point, which has to happen before any mod could
 load. For anything else, do not add a config entry: RecompOne's `HookManager`
 detours a recompiled function by address at run time, so a hook needs neither a
-config entry nor a recompile. See "Mods" in `NOTES.md`; `patches/FramePacing.cs`
+config entry nor a recompile. See "Mods" in `docs/PATCHES_AND_MODS.md`; `patches/FramePacing.cs`
 is the in-project example and `mods/` holds the loadable ones.
 
 Watch the namespace — generated code is `Recompiled.KingsField2`, a *class* named
@@ -346,7 +366,8 @@ after the project, which shadows any namespace called `KingsField2`.
 
 ### Identifying an address: the techniques that work
 
-In rough order of payoff (full reasoning and worked examples in `NOTES.md`):
+In rough order of payoff (full reasoning and worked examples in
+`docs/RECOMPILATION.md`):
 
 1. **The overlay delta.** The three executables are three links of the same
    libraries, laid out at a constant offset *per translation unit* (not per
@@ -437,7 +458,7 @@ uncaptured edit inside the checkout is left where it is.
   bit-for-bit what reaches the GP0 packet. `GteDepth` keys a small table on it, so
   the two halves are reunited without following a register or a store. A miss is
   the old affine behaviour, which is what makes it safe on by default. See
-  "Perspective correction" in `NOTES.md`.
+  "Perspective correction" in `docs/RENDERING.md`.
 
 - `0010-subpixel-vertex-positions.patch` — the GTE projects to 16.16 and then keeps
   only the whole part, so a vertex drifting slowly holds still and then jumps a
@@ -447,7 +468,7 @@ uncaptured edit inside the checkout is left where it is.
   always a float — and the software rasterizer now works in sixteenths of a pixel
   for any triangle that recovered a fraction, which scales its edge functions and
   its area by 256 and changes no ratio taken from them. See "Sub-pixel vertex
-  positioning" in `NOTES.md`.
+  positioning" in `docs/RENDERING.md`.
 
 - `0011-gte-depth-collisions.patch` — screen position is not a unique key, and
   dropping saturated vertices made every large nearby polygon fall back to affine
@@ -455,7 +476,7 @@ uncaptured edit inside the checkout is left where it is.
   per pixel, records the clamp for depth only, and picks per primitive; a leftover
   far Z is refused rather than applied. Positions stay on the packet — moving a
   clamped vertex to its true projection opened holes. See "The table is not unique"
-  in `NOTES.md`.
+  in `docs/RENDERING.md`.
 
 - `0012-exact-gte-vertex-map.patch` — screen position was never an identity, so
   `0011`'s picking between samples was scoring a collision rather than avoiding one,
@@ -466,7 +487,7 @@ uncaptured edit inside the checkout is left where it is.
   and `DrawPolygon` asks by the address `DrawOTag` read the word from — verifying the
   word before answering. No codegen change, so **this one needs no recompile**. The
   old table stays behind `KF2_PERSPECTIVE_FALLBACK` for comparison only. See
-  "Following the value through memory" in `NOTES.md`.
+  "Following the value through memory" in `docs/RENDERING.md`.
 
 - `0013-settings-slot-in-section.patch` — `SettingsRegistry.Extend` only draws
   *after* a section's whole body, so a port option that belongs beside one of the
@@ -482,7 +503,7 @@ uncaptured edit inside the checkout is left where it is.
   both rasterizers now test the recovered view depth per pixel. Window depth is
   a fragment value, not clip-space Z, so OpenGL does not far-clip the already-
   projected triangle. A miss is painter's order, so the HUD is untouched. Off
-  by default. See "Z-buffer" in `NOTES.md`. **No recompile** — the lookup is
+  by default. See "Z-buffer" in `docs/RENDERING.md`. **No recompile** — the lookup is
   the one `0012` already does.
 
 - `0015-zbuffer-occlusion-census.patch` — diagnostic behind `KF2_ZBUFFER_PROBE=2`.
@@ -502,7 +523,7 @@ uncaptured edit inside the checkout is left where it is.
   statements took the depth-map readback from 67-of-91 empty to 11-of-11
   populated. Real and measured, but **it did not cure the sky showing through
   nearby walls** — a second cause remains. **No recompile.** See "The clear
-  landed at the tail of the frame" in `NOTES.md`.
+  landed at the tail of the frame" in `docs/RENDERING.md`.
 
 - `0017-mouse-capture-and-motion.patch` — `InputManager` owns the `IMouse` and is
   `internal`, so a port could not reach the cursor at all. Adds `MouseCaptured`
@@ -511,13 +532,14 @@ uncaptured edit inside the checkout is left where it is.
   into motion), `TakeMouseMotion` and `IsMouseButtonDown`, forwarded from
   `HostWindow` beside the `IsKeyDown` that already plays that role for the
   keyboard, and gives the cursor back in `Shutdown`. Everything else about mouse
-  look is `patches/Mouse.cs`. **No recompile.** See "Mouse look" in `NOTES.md`.
+  look is `patches/Mouse.cs`. **No recompile.** See "Mouse look" in
+  `docs/INPUT.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.
 `END.EXE` ends in `while(1);` with no `VSync`; on hardware the last frame stays
-on the CRT, here the window dies. See "The ending screen" in `NOTES.md`.
+on the CRT, here the window dies. See "The ending screen" in `docs/RUNTIME.md`.
 
 Upstream **rejects AI-authored pull requests outright**. Recompiler fixes go
 upstream as issues, never as PRs, unless the user writes the patch themselves.

@@ -1,0 +1,396 @@
+# The runtime: what a static recompilation loses, and the patches for it
+
+`tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
+clone**. Changes to the recompiler or the runtime must be captured as a numbered
+patch in `patches/recompone/`, applied in order by `scripts/setup_tools.sh` (see
+"Setting up the tools" in [DEVELOPMENT.md](DEVELOPMENT.md) for why it peels the
+stack newest-first before applying it oldest-first).
+
+**One root cause is behind half of this file.** On hardware, PSY-Q reaches the
+outside world through interrupts: a finished DMA raises IRQ 3, a CD sector raises
+IRQ 2, the BIOS refills the pad buffer from VBlank. A recompiled build has **no
+exception path**, so none of those entry points ever runs. Nothing errors — the
+transfers themselves are emulated and complete fine — and only the work the game
+does *inside* the handler silently disappears.
+
+Its sibling failure is just as quiet: **anything the runtime refreshes only at
+`VSync` is invisible to a game that stops calling `VSync`.** The three CD hangs,
+the menu deadlock and the dead ending screen below are all that shape, in
+different libraries. When something completes but produces no visible effect, or
+a wait loop never satisfies, check which of the two it is before looking anywhere
+else.
+
+## DMA callbacks: the thing that was actually missing
+
+With libcdstream mapped, the movie ran end to end and the screen stayed black.
+Everything looked right: `StFreeRing`/`DrawSync`/`PutDrawEnv`/`DrawOTag` cycling
+once per frame, and `KF2_LOG=mdec` showing real decodes —
+
+```
+[MDEC] decode depth=3 signed=False bit15=True mbs=300 wordsOut=38400
+```
+
+300 macroblocks, 38400 words = 320×240×2 bytes, a full frame, 312 of them. The
+decoded frames were landing in RAM and never reaching VRAM.
+
+The reason is a general problem with static recompilation, not a King's Field
+one. **On hardware a finished DMA raises IRQ 3 and PSY-Q's interrupt entry reads
+DICR and calls the channel's callback. A recompiled build has no exception path,
+so that entry never runs and every DMA callback is dead.** Nothing errors; the
+transfers themselves are emulated and complete fine. Only the work the game does
+*inside* the callback silently disappears — and here that work is the whole
+picture:
+
+```
+DMACallback(1, 0x800142A0)        <- MDEC-out DMA completion callback
+0x800142A0:  LoadImage(rect, buf) <- uploads one 16x240 strip
+             rect.x += rect.w     <- 20 strips = one 320x240 frame
+             DecDCTout(buf, n)    <- decode the next strip
+```
+
+`DMACallback` is `0x8001EAF0` / `0x8005FC30` / `0x8001B0BC`, reached indirectly
+through a per-channel wrapper and libapi's own driver table, so it has no direct
+`jal` anywhere — `KF2_TRACECALL` on the dispatcher is what caught it. It is
+identified by its DICR arithmetic: it indexes a callback table by channel,
+returns the previous entry, and on install ORs `0x00800000 | (0x01010000 << ch)`
+into DICR, clearing those bits again when passed null.
+
+`patches/recompone/0004-libapi-dma-callbacks.patch` adds
+`RecompOne.Runtime.Sdk.LibApi`, which records the table and runs the callback
+from `Dma.Complete`. It is deliberately **not** gated on DICR: the routine that
+would have set those bits is the one being replaced, and a registered callback
+already encodes the same intent.
+
+Two things to know if this misbehaves later. The transfer completes inside the
+store that starts it, so the callback runs re-entrantly on top of the caller —
+`LibApi.Complete` snapshots and restores the CPU context the way
+`Interrupts.Deliver` does, and the strip loop above therefore recurses about 20
+deep per frame instead of iterating. And `Interrupts.Deliver` now reports a
+dropped IRQ once per line; a run where *every* IRQ misses means the
+interrupt-environment offset `BiosB` derives from `HookEntryInt` (`A0 - 0x36`)
+does not fit this game's PSY-Q version. For KF2 the real interrupt-callback
+table is at `0x8003DD44 + irq*4` and the DMA callback table at
+`0x8003DD74 + ch*4`, neither of which the runtime's offset finds — which is why
+routing `DMACallback` to the runtime beats trying to fix the offset.
+
+Verified by dumping the VRAM shadow mid-playback: the From Software logo and the
+title sequence, in both framebuffers. (Window capture is not available in this
+session — the compositor screenshots the lock screen — so the check was on VRAM
+rather than on the presented frame.)
+
+## The three ways a CD read can hang
+
+Every one of these is the same root cause as the DMA callbacks — **a static
+recompilation has no interrupt path** — and each one presents completely
+differently. The game uses all three, so all three had to be fixed, and each was
+hidden behind the one before it.
+
+**1. Polled `ReadN`.** `OPEN.EXE`'s title-screen loader issues
+`CdControl(CdlSetmode, 0x80)` and `CdControl(CdlReadN, &loc)`, then per sector
+runs `while (CdReady(0,0) != CdlDataReady) ;` followed by
+`CdGetSector(buf, 0x200)`. The raw `CdReady` spins on a global only libcd's
+interrupt handler writes. Symptom: **total silence** — the log stops dead, no
+VSync, nothing, because the CPU never leaves the loop.
+
+Fixed by mapping `CdReady` and `CdGetSector` and teaching the HLE that a read
+with no callback registered always has its next sector ready; `CdGetSector`
+advances the drive one sector, which is what makes the loop walk the file.
+
+**2. `CdReadSync`.** libcd's own file reader is
+`CdRead(...); while (CdReadSync(1, 0) > 0) ;`, and `CdReadSync` returns a
+sectors-remaining counter that only the interrupt decrements. Same silent spin.
+The instructive part: `OPEN.EXE` runs this identical routine and *survived*,
+because the counter happened to read 0 and the loop fell straight through.
+`GAME.EXE` read it as garbage and hung. **An unmapped SDK wait can look fine
+purely by accident** — do not treat "the intro works" as evidence the library is
+mapped.
+
+**3. Kernel events.** `GAME.EXE`'s loader is event-driven. Its init opens, in
+`EvMdINTR` (callback) mode:
+
+| class | spec | handler | what it does |
+|---|---|---|---|
+| `HwCdRom` `0xF0000003` | `EvSpCOMP` `0x20` | `0x8001794C` | job state machine; issues each `CdRead` |
+| `HwCdRom` | `EvSpDR` `0x40` | `0x80017A98` | `CdGetSector(job->buf, 0x200)` per sector |
+| `HwCdRom` | `EvSpERROR` `0x8000` | `0x80017B14` | |
+| `RCntCNT3` `0xF2000003` | `EvSpINT` `0x02` | `0x80017850` | frame counter the CD timeout rides on |
+
+On hardware libcd's interrupt handler turns each CD interrupt into a
+`DeliverEvent`. The runtime already has the whole event manager — `OpenEvent`,
+`EnableEvent`, `DeliverEventIntr` with `EvMdINTR` dispatch, used by the memory
+card — but **nothing ever delivered `HwCdRom` or root-counter events**, so the
+job queue never took a step.
+
+This one does *not* present as a freeze. The main loop keeps running and the
+loading screen animates happily forever, which reads like a slow load rather
+than a bug. Symptom: **everything alive, nothing progressing.**
+
+`0005` delivers them at VSync rather than inside the command, so a handler that
+issues the next command does not recurse on top of the one that called it; new
+events queued by a handler are drained in the same tick, up to a bound. `EvSpACK`
+goes out for every command and `EvSpCOMP` only for the commands with a second
+response (`Init`/`Stop`/`Pause`/`SeekL`/`SeekP`/`Standby`), plus one at the end
+of an HLE `CdRead` — modelling the pause real libcd issues once the last sector
+is in, which is the completion the caller actually waits for.
+
+| function | `open` | `game` | `end` |
+|---|---|---|---|
+| `CdReady` | `0x8001AF5C` | `0x8004AD18` | `0x80017528` |
+| `CdReadSync` | `0x8001AF7C` | `0x8004AD38` | `0x80017548` |
+| `CdGetSector` | `0x8001B224` | `0x8004AFE0` | `0x800177F0` |
+
+These are 8-instruction thunks that match in several places, so `game` and `end`
+come from the delta the unambiguous rows of the same object agree on
+(`+0x2FDBC` / `-0x3A34`), confirmed by the internal routine each thunk forwards
+to. **Note that is not the delta in the table below**: `CdInit` sits at
+`+0x315B0`, so libcd is split over more than one object and its thunk block and
+`cdinit` move independently.
+
+## The interrupt-callback table cannot be guessed
+
+**Symptom:** `unmapped call: 0x0BFF0FFE` from `Runtime.PresentFrame` →
+`Interrupts.Deliver`, arriving on the loading screen after minutes of correct
+play. The address is not code; it is not even aligned.
+
+`Interrupts.Deliver(irq)` finds the handler to call by reading
+`BiosB.IntrEnvInInterruptAddr + 2 + irq*4`, where that base comes from the
+argument the game passed to BIOS `B(19h) HookEntryInt`, minus `0x36`. That
+argument is a **jmp_buf**, not a callback table — in `GAME.EXE` it is
+`0x8007437C`, and the word above it (`jb[1]`, the interrupt stack pointer) is
+`0x8007535C`, 4 KB higher. Where the callback table sits relative to that buffer
+is a property of one link of one PSY-Q version, so here the derived slot,
+`0x80074348`, is an ordinary game variable. For most of the run it happens to
+read zero and the delivery is dropped silently; the moment the game stores
+something there, the runtime calls it.
+
+The real table is the one libapi's `InterruptCallback(irq, func)` indexes. That
+function is easy to recognise and gives the address directly: it computes
+`table + irq*4`, returns the previous entry, ORs `1 << irq` into `I_MASK` through
+the pointer in its `.data`, and clears the slot when passed null.
+`ResetCallback` next to it zeroes 11 consecutive slots — `irq` 0 to 10 — which is
+what fixes the base rather than leaving it one word ambiguous.
+
+| overlay | `InterruptCallback` | callback table |
+|---|---|---|
+| `open` | `0x8001E75C` | `0x8003DD48` |
+| `game` | `0x8005F8CC` | `0x8006E3D4` |
+| `end` | `0x8001AD28` | `0x80038D90` |
+
+Two independent checks. **Statically**, `table + 11*4` lands exactly on the DMA
+callback table the DMA interrupt dispatcher walks (`0x8003DD74` in `open`,
+`0x8006E400` in `game`) — the two tables are adjacent, as the 11-slot layout
+predicts. **At run time**, the slots read back as the functions they should be:
+`game` slot 3 is `0x8005FAE0`, which is that same DMA dispatcher (it masks DICR
+with `0x7F000000`, walks seven channels, clears each flag and calls the
+channel's callback), and slot 0 is `0x8005F45C`, the vblank handler that bumps
+the frame counter and runs the registered `VSyncCallback`.
+
+`patches/recompone/0006-irq-callback-table.patch` adds
+`Interrupts.CallbackTable` for a game to set, and — for the case where nothing
+has — makes the derived path refuse a handler that is not a word-aligned
+function the dispatcher knows, reporting it once instead of calling it. The
+addresses themselves are game knowledge, so they live in `Program.cs`, rebound
+per overlay from `OverlayLoadedEvent`.
+
+Note what this fixes beyond the crash: those two handlers had **never run**. The
+vblank callback the game registers now fires once a frame, which is what
+`VSyncCallback` users expect.
+
+## The menu deadlock: input only moved when the game drew
+
+**Symptom:** press the button that opens the in-game menu and everything stops —
+last frame still on screen, no error, no log output on any channel, process
+alive and burning CPU. Exactly the "total silence" signature of the polled CD
+read, and just as misleading.
+
+`dotnet-stack` named it immediately:
+
+```
+BiosB.PadRead → func_8005FE64 → func_8005F564 → func_80022EFC → func_80018E80
+```
+
+`func_8005FE64` is the `B(16h) PAD_dr` thunk and `func_8005F564` is libetc's
+`PadRead(id)` — `PAD_dr`, then `~*(u_long*)0x8006EAE4`, the buffer the game
+registered with `PAD_init2`. `func_80022EFC` is the caller that matters:
+
+```c
+do { } while (PadRead(1) != 0);      /* wait for every button to come up */
+```
+
+It draws nothing and it never calls `VSync`. **In the runtime, host input is
+polled only inside `PresentFrame`, which only runs from `VSync`** — so the pad
+word this loop reads is a snapshot frozen at the last frame drawn, taken while
+the button that opened the menu was still down. The release can never arrive.
+The game had walked into a wait that, in this port, nothing could ever satisfy.
+
+On hardware the BIOS fills that buffer from its own VBlank interrupt, so
+`PAD_dr` is fresh whether or not the game vsyncs — the loop is perfectly
+reasonable code.
+
+`patches/recompone/0007-pad-poll-outside-frame-loop.patch` makes `PAD_dr` pump
+the host itself, rate-limited to 4 ms (a game in this loop calls it ~200,000
+times a second; a VBlank is 16 ms, so 4 ms is still fresher than hardware).
+`HostWindow.PumpInput` takes in events and re-polls input, and redraws at most
+every 16 ms so the window stays live while the game is stuck outside its frame
+loop — `Present` stamps the same clock, so a normally running game never renders
+twice in a frame.
+
+This is a general RecompOne bug, not a King's Field one: any game that waits on
+the pad without vsyncing deadlocks the same way. Worth an upstream issue.
+
+Two things to take from it. First, **a wait loop that reads state the runtime
+only refreshes elsewhere is the recurring shape of this port's bugs** — the three
+CD hangs were the same mistake in a different library, and `VSync`-driven
+delivery is load-bearing for far more than frames. Second, the phantom is
+readable: when the game hangs, the last pad state in the log is the button that
+was held at the last drawn frame, which points straight at the input path.
+
+## The ending screen
+
+`END.EXE` is a movie player. `func_800119A4` inits the GPU, then calls
+`func_80011CC4` twice: `\OP\ED0.S` (1700 frames, timer `0x06A2` = 1698) and
+`\OP\ED1.S` (2673 frames, timer `0x0A6D` = 2669). The last displayed frame of
+the second file is the still with "The End" and the two copyright lines. After
+that it waits 150 × 6 `VSync`s, `CdControl(CdlStop)`, and falls into
+`while(1);` at `0x80011A50`.
+
+On hardware that spin is the ending: the GPU keeps scanning out the last
+framebuffer and the picture stays. Here a frame reaches the window only from
+`PresentFrame`, which only runs from `VSync`, so the same loop leaves the
+image up but the window dead — no events, no close, 100% of a core. That is
+what "it crashed on The End" was. `patches/EndingHold.cs` hooks
+`func_80011CC4` and, after the second movie returns, `VSync(0)`s forever
+instead of reaching the spin.
+
+Two dispatcher leftovers ride in with the executable swap and are the same
+shape of bug, even though they were not what froze the window:
+
+- `HandleRegionOverwrites` only dropped an overlay that was **fully contained**
+  in the new one. `GAME.EXE` is `0x5E000` bytes at `0x80011000`, `END.EXE` is
+  `0x29000` at the same base, so GAME was not contained and stayed mapped —
+  every `GAME.EXE` function past `0x8003A000` remained callable. The same hole
+  hits a smaller FDAT module loading over a larger one, and quit-to-title
+  (`OPEN.EXE` over `GAME.EXE`). `patches/recompone/0008` unloads on any
+  overlap.
+- The FDAT modules sit at `0x8019F07C`, which does not overlap any executable,
+  so even with that fix they would survive into `END.EXE`. Its heap starts at
+  `0x80100000` and covers that RAM. `Program.cs` unloads every `fdat*` overlay
+  when `open` or `end` loads.
+
+
+## The patches to the checkout, one by one
+
+Thirteen of the seventeen are load-bearing; `0002`, `0003` and `0015` are
+diagnostics and `0013` is a settings-placement hook. Several need **no recompile**
+— they change runtime behaviour only — and that is noted where it applies.
+
+**`patches/recompone/0001-bios-load-return-1.patch` is required to boot.** The
+runtime's BIOS `Load` (A(42h)) returned the header pointer, but the real BIOS
+returns 1 on success. King's Field's boot stub compares the result against 1
+exactly and retries forever otherwise, so unpatched it spins in the loader
+(~12,900 `Load` calls in 30 seconds) and never reaches `Exec`.
+
+**`patches/recompone/0004-libapi-dma-callbacks.patch` is required for the intro
+movie.** It adds `RecompOne.Runtime.Sdk.LibApi` so DMA-completion callbacks are
+delivered at all; see "DMA callbacks" above for why nothing works without it.
+
+**`patches/recompone/0005-libcd-interrupt-driven-reads.patch` is required to get
+past the title screen.** It gives `LibCd` a polled read path and makes it deliver
+CD-ROM kernel events, and gives `LibEtc.VSync` the vblank root-counter event. See
+"The three ways a CD read can hang" for what each one unblocks.
+
+**`patches/recompone/0006-irq-callback-table.patch` and
+`0007-pad-poll-outside-frame-loop.patch` are required to open the menu.** The
+first lets a game point the runtime at PSY-Q's real interrupt-callback table
+instead of deriving one that lands in game data; the second lets `PAD_dr` poll
+the host, so a game waiting on the pad without vsyncing is not waiting forever.
+See "The interrupt-callback table cannot be guessed" and "The menu deadlock"
+above.
+
+**`patches/recompone/0009-perspective-correct-textures.patch` is what stops the
+textures swimming.** It adds `GteDepth`, a screen-position-keyed table the GTE
+fills as it projects and the GPU reads as it decodes a vertex word, and teaches
+both renderers to use the depth it recovers. Nothing depends on it to run — every
+vertex it misses is drawn exactly as before — but it is the largest single change
+to the picture in the port. See "Perspective correction" in
+[RENDERING.md](RENDERING.md).
+
+**`patches/recompone/0010-subpixel-vertex-positions.patch` is the other half of
+that same recovered number** — the fraction of a pixel the GTE truncates off a
+projected vertex, which is what makes geometry twitch as it moves. It extends
+`GteDepth`'s slots rather than adding a table, and it is the reason `setup_tools.sh`
+peels the stack before applying it: two patches now edit the same file. Off by
+default. See "Sub-pixel vertex positioning" in [RENDERING.md](RENDERING.md).
+
+**`patches/recompone/0011-gte-depth-collisions.patch` is the rest of that table.**
+Screen position is not a unique key, and dropping saturated vertices made every
+large nearby polygon fall back to affine. The table now keeps several samples per
+pixel, records the clamp, and picks per primitive; a leftover far Z is refused
+rather than applied. See "The table is not unique" in
+[RENDERING.md](RENDERING.md).
+
+**`patches/recompone/0014-gte-zbuffer.patch` is a depth buffer from that same
+number.** The GPU walks the ordering table back to front with no per-pixel test,
+so two surfaces that actually interpenetrate take turns in front of each other.
+The recovered SZ is interpolated per pixel and tested; a miss is painter's order,
+so the HUD is untouched. Window depth is a fragment value rather than clip-space
+Z, because putting SZ into `gl_Position.z` far-clipped the already-projected
+triangle. Off by default. See "Z-buffer" in [RENDERING.md](RENDERING.md).
+
+The other two are diagnostics and safe to skip: `0002-cdtrace-diagnostic.patch`
+names the function behind a CD register access (`KF2_CDTRACE=1`), and
+`0003-libgpu-sdk-trace.patch` gives `LibGpu` the `Log.Sdk` tracing the other SDK
+libraries already had, plus a `Log.Gpu` line for every GP1 write. GP1 is
+display/control only — a handful of writes per mode change — so tracing all of it
+is cheap, and it is the only way to see whether the game ever enabled the display.
+
+**`0008-unload-overlapping-overlays.patch`** is the executable-swap fix written up
+under "The ending screen" above: `HandleRegionOverwrites` only dropped an overlay
+*fully contained* in the new one, so `GAME.EXE` stayed mapped under the smaller
+`END.EXE` at the same base. Any overlap is now an overwrite. The same hole hits a
+smaller FDAT module loading over a larger one, and quit-to-title.
+
+**`0012-exact-gte-vertex-map.patch`** replaces the screen-position key of `0009`
+and `0011` with the **RAM address** the coordinate is stored at, following the
+value through the game's own copies into the GP0 packet. **No recompile.** See
+"Following the value through memory" in [RENDERING.md](RENDERING.md).
+
+**`0013-settings-slot-in-section.patch`** adds `SettingsRegistry.DrawSlot(slotId)`
+and one call to it in the display section, so a port option can sit *inside* a
+runtime section rather than in a block underneath it. UI only — **no recompile**.
+See "Patch settings" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+**`0015-zbuffer-occlusion-census.patch`** is the diagnostic behind
+`KF2_ZBUFFER_PROBE=2` — per-polygon bbox, depth range, table position and flags,
+plus a 32×16 map read back from the depth attachment. **No recompile.** See
+"Z-buffer" in [RENDERING.md](RENDERING.md).
+
+**`0016-zbuffer-clear-at-frame-head.patch`** swaps two statements in
+`GlCore.PresentDisplay` so the depth clear lands at the head of a frame rather
+than the tail of the outgoing one. Real and measured, but it did **not** cure the
+reported symptom. **No recompile.** See "The clear landed at the tail of the
+frame" in [RENDERING.md](RENDERING.md).
+
+**`0017-mouse-capture-and-motion.patch`** exposes the cursor: `MouseCaptured`,
+`TakeMouseMotion` and `IsMouseButtonDown` on `InputManager`, forwarded from
+`HostWindow`. **No recompile.** See "What the runtime had to grow" in
+[INPUT.md](INPUT.md).
+
+## Two general shapes worth keeping
+
+`0007`, `0008` and `patches/EndingHold.cs` are the pattern to keep in mind:
+**anything the runtime refreshes only at `VSync` is invisible to a game that stops
+calling `VSync`**, and that failure mode is always silent.
+
+`0004`, `0005` and `0006` are the other one: **a handler that never runs loses
+only the work inside it**, so the symptom is never an error — it is a picture that
+stays black, a job queue that never advances, or a callback table that reads as an
+ordinary game variable until the game happens to store something in it.
+
+## Upstream contribution policy
+
+RecompOne's maintainer rejects AI-authored pull requests outright ("AI PRs will
+be rejected, no exceptions"). That governs contributions to RecompOne itself; the
+tool is MIT and using it here is unaffected. It does mean any fix to the
+*recompiler* should go upstream as an issue rather than a PR, unless you write
+the patch yourself.
