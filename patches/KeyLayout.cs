@@ -24,15 +24,16 @@ namespace Kf2;
 ///
 ///     Up / Down     walk forward / back        L1 / R1   strafe left / right
 ///     Left / Right  turn                       L2 / R2   look up / down
-///     Cross  attack, and holding it charges    Circle    the in-game menu
-///     Square use what is in front of you       Triangle  cast
+///     Square attack                            Circle    the in-game menu
+///     Cross  the action button: use, open      Triangle  cast
 ///
 /// which rearranges into the layout every first-person game has used since
 /// Quake:
 ///
-///     W A S D   walk and strafe          mouse       turn and look
-///     arrows    walk and turn                        R / F  look up / down
-///     Space     attack        E  use     Q  cast     Tab    menu
+///     W A S D   walk and strafe          mouse   turn and look
+///     arrows    walk and turn
+///     Space     attack        F  use     Q  cast     Tab  menu
+///     mouse     left attacks, right casts, middle uses
 ///
 /// The arrows keep walking as well as turning, and that is not nostalgia: the
 /// game's menus are navigated with the same D-pad bits, so an arrow key that no
@@ -71,7 +72,7 @@ public static class KeyLayout
     /// schema to grow a field.</summary>
     public const string AppliedKey = "kf2.keys.layout";
 
-    const int Version = 1;
+    const int Version = 2;
 
     /// <summary>
     /// Layouts this port has shipped before and has since changed its mind about.
@@ -80,10 +81,24 @@ public static class KeyLayout
     /// these — because anything else is a choice someone made. That means a change
     /// to <see cref="Layout()"/> after release reaches nobody unless the layout it
     /// replaces is recorded here and <see cref="Version"/> is bumped: without both,
-    /// an existing config reads as customised and is left alone forever. Empty
-    /// because there has only ever been one.
+    /// an existing config reads as customised and is left alone forever.
+    ///
+    /// Version 1 is here because it shipped with attack and use the wrong way
+    /// round — Space on Cross, F on Square. The static read of `func_8002957C`
+    /// named the buttons correctly and then guessed at what their branches did;
+    /// playing it settled the opposite, which is the same lesson the analog patch
+    /// learned on the pitch sign.
     /// </summary>
-    static readonly KeyBindings[] Superseded = [];
+    static readonly KeyBindings[] Superseded =
+    [
+        new()
+        {
+            Up = "W", Down = "S", L1 = "A", R1 = "D",
+            Left = "Left", Right = "Right", L2 = "R", R2 = "F",
+            Cross = "Space", Square = "E", Triangle = "Q", Circle = "Tab",
+            Select = "ShiftRight", Start = "Enter", L3 = "", R3 = "",
+        },
+    ];
 
     /// <summary>Off means the player asked for RecompOne's own scheme with
     /// KF2_KEYS=stock; nothing is written in that case.</summary>
@@ -104,27 +119,29 @@ public static class KeyLayout
         L1 = "A",
         R1 = "D",
 
-        // Look, for a player without a mouse or with the pointer let go. Turning
-        // stays on the arrows, where it has always been; the pitch pair goes on R
-        // and F, which are one above the other and next to the walking hand -- and
-        // which leaves the up and down arrows free to go on walking (see Extras).
+        // Turn. Left and Right stay on the arrows, where they have always been,
+        // and the arrows go on walking too (see Extras).
         Left = "Left",
         Right = "Right",
-        L2 = "R",
-        R2 = "F",
 
-        // Act. Space is attack because attack is the button that gets held --
-        // holding Cross is what charges a swing -- and a thumb is the right thing
-        // to hold it with. E for use and Q for cast are where three decades of
-        // first-person games have put them.
-        Cross = "Space",
-        Square = "E",
+        // Pitch is the mouse's, and only the mouse's. A keyboard pair for it
+        // exists -- the game looks up and down on L2/R2 and a pad still does --
+        // but two more keys to learn buy a worse version of something the mouse
+        // does continuously, so the keyboard does not carry them.
+        L2 = "",
+        R2 = "",
+
+        // Act. Square swings, so it gets the thumb; Cross is the action button --
+        // doors, levers, the things in front of you -- so it gets F, where thirty
+        // years of first-person games have put "use". Q casts.
+        Square = "Space",
+        Cross = "F",
         Triangle = "Q",
         Circle = "Tab",
         Select = "ShiftRight",
         Start = "Enter",
 
-        // The game reads neither, and F is the pitch key above.
+        // The game reads neither.
         L3 = "",
         R3 = "",
     };
@@ -228,8 +245,8 @@ public static class KeyLayout
 
             Apply();
             Console.WriteLine("[KF2] keys: WASD layout applied " +
-                              "(W/S walk, A/D strafe, arrows walk and turn, R/F look, " +
-                              "Space attack, E use, Q cast, Tab menu). " +
+                              "(W/S walk, A/D strafe, arrows walk and turn, " +
+                              "Space attack, F use, Q cast, Tab menu). " +
                               "Input settings has both layouts.");
         });
     }

@@ -294,7 +294,7 @@ Kf2.Analog.Install();
 //
 //     KF2_MOUSE=1                              on; off by default
 //     KF2_MOUSE_TURN/LOOK=1.0                  sensitivities; INVERTY=1 flips look Y
-//     KF2_MOUSE_BUTTONS=Cross,Triangle,Square  left, right, middle, as pad buttons
+//     KF2_MOUSE_BUTTONS=Square,Triangle,Cross  left, right, middle, as pad buttons
 //     KF2_MOUSE_KEY=Escape                     the key that captures and releases
 //
 // Off by default, unlike the sticks: nothing is broken about playing this with the

@@ -3316,16 +3316,21 @@ Read through the action-mask table, the pad means:
 |---|---|---|---|
 | Up / Down | walk forward / back | L1 / R1 | strafe left / right |
 | Left / Right | turn | L2 / R2 | look up / down |
-| Cross | attack (held, and it charges) | Circle | the in-game menu |
-| Square | use what is in front of you | Triangle | cast |
+| Square | attack | Circle | the in-game menu |
+| Cross | the action button: use, open | Triangle | cast |
 
 which rearranges into the layout every first-person game has used since Quake:
 
 ```
-W A S D  walk and strafe        mouse   turn and look
-arrows   walk and turn          R / F   look up / down
-Space    attack     E  use      Q cast  Tab  menu
+W A S D  walk and strafe        mouse    turn and look
+arrows   walk and turn                   left attacks, right casts, middle uses
+Space    attack     F  use      Q cast   Tab  menu
 ```
+
+**Pitch is the mouse's, and only the mouse's.** The game looks up and down on
+L2/R2 and a pad still does, but a keyboard pair for it buys a worse version of
+something the mouse does continuously, so the layout leaves those two bindings
+empty rather than spending two more keys on them.
 
 ### Yes, and it needs no patch to the checkout
 
@@ -3350,10 +3355,17 @@ Measured, by running the port against a config in each state:
 | config | marker | result |
 |---|---|---|
 | stock | unset | migrated — `Up` becomes `W` |
+| a layout the port shipped before | older | migrated to the current one |
 | stock | set | untouched: the player asked for stock |
 | stock with one key changed | unset | untouched: it is a customised file |
 | none at all | — | Load saves the port's layout as its defaults |
 | any | — | `KF2_KEYS=fps` overrides both guards |
+
+That second row is not hypothetical: version 1 of the layout had attack and use
+swapped (see the correction under "Mouse look"), and fixing it meant bumping
+`Version` to 2 and recording v1 in `Superseded`. Without both, a config carrying
+the old layout reads as *customised* and would never be corrected. This is the
+one piece of bookkeeping a changed default costs.
 
 The marker lives in `interface.ini` rather than in `settings.json` because
 `settings.json` is the thing being migrated, and a flag inside it would mean
@@ -3478,23 +3490,38 @@ using.
 four entries of the action-mask table, against the pad word at `0x80199554` and
 the previous frame's at `0x80199556`:
 
-| mask word | entry | button | tested | what the branch does |
-|---|---|---|---|---|
-| `0x8006E568` | 0 | Cross | **held** (this frame and last) | subtracts 500 a frame from two `u16` counters at `0x8019942E` and `0x80199432`, clamping at 0, and sets the state byte `0x8019941F` |
-| `0x8006E574` | 3 | Triangle | just pressed | `func_80027DC0`, which indexes 26-byte records at `0x8019C5EC` and compares `0x8019942C` against the record's `+0x16` before it runs |
-| `0x8006E578` | 4 | Select | just pressed | the same routine on a second slot, plus `func_800197D4` / `func_800474D0` through a table at `0x8009B52C` |
-| `0x8006E570` | 2 | Square | just pressed | `func_800262C8(0)` |
+| mask word | entry | button | tested | what the branch does | what it is |
+|---|---|---|---|---|---|
+| `0x8006E570` | 2 | Square | just pressed | `func_800262C8(0)` | **attack** |
+| `0x8006E568` | 0 | Cross | **held** (this frame and last) | subtracts 500 a frame from two `u16` counters at `0x8019942E` and `0x80199432`, clamping at 0, and sets the state byte `0x8019941F` to 1, or to `0x28` when a counter reaches zero | **the action button** |
+| `0x8006E574` | 3 | Triangle | just pressed | `func_80027DC0`, which indexes 26-byte records at `0x8019C5EC` and compares `0x8019942C` against the record's `+0x16` before it runs | **cast** |
+| `0x8006E578` | 4 | Select | just pressed | the same routine on a second slot, plus `func_800197D4` / `func_800474D0` through a table at `0x8009B52C` | the second slot |
 
-A held button draining a pair of counters is a swing and its charge; a routine
-that checks a record's cost against a pool before it will run is a spell. So the
-defaults are **left = Cross, right = Triangle, middle = Square**, and Circle is
-deliberately not among them — it opens the in-game menu (entry 1, `0x8006E56C`),
-and a menu on a mouse button under a captured pointer is a trap.
+So the defaults are **left = Square, right = Triangle, middle = Cross**, and
+Circle is deliberately not among them — it opens the in-game menu (entry 1,
+`0x8006E56C`), and a menu on a mouse button under a captured pointer is a trap.
 
-Note what that table does *not* say: it names the button behind a branch, not the
-word the manual would use. The settings page therefore says "Left button →
-Cross", not "Left button → Attack", which is also the truthful description of
-what the patch does.
+### A correction: the mask table names the button, not the verb
+
+The first version of this shipped with **attack and use swapped**, and the way it
+went wrong is worth keeping.
+
+The branches above are real and were read out of the emitted code. The column on
+the right was not: it was inferred. A button tested *while held* that drains a
+pair of counters reads like a swing and its charge; a single press calling one
+routine reads like using what is in front of you. Both readings are plausible and
+the second one is backwards — **Square attacks and Cross is the action button**,
+which one minute of play settles and no amount of reading the branch does.
+
+That is the same failure the analog patch had on the pitch sign, in the same
+place: the mask table gives the button behind an action and says nothing about
+what the action *is*, and a plausible story about a branch is not evidence. What
+the counters at `0x8019942E` and `0x80199432` actually are is now unidentified
+again — they are not a swing charge, whatever else they may be.
+
+It is also why the settings page says "Left button → Square" rather than "Left
+button → Attack". The port presses a pad button; the game's own control-config
+screen decides the verb, and the port would be lying if it claimed otherwise.
 
 ### Capture, and getting out again
 

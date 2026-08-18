@@ -16,7 +16,7 @@ namespace Kf2;
 ///     KF2_MOUSE=1                              on; off by default
 ///     KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0    sensitivities
 ///     KF2_MOUSE_INVERTY=1                      look-Y inversion
-///     KF2_MOUSE_BUTTONS=Cross,Triangle,Square  left, right, middle, as pad buttons
+///     KF2_MOUSE_BUTTONS=Square,Triangle,Cross  left, right, middle, as pad buttons
 ///     KF2_MOUSE_KEY=Escape                     the key that captures and releases
 ///
 /// The knobs are settings, under Input, beside the stick ones — see
@@ -128,23 +128,27 @@ public static class Mouse
 
     /// <summary>Indices into <see cref="PadButtons"/>, in the order left, right,
     /// middle.</summary>
-    public static int LeftButton = 1;     // Cross
+    public static int LeftButton = 3;     // Square
     public static int RightButton = 4;    // Triangle
-    public static int MiddleButton = 3;   // Square
+    public static int MiddleButton = 1;   // Cross
 
     /// <summary>
     /// What each mouse button presses, as a pad button rather than as an action.
     ///
-    /// The defaults are the three the game's own action routine (`func_8002957C`)
-    /// reads: Cross while it is *held*, draining a pair of counters — the attack
-    /// and its charge; Triangle on the press, through the routine that checks a
-    /// 26-byte record's MP cost before it runs — casting; and Square on the press,
-    /// which is the plain use-what-is-in-front-of-you. Circle is deliberately not
-    /// among them: it opens the in-game menu, and a menu bound to a mouse button
-    /// under a captured pointer is a trap.
+    /// The defaults are three of the four the game's own action routine
+    /// (`func_8002957C`) reads: **Square swings**, **Triangle casts** — that one
+    /// is the branch that checks a 26-byte record's MP cost before it runs — and
+    /// **Cross is the action button**, doors and levers and the thing in front of
+    /// you. Circle is deliberately not among them: it opens the in-game menu, and
+    /// a menu bound to a mouse button under a captured pointer is a trap.
     ///
-    /// The names are the pad's, not the game's, because that is the truth: this
-    /// presses a button and the game's control-config screen decides what the
+    /// Which branch is which was settled by *playing* it, not by reading it: the
+    /// mask table names the button behind a branch and says nothing about what the
+    /// branch does, and the first version of this had attack and use swapped. See
+    /// "A correction: the mask table names the button, not the verb" in NOTES.md.
+    ///
+    /// The names here are the pad's, not the game's, because that is the truth:
+    /// this presses a button and the game's control-config screen decides what the
     /// button does.
     /// </summary>
     internal static readonly (string Name, ushort Bit)[] PadButtons =
@@ -197,7 +201,7 @@ public static class Mouse
         Analog.Env("KF2_MOUSE_INVERTY", InvertKey, ref InvertY, _fromEnv);
 
         // One variable for the three buttons rather than three: they are set
-        // together or not at all, and "Cross,Triangle,Square" says what it does.
+        // together or not at all, and "Square,Triangle,Cross" says what it does.
         string? buttons = Environment.GetEnvironmentVariable("KF2_MOUSE_BUTTONS");
         if (!string.IsNullOrWhiteSpace(buttons))
         {
