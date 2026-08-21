@@ -196,6 +196,51 @@ Note what this fixes beyond the crash: those two handlers had **never run**. The
 vblank callback the game registers now fires once a frame, which is what
 `VSyncCallback` users expect.
 
+## The vblank fired when the game asked
+
+**Symptom:** the title-menu music plays at roughly half speed, and locking the
+frame rate below 30 (`KF2_FPS=15/20`) slows music everywhere the same way. The
+title screen renders at ~15 fps, not 30.
+
+**Mechanism:** the port advanced the emulated vblank once per HLE `VSync` call
+and nowhere else. `LibEtc.VSync` incremented `_vcount`, delivered the RCNT3
+vblank BIOS event (`BiosB.DeliverEventIntr`, class `0xF2000003` spec `0x0002`)
+and dispatched `VSyncEvent`; `Runtime.PresentFrame` additionally ran the PSY-Q
+IRQ 0 chain — all four at VSync-call frequency, and nothing else in the checkout
+advanced any of them. On hardware the vblank interrupt fires every 16.7 ms
+whether or not the main loop is ready: a loop blocked on a CD read misses
+pictures, not vblanks. In-game the loop issues two VSync calls per rendered
+frame (85.7% of frames charge two vblanks), so at 30 fps the domain ticks 60/s
+and the sound sequencer — fed by root-counter interrupt events opened beside the
+SPU flush (`OpenEvent(0xF2000000|n, …, EvMdINTR, …)`) — keeps time. The title
+loop presents through DrawSync, one `VSync(0)`, PutDrawEnv, PutDispEnv,
+DrawOTag — one VSync call per picture, and the streamed-picture rate is paced at
+real drive speed by `LibCdStream.StreamLoop`, which stays. So on the title the
+whole vblank domain ran at ~15 Hz and the music played half speed; at
+`KF2_FPS=15` it ran at half that again.
+
+**Fix:** `patches/recompone/0021-vblank-wall-clock.patch` advances the vblank on
+a wall-clock 60 Hz grid. Each `VSync(mode >= 0)` call catches up every boundary
+missed since the last one — counter increment, RCNT3 event, `VSyncEvent`, IRQ 0
+— as a burst, which is what the hardware's interrupt effectively did across the
+same gap. IRQ 0 moved with it, out of `PresentFrame`. Presentation cadence
+(`PresentFrame`, `FrameClock.Throttle`, the FramePacing floor) is untouched. A
+host stall longer than 120 vblanks (~2 s — window drag, breakpoint) resyncs the
+grid instead of fast-forwarding the game through the gap. Mode semantics are
+unchanged (`<0` returns the count, `==1` returns immediately); the game passes 0
+at every call site in all three overlays.
+
+**Measurement:** with the framestats mod, title windows go from
+`vblanks/frame 1:100%` to a spread worth ~60 vblanks/s; in-area windows stay
+`2:100%` at 30.0 fps. Expected behaviour change: title-screen waits counted in
+vblanks (the attract-demo timeout among them) now elapse at hardware's rate
+rather than at picture rate.
+
+One loose end recorded for the next audio timing mystery: the sound driver also
+opens RCNT1/RCNT2 interrupt events, which the runtime never delivers. Nothing
+visibly misses them today, but they are the first suspect.
+
+
 ## The menu deadlock: input only moved when the game drew
 
 **Symptom:** press the button that opens the in-game menu and everything stops —
@@ -280,7 +325,7 @@ shape of bug, even though they were not what froze the window:
 
 ## The patches to the checkout, one by one
 
-Sixteen of the twenty are load-bearing; `0002`, `0003` and `0015` are
+Seventeen of the twenty-one are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. Several need **no recompile**
 — they change runtime behaviour only — and that is noted where it applies.
 
