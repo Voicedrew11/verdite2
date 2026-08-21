@@ -420,7 +420,9 @@ The floor removes them. Over 3,200 frames of the floor-on run **no report window
 came out above 30.0 fps**, and eight consecutive in-area windows were 30.0 fps at
 `2:100.0%` exactly. Windows *below* 30 stay below it — the title screen and the
 intro are CD-bound at 7–15 fps with the floor on or off, which is right: a floor
-is a ceiling on speed, not a promise of one.
+is a ceiling on speed, not a promise of one; the music that ran half speed there
+was the vblank domain ticking at picture rate — see "The vblank fired when the
+game asked" in `docs/RUNTIME.md`.
 
 Two things the measurement says that are worth keeping in mind for step two:
 
