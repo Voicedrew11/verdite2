@@ -458,15 +458,6 @@ public static class Widescreen
             if (_listWide) ProbeWide(e);
             Census(e);
         }
-        // Feed the present gate: a primitive whose vertex lands past the game's
-        // own edge is margin content, wherever it came from.
-        if (On)
-            for (int i = 0; i < e.Count; i++)
-                if (e.X[i] < e.DrawLeft || e.X[i] > e.DrawRight)
-                {
-                    RecompOne.Runtime.Hle.GpuHle.LastMarginContentFlip = RecompOne.Runtime.Hle.GpuHle.DisplayFlip;
-                    break;
-                }
 
         if (StretchEffects && On) Stretch(e);
 
@@ -576,6 +567,10 @@ public static class Widescreen
             else if (e.X[i] >= right - EdgeSlack) e.X[i] = right + margin;
         }
 
+        // The latch in the backend must not mistake this manufactured width for
+        // margin content the game drew -- a stretched splash fade would otherwise
+        // latch its buffer and the present would flap between widths again.
+        RecompOne.Runtime.Hle.GpuHle.PortWidenedPrim = true;
         _stretched++;
     }
 

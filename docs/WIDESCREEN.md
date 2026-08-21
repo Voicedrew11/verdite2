@@ -97,17 +97,30 @@ CPU, no log output, and it looks exactly like a hang; set `VSync=False` in
 
 ### The present gate
 
-The gate 0022 removed is back, narrower (`patches/recompone/0023`). A wide target
-may serve a present only while its scene is producing margin content — a
-primitive whose vertex crosses the game's own draw-area edge, or a fill covering
-the widened target — within the last two *display* flips (not host presents,
-which is what sank the old counter-based gate), the tolerance absorbing the
-draw-back/display-front ordering. Gameplay crosses the edge every frame and the
-in-game menu's background fills cover the whole target, so neither notices; STR
-playback draws one ordering table and MDECs the other, so the splash produces
-neither, its idle target is demoted to the VRAM fallback, and the boot picture
-holds one width instead of breathing. `KF2_PRESENT_PROBE=1` shows splash windows
-as `vram fallback` only.
+A wide target whose margin columns have never carried a world would present
+invented picture at the sides, so `PresentDisplay` refuses any wide target that
+has not latched margin content (`patches/recompone/0023` supplies the display-
+flip counter, `0024` the latch). Latching is per target and lasts for the
+overlay session: a single display flip that delivers 32 game vertices past the
+game's own draw edge latches the target, a fill covering the widened target
+latches it outright, primitives the widescreen patch itself widened never count,
+and `Dispatcher.Load` clears every latch when a new executable loads.
+
+Both halves of the rule earn their place, measured. The density threshold is
+what keeps the boot splash out: OPEN.EXE clears each MDEC frame with an
+oversized opaque rect whose corners sit outside the draw area -- genuine game
+output, but two vertices of it per flip -- and a first cut that latched on any
+crossing granted the margin to that scene, whose present then flapped between
+widths again. A frame of gameplay crosses the edge hundreds of times; the title
+never latches at all, through minutes of idle. The per-target monotone half is
+what keeps menus wide, and it is why 0023's gate had to go: a scene that stops
+the world render -- in-game menu, dialog, shop, sign -- produces no margin
+content at all, so the old global stamp went quiet, both targets were demoted
+after two idle flips, and the picture collapsed to the 320-wide fallback for as
+long as the text was up.
+
+`KF2_PRESENT_PROBE=1` shows splash and title windows as `vram fallback` only,
+gameplay as `wide`, and menu windows stay `wide`.
 
 ## The HUD does not widen with the world, and finding it is the problem
 

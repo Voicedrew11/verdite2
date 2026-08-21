@@ -422,8 +422,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty of
-the twenty-four are load-bearing; `0002`, `0003` and `0015` are diagnostics,
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-one of
+the twenty-five are load-bearing; `0002`, `0003` and `0015` are diagnostics,
 `0013` is a settings-placement hook, and `0014b` only restores four comment lines
 whose presence patch `0015`'s context assumes.
 
@@ -608,6 +608,17 @@ uncaptured edit inside the checkout is left where it is.
   between 16:9 and the 4:3 fallback -- the boot splash breathing horizontally.
   Idle-margin targets are demoted to the VRAM fallback, which presents at authored
   width. See "The present gate" in `docs/WIDESCREEN.md`. **No recompile.**
+- `0024-margin-content-latch.patch` — replaces 0023's two-flip idle window with a
+  per-target latch: one display flip delivering 32 game vertices past the game's
+  own draw edge (or a fill covering the target) latches it for the overlay
+  session, and an overlay load clears every latch. Menus, dialogs, shops and
+  signs keep the wide picture instead of collapsing to the 320-wide 4:3 fallback
+  the moment the world render stops -- which is what 0023's decaying stamp did,
+  since such scenes produce no margin content at all. Splash and title still
+  present at authored width: their oversized clear rects cross the edge two
+  vertices a flip, under the threshold, and primitives the widescreen patch
+  itself widened never count (`GpuHle.PortWidenedPrim`). **No recompile.** See
+  "The present gate" in `docs/WIDESCREEN.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
