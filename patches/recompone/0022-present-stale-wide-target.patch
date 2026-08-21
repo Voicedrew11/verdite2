@@ -1,7 +1,7 @@
 diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
 --- a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
 +++ b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
-@@ -833,10 +833,34 @@
+@@ -833,10 +833,37 @@
          if (!rgb24)
              foreach (var rt in _rts)
              {
@@ -20,7 +20,10 @@ diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/RecompOne.Runtime
                  if (dispX < rt.X || dispY < rt.Y || dispX + w > rt.X + rt.W || dispY + h > rt.Y + rt.H) continue;
                  if (src == null || rt.LastDrawFrame > src.LastDrawFrame) src = rt;
              }
-+        if (GpuHle.PresentProbe)
++        // Only the non-rgb24 path searches for a target, so src is meaningful only
++        // there; an rgb24 present (FMV) draws raw VRAM by a different route and would
++        // otherwise be miscounted as the 4:3 margin fallback the census is watching for.
++        if (GpuHle.PresentProbe && !rgb24)
 +        {
 +            if (src is { Margin: > 0 }) GpuHle.PresentWide++;
 +            else if (src != null) GpuHle.PresentPlain++;
