@@ -76,15 +76,24 @@ whatever loads the matrix, costs correct HUD proportions, and — given a quarte
 the frame already crosses the edge — buys much less here than it does on a game
 that clips its own polygons.
 
-**Trap, learned while measuring:** with the session locked, KWin stops sending
-frame callbacks and the port blocks in `SwapBuffers` forever with `VSync=True` —
-0% CPU, no log output, and it looks exactly like a hang. Set `VSync=False` in
-`interface.ini` to run it without a visible window. Note the runtime only presents
-through the widened render target if that target was drawn into within the last
-**4** presented frames (`GlCore.PresentDisplay`); with `VSync=False` the host
-presents far faster than the game draws, so most frames fall back to the plain
-VRAM texture at 4:3. That is an artefact of running headless rather than a bug in
-the mod — but it is also what a real stall would look like on screen.
+**Trap, found while measuring, then fixed:** the runtime only presents through
+the widened render target if that target was drawn into within the last **4**
+presented frames (`GlCore.PresentDisplay`) — but the counter counts *host*
+presents, and with `VSync=False` the host presents far faster than the game
+draws, so most presents found both targets stale, fell back to the plain VRAM
+texture, and returned it at 4:3: **the margins flashed black, rapidly, through
+whole sessions.** Any present rate more than about five times the game's does
+it — a 144 Hz monitor with VSync on as well as VSync off. The gate is gone
+(`patches/recompone/0022`): every present writes the targets' middle columns
+back to VRAM first and direct VRAM writes are synced into the targets, so a
+target that contains the display area is never staler than the fallback it
+replaces, and idle targets are destroyed after 300 frames anyway.
+`KF2_PRESENT_PROBE=1` counts what each present picked — wide, plain, VRAM
+fallback — per two-second window, and is how the fallback rate is measured.
+Still true and worth keeping: with the session locked, KWin stops sending frame
+callbacks and the port blocks in `SwapBuffers` forever with `VSync=True` — 0%
+CPU, no log output, and it looks exactly like a hang; set `VSync=False` in
+`interface.ini` to run it without a visible window.
 
 ## The HUD does not widen with the world, and finding it is the problem
 

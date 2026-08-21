@@ -340,6 +340,15 @@ Kf2.Widescreen.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN"),
                          Environment.GetEnvironmentVariable("KF2_WIDESCREEN_EFFECTS"));
 Kf2.Widescreen.Install();
 
+// Present-path census. Counts, per two-second window, what PresentDisplay
+// picked: the widened render target, a plain one, or a fallback to raw VRAM.
+// The fallback presents at 4:3, so a high fallback rate is the flashing margin
+// -- see "Widescreen" in docs/WIDESCREEN.md and patches/recompone/0022:
+//
+//     KF2_PRESENT_PROBE=1    the census, on the console
+if (Environment.GetEnvironmentVariable("KF2_PRESENT_PROBE") == "1")
+    RecompOne.Runtime.Hle.GpuHle.PresentProbe = true;
+
 // The cull the margin runs into. King's Field decides what to draw from a 24x24
 // grid of tile visibility, rebuilt each frame as a top-down trapezoid whose corners
 // are seven s16 pairs in GAME.EXE's data -- the 4:3 frustum, flattened onto the
