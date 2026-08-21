@@ -31,7 +31,7 @@
      public static void VSync(CpuContext c, IMemory m)
      {
          int mode = (int)c.A0;
-@@ -17,6 +37,31 @@
+@@ -17,6 +37,34 @@
          if (mode == 1) { c.V0 = 0; return; }
  
          Runtime.PresentFrame();
@@ -44,6 +44,12 @@
 +    {
 +        double now = VBlankClock.Elapsed.TotalMilliseconds;
 +        if (!_timelineStarted) { _timelineStarted = true; _nextVBlankMs = now; }
++        else if (now - _nextVBlankMs > MaxCatchUpVBlanks * VBlankMs)
++        {
++            // The host was stopped, so discard its stale vblanks; retain only
++            // the current boundary below rather than fast-forwarding the game.
++            _nextVBlankMs = now;
++        }
 +
 +        int n = 0;
 +        while (_nextVBlankMs <= now && n < MaxCatchUpVBlanks)
@@ -53,9 +59,6 @@
 +            TickVBlank(c, m);
 +        }
 +
-+        //Past the cap the game was not scheduled at all rather than ran late;
-+        //drop the backlog so resuming does not spend seconds catching up.
-+        if (_nextVBlankMs <= now) _nextVBlankMs = now;
 +    }
 +
 +    static void TickVBlank(CpuContext c, IMemory m)

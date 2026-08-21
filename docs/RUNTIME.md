@@ -225,8 +225,9 @@ missed since the last one — counter increment, RCNT3 event, `VSyncEvent`, IRQ 
 — as a burst, which is what the hardware's interrupt effectively did across the
 same gap. IRQ 0 moved with it, out of `PresentFrame`. Presentation cadence
 (`PresentFrame`, `FrameClock.Throttle`, the FramePacing floor) is untouched. A
-host stall longer than 120 vblanks (~2 s — window drag, breakpoint) resyncs the
-grid instead of fast-forwarding the game through the gap. Mode semantics are
+host stall longer than 120 vblanks (~2 s — window drag, breakpoint) discards the
+stale backlog and processes only the current vblank, rather than fast-forwarding
+the game through the gap. Mode semantics are
 unchanged (`<0` returns the count, `==1` returns immediately); the game passes 0
 at every call site in all three overlays.
 
