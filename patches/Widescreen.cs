@@ -458,6 +458,15 @@ public static class Widescreen
             if (_listWide) ProbeWide(e);
             Census(e);
         }
+        // Feed the present gate: a primitive whose vertex lands past the game's
+        // own edge is margin content, wherever it came from.
+        if (On)
+            for (int i = 0; i < e.Count; i++)
+                if (e.X[i] < e.DrawLeft || e.X[i] > e.DrawRight)
+                {
+                    RecompOne.Runtime.Hle.GpuHle.LastMarginContentFlip = RecompOne.Runtime.Hle.GpuHle.DisplayFlip;
+                    break;
+                }
 
         if (StretchEffects && On) Stretch(e);
 

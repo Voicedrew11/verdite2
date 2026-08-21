@@ -422,8 +422,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Nineteen of
-the twenty-three are load-bearing; `0002`, `0003` and `0015` are diagnostics,
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty of
+the twenty-four are load-bearing; `0002`, `0003` and `0015` are diagnostics,
 `0013` is a settings-placement hook, and `0014b` only restores four comment lines
 whose presence patch `0015`'s context assumes.
 
@@ -601,6 +601,13 @@ uncaptured edit inside the checkout is left where it is.
   present, so a containing target is never staler than the fallback. See the
   trap paragraph in `docs/WIDESCREEN.md`; `KF2_PRESENT_PROBE=1` counts the
   picks. **No recompile.**
+- `0023-splash-margin-idle.patch` — a wide render target may serve a present only
+  while the scene is producing margin content (a primitive past the game's own
+  edge, or a fill covering the target). STR playback draws one ordering table and
+  MDECs the other, so only one flip buffer had a target and the present flapped
+  between 16:9 and the 4:3 fallback -- the boot splash breathing horizontally.
+  Idle-margin targets are demoted to the VRAM fallback, which presents at authored
+  width. See "The present gate" in `docs/WIDESCREEN.md`. **No recompile.**
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

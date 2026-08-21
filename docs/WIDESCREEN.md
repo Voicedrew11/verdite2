@@ -95,6 +95,20 @@ callbacks and the port blocks in `SwapBuffers` forever with `VSync=True` — 0%
 CPU, no log output, and it looks exactly like a hang; set `VSync=False` in
 `interface.ini` to run it without a visible window.
 
+### The present gate
+
+The gate 0022 removed is back, narrower (`patches/recompone/0023`). A wide target
+may serve a present only while its scene is producing margin content — a
+primitive whose vertex crosses the game's own draw-area edge, or a fill covering
+the widened target — within the last two *display* flips (not host presents,
+which is what sank the old counter-based gate), the tolerance absorbing the
+draw-back/display-front ordering. Gameplay crosses the edge every frame and the
+in-game menu's background fills cover the whole target, so neither notices; STR
+playback draws one ordering table and MDECs the other, so the splash produces
+neither, its idle target is demoted to the VRAM fallback, and the boot picture
+holds one width instead of breathing. `KF2_PRESENT_PROBE=1` shows splash windows
+as `vram fallback` only.
+
 ## The HUD does not widen with the world, and finding it is the problem
 
 The world gets wider; the HUD is drawn in screen space, so it keeps the 4:3 box it
