@@ -218,12 +218,12 @@ index 1ab5e3b..cfc3a69 100644
 +        if (OtEntry < 0 || OtLength <= 0) return false;
 +        if (minSz <= 0f || FarSz <= 0f) return false;
 +
-+        // The depth this table position would carry if position and SZ agreed. The
-+        // backdrop, linked at the far end, projects far below it; real geometry sits
-+        // at or above it. maxSz (the farthest corner) keeps a near-to-far spanning
-+        // wall from ever being mistaken for the flat backdrop.
++        // Park only inside the far band the backdrop links in — OtEntry < SkyScaleBand,
++        // the region already excluded from the FarSz scale above — and only when even
++        // the farthest corner (maxSz) still sits below its position-predicted depth.
++        // Gating to the band is what stops a mid-table wall parking and being seen through.
 +        float predicted = FarSz * (1f - (float)OtEntry / OtLength);
-+        bool park = maxSz < predicted * SkyParkMargin;
++        bool park = OtEntry < SkyScaleBand && maxSz < predicted * SkyParkMargin;
 +        if (park)
 +        {
 +            if (minSz < ZBandMinSz) ZBandMinSz = minSz;

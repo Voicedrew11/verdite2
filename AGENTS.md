@@ -627,7 +627,8 @@ uncaptured edit inside the checkout is left where it is.
   backdrop reject the distant terrain it should sit behind. `GteDepth.IsBackgroundPark`
   parks a primitive on that **disagreement**: it predicts the depth a table
   position would carry if position and SZ agreed (`FarSz × (1 − OtEntry/OtLength)`)
-  and parks anything projecting below `SkyParkMargin` (0.7) of that — the backdrop,
+  and, only inside the far band the backdrop links in (`OtEntry < SkyScaleBand`),
+  parks anything projecting below `SkyParkMargin` (0.7) of that — the backdrop,
   linked farthest, projects a third to a half of it; real geometry sits at or above
   its prediction and keeps testing. The scale it measures against is sticky,
   far-band-blind and reset on each overlay load (`FarSz`: the largest depth seen
@@ -642,7 +643,13 @@ uncaptured edit inside the checkout is left where it is.
   ~20 fps in any skybox scene. A park is now a depth, not a flag: the primitive
   keeps the test carrying `GteDepth.ParkedFarSz` (SZ3 saturated), so it lands in
   the same batch as real geometry and painter's order survives by arithmetic;
-  counted as `GteDepth.ZBand`. **No recompile.** See "The second cause" in
+  counted as `GteDepth.ZBand`. That far-plane depth also made the residual — the
+  *opposite* symptom, walls seen through to the room behind — because an un-gated
+  test over-parked mid-table geometry, and a wall pushed to the far plane loses
+  `LEQUAL` to the nearer room drawn before it. The `OtEntry < SkyScaleBand` gate is
+  the fix and it removes the mechanism, not just tightens the odds: a far-band park
+  is drawn before anything it could hide, so nothing nearer has drawn yet. **No
+  recompile.** See "The second cause" and "The park has to stay in the far band" in
   `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind

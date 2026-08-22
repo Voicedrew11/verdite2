@@ -15,7 +15,7 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 |---|---|---|---|
 | Perspective correction | **measured**, 92% hit | **checked**, 76.6% of pixels | **on** |
 | Sub-pixel vertex positions | **measured**, offsets uniform | **not checked** | off |
-| Z-buffer | **measured**, same recovered SZ | wrong outdoors — skybox parked by SZ/OT disagreement; longer check owed | off |
+| Z-buffer | **measured**, same recovered SZ | skybox parked by SZ/OT disagreement in the far band; longer check owed | off |
 | Dithering (removal) | **measured**, all three routes | **checked**, twice-drawn pair | off (no crosshatch) |
 
 That "mechanism measured / picture never checked" split is the rule the whole
@@ -443,7 +443,7 @@ does not move.
 
 ## Z-buffer: the same depth, used as occlusion
 
-**Mechanism confirmed; the outdoor defect is fixed by parking the skybox on the SZ/OT disagreement, and owes the picture a longer look before the default flips.**
+**Mechanism confirmed; the skybox is parked on the SZ/OT disagreement, restricted to the far band it links in so a mid-table wall is never parked and seen through; the default still owes the picture a longer look before it flips.**
 
 The GPU has no depth buffer. The game sorts every polygon into an ordering table
 by one number — the GTE's OTZ, the average of its vertices — and `DrawOTag` walks
@@ -687,6 +687,43 @@ nothing real is ever below the 0.7 cut — while the sky, at ≈ 0.32 of the are
 scale it can no longer prop up (7260 against 23000), parks permanently once an
 area has shown anything deeper than ~10.4k. An area shallower than that never
 parks its sky, but it also has nothing farther for the sky to occlude.
+
+### The park has to stay in the far band, or a wall is seen through
+
+The disagreement test still had a residual, and it was the mirror image of the one it
+fixed: not the sky drawing *over* a wall, but a *wall* vanishing to show the room
+behind it. `IsBackgroundPark` was applied at **every** `OtEntry`, with the threshold
+scaled down by position (`FarSz × (1 − OtEntry/OtLength)`). `OtEntry` is a linked-list
+node index — only a rough proxy for depth — and `FarSz` is sticky across the whole
+area, so in any view shallower than the area's deepest the prediction is inflated and
+**mid-table walls** fall under the cut and park. (The 40–90 `Flush()`es a frame that
+the flag-clear scheme cost were the same false positives, scattered through submission
+order — the contiguous sky alone could never cross the batch key that often.)
+
+While parking meant "drop the depth test, keep painter's order," a false positive was
+harmless: the wall still drew over what it should. The performance fix changed that —
+parking now rides to the backend as a far-plane depth (`ParkedFarSz`, above), and a
+wall pushed to the far plane is the farthest thing in the buffer. The room behind it is
+linked *farther* in the table, so it draws *first* and writes its real, nearer depth;
+the parked wall then loses `LEQUAL` to it and is rejected, and the room shows through
+the wall. It is intermittent because it rides on `FarSz` history and table packing.
+
+The fix is one clause: park only inside the far band the backdrop links in,
+`OtEntry < SkyScaleBand`. This is not merely a tighter heuristic — it removes the
+*mechanism*. A see-through needs a parked primitive drawn **after** the geometry it
+should occlude; a far-band park is among the **first** nodes the walk emits, and
+anything it should sit in front of is nearer, hence higher `OtEntry`, hence drawn
+after — so when the park draws, nothing it would hide has drawn yet, and the real
+geometry that follows wins on its own depth. Far-band parks tie each other at
+`ParkedFarSz` under `LEQUAL`, so later-wins reproduces the table's own order exactly.
+Even a stale-high `FarSz` that over-parks a genuinely-distant far-band primitive now
+renders it *behind* everything rather than as a hole. `SkyScaleBand` (512) is already
+the region excluded from the `FarSz` accumulation, so one constant now partitions the
+table: at or past it a primitive feeds the scale and never parks, before it a primitive
+may park and never feeds the scale. It cannot bring back either earlier defect — the
+sky (`ot 4–13`) is still inside the band and still parked, and real intersecting
+geometry is mid-table (`ot ≫ 512`) and always tests — and it costs nothing, since the
+test short-circuits on the gate for the ~99% of primitives outside the band.
 
 ## Dithering: one flag, and it lives in the draw environment
 
