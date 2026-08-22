@@ -422,7 +422,7 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-one of
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty of
 the twenty-five are load-bearing; `0002`, `0003` and `0015` are diagnostics,
 `0013` is a settings-placement hook, and `0014b` only restores four comment lines
 whose presence patch `0015`'s context assumes.
@@ -607,7 +607,8 @@ uncaptured edit inside the checkout is left where it is.
   MDECs the other, so only one flip buffer had a target and the present flapped
   between 16:9 and the 4:3 fallback -- the boot splash breathing horizontally.
   Idle-margin targets are demoted to the VRAM fallback, which presents at authored
-  width. See "The present gate" in `docs/WIDESCREEN.md`. **No recompile.**
+  width. See "The present gate" in `docs/WIDESCREEN.md` (0024 replaces this
+  idle window with a per-target latch). **No recompile.**
 - `0024-margin-content-latch.patch` — replaces 0023's two-flip idle window with a
   per-target latch: one display flip delivering 32 game vertices past the game's
   own draw edge (or a fill covering the target) latches it for the overlay

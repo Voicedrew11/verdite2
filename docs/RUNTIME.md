@@ -326,8 +326,9 @@ shape of bug, even though they were not what froze the window:
 
 ## The patches to the checkout, one by one
 
-Seventeen of the twenty-one are load-bearing; `0002`, `0003` and `0015` are
-diagnostics and `0013` is a settings-placement hook. Several need **no recompile**
+Twenty of the twenty-five are load-bearing; `0002`, `0003` and `0015` are
+diagnostics, `0013` is a settings-placement hook, and `0014b` restores four
+comment lines whose presence `0015`'s context assumes. Several need **no recompile**
 — they change runtime behaviour only — and that is noted where it applies.
 
 **`patches/recompone/0001-bios-load-return-1.patch` is required to boot.** The

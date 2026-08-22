@@ -599,6 +599,9 @@ public static class Widescreen
         int shift = hi <= HudLeftEdge ? -margin : lo >= HudRightEdge ? margin : 0;
         if (shift == 0) return;
 
+        // Same rule as Stretch: width this patch manufactured is not margin
+        // content the game drew, and the backend latch must not count it.
+        RecompOne.Runtime.Hle.GpuHle.PortWidenedPrim = true;
         for (int i = 0; i < e.Count; i++) e.X[i] += shift;
     }
 

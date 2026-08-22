@@ -157,3 +157,14 @@ diff --git a/RecompOne.Runtime/Gpu/GpuRaster.cs b/RecompOne.Runtime/Gpu/GpuRaste
          if (Event.HasAnyListeners<RenderPrimEvent>())
          {
              var e = _primEvent;
+@@ -442,7 +442,10 @@
+     }
+
+     void LineSegment(int x0, int y0, int r0, int g0, int b0, int x1, int y1, int r1, int g1, int b1, bool semi, bool gouraud)
+     {
++        // Lines pass neither RenderPrimEvent dispatch, so nothing clears the
++        // widescreen patch's widened-prim flag for them; clear it here.
++        Hle.GpuHle.PortWidenedPrim = false;
+         x0 += _drawOffsetX; y0 += _drawOffsetY;
+         x1 += _drawOffsetX; y1 += _drawOffsetY;
+         if (HleOn) { HleLine(x0, y0, r0, g0, b0, x1, y1, r1, g1, b1, semi, gouraud); return; }

@@ -108,13 +108,13 @@ and `Dispatcher.Load` clears every latch when a new executable loads.
 
 Both halves of the rule earn their place, measured. The density threshold is
 what keeps the boot splash out: OPEN.EXE clears each MDEC frame with an
-oversized opaque rect whose corners sit outside the draw area -- genuine game
-output, but two vertices of it per flip -- and a first cut that latched on any
+oversized opaque rect whose corners sit outside the draw area — genuine game
+output, but two vertices of it per flip — and a first cut that latched on any
 crossing granted the margin to that scene, whose present then flapped between
 widths again. A frame of gameplay crosses the edge hundreds of times; the title
 never latches at all, through minutes of idle. The per-target monotone half is
 what keeps menus wide, and it is why 0023's gate had to go: a scene that stops
-the world render -- in-game menu, dialog, shop, sign -- produces no margin
+the world render — in-game menu, dialog, shop, sign — produces no margin
 content at all, so the old global stamp went quiet, both targets were demoted
 after two idle flips, and the picture collapsed to the 320-wide fallback for as
 long as the text was up.
