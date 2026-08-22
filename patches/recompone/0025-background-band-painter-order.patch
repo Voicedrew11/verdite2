@@ -1,27 +1,61 @@
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index 35ed92f..d56c77a 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -454,7 +454,7 @@ public sealed class GlCore : IGpuBackend
+             Texpage = tpage,
+             U = v.U, V = v.V,
+             W = v.HasPersp && v.Z > 0f ? v.Z : 1f,
+-            Z = v.HasGteZ && v.Z > 0f ? v.Z : 0f,
++            Z = v.Parked ? GteDepth.ParkedFarSz : v.HasGteZ && v.Z > 0f ? v.Z : 0f,
+         };
+     }
+ 
 diff --git a/RecompOne.Runtime/Gpu/GpuHleForward.cs b/RecompOne.Runtime/Gpu/GpuHleForward.cs
-index e8dfaff..8575188 100644
+index e8dfaff..96c1573 100644
 --- a/RecompOne.Runtime/Gpu/GpuHleForward.cs
 +++ b/RecompOne.Runtime/Gpu/GpuHleForward.cs
-@@ -48,8 +48,17 @@ public sealed partial class Gpu
+@@ -25,11 +25,11 @@ public sealed partial class Gpu
+     // HasPersp and HasGteZ are independent: the first is "use Z as clip W" (the
+     // perspective-correct path), the second is "this Z is a real view depth" for
+     // the Z-buffer. Untextured walls have the second without the first.
+-    static HleVertex HV(in Vert v, bool persp, bool z) => new()
++    static HleVertex HV(in Vert v, bool persp, bool z, bool park) => new()
+     {
+         X = v.X + v.Fx, Y = v.Y + v.Fy,
+         R = (byte)v.R, G = (byte)v.G, B = (byte)v.B, U = (short)v.U, V = (short)v.V,
+-        Z = v.W, HasGteZ = z, HasPersp = persp,
++        Z = v.W, HasGteZ = z, HasPersp = persp, Parked = park,
+     };
+ 
+     PrimFlags PrimOf(bool tex, bool semi, bool raw, int clut, bool gouraud = false) => new()
+@@ -48,12 +48,24 @@ public sealed partial class Gpu
          // triangle's texture in half. The Z-buffer is the same rule for a different
          // reason — a corner at ndc.z = 0 among two real depths would punch a hole.
          bool persp = tex && a.HasW && b.HasW && c.HasW;
--        bool z = GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
--        if (GteDepth.ZBuffer) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
 +        // The skybox is the game's own "behind everything": linked at the far end
 +        // of the table but projecting near, because it is a small box drawn around
 +        // the camera. Its recovered SZ is not believed and it keeps painter's
 +        // order. Recognised by that disagreement — far link, near depth — rather
 +        // than by a fixed node count, so the far world beside it still tests.
-+        // Suppressed here rather than in HV so the counters and the vertex flags
-+        // cannot disagree. See GteDepth.IsBackgroundPark.
++        // Suppression rides to the backend as a far-plane depth attribute
++        // (GteDepth.ParkedFarSz) rather than as a cleared vertex flag: clearing
++        // the flag used to move the batch key and flush the whole pipeline at
++        // every crossing between parked and tested geometry. See
++        // GteDepth.IsBackgroundPark.
 +        bool band = GteDepth.ZBuffer && GteDepth.IsBackgroundPark(a.W, b.W, c.W);
-+        bool z = !band && GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
+         bool z = GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
+-        if (GteDepth.ZBuffer) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
 +        if (band) GteDepth.ZBand++;
 +        else if (GteDepth.ZBuffer) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
  
          var be = GpuHle.Backend!;
          be.SetDrawEnv(CurEnv());
+-        be.DrawTri(HV(a, persp, z), HV(b, persp, z), HV(c, persp, z), PrimOf(tex, semi, raw, clut, gouraud));
++        be.DrawTri(HV(a, persp, z, band), HV(b, persp, z, band), HV(c, persp, z, band), PrimOf(tex, semi, raw, clut, gouraud));
+     }
+ 
+     void HleRect(int x, int y, int w, int h, int u, int v, int clut, int r, int g, int b, bool tex, bool semi, bool raw)
 diff --git a/RecompOne.Runtime/Gpu/GpuRaster.cs b/RecompOne.Runtime/Gpu/GpuRaster.cs
 index d448e6b..d6c0617 100644
 --- a/RecompOne.Runtime/Gpu/GpuRaster.cs
@@ -48,10 +82,10 @@ index d448e6b..d6c0617 100644
  
          // The steps are per pixel and the coordinates are per sixteenth, so a step
 diff --git a/RecompOne.Runtime/Gpu/GteDepth.cs b/RecompOne.Runtime/Gpu/GteDepth.cs
-index 1ab5e3b..edbbb0f 100644
+index 1ab5e3b..cfc3a69 100644
 --- a/RecompOne.Runtime/Gpu/GteDepth.cs
 +++ b/RecompOne.Runtime/Gpu/GteDepth.cs
-@@ -235,7 +235,23 @@ public static class GteDepth
+@@ -235,7 +235,30 @@ public static class GteDepth
      /// back, so <see cref="ZRejects"/> stays at zero there.</summary>
      public static long ZTris, ZSkipped, ZRejects;
  
@@ -68,15 +102,22 @@ index 1ab5e3b..edbbb0f 100644
 +    /// position predicts. Empty range while nothing parked.</summary>
 +    public static float ZBandMinSz = float.MaxValue, ZBandMaxSz;
 +
++    /// <summary>The ordering-table range the parked primitives spanned this
++    /// window, so the probe can show how far along the far end of the table the
++    /// backdrop spreads — the scatter whose crossings with tested geometry used
++    /// to be paid for in batch flushes. Empty while nothing parked.</summary>
++    public static int ZBandMinEntry = int.MaxValue, ZBandMaxEntry = -1;
++
 +    public static void ResetZCounters()
 +    {
 +        ZTris = ZSkipped = ZBand = ZRejects = 0;
 +        ZBandMinSz = float.MaxValue; ZBandMaxSz = 0f;
++        ZBandMinEntry = int.MaxValue; ZBandMaxEntry = -1;
 +    }
  
      /// <summary>A census of the frame's <i>large</i> polygons, in the order the
      /// ordering table submitted them, with the depth each one recovered. It exists
-@@ -264,6 +280,103 @@ public static class GteDepth
+@@ -264,6 +287,119 @@ public static class GteDepth
      /// Believing its SZ puts the sky in front of the world.</summary>
      public static int OtEntry = -1;
  
@@ -100,6 +141,16 @@ index 1ab5e3b..edbbb0f 100644
 +    /// geometry then projects at or above its predicted depth more easily and is
 +    /// never over-parked.</summary>
 +    public const int SkyScaleBand = 512;
++
++    /// <summary>The depth attribute a parked primitive carries instead of its
++    /// recovered SZ: SZ3 saturated, the deepest window depth the GTE can emit.
++    /// The shader maps it just under the cleared depth, so a parked fragment
++    /// passes against empty space, writes a depth nothing real sits behind, and
++    /// ties with other parked fragments — painter's order by arithmetic rather
++    /// than by leaving the depth test, which would change the hardware backend's
++    /// batch key and flush at every crossing between parked and tested
++    /// geometry.</summary>
++    public const float ParkedFarSz = 65535f;
 +
 +    /// <summary>The far-world depth scale the park test measures against: the
 +    /// largest recovered depth of any full-depth primitive linked outside
@@ -137,10 +188,14 @@ index 1ab5e3b..edbbb0f 100644
 +    /// position predicts the far-world depth (<see cref="FarSz"/>), but it
 +    /// projects only mid-range. So the test is a disagreement, not a "near" cut: the
 +    /// position predicts <c>FarSz × (1 − OtEntry / OtLength)</c>, and a primitive
-+    /// projecting below <see cref="SkyParkMargin"/> of that is the backdrop and goes
-+    /// back to painter's order — no depth test, no depth write. A genuinely-distant
-+    /// wall carries at least its predicted depth and keeps testing; nothing in the
-+    /// near half predicts a far depth, so nothing there is ever parked.
++    /// projecting below <see cref="SkyParkMargin"/> of that is the backdrop and is
++    /// parked at <see cref="ParkedFarSz">the far plane</see> — it stays inside the
++    /// depth test but at a depth nothing real sits behind, so painter's order
++    /// survives by arithmetic rather than by leaving the test, which would move
++    /// the hardware backend's batch key and flush at every crossing with tested
++    /// geometry. A genuinely-distant wall carries at least its predicted depth
++    /// and keeps testing; nothing in the near half predicts a far depth, so
++    /// nothing there is ever parked.
 +    ///
 +    /// Called once per triangle from both rasterizers, only while
 +    /// <see cref="ZBuffer"/> is on, so it also carries the accumulation of
@@ -173,6 +228,8 @@ index 1ab5e3b..edbbb0f 100644
 +        {
 +            if (minSz < ZBandMinSz) ZBandMinSz = minSz;
 +            if (maxSz > ZBandMaxSz) ZBandMaxSz = maxSz;
++            if (OtEntry < ZBandMinEntry) ZBandMinEntry = OtEntry;
++            if (OtEntry > ZBandMaxEntry) ZBandMaxEntry = OtEntry;
 +        }
 +        return park;
 +    }
@@ -180,6 +237,19 @@ index 1ab5e3b..edbbb0f 100644
      /// <summary>How many entries the last completed walk had, so an entry can be
      /// read back as the OTZ the game linked at: <c>otz = OtLength - 1 - OtEntry</c>.
      /// Published one walk late, which is what makes it free.</summary>
+diff --git a/RecompOne.Runtime/Gpu/Hle/HleTypes.cs b/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+index c0bb072..1a2daaf 100644
+--- a/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
++++ b/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+@@ -11,6 +11,8 @@ public struct HleVertex
+     // too, and putting that Z into clip W would turn perspective correction on
+     // as a side effect. HasPersp is the original "use Z as gl_Position.w".
+     public bool HasPersp;
++    // Believed at the far plane rather than refused the test, so the backend's batch key does not move.
++    public bool Parked;
+ }
+ 
+ public struct PrimFlags
 diff --git a/RecompOne.Runtime/sdk/LibGpu.cs b/RecompOne.Runtime/sdk/LibGpu.cs
 index 95e1c99..a3f2aee 100644
 --- a/RecompOne.Runtime/sdk/LibGpu.cs

@@ -636,8 +636,13 @@ uncaptured edit inside the checkout is left where it is.
   the sky back. Two earlier tries missed and
   are recorded: a fixed node band (`OtEntry < 64`) over-captured filler and real far
   geometry, and a near-SZ cut (`SZ < FarSz × 0.3`) assumed the backdrop was near and
-  never parked it. Parked prims go back to painter's order — no depth test, no depth
-  write, counted as `GteDepth.ZBand`. **No recompile.** See "The second cause" in
+  never parked it. Parking first cleared the vertex depth flag, which moved the
+  hardware backend's batch key and flushed the whole GL batch at every crossing
+  between parked and tested geometry — measured 40–90 batches/frame outdoors,
+  ~20 fps in any skybox scene. A park is now a depth, not a flag: the primitive
+  keeps the test carrying `GteDepth.ParkedFarSz` (SZ3 saturated), so it lands in
+  the same batch as real geometry and painter's order survives by arithmetic;
+  counted as `GteDepth.ZBand`. **No recompile.** See "The second cause" in
   `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind

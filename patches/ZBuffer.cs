@@ -199,17 +199,26 @@ public static class ZBuffer
         // and a shallower recovered SZ, so the number that calibrates it is the
         // frame's far depth, against which each position predicts a depth; the
         // parked range shows the backdrop sitting below its own prediction.
+        // z-batches/frame counts Flush()es that ran with the depth test on — the
+        // hardware backend's batch key includes whether vertices carry recovered
+        // depth at all, so every painter's-order backdrop triangle sitting between
+        // tested ones costs a whole GL batch flush. It is the number that shows
+        // (or clears) that storm.
         float far = GteDepth.FarSz;
         string bandRange = GteDepth.ZBandMaxSz > 0f
             ? $" (parked z {GteDepth.ZBandMinSz:F0}..{GteDepth.ZBandMaxSz:F0})" : "";
+        string entryRange = GteDepth.ZBandMaxEntry >= 0
+            ? $" (parked entries {GteDepth.ZBandMinEntry}..{GteDepth.ZBandMaxEntry})" : "";
         Console.WriteLine($"[KF2] zbuffer: {tested / window:F0} tris/s tested, " +
-                          $"{skipped / window:F0} painter's/s, {banded / window:F0} far-band/s{bandRange}" +
+                          $"{skipped / window:F0} painter's/s, {banded / window:F0} far-band/s{bandRange}{entryRange}" +
                           $"{(total == 0 ? "" : $", {(100.0 * tested / total):F1}% of submitted")}" +
                           $"{(rejected == 0 ? "" : $", {rejected / window:F0} px rejected/s")}, " +
                           $"far z {far:F0}{(GteDepth.FarSzWalk < far ? $" (last walk {GteDepth.FarSzWalk:F0})" : "")}, " +
+                          $"{(float)GteDepth.ZBatchRt / _frames:F1}+{(float)GteDepth.ZBatchVram / _frames:F1} z-batches/frame, " +
                           $"over {_frames / window:F0} frames/s");
 
         GteDepth.ResetZCounters();
+        GteDepth.ZBatchRt = GteDepth.ZBatchVram = 0;
         _frames = 0;
         _windowStart = Now;
     }

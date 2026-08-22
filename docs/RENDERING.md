@@ -611,11 +611,30 @@ parks a primitive projecting below `SkyParkMargin` (0.7) of that prediction:
   at ≥ 1.14, so the 0.7 cut sits with margin on both sides.
 - `maxSz` (the farthest corner) is what is tested, so a near-to-far spanning wall
   is never mistaken for the flat backdrop. Parked primitives are counted as
-  `ZBand`; painter's order invents no new depth values. The far end's other
-  occupants, the 2D tints, never recover a depth and are untouched.
+  `ZBand`. The far end's other occupants, the 2D tints, never recover a depth and
+  are untouched.
 
-`KF2_ZBUFFER_PROBE=1` prints the frame's `far z` and the `parked z` range, so the
-backdrop can be seen sitting below the depth its position predicts;
+Parking was first expressed as it reads — a vertex flag cleared, so the backend
+skipped the test. That moved the hardware backend's batch key
+(`GlCore.DrawTri` derives `zMode` from whether vertices carry recovered depth at
+all), and every parked triangle sitting between tested ones in submission order
+flushed the whole GL batch: outdoor windows measured **40–90 `Flush()`es per
+frame** against 3 when nothing parked, and any scene drawing a skybox collapsed
+to ~20 fps while scenes without one were untouched. The fix expresses the same
+semantics as a depth instead: a parked primitive keeps the test but carries
+`GteDepth.ParkedFarSz` (65535, SZ3 saturated — the deepest window depth there
+is) as its depth attribute, which the shader maps just under the cleared
+attachment. It passes against empty space, writes a depth nothing real sits
+behind, and ties with fellow backdrop fragments under LEQUAL — painter's order
+survives by arithmetic and the batch key never moves. One semantic edge: a
+backdrop quad linked *after* deeper world geometry now loses to that geometry's
+real depth instead of overdrawing it — strictly more correct than the
+unconditional draw, and not observable in the game's own ordering.
+
+`KF2_ZBUFFER_PROBE=1` prints the frame's `far z`, the `parked z` range, how far
+along the table the backdrop spread (`parked entries`), and `z-batches/frame` —
+the flush counter that caught the cost above. The backdrop sits below the depth
+its position predicts, and the table can be seen holding that story;
 `KF2_ZBUFFER_PROBE=2`'s per-primitive census (`ot` against `z`) is the instrument
 that calibrates `SkyParkMargin` per area. The setting stays off by default until
 the picture has had the longer look a default flip wants — both the outdoor
