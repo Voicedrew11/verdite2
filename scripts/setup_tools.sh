@@ -11,12 +11,29 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLS="$ROOT/tools/RecompOne"
 UPSTREAM="https://github.com/BlackLabelHQ/RecompOne.git"
 
+# The patch stack in patches/recompone/ targets one specific upstream tree.
+# main drifts -- files get renamed (0x1FFFFCu became Runtime.RamWordMask), which
+# makes `git apply` reject the diffs against context that no longer exists -- so
+# a plain clone of HEAD breaks the build. Pin to the newest commit the whole
+# stack still applies to cleanly, in order. Re-run this after moving the pin to
+# re-derive the patched checkout; bump it only alongside rebasing the patches.
+PIN="870c5baa735111687c62d637a159eb47a08e94ae"
+
 if [ ! -d "$TOOLS/.git" ]; then
     echo "==> cloning RecompOne"
     git clone "$UPSTREAM" "$TOOLS"
 else
     echo "==> RecompOne already present at $TOOLS"
+    git -C "$TOOLS" fetch --quiet origin || true
 fi
+
+echo "==> pinning RecompOne to $PIN"
+# --force resets tracked files but leaves untracked ones; several patches CREATE
+# files (0004 -> LibApi.cs, 0009 -> GteDepth.cs), so a re-run would hit "already
+# exists" without also removing them. clean -fd gives a pristine pinned tree,
+# which the apply loop below then patches from a known state every time.
+git -C "$TOOLS" checkout --quiet --force "$PIN"
+git -C "$TOOLS" clean -qfd
 
 echo "==> applying local patches"
 shopt -s nullglob
