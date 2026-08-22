@@ -192,9 +192,9 @@ Kf2.KeyLayout.Install();
 // This is a correctness fix rather than an optional extra, so it lives in the
 // project rather than in mods/ -- see the class comment. It attaches through
 // RecompOne's HookManager, which detours a recompiled function by address at run
-// time, so it needs no entry in config/kf2.json. The measurement tools *are*
-// optional and are real mods: mods/framestats and mods/loopprobe, loaded by
-// ModLoader and toggled in the game's own Mods panel.
+// time, so it needs no entry in config/kf2.json. Optional extras *are* real
+// mods: mods/kf2debug, loaded by ModLoader and toggled in the game's own Mods
+// panel.
 Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_FPS_GATE"));
 Kf2.FramePacing.Install();

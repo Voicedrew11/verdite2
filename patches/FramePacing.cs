@@ -38,8 +38,8 @@ namespace Kf2;
 /// This lives in `patches/` and not in `mods/` on purpose. It is a correctness
 /// fix that has to be on: shipping it as a runtime-loaded package would let it be
 /// absent, disabled or fail to compile, and the failure would look like the game
-/// simply running too fast. The measurement tools, which are genuinely optional,
-/// are real mods -- see mods/framestats and mods/loopprobe.
+/// simply running too fast. The genuinely optional extras are real mods -- see
+/// mods/kf2debug.
 /// </summary>
 public static class FramePacing
 {
