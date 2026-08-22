@@ -340,6 +340,15 @@ Kf2.Widescreen.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN"),
                          Environment.GetEnvironmentVariable("KF2_WIDESCREEN_EFFECTS"));
 Kf2.Widescreen.Install();
 
+// Present-path census. Counts, per two-second window, what PresentDisplay
+// picked: the widened render target, a plain one, or a fallback to raw VRAM.
+// The fallback presents at 4:3, so a high fallback rate is the flashing margin
+// -- see "Widescreen" in docs/WIDESCREEN.md and patches/recompone/0022:
+//
+//     KF2_PRESENT_PROBE=1    the census, on the console
+if (Environment.GetEnvironmentVariable("KF2_PRESENT_PROBE") == "1")
+    RecompOne.Runtime.Hle.GpuHle.PresentProbe = true;
+
 // The cull the margin runs into. King's Field decides what to draw from a 24x24
 // grid of tile visibility, rebuilt each frame as a top-down trapezoid whose corners
 // are seven s16 pairs in GAME.EXE's data -- the 4:3 frustum, flattened onto the
@@ -352,9 +361,30 @@ Kf2.Widescreen.Install();
 //     KF2_WIDESCREEN_CULL=0        leave the cone at its 4:3 shape
 //     KF2_WIDESCREEN_CULL=1.5      pin a widening factor instead of the aspect's
 //     KF2_WIDESCREEN_CULL_PROBE=1  the cone's shape and what the grid clipped
+//     KF2_CULL_RESCUE_RADIUS=N     Chebyshev radius of the force-lit disc around
+//                                  the camera (default 3, 0 disables) — the
+//                                  occlusion flood's eye sits five tiles ahead
+//                                  of the camera, so near-camera tiles can be
+//                                  shadowed by walls that do not block the eye
 Kf2.CullCone.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN_CULL"),
-                       Environment.GetEnvironmentVariable("KF2_WIDESCREEN_CULL_PROBE"));
+                       Environment.GetEnvironmentVariable("KF2_WIDESCREEN_CULL_PROBE"),
+                       Environment.GetEnvironmentVariable("KF2_CULL_RESCUE_RADIUS"));
 Kf2.CullCone.Install();
+
+// The rest of the third cull: the 24x24 window itself, which fits the shipped
+// cone exactly and so truncates the widened one at some yaw -- a straight line
+// cut in world space at the screen edges. This rebuilds the whole visibility
+// pipeline at 32x32 (build, point query, box query; the legacy array gets our
+// central 24x24 crop), transcribed cell for cell from the generated code:
+//
+//     KF2_CULLGRID=shadow        run ours after the stock build, change nothing
+//     KF2_CULLGRID=on            replace the build and both queries with ours
+//     KF2_CULLGRID_COMPARE=1     in shadow, diff our grid against the stock one;
+//                                at factor 1 the acceptance gate is zero
+//                                mismatches over a whole attract session
+Kf2.CullGrid.Configure(Environment.GetEnvironmentVariable("KF2_CULLGRID"),
+                       Environment.GetEnvironmentVariable("KF2_CULLGRID_COMPARE"));
+Kf2.CullGrid.Install();
 
 // How close the frame's primitive buffer comes to running out. The game hands out
 // 0x19000 bytes a frame -- 1969 POLY_GT4 packets -- and func_80030540 abandons the

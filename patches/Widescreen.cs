@@ -567,6 +567,10 @@ public static class Widescreen
             else if (e.X[i] >= right - EdgeSlack) e.X[i] = right + margin;
         }
 
+        // The latch in the backend must not mistake this manufactured width for
+        // margin content the game drew -- a stretched splash fade would otherwise
+        // latch its buffer and the present would flap between widths again.
+        RecompOne.Runtime.Hle.GpuHle.PortWidenedPrim = true;
         _stretched++;
     }
 
@@ -595,6 +599,9 @@ public static class Widescreen
         int shift = hi <= HudLeftEdge ? -margin : lo >= HudRightEdge ? margin : 0;
         if (shift == 0) return;
 
+        // Same rule as Stretch: width this patch manufactured is not margin
+        // content the game drew, and the backend latch must not count it.
+        RecompOne.Runtime.Hle.GpuHle.PortWidenedPrim = true;
         for (int i = 0; i < e.Count; i++) e.X[i] += shift;
     }
 

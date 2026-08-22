@@ -31,7 +31,7 @@
      public static void VSync(CpuContext c, IMemory m)
      {
          int mode = (int)c.A0;
-@@ -17,6 +37,34 @@
+@@ -17,6 +37,38 @@
          if (mode == 1) { c.V0 = 0; return; }
  
          Runtime.PresentFrame();
@@ -59,6 +59,10 @@
 +            TickVBlank(c, m);
 +        }
 +
++        //The loop cap is the same size as the resync threshold, so it only bites at
++        //the exact boundary; if it ever does, snap the grid to now rather than carry
++        //the leftover gap into the next call and lag a frame behind for good.
++        if (n == MaxCatchUpVBlanks && _nextVBlankMs < now) _nextVBlankMs = now;
 +    }
 +
 +    static void TickVBlank(CpuContext c, IMemory m)

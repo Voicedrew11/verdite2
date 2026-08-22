@@ -76,15 +76,51 @@ whatever loads the matrix, costs correct HUD proportions, and — given a quarte
 the frame already crosses the edge — buys much less here than it does on a game
 that clips its own polygons.
 
-**Trap, learned while measuring:** with the session locked, KWin stops sending
-frame callbacks and the port blocks in `SwapBuffers` forever with `VSync=True` —
-0% CPU, no log output, and it looks exactly like a hang. Set `VSync=False` in
-`interface.ini` to run it without a visible window. Note the runtime only presents
-through the widened render target if that target was drawn into within the last
-**4** presented frames (`GlCore.PresentDisplay`); with `VSync=False` the host
-presents far faster than the game draws, so most frames fall back to the plain
-VRAM texture at 4:3. That is an artefact of running headless rather than a bug in
-the mod — but it is also what a real stall would look like on screen.
+**Trap, found while measuring, then fixed:** the runtime only presents through
+the widened render target if that target was drawn into within the last **4**
+presented frames (`GlCore.PresentDisplay`) — but the counter counts *host*
+presents, and with `VSync=False` the host presents far faster than the game
+draws, so most presents found both targets stale, fell back to the plain VRAM
+texture, and returned it at 4:3: **the margins flashed black, rapidly, through
+whole sessions.** Any present rate more than about five times the game's does
+it — a 144 Hz monitor with VSync on as well as VSync off. The gate is gone
+(`patches/recompone/0022`): every present writes the targets' middle columns
+back to VRAM first and direct VRAM writes are synced into the targets, so a
+target that contains the display area is never staler than the fallback it
+replaces, and idle targets are destroyed after 300 frames anyway.
+`KF2_PRESENT_PROBE=1` counts what each present picked — wide, plain, VRAM
+fallback — per two-second window, and is how the fallback rate is measured.
+Still true and worth keeping: with the session locked, KWin stops sending frame
+callbacks and the port blocks in `SwapBuffers` forever with `VSync=True` — 0%
+CPU, no log output, and it looks exactly like a hang; set `VSync=False` in
+`interface.ini` to run it without a visible window.
+
+### The present gate
+
+A wide target whose margin columns have never carried a world would present
+invented picture at the sides, so `PresentDisplay` refuses any wide target that
+has not latched margin content (`patches/recompone/0023` supplies the display-
+flip counter, `0024` the latch). Latching is per target and lasts for the
+overlay session: a single display flip that delivers 32 game vertices past the
+game's own draw edge latches the target, a fill covering the widened target
+latches it outright, primitives the widescreen patch itself widened never count,
+and `Dispatcher.Load` clears every latch when a new executable loads.
+
+Both halves of the rule earn their place, measured. The density threshold is
+what keeps the boot splash out: OPEN.EXE clears each MDEC frame with an
+oversized opaque rect whose corners sit outside the draw area — genuine game
+output, but two vertices of it per flip — and a first cut that latched on any
+crossing granted the margin to that scene, whose present then flapped between
+widths again. A frame of gameplay crosses the edge hundreds of times; the title
+never latches at all, through minutes of idle. The per-target monotone half is
+what keeps menus wide, and it is why 0023's gate had to go: a scene that stops
+the world render — in-game menu, dialog, shop, sign — produces no margin
+content at all, so the old global stamp went quiet, both targets were demoted
+after two idle flips, and the picture collapsed to the 320-wide fallback for as
+long as the text was up.
+
+`KF2_PRESENT_PROBE=1` shows splash and title windows as `vram fallback` only,
+gameplay as `wide`, and menu windows stay `wide`.
 
 ## The HUD does not widen with the world, and finding it is the problem
 
