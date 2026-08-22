@@ -491,6 +491,19 @@ per two-second window. The tested rate is the measurement: a rate near zero woul
 mean every triangle quietly kept the ordering table. Pixel rejects are a
 software-rasterizer number and stay at zero on the hardware path.
 
+**The report is written from a background thread, not the frame thread.** Its hook
+is a `DrawOTag` post-hook, so `AfterDrawOTag` runs on the frame-producing thread;
+a `Console.WriteLine` there blocks the frame while the terminal drains its PTY —
+a few milliseconds, once every two seconds. On a deterministic run (walking the
+same corridor) that two-second tick lands at the *same physical spot* every pass,
+so the probe looked like it caused a location-locked stutter that vanished with the
+probe off. It was the terminal write, not the depth test. `patches/ZBuffer.cs` now
+builds each report block on the frame thread (cheap) and hands the string to a
+single background writer (`Post` → a `BlockingCollection` drained by one thread),
+so the frame never waits on the console and the lines still print in order. This is
+terminal-write only; `KF2_ZBUFFER_PROBE=2`'s depth-map readback still stalls the GL
+pipeline on purpose (see below).
+
 **Off by default.** The recovered number is the one perspective correction already
 measures at 92% hit, and the outdoor defect below is fixed by parking the skybox
 on its SZ/OT disagreement; the default still waits for a longer look across a real

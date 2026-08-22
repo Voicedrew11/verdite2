@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Reflection;
+using System.Text;
+using System.Threading;
 using RecompOne.Runtime;
 using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Events;
@@ -99,6 +102,39 @@ public static class ZBuffer
 
     static double Now => Environment.TickCount64 / 1000.0;
 
+    // The report is emitted from AfterDrawOTag, which is a DrawOTag post-hook and so
+    // runs on the frame-producing thread. A Console.WriteLine there blocks the frame
+    // while the terminal drains its PTY — a few milliseconds, once every two seconds,
+    // which on a deterministic run lands as a stutter at the same spot. Hand every
+    // gameplay-time line to a background thread instead, so the frame never waits on
+    // the console. One consumer, so lines still appear in the order they were posted.
+    // (PROBE=2's depth-map readback still stalls the GL pipeline on purpose; this only
+    // takes the terminal write off the hot thread, not the glReadPixels.)
+    static readonly BlockingCollection<string> _log = new();
+    static volatile bool _writerStarted;
+
+    static void StartWriter()
+    {
+        if (_writerStarted) return;
+        _writerStarted = true;
+        var t = new Thread(() =>
+        {
+            foreach (string line in _log.GetConsumingEnumerable())
+                Console.WriteLine(line);
+        })
+        { IsBackground = true, Name = "kf2-zprobe-log" };
+        t.Start();
+    }
+
+    /// <summary>Queue a report block for the background writer instead of blocking the
+    /// frame thread on the terminal. Falls back to a direct write if the writer was
+    /// never started (it always is, in <see cref="Attach"/>, before any report).</summary>
+    static void Post(string s)
+    {
+        if (_writerStarted) _log.Add(s);
+        else Console.WriteLine(s);
+    }
+
     static readonly ModInfo _self = new()
     {
         Id = "kf2.zbuffer",
@@ -157,6 +193,7 @@ public static class ZBuffer
 
     static void Attach()
     {
+        StartWriter();
         SymbolRegistry.Build();
         var after = typeof(ZBuffer).GetMethod(nameof(AfterDrawOTag), BindingFlags.Public | BindingFlags.Static)!;
 
@@ -209,7 +246,7 @@ public static class ZBuffer
             ? $" (parked z {GteDepth.ZBandMinSz:F0}..{GteDepth.ZBandMaxSz:F0})" : "";
         string entryRange = GteDepth.ZBandMaxEntry >= 0
             ? $" (parked entries {GteDepth.ZBandMinEntry}..{GteDepth.ZBandMaxEntry})" : "";
-        Console.WriteLine($"[KF2] zbuffer: {tested / window:F0} tris/s tested, " +
+        Post($"[KF2] zbuffer: {tested / window:F0} tris/s tested, " +
                           $"{skipped / window:F0} painter's/s, {banded / window:F0} far-band/s{bandRange}{entryRange}" +
                           $"{(total == 0 ? "" : $", {(100.0 * tested / total):F1}% of submitted")}" +
                           $"{(rejected == 0 ? "" : $", {rejected / window:F0} px rejected/s")}, " +
@@ -237,6 +274,9 @@ public static class ZBuffer
     /// </summary>
     static void ReportCensus()
     {
+        var sb = new StringBuilder();
+        void Line(string s) => sb.AppendLine(s);
+
         var all = GteDepth.Census.ToArray();
         int tested = 0, clamped = 0, bigCount = 0;
         float near = float.MaxValue, far = 0f;
@@ -250,7 +290,7 @@ public static class ZBuffer
             if (t.MaxZ > far) far = t.MaxZ;
         }
 
-        Console.WriteLine($"[KF2] zbuffer census: {GteDepth.CensusSubmitted} polys submitted, " +
+        Line($"[KF2] zbuffer census: {GteDepth.CensusSubmitted} polys submitted, " +
                           $"{all.Length} kept ({bigCount} at least {GteDepth.CensusBigArea}px, " +
                           $"{tested} depth-tested, {clamped} with a clamped corner)" +
                           $"{(GteDepth.CensusDropped == 0 ? "" : $", {GteDepth.CensusDropped} dropped")}" +
@@ -264,7 +304,7 @@ public static class ZBuffer
         foreach (var t in all)
         {
             if (t.Area < GteDepth.CensusBigArea) continue;
-            Console.WriteLine("    head " + Describe(t));
+            Line("    head " + Describe(t));
             if (++heads == 3) break;
         }
 
@@ -279,7 +319,7 @@ public static class ZBuffer
         for (int i = 0; i < byArea.Length && i < 6; i++)
         {
             if (all[byArea[i]].Area < GteDepth.CensusBigArea) break;
-            Console.WriteLine("    largest " + Describe(all[byArea[i]]));
+            Line("    largest " + Describe(all[byArea[i]]));
         }
 
         // Entirely in front of, and overlapping: the later polygon loses every pixel
@@ -319,19 +359,20 @@ public static class ZBuffer
         foreach (int i in rank)
         {
             if (cost[i] == 0 || shown++ == 6) break;
-            Console.WriteLine($"    hides {Describe(all[i])} " +
+            Line($"    hides {Describe(all[i])} " +
                               $"-> in front of {hides[i]} later, {cost[i]}px hidden");
         }
 
         if (shown == 0)
-            Console.WriteLine("    nothing is entirely in front of anything the table put nearer — " +
+            Line("    nothing is entirely in front of anything the table put nearer — " +
                               "the hole is not one primitive winning the depth test");
         else
-            Console.WriteLine($"    {hiddenCount} polys ({hiddenArea}px of bbox) lose ground to " +
+            Line($"    {hiddenCount} polys ({hiddenArea}px of bbox) lose ground to " +
                               "something the table sorted farther away");
 
-        ReportDepthMap();
+        ReportDepthMap(sb);
         GteDepth.WantDepthMap = true;
+        Post(sb.ToString().TrimEnd('\r', '\n'));
     }
 
     /// <summary>
@@ -345,7 +386,7 @@ public static class ZBuffer
     /// is something claiming the foreground there; a hole with `.` in it was never
     /// depth-tested and the Z-buffer is not what emptied it.
     /// </summary>
-    static void ReportDepthMap()
+    static void ReportDepthMap(StringBuilder sb)
     {
         var map = GteDepth.DepthMap;
         if (map == null) return;
@@ -357,14 +398,14 @@ public static class ZBuffer
             if (v < lo) lo = v;
             if (v > hi) hi = v;
         }
-        Console.WriteLine($"    depth batches: {GteDepth.ZBatchRt} to a target with a depth buffer, " +
+        sb.AppendLine($"    depth batches: {GteDepth.ZBatchRt} to a target with a depth buffer, " +
                           $"{GteDepth.ZBatchVram} to VRAM, which has none" +
                           $"{(GteDepth.ZRtRecreated == 0 ? "" : $"; {GteDepth.ZRtRecreated} targets rebuilt, each losing its depth")}");
         GteDepth.ZBatchRt = GteDepth.ZBatchVram = GteDepth.ZRtRecreated = 0;
 
-        if (lo > hi) { Console.WriteLine("    depth map: nothing written — no pixel depth-tested"); return; }
+        if (lo > hi) { sb.AppendLine("    depth map: nothing written — no pixel depth-tested"); return; }
 
-        Console.WriteLine($"    depth map (0 = nearest {lo:F0}, 9 = farthest {hi:F0}, . = untested):");
+        sb.AppendLine($"    depth map (0 = nearest {lo:F0}, 9 = farthest {hi:F0}, . = untested):");
         float span = Math.Max(1f, hi - lo);
         var line = new char[GteDepth.DepthMapCols];
         for (int r = 0; r < GteDepth.DepthMapRows; r++)
@@ -374,7 +415,7 @@ public static class ZBuffer
                 float v = map[r * GteDepth.DepthMapCols + c];
                 line[c] = v >= GteDepth.DepthMapEmpty ? '.' : (char)('0' + (int)Math.Min(9, (v - lo) * 10f / span));
             }
-            Console.WriteLine("      " + new string(line));
+            sb.AppendLine("      " + new string(line));
         }
     }
 
