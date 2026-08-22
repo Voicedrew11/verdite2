@@ -15,7 +15,7 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 |---|---|---|---|
 | Perspective correction | **measured**, 92% hit | **checked**, 76.6% of pixels | **on** |
 | Sub-pixel vertex positions | **measured**, offsets uniform | **not checked** | off |
-| Z-buffer | **measured**, same recovered SZ | **checked and still wrong** — a second cause remains | off |
+| Z-buffer | **measured**, same recovered SZ | wrong outdoors — cause found and fixed; one clean look, longer check owed | off |
 | Dithering (removal) | **measured**, all three routes | **checked**, twice-drawn pair | off (no crosshatch) |
 
 That "mechanism measured / picture never checked" split is the rule the whole
@@ -443,7 +443,7 @@ does not move.
 
 ## Z-buffer: the same depth, used as occlusion
 
-**Confirmed mechanism; picture checked and still wrong — a second cause is Open.**
+**Mechanism confirmed; the outdoor defect's second cause is found and fixed — the picture was clean on one look, and owes it a longer one.**
 
 The GPU has no depth buffer. The game sorts every polygon into an ordering table
 by one number — the GTE's OTZ, the average of its vertices — and `DrawOTag` walks
@@ -492,7 +492,8 @@ mean every triangle quietly kept the ordering table. Pixel rejects are a
 software-rasterizer number and stay at zero on the hardware path.
 
 **Off by default.** The recovered number is the one perspective correction already
-measures at 92% hit, but the picture has not been checked by eye — and a twice-
+measures at 92% hit, and the defect below now has a found-and-fixed second cause;
+the default still waits for a longer look than one clean session — and a twice-
 drawn ordering table cannot take this pair, because the second pass would fail
 every test against the first. The cave is the test. The switch is under Video
 with the others; `KF2_ZBUFFER=1` forces it on for the run.
@@ -557,21 +558,45 @@ drawn one may have just been cleared by a fill. Diagnostic only.
 
 **This did not fix the picture.** Checked by eye after `0016`: the sky still
 draws over walls a few metres ahead. So the clear timing was a real defect —
-the buffer measurably did not survive its own frame, and now does — but it is
-not the cause of the reported symptom, or not the only one. A second cause
-remains and the Z-buffer stays off by default.
+the buffer measurably did not survive its own frame, and now does — but it was
+not the cause of the reported symptom.
 
-That rules out a whole class of explanation, which is worth keeping: **the
-depth the world is being tested against is now known to be this frame's**. Any
-remaining theory has to work with a correctly cleared buffer, correct per-frame
-depths, a table position that agrees with the recovered SZ everywhere measured,
-and no primitive standing entirely in front of one the table put nearer. What
-has *not* been measured is the geometry the depth is interpolated across
-between the vertices — every census number above is per polygon, taken from its
-corners, and the map is a 32×16 minimum-per-cell reduction. Screen-linear
-interpolation of a view depth is wrong (it is 1/z that is linear in screen
-space), which biases a polygon's interior; whether that bias is large enough to
-lose a wall in front of the sky is the next thing to measure, not to assume.
+### The second cause: the sky is parked at the far end on purpose
+
+The census above never caught it because every window it ran was indoors, where
+the far end of the ordering table genuinely holds far depths. Outdoors one
+specific thing differs, and the resolution rule was already written down in
+`GteDepth.OtEntry`'s doc comment before anything acted on it: **where the
+recovered SZ and the game's table position disagree, the game overrode depth on
+purpose.** Here the disagreement has a concrete shape — **the skybox is a small
+box drawn around the camera, so it projects *near*, and the game links it at the
+far end of the ordering table so painter's order keeps it behind everything.**
+Believing its recovered SZ makes the sky draw first (far end), stamp bogus-near
+depths into the attachment, and reject every world primitive truly farther than
+the skybox radius — houses and walls a few metres ahead included.
+
+The fix is `patches/recompone/0025`: primitives linked into the **far band** of
+the ordering table go back to painter's order — no depth test, no depth write.
+Membership is `OtEntry >= 0 && OtEntry < GteDepth.BackgroundOtBand`, the 64
+entries nearest the far end, ≈ 0.7% of the measured ~9000-entry tables; such
+primitives are counted as `ZBand` rather than entering the tested rate.
+Mid-table entries keep the test — that is the cave-interpenetration case the
+Z-buffer exists for, and indoor pictures are unchanged, because band geometry
+drew first and unconditionally either way. Painter's order was chosen over
+clamping band depths to a far constant because it restores exactly the console
+behaviour and invents no new depth values. The far end's other known occupants,
+the 2D tints, never recover a depth and are untouched.
+
+Measured on a played session (`KF2_ZBUFFER=1 KF2_ZBUFFER_PROBE=1`): band traffic
+appears exactly when the sky can be in view — 264–994 triangles/s across six
+two-second windows of the walk, zero in every window before and after — while
+world-world testing runs at full rate throughout (up to ~54k tris/s, 89–95% of
+submitted), so nothing beside the sky fell back to painter's order. One look
+over the player's shoulder agrees: the sky sits behind the houses again. What
+is *not* done is the longer look a default flip would want — the setting stays
+off, and both the outdoor sky and the cave flicker are things to watch across a
+real session. `KF2_ZBUFFER_PROBE=2`'s census remains the instrument for the
+exact entry the sky links at, if that number is ever wanted.
 
 ## Dithering: one flag, and it lives in the draw environment
 

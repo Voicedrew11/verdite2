@@ -41,6 +41,12 @@ namespace Kf2;
 ///   * Untextured geometry is tested too. Perspective correction only cares
 ///     about textured polygons; a flat-shaded wall still has a view depth.
 ///
+/// One class of primitive is refused on purpose rather than for lack of a
+/// depth: whatever the game linked into the far band of the ordering table —
+/// the skybox projects near and is parked there to be behind everything —
+/// goes back to painter's order instead of believing a depth the game itself
+/// overrode.
+///
 /// Both renderers honour it. The hardware backend attaches a 24-bit depth buffer
 /// to each display render target and writes window depth from SZ in the fragment
 /// shader, so OpenGL does not clip the already-projected triangle; the software
@@ -177,15 +183,19 @@ public static class ZBuffer
         if (_census) { ReportCensus(); GteDepth.ResetCensus(); }
 
         long tested = GteDepth.ZTris, skipped = GteDepth.ZSkipped, rejected = GteDepth.ZRejects;
-        long total = tested + skipped;
+        long banded = GteDepth.ZBand;
+        long total = tested + skipped + banded;
 
         // The tested rate is the measurement: it is the only thing that says the
         // recovered depth is actually reaching the rasterizer. A rate near zero
         // would mean every triangle quietly kept painter's order. Skipped is 2D
         // and anything the map missed; rejects are software-rasterizer pixels that
-        // lost, and stay at zero on the hardware path.
+        // lost, and stay at zero on the hardware path. Band counts triangles the
+        // port handed back to painter's order because the game linked them into
+        // the far end of the table (the skybox); they appear in neither of the
+        // other rates.
         Console.WriteLine($"[KF2] zbuffer: {tested / window:F0} tris/s tested, " +
-                          $"{skipped / window:F0} painter's/s" +
+                          $"{skipped / window:F0} painter's/s, {banded / window:F0} far-band/s" +
                           $"{(total == 0 ? "" : $", {(100.0 * tested / total):F1}% of submitted")}" +
                           $"{(rejected == 0 ? "" : $", {rejected / window:F0} px rejected/s")}, " +
                           $"over {_frames / window:F0} frames/s");

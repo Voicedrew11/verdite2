@@ -422,8 +422,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty of
-the twenty-five are load-bearing; `0002`, `0003` and `0015` are diagnostics,
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-one of
+the twenty-six are load-bearing; `0002`, `0003` and `0015` are diagnostics,
 `0013` is a settings-placement hook, and `0014b` only restores four comment lines
 whose presence patch `0015`'s context assumes.
 
@@ -620,6 +620,15 @@ uncaptured edit inside the checkout is left where it is.
   vertices a flip, under the threshold, and primitives the widescreen patch
   itself widened never count (`GpuHle.PortWidenedPrim`). **No recompile.** See
   "The present gate" in `docs/WIDESCREEN.md`.
+- `0025-background-band-painter-order.patch` — the skybox is a small box drawn
+  around the camera, so it projects *near*, and the game links it at the far end
+  of the ordering table so painter's order keeps it behind everything; the
+  Z-buffer believed that recovered SZ and put the sky in front of walls a few
+  metres ahead. Primitives linked into the far band (`GteDepth.BackgroundOtBand`,
+  64 entries ≈ 0.7% of the table) go back to painter's order — no depth test, no
+  depth write, counted as `GteDepth.ZBand` — while mid-table entries keep the
+  test, which is the cave-interpenetration case the Z-buffer exists for.
+  **No recompile.** See "The second cause" in `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

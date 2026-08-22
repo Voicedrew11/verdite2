@@ -78,7 +78,10 @@ position** the GTE truncates, so vertices need not snap to whole pixels; that on
 is off by default until its picture has been measured the way the textures were
 (see "Sub-pixel vertex positioning"). **A Z-buffer is available from the same
 recovered depth** — per-pixel occlusion instead of the ordering table — and is off
-by default for the same reason (see "Z-buffer"). Nearby walls and floors no longer
+by default for the same reason (see "Z-buffer"). Its one known picture defect —
+the sky drawing over nearby walls outdoors — has since been found (the skybox
+projects near and the game parks it at the far end of the ordering table) and
+fixed in `patches/recompone/0025`; the re-check by eye is still owed. Nearby walls and floors no longer
 pop back to affine the moment one vertex clamps off-screen, and a pixel that two
 vertices share no longer hands one polygon the other's depth (see "The table is
 not unique").
@@ -88,8 +91,11 @@ burst past it (see "Frame pacing" in `docs/PATCHES_AND_MODS.md`). **The ending
 runs**: `END.EXE` plays the two STR movies and holds "The End" — see "The ending
 screen" in `docs/RUNTIME.md`.
 
-**Widescreen, sub-pixel positioning and the Z-buffer all ship switched off for the
-same reason** — mechanism measured, picture never checked by eye. Mouse look is
+**Widescreen and sub-pixel positioning ship switched off for the same reason** —
+mechanism measured, picture never checked by eye. The Z-buffer's picture *was*
+checked, came back wrong outdoors, and its second cause is now fixed (see
+"Z-buffer"); it ships off anyway until a longer look replaces that single clean
+one. Mouse look is
 off for a different one: its path *is* measured end to end, but a pointer that
 disappears into the game unasked is worse than one switch to find. What is open
 and undiagnosed is in `docs/TODO.md`.
