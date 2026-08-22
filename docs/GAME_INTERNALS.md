@@ -58,9 +58,9 @@ buf1 0x8017E084 0x5F3C    buf4 0x801C8484 0x4611    buf7 0x8019C5EC 0x0AA3
 buf2 0x80199414 0x0058    buf5 0x80175914 0x21D1    buf8 0x80198574 0x03A7
 ```
 
-The write counts come from the `loopprobe` mod, which snapshots those 66 KB at
-every stage boundary and attributes each changed word to the stage that ran
-before it. What a steady in-area window says:
+The write counts came from a `loopprobe` mod (since removed), which snapshotted
+those 66 KB at every stage boundary and attributed each changed word to the stage
+that ran before it. What a steady in-area window says:
 
 - **buf1 is the display list**, and stage 13 is the only thing that fills it —
   310 to 470 words a frame, varying with what is on screen, which is also how you

@@ -46,8 +46,8 @@ useful than the question was.
 4. ~~**Fix the frame pacing.**~~ Step one done — the `fps` mod holds every
    rendered frame to two vblanks, so the port is a constant 30 fps and no longer
    bursts past NTSC's top band. See "Frame pacing" in
-   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md); the measurement is the
-   `framestats` mod.
+   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md); the measurement was a frame-stats
+   mod, since removed.
 5. ~~**Confirm the buf5 view block**, which is all 60 fps is now blocked on.~~
    Overtaken: the player state was found by reading the emitted C# instead, and
    it is not in `buf5` at all — see "Player state" in

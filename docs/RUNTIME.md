@@ -231,7 +231,7 @@ the game through the gap. Mode semantics are
 unchanged (`<0` returns the count, `==1` returns immediately); the game passes 0
 at every call site in all three overlays.
 
-**Measurement:** with the framestats mod, title windows go from
+**Measurement:** with a frame-stats mod (since removed), title windows go from
 `vblanks/frame 1:100%` to a spread worth ~60 vblanks/s; in-area windows stay
 `2:100%` at 30.0 fps. Expected behaviour change: title-screen waits counted in
 vblanks (the attract-demo timeout among them) now elapse at hardware's rate

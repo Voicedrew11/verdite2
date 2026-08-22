@@ -107,8 +107,8 @@ something to say about *how* to use them:
 - **`KF2_LOG=bios` is very expensive during play.** The game polls `PAD_dr`
   hundreds of thousands of times a second, which is gigabytes of log a minute.
   `KF2_LOG=sdk` is the same order once the frame loop is running — prefer the
-  measurement mods (`framestats`, `loopprobe`) and the patches' own probes, which
-  report a summary per window instead of a line per call.
+  patches' own probes, which report a summary per window instead of a line per
+  call.
 - **`KF2_CDTRACE=1`** puts a stack trace on the first CD register access
   (`patches/recompone/0002`).
 - **`KF2_AUTOPAD=8:Start:400,20:Circle:200`** replays scripted input, for

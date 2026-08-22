@@ -18,9 +18,8 @@ lives here — frame pacing and auto reload.
 | `UiScale.cs` | forces and saves the interface scale, for a config too large to edit in | [RUNTIME.md](RUNTIME.md) |
 | `settings/*` | the pages all of the above draw into | this file |
 
-`mods/framestats`, `mods/loopprobe` and `mods/kf2debug` are the measurement tools
-that stayed mods; `kf2debug`'s findings are in
-[GAME_INTERNALS.md](GAME_INTERNALS.md).
+`mods/kf2debug` is the measurement/debug tool that stayed a mod; its findings are
+in [GAME_INTERNALS.md](GAME_INTERNALS.md).
 
 ## Mods
 
@@ -35,8 +34,6 @@ A mod is a folder (or zip) under `mods/` with a `mod.json` and C# sources,
 **compiled at run time by Roslyn** and hooked by address:
 
 ```
-mods/framestats/mod.json + FrameStats.cs     fps and the vblank-per-frame histogram
-mods/loopprobe/mod.json  + LoopProbe.cs      per-frame writes, attributed to loop stages
 mods/kf2debug/mod.json   + GameState.cs,     noclip, invincibility, warp and a live
                            Noclip.cs,        state readout
                            Cheats.cs, Warp.cs,
@@ -389,10 +386,10 @@ KF2_FPS=30          # 30 fps, the default; 60, or off for no floor
 KF2_FPS_GATE=80040348+8002A550   # at 60, stages to run every other frame
 ```
 
-The `framestats` mod is the measurement above, made cheap — it is the same count of
-`VSync(0)`s between `DrawOTag`s that produced the band table, without the
-gigabytes of `KF2_LOG=sdk`. Use it to check any pacing change; bands are per
-report window, so consecutive lines separate the title screen from an area.
+The band table above was measured by a `framestats` mod (since removed) — the same
+count of `VSync(0)`s between `DrawOTag`s that fed it, without the gigabytes of
+`KF2_LOG=sdk`. Bands were reported per window, so consecutive lines separated the
+title screen from an area; restoring the mod is the way to check a pacing change.
 
 ### What the floor actually changed — and a correction
 
@@ -496,12 +493,11 @@ the cheap variant needs: gate stage 4, leave stage 2 alone, and the camera runs 
 Note this reverses the reading of the write-count table above, where stage 2 looks
 inert because it writes four words. It writes four words and they are *the* four.
 
-*The experiment that settles it* is scripted input, which has not successfully run
-yet — the port exited before `KF2_AUTOPAD`'s first press each time it was tried:
-
-```bash
-KF2_LOOPPROBE=5 KF2_AUTOPAD=20:Up:5000,40:Right:5000
-```
+*The experiment that settles it* is scripted input watched through a per-frame
+write probe (the `loopprobe` mod that ran it has since been removed, so this
+wants that mod restored) — `KF2_AUTOPAD=20:Up:5000,40:Right:5000`. It has not
+successfully run yet: the port exited before `KF2_AUTOPAD`'s first press each
+time it was tried.
 
 If `0x8017783C` steps monotonically under held Up, it is positional; if the three
 packed words swing under held Right and not under Up, they are the view angles.
