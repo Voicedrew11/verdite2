@@ -440,7 +440,12 @@ public static class Widescreen
         }
 
         _fromEnd = -1;
+        // Mirror LibGpu.DrawOTag: publish the table length and the Z-buffer's depth
+        // scale for the next walk. Missing the FarSz publish here would leave the
+        // skybox test without a scale whenever the HUD is anchored, the same footgun
+        // the perspective/OtLength publish has.
         if (GteDepth.OtEntry >= 0) GteDepth.OtLength = GteDepth.OtEntry + 1;
+        GteDepth.PublishFarSz();
         GteDepth.OtEntry = -1;
         if (custom) GpuPrims.Clear();
     }

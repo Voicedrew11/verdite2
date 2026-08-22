@@ -620,15 +620,22 @@ uncaptured edit inside the checkout is left where it is.
   vertices a flip, under the threshold, and primitives the widescreen patch
   itself widened never count (`GpuHle.PortWidenedPrim`). **No recompile.** See
   "The present gate" in `docs/WIDESCREEN.md`.
-- `0025-background-band-painter-order.patch` — the skybox is a small box drawn
-  around the camera, so it projects *near*, and the game links it at the far end
-  of the ordering table so painter's order keeps it behind everything; the
-  Z-buffer believed that recovered SZ and put the sky in front of walls a few
-  metres ahead. Primitives linked into the far band (`GteDepth.BackgroundOtBand`,
-  64 entries ≈ 0.7% of the table) go back to painter's order — no depth test, no
-  depth write, counted as `GteDepth.ZBand` — while mid-table entries keep the
-  test, which is the cave-interpenetration case the Z-buffer exists for.
-  **No recompile.** See "The second cause" in `docs/RENDERING.md`.
+- `0025-background-band-painter-order.patch` — outdoors the game links its
+  backdrop at the extreme far end of the ordering table, but (census-measured) it
+  projects *mid-depth*, not near — its SZ overlaps real geometry while the terrain
+  behind it is genuinely farther. The Z-buffer believed that SZ and let the
+  backdrop reject the distant terrain it should sit behind. `GteDepth.IsBackgroundPark`
+  parks a primitive on that **disagreement**: it predicts the depth a table
+  position would carry if position and SZ agreed (`FarSz × (1 − OtEntry/OtLength)`)
+  and parks anything projecting below `SkyParkMargin` (0.7) of that — the backdrop,
+  linked farthest, projects a third to a half of it; real geometry sits at or above
+  its prediction and keeps testing. `FarSz` is the frame's far depth published one
+  walk late beside `OtLength` in both `DrawOTag` sites. Two earlier tries missed and
+  are recorded: a fixed node band (`OtEntry < 64`) over-captured filler and real far
+  geometry, and a near-SZ cut (`SZ < FarSz × 0.3`) assumed the backdrop was near and
+  never parked it. Parked prims go back to painter's order — no depth test, no depth
+  write, counted as `GteDepth.ZBand`. **No recompile.** See "The second cause" in
+  `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

@@ -42,10 +42,12 @@ namespace Kf2;
 ///     about textured polygons; a flat-shaded wall still has a view depth.
 ///
 /// One class of primitive is refused on purpose rather than for lack of a
-/// depth: whatever the game linked into the far band of the ordering table —
-/// the skybox projects near and is parked there to be behind everything —
-/// goes back to painter's order instead of believing a depth the game itself
-/// overrode.
+/// depth: the outdoor backdrop, which the game links at the extreme far end of
+/// the ordering table yet (census-measured) projects only mid-depth, so its SZ
+/// would reject the distant terrain it is meant to sit behind. It is recognised
+/// by that disagreement — linked farther than its depth warrants — and handed
+/// back to painter's order instead of believing a depth the game itself
+/// overrode, while the genuinely-distant world beside it still depth-tests.
 ///
 /// Both renderers honour it. The hardware backend attaches a 24-bit depth buffer
 /// to each display render target and writes window depth from SZ in the fragment
@@ -191,13 +193,20 @@ public static class ZBuffer
         // would mean every triangle quietly kept painter's order. Skipped is 2D
         // and anything the map missed; rejects are software-rasterizer pixels that
         // lost, and stay at zero on the hardware path. Band counts triangles the
-        // port handed back to painter's order because the game linked them into
-        // the far end of the table (the skybox); they appear in neither of the
-        // other rates.
+        // port handed back to painter's order because they were the backdrop —
+        // linked far ahead of what their depth warrants; they appear in neither of
+        // the other rates. The check is the disagreement between the game's far link
+        // and a shallower recovered SZ, so the number that calibrates it is the
+        // frame's far depth, against which each position predicts a depth; the
+        // parked range shows the backdrop sitting below its own prediction.
+        float far = GteDepth.FarSz;
+        string bandRange = GteDepth.ZBandMaxSz > 0f
+            ? $" (parked z {GteDepth.ZBandMinSz:F0}..{GteDepth.ZBandMaxSz:F0})" : "";
         Console.WriteLine($"[KF2] zbuffer: {tested / window:F0} tris/s tested, " +
-                          $"{skipped / window:F0} painter's/s, {banded / window:F0} far-band/s" +
+                          $"{skipped / window:F0} painter's/s, {banded / window:F0} far-band/s{bandRange}" +
                           $"{(total == 0 ? "" : $", {(100.0 * tested / total):F1}% of submitted")}" +
                           $"{(rejected == 0 ? "" : $", {rejected / window:F0} px rejected/s")}, " +
+                          $"far z {far:F0}, " +
                           $"over {_frames / window:F0} frames/s");
 
         GteDepth.ResetZCounters();
