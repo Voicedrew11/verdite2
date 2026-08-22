@@ -131,6 +131,22 @@ public static class CullCone
     /// <summary>See <see cref="OffsetX"/>.</summary>
     const uint OffsetZ = 0x80192E9C;
 
+    /// <summary>The flood-eye's tile — the window middle's world tile, five
+    /// ahead of the camera. The offset arithmetic maps THIS word to the grid's
+    /// middle cell, which is the proof it is not the camera.</summary>
+    const uint EyeTileX = 0x80192E90;
+
+    /// <summary>See <see cref="EyeTileX"/>.</summary>
+    const uint EyeTileZ = 0x80192E94;
+
+    /// <summary>The camera's world position in the game's 2048-units-to-a-tile
+    /// fixed point — the words func_8002B6B4 clamps and converts to map records.
+    /// The true camera tile comes from here.</summary>
+    const uint CamWorldX = 0x80192E78;
+
+    /// <summary>See <see cref="CamWorldX"/>.</summary>
+    const uint CamWorldZ = 0x80192E80;
+
     /// <summary>How wide the grid is, in tiles, on both axes.</summary>
     const int Span = 24;
 
@@ -155,8 +171,18 @@ public static class CullCone
     // KF2_WIDESCREEN_CULL_PROBE=2: the post-occlusion census, by ring.
     static bool _rings;
 
-    /// <summary>func_8002D3A8, the whole grid build. Hooked only for the ring
-    /// census, which has to be taken after the occlusion flood has run.</summary>
+    // KF2_CULL_RESCUE_RADIUS: the Chebyshev radius, in tiles, of the disc around
+    // the camera tile that the rescue force-lights after every build. Default 3
+    // because the ring census showed rings 0-3 saturated in correct-state play —
+    // a working flood never darkens a cell that close to the eye, so anything it
+    // darkened there is a wrong shadow, caused by the flood computing occlusion
+    // from the window middle (five tiles ahead of the camera) rather than from
+    // the eye itself.
+    static int _rescueRadius = 3;
+
+    /// <summary>func_8002D3A8, the whole grid build. Hooked every frame: the
+    /// near-camera rescue runs after each build, and the ring census when the
+    /// probe asks for it.</summary>
     const uint BuildRoutine = 0x8002D3A8;
 
     // Lit cells per Chebyshev ring from the window's middle, summed over the
@@ -186,9 +212,8 @@ public static class CullCone
     // Per report window. _lit is the census that actually answers "did the cull
     // open": how many of the 576 tiles the cone marked, which depends on the cone
     // and not on where in the area the camera happens to be standing.
-    static long _frames, _clippedFrames, _clippedRows, _recovered, _lit;
+    static long _frames, _clippedFrames, _clippedRows, _recovered, _lit, _rescued;
     static double _windowStart;
-
     static double Now => Environment.TickCount64 / 1000.0;
 
     static readonly ModInfo _self = new()
@@ -199,7 +224,7 @@ public static class CullCone
         Description = "Opens the game's own tile-visibility cone to the widescreen aspect.",
     };
 
-    public static void Configure(string? widen, string? probe)
+    public static void Configure(string? widen, string? probe, string? rescue)
     {
         if (!string.IsNullOrWhiteSpace(widen))
         {
@@ -225,6 +250,13 @@ public static class CullCone
             // walls close off before it reaches the edge does not care how big the
             // window is.
             _rings = probe.Equals("2", StringComparison.Ordinal);
+        }
+
+        if (!string.IsNullOrWhiteSpace(rescue) &&
+            int.TryParse(rescue, System.Globalization.NumberStyles.Integer,
+                         System.Globalization.CultureInfo.InvariantCulture, out int radius))
+        {
+            _rescueRadius = Math.Clamp(radius, 0, Span - 13);
         }
     }
 
@@ -351,8 +383,9 @@ public static class CullCone
         n += Hook(LineRoutine, self.GetMethod(nameof(BeforeLine), BindingFlags.Public | BindingFlags.Static)!, pre: true);
         n += Hook(FillRoutine, self.GetMethod(nameof(AfterFill), BindingFlags.Public | BindingFlags.Static)!, pre: false);
 
-        if (_rings)
-            Hook(BuildRoutine, self.GetMethod(nameof(AfterBuild), BindingFlags.Public | BindingFlags.Static)!, pre: false);
+        // Always: the near-camera rescue runs in this hook, not just the ring
+        // census. It is a no-op unless the widening is in force.
+        Hook(BuildRoutine, self.GetMethod(nameof(AfterBuild), BindingFlags.Public | BindingFlags.Static)!, pre: false);
 
         if (n < 2)
         {
@@ -458,14 +491,22 @@ public static class CullCone
     static bool Outside(int x, int z) => (uint)x >= Span || (uint)z >= Span;
 
     /// <summary>
-    /// The census that says whether the 24-tile window is a limit worth lifting:
-    /// what survives the occlusion flood, by how far out it sits. A cone the walls
-    /// close off two tiles from the camera does not care how big the window is, and
-    /// King's Field is corridors. Post-hook on the whole build, so this is the grid
-    /// exactly as func_80032D78 will read it. KF2_WIDESCREEN_CULL_PROBE=2.
+    /// Post-hook on the whole build. First the near-camera rescue — the occlusion
+    /// flood computes visibility from a point five tiles ahead of the camera (the
+    /// window's middle, where its one seed ray starts), so a wall between that
+    /// point and a tile beside the camera knocks the tile out even though the
+    /// camera sees it. The game band-aids exactly this failure class by
+    /// force-lighting the 3×3 around the middle at build end, and protects
+    /// nothing around the eye itself. This ORs 0xC0 over a Chebyshev disc around
+    /// the camera tile, which only ever overrides wrong shadows: rings 0-3 were
+    /// saturated in correct-state play. Then, when the probe asks for it, the
+    /// ring census. KF2_WIDESCREEN_CULL_PROBE=2.
     /// </summary>
     public static void AfterBuild(CpuContext c, IMemory m)
     {
+        RescueNearCamera(m);
+
+        if (!_rings) return;
         _ringFrames++;
         for (int z = 0; z < Span; z++)
             for (int x = 0; x < Span; x++)
@@ -474,6 +515,70 @@ public static class CullCone
                 int r = Math.Max(Math.Abs(x - Span / 2), Math.Abs(z - Span / 2));
                 _ring[Math.Min(r, _ring.Length - 1)]++;
             }
+    }
+    /// <summary>Radius and activity of the rescue, shared with the 32×32
+    /// pipeline in <see cref="CullGrid"/> so both grids treat the same cells the
+    /// same way.</summary>
+    internal static int RescueRadius => _rescueRadius;
+
+    internal static bool RescueActive => _rescueRadius > 0 && Enabled && Widescreen.On && Factor > 1f;
+
+    /// <summary>
+    /// Force-light the discs of <see cref="_rescueRadius"/> tiles around the
+    /// camera and around the flood-eye. Only active while the widening is in
+    /// force, so a stock 4:3 picture stays bit-identical to shipped behaviour —
+    /// the flood's blind spot was first exposed by the wider fill giving
+    /// backward-running rays lateral room they never had. Counts the cells it
+    /// actually flips 0 → non-zero: a small steady number is the rescue working;
+    /// a large one is the flood misbehaving broadly and wants a look.
+    /// </summary>
+    internal static void RescueNearCamera(IMemory m)
+    {
+        if (!RescueActive) return;
+
+        // The camera, mapped into the grid the same way the queries map a world
+        // position: tile index plus the offset word, 32-bit wrap and all.
+        int cx = (int)((m.ReadU32(CamWorldX) >> 11) + m.ReadU32(OffsetX));
+        int cz = (int)((m.ReadU32(CamWorldZ) >> 11) + m.ReadU32(OffsetZ));
+        if ((uint)cx < Span && (uint)cz < Span)
+            RescueDisc(m, Grid, Span, cx, cz, _rescueRadius, ref _rescued);
+
+        // The eye, whose wrong shadows are the ones actually being overridden —
+        // the ring census measured rings 0-3 saturated from here.
+        int ex = (int)(m.ReadU32(EyeTileX) + m.ReadU32(OffsetX));
+        int ez = (int)(m.ReadU32(EyeTileZ) + m.ReadU32(OffsetZ));
+        if ((uint)ex < Span && (uint)ez < Span)
+            RescueDisc(m, Grid, Span, ex, ez, _rescueRadius, ref _rescued);
+    }
+
+    /// <summary>OR 0xC0 over the Chebyshev disc of <paramref name="radius"/>
+    /// around a grid cell, counting the cells it flips 0 → non-zero. Works on
+    /// any grid — the 24×24 array in PSX RAM here, the 32×32 managed one in
+    /// <see cref="CullGrid"/>.</summary>
+    internal static void RescueDisc(IMemory m, uint gridBase, int span, int cx, int cz, int radius, ref long rescued)
+    {
+        int lo = Math.Max(cx - radius, 0);
+        int hi = Math.Min(cx + radius, span - 1);
+        int zlo = Math.Max(cz - radius, 0);
+        int zhi = Math.Min(cz + radius, span - 1);
+
+        for (int z = zlo; z <= zhi; z++)
+        {
+            uint row = gridBase + (uint)(z * span);
+            for (int x = lo; x <= hi; x++)
+            {
+                byte b = m.ReadU8(row + (uint)x);
+                if (b == 0)
+                {
+                    m.WriteU8(row + (uint)x, 0xC0);
+                    rescued++;
+                }
+                else if ((b & 0xC0) != 0xC0)
+                {
+                    m.WriteU8(row + (uint)x, (byte)(b | 0xC0));
+                }
+            }
+        }
     }
 
     // func_8002CD0C's Bresenham, without its per-cell bounds check: the same
@@ -534,7 +639,7 @@ public static class CullCone
         Console.WriteLine($"[cullcone] x{Factor:0.###}: {(_frames > 0 ? _lit / (double)_frames : 0):0.0} " +
                           $"of {Span * Span} tiles lit, {_clippedFrames}/{_frames} frames reached the " +
                           $"grid edge, {_recovered} tiles recovered over {_clippedRows} rows the " +
-                          "game's own fill dropped");
+                          $"game's own fill dropped, {_rescued} cells rescued around the camera");
 
         if (_rings && _ringFrames > 0)
         {
@@ -545,6 +650,6 @@ public static class CullCone
         }
 
         _windowStart = now;
-        _frames = _clippedFrames = _clippedRows = _recovered = _lit = 0;
+        _frames = _clippedFrames = _clippedRows = _recovered = _lit = _rescued = 0;
     }
 }
