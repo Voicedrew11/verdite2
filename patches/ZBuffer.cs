@@ -206,7 +206,7 @@ public static class ZBuffer
                           $"{skipped / window:F0} painter's/s, {banded / window:F0} far-band/s{bandRange}" +
                           $"{(total == 0 ? "" : $", {(100.0 * tested / total):F1}% of submitted")}" +
                           $"{(rejected == 0 ? "" : $", {rejected / window:F0} px rejected/s")}, " +
-                          $"far z {far:F0}, " +
+                          $"far z {far:F0}{(GteDepth.FarSzWalk < far ? $" (last walk {GteDepth.FarSzWalk:F0})" : "")}, " +
                           $"over {_frames / window:F0} frames/s");
 
         GteDepth.ResetZCounters();

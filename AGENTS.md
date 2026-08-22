@@ -629,8 +629,11 @@ uncaptured edit inside the checkout is left where it is.
   position would carry if position and SZ agreed (`FarSz × (1 − OtEntry/OtLength)`)
   and parks anything projecting below `SkyParkMargin` (0.7) of that — the backdrop,
   linked farthest, projects a third to a half of it; real geometry sits at or above
-  its prediction and keeps testing. `FarSz` is the frame's far depth published one
-  walk late beside `OtLength` in both `DrawOTag` sites. Two earlier tries missed and
+  its prediction and keeps testing. The scale it measures against is sticky,
+  far-band-blind and reset on each overlay load (`FarSz`: the largest depth seen
+  outside a 512-node far band, raised only, zeroed by `OverlayLoadedEvent`) — a
+  per-frame scale let near-only views shrink it under the sky's own SZ and let
+  the sky back. Two earlier tries missed and
   are recorded: a fixed node band (`OtEntry < 64`) over-captured filler and real far
   geometry, and a near-SZ cut (`SZ < FarSz × 0.3`) assumed the backdrop was near and
   never parked it. Parked prims go back to painter's order — no depth test, no depth

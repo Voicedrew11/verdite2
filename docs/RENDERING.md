@@ -599,10 +599,10 @@ The fix keys on the disagreement measured the right way.
 *would* carry if position and SZ agreed — `FarSz × (1 − OtEntry / OtLength)` — and
 parks a primitive projecting below `SkyParkMargin` (0.7) of that prediction:
 
-- `FarSz` is the frame's own farthest recovered depth, published one walk late
+- `FarSz` is the scale the prediction measures against, published one walk late
   beside `OtLength` in both `LibGpu.DrawOTag` and the widescreen replacement of
-  it (and only when a walk carried depth geometry, so a HUD-only walk cannot reset
-  it). The backdrop's mid SZ never dominates that max, so it tracks the far world.
+  it. It began as the frame's own farthest recovered depth; why that could not
+  hold is the next subsection.
 - At the extreme far end the prediction is ≈ `FarSz`, so the backdrop projecting
   a third to a half of that is caught wherever it links; a genuinely-distant wall
   carries at least its predicted depth and keeps testing; the near half predicts a
@@ -620,6 +620,54 @@ backdrop can be seen sitting below the depth its position predicts;
 that calibrates `SkyParkMargin` per area. The setting stays off by default until
 the picture has had the longer look a default flip wants — both the outdoor
 backdrop and the cave flicker are things to watch across a real session.
+
+### The scale has to outlive the frame
+
+The disagreement test above was still intermittent outdoors: windows where the
+sky drew over the terrain alternated with windows where it sat correctly behind.
+The arithmetic says why. The sky is unparked exactly when
+`maxSz ≥ 0.7 · FarSz · (1 − OtEntry/OtLength)`; at its far-end link that is
+`FarSz ≲ 7260/0.7 ≈ 10.4k`, and the census numbers put the terrain at
+14000–23000. So the park held only while `FarSz` stayed near the area's real
+maximum — and `FarSz` was the *previous walk's* max. Any walk that followed a
+walk without deep world geometry — facing a wall, a street canyon, a camera
+swing — collapsed it below 10.4k, the sky depth-tested, stamped SZ 4674–7260
+across the top of the frame, and rejected the terrain behind it until some deep
+view refilled the scale.
+
+Latent beside that was the opposite failure: the sky fed the same scale it is
+measured against, because the accumulator took every full-depth primitive,
+parked or not. An area whose real max depth stayed under ~1.43× the sky's SZ
+(`Zmax_true/FarSz < 0.7`) would have had its *real* far geometry over-parked —
+the shape of the z-fighting regression the fixed band caused, waiting in a
+different area.
+
+The scale now has three properties, all in `GteDepth`:
+
+- **Sticky per overlay session.** `PublishFarSz` only ever raises `FarSz`
+  (`if (_farSzAccum > FarSz)`), so a near-only walk cannot shrink it. The
+  walk's own max is kept beside it as `FarSzWalk`, and `KF2_ZBUFFER_PROBE=1`
+  prints it as `(last walk N)` whenever it dips under the held scale — the
+  dips the old mechanism died on, made visible.
+- **Blind to the far band.** Primitives linked fewer than `SkyScaleBand`
+  (512) nodes from the far end never feed the accumulation. The backdrop
+  links at the extreme far end and spread past node 64 when the fixed band
+  tried to capture it, so 512 covers it with margin. Excluding genuinely
+  far-clamped geometry only lowers the scale, which is the safe direction:
+  real geometry then projects at or above its prediction more easily and is
+  never over-parked.
+- **Reset per area.** A static constructor listens for
+  `OverlayLoadedEvent` and zeroes `FarSz`, so one area's scale cannot leak
+  into the next; the first walks after a load run un-parked at scale 0,
+  which the loading transition covers.
+
+Why this cannot bring the z-fighting back: the game sorts by recovered depth,
+so for real geometry `maxSz/predicted ≈ Zmax_area/Scale`. Once the sky is out
+of the accumulation, `Scale ≤ Zmax_area` always holds, the ratio is ≥ 1, and
+nothing real is ever below the 0.7 cut — while the sky, at ≈ 0.32 of the area
+scale it can no longer prop up (7260 against 23000), parks permanently once an
+area has shown anything deeper than ~10.4k. An area shallower than that never
+parks its sky, but it also has nothing farther for the sky to occlude.
 
 ## Dithering: one flag, and it lives in the draw environment
 

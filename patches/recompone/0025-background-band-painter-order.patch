@@ -1,6 +1,57 @@
+diff --git a/RecompOne.Runtime/Gpu/GpuHleForward.cs b/RecompOne.Runtime/Gpu/GpuHleForward.cs
+index e8dfaff..8575188 100644
+--- a/RecompOne.Runtime/Gpu/GpuHleForward.cs
++++ b/RecompOne.Runtime/Gpu/GpuHleForward.cs
+@@ -48,8 +48,17 @@ public sealed partial class Gpu
+         // triangle's texture in half. The Z-buffer is the same rule for a different
+         // reason — a corner at ndc.z = 0 among two real depths would punch a hole.
+         bool persp = tex && a.HasW && b.HasW && c.HasW;
+-        bool z = GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
+-        if (GteDepth.ZBuffer) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
++        // The skybox is the game's own "behind everything": linked at the far end
++        // of the table but projecting near, because it is a small box drawn around
++        // the camera. Its recovered SZ is not believed and it keeps painter's
++        // order. Recognised by that disagreement — far link, near depth — rather
++        // than by a fixed node count, so the far world beside it still tests.
++        // Suppressed here rather than in HV so the counters and the vertex flags
++        // cannot disagree. See GteDepth.IsBackgroundPark.
++        bool band = GteDepth.ZBuffer && GteDepth.IsBackgroundPark(a.W, b.W, c.W);
++        bool z = !band && GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
++        if (band) GteDepth.ZBand++;
++        else if (GteDepth.ZBuffer) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
+ 
+         var be = GpuHle.Backend!;
+         be.SetDrawEnv(CurEnv());
+diff --git a/RecompOne.Runtime/Gpu/GpuRaster.cs b/RecompOne.Runtime/Gpu/GpuRaster.cs
+index d448e6b..d6c0617 100644
+--- a/RecompOne.Runtime/Gpu/GpuRaster.cs
++++ b/RecompOne.Runtime/Gpu/GpuRaster.cs
+@@ -255,7 +255,11 @@ public sealed partial class Gpu
+         // linear in screen space for a plane, so the pixel's view depth is the
+         // reciprocal of the interpolated inverses — whether or not the texture
+         // is also being divided.
+-        bool useZ = GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
++        // The skybox keeps painter's order on this path too, recognised by its
++        // disagreement — linked far, projecting near — which is what the hardware
++        // backend sees through HasGteZ. See GteDepth.IsBackgroundPark.
++        bool band = GteDepth.ZBuffer && GteDepth.IsBackgroundPark(a.W, b.W, c.W);
++        bool useZ = !band && GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
+         float za = 0f, zb = 0f, zc = 0f;
+         if (useZ)
+         {
+@@ -263,6 +267,7 @@ public sealed partial class Gpu
+             EnsureZClear();
+             za = 1f / a.W; zb = 1f / b.W; zc = 1f / c.W;
+         }
++        else if (band) GteDepth.ZBand++;
+         else if (GteDepth.ZBuffer) GteDepth.ZSkipped++;
+ 
+         // The steps are per pixel and the coordinates are per sixteenth, so a step
+diff --git a/RecompOne.Runtime/Gpu/GteDepth.cs b/RecompOne.Runtime/Gpu/GteDepth.cs
+index 1ab5e3b..edbbb0f 100644
 --- a/RecompOne.Runtime/Gpu/GteDepth.cs
 +++ b/RecompOne.Runtime/Gpu/GteDepth.cs
-@@ -235,7 +235,23 @@
+@@ -235,7 +235,23 @@ public static class GteDepth
      /// back, so <see cref="ZRejects"/> stays at zero there.</summary>
      public static long ZTris, ZSkipped, ZRejects;
  
@@ -25,7 +76,7 @@
  
      /// <summary>A census of the frame's <i>large</i> polygons, in the order the
      /// ordering table submitted them, with the depth each one recovered. It exists
-@@ -264,6 +280,79 @@
+@@ -264,6 +280,103 @@ public static class GteDepth
      /// Believing its SZ puts the sky in front of the world.</summary>
      public static int OtEntry = -1;
  
@@ -41,22 +92,41 @@
 +    /// <c>KF2_ZBUFFER_PROBE=2</c>.</summary>
 +    public const float SkyParkMargin = 0.7f;
 +
-+    /// <summary>The farthest recovered view depth of the last completed walk, the
-+    /// scale the near-SZ gate is measured against. The skybox's small SZ never
-+    /// dominates this max, so it tracks the far <i>world</i> depth regardless of
-+    /// what got parked. Published one walk late next to <see cref="OtLength"/>, and
-+    /// only when a walk actually carried depth geometry, so a HUD-only walk cannot
-+    /// clobber the world's scale.</summary>
++    /// <summary>Primitives linked fewer than this many nodes from the far end of
++    /// the table never feed the <see cref="FarSz"/> accumulation. The backdrop
++    /// links at the extreme far end and spread past node 64 in the fixed-band
++    /// attempt, so 512 covers it with margin; excluding genuinely far-clamped
++    /// geometry here only lowers the scale, which is the safe direction — real
++    /// geometry then projects at or above its predicted depth more easily and is
++    /// never over-parked.</summary>
++    public const int SkyScaleBand = 512;
++
++    /// <summary>The far-world depth scale the park test measures against: the
++    /// largest recovered depth of any full-depth primitive linked outside
++    /// <see cref="SkyScaleBand"/>, held sticky for the overlay session — a
++    /// near-only frame must not shrink it, or the backdrop's own mid-range SZ
++    /// beats the margin and the sky draws over the terrain behind it. Reset to 0
++    /// when an overlay loads (static constructor). Published one walk late beside
++    /// <see cref="OtLength"/>; a HUD-only walk changes nothing.</summary>
 +    public static float FarSz;
 +    static float _farSzAccum;
++    static float _farSzWalk;
++
++    /// <summary>The last completed walk's own maximum, kept beside the sticky
++    /// scale so the probe can show a near-only walk collapsing while the scale
++    /// holds.</summary>
++    public static float FarSzWalk => _farSzWalk;
++
++    static GteDepth() =>
++        Events.Event.AddListener<Events.OverlayLoadedEvent>(_ => FarSz = 0f);
 +
 +    /// <summary>Publish the walk's depth scale for the next one, beside the
-+    /// <see cref="OtLength"/> publish in every <c>DrawOTag</c>. Guarded on a
-+    /// non-empty accumulator so a walk with no depth geometry (the HUD) keeps the
-+    /// previous world scale rather than resetting it to zero.</summary>
++    /// <see cref="OtLength"/> publish in every <c>DrawOTag</c>. Sticky: the scale
++    /// only ever rises within an overlay session.</summary>
 +    public static void PublishFarSz()
 +    {
-+        if (_farSzAccum > 0f) FarSz = _farSzAccum;
++        if (_farSzAccum > FarSz) FarSz = _farSzAccum;
++        if (_farSzAccum > 0f) _farSzWalk = _farSzAccum;
 +        _farSzAccum = 0f;
 +    }
 +
@@ -64,7 +134,7 @@
 +    /// depth warrants</b>. For real geometry the table position and the recovered
 +    /// depth agree: a low <see cref="OtEntry"/> (the far end) carries a high SZ. The
 +    /// game's backdrop violates that — it is linked at the extreme far end, so its
-+    /// position predicts the frame's farthest depth (<see cref="FarSz"/>), but it
++    /// position predicts the far-world depth (<see cref="FarSz"/>), but it
 +    /// projects only mid-range. So the test is a disagreement, not a "near" cut: the
 +    /// position predicts <c>FarSz × (1 − OtEntry / OtLength)</c>, and a primitive
 +    /// projecting below <see cref="SkyParkMargin"/> of that is the backdrop and goes
@@ -81,8 +151,13 @@
 +        float minSz = MathF.Min(wa, MathF.Min(wb, wc));
 +        float maxSz = MathF.Max(wa, MathF.Max(wb, wc));
 +
-+        // Track the far world depth from any full-depth primitive, park or not.
-+        if (minSz > 0f && maxSz > _farSzAccum) _farSzAccum = maxSz;
++        // Track the far world depth from real geometry only: outside the far band, so
++        // the backdrop's own mid-depth SZ can never become the scale it is measured
++        // against. Parked-or-not is deliberately not the gate — bootstrapping on the
++        // test's own output would let walk 1 poison the scale in an area whose sky is
++        // deeper than every wall.
++        if (minSz > 0f && maxSz > _farSzAccum && OtEntry >= SkyScaleBand)
++            _farSzAccum = maxSz;
 +
 +        // Outside a walk, no full depth, or no scale/length yet: safer to test.
 +        if (OtEntry < 0 || OtLength <= 0) return false;
@@ -105,54 +180,11 @@
      /// <summary>How many entries the last completed walk had, so an entry can be
      /// read back as the OTZ the game linked at: <c>otz = OtLength - 1 - OtEntry</c>.
      /// Published one walk late, which is what makes it free.</summary>
---- a/RecompOne.Runtime/Gpu/GpuHleForward.cs
-+++ b/RecompOne.Runtime/Gpu/GpuHleForward.cs
-@@ -48,8 +48,17 @@
-         // triangle's texture in half. The Z-buffer is the same rule for a different
-         // reason — a corner at ndc.z = 0 among two real depths would punch a hole.
-         bool persp = tex && a.HasW && b.HasW && c.HasW;
--        bool z = GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
--        if (GteDepth.ZBuffer) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
-+        // The skybox is the game's own "behind everything": linked at the far end
-+        // of the table but projecting near, because it is a small box drawn around
-+        // the camera. Its recovered SZ is not believed and it keeps painter's
-+        // order. Recognised by that disagreement — far link, near depth — rather
-+        // than by a fixed node count, so the far world beside it still tests.
-+        // Suppressed here rather than in HV so the counters and the vertex flags
-+        // cannot disagree. See GteDepth.IsBackgroundPark.
-+        bool band = GteDepth.ZBuffer && GteDepth.IsBackgroundPark(a.W, b.W, c.W);
-+        bool z = !band && GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
-+        if (band) GteDepth.ZBand++;
-+        else if (GteDepth.ZBuffer) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
- 
-         var be = GpuHle.Backend!;
-         be.SetDrawEnv(CurEnv());
---- a/RecompOne.Runtime/Gpu/GpuRaster.cs
-+++ b/RecompOne.Runtime/Gpu/GpuRaster.cs
-@@ -255,7 +255,11 @@
-         // linear in screen space for a plane, so the pixel's view depth is the
-         // reciprocal of the interpolated inverses — whether or not the texture
-         // is also being divided.
--        bool useZ = GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
-+        // The skybox keeps painter's order on this path too, recognised by its
-+        // disagreement — linked far, projecting near — which is what the hardware
-+        // backend sees through HasGteZ. See GteDepth.IsBackgroundPark.
-+        bool band = GteDepth.ZBuffer && GteDepth.IsBackgroundPark(a.W, b.W, c.W);
-+        bool useZ = !band && GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
-         float za = 0f, zb = 0f, zc = 0f;
-         if (useZ)
-         {
-@@ -263,6 +267,7 @@
-             EnsureZClear();
-             za = 1f / a.W; zb = 1f / b.W; zc = 1f / c.W;
-         }
-+        else if (band) GteDepth.ZBand++;
-         else if (GteDepth.ZBuffer) GteDepth.ZSkipped++;
- 
-         // The steps are per pixel and the coordinates are per sixteenth, so a step
+diff --git a/RecompOne.Runtime/sdk/LibGpu.cs b/RecompOne.Runtime/sdk/LibGpu.cs
+index 95e1c99..a3f2aee 100644
 --- a/RecompOne.Runtime/sdk/LibGpu.cs
 +++ b/RecompOne.Runtime/sdk/LibGpu.cs
-@@ -47,8 +47,11 @@
+@@ -47,8 +47,11 @@ public static class LibGpu
  
          // The length is only known once the walk ends, so it is published for the
          // next one. An entry is readable as an OTZ against it: the walk starts at

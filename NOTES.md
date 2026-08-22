@@ -82,8 +82,10 @@ by default for the same reason (see "Z-buffer"). Its one known picture defect �
 the outdoor backdrop drawing over the terrain behind it — has since been found
 (census-measured: the backdrop is linked at the extreme far end of the ordering
 table yet projects only mid-depth) and fixed in `patches/recompone/0025`, which
-parks a primitive projecting below the depth its table position predicts; the
-re-check by eye is still owed. Nearby walls and floors no longer
+parks a primitive projecting below the depth its table position predicts — now
+against a sticky, far-band-blind scale reset per overlay load, without whose
+per-frame predecessor near-only views kept collapsing the yardstick and letting
+the sky back; the re-check by eye is still owed. Nearby walls and floors no longer
 pop back to affine the moment one vertex clamps off-screen, and a pixel that two
 vertices share no longer hands one polygon the other's depth (see "The table is
 not unique").
@@ -96,8 +98,9 @@ screen" in `docs/RUNTIME.md`.
 **Widescreen and sub-pixel positioning ship switched off for the same reason** —
 mechanism measured, picture never checked by eye. The Z-buffer's picture *was*
 checked, came back wrong outdoors, and the cause is now fixed by parking the
-skybox on its SZ/OT disagreement (see "Z-buffer"); it ships off anyway until a
-longer look across a real session confirms it. Mouse look is
+skybox on its SZ/OT disagreement against a scale that holds across frames (see
+"Z-buffer"); it ships off anyway until a longer look across a real session
+confirms it. Mouse look is
 off for a different one: its path *is* measured end to end, but a pointer that
 disappears into the game unasked is worse than one switch to find. What is open
 and undiagnosed is in `docs/TODO.md`.
