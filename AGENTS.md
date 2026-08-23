@@ -351,6 +351,7 @@ config/kf2.json          recompiler config: overlays, funcMaps, stubs[], patches
 config/funcmaps/*.json   swept function maps (address/name/size; size is mandatory)
 patches/                 hand-written C# replacing recompiled functions
 mods/<id>/               runtime-loaded mods (mod.json + C#, Roslyn-compiled)
+mcp/                     stdio MCP server exposing the KF2_SHELL command channel as tools to MCP hosts
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection and address-hunting tooling

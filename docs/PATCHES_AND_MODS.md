@@ -801,3 +801,27 @@ and the two must never fight over it. The press itself rides `PadReadEvent` with
 AutoStart's active-low byte-swapped math, which is what makes it work in the
 boot menus and everywhere else the game reads the pad.
 
+### The MCP layer
+
+`mcp/` (`KingsField2Mcp.csproj`) is a standalone stdio MCP server that wraps
+exactly the six verbs above as typed tools, so an MCP host — Claude Desktop, an
+inspector, omp — can drive the same channel without knowing the line protocol.
+It is a separate program with no NuGet dependencies (hand-rolled JSON-RPC over
+stdin/stdout; stdout carries protocol messages only), it talks TCP loopback to
+the shell, and the game itself needs no patch, no recompile and no config entry.
+
+The endpoint defaults to `127.0.0.1:27900`; `KF2_MCP_ENDPOINT=<host:port>`
+points a server instance elsewhere (a second game session on
+`KF2_SHELL=<port>`, say) without touching the game's own switch.
+
+```json
+{ "mcpServers": { "kf2": { "command": "dotnet",
+    "args": ["run", "--project", "<repo>/mcp/KingsField2Mcp.csproj", "-c", "Release", "--no-build"] } } }
+```
+
+The tools are `kf2_state`, `kf2_nearby`, `kf2_load_save`, `kf2_warp`,
+`kf2_press_button` and `kf2_kill`, one per verb, with the button names and
+ranges quoted from `AgentServer`. The shell stays the validator: replies come
+back verbatim, an `ok:false` surfaces as a tool error, and a game that is not
+running costs every tool one connection error rather than a dead host session.
+

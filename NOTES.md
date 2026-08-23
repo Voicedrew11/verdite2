@@ -205,6 +205,7 @@ How the port's own code attaches, where its settings go, plus frame pacing and a
 - Auto reload
 - Auto start and the agent beacon
 - The command channel
+- The MCP layer
 
 ### [INPUT.md](docs/INPUT.md)
 

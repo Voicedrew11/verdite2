@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AssemblyName>KingsField2Mcp</AssemblyName>
+        <RootNamespace>Kf2.Mcp</RootNamespace>
+    </PropertyGroup>
+
+    <!--
+      A stdio MCP server that exposes the game's KF2_SHELL command channel as
+      typed tools to MCP hosts. It is a separate program, not part of the game
+      assembly: it talks to patches/AgentServer.cs over TCP loopback and needs
+      nothing from RecompOne. No PackageReference — hand-rolled JSON-RPC keeps
+      restore offline-safe.
+    -->
+
+</Project>
