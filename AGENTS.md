@@ -258,7 +258,8 @@ driving the menus — `AutoReload.Simulate()` kills on demand from there, and th
 death clock at `0x8019951A` can be pinned to hold any frame of the death sequence
 still.
 
-**Getting an agent into the game: `KF2_AUTOSTART` and `KF2_AGENT`.** An agent left
+**Getting an agent into the game — and driving it once there: `KF2_AUTOSTART`,
+`KF2_AGENT`, `KF2_SHELL`.** An agent left
 at the title waits forever — the boot menus take no input by the usual routes
 (`KF2_AUTOPAD` only arms once an area has loaded, the very thing that has not
 happened), and the screen must not be scraped. `KF2_AUTOSTART=<1..3>` drives the
@@ -269,6 +270,12 @@ machine-readable `[KF2-AGENT]` line on each overlay change and about once a seco
 (`{"overlay":…,"inGame":…,"hp":…,"area":…,"slot":…}`) — `inGame:false` is how a
 program tells "stuck at the title" from "in an area" without a screenshot. See
 "Auto start and the agent beacon" in `docs/PATCHES_AND_MODS.md`.
+
+**`KF2_SHELL=1` is the acting half**: while the session runs, a line protocol on
+TCP 127.0.0.1:27900 (`state`, `load <slot>`, `warp <area>`, `press <button> [ms]`,
+`kill`; one request per line, one single-line JSON response back) steers the game
+the beacon is only watching. See "The command channel" in
+`docs/PATCHES_AND_MODS.md`.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
 its clock starts when the first area module loads, which is the only point in the
