@@ -82,26 +82,34 @@ public static class AgentBeacon
 
     static void Emit()
     {
+        if (RecompOne.Runtime.Runtime.Mem == null) return;
+        Console.WriteLine("[KF2-AGENT] " + Snapshot());
+    }
+
+    /// <summary>
+    /// The bare {...} JSON the beacon prints -- no prefix, no newline. Shared
+    /// with the command channel (patches/AgentServer.cs), whose `state` command
+    /// answers from it; public because patches/ files share one assembly.
+    /// </summary>
+    public static string Snapshot()
+    {
         var m = RecompOne.Runtime.Runtime.Mem;
-        if (m == null) return;
+        if (m == null) return "{\"overlay\":\"boot\",\"inGame\":false}";
 
         // Not in an area: the one field an agent needs to stop waiting.
         if (m.ReadU16(MaxHp) == 0)
-        {
-            Console.WriteLine($"[KF2-AGENT] {{\"overlay\":\"{_overlay}\",\"inGame\":false}}");
-            return;
-        }
+            return $"{{\"overlay\":\"{_overlay}\",\"inGame\":false}}";
 
         bool dead = m.ReadU8(State) == StateDead;
         int x = (int)m.ReadU32(PosX), y = (int)m.ReadU32(PosY), z = (int)m.ReadU32(PosZ);
-        Console.WriteLine(
-            $"[KF2-AGENT] {{\"overlay\":\"{_overlay}\",\"inGame\":true," +
+        return
+            $"{{\"overlay\":\"{_overlay}\",\"inGame\":true," +
             $"\"dead\":{(dead ? "true" : "false")}," +
             $"\"hp\":{m.ReadU16(Hp)},\"maxHp\":{m.ReadU16(MaxHp)}," +
             $"\"mp\":{m.ReadU16(Mp)},\"maxMp\":{m.ReadU16(MaxMp)}," +
             $"\"level\":{m.ReadU8(Level)},\"exp\":{m.ReadU32(Exp)}," +
             $"\"area\":{m.ReadU8(Area)},\"slot\":{m.ReadU8(CurrentSlot)}," +
             $"\"deathFrames\":{m.ReadU16(DeathFrames)}," +
-            $"\"pos\":[{x},{y},{z}]}}");
+            $"\"pos\":[{x},{y},{z}]}}";
     }
 }

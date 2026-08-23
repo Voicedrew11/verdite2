@@ -301,6 +301,22 @@ Kf2.AutoStart.Install();
 Kf2.AgentBeacon.Configure(Environment.GetEnvironmentVariable("KF2_AGENT"));
 Kf2.AgentBeacon.Install();
 
+// The command channel -- the half that lets an agent act instead of only watch.
+// A small TCP server on loopback, off unless KF2_SHELL is set:
+//
+//     KF2_SHELL=1   line protocol on 127.0.0.1:27900 (or =<port>): one request
+//                   per line, one single-line JSON response back --
+//                   state | load <slot> | warp <area> | press <button> [ms] | kill
+//
+// Commands arrive on socket threads and are marshalled onto the game thread
+// through two drainers -- a VSync listener for the cheap ones and a post hook on
+// main-loop stage 3 for load/warp, whose loader waits on the CD by looping VSync,
+// so running it inside the VSync event would nest VSync inside itself and swap
+// overlays under a live frame. Patches for the KF2_AUTOPAD reason; see "The
+// command channel" in docs/PATCHES_AND_MODS.md.
+Kf2.AgentServer.Configure(Environment.GetEnvironmentVariable("KF2_SHELL"));
+Kf2.AgentServer.Install();
+
 // Analog twin-stick control. Two pre-hooks on the game's own turn/look and
 // walk/strafe routines pre-load the velocities those routines are about to
 // accumulate, so the sticks pick the amount and the game's own movement code

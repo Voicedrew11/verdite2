@@ -203,6 +203,8 @@ How the port's own code attaches, where its settings go, plus frame pacing and a
 - Patch settings: a patch's knobs go in the runtime's own sections
 - Frame pacing: the port is pinned to the fastest band
 - Auto reload
+- Auto start and the agent beacon
+- The command channel
 
 ### [INPUT.md](docs/INPUT.md)
 

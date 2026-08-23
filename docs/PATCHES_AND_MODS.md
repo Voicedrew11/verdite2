@@ -743,3 +743,58 @@ budget. The stat addresses are carried locally (patches cannot reach the mod's
 `GameState.cs`, which the mod loader compiles separately); a future consolidation
 could move the shared map into `patches/`.
 
+## The command channel
+`patches/AgentServer.cs` (`KF2_SHELL=1`, or `KF2_SHELL=<port>`; default port
+27900) is the acting half beside the beacon's watching half: a small TCP server
+on loopback speaking a line protocol — one request per line, one single-line
+JSON response, always:
+
+```
+state                 the beacon's snapshot as JSON
+load <slot 1..3>      load a save through AutoReload.LoadSlot
+warp <area 0..7>      re-enter an area through the game's own entry routine
+press <button> [ms]   hold a pad button for ms (default 150); one press at a time,
+                      replaced by the next
+kill                  drop HP to zero, the way a hit would
+```
+
+A socket rather than stdin because stdout already carries the beacon and the
+`[KF2]` log lines; a stdio channel would make every client demultiplex its
+responses out of the logs. Off unless set, like every other agent switch: an
+unasked listener is worse than one switch to find (the mouse-look precedent).
+It is in `patches/` for the `KF2_AUTOPAD` reason — an agent that did not know to
+enable a package would get nothing.
+
+### Two marshal points, and why
+
+Commands arrive on socket threads and must run on the game thread. Where they
+run depends on whether the command re-enters the loader:
+
+- **`state`, `press`, `kill`, `help` drain from a `VSyncEvent` listener** — the
+  same place the beacon reads memory, so no cross-thread access and no new
+  machinery.
+- **`load` and `warp` drain from a post hook on main-loop stage 3**
+  (`0x8002A550`). `func_80024154` waits on the CD by looping `func_80017818`,
+  which calls VSync: running it inside the VSync event nests VSync inside
+  itself and swaps overlays under a frame that is still drawing — the documented
+  death of the debug panel's first warp button. Stage 3 is the game's own load
+  path, which is where `AutoReload.Reload` and `AutoStart` already call
+  `LoadSlot` from, and it only runs once an area is live — which is exactly the
+  guarantee `load`/`warp` need. A heavy command issued anywhere else (at the
+  title, say) times out after five seconds with that said in the error.
+
+`kill` is safe at VSync: `AutoReload.Simulate` only snapshots the CPU, writes
+HP, calls `func_8002A264` and restores — and the settings page already runs it
+from inside Present-inside-VSync.
+
+### One implementation of the warp
+
+The warp core moved out of the debug mod into `patches/AreaWarp.cs`
+(`Kf2.AreaWarp.TryRun`) so the server can reach it with no package enabled;
+the mod's panel delegates to it, so there is still exactly one transcription of
+the game's area-entry sequence. The synthetic press keeps its own inject state
+rather than sharing `AutoStart._inject`: that field belongs to the boot driver,
+and the two must never fight over it. The press itself rides `PadReadEvent` with
+AutoStart's active-low byte-swapped math, which is what makes it work in the
+boot menus and everywhere else the game reads the pad.
+

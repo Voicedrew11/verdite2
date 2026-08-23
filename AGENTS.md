@@ -108,6 +108,7 @@ KF2_MOUSE_KEY=Escape                     # the key that captures and releases
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
+KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|load|warp|press|kill
 KF2_UISCALE=1                            # force the interface scale, and save it
 ```
 
