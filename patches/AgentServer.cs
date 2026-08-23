@@ -259,6 +259,7 @@ public static class AgentServer
         {
             case "state":
             case "press":
+            case "kill":
             case "help":
             case "nearby":
                 _fast.Enqueue(cmd);
@@ -306,6 +307,7 @@ public static class AgentServer
         "kill" => DoKill(),
         "help" => DoHelp(),
         "load" => DoLoad(cmd.Arg1),
+        "warp" => DoWarp(cmd.Arg1),
         "nearby" => DoNearby(cmd.Arg1),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
