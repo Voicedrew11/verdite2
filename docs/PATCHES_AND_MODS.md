@@ -756,6 +756,9 @@ warp <area 0..7>      re-enter an area through the game's own entry routine
 press <button> [ms]   hold a pad button for ms (default 150); one press at a time,
                       replaced by the next
 kill                  drop HP to zero, the way a hit would
+nearby [radius=8192]  live records of the world tables within radius units of the
+                      player, nearest first, tagged by table (objects; buf6
+                      "entities", whose reading is still Inferred -- TODO.md)
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the
@@ -770,7 +773,7 @@ enable a package would get nothing.
 Commands arrive on socket threads and must run on the game thread. Where they
 run depends on whether the command re-enters the loader:
 
-- **`state`, `press`, `kill`, `help` drain from a `VSyncEvent` listener** — the
+- **`state`, `press`, `kill`, `help`, `nearby` drain from a `VSyncEvent` listener** — the
   same place the beacon reads memory, so no cross-thread access and no new
   machinery.
 - **`load` and `warp` drain from a post hook on main-loop stage 3**

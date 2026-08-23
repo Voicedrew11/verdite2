@@ -18,13 +18,16 @@ namespace Kf2;
 ///     KF2_SHELL=1     listen on 127.0.0.1:27900; KF2_SHELL=&lt;port&gt; picks another
 ///
 /// Line protocol over TCP loopback: one request per line, one single-line JSON
-/// response, always. Five commands:
+/// response, always. Six commands:
 ///
 ///     state                 the beacon's snapshot as JSON
 ///     load &lt;slot 1..3&gt;      load a save through AutoReload.LoadSlot
 ///     warp &lt;area 0..7&gt;      re-enter an area through AreaWarp.TryRun
 ///     press &lt;button&gt; [ms]   hold a pad button for ms (default 150)
 ///     kill                  drop HP to zero, the way a hit would
+///     nearby [radius]       live world-table records within radius of the
+///                           player, nearest first (positions only; buf6's
+///                           entity reading is still Inferred)
 ///
 /// Off unless KF2_SHELL is set, like every other agent switch: an unasked
 /// listener is worse than one switch to find (the mouse-look precedent). A
@@ -96,6 +99,7 @@ public static class AgentServer
         "warp <area 0..7> - re-enter an area through the game's own entry routine",
         "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
         "kill - drop HP to zero, the way a hit would",
+        "nearby [radius=8192] - live records of the world tables within radius units",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -255,8 +259,8 @@ public static class AgentServer
         {
             case "state":
             case "press":
-            case "kill":
             case "help":
+            case "nearby":
                 _fast.Enqueue(cmd);
                 break;
             case "load":
@@ -302,7 +306,7 @@ public static class AgentServer
         "kill" => DoKill(),
         "help" => DoHelp(),
         "load" => DoLoad(cmd.Arg1),
-        "warp" => DoWarp(cmd.Arg1),
+        "nearby" => DoNearby(cmd.Arg1),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
 
@@ -312,6 +316,103 @@ public static class AgentServer
     {
         if (RecompOne.Runtime.Runtime.Mem == null) return Err("not running");
         return "{\"ok\":true,\"cmd\":\"state\",\"state\":" + AgentBeacon.Snapshot() + "}";
+    }
+
+    // ---- world perception (nearby) ----
+    //
+    // Both maps are the ones patches/AreaWarp.cs uses for centroid placement,
+    // and the debug mod carried before it. The object table is documented in
+    // docs/GAME_INTERNALS.md; buf6's entity reading is Inferred, not confirmed
+    // (docs/TODO.md still calls that table unmapped), so records are reported
+    // as positions tagged by table -- never named as enemies.
+    const uint PlayerMaxHp = 0x80199426;   // u16; nonzero only while an area is up
+    const uint PlayerPosX  = 0x801994EC;   // s32
+    const uint PlayerPosY  = 0x801994F0;   // s32, height
+    const uint PlayerPosZ  = 0x801994F4;   // s32
+
+    const uint ObjectTable = 0x80177714;
+    const int ObjectStride = 0x44;
+    const int ObjectCount = 0x18C;
+    const int ObjectEmptyOff = 0x4;        // byte == 0xFF when the slot is free
+    const int ObjectPosOff = 0x14;         // VECTOR
+    const uint EntityTable = 0x8016C544;   // buf6
+    const int EntityStride = 0x7C;
+    const int EntityCount = 0xC8;
+    const int EntityEmptyOff = 0x0;
+    const int EntityPosOff = 0x2C;         // VECTOR
+
+    const int NearbyDefaultRadius = 8192;  // four tiles
+    const int NearbyMaxRadius = 0x10000;
+    const int NearbyListCap = 16;
+
+    /// <summary>
+    /// Live records of both world tables within a horizontal radius of the
+    /// player, nearest first. This is the agent's world feedback: positions of
+    /// whatever the tables hold, with distances, so navigation can be closed
+    /// loop without claiming to know what any record is.
+    /// </summary>
+    static string DoNearby(string radiusArg)
+    {
+        int radius = NearbyDefaultRadius;
+        if (radiusArg.Length > 0 &&
+            (!int.TryParse(radiusArg, out radius) || radius < 1 || radius > NearbyMaxRadius))
+            return Err($"radius must be 1..{NearbyMaxRadius}");
+
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (m == null || m.ReadU16(PlayerMaxHp) == 0) return Err("no area running");
+
+        int px = (int)m.ReadU32(PlayerPosX);
+        int py = (int)m.ReadU32(PlayerPosY);
+        int pz = (int)m.ReadU32(PlayerPosZ);
+
+        var sb = new StringBuilder("{\"ok\":true,\"cmd\":\"nearby\",\"radius\":")
+            .Append(radius)
+            .Append(",\"pos\":[")
+            .Append(px).Append(',').Append(py).Append(',').Append(pz).Append(']');
+
+        AppendNearby(sb, m, "objects", ObjectTable, ObjectStride, ObjectCount,
+                     ObjectEmptyOff, ObjectPosOff, px, pz, radius);
+        AppendNearby(sb, m, "entities", EntityTable, EntityStride, EntityCount,
+                     EntityEmptyOff, EntityPosOff, px, pz, radius);
+        sb.Append('}');
+        return sb.ToString();
+    }
+
+    static void AppendNearby(StringBuilder sb, IMemory m, string name,
+                             uint table, int stride, int count,
+                             int emptyOff, int posOff,
+                             int px, int pz, int radius)
+    {
+        var hits = new List<(long D2, int I, int X, int Y, int Z)>();
+        long r2 = (long)radius * radius;
+        int live = 0;
+        for (int i = 0; i < count; i++)
+        {
+            uint rec = table + (uint)(i * stride);
+            if (m.ReadU8(rec + (uint)emptyOff) == 0xFF) continue;
+            live++;
+            int x = (int)m.ReadU32(rec + (uint)posOff);
+            int y = (int)m.ReadU32(rec + (uint)(posOff + 4));
+            int z = (int)m.ReadU32(rec + (uint)(posOff + 8));
+            long dx = x - px, dz = z - pz;
+            long d2 = dx * dx + dz * dz;
+            if (d2 > r2) continue;
+            hits.Add((d2, i, x, y, z));
+        }
+        hits.Sort((a, b) => a.D2.CompareTo(b.D2));
+
+        sb.Append(",\"").Append(name).Append("\":{\"total\":").Append(live)
+          .Append(",\"within\":").Append(hits.Count).Append(",\"items\":[");
+        for (int n = 0; n < hits.Count && n < NearbyListCap; n++)
+        {
+            var h = hits[n];
+            if (n > 0) sb.Append(',');
+            sb.Append("{\"i\":").Append(h.I)
+              .Append(",\"pos\":[").Append(h.X).Append(',').Append(h.Y).Append(',').Append(h.Z).Append(']')
+              .Append(",\"dist\":").Append((int)Math.Sqrt(h.D2))
+              .Append('}');
+        }
+        sb.Append("]}");
     }
 
     static string DoPress(string name, string msArg)
