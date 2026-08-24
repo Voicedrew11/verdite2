@@ -801,7 +801,7 @@ and the two must never fight over it. The press itself rides `PadReadEvent` with
 AutoStart's active-low byte-swapped math, which is what makes it work in the
 boot menus and everywhere else the game reads the pad.
 
-### The MCP layer
+## The MCP layer
 
 `mcp/` (`KingsField2Mcp.csproj`) is a standalone stdio MCP server that wraps
 exactly the six verbs above as typed tools, so an MCP host — Claude Desktop, an
