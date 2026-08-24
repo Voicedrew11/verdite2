@@ -79,7 +79,7 @@ internal static class Program
 
         bool hasId = req.ContainsKey("id");
         JsonNode? id = req["id"];
-        var method = req["method"]?.GetValue<string>();
+        var method = Str(req["method"]);
 
         if (method is null)
         {
@@ -94,7 +94,7 @@ internal static class Program
         switch (method)
         {
             case "initialize":
-                WriteResult(id, InitializeResult(req["params"]));
+                WriteResult(id, InitializeResult(Obj(req["params"])));
                 break;
             case "ping":
                 WriteResult(id, []);
@@ -103,7 +103,7 @@ internal static class Program
                 WriteResult(id, ToolsList());
                 break;
             case "tools/call":
-                ToolsCall(id, req["params"], shell);
+                ToolsCall(id, Obj(req["params"]), shell);
                 break;
             default:
                 WriteError(id, -32601, $"Method not found: {method}");
@@ -113,7 +113,7 @@ internal static class Program
 
     // ---- initialize / tools/list ----
 
-    static JsonObject InitializeResult(JsonNode? parameters)
+    static JsonObject InitializeResult(JsonObject? parameters)
     {
         // Echo the host's requested version verbatim; invent nothing.
         var version = DefaultProtocolVersion;
@@ -221,9 +221,9 @@ internal static class Program
 
     sealed class ParamError(string message) : Exception(message);
 
-    static void ToolsCall(JsonNode? id, JsonNode? parameters, ShellClient shell)
+    static void ToolsCall(JsonNode? id, JsonObject? parameters, ShellClient shell)
     {
-        var name = parameters?["name"]?.GetValue<string>();
+        var name = Str(parameters?["name"]);
         if (string.IsNullOrEmpty(name))
         {
             WriteError(id, -32602, "Invalid params: tools/call requires a tool name");
@@ -287,6 +287,18 @@ internal static class Program
         return s;
     }
 
+    /// <summary>A node's string value, or null when absent or not a string.
+    /// The non-throwing read: <c>GetValue&lt;string&gt;()</c> on a number-shaped
+    /// node throws, and a malformed-but-legal-JSON request must cost its host
+    /// a -32602 reply, not a silently dropped call.</summary>
+    static string? Str(JsonNode? node) =>
+        node is JsonValue v && v.TryGetValue(out string? s) ? s : null;
+
+    /// <summary>params as the object the handlers index into, or null when
+    /// absent or mistyped: the string indexer on an array-shaped node throws,
+    /// so the shape is narrowed before anything indexes it.</summary>
+    static JsonObject? Obj(JsonNode? node) => node as JsonObject;
+
     /// <summary>True iff the shell's reply parses as an object with ok === false.</summary>
     static bool IsOkFalse(string reply)
     {
@@ -345,13 +357,16 @@ internal static class Program
 
 /// <summary>
 /// The persistent connection to the game's command channel: lazy, guarded by
-/// one lock, one request in flight at a time. A failed round trip costs one
-/// reconnect-and-resend before giving up with null — transport trouble is
-/// reported through tool results, never exceptions.
+/// one lock, one request in flight at a time. Transport trouble is reported
+/// through tool results, never exceptions. A failed round trip is never
+/// resent once the request has reached the wire — a lost reply may mean the
+/// game already warped, loaded or pressed, and resending would do it twice.
+/// Only a failure before anything was sent (the connect itself) retries once.
 /// </summary>
 sealed class ShellClient
 {
     const int ReplyTimeoutMs = 10_000; // the shell answers within ~5 s (it answers its own timeouts)
+    const int ConnectTimeoutMs = 5_000; // a filtered remote endpoint would otherwise park the single-threaded stdin loop in the OS SYN-retry window, minutes
 
     readonly string _host;
     readonly int _port;
@@ -396,10 +411,16 @@ sealed class ShellClient
     {
         lock (_gate)
         {
-            if (TryRoundTrip(requestLine, out var reply)) return reply;
+            if (TryRoundTrip(requestLine, out var reply, out var sent)) return reply;
+
+            // Resend only what was never sent: a refused or timed-out connect
+            // delivered nothing. Anything after that — a write that fell
+            // over, a reply that stalled past the receive timeout — may have
+            // executed the command, so it fails terminally rather than risk a
+            // doubled warp/load/press.
+            if (!sent && TryRoundTrip(requestLine, out reply, out _)) return reply;
+
             Close(); // stale bytes after a failure would desync the next reply
-            if (TryRoundTrip(requestLine, out reply)) return reply;
-            Close();
             return null;
         }
     }
@@ -413,26 +434,49 @@ sealed class ShellClient
         _writer = null;
     }
 
-    bool TryRoundTrip(string line, out string? reply)
+    bool TryRoundTrip(string line, out string? reply, out bool sent)
     {
         reply = null;
+        sent = false;
         try
         {
             if (_client is null || !_client.Connected)
             {
                 Close();
-                var tcp = new TcpClient(_host, _port) // loopback connect: instant accept or refuse
+                var tcp = new TcpClient
                 {
+                    NoDelay = true,
                     ReceiveTimeout = ReplyTimeoutMs,
                     SendTimeout = ReplyTimeoutMs,
-                    NoDelay = true,
                 };
+
+                // Bounded connect: loopback refuses instantly, but a
+                // KF2_MCP_ENDPOINT override aimed at a filtered address must
+                // not hold the stdin loop for the OS SYN-retry window.
+                if (!tcp.ConnectAsync(_host, _port).Wait(ConnectTimeoutMs))
+                {
+                    tcp.Close(); // the abandoned connect dies with the socket
+                    return false; // nothing sent: Call may retry
+                }
+
                 var stream = tcp.GetStream();
                 var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
                 _reader = new StreamReader(stream, utf8);
                 _writer = new StreamWriter(stream, utf8) { AutoFlush = true, NewLine = "\n" };
                 _client = tcp;
             }
+        }
+        catch
+        {
+            Close();
+            return false; // connect trouble: nothing was sent
+        }
+
+        // Past this point the request can reach the game however we exit, so
+        // every failure reports sent=true and Call will not resend.
+        sent = true;
+        try
+        {
             _writer!.WriteLine(line);
             var received = _reader!.ReadLine(); // exactly one reply line; timeout throws SocketException
             if (received is null || received.Length == 0) return false;
