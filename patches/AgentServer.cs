@@ -66,6 +66,7 @@ public static class AgentServer
     const int MaxLineLength = 256;
     const int ReplyTimeoutMs = 5000;
     const int DefaultHoldMs = 150;
+    const int QueueCap = 16;               // bound per queue; each heavy entry is seconds of loader time
 
     /// <summary>One request, routed to a queue; the reply is its single-line JSON.</summary>
     sealed record Cmd(string Name, string Arg1, string Arg2, TaskCompletionSource<string> Reply);
@@ -220,18 +221,47 @@ public static class AgentServer
         {
             using (client)
             {
-                var stream = client.GetStream();
-                using var reader = new StreamReader(stream, Encoding.UTF8);
+                Stream stream = client.GetStream();
                 using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
 
-                string? line;
-                while ((line = reader.ReadLine()) != null)
+                // Decoded by hand rather than StreamReader.ReadLine so the
+                // length cap binds while the line arrives: ReadLine buffered
+                // the whole newline-terminated line before the check could
+                // run, letting a client that never terminates grow memory
+                // without bound.
+                var decoder = Encoding.UTF8.GetDecoder();
+                var bytes = new byte[256];
+                var chars = new char[256];
+                var line = new char[MaxLineLength];
+                int len = 0;
+                bool over = false;
+
+                while (stream.Read(bytes, 0, bytes.Length) is int got && got > 0)
                 {
-                    line = line.Trim();
-                    if (line.Length == 0) continue;
-                    writer.WriteLine(line.Length > MaxLineLength
-                        ? "{\"ok\":false,\"error\":\"line too long (256 max)\"}"
-                        : Route(line));
+                    int consumed = 0;
+                    while (consumed < got)
+                    {
+                        decoder.Convert(bytes, consumed, got - consumed,
+                                        chars, 0, chars.Length, false,
+                                        out int bUsed, out int cUsed, out _);
+                        consumed += bUsed;
+                        for (int i = 0; i < cUsed; i++)
+                        {
+                            char ch = chars[i];
+                            if (ch is '\n' or '\r')
+                            {
+                                Answer(writer, line, len, over);
+                                len = 0;
+                                over = false;
+                            }
+                            else if (!over)
+                            {
+                                if (len == MaxLineLength) over = true;
+                                else line[len++] = ch;
+                            }
+                            // else: discarding the tail of an over-long line
+                        }
+                    }
                 }
             }
         }
@@ -241,6 +271,20 @@ public static class AgentServer
             // above and any pending reply's TCS just never completes. The game
             // carries on regardless.
         }
+    }
+
+    /// <summary>One completed line. Empty input stays silent, as before; a
+    /// line that grew past the cap answers the too-long error without the
+    /// excess ever having been buffered.</summary>
+    static void Answer(StreamWriter writer, char[] line, int len, bool over)
+    {
+        if (over)
+        {
+            writer.WriteLine("{\"ok\":false,\"error\":\"line too long (256 max)\"}");
+            return;
+        }
+        var text = new string(line, 0, len).Trim();
+        if (text.Length > 0) writer.WriteLine(Route(text));
     }
 
     // ---- routing ----
@@ -262,11 +306,11 @@ public static class AgentServer
             case "kill":
             case "help":
             case "nearby":
-                _fast.Enqueue(cmd);
+                Enqueue(_fast, cmd);
                 break;
             case "load":
             case "warp":
-                _heavy.Enqueue(cmd);
+                Enqueue(_heavy, cmd);
                 break;
             default:
                 return "{\"ok\":false,\"error\":" + Q($"unknown command '{cmd.Name}'; try help") + "}";
@@ -298,6 +342,20 @@ public static class AgentServer
             }
             cmd.Reply.TrySetResult(reply);
         }
+    }
+
+    /// <summary>Bound the queues: every queued heavy command is seconds of
+    /// serial loader time once stage 3 runs again, and an unbounded backlog
+    /// would let one client schedule minutes of warps ahead.</summary>
+    static void Enqueue(ConcurrentQueue<Cmd> queue, Cmd cmd)
+    {
+        if (queue.Count >= QueueCap)
+        {
+            cmd.Reply.TrySetResult(
+                Err($"too many queued '{cmd.Name}' commands ({QueueCap} max)"));
+            return;
+        }
+        queue.Enqueue(cmd);
     }
 
     static string Execute(Cmd cmd) => cmd.Name switch
