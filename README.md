@@ -1,19 +1,25 @@
 # Verdite2
 
-Verdite2 is a PC port of King's Field (US).
+Verdite2 is a PC port of King's Field (US) built atop of the [RecompOne](https://github.com/BlackLabelHQ/RecompOne) project. 
 
 ## Features
 
-- Widescreen: 16:9, 16:10, 21:9. Culling behavior adapted to new aspect ratio to avoid pop-in
-- Enhanced Rendering: Perspective correct textures, no vertex wobbling, 24-bit colour
-- Gameplay Enhancements: Save Autoloading
-- Controls: Keyboard and Mouse, Twin Stick FPS controls
-- Consistant frame-rate with no banding.
-- Mod Support
+- Widescreen support (16:9, 16:10, 21:9)
+- Perspective-correct textures and corrected vertex wobbling
+- 24-bit colour
+- Stable game speed
+- Automatic save reload after death
+- Keyboard and mouse support
+- Twin-stick FPS controls
+- Mod support
 
 ## Status
 
 Game is playable from start to finish. There may still be some intermittent issues.
+
+## Requirements
+
+A dump of the North American PlayStation release (`SLUS-00158`) in `.cue` / `.bin` format.
 
 ## Credits
 
