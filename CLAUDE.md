@@ -89,6 +89,7 @@ KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion
 KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, capacity, overflows
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
+KF2_TRUECOLOR=1                        # 24-bit shaded output, no 15-bit banding (off by default; GL backend only)
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
 KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
@@ -136,7 +137,13 @@ one.
 Frame pacing is load-bearing: without it the port runs faster than the game can on
 hardware, so it lives in `patches/` and is always on. Dithering is a patch for a
 different reason — it is a picture the port should be able to offer without a
-package having to load — and defaults to *off* (no crosshatch). **Perspective
+package having to load — and defaults to *off* (no crosshatch). **True color is a
+patch for that same reason** and is the other answer to the same 15-bit banding the
+dither hides: it renders the shaded gradient at 24 bits so it does not band, with
+no crosshatch (`patches/recompone/0021`, switch in `patches/TrueColor.cs`). It
+defaults to *off* too, but not for the sub-pixel reason — 24-bit shading is
+deliberately not what the hardware did, so the default is the authentic look.
+**Perspective
 correction is a patch for that same reason and is on by default**, beside it under
 Video. Unlike the others its work is not in `patches/` at all: a texture
 coordinate is decided far below anything `HookManager` can reach, so the mechanism
@@ -151,8 +158,11 @@ is shaped the same way — mechanism in `patches/recompone/0010` and `0012`, swi
 mechanism has been measured and the picture has not. **The Z-buffer is the same
 depth used as occlusion** rather than as a texture denominator: the GPU has none,
 so intersecting surfaces take turns in front of each other on the ordering table,
-and `patches/recompone/0014` tests the recovered SZ per pixel instead. Off by
-default for the sub-pixel reason; its switch sits with the others under Video.
+and `patches/recompone/0014` tests the recovered SZ per pixel instead. It has
+**no user-facing switch** — the Video checkbox was removed because the picture is
+effectively unbridgeable (DuckStation's PGXP depth buffer fails on the same
+per-polygon OTZ averages), so the mechanism is kept for diagnosis only, driven
+from the console by `KF2_ZBUFFER` / `KF2_ZBUFFER_PROBE`.
 See "Sub-pixel vertex positioning" and "Z-buffer" in `docs/RENDERING.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
@@ -438,8 +448,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Sixteen of
-the twenty are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Seventeen
+of the twenty-one are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
@@ -601,6 +611,20 @@ uncaptured edit inside the checkout is left where it is.
   `ScaleAllSizes`. Latent since long before `0019`; changing the *accent*
   compounds it too. **No recompile.** See "The scale can put the settings out of
   reach" in `docs/RUNTIME.md`.
+
+- `0021-true-color-24bit-output.patch` — the console renders into 15-bit VRAM, so a
+  smooth shaded fog gradient bands into 32 levels unless the ordered dither hides
+  it with a crosshatch. Two things enforce the truncation: the `GlDisplayRt` colour
+  attachment is `Rgb5A1`, and the fragment shader's `quant5` ends in
+  `min(c8 >> 3, 31) / 31.0`. Under `GteDepth.TrueColor` the attachment becomes
+  `Rgba8` and `quant5` keeps eight bits, so the gradient is smooth without the
+  crosshatch. Textures stay 5-bit (they live in 15-bit VRAM), so only the shaded
+  gradient gains precision; the writeback/present blits convert automatically.
+  GL backend only — the software rasterizer is always 15-bit. Off by default (the
+  authentic look). `patches/TrueColor.cs` (`KF2_TRUECOLOR`) is the switch and
+  `patches/settings/TrueColorPage.cs` the checkbox under Video. **No recompile** —
+  render-target format and shaders are runtime. See "True color" in
+  `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

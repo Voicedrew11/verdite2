@@ -49,13 +49,16 @@ namespace Kf2;
 /// never tested, the clip W is unchanged, and a vertex with no depth still
 /// writes <c>vec4(p, 0, 1)</c>.
 ///
-/// <b>Off by default</b>, for the same reason as sub-pixel positioning: the
-/// mechanism is the recovered depth that perspective correction already
-/// measures, but the picture has not been checked by eye. The cave flicker in
+/// <b>No user-facing switch, off by default.</b> The player-facing checkbox that
+/// once sat under Video was removed: recovering a usable depth here is effectively
+/// unbridgeable — DuckStation's mature PGXP depth buffer, given the same
+/// per-polygon OTZ averages this game submits, cannot produce a clean picture
+/// either. The mechanism is kept for diagnosis, driven from the console alone via
+/// <c>KF2_ZBUFFER=1</c> and <c>KF2_ZBUFFER_PROBE</c>; the cave flicker in
 /// "Following the value through memory" is the thing to look at. See "Z-buffer"
 /// in NOTES.md.
 ///
-/// As with perspective correction this patch is only the switch and the report;
+/// This patch is only the console switch and the report;
 /// the work is in the runtime (<c>patches/recompone/0014</c>), because a pixel's
 /// depth is decided far below anything <c>HookManager</c> can reach. The one hook
 /// is on <c>DrawOTag</c>, purely to have a frame boundary to count against, and

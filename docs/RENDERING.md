@@ -17,6 +17,7 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 | Sub-pixel vertex positions | **measured**, offsets uniform | **not checked** | off |
 | Z-buffer | **measured**, same recovered SZ | **checked and still wrong** — a second cause remains | off |
 | Dithering (removal) | **measured**, all three routes | **checked**, twice-drawn pair | off (no crosshatch) |
+| True color (24-bit) | **measured**, RGBA8 target + shader | the point of the switch | off (authentic 15-bit) |
 
 That "mechanism measured / picture never checked" split is the rule the whole
 port is written to: a feature whose mechanism has counters behind it but whose
@@ -494,8 +495,17 @@ software-rasterizer number and stay at zero on the hardware path.
 **Off by default.** The recovered number is the one perspective correction already
 measures at 92% hit, but the picture has not been checked by eye — and a twice-
 drawn ordering table cannot take this pair, because the second pass would fail
-every test against the first. The cave is the test. The switch is under Video
-with the others; `KF2_ZBUFFER=1` forces it on for the run.
+every test against the first. The cave is the test.
+
+**There is no longer a user-facing switch.** The player-facing checkbox was
+removed from Video: recovering a usable depth here is effectively unbridgeable —
+DuckStation's mature PGXP depth buffer, given the same per-polygon OTZ averages
+this game submits, cannot produce a clean picture either, so offering a switch
+that only ever half-works is worse than not offering it. The mechanism stays for
+diagnosis, driven from the console alone: `KF2_ZBUFFER=1` forces it on for the
+run and `KF2_ZBUFFER_PROBE=2` takes the census below. `patches/ZBuffer.cs` and
+`patches/recompone/0014` are unchanged; only `patches/settings/ZBufferPage.cs`
+and its registration are gone.
 
 ### The clear landed at the tail of the frame, not the head
 
@@ -559,7 +569,9 @@ drawn one may have just been cleared by a fill. Diagnostic only.
 draws over walls a few metres ahead. So the clear timing was a real defect —
 the buffer measurably did not survive its own frame, and now does — but it is
 not the cause of the reported symptom, or not the only one. A second cause
-remains and the Z-buffer stays off by default.
+remains; that unresolved symptom, together with DuckStation showing the same
+class of problem is unbridgeable even with a proper PGXP depth buffer, is why the
+user-facing switch was retired and the mechanism kept for diagnosis only.
 
 That rules out a whole class of explanation, which is worth keeping: **the
 depth the world is being tested against is now known to be this frame's**. Any
@@ -635,3 +647,52 @@ post-hook all coexist.
 Steady state with the patch in, probe on: `30 draw envs/s and 0 ordering-table
 words/s asked for dither, over 30 frames/s; GPUSTAT dither bit 0` — one dithered
 draw env per frame intercepted, route 2 unused, route 3 never taken.
+
+## True color: the other answer to 15-bit banding
+
+**Confirmed mechanism; picture is the point of the switch.**
+
+The console renders into 15-bit VRAM (RGB5A1), so every shaded pixel is quantised
+to five bits per channel — 32 levels. A wall that darkens with distance is a smooth
+per-vertex Gouraud shade interpolated across the polygon; where that gradient
+crosses each 1/32 step the framebuffer bands. The dither above is the hardware's
+own answer: it adds the 4×4 table before the truncation and spreads the step, at
+the cost of the crosshatch. With the dither off — this port's default — the bands
+show raw. That is the banding a player sees on a fog wall.
+
+True color is the second answer, and it removes the banding *without* the
+crosshatch. Two things enforce the five-bit truncation, and both have to give:
+
+- **The render-target format.** Geometry rasterises into a `GlDisplayRt` whose
+  colour attachment is an `Rgb5A1` texture, so even a full-precision fragment is
+  crushed to five bits on write. `patches/recompone/0021` makes that attachment
+  `Rgba8` when `GteDepth.TrueColor` is set. The mask/STP bit rides the alpha either
+  way — one bit in 1555, the top of an 8-bit alpha in RGBA8 — and reads back
+  `>= 0.5` in both.
+- **The fragment shader.** `quant5` (both the GLSL 330 and the 120 path) ends in
+  `min(c8 >> 3, 31) / 31.0`. Under `uTrueColor` it returns `c8 / 255.0` instead and
+  skips the dither, which has nothing to dither into on an 8-bit target.
+
+**Only the shaded gradient gains precision, not the texture.** Textures live in
+15-bit VRAM and are sampled at five bits (`t8 = floor(texel*31+0.5)*8`, and the
+CLUT/`fetch16` paths through `u5`), so the texture palette stays exactly the
+console's — the picture is authentic where its precision *was* the texture, and
+stops banding only where its precision was the framebuffer. The
+writeback/​sync blits between an `Rgba8` target and 15-bit VRAM convert
+automatically (`BlitFramebuffer` down/up-samples), so a true-colour target still
+leaves 15-bit content in VRAM for anything that later samples it. Presentation
+reads the target texture directly (`PresentFs` is a plain `texture()` fetch, no
+re-quantise), so an `Rgba8` target presents smooth.
+
+**GL backend only.** The software rasterizer keeps a 15-bit VRAM and is always the
+console's precision; the switch does nothing there. Toggling at run time is safe:
+`GlCore` compares `GteDepth.TrueColor` against the format its live targets were
+built with and, when they differ, writes each target back to VRAM and drops it at
+the next present — the next draw recreates it in the new format and re-syncs from
+VRAM, costing one transition frame that presents from VRAM.
+
+**Off by default**, so the default picture is the console's 15-bit output. Unlike
+sub-pixel and the Z-buffer this is not off because the picture is unchecked — it is
+off because 24-bit shading is deliberately *not* what the hardware did, and a
+player who wants the authentic look should get it without a package to load. Its
+switch is under Video with the others (`KF2_TRUECOLOR=1` forces it on for the run).

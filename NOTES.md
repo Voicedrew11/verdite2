@@ -163,7 +163,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the twenty
 
 ### [RENDERING.md](docs/RENDERING.md)
 
-Recovering the depth and the sub-pixel fraction the GP0 packet threw away: perspective correction, sub-pixel positions, Z-buffer, dither.
+Recovering the depth and the sub-pixel fraction the GP0 packet threw away: perspective correction, sub-pixel positions, Z-buffer, dither, true color.
 
 - Perspective correction: the depth is one step upstream, and the screen position is the key
 - Sub-pixel vertex positioning: the same number's other half
@@ -171,6 +171,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Following the value through memory: the address is the vertex
 - Z-buffer: the same depth, used as occlusion
 - Dithering: one flag, and it lives in the draw environment
+- True color: the other answer to 15-bit banding
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 
