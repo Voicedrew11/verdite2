@@ -104,7 +104,23 @@ flip counter, `0024` the latch). Latching is per target and lasts for the
 overlay session: a single display flip that delivers 32 game vertices past the
 game's own draw edge latches the target, a fill covering the widened target
 latches it outright, primitives the widescreen patch itself widened never count,
-and `Dispatcher.Load` clears every latch when a new executable loads.
+and the latches are cleared when a new **executable** loads.
+
+*Executable* is the load-bearing word, and it was not what the code did. `0024`
+cleared from `Dispatcher.Load`, which fires for every registered overlay — and the
+nine `fdat` area modules are overlays, all based at `0x8019F07C` and all evicting
+each other. So walking from one area to the next unlatched both flip buffers, the
+present fell straight back to the 320-wide VRAM texture at 4:3, and **the black
+bars came back for the length of every area load**, until the new area rendered a
+frame that put 32 vertices past the draw edge. The fade-in cannot do it either:
+`Widescreen.Stretch` sets `PortWidenedPrim`, which the latch explicitly excludes.
+The clear now lives in the port's own `OverlayLoadedEvent` listener
+(`patches/Widescreen.cs`) and runs only for `open`, `game` and `end` — which is
+where the knowledge of *which overlays are executables* belongs anyway; `0024` no
+longer patches `Dispatcher.cs` at all. The clear still earns its place for those
+three: returning to the title from `GAME.EXE` would otherwise let OPEN.EXE's
+splash, whose picture arrives by MDEC and never reaches the margin, inherit
+`GAME`'s latch and present invented sides.
 
 Both halves of the rule earn their place, measured. The density threshold is
 what keeps the boot splash out: OPEN.EXE clears each MDEC frame with an
@@ -120,7 +136,20 @@ after two idle flips, and the picture collapsed to the 320-wide fallback for as
 long as the text was up.
 
 `KF2_PRESENT_PROBE=1` shows splash and title windows as `vram fallback` only,
-gameplay as `wide`, and menu windows stay `wide`.
+gameplay as `wide`, and menu windows stay `wide`. It is also how the area
+transition is checked: watch the two-second windows either side of a
+`[Dispatcher] loaded overlay: fdat05` line and they should stay `wide`.
+
+**A second route to the same bars is mechanism-only, never measured.** `_frame`
+is bumped inside `PresentDisplay`, so it counts *presents*, not drawn frames, and
+`PresentDisplay` destroys any target idle for more than 300 of them — about five
+seconds at 60 Hz and two at 144. A disc read long enough to cross that takes the
+target with it; `GetOrCreateRt` builds a fresh one whose `MarginContentFlip` is
+the `-1000` default and whose margin columns are black, because `SyncRtFromVram`
+only refills the middle `W`. The obvious guard is to exempt whichever target
+contains the current display area, on the same reasoning `0022` used, but nobody
+has yet seen bars that outlast the latch fix, so it is written down rather than
+written.
 
 ## The HUD does not widen with the world, and finding it is the problem
 
