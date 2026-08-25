@@ -448,9 +448,20 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Seventeen
-of the twenty-one are load-bearing; `0002`, `0003` and `0015` are diagnostics and
-`0013` is a settings-placement hook.
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-two
+of the twenty-six are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`0013` is a settings-placement hook. The numbering has doubled up twice
+(`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
+of files, and the glob's sort is the apply order.
+
+**`setup_tools.sh` does not currently rebuild the checkout on this branch.**
+`0021-true-color-24bit-output.patch` was authored while `lighting-experiments`'
+`0025`/`0026` were also applied, so three of its hunks quote `_uCoplanarTol` /
+`_uLitCenter` context that only exists there and `git apply` rejects them. Running
+the script resets the checkout to the pin first, so it leaves the tree at `0020`
+and stops. The tree in place has been repaired by hand; do not re-run the script
+here until the patch's context is rebased or the branches are merged. See the
+entry in `docs/TODO.md`.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -625,6 +636,16 @@ uncaptured edit inside the checkout is left where it is.
   `patches/settings/TrueColorPage.cs` the checkbox under Video. **No recompile** —
   render-target format and shaders are runtime. See "True color" in
   `docs/RENDERING.md`.
+
+- `0022-present-stale-wide-target.patch`, `0023-splash-margin-idle.patch`,
+  `0024-margin-content-latch.patch` — the present gate. `PresentDisplay` picks a
+  wide render target only when its margin columns have carried a world, so a scene
+  that never draws out there (the MDEC boot splash) keeps its authored width
+  instead of flapping between widths. Latching is per target, and it is cleared
+  when an **executable** loads — from `patches/Widescreen.cs`, not from
+  `Dispatcher.Load`, which fires for the `fdat` area modules too and put the black
+  bars back for the length of every area transition. **No recompile.** See "The
+  present gate" in `docs/WIDESCREEN.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

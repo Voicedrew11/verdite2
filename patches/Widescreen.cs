@@ -291,8 +291,18 @@ public static class Widescreen
         // hooks are: the aspect is a setting that can be changed mid-session, and
         // hooks cannot be added once the game is running past the overlay loads.
         bool attached = false;
-        Event.AddListener<OverlayLoadedEvent>(_ =>
+        Event.AddListener<OverlayLoadedEvent>(e =>
         {
+            // The margin-content latch lasts for an *executable's* session, not an
+            // area's. OPEN.EXE and END.EXE draw pictures that never reach the
+            // margin, so a latch carried over from GAME.EXE would present invented
+            // sides -- that is what the clear is for. The nine fdat area modules
+            // are GAME.EXE still running, and clearing on those dropped the picture
+            // to the 320-wide 4:3 fallback for the length of every area load: the
+            // black bars came back each time the player crossed between areas.
+            if (e.Name is "open" or "game" or "end")
+                (GpuHle.Backend as GlCore)?.ClearMarginLatches();
+
             if (attached) return;
             attached = true;
             Attach();

@@ -127,17 +127,6 @@ diff --git a/RecompOne.Runtime/Gpu/Hle/GpuHle.cs b/RecompOne.Runtime/Gpu/Hle/Gpu
  
      public struct DispRect { public int X, Y, W, H; public long Stamp; public bool Valid; }
  
-diff --git a/RecompOne.Runtime/Dispatch/Dispatcher.cs b/RecompOne.Runtime/Dispatch/Dispatcher.cs
---- a/RecompOne.Runtime/Dispatch/Dispatcher.cs
-+++ b/RecompOne.Runtime/Dispatch/Dispatcher.cs
-@@ -72,6 +72,7 @@
- 
-         if (already) return;
-         Runtime.OverlayLog.Record(name, OverlayEventKind.Loaded);
-+        (RecompOne.Runtime.Hle.GpuHle.Backend as RecompOne.Runtime.Hle.GlCore)?.ClearMarginLatches();
-         Console.WriteLine($"[Dispatcher] loaded overlay: {name}");
- 
-         if (Event.HasAnyListeners<OverlayLoadedEvent>())
 diff --git a/RecompOne.Runtime/Gpu/GpuRaster.cs b/RecompOne.Runtime/Gpu/GpuRaster.cs
 --- a/RecompOne.Runtime/Gpu/GpuRaster.cs
 +++ b/RecompOne.Runtime/Gpu/GpuRaster.cs
