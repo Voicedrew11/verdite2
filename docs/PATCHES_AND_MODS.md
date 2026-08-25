@@ -275,19 +275,26 @@ away. Read it on `RuntimeReadyEvent`, dispatched at the end of that same
 `Initialize`. `FramePacing` does this and keeps the precedence the mods use:
 `KF2_FPS` beats the saved value.
 
-### 60 fps became a setting
+### The rate became a setting, so every hook is installed whatever it is set to
 
-For the setting to offer 60, the stage gate has to already be hooked — hooks are
-installed at the first overlay load and the rate is chosen long after. So
-`FramePacing` now hooks `0x80040348` and `0x8002A550` (the pair under "60 fps"
-below) whether or not 60 was asked for, and `BeforeStage` returns "run the
-original" at any rate below 60. `KF2_FPS_GATE` replaces that default pair rather
-than adding to it. At 30 this changes nothing; without it, choosing 60 from the
-settings would run the whole game at double speed.
+Hooks attach at the first overlay load; the rate is chosen from the settings long
+after, and cannot add one then. So `FramePacing` hooks **all** of it up front —
+the frame gate, the three gated stages, the delta scaler — whatever `KF2_FPS`
+said, and each hook decides per frame whether to do anything. At 30 every one of
+them runs the original and the port behaves exactly as it did before any of this
+existed; that is what makes 30 a safe default rather than a code path of its own.
 
-Two further consequences of the rate being live rather than fixed at startup:
-`Attach` no longer skips when the floor is off, since "uncapped" is now a choice
-that can be taken back, and `AfterDrawOTag` tests `Enabled` itself.
+Two consequences of the rate being live rather than fixed at startup: `Attach` does
+not skip when pacing is off, since "uncapped" is a choice that can be taken back,
+and `AfterDrawOTag` tests `Enabled` itself.
+
+Two further shapes worth copying. The rate is a **double, not a vblank divisor** —
+"arbitrary" was the point, and 144 is not 60/n — and the saved key changed with
+it, from `kf2.framepacing.vblanks` to `kf2.framepacing.fps`. `SavedRate` reads the
+old key once, converts (`n` → `60/n`, `0` → uncapped) and writes the new one, so an
+existing config keeps the rate it had. And the settings page is presets **plus a
+free number**: a player on a 165 Hz panel should be able to say 165, and the
+slider only appears once Custom is chosen, so the common case stays one control.
 
 ## Frame pacing: the port is pinned to the fastest band
 
@@ -370,8 +377,10 @@ named after the project, which shadows any namespace called `KingsField2` — he
 ordering table with no `VSync` between it and the first belongs to the frame
 already in flight; charging the floor per call would halve the rate of any screen
 that draws more than one OT. King's Field draws exactly one (no zero-vblank gap
-appears in any measurement), but the guard is free — the hook counts vblanks off
-a `VSyncEvent` listener and returns early when the count is zero.
+appears in any measurement), but the guard is free — the hook counts `VSync` calls
+off a pre-hook on the libetc thunk and returns early when the count is zero. (It
+counted *vblanks* until the fix described under "Any frame rate"; that is what made
+every rate above 30 run the game fast.)
 
 The deadline is absolute rather than `now + 33.3`, so a frame that overruns is
 paid for out of the next one instead of the rate drifting down by the accumulated
@@ -382,9 +391,14 @@ restarts instead of running flat out to catch up.
 Two env vars, both read in `Program.cs`:
 
 ```bash
-KF2_FPS=30          # 30 fps, the default; 60, or off for no floor
-KF2_FPS_GATE=80040348+8002A550   # at 60, stages to run every other frame
+KF2_FPS=30          # 30 fps, the default; any number, or off for no floor
+KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC   # what ticks at 30
 ```
+
+(That gate list *replaces* the default set rather than adding to it, and the rate
+is an arbitrary double rather than a vblank divisor — see "Any frame rate" below,
+which supersedes the two-stage, every-other-frame scheme this paragraph used to
+describe.)
 
 The band table above was measured by a `framestats` mod (since removed) — the same
 count of `VSync(0)`s between `DrawOTag`s that fed it, without the gigabytes of
@@ -430,90 +444,224 @@ Two things the measurement says that are worth keeping in mind for step two:
   both columns), which is the evidence that the floor is not fighting the game's
   loop or the runtime's `FrameClock` — it just absorbs the slack.
 
-**Step two, if 60 fps rendering is wanted**, is then a clean factor of two rather
-than four: run at one vblank per frame, halve every per-tick movement delta, and
-*double* the thresholds of per-tick counters (spell duration, torch burn,
-i-frames). The asymmetry is the trap — dividing a counter's step instead of
-multiplying its threshold makes it expire early. The cheaper variant, which gets
-most of the feel in a first-person game, is to run the player's movement and view
-at 60 with halved deltas and gate the world update to every other tick: smooth
-camera, enemy timing untouched, and a 2:1 gate is far safer than 4:1.
+**Step two was 60 fps, and it turned out to be a different shape than this.**
+What follows replaces the plan sketched here: the reference rate is still 30, but
+the thing to remove is the game's own frame gate rather than a vblank floor, and
+the world is held at 30 by a clock rather than by halving deltas. See below.
 
-Full decoupling — logic at 30, rendering interpolated at 60 — still needs
-decomp-level knowledge of which state is positional, and is still not worth it.
+## Any frame rate: three gates, one logic clock, and a smoothed view
 
-### 60 fps: the mechanism exists, the map is half drawn
+**Confirmed mechanism throughout; the picture has not been checked by eye.**
 
-**Mechanism Confirmed; which stages to gate is Inferred and the delta halving is
-still owed.**
+### The frame boundary was the vblank, and that made every rate above 30 run fast
 
-**There is room.** Sampling the game thread 200 times in an area puts 161 samples
-in the pacing sleep, 23 in `Present`, and six in game code — so a frame is about a
-millisecond of MIPS and thirty-two of waiting. Rendering twice as often costs
-nothing this port has not already got.
+Recorded first because it is the mistake the rest of this section was written
+around. `FramePacing.AfterDrawOTag` opened with `if (_vblanks == 0) return;`,
+counting `VSyncEvent` — which since `0021` is **the emulated vblank on a fixed
+wall-clock 60 Hz grid**, not the game asking to present. That is once a frame only
+while a frame lasts at least 16.7 ms. Above 60 rendered fps most frames reached
+`DrawOTag` with no vblank elapsed and were thrown away: no `Floor()`, no
+`AdvanceLogicClock()`, not counted in `Measured`. Two things followed.
 
-**The gate works.** A `pre` hook that returns `false` skips the original —
-`HookManager.Invoke` honours it — and hooks attach by address at run time, so any
-subset of the loop can be gated with no recompile and no config entry:
+* `_tickThisFrame` kept the **previous** frame's value, so the frame after a
+  ticking one ran the gated stages again. With N frames per vblank the world ticked
+  at `30 × N`.
+* `Floor()` ran at most 60 times a second while advancing its deadline by
+  `1000/target` each time, so above 60 it fell a frame behind on every call, reset,
+  and stopped throttling. `FrameClock`'s permissive `2 × target` ceiling — a
+  *ceiling*, never meant to pace anything — became the real limiter, which is why
+  the rendered rate came out at exactly twice what was asked for.
 
-```bash
-KF2_FPS=60 KF2_FPS_GATE=80040348+8002A550
+Measured in an area, slot 2, before the fix:
+
+| `KF2_FPS` | rendered | world ticks/s | death clock (65 ticks) |
+|---|---|---|---|
+| 30 | 30 | 30.0 | 2.13 s ✓ |
+| 60 | **120** | **~59** | **1.10 s** |
+| 120 | **240** | far above 60 | — |
+
+The rate-independent form of the same "don't charge a second ordering table
+twice" rule is **the ordering table drawn after the game asked to present**, so
+the boundary is now the `VSync` *call*: a pre-hook on the libetc thunk
+(`open 0x8001EB88`, `game 0x8005FCC8`, `end 0x8001B154`) counts calls and
+`AfterDrawOTag` returns early only when the count is zero. Above 30 the game's own
+frame gate is skipped, so a frame carries exactly one call — the presenter
+`func_8002E0FC`, which does `VSync(0)` immediately before `DrawOTag`. At 30
+nothing changes: the presenter's call still lands before the OT and the frame
+gate's spin calls land after it. After the fix, every rate from 30 to 144 measures
+**30.0-30.3 world ticks a second and a rendered rate equal to the number asked
+for**.
+
+`mods/framestats` carried the same guard and so reported the vblank-bearing subset
+as its frame rate; it now uses the call boundary too, and a `0:` band in its
+vblanks-per-frame histogram is the correct answer for a frame shorter than a
+vblank.
+
+### Three things hold the port at 30, and only one of them is the game's
+
+| # | gate | where |
+|---|---|---|
+| 1 | **the game's own frame gate**, `func_80017880` — spins on the vblank credit at `0x801B6CA8` until it reaches **2**, then zeroes it. Called by stage 13 as its last act. | `GAME.EXE`; see "The loop's own rate gate" in [GAME_INTERNALS.md](GAME_INTERNALS.md) |
+| 2 | **`FrameClock`**, a hard-coded 60 Hz applied per `VSync` *call* inside `Runtime.PresentFrame` | `patches/recompone/0025` makes it settable |
+| 3 | **`FramePacing.Floor()`**, the port's own deadline at the frame boundary | `patches/FramePacing.cs` |
+
+Gate 1 is the one that was missing from the earlier write-up, and it is decisive:
+since `0021` advances the emulated vblank on a wall-clock 60 Hz grid, that spin
+paces the port to exactly 30 fps whatever the host does. **No rate above 30 is
+reachable while it runs** — which means the odd/even stage gate the port shipped
+before was skipping stages on frames that were still 33 ms apart.
+
+`patches/FramePacing.cs` therefore hooks it with a `pre` that returns `false`
+above 30, writing `0` to `0x801B6CA8` itself because the function that would have
+zeroed it did not run. **At 30 the hook returns `true`** and every part of this is
+inert: the game paces itself exactly as it does on hardware, `FrameClock` keeps
+its 60, and the floor has nothing to enforce. Only `GAME.EXE`'s copy is hooked —
+`OPEN.EXE` and `END.EXE` link the same routine at their own addresses, but the
+title and the ending are CD-bound at 7–15 fps anyway.
+
+`LibEtc`'s vblank grid is deliberately **left at 60 Hz**. The music sequencer, the
+root-counter events and the game's own `0x801B6CA8` all hang off it, so raising it
+would speed the audio up; present rate and vblank rate are independent, which is
+exactly what `0021` set up. `FrameClock` is handed a permissive ceiling
+(`2 × target`, never below 60) rather than the target, because it paces per
+`VSync` call and a frame can carry more than one — a per-call throttle cannot
+express a frame rate. The floor, which sits at `DrawOTag` and therefore knows
+where a frame ends, is the only real pacer.
+
+### The logic clock
+
+Above 30 the loop runs at whatever the floor allows, so the world would advance a
+fixed amount that many times a second. A wall-clock accumulator ticks at 30 Hz and
+the main-loop stages holding per-tick state run only on a frame where it ticked.
+It is advanced by elapsed *time*, not by `1/target` per frame, so a host that
+misses the target runs the world at 30 Hz anyway — the difference between "the
+picture stutters" and "the game plays in slow motion".
+
+Five things are gated:
+
+```
+3  func_8002A550   pad read, turn, walk, angle fold, the death counter at
+                   0x8019951A, the poison tick, the buff timers at
+                   0x80199472..0x80199482, and 0x80199488, the global frame
+                   counter it bumps last
+4  func_80040348   the 200-record entity table at 0x8016C544. Its AI runs one
+                   entity in four off 0x80175908 & 3, which stays right for free
+                   once the stage itself is gated
+5  func_80046A60   128 effect/projectile slots at 0x8019CC6C, each with a lifetime
+                   at rec+0x0E decremented once per call. Ungated, every spell and
+                   effect expires at the render rate
+6  func_8004910C   the area module's own per-frame entry -- slot 1 of the module
+                   header, reached as *(u32*)(*(u32*)0x8017E068 + 4)
+13 func_80033FBC   the fade state machine stage 13 calls, not stage 13 itself
 ```
 
-Nothing is hooked when no gate list is given, so the mechanism costs nothing
-while it is unused.
+`KF2_FPS_GATE` replaces that set.
 
-**What is missing is which stages to name**, and the probe has narrowed it to a
-hypothesis rather than settled it.
+**"Can it draw" is the test each of them had to pass**, and it is the reason the
+list is what it is rather than "everything with a counter in it". A stage that
+submits primitives cannot be skipped — at 120 fps three frames in four would be
+missing whatever it drew. The check is static, against the emitted C#: walk the
+function's call subtree and look for `DrawOTag`, `VSync`, `PutDispEnv` or
+`PutDrawEnv`. What that found:
 
-*Established.* Over ten consecutive windows in an area, exactly four words outside
-the display list change on **every single frame**, and one stage writes all four:
+* **Stage 6** dispatches indirectly, so the target has to be read out of the
+  module image rather than the call graph: slot 1 of the 32-word header, which is
+  `FDAT.T` at the overlay's own `offset`. Six of the nine modules leave it an empty
+  `jr $ra` (`fdat02`, `05`, `08`, `17`, `23`, `32`); `fdat11`, `fdat14` and
+  `fdat20` use it for proximity and trigger logic — `fdat11`'s reads the player's
+  position, calls the angle helpers `func_80015394`/`func_80015328` and writes
+  state bytes. **No SDK entry point in any of the nine subtrees**, so it is gated.
+* **The fade**, `func_80033FBC`, is a three-function subtree that cannot draw,
+  which is why it can be gated even though its caller is the renderer. It is a
+  four-state machine on the byte at `0x80192D42`: brightness `0x80192D44` steps
+  `+0x14` a call until it reaches `0x64`, a hold counter at `0x80192D43` counts
+  down, then brightness steps `-0x14` (written as `+0xEC`) back to zero. Ungated
+  that whole sequence ran at the render rate and an area fade was four times
+  quicker at 120 fps than on hardware.
 
-```
-8017783C (buf5)  changed 656x/656 frames  mean -0.18   now -13348   by 80037C0C
-80177848 (buf5)  changed 656x             0xNN000000               by 80037C0C
-801778F8 (buf5)  changed 656x             0xNN800001               by 80037C0C
-8017793C (buf5)  changed 656x             0xNN800001               by 80037C0C
-```
+**What this still does not cover, recorded rather than discovered later.**
 
-Three are packed `u16:u16` pairs whose high halves range `0x0000`–`0x0E80` across
-samples; the fourth is a signed scalar that sits between −13,226 and −13,352 in
-every window, jitters by tens, and has a mean signed change of about zero — it
-does not drift over four minutes. Separately, stage 4 (`func_80040348`) writes a
-*marching* set of buf6 addresses — `8016C654`, `8016CBC0`, `8016CFA4`, `8016D1F4`,
-`8016CCA0` in successive windows — rather than a fixed set.
+* **Stage 2** (`func_80037C0C`, the 396-arm object dispatch) holds per-frame state
+  and is deliberately **not** gated: `DrawOTag`, `VSync`, `PutDispEnv` and
+  `PutDrawEnv` are all in its 268-function subtree, so it presents. Gating it
+  wholesale would drop frames of the picture. Its per-tick counters would have to
+  be found and gated one at a time.
+* **The jitter accumulator at `0x8006E608`** is in stage 13's *own body*
+  (`func_800342D8`), not in a callee, so no hook can reach it — `HookManager` only
+  detours whole functions and stage 13 must draw. It sums `func_80015374()` and
+  decays by an eighth a call to drive the screen shake, so above 30 the shake
+  settles faster and smaller. A quirk of amplitude, not a timer.
 
-*Inferred, not confirmed.* A 0–4096 range is the PSY-Q angle scale, so the buf5
-four look like a **view/camera block** and stage 2 like the stage that maintains
-it; a set of addresses that walks through a 9 KB buffer looks like **iteration
-over an entity table**, making stage 4 a world updater. That would give the split
-the cheap variant needs: gate stage 4, leave stage 2 alone, and the camera runs at
-60 while the world stays at 30.
+### The view has to be carried between ticks
 
-Note this reverses the reading of the write-count table above, where stage 2 looks
-inert because it writes four words. It writes four words and they are *the* four.
+A 30 Hz camera presented four times a second faster is not merely no better than
+30 fps, it is worse: the picture updates and the view does not. `patches/FrameSmoothing.cs`
+is one `pre`/`post` pair around **stage 8** (`func_80025A1C`), which is the whole
+of "build the render camera from the player state" and the only thing between that
+state and the picture — so the extrapolation lives for exactly one function call
+and cannot accumulate, cannot reach the collision code and cannot reach a save.
 
-*The experiment that settles it* is scripted input watched through a per-frame
-write probe (the `loopprobe` mod that ran it has since been removed, so this
-wants that mod restored) — `KF2_AUTOPAD=20:Up:5000,40:Right:5000`. It has not
-successfully run yet: the port exited before `KF2_AUTOPAD`'s first press each
-time it was tried.
+* **Yaw and pitch** are carried by `turnVel × frac` and `pitchVel × frac` off
+  `0x80199544` / `0x80199546` — the same two words `patches/Analog.cs` drives.
+  `frac` is `FramePacing.LogicPhase`, and it is continuous across a tick boundary,
+  so the camera does not jump on the frames where the world did advance. **Off by
+  default**, though an angle has no collision so this cannot be wrong, only badly
+  tuned — see below.
+* **Position** is carried by the s16 triple at `0x801994FC`/`FE`/`0x80199500`,
+  which is the movement `func_80028080` actually applied last tick. **Off by
+  default**: it is an extrapolation, so walking into a wall keeps carrying you
+  into it until the next tick snaps you back, and whether that reads as smoothness
+  or as jitter is a question for eyes.
 
-If `0x8017783C` steps monotonically under held Up, it is positional; if the three
-packed words swing under held Right and not under Up, they are the view angles.
-Either result names the stage, and the gate follows immediately. Until then
-`fps=60` with no gate list runs everything at double speed — the mod says so at
-startup rather than pretending otherwise.
+**Both default to off**, and the reason is the boundary bug above: while it stood,
+`LogicPhase` was always exactly 0 — a counted boundary was a whole tick wide, so
+the credit went `0 → 1 → tick → 0` and never sat anywhere in between. The probe
+read `0 of 240 frames carried (phase idle)` at every rate, meaning **this had
+never run at all**. It does now (at 60, turning in place: `120/120 frames carried,
+mean phase 0.52 tick, yaw 18.1 u`), so its picture is new and unseen, which is the
+sub-pixel reason for a default of off.
 
-**No clock exists in these buffers.** Every busy word has a mean signed change of
-about zero, so there is no frame counter to watch, and the verification idea of
-"gate a stage and see a counter's rate halve" needs a counter found somewhere else
-first. The area module's data at `0x8019F07C` is the next place to point the probe.
+### The comparison mode
 
-The delta-halving is still owed regardless — a view stage running at 60 with
-unhalved deltas moves twice as fast, and no amount of gating fixes that from outside.
-That is the one part of 60 fps that needs a constant identified in the game's own
-code rather than a stage gated from outside it.
+`KF2_FPS_LOGIC=full` (`patches/FullRateLogic.cs`) does the other thing: no gating
+at all, and the two rate words the game re-derives every frame — walk speed
+`0x80199558` and turn rate `0x8019955C` — scaled by `30 / target` on a pre hook of
+`func_80028DB8`. That is the seam `mods/kf2debug`'s speed multiplier already uses,
+and the scale is applied multiplicatively because by then the words carry the run
+ramp, the encumbered halving and the hit-stun zeroing.
+
+It buys turning, walking and collision genuinely sampled at the render rate, and
+it is **not** a shipping mode, for reasons worth stating before anyone measures
+them: pitch steps by a flat 3 and does not scale; gravity integrates
+`0x8019954E` per tick and does not scale; and every per-tick counter in the game —
+the death sequence, spell lifetimes, the poison tick, equipment regen, animation —
+runs at the render rate.
+
+### What it costs, and what is still unverified
+
+Sampling the game thread in an area put 161 of 200 samples in the pacing sleep, 23
+in `Present` and six in game code — about a millisecond of MIPS against thirty-two
+of waiting. Drawing more often costs nothing this port has not already got.
+
+**The default stays 30 fps** until the picture has been looked at, following the
+sub-pixel and widescreen precedent. What no counter answers: whether 60 and 120
+look smoother, whether the extrapolated camera swims or lags, whether position
+smoothing jitters against walls, and whether the full-rate mode feels better than
+the smoothed 30 despite its broken timers.
+
+The counters that *are* answerable, and what they read after the boundary fix at
+30, 60, 90, 120 and 144: the 65-tick death clock at `0x8019951A` finishes in
+2.11-2.13 s at every rate (30.0-30.3 ticks/s), and the rendered rate — stage 8
+calls per second, off `KF2_SMOOTH_PROBE=1` — equals the number asked for at every
+rate. Both are driven from `KF2_SHELL`: `kill`, then poll `state` for
+`deathFrames`.
+
+The measurement to run it against is `mods/framestats`, restored for this work and
+now reporting **two** histograms: vblanks per frame (how long the frame took) and
+`VSync` calls per frame (how many times the game asked). Since `0021` those are
+different numbers, and conflating them is what made the first pass at frame pacing
+read as circular.
+
 
 ## Auto reload
 

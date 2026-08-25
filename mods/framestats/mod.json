@@ -1,0 +1,7 @@
+{
+  "id": "kf2.framestats",
+  "name": "Frame stats",
+  "version": "1.1",
+  "author": "KFII-PC",
+  "description": "Reports fps, the vblank-per-frame histogram and the VSync calls a frame costs -- the two counts the frame pacing is judged on. Toggle here rather than trawling KF2_LOG=sdk."
+}

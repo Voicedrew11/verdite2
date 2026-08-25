@@ -83,13 +83,16 @@ pop back to affine the moment one vertex clamps off-screen, and a pixel that two
 vertices share no longer hands one polygon the other's depth (see "The table is
 not unique").
 
-**The frame rate is pinned to 30 fps**, NTSC's fastest band — the port used to
-burst past it (see "Frame pacing" in `docs/PATCHES_AND_MODS.md`). **The ending
-runs**: `END.EXE` plays the two STR movies and holds "The End" — see "The ending
-screen" in `docs/RUNTIME.md`.
+**The frame rate is a free number and defaults to 30**, NTSC's fastest band. Above
+30 the port skips the game's own frame gate, holds the game's clock at 30 Hz with
+a fixed timestep and carries the camera between ticks, so the picture can run at
+60, 120 or 165 while the world keeps hardware timing (see "Any frame rate" in
+`docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
+movies and holds "The End" — see "The ending screen" in `docs/RUNTIME.md`.
 
-**Widescreen, sub-pixel positioning and the Z-buffer all ship switched off for the
-same reason** — mechanism measured, picture never checked by eye. Mouse look is
+**Widescreen, sub-pixel positioning, the Z-buffer and every frame rate above 30
+all ship switched off for the same reason** — mechanism measured, picture never
+checked by eye. Mouse look is
 off for a different one: its path *is* measured end to end, but a pointer that
 disappears into the game unasked is worse than one switch to find. What is open
 and undiagnosed is in `docs/TODO.md`.
@@ -148,11 +151,13 @@ Making the recompiler produce correct code: config, overlays, function maps, SDK
 
 ### [RUNTIME.md](docs/RUNTIME.md)
 
-What a static recompilation loses (interrupts, VSync-driven work) and the twenty patches to the checkout.
+What a static recompilation loses (interrupts, VSync-driven work) and the patches to the checkout.
 
 - DMA callbacks: the thing that was actually missing
 - The three ways a CD read can hang
 - The interrupt-callback table cannot be guessed
+- The vblank fired when the game asked
+- There were three fixed 60s, and only one of them is the host's
 - The menu deadlock: input only moved when the game drew
 - The ending screen
 - The patches to the checkout, one by one
@@ -191,6 +196,9 @@ Aspect ratio, the HUD and screen-space effects authored 320 wide, and the three 
 The reverse-engineered game: main loop, player state, stats, death, movement, areas, saves, the boot stub.
 
 - The main game loop, stage by stage
+- The loop's own rate gate is `func_80017880`, and the number is a literal 2
+- Stage 8 is the render camera, and it is the only copy
+- The frame's applied position delta is a triple of its own
 - Player state: found, and it was in stage 3 all along
 - Saving and loading
 - Debug tools
@@ -203,6 +211,7 @@ How the port's own code attaches, where its settings go, plus frame pacing and a
 - Mods
 - Patch settings: a patch's knobs go in the runtime's own sections
 - Frame pacing: the port is pinned to the fastest band
+- Any frame rate: three gates, one logic clock, and a smoothed view
 - Auto reload
 - Auto start and the agent beacon
 - The command channel

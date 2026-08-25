@@ -77,8 +77,11 @@ that way.
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
-KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pacing"
-KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other frame
+KF2_FPS=120                            # 30 (default), any number, or off; see "Any frame rate"
+KF2_FPS_GATE=8002A550+80040348+80046A60  # the loop stages ticked at 30 above 30 fps
+KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
+KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by default); carry position too
+KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
@@ -135,7 +138,28 @@ supply all three of the runtime's languages, unlike an override of an existing
 one.
 
 Frame pacing is load-bearing: without it the port runs faster than the game can on
-hardware, so it lives in `patches/` and is always on. Dithering is a patch for a
+hardware, so it lives in `patches/` and is always on. **It is also where an
+arbitrary frame rate lives.** What pins the port to 30 is the *game's* own frame
+gate — `func_80017880`, which spins on the vblank credit at `0x801B6CA8` until it
+reaches 2 and is called by stage 13 — not the runtime; above 30 `FramePacing`
+skips it, paces the frame itself, and runs what holds per-tick state on a
+wall-clock 30 Hz accumulator, so every counter in the game keeps hardware timing.
+**A frame boundary is a `DrawOTag` that follows a `VSync` call, and that is
+load-bearing**: it used to be a `DrawOTag` that followed an emulated *vblank*, and
+since the vblank is a fixed 60 Hz wall-clock grid, above 60 fps most frames were
+neither paced nor logic-clocked and the world ran at `30 × frames-per-vblank` —
+measured double speed at `KF2_FPS=60`. What is gated is stages 3, 4, 5, **6** and
+stage 13's fade stepper `func_80033FBC`, and the test each had to pass is **can it
+draw**: stage 2 holds per-frame state too and is deliberately left alone because
+`DrawOTag` is in its subtree. `patches/FrameSmoothing.cs` is the other half rather
+than an option beside it: one pre/post pair around **stage 8** (`func_80025A1C`),
+the only copy of the camera between the player state and the renderer, carrying
+yaw and pitch by the fraction of a tick the frame stands at. **Both halves default
+to off** — while the boundary was broken the phase was pinned to 0 and the
+smoothing never ran at all, so its picture has never been seen. `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
+is not shippable — pitch, gravity and every per-tick counter do not scale. **The
+default stays 30** for the sub-pixel reason. See "Any frame rate" in
+`docs/PATCHES_AND_MODS.md`. Dithering is a patch for a
 different reason — it is a picture the port should be able to offer without a
 package having to load — and defaults to *off* (no crosshatch). **True color is a
 patch for that same reason** and is the other answer to the same 15-bit banding the
@@ -448,8 +472,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-two
-of the twenty-six are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-three
+of the twenty-seven are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
@@ -646,6 +670,15 @@ uncaptured edit inside the checkout is left where it is.
   `Dispatcher.Load`, which fires for the `fdat` area modules too and put the black
   bars back for the length of every area transition. **No recompile.** See "The
   present gate" in `docs/WIDESCREEN.md`.
+
+- `0025-frameclock-target-rate.patch` — `FrameClock.FrameMs` was a `const` 60 Hz,
+  and it is the *host* rate: the emulated vblank grid (`LibEtc.VBlankMs`) and every
+  game clock hanging off it are a different 60 that must not move, or the music
+  speeds up. Now a settable `FrameClock.TargetFps` (0 = off), exposed as
+  `Runtime.TargetFps` because `FrameClock` is `internal`. It still cannot be a
+  frame pacer — it throttles per `VSync` *call* and a frame carries two — so the
+  port hands it a permissive ceiling and keeps its own deadline at `DrawOTag`.
+  **No recompile.** See "There were three fixed 60s" in `docs/RUNTIME.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

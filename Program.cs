@@ -183,11 +183,24 @@ Kf2.UiScale.Install();
 Kf2.KeyLayout.Configure();
 Kf2.KeyLayout.Install();
 
-// Frame pacing. The game's speed is its frame rate and the port would otherwise
-// burst past NTSC's fastest band, so a rendered frame is held to two vblanks:
+// Frame pacing. The game's speed is its frame rate, so the rate the port draws at
+// and the rate the game's own clock runs at are two different numbers here:
 //
-//     KF2_FPS=30                       30 fps (default); 60, or off for no floor
-//     KF2_FPS_GATE=80040348+8002A550   at 60, stages to run every other frame
+//     KF2_FPS=30                  the game paces itself (default); any number, or
+//                                 off for no pacing at all
+//     KF2_FPS_LOGIC=full          do not tick the world at 30; scale the movement
+//                                 deltas instead -- a comparison mode
+//     KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC   what ticks at 30
+//
+// At 30 nothing here does anything: the game's own frame gate (func_80017880,
+// which spins on the vblank credit at 0x801B6CA8 until it reaches two) is left in
+// place and paces the port exactly as hardware does. Above 30 that gate is
+// skipped, the port's own deadline takes over, and everything holding per-tick
+// state that cannot draw -- stages 3, 4, 5, 6 and stage 13's fade stepper -- runs
+// on a 30 Hz clock instead of once per frame. A frame ends at the DrawOTag that
+// follows a VSync *call*, not the one that follows an emulated vblank: the vblank
+// is a fixed 60 Hz grid, so keying on it silently stopped pacing and stopped
+// ticking above 60 fps, and the world ran at double speed.
 //
 // This is a correctness fix rather than an optional extra, so it lives in the
 // project rather than in mods/ -- see the class comment. It attaches through
@@ -196,8 +209,24 @@ Kf2.KeyLayout.Install();
 // mods: mods/kf2debug, loaded by ModLoader and toggled in the game's own Mods
 // panel.
 Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
-                          Environment.GetEnvironmentVariable("KF2_FPS_GATE"));
+                          Environment.GetEnvironmentVariable("KF2_FPS_GATE"),
+                          Environment.GetEnvironmentVariable("KF2_FPS_LOGIC"));
 Kf2.FramePacing.Install();
+
+// The other half of drawing above 30: the world advances 30 times a second, so
+// without this the camera does too and the extra frames show the same view twice.
+// One pre/post pair around stage 8 (func_80025A1C), which is the whole of "build
+// the render camera from the player state" and the only thing between that state
+// and the picture -- so the extrapolation lives for one function call and reaches
+// nothing else.
+//
+//     KF2_SMOOTH=1        on; off by default, so the view steps at the logic rate
+//     KF2_SMOOTH_POS=1    carry the position too (off by default)
+//     KF2_SMOOTH_PROBE=1  what is being carried, per second
+Kf2.FrameSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH"),
+                             Environment.GetEnvironmentVariable("KF2_SMOOTH_POS"),
+                             Environment.GetEnvironmentVariable("KF2_SMOOTH_PROBE"));
+Kf2.FrameSmoothing.Install();
 Kf2.EndingHold.Install();
 
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of

@@ -82,6 +82,135 @@ The probe is not free — 220k memory reads a frame drops the port to ~26 fps an
 shifts the band histogram — so it is a diagnostic to run deliberately, not to
 leave on.
 
+### The loop's own rate gate is `func_80017880`, and the number is a literal 2
+
+**Confirmed, read straight out of the emitted C#.** "The loop waits an integer
+number of vblanks" is not a `VSync` argument — every `VSync` call in all three
+overlays passes 0. The wait is the game's own, and it is three pieces:
+
+| address | what |
+|---|---|
+| `func_80017850` | the **vblank callback**. Increments `0x801B6CA8` and `0x801B6CAC` and does nothing else. |
+| `func_80018690` | registers it, on event `0xF2000003` spec `0x0002` (RCntCNT3/EvSpINT), and zeroes `0x801B6CA8`. |
+| `func_80017880` | the **frame gate**. `EnterCriticalSection`; while `*(u32*)0x801B6CA8 < 2`, `ExitCriticalSection` and `VSync(0)`, and loop; then write `0` and return. |
+
+**Stage 13 calls the gate as its last act** (`0x800346B4`), right after the
+presenter `func_8002E0FC` — which is the frame's other `VSync(0)`. So a rendered
+frame costs two `VSync` calls: one to show the picture, and however many the gate
+needs to see two vblanks go by.
+
+The literal `2` at `0x800178A4` **is the game's frame rate**, in software. On
+hardware it is what bands the game at 30; here, where
+`patches/recompone/0021-vblank-wall-clock.patch` advances the emulated vblank on
+a wall-clock 60 Hz grid, it paces the port to exactly 30 fps whatever the host is
+doing. Nothing above 30 is reachable while it runs, which is why
+`patches/FramePacing.cs` hooks it. See "Frame pacing" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+`0x801B6CAC` is bumped by the same callback and never reset by anything.
+
+**With the gate skipped, a rendered frame costs exactly one `VSync` call** — the
+presenter's, which `func_8002E0FC` makes immediately *before* its `DrawOTag`. That
+is what the port's frame boundary is keyed on above 30, and the ordering is the
+reason it works at 30 too: the presenter's call lands before the ordering table and
+the gate's spin calls land after it, so the count at the boundary is non-zero
+exactly once per table either way. See "Any frame rate" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+### What in the loop holds per-call state, and what of it can draw
+
+Answered while fixing the frame pacing, and recorded here because the second half
+is the constraint: a stage that submits primitives cannot be skipped on a frame,
+whatever counters it also owns. Reachability is static, walking the call subtree in
+the emitted C# for `DrawOTag`, `VSync`, `PutDispEnv` or `PutDrawEnv`.
+
+| what | per-call state | can it draw |
+|---|---|---|
+| stage 3 `func_8002A550` | the player, the death counter, the poison tick, the buff timers, the global frame counter `0x80199488` | only through a nested sub-loop — see below |
+| stage 4 `func_80040348` | the 200-record entity table | no |
+| stage 5 `func_80046A60` | 128 effect lifetimes at `rec+0x0E` | no |
+| stage 6 `func_8004910C` | the module's own per-frame logic | **no**, in all nine modules |
+| stage 2 `func_80037C0C` | yes, unaudited in detail | **yes** — all four entry points are in its 268-function subtree |
+| stage 13 `func_800342D8` | the jitter accumulator at `0x8006E608`, in its own body | yes, it is the renderer |
+| — `func_80033FBC` | the fade state machine, called by stage 13 | **no** — three functions, none of them draw |
+
+**Stage 3 reaches the drawing entry points, but not the way stage 2 does**, and
+the distinction is what makes gating it safe. The path is
+`func_8002A550 -> func_80037B5C -> func_800342D8` — it calls **stage 13**, the
+renderer, from inside itself. That is a modal sub-loop (the in-game menu and the
+transitions around it) that takes over the main loop and renders its own frames
+while it runs, not a per-frame contribution to the frame the outer loop is
+building. Skipping stage 3 on a frame therefore never chops such a sub-loop in
+half; it only decides whether one is entered. **Unverified by eye:** whether a menu
+open at 120 fps flickers, since on the frames stage 3 is skipped nothing redraws it
+and stage 13 still presents the world underneath.
+
+**Stage 6 dispatches through the module header, so its target is read out of the
+module image rather than the call graph**: `*(u32*)(*(u32*)0x8017E068 + 4)` is slot
+1 of the 32-word table at the start of each `fdat` image in `CD/COM/FDAT.T`, at the
+overlay's own `offset`. Six of the nine leave it an empty `jr $ra` — `fdat02`
+(`0x8019F10C`), `05` (`0x8019F4FC`), `08` (`0x8019F1CC`), `17` (`0x8019F158`), `23`
+(`0x8019F0FC`), `32` (`0x80193FB8`). The three that use it are `fdat11`
+(`0x8019F424`), `fdat14` (`0x8019F5CC`) and `fdat20` (`0x8019F53C`), and it is
+scripted-trigger work: `fdat11`'s reads the player position, calls the angle
+helpers `func_80015394` and `func_80015328`, and writes state bytes.
+
+**The fade, `func_80033FBC`**, is a four-state machine on the byte at `0x80192D42`:
+
+```
+state 0 -> 1   brightness 0x80192D44 += 0x14 each call, until >= 0x64
+state 2        hold counter 0x80192D43 -= 1 each call, until zero
+state 3        brightness 0x80192D44 += 0xEC (i.e. -0x14), until zero
+```
+
+Its only callees are `func_80033FAC` (one byte write) and `func_80022B20` (a small
+byte fill), so it cannot draw and can be run on the game's clock rather than the
+renderer's.
+
+**The jitter accumulator at `0x8006E608`** is inline in `func_800342D8` itself,
+just after a `func_80015374()` call: it adds the result, then subtracts an eighth
+of it (`(v + 7) >> 3` with the sign fixup), so it is a damped accumulator driving
+the screen shake, not a counter. No hook can reach it — `HookManager` detours whole
+functions and stage 13 must draw.
+
+### Stage 8 is the render camera, and it is the only copy
+
+The stage table above credits stage 8 (`func_80025A1C`) with no writes, which is
+true of the *buffers the probe watched* and misleading about what it does. It is
+28 instructions with no branches, called from the loop as
+`func_80025A1C(sp+0x28, sp+0x38)`, and it is the whole of "build the render
+camera from the player state":
+
+```
+a0[0] = 0x801994EC (X)      a1[0] = 0x80199504 (composed pitch)
+a0[8] = 0x801994F4 (Z)      a1[2] = 0x80199506 (composed yaw)
+a0[4] = 0x801994F0 (Y) + s16 0x80199548 + s16 0x8019954C - 0x640
+                            a1[4] = 0x80199508 (composed roll)
+```
+
+`0x640` is the eye height; `0x80199548` is the head bob `func_80028560`
+maintains and `0x8019954C` the landing offset. The two stack blocks it fills are
+handed on to **stage 9** (`func_800140AC`, the 3D sound listener) and **stage 13**
+(`func_800342D8` → `func_8002E22C`, which copies them again into `0x80192E78` /
+`0x80192E88`, derives the tile index `X >> 11`, `Z >> 11`, and builds the view
+matrix that reaches the GTE).
+
+So the composed angles and the position triple are read *once* per frame, by one
+function, and nothing between there and the picture reads them again. That makes
+stage 8 the only place a port can move the camera without moving the game: a pre
+hook that nudges those globals and a post hook that puts them back is visible to
+the renderer and to nothing else. `patches/FrameSmoothing.cs` is that hook.
+
+### The frame's applied position delta is a triple of its own
+
+`0x801994FC` / `0x801994FE` / `0x80199500`, s16 each. `func_80028080` writes X and
+Z there after the collision test (`0x80028478`), so it is **the movement that was
+actually applied**, wall slide included, not what was asked for;
+`func_800290D4` zeroes them when neither movement branch ran, and the state arm at
+`0x8002A95C` writes all three as `target - current`. It is the game's own answer
+to "how far did you move this tick", which is what makes extrapolating a position
+between ticks need no trigonometry and no guess about which way strafe points.
+
 ## Player state: found, and it was in stage 3 all along
 
 The probe above could not find the player because it was watching the wrong 66 KB

@@ -16,7 +16,7 @@ useful than the question was.
 | **The twin-stick controls broke after the dragon stone went into the fountain.** Not reproduced. | Three candidates, each one memory read apart: the rate guards at `0x8019955C`/`0x80199558`, the action-mask table being rewritten, or the player action state parking in an arm that never calls the control routines. "Did the D-pad still work?" settles the third. | "Open: the twin-stick controls broke" in [INPUT.md](INPUT.md) |
 | **`KF2_WIDESCREEN` was overridden mid-session by the saved aspect.** | Env-forced aspects are not as forced as `_forced ?? saved` in `Widescreen.Install` reads. Anything A/B-ing two aspects should pin the *saved* setting instead. Worth tracking down. | "There is a third cull", trap at the end, in [WIDESCREEN.md](WIDESCREEN.md) |
 | **A wide target destroyed mid-load would show the bars again.** Mechanism only — never seen. | `PresentDisplay` bumps `_frame` per *present*, and destroys any target idle past 300 of them: about five seconds at 60 Hz, two at 144. A disc read that long leaves a fresh target with black margins and no latch. The guard would be to exempt the target holding the display area, as `0022` reasoned. `KF2_PRESENT_PROBE=1` across the longest area load is the test. | "The present gate" in [WIDESCREEN.md](WIDESCREEN.md) |
-| **`scripts/setup_tools.sh` cannot rebuild the checkout on `truecolor-output`.** | `0021-true-color-24bit-output.patch` was authored against a checkout that also carried `lighting-experiments`' `0025`/`0026`, so three of its hunks quote `_uCoplanarTol` / `_uLitCenter` context that does not exist on this branch and `git apply` rejects them. The checkout has been repaired by hand; the patch itself still needs its context rebased onto anchors both branches share (or the two branches merged). | this table |
+| ~~**`scripts/setup_tools.sh` cannot rebuild the checkout.**~~ **Closed.** `0021-true-color-24bit-output.patch` quoted `_uCoplanarTol` / `_uLitCenter` context from `lighting-experiments`' `0025`/`0026`, so four of its hunks were rejected on this branch. Regenerated against a scratch worktree carrying only `0001`–`0020`, so the added lines are unchanged and the context is this branch's. The whole 27-patch stack now peels and re-applies; verified by running the script twice from a pinned tree. | this table |
 | **The analog settings page is under the fold.** Not a bug; a placement problem with three weighed options and one chosen. | `SettingsRegistry.Extend` has no ordering argument, so an extension can only land at the bottom of a pane. Upstream gap, worth an issue. | "Open: the page is under the fold" in [INPUT.md](INPUT.md) |
 | **A stall at mod load, seen once, never reproduced.** | In `HookManager.Commit`, worker thread absent from the stack. Not a standing trap — recorded only so it is recognised if it recurs. | "Seen once, not reproduced", under "Four things that will bite" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md) |
 
@@ -51,16 +51,36 @@ useful than the question was.
    [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md); the measurement was a frame-stats
    mod, since removed.
 5. ~~**Confirm the buf5 view block**, which is all 60 fps is now blocked on.~~
-   Overtaken: the player state was found by reading the emitted C# instead, and
-   it is not in `buf5` at all — see "Player state" in
-   [GAME_INTERNALS.md](GAME_INTERNALS.md). The stage to gate is **3**
-   (`func_8002A550`), which holds the pad read, the turn, the walk and the angle
-   fold, and every per-tick delta it produces is now a named address. What 60 fps
-   still needs is the delta halving, and that is now a small edit rather than a
-   hunt: halve the turn rate at `0x8019955C` and the walk speed at `0x80199558`
-   on alternate frames, or scale them the way `patches/Analog.cs` already scales
-   the velocities they feed. The buf5 four are presumably the *rendered* camera and
-   can be left alone.
+   ~~**Halve the deltas.**~~ Both overtaken. The port now draws at **any** rate
+   and holds the game's own clock at 30 Hz instead of scaling anything: the thing
+   that actually pinned it to 30 was the *game's* frame gate (`func_80017880`,
+   spinning on the vblank credit at `0x801B6CA8` until it reaches two), not a
+   vblank floor, and the stages to gate are three, not one — stage 5's effect
+   lifetimes were the miss. The view is carried between ticks by a pre/post pair
+   around stage 8, which is the only copy of the camera. See "Any frame rate" in
+   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+   ~~**What is left is the part no counter answers.**~~ Not quite — a counter
+   answered first. Every rate above 30 was running the game fast (measured double
+   speed at `KF2_FPS=60`: 120 fps drawn, the 65-tick death clock at `0x8019951A`
+   finishing in 1.10 s instead of 2.17). The frame boundary was a `DrawOTag`
+   following an emulated *vblank*, which stops being once-a-frame the moment the
+   port draws faster than 60; it is now a `DrawOTag` following a `VSync` **call**.
+   With that fixed, 30/60/90/120/144 all measure 30.0–30.3 world ticks a second and
+   a rendered rate equal to the number asked for. The gate set also grew from three
+   stages to five — stage 6 and stage 13's fade stepper, both audited for whether
+   they can draw before being added. See "Any frame rate" in
+   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+   **What is still left is the part no counter answers**, and it is the user's:
+   does 60 or 120 actually look smoother, does the extrapolated camera swim or lag,
+   does `KF2_SMOOTH_POS=1` jitter against a wall, and is the default still right at
+   30? Frame smoothing now defaults to **off** as well as position — while the
+   boundary was broken the logic phase was pinned to 0, so it had never run at any
+   rate and its picture is new. Two things a counter *can* still be pointed at:
+   stage 2's per-tick counters (it holds them but cannot be gated wholesale, since
+   `DrawOTag` is in its subtree), and stage 13's jitter accumulator at
+   `0x8006E608`, which no hook can reach because it is in stage 13's own body.
 6. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,

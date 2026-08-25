@@ -241,6 +241,39 @@ One loose end recorded for the next audio timing mystery: the sound driver also
 opens RCNT1/RCNT2 interrupt events, which the runtime never delivers. Nothing
 visibly misses them today, but they are the first suspect.
 
+### There were three fixed 60s, and only one of them is the host's
+
+Worth keeping straight, because moving the wrong one speeds the music up:
+
+| constant | domain | moved by |
+|---|---|---|
+| `LibEtc.VBlankMs` | **guest.** The emulated vblank grid: the counter, the RCNT3 event, `VSyncEvent`, IRQ 0 — and through IRQ 0 the game's own `0x801B6CA8`, the sound sequencer and every clock the game keeps in frames. | nothing. Deliberately left at 60. |
+| `FrameClock.FrameMs` | **host.** How long `Runtime.PresentFrame` waits, applied per `VSync` *call*. | `patches/recompone/0025`, which turns it into a settable `FrameClock.TargetFps` (0 = off) exposed as `Runtime.TargetFps`, since `FrameClock` is `internal`. |
+| `FramePacing.VBlankMs` | **port.** The floor's own arithmetic. | gone — the floor is expressed in frames a second now. |
+
+`FrameClock` cannot be a frame pacer whatever its target, because it throttles per
+`VSync` call and a rendered frame can carry more than one — in an area it carries
+two, one to present and one inside the game's own frame gate. `patches/FramePacing.cs`
+therefore keeps its own deadline at `DrawOTag`, which is the only point that knows
+where a frame ends, and hands `FrameClock` a permissive ceiling instead. See "Any
+frame rate" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+**The ceiling did once end up pacing the port, and it is worth knowing how.** The
+port's floor only ran on frames it recognised as frames, and it recognised them by
+the *guest* vblank — the first row of that table, a fixed 60 Hz grid. Above 60 fps
+most frames carry no vblank, so the floor stopped firing on them, fell behind its
+own deadline, reset, and left `FrameClock`'s `2 × target` ceiling as the only limit
+in the loop. The port then drew at exactly twice the requested rate and the game
+ran at double speed. The fix was in the port, not here: the frame boundary is now
+the `VSync` *call* rather than the vblank. But the shape of it is the standing
+lesson about these three 60s — **a guest clock cannot be used to measure host
+time**, and this table is where to check which one a number belongs to.
+
+One thing `0025` does not fix, noted because it is the next question a rate above
+60 raises: **the runtime never queries the monitor's refresh rate**, so with vsync
+on the driver's swap blocks to a panel whose rate nobody here knows. A rate above
+the panel's is capped by it, silently.
+
 
 ## The menu deadlock: input only moved when the game drew
 
