@@ -36,8 +36,9 @@ namespace Kf2;
 ///   * **PutDrawEnv**, from the <c>dtd</c> flag at <c>DRAWENV+0x16</c>. The
 ///     library turns that byte straight into bit 9 of the E1 word it sends. This
 ///     is the one this game uses, and it uses only this one: the counter below
-///     measures exactly one dithered draw env per frame — 30 a second at 30 fps —
-///     on the title screen and in `fdat02` alike.
+///     measures exactly one dithered draw env per frame — so one per rendered
+///     frame, 30 a second when that was measured at 30 fps — on the title screen
+///     and in `fdat02` alike.
 ///   * **A DR_MODE or DR_TPAGE packet in the ordering table**, which is an E1
 ///     word the game linked in among the primitives. <c>SetDrawTPage</c> builds
 ///     one with the bit clear, <c>SetDrawMode</c> can build one with it set.

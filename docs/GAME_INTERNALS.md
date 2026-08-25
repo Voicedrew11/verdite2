@@ -99,22 +99,32 @@ presenter `func_8002E0FC` — which is the frame's other `VSync(0)`. So a render
 frame costs two `VSync` calls: one to show the picture, and however many the gate
 needs to see two vblanks go by.
 
-The literal `2` at `0x800178A4` **is the game's frame rate**, in software. On
-hardware it is what bands the game at 30; here, where
-`patches/recompone/0021-vblank-wall-clock.patch` advances the emulated vblank on
-a wall-clock 60 Hz grid, it paces the port to exactly 30 fps whatever the host is
-doing. Nothing above 30 is reachable while it runs, which is why
-`patches/FramePacing.cs` hooks it. See "Frame pacing" in
+The literal `2` at `0x800178A4` **is the frame rate the game asks for**, in
+software. Here, where `patches/recompone/0021-vblank-wall-clock.patch` advances
+the emulated vblank on a wall-clock 60 Hz grid, it paces the port to exactly
+30 fps whatever the host is doing, and nothing above 30 is reachable while it
+runs — which is why `patches/FramePacing.cs` hooks it.
+
+**What it asks for is not what the console delivered, and the port now says so.**
+King's Field is heavy enough that the loop misses that deadline under load and the
+frame costs three vblanks; since the game's speed *is* its frame rate, 20 is the
+speed it was played at. The port's HLE GPU makes the two-vblank deadline every
+time and never bands down, so the gate is now **skipped at every rate, not only
+above 30** — it decides the render rate and the world rate together and knows one
+answer for both. The world runs on `FramePacing.LogicHz` instead, 20 by default
+and 30 as a setting. See "The reference band is 3 vblanks, not 2" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 `0x801B6CAC` is bumped by the same callback and never reset by anything.
 
 **With the gate skipped, a rendered frame costs exactly one `VSync` call** — the
 presenter's, which `func_8002E0FC` makes immediately *before* its `DrawOTag`. That
-is what the port's frame boundary is keyed on above 30, and the ordering is the
-reason it works at 30 too: the presenter's call lands before the ordering table and
-the gate's spin calls land after it, so the count at the boundary is non-zero
-exactly once per table either way. See "Any frame rate" in
+is what the port's frame boundary is keyed on, and since the gate is now skipped at
+every rate it is the only case that arises: a `2` on `mods/framestats`' calls-per-
+frame count means the gate is back. (The ordering is why it also worked while the
+gate still ran below 30 — the presenter's call landed before the ordering table and
+the gate's spin calls after it, so the count at the boundary was non-zero exactly
+once per table either way.) See "Any frame rate" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 ### What in the loop holds per-call state, and what of it can draw

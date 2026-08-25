@@ -77,8 +77,9 @@ that way.
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
-KF2_FPS=120                            # 30 (default), any number, or off; see "Any frame rate"
-KF2_FPS_GATE=8002A550+80040348+80046A60  # the loop stages ticked at 30 above 30 fps
+KF2_FPS=120                            # 20 (default), any number, or off; see "Any frame rate"
+KF2_TICKRATE=30                        # ticks a second the world runs at (20 by default)
+KF2_FPS_GATE=8002A550+80040348+80046A60  # the loop stages held to the tick rate
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by default); carry position too
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
@@ -139,11 +140,26 @@ one.
 
 Frame pacing is load-bearing: without it the port runs faster than the game can on
 hardware, so it lives in `patches/` and is always on. **It is also where an
-arbitrary frame rate lives.** What pins the port to 30 is the *game's* own frame
-gate — `func_80017880`, which spins on the vblank credit at `0x801B6CA8` until it
-reaches 2 and is called by stage 13 — not the runtime; above 30 `FramePacing`
-skips it, paces the frame itself, and runs what holds per-tick state on a
-wall-clock 30 Hz accumulator, so every counter in the game keeps hardware timing.
+arbitrary frame rate lives, and where the world's own tick rate does.** What pinned
+the port to 30 is the *game's* own frame gate — `func_80017880`, which spins on the
+vblank credit at `0x801B6CA8` until it reaches 2 and is called by stage 13 — not
+the runtime. `FramePacing` **skips it at every rate**, paces the frame itself, and
+runs what holds per-tick state on a wall-clock accumulator at `LogicHz`.
+
+**`LogicHz` is 20, not 30, and that is a judgement rather than a reading.** The
+literal 2 is what the code asks for; the console missed that deadline under load
+and landed in the three-vblank band, and since King's Field's speed *is* its frame
+rate, 20 is the speed it was played at. The port's HLE GPU makes the 2-vblank
+deadline every frame and never bands down, so it has to be told. No counter here
+can settle it — the port cannot observe hardware, and the 30-minute vblank
+histogram that looks like it can is a measurement *of the port* — so it is a
+**setting** (`KF2_TICKRATE`, and a combo under Video), and 30 is one entry away.
+Because the gate decides the render rate and the world rate together and knows one
+answer for both, leaving it running at the 20 fps default would pin the world back
+to 30, which is why it is skipped everywhere rather than only above 30. **The
+default render rate is 20 too**, 1:1 with the tick, which is the console's own
+arrangement. Measured: 20.00 ticks/s at 20, 30, 60, 120, 144 and uncapped, with
+`KF2_TICKRATE=30` reproducing the 2.14 s death clock the 30 Hz world had.
 **A frame boundary is a `DrawOTag` that follows a `VSync` call, and that is
 load-bearing**: it used to be a `DrawOTag` that followed an emulated *vblank*, and
 since the vblank is a fixed 60 Hz wall-clock grid, above 60 fps most frames were
@@ -156,9 +172,10 @@ than an option beside it: one pre/post pair around **stage 8** (`func_80025A1C`)
 the only copy of the camera between the player state and the renderer, carrying
 yaw and pitch by the fraction of a tick the frame stands at. **Both halves default
 to off** — while the boundary was broken the phase was pinned to 0 and the
-smoothing never ran at all, so its picture has never been seen. `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
+smoothing never ran at all, so its picture has never been seen. A 50 ms tick makes
+it matter more than the 33 ms one did. `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The
-default stays 30** for the sub-pixel reason. See "Any frame rate" in
+default is 20 fps drawn against a 20 Hz world.** See "Any frame rate" in
 `docs/PATCHES_AND_MODS.md`. Dithering is a patch for a
 different reason — it is a picture the port should be able to offer without a
 package having to load — and defaults to *off* (no crosshatch). **True color is a

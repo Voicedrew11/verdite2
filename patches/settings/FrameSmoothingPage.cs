@@ -6,10 +6,12 @@ namespace Kf2.Settings;
 /// The two smoothing switches, under Video, sharing the "Enhancements" heading
 /// with the dither, perspective, sub-pixel and true-color ones.
 ///
-/// They only do anything above 30 fps -- at 30 the world advances once per drawn
-/// frame and there is nothing between ticks to carry -- so the controls dim
-/// themselves rather than disappearing, which would look like the setting had
-/// been lost. See <see cref="FrameSmoothing"/>.
+/// They only do anything above the world's tick rate -- at or below it the world
+/// advances at most once per drawn frame and there is nothing between ticks to
+/// carry -- so the controls dim themselves rather than disappearing, which would
+/// look like the setting had been lost. The test is
+/// <see cref="FramePacing.Extrapolating"/> and not <c>Gating</c>, which is now
+/// true at every rate. See <see cref="FrameSmoothing"/>.
 /// </summary>
 public sealed class FrameSmoothingPage : IPatchPage
 {
@@ -18,7 +20,7 @@ public sealed class FrameSmoothingPage : IPatchPage
 
     public void Draw()
     {
-        bool active = FramePacing.Gating;
+        bool active = FramePacing.Extrapolating;
         if (!active) ImGui.BeginDisabled();
 
         bool on = FrameSmoothing.Enabled;
@@ -29,7 +31,8 @@ public sealed class FrameSmoothingPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Above 30 fps the game's world still advances 30 times a second. " +
+            ImGui.SetTooltip("Above the tick rate the game's world still advances only that " +
+                             "many times a second. " +
                              "This carries the camera the rest of the way each frame, so turning " +
                              "and looking are as smooth as the frame rate rather than as smooth " +
                              "as the game. Off gives a faster picture of a camera that steps.");
@@ -50,7 +53,8 @@ public sealed class FrameSmoothingPage : IPatchPage
         if (!active)
         {
             ImGui.EndDisabled();
-            Note("Nothing to smooth at this frame rate: the world advances once per drawn frame.");
+            Note($"Nothing to smooth at this frame rate: the world's {FramePacing.LogicHz:0.#} Hz " +
+                 "is not below it, so every drawn frame lands on a tick.");
         }
     }
 

@@ -8,13 +8,13 @@ namespace Kf2;
 /// <summary>
 /// The comparison mode behind <c>KF2_FPS_LOGIC=full</c>: run every main-loop
 /// stage every rendered frame and scale the movement deltas down instead of
-/// ticking the world at 30.
+/// ticking the world at its own rate.
 ///
 /// It exists because the two models answer different questions and only one of
 /// them can be argued from a counter. <see cref="FramePacing"/>'s fixed timestep
 /// keeps every clock in the game exactly right and moves the *camera* between
-/// ticks (see <see cref="FrameSmoothing"/>), so input reaches the world 30 times
-/// a second however often the picture updates. This mode reaches the world at the
+/// ticks (see <see cref="FrameSmoothing"/>), so input reaches the world at the
+/// tick rate however often the picture updates. This mode reaches the world at the
 /// render rate -- so turning, walking and collision are genuinely sampled 120
 /// times a second -- and pays for it by running every per-tick counter in the game
 /// at that rate too.
@@ -29,7 +29,7 @@ namespace Kf2;
 ///   rate. At 120 fps a spell lasts a quarter as long.
 /// * **Pitch does not scale.** It steps by a flat 3 per tick to a limit of 32
 ///   (`func_80028DB8`, `0x80028F4C`/`0x80028F94`), not off a rate word, so looking
-///   up and down stays four times as fast at 120 as it is at 30.
+///   up and down stays as fast at 120 as it is at the tick rate.
 /// * **Gravity does not scale.** The fall velocity at `0x8019954E` is integrated
 ///   per tick and accelerated by a flat `0x28` (or `5`, or `0x64` on the landing
 ///   arm) in `func_80028560`. A velocity scales with the step and an acceleration
@@ -82,11 +82,14 @@ public static class FullRateLogic
     }
 
     /// <summary>The factor the deltas are scaled by: a tick of the game's own clock
-    /// divided by a rendered frame. 1 at 30 fps, 0.25 at 120.</summary>
+    /// divided by a rendered frame. 1 at the tick rate, 0.17 at 120 against a 20 Hz
+    /// world. The upper bound is above 1 because the render rate is allowed to sit
+    /// *below* the tick rate now -- clamping it at 1 there would silently stop
+    /// scaling, which is the one failure this mode cannot report.</summary>
     public static double Scale =>
         FramePacing.LogicMode != FramePacing.Logic.Full || !FramePacing.Enabled
             ? 1.0
-            : Math.Clamp(FramePacing.LogicHz / FramePacing.TargetFps, 0.01, 1.0);
+            : Math.Clamp(FramePacing.LogicHz / FramePacing.TargetFps, 0.01, 4.0);
 
     public static void Before(CpuContext c, IMemory m)
     {

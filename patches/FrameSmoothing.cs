@@ -11,7 +11,7 @@ namespace Kf2;
 /// Carries the view between logic ticks, so that a picture drawn more often than
 /// the world advances actually looks like it.
 ///
-///     KF2_SMOOTH=1        on; without it the camera moves 30 times a second
+///     KF2_SMOOTH=1        on; without it the camera moves at the tick rate only
 ///     KF2_SMOOTH_POS=1    extrapolate the position too, not just the angles
 ///     KF2_SMOOTH_PROBE=1  what is being carried, per second
 ///
@@ -21,12 +21,14 @@ namespace Kf2;
 /// idle)` -- so the picture it makes has never been seen.
 ///
 /// This is the other half of <see cref="FramePacing"/> rather than an option
-/// beside it. Above 30 fps the port ticks the game's own stages at 30 and draws
-/// in between, which keeps every counter in the game right -- and leaves the
-/// camera standing still on the frames that did not tick. At 120 fps that is the
-/// same 30 Hz motion presented four times, which is not merely no better than
-/// 30 fps, it is worse: the picture updates, the view does not, and the eye reads
-/// the mismatch as stutter.
+/// beside it. Above the tick rate the port ticks the game's own stages on their
+/// own clock and draws in between, which keeps every counter in the game right --
+/// and leaves the camera standing still on the frames that did not tick. At 120
+/// fps against a 20 Hz world that is the same motion presented six times, which is
+/// not merely no better than 20 fps, it is worse: the picture updates, the view
+/// does not, and the eye reads the mismatch as stutter. The default tick rate
+/// moving from 30 to 20 makes this **more** load-bearing, not less: a tick is now
+/// 50 ms rather than 33, so the camera stands still for half again as long.
 ///
 /// ## Why the hook point is exactly one function
 ///
@@ -104,7 +106,7 @@ public static class FrameSmoothing
     public const string PosKey = "kf2.smoothing.pos";
 
     /// <summary>Carry the view angles between ticks. **Off by default**, though
-    /// without it a rate above 30 buys a faster picture of a camera that is not
+    /// without it a rate above the tick rate buys a faster picture of a camera not
     /// moving. It was on until the frame boundary in <see cref="FramePacing"/> was
     /// fixed, and until then it never ran at all -- LogicPhase was pinned to 0 and
     /// the probe read `0 of 240 frames carried (phase idle)` at every rate. So its
@@ -130,6 +132,11 @@ public static class FrameSmoothing
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
     static long _carried, _skipped;
+
+    // Why a frame was skipped. "0 of N carried (phase idle)" used to be printed
+    // whichever it was, which reads as "the logic clock is broken" when in fact
+    // the player was standing still and there was nothing to carry.
+    static long _skipPhase, _skipStill;
     static double _yawSum, _pitchSum, _posSum, _fracSum;
 
     static readonly ModInfo _self = new()
@@ -137,7 +144,7 @@ public static class FrameSmoothing
         Id = "kf2.framesmoothing",
         Name = "Frame smoothing",
         Version = "1.0",
-        Description = "Carries the view between the game's 30 Hz logic ticks.",
+        Description = "Carries the view between the game's logic ticks.",
     };
 
     public static void Configure(string? on, string? position, string? probe)
@@ -175,7 +182,7 @@ public static class FrameSmoothing
         if (target == null)
         {
             Console.Error.WriteLine($"[KF2] smoothing: no game function at 0x{CameraCopy:X8}; " +
-                                    "the view will step at the logic rate above 30 fps.");
+                                    "the view will step at the logic rate above it.");
             return;
         }
 
@@ -212,7 +219,7 @@ public static class FrameSmoothing
         if (!Enabled || !FramePacing.Gating) return;
 
         double frac = FramePacing.LogicPhase;
-        if (frac <= 0.0005) { if (_probe) _skipped++; return; }
+        if (frac <= 0.0005) { if (_probe) { _skipped++; _skipPhase++; } return; }
 
         int turn = (short)m.ReadU16(TurnVel);
         int pitchVel = (short)m.ReadU16(PitchVel);
@@ -227,7 +234,7 @@ public static class FrameSmoothing
 
         if (turn == 0 && pitchVel == 0 && dx == 0 && dy == 0 && dz == 0)
         {
-            if (_probe) _skipped++;
+            if (_probe) { _skipped++; _skipStill++; }
             return;
         }
 
@@ -319,15 +326,16 @@ public static class FrameSmoothing
         if (total == 0) return;
 
         if (_carried == 0)
-            Console.WriteLine($"[KF2] smoothing: 0 of {total} frames carried " +
-                              $"(phase {(FramePacing.Gating ? "idle" : "not gating")})");
+            Console.WriteLine($"[KF2] smoothing: 0 of {total} frames carried -- " +
+                              $"{_skipPhase} on the tick, {_skipStill} with nothing moving" +
+                              $"{(FramePacing.Gating ? "" : ", not gating")}");
         else
             Console.WriteLine($"[KF2] smoothing: {_carried}/{total} frames carried, " +
                               $"mean phase {_fracSum / _carried:0.00} tick, " +
                               $"yaw {_yawSum / _carried:0.0} u, pitch {_pitchSum / _carried:0.0} u, " +
                               $"pos {_posSum / _carried:0.0} u");
 
-        _carried = _skipped = 0;
+        _carried = _skipped = _skipPhase = _skipStill = 0;
         _yawSum = _pitchSum = _posSum = _fracSum = 0.0;
     }
 }

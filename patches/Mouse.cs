@@ -64,8 +64,10 @@ public static class Mouse
     // ---- how far the picture turns for a pixel of desk --------------------------
     //
     // Yaw is 12 bits to the circle (`yaw & 0xFFF`), which the game's own numbers
-    // confirm: the D-pad's turn rate of 0x1C a frame at 30 fps is 74 degrees a
-    // second, the figure the frame-pacing work measured. Pitch is in the same
+    // confirm: the D-pad's turn rate is 0x1C a *logic tick*, which is 74 degrees a
+    // second against the 30 Hz world the frame-pacing work measured and 49 against
+    // the 20 Hz one the port now defaults to. The mouse's own step is per frame and
+    // therefore unaffected by that, which is the point of it. Pitch is in the same
     // units, held inside +/-0x2BC -- about 62 degrees either side of level.
     //
     // 0.15 degrees a pixel puts a 90-degree turn at 600 pixels of motion at

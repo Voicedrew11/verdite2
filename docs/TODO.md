@@ -72,12 +72,24 @@ useful than the question was.
    they can draw before being added. See "Any frame rate" in
    [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
-   **What is still left is the part no counter answers**, and it is the user's:
-   does 60 or 120 actually look smoother, does the extrapolated camera swim or lag,
-   does `KF2_SMOOTH_POS=1` jitter against a wall, and is the default still right at
-   30? Frame smoothing now defaults to **off** as well as position — while the
-   boundary was broken the logic phase was pinned to 0, so it had never run at any
-   rate and its picture is new. Two things a counter *can* still be pointed at:
+   **The tick rate has since moved from 30 to 20.** The literal `2` in the game's
+   frame gate is what the code *asks* for; the console missed that deadline under
+   load and landed in the three-vblank band, and since the game's speed is its
+   frame rate that band is the speed it was played at. The gate is now skipped at
+   every rate rather than only above 30 — it decides the render rate and the world
+   rate together and knows one answer for both — and the world runs on
+   `FramePacing.LogicHz`, a setting under Video with `KF2_TICKRATE` beside it.
+   Measured 20.00 ticks/s at 20, 30, 60, 120, 144 and uncapped, and `KF2_TICKRATE=30`
+   reproduces the old 2.14 s death clock exactly. See "The reference band is 3
+   vblanks, not 2" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+   **What is still left is the part no counter answers**, and it is the user's: is
+   20 actually right, is a 20 fps default acceptable or should the picture be drawn
+   faster than the world runs, does the extrapolated camera swim or lag, and does
+   `KF2_SMOOTH_POS=1` jitter against a wall? Frame smoothing still defaults to
+   **off** as well as position — while the boundary was broken the logic phase was
+   pinned to 0, so it had never run at any rate and its picture is new; a 50 ms tick
+   makes it matter more than the 33 ms one did. Two things a counter *can* still be pointed at:
    stage 2's per-tick counters (it holds them but cannot be gated wholesale, since
    `DrawOTag` is in its subtree), and stage 13's jitter accumulator at
    `0x8006E608`, which no hook can reach because it is in stage 13's own body.

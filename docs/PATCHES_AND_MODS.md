@@ -8,7 +8,7 @@ lives here — frame pacing and auto reload.
 
 | file | what it does | detail |
 |---|---|---|
-| `FramePacing.cs` | holds every frame to two vblanks (30 fps) | this file |
+| `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
 | `AutoReload.cs` | reloads the last save on death | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
 | `Perspective.cs`, `Subpixel.cs`, `ZBuffer.cs` | switches and probes over the GTE depth mechanisms | [RENDERING.md](RENDERING.md) |
@@ -325,16 +325,41 @@ the loop only asks for one vblank. Nothing here is a throttle doing its job;
 frame ever costs enough to fall into a slower band the way a real PlayStation
 would under load.
 
+**Read that last sentence again, because it is the whole trap.** The histogram
+above is a measurement *of the port*, and the reason the 3-vblank band holds 0.1%
+of its frames is precisely that the port cannot fall into it. It is not evidence
+about the console; it is evidence that the port never does what the console did.
+
 So the earlier framing of "twice as fast as the console" was too blunt. Precisely:
 **in light scenes the port matches hardware's best case exactly, in heavy scenes
 it is up to 2× faster because it never bands down, and for one frame in eight it
 runs at 60 fps — twice the NTSC ceiling, which is faster than the game can go on
-any console.** That last group is the part that is unambiguously wrong.
+any console.**
 
-That reading makes the work much smaller than it first looked, because the
-reference speed is not some variable hardware average — it is **the top band,
-30 fps**, which is both the design ceiling and where the port already spends 87%
-of its frames.
+### The reference band is 3 vblanks, not 2
+
+**This overturns what the rest of this section originally concluded**, which was
+that the reference speed is the top band, 30 fps, "which is both the design
+ceiling and where the port already spends 87% of its frames". The second half of
+that was circular, per the paragraph above. The first half confuses two things:
+
+* **What the code asks for.** Two vblanks, the literal `2` at `0x800178A4`. That
+  is a reading, it is confirmed, and it has not changed — see "The loop's own rate
+  gate" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
+* **What the console delivered.** King's Field is heavy enough that the loop
+  misses that deadline under load and the frame costs three vblanks. Since the
+  game's speed *is* its frame rate, the band it actually lands in is the speed the
+  game was played at — 20.
+
+A port that makes the 2-vblank deadline on every frame therefore plays the whole
+game **half again as fast** as the console did, not "the same as hardware's best
+case". The reference is **20**, and it is now the default: `FramePacing.LogicHz`.
+
+**No counter here can settle that**, and it should not be presented as though one
+did. The port cannot observe hardware, and the histogram above is the shape of
+evidence that looks like it can and does not. It is a judgement about the console,
+so it is a *setting* — 30 is one combo entry away, under Video, and every
+measurement below was taken at both.
 
 **Step one is a floor, not a scale factor.** Enforce a minimum of two vblanks
 (33.3 ms) per rendered frame and the port is a constant 30 fps: exactly NTSC's
@@ -388,11 +413,12 @@ jitter, with one frame of debt as the limit: past that the game has *stopped*
 drawing (a disc read, a module swap) rather than run late, and the cadence
 restarts instead of running flat out to catch up.
 
-Two env vars, both read in `Program.cs`:
+Three env vars, all read in `Program.cs`:
 
 ```bash
-KF2_FPS=30          # 30 fps, the default; any number, or off for no floor
-KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC   # what ticks at 30
+KF2_FPS=20          # 20 fps, the default; any number, or off for no floor
+KF2_TICKRATE=20     # ticks a second the world runs at; 30 is the other answer
+KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC   # what is ticked
 ```
 
 (That gate list *replaces* the default set rather than adding to it, and the rate
@@ -445,9 +471,10 @@ Two things the measurement says that are worth keeping in mind for step two:
   loop or the runtime's `FrameClock` — it just absorbs the slack.
 
 **Step two was 60 fps, and it turned out to be a different shape than this.**
-What follows replaces the plan sketched here: the reference rate is still 30, but
-the thing to remove is the game's own frame gate rather than a vblank floor, and
-the world is held at 30 by a clock rather than by halving deltas. See below.
+What follows replaces the plan sketched here: the thing to remove is the game's
+own frame gate rather than a vblank floor, and the world is held to a rate by a
+clock rather than by halving deltas. **And the reference rate is not 30** — see
+"The reference band is 3 vblanks, not 2" above. See below.
 
 ## Any frame rate: three gates, one logic clock, and a smoothed view
 
@@ -497,7 +524,7 @@ as its frame rate; it now uses the call boundary too, and a `0:` band in its
 vblanks-per-frame histogram is the correct answer for a frame shorter than a
 vblank.
 
-### Three things hold the port at 30, and only one of them is the game's
+### Three things held the port at 30, and only one of them was the game's
 
 | # | gate | where |
 |---|---|---|
@@ -511,13 +538,30 @@ paces the port to exactly 30 fps whatever the host does. **No rate above 30 is
 reachable while it runs** — which means the odd/even stage gate the port shipped
 before was skipping stages on frames that were still 33 ms apart.
 
-`patches/FramePacing.cs` therefore hooks it with a `pre` that returns `false`
-above 30, writing `0` to `0x801B6CA8` itself because the function that would have
-zeroed it did not run. **At 30 the hook returns `true`** and every part of this is
-inert: the game paces itself exactly as it does on hardware, `FrameClock` keeps
-its 60, and the floor has nothing to enforce. Only `GAME.EXE`'s copy is hooked —
-`OPEN.EXE` and `END.EXE` link the same routine at their own addresses, but the
-title and the ending are CD-bound at 7–15 fps anyway.
+`patches/FramePacing.cs` therefore hooks it with a `pre` that returns `false`,
+writing `0` to `0x801B6CA8` itself because the function that would have zeroed it
+did not run. Only `GAME.EXE`'s copy is hooked — `OPEN.EXE` and `END.EXE` link the
+same routine at their own addresses, but the title and the ending are CD-bound at
+7–15 fps and have no world to tick.
+
+**That hook used to return `true` at 30 and below**, on the reasoning that there
+the game paced itself exactly as it does on hardware and the port added nothing.
+That stopped being true the moment the tick rate became a number of its own: the
+gate does not only pace, it also decides how often the world advances, and it
+knows one answer for both — 30. Left running at the 20 fps default it would pin
+the world back to 30 Hz and make `LogicHz` a lie exactly where it matters most.
+So **it is now skipped at every rate**, and two consequences follow:
+
+* **The port's most-tested configuration is gone.** There is no longer a setting
+  at which none of this class does anything; `Floor()` is the pacer always.
+* **A rendered frame carries exactly one `VSync` call at every rate** — the
+  presenter's — because the gate's spin calls were the second one. The frame
+  boundary is therefore the same shape at 20 fps as at 144, which is the simpler
+  of the two cases it used to have to handle. `mods/framestats` reading `2` on
+  calls/frame now means the gate is back.
+
+`0x801B6CAC` and the vblank callback `func_80017850` are untouched: only the spin
+is skipped, so the CD timeout riding on that counter is unaffected.
 
 `LibEtc`'s vblank grid is deliberately **left at 60 Hz**. The music sequencer, the
 root-counter events and the game's own `0x801B6CA8` all hang off it, so raising it
@@ -530,12 +574,27 @@ where a frame ends, is the only real pacer.
 
 ### The logic clock
 
-Above 30 the loop runs at whatever the floor allows, so the world would advance a
-fixed amount that many times a second. A wall-clock accumulator ticks at 30 Hz and
-the main-loop stages holding per-tick state run only on a frame where it ticked.
-It is advanced by elapsed *time*, not by `1/target` per frame, so a host that
-misses the target runs the world at 30 Hz anyway — the difference between "the
-picture stutters" and "the game plays in slow motion".
+The loop runs at whatever the floor allows, so the world would advance a fixed
+amount that many times a second. A wall-clock accumulator ticks at `LogicHz` — 20
+by default, 30 the other way — and the main-loop stages holding per-tick state run
+only on a frame where it ticked. It is advanced by elapsed *time*, not by
+`1/target` per frame, so a host that misses the target runs the world at `LogicHz`
+anyway — the difference between "the picture stutters" and "the game plays in slow
+motion".
+
+**It runs in every configuration now**, not only above the tick rate, because
+skipping the game's gate left it as the only thing holding the world down:
+
+* At the render rate *equal* to the tick rate it ticks on every frame and nothing
+  is skipped, because `Floor()` guarantees a frame is at least `1000/LogicHz` ms
+  and the credit always reaches 1. Measured at `KF2_FPS=20`: 20.00 ticks/s.
+* **Uncapped no longer runs the game fast.** `KF2_FPS=off` draws flat out (60,
+  held there by `FrameClock`'s own ceiling) and still measures 19.99 ticks/s. The
+  settings label said "runs too fast" and no longer should.
+* Below the tick rate the world cannot catch up: a stage can be skipped but never
+  run twice, so it ticks once per frame and the whole game plays slow. Measured at
+  `KF2_FPS=20 KF2_TICKRATE=30`: 20.00 ticks/s, not 30. That is a diagnostic
+  configuration, and the settings note says so.
 
 Five things are gated:
 
@@ -555,7 +614,7 @@ Five things are gated:
 13 func_80033FBC   the fade state machine stage 13 calls, not stage 13 itself
 ```
 
-`KF2_FPS_GATE` replaces that set.
+`KF2_FPS_GATE` replaces that set, and `KF2_TICKRATE` sets the rate they run at.
 
 **"Can it draw" is the test each of them had to pass**, and it is the reason the
 list is what it is rather than "everything with a counter in it". A stage that
@@ -589,13 +648,16 @@ function's call subtree and look for `DrawOTag`, `VSync`, `PutDispEnv` or
 * **The jitter accumulator at `0x8006E608`** is in stage 13's *own body*
   (`func_800342D8`), not in a callee, so no hook can reach it — `HookManager` only
   detours whole functions and stage 13 must draw. It sums `func_80015374()` and
-  decays by an eighth a call to drive the screen shake, so above 30 the shake
-  settles faster and smaller. A quirk of amplitude, not a timer.
+  decays by an eighth a call to drive the screen shake, so above the tick rate the
+  shake settles faster and smaller. A quirk of amplitude, not a timer.
 
 ### The view has to be carried between ticks
 
-A 30 Hz camera presented four times a second faster is not merely no better than
-30 fps, it is worse: the picture updates and the view does not. `patches/FrameSmoothing.cs`
+A camera moving at the tick rate but presented several times as often is not
+merely no better than drawing at the tick rate, it is worse: the picture updates
+and the view does not. **Dropping the tick to 20 makes this more load-bearing, not
+less** — a tick is now 50 ms rather than 33, so the camera stands still for half
+again as long between them. `patches/FrameSmoothing.cs`
 is one `pre`/`post` pair around **stage 8** (`func_80025A1C`), which is the whole
 of "build the render camera from the player state" and the only thing between that
 state and the picture — so the extrapolation lives for exactly one function call
@@ -643,18 +705,49 @@ Sampling the game thread in an area put 161 of 200 samples in the pacing sleep, 
 in `Present` and six in game code — about a millisecond of MIPS against thirty-two
 of waiting. Drawing more often costs nothing this port has not already got.
 
-**The default stays 30 fps** until the picture has been looked at, following the
-sub-pixel and widescreen precedent. What no counter answers: whether 60 and 120
-look smoother, whether the extrapolated camera swims or lags, whether position
-smoothing jitters against walls, and whether the full-rate mode feels better than
-the smoothed 30 despite its broken timers.
+**The default is 20 fps and a 20 Hz world**, 1:1, which is the console's own
+arrangement. What no counter answers: whether 20 fps is an acceptable shipped
+default or whether the picture should be drawn faster than the world runs, whether
+the extrapolated camera swims or lags, whether position smoothing jitters against
+walls, and whether the full-rate mode feels better than a smoothed 20 despite its
+broken timers.
 
-The counters that *are* answerable, and what they read after the boundary fix at
-30, 60, 90, 120 and 144: the 65-tick death clock at `0x8019951A` finishes in
-2.11-2.13 s at every rate (30.0-30.3 ticks/s), and the rendered rate — stage 8
-calls per second, off `KF2_SMOOTH_PROBE=1` — equals the number asked for at every
-rate. Both are driven from `KF2_SHELL`: `kill`, then poll `state` for
-`deathFrames`.
+The counters that *are* answerable. The 65-tick death clock at `0x8019951A` is the
+measurement, since stage 3 bumps it once per logic tick — its slope against wall
+time *is* the tick rate. Driven from `KF2_SHELL`: `kill`, then poll `state` for
+`deathFrames`. Measured in area 1, slot 2:
+
+| `KF2_FPS` | `KF2_TICKRATE` | rendered | ticks/s | 65 ticks in |
+|---|---|---|---|---|
+| 20 | 20 (default) | 20.5 | **20.00** | 3.20 s |
+| 30 | 20 | 30.5 | **19.97** | 3.20 s |
+| 60 | 20 | 60.0 | **20.06** | 3.19 s |
+| 120 | 20 | 120.5 | **20.00** | 3.19 s |
+| 144 | 20 | 144.5 | **20.00** | 3.20 s |
+| off | 20 | 60.0 | **19.99** | 3.20 s |
+| 30 | 30 | 30.5 | 29.48 | 2.16 s |
+| 60 | 30 | 59.0 | 29.87 | 2.14 s |
+| 144 | 30 | 144.5 | 30.01 | 2.14 s |
+| 20 | 30 | 20.5 | 20.00 | 3.20 s (render-limited, see above) |
+
+`KF2_TICKRATE=30` reproducing 2.14-2.16 s is the regression check: it is the same
+2.11-2.13 s this section recorded before the tick rate moved, so the setting is
+genuinely a setting and not a one-way change. Rendered rate is stage-8 calls per
+second off `KF2_SMOOTH_PROBE=1`.
+
+Walk distance is the cross-check that does not go through the death clock. A fixed
+2 s hold of Up covers **1817 units at 20 Hz against 2574 at 30 Hz** — the game
+moves a fixed amount per tick, so the distance scales with the tick rate and not
+with the frame rate. (The ratio is 0.71 rather than exactly 2/3 because the run
+ramp completes in a fixed number of ticks either way.)
+
+Frame smoothing, at 60 fps against the 20 Hz world, turning in place:
+`120/120 frames carried, mean phase 0.60 tick, yaw 20.8 u` — further per frame
+than the 18.1 u recorded against a 30 Hz world, which is the longer tick showing
+up. **Its probe now says which of the two reasons a frame was skipped**; it used
+to print "0 of N carried (phase idle)" whether the phase was zero or the player
+was simply standing still, and the second reads as a broken logic clock when it is
+nothing of the kind.
 
 The measurement to run it against is `mods/framestats`, restored for this work and
 now reporting **two** histograms: vblanks per frame (how long the frame took) and
@@ -707,11 +800,14 @@ above it, at `0x8002AFBC`, is the resurrection-item path: a literal position and
 yaw `0x0C00` into area 1. It is the debug-looking warp already noted at that
 address.)
 
-65 frames is **2.17 s at 30 fps** — and the default delay was 2.0 s. Five
-frames of margin. The first run reloaded correctly and the second went back to
-the beginning of the game, from identical code and an identical log line, which
-is exactly what a race that tight looks like. At `KF2_FPS=60` the same 65 frames
-is 1.08 s and the reload would always lose.
+65 frames is **2.17 s at 30 ticks a second** — and the default delay was 2.0 s.
+Five frames of margin. The first run reloaded correctly and the second went back
+to the beginning of the game, from identical code and an identical log line, which
+is exactly what a race that tight looks like. They are logic ticks rather than
+rendered frames, so the margin follows `KF2_TICKRATE` and not `KF2_FPS`: at the
+20 Hz default the same 65 ticks is 3.25 s, which is more margin, not less — but
+the race is what the hold at frame 31 exists to remove, and it removes it at any
+rate.
 
 So it **holds the counter at 31** while it waits. The animation finishes,
 the fade never starts, the respawn never comes due, and the delay becomes ours

@@ -83,15 +83,20 @@ pop back to affine the moment one vertex clamps off-screen, and a pixel that two
 vertices share no longer hands one polygon the other's depth (see "The table is
 not unique").
 
-**The frame rate is a free number and defaults to 30**, NTSC's fastest band. Above
-30 the port skips the game's own frame gate, holds the game's clock at 30 Hz with
-a fixed timestep and carries the camera between ticks, so the picture can run at
-60, 120 or 165 while the world keeps hardware timing (see "Any frame rate" in
+**The frame rate is a free number and the world's tick rate is a second one.** The
+port skips the game's own frame gate at every rate — it decides both together and
+knows one answer for both, 30 — paces the picture itself, holds the world to a
+fixed timestep and carries the camera between ticks, so the picture can run at 60,
+120 or 165 while the world keeps a console's timing. **Both default to 20**: the
+literal 2 in that gate is what the code *asks* for, but the console missed the
+deadline under load and landed in the three-vblank band, and since the game's speed
+is its frame rate, 20 is the speed it was played at. That is a judgement no counter
+here can settle, so it is a setting (see "Any frame rate" in
 `docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
 movies and holds "The End" — see "The ending screen" in `docs/RUNTIME.md`.
 
-**Widescreen, sub-pixel positioning, the Z-buffer and every frame rate above 30
-all ship switched off for the same reason** — mechanism measured, picture never
+**Widescreen, sub-pixel positioning, the Z-buffer and every frame rate above the
+tick rate all ship switched off for the same reason** — mechanism measured, picture never
 checked by eye. Mouse look is
 off for a different one: its path *is* measured end to end, but a pointer that
 disappears into the game unasked is worse than one switch to find. What is open

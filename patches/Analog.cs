@@ -198,8 +198,8 @@ public static class Analog
     static bool _ownedTurn, _ownedPitch;
     static bool _mouseTurn, _mousePitch;
 
-    // Fractional remainders. Not optional: at 30 fps a small stick deflection
-    // rounds to a zero step every frame, and the player would simply not move.
+    // Fractional remainders. Not optional: at a 20 Hz tick a small stick deflection
+    // rounds to a zero step every tick, and the player would simply not move.
     static float _turnCarry, _pitchCarry, _fwdCarry, _strafeCarry;
 
     /// <summary>Keys a KF2_ANALOG* variable set, which the saved settings must

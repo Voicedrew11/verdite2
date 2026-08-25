@@ -186,18 +186,22 @@ Kf2.KeyLayout.Install();
 // Frame pacing. The game's speed is its frame rate, so the rate the port draws at
 // and the rate the game's own clock runs at are two different numbers here:
 //
-//     KF2_FPS=30                  the game paces itself (default); any number, or
-//                                 off for no pacing at all
-//     KF2_FPS_LOGIC=full          do not tick the world at 30; scale the movement
-//                                 deltas instead -- a comparison mode
-//     KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC   what ticks at 30
+//     KF2_FPS=20                  frames a second to draw (default); any number,
+//                                 or off for no pacing at all
+//     KF2_TICKRATE=20             ticks a second the world runs at (default); 30
+//                                 is the rate the game's own code asks for
+//     KF2_FPS_LOGIC=full          do not tick the world on its own clock; scale
+//                                 the movement deltas instead -- a comparison mode
+//     KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC   what is ticked
 //
-// At 30 nothing here does anything: the game's own frame gate (func_80017880,
-// which spins on the vblank credit at 0x801B6CA8 until it reaches two) is left in
-// place and paces the port exactly as hardware does. Above 30 that gate is
-// skipped, the port's own deadline takes over, and everything holding per-tick
+// The game's own frame gate (func_80017880, which spins on the vblank credit at
+// 0x801B6CA8 until it reaches two) is skipped at every rate, because it decides
+// the render rate and the world rate together and only knows one answer for both:
+// 30. The port's own deadline paces the picture, and everything holding per-tick
 // state that cannot draw -- stages 3, 4, 5, 6 and stage 13's fade stepper -- runs
-// on a 30 Hz clock instead of once per frame. A frame ends at the DrawOTag that
+// on the wall-clock tick rate instead of once per frame. 20 rather than 30 is a
+// judgement about what the console achieved under load rather than what the code
+// asked for; see FramePacing.LogicHz. A frame ends at the DrawOTag that
 // follows a VSync *call*, not the one that follows an emulated vblank: the vblank
 // is a fixed 60 Hz grid, so keying on it silently stopped pacing and stopped
 // ticking above 60 fps, and the world ran at double speed.
@@ -210,7 +214,8 @@ Kf2.KeyLayout.Install();
 // panel.
 Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_FPS_GATE"),
-                          Environment.GetEnvironmentVariable("KF2_FPS_LOGIC"));
+                          Environment.GetEnvironmentVariable("KF2_FPS_LOGIC"),
+                          Environment.GetEnvironmentVariable("KF2_TICKRATE"));
 Kf2.FramePacing.Install();
 
 // The other half of drawing above 30: the world advances 30 times a second, so

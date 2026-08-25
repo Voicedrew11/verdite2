@@ -19,17 +19,19 @@ namespace Kf2.Mods.FrameStats;
 /// patches/recompone/0021 the emulated vblank advances on a wall-clock 60 Hz grid
 /// rather than once per VSync call, so:
 ///
-/// * **vblanks/frame** is how long the frame took -- 2 means 33 ms, i.e. 30 fps,
-///   and **0 means the frame was shorter than a vblank**, which is ordinary above
-///   60. It says nothing about what the game asked for, which made the original
+/// * **vblanks/frame** is how long the frame took -- 3 means 50 ms, i.e. the
+///   20 fps the port now defaults to, 2 means 33 ms, and **0 means the frame was
+///   shorter than a vblank**, which is ordinary above 60. It says nothing about what the game asked for, which made the original
 ///   write-up of this measurement circular.
 /// * **calls/frame** is how many times the game asked, counted by hooking the
 ///   `VSync` thunk itself. That is the number that decides whether RecompOne's
 ///   per-call FrameClock throttle can even express the rate being asked for.
 ///
 /// In an area the game's own frame gate (`func_80017880`) spins on its vblank
-/// credit until it reaches two, so an unmodified port reads `2` on both counts at
-/// 30 fps. Above 30 the gate is skipped and calls/frame should fall to 1.
+/// credit until it reaches two, which would read `2` on both counts at 30 fps.
+/// **patches/FramePacing.cs now skips that gate at every rate**, so calls/frame
+/// should read 1 whatever the frame rate is -- a 2 there means the gate is back
+/// and both the picture and the world are pinned to 30.
 ///
 /// The same numbers used to cost a `KF2_LOG=sdk` trace, which is gigabytes a
 /// minute during play because the game also polls the pad ~200k times a second.
@@ -68,7 +70,7 @@ public sealed class FrameStatsMod : IMod
     public void DrawSettings()
     {
         ImGui.TextWrapped("Reports two counts per rendered frame: vblanks, which is how long " +
-                          "the frame took (2 = 33 ms = 30 fps), and VSync calls, which is how " +
+                          "the frame took (3 = 50 ms = 20 fps), and VSync calls, which is how " +
                           "many times the game asked. They are different numbers -- the vblank " +
                           "runs on a wall clock here -- and conflating them is what made the " +
                           "first pass at frame pacing hard to read.");
