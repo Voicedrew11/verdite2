@@ -11,7 +11,7 @@ useful than the question was.
 | question | what is known | where |
 |---|---|---|
 | **A third cull at the sides of a wide picture.** Corners still drop, floor and ceiling, occasionally; the edge was reported as straight, which says a clip plane or rectangle rather than a per-object test. | The tile cone, the view-space clipper, the primitive buffer and the backend scissor are each **ruled out with a number**. `KF2_VIEWCLIP=1.5` forces the clip volume open at any aspect and is the test that would implicate it regardless of the arithmetic. | "There is a third cull" in [WIDESCREEN.md](WIDESCREEN.md) |
-| **The Z-buffer still shows sky through nearby walls.** | The clear-at-tail bug (`0016`) was real and is fixed and measured; it was **not** the cause, or not the only one. What has not been measured is the depth *between* the vertices — screen-linear interpolation of a view depth is wrong, and whether that bias is large enough to lose a wall is the next thing to measure. | "The clear landed at the tail of the frame" in [RENDERING.md](RENDERING.md) |
+| ~~**The Z-buffer still shows sky through nearby walls.**~~ **Closed as unbridgeable.** The game encodes visibility as OT draw order, not depth, and some of that order *contradicts* any per-pixel depth: the skybox is a near-projecting box deliberately drawn first, so its true SZ makes it win against distant walls; coplanar decals rely on order at equal depth. One global z-test cannot serve both "cave rocks interpenetrate" and "near sky stays behind everything." The user-facing switch was **removed**; the mechanism stays for diagnosis behind `KF2_ZBUFFER`/`KF2_ZBUFFER_PROBE`. (DuckStation's PGXP depth buffer hits the same wall.) | "Z-buffer" in [RENDERING.md](RENDERING.md) |
 | **The camera does not feel consistent in every direction.** | Four candidates, three of them certainly *real* effects whether or not they are the one being felt (the game turns you slower while walking; yaw and pitch scales differ; diagonals saturate sooner; the ramp is radial). The measurement to take is written out. | "Open: the camera does not feel consistent" in [INPUT.md](INPUT.md) |
 | **The twin-stick controls broke after the dragon stone went into the fountain.** Not reproduced. | Three candidates, each one memory read apart: the rate guards at `0x8019955C`/`0x80199558`, the action-mask table being rewritten, or the player action state parking in an arm that never calls the control routines. "Did the D-pad still work?" settles the third. | "Open: the twin-stick controls broke" in [INPUT.md](INPUT.md) |
 | **`KF2_WIDESCREEN` was overridden mid-session by the saved aspect.** | Env-forced aspects are not as forced as `_forced ?? saved` in `Widescreen.Install` reads. Anything A/B-ing two aspects should pin the *saved* setting instead. Worth tracking down. | "There is a third cull", trap at the end, in [WIDESCREEN.md](WIDESCREEN.md) |
@@ -89,12 +89,12 @@ useful than the question was.
    [RENDERING.md](RENDERING.md). **Walk a wall after 0011 with both switches on**
    — that patch is what should have killed the remaining crawl and the far-away
    pop, and the picture is the test.
-9. **Look at the Z-buffer in the cave.** The mechanism is the recovered SZ
-   perspective correction already measures, but a twice-drawn OT cannot take this
-   pair (the second pass would fail every test against the first), so the picture
-   is the only test, and it is what is keeping the default off. Interpenetrating
-   rocks should sit still; coplanar floors should not z-fight; the HUD should be
-   identical. See "Z-buffer" in [RENDERING.md](RENDERING.md).
+9. ~~**Look at the Z-buffer in the cave.**~~ **Closed.** Retired as a user option:
+   the game's visibility is OT draw order, and the skybox (near-projecting, drawn
+   first) plus coplanar decals contradict any single per-pixel depth, so no z-test
+   can be globally correct on this content. Mechanism kept for diagnosis only,
+   behind `KF2_ZBUFFER`/`KF2_ZBUFFER_PROBE`. See "Z-buffer" in
+   [RENDERING.md](RENDERING.md).
 10. **Decide what the interface should be scaled by, and by eye.**
    `patches/recompone/0018` fixed *where* the interface is drawn; how large it is
    is a second defect and still ours. `QueryDpiScale` returns the primary

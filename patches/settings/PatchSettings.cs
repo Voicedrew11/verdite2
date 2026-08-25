@@ -123,7 +123,7 @@ public static class PatchSettings
         Register("display", new NoDitherPage());
         Register("display", new PerspectivePage());
         Register("display", new SubpixelPage());
-        Register("display", new ZBufferPage());
+        Register("display", new TrueColorPage());
         RegisterSlot("display.render_scale", new WidescreenPage());
         Register("input", new KeyLayoutPage());
         Register("input", new AnalogPage());

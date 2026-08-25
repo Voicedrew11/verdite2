@@ -1,0 +1,132 @@
+diff --git a/RecompOne.Runtime/Gpu/GteDepth.cs b/RecompOne.Runtime/Gpu/GteDepth.cs
+--- a/RecompOne.Runtime/Gpu/GteDepth.cs
++++ b/RecompOne.Runtime/Gpu/GteDepth.cs
+@@ -148,6 +148,20 @@
+     public static int Generation;
+ 
+     /// <summary>
++    /// True color (24-bit). While false the GL backend renders into an RGB5A1
++    /// display target and the fragment shader crushes every shaded pixel to five
++    /// bits per channel, exactly as the PlayStation's 15-bit VRAM does — which
++    /// bands a smooth fog gradient. On, the display target is RGBA8 and the shader
++    /// keeps eight bits, so the gradient is smooth without the dither crosshatch.
++    /// Textures are still sampled at five bits (they live in 15-bit VRAM), so only
++    /// the shaded gradient gains precision, not the texture palette. GL backend
++    /// only; the software rasterizer is always 15-bit. Safe to change at run time:
++    /// <see cref="GlCore"/> rebuilds its display targets on the next present when
++    /// this differs from the format they were built with.
++    /// </summary>
++    public static bool TrueColor;
++
++    /// <summary>
+     /// While false nothing is lit: every fragment keeps exactly the baked Gouraud
+     /// color the game submitted. On, a triangle whose vertices all recovered a
+     /// view depth takes an additive point-light term computed per fragment from a
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -193,7 +193,12 @@
+             vec4 p = fetch(c);
+             return u5(p.r) | (u5(p.g) << 5) | (u5(p.b) << 10) | (int(ceil(p.a)) << 15);
+         }
++        uniform float uTrueColor;
+         vec3 quant5(ivec3 c8) {
++            // True color: keep all eight bits, so the smooth shaded gradient is not
++            // banded down to 32 levels. Dither is pointless here and skipped — the
++            // RGBA8 target has nothing to dither into.
++            if (uTrueColor > 0.5) return vec3(clamp(c8, 0, 255)) / 255.0;
+             if (vDither != 0) {
+                 ivec2 vp = ivec2(floor(gl_FragCoord.xy / float(uScale) - uPosBias));
+                 c8 = clamp(c8 + ditherTbl[(vp.y & 3) * 4 + (vp.x & 3)], 0, 255);
+@@ -529,7 +534,9 @@
+             return u5(p.r) + u5(p.g) * 32.0 + u5(p.b) * 1024.0 + ceil(p.a) * 32768.0;
+         }
+ 
++        uniform float uTrueColor;
+         vec3 quant5(vec3 c8) {
++            if (uTrueColor > 0.5) return clamp(c8, 0.0, 255.0) / 255.0;
+             if (vDither > 0.5) {
+                 vec2 vp = floor(gl_FragCoord.xy / uScale - uPosBias);
+                 float col = mod(vp.x, 4.0);
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -61,6 +61,11 @@
+     int _kRepClutCount;
+     int _uTexWindow, _uBlend, _uBlendOpaque, _uSetMask, _uCheckMask, _uPosBias, _uFbInv;
+     int _uCoplanarTol, _uCoplanarRel;
++    int _uTrueColor;
++    // The true-color flag the live display targets were built with. When it drifts
++    // from GteDepth.TrueColor the targets carry the wrong pixel format, so they are
++    // torn down at the next present and rebuilt (their content survives in VRAM).
++    bool _rtsTrueColor;
+     int _uLitCenter, _uLitInvH;
+     int _uRepRect, _uRepClutCount;
+     int _uPresentOrigin, _uPresentSize, _uPresentTexSize, _uPresent24Origin, _uPresent24Size;
+@@ -106,6 +111,8 @@
+         _uFbInv = _gl.GetUniformLocation(_progPrim, "uFbInv");
+         _uCoplanarTol = _gl.GetUniformLocation(_progPrim, "uCoplanarTol");
+         _uCoplanarRel = _gl.GetUniformLocation(_progPrim, "uCoplanarRel");
++        _uTrueColor = _gl.GetUniformLocation(_progPrim, "uTrueColor");
++        _rtsTrueColor = GteDepth.TrueColor;
+         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
+         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
+         _uLitCenter = _gl.GetUniformLocation(_progPrim, "uLitCenter");
+@@ -734,6 +741,7 @@
+         // (raw depth test). Cheap per batch and safe if the uniform is absent.
+         if (_uCoplanarTol >= 0) _gl.Uniform1(_uCoplanarTol, GteDepth.CoplanarTol);
+         if (_uCoplanarRel >= 0) _gl.Uniform1(_uCoplanarRel, GteDepth.TolRel);
++        if (_uTrueColor >= 0) _gl.Uniform1(_uTrueColor, GteDepth.TrueColor ? 1f : 0f);
+ 
+         // Lighting, per batch like the coplanar pair. uLitCenter is the draw
+         // offset plus the projection center: a packet coordinate is
+@@ -936,6 +944,25 @@
+         Flush();
+         _frame++;
+ 
++        // True color was toggled: the live targets have the wrong pixel format.
++        // Flush already drained this frame's batch, so no draw is mid-flight; write
++        // each target's content back to VRAM and drop it. The next draw recreates
++        // it in the new format and re-syncs from VRAM, and this present falls back
++        // to VRAM (which just received the writeback) for the one transition frame.
++        if (_rtsTrueColor != GteDepth.TrueColor)
++        {
++            _rtsTrueColor = GteDepth.TrueColor;
++            for (int i = 0; i < _rts.Length; i++)
++                if (_rts[i] is { } rt)
++                {
++                    if (rt.Dirty) Writeback(rt);
++                    rt.Destroy(_gl);
++                    _rts[i] = null;
++                }
++            _kTarget = null;
++            _lastZRt = null;
++        }
++
+         for (int i = 0; i < _rts.Length; i++)
+         {
+             if (_rts[i] is not { } rt) continue;
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlDisplayRt.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlDisplayRt.cs
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlDisplayRt.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlDisplayRt.cs
+@@ -42,8 +42,18 @@
+         gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+         gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+         gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+-        gl.TexImage2D<ushort>(TextureTarget.Texture2D, 0, InternalFormat.Rgb5A1, (uint)TexW, (uint)TexH, 0,
+-            PixelFormat.Rgba, PixelType.UnsignedShort1555Rev, new ushort[TexW * TexH].AsSpan());
++        // True color keeps eight bits per channel so the shaded fog gradient does
++        // not band; the default RGB5A1 matches the console's 15-bit VRAM and lets
++        // the fragment shader's quant5 stand. The mask/STP bit rides the alpha
++        // either way — 1-bit in 1555, the top of an 8-bit alpha in RGBA8, and both
++        // read back as >= 0.5. The blits to and from VRAM (Rgb5A1) convert
++        // automatically, so a true-color target still writes 15-bit content back.
++        if (GteDepth.TrueColor)
++            gl.TexImage2D<byte>(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)TexW, (uint)TexH, 0,
++                PixelFormat.Rgba, PixelType.UnsignedByte, new byte[TexW * TexH * 4].AsSpan());
++        else
++            gl.TexImage2D<ushort>(TextureTarget.Texture2D, 0, InternalFormat.Rgb5A1, (uint)TexW, (uint)TexH, 0,
++                PixelFormat.Rgba, PixelType.UnsignedShort1555Rev, new ushort[TexW * TexH].AsSpan());
+ 
+         Fbo = gl.GenFramebuffer();
+         gl.BindFramebuffer(FramebufferTarget.Framebuffer, Fbo);

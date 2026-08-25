@@ -4,7 +4,7 @@ namespace Kf2.Settings;
 
 /// <summary>
 /// The sub-pixel switch, under Video, sharing the "Enhancements" heading with the
-/// dither, perspective and Z-buffer switches — four checkboxes, each one a choice about how
+/// dither, perspective and true-color switches — each one a choice about how
 /// faithful the picture should be to the hardware, and none of them deserving a
 /// rule and a name of its own.
 ///

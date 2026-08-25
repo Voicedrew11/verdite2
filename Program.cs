@@ -267,6 +267,18 @@ Kf2.ZBuffer.Configure(Environment.GetEnvironmentVariable("KF2_ZBUFFER"),
                       Environment.GetEnvironmentVariable("KF2_ZBUFFER_PROBE"));
 Kf2.ZBuffer.Install();
 
+// True color (24-bit) output for the GL backend. The console renders into 15-bit
+// VRAM, so a shaded fog gradient bands into steps unless the dither hides it with
+// a crosshatch; this keeps eight bits per channel and removes the banding without
+// the crosshatch. Off by default -- the default picture is the console's:
+//
+//     KF2_TRUECOLOR=1  on; 0 or unset keeps the 15-bit output
+//
+// The mechanism is patches/recompone/0021 (the render-target format and the
+// fragment shader). Its switch is under Video with the others.
+Kf2.TrueColor.Configure(Environment.GetEnvironmentVariable("KF2_TRUECOLOR"));
+Kf2.TrueColor.Install();
+
 // Auto reload. One post-hook on the end of main-loop stage 3 watches for the
 // player's death and reloads the last save through the game's own loader, so a
 // death costs a couple of seconds instead of four screens of menu:
