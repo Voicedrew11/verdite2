@@ -327,9 +327,59 @@ public static class AutoReload
 
     /// <summary>
     /// The game's own loader, then the game's own post-load arm from
-    /// func_80029CBC at 0x80029E0C, transcribed. The stack window is for
-    /// func_80024154's fifth and sixth arguments, which MIPS passes at sp+0x10
-    /// and sp+0x14 of the caller's frame.
+    /// func_80029CBC at 0x80029E0C, transcribed — the mechanism, with no
+    /// death-specific messaging, so it serves both a reload from death and a cold
+    /// start from the title (patches/AutoStart.cs). Returns func_80023638's result
+    /// code: 0 loaded, 1 no such save file, 2 checksum failed; on 0, <paramref
+    /// name="area"/> is the loaded save's area and the character is live in it.
+    ///
+    /// It runs the game's own code on the caller's CpuContext, so it brackets the
+    /// whole sequence in Snapshot/Restore. The stack window is for func_80024154's
+    /// fifth and sixth arguments, which MIPS passes at sp+0x10 and sp+0x14 of the
+    /// caller's frame. Memory is not part of the snapshot, so a caller reads the
+    /// loaded HP/level straight back afterwards.
+    /// </summary>
+    internal static uint LoadSlot(CpuContext c, IMemory m, byte slot, out uint area)
+    {
+        area = 0;
+
+        var saved = c.Snapshot();
+
+        c.A0 = slot;
+        KingsField2.func_80023638(c, m);
+        uint result = c.V0;
+
+        if (result == 0)
+        {
+            KingsField2.func_800240B8(c, m);
+
+            area = m.ReadU8(Area);
+            c.SP -= 0x20u;
+            m.WriteU32(c.SP + 0x14u, 0xFFu);
+            m.WriteU32(c.SP + 0x10u, area);
+            c.A0 = area;
+            c.A1 = area;
+            c.A2 = area;
+            c.A3 = area;
+            KingsField2.func_80024154(c, m);
+            c.SP += 0x20u;
+
+            KingsField2.func_80025D38(c, m);
+
+            // The game reaches that arm from a live state and so never has to
+            // clear the death latch. Coming from 0x11, we do -- func_80029E5C is
+            // the game's own reset for the state byte and its timers. A cold start
+            // is never dead, so this is a no-op for AutoStart.
+            if (m.ReadU8(State) == StateDead)
+                KingsField2.func_80029E5C(c, m);
+        }
+
+        c.Restore(saved);
+        return result;
+    }
+
+    /// <summary>
+    /// Load the last save on death, through <see cref="LoadSlot"/>.
     /// </summary>
     static void Reload(CpuContext c, IMemory m)
     {
@@ -347,35 +397,10 @@ public static class AutoReload
 
         ushort held = m.ReadU16(DeathFrames);
 
-        var saved = c.Snapshot();
-
-        c.A0 = slot;
-        KingsField2.func_80023638(c, m);
-        uint result = c.V0;
+        uint result = LoadSlot(c, m, slot, out uint area);
 
         if (result == 0)
         {
-            KingsField2.func_800240B8(c, m);
-
-            uint area = m.ReadU8(Area);
-            c.SP -= 0x20u;
-            m.WriteU32(c.SP + 0x14u, 0xFFu);
-            m.WriteU32(c.SP + 0x10u, area);
-            c.A0 = area;
-            c.A1 = area;
-            c.A2 = area;
-            c.A3 = area;
-            KingsField2.func_80024154(c, m);
-            c.SP += 0x20u;
-
-            KingsField2.func_80025D38(c, m);
-
-            // The game reaches that arm from a live state and so never has to
-            // clear the death latch. Coming from 0x11, we do -- func_80029E5C is
-            // the game's own reset for the state byte and its timers.
-            if (m.ReadU8(State) == StateDead)
-                KingsField2.func_80029E5C(c, m);
-
             Reloads++;
             // The counter is the proof the hold worked: it must still be at the
             // animation's end. Anything near 65 means the game's own respawn had
@@ -393,7 +418,5 @@ public static class AutoReload
             Status = $"slot {slot} would not load: {why} ({result})";
             Console.WriteLine($"[KF2] autoreload: {Status}");
         }
-
-        c.Restore(saved);
     }
 }

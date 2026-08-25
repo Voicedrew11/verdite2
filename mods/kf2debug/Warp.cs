@@ -21,24 +21,6 @@ internal static class Warp
 {
     internal const int SlotCount = 4;
 
-    /// <summary>
-    /// The valid area indices.
-    ///
-    /// FDAT.T runs in groups of three -- data, data, code module -- so area N is
-    /// entries 3N, 3N+1, 3N+2 and the code module is entry 3N+2. The nine
-    /// modules on the disc are entries 2, 5, 8, 11, 14, 17, 20, 23 and 32, which
-    /// makes the areas 0..7 plus 10. Entries 24-29 are zero length, so areas 8
-    /// and 9 do not exist.
-    ///
-    /// Area 10 is entry 32, and it is a cut area: every module this game loads is
-    /// linked for 0x8019F07C and entry 32 is linked for 0x80193B38, so the loader
-    /// cannot reach it and warping there hangs. See "fdat32 is a cut area" in
-    /// NOTES.md. It is left out of this list deliberately.
-    /// </summary>
-    internal static readonly int[] Areas = [0, 1, 2, 3, 4, 5, 6, 7];
-
-    internal const int CutArea = 10;
-
     internal static string Status = "";
 
     struct Bookmark
@@ -143,23 +125,6 @@ internal static class Warp
     // own load path -- func_80029CBC and patches/AutoReload.cs both call it from here.
     static int _pendingArea = -1;
 
-    // New-game spawn, written by func_80025B4C. Used only as a parking spot
-    // whose X>>11 / Z>>11 land inside the 80x80 tile map; func_80025DA8 indexes
-    // that map with no clamp, and a noclip flight that left it would OOB during
-    // the load. The real landing is the new area's object centroid, below.
-    const int SafeX = 0x00011800;
-    const int SafeY = unchecked((int)0xFFFFCE00);
-    const int SafeZ = 0x00018000;
-    const int TileShift = 11;
-    const int TileCount = 0x50;
-
-    const uint ObjectTable  = 0x80177714;
-    const int  ObjectStride = 0x44;
-    const int  ObjectCount  = 0x18C;
-    const uint EntityTable  = 0x8016C544;
-    const int  EntityStride = 0x7C;
-    const int  EntityCount  = 0xC8;
-
     /// <summary>
     /// Queue an area re-entry through the game's own routine.
     ///
@@ -178,15 +143,15 @@ internal static class Warp
             return false;
         }
 
-        if (area == CutArea)
+        if (area == Kf2.AreaWarp.CutArea)
         {
             // Belt and braces; the panel does not offer it.
-            Status = $"area {CutArea} is the cut area (fdat32) and cannot load";
+            Status = $"area {Kf2.AreaWarp.CutArea} is the cut area (fdat32) and cannot load";
             Console.WriteLine($"[kf2debug] refused: {Status}");
             return false;
         }
 
-        if (Array.IndexOf(Areas, area) < 0)
+        if (Array.IndexOf(Kf2.AreaWarp.Areas, area) < 0)
         {
             Status = $"area {area} does not exist";
             return false;
@@ -213,112 +178,15 @@ internal static class Warp
 
     static void RunToArea(CpuContext c, IMemory m, int area)
     {
-        if (!GameState.IsInGame(m))
-        {
-            Status = "no area running";
-            return;
-        }
-
         int from = m.ReadU8(GameState.Area);
         Console.WriteLine($"[kf2debug] warping from area {from} to area {area}");
 
-        var saved = c.Snapshot();
-
-        // Park inside the tile map before the loader's own floor snap runs.
-        var (x, y, z) = GameState.Position(m);
-        if (!InTileMap(x, z))
-            GameState.SetPosition(m, SafeX, SafeY, SafeZ);
-
-        c.SP -= 0x20u;
-        m.WriteU32(c.SP + 0x14u, 0xFFu);
-        m.WriteU32(c.SP + 0x10u, (uint)area);
-        c.A0 = (uint)area;
-        c.A1 = (uint)area;
-        c.A2 = (uint)area;
-        c.A3 = (uint)area;
-        KingsField2.func_80024154(c, m);
-        c.SP += 0x20u;
-
-        KingsField2.func_80025D38(c, m);
-
-        // The wrapper floor-snaps at the previous area's X/Z. That is the
-        // previous area, so the new module's tiles there are empty and the
-        // renderer then walks object indices it does not own -- the same crash
-        // as flying out of the loaded geometry. Sit on the new area's objects
-        // and snap there. Same-area is already standing on valid tiles.
-        if (from != area)
-            PlaceInLoadedArea(c, m);
-
-        // The dummy parking spot, or empty tiles in the new map, can trip the
-        // below-floor latch inside func_80025DA8. The game's own load path
-        // never has to clear it because it arrives from a live state; we might.
-        if (m.ReadU8(GameState.State) == GameState.StateDead)
-            KingsField2.func_80029E5C(c, m);
-
-        GameState.StopMotion(m);
-        c.Restore(saved);
+        string? err = Kf2.AreaWarp.TryRun(c, m, area);
+        if (err != null) { Status = err; return; }
 
         Noclip.Resync();
-
         Status = $"warped to area {area} at {Noclip.Format(GameState.Position(m))}";
         Console.WriteLine($"[kf2debug] {Status}");
-    }
-
-    static bool InTileMap(int x, int z)
-    {
-        uint tx = (uint)(x >> TileShift);
-        uint tz = (uint)(z >> TileShift);
-        return tx < TileCount && tz < TileCount;
-    }
-
-    /// <summary>
-    /// Put the player on the centroid of the loaded area's object table, then
-    /// run the game's own floor snap.
-    ///
-    /// Objects are 0x44 bytes at 0x80177714, 0x18C of them; a slot is empty
-    /// when byte +4 is 0xFF -- the test stage 2 uses, and the value the loader
-    /// writes when it clears the table. Position is the VECTOR at +0x14. If
-    /// nothing survived the load, the entity table (buf6, 0x7C bytes, byte 0
-    /// is 0xFF when disabled, VECTOR at +0x2C) is the fallback.
-    /// </summary>
-    static void PlaceInLoadedArea(CpuContext c, IMemory m)
-    {
-        if (!Centroid(m, ObjectTable, ObjectStride, ObjectCount, 0x4, 0x14,
-                      out int x, out int y, out int z) &&
-            !Centroid(m, EntityTable, EntityStride, EntityCount, 0x0, 0x2C,
-                      out x, out y, out z))
-        {
-            return;
-        }
-
-        GameState.SetPosition(m, x, y, z);
-        KingsField2.func_80025DA8(c, m);
-    }
-
-    static bool Centroid(IMemory m, uint table, int stride, int count,
-                         int emptyOff, int posOff,
-                         out int x, out int y, out int z)
-    {
-        long sx = 0, sy = 0, sz = 0;
-        int n = 0;
-        for (int i = 0; i < count; i++)
-        {
-            uint rec = table + (uint)(i * stride);
-            if (m.ReadU8(rec + (uint)emptyOff) == 0xFF) continue;
-            sx += (int)m.ReadU32(rec + (uint)posOff);
-            sy += (int)m.ReadU32(rec + (uint)posOff + 4u);
-            sz += (int)m.ReadU32(rec + (uint)posOff + 8u);
-            n++;
-        }
-        if (n == 0)
-        {
-            x = y = z = 0;
-            return false;
-        }
-        x = (int)(sx / n);
-        y = (int)(sy / n);
-        z = (int)(sz / n);
-        return true;
     }
 
     internal static void Reset() => _pendingArea = -1;

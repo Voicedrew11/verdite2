@@ -282,6 +282,41 @@ Kf2.AutoReload.Configure(Environment.GetEnvironmentVariable("KF2_AUTORELOAD"),
                          Environment.GetEnvironmentVariable("KF2_AUTORELOAD_SLOT"));
 Kf2.AutoReload.Install();
 
+// Auto start, and the agent beacon -- the pair that lets an automated tester get
+// into the game and know it got there. Scripted input cannot drive the boot menus
+// (KF2_AUTOPAD's clock only starts once an area has loaded), and screenshots are
+// off the table, so an agent left at the title waits on nothing:
+//
+//     KF2_AUTOSTART=2   load slot 1..3 through the game's own loader at boot,
+//                       skipping the title and Continue menus (off unless set)
+//     KF2_AGENT=1       emit [KF2-AGENT] stdout lines -- an overlay transition on
+//                       each load and a JSON state snapshot ~1/s, whose inGame
+//                       field is how a program tells "stuck at title" from "in an
+//                       area" (off unless set)
+//
+// Patches for the KF2_AUTOPAD reason: they must work from an environment variable
+// with no package to enable.
+Kf2.AutoStart.Configure(Environment.GetEnvironmentVariable("KF2_AUTOSTART"));
+Kf2.AutoStart.Install();
+Kf2.AgentBeacon.Configure(Environment.GetEnvironmentVariable("KF2_AGENT"));
+Kf2.AgentBeacon.Install();
+
+// The command channel -- the half that lets an agent act instead of only watch.
+// A small TCP server on loopback, off unless KF2_SHELL is set:
+//
+//     KF2_SHELL=1   line protocol on 127.0.0.1:27900 (or =<port>): one request
+//                   per line, one single-line JSON response back --
+//                   state | load <slot> | warp <area> | press <button> [ms] | kill
+//
+// Commands arrive on socket threads and are marshalled onto the game thread
+// through two drainers -- a VSync listener for the cheap ones and a post hook on
+// main-loop stage 3 for load/warp, whose loader waits on the CD by looping VSync,
+// so running it inside the VSync event would nest VSync inside itself and swap
+// overlays under a live frame. Patches for the KF2_AUTOPAD reason; see "The
+// command channel" in docs/PATCHES_AND_MODS.md.
+Kf2.AgentServer.Configure(Environment.GetEnvironmentVariable("KF2_SHELL"));
+Kf2.AgentServer.Install();
+
 // Analog twin-stick control. Two pre-hooks on the game's own turn/look and
 // walk/strafe routines pre-load the velocities those routines are about to
 // accumulate, so the sticks pick the amount and the game's own movement code

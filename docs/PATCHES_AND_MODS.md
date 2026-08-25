@@ -664,3 +664,164 @@ and *Simulate death* from the new tab logged
 result the mod gave, so the hook, the config read and the reload path all survived
 the move.
 
+## Auto start and the agent beacon
+
+`patches/AutoStart.cs` (`KF2_AUTOSTART=<1..3>`) and `patches/AgentBeacon.cs`
+(`KF2_AGENT=1`) are the pair that lets an automated tester **get into the game and
+know it got there**. Both are patches driven by an environment variable, not mod
+features, for the `KF2_AUTOPAD` reason: a mod is off by default and silent when
+disabled, so an agent that did not know to enable it would get nothing.
+
+### The wall is the title, not the Continue menu
+
+The plan for auto start assumed the loader could be called at GAME.EXE's start
+menu. It cannot, and the reason took several runs to pin down:
+
+- **With no input the port never leaves OPEN.EXE.** Measured: 110 s at the title,
+  still `overlay open`. The "attract demo walks itself in after a minute" only
+  happens on some idle path this build did not take; an agent cannot rely on it.
+- **`KF2_AUTOPAD` cannot help** — its clock is gated behind the first `fdat` load
+  (`Program.cs`), the very thing that has not happened at the title.
+- **Writing `Controller.State` does not reach the boot menus.** It advanced
+  OPEN.EXE's title but did nothing at GAME.EXE's menu. The path that reaches the
+  game *wherever it is* is `PAD_dr` — a `PadReadEvent` listener, exactly what
+  `patches/Mouse.cs` uses "so the buttons work in its menus". The buffer is
+  active-low and its two button bytes are swapped against `Controller`'s layout,
+  so a pressed `Controller` bit is injected as `e.Buttons &= ~((b>>8)|(b<<8))`.
+- **The start menu (`func_8001B35C`) is a blocking poll loop**, so the per-frame
+  main-loop and stage-3 hooks (`0x80040348`, `0x8002A550`) never run there — none
+  of them fired while stuck at the menu, which is why a stage-3-hook load could not
+  fire either. The menu's cursor handler is `func_8001EA14` (2 options: 0 = Load →
+  `func_8001B4F4`, 1 = New Game), and injected Up/Down did **not** move it; only
+  Cross registered, always confirming the New Game default.
+
+### The route that works: New Game as a vehicle, then load over it
+
+So auto start does not fight the cursor. It drives three steps, all through
+`PAD_dr`:
+
+1. Pulse **Start** through OPEN.EXE's intro/title → `overlay game`.
+2. Pulse **Cross** at the start menu → confirm the New Game default → `overlay
+   fdat02`, a real area with the main loop turning.
+3. The stage-3 post-hook (`0x8002A550`), which now runs because an area is live,
+   waits ~90 frames and calls `AutoReload.LoadSlot(slot)` — the same menu-free
+   loader (`func_80023638` + the post-load arm) AutoReload uses on death — to load
+   the chosen slot **over** the New Game. Nothing is saved; the load replaces the
+   scratch character with the slot's own area and state.
+
+`AutoReload.Reload` was refactored to share `LoadSlot`, so the delicate MIPS-ABI
+stack window (`func_80024154`'s fifth/sixth args at `sp+0x10`/`sp+0x14`) lives in
+one place.
+
+**Verified, end to end, read off the `KF2_AGENT` beacon (no screenshot):**
+
+```
+KF2_AUTOSTART=2 →  overlay main → open → game → fdat02 → fdat05
+                   [KF2] autostart: loaded slot 2 into area 1 (HP 46/86, LV 6)
+                   beacon: level 1/area 0/slot 0  →  level 6/exp 417/area 1/slot 2
+KF2_AUTOSTART=3 →  [KF2] autostart: loaded slot 3 into area 0 (HP 71/79, LV 5)
+                   beacon: … → level 5/exp 291/slot 3   (matches the card title "2-3 LV 5")
+```
+
+### The beacon
+
+`AgentBeacon` emits one `[KF2-AGENT]` line on each `OverlayLoadedEvent` and a JSON
+snapshot about once a second from `VSyncEvent` (on the game thread, so its memory
+reads need no marshalling):
+
+```
+[KF2-AGENT] {"overlay":"fdat05","inGame":true,"dead":false,"hp":46,"maxHp":86,
+             "mp":…,"maxMp":…,"level":6,"exp":417,"area":1,"slot":2,
+             "deathFrames":0,"pos":[x,y,z]}
+```
+
+`inGame` is `MaxHp != 0` — the same title-vs-in-game oracle as
+`mods/kf2debug/GameState.IsInGame`; when it is false the stat fields are omitted.
+That one field, printed once a second, is what an agent needs to tell "stuck at
+the title" from "in an area" — the failure that used to burn a tester's whole
+budget. The stat addresses are carried locally (patches cannot reach the mod's
+`GameState.cs`, which the mod loader compiles separately); a future consolidation
+could move the shared map into `patches/`.
+
+## The command channel
+`patches/AgentServer.cs` (`KF2_SHELL=1`, or `KF2_SHELL=<port>`; default port
+27900) is the acting half beside the beacon's watching half: a small TCP server
+on loopback speaking a line protocol — one request per line, one single-line
+JSON response, always:
+
+```
+state                 the beacon's snapshot as JSON
+load <slot 1..3>      load a save through AutoReload.LoadSlot
+warp <area 0..7>      re-enter an area through the game's own entry routine
+press <button> [ms]   hold a pad button for ms (default 150); one press at a time,
+                      replaced by the next
+kill                  drop HP to zero, the way a hit would
+nearby [radius=8192]  live records of the world tables within radius units of the
+                      player, nearest first, tagged by table (objects; buf6
+                      "entities", whose reading is still Inferred -- TODO.md)
+```
+
+A socket rather than stdin because stdout already carries the beacon and the
+`[KF2]` log lines; a stdio channel would make every client demultiplex its
+responses out of the logs. Off unless set, like every other agent switch: an
+unasked listener is worse than one switch to find (the mouse-look precedent).
+It is in `patches/` for the `KF2_AUTOPAD` reason — an agent that did not know to
+enable a package would get nothing.
+
+### Two marshal points, and why
+
+Commands arrive on socket threads and must run on the game thread. Where they
+run depends on whether the command re-enters the loader:
+
+- **`state`, `press`, `kill`, `help`, `nearby` drain from a `VSyncEvent` listener** — the
+  same place the beacon reads memory, so no cross-thread access and no new
+  machinery.
+- **`load` and `warp` drain from a post hook on main-loop stage 3**
+  (`0x8002A550`). `func_80024154` waits on the CD by looping `func_80017818`,
+  which calls VSync: running it inside the VSync event nests VSync inside
+  itself and swaps overlays under a frame that is still drawing — the documented
+  death of the debug panel's first warp button. Stage 3 is the game's own load
+  path, which is where `AutoReload.Reload` and `AutoStart` already call
+  `LoadSlot` from, and it only runs once an area is live — which is exactly the
+  guarantee `load`/`warp` need. A heavy command issued anywhere else (at the
+  title, say) times out after five seconds with that said in the error.
+
+`kill` is safe at VSync: `AutoReload.Simulate` only snapshots the CPU, writes
+HP, calls `func_8002A264` and restores — and the settings page already runs it
+from inside Present-inside-VSync.
+
+### One implementation of the warp
+
+The warp core moved out of the debug mod into `patches/AreaWarp.cs`
+(`Kf2.AreaWarp.TryRun`) so the server can reach it with no package enabled;
+the mod's panel delegates to it, so there is still exactly one transcription of
+the game's area-entry sequence. The synthetic press keeps its own inject state
+rather than sharing `AutoStart._inject`: that field belongs to the boot driver,
+and the two must never fight over it. The press itself rides `PadReadEvent` with
+AutoStart's active-low byte-swapped math, which is what makes it work in the
+boot menus and everywhere else the game reads the pad.
+
+## The MCP layer
+
+`mcp/` (`KingsField2Mcp.csproj`) is a standalone stdio MCP server that wraps
+exactly the six verbs above as typed tools, so an MCP host — Claude Desktop, an
+inspector, omp — can drive the same channel without knowing the line protocol.
+It is a separate program with no NuGet dependencies (hand-rolled JSON-RPC over
+stdin/stdout; stdout carries protocol messages only), it talks TCP loopback to
+the shell, and the game itself needs no patch, no recompile and no config entry.
+
+The endpoint defaults to `127.0.0.1:27900`; `KF2_MCP_ENDPOINT=<host:port>`
+points a server instance elsewhere (a second game session on
+`KF2_SHELL=<port>`, say) without touching the game's own switch.
+
+```json
+{ "mcpServers": { "kf2": { "command": "dotnet",
+    "args": ["run", "--project", "<repo>/mcp/KingsField2Mcp.csproj", "-c", "Release", "--no-build"] } } }
+```
+
+The tools are `kf2_state`, `kf2_nearby`, `kf2_load_save`, `kf2_warp`,
+`kf2_press_button` and `kf2_kill`, one per verb, with the button names and
+ranges quoted from `AgentServer`. The shell stays the validator: replies come
+back verbatim, an `ok:false` surfaces as a tool error, and a game that is not
+running costs every tool one connection error rather than a dead host session.
+

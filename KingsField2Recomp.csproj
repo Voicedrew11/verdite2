@@ -47,4 +47,16 @@
         <None Remove="mods/**" />
     </ItemGroup>
 
+    <!--
+      mcp/ is a separate program (an MCP server for agent hosts), not part of the
+      game assembly. Nested under this directory its sources and obj/ AssemblyInfo
+      would be picked up by the default globs — the CS0579 trap tools/** and
+      mods/** are already removed for.
+    -->
+    <ItemGroup>
+        <Compile Remove="mcp/**" />
+        <EmbeddedResource Remove="mcp/**" />
+        <None Remove="mcp/**" />
+    </ItemGroup>
+
 </Project>

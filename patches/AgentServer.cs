@@ -1,0 +1,576 @@
+using System.Collections.Concurrent;
+using System.Net;
+using System.Net.Sockets;
+using System.Reflection;
+using System.Text;
+using RecompOne.Runtime.Context;
+using RecompOne.Runtime.Events;
+using RecompOne.Runtime.Hardware;
+using RecompOne.Runtime.Memory;
+using RecompOne.Runtime.Modding;
+
+namespace Kf2;
+
+/// <summary>
+/// A command channel for automated agents — the acting half beside the beacon's
+/// watching half (see <see cref="AgentBeacon"/>):
+///
+///     KF2_SHELL=1     listen on 127.0.0.1:27900; KF2_SHELL=&lt;port&gt; picks another
+///
+/// Line protocol over TCP loopback: one request per line, one single-line JSON
+/// response, always. Six commands:
+///
+///     state                 the beacon's snapshot as JSON
+///     load &lt;slot 1..3&gt;      load a save through AutoReload.LoadSlot
+///     warp &lt;area 0..7&gt;      re-enter an area through AreaWarp.TryRun
+///     press &lt;button&gt; [ms]   hold a pad button for ms (default 150)
+///     kill                  drop HP to zero, the way a hit would
+///     nearby [radius]       live world-table records within radius of the
+///                           player, nearest first (positions only; buf6's
+///                           entity reading is still Inferred)
+///
+/// Off unless KF2_SHELL is set, like every other agent switch: an unasked
+/// listener is worse than one switch to find (the mouse-look precedent). A
+/// socket rather than stdin because stdout already carries the beacon and the
+/// [KF2] log lines — a stdio channel would make every client demultiplex its
+/// responses out of the logs.
+///
+/// The load-bearing shape is the two marshal points. Commands arrive on socket
+/// threads and must run on the game thread; where they run depends on whether
+/// the command re-enters the loader:
+///
+///   * <c>state</c>, <c>press</c>, <c>kill</c>, <c>help</c> drain from a
+///     VSyncEvent listener — the same place the beacon reads memory.
+///   * <c>load</c> and <c>warp</c> drain from a post hook on main-loop stage 3.
+///     func_80024154 waits on the CD by looping func_80017818, which calls
+///     VSync: running them inside the VSync event nests VSync inside itself
+///     and swaps overlays under a live frame — the documented death of the
+///     debug panel's first warp button. Stage 3 is the game's own load path,
+///     which AutoReload.Reload and AutoStart already call LoadSlot from.
+///
+/// <c>kill</c> is safe at VSync: AutoReload.Simulate only snapshots the CPU,
+/// writes HP, calls func_8002A264 and restores — the settings page already
+/// runs it from inside Present-inside-VSync.
+/// </summary>
+public static class AgentServer
+{
+    public const int DefaultPort = 27900;
+
+    /// <summary>The listening port, or 0 when off.</summary>
+    public static int Port { get; private set; }
+
+    // End of main-loop stage 3 -- the site the game's own load path re-enters an
+    // area from, and where AutoReload's and AutoStart's hooks already sit.
+    const uint PlayerStage = 0x8002A550;
+
+    const int MaxLineLength = 256;
+    const int ReplyTimeoutMs = 5000;
+    const int DefaultHoldMs = 150;
+    const int QueueCap = 16;               // bound per queue; each heavy entry is seconds of loader time
+
+    /// <summary>One request, routed to a queue; the reply is its single-line JSON.</summary>
+    sealed record Cmd(string Name, string Arg1, string Arg2, TaskCompletionSource<string> Reply);
+
+    // Fast: drained by the VSync listener. Heavy: drained by the stage-3 hook.
+    static readonly ConcurrentQueue<Cmd> _fast = new();
+    static readonly ConcurrentQueue<Cmd> _heavy = new();
+
+    // The synthetic press. Own copy rather than AutoStart._inject, which belongs
+    // to that patch's boot driver: the two must never fight over one field.
+    static volatile ushort _pressBits;
+    static long _pressUntil;
+
+    // The same case-insensitive names KF2_AUTOPAD builds in Program.cs.
+    static readonly Dictionary<string, ushort> Buttons = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Select"] = Controller.Select, ["Start"] = Controller.Start,
+        ["Cross"] = Controller.Cross, ["Circle"] = Controller.Circle,
+        ["Square"] = Controller.Square, ["Triangle"] = Controller.Triangle,
+        ["L1"] = Controller.L1, ["R1"] = Controller.R1,
+        ["L2"] = Controller.L2, ["R2"] = Controller.R2,
+        ["L3"] = Controller.L3, ["R3"] = Controller.R3,
+        ["Up"] = Controller.Up, ["Down"] = Controller.Down,
+        ["Left"] = Controller.Left, ["Right"] = Controller.Right,
+    };
+
+    static readonly string[] HelpCommands =
+    [
+        "state - the player/area snapshot as JSON",
+        "load <slot 1..3> - load a save through the game's own loader",
+        "warp <area 0..7> - re-enter an area through the game's own entry routine",
+        "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
+        "kill - drop HP to zero, the way a hit would",
+        "nearby [radius=8192] - live records of the world tables within radius units",
+    ];
+
+    // HookManager attributes hooks to a mod so they can be removed again. This is
+    // in-project rather than a loaded package, so it declares its own identity.
+    static readonly ModInfo _self = new()
+    {
+        Id = "kf2.agentserver",
+        Name = "Agent command channel",
+        Version = "1.0",
+        Description = "TCP loopback command channel for automated agents.",
+    };
+
+    public static void Configure(string? spec)
+    {
+        if (string.IsNullOrWhiteSpace(spec))
+        {
+            Port = 0;
+            return;
+        }
+
+        var s = spec.Trim().ToLowerInvariant();
+        if (s is "0" or "off") { Port = 0; return; }
+        if (s is "1" or "on" or "true" or "yes") { Port = DefaultPort; return; }
+
+        if (!int.TryParse(s, System.Globalization.NumberStyles.Integer,
+                          System.Globalization.CultureInfo.InvariantCulture, out int port))
+            throw new ArgumentException($"KF2_SHELL: cannot read '{spec}'");
+
+        Port = Math.Clamp(port, 1, 65535);
+    }
+
+    public static void Install()
+    {
+        if (Port == 0) return;
+
+        // Cheap commands: the VSync event fires on the game thread, the same
+        // place the beacon reads memory, so no cross-thread access.
+        Event.AddListener<VSyncEvent>(_ => Drain(_fast));
+
+        // Heavy commands: attached on the first overlay load, when SymbolRegistry
+        // can resolve GAME.EXE -- exactly like AutoReload.Attach.
+        bool attached = false;
+        Event.AddListener<OverlayLoadedEvent>(_ =>
+        {
+            if (attached) return;
+            attached = true;
+            AttachHeavy();
+        });
+
+        // Inject through PAD_dr with AutoStart's exact math: the pad buffer is
+        // active-low and its two button bytes are swapped against Controller's
+        // layout, so a pressed Controller bit becomes a cleared swapped bit here.
+        Event.AddListener<PadReadEvent>(e =>
+        {
+            if (e.Port != 0) return;
+            ushort bits = _pressBits;
+            if (bits != 0 && Environment.TickCount64 < _pressUntil)
+                e.Buttons &= (ushort)~(ushort)((bits >> 8) | (bits << 8));
+        });
+
+        try
+        {
+            var listener = new TcpListener(IPAddress.Loopback, Port);
+            listener.Start();
+            new Thread(AcceptLoop) { IsBackground = true, Name = "kf2-agent-server" }.Start(listener);
+            Console.WriteLine($"[KF2] agent server: listening on 127.0.0.1:{Port}");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[KF2] agent server: could not listen on port {Port}: {ex.Message}");
+        }
+    }
+
+    static void AttachHeavy()
+    {
+        SymbolRegistry.Build();
+        var impl = typeof(AgentServer)
+            .GetMethod(nameof(AfterPlayerStage), BindingFlags.Public | BindingFlags.Static)!;
+
+        var target = SymbolRegistry.Resolve("game", null, PlayerStage);
+        if (target == null || !HookManager.AddPost(_self, target, impl))
+        {
+            Console.Error.WriteLine($"[KF2] agent server: nothing hooked at game/0x{PlayerStage:X8} — " +
+                                    "load/warp will time out until an area is live. " +
+                                    "See \"The command channel\" in docs/PATCHES_AND_MODS.md.");
+            return;
+        }
+
+        HookManager.Commit();
+    }
+
+    /// <summary>
+    /// End of main-loop stage 3: the heavy drainer. Only runs once GAME.EXE is in
+    /// a real area — which is precisely the guarantee load/warp need.
+    /// </summary>
+    public static void AfterPlayerStage(CpuContext c, IMemory m) => Drain(_heavy);
+
+    // ---- accept / serve ----
+
+    static void AcceptLoop(object? obj)
+    {
+        var listener = (TcpListener)obj!;
+        while (true)
+        {
+            TcpClient client;
+            try { client = listener.AcceptTcpClient(); }
+            catch (SocketException) { continue; }         // transient; keep accepting
+            catch (IOException) { continue; }
+            catch (ObjectDisposedException) { return; }   // listener gone: shutting down
+
+            new Thread(() => Serve(client)) { IsBackground = true, Name = "kf2-agent-client" }.Start();
+        }
+    }
+
+    static void Serve(TcpClient client)
+    {
+        try
+        {
+            using (client)
+            {
+                Stream stream = client.GetStream();
+                using var writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+
+                // Decoded by hand rather than StreamReader.ReadLine so the
+                // length cap binds while the line arrives: ReadLine buffered
+                // the whole newline-terminated line before the check could
+                // run, letting a client that never terminates grow memory
+                // without bound.
+                var decoder = Encoding.UTF8.GetDecoder();
+                var bytes = new byte[256];
+                var chars = new char[256];
+                var line = new char[MaxLineLength];
+                int len = 0;
+                bool over = false;
+
+                while (stream.Read(bytes, 0, bytes.Length) is int got && got > 0)
+                {
+                    int consumed = 0;
+                    while (consumed < got)
+                    {
+                        decoder.Convert(bytes, consumed, got - consumed,
+                                        chars, 0, chars.Length, false,
+                                        out int bUsed, out int cUsed, out _);
+                        consumed += bUsed;
+                        for (int i = 0; i < cUsed; i++)
+                        {
+                            char ch = chars[i];
+                            if (ch is '\n' or '\r')
+                            {
+                                Answer(writer, line, len, over);
+                                len = 0;
+                                over = false;
+                            }
+                            else if (!over)
+                            {
+                                if (len == MaxLineLength) over = true;
+                                else line[len++] = ch;
+                            }
+                            // else: discarding the tail of an over-long line
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // The client went away mid-request; the socket dies with the usings
+            // above and any pending reply's TCS just never completes. The game
+            // carries on regardless.
+        }
+    }
+
+    /// <summary>One completed line. Empty input stays silent, as before; a
+    /// line that grew past the cap answers the too-long error without the
+    /// excess ever having been buffered.</summary>
+    static void Answer(StreamWriter writer, char[] line, int len, bool over)
+    {
+        if (over)
+        {
+            writer.WriteLine("{\"ok\":false,\"error\":\"line too long (256 max)\"}");
+            return;
+        }
+        var text = new string(line, 0, len).Trim();
+        if (text.Length > 0) writer.WriteLine(Route(text));
+    }
+
+    // ---- routing ----
+
+    /// <summary>Parse one request line, route it to a queue, wait for the game
+    /// thread's answer. Unknown commands answer immediately.</summary>
+    static string Route(string line)
+    {
+        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var cmd = new Cmd(parts[0].ToLowerInvariant(),
+                          parts.Length > 1 ? parts[1] : "",
+                          parts.Length > 2 ? parts[2] : "",
+                          new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously));
+
+        switch (cmd.Name)
+        {
+            case "state":
+            case "press":
+            case "kill":
+            case "help":
+            case "nearby":
+                Enqueue(_fast, cmd);
+                break;
+            case "load":
+            case "warp":
+                Enqueue(_heavy, cmd);
+                break;
+            default:
+                return "{\"ok\":false,\"error\":" + Q($"unknown command '{cmd.Name}'; try help") + "}";
+        }
+
+        if (!cmd.Reply.Task.Wait(ReplyTimeoutMs))
+        {
+            return cmd.Name is "load" or "warp"
+                ? "{\"ok\":false,\"error\":"
+                  + Q("timed out after 5s — stage 3 never ran (are you in an area?)")
+                  + ",\"cmd\":" + Q(cmd.Name) + "}"
+                : "{\"ok\":false,\"error\":" + Q("timed out after 5s")
+                  + ",\"cmd\":" + Q(cmd.Name) + "}";
+        }
+
+        return cmd.Reply.Task.Result;
+    }
+
+    /// <summary>The game-thread drainer: execute everything queued, reply to each.</summary>
+    static void Drain(ConcurrentQueue<Cmd> queue)
+    {
+        while (queue.TryDequeue(out var cmd))
+        {
+            string reply;
+            try { reply = Execute(cmd); }
+            catch (Exception ex)
+            {
+                reply = "{\"ok\":false,\"cmd\":" + Q(cmd.Name) + ",\"error\":" + Q(ex.Message) + "}";
+            }
+            cmd.Reply.TrySetResult(reply);
+        }
+    }
+
+    /// <summary>Bound the queues: every queued heavy command is seconds of
+    /// serial loader time once stage 3 runs again, and an unbounded backlog
+    /// would let one client schedule minutes of warps ahead.</summary>
+    static void Enqueue(ConcurrentQueue<Cmd> queue, Cmd cmd)
+    {
+        if (queue.Count >= QueueCap)
+        {
+            cmd.Reply.TrySetResult(
+                Err($"too many queued '{cmd.Name}' commands ({QueueCap} max)"));
+            return;
+        }
+        queue.Enqueue(cmd);
+    }
+
+    static string Execute(Cmd cmd) => cmd.Name switch
+    {
+        "state" => DoState(),
+        "press" => DoPress(cmd.Arg1, cmd.Arg2),
+        "kill" => DoKill(),
+        "help" => DoHelp(),
+        "load" => DoLoad(cmd.Arg1),
+        "warp" => DoWarp(cmd.Arg1),
+        "nearby" => DoNearby(cmd.Arg1),
+        _ => Err($"unknown command '{cmd.Name}'; try help"),
+    };
+
+    // ---- commands ----
+
+    static string DoState()
+    {
+        if (RecompOne.Runtime.Runtime.Mem == null) return Err("not running");
+        return "{\"ok\":true,\"cmd\":\"state\",\"state\":" + AgentBeacon.Snapshot() + "}";
+    }
+
+    // ---- world perception (nearby) ----
+    //
+    // Both maps are the ones patches/AreaWarp.cs uses for centroid placement,
+    // and the debug mod carried before it. The object table is documented in
+    // docs/GAME_INTERNALS.md; buf6's entity reading is Inferred, not confirmed
+    // (docs/TODO.md still calls that table unmapped), so records are reported
+    // as positions tagged by table -- never named as enemies.
+    const uint PlayerMaxHp = 0x80199426;   // u16; nonzero only while an area is up
+    const uint PlayerPosX  = 0x801994EC;   // s32
+    const uint PlayerPosY  = 0x801994F0;   // s32, height
+    const uint PlayerPosZ  = 0x801994F4;   // s32
+
+    const uint ObjectTable = 0x80177714;
+    const int ObjectStride = 0x44;
+    const int ObjectCount = 0x18C;
+    const int ObjectEmptyOff = 0x4;        // byte == 0xFF when the slot is free
+    const int ObjectPosOff = 0x14;         // VECTOR
+    const uint EntityTable = 0x8016C544;   // buf6
+    const int EntityStride = 0x7C;
+    const int EntityCount = 0xC8;
+    const int EntityEmptyOff = 0x0;
+    const int EntityPosOff = 0x2C;         // VECTOR
+
+    const int NearbyDefaultRadius = 8192;  // four tiles
+    const int NearbyMaxRadius = 0x10000;
+    const int NearbyListCap = 16;
+
+    /// <summary>
+    /// Live records of both world tables within a horizontal radius of the
+    /// player, nearest first. This is the agent's world feedback: positions of
+    /// whatever the tables hold, with distances, so navigation can be closed
+    /// loop without claiming to know what any record is.
+    /// </summary>
+    static string DoNearby(string radiusArg)
+    {
+        int radius = NearbyDefaultRadius;
+        if (radiusArg.Length > 0 &&
+            (!int.TryParse(radiusArg, out radius) || radius < 1 || radius > NearbyMaxRadius))
+            return Err($"radius must be 1..{NearbyMaxRadius}");
+
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (m == null || m.ReadU16(PlayerMaxHp) == 0) return Err("no area running");
+
+        int px = (int)m.ReadU32(PlayerPosX);
+        int py = (int)m.ReadU32(PlayerPosY);
+        int pz = (int)m.ReadU32(PlayerPosZ);
+
+        var sb = new StringBuilder("{\"ok\":true,\"cmd\":\"nearby\",\"radius\":")
+            .Append(radius)
+            .Append(",\"pos\":[")
+            .Append(px).Append(',').Append(py).Append(',').Append(pz).Append(']');
+
+        AppendNearby(sb, m, "objects", ObjectTable, ObjectStride, ObjectCount,
+                     ObjectEmptyOff, ObjectPosOff, px, pz, radius);
+        AppendNearby(sb, m, "entities", EntityTable, EntityStride, EntityCount,
+                     EntityEmptyOff, EntityPosOff, px, pz, radius);
+        sb.Append('}');
+        return sb.ToString();
+    }
+
+    static void AppendNearby(StringBuilder sb, IMemory m, string name,
+                             uint table, int stride, int count,
+                             int emptyOff, int posOff,
+                             int px, int pz, int radius)
+    {
+        var hits = new List<(long D2, int I, int X, int Y, int Z)>();
+        long r2 = (long)radius * radius;
+        int live = 0;
+        for (int i = 0; i < count; i++)
+        {
+            uint rec = table + (uint)(i * stride);
+            if (m.ReadU8(rec + (uint)emptyOff) == 0xFF) continue;
+            live++;
+            int x = (int)m.ReadU32(rec + (uint)posOff);
+            int y = (int)m.ReadU32(rec + (uint)(posOff + 4));
+            int z = (int)m.ReadU32(rec + (uint)(posOff + 8));
+            long dx = x - px, dz = z - pz;
+            long d2 = dx * dx + dz * dz;
+            if (d2 > r2) continue;
+            hits.Add((d2, i, x, y, z));
+        }
+        hits.Sort((a, b) => a.D2.CompareTo(b.D2));
+
+        sb.Append(",\"").Append(name).Append("\":{\"total\":").Append(live)
+          .Append(",\"within\":").Append(hits.Count).Append(",\"items\":[");
+        for (int n = 0; n < hits.Count && n < NearbyListCap; n++)
+        {
+            var h = hits[n];
+            if (n > 0) sb.Append(',');
+            sb.Append("{\"i\":").Append(h.I)
+              .Append(",\"pos\":[").Append(h.X).Append(',').Append(h.Y).Append(',').Append(h.Z).Append(']')
+              .Append(",\"dist\":").Append((int)Math.Sqrt(h.D2))
+              .Append('}');
+        }
+        sb.Append("]}");
+    }
+
+    static string DoPress(string name, string msArg)
+    {
+        if (!Buttons.TryGetValue(name, out ushort bits))
+            return Err($"no such button '{name}' (Cross, Start, Select, Circle, Square, Triangle, " +
+                       "L1-R3, Up, Down, Left, Right)");
+
+        long hold = DefaultHoldMs;
+        if (msArg.Length > 0 &&
+            (!long.TryParse(msArg, out hold) || hold < 1 || hold > 5000))
+            return Err("holdMs must be 1..5000");
+
+        // One synthetic press at a time: a later press replaces bits and deadline.
+        _pressBits = bits;
+        _pressUntil = Environment.TickCount64 + hold;
+
+        return "{\"ok\":true,\"cmd\":\"press\",\"button\":" + Q(name) + ",\"holdMs\":" + hold + "}";
+    }
+
+    static string DoKill()
+    {
+        AutoReload.Simulate();
+        return "{\"ok\":true,\"cmd\":\"kill\",\"status\":" + Q(AutoReload.Status) + "}";
+    }
+
+    static string DoHelp()
+    {
+        var sb = new StringBuilder("{\"ok\":true,\"cmd\":\"help\",\"commands\":[");
+        for (int i = 0; i < HelpCommands.Length; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(Q(HelpCommands[i]));
+        }
+        sb.Append("]}");
+        return sb.ToString();
+    }
+
+    static string DoLoad(string slotArg)
+    {
+        if (!int.TryParse(slotArg, out int slot) || slot < 1 || slot > 3)
+            return Err("slot must be 1..3");
+
+        var c = RecompOne.Runtime.Runtime.Cpu;
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (c == null || m == null) return Err("not running");
+
+        uint result = AutoReload.LoadSlot(c, m, (byte)slot, out uint area);
+        return result switch
+        {
+            0 => "{\"ok\":true,\"cmd\":\"load\",\"slot\":" + slot + ",\"area\":" + area + "}",
+            1 => Err("no such save file"),
+            2 => Err("checksum failed"),
+            _ => Err($"load failed ({result})"),
+        };
+    }
+
+    static string DoWarp(string areaArg)
+    {
+        if (!int.TryParse(areaArg, out int area))
+            return Err("usage: warp <area 0..7>");
+
+        var c = RecompOne.Runtime.Runtime.Cpu;
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (c == null || m == null) return Err("not running");
+
+        string? err = AreaWarp.TryRun(c, m, area);
+        return err != null ? Err(err) : ("{\"ok\":true,\"cmd\":\"warp\",\"area\":" + area + "}");
+    }
+
+    // ---- JSON helpers ----
+
+    static string Err(string message) =>
+        "{\"ok\":false,\"error\":" + Q(message) + "}";
+
+    /// <summary>A double-quoted, escaped JSON string. Every response goes through
+    /// this for anything not produced by this file, so user input can never end a
+    /// string early.</summary>
+    static string Q(string s)
+    {
+        var sb = new StringBuilder(s.Length + 2);
+        sb.Append('"');
+        foreach (char ch in s)
+        {
+            switch (ch)
+            {
+                case '\"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (ch < 0x20) sb.Append("\\u").Append(((int)ch).ToString("x4"));
+                    else sb.Append(ch);
+                    break;
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
+    }
+}

@@ -115,6 +115,14 @@ something to say about *how* to use them:
   reproducing an input-triggered bug with nobody at the keyboard. Its clock
   starts when the first area module loads, which is the only point in the boot
   sequence that reliably means "in game".
+- **`KF2_SHELL=1`** opens a command channel for agents on TCP 127.0.0.1:27900 —
+  `state | load <slot> | warp <area> | press <button> [ms] | kill`, one request
+  per line, one single-line JSON response back. See "The command channel" in
+  [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+- **`mcp/` is the same channel as an MCP server.** `KingsField2Mcp.csproj` is a
+  standalone stdio server exposing those six verbs as typed tools to any MCP
+  host (`KF2_MCP_ENDPOINT` overrides the endpoint). See "The MCP layer" in
+  [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 - **The attract demo is a free live session.** Leave the port at the title and it
   walks itself into an area about a minute later, with a character, an HP bar and
   eventually a death — which is how in-game behaviour gets tested without a human

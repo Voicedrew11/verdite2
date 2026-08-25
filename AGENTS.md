@@ -106,6 +106,9 @@ KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities 
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
+KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
+KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
+KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill
 KF2_UISCALE=1                            # force the interface scale, and save it
 ```
 
@@ -255,6 +258,26 @@ driving the menus — `AutoReload.Simulate()` kills on demand from there, and th
 death clock at `0x8019951A` can be pinned to hold any frame of the death sequence
 still.
 
+**Getting an agent into the game — and driving it once there: `KF2_AUTOSTART`,
+`KF2_AGENT`, `KF2_SHELL`.** An agent left
+at the title waits forever — the boot menus take no input by the usual routes
+(`KF2_AUTOPAD` only arms once an area has loaded, the very thing that has not
+happened), and the screen must not be scraped. `KF2_AUTOSTART=<1..3>` drives the
+pad itself through `PAD_dr`: Start through the intro, Cross to start a New Game
+into `fdat02`, then loads the chosen slot over it through `AutoReload.LoadSlot`,
+landing in the save's own area in a few seconds. `KF2_AGENT=1` prints a
+machine-readable `[KF2-AGENT]` line on each overlay change and about once a second
+(`{"overlay":…,"inGame":…,"hp":…,"area":…,"slot":…}`) — `inGame:false` is how a
+program tells "stuck at the title" from "in an area" without a screenshot. See
+"Auto start and the agent beacon" in `docs/PATCHES_AND_MODS.md`.
+
+**`KF2_SHELL=1` is the acting half**: while the session runs, a line protocol on
+TCP 127.0.0.1:27900 (`state`, `nearby`, `load <slot>`, `warp <area>`,
+`press <button> [ms]`, `kill`; one request per line, one single-line JSON
+response back) steers the game
+the beacon is only watching. See "The command channel" in
+`docs/PATCHES_AND_MODS.md`.
+
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
 its clock starts when the first area module loads, which is the only point in the
 boot sequence that reliably means "in game". `KF2_LOG=bios` is very expensive
@@ -328,6 +351,7 @@ config/kf2.json          recompiler config: overlays, funcMaps, stubs[], patches
 config/funcmaps/*.json   swept function maps (address/name/size; size is mandatory)
 patches/                 hand-written C# replacing recompiled functions
 mods/<id>/               runtime-loaded mods (mod.json + C#, Roslyn-compiled)
+mcp/                     stdio MCP server exposing the KF2_SHELL command channel as tools to MCP hosts
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection and address-hunting tooling
