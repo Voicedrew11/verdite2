@@ -90,7 +90,7 @@ useful than the question was.
    The static world and the 2D HUD are smooth for free; anything with a position of
    its own still stepped, and against a smoothly sliding world that reads worse
    than not smoothing at all. `patches/ObjectSmoothing.cs`
-   (`KF2_SMOOTH_OBJECTS=1`) interpolates the object table at `0x80177714` across a
+   (`KF2_SMOOTH_OBJECTS=1`) carries the object table at `0x80177714` across a
    pre/post pair on stage 13 — measured `121/121 frames carried`, no leak, and the
    death clock still 65 ticks in 3219 ms. **The arm is not the same bug**: it is
    2D, drawn by the HUD builder `func_80031D5C`, so what steps is its sprite index

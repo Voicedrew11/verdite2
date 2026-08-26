@@ -62,9 +62,10 @@ public sealed class FrameSmoothingPage : IPatchPage
             ImGui.SetTooltip("Smoothing the camera leaves enemies, doors and everything else " +
                              "that moves arriving in tick-sized steps, which against a smoothly " +
                              "sliding world is more obvious than it would be otherwise. This " +
-                             "walks each of them between the two positions the game gave it. " +
-                             "Unlike the view it interpolates rather than guesses ahead, so it " +
-                             "cannot overshoot. Off by default.");
+                             "carries each of them on by however far it moved last tick, on " +
+                             "the same clock as the view -- the two have to agree about what " +
+                             "time it is, or the objects read as slower than the world. Off " +
+                             "by default.");
 
         if (!active)
         {

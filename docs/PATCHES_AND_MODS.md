@@ -719,16 +719,26 @@ what" in [GAME_INTERNALS.md](GAME_INTERNALS.md) for how that was established.
 
 Two decisions differ deliberately from the camera's:
 
-* **It interpolates rather than extrapolates.** The view extrapolates because it
-  answers the player's hand and a tick of latency on it would be felt. Nothing in
-  this table is steered by the player, so the latency is free and buys immunity to
-  overshoot — an object that stops or turns is never carried past where it went.
-  Concretely it keeps last tick's positions as well as this tick's and walks *back*
-  from the newer one by `1 - frac`.
+* **It extrapolates, on the same clock as the view — and it did not at first.**
+  Interpolating was the original choice and the reasoning held on its own terms:
+  nothing in this table is steered by the player, so a tick of latency is free, and
+  walking between two positions the game actually produced cannot overshoot the way
+  `KF2_SMOOTH_POS` can. What that missed is the *neighbour*. `FrameSmoothing`
+  carries the view forward to `t + frac`; interpolating draws an object at
+  `t - 1 + frac`. The two are then a whole tick apart — 50 ms at the default rate —
+  and a constant offset between the world and the things standing in it does not
+  read as latency, it reads as **the objects moving more slowly than everything
+  else**. Reported exactly that way: *"the enemies still move visibly slower than
+  the compass."* The overshoot the first version was avoiding is real, but bounded
+  to one tick and corrected on the next; being on a different clock from the camera
+  is neither. **Two smoothers must agree about what time it is** — that is the rule
+  worth carrying to whatever gets smoothed next.
 * **A step over 1024 units on any axis is a placement, and is left alone.**
   Without that, an object spawned, respawned, moved by a script, or simply placed
-  when the area finished loading gets swept smoothly across the map over the next
-  tick instead of appearing. The threshold comes from measurement, not taste: real
+  when the area finished loading is flung a whole area's width by the
+  extrapolation. (It mattered before the switch to extrapolating too, where it
+  swept the object smoothly across the map instead; forward, it is what makes
+  extrapolating safe to do at all.) The threshold comes from measurement, not taste: real
   motion peaked at **37 units a tick**, the player — the fastest thing in the game —
   covers 1817 units in 2 s at 20 Hz and so about **45 a tick**, and one window
   caught a **233,472-unit** step at area load. 1024 sits twenty times above

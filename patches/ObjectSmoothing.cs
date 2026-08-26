@@ -45,16 +45,28 @@ namespace Kf2;
 /// reports. So the object table is where a drawn position lives, and carrying it
 /// is what moves the picture.
 ///
-/// ## Interpolate, not extrapolate
+/// ## Extrapolate, because the camera does
 ///
-/// <see cref="FrameSmoothing"/> extrapolates the view, because a view responds to
-/// the player's hand and a tick of latency on it would be felt. Nothing here is
-/// steered by the player, so this **interpolates instead**: it keeps the previous
-/// tick's positions as well as the current ones and walks between them. That costs
-/// one tick of latency on every object, which nobody can feel, and buys immunity
-/// to the overshoot that keeps <c>KF2_SMOOTH_POS</c> off by default -- an object
-/// that stops, turns, or is teleported by a script would otherwise be carried past
-/// where it went and snapped back.
+/// **This interpolated at first, and that was wrong -- not in itself, but next to
+/// the camera.** The reasoning for interpolating was sound on its own terms:
+/// nothing in this table is steered by the player, so a tick of latency is free,
+/// and walking between two positions the game actually produced cannot overshoot
+/// the way <c>KF2_SMOOTH_POS</c> can. What it missed is that
+/// <see cref="FrameSmoothing"/> carries the view *forward*, to `t + frac`, while
+/// interpolating draws an object at `t - 1 + frac`. The two are then a whole tick
+/// apart -- 50 ms at the default rate -- and a constant offset between the world
+/// and the things standing in it does not read as latency, it reads as **the
+/// objects moving more slowly than everything else**. Which is what it was
+/// reported as: "the enemies still move visibly slower than the compass."
+///
+/// So it extrapolates, on the same clock and by the same fraction as the view.
+/// The overshoot that argument was avoiding is real but bounded and brief: an
+/// object that stops or turns is carried at most one tick past where it went and
+/// is corrected on the next one. Being on a different clock from the camera is
+/// neither bounded nor brief.
+///
+/// The guard against a *placement* below is what makes this safe to do forward at
+/// all -- an extrapolated teleport would fling an object a whole area's width.
 ///
 /// ## Why it cannot leak
 ///
@@ -248,13 +260,13 @@ public static class ObjectSmoothing
                 continue;
             }
 
-            // Walking *back* from where the game has already put it, by the part of
-            // the tick that has not happened yet. So an object is drawn between its
-            // two known positions rather than past the newer one.
-            double back = 1.0 - frac;
-            int x = _cur[b] - (int)Math.Round(dx * back);
-            int y = _cur[b + 1] - (int)Math.Round(dy * back);
-            int z = _cur[b + 2] - (int)Math.Round(dz * back);
+            // Carried *forward* from where the game has put it, by the part of the
+            // tick this frame stands at, on the assumption the object keeps doing
+            // what it did last tick. Same clock as the camera -- see the class
+            // comment for why that matters more than the overshoot does.
+            int x = _cur[b] + (int)Math.Round(dx * frac);
+            int y = _cur[b + 1] + (int)Math.Round(dy * frac);
+            int z = _cur[b + 2] + (int)Math.Round(dz * frac);
 
             uint pos = (uint)(Table + i * Stride + PosOff);
             _saved[b] = (int)m.ReadU32(pos);
@@ -271,7 +283,7 @@ public static class ObjectSmoothing
             carried++;
             if (_probe)
             {
-                moved += Math.Abs(dx * back) + Math.Abs(dy * back) + Math.Abs(dz * back);
+                moved += Math.Abs(dx * frac) + Math.Abs(dy * frac) + Math.Abs(dz * frac);
                 int step = Math.Abs(dx) + Math.Abs(dy) + Math.Abs(dz);
                 if (step > _biggestStep) _biggestStep = step;
             }

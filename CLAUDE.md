@@ -185,8 +185,11 @@ constants `AgentServer` reports `nearby` from). It is that table and **not** the
 200-record entity table at `0x8016C544`, which is AI state stage 4 copies *from*
 it; measured by reading `func_80032588`'s arguments, which are
 `0x80177714 + slot*0x44 + 0x14` for slot numbers `nearby` agrees with. It
-**interpolates rather than extrapolates** — nothing here is steered by the player,
-so a tick of latency is free and overshoot is not worth risking — and it leaves a
+**extrapolates, on the same clock and by the same fraction as the view** — it
+interpolated at first, which was defensible alone and wrong beside a camera
+carried *forward*, since the two then sit a whole tick apart and a constant offset
+between the world and the things in it reads as the objects moving slower than
+everything else. It leaves a
 slot whose step exceeds 1024 units on an axis exactly where the game put it,
 because that is a placement rather than motion (measured: real motion 37 u a tick,
 a placement 233,472). **What none of this fixes is animation**: the player's arm is
