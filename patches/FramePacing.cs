@@ -91,6 +91,12 @@ namespace Kf2;
 ///                        -0x14 out, hold counter 0x80192D43. Its own subtree is
 ///                        three functions and none can draw, so the fade is gated
 ///                        even though its caller is the renderer
+///     13 func_8002DC78   the animated-texture updater stage 13 calls -- eight
+///                        slots at 0x80192D58 (stride 0x18), each a scroll phase at
+///                        rec+0x4 re-uploaded to VRAM through func_80060624. The
+///                        water, the fire and the creatures' skins. Its subtree is
+///                        the VRAM upload alone, so like the fade it is gated though
+///                        its caller draws; ungated it scrolled at the render rate
 ///
 /// **Can it draw** is the test each of those had to pass, because a stage that
 /// submits primitives cannot be skipped -- at 120 fps three frames in four would
@@ -248,6 +254,21 @@ public static class FramePacing
                       //    can draw, so it is safe to skip even though its caller
                       //    is the renderer. Ungated, an area fade is four times
                       //    quicker at 120 fps than on hardware.
+        0x8002DC78,   // 13 the animated-texture updater, also called from stage 13
+                      //    (at 0x800346..). It walks 8 slots at 0x80192D58 (stride
+                      //    0x18): each advances a scroll phase at rec+0x4 by the
+                      //    per-slot rate at rec+0x3, wrapping at rec+0xC, then
+                      //    re-uploads the scrolled texture region to VRAM through
+                      //    func_80060624 (a LoadImage-style GPU transfer). This is
+                      //    the animated water, the main-hall fire and the creatures'
+                      //    scrolling skins. Ungated it advanced once per rendered
+                      //    frame, so the scroll ran at the render rate -- measured
+                      //    rec+0x4 changing on 100% of frames at 120 fps, i.e. six
+                      //    times too fast against the 20 Hz world. Its subtree is
+                      //    the VRAM upload alone -- no DrawOTag/VSync/PutDispEnv/
+                      //    PutDrawEnv -- so skipping it on a non-tick frame is safe:
+                      //    the phase holds and VRAM keeps the last tick's frame, so
+                      //    the texture animates at the tick rate.
     ];
 
     /// <summary>True once KF2_FPS has spoken, so the saved rate does not overrule it.</summary>

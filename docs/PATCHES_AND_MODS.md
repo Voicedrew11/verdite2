@@ -647,6 +647,25 @@ function's call subtree and look for `DrawOTag`, `VSync`, `PutDispEnv` or
   `PutDrawEnv` are all in its 268-function subtree, so it presents. Gating it
   wholesale would drop frames of the picture. Its per-tick counters would have to
   be found and gated one at a time.
+
+**Animated textures — the sixth gated function, `func_8002DC78`.** The animated
+water at the start, the main-hall fire and the creatures' scrolling skins are one
+system: **eight slots at `0x80192D58`** (stride `0x18`), each holding a scroll
+phase at `rec+0x4`, a per-slot advance rate at `rec+0x3`, a wrap at `rec+0xC`, and
+a source-texture pointer at `rec+0xE`. `func_8002DC78` walks all eight every call —
+it advances each phase, then re-uploads the scrolled region of the source texture
+to VRAM through `func_80060624` (a `LoadImage`-style GPU transfer). It is called
+once, straight from **stage 13** (the renderer, `func_800342D8`, at `0x800346..`),
+so ungated it ran once per *rendered* frame: the scroll advanced at the render
+rate — measured `rec+0x4` changing on **100 % of frames at 120 fps**, six times too
+fast against the 20 Hz world (and the reported "runs high with the framerate":
+faster the higher the frame rate). Its whole subtree is the VRAM upload — no
+`DrawOTag`/`VSync`/`PutDispEnv`/`PutDrawEnv` — so it passes the same "can it draw"
+test as the fade stepper `func_80033FBC` and is added to `FramePacing.DefaultGate`
+alongside it. On a non-tick frame it is skipped: the phase holds and VRAM keeps the
+last tick's frame, so the texture animates at the tick rate whatever the port
+draws (measured `rec+0x4` back to **17 % of frames at 120 fps**, i.e. 20 Hz). No
+setting and no new patch — it is one more address in the gate.
 * **The jitter accumulator at `0x8006E608`** is in stage 13's *own body*
   (`func_800342D8`), not in a callee, so no hook can reach it — `HookManager` only
   detours whole functions and stage 13 must draw. It sums `func_80015374()` and
