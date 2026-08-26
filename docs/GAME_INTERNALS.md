@@ -249,13 +249,20 @@ Two things fell out of it that matter:
   packets a frame). So the arm cannot be "reattached" to an extrapolated camera —
   it is already welded to the screen, and what steps at the tick rate is its
   sprite index, which is what the console did too.
-- **`func_80032588` is handed the object table, not the entity table.** Its `a2`
-  argument is a `VECTOR` pointer, and `KF2_DRAWCENSUS=2` prints it: the addresses
-  are `0x80177714 + slot*0x44 + 0x14`, and the slot numbers match what the command
-  channel's `nearby` reports for `objects`. The 200-record entity table at
-  `0x8016C544` is AI state that stage 4 copies *from* that table into `rec+0x2C`
-  each tick — the arrow points the other way from the obvious guess, and it is why
-  `patches/ObjectSmoothing.cs` interpolates `0x80177714` and not the records.
+- **`func_80032588` is fed from *two* tables, one loop each.** `func_800331B4`
+  loops the **entity table** `0x8016C544` (200 records, `0x7C` stride, free at
+  `+0x0`) first — **creatures/enemies**, position at `rec+0x2C` and a three-`s16`
+  rotation at `rec+0x40` (yaw biased by `0x800`) passed as `a3` — then loops the
+  **object table** `0x80177714` (`0x44` stride) for static props and sprites. A
+  `KF2_DRAWCENSUS=2` reading of `a2` reported only `0x80177714 + slot*0x44 + 0x14`,
+  which for a while read as "the renderer never touches the entity record"; it was
+  measured in a scene with props and **no creatures near**, so it caught the second
+  loop alone. The truth is that the entity record is both AI state *and* what the
+  first loop draws creatures from — stage 4 copies the object position into
+  `rec+0x2C`, but the renderer then reads that copy, plus a rotation the object
+  table has no equivalent of. This is why `patches/ObjectSmoothing.cs` interpolates
+  **both** tables, and the entity table's rotation on top: smoothing `0x80177714`
+  alone left every enemy stepping in position and facing.
 
 Two traps in measuring it this way, both hit:
 

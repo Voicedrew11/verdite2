@@ -720,13 +720,30 @@ the renderer that reads these and not the camera builder. Stage 13 writes nothin
 but the display list, so the interpolated positions are gone before the next tick's
 AI, a save or a proximity trigger can see them.
 
-**The table is `0x80177714`** — 396 slots of `0x44`, `VECTOR` at `+0x14`, free when
-the byte at `+0x4` is `0xFF`, the constants `patches/AgentServer.cs` already reads
-for `nearby`. That it is the *object* table and not the 200-record entity table at
-`0x8016C544` is the one thing here that had to be measured rather than assumed:
-stage 4 copies the object's position **into** `rec+0x2C` each tick, so the entity
-record is a copy, and the renderer never reads it. See "What in the renderer draws
+**There are two tables, because the renderer walks two.** `func_800331B4` loops
+the **entity table** `0x8016C544` (200 records of `0x7C`, free at `+0x0`, position
+a `VECTOR` at `+0x2C`, rotation three `s16` at `+0x40`) for **creatures/enemies**,
+then loops the **object table** `0x80177714` (396 slots of `0x44`, `VECTOR` at
+`+0x14`, free at `+0x4`) for static props and sprites — both the constants
+`patches/AgentServer.cs` already reads for `nearby` (`entities` and `objects`).
+
+For a while this carried only the object table, on the belief — from a
+`KF2_DRAWCENSUS=2` reading of `func_80032588`'s `a2` — that "the renderer reads the
+object table and not the entity record." That reading was taken with props on
+screen and **no creatures near**, so it saw only the second loop. The entity record
+is a copy *and* a source: stage 4 copies the object position into `rec+0x2C`, but
+the first loop then draws creatures from that copy, plus a rotation the object table
+has no equivalent of. Smoothing the object table alone therefore left every enemy
+stepping in **both** position and facing — the reported jitter — so this carries
+**both** tables, and the entity rotation on top. See "What in the renderer draws
 what" in [GAME_INTERNALS.md](GAME_INTERNALS.md) for how that was established.
+
+The entity rotation is interpolated the shortest way round a **4096-unit turn** (the
+`0x800` yaw bias the renderer adds is half of it). The raw lanes are not confined to
+one turn — the probe measures signed/accumulated values above `0xFFF` and just under
+`0x10000` — so the carry works modulo 4096, the part the GTE reads, and leaves the
+bits above it untouched. Measured at 60 fps in an area: `241/241 frames carried, 3.0
+creature(s) each`, no leak, alongside the object pass.
 
 Two things about it are worth stating:
 
@@ -775,8 +792,14 @@ welded to the screen and there is no camera to reattach it to; what steps is its
 **sprite index**, advanced once a tick by stage 3's player control. Interpolating
 between two authored sprites is not a thing, and a console running at 20 fps
 stepped it at exactly the same rate. The same goes for a creature's animation
-frames as distinct from its position: `ObjectSmoothing` makes an enemy *travel*
-smoothly, and it still cycles its poses on the tick.
+frames as distinct from its position and facing: `ObjectSmoothing` now makes an
+enemy *travel and turn* smoothly, but it still cycles its **poses** on the tick.
+That is the same class as the arm — the pose is chosen by a frame index in the
+entity record, advanced once a tick, with no in-between the game ever produced to
+interpolate to. Whether it can be smoothed at all is an open question in
+[TODO.md](TODO.md): it needs `func_80032588` to prove skeletal (interpolatable
+per-limb transforms) rather than keyframe vertex swaps, and the console stepped it
+at 20 fps regardless.
 
 ### The comparison mode
 

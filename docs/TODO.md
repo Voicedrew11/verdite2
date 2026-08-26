@@ -100,6 +100,22 @@ useful than the question was.
    that moves" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md) and "What in the
    renderer draws what" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
 
+   **That first version smoothed the wrong table for enemies.** It carried only the
+   object table `0x80177714`, but `func_800331B4` draws creatures from a *separate*
+   loop over the **entity table** `0x8016C544` (200 records of `0x7C`, position
+   `+0x2C`, rotation `+0x40`) — the `KF2_DRAWCENSUS=2` reading that said "renderer
+   reads the object table, not the entity record" was taken with no creatures near
+   and saw only the second loop. So enemies stepped in position *and* facing even
+   with objects on. `ObjectSmoothing` now carries both tables, and interpolates the
+   entity **rotation** the shortest way round a 4096-unit turn — measured
+   `241/241 frames carried, 3.0 creature(s) each`, no leak. **The open part is
+   animation poses**: an enemy's pose is a frame index in the entity record advanced
+   once a tick, the same class as the arm's sprite index. Whether it can be smoothed
+   needs a spike — read `func_80032588` and its callees (`func_8005C780`,
+   `func_8005C810`, `func_8005D968`) to decide if a pose is interpolatable per-limb
+   transforms or a keyframe vertex swap with no in-between — and the console stepped
+   these at 20 fps regardless, so it may be left as authentic.
+
    **What is still left is the part no counter answers**, and it is the user's: is
    20 actually right, is a 20 fps default acceptable or should the picture be drawn
    faster than the world runs, and does the full-rate mode feel better than a

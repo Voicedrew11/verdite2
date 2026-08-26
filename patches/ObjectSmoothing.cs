@@ -29,21 +29,30 @@ namespace Kf2;
 /// world: "the enemies move at the correct speed, but they are animated at a
 /// visibly lower framerate."
 ///
-/// ## What moves, and where
+/// ## What moves, and where -- two tables, because the renderer walks two
 ///
-/// One table: **`0x80177714`, 396 slots of `0x44` bytes**, with the position a
-/// `VECTOR` at `+0x14` and the slot free when the byte at `+0x4` is `0xFF`. Those
-/// are the same constants `patches/AgentServer.cs` reports `nearby` from.
+/// The model submitter `func_800331B4` has **two loops**, and they feed
+/// `func_80032588` (under stage 13's world walk) from two different tables:
 ///
-/// It is the *object* table rather than the 200-record entity table at
-/// `0x8016C544`, and that distinction is load-bearing: the entity record is AI
-/// state, and stage 4 (`func_80040348`) *copies* the object's position into it at
-/// `rec+0x2C` each tick rather than the other way round. The renderer never reads
-/// the entity record -- measured, by handing `func_80032588` (the model submitter,
-/// under stage 13's world walk) its arguments: it is called with `a2` pointing at
-/// `0x80177714 + slot*0x44 + 0x14`, and the slot numbers match what `nearby`
-/// reports. So the object table is where a drawn position lives, and carrying it
-/// is what moves the picture.
+/// * **The object table -- `0x80177714`, 396 slots of `0x44`**, position a
+///   `VECTOR` at `+0x14`, free when the byte at `+0x4` is `0xFF`. Static props,
+///   doors and sprites. This is what a `KF2_DRAWCENSUS=2` reading of
+///   `func_80032588`'s `a2` caught (`0x80177714 + slot*0x44 + 0x14`) -- but only
+///   because the scene it measured had props and no creatures near.
+/// * **The entity table -- `0x8016C544`, 200 slots of `0x7C`**, free when the byte
+///   at `+0x0` is `0xFF`, position a `VECTOR` at `+0x2C` and a three-`s16`
+///   rotation at `+0x40`. **Creatures/enemies.** The object table has no rotation
+///   at all, so this loop is the only place an enemy's facing lives.
+///
+/// Both are the constants `patches/AgentServer.cs` reports `nearby` from
+/// (`objects` and `entities`). The earlier belief that "the renderer reads the
+/// object table and not the entity record" was right for props and wrong for
+/// creatures: stage 4 (`func_80040348`) copies the object position into
+/// `rec+0x2C` of the entity record, but the entity record is *also* what the first
+/// loop draws creatures from, rotation included. Smoothing the object table alone
+/// therefore left every enemy stepping in both position and facing -- the reported
+/// jitter -- which is why this carries **both** tables, and the entity table's
+/// rotation on top.
 ///
 /// ## Interpolate, and so does the camera now
 ///
@@ -91,6 +100,28 @@ public static class ObjectSmoothing
     const int Count = 0x18C;
     const int EmptyOff = 0x4;     // byte == 0xFF when the slot is free
     const int PosOff = 0x14;      // VECTOR: three s32
+
+    // The entity table -- creatures/enemies -- as patches/AgentServer.cs reads it
+    // for `nearby` "entities". The renderer draws these in a *separate* loop from
+    // the object table (func_800331B4's first loop over 0x8016C544, stride 0x7C),
+    // reading the position from +0x2C and a rotation the object table has no
+    // equivalent of. Neither steps through the object table, so smoothing that one
+    // alone leaves every enemy jittering in place and turn.
+    const uint EntityTable = 0x8016C544;
+    const int EntityStride = 0x7C;
+    const int EntityCount = 0xC8;
+    const int EntityEmptyOff = 0x0;   // byte == 0xFF when the slot is free
+    const int EntityPosOff = 0x2C;    // VECTOR: three s32
+    const int EntityRotOff = 0x40;    // three s16, XYZ; the yaw lane is biased by
+                                      // 0x800 downstream, half of AngleMod below
+
+    /// <summary>One whole turn, in the entity rotation lanes' units. The 0x800 yaw
+    /// bias the renderer applies is exactly half of this, which is the evidence a
+    /// turn is 4096. The raw lanes are *not* confined to [0, AngleMod): the probe
+    /// measures values above 0xFFF and just under 0x10000 -- small signed or
+    /// accumulated angles -- so the interpolation works modulo AngleMod (the only
+    /// part the GTE sees) and preserves the bits above it untouched on write.</summary>
+    const int AngleMod = 0x1000;
 
     /// <summary>
     /// Units on one axis in one tick past which a slot is treated as having been
@@ -143,6 +174,20 @@ public static class ObjectSmoothing
     static readonly int[] _wrote = new int[Count];
     static bool _applied;
 
+    // The entity table's own last/this-tick samples: position (three s32) and
+    // rotation (three s16, kept as raw int). Same priming and OverlayLoadedEvent
+    // invalidation as the object arrays above.
+    static readonly int[] _ePrev = new int[EntityCount * 3];
+    static readonly int[] _eCur = new int[EntityCount * 3];
+    static readonly int[] _ePrevRot = new int[EntityCount * 3];
+    static readonly int[] _eCurRot = new int[EntityCount * 3];
+    static readonly bool[] _eLive = new bool[EntityCount];
+
+    static readonly int[] _eSaved = new int[EntityCount * 3];     // position, to restore
+    static readonly int[] _eSavedRot = new int[EntityCount * 3];  // rotation, to restore
+    static readonly bool[] _eTouched = new bool[EntityCount];
+    static readonly int[] _eWrote = new int[EntityCount];         // wrote X, for the leak check
+
     // ---- the probe ------------------------------------------------------------
 
     static bool _probe;
@@ -152,6 +197,11 @@ public static class ObjectSmoothing
     static double _moveSum, _fracSum;
     static int _biggestStep;
     static long _teleports;
+
+    // The entity pass's own counters.
+    static long _eCarriedFrames, _eCarriedSlots, _eMismatches, _eTeleports;
+    static double _eRotSum;
+    static int _eBiggestAngleStep, _eMaxRawAngle;
 
     static readonly ModInfo _self = new()
     {
@@ -301,6 +351,84 @@ public static class ObjectSmoothing
             _moveSum += moved / carried;
             _fracSum += frac;
         }
+
+        // The entity table: creatures, carried in position *and* facing. Rotation
+        // is the half the object table never had, and is why an enemy turning to
+        // face you snapped a whole tick at a time even with objects smoothed.
+        int eCarried = 0;
+        int eMaxRaw = 0;
+        double eRotMoved = 0.0;
+        int mask = AngleMod - 1;
+
+        for (int i = 0; i < EntityCount; i++)
+        {
+            if (!_eLive[i]) continue;
+
+            int b = i * 3;
+            int dx = _eCur[b] - _ePrev[b], dy = _eCur[b + 1] - _ePrev[b + 1], dz = _eCur[b + 2] - _ePrev[b + 2];
+            int rdx = DeltaAngle(_ePrevRot[b], _eCurRot[b]);
+            int rdy = DeltaAngle(_ePrevRot[b + 1], _eCurRot[b + 1]);
+            int rdz = DeltaAngle(_ePrevRot[b + 2], _eCurRot[b + 2]);
+
+            if (dx == 0 && dy == 0 && dz == 0 && rdx == 0 && rdy == 0 && rdz == 0) continue;
+
+            // A step over the placement threshold is a spawn or a script move; leave
+            // the whole slot -- position and facing both -- where the game put it.
+            if (Math.Abs(dx) > TeleportUnits || Math.Abs(dy) > TeleportUnits ||
+                Math.Abs(dz) > TeleportUnits)
+            {
+                if (_probe) _eTeleports++;
+                continue;
+            }
+
+            int x = _ePrev[b] + (int)Math.Round(dx * frac);
+            int y = _ePrev[b + 1] + (int)Math.Round(dy * frac);
+            int z = _ePrev[b + 2] + (int)Math.Round(dz * frac);
+
+            // Interpolate the low AngleMod bits along the shortest way round; keep
+            // whatever sits above them, so a lane that turns out to be wider than
+            // 12 bits is preserved rather than truncated.
+            int rx = (_ePrevRot[b] + (int)Math.Round(rdx * frac)) & mask;
+            int ry = (_ePrevRot[b + 1] + (int)Math.Round(rdy * frac)) & mask;
+            int rz = (_ePrevRot[b + 2] + (int)Math.Round(rdz * frac)) & mask;
+
+            uint pos = (uint)(EntityTable + i * EntityStride + EntityPosOff);
+            uint rot = (uint)(EntityTable + i * EntityStride + EntityRotOff);
+            _eSaved[b] = (int)m.ReadU32(pos);
+            _eSaved[b + 1] = (int)m.ReadU32(pos + 4u);
+            _eSaved[b + 2] = (int)m.ReadU32(pos + 8u);
+            _eSavedRot[b] = m.ReadU16(rot);
+            _eSavedRot[b + 1] = m.ReadU16(rot + 2u);
+            _eSavedRot[b + 2] = m.ReadU16(rot + 4u);
+            _eTouched[i] = true;
+            _applied = true;
+
+            _eWrote[i] = x;
+            m.WriteU32(pos, (uint)x);
+            m.WriteU32(pos + 4u, (uint)y);
+            m.WriteU32(pos + 8u, (uint)z);
+            m.WriteU16(rot, (ushort)((_eSavedRot[b] & ~mask) | rx));
+            m.WriteU16(rot + 2u, (ushort)((_eSavedRot[b + 1] & ~mask) | ry));
+            m.WriteU16(rot + 4u, (ushort)((_eSavedRot[b + 2] & ~mask) | rz));
+
+            eCarried++;
+            if (_probe)
+            {
+                int astep = Math.Abs(rdx) + Math.Abs(rdy) + Math.Abs(rdz);
+                if (astep > _eBiggestAngleStep) _eBiggestAngleStep = astep;
+                eRotMoved += astep * frac;
+                int raw = Math.Max(_eCurRot[b], Math.Max(_eCurRot[b + 1], _eCurRot[b + 2]));
+                if (raw > eMaxRaw) eMaxRaw = raw;
+            }
+        }
+
+        if (_probe && eCarried > 0)
+        {
+            _eCarriedFrames++;
+            _eCarriedSlots += eCarried;
+            _eRotSum += eRotMoved / eCarried;
+            if (eMaxRaw > _eMaxRawAngle) _eMaxRawAngle = eMaxRaw;
+        }
     }
 
     /// <summary>
@@ -329,10 +457,42 @@ public static class ObjectSmoothing
                 m.WriteU32(pos + 4u, (uint)_saved[b + 1]);
                 m.WriteU32(pos + 8u, (uint)_saved[b + 2]);
             }
+
+            for (int i = 0; i < EntityCount; i++)
+            {
+                if (!_eTouched[i]) continue;
+                _eTouched[i] = false;
+
+                int b = i * 3;
+                uint pos = (uint)(EntityTable + i * EntityStride + EntityPosOff);
+                uint rot = (uint)(EntityTable + i * EntityStride + EntityRotOff);
+
+                if (_probe && (int)m.ReadU32(pos) != _eWrote[i]) _eMismatches++;
+
+                m.WriteU32(pos, (uint)_eSaved[b]);
+                m.WriteU32(pos + 4u, (uint)_eSaved[b + 1]);
+                m.WriteU32(pos + 8u, (uint)_eSaved[b + 2]);
+                m.WriteU16(rot, (ushort)_eSavedRot[b]);
+                m.WriteU16(rot + 2u, (ushort)_eSavedRot[b + 1]);
+                m.WriteU16(rot + 4u, (ushort)_eSavedRot[b + 2]);
+            }
+
             _applied = false;
         }
 
         if (_probe) Report();
+    }
+
+    /// <summary>Shortest signed step from one angle to another, in
+    /// [-AngleMod/2, AngleMod/2), so a turn through the wrap takes the short way
+    /// round -- the same idea as FrameSmoothing.Delta12, generalised to AngleMod.
+    /// AngleMod is a power of two, so `&amp; mask` is the modulus.</summary>
+    static int DeltaAngle(int from, int to)
+    {
+        int mask = AngleMod - 1;
+        int d = ((to & mask) - (from & mask)) & mask;   // 0 .. AngleMod-1
+        if (d > AngleMod / 2) d -= AngleMod;            // to the shorter side
+        return d;
     }
 
     /// <summary>
@@ -368,6 +528,38 @@ public static class ObjectSmoothing
             _live[i] = _primed;
         }
 
+        // The entity table, the same way, plus its rotation lanes.
+        for (int i = 0; i < EntityCount; i++)
+        {
+            int b = i * 3;
+            bool wasFree = m.ReadU8((uint)(EntityTable + i * EntityStride + EntityEmptyOff)) == 0xFF;
+
+            _ePrev[b] = _eCur[b];
+            _ePrev[b + 1] = _eCur[b + 1];
+            _ePrev[b + 2] = _eCur[b + 2];
+            _ePrevRot[b] = _eCurRot[b];
+            _ePrevRot[b + 1] = _eCurRot[b + 1];
+            _ePrevRot[b + 2] = _eCurRot[b + 2];
+
+            if (wasFree)
+            {
+                _eLive[i] = false;
+                continue;
+            }
+
+            uint pos = (uint)(EntityTable + i * EntityStride + EntityPosOff);
+            _eCur[b] = (int)m.ReadU32(pos);
+            _eCur[b + 1] = (int)m.ReadU32(pos + 4u);
+            _eCur[b + 2] = (int)m.ReadU32(pos + 8u);
+
+            uint rot = (uint)(EntityTable + i * EntityStride + EntityRotOff);
+            _eCurRot[b] = m.ReadU16(rot);
+            _eCurRot[b + 1] = m.ReadU16(rot + 2u);
+            _eCurRot[b + 2] = m.ReadU16(rot + 4u);
+
+            _eLive[i] = _primed;
+        }
+
         _primed = true;
     }
 
@@ -391,9 +583,21 @@ public static class ObjectSmoothing
                               (_teleports > 0 ? $", {_teleports} placement(s) left alone" : "") +
                               (_mismatches > 0 ? $", {_mismatches} LEAKED" : ""));
 
+        if (_eCarriedFrames > 0)
+            Console.WriteLine($"[KF2] entities: {_eCarriedFrames}/{_frames} frames carried, " +
+                              $"{(double)_eCarriedSlots / _eCarriedFrames:0.0} creature(s) each, " +
+                              $"mean rot step {_eRotSum / _eCarriedFrames:0.0} u, " +
+                              $"biggest {_eBiggestAngleStep} u, max raw angle 0x{_eMaxRawAngle:X}" +
+                              (_eTeleports > 0 ? $", {_eTeleports} placement(s) left alone" : "") +
+                              (_eMismatches > 0 ? $", {_eMismatches} LEAKED" : ""));
+
         _frames = _carriedFrames = _carriedSlots = _mismatches = 0;
         _moveSum = _fracSum = 0.0;
         _biggestStep = 0;
         _teleports = 0;
+
+        _eCarriedFrames = _eCarriedSlots = _eMismatches = _eTeleports = 0;
+        _eRotSum = 0.0;
+        _eBiggestAngleStep = _eMaxRawAngle = 0;
     }
 }
