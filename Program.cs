@@ -221,17 +221,20 @@ Kf2.FramePacing.Install();
 // The one thing frame pacing cannot reach: the in-game menu is a modal sub-loop
 // inside stage 3 (func_80029CBC jal's func_80018E80, which blocks for the whole
 // session and renders its own frames), so no gated stage is being called while it
-// runs and nothing in it is on the tick clock. Its cursor has no edge detection --
-// holding a direction steps once per menu-loop iteration, throttled only by
-// func_80022E90, a spin on six VSync(0) calls. Those cost a vblank each on
-// hardware; here they cost whatever FrameClock's permissive ceiling allows, so the
-// cursor raced at ~5x the console's rate at 144 fps. Paced back to six vblanks.
+// runs and nothing in it is on the tick clock. Two things in there are counted in
+// vblanks and so ran at the render rate instead. The cursor's auto-repeat is a
+// spin on six VSync(0) calls in func_80022E90 -- a vblank each on hardware, 1.2 ms
+// at 144 fps here -- and those calls are held to the 60 Hz grid. The cursor's
+// blink steps once per menu frame in func_80022530, the frame head, which cannot
+// be skipped because it swaps the buffer, so a pre/post pair puts its counter
+// back on a frame the grid did not advance on. Nothing sleeps for the blink: the
+// menu still draws at the render rate, the wink is only capped at 60 Hz.
 //
-//     KF2_MENUREPEAT=0        leave it on the frame clock -- comparison only
-//     KF2_MENUREPEAT_PROBE=1  what each repeat actually cost, in ms
-Kf2.MenuRepeat.Configure(Environment.GetEnvironmentVariable("KF2_MENUREPEAT"),
-                         Environment.GetEnvironmentVariable("KF2_MENUREPEAT_PROBE"));
-Kf2.MenuRepeat.Install();
+//     KF2_MENUPACING=0        leave both on the frame clock -- comparison only
+//     KF2_MENUPACING_PROBE=1  what each repeat cost, and the blink's step rate
+Kf2.MenuPacing.Configure(Environment.GetEnvironmentVariable("KF2_MENUPACING"),
+                         Environment.GetEnvironmentVariable("KF2_MENUPACING_PROBE"));
+Kf2.MenuPacing.Install();
 
 // The other half of drawing above 30: the world advances 30 times a second, so
 // without this the camera does too and the extra frames show the same view twice.

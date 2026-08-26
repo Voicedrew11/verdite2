@@ -8,11 +8,11 @@ using RecompOne.Runtime.Modding;
 namespace Kf2;
 
 /// <summary>
-/// Hold the menus' cursor auto-repeat to the rate the console had, at any frame
-/// rate.
+/// Hold the two things in the menus that are counted in vblanks -- the cursor's
+/// auto-repeat and its blink -- to the rate the console had, at any frame rate.
 ///
-///     KF2_MENUREPEAT=0        leave it on the frame clock -- comparison only
-///     KF2_MENUREPEAT_PROBE=1  what each repeat actually cost, in ms
+///     KF2_MENUPACING=0        leave both on the frame clock -- comparison only
+///     KF2_MENUPACING_PROBE=1  what each repeat cost, and the blink's step rate
 ///
 /// ## The menu is outside the stage gate by construction
 ///
@@ -93,16 +93,71 @@ namespace Kf2;
 /// since `func_8001EA14`, `func_8001EB70`, `func_8001B0D0`, `func_8001BB7C`,
 /// `func_8001BE60` and `func_800206E0` all call it.
 ///
+/// ## The blink is the same bug one layer up
+///
+/// The cursor's highlight is an eight-step ramp up and back down:
+/// <see cref="BlinkStepper"/>
+/// -- `func_80022530`, the menu's frame head (buffer swap, OT pointer,
+/// `ClearOTag`) -- steps `0x8006E5CC` by one in the direction at `0x8006E5D0`,
+/// clamping to 7 at the top and latching off at the bottom, and `func_80021A84`
+/// reads the counter as `(v + 0x1F4) &lt;&lt; 6` into a sprite's `+0xE` to pick one
+/// of eight cursor frames. `func_8001EA14` zeroes the direction on every accepted
+/// move, restarting the ramp; `func_80022E90` zeroes the counter when a repeat
+/// fires.
+///
+/// It is not a continuous pulse: the down ramp latches the direction to
+/// `0xFFFFFFFF` and freezes, so it is **one wink per accepted move**, sixteen
+/// steps long. Sitting still in a menu steps it zero times a second, measured.
+///
+/// It steps **once per menu frame**, so its rate is the render rate. Measured
+/// steps a second while holding Down, `KF2_MENUPACING=0` against on:
+///
+///     KF2_FPS    off        on
+///     20         15-19      8-13
+///     60         30-35      ~21
+///     144        73-77      9-20
+///
+/// The frame head cannot be skipped -- it swaps the buffer -- so this is a
+/// pre/post pair that saves the two words and puts them back on a frame the grid
+/// did not advance on, the same shape `ObjectSmoothing` uses. **Nothing sleeps
+/// here**: the menu still renders at the render rate and only the counter is
+/// held, so the blink is *capped* rather than paced.
+///
+/// **60 Hz and not <see cref="FramePacing.LogicHz"/>, deliberately.** A menu
+/// frame is one `VSync(0)`, which is one vblank; the tick rate is a judgement
+/// about what the *world* achieved under load and has no business changing how
+/// fast a cursor winks. Binding it there would also make `KF2_TICKRATE` -- a
+/// setting about game speed -- retune the interface.
+///
+/// **It does bite a little at the 20 fps default**, which is worth stating
+/// because the first guess was that it would not: the menu renders its frames in
+/// pairs (two passes of an inner loop per iteration of `func_80018E80`, each
+/// presenting), and the second of a pair lands inside the same vblank slot as the
+/// first whatever the render rate. So the default's wink gets somewhat longer
+/// rather than staying exactly as it was. Whether that reads better or worse is a
+/// by-eye question, and <see cref="BlinkMs"/> is where the answer goes.
+///
 /// On by default and with no settings page: this is a correctness fix like frame
-/// pacing rather than a taste like dithering, and the console fixed the number at
-/// one value. See "The menu's cursor repeat" in docs/PATCHES_AND_MODS.md.
+/// pacing rather than a taste like dithering, and the console fixed the numbers
+/// at one value each. See "The menu's cursor repeat" in
+/// docs/PATCHES_AND_MODS.md.
 /// </summary>
-public static class MenuRepeat
+public static class MenuPacing
 {
     /// <summary>The auto-repeat delay every list in the game calls first: spin on
     /// up to six `VSync(0)` calls while a button is still held, then let the
     /// caller step the cursor once.</summary>
     const uint RepeatGate = 0x80022E90;
+
+    /// <summary>The menu's frame head -- buffer swap, OT pointer, `ClearOTag`,
+    /// and the cursor blink's ping-pong counter. Called once per menu frame from
+    /// every screen in `func_80018E80`'s jump table.</summary>
+    const uint BlinkStepper = 0x80022530;
+
+    /// <summary>The blink's ping-pong counter (u32, 0..7) and its direction
+    /// (u32: 0 counts up, 1 counts down, anything else is frozen).</summary>
+    const uint BlinkCount = 0x8006E5CC;
+    const uint BlinkDir   = 0x8006E5D0;
 
     /// <summary>libetc `VSync`, GAME.EXE's copy -- the same address
     /// <see cref="FramePacing"/> counts frames on. `HookManager` runs every pre
@@ -113,6 +168,22 @@ public static class MenuRepeat
     /// from `LibEtc`: its `_vcount` only advances *from* a VSync call, so waiting
     /// on it here would deadlock.</summary>
     const double VBlankMs = 1000.0 / 60.0;
+
+    /// <summary>
+    /// The fastest the blink's counter is allowed to advance, in ms per step.
+    /// One vblank.
+    ///
+    /// **This one is a choice, and the constant is here so it is an easy one to
+    /// change.** The frame head runs **twice** per menu-loop iteration (measured:
+    /// 144 calls a second against a 144 fps render, so 72 iterations), and on
+    /// hardware an iteration cost at least one `VSync`. If the console's menu held
+    /// 60 fps it therefore stepped the blink twice a vblank, and the honest cap
+    /// would be 8.3 ms rather than 16.7 -- a 0.13 s wink instead of 0.27 s. That
+    /// rests on an assumption about a frame rate this port cannot observe, and the
+    /// complaint being fixed is "too fast", so the slower of the two is the
+    /// default. By eye is the only way to settle it.
+    /// </summary>
+    const double BlinkMs = VBlankMs;
 
     /// <summary>Spin the last stretch; `Thread.Sleep` granularity is a few ms.
     /// The same shape as <c>FramePacing.Floor</c>.</summary>
@@ -136,6 +207,15 @@ public static class MenuRepeat
     // For the probe: what the window actually cost, and how many calls it held.
     static double _enteredMs;
     static int _held;
+
+    // The blink's own grid: when the counter may next advance, and the two words
+    // as they stood before the frame head ran.
+    static double _blinkDue = -1.0;
+    static uint _blinkCount, _blinkDir;
+
+    // For the probe: blink steps allowed against menu frames drawn, per second.
+    static double _blinkWindowMs = -1.0;
+    static int _blinkFrames, _blinkSteps;
 
     static readonly ModInfo _self = new()
     {
@@ -174,7 +254,7 @@ public static class MenuRepeat
     static void Attach()
     {
         SymbolRegistry.Build();
-        var self = typeof(MenuRepeat);
+        var self = typeof(MenuPacing);
         var before = self.GetMethod(nameof(BeforeRepeat), BindingFlags.Public | BindingFlags.Static)!;
         var after = self.GetMethod(nameof(AfterRepeat), BindingFlags.Public | BindingFlags.Static)!;
         var vsync = self.GetMethod(nameof(BeforeVSync), BindingFlags.Public | BindingFlags.Static)!;
@@ -182,7 +262,7 @@ public static class MenuRepeat
         var gate = SymbolRegistry.Resolve("game", null, RepeatGate);
         if (gate == null)
         {
-            Console.Error.WriteLine($"[KF2] menu repeat: no game function at 0x{RepeatGate:X8} -- " +
+            Console.Error.WriteLine($"[KF2] menu pacing: no game function at 0x{RepeatGate:X8} -- " +
                                     "a held menu direction will keep repeating at the frame rate.");
             return;
         }
@@ -190,7 +270,7 @@ public static class MenuRepeat
         var thunk = SymbolRegistry.Resolve("game", null, VSyncThunk);
         if (thunk == null)
         {
-            Console.Error.WriteLine($"[KF2] menu repeat: no VSync at game/0x{VSyncThunk:X8} -- " +
+            Console.Error.WriteLine($"[KF2] menu pacing: no VSync at game/0x{VSyncThunk:X8} -- " +
                                     "nothing can be paced, so the repeat is left on the frame rate.");
             return;
         }
@@ -199,10 +279,26 @@ public static class MenuRepeat
         if (HookManager.AddPre(_self, gate, before)) n++;
         if (HookManager.AddPost(_self, gate, after)) n++;
         if (HookManager.AddPre(_self, thunk, vsync)) n++;
+
+        // The blink is a separate finding on a separate function, so a missing
+        // frame head costs the blink and leaves the repeat working.
+        var head = SymbolRegistry.Resolve("game", null, BlinkStepper);
+        if (head == null)
+            Console.Error.WriteLine($"[KF2] menu pacing: no game function at 0x{BlinkStepper:X8} -- " +
+                                    "the cursor's blink will keep running at the render rate.");
+        else
+        {
+            var blinkPre = self.GetMethod(nameof(BeforeFrameHead), BindingFlags.Public | BindingFlags.Static)!;
+            var blinkPost = self.GetMethod(nameof(AfterFrameHead), BindingFlags.Public | BindingFlags.Static)!;
+            if (HookManager.AddPre(_self, head, blinkPre)) n++;
+            if (HookManager.AddPost(_self, head, blinkPost)) n++;
+        }
+
         HookManager.Commit();
 
-        Console.WriteLine($"[KF2] menu repeat: {(Enabled ? "on" : "off")}, {n} hook(s), " +
-                          $"a held direction every {6.0 * VBlankMs:0.#} ms");
+        Console.WriteLine($"[KF2] menu pacing: {(Enabled ? "on" : "off")}, {n} hook(s), " +
+                          $"a held direction every {6.0 * VBlankMs:0.#} ms, " +
+                          $"the blink capped at {1000.0 / BlinkMs:0.#} Hz");
     }
 
     /// <summary>
@@ -225,7 +321,7 @@ public static class MenuRepeat
         _inRepeat = false;
 
         if (_probe && _held > 0)
-            Console.WriteLine($"[KF2] menu repeat: {_clock.Elapsed.TotalMilliseconds - _enteredMs:0.#} ms " +
+            Console.WriteLine($"[KF2] menu pacing: {_clock.Elapsed.TotalMilliseconds - _enteredMs:0.#} ms " +
                               $"over {_held} VSync call(s)");
     }
 
@@ -262,5 +358,64 @@ public static class MenuRepeat
             }
             while (_clock.Elapsed.TotalMilliseconds < _due) Thread.SpinWait(48);
         }
+    }
+
+    /// <summary>
+    /// The menu's frame head, about to run. Remember the blink's two words so the
+    /// post can put them back; everything else the frame head does -- the buffer
+    /// swap, the OT pointer, the `ClearOTag` -- has to happen on every frame and
+    /// is untouched.
+    /// </summary>
+    public static void BeforeFrameHead(CpuContext c, IMemory m)
+    {
+        if (!Enabled && !_probe) return;
+        _blinkCount = m.ReadU32(BlinkCount);
+        _blinkDir = m.ReadU32(BlinkDir);
+    }
+
+    /// <summary>
+    /// Undo the blink's step unless a 60 Hz slot has come round. Nothing sleeps:
+    /// the frame was drawn at the render rate either way, and only the counter is
+    /// held back, so this caps the blink rather than pacing the menu.
+    /// </summary>
+    public static void AfterFrameHead(CpuContext c, IMemory m)
+    {
+        if (!Enabled && !_probe) return;
+
+        double now = _clock.Elapsed.TotalMilliseconds;
+        bool step = now >= _blinkDue;
+
+        if (step)
+        {
+            // A stale deadline means the menu was closed for a while rather than
+            // that the host ran late, so restart the grid instead of letting the
+            // backlog wave the cursor through several frames in a row.
+            _blinkDue = (_blinkDue < 0.0 || now - _blinkDue > BlinkMs)
+                ? now + BlinkMs : _blinkDue + BlinkMs;
+        }
+        else if (Enabled)
+        {
+            m.WriteU32(BlinkCount, _blinkCount);
+            m.WriteU32(BlinkDir, _blinkDir);
+        }
+
+        if (!_probe) return;
+
+        // Counted off the words themselves rather than off the grid, so the
+        // switch-off comparison measures the game and not this class. Either word
+        // moving is a step: at the top of the ramp the count clamps and only the
+        // direction changes.
+        _blinkFrames++;
+        if (m.ReadU32(BlinkCount) != _blinkCount || m.ReadU32(BlinkDir) != _blinkDir) _blinkSteps++;
+        if (_blinkWindowMs < 0.0) { _blinkWindowMs = now; return; }
+
+        double elapsed = now - _blinkWindowMs;
+        if (elapsed < 1000.0) return;
+
+        Console.WriteLine($"[KF2] menu pacing: blink stepped {_blinkSteps * 1000.0 / elapsed:0.#} " +
+                          $"times a second over {_blinkFrames * 1000.0 / elapsed:0.#} menu frames");
+        _blinkWindowMs = now;
+        _blinkFrames = 0;
+        _blinkSteps = 0;
     }
 }

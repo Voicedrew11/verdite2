@@ -418,9 +418,9 @@ as well.
 the word they just read — so holding a direction steps the cursor once per
 iteration of the menu loop, and the repeat delay is the only thing that makes it
 usable. That delay is six `VSync(0)` calls, which is 100 ms of vblanks on
-hardware and was 21 ms at 144 fps here until `patches/MenuRepeat.cs`; see "The
-menu's cursor repeat is outside the gate by construction" in
-[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+hardware and produced 37 steps a second at 144 fps here until
+`patches/MenuPacing.cs`; see "The menu's cursor repeat is outside the gate by
+construction" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 Two words carry the cursor's blink. `func_80022530` steps `0x8006E5CC` (u32) by
 ±1 according to the direction in `0x8006E5D0` — 0 counts up, 1 counts down,
@@ -428,8 +428,15 @@ anything else is frozen — clamping to 7 at the top and latching `0xFFFFFFFF` a
 the bottom, and `func_80021A84` reads the counter as `(v + 0x1F4) << 6` into a
 sprite's `+0xE`, which is one of eight cursor frames. `func_8001EA14` zeroes the
 direction on every accepted move (restarting the ramp) and `func_80022E90` zeroes
-the counter when a repeat fires. Since `func_80022530` runs once per menu frame,
-the blink is still on the render rate.
+the counter when a repeat fires.
+
+**The bottom latch means it is one wink per move, not a continuous pulse**: after
+sixteen steps the direction is `0xFFFFFFFF` and nothing moves until the next
+accepted move zeroes it. Measured, sitting still in a menu steps it zero times a
+second. And **`func_80022530` runs twice per iteration** of `func_80018E80` — the
+menu's inner loop makes two passes and each presents — so the frame-head rate is
+the rendered frame rate, which is what put the blink on the render rate until
+`patches/MenuPacing.cs` capped it.
 
 ### Every control axis has the same three branches
 

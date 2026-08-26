@@ -863,26 +863,29 @@ than one. The delay inherited that ceiling, so raising the render rate shortened
 it — and above 60 the ceiling stopped holding the spin at all.
 
 Measured by holding Down in the menu for two seconds, driven over `KF2_SHELL`,
-with `KF2_MENUREPEAT_PROBE=1` reporting what each spin cost:
+with `KF2_MENUPACING_PROBE=1` reporting what each spin cost:
 
 | `KF2_FPS` | spin, unpaced | steps/s | spin, paced | steps/s |
 |---|---|---|---|---|
 | 20 (default) | 66 ms | 7.5 | 100.8 ms | 6.0 |
 | 60 | 41 ms | 15.0 | 100.7 ms | 8.5 |
-| 144 | 1.2 ms | **37.5** | 100.2 ms | 9.5 |
+| 144 | 1–17 ms | **36–37** | 100.2 ms | 9.5 |
 
-The 144 row is the complaint: thirty-seven steps a second through a list. Note
-that the unpaced column is **not** the ceiling's arithmetic — 6 calls at a 288/s
-ceiling would be 21 ms, and it measured 1.2. The ceiling is a per-call throttle
-with the menu's own frame already spending against it, so predicting the number
-from the rate is exactly the mistake `0025` warns about; the honest statement is
-that the delay was on the frame clock and the frame clock does not hold it.
+The 144 row is the complaint: thirty-seven steps a second through a list. **Read
+the steps/s column, not the spin.** The unpaced spin is not reproducible — the
+same configuration measured 1.2 ms on one run and 16.6 ms on the next — while the
+repeat rate it produced was 37.5 and 36.0 across those same two. And it is **not**
+the ceiling's arithmetic either: six calls at a 288/s ceiling would be 21 ms. The
+ceiling is a per-call throttle that the menu's own frame is already spending
+against, so predicting the number from the rate is exactly the mistake `0025`
+warns about. The honest statement is that the delay was on the frame clock, and
+the frame clock does not hold it.
 
 `0025`'s own comment names the trap: the ceiling is permissive *because* it paces
 per call, and a caller that needs a rate should keep its own deadline at the frame
 boundary. `FramePacing` does; this delay is expressed in calls, so it did not.
 
-**`patches/MenuRepeat.cs` makes those six calls cost a vblank each again, and only
+**`patches/MenuPacing.cs` makes those six calls cost a vblank each again, and only
 those.** One pre/post pair around `func_80022E90` marks the window, and a pre on
 GAME.EXE's `VSync` thunk (`0x8005FCC8`) holds to the next 1/60 s boundary while it
 is open. The six frames are still presented, which is the point of pacing the
@@ -910,17 +913,59 @@ held. One hook covers every list in the game: `func_8001EA14`, `func_8001EB70`,
 
 It is on by default with no settings page — a correctness fix like frame pacing
 rather than a taste like dithering, and the console fixed the number at one value.
-`KF2_MENUREPEAT=0` is the comparison; `KF2_MENUREPEAT_PROBE=1` prints what each
-repeat cost.
+`KF2_MENUPACING=0` is the comparison; `KF2_MENUPACING_PROBE=1` prints what each
+repeat cost and how fast the blink stepped.
 
-**What this does not fix, and it is the same bug.** The cursor's own blink is a
-0↔7 ping-pong at `0x8006E5CC`, stepped in `func_80022530` — the menu's buffer swap
-and `ClearOTag` — once per menu frame, and read by `func_80021A84` to pick one of
-eight cursor sprites. At 144 fps that ramp runs about seven times too fast.
-`func_80022530` cannot be skipped whole (it swaps buffers), so the fix is a
-pre/post pair restoring the two words on a non-tick frame, the same shape as
-`FrameSmoothing`. `FramePacing.TickedThisFrame` is valid inside the menu, since
-the menu's own `DrawOTag` keeps the accumulator running. Not done.
+### The blink is the same bug one layer up
+
+The cursor's highlight is an eight-step ramp up and back down. `func_80022530` —
+the menu's **frame head**: buffer swap, OT pointer, `ClearOTag` — steps
+`0x8006E5CC` by one in the direction at `0x8006E5D0`, clamping to 7 at the top and
+latching `0xFFFFFFFF` at the bottom, and `func_80021A84` reads the counter as
+`(v + 0x1F4) << 6` into a sprite's `+0xE` to pick one of eight cursor frames.
+`func_8001EA14` zeroes the direction on every accepted move and `func_80022E90`
+zeroes the counter when a repeat fires.
+
+Two things about it were not what they looked like. It is **not a continuous
+pulse** — the down ramp latches the direction off, so it is one wink per accepted
+move, sixteen steps long, and sitting still in a menu steps it zero times a second
+(measured). And the frame head runs **twice per iteration** of `func_80018E80`,
+because the menu's inner loop makes two passes and each one presents.
+
+It steps once per menu frame, so its rate is the render rate. Measured steps a
+second while holding Down:
+
+| `KF2_FPS` | unpaced | capped |
+|---|---|---|
+| 20 (default) | 15–19 | 8–13 |
+| 60 | 30–35 | ~21 |
+| 144 | 73–77 | 9–20 |
+
+The frame head cannot be skipped — it swaps the buffer — so the fix is a pre/post
+pair saving the two words and putting them back on a frame the grid did not
+advance on, the same shape `ObjectSmoothing` uses. **Nothing sleeps for the
+blink**: the menu still renders at the render rate, only the counter is held, so
+this caps the wink rather than pacing the menu. That is what keeps it from
+becoming the 60 fps menu the repeat fix deliberately avoided.
+
+**60 Hz and not `LogicHz`, deliberately**, for the reason the repeat gives: a menu
+frame is one `VSync(0)`, which is one vblank, and the tick rate is a judgement
+about what the *world* achieved under load. Binding it there would make
+`KF2_TICKRATE` — a setting about game speed — retune the interface.
+
+**It does bite a little at the 20 fps default**, and that is worth recording
+because the first guess was that it would not. The menu renders its frames in
+pairs, and the second of a pair lands inside the same vblank slot as the first
+whatever the render rate, so one of the two is always held. The default's wink
+gets somewhat longer rather than staying exactly as it was.
+
+**The cap is a choice, not a reading.** If the console's menu held 60 fps it
+stepped the blink twice a vblank — the frame head runs twice an iteration — and
+the faithful cap would be 8.3 ms, a 0.13 s wink instead of 0.27 s. That rests on
+an assumption about a frame rate this port cannot observe, and the complaint being
+fixed is "too fast", so the slower of the two is the default. `MenuPacing.BlinkMs`
+is the one constant to change. **By eye is the only way to settle it, and it has
+not been looked at.**
 
 Every other modal loop is rate-dependent for the same structural reason and is
 also untouched: the menu box open/close animation (`func_800356F4`), and the

@@ -79,8 +79,8 @@ KF2_CDTRACE=1                          # stack trace on first CD register access
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
 KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pacing"
 KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
-KF2_MENUREPEAT=0                       # menu cursor repeat back on the frame clock (on by default)
-KF2_MENUREPEAT_PROBE=1                 # what each repeat cost, in ms
+KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
+KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
