@@ -79,8 +79,10 @@ KF2_CDTRACE=1                          # stack trace on first CD register access
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
 KF2_FPS=120                            # 20 (default), any number, or off; see "Any frame rate"
 KF2_TICKRATE=30                        # ticks a second the world runs at (20 by default)
-KF2_FPS_GATE=8002A550+80040348+80046A60  # the loop stages held to the tick rate
+KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
+KF2_MENUREPEAT=0                       # menu cursor repeat back on the frame clock (on by default)
+KF2_MENUREPEAT_PROBE=1                 # what each repeat cost, in ms
 KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by default); carry position too
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
 KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
@@ -198,7 +200,23 @@ during an attack — and a sprite index advancing once a tick is what the consol
 did too. **All three default to off** — while the boundary was broken the phase was
 pinned to 0 and the
 smoothing never ran at all, so its picture has never been seen. A 50 ms tick makes
-it matter more than the 33 ms one did. `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
+it matter more than the 33 ms one did. **The stage gate cannot reach the in-game menu, and `patches/MenuRepeat.cs` is
+why that mattered**: the menu is a modal sub-loop (`func_80029CBC` `jal`s
+`func_80018E80`, which blocks for the whole session and renders its own frames),
+so no gated stage is being called while it runs. Its cursor does not edge-detect
+— holding a direction steps once per menu-loop iteration, throttled only by
+`func_80022E90`, a spin on six `VSync(0)` calls. Those were a vblank each on
+hardware (100 ms); here `VSync` returns as fast as `FrameClock`'s deliberately
+permissive `max(60, fps*2)` ceiling allows, which above 60 is not at all —
+**measured 1.2 ms and 37 steps a second at 144 fps**, against 66 ms and 7.5 at the
+20 fps default. One pre/post pair around `func_80022E90` and a pre on the `VSync`
+thunk hold those six calls to the 60 Hz grid, so the six frames still present:
+measured 100.2-100.8 ms at 20, 60 and 144. The residual 6.0-9.5 steps a second is
+the menu's own frame, which still lands at the render rate. On by default;
+`KF2_MENUREPEAT=0` is the comparison. **The cursor's blink is the same bug and is
+not fixed** — `0x8006E5CC` steps in `func_80022530`, the menu's buffer swap, once
+per menu frame. See "The menu's cursor repeat" in `docs/PATCHES_AND_MODS.md`.
+`patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The
 default is 20 fps drawn against a 20 Hz world.** See "Any frame rate" in
 `docs/PATCHES_AND_MODS.md`. Dithering is a patch for a

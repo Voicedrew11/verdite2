@@ -420,7 +420,7 @@ Three env vars, all read in `Program.cs`:
 ```bash
 KF2_FPS=20          # 20 fps, the default; any number, or off for no floor
 KF2_TICKRATE=20     # ticks a second the world runs at; 30 is the other answer
-KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC   # what is ticked
+KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78   # what is ticked
 ```
 
 (That gate list *replaces* the default set rather than adding to it, and the rate
@@ -819,6 +819,113 @@ interpolate to. Whether it can be smoothed at all is an open question in
 [TODO.md](TODO.md): it needs `func_80032588` to prove skeletal (interpolatable
 per-limb transforms) rather than keyframe vertex swaps, and the console stepped it
 at 20 fps regardless.
+
+### The menu's cursor repeat is outside the gate by construction
+
+The stage gate is a pre-hook on six main-loop entry points, so it can only decide
+whether one of those six *runs*. The in-game menu is not one of them and never
+passes through them: `func_80029CBC`, inside stage 3, `jal`s **`func_80018E80`**
+on a just-pressed Circle, and that call **blocks for the whole menu session**,
+running its own loop and presenting its own frames through `func_800226A8`
+(`VSync` then `DrawOTag`). While it runs, the main loop is parked inside stage
+3's `jal`; `FramePacing.AfterDrawOTag` still fires and the accumulator still
+ticks, but `BeforeStage` is never consulted, so **nothing inside the menu is on
+the tick clock**. This is the case the "Three things held the port at 30" section
+already flags: skipping stage 3 decides whether such a loop is entered, it cannot
+cut one in half.
+
+What that cost is the cursor. The two steppers — `func_8001EA14` (a fixed option
+list) and `func_8001EB70` (a scrolling one: inventory, equipment, magic) — open
+the same way, and there is **no edge detection** in either:
+
+    func_80022E90();   // the auto-repeat delay
+    func_80022E58();   // PadRead(1), and latch 0x8006E5C4 if anything is down
+    ... test Up (0x8006E590) / Down (0x8006E594) against that word, and step
+
+Holding Up steps the cursor on every iteration of the menu loop. The only
+throttle is **`func_80022E90`**:
+
+    if (*0x8006E5C4 != 1) return;          // nothing was down last read
+    *0x8006E5C4 = 0;
+    for (s0 = 0; ; ) {
+        if (PadRead(1) == 0) return;       // released
+        if (s0 < 6) { s0++; VSync(0); continue; }
+        *0x8006E5CC = 0; return;           // the repeat fires
+    }
+
+On hardware `VSync(0)` waits for the next vblank, so that spin costs **six
+vblanks — 100 ms** whatever frame rate the game itself was achieving. Since
+[`0021`](RUNTIME.md) the emulated vblank is a wall-clock grid and `VSync(0)`
+presents and returns, so the only thing pacing a VSync *call* is `FrameClock` —
+which `FramePacing.ApplyHostCeiling` deliberately sets permissive at
+`max(60, TargetFps * 2)`, because it paces per call and a frame can carry more
+than one. The delay inherited that ceiling, so raising the render rate shortened
+it — and above 60 the ceiling stopped holding the spin at all.
+
+Measured by holding Down in the menu for two seconds, driven over `KF2_SHELL`,
+with `KF2_MENUREPEAT_PROBE=1` reporting what each spin cost:
+
+| `KF2_FPS` | spin, unpaced | steps/s | spin, paced | steps/s |
+|---|---|---|---|---|
+| 20 (default) | 66 ms | 7.5 | 100.8 ms | 6.0 |
+| 60 | 41 ms | 15.0 | 100.7 ms | 8.5 |
+| 144 | 1.2 ms | **37.5** | 100.2 ms | 9.5 |
+
+The 144 row is the complaint: thirty-seven steps a second through a list. Note
+that the unpaced column is **not** the ceiling's arithmetic — 6 calls at a 288/s
+ceiling would be 21 ms, and it measured 1.2. The ceiling is a per-call throttle
+with the menu's own frame already spending against it, so predicting the number
+from the rate is exactly the mistake `0025` warns about; the honest statement is
+that the delay was on the frame clock and the frame clock does not hold it.
+
+`0025`'s own comment names the trap: the ceiling is permissive *because* it paces
+per call, and a caller that needs a rate should keep its own deadline at the frame
+boundary. `FramePacing` does; this delay is expressed in calls, so it did not.
+
+**`patches/MenuRepeat.cs` makes those six calls cost a vblank each again, and only
+those.** One pre/post pair around `func_80022E90` marks the window, and a pre on
+GAME.EXE's `VSync` thunk (`0x8005FCC8`) holds to the next 1/60 s boundary while it
+is open. The six frames are still presented, which is the point of pacing the
+calls rather than sleeping the shortfall afterwards — that would be ~79 ms of
+frozen picture every repeat at 144 fps. `LibEtc`'s own `_vcount` cannot be the
+clock, since it only advances *from* a `VSync` call and waiting on it would
+deadlock, so the patch keeps its own 60 Hz grid.
+
+**The residual is one menu frame**, and it is deliberate: 6.0 steps a second at
+20 fps against 9.5 at 144, because after the spin returns the menu still renders
+one frame at the render rate — 50 ms against 7 ms on top of a constant 100. That
+is a 1.6× spread replacing a 5× one. Closing it entirely would mean pacing every
+`VSync` inside `func_80018E80` rather than inside the repeat, which pins the whole
+menu to 60 fps; not done, and one line away if the residual ever reads as a rate
+dependence rather than as feel.
+
+Three things about the shape are load-bearing. Adding `func_80018E80` to the gate
+would skip the **entire menu session** rather than one iteration of its loop,
+because `HookManager` detours whole functions. Gating the steppers is worse: both
+return the new cursor index in `V0`, so a bare `return false` hands the caller
+garbage. And it costs nothing when idle — `func_80022E90` returns before its loop
+whenever `0x8006E5C4` is not 1, so nothing is paced unless a direction is actually
+held. One hook covers every list in the game: `func_8001EA14`, `func_8001EB70`,
+`func_8001B0D0`, `func_8001BB7C`, `func_8001BE60` and `func_800206E0` all call it.
+
+It is on by default with no settings page — a correctness fix like frame pacing
+rather than a taste like dithering, and the console fixed the number at one value.
+`KF2_MENUREPEAT=0` is the comparison; `KF2_MENUREPEAT_PROBE=1` prints what each
+repeat cost.
+
+**What this does not fix, and it is the same bug.** The cursor's own blink is a
+0↔7 ping-pong at `0x8006E5CC`, stepped in `func_80022530` — the menu's buffer swap
+and `ClearOTag` — once per menu frame, and read by `func_80021A84` to pick one of
+eight cursor sprites. At 144 fps that ramp runs about seven times too fast.
+`func_80022530` cannot be skipped whole (it swaps buffers), so the fix is a
+pre/post pair restoring the two words on a non-tick frame, the same shape as
+`FrameSmoothing`. `FramePacing.TickedThisFrame` is valid inside the menu, since
+the menu's own `DrawOTag` keeps the accumulator running. Not done.
+
+Every other modal loop is rate-dependent for the same structural reason and is
+also untouched: the menu box open/close animation (`func_800356F4`), and the
+spell-cast and item-use animations (`func_800474D0`, `func_80047000`,
+`func_8004831C`).
 
 ### The comparison mode
 

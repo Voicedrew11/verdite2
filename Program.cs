@@ -218,6 +218,21 @@ Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_TICKRATE"));
 Kf2.FramePacing.Install();
 
+// The one thing frame pacing cannot reach: the in-game menu is a modal sub-loop
+// inside stage 3 (func_80029CBC jal's func_80018E80, which blocks for the whole
+// session and renders its own frames), so no gated stage is being called while it
+// runs and nothing in it is on the tick clock. Its cursor has no edge detection --
+// holding a direction steps once per menu-loop iteration, throttled only by
+// func_80022E90, a spin on six VSync(0) calls. Those cost a vblank each on
+// hardware; here they cost whatever FrameClock's permissive ceiling allows, so the
+// cursor raced at ~5x the console's rate at 144 fps. Paced back to six vblanks.
+//
+//     KF2_MENUREPEAT=0        leave it on the frame clock -- comparison only
+//     KF2_MENUREPEAT_PROBE=1  what each repeat actually cost, in ms
+Kf2.MenuRepeat.Configure(Environment.GetEnvironmentVariable("KF2_MENUREPEAT"),
+                         Environment.GetEnvironmentVariable("KF2_MENUREPEAT_PROBE"));
+Kf2.MenuRepeat.Install();
+
 // The other half of drawing above 30: the world advances 30 times a second, so
 // without this the camera does too and the extra frames show the same view twice.
 // One pre/post pair around stage 8 (func_80025A1C), which is the whole of "build

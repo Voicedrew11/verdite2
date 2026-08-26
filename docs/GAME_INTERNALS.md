@@ -385,6 +385,52 @@ is what writes the quit-to-title exit reason. One call site, behind a
 just-pressed edge, means that function blocks for the whole menu session rather
 than being re-entered per frame.
 
+### Inside the menu: the cursor, its repeat, and its frame head
+
+Found while chasing a cursor that scrolled faster the higher `KF2_FPS` was set.
+`docs/TODO.md` still lists the menu's screens as unmapped; these five routines are
+the input and frame plumbing under all of them, and are shared by the start menu
+as well.
+
+| function | role |
+|---|---|
+| `func_80018E80` | **the in-game menu** — the modal loop, dispatching a 7-arm jump table at `0x80011098` on a screen index kept in a stack local |
+| `func_8001EA14` | the fixed option-list cursor: `(cursor, maxIndex, *selected, *confirmed, *cancelled) -> newCursor` |
+| `func_8001EB70` | the scrolling-list cursor, taking a descriptor in `a0` |
+| `func_80022E58` | `PadRead(1)`, latching `0x8006E5C4` to 1 whenever anything is down |
+| `func_80022E90` | the auto-repeat delay — consumes that latch and spins on up to six `VSync(0)` calls |
+| `func_80022530` | the menu's frame head: buffer swap, OT pointer, `ClearOTag`, and the cursor blink |
+| `func_800226A8` | the menu's presenter — `DrawSync`, `VSync(0)`, `PutDrawEnv`, `PutDispEnv`, `LoadImage`, `DrawOTag` |
+| `func_80022EFC` | wait for every button to come up; the loop behind the menu deadlock in [RUNTIME.md](RUNTIME.md) |
+
+`func_8001EB70`'s descriptor is five bytes, deduced from its up and down arms:
+
+| offset | meaning |
+|---|---|
+| `+0x1E` | item count (also the "list is non-empty" guard) |
+| `+0x1F` | visible window height, in rows |
+| `+0x20` | scroll offset — the index of the top visible row |
+| `+0x21` | the absolute selected index |
+| `+0x22` | the cursor's row within the window |
+
+**Neither cursor edge-detects.** Both call `func_80022E90` and then
+`func_80022E58`, and then test Up (`0x8006E590`) and Down (`0x8006E594`) against
+the word they just read — so holding a direction steps the cursor once per
+iteration of the menu loop, and the repeat delay is the only thing that makes it
+usable. That delay is six `VSync(0)` calls, which is 100 ms of vblanks on
+hardware and was 21 ms at 144 fps here until `patches/MenuRepeat.cs`; see "The
+menu's cursor repeat is outside the gate by construction" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+Two words carry the cursor's blink. `func_80022530` steps `0x8006E5CC` (u32) by
+±1 according to the direction in `0x8006E5D0` — 0 counts up, 1 counts down,
+anything else is frozen — clamping to 7 at the top and latching `0xFFFFFFFF` at
+the bottom, and `func_80021A84` reads the counter as `(v + 0x1F4) << 6` into a
+sprite's `+0xE`, which is one of eight cursor frames. `func_8001EA14` zeroes the
+direction on every accepted move (restarting the ramp) and `func_80022E90` zeroes
+the counter when a repeat fires. Since `func_80022530` runs once per menu frame,
+the blink is still on the render rate.
+
 ### Every control axis has the same three branches
 
 Turn, pitch, forward and strafe are all velocity based and all written the same
