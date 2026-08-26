@@ -662,28 +662,39 @@ less** — a tick is now 50 ms rather than 33, so the camera stands still for ha
 again as long between them. `patches/FrameSmoothing.cs`
 is one `pre`/`post` pair around **stage 8** (`func_80025A1C`), which is the whole
 of "build the render camera from the player state" and the only thing between that
-state and the picture — so the extrapolation lives for exactly one function call
+state and the picture — so the carried view lives for exactly one function call
 and cannot accumulate, cannot reach the collision code and cannot reach a save.
 
-* **Yaw and pitch** are carried by `turnVel × frac` and `pitchVel × frac` off
-  `0x80199544` / `0x80199546` — the same two words `patches/Analog.cs` drives.
-  `frac` is `FramePacing.LogicPhase`, and it is continuous across a tick boundary,
-  so the camera does not jump on the frames where the world did advance. **Off by
-  default**, though an angle has no collision so this cannot be wrong, only badly
-  tuned — see below.
-* **Position** is carried by the s16 triple at `0x801994FC`/`FE`/`0x80199500`,
-  which is the movement `func_80028080` actually applied last tick. **Off by
-  default**: it is an extrapolation, so walking into a wall keeps carrying you
-  into it until the next tick snaps you back, and whether that reads as smoothness
-  or as jitter is a question for eyes.
+**It interpolates, it does not extrapolate — and that is what stopped the bounce.**
+The first version carried the view *forward* by last tick's velocity (`angle +
+turnVel × frac`). That is smooth only while the velocity holds, and King's Field
+damps a turn and stops dead at a wall, so the next tick's real angle was routinely
+*less* than the one predicted and the view snapped back to it — reported as *"the
+camera bounces back to a position it would have travelled in 20 Hz"*, every time a
+turn eased off. It now keeps the view the game produced at the previous tick and at
+this one and draws `lerp(prev, cur, frac)`, which can never reach a position the
+game did not produce, so nothing overshoots and nothing snaps. The cost is a tick
+of latency — the picture trails input by up to 50 ms — but the input is sampled at
+the tick rate anyway, so that is a delay of the *display*, not of the response.
 
-**Both default to off**, and the reason is the boundary bug above: while it stood,
-`LogicPhase` was always exactly 0 — a counted boundary was a whole tick wide, so
-the credit went `0 → 1 → tick → 0` and never sat anywhere in between. The probe
-read `0 of 240 frames carried (phase idle)` at every rate, meaning **this had
-never run at all**. It does now (at 60, turning in place: `120/120 frames carried,
-mean phase 0.52 tick, yaw 18.1 u`), so its picture is new and unseen, which is the
-sub-pixel reason for a default of off.
+* **Yaw and pitch** are interpolated between the composed view angles at
+  `0x80199504` / `0x80199506`, re-sampled on every frame the world advanced on.
+  `frac` is `FramePacing.LogicPhase`, continuous across a tick boundary, so the
+  camera does not jump on the frames where the world did advance. Yaw is 12-bit and
+  wraps, so the interpolation takes the shortest way round.
+* **Position** is interpolated between the player position at `0x801994EC`/`F0`/`F4`
+  that `func_80028080` writes after the collision test, so walking a wall
+  interpolates between two positions that already slid along it — no overshoot into
+  it, and no snap back. A step past 1024 units on an axis is a warp rather than a
+  walk and is left alone, the way `ObjectSmoothing` guards a placement.
+
+**Both default to off** — a house rule, not a doubt about the mechanism. The
+boundary bug that once pinned `LogicPhase` to 0 (a counted boundary was a whole tick
+wide, so the credit went `0 → 1 → tick → 0` and never sat between) is long fixed;
+the probe now reads e.g. `241/241 frames carried, mean phase 0.50 tick, yaw 17.7 u`
+at 120 fps. The picture was checked by eye after the switch to interpolation and
+reported *"incredible"*; the default stays off until that judgement is settled for
+shipping.
 
 ### The camera is not the only thing that moves
 
@@ -717,28 +728,27 @@ stage 4 copies the object's position **into** `rec+0x2C` each tick, so the entit
 record is a copy, and the renderer never reads it. See "What in the renderer draws
 what" in [GAME_INTERNALS.md](GAME_INTERNALS.md) for how that was established.
 
-Two decisions differ deliberately from the camera's:
+Two things about it are worth stating:
 
-* **It extrapolates, on the same clock as the view — and it did not at first.**
-  Interpolating was the original choice and the reasoning held on its own terms:
-  nothing in this table is steered by the player, so a tick of latency is free, and
-  walking between two positions the game actually produced cannot overshoot the way
-  `KF2_SMOOTH_POS` can. What that missed is the *neighbour*. `FrameSmoothing`
-  carries the view forward to `t + frac`; interpolating draws an object at
-  `t - 1 + frac`. The two are then a whole tick apart — 50 ms at the default rate —
-  and a constant offset between the world and the things standing in it does not
-  read as latency, it reads as **the objects moving more slowly than everything
-  else**. Reported exactly that way: *"the enemies still move visibly slower than
-  the compass."* The overshoot the first version was avoiding is real, but bounded
-  to one tick and corrected on the next; being on a different clock from the camera
-  is neither. **Two smoothers must agree about what time it is** — that is the rule
-  worth carrying to whatever gets smoothed next.
+* **It interpolates, on the same clock as the view — and the clock is the whole
+  point.** It interpolated, was switched to extrapolating, and now interpolates
+  again. Interpolating was right on its own terms — nothing in this table is steered
+  by the player, so a tick of latency is free, and walking between two positions the
+  game produced cannot overshoot. It was abandoned only because the *camera* then
+  extrapolated: `FrameSmoothing` drew the view forward to `t + frac` while
+  interpolating drew an object at `t - 1 + frac`, a whole tick apart — 50 ms at the
+  default rate — and that constant offset did not read as latency, it read as **the
+  objects moving more slowly than everything else** (*"the enemies still move
+  visibly slower than the compass"*). The camera now interpolates too, so the two
+  are back at the same instant, and interpolation is the better tool wherever it can
+  be afforded: no bounce-back on a stop or a turn, which is exactly what forward
+  extrapolation gave. **Two smoothers must agree about what time it is** — that is
+  the rule worth carrying to whatever gets smoothed next.
 * **A step over 1024 units on any axis is a placement, and is left alone.**
   Without that, an object spawned, respawned, moved by a script, or simply placed
-  when the area finished loading is flung a whole area's width by the
-  extrapolation. (It mattered before the switch to extrapolating too, where it
-  swept the object smoothly across the map instead; forward, it is what makes
-  extrapolating safe to do at all.) The threshold comes from measurement, not taste: real
+  when the area finished loading is swept a whole area's width over one tick. (It is
+  needed for interpolation just as it was for extrapolation: prev and cur can
+  straddle a placement either way.) The threshold comes from measurement, not taste: real
   motion peaked at **37 units a tick**, the player — the fastest thing in the game —
   covers 1817 units in 2 s at 20 Hz and so about **45 a tick**, and one window
   caught a **233,472-unit** step at area load. 1024 sits twenty times above
@@ -792,10 +802,11 @@ of waiting. Drawing more often costs nothing this port has not already got.
 
 **The default is 20 fps and a 20 Hz world**, 1:1, which is the console's own
 arrangement. What no counter answers: whether 20 fps is an acceptable shipped
-default or whether the picture should be drawn faster than the world runs, whether
-the extrapolated camera swims or lags, whether position smoothing jitters against
-walls, and whether the full-rate mode feels better than a smoothed 20 despite its
-broken timers.
+default or whether the picture should be drawn faster than the world runs (checked
+by eye once the smoothing interpolated, and reported *"incredible"* at a high rate),
+and whether the full-rate mode feels better than a smoothed 20 despite its broken
+timers. The interpolated camera no longer swims, lags into a bounce, or jitters
+against a wall — that was the extrapolation, now replaced.
 
 The counters that *are* answerable. The 65-tick death clock at `0x8019951A` is the
 measurement, since stage 3 bumps it once per logic tick — its slope against wall

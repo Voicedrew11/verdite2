@@ -102,13 +102,14 @@ useful than the question was.
 
    **What is still left is the part no counter answers**, and it is the user's: is
    20 actually right, is a 20 fps default acceptable or should the picture be drawn
-   faster than the world runs, does the extrapolated camera swim or lag, does
-   `KF2_SMOOTH_POS=1` jitter against a wall, and does `KF2_SMOOTH_OBJECTS=1`
-   actually settle the enemies or just make their pose-stepping the next thing you
-   notice? Frame smoothing still defaults to
-   **off** as well as position — while the boundary was broken the logic phase was
-   pinned to 0, so it had never run at any rate and its picture is new; a 50 ms tick
-   makes it matter more than the 33 ms one did. Two things a counter *can* still be pointed at:
+   faster than the world runs, and does the full-rate mode feel better than a
+   smoothed 20 despite its broken timers? The smoothing was checked by eye at a high
+   rate and reported *"incredible"* once it **interpolated** — `FrameSmoothing` and
+   `ObjectSmoothing` both extrapolated at first, which bounced the camera back to
+   the tick position whenever a turn eased off or motion met a wall; they now draw
+   `lerp(prev, cur, phase)`, which cannot overshoot. Smoothing still defaults to
+   **off** (position and objects included) as a house rule until that judgement is
+   settled for shipping, not because it has never run. Two things a counter *can* still be pointed at:
    stage 2's per-tick counters (it holds them but cannot be gated wholesale, since
    `DrawOTag` is in its subtree), and stage 13's jitter accumulator at
    `0x8006E608`, which no hook can reach because it is in stage 13's own body.
