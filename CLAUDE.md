@@ -83,6 +83,9 @@ KF2_FPS_GATE=8002A550+80040348+80046A60  # the loop stages held to the tick rate
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by default); carry position too
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
+KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
+KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
+KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
@@ -170,8 +173,27 @@ draw**: stage 2 holds per-frame state too and is deliberately left alone because
 `DrawOTag` is in its subtree. `patches/FrameSmoothing.cs` is the other half rather
 than an option beside it: one pre/post pair around **stage 8** (`func_80025A1C`),
 the only copy of the camera between the player state and the renderer, carrying
-yaw and pitch by the fraction of a tick the frame stands at. **Both halves default
-to off** — while the boundary was broken the phase was pinned to 0 and the
+yaw and pitch by the fraction of a tick the frame stands at. **Smoothing the camera
+is not the whole picture, and `patches/ObjectSmoothing.cs` is the rest of it**:
+most of the frame is architecture that never moves, so a moving camera smooths it
+for free, but anything with a position of its own still arrives in tick-sized
+steps — and against a world sliding smoothly past, that step is *more* obvious
+than if nothing were smoothed. Same shape, one pre/post pair around **stage 13**
+(`func_800342D8`), walking the **object table at `0x80177714`** (396 slots of
+`0x44`, `VECTOR` at `+0x14`, free when the byte at `+0x4` is `0xFF` — the same
+constants `AgentServer` reports `nearby` from). It is that table and **not** the
+200-record entity table at `0x8016C544`, which is AI state stage 4 copies *from*
+it; measured by reading `func_80032588`'s arguments, which are
+`0x80177714 + slot*0x44 + 0x14` for slot numbers `nearby` agrees with. It
+**interpolates rather than extrapolates** — nothing here is steered by the player,
+so a tick of latency is free and overshoot is not worth risking — and it leaves a
+slot whose step exceeds 1024 units on an axis exactly where the game put it,
+because that is a placement rather than motion (measured: real motion 37 u a tick,
+a placement 233,472). **What none of this fixes is animation**: the player's arm is
+2D, drawn by the HUD builder `func_80031D5C` — proved by its packet count moving
+during an attack — and a sprite index advancing once a tick is what the console
+did too. **All three default to off** — while the boundary was broken the phase was
+pinned to 0 and the
 smoothing never ran at all, so its picture has never been seen. A 50 ms tick makes
 it matter more than the 33 ms one did. `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The

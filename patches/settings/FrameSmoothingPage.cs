@@ -3,7 +3,7 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The two smoothing switches, under Video, sharing the "Enhancements" heading
+/// The three smoothing switches, under Video, sharing the "Enhancements" heading
 /// with the dither, perspective, sub-pixel and true-color ones.
 ///
 /// They only do anything above the world's tick rate -- at or below it the world
@@ -11,7 +11,8 @@ namespace Kf2.Settings;
 /// carry -- so the controls dim themselves rather than disappearing, which would
 /// look like the setting had been lost. The test is
 /// <see cref="FramePacing.Extrapolating"/> and not <c>Gating</c>, which is now
-/// true at every rate. See <see cref="FrameSmoothing"/>.
+/// true at every rate. See <see cref="FrameSmoothing"/> and
+/// <see cref="ObjectSmoothing"/>.
 /// </summary>
 public sealed class FrameSmoothingPage : IPatchPage
 {
@@ -49,6 +50,21 @@ public sealed class FrameSmoothingPage : IPatchPage
                              "It uses the distance the game actually moved you last tick, wall " +
                              "slide included -- but it is a guess about the next one, so walking " +
                              "into a wall can shimmer. Off by default.");
+
+        bool objects = ObjectSmoothing.Enabled;
+        if (ImGui.Checkbox("Smooth other things that move", ref objects))
+        {
+            ObjectSmoothing.SetEnabled(objects);
+            PatchSettings.Set(ObjectSmoothing.OnKey, objects);
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Smoothing the camera leaves enemies, doors and everything else " +
+                             "that moves arriving in tick-sized steps, which against a smoothly " +
+                             "sliding world is more obvious than it would be otherwise. This " +
+                             "walks each of them between the two positions the game gave it. " +
+                             "Unlike the view it interpolates rather than guesses ahead, so it " +
+                             "cannot overshoot. Off by default.");
 
         if (!active)
         {

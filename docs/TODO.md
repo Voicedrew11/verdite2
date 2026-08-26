@@ -83,10 +83,29 @@ useful than the question was.
    reproduces the old 2.14 s death clock exactly. See "The reference band is 3
    vblanks, not 2" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
+   **A second half of the smoothing has since been written.** Carrying the camera
+   turned out not to be the whole picture: reported from play at 60/20, "the
+   enemies move at the correct speed, but they are animated at a visibly lower
+   framerate, the HUD renders at 60, and the player's arm renders at 20 as well."
+   The static world and the 2D HUD are smooth for free; anything with a position of
+   its own still stepped, and against a smoothly sliding world that reads worse
+   than not smoothing at all. `patches/ObjectSmoothing.cs`
+   (`KF2_SMOOTH_OBJECTS=1`) interpolates the object table at `0x80177714` across a
+   pre/post pair on stage 13 — measured `121/121 frames carried`, no leak, and the
+   death clock still 65 ticks in 3219 ms. **The arm is not the same bug**: it is
+   2D, drawn by the HUD builder `func_80031D5C`, so what steps is its sprite index
+   and the console stepped it too. Both established with a new probe,
+   `patches/DrawCensus.cs` (`KF2_DRAWCENSUS`), which attributes the frame's
+   primitives to the routine that drew them. See "The camera is not the only thing
+   that moves" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md) and "What in the
+   renderer draws what" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
+
    **What is still left is the part no counter answers**, and it is the user's: is
    20 actually right, is a 20 fps default acceptable or should the picture be drawn
-   faster than the world runs, does the extrapolated camera swim or lag, and does
-   `KF2_SMOOTH_POS=1` jitter against a wall? Frame smoothing still defaults to
+   faster than the world runs, does the extrapolated camera swim or lag, does
+   `KF2_SMOOTH_POS=1` jitter against a wall, and does `KF2_SMOOTH_OBJECTS=1`
+   actually settle the enemies or just make their pose-stepping the next thing you
+   notice? Frame smoothing still defaults to
    **off** as well as position — while the boundary was broken the logic phase was
    pinned to 0, so it had never run at any rate and its picture is new; a 50 ms tick
    makes it matter more than the 33 ms one did. Two things a counter *can* still be pointed at:

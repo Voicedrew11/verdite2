@@ -232,7 +232,31 @@ Kf2.FrameSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_POS"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_PROBE"));
 Kf2.FrameSmoothing.Install();
+
+// The other half of the same problem: the camera moves every frame now, but an
+// object whose position advances on the tick still arrives in 50 ms steps, and
+// against a smoothly sliding world that reads worse than not smoothing at all.
+// One pre/post pair around stage 13, interpolating the object table at 0x80177714
+// -- the table the renderer is actually handed, not the entity records, which are
+// a copy stage 4 makes of it.
+//
+//     KF2_SMOOTH_OBJECTS=1        on; off by default
+//     KF2_SMOOTH_OBJECTS_PROBE=1  how much is being carried, per second
+Kf2.ObjectSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS"),
+                              Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_PROBE"));
+Kf2.ObjectSmoothing.Install();
 Kf2.EndingHold.Install();
+
+// Which routine in the renderer drew how much of the frame. Stage 13 is the only
+// filler of the display list, but nothing records which of its callees draws the
+// map, the objects, or the first-person weapon -- and "the arm steps at the tick
+// rate" has two different fixes depending on which. Measured off the primitive
+// arena's bump pointer across each routine, so it costs two reads per routine per
+// frame and nothing per polygon.
+//
+//     KF2_DRAWCENSUS=1    the per-routine primitive census, every two seconds
+Kf2.DrawCensus.Configure(Environment.GetEnvironmentVariable("KF2_DRAWCENSUS"));
+Kf2.DrawCensus.Install();
 
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a

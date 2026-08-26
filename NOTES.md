@@ -203,6 +203,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - The main game loop, stage by stage
 - The loop's own rate gate is `func_80017880`, and the number is a literal 2
 - Stage 8 is the render camera, and it is the only copy
+- What in the renderer draws what
 - The frame's applied position delta is a triple of its own
 - Player state: found, and it was in stage 3 all along
 - Saving and loading

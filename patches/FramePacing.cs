@@ -297,6 +297,18 @@ public static class FramePacing
     public static double LogicPhase => Gating ? Math.Clamp(_logicCredit, 0.0, 1.0) : 0.0;
 
     /// <summary>
+    /// Whether the gated stages ran on the frame now being drawn -- that is,
+    /// whether the world advanced since the last one. Decided at the previous
+    /// frame's boundary like the phase, so it is stable for the whole frame and
+    /// can be read from anywhere in it.
+    ///
+    /// <see cref="ObjectSmoothing"/> is what wants it: to carry a moving object
+    /// between ticks you need last tick's position as well as this one's, and the
+    /// only moment worth re-sampling is a frame the world actually moved on.
+    /// </summary>
+    public static bool TickedThisFrame => !Gating || _tickThisFrame;
+
+    /// <summary>
     /// True when the world is on the logic clock rather than on the loop.
     ///
     /// **This used to require a rate above 30**, because below that the game's own

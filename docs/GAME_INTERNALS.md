@@ -205,11 +205,69 @@ handed on to **stage 9** (`func_800140AC`, the 3D sound listener) and **stage 13
 `0x80192E88`, derives the tile index `X >> 11`, `Z >> 11`, and builds the view
 matrix that reaches the GTE).
 
-So the composed angles and the position triple are read *once* per frame, by one
-function, and nothing between there and the picture reads them again. That makes
-stage 8 the only place a port can move the camera without moving the game: a pre
-hook that nudges those globals and a post hook that puts them back is visible to
-the renderer and to nothing else. `patches/FrameSmoothing.cs` is that hook.
+So the composed **angles** are read once per frame, by one function, and nothing
+between there and the picture reads them again. That makes stage 8 the only place
+a port can move the camera without moving the game: a pre hook that nudges those
+globals and a post hook that puts them back is visible to the renderer and to
+nothing else. `patches/FrameSmoothing.cs` is that hook.
+
+**The same is not true of the position, and this used to say it was.** Two of
+stage 13's own callees read the player position triple directly, *after* stage 8
+has run and after `FrameSmoothing.After` has put the un-nudged values back:
+`func_80032400` reads `0x801994EC` and `0x801994F4`, and `func_800331B4` — the
+world and object walks — reads all three. Found by listing every function in the
+emitted C# that loads through the `0x801A0000 - 0x6B14/0x6B10/0x6B0C` base and
+offsets stage 8 uses. It does not break the smoothing, whose position half is off
+by default and which nudges the globals stage 8 copies rather than the copy, but
+it does mean "one reader" is a claim about the angles alone.
+
+### What in the renderer draws what
+
+Stage 13 fills the whole display list, but which of its callees draws the world,
+the map, the HUD and the player's own weapon was never written down, and it has to
+be known before anything can be said about one of them updating at the wrong rate.
+`patches/DrawCensus.cs` (`KF2_DRAWCENSUS=1`) answers it by attribution rather than
+by reading code: the game bumps a `{start, end, current}` descriptor at
+`0x8017E0A4` once per polygon, so the bytes a routine drew are the bump across it —
+two hooks per routine, nothing per polygon, and a stack so nesting is charged once.
+
+Stage 13 calls twenty-one routines. **Three of them draw**, and stage 13's own body
+draws nothing (its exclusive count is 0):
+
+| routine | what | measured, standing in an area |
+|---|---|---|
+| `func_80031C94` | the map: a 24x24 walk of the visibility grid at `0x80192EAC` | 27 packets still, 67 turning |
+| `func_800331B4` → `func_80032588` | the object model submitter | 48 packets, ~2 calls |
+| `func_80031D5C` | the HUD **and the player's arm** | 57 packets |
+
+Two things fell out of it that matter:
+
+- **The player's first-person weapon is drawn by the HUD builder**, not by the 3D
+  walk. It is 2D, in screen space, out of the fourteen-entry table at
+  `0x80067774`. The proof is a difference rather than a reading: pressing attack
+  over the command channel moves that row and nothing else (56.9 → 54.0 → 52.7
+  packets a frame). So the arm cannot be "reattached" to an extrapolated camera —
+  it is already welded to the screen, and what steps at the tick rate is its
+  sprite index, which is what the console did too.
+- **`func_80032588` is handed the object table, not the entity table.** Its `a2`
+  argument is a `VECTOR` pointer, and `KF2_DRAWCENSUS=2` prints it: the addresses
+  are `0x80177714 + slot*0x44 + 0x14`, and the slot numbers match what the command
+  channel's `nearby` reports for `objects`. The 200-record entity table at
+  `0x8016C544` is AI state that stage 4 copies *from* that table into `rec+0x2C`
+  each tick — the arrow points the other way from the obvious guess, and it is why
+  `patches/ObjectSmoothing.cs` interpolates `0x80177714` and not the records.
+
+Two traps in measuring it this way, both hit:
+
+- **The arena is swapped, not just rewound.** `func_8002E064` at stage 13's head
+  picks this frame's of two buffers (`0x800FC99C` / `0x8011599C`) and then rewinds
+  it, so across stage 13 the entry and exit bump pointers are in *different*
+  buffers and subtracting them reads as ±0x19000. Comparing the descriptor
+  address, not the pointer, is what catches it.
+- **A routine that unwinds to depth 0 is not necessarily a frame.**
+  `func_80015374` is called from outside stage 13 as well as inside it, and
+  counting frames on "the stack emptied" inflated the frame count 2.5x. Count on
+  the renderer's own slot.
 
 ### The frame's applied position delta is a triple of its own
 

@@ -9,6 +9,8 @@ lives here — frame pacing and auto reload.
 | file | what it does | detail |
 |---|---|---|
 | `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
+| `FrameSmoothing.cs`, `ObjectSmoothing.cs` | carry the view, and everything that moves, between ticks | this file |
+| `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
 | `Perspective.cs`, `Subpixel.cs`, `ZBuffer.cs` | switches and probes over the GTE depth mechanisms | [RENDERING.md](RENDERING.md) |
@@ -682,6 +684,79 @@ read `0 of 240 frames carried (phase idle)` at every rate, meaning **this had
 never run at all**. It does now (at 60, turning in place: `120/120 frames carried,
 mean phase 0.52 tick, yaw 18.1 u`), so its picture is new and unseen, which is the
 sub-pixel reason for a default of off.
+
+### The camera is not the only thing that moves
+
+Reported after the tick rate became a setting, playing at 60 fps against the 20 Hz
+world with frame smoothing on: *"the enemies move at the correct speed, but they
+are animated at a visibly lower framerate, while the HUD renders at 60 — and the
+player's arm renders at 20 as well."* Every part of that is the design working as
+built, and two thirds of it are fixable.
+
+Smoothing the camera covers more of the picture than it sounds like it does,
+because most of the picture is architecture that never moves: reproject a static
+wall through a camera that moved and it is smooth. The HUD is 2D, so it is exempt
+by construction. What is left over is anything carrying a position of its own —
+which still advances once a tick, and which now steps against a world sliding
+smoothly past it. That contrast makes the step **more** visible than it is with
+nothing smoothed at all, which is why this is the other half of frame smoothing
+rather than an extra beside it.
+
+`patches/ObjectSmoothing.cs` (`KF2_SMOOTH_OBJECTS=1`) is the same shape as
+`FrameSmoothing` — a `pre` that writes, a `post` that puts back exactly what was
+there — around **stage 13** (`func_800342D8`) rather than stage 8, because it is
+the renderer that reads these and not the camera builder. Stage 13 writes nothing
+but the display list, so the interpolated positions are gone before the next tick's
+AI, a save or a proximity trigger can see them.
+
+**The table is `0x80177714`** — 396 slots of `0x44`, `VECTOR` at `+0x14`, free when
+the byte at `+0x4` is `0xFF`, the constants `patches/AgentServer.cs` already reads
+for `nearby`. That it is the *object* table and not the 200-record entity table at
+`0x8016C544` is the one thing here that had to be measured rather than assumed:
+stage 4 copies the object's position **into** `rec+0x2C` each tick, so the entity
+record is a copy, and the renderer never reads it. See "What in the renderer draws
+what" in [GAME_INTERNALS.md](GAME_INTERNALS.md) for how that was established.
+
+Two decisions differ deliberately from the camera's:
+
+* **It interpolates rather than extrapolates.** The view extrapolates because it
+  answers the player's hand and a tick of latency on it would be felt. Nothing in
+  this table is steered by the player, so the latency is free and buys immunity to
+  overshoot — an object that stops or turns is never carried past where it went.
+  Concretely it keeps last tick's positions as well as this tick's and walks *back*
+  from the newer one by `1 - frac`.
+* **A step over 1024 units on any axis is a placement, and is left alone.**
+  Without that, an object spawned, respawned, moved by a script, or simply placed
+  when the area finished loading gets swept smoothly across the map over the next
+  tick instead of appearing. The threshold comes from measurement, not taste: real
+  motion peaked at **37 units a tick**, the player — the fastest thing in the game —
+  covers 1817 units in 2 s at 20 Hz and so about **45 a tick**, and one window
+  caught a **233,472-unit** step at area load. 1024 sits twenty times above
+  anything that walks and two hundred times below the placement it has to catch.
+
+Measured at 60 fps against the 20 Hz world, standing in an area: `121/121 frames
+carried, 3.0 objects each, mean phase 0.40 tick, offset 14 u, biggest tick step 37
+u`, with the probe's own leak check — re-read every touched slot after the renderer
+and compare it with what the pre-hook wrote — reporting nothing. The **death clock
+is untouched**, which is the check that matters: 65 ticks in **3219 ms** against
+the 3250 ms a 20 Hz world owes. Cost, at a 1000 fps cap so there is something to
+see: 550–615 fps either way, the run-to-run spread wider than the difference.
+
+**Off by default**, the house rule for a mechanism that has been measured and whose
+picture has not been looked at.
+
+#### What still steps at the tick rate, and should
+
+The arm is the case worth stating, because it looks like the same bug and is not.
+**It is 2D**, drawn by the HUD builder `func_80031D5C` out of the fourteen-entry
+table at `0x80067774` — established by difference, since pressing attack over the
+command channel moves that row's packet count and nothing else. So it is already
+welded to the screen and there is no camera to reattach it to; what steps is its
+**sprite index**, advanced once a tick by stage 3's player control. Interpolating
+between two authored sprites is not a thing, and a console running at 20 fps
+stepped it at exactly the same rate. The same goes for a creature's animation
+frames as distinct from its position: `ObjectSmoothing` makes an enemy *travel*
+smoothly, and it still cycles its poses on the tick.
 
 ### The comparison mode
 
