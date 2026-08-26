@@ -236,6 +236,23 @@ Kf2.MenuPacing.Configure(Environment.GetEnvironmentVariable("KF2_MENUPACING"),
                          Environment.GetEnvironmentVariable("KF2_MENUPACING_PROBE"));
 Kf2.MenuPacing.Install();
 
+// Which words of the game's memory change at the render rate rather than at the
+// tick rate -- the instrument that turns "something looks too fast" into an
+// address. Samples on the emulated vblank, which is a wall-clock 60 Hz grid since
+// patches/recompone/0021, so two runs at different render rates are directly
+// comparable. Off by default; it costs a compare over the game's data region
+// sixty times a second.
+//
+//     KF2_RATECENSUS=1                       on
+//     KF2_RATECENSUS_RANGE=80060000:801C0000 the window to watch (the default)
+//     KF2_RATECENSUS_OUT=path                where to write (default ratecensus.txt)
+//     KF2_RATECENSUS_PERIOD=5                seconds between dumps
+Kf2.RateCensus.Configure(Environment.GetEnvironmentVariable("KF2_RATECENSUS"),
+                         Environment.GetEnvironmentVariable("KF2_RATECENSUS_RANGE"),
+                         Environment.GetEnvironmentVariable("KF2_RATECENSUS_OUT"),
+                         Environment.GetEnvironmentVariable("KF2_RATECENSUS_PERIOD"));
+Kf2.RateCensus.Install();
+
 // The other half of drawing above 30: the world advances 30 times a second, so
 // without this the camera does too and the extra frames show the same view twice.
 // One pre/post pair around stage 8 (func_80025A1C), which is the whole of "build

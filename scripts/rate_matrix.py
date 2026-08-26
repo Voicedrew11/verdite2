@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Run a scenario across a matrix of rate settings and print the table.
+
+    python3 scripts/rate_matrix.py menu-scroll --fps 20 60 144
+    python3 scripts/rate_matrix.py death-clock --fps 20 60 144 --tickrate 20 30
+    python3 scripts/rate_matrix.py menu-scroll --fps 144 --env KF2_MENUPACING=0
+    python3 scripts/rate_matrix.py --list
+
+Every rate claim in docs/ should be reproducible by one of these. The output is a
+markdown table ready to paste, and `--json` keeps the raw numbers so a later run
+can be diffed against an earlier one.
+
+**Read the rate a scenario reports, not the duration it reports.** Some of these
+numbers are stable across runs and some are not -- the menu repeat's spin measured
+1.2 ms on one run and 16.6 ms on the next at the same settings, while the repeat
+*rate* it produced was 37.5 and 36.0. A scenario says which of its numbers it
+considers load-bearing; the others are context.
+"""
+
+from __future__ import annotations
+
+import argparse
+import itertools
+import json
+import re
+import statistics
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import kf2run as kf2
+
+SCRATCH = Path("/tmp/kf2-rate-matrix")
+
+
+# --- scenarios ---------------------------------------------------------------
+#
+# A scenario drives the game and returns {column: value}. It may assume an area
+# is up and settled. Keep them short: the matrix multiplies their cost.
+
+def sc_menu_scroll(run: kf2.Run) -> dict:
+    """Open the menu, hold Down, and measure the cursor repeat and the blink.
+
+    Needs KF2_MENUPACING_PROBE=1, which the scenario asks for below.
+    """
+    kf2.press("Circle", 150)
+    time.sleep(2.5)
+    kf2.hold("Down", 2.0)
+    time.sleep(1.5)
+
+    spins = [float(m.group(1)) for m in run.matching(r"menu pacing: ([\d.]+) ms over")]
+    blinks = [(float(m.group(1)), float(m.group(2)))
+              for m in run.matching(r"blink stepped ([\d.]+) times a second over ([\d.]+) menu frames")]
+
+    # The blink freezes when the cursor is not moving, so the windows that matter
+    # are the ones where it stepped at all -- the rest are the menu sitting idle.
+    scrolling = [b for b in blinks if b[0] > 1.0]
+
+    return {
+        "repeats/2s": len(spins),
+        "repeat rate": round(len(spins) / 2.0, 1) if spins else 0.0,
+        "spin ms": round(statistics.median(spins), 1) if spins else None,
+        "blink/s": round(max((b[0] for b in scrolling), default=0.0), 1),
+    }
+
+
+def sc_death_clock(run: kf2.Run) -> dict:
+    """Kill the player and time the 65-tick death counter.
+
+    Stage 3 bumps 0x8019951A once per logic tick, so its slope against wall time
+    *is* the tick rate. This is the regression check for KF2_TICKRATE.
+    """
+    kf2.shell("kill")
+    t0 = time.time()
+    last = 0
+    deadline = t0 + 20.0
+    while time.time() < deadline:
+        st = kf2.state()
+        frames = st.get("deathFrames", 0)
+        if frames and frames >= last:
+            last = frames
+        if last and (not frames or st.get("dead") is False):
+            break
+        time.sleep(0.05)
+    elapsed = time.time() - t0
+    return {
+        "death frames": last,
+        "seconds": round(elapsed, 2),
+        "ticks/s": round(last / elapsed, 2) if elapsed > 0 else None,
+    }
+
+
+def sc_walk(run: kf2.Run) -> dict:
+    """Hold Up for two seconds and measure the distance covered.
+
+    The cross-check that does not go through the death clock: the game moves a
+    fixed amount per tick, so distance scales with the tick rate and not with the
+    frame rate.
+    """
+    a = kf2.state().get("pos", [0, 0, 0])
+    kf2.hold("Up", 2.0)
+    b = kf2.state().get("pos", [0, 0, 0])
+    dx, dz = b[0] - a[0], b[2] - a[2]
+    return {"units/2s": round((dx * dx + dz * dz) ** 0.5)}
+
+
+def sc_idle(run: kf2.Run) -> dict:
+    """Stand still for five seconds. For pairing with KF2_RATECENSUS."""
+    time.sleep(5.0)
+    return {"ok": True}
+
+
+SCENARIOS = {
+    "menu-scroll": (sc_menu_scroll, {"KF2_MENUPACING_PROBE": "1"},
+                    "open the menu, hold Down; cursor repeat and blink rate"),
+    "death-clock": (sc_death_clock, {}, "kill, and time the 65-tick death counter"),
+    "walk":        (sc_walk, {}, "hold Up for 2 s; distance is tick-rate bound"),
+    "idle":        (sc_idle, {}, "stand still for 5 s (pair with KF2_RATECENSUS)"),
+}
+
+
+# --- the matrix --------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("scenario", nargs="?", help="which scenario to run")
+    ap.add_argument("--fps", nargs="*", default=["20", "60", "144"])
+    ap.add_argument("--tickrate", nargs="*", default=[None])
+    ap.add_argument("--env", nargs="*", default=[],
+                    help="extra KEY=VALUE applied to every run in the matrix")
+    ap.add_argument("--json", type=Path, help="also write the raw numbers here")
+    ap.add_argument("--settle", type=float, default=10.0)
+    ap.add_argument("--list", action="store_true")
+    args = ap.parse_args()
+
+    if args.list or not args.scenario:
+        print("scenarios:")
+        for name, (_, env, doc) in SCENARIOS.items():
+            extra = f"  [{kf2.fmt_env(env)}]" if env else ""
+            print(f"  {name:<12} {doc}{extra}")
+        return 0
+
+    if args.scenario not in SCENARIOS:
+        print(f"no scenario '{args.scenario}'; --list to see them", file=sys.stderr)
+        return 2
+
+    fn, scenario_env, doc = SCENARIOS[args.scenario]
+    fixed = dict(kv.split("=", 1) for kv in args.env)
+
+    rows = []
+    combos = list(itertools.product(args.fps, args.tickrate))
+    for i, (fps, tick) in enumerate(combos, 1):
+        env = dict(scenario_env)
+        env["KF2_FPS"] = fps
+        if tick:
+            env["KF2_TICKRATE"] = tick
+        env.update(fixed)
+
+        label = f"fps={fps}" + (f" tick={tick}" if tick else "")
+        print(f"[{i}/{len(combos)}] {label} ...", file=sys.stderr, flush=True)
+
+        log = SCRATCH / f"{args.scenario}-{fps}-{tick or 'default'}.log"
+        run = kf2.launch(env, log)
+        try:
+            kf2.wait_in_game(settle=args.settle)
+            result = fn(run)
+        except Exception as e:                      # a bad config should cost one row
+            print(f"    failed: {e}", file=sys.stderr)
+            result = {"error": str(e)[:60]}
+        finally:
+            kf2.stop()
+
+        rows.append({"fps": fps, "tickrate": tick or "", **result})
+
+    columns = ["fps"] + (["tickrate"] if any(r["tickrate"] for r in rows) else [])
+    for r in rows:
+        for k in r:
+            if k not in columns and k not in ("fps", "tickrate"):
+                columns.append(k)
+
+    print()
+    print(f"### {args.scenario} — {doc}")
+    if fixed:
+        print(f"\n`{kf2.fmt_env(fixed)}`")
+    print()
+    print("| " + " | ".join(columns) + " |")
+    print("|" + "|".join("---" for _ in columns) + "|")
+    for r in rows:
+        print("| " + " | ".join(str(r.get(c, "")) for c in columns) + " |")
+
+    if args.json:
+        args.json.write_text(json.dumps(rows, indent=2))
+        print(f"\nraw numbers in {args.json}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

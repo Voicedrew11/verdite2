@@ -103,10 +103,15 @@ namespace Kf2;
 /// have nothing from it. That is checked against the emitted C#: the subtree of a
 /// gated function must contain no `DrawOTag`, `VSync`, `PutDispEnv` or
 /// `PutDrawEnv`. Stage 3 is the one exception and it is a different shape: it
-/// reaches them only as `func_8002A550 -> func_80037B5C -> func_800342D8`, calling
-/// stage 13 from inside a modal sub-loop (the in-game menu) that takes the main
-/// loop over and renders its own frames. Skipping stage 3 decides whether such a
-/// loop is entered; it cannot cut one in half.
+/// reaches them by calling **stage 13 itself** -- `func_80029CBC -> func_80018E80`
+/// (the in-game menu) and `func_80037B5C` (the transition fade), both of which
+/// take the main loop over and render their own frames, and `func_80022DC4` (the
+/// menu blip) which VSyncs without drawing. Those are *extra* renders inside the
+/// stage rather than the frame's own: the main loop still runs stage 13
+/// afterwards, so skipping stage 3 costs a redundant draw and not a frame's
+/// picture. Skipping it decides whether such a loop is entered; it cannot cut one
+/// in half. (`scripts/check_gate.py` re-derives this; it is a recorded exception
+/// there, and the single-path version of this sentence was wrong.)
 ///
 /// **What this still does not cover, stated rather than discovered later.**
 /// **Stage 2** (`func_80037C0C`, the 396-arm object dispatch) holds per-frame

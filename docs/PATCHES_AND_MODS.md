@@ -832,7 +832,9 @@ running its own loop and presenting its own frames through `func_800226A8`
 ticks, but `BeforeStage` is never consulted, so **nothing inside the menu is on
 the tick clock**. This is the case the "Three things held the port at 30" section
 already flags: skipping stage 3 decides whether such a loop is entered, it cannot
-cut one in half.
+cut one in half. (Stage 3 reaches the renderer by more paths than that section
+originally claimed — `scripts/check_gate.py` enumerates them — but they are all
+extra renders inside the stage rather than the frame's own.)
 
 What that cost is the cursor. The two steppers — `func_8001EA14` (a fixed option
 list) and `func_8001EB70` (a scrolling one: inventory, equipment, magic) — open

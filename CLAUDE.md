@@ -83,6 +83,9 @@ KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ti
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
 KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
+KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
+KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
+KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
 KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by default); carry position too
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
 KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
@@ -451,7 +454,12 @@ mods/<id>/               runtime-loaded mods (mod.json + C#, Roslyn-compiled)
 mcp/                     stdio MCP server exposing the KF2_SHELL command channel as tools to MCP hosts
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
-scripts/*.py             disc inspection and address-hunting tooling
+scripts/*.py             disc inspection, address-hunting, and the rate tooling:
+                         rate_census (which words move at the render rate),
+                         find_writers (which code moves them), rate_matrix (did
+                         the fix work), check_gate (does the gate obey its rule).
+                         kf2run/callgraph/kf2model are their shared halves.
+                         See "Finding the rate defects" in docs/DEVELOPMENT.md
 Program.cs               hand-owned entry point; calls Entry.Run(PSMemory, cuePath)
 ```
 
