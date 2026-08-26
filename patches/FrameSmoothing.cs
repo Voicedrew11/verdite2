@@ -12,7 +12,7 @@ namespace Kf2;
 /// the world advances actually looks like it.
 ///
 ///     KF2_SMOOTH=1        on; without it the camera moves at the tick rate only
-///     KF2_SMOOTH_POS=1    extrapolate the position too, not just the angles
+///     KF2_SMOOTH_POS=1    interpolate the position too, not just the angles
 ///     KF2_SMOOTH_PROBE=1  what is being carried, per second
 ///
 /// Both are settings, under Video beside the frame rate. **Both default to off**:
@@ -44,36 +44,46 @@ namespace Kf2;
 /// It runs after stage 3 and before stage 13, and the two stack blocks it fills
 /// are what the renderer -- and stage 9, the 3D sound listener -- are handed. So
 /// it is the *only* thing between the authoritative player state and the picture.
-/// A pre-hook that nudges those globals and a post-hook that puts them back means
-/// the extrapolation exists for exactly one function call: it cannot accumulate,
+/// A pre-hook that writes those globals and a post-hook that puts them back means
+/// the carried view exists for exactly one function call: it cannot accumulate,
 /// it cannot reach the collision code, and it cannot reach a save. That isolation
 /// is the whole reason this is safe, and it is why the hook is not on stage 2 or
 /// stage 13 -- both of which do other things, repeatedly.
 ///
-/// ## What is carried, and what that costs
+/// ## Interpolate, not extrapolate
 ///
-/// * **Yaw and pitch**, from the velocity words stage 3 wrote this tick
-///   (`0x80199544` and `0x80199546` -- the same two <c>patches/Analog.cs</c>
-///   drives). The game adds the whole velocity once per tick; this adds the
-///   fraction of it the frame is worth. Turning is where the judder is most
-///   visible in a first-person game and where extrapolation cannot be wrong:
-///   an angle has no collision.
-/// * **Position**, optionally, from `0x801994FC`/`FE`/`0x80199500` -- the s16
-///   triple `func_80028080` writes with the movement it *actually applied* this
-///   tick, wall slide and all, and which `func_800290D4` zeroes when the player is
-///   not moving. So this is the game's own answer to "how far did you move", not
-///   a re-derivation of it from the yaw, and it needs no trigonometry and no guess
-///   about which way strafe points.
+/// **This carried the view *forward* at first -- current angle + this tick's
+/// velocity x frac -- and that is what made it bounce.** Forward extrapolation is
+/// smooth only while the velocity holds. King's Field damps a turn and stops dead
+/// at a wall, so the next tick's real angle is routinely *less* than the one that
+/// was predicted, and the view snapped back to it -- "the camera bounces back to a
+/// position it would have travelled in 20 Hz", every time a turn eased off.
 ///
-///   It is **off by default** all the same. The delta is last tick's, so it is an
-///   extrapolation rather than an interpolation -- no added latency, but a player
-///   who walks into a wall keeps being carried into it for the rest of the tick
-///   before snapping back. Whether that reads as smoothness or as jitter is a
-///   question for eyes, not for a counter.
+/// So it interpolates instead: it keeps the view the game produced at the previous
+/// tick and at the current one, and draws `lerp(prev, cur, frac)`. That can never
+/// reach a position the game did not produce, so nothing overshoots and nothing
+/// snaps. The cost is a tick of latency -- the picture trails input by up to 50 ms
+/// at 20 Hz -- which for a game whose input is already sampled at the tick rate is
+/// a delay of the *display*, not of the response, and is the price the smoothness
+/// is worth.
+///
+/// What is carried:
+/// * **Yaw and pitch**, the composed view angles at `0x80199504`/`0x80199506` --
+///   the values stage 3 (`func_80028DB8`) has already folded this tick's turn into,
+///   sampled fresh on every frame the world advanced. Yaw is 12-bit and wraps, so
+///   the interpolation takes the shortest way round.
+/// * **Position**, optionally, from `0x801994EC`/`F0`/`F4` -- the player position
+///   `func_80028080` writes after the collision test, so walking a wall interpolates
+///   between two positions that already slid along it, with no overshoot into it. A
+///   step past <see cref="TeleportUnits"/> on an axis is a warp rather than a walk
+///   and is left alone, the way <see cref="ObjectSmoothing"/> guards a placement.
+///
+/// Both agree on time with <see cref="ObjectSmoothing"/>, which interpolates too:
+/// both draw the world at `t - 1 + frac`, so nothing slides against anything else.
 ///
 /// <see cref="FramePacing.LogicPhase"/> is the fraction used, and it is continuous
 /// across a tick boundary -- it does not reset to zero on the frames where the
-/// world did advance -- so the camera does not jump when the world catches up.
+/// world did advance -- so the view does not jump when the world catches up.
 /// </summary>
 public static class FrameSmoothing
 {
@@ -89,18 +99,12 @@ public static class FrameSmoothing
     const uint PosY = 0x801994F0;
     const uint PosZ = 0x801994F4;
 
-    // This tick's view velocities, added to the angles once by func_80028DB8.
-    const uint TurnVel  = 0x80199544;        // s16
-    const uint PitchVel = 0x80199546;        // s16
-
-    // This tick's applied position delta, written by func_80028080 after the
-    // collision test and zeroed by func_800290D4 when standing still.
-    const uint MoveDX = 0x801994FC;          // s16
-    const uint MoveDY = 0x801994FE;
-    const uint MoveDZ = 0x80199500;
-
-    /// <summary>The game's own pitch limit, held by func_80015364.</summary>
-    const int PitchLimit = 0x2BC;
+    /// <summary>Units on one axis between two ticks past which the position is a
+    /// warp rather than a walk, and is left where the game put it -- lerping across
+    /// it would sweep the camera the width of the map. The player, the fastest
+    /// thing in the game, covers about 45 units a tick, so 1024 clears any walk by
+    /// twenty times. Matches <see cref="ObjectSmoothing"/>'s placement guard.</summary>
+    const int TeleportUnits = 1024;
 
     public const string OnKey  = "kf2.smoothing.on";
     public const string PosKey = "kf2.smoothing.pos";
@@ -120,6 +124,16 @@ public static class FrameSmoothing
 
     static bool _onFromEnv, _posFromEnv;
 
+    // Last tick's and this tick's composed view, sampled on a frame the world
+    // advanced on. `_cur` is what the game most recently produced, `_prev` what it
+    // produced the tick before; the frame is drawn at lerp(prev, cur, phase).
+    static ushort _prevYaw, _curYaw, _prevPitch, _curPitch;
+    static int _prevX, _curX, _prevY, _curY, _prevZ, _curZ;
+
+    // False until a first sample exists, then until a second does. Carrying needs
+    // both prev and cur to be real, exactly as ObjectSmoothing's `_live` does.
+    static bool _primed, _carriable;
+
     // What the pre-hook overwrote, and whether it overwrote anything. Restored by
     // the post-hook; there is exactly one call in flight at a time, on one thread.
     static bool _applied;
@@ -133,10 +147,10 @@ public static class FrameSmoothing
     static double _reportedAt;
     static long _carried, _skipped;
 
-    // Why a frame was skipped. "0 of N carried (phase idle)" used to be printed
-    // whichever it was, which reads as "the logic clock is broken" when in fact
-    // the player was standing still and there was nothing to carry.
-    static long _skipPhase, _skipStill;
+    // Why a frame was skipped. With interpolation the only reason left is that the
+    // view did not change between the two ticks -- the player was standing still --
+    // which reads very differently from "the logic clock is broken".
+    static long _skipStill;
     static double _yawSum, _pitchSum, _posSum, _fracSum;
 
     static readonly ModInfo _self = new()
@@ -162,6 +176,11 @@ public static class FrameSmoothing
             if (!_onFromEnv) Enabled = view.GetBool(OnKey, Enabled);
             if (!_posFromEnv) Position = view.GetBool(PosKey, Position);
         });
+
+        // An area or executable swap rebuilds the player state, so the previous
+        // sample describes a position and heading that no longer mean anything;
+        // start priming again rather than lerp across the discontinuity.
+        Event.AddListener<OverlayLoadedEvent>(_ => { _primed = false; _carriable = false; });
 
         bool attached = false;
         Event.AddListener<OverlayLoadedEvent>(_ =>
@@ -201,7 +220,7 @@ public static class FrameSmoothing
 
         if (n < 2)
             Console.Error.WriteLine("[KF2] smoothing: only half the pair attached; " +
-                                    "the extrapolation is disabled rather than left applied.");
+                                    "the interpolation is disabled rather than left applied.");
         else
             Console.WriteLine($"[KF2] smoothing: {(Enabled ? "on" : "off")}" +
                               $"{(Position ? ", carrying position" : "")}, hooked stage 8 at 0x{CameraCopy:X8}");
@@ -210,29 +229,53 @@ public static class FrameSmoothing
     }
 
     /// <summary>
-    /// Nudge the view forward by the fraction of a logic tick this frame stands at,
-    /// just before the one function that reads it.
+    /// Draw the view at lerp(prev tick, this tick, phase), just before the one
+    /// function that reads it. On a frame the world advanced on, this tick's value
+    /// is re-sampled first; on every other frame the two samples stand and only the
+    /// phase moves.
     /// </summary>
     public static void Before(CpuContext c, IMemory m)
     {
         _applied = false;
         if (!Enabled || !FramePacing.Gating) return;
 
-        double frac = FramePacing.LogicPhase;
-        if (frac <= 0.0005) { if (_probe) { _skipped++; _skipPhase++; } return; }
-
-        int turn = (short)m.ReadU16(TurnVel);
-        int pitchVel = (short)m.ReadU16(PitchVel);
-
-        int dx = 0, dy = 0, dz = 0;
-        if (Position)
+        // Roll forward on a tick, then re-read the values the game just produced.
+        // Stage 3 (func_80028DB8 for the angles, func_80028080 for the position)
+        // runs before stage 8, so on a tick frame these already hold the new tick.
+        if (FramePacing.TickedThisFrame)
         {
-            dx = (short)m.ReadU16(MoveDX);
-            dy = (short)m.ReadU16(MoveDY);
-            dz = (short)m.ReadU16(MoveDZ);
+            _prevYaw = _curYaw; _prevPitch = _curPitch;
+            _prevX = _curX; _prevY = _curY; _prevZ = _curZ;
+
+            _curYaw = m.ReadU16(ComposedYaw);
+            _curPitch = m.ReadU16(ComposedPitch);
+            _curX = (int)m.ReadU32(PosX);
+            _curY = (int)m.ReadU32(PosY);
+            _curZ = (int)m.ReadU32(PosZ);
+
+            _carriable = _primed;   // both prev and cur are real only after two samples
+            _primed = true;
         }
 
-        if (turn == 0 && pitchVel == 0 && dx == 0 && dy == 0 && dz == 0)
+        // Not gated on a small phase: interpolation must overwrite the live globals
+        // even at frac ~= 0, because on a tick frame they hold `cur` (the new tick)
+        // and the frame is meant to draw `prev`. Skipping there would leave the new
+        // value on screen and put a snap back the other way.
+        if (!_carriable) return;
+
+        double frac = FramePacing.LogicPhase;
+
+        int yawD = Delta12(_prevYaw, _curYaw);
+        int pitchD = S12(_curPitch) - S12(_prevPitch);
+
+        int dx = _curX - _prevX, dy = _curY - _prevY, dz = _curZ - _prevZ;
+        bool posLive = Position &&
+                       Math.Abs(dx) <= TeleportUnits &&
+                       Math.Abs(dy) <= TeleportUnits &&
+                       Math.Abs(dz) <= TeleportUnits &&
+                       (dx != 0 || dy != 0 || dz != 0);
+
+        if (yawD == 0 && pitchD == 0 && !posLive)
         {
             if (_probe) { _skipped++; _skipStill++; }
             return;
@@ -245,17 +288,17 @@ public static class FrameSmoothing
         _z = m.ReadU32(PosZ);
         _applied = true;
 
-        int yawStep = Step(turn * frac);
-        int pitchStep = Step(pitchVel * frac);
+        int yawStep = (int)Math.Round(yawD * frac);
+        int pitchStep = (int)Math.Round(pitchD * frac);
 
-        if (yawStep != 0) m.WriteU16(ComposedYaw, (ushort)((_yaw + yawStep) & 0xFFF));
-        if (pitchStep != 0) m.WriteU16(ComposedPitch, Pitch(_pitch, pitchStep));
+        m.WriteU16(ComposedYaw, (ushort)(((_prevYaw & 0xFFF) + yawStep) & 0xFFF));
+        m.WriteU16(ComposedPitch, (ushort)((S12(_prevPitch) + pitchStep) & 0xFFF));
 
-        if (Position)
+        if (posLive)
         {
-            m.WriteU32(PosX, (uint)((int)_x + Step(dx * frac)));
-            m.WriteU32(PosY, (uint)((int)_y + Step(dy * frac)));
-            m.WriteU32(PosZ, (uint)((int)_z + Step(dz * frac)));
+            m.WriteU32(PosX, (uint)(_prevX + (int)Math.Round(dx * frac)));
+            m.WriteU32(PosY, (uint)(_prevY + (int)Math.Round(dy * frac)));
+            m.WriteU32(PosZ, (uint)(_prevZ + (int)Math.Round(dz * frac)));
         }
 
         if (_probe)
@@ -263,7 +306,7 @@ public static class FrameSmoothing
             _carried++;
             _yawSum += Math.Abs(yawStep);
             _pitchSum += Math.Abs(pitchStep);
-            _posSum += Math.Abs(Step(dx * frac)) + Math.Abs(Step(dz * frac));
+            if (posLive) _posSum += Math.Abs(dx * frac) + Math.Abs(dz * frac);
             _fracSum += frac;
         }
     }
@@ -288,32 +331,25 @@ public static class FrameSmoothing
         if (_probe) Report();
     }
 
-    /// <summary>
-    /// Round away from zero, so that a step smaller than half a unit still moves
-    /// the view. At 120 fps a quarter of a slow turn is well under one unit, and
-    /// rounding it to nothing would put the judder straight back.
-    /// </summary>
-    static int Step(double v)
+    /// <summary>Read a 12-bit angle as signed, in [-2048, 2047]. Pitch is a small
+    /// signed angle (±0x2BC) stored this way; yaw uses the whole range.</summary>
+    static int S12(int raw)
     {
-        if (v == 0.0) return 0;
-        int n = (int)Math.Round(Math.Abs(v), MidpointRounding.AwayFromZero);
-        if (n == 0) n = 1;
-        return v < 0.0 ? -n : n;
+        int v = raw & 0xFFF;
+        return v >= 0x800 ? v - 0x1000 : v;
     }
 
     /// <summary>
-    /// Add to a 12-bit wrapped angle, holding the game's own ±0x2BC pitch limit --
-    /// but only when the angle is inside it already, so that a cutscene or the
-    /// death camera driving the view further is not clamped by the smoothing.
+    /// The shortest signed distance from one 12-bit angle to another, in
+    /// [-2048, 2048]. Interpolating a yaw with this instead of the raw difference is
+    /// what stops a turn through the 0/4095 wrap from spinning the long way round.
     /// </summary>
-    static ushort Pitch(ushort raw, int step)
+    static int Delta12(ushort from, ushort to)
     {
-        int v = raw & 0xFFF;
-        int signed = v >= 0x800 ? v - 0x1000 : v;
-        int next = signed + step;
-        if (signed >= -PitchLimit && signed <= PitchLimit)
-            next = Math.Clamp(next, -PitchLimit, PitchLimit);
-        return (ushort)(next & 0xFFF);
+        int d = (to & 0xFFF) - (from & 0xFFF);
+        if (d > 2048) d -= 4096;
+        else if (d < -2048) d += 4096;
+        return d;
     }
 
     static void Report()
@@ -327,7 +363,7 @@ public static class FrameSmoothing
 
         if (_carried == 0)
             Console.WriteLine($"[KF2] smoothing: 0 of {total} frames carried -- " +
-                              $"{_skipPhase} on the tick, {_skipStill} with nothing moving" +
+                              $"{_skipStill} with nothing moving" +
                               $"{(FramePacing.Gating ? "" : ", not gating")}");
         else
             Console.WriteLine($"[KF2] smoothing: {_carried}/{total} frames carried, " +
@@ -335,7 +371,7 @@ public static class FrameSmoothing
                               $"yaw {_yawSum / _carried:0.0} u, pitch {_pitchSum / _carried:0.0} u, " +
                               $"pos {_posSum / _carried:0.0} u");
 
-        _carried = _skipped = _skipPhase = _skipStill = 0;
+        _carried = _skipped = _skipStill = 0;
         _yawSum = _pitchSum = _posSum = _fracSum = 0.0;
     }
 }

@@ -45,28 +45,29 @@ namespace Kf2;
 /// reports. So the object table is where a drawn position lives, and carrying it
 /// is what moves the picture.
 ///
-/// ## Extrapolate, because the camera does
+/// ## Interpolate, and so does the camera now
 ///
-/// **This interpolated at first, and that was wrong -- not in itself, but next to
-/// the camera.** The reasoning for interpolating was sound on its own terms:
-/// nothing in this table is steered by the player, so a tick of latency is free,
-/// and walking between two positions the game actually produced cannot overshoot
-/// the way <c>KF2_SMOOTH_POS</c> can. What it missed is that
-/// <see cref="FrameSmoothing"/> carries the view *forward*, to `t + frac`, while
-/// interpolating draws an object at `t - 1 + frac`. The two are then a whole tick
-/// apart -- 50 ms at the default rate -- and a constant offset between the world
-/// and the things standing in it does not read as latency, it reads as **the
-/// objects moving more slowly than everything else**. Which is what it was
-/// reported as: "the enemies still move visibly slower than the compass."
+/// **This interpolated, then extrapolated, and now interpolates again -- and the
+/// round trip is the point.** Interpolating was right on its own terms: nothing in
+/// this table is steered by the player, so a tick of latency is free, and walking
+/// between two positions the game actually produced cannot overshoot the way
+/// extrapolation can. It was abandoned only because <see cref="FrameSmoothing"/>
+/// *extrapolated* the view, to `t + frac`, while interpolating draws an object at
+/// `t - 1 + frac`. The two were then a whole tick apart -- 50 ms at the default
+/// rate -- and a constant offset between the world and the things standing in it
+/// read not as latency but as **the objects moving more slowly than everything
+/// else** ("the enemies still move visibly slower than the compass").
 ///
-/// So it extrapolates, on the same clock and by the same fraction as the view.
-/// The overshoot that argument was avoiding is real but bounded and brief: an
-/// object that stops or turns is carried at most one tick past where it went and
-/// is corrected on the next one. Being on a different clock from the camera is
-/// neither bounded nor brief.
+/// The camera now interpolates too, so the two are back on the same clock and at
+/// the same instant (`t - 1 + frac`). Interpolation is the better of the two
+/// wherever it can be afforded: it never predicts past a position the game
+/// produced, so a creature that stops or turns simply stops -- no bounce-back on
+/// the next tick, which is what forward extrapolation gave. The one thing it costs,
+/// a tick of latency, is exactly what an unsteered object can spend for free.
 ///
-/// The guard against a *placement* below is what makes this safe to do forward at
-/// all -- an extrapolated teleport would fling an object a whole area's width.
+/// The guard against a *placement* below is kept regardless: prev and cur can
+/// straddle a spawn or a script-move even when interpolating, and lerping across
+/// that would sweep an object a whole area's width over one tick.
 ///
 /// ## Why it cannot leak
 ///
@@ -239,8 +240,11 @@ public static class ObjectSmoothing
         if (FramePacing.TickedThisFrame) Sample(m);
         if (!_primed) return;
 
+        // Not gated on a small phase: interpolation must overwrite the table even at
+        // frac ~= 0, because on a tick frame the table holds `_cur` (the new tick) and
+        // the frame is meant to draw `_prev`. The per-slot dx==dy==dz==0 skip below
+        // covers "nothing to do".
         double frac = FramePacing.LogicPhase;
-        if (frac <= 0.0005) return;
 
         int carried = 0;
         double moved = 0.0;
@@ -260,13 +264,14 @@ public static class ObjectSmoothing
                 continue;
             }
 
-            // Carried *forward* from where the game has put it, by the part of the
-            // tick this frame stands at, on the assumption the object keeps doing
-            // what it did last tick. Same clock as the camera -- see the class
-            // comment for why that matters more than the overshoot does.
-            int x = _cur[b] + (int)Math.Round(dx * frac);
-            int y = _cur[b + 1] + (int)Math.Round(dy * frac);
-            int z = _cur[b + 2] + (int)Math.Round(dz * frac);
+            // Interpolated between the previous tick and this one -- _prev + delta *
+            // frac, i.e. lerp(_prev, _cur, frac). Never past a position the game
+            // actually produced, so it cannot overshoot on a stop or a turn. Same
+            // clock as the camera, which now interpolates too -- see the class
+            // comment.
+            int x = _prev[b] + (int)Math.Round(dx * frac);
+            int y = _prev[b + 1] + (int)Math.Round(dy * frac);
+            int z = _prev[b + 2] + (int)Math.Round(dz * frac);
 
             uint pos = (uint)(Table + i * Stride + PosOff);
             _saved[b] = (int)m.ReadU32(pos);
