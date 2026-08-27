@@ -1193,8 +1193,44 @@ redraws, so the loop resumes with exactly what stage 13 left it.
 
 **Stage 8 is deliberately not replayed.** It would overwrite a cutscene's scripted
 camera with the player's, and it buys nothing: no gated stage runs inside a modal
-loop, so the player camera cannot move and `FrameSmoothing` has nothing to carry
-there.
+loop, so the *player* camera cannot move and `FrameSmoothing` has nothing to carry
+there. Measured — `KF2_LOOPPACING_PROBE=2` reads `the loop's own view moved 0.0 u
+(peak 0) and 0.0 units per iteration` through a transition fade, a warp and the
+menu, over every window but the one that spans an area load.
+
+### A camera the loop builds itself is the one that does move
+
+Play reported it in one line: *"the camera is visibly moving at a lower framerate
+in the modals."* `func_8004831C`, the cutscene and message-box loop, has two:
+
+* one ramps a heading `0 -> 0x1000` by `0x200` an iteration and hands stage 13 the
+  `u16` it has just written (`a0 = 0, a1 = s2`) — a **full turn in 32 steps**;
+* the other steps `rec+0x26` by `0x40` an iteration and passes
+  `a1 = 0x80199504`, the player's own composed view, the address `FrameSmoothing`
+  already knows.
+
+Held to the tick that is 11.25° a step against a 165 fps picture. It is not a
+regression — it is the *speed* fix arriving without the smoothing half, the same
+shape as every other complaint this port has had.
+
+So a redraw **carries it**, in the shape the other two smoothing patches already
+use. `LoopPacing` keeps the block the loop passed at the previous iteration and at
+this one and draws `lerp(prev, cur, phase)` — **interpolated**, at `t - 1 + frac`,
+so it agrees with `FrameSmoothing` and `ObjectSmoothing` and can never reach a
+heading the loop did not produce. Three `u16` angles at `a1` and three words of
+position at `a0`, which is exactly what `func_8002E22C` consumes; applied in the pre
+and taken back in the post, so the interpolated values live for one stage 13 call
+and the loop's own state is never touched. A step past `CutUnits` (1024, a quarter
+turn, eight times the largest pan measured) is a **cut** rather than a pan and is
+left alone, the way both other patches guard a placement.
+
+Re-primed whenever the pointer pair changes, an overlay loads, or the main loop
+draws a frame — that last one is also what keeps the carry out of the main loop
+entirely, since `_carriable` can then never be true there and `FrameSmoothing`
+stays the only thing carrying the player's view.
+
+`KF2_LOOPPACING=nocarry` is the A/B: redraw, but leave the loop's own pan stepping
+at the tick.
 
 Measured at `KF2_FPS=165` with `KF2_LOOPPACING_PROBE=1`, which now prints the
 recorded pair: the death fade ran at **165.0 modal world frames a second against

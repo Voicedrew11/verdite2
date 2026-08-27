@@ -158,15 +158,19 @@ useful than the question was.
      obviously apply — a submit is per object, not per back-face-culled polygon —
      but that is an argument, not a measurement. Not started.
 
-   * **A modal loop's own camera**, which is the same shape one level up. `fdat23`'s
-     cutscene loops build a view of their own and hand it to stage 13 as
-     `func_800342D8`'s two pointers; a redraw replays those pointers unchanged, so a
-     scripted pan steps once a tick. `FrameSmoothing` cannot help — it hooks stage
-     8, which a redraw deliberately does not run, and stage 8 reads the *player*
-     state a cutscene is not driving. Carrying it would mean interpolating the two
-     blocks the loop passes, keyed by the pointer, between one iteration and the
-     next. **Never reported from play**; recorded because dropping stage 8 from the
-     redraw is what makes it permanent.
+   * ~~**A modal loop's own camera.**~~ **Closed.** `func_8004831C`, the cutscene and
+     message-box loop, ramps a heading `0 -> 0x1000` by `0x200` an iteration and
+     hands stage 13 the `u16` it just wrote, and elsewhere steps `rec+0x26` by `0x40`
+     while passing `a1 = 0x80199504`; held to the tick that is a full turn in 32
+     steps, which play reported as "the camera is visibly moving at a lower framerate
+     in the modals". `LoopPacing` now carries the block the loop passes —
+     `lerp(prev, cur, phase)` over the three angles at `a1` and the three position
+     words at `a0`, applied in stage 13's pre and taken back in its post, with the
+     same placement guard the other two smoothing patches use.
+     `KF2_LOOPPACING_PROBE=2` is what found it, and reads `0.0 u per iteration`
+     everywhere the player camera is the one being drawn. `KF2_LOOPPACING=nocarry`
+     is the A/B. **The picture has not been checked by eye** — the loop needs an NPC
+     or a cutscene, which the shell cannot reach.
    * **Four ungated stages that submit nothing at all** and so are free under the
      existing rule, but hold globals nobody has looked at: stage 1 `func_8002C944`
      (8), stage 9 `func_800140AC` (8, the 3D sound listener), stage 11

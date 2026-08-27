@@ -85,7 +85,9 @@ KF2_MENUPACING=0                       # menu cursor repeat and blink back on th
 KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
 KF2_LOOPPACING=0                       # loops that render their own frames back on the render rate (on by default)
 KF2_LOOPPACING=pace                    # hold such a loop but do not redraw: right speed, tick-rate picture
+KF2_LOOPPACING=nocarry                 # redraw, but do not carry a view the loop pans itself
 KF2_LOOPPACING_PROBE=1                 # modal frames a second, world and interface, against the main loop's
+KF2_LOOPPACING_PROBE=2                 # also how far the loop's own view moves per iteration
 KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
 KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
 KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
@@ -284,18 +286,29 @@ what was in it two frames ago: the first version of the redraw shipped that way 
 play reported black flicker and a stale frame alternating with the live one.
 **Stage 8 is deliberately not replayed** — it *writes* through those same two
 pointers, so it corrupted whatever they addressed, and re-running it would
-overwrite a cutscene's scripted camera with the player's; the player camera cannot
-move inside a modal loop anyway, since no gated stage runs there. The menu draws no
-world, so it is paced at the vblank instead. Measured at `KF2_FPS=144` with
+overwrite a cutscene's scripted camera with the player's; the *player* camera
+cannot move inside a modal loop anyway, since no gated stage runs there (measured:
+`KF2_LOOPPACING_PROBE=2` reads `the loop's own view moved 0.0 u per iteration`
+through a fade, a warp and the menu). **A camera the loop builds itself is the case
+that does move**, and `func_8004831C` — the cutscene and message-box loop — is the
+one play reported: it ramps a heading `0 -> 0x1000` by `0x200` an iteration and
+hands stage 13 the `u16` it just wrote, a full turn in 32 steps, and elsewhere steps
+`rec+0x26` by `0x40` while passing `a1 = 0x80199504`. Held to the tick that is
+11.25° a step. So a redraw **carries it**, in `FrameSmoothing`'s own shape:
+`lerp(prev, cur, phase)` over the three `u16` angles at `a1` and the three position
+words at `a0`, applied in the pre and taken back in the post, re-primed whenever the
+pointer pair changes or the main loop takes over, with a `CutUnits` guard so a
+scene cut is left where the loop put it. The menu draws no world, so it is paced at
+the vblank instead. Measured at `KF2_FPS=144` with
 `rate_matrix.py modal-rate`: the fade's body 33.8 -> 19.9 iterations a second, its
 picture 33.8 -> 144.0 frames a second, the menu 144.0 -> 60.1. It does nothing at
 or below the tick rate and touches no game memory. What it cannot reach is a counter stepped inside a *drawing function's own
 body* — stage 13's shake accumulator `0x8006E608` and `func_800331B4`'s ambient
 retrigger, which want a hold/restore pair instead and which redraws step as
 often as an ordinary frame already does — or a counter the modal loop steps in its
-own body, a scripted cutscene camera included, whose *speed* is right but which is
-smooth only if its transform comes from a table `ObjectSmoothing` carries. Both are
-in `docs/TODO.md`.
+own body, whose *speed* is right but which is smooth only if its transform comes
+from a table `ObjectSmoothing` carries or is the view the loop hands stage 13. Both
+are in `docs/TODO.md`.
 See "Loops that render their own frames" in `docs/PATCHES_AND_MODS.md`.
 `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The

@@ -14,8 +14,12 @@ namespace Kf2;
 ///     KF2_LOOPPACING=0        leave them on the render rate -- comparison only
 ///     KF2_LOOPPACING=pace     hold the loop and do *not* redraw -- comparison only:
 ///                             the speed is right and the picture steps at the tick
+///     KF2_LOOPPACING=nocarry  redraw, but do not carry the view a modal loop pans
+///                             itself -- comparison only
 ///     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface, against
 ///                             the main loop's own
+///     KF2_LOOPPACING_PROBE=2  also how far the drawn view moves between one
+///                             iteration of a modal loop's body and the next
 ///
 /// ## The hole this fills
 ///
@@ -94,13 +98,37 @@ namespace Kf2;
 ///
 /// **Stage 8 is deliberately not part of a redraw.** Re-running it would overwrite
 /// a cutscene's scripted camera with the player's, and it buys nothing: no gated
-/// stage runs inside a modal loop, so the player camera cannot move and
-/// <see cref="FrameSmoothing"/> has nothing to carry there. A modal loop that pans
-/// a camera of its own steps it once a tick; smoothing *that* is the same open
-/// problem as a counter the loop steps in its own body -- see docs/TODO.md.
+/// stage runs inside a modal loop, so the *player* camera cannot move there --
+/// measured, `KF2_LOOPPACING_PROBE=2` reads `drawn view moved 0.0 u per iteration`
+/// through a transition fade, a warp and the menu.
 ///
 /// The register file is snapshotted and restored around the redraws, so a modal
 /// loop resumes with exactly the registers stage 13 left it.
+///
+/// ## A modal loop that pans a camera of its own, which is most of them that move
+///
+/// The player camera is frozen in a modal loop; a camera the **loop itself** builds
+/// is not. `func_8004831C`, the cutscene and message-box loop, is the case play
+/// reported -- *"the camera is visibly moving at a lower framerate in the modals"*.
+/// It has two of them: one ramps a heading `0 -> 0x1000` by `0x200` an iteration and
+/// hands stage 13 the `u16` it just wrote (`a1 = s2`), which is a full turn in 32
+/// steps; the other steps `rec+0x26` by `0x40` an iteration and passes
+/// `a1 = 0x80199504`, the player's own composed view. Held to the tick that is
+/// 11.25 degrees a step against a 165 fps picture, which is exactly as steppy as it
+/// sounds -- and it is not a regression, it is the *speed* fix arriving without the
+/// smoothing half, the same shape as everything else in this port.
+///
+/// So a redraw carries it, in the shape <see cref="FrameSmoothing"/> and
+/// <see cref="ObjectSmoothing"/> already use: keep the block the loop passed at the
+/// previous iteration and at this one, and draw `lerp(prev, cur, phase)` --
+/// **interpolated**, at `t - 1 + frac`, so it agrees with those two and can never
+/// reach a heading the loop did not produce. It is applied in the pre and taken
+/// back in the post, so the interpolated values exist for the length of one stage 13
+/// call and the loop's own state is never touched. Three `u16` angles at `a1` and
+/// three words of position at `a0` -- exactly what `func_8002E22C` consumes -- and
+/// a step past <see cref="CutUnits"/> is a cut rather than a pan and is left alone,
+/// the way both other patches guard a placement. Re-primed whenever the pointer pair
+/// changes or the main loop takes over, so one loop never lerps from another's view.
 ///
 /// ## Classifying a frame costs one hook
 ///
@@ -181,6 +209,25 @@ public static class LoopPacing
     const double InterfaceHz = 60.0;
 
     /// <summary>
+    /// The view stage 13 actually draws with, which is where `KF2_LOOPPACING_PROBE=2`
+    /// looks. `func_8002E22C` copies the caller's two blocks here and then builds the
+    /// frame's matrices out of *these* on every call -- so when a modal loop passes
+    /// `0, 0` it is these that stand still. The three angles are `u16`s at
+    /// <see cref="ViewRot"/>+0/+2/+4 and the position the words at
+    /// <see cref="ViewPos"/>+0/+4/+8, the same layout stage 8 fills.
+    /// </summary>
+    const uint ViewPos = 0x80192E78;
+    const uint ViewRot = 0x80192E88;
+
+    /// <summary>Units on one axis, or twelve-bit angle units on one axis, between two
+    /// iterations past which the loop **cut** to a new view rather than panning to
+    /// it, and it is left where the loop put it. 1024 is a quarter turn, and eight
+    /// times the largest pan step measured (`0x200`, a full turn in 32). Matches the
+    /// placement guard <see cref="FrameSmoothing"/> and <see cref="ObjectSmoothing"/>
+    /// already use.</summary>
+    const int CutUnits = 1024;
+
+    /// <summary>
     /// Redraws one modal iteration may be followed by. The loop below ends on the
     /// logic clock, which is wall-clock driven and therefore always ticks, so this
     /// is a backstop against a configuration nobody has thought of rather than the
@@ -197,6 +244,16 @@ public static class LoopPacing
     static bool _paceOnly;
 
     static bool _probe;
+
+    /// <summary>`KF2_LOOPPACING_PROBE=2`: also report how far the view stage 13 draws
+    /// with moves between one iteration of a modal loop's body and the next. Zero
+    /// means the camera is frozen inside the loop; anything else is a loop panning a
+    /// camera of its own, which is what <see cref="Carry"/> carries.</summary>
+    static bool _viewProbe;
+
+    /// <summary>`KF2_LOOPPACING=nocarry`: redraw, but leave a loop's own pan stepping
+    /// at the tick rate. The A/B for the paragraph above.</summary>
+    static bool _noCarry;
 
     /// <summary>Set by <see cref="MainLoopStage"/>, consumed at the frame boundary.
     /// Absent there, the frame was produced by a loop of the game's own.</summary>
@@ -245,6 +302,23 @@ public static class LoopPacing
     // equal the tick rate; the second is what turns it back into a picture.
     static int _iters, _extra;
 
+    // The view the modal loop passed stage 13 at the previous iteration of its body
+    // and at this one. The frame is drawn at lerp(prev, cur, phase), which is the
+    // same instant -- t - 1 + frac -- FrameSmoothing and ObjectSmoothing draw at.
+    static bool _primed, _carriable;
+    static uint _primedPos, _primedRot;
+    static readonly int[] _prevRot = new int[3], _curRot = new int[3];
+    static readonly int[] _prevPos = new int[3], _curPos = new int[3];
+
+    // What Carry overwrote, and whether it overwrote anything. Put back by
+    // Restore(); there is one stage 13 call in flight at a time, on one thread.
+    static bool _applied;
+    static readonly int[] _heldRot = new int[3], _heldPos = new int[3];
+    static bool _heldRotLive, _heldPosLive;
+
+    // For the view probe: how far the loop's own view moved, summed over the window.
+    static long _viewSteps, _viewAngleSum, _viewPosSum, _viewAngleMax;
+
     // For the probe: frames of each kind since the window opened.
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _windowMs = -1.0;
@@ -267,9 +341,18 @@ public static class LoopPacing
                 Enabled = true;
                 _paceOnly = true;
             }
+            else if (string.Equals(enabled, "nocarry", StringComparison.OrdinalIgnoreCase))
+            {
+                Enabled = true;
+                _noCarry = true;
+            }
             else Enabled = enabled != "0";
         }
-        if (!string.IsNullOrWhiteSpace(probe)) _probe = probe != "0";
+        if (!string.IsNullOrWhiteSpace(probe))
+        {
+            _probe = probe != "0";
+            _viewProbe = probe == "2";
+        }
     }
 
     /// <summary>
@@ -284,6 +367,10 @@ public static class LoopPacing
     public static void Install()
     {
         bool attached = false;
+        // An area or executable swap replaces whatever a loop was drawing, so the
+        // previous sample describes a view that no longer means anything.
+        Event.AddListener<OverlayLoadedEvent>(_ => Reprime());
+
         Event.AddListener<OverlayLoadedEvent>(_ =>
         {
             if (attached) return;
@@ -366,10 +453,152 @@ public static class LoopPacing
     /// </summary>
     public static void BeforeRenderer(CpuContext c, IMemory m)
     {
-        if (_inExtra) return;
-        _argPos = c.A0;
-        _argRot = c.A1;
-        _argsSeen = true;
+        if (!_inExtra)
+        {
+            // A different pair is a different loop, or the same loop switched
+            // cameras: the previous sample describes a view that no longer means
+            // anything, so start priming again rather than lerp across the cut.
+            if (c.A0 != _argPos || c.A1 != _argRot) Reprime();
+
+            _argPos = c.A0;
+            _argRot = c.A1;
+            _argsSeen = true;
+
+            // The loop has just written this iteration's view, so this is the moment
+            // `cur` is real. A redraw must not re-sample: the block then holds what
+            // Restore put back, which is the same `cur` again.
+            Sample(m);
+        }
+
+        Carry(m);
+    }
+
+    /// <summary>Roll the previous iteration's view forward and read this one's.</summary>
+    static void Sample(IMemory m)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            _prevRot[i] = _curRot[i];
+            _prevPos[i] = _curPos[i];
+        }
+
+        if (_argRot != 0u)
+            for (int i = 0; i < 3; i++) _curRot[i] = m.ReadU16(_argRot + (uint)(i * 2));
+        if (_argPos != 0u)
+            for (int i = 0; i < 3; i++) _curPos[i] = (int)m.ReadU32(_argPos + (uint)(i * 4));
+
+        _carriable = _primed;   // both prev and cur are real only after two samples
+        _primed = true;
+        _primedPos = _argPos;
+        _primedRot = _argRot;
+
+        if (!_viewProbe || !_carriable) return;
+
+        int da = 0;
+        for (int i = 0; i < 3; i++) da += Math.Abs(Wrap12(_curRot[i] - _prevRot[i]));
+        long dp = 0;
+        for (int i = 0; i < 3; i++) dp += Math.Abs((long)_curPos[i] - _prevPos[i]);
+
+        _viewSteps++;
+        _viewAngleSum += da;
+        _viewPosSum += dp;
+        if (da > _viewAngleMax) _viewAngleMax = da;
+    }
+
+    /// <summary>
+    /// Draw this frame at `lerp(prev, cur, phase)` -- the view the loop had an
+    /// iteration ago, carried towards the one it has now by however far into the tick
+    /// the frame stands. Applied on the loop's own frame as well as on a redraw: at
+    /// phase ~0 that draws `prev`, which is what makes it an interpolation rather
+    /// than a snap forward on every tick.
+    /// </summary>
+    static void Carry(IMemory m)
+    {
+        _applied = false;
+        _heldRotLive = false;
+        _heldPosLive = false;
+
+        if (_noCarry || !Enabled || !_carriable || !FramePacing.Extrapolating) return;
+        if (_argPos != _primedPos || _argRot != _primedRot) return;
+
+        double frac = FramePacing.LogicPhase;
+
+        if (_argRot != 0u)
+        {
+            var d = new int[3];
+            bool live = false, cut = false;
+            for (int i = 0; i < 3; i++)
+            {
+                d[i] = Wrap12(_curRot[i] - _prevRot[i]);
+                if (d[i] != 0) live = true;
+                if (Math.Abs(d[i]) > CutUnits) cut = true;
+            }
+
+            if (live && !cut)
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    _heldRot[i] = (int)m.ReadU16(_argRot + (uint)(i * 2));
+                    int v = (_prevRot[i] + (int)Math.Round(d[i] * frac)) & 0xFFF;
+                    m.WriteU16(_argRot + (uint)(i * 2), (ushort)v);
+                }
+                _heldRotLive = true;
+                _applied = true;
+            }
+        }
+
+        if (_argPos != 0u)
+        {
+            var d = new int[3];
+            bool live = false, cut = false;
+            for (int i = 0; i < 3; i++)
+            {
+                d[i] = _curPos[i] - _prevPos[i];
+                if (d[i] != 0) live = true;
+                if (Math.Abs(d[i]) > CutUnits) cut = true;
+            }
+
+            if (live && !cut)
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    _heldPos[i] = (int)m.ReadU32(_argPos + (uint)(i * 4));
+                    m.WriteU32(_argPos + (uint)(i * 4),
+                               (uint)(_prevPos[i] + (int)Math.Round(d[i] * frac)));
+                }
+                _heldPosLive = true;
+                _applied = true;
+            }
+        }
+    }
+
+    /// <summary>Put the loop's own view back the moment stage 13 has read it, so the
+    /// interpolated values exist for exactly one call and the loop's state is
+    /// untouched.</summary>
+    static void Restore(IMemory m)
+    {
+        if (!_applied) return;
+
+        if (_heldRotLive)
+            for (int i = 0; i < 3; i++) m.WriteU16(_argRot + (uint)(i * 2), (ushort)_heldRot[i]);
+        if (_heldPosLive)
+            for (int i = 0; i < 3; i++) m.WriteU32(_argPos + (uint)(i * 4), (uint)_heldPos[i]);
+
+        _applied = false;
+    }
+
+    /// <summary>Forget the two samples: a different loop, a different camera, or the
+    /// main loop taking over again.</summary>
+    static void Reprime()
+    {
+        _primed = false;
+        _carriable = false;
+    }
+
+    static int Wrap12(int d)
+    {
+        d &= 0xFFF;
+        return d > 2048 ? d - 4096 : d;
     }
 
     /// <summary>
@@ -386,6 +615,10 @@ public static class LoopPacing
     /// </summary>
     public static void AfterRenderer(CpuContext c, IMemory m)
     {
+        // Paired with Carry in the pre, and taken back before anything else can see
+        // it -- including the redraws below, each of which applies its own.
+        Restore(m);
+
         // Every hook fires on a redraw too, this one included.
         if (_inExtra) return;
 
@@ -468,6 +701,10 @@ public static class LoopPacing
         _lastModal = !mainLoop;
         _lastWorld = world;
 
+        // The main loop drew this one, so any modal loop that was running has ended;
+        // the next one must not lerp from the view this one left behind.
+        if (mainLoop) Reprime();
+
         double min = enabled && targetFps > 0.0 ? 1000.0 / targetFps : 0.0;
 
         if (_probe) Count(mainLoop, world);
@@ -512,6 +749,11 @@ public static class LoopPacing
                                   ? $"; {_iters * 1000.0 / elapsed:0.#} world iteration(s) a second, " +
                                     $"{(double)_extra / _iters:0.0} redraw(s) each, " +
                                     $"view a0=0x{_argPos:X8} a1=0x{_argRot:X8}"
+                                  : "") +
+                              (_viewProbe && _viewSteps > 0
+                                  ? $"; the loop's own view moved {(double)_viewAngleSum / _viewSteps:0.0} u " +
+                                    $"(peak {_viewAngleMax}) and {(double)_viewPosSum / _viewSteps:0.0} units " +
+                                    $"per iteration over {_viewSteps}"
                                   : ""));
 
         _windowMs = now;
@@ -520,5 +762,9 @@ public static class LoopPacing
         _uiFrames = 0;
         _extra = 0;
         _iters = 0;
+        _viewSteps = 0;
+        _viewAngleSum = 0;
+        _viewPosSum = 0;
+        _viewAngleMax = 0;
     }
 }

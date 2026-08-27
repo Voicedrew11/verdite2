@@ -329,9 +329,18 @@ Kf2.AnimSmoothing.Install();
 // overwrite a cutscene's scripted camera with the player's, and the player camera
 // cannot move inside a modal loop anyway.
 //
+// The player camera cannot move inside a modal loop -- no gated stage runs there --
+// but a camera the *loop itself* builds can: func_8004831C ramps a heading 0->0x1000
+// by 0x200 an iteration, a full turn in 32 steps, which held to the tick is what play
+// reported as "the camera is visibly moving at a lower framerate in the modals". So a
+// redraw carries the block the loop passed, lerp(prev, cur, phase), applied in the
+// pre and taken back in the post.
+//
 //     KF2_LOOPPACING=0        leave them on the render rate -- comparison only
 //     KF2_LOOPPACING=pace     hold the loop but do not redraw -- comparison only
+//     KF2_LOOPPACING=nocarry  redraw, but do not carry the loop's own pan
 //     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface
+//     KF2_LOOPPACING_PROBE=2  also how far the loop's own view moves per iteration
 //
 // Installed *after* the three smoothing patches, and that ordering is
 // load-bearing: HookManager runs the posts on a function in the order they
