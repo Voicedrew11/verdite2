@@ -9,7 +9,7 @@ lives here — frame pacing and auto reload.
 | file | what it does | detail |
 |---|---|---|
 | `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
-| `FrameSmoothing.cs`, `ObjectSmoothing.cs` | carry the view, and everything that moves, between ticks | this file |
+| `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
@@ -908,15 +908,34 @@ command channel moves that row's packet count and nothing else. So it is already
 welded to the screen and there is no camera to reattach it to; what steps is its
 **sprite index**, advanced once a tick by stage 3's player control. Interpolating
 between two authored sprites is not a thing, and a console running at 20 fps
-stepped it at exactly the same rate. The same goes for a creature's animation
-frames as distinct from its position and facing: `ObjectSmoothing` now makes an
-enemy *travel and turn* smoothly, but it still cycles its **poses** on the tick.
-That is the same class as the arm — the pose is chosen by a frame index in the
-entity record, advanced once a tick, with no in-between the game ever produced to
-interpolate to. Whether it can be smoothed at all is an open question in
-[TODO.md](TODO.md): it needs `func_80032588` to prove skeletal (interpolatable
-per-limb transforms) rather than keyframe vertex swaps, and the console stepped it
-at 20 fps regardless.
+stepped it at exactly the same rate.
+
+A creature's **pose** is an MO mesh morph, not a second copy of object
+motion. `ObjectSmoothing` already carries origin and Euler on all four
+tables the renderer walks. The clip byte and the clip time arrive at
+`func_80032588` as its **eighth and ninth stack words** (`caller SP+0x1C` and
+`+0x20`) — all five of `func_800331B4`'s call sites fill them, from four
+tables with four different strides, which is why the argument list and not a
+table offset is the right description. Below `0x80`, `func_80034DA8` applies
+packed vertex deltas (the MO format) into `0x80190AD8`; `func_8003486C` turns
+the integer time into a segment and a 12.12 weight.
+
+Stage 13 rebuilds that morph every frame — `L80034FCC` re-runs the decoder
+even when the segment has not changed — so the only thing stuck on the tick is
+the time. `patches/AnimSmoothing.cs` (`KF2_SMOOTH_ANIM=1`) interpolates last
+tick's time with this one, hands `floor(t)` to `3486C` so the segment pick
+stays right, and adds the fraction onto the weight `34A74` already consumes —
+**subtracting it on a segment whose flag word is set**, because `3486C`
+publishes `0x1000 - raw` there and the weight runs backwards. It writes no
+game state at all: one register on one call, and the caller's own stack temp.
+
+Vertex-fetch lerp at `RotTransPers` was tried first and did not change the
+picture — it interpolated a rigid majority, and the probe's "XYZ moved" line
+was vertex 0 only. Measured not to touch the world clock, which the discarded
+version did: 65 death frames in 3.25-3.28 s with it on at 20, 60 and 144 fps,
+against 3.25-3.27 s with it off.
+
+The arm is still a sprite index. That one stays.
 
 ### The menu's cursor repeat is outside the gate by construction
 

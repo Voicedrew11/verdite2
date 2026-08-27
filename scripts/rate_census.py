@@ -179,6 +179,7 @@ def run(fps: list[str], seconds: float, scenario: str, extra: dict[str, str]) ->
             # by design and would otherwise be the loudest rows in the report.
             "KF2_SMOOTH": "0",
             "KF2_SMOOTH_OBJECTS": "0",
+            "KF2_SMOOTH_ANIM": "0",
         }
         env.update(extra)
         print(f"[{rate} fps] {seconds:.0f}s of '{scenario}' ...", file=sys.stderr, flush=True)

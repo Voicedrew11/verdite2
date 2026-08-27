@@ -108,13 +108,11 @@ useful than the question was.
    and saw only the second loop. So enemies stepped in position *and* facing even
    with objects on. `ObjectSmoothing` now carries both tables, and interpolates the
    entity **rotation** the shortest way round a 4096-unit turn — measured
-   `241/241 frames carried, 3.0 creature(s) each`, no leak. **The open part is
-   animation poses**: an enemy's pose is a frame index in the entity record advanced
-   once a tick, the same class as the arm's sprite index. Whether it can be smoothed
-   needs a spike — read `func_80032588` and its callees (`func_8005C780`,
-   `func_8005C810`, `func_8005D968`) to decide if a pose is interpolatable per-limb
-   transforms or a keyframe vertex swap with no in-between — and the console stepped
-   these at 20 fps regardless, so it may be left as authentic.
+   `241/241 frames carried, 3.0 creature(s) each`, no leak. **Pose is the MO
+   clip clock.** Vertex-fetch lerp was tried and did not change the picture.
+   `patches/AnimSmoothing.cs` now drives `func_8003486C`'s time
+   (`KF2_SMOOTH_ANIM=1`, off by default) so the blender writes the in-between
+   mesh. The arm is still a 2D sprite index and stays that way.
 
    **What is still left is the part no counter answers**, and it is the user's: is
    20 actually right, is a 20 fps default acceptable or should the picture be drawn
@@ -175,14 +173,17 @@ useful than the question was.
    game updates once a tick and the renderer reads — snapshot it on the tick, write
    `lerp(prev, cur, phase)` before the read, put it back after.* Object position,
    object rotation, entity position, entity rotation and (not yet done) tile height
-   are five instances of that one operation, not five features.
+   are five instances of that one operation, not five features. Model pose is
+   the same lerp on a different site: the MO clip clock (`func_80032588`'s
+   ninth stack word / `func_8003486C`), not the vertex fetch.
 
    **What was done.** Stage 2 gated so props step at the tick rate at all; the
    object table's rotation lane at `+0x24` found and carried; the renderer's *four*
    model tables carried instead of two; the object table's emptiness test corrected
-   from stage 2's (`byte +0x4`) to the renderer's (`u16 +0x6`). See "Any frame rate"
-   in `docs/PATCHES_AND_MODS.md` and "What in the renderer draws what" in
-   `docs/GAME_INTERNALS.md`.
+   from stage 2's (`byte +0x4`) to the renderer's (`u16 +0x6`); vertex-fetch pose
+   lerp tried and discarded (rigid majority, vertex-0 probe); **clip clock
+   driven instead** (`patches/AnimSmoothing.cs`, `KF2_SMOOTH_ANIM=1`). See
+   "The model pipeline has no skeleton" in `docs/GAME_INTERNALS.md`.
 
    **What is left, in order.**
 
@@ -201,8 +202,10 @@ useful than the question was.
       pair is needed** — that vector is a stack temp, not game state, which makes
       this the cleanest of the five sites rather than the hardest. One hook covers
       every moving tile in the game.
-   3. **If it is the model index: stop.** That is a discrete swap with no in-between,
-      which is the boundary below.
+   3. ~~**If it is the model index: stop.**~~ Closed. It is not: the vertex
+      fetch rewrites the same mesh. Count mismatches (5% of one window) are skipped
+      per slot, which is the discrete-swap boundary applied where it actually
+      happens.
    4. **Enumerate the remaining tables from the code, not from reports.** The set is
       finite and derivable: stage 13 has three drawing callees, and every position,
       height or angle any of them reads is a table entry at a known address. Four
@@ -224,31 +227,53 @@ useful than the question was.
    accuracy, is "The display list cannot name a face" in `docs/RENDERING.md`.
    `patches/PacketMatch.cs` (`KF2_PACKETMATCH=1`) is kept as the probe.
 
-   **What that experiment did establish, and it is the case for continuing.** With
-   the camera **completely** frozen and two enemies attacking, over twenty-five
-   consecutive one-second windows, the objects' own translation was 0.1-0.8 px a
-   tick while the motion of their primitives *relative to each other* was **3.4-13
-   px a tick on 9-13% of contexts, peaking at 36**. That is pose animation, it is
-   large, and no table smoother can reach it.
+   **What that experiment did establish.** With the camera **completely** frozen
+   and two enemies attacking, over twenty-five consecutive one-second windows, the
+   objects' own translation was 0.1-0.8 px a tick while the motion of their
+   primitives *relative to each other* was **3.4-13 px a tick on 9-13% of contexts,
+   peaking at 36**. That is pose animation, it is large, and no table smoother can
+   reach it. The clip clock is what reaches it.
 
-   **The boundary, restated where it actually falls.** The table technique works on
-   a *continuous quantity in an addressable slot*, and a pose is not one: models are
-   rigid, there is no per-part matrix anywhere in the subtree, so "interpolate the
-   matrices" is not available (see "The model pipeline has no skeleton" in
-   `docs/GAME_INTERNALS.md`). What is **not** true is that this makes pose
-   interpolation impossible — only that it cannot be done from a table, and cannot
-   be done from the display list either.
+   **The vertex fetch inside `func_80032588` was the wrong site.** It interpolated
+   a rigid majority; the picture did not change. `patches/AnimSmoothing.cs` now
+   drives `func_8003486C` instead. **Checked by eye and it works** — off by
+   default all the same, until someone decides that is the wrong default.
 
-   **The open door is the vertex fetch inside `func_80032588`.** Before projection
-   and before culling, a face is identified by its index in the mesh — exact rather
-   than inferred — and a morph applied there comes out through the game's own
-   transform, so there is no camera to subtract and no per-object mean to take out.
-   Both problems that killed the packet layer are absent by construction. What it
-   needs is **where the loop reads vertices and how many**, which is a runtime
-   observation (log the reads) rather than a decode of the model format. The
-   remaining question it must answer is whether a pose change is a *swapped model
-   index* — in which case morphing needs a correspondence between two meshes — or a
-   rewrite of the same mesh's vertex data, in which case it is a straight lerp.
+   **The fast-world regression the vertex-fetch version caused is gone**, and that
+   was measured rather than assumed: 65 death frames on the counter at `0x8019951A`
+   took 3.25 s with the switch off and 3.25-3.28 s with it on, at 20, 60 and 144
+   fps — 19.8-20.1 ticks a second either way, and `check_gate.py` reports 0
+   violations. The clip clock writes no game state (one register on one call, and
+   the caller's own stack temp), which is why it cannot.
+
+   **No counter here proved the mechanism; a person did.** Across every scene an
+   agent could reach — the save's own area, warps to 1/2/3/4/5/8, an attack, a
+   death — the probe read 0-61 morph submits a second against 60-122 rigid ones,
+   and **every one of those morph submits carried a clip time of 0**: props posed
+   through the MO path, not clips being played. One of `func_800331B4`'s five call
+   sites passes a literal `0` for the time, which is what those are. The probe
+   counts "with a running clip" separately so that this reads as "no subject"
+   rather than as "no effect". Getting an agent in front of a creature whose clip
+   is running is still unsolved and is the reason the eye had to settle it.
+
+   One transient scene (immediately after a death, warped into area 3) did show
+   **30 morph submits with a running clip, stepping a mean of 511 clip units a
+   tick** — and that is what caught the real defect in the first version: its
+   `MaxTimeStep` guard was `32`, so 24 of those 30 were discarded as a
+   discontinuity and nothing was ever carried. The guard is now `4096`, and the
+   reasoning is written down at the constant: a clip *restarting* runs its time
+   backwards and a clip being *swapped* changes the clip byte, so the two real
+   discontinuities are caught by their own tests and the magnitude is only a
+   backstop. Picking it near a plausible-looking number is what broke it.
+
+   **What is left is the default, which is a judgement and not a measurement.**
+   The picture is confirmed, so the sub-pixel reason for shipping this off no
+   longer applies to it; whether smooth poses are the *authentic* picture is the
+   same question `LogicHz` is, and it is the user's. If an agent ever needs to
+   re-check this itself, the blocker to solve first is getting in front of a
+   creature whose clip is running: the entity table has 159 records in area 1 but
+   never more than one within 8192 units of the spawn, and that one sits 9,000
+   units above the floor.
 
    **Two tooling defects found on the way, both unfixed.**
 

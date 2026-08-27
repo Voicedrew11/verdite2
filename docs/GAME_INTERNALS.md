@@ -356,6 +356,47 @@ already carries. Anything that animates *shape* is doing it in the vertex data o
 by swapping the model index at `a1` (`rec+0x6 + 0x100`), neither of which any
 matrix interpolation can reach.
 
+**Creature pose is an MO morph; most *submits* are still rigid architecture.**
+`a1` is the mesh. **The clip and its time are stack arguments, not table
+fields** — `func_80032588`'s eighth stack word (`caller SP+0x1C`) is the clip
+byte and its ninth (`caller SP+0x20`) is the integer clip time. That is worth
+stating in the argument list rather than as an offset, because
+`func_800331B4` calls it from **five** sites over four tables with four
+strides: the entity loop takes the pair from `S0+0x9` and `S0+0x15`, the
+object loop from `S0-0x5` and `S0+0x9` off a `0x48` cursor, another from
+`S0-0x13`/`S0-0xA`, and one passes a **literal 0** for the time. The
+argument list is the one description true for all of them. (KingsFieldRE names
+these `CurAnim` and the clip time on its own struct; those offsets are its
+frame of reference, not this function's.)
+
+`func_80032588` runs the blender `func_80034DA8` when the clip byte is
+`< 0x80`, else `L800329F8` publishes a pointer *into the model* via
+`func_8002E1F0` and the vertices never move. Walls and props take the second
+path and dominate a frame's submit count — measured 60-122 rigid submits a
+second against 0-61 morph ones. A walking enemy takes the first: MO is a base
+TMD plus packed vertex deltas, and `func_80034A74` is that decoder into
+`0x80190AD8`.
+
+`func_8003486C(bank, clip, time, &segment, &weight)` walks the clip: it
+accumulates the per-segment durations at `segment+0x2` until the time falls
+inside one, publishes `((time - segmentStart) << 12) / duration` as a 12.12
+weight, and returns the segment record in `v0`. **When the flag `u16` at
+`segment+0x0` is set it publishes `0x1000 - that`**, so the weight runs *down*
+as the clip runs forward — anything adding to it has to know which.
+
+**Why the clock reaches the mesh at all is `L80034FCC`**, and it is the
+load-bearing part. When the clip *and* the segment index are both unchanged,
+`func_80034DA8` skips rebuilding its keyframe cache — but it still copies the
+base mesh into `0x80190AD8` and still calls the decoder with the weight
+`func_8003486C` just wrote. Stage 13 therefore re-morphs on every rendered
+frame; the only thing stuck on the tick is the time it morphs *to*. Move the
+weight and the mesh moves. `patches/AnimSmoothing.cs` (`KF2_SMOOTH_ANIM=1`)
+does exactly that — `floor(lerp(prev, cur, LogicPhase))` into `3486C` so the
+segment pick matches the in-between instant, the leftover fraction added (or
+subtracted, on a flagged segment) onto the weight. Vertex-fetch lerp at
+`RotTransPers` was the previous attempt and did not change the picture. The
+arm is a sprite index; origin and Euler are `ObjectSmoothing`.
+
 - **`func_80032588` is fed from *four* tables, one loop each** — and for a long
   time only the first two were written down, which is how two separate "the
   animation runs at a low frame rate" reports were caused and then chased. The

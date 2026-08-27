@@ -808,9 +808,14 @@ display list.
 ### What would work instead
 
 The identity problem is created by projection and culling, so it does not exist
-before them. Inside `func_80032588`, a face is identified by its index in the mesh —
-exact, not inferred — and a morph applied there comes out through the game's own
-transform, so there is no camera to subtract and no mean to take out. What that
-needs is where the vertex loop reads and how many it reads, which is a runtime
-observation rather than a decode of the model format. That is the open door;
-`docs/TODO.md` item 6 carries it.
+before them. Inside `func_80032588`, a vertex is identified by its index in the
+mesh — exact, not inferred — and a morph applied there comes out through the
+game's own transform, so there is no camera to subtract and no mean to take out.
+`patches/AnimSmoothing.cs` no longer hooks that fetch. Creature pose is an
+MO clip: `func_8003486C` already produces a 12.12 weight from integer time,
+and `func_80034A74` already morphs. Driving that clock between ticks lets the
+decoder write the in-between mesh; interpolating object-space `SVECTOR` reads
+did not, because most submits are rigid architecture (`CurAnim >= 0x80`) and
+the first-person arm is a sprite index. Tile height is a different, smaller
+problem and is not this. See "The model pipeline has no skeleton" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md).

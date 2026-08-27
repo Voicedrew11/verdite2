@@ -271,9 +271,9 @@ before reading a number:
   nothing running between them — so a burst reads as one change, which is what
   keeps a 20 Hz stepper reporting 20 rather than 60.
 
-The census switches `KF2_SMOOTH` and `KF2_SMOOTH_OBJECTS` off for its runs,
-because both write interpolated values every rendered frame *on purpose* and would
-otherwise be the loudest rows in the report. That is the general caveat in one
+The census switches `KF2_SMOOTH`, `KF2_SMOOTH_OBJECTS` and `KF2_SMOOTH_ANIM` off
+for its runs, because they write interpolated values every rendered frame *on
+purpose* and would otherwise be the loudest rows in the report. That is the general caveat in one
 instance: **the output is a candidate list, not a defect list.** A frame counter
 and a primitive-buffer cursor are legitimately per-frame too.
 

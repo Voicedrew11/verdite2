@@ -90,6 +90,8 @@ KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by de
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
 KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
 KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
+KF2_SMOOTH_ANIM=1                      # drive MO clip time between ticks (off by default)
+KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, and the clip-clock step
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
@@ -207,12 +209,18 @@ between the world and the things in it reads as the objects moving slower than
 everything else. It leaves a
 slot whose step exceeds 1024 units on an axis exactly where the game put it,
 because that is a placement rather than motion (measured: real motion 37 u a tick,
-a placement 233,472). **What none of this fixes is animation**: the player's arm is
-2D, drawn by the HUD builder `func_80031D5C` — proved by its packet count moving
-during an attack — and a sprite index advancing once a tick is what the console
-did too. **All three default to off** — while the boundary was broken the phase was
+a placement 233,472). **3D pose is `patches/AnimSmoothing.cs`**, which drives
+the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the blender writes the
+in-between mesh (`KF2_SMOOTH_ANIM=1`). Vertex-fetch lerp was tried and did
+not change the picture. The
+player's arm is a different bug: it is 2D, drawn by the HUD builder
+`func_80031D5C` — proved by its packet count moving during an attack — and a
+sprite index advancing once a tick is what the console did too. **All four
+default to off** — while the boundary was broken the phase was
 pinned to 0 and the
-smoothing never ran at all, so its picture has never been seen. A 50 ms tick makes
+smoothing never ran at all, so the first three's picture has never been seen.
+The animation one's has: it was confirmed by eye once the clip-time guard stopped
+discarding every real step. A 50 ms tick makes
 it matter more than the 33 ms one did. **The stage gate cannot reach the in-game
 menu, and `patches/MenuPacing.cs` is why that mattered**: the menu is a modal
 sub-loop (`func_80029CBC` `jal`s `func_80018E80`, which blocks for the whole

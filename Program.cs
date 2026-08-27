@@ -280,6 +280,23 @@ Kf2.FrameSmoothing.Install();
 Kf2.ObjectSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS"),
                               Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_PROBE"));
 Kf2.ObjectSmoothing.Install();
+
+// The third of the same problem: origin and facing are carried now, but a
+// creature's *pose* is a mesh morph and its clock only advances on the tick, so
+// the shape still steps against a body that glides. Stage 13 re-runs the blender
+// every frame -- what is stuck is the time it blends to -- so this drives that
+// clock instead of touching vertices: one pre on stage 13 for the frame, a
+// pre/post pair on the model submit (func_80032588) and one on the MO clip clock
+// (func_8003486C), handing it floor(lerp(prev, cur, phase)) and adding the
+// leftover fraction onto the 12.12 weight the decoder consumes. Nothing is
+// written to game state -- a register and the caller's own stack temp.
+//
+//     KF2_SMOOTH_ANIM=1        on; off by default
+//     KF2_SMOOTH_ANIM_PROBE=1  morph vs rigid submits, the clip-clock step, and
+//                              the weights carried, per second
+Kf2.AnimSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM"),
+                            Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM_PROBE"));
+Kf2.AnimSmoothing.Install();
 Kf2.EndingHold.Install();
 
 // Which routine in the renderer drew how much of the frame. Stage 13 is the only

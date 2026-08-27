@@ -3,7 +3,7 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The three smoothing switches, under Video, sharing the "Enhancements" heading
+/// The four smoothing switches, under Video, sharing the "Enhancements" heading
 /// with the dither, perspective, sub-pixel and true-color ones.
 ///
 /// They only do anything above the world's tick rate -- at or below it the world
@@ -11,8 +11,8 @@ namespace Kf2.Settings;
 /// carry -- so the controls dim themselves rather than disappearing, which would
 /// look like the setting had been lost. The test is
 /// <see cref="FramePacing.Extrapolating"/> and not <c>Gating</c>, which is now
-/// true at every rate. See <see cref="FrameSmoothing"/> and
-/// <see cref="ObjectSmoothing"/>.
+/// true at every rate. See <see cref="FrameSmoothing"/>,
+/// <see cref="ObjectSmoothing"/> and <see cref="AnimSmoothing"/>.
 /// </summary>
 public sealed class FrameSmoothingPage : IPatchPage
 {
@@ -66,6 +66,20 @@ public sealed class FrameSmoothingPage : IPatchPage
                              "the same clock as the view -- the two have to agree about what " +
                              "time it is, or the objects read as slower than the world. Off " +
                              "by default.");
+
+        bool anim = AnimSmoothing.Enabled;
+        if (ImGui.Checkbox("Smooth model animation", ref anim))
+        {
+            AnimSmoothing.SetEnabled(anim);
+            PatchSettings.Set(AnimSmoothing.OnKey, anim);
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Position and facing are already carried from the entity and " +
+                             "object tables. A creature's pose is a mesh morph (MO clip): this " +
+                             "drives that clip's clock between ticks so the game's own blender " +
+                             "fills the in-between shapes. The first-person arm is 2D and is " +
+                             "not this. Off by default.");
 
         if (!active)
         {
