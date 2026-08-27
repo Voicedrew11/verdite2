@@ -125,10 +125,47 @@ useful than the question was.
    the tick position whenever a turn eased off or motion met a wall; they now draw
    `lerp(prev, cur, phase)`, which cannot overshoot. Smoothing still defaults to
    **off** (position and objects included) as a house rule until that judgement is
-   settled for shipping, not because it has never run. Two things a counter *can* still be pointed at:
-   stage 2's per-tick counters (it holds them but cannot be gated wholesale, since
-   `DrawOTag` is in its subtree), and stage 13's jitter accumulator at
-   `0x8006E608`, which no hook can reach because it is in stage 13's own body.
+   settled for shipping, not because it has never run. **Stage 2 is done** — it turned out to be
+   gateable after all (its only edge to the renderer is the transition fade
+   `func_80037B5C`, an extra render rather than the frame's own), so doors, the
+   drawbridge, the minecart and the crystals now step at the tick rate. What is
+   still open, in rough order of how reachable it is:
+
+   * **`rec+0x40` on two object slots, ratio 3.69.** Not stage 2 — gating
+     `func_800331B4` as a probe dropped it from 53.4/s to 17.6/s, so the writer is
+     **stage 13's own object pass**. It is a per-object ambient-sound retrigger
+     deadline in vblank units (`vbl + 6 * (u16 at rec+0x3E)`, against `0x801B6CAC`),
+     which on expiry computes a distance-attenuated volume and calls
+     `func_80014158`. With a small interval it retriggers once per rendered frame
+     up to the 60 Hz ceiling: 20/s at the default, 60/s at 144. No whole-function
+     hook can reach it — `func_800331B4` steps the timer and draws the models in
+     one loop — so this needs either a sub-function hook or a hold/restore pair
+     around the field. **Never listened to**; only the counter has spoken.
+   * **Stage 13's jitter accumulator at `0x8006E608`**, which no hook can reach
+     because it is in stage 13's own body.
+   * **Four ungated stages that submit nothing at all** and so are free under the
+     existing rule, but hold globals nobody has looked at: stage 1 `func_8002C944`
+     (8), stage 9 `func_800140AC` (8, the 3D sound listener), stage 11
+     `func_80016FC8` (1), stage 12 `func_80014534` (14). `check_gate.py --stages`
+     lists them as candidates. Measure before gating — the point of doing them
+     separately is that a regression stays attributable to one cause.
+   * **`func_80037B5C` itself.** The transition fade steps once per *rendered*
+     frame inside its own loop, so an area transition is still quicker at 144 than
+     at 20. Same family as the menu cursor, so the fix is `MenuPacing`'s shape and
+     not a gate.
+
+   **Two `rate_matrix` scenarios are not measuring what they claim, and it predates
+   the stage 2 work** (confirmed by re-running them with `KF2_FPS_GATE` set to the
+   old six addresses — identical numbers). `death-clock` reports 31 death frames
+   and ~2.05 s in every configuration, including `KF2_TICKRATE=30` against `20`,
+   where the recorded baseline is 65 ticks and 3.20 s against 2.14 s; the loop
+   probably exits on the agent's `dead` flag before the counter finishes.
+   `walk` reports exactly 2844 units/2 s in all four combinations, which is the
+   signature of the player walking into a wall from the autostart position rather
+   than a distance that scales with the tick rate. Until both are fixed the
+   trustworthy tick-rate check is the census itself: the global frame counter at
+   `0x80199488` and the animated-texture phase both read ~16-18/s at 20 and at
+   144 fps.
 6. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,

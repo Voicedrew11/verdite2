@@ -79,7 +79,7 @@ KF2_CDTRACE=1                          # stack trace on first CD register access
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
 KF2_FPS=120                            # 20 (default), any number, or off; see "Any frame rate"
 KF2_TICKRATE=30                        # ticks a second the world runs at (20 by default)
-KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
+KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
 KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
@@ -172,10 +172,20 @@ arrangement. Measured: 20.00 ticks/s at 20, 30, 60, 120, 144 and uncapped, with
 load-bearing**: it used to be a `DrawOTag` that followed an emulated *vblank*, and
 since the vblank is a fixed 60 Hz wall-clock grid, above 60 fps most frames were
 neither paced nor logic-clocked and the world ran at `30 × frames-per-vblank` —
-measured double speed at `KF2_FPS=60`. What is gated is stages 3, 4, 5, **6** and
-stage 13's fade stepper `func_80033FBC`, and the test each had to pass is **can it
-draw**: stage 2 holds per-frame state too and is deliberately left alone because
-`DrawOTag` is in its subtree. `patches/FrameSmoothing.cs` is the other half rather
+measured double speed at `KF2_FPS=60`. What is gated is stages **2**, 3, 4, 5, 6 and
+stage 13's fade stepper `func_80033FBC` and animated-texture updater
+`func_8002DC78`, and the test each had to pass is **can it draw**. **Stage 2
+(`func_80037C0C`) is where doors, the drawbridge, the minecart and the crystals
+move** — it walks the object table at `0x80177714` and dispatches on the type byte
+at `rec+0x4` through a 224-entry jump table at `0x8001191C` — and it *does* reach
+`DrawOTag`, through exactly one edge: `func_80037B5C`, the transition fade, which
+renders its own frames by calling stage 13. That is an **extra** render inside the
+stage, not the frame's own, which is the same recorded exception stage 3 carries,
+so both are gated and `scripts/check_gate.py`'s `KNOWN` holds the reason. The cost
+is that entering a fade or a cutscene can be deferred by up to one tick. What
+survived the gate is `rec+0x40` on two slots — a per-object ambient-sound
+retrigger stepped by **stage 13's own object pass** `func_800331B4`, which cannot
+be gated because it draws the models in the same loop. `patches/FrameSmoothing.cs` is the other half rather
 than an option beside it: one pre/post pair around **stage 8** (`func_80025A1C`),
 the only copy of the camera between the player state and the renderer, carrying
 yaw and pitch by the fraction of a tick the frame stands at. **Smoothing the camera

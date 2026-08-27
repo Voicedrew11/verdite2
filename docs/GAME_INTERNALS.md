@@ -76,7 +76,9 @@ that ran before it. What a steady in-area window says:
   one), and the area module's own data at `0x8019F07C`.
 - **Stage 2 is the biggest function in the loop by far** — 1,917 instructions,
   224 functions reachable, `VSync` and `DrawOTag` in its subtree — and writes four
-  words. Whatever it does, it does somewhere else.
+  words *through literal addresses*. Everything else it writes goes through the
+  object-table base register, which is why the probe saw almost nothing. See
+  "Stage 2 is the object-table state machine" below.
 
 The probe is not free — 220k memory reads a frame drops the port to ~26 fps and
 shifts the band histogram — so it is a diagnostic to run deliberately, not to
@@ -140,12 +142,60 @@ the emitted C# for `DrawOTag`, `VSync`, `PutDispEnv` or `PutDrawEnv`.
 | stage 4 `func_80040348` | the 200-record entity table | no |
 | stage 5 `func_80046A60` | 128 effect lifetimes at `rec+0x0E` | no |
 | stage 6 `func_8004910C` | the module's own per-frame logic | **no**, in all nine modules |
-| stage 2 `func_80037C0C` | yes, unaudited in detail | **yes** — all four entry points are in its 268-function subtree |
+| stage 2 `func_80037C0C` | the object table at `0x80177714` — every world prop that moves | **yes**, but through one edge only — see below; gated regardless |
 | stage 13 `func_800342D8` | the jitter accumulator at `0x8006E608`, in its own body | yes, it is the renderer |
 | — `func_80033FBC` | the fade state machine, called by stage 13 | **no** — three functions, none of them draw |
 
-**Stage 3 reaches the drawing entry points, but not the way stage 2 does**, and
-the distinction is what makes gating it safe. The path is
+### Stage 2 is the object-table state machine
+
+`func_80037C0C` is where doors, the drawbridge, the minecart and the crystals
+move. Its shape, read off the emitted C#:
+
+- It walks the **object table at `0x80177714`** — `0x18C` (396) slots of `0x44`,
+  count held on the stack, two base registers advanced by `0x44` at the loop tail.
+  A slot whose **type byte at `rec+0x4`** is `0xFF` is skipped; that is the same
+  free test `AreaWarp` and `AgentServer` use and the value the loader writes when
+  it clears the table.
+- Each iteration **publishes two pointers to globals**: the record itself to
+  `0x8017E04C`, and its definition record to `0x8017E048`. The definition is
+  `0x80175914 + (u16 at rec+0x6) * 0x18` — so `rec+0x6` is a definition index and
+  `0x80175914` (inside `buf5`) is a `0x18`-stride table of object *kinds*.
+  `0x8017E04C` is cleared to 0 on loop exit, so it means "the object being
+  stepped right now" and nothing outside the loop can read it.
+- It then **dispatches on the type byte**: `v1 = type - 2`, rejected if
+  `v1 > 0xDF`, so valid types are `0x02..0xE1` — a **224-entry jump table at
+  `0x8001191C`**, collapsing to thirty distinct arms. One arm is an indirect call
+  through `*(u32*)(*(u32*)0x8017E068 + 0x24)`, slot 9 of the area module's header,
+  which is how a module gives its own props behaviour.
+
+What it writes, by record offset (site counts over the whole function):
+
+| offset | width | sites | what |
+|---|---|---|---|
+| `+0x08` | u16 | 43 | the per-object state word — the state machine's own program counter |
+| `+0x40` | u16/u8/u32 | 20 | a per-object timer |
+| `+0x18` | u32 | 7 | the position VECTOR's **Y** lane — the bob, and a door or lift rising |
+| `+0x26` | u16 | 7 | |
+| `+0x24` | u16 | 6 | |
+| `+0x38` | u8 | 10 | |
+| `+0x3E` | u16 | 8 | |
+| `+0x14`, `+0x1C` | u32 | 2, 3 | position **X** and **Z** |
+| `+0x10`, `+0x0E`, `+0x28`, `+0x2C..0x30`, `+0x01`, `+0x04` | | 1–4 | `+0x04` itself, so a slot can retire or change kind |
+
+`+0x18`, `+0x24` and `+0x40` are the three fields the rate census measured running
+at the render rate. Note the object table **still has no rotation lane** — a
+crystal's spin is not `+0x24`-as-yaw on the evidence here, only a field that moves
+when it spins.
+
+**`func_80037B5C` is the transition fade**, and it is the one thing in stage 2
+that draws. It steps a tint from `a1` to `a2` by `a3` and, for each step, calls
+the tint drawer `func_8003220C` and then stages 11, 12, 8 and **13** — a modal
+loop rendering its own frames, entered from an in-bounds trigger arm. It is also
+what stage 3 reaches, which is why both stages carry the same gating exception.
+
+**Stage 3 reaches the drawing entry points the same way stage 2 does**, and
+the distinction from the frame's own render is what makes gating both safe. The
+path is
 `func_8002A550 -> func_80037B5C -> func_800342D8` — it calls **stage 13**, the
 renderer, from inside itself. That is a modal sub-loop (the in-game menu and the
 transitions around it) that takes over the main loop and renders its own frames

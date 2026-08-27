@@ -420,7 +420,7 @@ Three env vars, all read in `Program.cs`:
 ```bash
 KF2_FPS=20          # 20 fps, the default; any number, or off for no floor
 KF2_TICKRATE=20     # ticks a second the world runs at; 30 is the other answer
-KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78   # what is ticked
+KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78   # what is ticked
 ```
 
 (That gate list *replaces* the default set rather than adding to it, and the rate
@@ -640,13 +640,73 @@ function's call subtree and look for `DrawOTag`, `VSync`, `PutDispEnv` or
   that whole sequence ran at the render rate and an area fade was four times
   quicker at 120 fps than on hardware.
 
+**Stage 2 — the world's moving props, and why "can it draw" nearly kept it out.**
+Doors, the drawbridge, the minecart and the spinning crystals all live in
+`func_80037C0C`, main-loop stage 2, and until this was gated they moved at the
+render rate. It walks the **object table at `0x80177714`** — 396 slots of `0x44`,
+a slot free when the type byte at `rec+0x4` is `0xFF` — publishing each record to
+`0x8017E04C` and its `0x18`-stride definition (indexed by the `u16` at `rec+0x6`,
+in the table at `0x80175914`) to `0x8017E048`, then dispatching on that same type
+byte through a **224-entry jump table at `0x8001191C`**, collapsing to thirty
+distinct arms plus an indirect arm into the area module's own handler. Counting
+its writes through the record base gives the census's three fields exactly:
+`rec+0x18` (the position VECTOR's Y lane, 7 sites), `rec+0x24` (6) and `rec+0x40`
+(20), alongside `rec+0x14`/`rec+0x1C` for X and Z and the state word at
+`rec+0x08` — 43 sites, the busiest field in the function and the door/lift state
+machine itself.
+
+It was excluded for years on the reading that "all four SDK entry points are in
+its 268-function subtree, so it presents". That is true of *reachability* and
+false of what the rule protects against. Enumerate every function in the subtree
+that calls a submitting or presenting entry point **directly** and there is
+exactly one, reached by exactly one edge:
+
+    func_80037C0C -> func_80037B5C -> func_800342D8 -> func_8002E0FC -> DrawOTag
+
+`func_80037B5C` is a self-driving fade loop — it steps a tint from `a1` to `a2` by
+`a3` and calls the tint drawer, stages 11, 12, 8 and **stage 13 itself** for each
+step. It is entered from one arm of the state machine (an in-bounds trigger), and
+the indirect area-module arms get to the renderer the same way, through the
+message-box and cutscene loops `func_80047000`, `func_80048208` and
+`func_8004831C`. Every one of those is an **extra** render inside the stage, never
+the frame's own: the main loop still runs stage 13 afterwards. That is the same
+exception stage 3 already carried, and a strictly narrower one — stage 3 has nine
+such paths including a whole blocking menu session. So stage 2 is gated, with the
+reason recorded in `check_gate.py`'s `KNOWN`, and **the cost is that entering a
+fade or a cutscene can be deferred by up to one tick (50 ms)**. Skipping cannot
+cut one in half: once entered, the stage is on the stack and drives its own
+frames.
+
+Measured with `rate_census.py --run --scenario idle --fps 20 144`, standing still
+in area 1, the four records that move:
+
+| field | before (20 -> 144) | after (20 -> 144) |
+|---|---|---|
+| object table `+0x18` | 13.0/s -> 49.8/s, ratio 3.84 | 13.7/s -> 17.7/s, ratio 1.29 |
+| object table `+0x24` | 13.0/s -> 52.4/s, ratio 4.05 | 13.7/s -> 17.7/s, ratio 1.29 |
+
+For scale, in the same pair of runs the already-gated animated-texture phase reads
+16.8/s -> 18.4/s (ratio 1.10) and the global frame counter `0x80199488` reads
+15.5/s -> 18.1/s (ratio 1.17). The props now alias the way the things that were
+already right do. **The picture has not been looked at** — whether a fade or a
+cutscene now starts visibly late, and whether a 20 Hz prop against a 144 fps
+picture wants `KF2_SMOOTH_OBJECTS=1`, are both eye questions.
+
 **What this still does not cover, recorded rather than discovered later.**
 
-* **Stage 2** (`func_80037C0C`, the 396-arm object dispatch) holds per-frame state
-  and is deliberately **not** gated: `DrawOTag`, `VSync`, `PutDispEnv` and
-  `PutDrawEnv` are all in its 268-function subtree, so it presents. Gating it
-  wholesale would drop frames of the picture. Its per-tick counters would have to
-  be found and gated one at a time.
+* **`rec+0x40` on two other slots is a different defect and is still open.** It
+  survived the gate at ratio 3.69 (14.4/s -> 53.4/s), and gating `func_800331B4`
+  as an experiment dropped it to 17.6/s, which is the attribution: the writer is
+  **stage 13's own object pass**, not stage 2. Reading it, `rec+0x40` is a
+  retrigger deadline in **vblank** units against the free-running count at
+  `0x801B6CAC`, re-armed as `vbl + 6 * (u16 at rec+0x3E)`, and when it expires the
+  routine computes a distance-attenuated volume against the player position at
+  `0x801994EC` and calls the sound player `func_80014158`. So it is a per-object
+  **ambient sound** — and with a small interval it retriggers once per rendered
+  frame up to the 60 Hz vblank ceiling, i.e. 20/s at the default and 60/s at 144.
+  It cannot be gated: `func_800331B4` walks the table and draws the models in the
+  same loop, so no whole-function hook separates the two. **Not heard by ear**;
+  the numbers above are all that is known.
 
 **Animated textures — the sixth gated function, `func_8002DC78`.** The animated
 water at the start, the main-hall fire and the creatures' scrolling skins are one

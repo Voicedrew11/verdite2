@@ -18,7 +18,8 @@ namespace Kf2;
 ///     KF2_FPS=off     no pacing at all -- the picture is uncapped, the world is not
 ///     KF2_TICKRATE=30 tick the world at what the game's code asks for instead
 ///     KF2_FPS_LOGIC=full   do not gate anything; scale the movement deltas instead
-///     KF2_FPS_GATE=8002A550+80040348+80046A60   the stages to tick at LogicHz
+///     KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78
+///                     the stages to tick at LogicHz -- naming any replaces the set
 ///
 /// It is also a setting, under Video -- see Kf2.Settings.FramePacingPage. The
 /// saved choice is read on RuntimeReadyEvent rather than in Configure, since
@@ -72,6 +73,13 @@ namespace Kf2;
 ///
 /// What is gated is everything found to hold per-tick state that cannot draw:
 ///
+///     2  func_80037C0C   the object-table state machine: 396 slots of 0x44 at
+///                        0x80177714, dispatched on the type byte at rec+0x4
+///                        through a 224-entry jump table at 0x8001191C. Every
+///                        world prop that moves is in here -- doors, the
+///                        drawbridge, the minecart, the crystals -- and it writes
+///                        their position VECTOR itself, so ungated they moved at
+///                        the render rate
 ///     3  func_8002A550   pad read, turn, walk, angle fold, the death counter at
 ///                        0x8019951A, the poison tick, the buff timers at
 ///                        0x80199472..0x80199482, and 0x80199488, the global frame
@@ -102,26 +110,39 @@ namespace Kf2;
 /// submits primitives cannot be skipped -- at 120 fps three frames in four would
 /// have nothing from it. That is checked against the emitted C#: the subtree of a
 /// gated function must contain no `DrawOTag`, `VSync`, `PutDispEnv` or
-/// `PutDrawEnv`. Stage 3 is the one exception and it is a different shape: it
-/// reaches them by calling **stage 13 itself** -- `func_80029CBC -> func_80018E80`
-/// (the in-game menu) and `func_80037B5C` (the transition fade), both of which
-/// take the main loop over and render their own frames, and `func_80022DC4` (the
-/// menu blip) which VSyncs without drawing. Those are *extra* renders inside the
-/// stage rather than the frame's own: the main loop still runs stage 13
-/// afterwards, so skipping stage 3 costs a redundant draw and not a frame's
-/// picture. Skipping it decides whether such a loop is entered; it cannot cut one
-/// in half. (`scripts/check_gate.py` re-derives this; it is a recorded exception
-/// there, and the single-path version of this sentence was wrong.)
+/// `PutDrawEnv`. **Stages 2 and 3 are the two exceptions and they are the same
+/// shape**: what they reach is **stage 13 itself**, not a drawing primitive of
+/// their own. Stage 3 gets there through `func_80029CBC -> func_80018E80` (the
+/// in-game menu) and `func_80037B5C` (the transition fade), both of which take
+/// the main loop over and render their own frames, and through `func_80022DC4`
+/// (the menu blip) which VSyncs without drawing. Stage 2's case is strictly
+/// narrower: enumerating every function in its subtree that calls a submitting or
+/// presenting entry point directly leaves exactly one, reached by exactly one
+/// edge -- `func_80037C0C -> func_80037B5C -> func_800342D8 -> func_8002E0FC` --
+/// plus the area modules' own message-box and cutscene loops (`func_80047000`,
+/// `func_80048208`, `func_8004831C`) off its indirect arm, which reach stage 13
+/// the same way. Those are *extra* renders inside the stage rather than the
+/// frame's own: the main loop still runs stage 13 afterwards, so skipping either
+/// stage costs a redundant draw and not a frame's picture. Skipping decides
+/// whether such a loop is entered; it cannot cut one in half, since once entered
+/// the stage is on the stack and drives its own frames. The cost is that entering
+/// a fade or a cutscene can be deferred by up to one tick. (`scripts/check_gate.py`
+/// re-derives this; both are recorded exceptions there, and the single-path
+/// version of the stage 3 sentence was wrong.)
 ///
 /// **What this still does not cover, stated rather than discovered later.**
-/// **Stage 2** (`func_80037C0C`, the 396-arm object dispatch) holds per-frame
-/// state too and is deliberately *not* gated: all four of those SDK entry points
-/// are in its 268-function subtree, so it presents. Its per-tick counters would
-/// have to be found and gated one at a time. And stage 13's **jitter
-/// accumulator at 0x8006E608** is in stage 13's own body rather than in a callee,
-/// so no hook can reach it -- it is a damped accumulator (decayed by an eighth a
-/// call) driving the screen shake, so above the tick rate it settles faster and
-/// smaller.
+/// Stage 13's **jitter accumulator at 0x8006E608** is in stage 13's own body
+/// rather than in a callee, so no hook can reach it -- it is a damped accumulator
+/// (decayed by an eighth a call) driving the screen shake, so above the tick rate
+/// it settles faster and smaller. `func_80037B5C` itself, the transition
+/// fade, steps once per *rendered* frame inside its own loop, so an area
+/// transition is still quicker at 144 than at 20; that is the modal-loop shape
+/// <see cref="MenuPacing"/> deals with elsewhere, not a gate. And **the object
+/// record's rec+0x40 on two slots survived gating stage 2 at ratio 3.69**: that
+/// one is stepped by stage 13's own object pass `func_800331B4` (proved by gating
+/// it as a probe -- 53.4/s fell to 17.6/s), where it is an ambient-sound retrigger
+/// deadline in vblank units against 0x801B6CAC. `func_800331B4` steps the timer
+/// and draws the models in one loop, so no whole-function hook separates them.
 ///
 /// The camera would then move <see cref="LogicHz"/> times a second while the
 /// picture updated more often, which looks worse than not drawing faster at all. <see cref="FrameSmoothing"/> is the
@@ -226,7 +247,8 @@ public static class FramePacing
 
     /// <summary>
     /// What ticks at <see cref="LogicHz"/> when <c>KF2_FPS_GATE</c> names nothing:
-    /// main-loop stages 3, 4, 5 and 6, plus stage 13's fade state machine. Hooking
+    /// main-loop stages 2, 3, 4, 5 and 6, plus stage 13's fade state machine and
+    /// its animated-texture updater. Hooking
     /// them unconditionally is what makes the rate a setting rather than a launch
     /// argument. It costs nothing when the render rate equals the tick rate, where
     /// the accumulator ticks on every frame and <see cref="BeforeStage"/> always
@@ -234,14 +256,38 @@ public static class FramePacing
     ///
     /// Every one of them was checked for whether it can *draw* before being put
     /// here, because a stage that submits primitives cannot be skipped -- the
-    /// picture would flicker at three frames in four. Stage 2 is the reason that
-    /// matters: it holds per-frame state too, but `DrawOTag`, `VSync`,
-    /// `PutDispEnv` and `PutDrawEnv` are all in its 268-function subtree, so it
-    /// is deliberately **not** here. See "Any frame rate" in
+    /// picture would flicker at three frames in four. Stages 2 and 3 are the two
+    /// recorded exceptions, and they are the same shape: what they reach is stage
+    /// 13 itself, called as an extra render from inside a modal loop of their own,
+    /// never a primitive the frame's picture depends on. `scripts/check_gate.py`
+    /// re-derives that and holds both reasons. See "Any frame rate" in
     /// docs/PATCHES_AND_MODS.md.
     /// </summary>
     static readonly uint[] DefaultGate =
     [
+        0x80037C0C,   // 2  the object-table state machine. It walks the 396 slots
+                      //    of 0x44 at 0x80177714, skipping a slot whose type byte
+                      //    at rec+0x4 is 0xFF, publishes the record to 0x8017E04C
+                      //    and its 0x18-stride definition (indexed by the u16 at
+                      //    rec+0x6) to 0x8017E048, then dispatches on that type
+                      //    byte through a 224-entry jump table at 0x8001191C --
+                      //    thirty distinct arms, plus an indirect arm into the
+                      //    area module's own handler. This is every world prop
+                      //    that moves: doors, the drawbridge, the minecart, the
+                      //    crystals. It writes the position VECTOR directly
+                      //    (rec+0x14/+0x18/+0x1C), the state word at rec+0x08 (43
+                      //    sites, the busiest field in the function) and the
+                      //    timers at rec+0x24 and rec+0x40. Ungated, all of it ran
+                      //    once per rendered frame -- the census measured rec+0x18,
+                      //    rec+0x24 and rec+0x40 at ratio 3.8-4.05, 13/s against
+                      //    50/s, standing still in area 1 at 144 fps.
+                      //
+                      //    It reaches DrawOTag, and is gated anyway: the only edge
+                      //    out is func_80037B5C, the transition fade, which renders
+                      //    its own frames by calling stage 13. The main loop still
+                      //    runs stage 13 afterwards, so this costs the *entry* to a
+                      //    fade or a cutscene up to one tick of delay, never a
+                      //    frame's picture. Recorded in check_gate.py's KNOWN.
         0x8002A550,   // 3  pad read, turn, walk, the death counter at 0x8019951A,
                       //    the poison tick, the buff timers, the frame counter
         0x80040348,   // 4  the 200-record entity table at 0x8016C544

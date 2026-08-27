@@ -56,6 +56,16 @@ SDK_NAMES = SUBMIT | PRESENT
 # defect. Anything reaching one that is *not* listed here fails: that is the
 # whole point of the check.
 KNOWN = {
+    0x80037C0C: (
+        "stage 2 calls stage 13 itself, and only from one edge: func_80037B5C, "
+        "the transition fade, which steps a tint and renders its own frames. Its "
+        "indirect arm reaches the area modules' message-box and cutscene loops "
+        "(func_80047000, func_80048208, func_8004831C), which get there the same "
+        "way. Every one of those is an *extra* render inside the stage -- the main "
+        "loop still runs stage 13 afterwards -- so skipping stage 2 costs the "
+        "*entry* to a fade or a cutscene up to one tick of delay, never a frame's "
+        "picture. It is the same exception as stage 3 and a strictly narrower one."
+    ),
     0x8002A550: (
         "stage 3 calls stage 13 itself, on the frames where an item is used "
         "(func_80029CBC) and from the transition fade (func_80037B5C). Those are "

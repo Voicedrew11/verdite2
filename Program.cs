@@ -192,7 +192,7 @@ Kf2.KeyLayout.Install();
 //                                 is the rate the game's own code asks for
 //     KF2_FPS_LOGIC=full          do not tick the world on its own clock; scale
 //                                 the movement deltas instead -- a comparison mode
-//     KF2_FPS_GATE=8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78   what is ticked
+//     KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78   what is ticked
 //
 // The game's own frame gate (func_80017880, which spins on the vblank credit at
 // 0x801B6CA8 until it reaches two) is skipped at every rate, because it decides

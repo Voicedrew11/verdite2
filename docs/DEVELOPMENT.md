@@ -290,6 +290,28 @@ knowing what a crystal is. These fields are written through an index rather than
 literal address, so `find_writers` cannot attribute them — which is itself the
 expected answer for anything inside a table.
 
+**How the attribution was got anyway, since `find_writers` could not.** The step
+the tooling does not automate is reading the emitted C# for the *stage* rather
+than for the address. `func_80037C0C` (stage 2) sets a base register to
+`0x80177714` and advances it by `0x44` at the loop tail, so every write it makes
+is `base + k` — invisible to a `lui`/`addiu` scan and obvious to a regex over one
+function's body. Tallying those gave `+0x18` at 7 sites, `+0x24` at 6 and `+0x40`
+at 20, which is the census's three rows and nothing else. **When `find_writers`
+answers "reached through a pointer or an index", the census's own structure
+folding has already told you which structure — go and read the function that walks
+it.**
+
+Two things came out of finishing it that are worth keeping:
+
+* **The first two rows were stage 2, and it is now gated** — see "Any frame rate"
+  in `docs/PATCHES_AND_MODS.md`. `+0x18` and `+0x24` fell to ratio 1.29.
+* **The third row was not.** `+0x40` stayed at 3.69. Adding `800331B4` to
+  `KF2_FPS_GATE` as a one-off experiment dropped it to 17.6/s, which named the
+  writer as stage 13's object pass. **That is the technique worth reusing: an
+  address in `KF2_FPS_GATE` is a free attribution probe.** It does not have to be
+  a change you would ship — gating a drawing function ruins the picture and
+  answers the question anyway, in one run.
+
 ### find_writers: which code, and at what rate
 
     python3 scripts/find_writers.py 8006E5CC
