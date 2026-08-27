@@ -304,6 +304,58 @@ Two things fell out of it that matter:
   packets a frame). So the arm cannot be "reattached" to an extrapolated camera —
   it is already welded to the screen, and what steps at the tick rate is its
   sprite index, which is what the console did too.
+### The map is an 80x80 tile grid, and a tile's height is one byte
+
+`func_80031C94` (the "map tiles" line in `KF2_DRAWCENSUS`, and 78% of a frame's
+packets in a corridor) walks the 24x24 visibility window at `0x80192EAC` and calls
+`func_80031B1C(tileX, tileZ, flags)` for each lit tile. That resolves the tile
+record as (`generated/game.cs:37716-37727`):
+
+    tile = 0x801C8484 + 800 * tileZ + 10 * tileX
+
+so the map is **80 x 80 tiles of 10 bytes**, 800 bytes a row — the 24x24 grid is a
+window into it, not its size. Both loop bounds test against `0x50` = 80.
+
+Each tile has **two drawn halves**, and the pair is the whole record:
+
+| offset | what |
+|---|---|
+| `+0x0` | model index for half A; drawn when `< 240` and bit 0 of `flags` |
+| `+0x1` | **height byte** for half A |
+| `+0x5` | model index for half B; drawn when `< 240` and bit 1 of `flags` |
+| `+0x6` | **height byte** for half B |
+
+The position handed to the submit routine `func_80031950(model, &vec, flags)` is
+built at `generated/game.cs:37746-37762`, camera-relative:
+
+    X = (tileX << 11) - [0x80192E78] + 0x400
+    Z = (tileZ << 11) - [0x80192E80] + 0x400
+    Y = (-(u8 height) << 7) - [0x80192E7C]
+
+Three consequences worth keeping:
+
+* **A tile's Y is a byte scaled by `<< 7`**, so map geometry moves in 128-unit
+  quanta and cannot express anything finer without changing the computation.
+* **`&vec` is a stack temp** in `func_80031B1C`'s frame, not game state. Anything
+  that rewrites it before `func_80031950` reads it needs no restore and cannot
+  leak into the AI or a save — unlike every other smoothing site in the port.
+* **Moving architecture lives here, not in the model tables.** A `KF2_DRAWCENSUS=2`
+  run taken while a drawbridge cycled listed 11 models, all byte-identical in
+  position and rotation across two windows two seconds apart, while the map pass
+  kept drawing ~593 packets a frame. The bridge is a tile, not a model.
+
+### The model pipeline has no skeleton
+
+In `func_80032588`'s 62-function subtree, `SetRotMatrix` and `SetTransMatrix` are
+each called from **`func_80032588` itself and from none of its 61 callees**. One
+matrix pair is loaded per model and every vertex is transformed under it, so a
+model is rigid: there is no per-part transform stack and therefore no skeleton to
+interpolate. The complete set of per-object transforms in the pipeline is the
+position `VECTOR` and the Euler triple, both of which `patches/ObjectSmoothing.cs`
+already carries. Anything that animates *shape* is doing it in the vertex data or
+by swapping the model index at `a1` (`rec+0x6 + 0x100`), neither of which any
+matrix interpolation can reach.
+
 - **`func_80032588` is fed from *four* tables, one loop each** — and for a long
   time only the first two were written down, which is how two separate "the
   animation runs at a low frame rate" reports were caused and then chased. The

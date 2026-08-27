@@ -166,11 +166,89 @@ useful than the question was.
    trustworthy tick-rate check is the census itself: the global frame counter at
    `0x80199488` and the animated-texture phase both read ~16-18/s at 20 and at
    144 fps.
-6. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
+6. **Finish the smoothing sweep: enumerate every table, do the map, stop finding
+   them by bug report.** This is the live work item and it has a specific history
+   worth reading before touching it, because the same mistake was made three times.
+
+   **What the pattern is.** Every smoothing fix in the port is one operation: *a
+   per-entity number, at a stable address, in a table of fixed stride, which the
+   game updates once a tick and the renderer reads — snapshot it on the tick, write
+   `lerp(prev, cur, phase)` before the read, put it back after.* Object position,
+   object rotation, entity position, entity rotation and (not yet done) tile height
+   are five instances of that one operation, not five features.
+
+   **What was done.** Stage 2 gated so props step at the tick rate at all; the
+   object table's rotation lane at `+0x24` found and carried; the renderer's *four*
+   model tables carried instead of two; the object table's emptiness test corrected
+   from stage 2's (`byte +0x4`) to the renderer's (`u16 +0x6`). See "Any frame rate"
+   in `docs/PATCHES_AND_MODS.md` and "What in the renderer draws what" in
+   `docs/GAME_INTERNALS.md`.
+
+   **What is left, in order.**
+
+   1. **Confirm which byte animates a moving tile.** A `KF2_DRAWCENSUS=2` run taken
+      while a drawbridge cycled proved it is map geometry and not a model (11 models
+      listed, byte-identical across two windows two seconds apart). The remaining
+      question is whether what moves is the **height byte** at `tile+0x1`/`+0x6` or
+      the **model index** at `tile+0x0`/`+0x5`. One census run answers it — but note
+      the range, below.
+   2. **If it is the height: write the tile smoother.** Sample the 80x80 grid's two
+      height bytes each tick (12.8 KB), pre-hook `func_80031B1C` to note `(tileX,
+      tileZ)`, and pre-hook `func_80031950` to write
+      `-(lerp(prev, cur, phase) * 128) - camY` into the Y at `a1+2`. **No restore
+      pair is needed** — that vector is a stack temp, not game state, which makes
+      this the cleanest of the five sites rather than the hardest. One hook covers
+      every moving tile in the game.
+   3. **If it is the model index: stop.** That is a discrete swap with no in-between,
+      which is the boundary below.
+   4. **Enumerate the remaining tables from the code, not from reports.** The set is
+      finite and derivable: stage 13 has three drawing callees, and every position,
+      height or angle any of them reads is a table entry at a known address. Four
+      model tables and the map are now known. Walk all three routines end to end and
+      write the complete list down, because "that's all of them" has been asserted
+      and been wrong twice, and each correction cost a round trip through a person
+      playing the game.
+
+   **The boundary, which is permanent.** The technique works on a *continuous
+   quantity in an addressable slot*. It cannot work on a discrete index — a model
+   swap or a pose index — because there is no in-between to compute.
+   `lerp(frame 4, frame 5, 0.5)` is not a smaller version of the same problem; it is
+   vertex morphing, and it needs a correspondence between frames that the port
+   cannot recover from the packet stream. That would need the model format (see
+   item 7) and a hook on the vertex fetch inside `func_80032588`'s inner loop —
+   which needs only *where the loop reads vertices and how many*, a runtime
+   observation, not a full decode. Note also that **models are rigid**: there is no
+   per-part matrix in the whole subtree, so "just interpolate the matrices" is not
+   available. See "The model pipeline has no skeleton" in `docs/GAME_INTERNALS.md`.
+
+   **Two tooling defects found on the way, both unfixed.**
+
+   * **`KF2_RATECENSUS_RANGE` defaults to `80060000:801C0000` and the map tile table
+     is at `0x801C8484` — outside it.** Every rate census ever run in this repo has
+     been blind to the entire map. Widen the default, or at minimum pass
+     `KF2_RATECENSUS_RANGE=801C0000:801D8000` for step 1 above.
+   * **`rate_matrix`'s `death-clock` and `walk` scenarios are misreporting**, and it
+     predates the stage 2 work (confirmed by re-running both with `KF2_FPS_GATE` set
+     to the old six addresses — identical numbers). `death-clock` gives 31 frames and
+     ~2.05 s in every configuration including `KF2_TICKRATE=30` against `20`, where
+     the recorded baseline is 65 ticks, 3.20 s against 2.14 s; the loop probably
+     exits on the agent's `dead` flag before the counter finishes. `walk` gives
+     exactly 2844 units/2 s in all four combinations, which is the signature of
+     walking into a wall from the autostart position. Until they are fixed the
+     trustworthy tick-rate check is the census itself — `0x80199488` and the
+     animated-texture phase both read ~16-18/s at 20 and at 144 fps.
+
+   **One rate defect is still open and is not smoothing.** `rec+0x40` on two object
+   slots runs at ratio 3.69; gating `func_800331B4` as a probe dropped it to 17.6/s,
+   naming stage 13's own object pass as the writer, where `rec+0x40` is an ambient
+   sound retrigger deadline in vblank units. It steps the timer and draws the models
+   in one loop, so no whole-function hook separates them. Never listened to.
+
+7. Work out the rest of the `CD/COM/*.T` archive formats when asset work starts.
    [IvanDSM/KingsFieldRE](https://github.com/IvanDSM/KingsFieldRE) has KFModTool
    and format notes covering this game across its regional variants (no symbols,
    `.map` or ELF, so it does not help the function maps).
-7. **Report the runtime bugs upstream as issues** (not PRs — see "Upstream
+8. **Report the runtime bugs upstream as issues** (not PRs — see "Upstream
    contribution policy" in [RUNTIME.md](RUNTIME.md)):
    input polled only from `PresentFrame`, which deadlocks any game that waits on
    the pad without vsyncing, and `Interrupts.Deliver` deriving a callback-table
@@ -184,7 +262,7 @@ useful than the question was.
    `ImGuiController.SetPerFrameImGuiData` that `patches/recompone/0018` works
    around, which breaks every fractionally scaled display and belongs in
    `dotnet/Silk.NET`.
-8. **Take the twice-drawn pair for sub-pixel vertex positioning, and flip its
+9. **Take the twice-drawn pair for sub-pixel vertex positioning, and flip its
    default if it holds up.** The mechanism is measured — 47k vertices a second
    recovered, offsets uniform across the pixel, no frame-rate cost — but the
    picture is not, and that is the only thing keeping it off by default while its
@@ -196,13 +274,13 @@ useful than the question was.
    [RENDERING.md](RENDERING.md). **Walk a wall after 0011 with both switches on**
    — that patch is what should have killed the remaining crawl and the far-away
    pop, and the picture is the test.
-9. ~~**Look at the Z-buffer in the cave.**~~ **Closed.** Retired as a user option:
+10. ~~**Look at the Z-buffer in the cave.**~~ **Closed.** Retired as a user option:
    the game's visibility is OT draw order, and the skybox (near-projecting, drawn
    first) plus coplanar decals contradict any single per-pixel depth, so no z-test
    can be globally correct on this content. Mechanism kept for diagnosis only,
    behind `KF2_ZBUFFER`/`KF2_ZBUFFER_PROBE`. See "Z-buffer" in
    [RENDERING.md](RENDERING.md).
-10. **Decide what the interface should be scaled by, and by eye.**
+11. **Decide what the interface should be scaled by, and by eye.**
    `patches/recompone/0018` fixed *where* the interface is drawn; how large it is
    is a second defect and still ours. `QueryDpiScale` returns the primary
    monitor's integer `wl_output` scale — 2.0 for a monitor KDE runs at 1.15 — so
@@ -213,7 +291,7 @@ useful than the question was.
    counter answers is whether the result *looks* right, or whether the atlas
    rebuild is cheap enough to do on a monitor change. See "The interface only
    fits a monitor whose scale is a whole number" in [RUNTIME.md](RUNTIME.md).
-11. Play further in. Now that the menu opens, the parts of the game it reaches —
+12. Play further in. Now that the menu opens, the parts of the game it reaches —
    inventory, equipment, magic, the map — have never run, and each is a screen
    with its own code path. `mods/kf2debug` is the instrument for this: its state
    readout is how the rest of `buf2` gets named, and its area warp reaches an
