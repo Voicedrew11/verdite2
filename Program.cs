@@ -236,26 +236,6 @@ Kf2.MenuPacing.Configure(Environment.GetEnvironmentVariable("KF2_MENUPACING"),
                          Environment.GetEnvironmentVariable("KF2_MENUPACING_PROBE"));
 Kf2.MenuPacing.Install();
 
-// The menu is not the only loop of that shape, and naming them one at a time is
-// how the list was being found. A *modal loop* -- a function that takes the main
-// loop over and presents its own frames -- is entered from a gated stage, so the
-// gate decides only whether it is entered and never cuts one in half; inside, the
-// loop iterates once per rendered frame and everything it steps runs at the render
-// rate. That is the transition fade, the cutscene and message-box loops, and the
-// item-use and spell-cast animations: a picked-up item spinning seven times too
-// fast at 144. The fix is structural rather than per-counter -- a frame the main
-// loop did not produce is paced by the world's clock (an interface-only one by the
-// vblank), so an iteration costs a tick again and every number inside it is right
-// without being found. One pre-hook on stage 9, whose only caller is the main loop.
-// It does nothing at or below the tick rate, which is where the defect does not
-// exist either.
-//
-//     KF2_LOOPPACING=0        leave them on the render rate -- comparison only
-//     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface
-Kf2.LoopPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
-                         Environment.GetEnvironmentVariable("KF2_LOOPPACING_PROBE"));
-Kf2.LoopPacing.Install();
-
 // Which words of the game's memory change at the render rate rather than at the
 // tick rate -- the instrument that turns "something looks too fast" into an
 // address. Samples on the emulated vblank, which is a wall-clock 60 Hz grid since
@@ -317,6 +297,41 @@ Kf2.ObjectSmoothing.Install();
 Kf2.AnimSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM"),
                             Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM_PROBE"));
 Kf2.AnimSmoothing.Install();
+
+// The menu is not the only loop of that shape, and naming them one at a time is
+// how the list was being found. A *modal loop* -- a function that takes the main
+// loop over and presents its own frames -- is entered from a gated stage, so the
+// gate decides only whether it is entered and never cuts one in half; inside, the
+// loop iterates once per rendered frame and everything it steps runs at the render
+// rate. That is the transition fade, the cutscene and message-box loops, and the
+// item-use and spell-cast animations: a picked-up item spinning too fast at 144.
+// The fix is structural rather than per-counter -- the loop's *body* is held to one
+// run per world tick, so every number inside it is right without being found. One
+// pre-hook on stage 9, whose only caller is the main loop, tells a modal frame from
+// the main loop's.
+//
+// Holding it there is only half. Pacing the loop's frames to the tick makes the
+// speed right and the picture 20 fps, because the frame the loop draws *is* the
+// tick and LogicPhase is 0 on every one of them, so the smoothing patches have
+// nothing to carry. So the gap between iterations is filled with extra renders --
+// stage 8 then stage 13, the main loop's own drawing tail, run again at the phase
+// the frame stands at, which is what func_80037B5C already does inside a stage.
+// A modal frame then *is* a main-loop frame: world at LogicHz, picture at the
+// render rate, view and objects and poses carried by the patches that already do
+// it everywhere else. The menu draws no world, so it is paced at the vblank
+// instead. It does nothing at or below the tick rate, which is where the defect
+// does not exist either.
+//
+//     KF2_LOOPPACING=0        leave them on the render rate -- comparison only
+//     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface
+//
+// Installed *after* the three smoothing patches, and that ordering is
+// load-bearing: HookManager runs the posts on a function in the order they
+// were added, and the extra render has to be asked for once their own posts
+// have put the tables back.
+Kf2.LoopPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
+                         Environment.GetEnvironmentVariable("KF2_LOOPPACING_PROBE"));
+Kf2.LoopPacing.Install();
 Kf2.EndingHold.Install();
 
 // Which routine in the renderer drew how much of the frame. Stage 13 is the only

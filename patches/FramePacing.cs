@@ -138,8 +138,11 @@ namespace Kf2;
 /// class**: `func_80037B5C` (the transition fade), the item-use and spell-cast
 /// animations and the menu all step once per *rendered* frame inside a loop of
 /// their own, which a gate cannot reach because it decides only whether such a
-/// loop is entered. <see cref="LoopPacing"/> paces the frames those loops produce
-/// instead, so an iteration of one costs a tick again. And **the object
+/// loop is entered. <see cref="LoopPacing"/> holds the loop's *body* to one run per
+/// tick instead, and fills the gap between its iterations with extra renders of
+/// stage 8 and stage 13, so a modal frame is an ordinary frame: world at
+/// <see cref="LogicHz"/>, picture at the render rate, smoothing carrying it. And
+/// **the object
 /// record's rec+0x40 on two slots survived gating stage 2 at ratio 3.69**: that
 /// one is stepped by stage 13's own object pass `func_800331B4` (proved by gating
 /// it as a probe -- 53.4/s fell to 17.6/s), where it is an ambient-sound retrigger

@@ -135,12 +135,21 @@ def sc_modal_rate(run: kf2.Run) -> dict:
 
     rows = [(float(m.group(1)), float(m.group(2)))
             for m in run.matching(r"loop pacing: ([\d.]+) main-loop, ([\d.]+) modal world,")]
+    iters = [float(m.group(1)) for m in
+             run.matching(r"([\d.]+) world iteration\(s\) a second")]
 
     # Only the windows a loop actually ran in say anything; the rest are the main
     # loop on its own, and averaging those in reports the fade as slower than it is.
+    #
+    # The two columns say different things and both matter. `world iter/s` is the
+    # loop *body* -- the thing that was running too fast, and which must equal the
+    # tick rate. `modal world/s` is the *picture*, which must equal the render rate:
+    # the gap between iterations is filled with extra renders so the smoothing
+    # patches have something to carry.
     return {
         "main/s": round(max((r[0] for r in rows), default=0.0), 1),
         "modal world/s": round(max((r[1] for r in rows), default=0.0), 1),
+        "world iter/s": round(max(iters, default=0.0), 1),
         "modal ui/s": round(max((u for u in ui if u > 1.0), default=0.0), 1),
     }
 

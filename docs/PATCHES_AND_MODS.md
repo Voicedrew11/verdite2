@@ -9,7 +9,7 @@ lives here — frame pacing and auto reload.
 | file | what it does | detail |
 |---|---|---|
 | `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
-| `MenuPacing.cs`, `LoopPacing.cs` | hold the loops that render their own frames to the rate the console ran them at | this file |
+| `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap with extra renders | this file |
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
@@ -1120,13 +1120,63 @@ sprite index, a message timer — runs at the render rate.
 
 **The fix is one sentence.** On the console a modal loop's iteration *was* a
 rendered frame and a rendered frame *was* a tick. The port broke that identity
-everywhere the stage gate cannot reach, so put it back: **a frame the main loop
-did not produce is paced by the world's clock, not by the render rate.** Nothing
-is enumerated, nothing is snapshotted and no counter has to be found — the loop
-iterates as often as the world ticks, so every number inside it is right by
-construction. It is the smoothing fix run backwards: smoothing takes the phase
-between two ticks and *adds* frames the game did not compute, this takes the same
-phase and *withholds* iterations it should not have computed.
+everywhere the stage gate cannot reach, so put it back: **a modal loop's body runs
+once per world tick, not once per rendered frame.** Nothing is enumerated, nothing
+is snapshotted and no counter has to be found — the loop iterates as often as the
+world ticks, so every number inside it is right by construction. It is the
+smoothing fix run backwards: smoothing takes the phase between two ticks and *adds*
+frames the game did not compute, this takes the same phase and *withholds*
+iterations it should not have computed.
+
+### Holding the loop is half of it, and the first version shipped only that half
+
+The half that shipped paced the loop's *frames* to the tick rate, which is the
+same thing as holding its body — one iteration, one frame — and it is what came
+back from play: *"it runs at the correct speed, BUT the animation is at its
+original framerate, and so is the camera."*
+
+Of course it was, and the reason is already written down two sections up. The
+frame the loop drew **was** the tick, so `FramePacing.LogicPhase` was 0 on every
+one of them and `FrameSmoothing`, `ObjectSmoothing` and `AnimSmoothing` had
+nothing to carry — exactly the state everything was in while the frame boundary
+was broken and "the smoothing never ran at all". Pacing gives a modal loop the
+console's *speed* and the console's *frame rate*, and the port's whole argument is
+that those two should stop being the same number.
+
+So the loop is not paced. It is **gated**, and the gap between its iterations is
+filled with **extra renders**: stage 8 then stage 13 — the main loop's own drawing
+tail — run again at the phase the frame now stands at. That is not a new
+mechanism. `func_80037B5C` already renders extra frames inside a stage by calling
+stage 13, and that is precisely why stages 2 and 3 are recorded gate exceptions;
+this does the same thing deliberately.
+
+What it buys is that **a modal frame becomes exactly a main-loop frame**: the
+world advances at `LogicHz`, the picture is drawn at the render rate, and the
+three smoothing patches carry the view, the objects, the creatures and the poses
+between ticks the way they already do everywhere else — they hook stage 8 and
+stage 13, both of which a modal loop reaches, and both of which an extra render
+runs. Neither patch re-reads memory on a non-tick frame (each keeps `prev` and
+`cur` in managed fields and only re-samples when `TickedThisFrame`), so an extra
+render is safe for them by construction; it only re-lerps at the new phase.
+
+The loop ends on the logic clock rather than on a counter: each extra render
+passes the frame boundary itself, so it is paced by `FramePacing.Floor` and
+advances the accumulator exactly as an ordinary frame does. `MaxExtraRenders` is a
+backstop against a configuration nobody has thought of, not the mechanism.
+
+**Two things it costs, both stated rather than discovered later.** Whatever stage
+13 steps in its *own* body now steps once per rendered frame inside a modal loop —
+the jitter accumulator at `0x8006E608` and `func_800331B4`'s ambient-sound
+retrigger — which makes a modal loop no worse than an ordinary frame rather than
+better; both are already open in [TODO.md](TODO.md). And an extra render cannot
+reach a counter the modal loop steps in its own body: a picked-up item's spin
+steps once a tick, which is the console's own rate for it, and smoothing *that*
+would need the model submit's arguments interpolated rather than a table.
+
+**Install order is load-bearing.** `HookManager` runs the posts on a function in
+the order they were added, so `LoopPacing` is installed in `Program.cs` *after*
+all three smoothing patches: the extra render has to be asked for once their posts
+have put the tables back, not while their interpolated values are still in them.
 
 **Classifying a frame costs one hook.** `FramePacing.AfterDrawOTag` already fires
 on a modal frame, because a modal loop presents through `func_8002E0FC` (stage 13)
@@ -1146,31 +1196,39 @@ decide what it should pace to instead:
   `FramePacing.BeforeFrameGate` already hooks it — so that answer costs no hook at
   all.
 
-**Two rates, and the second is a choice.** A modal loop that draws the world gets
-`LogicHz`; one that draws no world is the interface and gets **60 Hz, not the tick
-rate**, for the reason `MenuPacing.BlinkMs` already gives — a menu frame is one
-vblank, and `KF2_TICKRATE` is a setting about game *speed* with no business
-retuning a cursor. The menu also presents twice per iteration of `func_80018E80`,
-so binding it to a 20 Hz tick would make it respond at 10 Hz.
+**The interface is the other case, and it is paced rather than filled.** A modal
+loop that draws no world — the menu — has nothing for the smoothing patches to
+carry and never calls stage 13, so there is no gap worth filling. It is paced, at
+**60 Hz and not the tick rate**, for the reason `MenuPacing.BlinkMs` already gives:
+a menu frame is one vblank, and `KF2_TICKRATE` is a setting about game *speed* with
+no business retuning a cursor. The menu also presents twice per iteration of
+`func_80018E80`, so binding it to a 20 Hz tick would make it respond at 10 Hz.
+Pacing is also the **fallback** for a world-drawing loop if stage 8 or stage 13
+cannot be resolved: the speed stays right and the picture goes back to stepping,
+which is the failure worth having.
 
 Measured with `python3 scripts/rate_matrix.py modal-rate --fps 20 144`, which
 opens the menu and then warps, against the same run with
 `--env KF2_LOOPPACING=0`:
 
-| `KF2_FPS` | main/s | modal world/s | modal ui/s |
-|---|---|---|---|
-| 20, unpaced | 17.8 | 20.9 | 20.0 |
-| 20, paced | 19.0 | 20.9 | 20.0 |
-| 144, unpaced | 135.9 | **31.7** | **144.2** |
-| 144, paced | 87.9 | **20.1** | **60.1** |
+| `KF2_FPS` | main/s | modal world/s | world iter/s | modal ui/s |
+|---|---|---|---|---|
+| 20, off | 15.0 | 21.0 | 21.0 | 20.1 |
+| 20, on | 15.4 | 21.0 | 21.0 | 20.0 |
+| 144, off | 111.9 | **33.8** | **33.8** | **144.0** |
+| 144, on | 142.9 | **144.0** | **19.9** | **60.1** |
 
-Read the two modal columns and not `main/s`, which is a maximum over windows that
-included modal time and so reads low whenever a loop ran for part of one. The 20
-fps rows are the point of the "does nothing at the tick rate" claim: identical
-either way. The unpaced world row is 31.7 rather than 144 because a fade frame is
-a full world render and never reaches the target — it was still 1.6× too fast,
-and this class of complaint scales with whatever the loop can achieve rather than
-with the number asked for.
+The two world columns say different things and both are load-bearing.
+`world iter/s` is the loop **body** — the thing that was running too fast, and
+which has to equal the tick rate. `modal world/s` is the **picture**, which has to
+equal the render rate. Off, they are the same number, which *is* the defect; on,
+they separate into 20 and 144. The 20 fps rows are the point of the "does nothing
+at the tick rate" claim: identical either way. `main/s` is a maximum over windows
+that included modal time and so reads low whenever a loop ran for part of one —
+read the modal columns, not that one. The unpaced world row is 33.8 rather than
+144 because a fade frame is a full world render and never reaches the target: it
+was 1.7× too fast, and this class of complaint scales with whatever the loop can
+achieve rather than with the number asked for.
 
 **It does nothing at or below the tick rate**, which is where the defect does not
 exist either: `LoopPacing.FrameMinMs` returns the length `FramePacing` would have

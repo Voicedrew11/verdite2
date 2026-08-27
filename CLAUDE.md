@@ -257,20 +257,31 @@ entered and never cuts one in half, and inside it the loop iterates once per
 message-box loops, the menu box open/close and the item-use and spell-cast
 animations — a picked-up item spinning too fast is that bug, not an entity to be
 found. The fix restores the identity the console had, that a modal loop's
-iteration *was* a frame and a frame *was* a tick: **a frame the main loop did not
-produce is paced by the world's clock**, an interface-only one by the vblank, so
-an iteration costs a tick again and every counter inside it is right without being
-enumerated. Classifying a frame costs **one** hook — a pre on **stage 9
-`func_800140AC`**, whose only caller is the main loop `func_8001369C` (stage 1
-looks like the marker and is not: two modal loops and three area modules call it
-too) — plus a flag set in `FramePacing.BeforeFrameGate`, which is already hooked
-on `func_80017880`, stage 13's sole caller, and so says whether the frame drew the
-world. Measured at `KF2_FPS=144`: the menu 144 -> 60 frames a second, the area
-fade 31-34 -> 18-20. It does nothing at or below the tick rate, takes the *longer*
-of the two deadlines so it can never make the port run fast, and touches no game
-memory. What it cannot reach is a counter stepped inside a *drawing function's own
+iteration *was* a frame and a frame *was* a tick: **the loop's body runs once per
+world tick, not once per rendered frame**, so every counter inside it is right
+without being enumerated. Classifying a frame costs **one** hook — a pre on
+**stage 9 `func_800140AC`**, whose only caller is the main loop `func_8001369C`
+(stage 1 looks like the marker and is not: two modal loops and three area modules
+call it too) — plus a flag set in `FramePacing.BeforeFrameGate`, which is already
+hooked on `func_80017880`, stage 13's sole caller, and so says whether the frame
+drew the world. **Holding the loop is only half**: pacing its frames to the tick
+gives the right speed and a 20 fps *picture*, because the frame the loop draws
+*is* the tick and `LogicPhase` is 0 on every one of them, so the smoothing patches
+have nothing to carry. The gap between iterations is therefore filled with **extra
+renders** — stage 8 then stage 13, the main loop's own drawing tail, run again at
+the frame's phase, which is what `func_80037B5C` already does inside a stage — so
+a modal frame *is* a main-loop frame and `FrameSmoothing`, `ObjectSmoothing` and
+`AnimSmoothing` carry it. That post on stage 13 must run after theirs, which is why
+`LoopPacing` is installed last in `Program.cs`. The menu draws no world, so it is
+paced at the vblank instead. Measured at `KF2_FPS=144` with
+`rate_matrix.py modal-rate`: the fade's body 33.8 -> 19.9 iterations a second, its
+picture 33.8 -> 144.0 frames a second, the menu 144.0 -> 60.1. It does nothing at
+or below the tick rate and touches no game memory. What it cannot reach is a counter stepped inside a *drawing function's own
 body* — stage 13's shake accumulator `0x8006E608` and `func_800331B4`'s ambient
-retrigger — which want a hold/restore pair instead and are still in `docs/TODO.md`.
+retrigger, which want a hold/restore pair instead and which extra renders step as
+often as an ordinary frame already does — or a counter the modal loop steps in its
+own body, whose *speed* is right but which is smooth only if its transform comes
+from a table `ObjectSmoothing` carries. Both are in `docs/TODO.md`.
 See "Loops that render their own frames" in `docs/PATCHES_AND_MODS.md`.
 `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The
