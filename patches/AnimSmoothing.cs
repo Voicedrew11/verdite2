@@ -11,7 +11,8 @@ namespace Kf2;
 /// Carries creature (and morphing-object) pose between logic ticks by driving
 /// the MO clip clock, not by rewriting vertices after the fact.
 ///
-///     KF2_SMOOTH_ANIM=1        on; off by default
+///     KF2_SMOOTH_ANIM=1        on (weight only, bounded); off by default
+///     KF2_SMOOTH_ANIM=time     also drive the integer clip time (unbounded)
 ///     KF2_SMOOTH_ANIM_PROBE=1  morph vs rigid submits, and the time step
 ///
 /// It is a setting under Video, beside the three other smoothing checkboxes.
@@ -46,6 +47,40 @@ namespace Kf2;
 /// the decoder with the weight `func_8003486C` just wrote. Stage 13 therefore
 /// re-morphs every rendered frame; only the time it morphs *to* is stuck on the
 /// tick. Move the weight and the mesh moves.
+///
+/// ## Two modes, and why the bounded one is the default
+///
+/// Play reported poses **spazzing out with interpolation on and never at 20
+/// fps**, which is the reading that matters: at 20 fps the phase is 0 on every
+/// frame, so the carry is zero and this patch does nothing. The game's own data
+/// is therefore fine and the in-between pose is what is wrong.
+///
+/// Everything static analysis can settle here says the mechanism is sound --
+/// the blender's keyframe rebuild is **absolute rather than incremental** (a
+/// fixed keyframe list per segment, `func_80034934` then `func_800349F8`), so
+/// asking it for a segment out of order cannot desynchronise a stream; the
+/// weight slot is genuinely the caller's (`func_8003486C` has no prologue, so
+/// `SP+0x10` is the blender's frame); the reversed-segment sign is right. What
+/// *cannot* be settled from here is what the whole pipeline does when the
+/// **segment index moves at the frame rate** rather than at the tick rate, and
+/// that is the one thing driving the integer time does that nothing else in this
+/// port does.
+///
+/// So the default stopped doing it. <see cref="Mode.Weight"/> leaves the integer
+/// time exactly as the game wrote it and spends the phase on the **12.12 blend
+/// weight alone**, clamped to the segment. The pose is then always between that
+/// segment's start and the pose the game asked for -- it cannot reach anywhere
+/// the game would not have drawn this tick, whatever the clip time is doing --
+/// and the segment index, the cache and every decode are bit-for-bit what they
+/// are with the patch absent. That bound holds under every explanation of the
+/// spazzing that could not be eliminated, which is why it is the default rather
+/// than one more guess at the cause.
+///
+/// It costs motion *across* a segment boundary, which clamps at the boundary
+/// instead of continuing through. A tick advances roughly one segment (mean step
+/// 511 against `u16` durations), so most of the in-between motion is inside a
+/// segment and survives. <see cref="Mode.Time"/> (`KF2_SMOOTH_ANIM=time`) is the
+/// old behaviour, kept for comparison by eye.
 ///
 /// ## What this does
 ///
@@ -201,6 +236,39 @@ public static class AnimSmoothing
     /// </summary>
     const int ThrashFlips = 3;
 
+    /// <summary>How much of the clip clock this is allowed to drive.</summary>
+    public enum Mode
+    {
+        /// <summary>
+        /// **Carry the weight only, inside the segment the game itself chose.**
+        /// The integer time handed to `func_8003486C` is left exactly as the
+        /// game wrote it, so the segment index, the blender's keyframe cache and
+        /// every decode it does are bit-for-bit what they are with smoothing
+        /// off; the only thing that moves is the 12.12 blend weight, and it is
+        /// clamped to its own segment. The pose is therefore always **between
+        /// the segment's start and the pose the game asked for** -- it cannot
+        /// reach anywhere the game would not have drawn this tick, whatever the
+        /// clip time does. That bound is the point: it holds under every
+        /// explanation of a spazzing pose, including the ones no counter here
+        /// can rule out.
+        ///
+        /// What it gives up is motion *across* a segment boundary, which clamps
+        /// to the boundary instead of continuing through it. Since a tick
+        /// advances roughly one segment (mean step 511 against `u16` durations),
+        /// most of the in-between motion is inside a segment and survives.
+        /// </summary>
+        Weight,
+
+        /// <summary>
+        /// Drive the integer time as well, so the in-between instant picks its
+        /// own segment. Strictly more faithful when it works, and strictly less
+        /// bounded: the pose can land on a segment the game did not ask for, and
+        /// what the blender does with a segment index moving at the frame rate
+        /// is not something this repo can check by counter. `KF2_SMOOTH_ANIM=time`.
+        /// </summary>
+        Time,
+    }
+
     /// <summary>What a tick's clip-time step was, decided once in
     /// <see cref="Classify"/>.</summary>
     enum Verdict
@@ -273,10 +341,19 @@ public static class AnimSmoothing
     static uint _weightPtr;
     static int _tFloor;
 
+    /// <summary>How far *back* in clip time from the game's own current time
+    /// this frame stands, in <see cref="Mode.Weight"/>. Signed, so a clip played
+    /// in reverse needs no special case.</summary>
+    static double _back;
+
     public const string OnKey = "kf2.smoothing.anim";
 
     /// <summary>Drive the MO clip clock between ticks. **Off by default.**</summary>
     public static bool Enabled { get; private set; }
+
+    /// <summary>How much of the clock to drive. <see cref="Mode.Weight"/> is the
+    /// default because it is the bounded one.</summary>
+    public static Mode Carry { get; private set; } = Mode.Weight;
 
     static bool _onFromEnv;
     static bool _probe;
@@ -299,7 +376,12 @@ public static class AnimSmoothing
 
     public static void Configure(string? on, string? probe)
     {
-        if (!string.IsNullOrWhiteSpace(on)) { Enabled = on != "0"; _onFromEnv = true; }
+        if (!string.IsNullOrWhiteSpace(on))
+        {
+            Enabled = on != "0";
+            Carry = on is "time" or "full" ? Mode.Time : Mode.Weight;
+            _onFromEnv = true;
+        }
         _probe = !string.IsNullOrWhiteSpace(probe) && probe != "0";
     }
 
@@ -339,7 +421,7 @@ public static class AnimSmoothing
         n += Pair(self, ClipClock, nameof(BeforeClock), nameof(AfterClock)) ? 1 : 0;
         HookManager.Commit();
 
-        Console.WriteLine($"[KF2] anim: {(Enabled ? "on" : "off")}" +
+        Console.WriteLine($"[KF2] anim: {(Enabled ? Carry.ToString().ToLowerInvariant() : "off")}" +
                           (_probe ? ", probe" : "") +
                           $", hooked {n} of 3 site(s) (clip clock)");
     }
@@ -464,6 +546,34 @@ public static class AnimSmoothing
 
         if (!Enabled || !FramePacing.Gating || !slot.HasPrev) return;
 
+        // A wrap's own step is a cycle length; what the tick actually advanced
+        // by is the playback rate behind it.
+        int advance = slot.Say == Verdict.Wrap ? slot.LastStep : slot.Step;
+
+        if (Carry == Mode.Weight)
+        {
+            switch (slot.Say)
+            {
+                case Verdict.Wrap:
+                    if (_probe) _wrapCarried++;
+                    break;
+                case Verdict.Play:
+                    if (_probe && slot.Step < 0) _backward++;
+                    break;
+                default:
+                    return;   // Still, or a hold: what the game asked for stands
+            }
+
+            // The frame stands `(1 - phase)` of a tick behind the pose the game
+            // asked for. Say that in clip time and let AfterClock spend it on
+            // the weight, inside the game's own segment -- the integer time is
+            // not touched at all, so the segment index and the blender's cache
+            // are exactly what they would be with this patch absent.
+            _back = (1.0 - _phase) * advance;
+            _pending = true;
+            return;
+        }
+
         double t;
         switch (slot.Say)
         {
@@ -506,15 +616,23 @@ public static class AnimSmoothing
     public static void BeforeClock(CpuContext c, IMemory m)
     {
         if (!_pending) return;
+
+        // func_8003486C has no prologue, so SP is still the blender's and
+        // SP+0x10 is the weight slot it stored for the clock to fill in.
         _weightPtr = m.ReadU32(c.SP + 0x10u);
-        c.A2 = (uint)_tFloor;
+
+        // In Weight mode the time is deliberately left alone: the segment the
+        // game picked is the segment that gets drawn.
+        if (Carry == Mode.Time) c.A2 = (uint)_tFloor;
     }
 
     public static void AfterClock(CpuContext c, IMemory m)
     {
         if (!_pending) return;
         _pending = false;
-        if (_weightPtr == 0 || _carry <= 0.0) return;
+        double spend = Carry == Mode.Weight ? _back : _carry;
+        if (_weightPtr == 0 || spend == 0.0) return;
+        if (Carry == Mode.Time && spend < 0.0) return;
 
         // v0 is the segment record: +0x0 the direction flag, +0x2 the duration
         // the weight was divided by.
@@ -523,7 +641,10 @@ public static class AnimSmoothing
         int duration = m.ReadU16(segment + 2u);
         if (duration <= 0) return;
 
-        int add = (int)Math.Round(_carry * 4096.0 / duration);
+        // Weight mode spends a *backward* offset from the game's own pose, so
+        // the sign flips; the clamp below is what keeps it inside this segment.
+        int add = (int)Math.Round(spend * 4096.0 / duration);
+        if (Carry == Mode.Weight) add = -add;
         if (add == 0) return;
 
         // A flagged segment is published as 0x1000 - raw, so its weight runs down
@@ -539,7 +660,7 @@ public static class AnimSmoothing
         {
             _carried++;
             if (reversed) _reversed++;
-            _fracSum += _carry;
+            _fracSum += Math.Abs(spend);
         }
     }
 

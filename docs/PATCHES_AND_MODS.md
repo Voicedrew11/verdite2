@@ -992,6 +992,48 @@ half-cycle and decays back long before it gets there.
 carried through; R re-seek(s), S stuck`, which is also how to tell whether a clip
 is looping — or thrashing — through this path at all.
 
+#### The bounded mode, and why it is the default
+
+Play reported poses **spazzing out with interpolation on and never at 20 fps**,
+and that reading is the one that matters: at 20 fps the phase is 0 on every
+frame, so the carry is zero and the patch does nothing at all. The game's own
+data is fine; the in-between pose is what is wrong.
+
+Everything static analysis can settle says the mechanism is sound. The blender's
+keyframe rebuild is **absolute rather than incremental** — `func_80034DA8` caches
+on (clip, animation index, segment index) at `S1+0x2/+0x4/+0x6`, and a miss
+rebuilds from a fixed per-segment keyframe list (`u16[seg+8]` through
+`func_80034934`, then the list at `seg+0xA` accumulated by `func_800349F8`) — so
+asking it for a segment out of order cannot desynchronise a decoder. The weight
+slot really is the caller's: `func_8003486C` has no prologue, so its `SP+0x10` is
+the blender's frame, where `SP+0x1C` was stored for it. The reversed-segment sign
+is right. Also worth recording, since the doc comment had it loose: the submitter
+passes the blender **three** distinct values — `a1` is the *bank* (from its own
+`a1` register), `a2` the *animation index* (caller `SP+0x1C`, the byte tested
+`< 0x80`), `a3` the *time* (caller `SP+0x20`) — and it is the animation index,
+not the bank, that this patch keys slots on.
+
+What **cannot** be settled from here is what the pipeline does when the segment
+index moves at the *frame* rate rather than at the tick rate, and driving the
+integer clip time is the only thing in this port that makes it do so.
+
+So the default stopped doing it. `Mode.Weight` leaves the integer time exactly as
+the game wrote it and spends the phase on the **12.12 blend weight alone**,
+clamped to its segment: the frame stands `(1 - phase)` of a tick behind the pose
+the game asked for, so `add = -(1 - phase) * step * 4096 / duration`. The pose is
+then always between the segment's start and the pose the game asked for — it
+cannot reach anywhere the game would not have drawn this tick, whatever the clip
+time does — and the segment index, the cache and every decode are bit-for-bit
+what they are with the patch absent. **That bound holds under every explanation
+of the spazzing that could not be eliminated**, which is why it is the default
+rather than one more guess at the cause.
+
+It gives up motion *across* a segment boundary, which clamps at the boundary
+instead of continuing through it. A tick advances roughly one segment (mean step
+511 against `u16` durations), so most of the in-between motion is inside a
+segment and survives. `KF2_SMOOTH_ANIM=time` is the old unbounded behaviour, kept
+for comparison by eye.
+
 Vertex-fetch lerp at `RotTransPers` was tried first and did not change the
 picture — it interpolated a rigid majority, and the probe's "XYZ moved" line
 was vertex 0 only. Measured not to touch the world clock, which the discarded

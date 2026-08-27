@@ -291,7 +291,10 @@ Kf2.ObjectSmoothing.Install();
 // leftover fraction onto the 12.12 weight the decoder consumes. Nothing is
 // written to game state -- a register and the caller's own stack temp.
 //
-//     KF2_SMOOTH_ANIM=1        on; off by default
+//     KF2_SMOOTH_ANIM=1        on -- the blend weight only, clamped to the
+//                              segment the game itself chose; off by default
+//     KF2_SMOOTH_ANIM=time     also drive the integer clip time, so the
+//                              in-between instant picks its own segment
 //     KF2_SMOOTH_ANIM_PROBE=1  morph vs rigid submits, the clip-clock step, and
 //                              the weights carried, per second
 Kf2.AnimSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM"),

@@ -95,7 +95,8 @@ KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by de
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
 KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
 KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
-KF2_SMOOTH_ANIM=1                      # drive MO clip time between ticks (off by default)
+KF2_SMOOTH_ANIM=1                      # carry MO pose between ticks, weight only (off by default)
+KF2_SMOOTH_ANIM=time                   # also drive the integer clip time (unbounded; the old way)
 KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, and the clip-clock step
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
@@ -224,9 +225,15 @@ the time landed* — within one tick's advance of the cycle's first frame — an
 tick is then run forwards through the turnover, which needs no clip length. That
 turnover is *synthesised* out of the last playback step, so it is believed only
 off a settled run; and **a clip the game is fighting over is held rather than
-carried** — an attack the AI restarts every tick steps its time one way and back
-the next, and interpolating that sweeps the pose continuously instead of
-alternating, a violent shake where the console flickered at 20 Hz.
+carried**. **The default carries the 12.12 blend weight only, inside the segment
+the game itself chose** (`Mode.Weight`), because play reported poses spazzing
+with interpolation on and never at 20 fps — where the phase is 0 and the patch
+does nothing — so the in-between pose is what is wrong rather than the game's
+data. Static analysis clears the blender (its keyframe rebuild is absolute, not
+incremental) but cannot say what the pipeline does with a segment index moving at
+the *frame* rate, which is the one thing driving the integer time does. Weight
+mode never moves it, so the pose is always between the segment's start and the
+pose the game asked for. `KF2_SMOOTH_ANIM=time` is the old unbounded way.
 Vertex-fetch lerp was tried and did
 not change the picture. The
 player's arm is a different bug: it is 2D, drawn by the HUD builder
