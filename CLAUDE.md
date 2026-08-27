@@ -221,7 +221,12 @@ special case**: the clip resets its time while keeping the same clip byte, so th
 wrap reads as one tick stepping a whole cycle backwards and lerping it rewound
 the animation over that tick's frames. A wrap is told from a re-seek by *where
 the time landed* — within one tick's advance of the cycle's first frame — and the
-tick is then run forwards through the turnover, which needs no clip length.
+tick is then run forwards through the turnover, which needs no clip length. That
+turnover is *synthesised* out of the last playback step, so it is believed only
+off a settled run; and **a clip the game is fighting over is held rather than
+carried** — an attack the AI restarts every tick steps its time one way and back
+the next, and interpolating that sweeps the pose continuously instead of
+alternating, a violent shake where the console flickered at 20 Hz.
 Vertex-fetch lerp was tried and did
 not change the picture. The
 player's arm is a different bug: it is 2D, drawn by the HUD builder

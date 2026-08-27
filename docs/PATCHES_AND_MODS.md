@@ -967,9 +967,30 @@ that segment at a full `0x1000` weight, which is the pose the clip ends on
 anyway. A wrap's step is a cycle length rather than a rate and is deliberately
 not recorded as `lastStep`, or the *next* wrap would be unrecognisable.
 
+**The turnover is synthesised, not measured, and that has a cost.** It is made
+out of `lastStep`, so a `lastStep` that is not a real playback rate invents one
+wrongly — and a clip whose time is merely *jittering* near its own head reads as
+wrapping every other tick, with the invented pose sweeping a fraction of the clip
+and then cutting to the head. That is worse than the hard cut it replaces, so a
+wrap is only believed off two consecutive same-direction ticks (`WrapRun`); with
+less than that behind it the tick is held at the game's own time, which is the
+hard cut.
+
+**A clip being fought over is not animating.** The remaining case is an attack
+whose animation the AI restarts every tick because the conditions to finish it
+are never met — a piranha, or the final boss with the player under its head. Its
+time steps one way and back the next, never landing at a cycle boundary, so it is
+neither playback nor a wrap; interpolating it sweeps the pose *continuously*
+between the two instead of alternating between them, which reads as a violent
+shake where the console showed a 20 Hz flicker. Three reversals net of steady
+playback (`ThrashFlips`) and the slot is held at the game's own time until it
+resolves. That is not a repair of the game's own indecision — it is a refusal to
+draw it more often than the game makes it. A ping-pong clip flips once a
+half-cycle and decays back long before it gets there.
+
 `KF2_SMOOTH_ANIM_PROBE=1` reports `N cycle wrap(s) (longest clip seen T), M
-carried through`, which is also how to tell whether a clip is looping through
-this path at all.
+carried through; R re-seek(s), S stuck`, which is also how to tell whether a clip
+is looping — or thrashing — through this path at all.
 
 Vertex-fetch lerp at `RotTransPers` was tried first and did not change the
 picture — it interpolated a rigid majority, and the probe's "XYZ moved" line

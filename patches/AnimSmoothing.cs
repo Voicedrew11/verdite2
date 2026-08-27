@@ -106,7 +106,28 @@ namespace Kf2;
 /// anyway (it answers with the last segment at a full `0x1000` weight, the pose
 /// the clip ends on).
 ///
-/// `KF2_SMOOTH_ANIM_PROBE=1` counts the wraps and how many were carried through.
+/// The turnover is **synthesised** out of `LastStep` rather than measured, so it
+/// is only believed off a settled run of playback (<see cref="WrapRun"/>).
+/// Without that, a clip whose time is merely *jittering* near its own head reads
+/// as wrapping every other tick, and the pose invented for it sweeps a fraction
+/// of the clip and then cuts to the head -- far more violent than the hard cut
+/// it replaced.
+///
+/// ## A clip being fought over is not animating
+///
+/// The last case is a clip the game cannot settle: an attack whose animation the
+/// AI restarts every tick because the conditions to finish it are never met --
+/// a piranha, or the final boss with the player under its head. Its time steps
+/// one way and back the next tick, never landing at a cycle boundary, and
+/// interpolating that sweeps the pose *continuously* between the two poses
+/// instead of alternating between them, which reads as a violent shake rather
+/// than as the 20 Hz flicker the console showed. <see cref="ThrashFlips"/>
+/// reversals, net of steady playback, and the slot is held at the game's own
+/// time until it resolves. Holding is not a repair of the game's own indecision;
+/// it is a refusal to draw it more often than the game makes it.
+///
+/// `KF2_SMOOTH_ANIM_PROBE=1` counts the wraps, how many were carried through,
+/// and how many slots are being held stuck.
 ///
 /// **The picture has been looked at and it works** -- which is worth saying
 /// plainly, because no counter in this repo could have said it: every scene an
@@ -150,18 +171,73 @@ public static class AnimSmoothing
     /// </summary>
     const int MaxTimeStep = 4096;
 
+    /// <summary>
+    /// How many consecutive same-direction ticks a slot must have behind it
+    /// before a turnover is *synthesised* rather than held.
+    ///
+    /// <see cref="WrapTime"/> makes a wrap tick up out of `LastStep`, so a
+    /// `LastStep` that is not a real playback rate makes one up wrongly — and
+    /// the pose it invents sweeps a fraction of the clip and then cuts to the
+    /// head, which is far more violent than the hard cut it replaces. Two is
+    /// enough to exclude a slot whose time is oscillating (which never gets a
+    /// run at all) while still catching the first wrap of any clip three ticks
+    /// long or more.
+    /// </summary>
+    const int WrapRun = 2;
+
+    /// <summary>
+    /// Reversals, net of playback, at which a slot is declared stuck and left at
+    /// the game's own time.
+    ///
+    /// **A clip whose time is being fought over is not animating**, and
+    /// carrying it renders the fight at the frame rate instead of at the tick
+    /// rate: an attack the AI cannot resolve — a piranha or the final boss with
+    /// the player under its head — steps its time one way and back the next
+    /// tick, and interpolating that sweeps the pose continuously between the two
+    /// instead of alternating between them, which reads as a violent shake. The
+    /// console alternated, so a stuck slot is held. Three ticks of it is 150 ms
+    /// at the default rate; a ping-pong clip flips once a half-cycle and decays
+    /// back long before it gets here.
+    /// </summary>
+    const int ThrashFlips = 3;
+
+    /// <summary>What a tick's clip-time step was, decided once in
+    /// <see cref="Classify"/>.</summary>
+    enum Verdict
+    {
+        /// <summary>Nothing moved.</summary>
+        Still,
+        /// <summary>Ordinary playback: interpolate it.</summary>
+        Play,
+        /// <summary>A cycle turned over: run the tick forwards through it.</summary>
+        Wrap,
+        /// <summary>A re-seek, a clip being fought over, or a turnover with no
+        /// settled rate behind it. Leave the game's own time alone.</summary>
+        Hold,
+    }
+
     sealed class Slot
     {
         public int Clip = -1;
         public int PrevTime, CurTime;
         public bool HasCur, HasPrev;
 
-        /// <summary>This tick's step, and whether it was classified as a cycle
-        /// wrap rather than as playback. Decided once per tick in
-        /// <see cref="Classify"/>, not once per frame, so the verdict cannot
+        /// <summary>This tick's step and what <see cref="Classify"/> made of
+        /// it. Decided once per tick, not once per frame, so the verdict cannot
         /// disagree with itself across the frames of one tick.</summary>
         public int Step;
-        public bool Wrap;
+        public Verdict Say;
+
+        /// <summary>Consecutive ticks stepping the same way. A wrap is
+        /// *synthesised* from <see cref="LastStep"/> rather than measured, so it
+        /// is only believed off a settled run of playback.</summary>
+        public int Run;
+
+        /// <summary>Direction reversals that were not cycle turnovers, decayed
+        /// one a tick by steady playback. A clip whose time is being fought over
+        /// -- an attack the AI cannot resolve -- flips every tick and climbs;
+        /// a ping-pong clip flips once a half-cycle and never does.</summary>
+        public int Flips;
 
         /// <summary>The last step that was *playback* -- a wrap's step is a
         /// cycle length and is deliberately not recorded here. It is the
@@ -208,7 +284,7 @@ public static class AnimSmoothing
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
     static long _submits, _morph, _rigid, _clipTicks, _carried, _skipped, _reversed, _live,
-                _backward, _wraps, _wrapCarried;
+                _backward, _wraps, _wrapCarried, _stuck;
     static int _maxTimeSeen;
     static double _timeStepSum, _fracSum;
     static int _maxStep, _minStep = int.MaxValue;
@@ -347,8 +423,8 @@ public static class AnimSmoothing
         {
             slot.Clip = clip;
             slot.HasCur = slot.HasPrev = slot.HasMax = false;
-            slot.LastStep = slot.Step = slot.MaxTime = 0;
-            slot.Wrap = false;
+            slot.LastStep = slot.Step = slot.MaxTime = slot.Run = slot.Flips = 0;
+            slot.Say = Verdict.Still;
         }
 
         if (slot.Tick != _tick)
@@ -364,14 +440,18 @@ public static class AnimSmoothing
             if (!slot.HasMax || time > slot.MaxTime) { slot.MaxTime = time; slot.HasMax = true; }
 
             slot.Step = 0;
-            slot.Wrap = false;
+            slot.Say = Verdict.Still;
             if (slot.HasPrev) Classify(slot);
 
             if (_probe && slot.HasPrev)
             {
                 int d = Math.Abs(slot.Step);
-                if (slot.Wrap) _wraps++;
-                else
+                if (slot.Say == Verdict.Wrap) _wraps++;
+                else if (slot.Say == Verdict.Hold)
+                {
+                    if (slot.Flips >= ThrashFlips) _stuck++; else _skipped++;
+                }
+                else if (slot.Say == Verdict.Play)
                 {
                     _clipTicks++;
                     _timeStepSum += d;
@@ -384,33 +464,24 @@ public static class AnimSmoothing
 
         if (!Enabled || !FramePacing.Gating || !slot.HasPrev) return;
 
-        if (slot.Step == 0) return;
-
         double t;
-        if (slot.Wrap)
+        switch (slot.Say)
         {
-            // The clip looped. Lerping prev -> cur across it plays the whole
-            // cycle *backwards* over one tick, which is the rewind this used to
-            // show; run it forwards through the turnover instead.
-            if (_probe) _wrapCarried++;
-            t = WrapTime(slot, _phase);
-        }
-        else
-        {
-            // The sign is a direction, not a discontinuity. A clip played in
-            // reverse runs its time down by the same small amount a forward one
-            // runs it up -- the drawbridge lever going back up against the same
-            // lever coming down -- so bailing on a negative step left exactly
-            // those animations stepping at the tick rate. With the wrap taken
-            // out above, magnitude is what is left to separate playback from a
-            // re-seek, in either direction.
-            if (Math.Abs(slot.Step) > MaxTimeStep)
-            {
-                if (_probe) _skipped++;
-                return;
-            }
-            if (_probe && slot.Step < 0) _backward++;
-            t = slot.PrevTime + slot.Step * _phase;
+            case Verdict.Wrap:
+                // The clip looped. Lerping prev -> cur across it plays the whole
+                // cycle *backwards* over one tick, which is the rewind this used
+                // to show; run it forwards through the turnover instead.
+                if (_probe) _wrapCarried++;
+                t = WrapTime(slot, _phase);
+                break;
+
+            case Verdict.Play:
+                if (_probe && slot.Step < 0) _backward++;
+                t = slot.PrevTime + slot.Step * _phase;
+                break;
+
+            default:
+                return;   // Still, or a hold: whatever the game asked for stands
         }
 
         _tFloor = (int)Math.Floor(t);
@@ -473,7 +544,8 @@ public static class AnimSmoothing
     }
 
     /// <summary>
-    /// Decide what this tick's step *was*: playback, a cycle wrap, or a re-seek.
+    /// Decide what this tick's step *was*: playback, a cycle wrap, a re-seek, or
+    /// a clip nothing can currently agree on.
     ///
     /// A wrap and a re-seek both run the time the wrong way; what tells them
     /// apart is **where the time landed**. A loop turning over lands within one
@@ -481,27 +553,75 @@ public static class AnimSmoothing
     /// since the overshoot past the end is what the new time is made of -- while
     /// a ping-pong clip easing back through its own last frames lands where it
     /// already was, and a re-seek lands anywhere. Magnitude alone cannot do it:
-    /// a short cycle wraps by less than a long clip's ordinary step.
+    /// a short cycle wraps by less than a long clip's ordinary step. It does
+    /// have to move *further than one tick's advance*, though, or a clip
+    /// jittering near its own head reads as wrapping every other tick.
+    ///
+    /// The remaining case is a clip being **fought over** rather than played --
+    /// an attack whose animation the AI restarts every tick because the
+    /// conditions to finish it are never met. Its step reverses every tick
+    /// without ever landing at a cycle boundary, and carrying it draws the fight
+    /// at the frame rate. <see cref="ThrashFlips"/> such reversals, net of
+    /// steady playback, and the slot is held at the game's own time until it
+    /// resolves.
     /// </summary>
     static void Classify(Slot s)
     {
         int step = s.CurTime - s.PrevTime;
         s.Step = step;
-        s.Wrap = false;
-        if (step == 0) return;
+        if (step == 0)
+        {
+            // A frozen clip is not a fight: nothing to carry, nothing to hold
+            // against, and a run of one pose is not a run of playback.
+            s.Say = Verdict.Still;
+            s.Run = 0;
+            return;
+        }
 
         int adv = Math.Abs(s.LastStep);
         if (adv > 0 && Math.Sign(step) != Math.Sign(s.LastStep))
         {
-            s.Wrap = s.LastStep > 0
+            bool atStart = s.LastStep > 0
                 ? s.CurTime <= adv                    // forward, back to the head
                 : s.CurTime >= s.MaxTime - adv;       // reverse, back to the tail
-            // A wrap's step is a cycle length, not a rate: recording it would
-            // make the *next* wrap unrecognisable.
-            if (s.Wrap) return;
+
+            if (atStart && Math.Abs(step) > adv)
+            {
+                // A cycle turned over. Believe it only off a settled run, since
+                // the turnover is synthesised out of LastStep rather than
+                // measured; otherwise hold, which is the console's hard cut.
+                s.Say = s.Run >= WrapRun ? Verdict.Wrap : Verdict.Hold;
+                s.Run = 0;
+                // A wrap's step is a cycle length, not a rate: recording it
+                // would make the *next* wrap unrecognisable.
+                return;
+            }
+
+            s.Flips++;
+            s.Run = 0;
+        }
+        else
+        {
+            s.Run++;
+            if (s.Flips > 0) s.Flips--;
         }
 
-        if (Math.Abs(step) <= MaxTimeStep) s.LastStep = step;
+        if (Math.Abs(step) > MaxTimeStep)
+        {
+            // A re-seek: a restart, or a jump to somewhere else in the same
+            // clip. Not a rate either, so LastStep stands.
+            s.Say = Verdict.Hold;
+            s.Run = 0;
+            return;
+        }
+
+        // The sign is a direction, not a discontinuity. A clip played in reverse
+        // runs its time down by the same small amount a forward one runs it up
+        // -- the drawbridge lever going back up against the same lever coming
+        // down -- so bailing on a negative step left exactly those animations
+        // stepping at the tick rate.
+        s.LastStep = step;
+        s.Say = s.Flips >= ThrashFlips ? Verdict.Hold : Verdict.Play;
     }
 
     /// <summary>
@@ -557,17 +677,18 @@ public static class AnimSmoothing
         string wrap = _wraps == 0 ? "" :
             $", {_wraps} cycle wrap(s) (longest clip seen {_maxTimeSeen})" +
             (Enabled ? $", {_wrapCarried} carried through" : "");
+        string stuck = _stuck == 0 ? "" : $", {_stuck} stuck";
         string carry = !Enabled ? ""
             : _carried == 0 ? ", 0 weights carried"
             : $", {_carried} weight(s) carried ({_reversed} reversed), " +
               $"mean frac {_fracSum / _carried:0.00}";
         Console.WriteLine($"[KF2] anim: {_submits} submit(s), " +
                           $"morph {_morph} ({morphPct}), rigid {_rigid}{live}" +
-                          $"{step}{back}{wrap}; {_skipped} skipped" +
+                          $"{step}{back}{wrap}; {_skipped} re-seek(s){stuck}" +
                           carry);
 
         _submits = _morph = _rigid = _clipTicks = _carried = _skipped = _reversed = _live = 0;
-        _backward = _wraps = _wrapCarried = 0;
+        _backward = _wraps = _wrapCarried = _stuck = 0;
         _timeStepSum = _fracSum = 0;
         _maxStep = 0; _minStep = int.MaxValue;
     }
