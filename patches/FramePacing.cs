@@ -134,10 +134,12 @@ namespace Kf2;
 /// Stage 13's **jitter accumulator at 0x8006E608** is in stage 13's own body
 /// rather than in a callee, so no hook can reach it -- it is a damped accumulator
 /// (decayed by an eighth a call) driving the screen shake, so above the tick rate
-/// it settles faster and smaller. `func_80037B5C` itself, the transition
-/// fade, steps once per *rendered* frame inside its own loop, so an area
-/// transition is still quicker at 144 than at 20; that is the modal-loop shape
-/// <see cref="MenuPacing"/> deals with elsewhere, not a gate. And **the object
+/// it settles faster and smaller. **The modal loops are covered, and not by this
+/// class**: `func_80037B5C` (the transition fade), the item-use and spell-cast
+/// animations and the menu all step once per *rendered* frame inside a loop of
+/// their own, which a gate cannot reach because it decides only whether such a
+/// loop is entered. <see cref="LoopPacing"/> paces the frames those loops produce
+/// instead, so an iteration of one costs a tick again. And **the object
 /// record's rec+0x40 on two slots survived gating stage 2 at ratio 3.69**: that
 /// one is stepped by stage 13's own object pass `func_800331B4` (proved by gating
 /// it as a probe -- 53.4/s fell to 17.6/s), where it is an ambient-sound retrigger
@@ -687,6 +689,12 @@ public static class FramePacing
     /// </summary>
     public static bool BeforeFrameGate(CpuContext c, IMemory m)
     {
+        // Stage 13 is the only caller, so reaching here is the one signal that the
+        // frame now being finished is a picture of the world rather than of the
+        // interface. LoopPacing wants that and would otherwise need a hook of its
+        // own; taking it here costs nothing.
+        LoopPacing.WorldDrawn();
+
         if (!SkipFrameGate) return true;
         m.WriteU32(VBlankCredit, 0u);
         return false;
@@ -737,7 +745,14 @@ public static class FramePacing
 
         AdvanceLogicClock(now);
 
-        if (Enabled) Floor();
+        // How long this frame is allowed to be is no longer the render rate alone:
+        // a frame the main loop did not produce belongs to a loop of the game's own
+        // that steps its state once per iteration, and LoopPacing holds those to the
+        // world's clock. It returns 1000/TargetFps for an ordinary frame, and 0 when
+        // nothing should wait, so Floor runs in the uncapped configuration too --
+        // which is correct, since the world is held to LogicHz there as well.
+        double min = LoopPacing.FrameMinMs(Enabled, TargetFps);
+        if (min > 0.0) Floor(min);
     }
 
     /// <summary>
@@ -783,9 +798,14 @@ public static class FramePacing
     /// </summary>
     public static bool BeforeStage(CpuContext c, IMemory m) => !Gating || _tickThisFrame;
 
-    static void Floor()
+    /// <summary>
+    /// Hold the frame boundary until <paramref name="min"/> ms have passed since
+    /// the last one. The minimum is passed in rather than derived from
+    /// <see cref="TargetFps"/> because a modal frame's is longer -- see
+    /// <see cref="LoopPacing.FrameMinMs"/>.
+    /// </summary>
+    static void Floor(double min)
     {
-        double min = 1000.0 / TargetFps;
         double now = _clock.Elapsed.TotalMilliseconds;
 
         // More than a frame of debt means the game stopped drawing rather than ran

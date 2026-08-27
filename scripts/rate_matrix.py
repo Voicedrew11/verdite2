@@ -105,6 +105,46 @@ def sc_walk(run: kf2.Run) -> dict:
     return {"units/2s": round((dx * dx + dz * dz) ** 0.5)}
 
 
+def sc_modal_rate(run: kf2.Run) -> dict:
+    """Open the menu, then warp, and read what rate each modal loop iterated at.
+
+    A modal loop -- one that takes the main loop over and presents its own frames
+    -- is outside the stage gate by construction, so before patches/LoopPacing.cs
+    everything it stepped ran at the render rate. The menu is the interface case
+    (no world drawn, held to the vblank) and the area transition's fade is the
+    world case (held to LogicHz). The load-bearing numbers are the two modal
+    columns: they must stop tracking the render rate while `main/s` keeps
+    following it.
+
+    Needs KF2_LOOPPACING_PROBE=1, which the scenario asks for below. Pair it with
+    --env KF2_LOOPPACING=0 for the before.
+    """
+    kf2.press("Circle", 150)
+    time.sleep(5.0)
+    kf2.press("Circle", 150)
+    time.sleep(1.0)
+
+    ui = [float(m.group(1)) for m in
+          run.matching(r"loop pacing: [\d.]+ main-loop, [\d.]+ modal world, ([\d.]+) modal interface")]
+
+    try:
+        kf2.shell("warp 5", timeout=30)
+    except Exception:
+        pass
+    time.sleep(8.0)
+
+    rows = [(float(m.group(1)), float(m.group(2)))
+            for m in run.matching(r"loop pacing: ([\d.]+) main-loop, ([\d.]+) modal world,")]
+
+    # Only the windows a loop actually ran in say anything; the rest are the main
+    # loop on its own, and averaging those in reports the fade as slower than it is.
+    return {
+        "main/s": round(max((r[0] for r in rows), default=0.0), 1),
+        "modal world/s": round(max((r[1] for r in rows), default=0.0), 1),
+        "modal ui/s": round(max((u for u in ui if u > 1.0), default=0.0), 1),
+    }
+
+
 def sc_idle(run: kf2.Run) -> dict:
     """Stand still for five seconds. For pairing with KF2_RATECENSUS."""
     time.sleep(5.0)
@@ -116,6 +156,8 @@ SCENARIOS = {
                     "open the menu, hold Down; cursor repeat and blink rate"),
     "death-clock": (sc_death_clock, {}, "kill, and time the 65-tick death counter"),
     "walk":        (sc_walk, {}, "hold Up for 2 s; distance is tick-rate bound"),
+    "modal-rate":  (sc_modal_rate, {"KF2_LOOPPACING_PROBE": "1"},
+                    "open the menu, then warp; what rate each self-rendered loop ran at"),
     "idle":        (sc_idle, {}, "stand still for 5 s (pair with KF2_RATECENSUS)"),
 }
 

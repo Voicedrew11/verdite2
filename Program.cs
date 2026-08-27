@@ -236,6 +236,26 @@ Kf2.MenuPacing.Configure(Environment.GetEnvironmentVariable("KF2_MENUPACING"),
                          Environment.GetEnvironmentVariable("KF2_MENUPACING_PROBE"));
 Kf2.MenuPacing.Install();
 
+// The menu is not the only loop of that shape, and naming them one at a time is
+// how the list was being found. A *modal loop* -- a function that takes the main
+// loop over and presents its own frames -- is entered from a gated stage, so the
+// gate decides only whether it is entered and never cuts one in half; inside, the
+// loop iterates once per rendered frame and everything it steps runs at the render
+// rate. That is the transition fade, the cutscene and message-box loops, and the
+// item-use and spell-cast animations: a picked-up item spinning seven times too
+// fast at 144. The fix is structural rather than per-counter -- a frame the main
+// loop did not produce is paced by the world's clock (an interface-only one by the
+// vblank), so an iteration costs a tick again and every number inside it is right
+// without being found. One pre-hook on stage 9, whose only caller is the main loop.
+// It does nothing at or below the tick rate, which is where the defect does not
+// exist either.
+//
+//     KF2_LOOPPACING=0        leave them on the render rate -- comparison only
+//     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface
+Kf2.LoopPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
+                         Environment.GetEnvironmentVariable("KF2_LOOPPACING_PROBE"));
+Kf2.LoopPacing.Install();
+
 // Which words of the game's memory change at the render rate rather than at the
 // tick rate -- the instrument that turns "something looks too fast" into an
 // address. Samples on the emulated vblank, which is a wall-clock 60 Hz grid since

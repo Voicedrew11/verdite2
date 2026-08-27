@@ -332,6 +332,16 @@ rendered frame — because `FramePacing` decides whether the loop is *entered* a
 cannot cut one in half. A modal loop is computed, not listed: a function with a
 backward branch whose subtree reaches a drawing entry point. There are 53.
 
+**The fourth verdict is no longer a defect on its own**, and that changes how to
+read a report: `patches/LoopPacing.cs` paces the *frames* a modal loop produces —
+at `LogicHz` if the frame drew the world, at the vblank if it did not — so a
+counter stepped once per iteration of one is already on the world's clock. A
+`render rate: inside modal loop` row is now a row to check with
+`KF2_LOOPPACING_PROBE=1` rather than a row to fix. What is still a defect is a
+counter stepped inside a *drawing function's own body*, which no whole-function
+hook reaches and no deadline holds. See "Loops that render their own frames" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
 `--audit` classifies every global on the per-frame path. As of writing: **594
 globals, 73 held to the tick rate, 157 inside a modal loop, 364 under a stage that
 presents.** A writer is any function that stores to the address — an initialiser
@@ -347,6 +357,7 @@ address", never "not written".
     python3 scripts/rate_matrix.py menu-scroll --fps 20 60 144
     python3 scripts/rate_matrix.py death-clock --fps 20 144 --tickrate 20 30
     python3 scripts/rate_matrix.py menu-scroll --fps 144 --env KF2_MENUPACING=0
+    python3 scripts/rate_matrix.py modal-rate --fps 20 144 --env KF2_LOOPPACING=0
     python3 scripts/rate_matrix.py --list
 
 Every empirical claim in these documents should be reproducible by one of these.

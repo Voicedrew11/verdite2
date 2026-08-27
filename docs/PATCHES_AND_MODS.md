@@ -9,6 +9,7 @@ lives here — frame pacing and auto reload.
 | file | what it does | detail |
 |---|---|---|
 | `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
+| `MenuPacing.cs`, `LoopPacing.cs` | hold the loops that render their own frames to the rate the console ran them at | this file |
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
@@ -1094,10 +1095,102 @@ fixed is "too fast", so the slower of the two is the default. `MenuPacing.BlinkM
 is the one constant to change. **By eye is the only way to settle it, and it has
 not been looked at.**
 
-Every other modal loop is rate-dependent for the same structural reason and is
-also untouched: the menu box open/close animation (`func_800356F4`), and the
-spell-cast and item-use animations (`func_800474D0`, `func_80047000`,
-`func_8004831C`).
+Every other modal loop was rate-dependent for the same structural reason, and
+that list — the menu box open/close animation (`func_800356F4`), the transition
+fade (`func_80037B5C`), the cutscene and message-box loops (`func_80047000`,
+`func_80048208`, `func_8004831C`) and the spell-cast and item-use animations
+(`func_800474D0`) — is what stopped being enumerated by hand. See "Loops that
+render their own frames" below.
+
+### Loops that render their own frames
+
+**The generalisation of the two fixes above, and the reason the list stopped
+growing by bug report.** Reported from play at a high rate: a picked-up item spins
+too fast, an NPC's interact animation plays too fast. Both are the cursor's bug
+with a different counter in a different loop, and the answer had to be structural
+— finding the counters by playing the game is exactly what the two fixes above
+cost.
+
+**Why a modal loop escapes the gate.** `FramePacing` holds the world to `LogicHz`
+by *skipping* five main-loop stages on a non-tick frame. A modal loop is entered
+*from* one of those stages, so the gate decides only whether it is entered and
+never cuts one in half. Inside, no gated stage is being called: the loop iterates
+once per **rendered** frame, and everything it steps — a rotation, a fade level, a
+sprite index, a message timer — runs at the render rate.
+
+**The fix is one sentence.** On the console a modal loop's iteration *was* a
+rendered frame and a rendered frame *was* a tick. The port broke that identity
+everywhere the stage gate cannot reach, so put it back: **a frame the main loop
+did not produce is paced by the world's clock, not by the render rate.** Nothing
+is enumerated, nothing is snapshotted and no counter has to be found — the loop
+iterates as often as the world ticks, so every number inside it is right by
+construction. It is the smoothing fix run backwards: smoothing takes the phase
+between two ticks and *adds* frames the game did not compute, this takes the same
+phase and *withholds* iterations it should not have computed.
+
+**Classifying a frame costs one hook.** `FramePacing.AfterDrawOTag` already fires
+on a modal frame, because a modal loop presents through `func_8002E0FC` (stage 13)
+or `func_800226A8` (the menu) and both `VSync` and then draw the table — so the
+whole defect is that `Floor` was pacing that frame to `TargetFps`. Two questions
+decide what it should pace to instead:
+
+* **Is this the main loop's frame?** A pre-hook on **stage 9, `func_800140AC`**,
+  whose *only* caller is `func_8001369C`, the main loop. Stages 3, 4 and 6 are the
+  only others with a single caller; stage 1 looks like the obvious marker and is
+  the wrong one — it is also called from two modal loops and three area modules.
+  Stage 9 sits after every stage a modal loop is entered from (2, 3, 7), so a
+  loop's own first frame classifies correctly, and it is not in the gate set, so
+  `KF2_FPS_GATE` cannot disturb what it measures.
+* **Did this modal frame draw the world?** The game's own frame gate
+  `func_80017880` is called by stage 13 and by nothing else, and
+  `FramePacing.BeforeFrameGate` already hooks it — so that answer costs no hook at
+  all.
+
+**Two rates, and the second is a choice.** A modal loop that draws the world gets
+`LogicHz`; one that draws no world is the interface and gets **60 Hz, not the tick
+rate**, for the reason `MenuPacing.BlinkMs` already gives — a menu frame is one
+vblank, and `KF2_TICKRATE` is a setting about game *speed* with no business
+retuning a cursor. The menu also presents twice per iteration of `func_80018E80`,
+so binding it to a 20 Hz tick would make it respond at 10 Hz.
+
+Measured with `python3 scripts/rate_matrix.py modal-rate --fps 20 144`, which
+opens the menu and then warps, against the same run with
+`--env KF2_LOOPPACING=0`:
+
+| `KF2_FPS` | main/s | modal world/s | modal ui/s |
+|---|---|---|---|
+| 20, unpaced | 17.8 | 20.9 | 20.0 |
+| 20, paced | 19.0 | 20.9 | 20.0 |
+| 144, unpaced | 135.9 | **31.7** | **144.2** |
+| 144, paced | 87.9 | **20.1** | **60.1** |
+
+Read the two modal columns and not `main/s`, which is a maximum over windows that
+included modal time and so reads low whenever a loop ran for part of one. The 20
+fps rows are the point of the "does nothing at the tick rate" claim: identical
+either way. The unpaced world row is 31.7 rather than 144 because a fade frame is
+a full world render and never reaches the target — it was still 1.6× too fast,
+and this class of complaint scales with whatever the loop can achieve rather than
+with the number asked for.
+
+**It does nothing at or below the tick rate**, which is where the defect does not
+exist either: `LoopPacing.FrameMinMs` returns the length `FramePacing` would have
+used anyway, and a modal frame always takes the *longer* of the two deadlines, so
+nothing here can make the port run fast. It also stands down under
+`KF2_FPS_LOGIC=full`. Nothing in the class reads or writes game memory; it only
+ever lengthens a frame. `MenuPacing` is untouched by it — the repeat gate's six
+`VSync(0)` calls present no ordering table, so they never reach the frame boundary
+and this cannot see them.
+
+**What it does not reach**, stated rather than discovered later: a counter stepped
+inside a *drawing function's own body*, where no whole-function hook lands. Two are
+known — stage 13's jitter accumulator at `0x8006E608` (the screen shake, which
+settles faster and smaller above the tick rate) and the per-object ambient-sound
+retrigger at `rec+0x40` in `func_800331B4`. Neither is an animation anyone has
+reported; both need the hold/restore shape rather than a deadline, and both are
+still in [TODO.md](TODO.md).
+
+On by default and with no settings page, for the reason the menu repeat gives: a
+correctness fix rather than a taste. `KF2_LOOPPACING=0` is the comparison.
 
 ### The comparison mode
 

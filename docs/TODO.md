@@ -140,17 +140,29 @@ useful than the question was.
      one loop — so this needs either a sub-function hook or a hold/restore pair
      around the field. **Never listened to**; only the counter has spoken.
    * **Stage 13's jitter accumulator at `0x8006E608`**, which no hook can reach
-     because it is in stage 13's own body.
+     because it is in stage 13's own body. With the modal loops closed this and
+     the `rec+0x40` retrigger above are the **only** rate defects left, and they
+     are the same shape as each other: a counter stepped inside a drawing
+     function's own body, which needs a hold/restore pair on the field rather than
+     a deadline on the frame. Neither has been reported from play.
    * **Four ungated stages that submit nothing at all** and so are free under the
      existing rule, but hold globals nobody has looked at: stage 1 `func_8002C944`
      (8), stage 9 `func_800140AC` (8, the 3D sound listener), stage 11
      `func_80016FC8` (1), stage 12 `func_80014534` (14). `check_gate.py --stages`
      lists them as candidates. Measure before gating — the point of doing them
      separately is that a regression stays attributable to one cause.
-   * **`func_80037B5C` itself.** The transition fade steps once per *rendered*
-     frame inside its own loop, so an area transition is still quicker at 144 than
-     at 20. Same family as the menu cursor, so the fix is `MenuPacing`'s shape and
-     not a gate.
+   * ~~**`func_80037B5C` itself.**~~ **Closed, and so is the whole class it
+     belonged to.** Every loop that renders its own frames — the transition fade,
+     the cutscene and message-box loops, the spell-cast and item-use animations,
+     the menu — stepped once per *rendered* frame, and the answer turned out to be
+     structural rather than one fix per loop: a frame the main loop did not produce
+     is paced by the world's clock (an interface-only one by the vblank), so an
+     iteration costs a tick again. One pre-hook on stage 9, whose only caller is
+     the main loop. `patches/LoopPacing.cs`; measured with the new
+     `rate_matrix.py modal-rate` scenario, the menu went 144.2 -> 60.1 and the
+     fade 31.7 -> 20.1 frames a second at `KF2_FPS=144`, with the 20 fps rows
+     identical either way. See "Loops that render their own frames" in
+     [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
    **Two `rate_matrix` scenarios are not measuring what they claim, and it predates
    the stage 2 work** (confirmed by re-running them with `KF2_FPS_GATE` set to the

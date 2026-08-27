@@ -83,6 +83,8 @@ KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # w
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
 KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
+KF2_LOOPPACING=0                       # loops that render their own frames back on the render rate (on by default)
+KF2_LOOPPACING_PROBE=1                 # modal frames a second, world and interface, against the main loop's
 KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
 KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
 KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
@@ -246,7 +248,30 @@ sleeps, so a 144 fps menu is still a 144 fps menu. On by default;
 eye**, and the 60 Hz is a choice rather than a reading (`MenuPacing.BlinkMs`): if
 the console's menu held 60 fps it stepped the blink twice a vblank, since the
 frame head runs twice an iteration. See "The menu's cursor repeat" in
-`docs/PATCHES_AND_MODS.md`.
+`docs/PATCHES_AND_MODS.md`. **The menu is not the only loop of that shape, and
+`patches/LoopPacing.cs` is the generalisation rather than a third instance of it**:
+any *modal loop* — a function that takes the main loop over and presents its own
+frames — is entered from a gated stage, so the gate decides only whether it is
+entered and never cuts one in half, and inside it the loop iterates once per
+**rendered** frame. That is the transition fade `func_80037B5C`, the cutscene and
+message-box loops, the menu box open/close and the item-use and spell-cast
+animations — a picked-up item spinning too fast is that bug, not an entity to be
+found. The fix restores the identity the console had, that a modal loop's
+iteration *was* a frame and a frame *was* a tick: **a frame the main loop did not
+produce is paced by the world's clock**, an interface-only one by the vblank, so
+an iteration costs a tick again and every counter inside it is right without being
+enumerated. Classifying a frame costs **one** hook — a pre on **stage 9
+`func_800140AC`**, whose only caller is the main loop `func_8001369C` (stage 1
+looks like the marker and is not: two modal loops and three area modules call it
+too) — plus a flag set in `FramePacing.BeforeFrameGate`, which is already hooked
+on `func_80017880`, stage 13's sole caller, and so says whether the frame drew the
+world. Measured at `KF2_FPS=144`: the menu 144 -> 60 frames a second, the area
+fade 31-34 -> 18-20. It does nothing at or below the tick rate, takes the *longer*
+of the two deadlines so it can never make the port run fast, and touches no game
+memory. What it cannot reach is a counter stepped inside a *drawing function's own
+body* — stage 13's shake accumulator `0x8006E608` and `func_800331B4`'s ambient
+retrigger — which want a hold/restore pair instead and are still in `docs/TODO.md`.
+See "Loops that render their own frames" in `docs/PATCHES_AND_MODS.md`.
 `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The
 default is 20 fps drawn against a 20 Hz world.** See "Any frame rate" in
