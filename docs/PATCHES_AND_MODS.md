@@ -938,6 +938,39 @@ lever went up in 50 ms jumps while the same lever came down smoothly. A clip
 swap is caught by the clip byte; only the size separates playback from a
 re-seek, in either direction.
 
+**The end of a cycle is neither, and it was a third bug.** A looping clip runs
+its time up and then resets it *keeping the same clip byte*, so the wrap arrives
+as one ordinary tick whose step is a whole cycle backwards — and interpolating
+that plays the animation in reverse, at cycle-per-tick speed, across every frame
+of that tick. That is the rewind reported as "the animation snaps back to its
+first position at the end of the cycle". The size guard cannot be what catches
+it: a cycle shorter than 4096 slips under it, and one longer only turns the
+rewind into a hard cut.
+
+What separates a wrap from a re-seek is **where the time landed**, not how far it
+moved. A loop turning over lands within one tick's advance of the cycle's first
+frame — the overshoot past the end is what the new time is made of — while a
+ping-pong clip easing back through its own last frames lands where it already
+was, and a re-seek lands anywhere. So the test is `sign(step) != sign(lastStep)`
+**and** `cur <= |lastStep|` (mirrored for a clip played in reverse, which turns
+over at the tail).
+
+Having recognised it, the tick is then run *forwards* through the turnover
+instead of being skipped: the clip advances about `lastStep` a tick and the part
+of that already spent in the new cycle is the new time itself, so the cycle
+turned over `1 - cur/lastStep` of the way through the tick. Before that fraction
+the old cycle is still finishing, after it the new one is running. **No clip
+length is needed**, which is as well — the only place the total duration exists
+is the segment table `func_8003486C` walks — and overshooting the real end by up
+to a frame is harmless, because past its last segment that clock answers with
+that segment at a full `0x1000` weight, which is the pose the clip ends on
+anyway. A wrap's step is a cycle length rather than a rate and is deliberately
+not recorded as `lastStep`, or the *next* wrap would be unrecognisable.
+
+`KF2_SMOOTH_ANIM_PROBE=1` reports `N cycle wrap(s) (longest clip seen T), M
+carried through`, which is also how to tell whether a clip is looping through
+this path at all.
+
 Vertex-fetch lerp at `RotTransPers` was tried first and did not change the
 picture — it interpolated a rigid majority, and the probe's "XYZ moved" line
 was vertex 0 only. Measured not to touch the world clock, which the discarded

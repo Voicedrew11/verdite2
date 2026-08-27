@@ -83,6 +83,31 @@ namespace Kf2;
 /// up in 50 ms jumps while the same lever came down smoothly. A clip swap is
 /// caught by the clip byte; only the size separates playback from a re-seek.
 ///
+/// ## The end of a cycle is not a re-seek
+///
+/// A looping clip runs its time up and then resets it, keeping the same clip
+/// byte -- so the wrap arrives here as one ordinary tick whose step is a whole
+/// cycle *backwards*. Interpolating that plays the animation in reverse, at
+/// cycle-per-tick speed, over every frame of that tick: the rewind reported as
+/// "it snaps back to the first position at the end of the cycle". The size guard
+/// does not catch it and should not -- a cycle shorter than
+/// <see cref="MaxTimeStep"/> slips under it, and one longer only turns the rewind
+/// into a hard cut.
+///
+/// <see cref="Classify"/> separates the wrap from a re-seek on **where the time
+/// landed** rather than on how far it moved: a loop turning over lands within one
+/// tick's advance of the cycle's first frame, because the overshoot past the end
+/// is what the new time is made of. <see cref="WrapTime"/> then runs the tick
+/// *forwards* through the turnover -- finishing the old cycle for the first
+/// `1 - CurTime/LastStep` of it and running the new one for the rest -- so the
+/// loop is continuous instead of rewound. It needs no clip length, which is as
+/// well: the only place the total duration exists is the segment table
+/// `func_8003486C` walks, and asking that clock for a time past the end is safe
+/// anyway (it answers with the last segment at a full `0x1000` weight, the pose
+/// the clip ends on).
+///
+/// `KF2_SMOOTH_ANIM_PROBE=1` counts the wraps and how many were carried through.
+///
 /// **The picture has been looked at and it works** -- which is worth saying
 /// plainly, because no counter in this repo could have said it: every scene an
 /// agent could drive itself to had morph submits with a clip time of 0, and the
@@ -131,6 +156,25 @@ public static class AnimSmoothing
         public int PrevTime, CurTime;
         public bool HasCur, HasPrev;
 
+        /// <summary>This tick's step, and whether it was classified as a cycle
+        /// wrap rather than as playback. Decided once per tick in
+        /// <see cref="Classify"/>, not once per frame, so the verdict cannot
+        /// disagree with itself across the frames of one tick.</summary>
+        public int Step;
+        public bool Wrap;
+
+        /// <summary>The last step that was *playback* -- a wrap's step is a
+        /// cycle length and is deliberately not recorded here. It is the
+        /// estimate of how far the clip advances in a tick, which is what says
+        /// where in the wrap tick the cycle turned over.</summary>
+        public int LastStep;
+
+        /// <summary>The highest clip time seen on this clip, which is the best
+        /// estimate of where its last segment ends. Only a reverse-played loop
+        /// needs it, to know where its cycle starts.</summary>
+        public int MaxTime;
+        public bool HasMax;
+
         /// <summary>The logic tick this slot last sampled on. One sample per
         /// tick, whichever frame of that tick the slot happens to be drawn on.</summary>
         public long Tick = -1;
@@ -164,7 +208,8 @@ public static class AnimSmoothing
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
     static long _submits, _morph, _rigid, _clipTicks, _carried, _skipped, _reversed, _live,
-                _backward;
+                _backward, _wraps, _wrapCarried;
+    static int _maxTimeSeen;
     static double _timeStepSum, _fracSum;
     static int _maxStep, _minStep = int.MaxValue;
 
@@ -301,7 +346,9 @@ public static class AnimSmoothing
         if (slot.Clip != clip)
         {
             slot.Clip = clip;
-            slot.HasCur = slot.HasPrev = false;
+            slot.HasCur = slot.HasPrev = slot.HasMax = false;
+            slot.LastStep = slot.Step = slot.MaxTime = 0;
+            slot.Wrap = false;
         }
 
         if (slot.Tick != _tick)
@@ -314,35 +361,58 @@ public static class AnimSmoothing
             }
             slot.CurTime = time;
             slot.HasCur = true;
+            if (!slot.HasMax || time > slot.MaxTime) { slot.MaxTime = time; slot.HasMax = true; }
+
+            slot.Step = 0;
+            slot.Wrap = false;
+            if (slot.HasPrev) Classify(slot);
+
             if (_probe && slot.HasPrev)
             {
-                int d = Math.Abs(slot.CurTime - slot.PrevTime);
-                _clipTicks++;
-                _timeStepSum += d;
-                if (d > _maxStep) _maxStep = d;
-                if (d < _minStep) _minStep = d;
+                int d = Math.Abs(slot.Step);
+                if (slot.Wrap) _wraps++;
+                else
+                {
+                    _clipTicks++;
+                    _timeStepSum += d;
+                    if (d > _maxStep) _maxStep = d;
+                    if (d < _minStep) _minStep = d;
+                }
+                if (slot.MaxTime > _maxTimeSeen) _maxTimeSeen = slot.MaxTime;
             }
         }
 
         if (!Enabled || !FramePacing.Gating || !slot.HasPrev) return;
 
-        // The sign is a direction, not a discontinuity. A clip played in reverse
-        // runs its time down by the same small amount a forward one runs it up --
-        // the drawbridge lever going back up against the same lever coming down --
-        // so bailing on a negative step left exactly those animations stepping at
-        // the tick rate. Magnitude is what separates playback from a re-seek, in
-        // either direction; a restart from a high time is a large negative jump
-        // and is caught here too.
-        int step = slot.CurTime - slot.PrevTime;
-        if (step == 0) return;
-        if (Math.Abs(step) > MaxTimeStep)
-        {
-            if (_probe) _skipped++;
-            return;
-        }
-        if (_probe && step < 0) _backward++;
+        if (slot.Step == 0) return;
 
-        double t = slot.PrevTime + step * _phase;
+        double t;
+        if (slot.Wrap)
+        {
+            // The clip looped. Lerping prev -> cur across it plays the whole
+            // cycle *backwards* over one tick, which is the rewind this used to
+            // show; run it forwards through the turnover instead.
+            if (_probe) _wrapCarried++;
+            t = WrapTime(slot, _phase);
+        }
+        else
+        {
+            // The sign is a direction, not a discontinuity. A clip played in
+            // reverse runs its time down by the same small amount a forward one
+            // runs it up -- the drawbridge lever going back up against the same
+            // lever coming down -- so bailing on a negative step left exactly
+            // those animations stepping at the tick rate. With the wrap taken
+            // out above, magnitude is what is left to separate playback from a
+            // re-seek, in either direction.
+            if (Math.Abs(slot.Step) > MaxTimeStep)
+            {
+                if (_probe) _skipped++;
+                return;
+            }
+            if (_probe && slot.Step < 0) _backward++;
+            t = slot.PrevTime + slot.Step * _phase;
+        }
+
         _tFloor = (int)Math.Floor(t);
         _carry = t - _tFloor;
         _pending = true;
@@ -402,6 +472,70 @@ public static class AnimSmoothing
         }
     }
 
+    /// <summary>
+    /// Decide what this tick's step *was*: playback, a cycle wrap, or a re-seek.
+    ///
+    /// A wrap and a re-seek both run the time the wrong way; what tells them
+    /// apart is **where the time landed**. A loop turning over lands within one
+    /// tick's advance of the cycle's first frame -- it cannot land further,
+    /// since the overshoot past the end is what the new time is made of -- while
+    /// a ping-pong clip easing back through its own last frames lands where it
+    /// already was, and a re-seek lands anywhere. Magnitude alone cannot do it:
+    /// a short cycle wraps by less than a long clip's ordinary step.
+    /// </summary>
+    static void Classify(Slot s)
+    {
+        int step = s.CurTime - s.PrevTime;
+        s.Step = step;
+        s.Wrap = false;
+        if (step == 0) return;
+
+        int adv = Math.Abs(s.LastStep);
+        if (adv > 0 && Math.Sign(step) != Math.Sign(s.LastStep))
+        {
+            s.Wrap = s.LastStep > 0
+                ? s.CurTime <= adv                    // forward, back to the head
+                : s.CurTime >= s.MaxTime - adv;       // reverse, back to the tail
+            // A wrap's step is a cycle length, not a rate: recording it would
+            // make the *next* wrap unrecognisable.
+            if (s.Wrap) return;
+        }
+
+        if (Math.Abs(step) <= MaxTimeStep) s.LastStep = step;
+    }
+
+    /// <summary>
+    /// The in-between time on the tick a cycle turned over, without knowing how
+    /// long the cycle is.
+    ///
+    /// The clip advances about <c>LastStep</c> per tick, and the part of that
+    /// advance already spent in the *new* cycle is the new time itself (measured
+    /// from the cycle's first frame). So the turnover happened at
+    /// <c>1 - CurTime/LastStep</c> of the way through the tick: before that the
+    /// old cycle is still finishing, after it the new one is running. Nothing
+    /// here needs the clip's total duration -- which is as well, since the only
+    /// place it exists is the segment table <c>func_8003486C</c> walks.
+    ///
+    /// Overshooting the real end by up to a frame is harmless: past its last
+    /// segment the clock returns that segment at a full <c>0x1000</c> weight,
+    /// which is the pose the clip ends on anyway.
+    /// </summary>
+    static double WrapTime(Slot s, double phase)
+    {
+        int dir = Math.Sign(s.LastStep);
+        double adv = Math.Abs(s.LastStep);
+        double intoNew = dir > 0 ? s.CurTime : Math.Max(0, s.MaxTime - s.CurTime);
+        double tailFrac = 1.0 - Math.Min(1.0, intoNew / adv);
+
+        double t = phase < tailFrac
+            ? s.PrevTime + dir * (phase * adv)                               // finishing
+            : (dir > 0 ? 0.0 : s.MaxTime) + dir * ((phase - tailFrac) * adv); // restarted
+
+        // A negative time would land in the first segment with a negative
+        // weight, which the clock writes out as a huge unsigned one.
+        return t < 0.0 ? 0.0 : t;
+    }
+
     static Slot Get(uint id)
     {
         if (!_slots.TryGetValue(id, out var s))
@@ -420,17 +554,20 @@ public static class AnimSmoothing
             $", time step {_minStep}..{_maxStep} mean {_timeStepSum / _clipTicks:0.0} over {_clipTicks}";
         string live = _morph == 0 ? "" : $", {_live} with a running clip";
         string back = _backward == 0 ? "" : $", {_backward} playing backwards";
+        string wrap = _wraps == 0 ? "" :
+            $", {_wraps} cycle wrap(s) (longest clip seen {_maxTimeSeen})" +
+            (Enabled ? $", {_wrapCarried} carried through" : "");
         string carry = !Enabled ? ""
             : _carried == 0 ? ", 0 weights carried"
             : $", {_carried} weight(s) carried ({_reversed} reversed), " +
               $"mean frac {_fracSum / _carried:0.00}";
         Console.WriteLine($"[KF2] anim: {_submits} submit(s), " +
                           $"morph {_morph} ({morphPct}), rigid {_rigid}{live}" +
-                          $"{step}{back}; {_skipped} skipped" +
+                          $"{step}{back}{wrap}; {_skipped} skipped" +
                           carry);
 
         _submits = _morph = _rigid = _clipTicks = _carried = _skipped = _reversed = _live = 0;
-        _backward = 0;
+        _backward = _wraps = _wrapCarried = 0;
         _timeStepSum = _fracSum = 0;
         _maxStep = 0; _minStep = int.MaxValue;
     }

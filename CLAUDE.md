@@ -216,7 +216,13 @@ slot whose step exceeds 1024 units on an axis exactly where the game put it,
 because that is a placement rather than motion (measured: real motion 37 u a tick,
 a placement 233,472). **3D pose is `patches/AnimSmoothing.cs`**, which drives
 the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the blender writes the
-in-between mesh (`KF2_SMOOTH_ANIM=1`). Vertex-fetch lerp was tried and did
+in-between mesh (`KF2_SMOOTH_ANIM=1`). **The end of a looping cycle is a
+special case**: the clip resets its time while keeping the same clip byte, so the
+wrap reads as one tick stepping a whole cycle backwards and lerping it rewound
+the animation over that tick's frames. A wrap is told from a re-seek by *where
+the time landed* — within one tick's advance of the cycle's first frame — and the
+tick is then run forwards through the turnover, which needs no clip length.
+Vertex-fetch lerp was tried and did
 not change the picture. The
 player's arm is a different bug: it is 2D, drawn by the HUD builder
 `func_80031D5C` — proved by its packet count moving during an attack — and a
