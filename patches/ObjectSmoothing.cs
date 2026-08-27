@@ -35,14 +35,24 @@ namespace Kf2;
 /// `func_80032588` (under stage 13's world walk) from two different tables:
 ///
 /// * **The object table -- `0x80177714`, 396 slots of `0x44`**, position a
-///   `VECTOR` at `+0x14`, free when the byte at `+0x4` is `0xFF`. Static props,
-///   doors and sprites. This is what a `KF2_DRAWCENSUS=2` reading of
-///   `func_80032588`'s `a2` caught (`0x80177714 + slot*0x44 + 0x14`) -- but only
-///   because the scene it measured had props and no creatures near.
+///   `VECTOR` at `+0x14` and a **three-`s16` rotation at `+0x24`**, free when the
+///   byte at `+0x4` is `0xFF`. Static props, doors and sprites. This is what a
+///   `KF2_DRAWCENSUS=2` reading of `func_80032588`'s `a2` caught
+///   (`0x80177714 + slot*0x44 + 0x14`) -- but only because the scene it measured
+///   had props and no creatures near.
 /// * **The entity table -- `0x8016C544`, 200 slots of `0x7C`**, free when the byte
 ///   at `+0x0` is `0xFF`, position a `VECTOR` at `+0x2C` and a three-`s16`
-///   rotation at `+0x40`. **Creatures/enemies.** The object table has no rotation
-///   at all, so this loop is the only place an enemy's facing lives.
+///   rotation at `+0x40`. **Creatures/enemies.**
+///
+/// **The object table's rotation was missed at first, and a door closing is what
+/// found it.** This comment used to say the object table had no rotation at all,
+/// on the strength of the draw census reading only `a2`. It has one, in the same
+/// shape and with the same `0x800` yaw bias as the entity table's: the object loop
+/// of `func_800331B4` builds the triple it passes as `a3` from `rec+0x24`,
+/// `rec+0x26 + 0x800` and `rec+0x28`. Carrying position alone therefore left
+/// anything that *turns* -- a swinging door, a spinning crystal -- stepping at the
+/// tick rate against a position that glided, which reads as the animation running
+/// at a low frame rate while its speed is right.
 ///
 /// Both are the constants `patches/AgentServer.cs` reports `nearby` from
 /// (`objects` and `entities`). The earlier belief that "the renderer reads the
@@ -100,13 +110,18 @@ public static class ObjectSmoothing
     const int Count = 0x18C;
     const int EmptyOff = 0x4;     // byte == 0xFF when the slot is free
     const int PosOff = 0x14;      // VECTOR: three s32
+    const int RotOff = 0x24;      // three s16, XYZ; the yaw lane at +0x26 is biased
+                                  // by 0x800 downstream, exactly as the entity
+                                  // table's is. Read off func_800331B4's object
+                                  // loop, which fills the a3 triple from rec+0x24,
+                                  // rec+0x26 + 0x800 and rec+0x28.
 
     // The entity table -- creatures/enemies -- as patches/AgentServer.cs reads it
     // for `nearby` "entities". The renderer draws these in a *separate* loop from
     // the object table (func_800331B4's first loop over 0x8016C544, stride 0x7C),
-    // reading the position from +0x2C and a rotation the object table has no
-    // equivalent of. Neither steps through the object table, so smoothing that one
-    // alone leaves every enemy jittering in place and turn.
+    // reading the position from +0x2C and its own rotation at +0x40. Neither steps
+    // through the object table, so smoothing that one alone leaves every enemy
+    // jittering in place and turn.
     const uint EntityTable = 0x8016C544;
     const int EntityStride = 0x7C;
     const int EntityCount = 0xC8;
@@ -157,6 +172,8 @@ public static class ObjectSmoothing
     /// <summary>Whether a slot had a position in both samples, so there is
     /// something to walk between. A slot that has just appeared interpolates from
     /// nothing and must be left where it is.</summary>
+    static readonly int[] _prevRot = new int[Count * 3];
+    static readonly int[] _curRot = new int[Count * 3];
     static readonly bool[] _live = new bool[Count];
 
     /// <summary>True once both samples exist. Cleared when an area loads, because
@@ -166,6 +183,7 @@ public static class ObjectSmoothing
     // What the pre-hook overwrote, so the post-hook can put it back. One call in
     // flight at a time, on one thread.
     static readonly int[] _saved = new int[Count * 3];
+    static readonly int[] _savedRot = new int[Count * 3];
     static readonly bool[] _touched = new bool[Count];
 
     /// <summary>The X the pre-hook wrote, kept only so the probe can check that
@@ -196,6 +214,8 @@ public static class ObjectSmoothing
     static long _frames, _carriedFrames, _carriedSlots, _mismatches;
     static double _moveSum, _fracSum;
     static int _biggestStep;
+    static int _biggestAngleStep;
+    static long _rotSlots;
     static long _teleports;
 
     // The entity pass's own counters.
@@ -298,6 +318,7 @@ public static class ObjectSmoothing
 
         int carried = 0;
         double moved = 0.0;
+        int omask = AngleMod - 1;
 
         for (int i = 0; i < Count; i++)
         {
@@ -305,35 +326,75 @@ public static class ObjectSmoothing
 
             int b = i * 3;
             int dx = _cur[b] - _prev[b], dy = _cur[b + 1] - _prev[b + 1], dz = _cur[b + 2] - _prev[b + 2];
-            if (dx == 0 && dy == 0 && dz == 0) continue;
 
-            if (Math.Abs(dx) > TeleportUnits || Math.Abs(dy) > TeleportUnits ||
-                Math.Abs(dz) > TeleportUnits)
-            {
-                if (_probe) _teleports++;
-                continue;
-            }
+            // Rotation is carried on its own terms, not as a rider on position: a
+            // door swings without its origin moving, and skipping the slot on
+            // dx==dy==dz==0 is exactly what left it stepping at the tick rate.
+            int rdx = DeltaAngle(_prevRot[b], _curRot[b]);
+            int rdy = DeltaAngle(_prevRot[b + 1], _curRot[b + 1]);
+            int rdz = DeltaAngle(_prevRot[b + 2], _curRot[b + 2]);
+
+            bool posMoved = dx != 0 || dy != 0 || dz != 0;
+            bool rotMoved = rdx != 0 || rdy != 0 || rdz != 0;
+            if (!posMoved && !rotMoved) continue;
+
+            // The placement guard is the position's alone. An angle cannot be
+            // "placed too far" -- DeltaAngle already takes the short way round, so
+            // the worst a re-placed facing costs is half a turn of sweep -- and
+            // letting it veto the whole slot would put the guard's position test in
+            // charge of whether a door animates.
+            bool posLive = posMoved &&
+                           Math.Abs(dx) <= TeleportUnits &&
+                           Math.Abs(dy) <= TeleportUnits &&
+                           Math.Abs(dz) <= TeleportUnits;
+            if (posMoved && !posLive && _probe) _teleports++;
+            if (!posLive && !rotMoved) continue;
 
             // Interpolated between the previous tick and this one -- _prev + delta *
             // frac, i.e. lerp(_prev, _cur, frac). Never past a position the game
             // actually produced, so it cannot overshoot on a stop or a turn. Same
             // clock as the camera, which now interpolates too -- see the class
             // comment.
-            int x = _prev[b] + (int)Math.Round(dx * frac);
-            int y = _prev[b + 1] + (int)Math.Round(dy * frac);
-            int z = _prev[b + 2] + (int)Math.Round(dz * frac);
-
             uint pos = (uint)(Table + i * Stride + PosOff);
+            uint rot = (uint)(Table + i * Stride + RotOff);
+
             _saved[b] = (int)m.ReadU32(pos);
             _saved[b + 1] = (int)m.ReadU32(pos + 4u);
             _saved[b + 2] = (int)m.ReadU32(pos + 8u);
+            _savedRot[b] = m.ReadU16(rot);
+            _savedRot[b + 1] = m.ReadU16(rot + 2u);
+            _savedRot[b + 2] = m.ReadU16(rot + 4u);
             _touched[i] = true;
             _applied = true;
 
-            _wrote[i] = x;
-            m.WriteU32(pos, (uint)x);
-            m.WriteU32(pos + 4u, (uint)y);
-            m.WriteU32(pos + 8u, (uint)z);
+            if (posLive)
+            {
+                int x = _prev[b] + (int)Math.Round(dx * frac);
+                int y = _prev[b + 1] + (int)Math.Round(dy * frac);
+                int z = _prev[b + 2] + (int)Math.Round(dz * frac);
+
+                _wrote[i] = x;
+                m.WriteU32(pos, (uint)x);
+                m.WriteU32(pos + 4u, (uint)y);
+                m.WriteU32(pos + 8u, (uint)z);
+            }
+            else
+            {
+                _wrote[i] = _saved[b];      // untouched, so the leak check still holds
+            }
+
+            if (rotMoved)
+            {
+                // Interpolate the low AngleMod bits along the shortest way round;
+                // keep whatever sits above them, the same rule as the entity lanes.
+                int rx = (_prevRot[b] + (int)Math.Round(rdx * frac)) & omask;
+                int ry = (_prevRot[b + 1] + (int)Math.Round(rdy * frac)) & omask;
+                int rz = (_prevRot[b + 2] + (int)Math.Round(rdz * frac)) & omask;
+
+                m.WriteU16(rot, (ushort)((_savedRot[b] & ~omask) | rx));
+                m.WriteU16(rot + 2u, (ushort)((_savedRot[b + 1] & ~omask) | ry));
+                m.WriteU16(rot + 4u, (ushort)((_savedRot[b + 2] & ~omask) | rz));
+            }
 
             carried++;
             if (_probe)
@@ -341,6 +402,9 @@ public static class ObjectSmoothing
                 moved += Math.Abs(dx * frac) + Math.Abs(dy * frac) + Math.Abs(dz * frac);
                 int step = Math.Abs(dx) + Math.Abs(dy) + Math.Abs(dz);
                 if (step > _biggestStep) _biggestStep = step;
+                int astep = Math.Abs(rdx) + Math.Abs(rdy) + Math.Abs(rdz);
+                if (astep > _biggestAngleStep) _biggestAngleStep = astep;
+                if (rotMoved) _rotSlots++;
             }
         }
 
@@ -447,6 +511,7 @@ public static class ObjectSmoothing
 
                 int b = i * 3;
                 uint pos = (uint)(Table + i * Stride + PosOff);
+                uint rot = (uint)(Table + i * Stride + RotOff);
 
                 // The probe's own check that nothing leaks: what the renderer left
                 // behind must be what the pre-hook wrote, or something downstream
@@ -456,6 +521,9 @@ public static class ObjectSmoothing
                 m.WriteU32(pos, (uint)_saved[b]);
                 m.WriteU32(pos + 4u, (uint)_saved[b + 1]);
                 m.WriteU32(pos + 8u, (uint)_saved[b + 2]);
+                m.WriteU16(rot, (ushort)_savedRot[b]);
+                m.WriteU16(rot + 2u, (ushort)_savedRot[b + 1]);
+                m.WriteU16(rot + 4u, (ushort)_savedRot[b + 2]);
             }
 
             for (int i = 0; i < EntityCount; i++)
@@ -511,6 +579,9 @@ public static class ObjectSmoothing
             _prev[b] = _cur[b];
             _prev[b + 1] = _cur[b + 1];
             _prev[b + 2] = _cur[b + 2];
+            _prevRot[b] = _curRot[b];
+            _prevRot[b + 1] = _curRot[b + 1];
+            _prevRot[b + 2] = _curRot[b + 2];
 
             if (wasFree)
             {
@@ -522,6 +593,11 @@ public static class ObjectSmoothing
             _cur[b] = (int)m.ReadU32(pos);
             _cur[b + 1] = (int)m.ReadU32(pos + 4u);
             _cur[b + 2] = (int)m.ReadU32(pos + 8u);
+
+            uint rot = (uint)(Table + i * Stride + RotOff);
+            _curRot[b] = m.ReadU16(rot);
+            _curRot[b + 1] = m.ReadU16(rot + 2u);
+            _curRot[b + 2] = m.ReadU16(rot + 4u);
 
             // Live only once the slot has been occupied for two samples running,
             // which is also what makes the first sample after an area load safe.
@@ -579,7 +655,9 @@ public static class ObjectSmoothing
                               $"{(double)_carriedSlots / _carriedFrames:0.0} object(s) each, " +
                               $"mean phase {_fracSum / _carriedFrames:0.00} tick, " +
                               $"offset {_moveSum / _carriedFrames:0.0} u, " +
-                              $"biggest tick step {_biggestStep} u" +
+                              $"biggest tick step {_biggestStep} u, " +
+                              $"{(double)_rotSlots / _carriedFrames:0.0} turning, " +
+                              $"biggest angle step {_biggestAngleStep} u" +
                               (_teleports > 0 ? $", {_teleports} placement(s) left alone" : "") +
                               (_mismatches > 0 ? $", {_mismatches} LEAKED" : ""));
 
@@ -594,6 +672,8 @@ public static class ObjectSmoothing
         _frames = _carriedFrames = _carriedSlots = _mismatches = 0;
         _moveSum = _fracSum = 0.0;
         _biggestStep = 0;
+        _biggestAngleStep = 0;
+        _rotSlots = 0;
         _teleports = 0;
 
         _eCarriedFrames = _eCarriedSlots = _eMismatches = _eTeleports = 0;

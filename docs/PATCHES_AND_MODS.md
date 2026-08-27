@@ -811,11 +811,30 @@ For a while this carried only the object table, on the belief — from a
 object table and not the entity record." That reading was taken with props on
 screen and **no creatures near**, so it saw only the second loop. The entity record
 is a copy *and* a source: stage 4 copies the object position into `rec+0x2C`, but
-the first loop then draws creatures from that copy, plus a rotation the object table
-has no equivalent of. Smoothing the object table alone therefore left every enemy
+the first loop then draws creatures from that copy, plus its own rotation at
+`rec+0x40`. Smoothing the object table alone therefore left every enemy
 stepping in **both** position and facing — the reported jitter — so this carries
 **both** tables, and the entity rotation on top. See "What in the renderer draws
 what" in [GAME_INTERNALS.md](GAME_INTERNALS.md) for how that was established.
+
+**The object table has a rotation lane too, and missing it left doors animating at
+20 Hz.** This section used to say the object table had no rotation at all, on the
+strength of the same draw census reading only `a2`. It has one — three `s16` at
+`rec+0x24`/`+0x26`/`+0x28`, with the identical `0x800` yaw bias, built into the
+`a3` triple by the object loop of `func_800331B4`. Carrying position alone left
+anything that *turns* stepping at the tick rate against a position that glided,
+which is what a door closing looks like at a low frame rate while its speed is
+right. It is now carried the same way the entity lanes are: shortest way round a
+4096-unit turn, the bits above the mask preserved, and restored in the post-hook.
+Two things about it differ from the position path on purpose — **rotation is not a
+rider on position**, so a slot whose origin never moves (a door swinging on its
+hinge) is still carried, where the old `dx==dy==dz==0` skip dropped it; and **the
+1024-unit placement guard is the position's alone**, since `DeltaAngle` already
+takes the short way round, so a re-placed facing costs at worst half a turn of
+sweep and cannot veto the slot. Measured at 144 fps, standing in a quiet area:
+`289/289 frames carried, 4.0 object(s) each, 4.0 turning, biggest angle step 128 u`
+and no `LEAKED` — 128 is `0x80`, exactly what the arm at `0x80038BA8` adds to
+`rec+0x26` each tick, i.e. 1/32 of a turn. **Not looked at by eye.**
 
 The entity rotation is interpolated the shortest way round a **4096-unit turn** (the
 `0x800` yaw bias the renderer adds is half of it). The raw lanes are not confined to

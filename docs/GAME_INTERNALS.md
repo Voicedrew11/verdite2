@@ -183,9 +183,14 @@ What it writes, by record offset (site counts over the whole function):
 | `+0x10`, `+0x0E`, `+0x28`, `+0x2C..0x30`, `+0x01`, `+0x04` | | 1–4 | `+0x04` itself, so a slot can retire or change kind |
 
 `+0x18`, `+0x24` and `+0x40` are the three fields the rate census measured running
-at the render rate. Note the object table **still has no rotation lane** — a
-crystal's spin is not `+0x24`-as-yaw on the evidence here, only a field that moves
-when it spins.
+at the render rate — and `+0x24` is **not a timer**. It is the first lane of a
+three-`s16` rotation at `rec+0x24`/`+0x26`/`+0x28`, which the object loop of
+`func_800331B4` reads into the `a3` triple it hands `func_80032588`, applying the
+same `0x800` yaw bias to `+0x26` that the entity table gets on its own `+0x40`.
+The census could not tell the two apart because its sampler is 4-byte aligned, so
+the one word at `+0x24` covers `+0x24` and `+0x26` together. Measured, the four
+objects moving in a quiet area turn **0x80 a tick** — 1/32 of a turn, the constant
+the arm at `0x80038BA8` adds — while they bob in Y.
 
 **`func_80037B5C` is the transition fade**, and it is the one thing in stage 2
 that draws. It steps a tint from `a1` to `a2` by `a3` and, for each step, calls
@@ -310,7 +315,7 @@ Two things fell out of it that matter:
   loop alone. The truth is that the entity record is both AI state *and* what the
   first loop draws creatures from — stage 4 copies the object position into
   `rec+0x2C`, but the renderer then reads that copy, plus a rotation the object
-  table has no equivalent of. This is why `patches/ObjectSmoothing.cs` interpolates
+  table has its own copy of at `+0x24`. This is why `patches/ObjectSmoothing.cs` interpolates
   **both** tables, and the entity table's rotation on top: smoothing `0x80177714`
   alone left every enemy stepping in position and facing.
 
