@@ -75,11 +75,13 @@ namespace Kf2;
 ///
 /// A slot whose clip time jumps more than <see cref="MaxTimeStep"/> in a tick is
 /// left alone, the pose equivalent of the placement guard in
-/// <see cref="ObjectSmoothing"/> -- but the guard that does the work here is not
-/// the magnitude. A clip restarting runs its time *backwards* and a clip being
-/// swapped changes the clip byte, and those two tests catch the discontinuities;
-/// the magnitude is only a backstop, and setting it near a plausible-looking
-/// number is what made the first version carry nothing at all.
+/// <see cref="ObjectSmoothing"/>. **The guard is on the size and not on the
+/// sign**, and that distinction cost one bug each way: setting the size near a
+/// plausible-looking number (32, against a real 511) made the first version carry
+/// nothing at all, and treating a *negative* step as a discontinuity left every
+/// clip played in reverse stepping at the tick rate -- the drawbridge lever went
+/// up in 50 ms jumps while the same lever came down smoothly. A clip swap is
+/// caught by the clip byte; only the size separates playback from a re-seek.
 ///
 /// **The picture has been looked at and it works** -- which is worth saying
 /// plainly, because no counter in this repo could have said it: every scene an
@@ -113,13 +115,13 @@ public static class AnimSmoothing
     /// running stepped a mean of 511 units a tick, so 24 of its 30 morph submits
     /// were skipped and nothing was ever carried.
     ///
-    /// Both discontinuities that would make a lerp wrong are caught by their own
-    /// test rather than by a magnitude: a clip **restarting** runs the time
-    /// backwards and is caught by `step &lt;= 0`, and a clip being **swapped** is
-    /// caught by `slot.Clip != clip`. What is left for a number to catch is a
-    /// re-seek inside the same clip, so this is set well clear of any step
-    /// observed playing rather than close to it. It is 12.12's whole unit, eight
-    /// times the only measurement.
+    /// A clip being **swapped** is caught by `slot.Clip != clip` and needs no
+    /// magnitude. What this catches is a **re-seek** — a restart, or a jump to
+    /// somewhere else in the same clip — and it has to do it **on both signs**,
+    /// because the sign alone is a direction: reverse playback and a restart both
+    /// run the time down, and only the size tells them apart. Set well clear of
+    /// any step observed playing rather than close to it: 12.12's whole unit,
+    /// eight times the only measurement.
     /// </summary>
     const int MaxTimeStep = 4096;
 
@@ -161,7 +163,8 @@ public static class AnimSmoothing
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
-    static long _submits, _morph, _rigid, _clipTicks, _carried, _skipped, _reversed, _live;
+    static long _submits, _morph, _rigid, _clipTicks, _carried, _skipped, _reversed, _live,
+                _backward;
     static double _timeStepSum, _fracSum;
     static int _maxStep, _minStep = int.MaxValue;
 
@@ -323,13 +326,21 @@ public static class AnimSmoothing
 
         if (!Enabled || !FramePacing.Gating || !slot.HasPrev) return;
 
+        // The sign is a direction, not a discontinuity. A clip played in reverse
+        // runs its time down by the same small amount a forward one runs it up --
+        // the drawbridge lever going back up against the same lever coming down --
+        // so bailing on a negative step left exactly those animations stepping at
+        // the tick rate. Magnitude is what separates playback from a re-seek, in
+        // either direction; a restart from a high time is a large negative jump
+        // and is caught here too.
         int step = slot.CurTime - slot.PrevTime;
-        if (step <= 0) return;
-        if (step > MaxTimeStep)
+        if (step == 0) return;
+        if (Math.Abs(step) > MaxTimeStep)
         {
             if (_probe) _skipped++;
             return;
         }
+        if (_probe && step < 0) _backward++;
 
         double t = slot.PrevTime + step * _phase;
         _tFloor = (int)Math.Floor(t);
@@ -408,16 +419,18 @@ public static class AnimSmoothing
         string step = _clipTicks == 0 ? "" :
             $", time step {_minStep}..{_maxStep} mean {_timeStepSum / _clipTicks:0.0} over {_clipTicks}";
         string live = _morph == 0 ? "" : $", {_live} with a running clip";
+        string back = _backward == 0 ? "" : $", {_backward} playing backwards";
         string carry = !Enabled ? ""
             : _carried == 0 ? ", 0 weights carried"
             : $", {_carried} weight(s) carried ({_reversed} reversed), " +
               $"mean frac {_fracSum / _carried:0.00}";
         Console.WriteLine($"[KF2] anim: {_submits} submit(s), " +
                           $"morph {_morph} ({morphPct}), rigid {_rigid}{live}" +
-                          $"{step}; {_skipped} skipped" +
+                          $"{step}{back}; {_skipped} skipped" +
                           carry);
 
         _submits = _morph = _rigid = _clipTicks = _carried = _skipped = _reversed = _live = 0;
+        _backward = 0;
         _timeStepSum = _fracSum = 0;
         _maxStep = 0; _minStep = int.MaxValue;
     }

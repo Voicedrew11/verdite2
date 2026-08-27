@@ -266,6 +266,17 @@ useful than the question was.
    discontinuities are caught by their own tests and the magnitude is only a
    backstop. Picking it near a plausible-looking number is what broke it.
 
+   **The sign of that step was the same mistake one level down, and the
+   drawbridge lever found it.** The guard also read `step <= 0`, on the reasoning
+   that a clip restarting runs its time backwards — but so does a clip **played
+   in reverse**, and the lever going back up is exactly that. Down was smooth and
+   up stepped at 20 Hz, on the same object and the same clip. The test is on
+   `Math.Abs(step)` now: the sign is a direction, only the size separates playback
+   from a re-seek, and a restart from a high time is a large negative jump that
+   the size still catches. A negative step used to exit silently and was counted
+   nowhere, which is the reporting gap that hid it; the probe prints
+   `N playing backwards` beside the skipped count now. Confirmed by eye.
+
    **What is left is the default, which is a judgement and not a measurement.**
    The picture is confirmed, so the sub-pixel reason for shipping this off no
    longer applies to it; whether smooth poses are the *authentic* picture is the

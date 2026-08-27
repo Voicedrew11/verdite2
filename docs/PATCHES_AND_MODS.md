@@ -929,6 +929,14 @@ stays right, and adds the fraction onto the weight `34A74` already consumes —
 publishes `0x1000 - raw` there and the weight runs backwards. It writes no
 game state at all: one register on one call, and the caller's own stack temp.
 
+The guard on the clip-time step is on its **size and not its sign**, and that
+cost one bug each way: a magnitude of 32 against a real 511 made the first
+version carry nothing at all, and treating a negative step as a discontinuity
+left every clip played in reverse stepping at the tick rate — the drawbridge
+lever went up in 50 ms jumps while the same lever came down smoothly. A clip
+swap is caught by the clip byte; only the size separates playback from a
+re-seek, in either direction.
+
 Vertex-fetch lerp at `RotTransPers` was tried first and did not change the
 picture — it interpolated a rigid majority, and the probe's "XYZ moved" line
 was vertex 0 only. Measured not to touch the world clock, which the discarded
