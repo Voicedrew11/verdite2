@@ -817,6 +817,25 @@ stepping in **both** position and facing — the reported jitter — so this car
 **both** tables, and the entity rotation on top. See "What in the renderer draws
 what" in [GAME_INTERNALS.md](GAME_INTERNALS.md) for how that was established.
 
+**It carries four tables now, not two, and it is a list rather than four copies of
+the code.** The renderer draws from four (the inventory is in "What in the
+renderer draws what" in [GAME_INTERNALS.md](GAME_INTERNALS.md)); this carried two,
+and *both* omissions reached a player as "the animation runs at a low frame rate"
+before anyone read `func_800331B4` to the end. The two that were missing are
+**stage 5's table at `0x8019CC6C`** (128 x `0x48`, position `+0x14`, rotation
+`+0x24` — the same layout as the object table, and gated, so it stepped at the
+tick rate with nothing carrying it) and the **billboard sprites at `0x80195174`**
+(128 x `0x18`, position `+0x8`, no rotation — already render-rate, so carrying
+them is a no-op and harmless). `ObjectSmoothing.Tables` is now a `TableSpec[]` and
+one routine walks it, so the next table is a row.
+
+**The object table's emptiness test was the owning stage's, not the renderer's.**
+Stage 2 steps a slot when the byte at `+0x4` is not `0xFF`; `func_800331B4` draws
+it when the `u16` at `+0x6` is not `0xFF`. This used stage 2's, so any slot that
+is drawn but not stepped by stage 2 was treated as free and never carried. What is
+being interpolated is what is *drawn*, so the drawing test is the right one — and
+a slot carried but not drawn costs a write and a restore and nothing else.
+
 **The object table has a rotation lane too, and missing it left doors animating at
 20 Hz.** This section used to say the object table had no rotation at all, on the
 strength of the same draw census reading only `a2`. It has one — three `s16` at

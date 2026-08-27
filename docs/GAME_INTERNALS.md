@@ -304,7 +304,35 @@ Two things fell out of it that matter:
   packets a frame). So the arm cannot be "reattached" to an extrapolated camera —
   it is already welded to the screen, and what steps at the tick rate is its
   sprite index, which is what the console did too.
-- **`func_80032588` is fed from *two* tables, one loop each.** `func_800331B4`
+- **`func_80032588` is fed from *four* tables, one loop each** — and for a long
+  time only the first two were written down, which is how two separate "the
+  animation runs at a low frame rate" reports were caused and then chased. The
+  whole inventory, read off `func_800331B4` end to end:
+
+  | # | base | stride | count | free test | position | rotation |
+  |---|---|---|---|---|---|---|
+  | 1 | `0x8016C544` | `0x7C` | 200 | byte `+0x0` == `0xFF` | `+0x2C` | `+0x40` |
+  | 2 | `0x80177714` | `0x44` | 396 | **u16 `+0x6` == `0xFF`** | `+0x14` | `+0x24` |
+  | 3 | `0x8019CC6C` | `0x48` | 128 | byte `+0x0` == `0xFF` | `+0x14` | `+0x24` |
+  | 4 | `0x80195174` | `0x18` | 128 | u16 `+0x0` == `0xFFFF` | `+0x8` | none — zeroed |
+
+  Every rotation lane is three `s16` with the yaw (`+2`) biased by `0x800`, the
+  same convention throughout. Table 3 is **stage 5's** table, the one FramePacing
+  describes as "128 effect/projectile lifetimes at `rec+0x0E`" — that name is a
+  guess from one field, and the renderer draws it with a full position *and*
+  facing, which makes it a general table of things that move. Table 4 is
+  billboards; the renderer zeroes their rotation triple and their positions are
+  written under stage 13 itself (`func_8002DF80`), so they already move at the
+  render rate.
+
+  **The object table has two different emptiness tests and they are not
+  interchangeable.** Stage 2 steps a slot when the byte at `+0x4` is not `0xFF`;
+  the renderer draws it when the `u16` at `+0x6` — the definition index — is not
+  `0xFF`. A patch that wants to interpolate *what is drawn* must use the second,
+  and `patches/ObjectSmoothing.cs` used the first, silently dropping any slot that
+  is drawn but not stepped by stage 2.
+
+- **The first two loops, in the detail they were originally recorded:** `func_800331B4`
   loops the **entity table** `0x8016C544` (200 records, `0x7C` stride, free at
   `+0x0`) first — **creatures/enemies**, position at `rec+0x2C` and a three-`s16`
   rotation at `rec+0x40` (yaw biased by `0x800`) passed as `a3` — then loops the
