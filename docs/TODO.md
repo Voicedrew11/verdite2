@@ -186,13 +186,15 @@ useful than the question was.
 
    **What is left, in order.**
 
-   1. **Confirm which byte animates a moving tile.** A `KF2_DRAWCENSUS=2` run taken
-      while a drawbridge cycled proved it is map geometry and not a model (11 models
-      listed, byte-identical across two windows two seconds apart). The remaining
-      question is whether what moves is the **height byte** at `tile+0x1`/`+0x6` or
-      the **model index** at `tile+0x0`/`+0x5`. One census run answers it — but note
-      the range, below.
-   2. **If it is the height: write the tile smoother.** Sample the 80x80 grid's two
+   1. ~~**Confirm which byte animates a moving tile.**~~ Closed. `KF2_PACKETMATCH`
+      measured map tile primitives at 100% match with **0.00 px displacement** across
+      30 windows while the player stood still; model primitives moved in the same
+      windows. The drawbridge reported as architecture did not show up in the tile
+      pass. A prior `KF2_DRAWCENSUS=2` sample that listed 11 byte-identical models
+      over two seconds apart likely sampled between animation cycles. Not chased
+      further — the goal is model pose animation, not the drawbridge.
+   2. **If it is the height: write the tile smoother.** *(Deprioritised — item 1
+      closed the drawbridge question.)* Sample the 80x80 grid's two
       height bytes each tick (12.8 KB), pre-hook `func_80031B1C` to note `(tileX,
       tileZ)`, and pre-hook `func_80031950` to write
       `-(lerp(prev, cur, phase) * 128) - camY` into the Y at `a1+2`. **No restore
@@ -209,17 +211,44 @@ useful than the question was.
       and been wrong twice, and each correction cost a round trip through a person
       playing the game.
 
-   **The boundary, which is permanent.** The technique works on a *continuous
-   quantity in an addressable slot*. It cannot work on a discrete index — a model
-   swap or a pose index — because there is no in-between to compute.
-   `lerp(frame 4, frame 5, 0.5)` is not a smaller version of the same problem; it is
-   vertex morphing, and it needs a correspondence between frames that the port
-   cannot recover from the packet stream. That would need the model format (see
-   item 7) and a hook on the vertex fetch inside `func_80032588`'s inner loop —
-   which needs only *where the loop reads vertices and how many*, a runtime
-   observation, not a full decode. Note also that **models are rigid**: there is no
-   per-part matrix in the whole subtree, so "just interpolate the matrices" is not
-   available. See "The model pipeline has no skeleton" in `docs/GAME_INTERNALS.md`.
+   **The generic alternative was tried and it does not work at the packet layer.**
+   The idea was to stop enumerating tables entirely: at `DrawOTag` the frame is a
+   list of finished primitives, so recognise each one in the previous tick's list
+   and carry its screen position by the phase. It fails on **identity**. Back-face
+   culling submits only the faces pointing at the eye, so one dropped polygon shifts
+   every ordinal after it and the key then names a different triangle while still
+   counting as a match — measured, models, **92-100% of ordinals matched and only
+   14-40% of those were the same face** as soon as anything moved. Applying it
+   garbled every object on screen. The full write-up, including the two probe
+   defects found on the way and the trap of measuring a hit rate instead of an
+   accuracy, is "The display list cannot name a face" in `docs/RENDERING.md`.
+   `patches/PacketMatch.cs` (`KF2_PACKETMATCH=1`) is kept as the probe.
+
+   **What that experiment did establish, and it is the case for continuing.** With
+   the camera **completely** frozen and two enemies attacking, over twenty-five
+   consecutive one-second windows, the objects' own translation was 0.1-0.8 px a
+   tick while the motion of their primitives *relative to each other* was **3.4-13
+   px a tick on 9-13% of contexts, peaking at 36**. That is pose animation, it is
+   large, and no table smoother can reach it.
+
+   **The boundary, restated where it actually falls.** The table technique works on
+   a *continuous quantity in an addressable slot*, and a pose is not one: models are
+   rigid, there is no per-part matrix anywhere in the subtree, so "interpolate the
+   matrices" is not available (see "The model pipeline has no skeleton" in
+   `docs/GAME_INTERNALS.md`). What is **not** true is that this makes pose
+   interpolation impossible — only that it cannot be done from a table, and cannot
+   be done from the display list either.
+
+   **The open door is the vertex fetch inside `func_80032588`.** Before projection
+   and before culling, a face is identified by its index in the mesh — exact rather
+   than inferred — and a morph applied there comes out through the game's own
+   transform, so there is no camera to subtract and no per-object mean to take out.
+   Both problems that killed the packet layer are absent by construction. What it
+   needs is **where the loop reads vertices and how many**, which is a runtime
+   observation (log the reads) rather than a decode of the model format. The
+   remaining question it must answer is whether a pose change is a *swapped model
+   index* — in which case morphing needs a correspondence between two meshes — or a
+   rewrite of the same mesh's vertex data, in which case it is a straight lerp.
 
    **Two tooling defects found on the way, both unfixed.**
 

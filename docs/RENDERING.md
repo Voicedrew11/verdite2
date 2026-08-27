@@ -696,3 +696,121 @@ sub-pixel and the Z-buffer this is not off because the picture is unchecked — 
 off because 24-bit shading is deliberately *not* what the hardware did, and a
 player who wants the authentic look should get it without a package to load. Its
 switch is under Video with the others (`KF2_TRUECOLOR=1` forces it on for the run).
+
+## The display list cannot name a face: why packet-level smoothing failed
+
+The port smooths between logic ticks by carrying *tables* — the camera in
+`patches/FrameSmoothing.cs`, four model tables and the entity records in
+`patches/ObjectSmoothing.cs`. That set has been found incomplete three times, each
+time by a person noticing something step in play, and item 6 in
+[TODO.md](TODO.md) is the standing request to stop finding them that way.
+
+The generic alternative tried here was **packet-level interpolation**: one layer
+below the tables, at `DrawOTag`, the frame is a finished list of primitives; if the
+same primitive can be recognised in the previous tick's list, its screen position
+can be carried by the tick phase, and one hook covers doors, tiles, enemies and
+animation alike. It does not work for models, for a reason worth writing down
+because it is not obvious and because the measurement that appeared to endorse it
+was measuring the wrong thing.
+
+`patches/PacketMatch.cs` (`KF2_PACKETMATCH=1`) is the probe, and it is kept. It is
+a measurement only — it never writes to game memory.
+
+### Where a primitive's identity comes from
+
+A read-only pre-hook on `DrawOTag` walks the ordering table exactly as
+`Widescreen`'s replacement does (`patches/Widescreen.cs:409-450`). Not
+`RenderPrimEvent`: that event carries four screen positions, four flags and a CLUT,
+and nothing else — no texture coordinates and no source address — so nothing
+intrinsic to a face is visible from it.
+
+Which object a packet belongs to is read off the **primitive arena**, the same
+mechanism `patches/DrawCensus.cs` attributes bytes with: the game bumps a
+`{start, end, current}` descriptor at `0x8017E0A4` once per polygon, so the packets
+a call produced are the addresses between its entry and exit `current`. Two calls
+are attributed:
+
+* `func_80032588`, the model submitter — `a2` is the position pointer, which names
+  the table slot and covers all four model tables at once.
+* `func_80031950`, the map-tile submitter — `a0` is the tile record address **plus
+  the half offset** (`S0` or `S0+5` in `func_80031B1C`), so it already distinguishes
+  a tile's two drawn halves and needs no separate counter.
+
+Three keys were measured, and a fourth number decided it:
+
+| key | definition |
+|---|---|
+| **K1 ordinal** | `(kind, contextId, index within context)` |
+| **K2 lerpable** | K1 matched *and* the same primitive shape |
+| **K3 intrinsic** | `(kind, contextId, hash of command byte, UVs, CLUT/texpage)` |
+| **correctness** | of the primitives K1 matched, how many matched a face with the **same texture coordinates** |
+
+### The ordinal matches, and names the wrong triangle
+
+K1's hit rate is high and it is **meaningless on its own**. Back-face culling
+submits only the faces pointing at the eye, so dropping one polygon shifts every
+ordinal after it by one: the key `(slot, 5)` still exists on both sides of the
+tick, so it counts as a match, while now naming a different face. Measured, models,
+one second a window:
+
+| what the player was doing | K1 matched | …and was the same face |
+|---|---|---|
+| standing perfectly still | 100% | **100%** |
+| walking or turning | 92–100% | **14–40%** |
+
+Map tiles survive it — 76–100% correct under the same motion — because a tile is a
+simple static mesh whose visible-face set barely changes. Models do not.
+
+**This is the trap to remember.** A match rate answers "did the key find
+something", and the question is "did it find the *right* thing". The first reading
+of this experiment reported 96.6–99.3% and concluded the design was viable; the
+second key, K3, was disagreeing with it at 56–94% the whole time, and that
+disagreement was read as K3 being the weaker key rather than as the two keys
+contradicting each other. Applying it looked exactly like what it was: **"every
+object becomes super garbled the moment I move"**, because two thirds of the
+carried motion belonged to some other triangle.
+
+### The other thing a screen-space carry gets wrong
+
+Even with a correct key, a primitive's whole displacement is the wrong quantity to
+carry. The frame is already drawn through a camera `FrameSmoothing` has advanced to
+this frame's phase, and through positions `ObjectSmoothing` has already
+interpolated; adding the full per-tick delta adds both a second time and runs
+objects ahead of the world on every turn. The quantity to carry is the **deviation
+from the context's mean** — the mean being the object moving as one, which is
+already carried, and the deviation being the pose. The probe reports that split as
+`pose split`, gated on the camera having held completely still, because parallax
+from a moving *eye* survives the mean and would otherwise be counted as pose.
+
+That measurement is worth keeping whatever happens next, because it is the evidence
+that there is anything to fix: with the camera frozen and two enemies attacking,
+over twenty-five consecutive windows, the objects' own translation was 0.1–0.8 px a
+tick while the motion of their primitives *relative to each other* was **3.4–13 px
+a tick on 9–13% of contexts, peaking at 36**. There is real animation the tables
+cannot reach — the model pipeline has no skeleton, so a pose is vertex data or a
+swapped model index (see "The model pipeline has no skeleton" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md)) — it simply cannot be recovered from the
+display list.
+
+### Two defects in the probe itself, both fixed and both instructive
+
+* **Vertex colours are not identity.** The intrinsic key hashed them at first and
+  read 0–5% on the world against 92–99% for the ordinal. They are the game's own
+  per-frame shading, recomputed as the camera moves, so a face never hashed the same
+  twice; the HUD, whose colours are constant, was the only thing that matched, which
+  is what named the cause.
+* **The UV word's upper half is pad on the third and fourth vertices.** Only the
+  first two carry the CLUT and the texpage. PSY-Q does not clear the rest, and the
+  arena hands out memory two frames stale, so hashing it made the key differ from
+  itself with the camera standing still. `Gpu.DrawPolygon` reads exactly the three
+  fields that mean anything.
+
+### What would work instead
+
+The identity problem is created by projection and culling, so it does not exist
+before them. Inside `func_80032588`, a face is identified by its index in the mesh —
+exact, not inferred — and a morph applied there comes out through the game's own
+transform, so there is no camera to subtract and no mean to take out. What that
+needs is where the vertex loop reads and how many it reads, which is a runtime
+observation rather than a decode of the model format. That is the open door;
+`docs/TODO.md` item 6 carries it.

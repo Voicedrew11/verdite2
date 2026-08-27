@@ -293,6 +293,20 @@ Kf2.EndingHold.Install();
 Kf2.DrawCensus.Configure(Environment.GetEnvironmentVariable("KF2_DRAWCENSUS"));
 Kf2.DrawCensus.Install();
 
+// Whether the frame could be smoothed without knowing any of the tables at all.
+// Every smoother in the port carries a named table between ticks, and that set has
+// been incomplete three times running -- each miss found by someone noticing a
+// stepping door rather than by a counter. One layer down, at DrawOTag, the frame
+// is a list of finished primitives; if a primitive can be recognised in the
+// previous tick's list its screen position could be carried by the tick phase, and
+// that would be one hook covering doors, tiles, enemies and the drawbridge alike.
+// Whether it can be recognised is the whole question, and this only measures it.
+//
+//     KF2_PACKETMATCH=1   the match census, once a second, by three candidate keys
+//     KF2_PACKETMATCH=2   also name the worst-matching contexts
+Kf2.PacketMatch.Configure(Environment.GetEnvironmentVariable("KF2_PACKETMATCH"));
+Kf2.PacketMatch.Install();
+
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
 // picture the port should be able to offer without a package having to load: the

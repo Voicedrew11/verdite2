@@ -182,6 +182,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Z-buffer: the same depth, used as occlusion
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding
+- The display list cannot name a face: why packet-level smoothing failed
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 
