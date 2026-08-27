@@ -213,9 +213,14 @@ interpolated at first, which was defensible alone and wrong beside a camera
 carried *forward*, since the two then sit a whole tick apart and a constant offset
 between the world and the things in it reads as the objects moving slower than
 everything else. It leaves a
-slot whose step exceeds 1024 units on an axis exactly where the game put it,
+slot whose step exceeds 8192 units on an axis exactly where the game put it,
 because that is a placement rather than motion (measured: real motion 37 u a tick,
-a placement 233,472). **3D pose is `patches/AnimSmoothing.cs`**, which drives
+a placement 233,472), and that decision is **sticky** — a slot already being
+carried gets four times the threshold. It was a flat 1024, measured against things
+that *walk*: a boss's or a piranha's parts cover far more ground in an attack, and
+a part whose step straddled the threshold glided across one tick and held still
+the next while the parts either side kept gliding, which read as the creature
+tearing itself apart. **3D pose is `patches/AnimSmoothing.cs`**, which drives
 the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the blender writes the
 in-between mesh (`KF2_SMOOTH_ANIM=1`). **The end of a looping cycle is a
 special case**: the clip resets its time while keeping the same clip byte, so the

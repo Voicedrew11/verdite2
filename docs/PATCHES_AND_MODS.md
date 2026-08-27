@@ -879,7 +879,19 @@ Two things about it are worth stating:
   be afforded: no bounce-back on a stop or a turn, which is exactly what forward
   extrapolation gave. **Two smoothers must agree about what time it is** — that is
   the rule worth carrying to whatever gets smoothed next.
-* **A step over 1024 units on any axis is a placement, and is left alone.**
+* **A step over 8192 units on any axis is a placement, and is left alone** —
+  and the decision is **sticky**, a slot already being carried getting four times
+  that before it is called one. It was a flat 1024 and that was measured against
+  things that *walk*. Play reported the final boss and the piranhas freaking out
+  during an attack, which is exactly when a big creature's parts cover the most
+  ground in a tick: a part whose step sits near the threshold is carried on the
+  tick it comes in under and held on the tick it goes over, gliding and stopping
+  twenty times a second while the parts either side of it keep gliding. That
+  reads as the creature tearing itself apart, and it cannot show at 20 fps, where
+  the phase is 0 and nothing is carried at all. A bare threshold is a cliff and
+  raising it only moves the cliff, so motion is now assumed to continue and it
+  takes `GlidingFactor` × the threshold to decide otherwise — which the one
+  placement ever measured clears by seven times over.
   Without that, an object spawned, respawned, moved by a script, or simply placed
   when the area finished loading is swept a whole area's width over one tick. (It is
   needed for interpolation just as it was for extrapolation: prev and cur can

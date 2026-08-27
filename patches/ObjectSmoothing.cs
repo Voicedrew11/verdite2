@@ -161,6 +161,11 @@ public static class ObjectSmoothing
         public int[] Saved = [], SavedRot = [], Wrote = [];
         public bool[] Live = [], Touched = [];
 
+        /// <summary>Slots carried on the last tick, which get
+        /// <see cref="GlidingFactor"/> times the placement threshold on this
+        /// one. Motion is assumed to continue; a cliff is not.</summary>
+        public bool[] Gliding = [];
+
         // The probe's per-table window.
         public long CarriedFrames, CarriedSlots, RotSlots, Mismatches, Teleports;
         public double MoveSum;
@@ -174,6 +179,7 @@ public static class ObjectSmoothing
             Saved = new int[s.Count * 3], SavedRot = new int[s.Count * 3],
             Wrote = new int[s.Count],
             Live = new bool[s.Count], Touched = new bool[s.Count],
+            Gliding = new bool[s.Count],
         };
 
         public void ResetWindow()
@@ -205,10 +211,39 @@ public static class ObjectSmoothing
     /// things moving were bobbing in Y and spinning 0x80 a tick), while one window
     /// caught a **233,472-unit** step, which is most of an area. The player, the
     /// fastest thing in the game, covers 1817 units in 2 s at 20 Hz -- about **45
-    /// units a tick** -- so 1024 sits some twenty times above anything that walks and
+    /// units a tick** -- so 1024 sat some twenty times above anything that walks and
     /// two hundred times below the placement it has to catch.
+    ///
+    /// **1024 was measured against things that walk, and a boss does not walk.**
+    /// Play reported the final boss and the piranhas "freaking out" during an
+    /// attack -- and an attack is exactly when a big creature's parts cover the
+    /// most ground in a tick. A part whose step sits near the threshold is
+    /// carried on the tick it comes in under and left where the game put it on
+    /// the tick it goes over, so it glides across a tick and then holds still
+    /// for one, twenty times a second, while the parts either side of it keep
+    /// gliding. That reads as the creature tearing itself apart, and it cannot
+    /// show at 20 fps because the phase is 0 and nothing is carried at all.
+    ///
+    /// The walking measurements never bounded fast motion; they only bounded
+    /// walking. The gap between them and the one placement ever measured is a
+    /// factor of two hundred, so the threshold can be raised a long way and
+    /// still catch what it exists to catch: 8192 is 180 times a walk and 28
+    /// times below the 233,472-unit placement.
     /// </summary>
-    const int TeleportUnits = 1024;
+    const int TeleportUnits = 8192;
+
+    /// <summary>
+    /// How much further a slot **already being carried** may step before it is
+    /// called a placement.
+    ///
+    /// A bare threshold is a cliff, and the shake is the sound of a slot falling
+    /// off it and climbing back on alternate ticks. Raising it moves the cliff
+    /// without removing it, so the decision is made sticky instead: something
+    /// that was moving is assumed to still be moving, and it takes four times
+    /// the threshold to decide otherwise. A real placement clears that by seven
+    /// times over.
+    /// </summary>
+    const int GlidingFactor = 4;
 
     public const string OnKey = "kf2.smoothing.objects";
 
@@ -363,10 +398,16 @@ public static class ObjectSmoothing
                 // the worst a re-placed facing costs is half a turn of sweep -- and
                 // letting it veto the whole slot would put the position test in charge
                 // of whether a door animates.
+                // Sticky: a slot that was gliding last tick keeps gliding
+                // unless the step is far past the threshold, so a part whose
+                // motion sits near it cannot alternate between carried and held
+                // and tear itself off the rest of the creature.
+                int cap = t.Gliding[i] ? TeleportUnits * GlidingFactor : TeleportUnits;
                 bool posLive = posMoved &&
-                               Math.Abs(dx) <= TeleportUnits &&
-                               Math.Abs(dy) <= TeleportUnits &&
-                               Math.Abs(dz) <= TeleportUnits;
+                               Math.Abs(dx) <= cap &&
+                               Math.Abs(dy) <= cap &&
+                               Math.Abs(dz) <= cap;
+                t.Gliding[i] = posLive;
                 if (posMoved && !posLive && _probe) t.Teleports++;
                 if (!posLive && !rotMoved) continue;
 
@@ -514,6 +555,7 @@ public static class ObjectSmoothing
                 if (wasFree)
                 {
                     t.Live[i] = false;
+                    t.Gliding[i] = false;
                     continue;
                 }
 
