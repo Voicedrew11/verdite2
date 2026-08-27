@@ -84,6 +84,7 @@ KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas in
 KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
 KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
 KF2_LOOPPACING=0                       # loops that render their own frames back on the render rate (on by default)
+KF2_LOOPPACING=pace                    # hold such a loop but do not redraw: right speed, tick-rate picture
 KF2_LOOPPACING_PROBE=1                 # modal frames a second, world and interface, against the main loop's
 KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
 KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
@@ -267,21 +268,34 @@ hooked on `func_80017880`, stage 13's sole caller, and so says whether the frame
 drew the world. **Holding the loop is only half**: pacing its frames to the tick
 gives the right speed and a 20 fps *picture*, because the frame the loop draws
 *is* the tick and `LogicPhase` is 0 on every one of them, so the smoothing patches
-have nothing to carry. The gap between iterations is therefore filled with **extra
-renders** — stage 8 then stage 13, the main loop's own drawing tail, run again at
-the frame's phase, which is what `func_80037B5C` already does inside a stage — so
-a modal frame *is* a main-loop frame and `FrameSmoothing`, `ObjectSmoothing` and
-`AnimSmoothing` carry it. That post on stage 13 must run after theirs, which is why
-`LoopPacing` is installed last in `Program.cs`. The menu draws no world, so it is
-paced at the vblank instead. Measured at `KF2_FPS=144` with
+have nothing to carry. The gap between iterations is therefore filled with
+**redraws** — stage 13 called again at the frame's phase, which is what
+`func_80037B5C` already does inside a stage — so `ObjectSmoothing` and
+`AnimSmoothing`, which bracket stage 13, carry the picture. That post on stage 13
+must run after theirs, which is why `LoopPacing` is installed last in `Program.cs`.
+**A redraw replays stage 13 with the two pointers the loop itself passed it**, and
+that is load-bearing rather than tidy: stage 13 is
+`func_800342D8(VECTOR *pos, SVECTOR *rot)` and builds the frame's whole view matrix
+out of them unless both are zero, so a redraw that leaves the register file alone
+projects the world through the tail of `func_8003549C` — measured, a pointer into
+the sound table near `0x8018EAA4`. That draws next to nothing, and since this
+game's `PutDrawEnv` has `isbg=0` there is no background clear, so the buffer keeps
+what was in it two frames ago: the first version of the redraw shipped that way and
+play reported black flicker and a stale frame alternating with the live one.
+**Stage 8 is deliberately not replayed** — it *writes* through those same two
+pointers, so it corrupted whatever they addressed, and re-running it would
+overwrite a cutscene's scripted camera with the player's; the player camera cannot
+move inside a modal loop anyway, since no gated stage runs there. The menu draws no
+world, so it is paced at the vblank instead. Measured at `KF2_FPS=144` with
 `rate_matrix.py modal-rate`: the fade's body 33.8 -> 19.9 iterations a second, its
 picture 33.8 -> 144.0 frames a second, the menu 144.0 -> 60.1. It does nothing at
 or below the tick rate and touches no game memory. What it cannot reach is a counter stepped inside a *drawing function's own
 body* — stage 13's shake accumulator `0x8006E608` and `func_800331B4`'s ambient
-retrigger, which want a hold/restore pair instead and which extra renders step as
+retrigger, which want a hold/restore pair instead and which redraws step as
 often as an ordinary frame already does — or a counter the modal loop steps in its
-own body, whose *speed* is right but which is smooth only if its transform comes
-from a table `ObjectSmoothing` carries. Both are in `docs/TODO.md`.
+own body, a scripted cutscene camera included, whose *speed* is right but which is
+smooth only if its transform comes from a table `ObjectSmoothing` carries. Both are
+in `docs/TODO.md`.
 See "Loops that render their own frames" in `docs/PATCHES_AND_MODS.md`.
 `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The

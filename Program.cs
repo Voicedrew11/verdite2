@@ -311,23 +311,31 @@ Kf2.AnimSmoothing.Install();
 // the main loop's.
 //
 // Holding it there is only half. Pacing the loop's frames to the tick makes the
-// speed right and the picture 20 fps, because the frame the loop draws *is* the
-// tick and LogicPhase is 0 on every one of them, so the smoothing patches have
-// nothing to carry. So the gap between iterations is filled with extra renders --
-// stage 8 then stage 13, the main loop's own drawing tail, run again at the phase
-// the frame stands at, which is what func_80037B5C already does inside a stage.
-// A modal frame then *is* a main-loop frame: world at LogicHz, picture at the
-// render rate, view and objects and poses carried by the patches that already do
-// it everywhere else. The menu draws no world, so it is paced at the vblank
-// instead. It does nothing at or below the tick rate, which is where the defect
-// does not exist either.
+// speed right and the picture step at the tick rate, because the frame the loop
+// draws *is* the tick and LogicPhase is 0 on every one of them, so the smoothing
+// patches have nothing to carry. So the gap between iterations is filled with
+// redraws -- stage 13 called again at the phase the frame stands at, which is what
+// func_80037B5C already does inside a stage. The world then advances at LogicHz
+// while the picture is drawn at the render rate, with objects and poses carried by
+// the patches that already do it everywhere else. The menu draws no world, so it is
+// paced at the vblank instead. It does nothing at or below the tick rate, which is
+// where the defect does not exist either.
+//
+// A redraw replays stage 13 with the two pointers the modal loop itself passed it
+// (func_800342D8(VECTOR *pos, SVECTOR *rot)), recorded by a pre-hook. Calling it
+// without them -- which the first version of this did -- builds the frame's view
+// matrix out of whatever the register file held, which is a black flicker and a
+// stale buffer left on screen. Stage 8 is deliberately not replayed: it would
+// overwrite a cutscene's scripted camera with the player's, and the player camera
+// cannot move inside a modal loop anyway.
 //
 //     KF2_LOOPPACING=0        leave them on the render rate -- comparison only
+//     KF2_LOOPPACING=pace     hold the loop but do not redraw -- comparison only
 //     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface
 //
 // Installed *after* the three smoothing patches, and that ordering is
 // load-bearing: HookManager runs the posts on a function in the order they
-// were added, and the extra render has to be asked for once their own posts
+// were added, and the redraw has to be asked for once their own posts
 // have put the tables back.
 Kf2.LoopPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
                          Environment.GetEnvironmentVariable("KF2_LOOPPACING_PROBE"));

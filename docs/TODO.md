@@ -144,8 +144,8 @@ useful than the question was.
      the `rec+0x40` retrigger above are the **only** rate defects left, and they
      are the same shape as each other: a counter stepped inside a drawing
      function's own body, which needs a hold/restore pair on the field rather than
-     a deadline on the frame. Neither has been reported from play. **Extra renders
-     make both of them fire inside a modal loop as often as they already do in the
+     a deadline on the frame. Neither has been reported from play. **A modal loop's
+     redraws make both of them fire inside it as often as they already do in the
      main loop** — no worse than an ordinary frame, but no better either.
 
    * **A counter a modal loop steps in its own body** — a picked-up item's spin, if
@@ -157,6 +157,16 @@ useful than the question was.
      address. The identity problem that killed display-list matching does not
      obviously apply — a submit is per object, not per back-face-culled polygon —
      but that is an argument, not a measurement. Not started.
+
+   * **A modal loop's own camera**, which is the same shape one level up. `fdat23`'s
+     cutscene loops build a view of their own and hand it to stage 13 as
+     `func_800342D8`'s two pointers; a redraw replays those pointers unchanged, so a
+     scripted pan steps once a tick. `FrameSmoothing` cannot help — it hooks stage
+     8, which a redraw deliberately does not run, and stage 8 reads the *player*
+     state a cutscene is not driving. Carrying it would mean interpolating the two
+     blocks the loop passes, keyed by the pointer, between one iteration and the
+     next. **Never reported from play**; recorded because dropping stage 8 from the
+     redraw is what makes it permanent.
    * **Four ungated stages that submit nothing at all** and so are free under the
      existing rule, but hold globals nobody has looked at: stage 1 `func_8002C944`
      (8), stage 9 `func_800140AC` (8, the 3D sound listener), stage 11
@@ -168,15 +178,18 @@ useful than the question was.
      the cutscene and message-box loops, the spell-cast and item-use animations,
      the menu — stepped once per *rendered* frame, and the answer turned out to be
      structural rather than one fix per loop: the loop's **body** is held to one
-     run per world tick, and the gap between its iterations is filled with **extra
-     renders** — stage 8 then stage 13, the main loop's own drawing tail, run again
-     at the phase the frame stands at — so the three smoothing patches carry the
-     picture the way they do everywhere else. Pacing the loop alone was the first
-     version and was only half: it gave the right speed and a 20 fps picture, since
-     the frame the loop drew *was* the tick and `LogicPhase` was 0 on all of them.
-     One pre-hook on stage 9, whose only caller is the main loop, plus a post on
-     stage 13. `patches/LoopPacing.cs`; measured with the new
-     `rate_matrix.py modal-rate` scenario at `KF2_FPS=144`, the fade's body went
+     run per world tick, and the gap between its iterations is filled with
+     **redraws** — stage 13 called again at the phase the frame stands at, with the
+     two view pointers the loop itself passed it — so `ObjectSmoothing` and
+     `AnimSmoothing` carry the picture the way they do everywhere else. Pacing the
+     loop alone was the first version and was only half: it gave the right speed and
+     a 20 fps picture, since the frame the loop drew *was* the tick and `LogicPhase`
+     was 0 on all of them. The second version redrew without passing stage 13 its
+     arguments, which built the view matrix out of the leftover register file and
+     put a black flicker and a stale buffer on screen; the pointers are recorded by
+     a pre-hook now. One pre-hook on stage 9, whose only caller is the main loop,
+     plus a pre and a post on stage 13. `patches/LoopPacing.cs`; measured with the
+     new `rate_matrix.py modal-rate` scenario at `KF2_FPS=144`, the fade's body went
      33.8 -> 19.9 iterations a second while its picture went 33.8 -> 144.0 frames a
      second, and the menu 144.0 -> 60.1; the 20 fps rows are identical either way.
      See "Loops that render their own frames" in

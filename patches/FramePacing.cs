@@ -139,10 +139,11 @@ namespace Kf2;
 /// animations and the menu all step once per *rendered* frame inside a loop of
 /// their own, which a gate cannot reach because it decides only whether such a
 /// loop is entered. <see cref="LoopPacing"/> holds the loop's *body* to one run per
-/// tick instead, and fills the gap between its iterations with extra renders of
-/// stage 8 and stage 13, so a modal frame is an ordinary frame: world at
-/// <see cref="LogicHz"/>, picture at the render rate, smoothing carrying it. And
-/// **the object
+/// tick instead, and fills the gap between its iterations by **redrawing** -- stage
+/// 13 called again, with the two view pointers the loop itself passed it, at the
+/// phase the frame now stands at. The world then advances at <see cref="LogicHz"/>
+/// while the picture is drawn at the render rate, with the smoothing carrying it.
+/// And **the object
 /// record's rec+0x40 on two slots survived gating stage 2 at ratio 3.69**: that
 /// one is stepped by stage 13's own object pass `func_800331B4` (proved by gating
 /// it as a probe -- 53.4/s fell to 17.6/s), where it is an ambient-sound retrigger

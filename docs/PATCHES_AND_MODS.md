@@ -9,7 +9,7 @@ lives here — frame pacing and auto reload.
 | file | what it does | detail |
 |---|---|---|
 | `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
-| `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap with extra renders | this file |
+| `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
@@ -1144,38 +1144,79 @@ console's *speed* and the console's *frame rate*, and the port's whole argument 
 that those two should stop being the same number.
 
 So the loop is not paced. It is **gated**, and the gap between its iterations is
-filled with **extra renders**: stage 8 then stage 13 — the main loop's own drawing
-tail — run again at the phase the frame now stands at. That is not a new
-mechanism. `func_80037B5C` already renders extra frames inside a stage by calling
-stage 13, and that is precisely why stages 2 and 3 are recorded gate exceptions;
-this does the same thing deliberately.
+filled with **redraws**: stage 13 called again at the phase the frame now stands
+at. That is not a new mechanism. `func_80037B5C` already renders extra frames
+inside a stage by calling stage 13, and that is precisely why stages 2 and 3 are
+recorded gate exceptions; this does the same thing deliberately.
 
-What it buys is that **a modal frame becomes exactly a main-loop frame**: the
-world advances at `LogicHz`, the picture is drawn at the render rate, and the
-three smoothing patches carry the view, the objects, the creatures and the poses
-between ticks the way they already do everywhere else — they hook stage 8 and
-stage 13, both of which a modal loop reaches, and both of which an extra render
-runs. Neither patch re-reads memory on a non-tick frame (each keeps `prev` and
-`cur` in managed fields and only re-samples when `TickedThisFrame`), so an extra
-render is safe for them by construction; it only re-lerps at the new phase.
+What it buys is that the world advances at `LogicHz` while the picture is drawn at
+the render rate, and `ObjectSmoothing` and `AnimSmoothing` — which bracket stage 13
+— carry the objects, the creatures and the poses between ticks the way they already
+do everywhere else. Neither re-reads memory on a non-tick frame (each keeps `prev`
+and `cur` in managed fields and only re-samples when `TickedThisFrame`), so a
+redraw is safe for them by construction; it only re-lerps at the new phase.
 
-The loop ends on the logic clock rather than on a counter: each extra render
-passes the frame boundary itself, so it is paced by `FramePacing.Floor` and
-advances the accumulator exactly as an ordinary frame does. `MaxExtraRenders` is a
-backstop against a configuration nobody has thought of, not the mechanism.
+The loop ends on the logic clock rather than on a counter: each redraw passes the
+frame boundary itself, so it is paced by `FramePacing.Floor` and advances the
+accumulator exactly as an ordinary frame does. `MaxExtraRenders` is a backstop
+against a configuration nobody has thought of, not the mechanism.
+
+### A redraw has to pass stage 13 its two pointers, and the first one shipped did not
+
+Stage 13 is **`func_800342D8(VECTOR *pos, SVECTOR *rot)`**. It opens with
+`func_8002E22C`, which copies 16 bytes from `a0` and 8 from `a1` into
+`0x80192E78`/`0x80192E88` and builds the frame's whole view matrix out of them —
+**unless both are zero, in which case it reuses what is already stored**. Stage 8,
+`func_80025A1C(pos, rot)`, is the routine that *fills* those two blocks: 12 bytes
+written through `a0`, six through `a1`. The main loop `func_8001369C` keeps two
+stack scratch blocks (`s1 = sp+0x28`, `s0 = sp+0x38`) and hands the same pair to
+both stages; `func_80037B5C` does the same with `sp+0x10`/`sp+0x20`.
+
+The first version of the redraw called `stage8(c, m)` and `stage13(c, m)` with
+whatever the register file held. After stage 13 that is the tail of
+`func_8003549C`, so `a0` is a pointer into the sound-slot table near `0x8018EAA4`:
+stage 8 wrote the camera *into live game data*, and stage 13 then projected the
+world through it. A garbage view matrix draws next to nothing, and this game's
+`PutDrawEnv` has `isbg=0` — there is no background clear, the game overwrites the
+buffer by drawing the whole scene — so a mostly-empty frame leaves **the previous
+contents of that buffer** on screen. Double-buffered at seven redraws a tick, that
+is what came back from play: constant black flicker, no camera interpolation, and
+"the frame you died on" alternating with the live picture.
+
+So a redraw **replays stage 13 with the arguments the modal loop itself passed**,
+recorded by a pre-hook on the same function. That is literally "draw this frame
+again at a later phase", and it is right for all three call shapes in the game: the
+fade's own stack blocks (still live below `sp`, and unchanged because the world is
+frozen), the `0, 0` of the item-use and `fdat05`/`fdat14` loops, and `fdat23`'s
+scripted cutscene camera. The register file is snapshotted and restored around the
+redraws, so the loop resumes with exactly what stage 13 left it.
+
+**Stage 8 is deliberately not replayed.** It would overwrite a cutscene's scripted
+camera with the player's, and it buys nothing: no gated stage runs inside a modal
+loop, so the player camera cannot move and `FrameSmoothing` has nothing to carry
+there.
+
+Measured at `KF2_FPS=165` with `KF2_LOOPPACING_PROBE=1`, which now prints the
+recorded pair: the death fade ran at **165.0 modal world frames a second against
+19.9 loop iterations, 7.3 redraws each**, and every window reported
+`view a0=0x801FFEE8 a1=0x801FFEF8` — a stack address, the loop's own scratch. The
+menu came out at 60.0, and at `KF2_FPS=20` the redraw count is **0.0**, which is
+the "does nothing at or below the tick rate" claim in one number. Menu, warp, death
+and auto-reload raised no exception and no unmapped call.
 
 **Two things it costs, both stated rather than discovered later.** Whatever stage
 13 steps in its *own* body now steps once per rendered frame inside a modal loop —
 the jitter accumulator at `0x8006E608` and `func_800331B4`'s ambient-sound
 retrigger — which makes a modal loop no worse than an ordinary frame rather than
-better; both are already open in [TODO.md](TODO.md). And an extra render cannot
-reach a counter the modal loop steps in its own body: a picked-up item's spin
-steps once a tick, which is the console's own rate for it, and smoothing *that*
-would need the model submit's arguments interpolated rather than a table.
+better; both are already open in [TODO.md](TODO.md). And a redraw cannot reach a
+counter the modal loop steps in its own body: a picked-up item's spin, or a
+cutscene camera the loop pans itself, steps once a tick, which is the console's own
+rate for it, and smoothing *that* would need the model submit's arguments
+interpolated rather than a table.
 
 **Install order is load-bearing.** `HookManager` runs the posts on a function in
 the order they were added, so `LoopPacing` is installed in `Program.cs` *after*
-all three smoothing patches: the extra render has to be asked for once their posts
+all three smoothing patches: the redraw has to be asked for once their posts
 have put the tables back, not while their interpolated values are still in them.
 
 **Classifying a frame costs one hook.** `FramePacing.AfterDrawOTag` already fires
@@ -1203,9 +1244,11 @@ carry and never calls stage 13, so there is no gap worth filling. It is paced, a
 a menu frame is one vblank, and `KF2_TICKRATE` is a setting about game *speed* with
 no business retuning a cursor. The menu also presents twice per iteration of
 `func_80018E80`, so binding it to a 20 Hz tick would make it respond at 10 Hz.
-Pacing is also the **fallback** for a world-drawing loop if stage 8 or stage 13
-cannot be resolved: the speed stays right and the picture goes back to stepping,
-which is the failure worth having.
+Pacing is also the **fallback** for a world-drawing loop if stage 13 cannot be
+resolved or has not yet been seen with its arguments, and it is what
+`KF2_LOOPPACING=pace` selects on purpose, as the A/B against the redraws: the speed
+stays right and the picture goes back to stepping, which is the failure worth
+having.
 
 Measured with `python3 scripts/rate_matrix.py modal-rate --fps 20 144`, which
 opens the menu and then warps, against the same run with

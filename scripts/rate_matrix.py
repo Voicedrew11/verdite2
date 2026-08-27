@@ -144,7 +144,7 @@ def sc_modal_rate(run: kf2.Run) -> dict:
     # The two columns say different things and both matter. `world iter/s` is the
     # loop *body* -- the thing that was running too fast, and which must equal the
     # tick rate. `modal world/s` is the *picture*, which must equal the render rate:
-    # the gap between iterations is filled with extra renders so the smoothing
+    # the gap between iterations is filled with redraws so the smoothing
     # patches have something to carry.
     return {
         "main/s": round(max((r[0] for r in rows), default=0.0), 1),

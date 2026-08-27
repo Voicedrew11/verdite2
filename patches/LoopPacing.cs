@@ -9,9 +9,11 @@ namespace Kf2;
 
 /// <summary>
 /// Hold every loop that renders its own frames to the rate the console ran it at,
-/// whatever the port draws at.
+/// whatever the port draws at, and fill the gap it leaves with redraws.
 ///
 ///     KF2_LOOPPACING=0        leave them on the render rate -- comparison only
+///     KF2_LOOPPACING=pace     hold the loop and do *not* redraw -- comparison only:
+///                             the speed is right and the picture steps at the tick
 ///     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface, against
 ///                             the main loop's own
 ///
@@ -44,37 +46,61 @@ namespace Kf2;
 /// and no counter has to be found -- the loop iterates as often as the world
 /// ticks, so every number inside it is right by construction.
 ///
-/// **Holding the loop is only half of it, and the first version shipped only that
-/// half.** Pacing the loop's frames to the tick rate makes the speed right and
-/// makes the *picture* 20 fps, which is what came back from play: "it runs at the
-/// correct speed, BUT the animation is at its original framerate, and so is the
-/// camera". Of course it was -- the frame the loop drew *was* the tick, so
-/// <see cref="FramePacing.LogicPhase"/> was 0 on every one of them and the three
-/// smoothing patches had nothing to carry, exactly as they had nothing to carry
-/// before the frame boundary was fixed.
+/// **Holding the loop is only half of it.** Pacing the loop's frames to the tick
+/// rate makes the speed right and makes the *picture* step at the tick rate, which
+/// is what came back from play: "it runs at the correct speed, BUT the animation is
+/// at its original framerate, and so is the camera". Of course it was -- the frame
+/// the loop drew *was* the tick, so <see cref="FramePacing.LogicPhase"/> was 0 on
+/// every one of them and the three smoothing patches had nothing to carry, exactly
+/// as they had nothing to carry before the frame boundary was fixed.
 ///
-/// So the loop is not paced. It is **gated**, and the gap between its iterations
-/// is filled with extra renders -- the main loop's own drawing tail, stage 8 then
-/// stage 13, run again at the phase the frame now stands at. That is not a new
-/// mechanism: `func_80037B5C` already renders extra frames inside a stage by
-/// calling stage 13, and that is why stages 2 and 3 are recorded gate exceptions.
-/// What it buys is that a modal frame becomes **exactly a main-loop frame**: the
-/// world advances at <see cref="FramePacing.LogicHz"/>, the picture is drawn at
-/// the render rate, and <see cref="FrameSmoothing"/>, <see cref="ObjectSmoothing"/>
-/// and <see cref="AnimSmoothing"/> -- which hook stage 8 and stage 13, both of
-/// which a modal loop reaches -- carry the view, the objects, the creatures and
-/// the poses between ticks the way they already do everywhere else.
+/// So the loop is not paced. It is **gated**, and the gap between its iterations is
+/// filled with **redraws**: stage 13 called again at the phase the frame now stands
+/// at. That is not a new mechanism -- `func_80037B5C` already renders extra frames
+/// inside a stage by calling stage 13, and that is why stages 2 and 3 are recorded
+/// gate exceptions. What it buys is that the world advances at
+/// <see cref="FramePacing.LogicHz"/> while the picture is drawn at the render rate,
+/// and <see cref="ObjectSmoothing"/> and <see cref="AnimSmoothing"/> -- which
+/// bracket stage 13 -- carry the objects, the creatures and the poses between ticks
+/// the way they already do everywhere else.
 ///
-/// It is the slowdown fix run backwards, and then the slowdown fix again on top:
-/// withhold the iterations the game should not have computed, then draw the
-/// in-between frames it never could.
+/// ## Stage 13 takes two pointers, and the first version of this did not pass them
 ///
-/// **What an extra render does not reach** is a counter the modal loop steps in
-/// its own body -- a picked-up item's spin, if its transform does not come from
-/// one of the tables <see cref="ObjectSmoothing"/> carries. That steps once a
-/// tick, which is the console's own rate for it; smoothing it would need the model
-/// submit's *arguments* interpolated rather than a table. Stated here rather than
-/// discovered later.
+/// **This is the defect that shipped in the redraw's first version and it is worth
+/// naming.** Stage 13 is `func_800342D8(VECTOR *pos, SVECTOR *rot)`: it opens with
+/// `func_8002E22C`, which copies 16 bytes from `a0` and 8 from `a1` into
+/// `0x80192E78`/`0x80192E88` and builds the frame's whole view matrix out of them
+/// -- unless both are zero, in which case it reuses what is already stored. Stage 8
+/// `func_80025A1C(pos, rot)` is the routine that *fills* those two blocks, and the
+/// main loop `func_8001369C` hands both stages the same pair of stack scratch
+/// blocks.
+///
+/// A redraw that calls either without setting `a0`/`a1` gets whatever the register
+/// file happens to hold -- after stage 13 that is the tail of `func_8003549C`, so
+/// `a0` is a pointer into the sound-slot table near `0x8018EAA4`. Stage 8 then
+/// *writes the camera into live game data*, and stage 13 builds its view matrix out
+/// of that. A garbage view draws next to nothing, and this game's `PutDrawEnv` has
+/// `isbg=0` -- there is no background clear -- so a mostly-empty frame leaves the
+/// previous contents of that buffer on screen. Double-buffered at seven redraws a
+/// tick that is a black flicker and a display alternating between the correct frame
+/// and one two frames old, which is exactly what came back from play.
+///
+/// So a redraw **replays stage 13 with the arguments the modal loop itself passed**,
+/// recorded by <see cref="BeforeRenderer"/>. That is literally "draw this frame
+/// again at a later phase", and it is right for all three call shapes the game
+/// uses: the fade's own stack blocks (still live, and unchanged because the world
+/// is frozen), the `0, 0` of the item-use and `fdat05`/`fdat14` loops (reuse the
+/// stored view, as intended), and `fdat23`'s **scripted** cutscene camera.
+///
+/// **Stage 8 is deliberately not part of a redraw.** Re-running it would overwrite
+/// a cutscene's scripted camera with the player's, and it buys nothing: no gated
+/// stage runs inside a modal loop, so the player camera cannot move and
+/// <see cref="FrameSmoothing"/> has nothing to carry there. A modal loop that pans
+/// a camera of its own steps it once a tick; smoothing *that* is the same open
+/// problem as a counter the loop steps in its own body -- see docs/TODO.md.
+///
+/// The register file is snapshotted and restored around the redraws, so a modal
+/// loop resumes with exactly the registers stage 13 left it.
 ///
 /// ## Classifying a frame costs one hook
 ///
@@ -107,22 +133,23 @@ namespace Kf2;
 /// of `func_80018E80`, so binding it to a 20 Hz tick would make it respond at
 /// 10 Hz.
 ///
-/// Pacing is also the **fallback** for a world-drawing loop when stage 8 or stage
-/// 13 cannot be resolved: the speed stays right and the picture goes back to
-/// stepping, which is the failure worth having.
+/// Pacing is also the **fallback** for a world-drawing loop when stage 13 cannot be
+/// resolved or has not yet been seen with its arguments, and it is what
+/// `KF2_LOOPPACING=pace` selects on purpose: the speed stays right and the picture
+/// goes back to stepping, which is the failure worth having.
 ///
 /// ## What it costs, and when it does nothing
 ///
 /// <see cref="FrameMinMs"/> returns the frame length FramePacing would have used
-/// anyway, and <see cref="AfterRenderer"/> renders nothing extra, whenever the
-/// render rate is at or below the tick rate -- so **at the 20 fps default this
-/// class does nothing at all**, which is where the defect does not exist either.
-/// It also stands down under `KF2_FPS_LOGIC=full`, which is deliberately
-/// "everything at the render rate". Nothing here reads or writes game memory: it
-/// lengthens a frame, or it asks the renderer to draw one more.
+/// anyway, and <see cref="AfterRenderer"/> redraws nothing, whenever the render
+/// rate is at or below the tick rate -- so **at the 20 fps default this class does
+/// nothing at all**, which is where the defect does not exist either. It also
+/// stands down under `KF2_FPS_LOGIC=full`, which is deliberately "everything at the
+/// render rate". Nothing here reads or writes game memory: it lengthens a frame, or
+/// it asks the renderer to draw the same one again.
 ///
-/// **The one thing an extra render costs** is that whatever stage 13 steps in its
-/// *own* body now steps once per rendered frame inside a modal loop, exactly as it
+/// **The one thing a redraw costs** is that whatever stage 13 steps in its *own*
+/// body now steps once per rendered frame inside a modal loop, exactly as it
 /// already does in the main loop -- the jitter accumulator at `0x8006E608` and
 /// `func_800331B4`'s ambient-sound retrigger. Both are already on that list in
 /// docs/TODO.md; this makes a modal loop no worse than an ordinary frame rather
@@ -143,30 +170,31 @@ public static class LoopPacing
     /// </summary>
     const uint MainLoopMarker = 0x800140AC;
 
-    /// <summary>Stage 13, the renderer. Both the post that fills a modal loop's gap
-    /// and the extra render itself; `ObjectSmoothing` and `AnimSmoothing` hook it
-    /// too, which is what makes an extra render an interpolated one.</summary>
+    /// <summary>Stage 13, the renderer -- `func_800342D8(VECTOR *pos, SVECTOR *rot)`.
+    /// The pre that records those two pointers, the post that fills a modal loop's
+    /// gap, and the redraw itself; `ObjectSmoothing` and `AnimSmoothing` bracket it
+    /// too, which is what makes a redraw an interpolated one.</summary>
     const uint Renderer = 0x800342D8;
-
-    /// <summary>Stage 8, the only copy of the camera between the player state and
-    /// the renderer, and where <see cref="FrameSmoothing"/> carries the view. Run
-    /// before each extra render for the same reason the main loop runs it before
-    /// each of its own: without it the view is whatever the last copy left.</summary>
-    const uint CameraCopy = 0x80025A1C;
 
     /// <summary>The rate an interface-only modal frame is held to. One vblank, the
     /// same grid and the same reasoning as <see cref="MenuPacing.BlinkMs"/>.</summary>
     const double InterfaceHz = 60.0;
 
     /// <summary>
-    /// Extra renders one modal iteration may be followed by. The loop below ends
-    /// on the logic clock, which is wall-clock driven and therefore always ticks,
-    /// so this is a backstop against a configuration nobody has thought of rather
-    /// than the mechanism -- 64 is over three ticks' worth at 1000 fps.
+    /// Redraws one modal iteration may be followed by. The loop below ends on the
+    /// logic clock, which is wall-clock driven and therefore always ticks, so this
+    /// is a backstop against a configuration nobody has thought of rather than the
+    /// mechanism -- 64 is over three ticks' worth at 1000 fps.
     /// </summary>
     const int MaxExtraRenders = 64;
 
     public static bool Enabled { get; private set; } = true;
+
+    /// <summary>`KF2_LOOPPACING=pace`: hold the loop's body to the tick and do not
+    /// redraw, which is the behaviour the fallback path gives when stage 13 cannot
+    /// be reached. The speed is right and the picture steps at the tick rate;
+    /// kept as the A/B against the redraws.</summary>
+    static bool _paceOnly;
 
     static bool _probe;
 
@@ -187,24 +215,34 @@ public static class LoopPacing
 
     /// <summary>True while <see cref="AfterRenderer"/> is driving a render of its
     /// own. Every hook in the port fires on those too, this one included, so
-    /// without it the first extra render would recurse.</summary>
+    /// without it the first redraw would recurse -- and the recorded arguments
+    /// would be overwritten with the ones this class had just set.</summary>
     static bool _inExtra;
 
-    /// <summary>Stage 8 and stage 13 as callables. Bound on first use rather than
-    /// at attach time, so they are resolved after every patch has committed its
-    /// hooks and an extra render goes through the same detours an ordinary call
-    /// does.</summary>
-    static Action<CpuContext, IMemory>? _stage8, _stage13;
+    /// <summary>The two pointers the caller handed stage 13, recorded by
+    /// <see cref="BeforeRenderer"/> on the loop's own frame and replayed on every
+    /// redraw. See the class comment: getting these wrong is not a subtle
+    /// difference, it is a garbage view matrix and a corrupted sound table.</summary>
+    static uint _argPos, _argRot;
+    static bool _argsSeen;
+
+    /// <summary>Stage 13 as a callable. Bound on first use rather than at attach
+    /// time, so it is resolved after every patch has committed its hooks and a
+    /// redraw goes through the same detours an ordinary call does.</summary>
+    static Action<CpuContext, IMemory>? _stage13;
     static bool _bound;
 
-    /// <summary>False when stage 8 or stage 13 could not be resolved: a
-    /// world-drawing modal loop is then paced like the interface instead, which
-    /// keeps the speed right and gives up the picture.</summary>
+    /// <summary>False when stage 13 could not be resolved: a world-drawing modal
+    /// loop is then paced like the interface instead, which keeps the speed right
+    /// and gives up the picture.</summary>
     static bool _canFill = true;
 
-    // For the probe: modal world iterations the loop body actually ran, and extra
-    // renders issued to fill the gaps between them. The first is the number that
-    // has to equal the tick rate; the second is what turns it back into a picture.
+    /// <summary>Whether a modal world frame is filled with redraws or simply paced.</summary>
+    static bool Filling => _canFill && !_paceOnly;
+
+    // For the probe: modal world iterations the loop body actually ran, and redraws
+    // issued to fill the gaps between them. The first is the number that has to
+    // equal the tick rate; the second is what turns it back into a picture.
     static int _iters, _extra;
 
     // For the probe: frames of each kind since the window opened.
@@ -216,13 +254,21 @@ public static class LoopPacing
     {
         Id = "kf2.looppacing",
         Name = "Loop pacing",
-        Version = "1.0",
+        Version = "1.1",
         Description = "Runs a loop that renders its own frames at the world's rate, not the render rate.",
     };
 
     public static void Configure(string? enabled, string? probe)
     {
-        if (!string.IsNullOrWhiteSpace(enabled)) Enabled = enabled != "0";
+        if (!string.IsNullOrWhiteSpace(enabled))
+        {
+            if (string.Equals(enabled, "pace", StringComparison.OrdinalIgnoreCase))
+            {
+                Enabled = true;
+                _paceOnly = true;
+            }
+            else Enabled = enabled != "0";
+        }
         if (!string.IsNullOrWhiteSpace(probe)) _probe = probe != "0";
     }
 
@@ -268,65 +314,79 @@ public static class LoopPacing
         var hook = self.GetMethod(nameof(MainLoopStage), BindingFlags.Public | BindingFlags.Static)!;
         if (!HookManager.AddPre(_self, marker, hook)) return;
 
-        // The gap filler. This post must run *after* the smoothing patches' own
-        // posts on the same function, or the extra render would be asked for while
-        // their interpolated values were still in the tables -- hence Program.cs
-        // installing this class after all three of them. HookManager runs posts in
-        // the order they were added.
+        // The argument recorder and the gap filler. The post must run *after* the
+        // smoothing patches' own posts on the same function, or the redraw would be
+        // asked for while their interpolated values were still in the tables --
+        // hence Program.cs installing this class after all three of them.
+        // HookManager runs posts in the order they were added.
         var renderer = SymbolRegistry.Resolve("game", null, Renderer);
-        var camera = SymbolRegistry.Resolve("game", null, CameraCopy);
-        if (renderer == null || camera == null)
+        if (renderer == null)
         {
             _canFill = false;
-            Console.Error.WriteLine($"[KF2] loop pacing: no game function at " +
-                                    $"0x{(renderer == null ? Renderer : CameraCopy):X8} -- " +
-                                    "a modal loop cannot be handed an extra render, so its speed " +
-                                    "will be right and its picture will step at the tick rate.");
+            Console.Error.WriteLine($"[KF2] loop pacing: no game function at 0x{Renderer:X8} -- " +
+                                    "a modal loop cannot be handed a redraw, so its speed will be " +
+                                    "right and its picture will step at the tick rate.");
         }
         else
         {
+            var args = self.GetMethod(nameof(BeforeRenderer), BindingFlags.Public | BindingFlags.Static)!;
             var fill = self.GetMethod(nameof(AfterRenderer), BindingFlags.Public | BindingFlags.Static)!;
+            if (!HookManager.AddPre(_self, renderer, args)) _canFill = false;
             if (!HookManager.AddPost(_self, renderer, fill)) _canFill = false;
         }
 
         HookManager.Commit();
 
         Console.WriteLine($"[KF2] loop pacing: {(Enabled ? "on" : "off")}, " +
-                          $"a self-rendered world frame {(_canFill ? "filled to the render rate" : $"paced at {FramePacing.LogicHz:0.#} Hz")}, " +
+                          $"a self-rendered world frame {(Filling ? "redrawn to the render rate" : $"paced at {FramePacing.LogicHz:0.#} Hz")}, " +
                           $"an interface frame at {InterfaceHz:0.#} Hz");
     }
 
     /// <summary>
-    /// Bind stage 8 and stage 13 as callables, once, on the first frame that wants
-    /// them. Late on purpose: a delegate made here goes through whatever detours
-    /// every patch has committed by now, which is the whole point -- an extra
-    /// render has to run the smoothing hooks or it is just the same picture again.
+    /// Bind stage 13 as a callable, once, on the first frame that wants it. Late on
+    /// purpose: a delegate made here goes through whatever detours every patch has
+    /// committed by now, which is the whole point -- a redraw has to run the
+    /// smoothing hooks or it is just the same picture again.
     /// </summary>
     static void Bind()
     {
         _bound = true;
         var renderer = SymbolRegistry.Resolve("game", null, Renderer);
-        var camera = SymbolRegistry.Resolve("game", null, CameraCopy);
-        if (renderer == null || camera == null) { _canFill = false; return; }
+        if (renderer == null) { _canFill = false; return; }
 
         _stage13 = renderer.CreateDelegate<Action<CpuContext, IMemory>>();
-        _stage8 = camera.CreateDelegate<Action<CpuContext, IMemory>>();
+    }
+
+    /// <summary>
+    /// Record the view stage 13 was handed -- `a0` a VECTOR position, `a1` an
+    /// SVECTOR of angles, or both zero for "reuse the stored view". A redraw
+    /// replays exactly these; see the class comment for what happens when it does
+    /// not. Skipped while a redraw is in flight, which is this class's own values
+    /// coming back round.
+    /// </summary>
+    public static void BeforeRenderer(CpuContext c, IMemory m)
+    {
+        if (_inExtra) return;
+        _argPos = c.A0;
+        _argRot = c.A1;
+        _argsSeen = true;
     }
 
     /// <summary>
     /// Stage 13 has returned, so the modal loop that called it is about to step its
     /// state again. Hold it there until the world is due to advance, and fill the
-    /// wait with the main loop's own drawing tail -- stage 8, then stage 13 -- so
-    /// the picture is drawn at the render rate and the smoothing patches carry it.
+    /// wait by drawing the same frame again -- at the phase the frame now stands
+    /// at, so <see cref="ObjectSmoothing"/> and <see cref="AnimSmoothing"/> carry
+    /// it.
     ///
-    /// Each extra render passes the frame boundary itself, so it is paced by
+    /// Each redraw passes the frame boundary itself, so it is paced by
     /// <c>FramePacing.Floor</c> and advances the logic clock exactly as an ordinary
     /// frame does; the loop below therefore ends on the tick rather than on a
-    /// counter, and the phase every render is drawn at is the real one.
+    /// counter, and the phase every redraw is drawn at is the real one.
     /// </summary>
     public static void AfterRenderer(CpuContext c, IMemory m)
     {
-        // Every hook fires on an extra render too, this one included.
+        // Every hook fires on a redraw too, this one included.
         if (_inExtra) return;
 
         if (!FramePacing.Gating) return;
@@ -339,29 +399,34 @@ public static class LoopPacing
         // where the whole claim is that it tracks the render rate.
         if (_probe) _iters++;
 
-        if (!Enabled || !_canFill) return;
+        if (!Enabled || !Filling || !_argsSeen) return;
 
         // Below or at the tick rate there is no gap: the loop's own frame is
         // already at least a tick long.
         if (!FramePacing.Extrapolating) return;
 
         if (!_bound) Bind();
-        if (_stage13 == null || _stage8 == null) return;
+        if (_stage13 == null) return;
 
         int n = 0;
+        var saved = c.Snapshot();
         _inExtra = true;
         try
         {
             while (!FramePacing.TickedThisFrame && n < MaxExtraRenders)
             {
                 n++;
-                _stage8(c, m);
+                c.A0 = _argPos;
+                c.A1 = _argRot;
                 _stage13(c, m);
             }
         }
         finally
         {
             _inExtra = false;
+            // The modal loop resumes with exactly the registers stage 13 left it,
+            // whatever the redraws did to them.
+            c.Restore(saved);
         }
 
         if (_probe) _extra += n;
@@ -388,8 +453,8 @@ public static class LoopPacing
     ///
     /// **A world-drawing modal frame is not lengthened when the gap can be filled**
     /// -- <see cref="AfterRenderer"/> holds the loop's *body* to the tick instead,
-    /// and lengthening the frame as well would leave the extra renders nowhere to
-    /// go and put the picture back at 20 fps.
+    /// and lengthening the frame as well would leave the redraws nowhere to go and
+    /// put the picture back at the tick rate.
     /// </summary>
     public static double FrameMinMs(bool enabled, double targetFps)
     {
@@ -412,9 +477,9 @@ public static class LoopPacing
         if (mainLoop || !Enabled || !FramePacing.Gating) return min;
 
         // The world case is gated and filled rather than paced, unless the filling
-        // could not be wired up -- then pacing is the fallback and the picture
-        // steps.
-        if (world && _canFill) return min;
+        // could not be wired up or was switched off -- then pacing is the fallback
+        // and the picture steps.
+        if (world && Filling) return min;
 
         double hz = world ? FramePacing.LogicHz : InterfaceHz;
         return Math.Max(min, 1000.0 / hz);
@@ -445,7 +510,8 @@ public static class LoopPacing
                               $"{_uiFrames * 1000.0 / elapsed:0.#} modal interface frames a second" +
                               (_iters > 0
                                   ? $"; {_iters * 1000.0 / elapsed:0.#} world iteration(s) a second, " +
-                                    $"{(double)_extra / _iters:0.0} extra render(s) each"
+                                    $"{(double)_extra / _iters:0.0} redraw(s) each, " +
+                                    $"view a0=0x{_argPos:X8} a1=0x{_argRot:X8}"
                                   : ""));
 
         _windowMs = now;
