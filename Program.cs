@@ -277,8 +277,14 @@ Kf2.FrameSmoothing.Install();
 //
 //     KF2_SMOOTH_OBJECTS=1        on; off by default
 //     KF2_SMOOTH_OBJECTS_PROBE=1  how much is being carried, per second
+//     KF2_SMOOTH_OBJECTS_GUARD=   strict | sticky | continuous; which step counts
+//                                 as a placement rather than as motion. `strict`
+//                                 by default -- the raised modes make projectiles
+//                                 stutter. A picture, so it is a setting under
+//                                 Video as well.
 Kf2.ObjectSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS"),
-                              Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_PROBE"));
+                              Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_PROBE"),
+                              Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_GUARD"));
 Kf2.ObjectSmoothing.Install();
 
 // The third of the same problem: origin and facing are carried now, but a

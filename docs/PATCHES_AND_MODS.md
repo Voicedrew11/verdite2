@@ -879,27 +879,80 @@ Two things about it are worth stating:
   be afforded: no bounce-back on a stop or a turn, which is exactly what forward
   extrapolation gave. **Two smoothers must agree about what time it is** — that is
   the rule worth carrying to whatever gets smoothed next.
-* **A step over 8192 units on any axis is a placement, and is left alone** —
-  and the decision is **sticky**, a slot already being carried getting four times
-  that before it is called one. It was a flat 1024 and that was measured against
-  things that *walk*. Play reported the final boss and the piranhas freaking out
-  during an attack, which is exactly when a big creature's parts cover the most
-  ground in a tick: a part whose step sits near the threshold is carried on the
-  tick it comes in under and held on the tick it goes over, gliding and stopping
-  twenty times a second while the parts either side of it keep gliding. That
-  reads as the creature tearing itself apart, and it cannot show at 20 fps, where
-  the phase is 0 and nothing is carried at all. A bare threshold is a cliff and
-  raising it only moves the cliff, so motion is now assumed to continue and it
-  takes `GlidingFactor` × the threshold to decide otherwise — which the one
-  placement ever measured clears by seven times over.
-  Without that, an object spawned, respawned, moved by a script, or simply placed
-  when the area finished loading is swept a whole area's width over one tick. (It is
-  needed for interpolation just as it was for extrapolation: prev and cur can
-  straddle a placement either way.) The threshold comes from measurement, not taste: real
-  motion peaked at **37 units a tick**, the player — the fastest thing in the game —
-  covers 1817 units in 2 s at 20 Hz and so about **45 a tick**, and one window
-  caught a **233,472-unit** step at area load. 1024 sits twenty times above
-  anything that walks and two hundred times below the placement it has to catch.
+* **A step over 1024 units on any axis is a placement, and is left alone.**
+  Without it an object spawned, respawned, moved by a script, or simply placed
+  when the area finished loading is swept a whole area's width over one tick. (It
+  is needed for interpolation just as it was for extrapolation: prev and cur can
+  straddle a placement either way.) The threshold comes from measurement, not
+  taste: real motion peaked at **37 units a tick**, the player — the fastest thing
+  in the game — covers 1817 units in 2 s at 20 Hz and so about **45 a tick**, and
+  one window caught a **233,472-unit** step at area load. 1024 sits twenty times
+  above anything that walks and two hundred times below the placement it has to
+  catch.
+* **It was raised to 8192 and made sticky, and that was reverted. The reasoning is
+  worth keeping.** Play reported the final boss and the piranhas freaking out
+  during an attack, and the argument was that a part whose step sits near the
+  threshold is carried on the tick it comes in under and held on the tick it goes
+  over, gliding and stopping twenty times a second while the parts either side of
+  it keep gliding — the creature tearing itself apart. A bare threshold being a
+  cliff, the decision was also made sticky, a slot already carried getting
+  `GlidingFactor` × the threshold before it is called a placement.
+
+  **The mechanism was impossible.** A creature is *one record* in the entity table
+  — one position, one rotation triple (`0x8016C544`, 200 × `0x7C`, position
+  `+0x2C`, rotation `+0x40`) — so the finest thing this patch can act on is the
+  whole creature. It can make a boss judder as a body; it cannot shear one limb
+  against another, and a limb-relative defect is the MO pose, which is
+  `AnimSmoothing`'s clip clock. The boss was never confirmed to improve at 8192,
+  so nothing verified was gained.
+
+  **And the raise broke projectiles.** Play reported fireballs stuttering and
+  appearing where they had not been, at anything above 1024. The effects table
+  (`0x8019CC6C`, 128 × `0x48`) recycles its slots constantly, and a slot freed and
+  refilled inside one tick is never observed free: `Prev` holds the dead
+  projectile and `Cur` the new one. 1024 refuses that delta as a placement; 8192
+  carries it, and the new fireball is drawn sliding in from wherever the old one
+  died. Stickiness makes it worse again, since a recycled slot inherits the
+  previous occupant's `Gliding` along with its position. That is a **wrong**
+  position, not a rough one, so an unverified fix bought a verified regression and
+  the default went back.
+* **The lasting finding is that this threshold was doing two jobs.** Rejecting
+  slot reuse and teleports wants it tight; admitting fast honest motion wants it
+  loose. One global constant cannot serve both — the boss argument and the
+  fireball report are the two ends of exactly that — and both numbers were derived
+  in a quiet corridor from things that walk, which never bounded either job. The
+  principled fix is to take the first job away from the threshold entirely by
+  keying the sample on the slot's **identity** (the object table's definition
+  index at `+0x6`, the entity table's byte at `+0x0`) and dropping the previous
+  sample whenever it changes, so reuse is caught regardless of speed. Failing
+  that, the threshold belongs per `TableSpec` rather than global: creatures walk,
+  projectiles do not.
+* **The symptom does not reproduce at 1024 any more**, which closes the argument.
+  1024 is the value that was in place when the boss was first reported spazzing,
+  so if the guard were the variable the revert would have brought it back. It did
+  not. The only other behavioural change since that report is `AnimSmoothing`'s
+  segment overrun becoming a **refusal for the whole tick** rather than a clamp to
+  the segment's start — which is the pose, the layer that can actually move one
+  limb against another. Not yet confirmed by stashing that change and re-running
+  the boss, but everything else in between is documentation or the per-tick
+  decision below, which under `strict` is a provable no-op.
+* **The guard is a setting**, since the comparison is worth being able to make by
+  eye: Video ▸ Enhancements ▸
+  Placement guard, or `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`.
+  `strict` is the 1024 default. `sticky` is the raise described above.
+  `continuous` additionally raises the cap on a slot that merely *moved* last tick
+  rather than one that was *carried* — sticky's hysteresis is one-way, so a slot
+  can only become sticky by first passing the bare threshold — which makes it the
+  widest of the three and the worst for slot reuse. Switching mid-session drops
+  the per-slot hysteresis so the new rule does not inherit the old one's
+  decisions.
+* **The carry decision is made once per tick, not once per frame.** The deltas are
+  tick-constant so the answer does not change within a tick — but the hysteresis
+  reads the same per-slot state the decision writes, so re-deriving it on the
+  second frame of a tick would judge that frame against what the first frame had
+  just stored. Under `continuous` that is a real divergence: frame 1 of a fast
+  step refuses and sets `MovedLast`, and frame 2 would then find the raised cap
+  and carry, moving the object in the middle of a tick.
 
 Measured at 60 fps against the 20 Hz world, standing in an area: `121/121 frames
 carried, 3.0 objects each, mean phase 0.40 tick, offset 14 u, biggest tick step 37

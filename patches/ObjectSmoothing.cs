@@ -166,6 +166,19 @@ public static class ObjectSmoothing
         /// one. Motion is assumed to continue; a cliff is not.</summary>
         public bool[] Gliding = [];
 
+        /// <summary>Slots whose position moved at all on the last tick, carried
+        /// or refused. <see cref="Guard.Continuous"/> raises the cap on this
+        /// rather than on <see cref="Gliding"/>, which is what lets a slot that
+        /// has never been under the bare threshold become sticky.</summary>
+        public bool[] MovedLast = [];
+
+        /// <summary>The carry decision, made once on the tick and reused by the
+        /// rest of that tick's frames. The inputs are tick-constant, so this is
+        /// only bookkeeping for <see cref="Guard.Sticky"/> -- but the hysteresis
+        /// reads state this loop also writes, and re-deriving it on frame two of
+        /// a tick would read the value frame one had just stored.</summary>
+        public bool[] Carry = [];
+
         // The probe's per-table window.
         public long CarriedFrames, CarriedSlots, RotSlots, Mismatches, Teleports;
         public double MoveSum;
@@ -179,7 +192,8 @@ public static class ObjectSmoothing
             Saved = new int[s.Count * 3], SavedRot = new int[s.Count * 3],
             Wrote = new int[s.Count],
             Live = new bool[s.Count], Touched = new bool[s.Count],
-            Gliding = new bool[s.Count],
+            Gliding = new bool[s.Count], MovedLast = new bool[s.Count],
+            Carry = new bool[s.Count],
         };
 
         public void ResetWindow()
@@ -214,38 +228,101 @@ public static class ObjectSmoothing
     /// units a tick** -- so 1024 sat some twenty times above anything that walks and
     /// two hundred times below the placement it has to catch.
     ///
-    /// **1024 was measured against things that walk, and a boss does not walk.**
-    /// Play reported the final boss and the piranhas "freaking out" during an
-    /// attack -- and an attack is exactly when a big creature's parts cover the
-    /// most ground in a tick. A part whose step sits near the threshold is
-    /// carried on the tick it comes in under and left where the game put it on
-    /// the tick it goes over, so it glides across a tick and then holds still
-    /// for one, twenty times a second, while the parts either side of it keep
-    /// gliding. That reads as the creature tearing itself apart, and it cannot
-    /// show at 20 fps because the phase is 0 and nothing is carried at all.
+    /// **1024 was raised to 8192 on a rationale that did not survive, and the
+    /// default is 1024 again.** Play reported the final boss and the piranhas
+    /// freaking out during an attack, and the argument was that a part whose step
+    /// sits near the threshold is carried on the tick it comes in under and held
+    /// on the tick it goes over, tearing itself off the parts either side of it.
     ///
-    /// The walking measurements never bounded fast motion; they only bounded
-    /// walking. The gap between them and the one placement ever measured is a
-    /// factor of two hundred, so the threshold can be raised a long way and
-    /// still catch what it exists to catch: 8192 is 180 times a walk and 28
-    /// times below the 233,472-unit placement.
+    /// **That cannot be what this guard does.** A creature is *one record* in the
+    /// entity table -- one position and one rotation triple (`0x8016C544`, 200
+    /// records of `0x7C`, position `+0x2C`, rotation `+0x40`) -- so the finest
+    /// thing this patch can act on is the whole creature. It can make a boss
+    /// judder as a body; it cannot shear one limb against another. A limb-relative
+    /// defect is the MO pose, which is `AnimSmoothing`'s clip clock and not this.
+    /// The boss was never confirmed to improve at 8192 either, so nothing verified
+    /// was gained.
+    ///
+    /// What the raise did do was **break projectiles**: play reported fireballs
+    /// stuttering and appearing in places they had not been at anything above
+    /// 1024. The effects table churns its slots, and a slot freed and refilled
+    /// inside one tick is never seen free, so `Prev` holds the dead projectile and
+    /// `Cur` the new one; 1024 refuses that delta as a placement and 8192 carries
+    /// it, walking the new fireball in from wherever the old one died. That is a
+    /// wrong position rather than a rough one.
+    ///
+    /// So 1024 stands as the default -- an unverified fix that caused a verified
+    /// regression is not a trade -- and the raise is kept as a comparison mode.
+    /// The lasting lesson is that this threshold was doing **two jobs**: rejecting
+    /// slot reuse and teleports, which wants it tight, and admitting fast honest
+    /// motion, which wants it loose. One number cannot serve both, and the real
+    /// fix is to take the first job away from it by keying the sample on the
+    /// slot's *identity* rather than inferring reuse from distance.
     /// </summary>
-    const int TeleportUnits = 8192;
+    const int TeleportUnits = 1024;
+
+    /// <summary>The raised threshold, reachable as <see cref="Guard.Sticky"/> and
+    /// <see cref="Guard.Continuous"/>. Kept so the comparison can be made by eye,
+    /// not because it is believed: with the guard back at 1024 -- the value in
+    /// place when the boss was first reported spazzing -- play no longer
+    /// reproduces the symptom, which says the guard was never the variable.</summary>
+    const int RaisedUnits = 8192;
 
     /// <summary>
-    /// How much further a slot **already being carried** may step before it is
-    /// called a placement.
+    /// How much further a slot **already being carried** may step, under the two
+    /// raised modes, before it is called a placement.
     ///
-    /// A bare threshold is a cliff, and the shake is the sound of a slot falling
-    /// off it and climbing back on alternate ticks. Raising it moves the cliff
-    /// without removing it, so the decision is made sticky instead: something
-    /// that was moving is assumed to still be moving, and it takes four times
-    /// the threshold to decide otherwise. A real placement clears that by seven
-    /// times over.
+    /// The argument for it: a bare threshold is a cliff, and a slot whose speed
+    /// sits near it falls off and climbs back on alternate ticks, so the decision
+    /// is made sticky and something that was moving is assumed to still be
+    /// moving. The argument holds in the abstract; what it was reaching for -- a
+    /// boss's limbs shearing -- is not something this patch can cause, and the
+    /// stickiness makes slot reuse worse, since a recycled slot inherits the
+    /// previous occupant's <c>Gliding</c> along with its position.
     /// </summary>
     const int GlidingFactor = 4;
 
+    /// <summary>
+    /// How a slot's step is judged to be motion or a placement. Three modes,
+    /// because the choice between them is a matter of what a boss looks like
+    /// mid-attack and no counter here can settle it.
+    /// </summary>
+    public enum Guard
+    {
+        /// <summary>A bare <see cref="TeleportUnits"/> on every slot, every tick.
+        /// **The default.** The only mode in which projectiles have been reported
+        /// correct.</summary>
+        Strict,
+
+        /// <summary><see cref="RaisedUnits"/>, times <see cref="GlidingFactor"/>
+        /// for a slot that was carried on the previous tick. Was briefly the
+        /// default; reported to make fireballs stutter and jump.</summary>
+        Sticky,
+
+        /// <summary>As <see cref="Sticky"/>, but a slot that simply *moved* on
+        /// the previous tick gets the raised cap too, whether or not it was
+        /// carried.
+        ///
+        /// Sticky's hysteresis is one-way: a slot can only become sticky by
+        /// first passing the bare threshold, so anything that sustains 8192 to
+        /// 32768 units a tick from its very first moving tick is refused for as
+        /// long as it keeps that speed. This admits it from its second moving
+        /// tick onward.
+        ///
+        /// It is the **widest** of the three and so the worst for slot reuse: a
+        /// projectile table recycles constantly, and this gives a freshly reused
+        /// slot the raised cap on the strength of the previous occupant's motion.
+        /// Kept for comparison; not a candidate.</summary>
+        Continuous,
+    }
+
+    /// <summary>Which rule <see cref="Before"/> judges a step by. Defaults to
+    /// <see cref="Guard.Strict"/>: the raised modes buy nothing measured and cost
+    /// projectiles.</summary>
+    public static Guard Placement { get; private set; } = Guard.Strict;
+
     public const string OnKey = "kf2.smoothing.objects";
+    public const string GuardKey = "kf2.smoothing.objects.guard";
 
     /// <summary>Carry positions and facings between ticks. **Off by default**, the
     /// house rule for a mechanism that has been measured and whose picture has
@@ -253,6 +330,7 @@ public static class ObjectSmoothing
     public static bool Enabled { get; private set; }
 
     static bool _onFromEnv;
+    static bool _guardFromEnv;
 
     /// <summary>True once both samples exist. Cleared when an area loads, because the
     /// tables are rebuilt and the last area's positions are meaningless.</summary>
@@ -278,10 +356,24 @@ public static class ObjectSmoothing
         Description = "Carries object positions between the game's logic ticks.",
     };
 
-    public static void Configure(string? on, string? probe)
+    public static void Configure(string? on, string? probe, string? guard = null)
     {
         if (!string.IsNullOrWhiteSpace(on)) { Enabled = on != "0"; _onFromEnv = true; }
         _probe = probe == "1";
+
+        if (!string.IsNullOrWhiteSpace(guard))
+        {
+            if (Enum.TryParse<Guard>(guard, ignoreCase: true, out var g))
+            {
+                Placement = g;
+                _guardFromEnv = true;
+            }
+            else
+            {
+                Console.Error.WriteLine($"[KF2] objects: unknown placement guard '{guard}'; " +
+                                        $"expected strict, sticky or continuous. Keeping {Placement}.");
+            }
+        }
     }
 
     public static void Install()
@@ -290,6 +382,12 @@ public static class ObjectSmoothing
         {
             if (!_onFromEnv)
                 Enabled = RecompOne.Runtime.Runtime.View.GetBool(OnKey, Enabled);
+
+            if (!_guardFromEnv)
+            {
+                int g = RecompOne.Runtime.Runtime.View.GetInt(GuardKey, (int)Placement);
+                if (Enum.IsDefined(typeof(Guard), g)) Placement = (Guard)g;
+            }
         });
 
         // An area swap rebuilds the table, so the previous sample describes objects
@@ -307,6 +405,23 @@ public static class ObjectSmoothing
     }
 
     public static void SetEnabled(bool on) => Enabled = on;
+
+    /// <summary>Switch the placement rule mid-session, which is the point of it
+    /// being a setting: the difference between the three is a picture, and the
+    /// only way to compare pictures is to swap between them while looking at one.
+    /// The per-slot hysteresis is dropped so the new rule starts from a clean
+    /// state rather than inheriting decisions the old one made.</summary>
+    public static void SetPlacement(Guard g)
+    {
+        if (Placement == g) return;
+        Placement = g;
+        foreach (var t in _state)
+        {
+            Array.Clear(t.Gliding);
+            Array.Clear(t.MovedLast);
+            Array.Clear(t.Carry);
+        }
+    }
 
     static void Attach()
     {
@@ -398,17 +513,39 @@ public static class ObjectSmoothing
                 // the worst a re-placed facing costs is half a turn of sweep -- and
                 // letting it veto the whole slot would put the position test in charge
                 // of whether a door animates.
-                // Sticky: a slot that was gliding last tick keeps gliding
-                // unless the step is far past the threshold, so a part whose
-                // motion sits near it cannot alternate between carried and held
-                // and tear itself off the rest of the creature.
-                int cap = t.Gliding[i] ? TeleportUnits * GlidingFactor : TeleportUnits;
-                bool posLive = posMoved &&
-                               Math.Abs(dx) <= cap &&
-                               Math.Abs(dy) <= cap &&
-                               Math.Abs(dz) <= cap;
-                t.Gliding[i] = posLive;
-                if (posMoved && !posLive && _probe) t.Teleports++;
+                // Decided once, on the frame the world advanced on, and reused
+                // for the rest of the tick's frames. The deltas are tick-constant
+                // so the answer would not change -- but the hysteresis reads
+                // Gliding and MovedLast, which this same block writes, so a
+                // second frame would judge itself against its own first frame.
+                bool posLive;
+                if (FramePacing.TickedThisFrame)
+                {
+                    // Sticky: a slot that was gliding last tick keeps gliding
+                    // unless the step is far past the threshold, so a part whose
+                    // motion sits near it cannot alternate between carried and
+                    // held and tear itself off the rest of the creature.
+                    // Continuous extends that to a slot that merely moved, which
+                    // is the lunge-from-a-standstill case Sticky cannot admit.
+                    int cap = Placement switch
+                    {
+                        Guard.Strict => TeleportUnits,
+                        Guard.Continuous => t.MovedLast[i] || t.Gliding[i]
+                            ? RaisedUnits * GlidingFactor : RaisedUnits,
+                        _ => t.Gliding[i] ? RaisedUnits * GlidingFactor : RaisedUnits,
+                    };
+
+                    posLive = posMoved &&
+                              Math.Abs(dx) <= cap &&
+                              Math.Abs(dy) <= cap &&
+                              Math.Abs(dz) <= cap;
+
+                    t.Gliding[i] = posLive;
+                    t.MovedLast[i] = posMoved;
+                    t.Carry[i] = posLive;
+                    if (posMoved && !posLive && _probe) t.Teleports++;
+                }
+                else posLive = t.Carry[i];
                 if (!posLive && !rotMoved) continue;
 
                 uint pos = (uint)(s.Base + i * s.Stride + s.PosOff);
@@ -556,6 +693,8 @@ public static class ObjectSmoothing
                 {
                     t.Live[i] = false;
                     t.Gliding[i] = false;
+                    t.MovedLast[i] = false;
+                    t.Carry[i] = false;
                     continue;
                 }
 

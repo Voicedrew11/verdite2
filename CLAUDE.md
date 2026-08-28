@@ -95,6 +95,7 @@ KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by de
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
 KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
 KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
+KF2_SMOOTH_OBJECTS_GUARD=strict        # strict|sticky|continuous: what counts as a placement
 KF2_SMOOTH_ANIM=1                      # carry MO pose between ticks, weight only (off by default)
 KF2_SMOOTH_ANIM=time                   # also drive the integer clip time (unbounded; the old way)
 KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the clip-clock step, refused carries
@@ -208,19 +209,32 @@ constants `AgentServer` reports `nearby` from). It is that table and **not** the
 200-record entity table at `0x8016C544`, which is AI state stage 4 copies *from*
 it; measured by reading `func_80032588`'s arguments, which are
 `0x80177714 + slot*0x44 + 0x14` for slot numbers `nearby` agrees with. It
-**extrapolates, on the same clock and by the same fraction as the view** — it
-interpolated at first, which was defensible alone and wrong beside a camera
-carried *forward*, since the two then sit a whole tick apart and a constant offset
+**interpolates — `lerp(prev, cur, phase)`, never past a position the game
+produced — on the same clock and by the same fraction as the view.** It
+interpolated, was switched to extrapolating, and interpolates again: interpolating
+was always right on its own terms, and was abandoned only while the *camera*
+extrapolated, since the two then sat a whole tick apart and a constant offset
 between the world and the things in it reads as the objects moving slower than
-everything else. It leaves a
-slot whose step exceeds 8192 units on an axis exactly where the game put it,
+everything else. `FrameSmoothing` interpolates too now, so they agree about what
+time it is. It leaves a
+slot whose step exceeds 1024 units on an axis exactly where the game put it,
 because that is a placement rather than motion (measured: real motion 37 u a tick,
-a placement 233,472), and that decision is **sticky** — a slot already being
-carried gets four times the threshold. It was a flat 1024, measured against things
-that *walk*: a boss's or a piranha's parts cover far more ground in an attack, and
-a part whose step straddled the threshold glided across one tick and held still
-the next while the parts either side kept gliding, which read as the creature
-tearing itself apart. **3D pose is `patches/AnimSmoothing.cs`**, which drives
+a placement 233,472). **That threshold was briefly raised to 8192 and made sticky,
+and the raise was reverted**: it was chasing a boss whose parts appeared to tear
+apart mid-attack, and this patch cannot cause that — a creature is *one record* in
+the entity table, one position and one rotation, so it moves a creature as a whole
+and a limb-relative defect is the MO pose. The boss was never confirmed to improve,
+while the raise did make **fireballs stutter and jump**: the effects table recycles
+slots, a slot freed and refilled inside one tick is never seen free, so `Prev` is
+the dead projectile and `Cur` the new one, and 8192 carries that delta instead of
+refusing it. The finding underneath is that the threshold does **two jobs** —
+rejecting slot reuse, which wants it tight, and admitting fast motion, which wants
+it loose — and the real fix is to key the sample on the slot's *identity* rather
+than infer reuse from distance. The raise is kept as a comparison setting
+(Video ▸ Enhancements ▸ Placement guard, `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`,
+`strict` by default), and the carry decision is made once per tick rather than once
+per frame because the hysteresis reads state it also writes.
+**3D pose is `patches/AnimSmoothing.cs`**, which drives
 the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the blender writes the
 in-between mesh (`KF2_SMOOTH_ANIM=1`). **The end of a looping cycle is a
 special case**: the clip resets its time while keeping the same clip byte, so the

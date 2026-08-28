@@ -67,6 +67,8 @@ public sealed class FrameSmoothingPage : IPatchPage
                              "time it is, or the objects read as slower than the world. Off " +
                              "by default.");
 
+        DrawPlacementGuard();
+
         bool anim = AnimSmoothing.Enabled;
         if (ImGui.Checkbox("Smooth model animation", ref anim))
         {
@@ -88,6 +90,72 @@ public sealed class FrameSmoothingPage : IPatchPage
                  "is not below it, so every drawn frame lands on a tick.");
         }
     }
+
+    // Indexed by (int)ObjectSmoothing.Guard.
+    static readonly string[] GuardLabels =
+    [
+        "Strict - 1024 units, no hysteresis (default)",
+        "Sticky - 8192, x4 while carried",
+        "Continuous - 8192, x4 once moving",
+    ];
+
+    /// <summary>
+    /// Which step counts as a placement rather than as motion, under the object
+    /// checkbox and indented to say it belongs to it.
+    ///
+    /// This is a comparison control rather than a preference, and the comparison
+    /// has a result: the two raised modes make projectiles stutter and jump, so
+    /// Strict is the default and the others are here to be looked at rather than
+    /// chosen. See <see cref="ObjectSmoothing.Guard"/> for what each one is and
+    /// what the raise was reaching for.
+    /// </summary>
+    static void DrawPlacementGuard()
+    {
+        if (!ObjectSmoothing.Enabled) ImGui.BeginDisabled();
+
+        ImGui.Indent();
+
+        int guard = (int)ObjectSmoothing.Placement;
+        ImGui.SetNextItemWidth(ImGui.GetFontSize() * 20f);
+        if (ImGui.Combo("Placement guard", ref guard, GuardLabels, GuardLabels.Length))
+        {
+            ObjectSmoothing.SetPlacement((ObjectSmoothing.Guard)guard);
+            PatchSettings.Set(ObjectSmoothing.GuardKey, guard);
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("How far a thing may move in one tick before the port decides it " +
+                             "was placed there rather than that it walked, and leaves it alone. " +
+                             "Too low and a fast creature is carried on one tick and held on " +
+                             "the next, which reads as its parts coming apart; too high and " +
+                             "something that is teleported slides across the room. Switching " +
+                             "takes effect on the next tick, so it can be compared while a " +
+                             "creature is on screen.");
+
+        Note(GuardNote());
+        ImGui.Unindent();
+
+        if (!ObjectSmoothing.Enabled) ImGui.EndDisabled();
+    }
+
+    static string GuardNote() => ObjectSmoothing.Placement switch
+    {
+        ObjectSmoothing.Guard.Strict =>
+            "Measured against things that walk, and the only setting in which fireballs and " +
+            "other projectiles have been reported correct. Anything faster than this is left " +
+            "stepping at the world's own rate rather than being carried.",
+
+        ObjectSmoothing.Guard.Continuous =>
+            "The widest of the three: anything that moved on the previous tick gets the raised " +
+            "limit, not just what was already being carried. Worst for projectiles, whose table " +
+            "reuses slots constantly -- a new one can be drawn sliding in from where the last " +
+            "one died.",
+
+        _ =>
+            "Eight times the limit, and four times that again for something already being " +
+            "carried. Raised to chase a boss juddering mid-attack, which it was never confirmed " +
+            "to fix, and it makes projectiles stutter and jump. Here to compare against.",
+    };
 
     static void Note(string text)
     {
