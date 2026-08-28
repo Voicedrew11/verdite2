@@ -97,7 +97,7 @@ KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything els
 KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
 KF2_SMOOTH_ANIM=1                      # carry MO pose between ticks, weight only (off by default)
 KF2_SMOOTH_ANIM=time                   # also drive the integer clip time (unbounded; the old way)
-KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, and the clip-clock step
+KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the clip-clock step, refused carries
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
@@ -238,7 +238,16 @@ data. Static analysis clears the blender (its keyframe rebuild is absolute, not
 incremental) but cannot say what the pipeline does with a segment index moving at
 the *frame* rate, which is the one thing driving the integer time does. Weight
 mode never moves it, so the pose is always between the segment's start and the
-pose the game asked for. `KF2_SMOOTH_ANIM=time` is the old unbounded way.
+pose the game asked for. **The segment bound is a refusal, not a clamp**: a tick
+advances about one segment, so on a short-segment clip the early frames of every
+tick ask for an instant behind the segment entirely, and writing the clamped
+weight pinned them to the segment's start — the pose held, then raced, then
+jumped at the tick boundary, and play reported the final boss as jerkier with
+smoothing on than off. A carry that would clamp is dropped for the whole tick
+(the first frame carries the largest offset and so is the one that finds it;
+carrying only the later frames steps backwards at the frame that stops), so such
+a slot draws at the tick rate exactly as it does with the patch off.
+`KF2_SMOOTH_ANIM_PROBE=1` counts the refusals. `KF2_SMOOTH_ANIM=time` is the old unbounded way.
 Vertex-fetch lerp was tried and did
 not change the picture. The
 player's arm is a different bug: it is 2D, drawn by the HUD builder

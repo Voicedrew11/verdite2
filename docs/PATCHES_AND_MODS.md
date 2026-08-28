@@ -1040,11 +1040,29 @@ what they are with the patch absent. **That bound holds under every explanation
 of the spazzing that could not be eliminated**, which is why it is the default
 rather than one more guess at the cause.
 
-It gives up motion *across* a segment boundary, which clamps at the boundary
-instead of continuing through it. A tick advances roughly one segment (mean step
-511 against `u16` durations), so most of the in-between motion is inside a
-segment and survives. `KF2_SMOOTH_ANIM=time` is the old unbounded behaviour, kept
-for comparison by eye.
+It gives up motion *across* a segment boundary. **That has to be a refusal and
+not a clamp**, and the first version of it clamped. A tick advances roughly one
+segment (mean step 511 against `u16` durations), so on a clip whose segments are
+short — a boss mid-attack — `(1 - phase) * step` is larger than the whole segment
+for the early frames of every tick, and `Math.Clamp` turns those into the
+segment's own *start* pose. The slot then holds still for part of the tick,
+races through the remainder and jumps at the tick boundary: play reported the
+final boss as **noticeably less smooth and more jittery with smoothing on than
+with it off**, which is that, and it is a worse artefact than the 20 Hz stepping
+the patch exists to remove. So a carry whose clamped value differs from the value
+it asked for is dropped instead of written, and dropped for the **whole tick** —
+the first frame of a tick carries the largest offset and so is the frame that
+discovers the overrun, and a slot that carried on the later frames alone would
+step *backwards* at the frame that stopped, which is the same jump one frame
+later. A refused slot draws the pose the game asked for, identically to the patch
+being off. `KF2_SMOOTH_ANIM_PROBE=1` reports `N refused (left the segment)`
+beside the carry count; a clip whose segments are long enough never shows it.
+
+Carrying properly across the boundary means picking the *earlier* segment, which
+is precisely what `Mode.Weight` exists in order not to do, so it stays a refusal
+until the segment-index question the mode was created for is settled.
+`KF2_SMOOTH_ANIM=time` is the old unbounded behaviour, kept for comparison by
+eye.
 
 Vertex-fetch lerp at `RotTransPers` was tried first and did not change the
 picture — it interpolated a rigid majority, and the probe's "XYZ moved" line

@@ -76,11 +76,21 @@ namespace Kf2;
 /// spazzing that could not be eliminated, which is why it is the default rather
 /// than one more guess at the cause.
 ///
-/// It costs motion *across* a segment boundary, which clamps at the boundary
-/// instead of continuing through. A tick advances roughly one segment (mean step
-/// 511 against `u16` durations), so most of the in-between motion is inside a
-/// segment and survives. <see cref="Mode.Time"/> (`KF2_SMOOTH_ANIM=time`) is the
-/// old behaviour, kept for comparison by eye.
+/// It costs motion *across* a segment boundary. **That cost is a refusal, not a
+/// clamp**, and the difference is the whole quality of the picture: a tick
+/// advances roughly one segment (mean step 511 against `u16` durations), so on a
+/// clip whose segments are short -- a boss mid-attack -- the early frames of a
+/// tick ask for an instant behind the segment entirely. Writing the clamped
+/// weight pins those frames to the segment's *start*, so the pose holds for part
+/// of the tick, races through the rest and jumps at the boundary; play reported
+/// the final boss as jerkier with this on than with it off. A carry that would
+/// clamp is therefore dropped, and dropped for the **whole tick** -- the first
+/// frame of a tick has the largest offset and so is the one that discovers it,
+/// and a slot that carried on the later frames alone would step backwards at the
+/// frame that stopped. Such a slot draws at the tick rate, exactly as it does
+/// with this patch off. `KF2_SMOOTH_ANIM_PROBE=1` counts the refusals.
+/// <see cref="Mode.Time"/> (`KF2_SMOOTH_ANIM=time`) is the old behaviour, kept
+/// for comparison by eye.
 ///
 /// ## What this does
 ///
@@ -322,6 +332,14 @@ public static class AnimSmoothing
         /// <summary>The logic tick this slot last sampled on. One sample per
         /// tick, whichever frame of that tick the slot happens to be drawn on.</summary>
         public long Tick = -1;
+
+        /// <summary>The tick a <see cref="Mode.Weight"/> carry last ran out of
+        /// its segment on. The offset is largest on the first frame of a tick,
+        /// so that frame is the one that discovers it, and the rest of the tick
+        /// is then left alone: a slot that carries on some frames of a tick and
+        /// not others steps *backwards* at the frame that stops, which is worse
+        /// than not carrying it at all.</summary>
+        public long OverrunTick = -1;
     }
 
     static readonly Dictionary<uint, Slot> _slots = [];
@@ -337,6 +355,10 @@ public static class AnimSmoothing
 
     static int _depth;
     static bool _pending;
+
+    /// <summary>The slot this submit is for, so <see cref="AfterClock"/> can
+    /// record an overrun back onto it. Null on a rigid submit.</summary>
+    static Slot? _slot;
     static double _carry;
     static uint _weightPtr;
     static int _tFloor;
@@ -357,6 +379,9 @@ public static class AnimSmoothing
 
     static bool _onFromEnv;
     static bool _probe;
+
+    /// <summary>Weight carries refused because they left their segment.</summary>
+    static int _overran;
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
@@ -475,6 +500,7 @@ public static class AnimSmoothing
         if (_depth != 1) return;
 
         _pending = false;
+        _slot = null;
         if (_probe) _submits++;
 
         // The incoming stack, before the prologue: +0x1C is the clip byte,
@@ -501,6 +527,7 @@ public static class AnimSmoothing
         if (id == 0) return;
 
         var slot = Get(id);
+        _slot = slot;
         if (slot.Clip != clip)
         {
             slot.Clip = clip;
@@ -563,6 +590,12 @@ public static class AnimSmoothing
                 default:
                     return;   // Still, or a hold: what the game asked for stands
             }
+
+            // This tick already asked for more than its segment could give. The
+            // remaining frames of it stand *closer* to the game's pose and would
+            // carry, so letting them run would step the pose backwards at the
+            // boundary between the frame that refused and the frame that did not.
+            if (slot.OverrunTick == _tick) return;
 
             // The frame stands `(1 - phase)` of a tick behind the pose the game
             // asked for. Say that in clip time and let AfterClock spend it on
@@ -653,7 +686,30 @@ public static class AnimSmoothing
         if (reversed) add = -add;
 
         int weight = (int)m.ReadU32(_weightPtr);
-        int next = Math.Clamp(weight + add, 0, 0x1000);
+        int want = weight + add;
+        int next = Math.Clamp(want, 0, 0x1000);
+
+        // **A clamped weight is not a pose between two ticks, it is the segment's
+        // own end**, and writing it is what made a fast clip jitter rather than
+        // smooth. The backward offset is `(1 - phase)` of a tick of clip time; a
+        // tick advances roughly one segment, so on a clip whose segments are
+        // short -- a boss's attack -- the early frames of every tick ask for an
+        // instant that is behind this segment entirely and get pinned to its
+        // start. The pose then holds for part of the tick and races through the
+        // rest of it, and jumps at the tick boundary, which reads as worse than
+        // the 20 Hz steps this is meant to remove.
+        //
+        // Carrying across the boundary properly means picking the earlier
+        // segment, which is exactly what Weight mode exists not to do. So the
+        // carry is *refused* instead: the slot draws the pose the game asked
+        // for, identically to this patch being off, for the rest of the tick.
+        if (next != want)
+        {
+            if (_slot != null) _slot.OverrunTick = _tick;
+            if (_probe) _overran++;
+            return;
+        }
+
         m.WriteU32(_weightPtr, (uint)next);
 
         if (_probe)
@@ -803,13 +859,15 @@ public static class AnimSmoothing
             : _carried == 0 ? ", 0 weights carried"
             : $", {_carried} weight(s) carried ({_reversed} reversed), " +
               $"mean frac {_fracSum / _carried:0.00}";
+        string over = _overran == 0 ? ""
+            : $", {_overran} refused (left the segment)";
         Console.WriteLine($"[KF2] anim: {_submits} submit(s), " +
                           $"morph {_morph} ({morphPct}), rigid {_rigid}{live}" +
                           $"{step}{back}{wrap}; {_skipped} re-seek(s){stuck}" +
-                          carry);
+                          carry + over);
 
         _submits = _morph = _rigid = _clipTicks = _carried = _skipped = _reversed = _live = 0;
-        _backward = _wraps = _wrapCarried = _stuck = 0;
+        _backward = _wraps = _wrapCarried = _stuck = _overran = 0;
         _timeStepSum = _fracSum = 0;
         _maxStep = 0; _minStep = int.MaxValue;
     }
