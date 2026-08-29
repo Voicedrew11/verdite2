@@ -88,6 +88,8 @@ KF2_LOOPPACING=pace                    # hold such a loop but do not redraw: rig
 KF2_LOOPPACING=nocarry                 # redraw, but do not carry a view the loop pans itself
 KF2_LOOPPACING_PROBE=1                 # modal frames a second, world and interface, against the main loop's
 KF2_LOOPPACING_PROBE=2                 # also how far the loop's own view moves per iteration
+KF2_LOADPACING=0                       # the loading screen's walking figure back on the host ceiling (paced by default)
+KF2_LOADPACING_PROBE=1                 # its steps a second, and what one load cost
 KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
 KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
 KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
@@ -433,6 +435,25 @@ own body, whose *speed* is right but which is smooth only if its transform comes
 from a table `ObjectSmoothing` carries or is the view the loop hands stage 13. Both
 are in `docs/TODO.md`.
 See "Loops that render their own frames" in `docs/PATCHES_AND_MODS.md`.
+**A disc wait is neither a modal loop nor a frame, and `patches/LoadPacing.cs` is
+that third case**: the loading screen's walking figure is stepped by
+`func_8001883C`, which draws straight into VRAM with `ClearImage`/`MoveImage` and
+so presents **no ordering table at all** — measured, zero `DrawOTag` calls between
+entering the loader and the fade at the end of it — so no frame boundary exists
+there and neither `FramePacing` nor `LoopPacing` can see it. It ends in
+`DrawSync(0); VSync(0)`, one vblank a call on hardware; here `VSync` returns at
+`FrameClock`'s permissive `max(60, fps*2)` ceiling, so the figure took its 84
+steps in **352 ms at `KF2_FPS=144` and 1715 ms at the 20 fps default**. A pre/post
+pair on the two disc waits `func_80017CA8` and `func_800181B0` (depth-counted, the
+second calls the first) marks a window in which every `VSync(0)` is held to the
+60 Hz grid — `MenuPacing`'s repeat shape — which reads **49.0 steps a second at
+20, 60 and 144**, the console's own four-steps-per-five-vblanks. Holding the
+animator's three counters instead was tried and is worse: the calls arrive in
+bursts of four, so a cap refuses steps that were not early on average and drops
+the *default* to 36-40. The cost is that above 60 fps a load now takes as long as
+it already does at the default, 1.7 s rather than 0.35 s. On by default;
+`KF2_LOADPACING=0` is the comparison. See "The loading screen's walking figure" in
+`docs/PATCHES_AND_MODS.md`.
 `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The
 default is 20 fps drawn against a 20 Hz world.** See "Any frame rate" in

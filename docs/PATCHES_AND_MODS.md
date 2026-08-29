@@ -10,6 +10,7 @@ lives here — frame pacing and auto reload.
 |---|---|---|
 | `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
 | `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
+| `LoadPacing.cs` | makes a `VSync(0)` inside a disc wait cost a vblank again, so the loading screen's figure walks at the console's rate | this file |
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
@@ -1840,6 +1841,89 @@ still in [TODO.md](TODO.md).
 
 On by default and with no settings page, for the reason the menu repeat gives: a
 correctness fix rather than a taste. `KF2_LOOPPACING=0` is the comparison.
+
+### The loading screen's walking figure
+
+**A third place with the same cause, and the one the frame boundary can never
+reach.** Reported from play: *"the little man that walks across the screen on the
+loading screen after pressing start on the main menu walks really fast on high
+refresh rate options."*
+
+A disc read here is a **blocking wait**, not a frame. `func_80017CA8` spins
+`func_80017818(); if (flag) func_8001883C() x4;` until the CD job's queue at
+`0x801B6F44` drains, and `func_800181B0` spins `func_8001883C()` while
+`CdReadSync` still reports sectors outstanding. `func_8001883C` is the animator:
+it draws the figure straight into VRAM — `ClearImage` (`0x800605D4`) over where
+the sprite was, `MoveImage` (`0x8006069C`) where it now is — and writes exactly
+three globals, which is the whole animation:
+
+| address | what |
+|---|---|
+| `0x8006E5A4` | the frame counter, `++` as the last act of every call; the `& 3` and `& 7` gates that pace the sequence's sub-steps read it |
+| `0x8006E5A8` | the sequence's state |
+| `0x8006E5AC` | the figure's **x**, `+= 3` a call, or 5 once the state is past the middle band, while it is under 288 |
+
+Those three are the only globals it writes (confirmed with
+`find_writers.py`, and by reading every non-stack store in the function), and it
+ends in `DrawSync(0); VSync(0)` — so **on hardware one call was one vblank** and
+the figure walked three to five pixels every 1/60 s.
+
+**Neither `FramePacing` nor `LoopPacing` can see this loop at all.** Both key on
+the frame boundary, a `DrawOTag` after a `VSync`, and this one draws no ordering
+table: measured, **zero** `DrawOTag` calls between entering the loader and the
+transition fade at the end of it. So the only thing governing it is
+`FrameClock`'s deliberately permissive host ceiling, `max(60, TargetFps * 2)` —
+which above 60 fps barely holds a `VSync(0)` at all. The whole defect is
+`MenuPacing`'s in a third place, and the shared cause is worth stating plainly:
+**the game counts time in `VSync(0)` calls, and a `VSync(0)` call is no longer a
+vblank.**
+
+`patches/LoadPacing.cs` marks the window between the pre and post of
+`func_80017CA8` and `func_800181B0` — depth-counted, since the second calls the
+first — and a pre on GAME.EXE's `VSync` thunk (`0x8005FCC8`) holds every call
+inside it to the 60 Hz grid, exactly as the cursor repeat's six calls are held.
+That restores the identity the sequence is written against, so its three counters
+and the gates keyed on them are right by construction with nothing enumerated.
+Measured over the area load that follows the title menu, with
+`KF2_LOADPACING_PROBE=1`:
+
+| `KF2_FPS` | off | on |
+|---|---|---|
+| 20 (default) | 84 steps in 1715 ms — **49.0/s** | 84 steps in 1715 ms — **49.0/s** |
+| 60 | 84 steps in 856 ms — **98.1/s** | 84 in 1714 ms — **49.0/s** |
+| 144 | 84 steps in 352 ms — **238.6/s** | 84 in 1714 ms — **49.0/s** |
+
+49 a second *is* the console's number for this shape and not a coincidence: the
+drain loop spends five vblanks an iteration — one in `func_80017818` and one in
+each of the four animator calls — for four steps, so four steps per five vblanks
+is 48. The 20 fps column is identical either way, which is the "does nothing at
+or below 60" claim in one row; note that even 60 fps was **twice** too fast
+before, because the ceiling there is 120.
+
+**Capping the three counters instead was written and measured first, and it is
+the worse fix.** Holding them on a 60 Hz grid leaves the wait spinning at the
+render rate, so loads stay short — but it cannot reproduce the rate the port
+already has at its own default: the calls arrive in bursts of four, so a cap
+refuses steps that were never too early *on average*, and the default's 48.9 a
+second came out at **36–40**. A fix for "too fast at 144" that also slows the one
+configuration the report calls correct is the wrong trade.
+
+**What pacing costs, stated rather than discovered later:** above 60 fps a load
+takes as long as it already does at the 20 fps default — 1.7 s rather than 0.35 s
+for the load measured above. That is the console's own duration and the port's own
+default behaviour, and it is the direct consequence of the figure walking at the
+right speed; the alternative is a loading screen whose *length* depends on the
+render rate, which is the thing this port exists to stop. The window contains no
+gated stage, no stage 13 and no rendered frame, so there is nothing else in it to
+slow down. 60 Hz and not `LogicHz`, for the reason `MenuPacing.BlinkMs` gives: one
+vblank of an interface animation, and `KF2_TICKRATE` is a setting about the speed
+of the *world*.
+
+Regression-checked against `rate_matrix.py`: `walk` is bit-identical with the
+patch on and off at 20 and 144, `menu-scroll` reads 6.0 and 8.5 repeats a second
+with the spin at 100.6 ms and the blink capped at 16.8, and `modal-rate` at 144
+reads 144.8 modal world frames a second against 22.0 loop iterations. On by
+default and with no settings page. `KF2_LOADPACING=0` is the comparison.
 
 ### The comparison mode
 

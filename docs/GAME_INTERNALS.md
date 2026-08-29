@@ -1008,6 +1008,36 @@ that split.
 Entries 24–29 are zero length, so areas 8 and 9 do not exist, and area 10 is
 entry 32, the cut one.
 
+### The loading screen is a blocking wait, and its figure is three words
+
+A disc read never returns to the main loop. `func_80024154` calls
+**`func_80017CA8`**, which spins `func_80017818(); if (*(u8*)0x800864DC)
+func_8001883C() x4;` until the CD job queue at `0x801B6F44` drains;
+**`func_800181B0`** is the other shape, `CdRead` then a spin on `CdReadSync`
+calling `func_8001883C` once an iteration.
+
+**`func_8001883C` is the loading screen's animator** — the little figure that
+walks across the screen while an area loads. It draws with no ordering table at
+all: `ClearImage` (`0x800605D4`) over the rectangle the sprite occupied, then
+`MoveImage` (`0x8006069C`) from a 32x32 source in VRAM at (`0x3C0`, `0x1C0`/
+`0x1E0`) to the new position. Its whole state is three globals, and they are the
+only ones it writes:
+
+| address | width | what |
+|---|---|---|
+| `0x8006E5A4` | u32 | frame counter, `++` as the function's last act; the sub-steps are gated on `& 3` and `& 7` of it |
+| `0x8006E5A8` | u32 | the sequence's state; `state - 5 < 0x16` skips the walking branch |
+| `0x8006E5AC` | u32 | the figure's **x**, `+= 3` while state < 5 and `+= 5` once state is past the middle band, only while it is under 288 |
+| `0x8006E5B0` | u32 | its y — read here, written elsewhere |
+
+They sit in the same block of GAME.EXE globals as the menu cursor's blink
+(`0x8006E5CC`/`0x8006E5D0`).
+
+The function ends in `DrawSync(0); VSync(0)`, so **one call was one vblank**, and
+the drain loop's five vblanks an iteration for four steps is where the console's
+48 steps a second comes from. That is what `patches/LoadPacing.cs` restores; see
+"The loading screen's walking figure" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
 ### Noclip's hard limit is the loaded area
 
 Flying far enough leaves the geometry the game has in RAM, and the crash is

@@ -236,6 +236,23 @@ Kf2.MenuPacing.Configure(Environment.GetEnvironmentVariable("KF2_MENUPACING"),
                          Environment.GetEnvironmentVariable("KF2_MENUPACING_PROBE"));
 Kf2.MenuPacing.Install();
 
+// The loading screen's walking figure is the same bug in a third place, and the
+// shared cause is that the game counts time in VSync(0) calls while a VSync(0)
+// call here is no longer a vblank. A disc read is a blocking wait rather than a
+// frame: func_80017CA8 spins until the CD job drains, calling the animator
+// func_8001883C four times an iteration, and that function draws the figure
+// straight into VRAM with ClearImage/MoveImage -- no ordering table, so no frame
+// boundary, so neither FramePacing nor LoopPacing can see it at all. It ends in
+// DrawSync(0); VSync(0), so one call was one vblank on hardware; here it ran 167
+// times a second at KF2_FPS=144 against 42.7 at the 20 fps default. Its three
+// words are held on a 60 Hz grid, which caps the walk without pacing the load.
+//
+//     KF2_LOADPACING=0        leave it on the render rate -- comparison only
+//     KF2_LOADPACING_PROBE=1  steps a second against calls a second
+Kf2.LoadPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOADPACING"),
+                         Environment.GetEnvironmentVariable("KF2_LOADPACING_PROBE"));
+Kf2.LoadPacing.Install();
+
 // Which words of the game's memory change at the render rate rather than at the
 // tick rate -- the instrument that turns "something looks too fast" into an
 // address. Samples on the emulated vblank, which is a wall-clock 60 Hz grid since
