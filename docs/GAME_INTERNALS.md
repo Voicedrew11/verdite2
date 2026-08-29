@@ -384,6 +384,29 @@ weight, and returns the segment record in `v0`. **When the flag `u16` at
 `segment+0x0` is set it publishes `0x1000 - that`**, so the weight runs *down*
 as the clip runs forward — anything adding to it has to know which.
 
+**The whole clip record is reachable from that walk, and its total duration is
+the one number the pose smoother needs.** Read off the loop at `L800348B4`:
+
+| what | where |
+|---|---|
+| clip table | `bank + u32[bank + 0x10]` |
+| clip record | `bank + u32[clipTable + clip*4]` |
+| segment count | `u16[clipRec + 0x0]` |
+| segment pointers | `u32[clipRec + 4 + 4*i]`, `bank`-relative |
+| segment: reversed flag | `u16[seg + 0x0]` |
+| segment: duration | `u16[seg + 0x2]` |
+
+so the clip's length is `sum(u16[seg_i + 2])` — exactly the accumulator the
+clock compares the time against, which is why a time past it answers with the
+last segment at a full `0x1000` weight. Measured live: every clip reached in
+areas 0, 2 and 7 has a length of **4096**, and the highest clip time the legacy
+probe ever saw on one is **4095**, which is the same fact read two ways. The
+step a clip takes in a tick is 64-290 units there, so a cycle is 14-64 ticks
+long and a wrap arrives as a step of `rate - 4096` — 3936, 3942, 4032 observed
+against rates of 160, 154 and 64. `patches/AnimSmoothing.cs` reads this table so
+it can treat the clip time as a point on a circle of that circumference; before
+it did, the end of a cycle had to be guessed at from where the time landed.
+
 **Why the clock reaches the mesh at all is `L80034FCC`**, and it is the
 load-bearing part. When the clip *and* the segment index are both unchanged,
 `func_80034DA8` skips rebuilding its keyframe cache — but it still copies the

@@ -278,10 +278,11 @@ Kf2.FrameSmoothing.Install();
 //     KF2_SMOOTH_OBJECTS=1        on; off by default
 //     KF2_SMOOTH_OBJECTS_PROBE=1  how much is being carried, per second
 //     KF2_SMOOTH_OBJECTS_GUARD=   strict | sticky | continuous; which step counts
-//                                 as a placement rather than as motion. `strict`
-//                                 by default -- the raised modes make projectiles
-//                                 stutter. A picture, so it is a setting under
-//                                 Video as well.
+//                                 as a placement rather than as motion, on the
+//                                 entity table only -- every other table keeps the
+//                                 strict limit, since the projectile tables recycle
+//                                 slots. `continuous` by default. A picture, so it
+//                                 is a setting under Video as well.
 Kf2.ObjectSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS"),
                               Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_PROBE"),
                               Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_GUARD"));
@@ -297,12 +298,16 @@ Kf2.ObjectSmoothing.Install();
 // leftover fraction onto the 12.12 weight the decoder consumes. Nothing is
 // written to game state -- a register and the caller's own stack temp.
 //
-//     KF2_SMOOTH_ANIM=1        on -- the blend weight only, clamped to the
-//                              segment the game itself chose; off by default
-//     KF2_SMOOTH_ANIM=time     also drive the integer clip time, so the
-//                              in-between instant picks its own segment
-//     KF2_SMOOTH_ANIM_PROBE=1  morph vs rigid submits, the clip-clock step, and
-//                              the weights carried, per second
+//     KF2_SMOOTH_ANIM=1         on, in whichever mode the settings hold;
+//                               off by default
+//     KF2_SMOOTH_ANIM=timeline  interpolate on the clip's own timeline, the
+//                               length read out of the segment table (default)
+//     KF2_SMOOTH_ANIM=time      comparison: lerp the clip time between the two
+//                               ticks, with the wrap and re-seek classifiers
+//     KF2_SMOOTH_ANIM=weight    comparison: the blend weight only, clamped to
+//                               the segment the game itself chose
+//     KF2_SMOOTH_ANIM_PROBE=1   morph vs rigid submits, the verdict census and
+//                               the weights carried, per second
 Kf2.AnimSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM"),
                             Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM_PROBE"));
 Kf2.AnimSmoothing.Install();

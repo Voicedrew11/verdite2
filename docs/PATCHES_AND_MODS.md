@@ -916,6 +916,36 @@ Two things about it are worth stating:
   previous occupant's `Gliding` along with its position. That is a **wrong**
   position, not a rough one, so an unverified fix bought a verified regression and
   the default went back.
+* **The threshold is per table, and that is the compromise.** Play, with the guard
+  switchable: on `strict` the boss no longer freaks out and projectiles are
+  perfect, but a boss moving fast still looks as though *its head snaps into the
+  next frame of the animation*; on the raised modes the animation gains visible
+  in-between frames and projectiles break. Both halves have the same cause. A
+  creature is drawn from **two** smoothers — its root from `ObjectSmoothing`, its
+  pose from `AnimSmoothing` — and when the guard refuses a fast creature's
+  position, the root steps at the tick rate while the vertices go on morphing at
+  the frame rate. The pose then slides ahead of the body, which is what the head
+  snapping is; the raised modes "add in-between frames" mainly by giving the pose
+  a root that moves with it. Meanwhile the projectile tables recycle slots
+  constantly and are wrong at anything above 1024. The tables want opposite
+  answers, so `TableSpec.Fast` scopes the raise to the **entity table** and every
+  other table keeps 1024 whatever the mode is set to.
+* **When a root is held, the pose is held with it.** Scoping is not enough on its
+  own: a creature past even the raised cap brings the head snapping straight back.
+  `ObjectSmoothing` publishes the position addresses it refused this tick and
+  `AnimSmoothing` refuses those slots' pose carries for the same tick, so such a
+  creature degrades to a coherent tick-rate creature rather than an incoherent
+  smooth one. The two patches need no knowledge of each other's tables to do it:
+  `func_80032588`'s `a2` — what `AnimSmoothing` already keys its per-creature
+  state on — *is* `base + slot*stride + PosOff`, the address the carry writes
+  through. The coupling is inert when `ObjectSmoothing` is off, since nothing is
+  carrying any root then and holding every pose would disable pose smoothing
+  rather than keep two smoothers in step. `KF2_SMOOTH_ANIM_PROBE=1` counts it as
+  `refused (root held)`.
+* **The default is `continuous`**, which is the mode play reported as visibly
+  smoothest on a creature. What made the raise unshippable was projectiles, and
+  the raise no longer reaches them. `sticky` is the more conservative choice if a
+  creature is ever seen sliding in on spawn.
 * **The lasting finding is that this threshold was doing two jobs.** Rejecting
   slot reuse and teleports wants it tight; admitting fast honest motion wants it
   loose. One global constant cannot serve both — the boss argument and the
@@ -939,7 +969,8 @@ Two things about it are worth stating:
 * **The guard is a setting**, since the comparison is worth being able to make by
   eye: Video ▸ Enhancements ▸
   Placement guard, or `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`.
-  `strict` is the 1024 default. `sticky` is the raise described above.
+  `strict` is 1024 on every table. `sticky` is the raise described above,
+  creatures only.
   `continuous` additionally raises the cap on a slot that merely *moved* last tick
   rather than one that was *carried* — sticky's hysteresis is one-way, so a slot
   can only become sticky by first passing the bare threshold — which makes it the
@@ -1053,11 +1084,190 @@ resolves. That is not a repair of the game's own indecision — it is a refusal 
 draw it more often than the game makes it. A ping-pong clip flips once a
 half-cycle and decays back long before it gets there.
 
-`KF2_SMOOTH_ANIM_PROBE=1` reports `N cycle wrap(s) (longest clip seen T), M
-carried through; R re-seek(s), S stuck`, which is also how to tell whether a clip
-is looping — or thrashing — through this path at all.
+`KF2_SMOOTH_ANIM_PROBE=1` reports `N cycle wrap(s) (longest time seen T), M
+carried through, R re-seek(s), S stuck` in these two modes, which is also how to
+tell whether a clip is looping — or thrashing — through this path at all. In
+`Mode.Timeline` the same line reports the new predicate instead: `N playback (W
+on the wrap, T turned, B in reverse), H held (no match), S settling, L with no
+clip length`.
 
-#### The bounded mode, and why it is the default
+#### The clip is a timeline, and none of that knew how long it was
+
+Everything above — the landing-site wrap test, the synthesised turnover, the
+`WrapRun` settling count, the `ThrashFlips` hold, the 4096 magnitude cutoff, and
+the bounded mode below with its whole-tick overrun refusal — is a repair of one
+missing fact. The patch was lerping the integer clip time as if it were a
+Euclidean scalar on an unbounded line. It is not: it is a point on a **circle**,
+and the circumference is the clip's own length.
+
+**That length is not missing.** It is the sum of the per-segment durations in the
+very table `func_8003486C` walks, and the whole record is reachable from the
+`bank` and `clip` the clock is called with — clip table at `bank + u32[bank +
+0x10]`, record at `bank + u32[clipTable + clip*4]`, `u16` segment count, then
+`bank`-relative `u32` pointers to records whose `u16` at `+0x2` is the duration.
+See "The model pipeline has no skeleton" in `docs/GAME_INTERNALS.md` for the
+layout. Measured live, every clip reached in areas 0, 2 and 7 is **4096** long,
+which the legacy probe confirms from the other side: the highest clip time it
+ever saw on one is 4095, and its "cycle wrap" steps are 3936, 3942 and 4032
+against playback rates of 160, 154 and 64 — `rate - 4096` exactly.
+
+`Mode.Timeline` is that, and it is one predicate where there were five. Playback
+is constant velocity along the circle, including through 0. So each tick:
+
+1. **the clip byte changed** — a hard cut, show the game's pose, start again;
+2. **else unwrap the step against the settled rate.** The observed `cur` is
+   consistent with any step `cur + kD - prev`, and `k` is not searched for, it is
+   `round((rate - step) / D)` — the wrap count that puts the candidate nearest
+   the rate. Two more candidates cover a clip that **reflects** at an endpoint
+   rather than wrapping: a turn at 0 lands at `-raw`, a turn at the end at
+   `2D - raw`. The nearest candidate wins if it is within half the rate of it.
+   That single test *is* ordinary playback, the cycle wrap, the reverse clip and
+   the ping-pong turn;
+3. **nothing matched** — a re-seek, or an attack the AI is restarting every tick
+   — so hold at the game's own time, and re-seed the rate from what was actually
+   seen so the next tick has something to confirm against.
+
+A carried tick interpolates along the path it just recognised,
+`raw = prev + delta * phase`, folds it back onto the clip (modulo for a wrap, a
+triangle fold for a turn), hands `floor(t)` to `func_8003486C` and spends the
+leftover fraction on the 12.12 weight. **The fraction is under one clip unit, so
+it cannot leave the segment `floor(t)` landed in** — the overrun refusal the
+bounded mode needs has nothing left to refuse, and the clamp on the weight is
+only rounding at the very top of a segment.
+
+Two things it gives up. A settled rate takes one tick to establish, so a slot
+carries from its **third** sample of a clip rather than its second — except at a
+genuine clip change, where the first moving step *is* the definition of the rate
+and there is nothing to have re-seeked away from, so that one is taken on trust.
+A step of zero is deliberately neither: it leaves both the rate and that trust
+alone, or a clip posed for a tick before it starts would lose its opening step to
+a rate of 0. And a clip whose length cannot be read never carries at all, which
+is the honest failure rather than a guess.
+
+##### The first version shook, and the probe had already said so
+
+Shipped as the default, `Mode.Timeline` made the **teleport crystals shake
+rapidly up and down** — reported from play, at 144 fps. The probe had recorded
+the cause a run earlier and it was read as success:
+
+```
+76 playback (6 on the wrap, 0 turned, 0 in reverse)
+73 playback (0 on the wrap, 4 turned, 0 in reverse)
+```
+
+Those two columns contradict each other. A clip that genuinely reflects at an
+endpoint runs **backwards** for the rest of its half-cycle, so every real turn
+must be followed by ticks counted `in reverse`. There were none, in any window,
+while turns fired 1-6 times a second. **Every turn was spurious**, and a spurious
+turn is a shake by construction: the pose runs to the end of the clip and back
+inside one tick, once per tick, at the frame rate. A crystal whose clip is a
+vertical bob renders that as exactly what was reported.
+
+Three defects, and they are worth separating because only the first is about
+turns:
+
+1. **The rate was not reflected after a turn.** The unwrapped path length was
+   stored as the new rate, keeping the *pre-turn* sign, so the tick after a turn
+   always mispredicted, re-seeded and turned again. Self-perpetuating, and the
+   direct reason no turn was ever followed by reverse playback.
+2. **A turn was accepted merely for scoring closer to the rate than straight
+   playback.** The reflection is a free extra parameter, so it wins on noise: a
+   clip that simply *slowed down* near the end of its cycle was explained as a
+   reflection. A turn is now considered only once constant velocity has failed
+   its own tolerance **and** the clip would genuinely have overshot that end.
+3. **The opening step of a clip was trusted with no bound.** A seek into the
+   middle of a clip is indistinguishable from the start of a fast one except by
+   size, and `Nearest(step, D, 0)` admits up to `D/2`. Measured playback is
+   64-290 units against `D = 4096`, so `FirstStepFrac` refuses an opening step
+   past a quarter of the clip — an order of magnitude clear of anything real.
+
+**The structural lesson is bigger than the three bugs.** `Mode.Timeline` is the
+only mode that can ask for a pose *outside* the interval `[prev, cur]`; that is
+deliberate, and it is how a loop plays forward through its wrap instead of
+rewinding. But it means a misclassification does not produce a slightly wrong
+pose, it produces a pose from somewhere else in the clip. `Mode.Time`, for all
+its ad-hoc classifiers, cannot do that: whatever it decides a tick was, it draws
+something between two poses the game actually produced. **The two designs differ
+in where the risk sits, not only in how principled they are** — a principled
+predicate with an unbounded interpolator against guessy classifiers on top of a
+bounded one — and the premise that the classifiers were the whole problem was
+half the picture.
+
+So the fallback is bounded too, which is the fourth fix and the one that makes
+the rest safe. A carry is accepted within `RateTolRel` *of the rate*, so the
+tolerance is as wide as whatever was last recorded — and the hold path was
+recording whatever it saw, including a seek of up to `D/2`. That handed the next
+tick a tolerance of `D/8` and let it accept a pose from anywhere. `Seed` now
+refuses to call an implausible step a rate at all and leaves the slot unsettled,
+so the slot draws at the tick rate until the clip does something a clip could do.
+**What makes the mode safe is not that the predicate is always right; it is that
+being wrong costs a held tick rather than a pose out of nowhere.**
+
+##### What it measures now
+
+At `KF2_FPS=144` with `KF2_SMOOTH_ANIM_PROBE=1`, sweeping areas 0, 2 and 7 —
+852 playback ticks over the run, **18 recognised as cycle wraps, 0 as endpoint
+turns**, against 11 holds and 3 slots settling; 84-352 weights carried a second
+at a mean fraction of 0.57-0.59; `0 with no clip length` outside the frames of an
+area transition. The load-bearing number is the **arc**: the widest step carried
+over the whole run is **290 units**, the top of the measured playback range, so
+nothing walked round the back of the circle. Before the fix the same scenes
+counted 1-6 turns a second. The same scenes under `Mode.Weight` show **8-17
+carries a second refused for leaving their segment**, which is the defect
+`Timeline` removes rather than bounds. The probe counts a morph submit with a
+clip time of 0 separately (`N with a running clip`) so a scene full of MO-posed
+props cannot read as success. Death clock unmoved: 65 frames in 3.16 s at 20 fps
+with the mode on and off.
+
+**`Mode.Timeline` is the default, and it took two readings by eye to get there.**
+It shipped as the default, play reported the crystals; the default moved to
+`Mode.Time`, which was the only mode with a positive report at that moment, while
+the cause was found; with the four fixes in, play reports it looking very good
+and it is the default again. The argument for it was always the stronger one.
+What it lacked was the eye, and nothing in this repo could supply that.
+
+##### Is it *correct*, though
+
+On the invariant this was written to — *every in-between pose is a sample of the
+game's own clip function between two consecutive ticks of playback, or else the
+pose the game asked for* — `Timeline` satisfies it by construction and
+`Mode.Time` does not. When `Timeline`'s predicate cannot explain a tick it
+**holds**, which is the second half of the invariant; when `Mode.Time`'s
+classifiers are wrong they still interpolate, and its turnover is *synthesised*
+out of the last playback step rather than read, so the pose it draws across a
+wrap is one the game never produced. That is a real difference in kind and it is
+the honest reason to prefer `Timeline`.
+
+"Objectively correct" is more than that claim, and four things are still open:
+
+* **Three tuned constants remain** — `RateTolRel`, `RateTolAbs`,
+  `FirstStepFrac`. Fewer than the five classifiers they replaced, and each is
+  expressed against something measured (the slot's own rate, the clip's own
+  length) rather than picked, but they are not derived.
+* **"Playback is constant velocity" is an assumption about the game**, not a
+  reading of it. It is strongly supported — 852 of 866 classified ticks were
+  accepted as playback across three areas — but a clip that *eases* violates it
+  and is held.
+* **Two of the four cases the predicate claims have never been exercised.** The
+  probe has never once counted an endpoint turn or a tick of reverse playback, in
+  any run, before or after the fix. The ping-pong branch is the part of the
+  predicate with no evidence behind it at all, and it is the part that shipped a
+  visible defect; if anything shakes again, look there first.
+* **Every clip measured is 4096 long.** The modulus is confirmed two ways (the
+  highest clip time seen is 4095, and wrap steps are exactly `rate - 4096`), but
+  a *uniform* length means the per-clip lookup would look identical if it were
+  reading a constant. Finding one clip with a different `D` is what tests it.
+
+What no counter here can say is the **picture**. Three cases need looking at: a
+**looping** clip through its turnover (the wrap column proves the tick was
+recognised, not that the pose is continuous across it), a clip played in
+**reverse** — the drawbridge lever, which is what caught the old sign bug and
+which the probe has still not reported a single instance of (`0 in reverse` in
+every window) — and an **attack the AI restarts**, which is the case that lands
+in the hold and should therefore look exactly like smoothing being off. The
+crystals are now the fourth: they are the scene that caught the shake.
+
+#### The bounded mode, and why it was the default
 
 Play reported poses **spazzing out with interpolation on and never at 20 fps**,
 and that reading is the one that matters: at 20 fps the phase is 0 on every
@@ -1112,10 +1322,21 @@ being off. `KF2_SMOOTH_ANIM_PROBE=1` reports `N refused (left the segment)`
 beside the carry count; a clip whose segments are long enough never shows it.
 
 Carrying properly across the boundary means picking the *earlier* segment, which
-is precisely what `Mode.Weight` exists in order not to do, so it stays a refusal
-until the segment-index question the mode was created for is settled.
-`KF2_SMOOTH_ANIM=time` is the old unbounded behaviour, kept for comparison by
-eye.
+is precisely what `Mode.Weight` exists in order not to do, so within that mode it
+stays a refusal. `Mode.Timeline` picks the earlier segment on purpose and bounds
+the result a different way — the fraction it spends on the weight is under one
+clip unit, so the segment `floor(t)` landed in is the segment that gets drawn —
+which is why the refusal has nothing left to catch there.
+
+**All three are selectable, because only the picture can separate them** — which
+is not a formality here: the mode with the best argument behind it is the one
+play caught shaking, and the switch is how that was found. The combo is
+Video ▸ Enhancements ▸ Pose interpolation, under the animation checkbox, and
+`KF2_SMOOTH_ANIM=timeline|weight|time` sets it from the console; switching clears
+the per-slot state, so a creature on screen steps for one tick and then draws
+under the new mode, which is what makes an A/B while something is animating
+possible at all. **`Time` is the default**, because it is the only mode with a
+positive report by eye. When the picture has been judged, the losers go.
 
 Vertex-fetch lerp at `RotTransPers` was tried first and did not change the
 picture — it interpolated a rigid majority, and the probe's "XYZ moved" line

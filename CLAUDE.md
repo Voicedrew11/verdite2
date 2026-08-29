@@ -95,10 +95,12 @@ KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by de
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
 KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
 KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
-KF2_SMOOTH_OBJECTS_GUARD=strict        # strict|sticky|continuous: what counts as a placement
-KF2_SMOOTH_ANIM=1                      # carry MO pose between ticks, weight only (off by default)
-KF2_SMOOTH_ANIM=time                   # also drive the integer clip time (unbounded; the old way)
-KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the clip-clock step, refused carries
+KF2_SMOOTH_OBJECTS_GUARD=continuous    # strict|sticky|continuous: what counts as a placement (creatures)
+KF2_SMOOTH_ANIM=1                      # carry MO pose between ticks (off by default)
+KF2_SMOOTH_ANIM=time                   # lerp the clip time between the two ticks (the default mode)
+KF2_SMOOTH_ANIM=timeline               # comparison: interpolate on the clip's own timeline
+KF2_SMOOTH_ANIM=weight                 # comparison: the blend weight only, inside the game's segment
+KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the verdict census, carries
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
@@ -230,38 +232,90 @@ the dead projectile and `Cur` the new one, and 8192 carries that delta instead o
 refusing it. The finding underneath is that the threshold does **two jobs** —
 rejecting slot reuse, which wants it tight, and admitting fast motion, which wants
 it loose — and the real fix is to key the sample on the slot's *identity* rather
-than infer reuse from distance. The raise is kept as a comparison setting
-(Video ▸ Enhancements ▸ Placement guard, `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`,
-`strict` by default), and the carry decision is made once per tick rather than once
-per frame because the hysteresis reads state it also writes.
+than infer reuse from distance. **The threshold is therefore per table** (`TableSpec.Fast`): the raise applies to
+the **entity table only**, so a boss gets it and the projectile tables keep 1024
+whatever the mode is. That is the compromise, and it comes from play — on `strict`
+the boss is calm and projectiles are perfect but a fast boss's *head snaps into the
+next animation frame*, and on the raised modes the animation gains in-between
+frames and projectiles break. Both halves are one cause: a creature is drawn from
+**two** smoothers, its root here and its pose in `AnimSmoothing`, and a refused
+root steps at the tick rate while the vertices morph at the frame rate. So
+**`ObjectSmoothing` publishes the addresses it refused and `AnimSmoothing` holds
+those poses for the same tick** — they need no knowledge of each other's tables,
+since `func_80032588`'s `a2` *is* `base + slot*stride + PosOff` — and a creature
+past even the raised cap degrades to a coherent tick-rate creature instead of a
+smooth head on a stepping body. The mode is a setting (Video ▸ Enhancements ▸
+Placement guard, `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`, `continuous`
+by default), and the carry decision is made once per tick rather than once per
+frame because the hysteresis reads state it also writes.
 **3D pose is `patches/AnimSmoothing.cs`**, which drives
-the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the blender writes the
-in-between mesh (`KF2_SMOOTH_ANIM=1`). **The end of a looping cycle is a
-special case**: the clip resets its time while keeping the same clip byte, so the
-wrap reads as one tick stepping a whole cycle backwards and lerping it rewound
-the animation over that tick's frames. A wrap is told from a re-seek by *where
-the time landed* — within one tick's advance of the cycle's first frame — and the
-tick is then run forwards through the turnover, which needs no clip length. That
-turnover is *synthesised* out of the last playback step, so it is believed only
-off a settled run; and **a clip the game is fighting over is held rather than
-carried**. **The default carries the 12.12 blend weight only, inside the segment
-the game itself chose** (`Mode.Weight`), because play reported poses spazzing
-with interpolation on and never at 20 fps — where the phase is 0 and the patch
-does nothing — so the in-between pose is what is wrong rather than the game's
-data. Static analysis clears the blender (its keyframe rebuild is absolute, not
-incremental) but cannot say what the pipeline does with a segment index moving at
-the *frame* rate, which is the one thing driving the integer time does. Weight
-mode never moves it, so the pose is always between the segment's start and the
-pose the game asked for. **The segment bound is a refusal, not a clamp**: a tick
-advances about one segment, so on a short-segment clip the early frames of every
-tick ask for an instant behind the segment entirely, and writing the clamped
-weight pinned them to the segment's start — the pose held, then raced, then
-jumped at the tick boundary, and play reported the final boss as jerkier with
-smoothing on than off. A carry that would clamp is dropped for the whole tick
-(the first frame carries the largest offset and so is the one that finds it;
-carrying only the later frames steps backwards at the frame that stops), so such
-a slot draws at the tick rate exactly as it does with the patch off.
-`KF2_SMOOTH_ANIM_PROBE=1` counts the refusals. `KF2_SMOOTH_ANIM=time` is the old unbounded way.
+the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the
+blender writes the in-between mesh (`KF2_SMOOTH_ANIM=1`). **The clip time is a
+point on a circle, not a number on a line**, and every version of this patch
+before the current one did not know the circumference: it lerped the integer time
+as a scalar and then repaired each way that fails — the end of a looping cycle
+told from a re-seek by *where the time landed*, a turnover synthesised out of the
+last playback step and believed only off a settled run, a clip the AI is fighting
+over counted in direction reversals and held, a magnitude cutoff at 4096 for a
+re-seek, and a default that gave up driving the time at all. **The missing fact
+was the clip's length, and it is in the table `func_8003486C` already walks**:
+clip table at `bank + u32[bank+0x10]`, record at `bank + u32[clipTable +
+clip*4]`, `u16` segment count, `bank`-relative `u32` pointers to segments whose
+`u16` at `+0x2` is the duration — so `D` is their sum, and measured it is 4096
+for every clip reached, confirmed from the other side by a highest-time-seen of
+4095 and wrap steps of `rate - 4096`. `Mode.Timeline` (the default) is one
+predicate where there were five: unwrap the tick's step against the slot's
+settled rate over the candidates `cur + kD - prev` — `k` computed, not searched —
+plus the two ping-pong reflections `-cur - prev` and `2D - cur - prev`, and take
+the nearest if it is within half the rate. That covers playback, the cycle wrap,
+a reverse clip and an endpoint turn at once; anything else is a re-seek or a
+fight and is **held at the game's own time**. A carried tick lerps along the path
+it recognised, folds it back onto the clip, hands `floor(t)` to `func_8003486C`
+and spends the leftover fraction on the 12.12 weight — the fraction is under one
+clip unit, so it cannot leave the segment `floor(t)` landed in and the old
+whole-tick overrun refusal has nothing to refuse. It carries from the **third**
+sample of a clip, since a rate has to be confirmed once, except at a genuine clip
+change where the first moving step *is* the rate and is taken on trust — but only
+within a quarter of the clip, or a seek into the middle of one sweeps most of the
+animation in a 50 ms tick; a zero step touches neither. **Shipped as the default
+it made the teleport crystals shake up and down**, and the probe had already said
+so: it counted 1-6 endpoint *turns* a second while never once counting reverse
+playback, and a real turn is always followed by reverse playback, so every turn
+was spurious — a spurious turn runs the pose to the end of the clip and back
+inside one tick. Three causes: the rate was not reflected after a turn (so every
+turn mispredicted the next tick and turned again), a turn was accepted merely for
+scoring better than straight playback rather than only after it failed, and the
+opening step was unbounded. **The lesson under them is that `Timeline` is the
+only mode that can ask for a pose outside `[prev, cur]`** — deliberately, since
+that is how a loop plays forward through its wrap — so a misclassification gives
+a pose from elsewhere in the clip rather than a slightly wrong one, where
+`Mode.Time`'s guessy classifiers sit on top of an interpolator that stays bounded
+when they are wrong. The two designs differ in **where the risk sits**. Hence the
+fourth fix: `Seed` refuses to record an implausible step as a rate at all, since
+the tolerance scales with the rate and a seek recorded as one lets the next tick
+accept anything — being wrong now costs a held tick rather than a pose out of
+nowhere. Measured after, at 144 fps over areas 0, 2 and 7: 852 playback ticks,
+18 wraps, **0 turns**, 11 holds, 3 settling, 0 without a clip length, and the
+widest arc carried over the whole run is **290 units** — the top of the measured
+playback range, so nothing walked round the back of the circle. `Mode.Weight`
+refuses 8-17 carries a second for leaving their segment in the same scenes.
+**`Mode.Timeline` is the default again** — the default moved to `Mode.Time` while
+the shake was diagnosed, since that was the only mode with a positive report by
+eye, and moved back once play reported the fixed one looking very good; the other
+two are a combo under Video ▸ Enhancements ▸ Pose interpolation, switchable while
+a creature is on screen, and the losers go once the picture is judged. **On the
+invariant it is the correct approach and `Mode.Time` is not**: when the predicate
+cannot explain a tick it holds, which *is* the invariant's second half, whereas
+`Mode.Time` interpolates anyway and synthesises its turnover out of the last
+step, so across a wrap it draws a pose the game never produced. Short of that it
+is not proven: three tuned constants remain (`RateTolRel`, `RateTolAbs`,
+`FirstStepFrac`, each against something measured rather than picked), "playback
+is constant velocity" is an assumption about the game rather than a reading of
+it, **the endpoint-turn and reverse-playback branches have never once been
+exercised** in any run — that is the part with no evidence behind it and the part
+that shipped the shake — and every clip measured is 4096 long, so a per-clip
+length lookup would look identical to reading a constant. Still to look at: a
+looping clip's turnover, a clip played in reverse, an attack the AI restarts.
 Vertex-fetch lerp was tried and did
 not change the picture. The
 player's arm is a different bug: it is 2D, drawn by the HUD builder
