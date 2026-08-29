@@ -754,8 +754,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-three
-of the twenty-seven are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-four
+of the twenty-eight are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
@@ -961,6 +961,18 @@ uncaptured edit inside the checkout is left where it is.
   frame pacer — it throttles per `VSync` *call* and a frame carries two — so the
   port hands it a permissive ceiling and keeps its own deadline at `DrawOTag`.
   **No recompile.** See "There were three fixed 60s" in `docs/RUNTIME.md`.
+
+- `0026-str-pacing-without-a-latch.patch` — an STR movie is paced by the disc:
+  sectors arrive at 150 a second, a frame is 9-14 of them, and the game's display
+  loop blocks in `StGetNext` until one is complete, so the loop's own rate never
+  enters into it. `StreamLoop` modelled that, but only once a latch tripped — two
+  decoded frames sitting in the 32-slot ring at the same time — which for the third
+  intro movie's 13-14-sector frames never happened, because the game drains a frame
+  as soon as it is ready. Unthrottled, that movie played at the **render rate**
+  instead: measured ~56 frames a second at `KF2_FPS=60` and ~93 at 144, against the
+  10 the disc holds it to. Paced from the start of the stream now, since there is no
+  free burst on hardware either. **No recompile.** See "The intro movie ran at the
+  render rate" in `docs/RUNTIME.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

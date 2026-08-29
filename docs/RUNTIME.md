@@ -275,6 +275,56 @@ on the driver's swap blocks to a panel whose rate nobody here knows. A rate abov
 the panel's is capped by it, silently.
 
 
+## The intro movie ran at the render rate, because its pacer never armed
+
+**Symptom:** boot the port with a high frame rate chosen and the third and
+longest of the three intro movies — the one that plays the game in — runs fast.
+The two before it are correct at every rate.
+
+**Mechanism:** an STR movie is paced by the disc and by nothing else. Sectors
+arrive at `LibCd.SectorsPerSecond` (150 in double speed), a frame is several of
+them, and the game's display loop `func_80013DC8` blocks in `StGetNext` until the
+next one is complete — so the movie's frame rate is the delivery rate divided by
+its sectors per frame, and the loop's own rate never enters into it. `StreamLoop`
+models that with a wall clock: it refuses to read a frame the drive would not have
+delivered yet. But it only *started* refusing once a latch was set, and the latch
+was set from the enqueue path — `_primed` when `_ready.Count >= PrimeFrames`, two
+frames sitting decoded in the ring at the same time. **A latch that has to be
+tripped can fail to trip.** The ring is 32 slots, the game drains one frame per
+iteration as soon as it is ready, and this movie's frames are 13-14 sectors each:
+two of them never coexisted in the ring, so `_primed` stayed false for the whole
+movie and every sector was delivered as fast as the host could read it. The
+picture then advanced once per iteration of the display loop, which is once per
+rendered frame. The two earlier movies are 9 sectors a frame, three fit, the latch
+tripped in the first few frames, and they were paced correctly — which is why the
+defect looked like it belonged to one movie rather than to the pacer.
+
+**Fix:** `patches/recompone/0026-str-pacing-without-a-latch.patch` deletes the
+latch and paces from the moment the stream starts. There is no free burst on
+hardware, and the burst bought nothing here: the first frame now waits the 13
+sectors it would have waited on a console, which is 87 ms.
+
+**Measurement**, by counting `KF2_LOG=mdec` decodes per second — one decode is one
+movie frame:
+
+| | movie 1 (9 sectors/frame) | movie 2 (9) | movie 3 (13-14) |
+|---|---|---|---|
+| before, `KF2_FPS=60` | 15/s | 15/s | **~56/s** |
+| before, `KF2_FPS=144` | 15/s | 15/s | **~93/s** |
+| after, `KF2_FPS=20` / `60` / `144` | 15/s | 15/s | 10/s |
+
+10/s is the rate the disc holds it to: 13.5 video sectors a frame against 150
+sectors a second, the remainder being the interleaved XA audio. The `[STR]`
+counters that showed `primed=False` for the length of that movie were a temporary
+probe and are not in the patch.
+
+**The shape to keep**, since the repo already has two of these: a rate that is
+enforced only after a condition is observed will run unbounded whenever the
+condition cannot occur, and it fails silently and only for some inputs. The other
+half of the lesson is where the movie's rate comes from at all — the disc, not the
+loop — which is the same reason `patches/LoopPacing.cs` exists for loops the disc
+does *not* pace.
+
 ## The menu deadlock: input only moved when the game drew
 
 **Symptom:** press the button that opens the in-game menu and everything stops —
@@ -359,7 +409,7 @@ shape of bug, even though they were not what froze the window:
 
 ## The patches to the checkout, one by one
 
-Twenty of the twenty-five are load-bearing; `0002`, `0003` and `0015` are
+Twenty-one of the twenty-six are load-bearing; `0002`, `0003` and `0015` are
 diagnostics, `0013` is a settings-placement hook, and `0014b` restores four
 comment lines whose presence `0015`'s context assumes. Several need **no recompile**
 — they change runtime behaviour only — and that is noted where it applies.
@@ -471,6 +521,12 @@ before `Theme.Apply` re-themes it, because `ScaleAllSizes` multiplies every size
 field and `Apply` only resets some — leaving a `WindowMinSize` that grows on each
 call and eventually floors a window past the screen, over `0019`'s clamp. **No
 recompile.** See "The scale can put the settings out of reach" below.
+
+**`0026-str-pacing-without-a-latch.patch`** paces an STR stream from the moment it
+starts instead of after two decoded frames happen to sit in the ring together,
+which for a movie of 13-14 sectors a frame never happened — so it was delivered
+unthrottled and played at the render rate. **No recompile.** See "The intro movie
+ran at the render rate" above.
 
 ## The interface only fits a monitor whose scale is a whole number
 

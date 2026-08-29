@@ -163,6 +163,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 - The interrupt-callback table cannot be guessed
 - The vblank fired when the game asked
 - There were three fixed 60s, and only one of them is the host's
+- The intro movie ran at the render rate, because its pacer never armed
 - The menu deadlock: input only moved when the game drew
 - The ending screen
 - The patches to the checkout, one by one
