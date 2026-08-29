@@ -25,3 +25,7 @@ __pycache__/
 
 # ModLoader compiles mods/ at run time and caches the assemblies here.
 mods/.cache/
+
+# RateCensus writes its dump here by default (KF2_RATECENSUS_OUT); it is a
+# diagnostic reading of one session, not source. One was committed once.
+ratecensus.txt
