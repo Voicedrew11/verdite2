@@ -1203,16 +1203,51 @@ so the slot draws at the tick rate until the clip does something a clip could do
 **What makes the mode safe is not that the predicate is always right; it is that
 being wrong costs a held tick rather than a pose out of nowhere.**
 
+##### A fast clip could never settle a rate, and so never moved
+
+Play reported a **flying gecko's backflip looking like it ran at a low frame
+rate** while everything around it was smooth. That is what `Mode.Timeline` looks
+like when it holds — and it was holding, permanently, on that one animation.
+
+`FirstStepFrac` was written as a bound on what the *opening* step of a clip may
+be carried on trust. It was also being applied to whether the step could be
+**recorded as a rate at all**, and those are not the same question. A clip whose
+genuine playback rate is larger than a quarter of its length then cannot settle:
+
+* the slot has no rate, so it takes the unsettled branch;
+* the step is past the bound, so it is neither carried nor recorded;
+* nothing changed, so the next tick reasons identically and holds identically.
+
+It never recovers, for the whole animation. (A slot *past* its first step
+recovered in two ticks, which is why this only ever showed on one clip: the
+strand needs the very first step of a fresh clip to be a big one, and a backflip
+starting from a new clip byte is exactly that.) The probe could not show it
+either — a stranded slot is silent, and "no carries" reads identically to "nothing
+animating".
+
+Both halves are fixed. **Size buys a tick of latency; repetition buys
+correctness.** A step too big to trust is now *made to wait one tick* and
+confirmed by a second observation, which is what "settled playback" means and is
+evidence that magnitude cannot supply; `Seed` records what it saw whatever the
+size. The danger a big rate actually posed was never its size but that the
+acceptance window scales with it, so that is capped directly instead
+(`RateTolCap`, a twentieth of the clip — about one tick's motion, binding only
+above a rate of ~410, well past anything measured). And `_maxRefused` is now in
+the probe line as `widest refused N`, which is the counter that makes a stranded
+clip visible at all: **a refused step of 1344 showed up in the first run after
+adding it**, on a 4096-unit clip, so steps past the old ceiling are ordinary.
+
 ##### What it measures now
 
 At `KF2_FPS=144` with `KF2_SMOOTH_ANIM_PROBE=1`, sweeping areas 0, 2 and 7 —
-852 playback ticks over the run, **18 recognised as cycle wraps, 0 as endpoint
-turns**, against 11 holds and 3 slots settling; 84-352 weights carried a second
-at a mean fraction of 0.57-0.59; `0 with no clip length` outside the frames of an
+553 playback ticks over the run, **7 recognised as cycle wraps, 0 as endpoint
+turns**, against 15 holds and 0 slots settling; 381-527 weights carried a second
+at a mean fraction of 0.55-0.59; `0 with no clip length` outside the frames of an
 area transition. The load-bearing number is the **arc**: the widest step carried
 over the whole run is **290 units**, the top of the measured playback range, so
-nothing walked round the back of the circle. Before the fix the same scenes
-counted 1-6 turns a second. The same scenes under `Mode.Weight` show **8-17
+nothing walked round the back of the circle, while the widest step *refused* was
+1344 — the two staying far apart is the shape to want. Before the turn fix the
+same scenes counted 1-6 turns a second. The same scenes under `Mode.Weight` show **8-17
 carries a second refused for leaving their segment**, which is the defect
 `Timeline` removes rather than bounds. The probe counts a morph submit with a
 clip time of 0 separately (`N with a running clip`) so a scene full of MO-posed
@@ -1252,7 +1287,11 @@ the honest reason to prefer `Timeline`.
   probe has never once counted an endpoint turn or a tick of reverse playback, in
   any run, before or after the fix. The ping-pong branch is the part of the
   predicate with no evidence behind it at all, and it is the part that shipped a
-  visible defect; if anything shakes again, look there first.
+  visible defect; if anything shakes again, look there first. The gecko's
+  backflip may well be the reverse case — the report was that it is the frontflip
+  played backwards — in which case `0 in reverse` was a *second* symptom of the
+  strand rather than a separate gap, and it should start counting now. Worth
+  reading the probe next to that gecko.
 * **Every clip measured is 4096 long.** The modulus is confirmed two ways (the
   highest clip time seen is 4095, and wrap steps are exactly `rate - 4096`), but
   a *uniform* length means the per-clip lookup would look identical if it were

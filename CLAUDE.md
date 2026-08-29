@@ -291,13 +291,24 @@ that is how a loop plays forward through its wrap — so a misclassification giv
 a pose from elsewhere in the clip rather than a slightly wrong one, where
 `Mode.Time`'s guessy classifiers sit on top of an interpolator that stays bounded
 when they are wrong. The two designs differ in **where the risk sits**. Hence the
-fourth fix: `Seed` refuses to record an implausible step as a rate at all, since
-the tolerance scales with the rate and a seek recorded as one lets the next tick
-accept anything — being wrong now costs a held tick rather than a pose out of
-nowhere. Measured after, at 144 fps over areas 0, 2 and 7: 852 playback ticks,
-18 wraps, **0 turns**, 11 holds, 3 settling, 0 without a clip length, and the
+fourth fix: the acceptance window, which scales with the rate, is **capped** at a
+twentieth of the clip, so a seek recorded as a rate cannot let the next tick
+accept anything — being wrong costs a held tick rather than a pose out of
+nowhere. **That cap replaced a worse first attempt**: refusing to *record* an
+implausible step at all, which stranded any clip whose real rate exceeded a
+quarter of its length — no rate, so the unsettled branch; too big, so neither
+carried nor recorded; nothing changed, so the next tick reasoned identically,
+for the whole animation. Play found it on a flying gecko's backflip looking like
+it ran at a low frame rate. **Size buys a tick of latency; repetition buys
+correctness** — a big step now waits one tick and is confirmed by a second
+observation, and `FirstStepFrac` gates only the no-confirmation shortcut. The
+probe gained `widest refused N` for it, which is the counter that makes a
+stranded clip visible at all: a refused step of 1344 on a 4096-unit clip turned
+up in the first run after adding it. Measured after, at 144 fps over areas 0, 2 and 7: 553 playback ticks,
+7 wraps, **0 turns**, 15 holds, 0 settling, 0 without a clip length, and the
 widest arc carried over the whole run is **290 units** — the top of the measured
-playback range, so nothing walked round the back of the circle. `Mode.Weight`
+playback range, so nothing walked round the back of the circle — against a widest
+*refused* step of 1344, the two staying far apart being the shape to want. `Mode.Weight`
 refuses 8-17 carries a second for leaving their segment in the same scenes.
 **`Mode.Timeline` is the default again** — the default moved to `Mode.Time` while
 the shake was diagnosed, since that was the only mode with a positive report by

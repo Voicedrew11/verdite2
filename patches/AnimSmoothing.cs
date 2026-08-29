@@ -176,8 +176,24 @@ public static class AnimSmoothing
     const double RateTolAbs = 2.0;
 
     /// <summary>
+    /// A ceiling on the acceptance window, as a fraction of the clip's length.
+    ///
+    /// The window is <see cref="RateTolRel"/> *of the settled rate*, so it grows
+    /// with whatever was last recorded — and the hold path records what it saw,
+    /// including a seek. Without a ceiling a rate of half the clip carries a
+    /// window of an eighth of it and lets the next tick accept a pose from
+    /// somewhere else entirely. Measured playback is 64-290 units against a clip
+    /// length of 4096, so a window of a twentieth of the clip is about one
+    /// tick's motion — the loosest a "did it keep playing" test should ever be —
+    /// and it only binds above a rate of ~410, which is well past anything
+    /// observed. This is what lets <see cref="Seed"/> record a rate of any size
+    /// without that size becoming its own excuse.
+    /// </summary>
+    const double RateTolCap = 0.05;
+
+    /// <summary>
     /// The largest opening step, as a fraction of the clip's own length, that is
-    /// taken on trust as the start of playback rather than held as a seek.
+    /// carried on trust as the start of playback **without a confirming tick**.
     ///
     /// The first moving tick of a clip has no settled rate to be checked
     /// against, and a seek into the middle of a clip is indistinguishable from
@@ -189,6 +205,16 @@ public static class AnimSmoothing
     /// clear of anything real and still refuses a seek. Expressed in the clip's
     /// own length rather than as a magnitude, which is the whole point of
     /// knowing it.
+    ///
+    /// **It is a shortcut and not a gate**, and getting that wrong cost a bug: a
+    /// step past it used to be refused *as a rate* as well, so a clip whose
+    /// genuine playback rate exceeded it could never settle one — the slot held,
+    /// declined to record what it saw, held again on the identical reasoning,
+    /// and drew at the tick rate for the whole animation. Play found it on a
+    /// gecko's backflip, which is fast enough to clear a quarter of its clip in
+    /// a tick. Size buys a tick of latency; **repetition** is what buys
+    /// correctness, and two consecutive ticks agreeing is settled playback
+    /// whatever the size.
     /// </summary>
     const double FirstStepFrac = 0.25;
 
@@ -394,6 +420,19 @@ public static class AnimSmoothing
     static int _maxTimeSeen;
     static double _timeStepSum, _fracSum;
     static int _maxStep, _minStep = int.MaxValue;
+
+    /// <summary>The widest step a hold turned away, which is the counter that
+    /// makes a clip too fast to be carried visible. A slot stuck at the tick
+    /// rate shows up here as a number far above the carried range beside it;
+    /// without it, a stranded fast clip is indistinguishable from a scene with
+    /// nothing animating in it.</summary>
+    static int _maxRefused;
+
+    static void Refused(double delta)
+    {
+        int a = (int)Math.Round(Math.Abs(delta));
+        if (a > _maxRefused) _maxRefused = a;
+    }
 
     static readonly ModInfo _self = new()
     {
@@ -658,20 +697,21 @@ public static class AnimSmoothing
         var path = Fold.Circle;
         bool wrapped = false, mirrored = false;
 
-        if (!s.HasRate || s.FirstStep)
+        if (!s.HasRate)
         {
-            // The first moving tick of a clip *is* the definition of its rate --
-            // the game just started playing it, and there is nothing to have
-            // re-seeked away from yet -- but only within reach of a rate. A seek
-            // into the middle of a clip arrives here looking exactly the same,
-            // and trusting one sweeps most of the animation inside a 50 ms tick.
-            // Measured playback is 64-290 units against a clip length of 4096,
-            // so a quarter of the clip is an order of magnitude clear of
-            // anything observed and still refuses a seek.
+            // Nothing to check against yet. The first moving tick of a clip *is*
+            // the definition of its rate -- the game just started playing it and
+            // there is nothing to have re-seeked away from -- so a step within
+            // reach of a rate is carried straight away. A bigger one is not
+            // refused, it is **made to wait one tick** and confirmed by
+            // repetition instead; refusing it outright stranded any clip whose
+            // real rate was that big, which is what a gecko's backflip is.
             best = Nearest(step, d, 0.0);
-            if (!s.FirstStep || !Plausible(best, d))
+            if (!s.FirstStep || !Trusted(best, d))
             {
-                Seed(s, best, d);
+                Seed(s, best);
+                s.FirstStep = false;
+                if (_probe) Refused(best);
                 s.Say = Verdict.Hold;
                 return;
             }
@@ -679,7 +719,7 @@ public static class AnimSmoothing
         else
         {
             double rate = s.Rate;
-            double tol = Math.Max(RateTolAbs, Math.Abs(rate) * RateTolRel);
+            double tol = Window(rate, d);
 
             best = Nearest(step, d, rate);
             double err = Math.Abs(best - rate);
@@ -708,7 +748,9 @@ public static class AnimSmoothing
                     // Not playback at all. Re-seed from what was actually seen
                     // so the next tick has something to confirm against, and
                     // hold this one.
-                    Seed(s, Nearest(step, d, 0.0), d);
+                    double seen = Nearest(step, d, 0.0);
+                    Seed(s, seen);
+                    if (_probe) Refused(seen);
                     s.Say = Verdict.Hold;
                     return;
                 }
@@ -740,32 +782,35 @@ public static class AnimSmoothing
     }
 
     /// <summary>
-    /// Whether a step could be a playback rate at all. See
-    /// <see cref="FirstStepFrac"/>; it is the same bound in both places because
-    /// it answers the same question.
+    /// Whether an opening step is small enough to be carried **without** the
+    /// confirming tick every other step needs. See <see cref="FirstStepFrac"/>.
+    /// A step past it is not refused, only made to wait a tick.
     /// </summary>
-    static bool Plausible(double delta, int d) => Math.Abs(delta) <= d * FirstStepFrac;
+    static bool Trusted(double delta, int d) => Math.Abs(delta) <= d * FirstStepFrac;
+
+    /// <summary>The acceptance window around the settled rate, floored by
+    /// <see cref="RateTolAbs"/> and capped by <see cref="RateTolCap"/>.</summary>
+    static double Window(double rate, int d) =>
+        Math.Min(Math.Max(RateTolAbs, Math.Abs(rate) * RateTolRel), d * RateTolCap);
 
     /// <summary>
-    /// Record what a held tick saw as the rate to check the next one against --
-    /// **but only if it could be a rate.**
+    /// Record what a held tick saw, as the rate the next one is checked against.
     ///
-    /// This is the bounded fallback, and without it the mode had a hole that no
-    /// amount of care in the predicate closes. A carry is accepted within
-    /// <see cref="RateTolRel"/> *of the rate*, so the tolerance is as big as
-    /// whatever was last recorded: seeding an implausible step -- a seek, which
-    /// on the circle can be up to half the clip -- hands the next tick a
-    /// tolerance of an eighth of the clip and lets it accept a pose from
-    /// somewhere else entirely. Refusing to call that a rate keeps the slot
-    /// unsettled instead, so it draws at the tick rate until the clip does
-    /// something a clip could actually do. **What makes the mode safe is not
-    /// that the predicate is always right; it is that being wrong costs a held
-    /// tick rather than a pose out of nowhere.**
+    /// **Whatever its size.** A step too big to be carried on trust is still the
+    /// best available guess at what the clip is doing, and refusing to record it
+    /// is what stranded a fast clip: with nothing recorded the next tick reasons
+    /// identically, holds identically, and the slot never settles a rate at all.
+    /// The danger a large rate poses is not that it is large, it is that the
+    /// acceptance window scales with it — so that is capped
+    /// (<see cref="RateTolCap"/>) and the size itself is allowed. A tick that
+    /// cannot be explained then costs one held tick and a fresh guess, which is
+    /// the bounded fallback the mode needs: **being wrong costs a stepped tick
+    /// rather than a pose from elsewhere in the clip.**
     /// </summary>
-    static void Seed(Slot s, double delta, int d)
+    static void Seed(Slot s, double delta)
     {
-        if (Plausible(delta, d)) { s.Rate = delta; s.HasRate = true; }
-        else { s.Rate = 0; s.HasRate = false; }
+        s.Rate = delta;
+        s.HasRate = true;
     }
 
     /// <summary>
@@ -1214,6 +1259,7 @@ public static class AnimSmoothing
             ? $"; {_play} playback ({_wrapped} on the wrap, {_mirrored} turned, " +
               $"{_backward} in reverse), {_held} held (no match), " +
               $"{_unsettled} settling, {_noLength} with no clip length" +
+              (_maxRefused > 0 ? $", widest refused {_maxRefused}" : "") +
               (_maxTimeSeen > 0 ? $", longest clip {_maxTimeSeen}" : "")
             : $"; {_wraps} cycle wrap(s) (longest time seen {_maxTimeSeen}), " +
               $"{_wrapCarried} carried through, {_skipped} re-seek(s), {_stuck} stuck, " +
@@ -1228,7 +1274,7 @@ public static class AnimSmoothing
         _play = _wrapped = _mirrored = _backward = _held = _unsettled = _noLength = _rootHeld = 0;
         _clipTicks = _wraps = _wrapCarried = _stuck = _skipped = _overran = 0;
         _timeStepSum = _fracSum = 0;
-        _maxTimeSeen = 0;
+        _maxTimeSeen = _maxRefused = 0;
         _maxStep = 0; _minStep = int.MaxValue;
     }
 }
