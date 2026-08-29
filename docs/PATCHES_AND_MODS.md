@@ -786,8 +786,9 @@ built, and two thirds of it are fixable.
 
 Smoothing the camera covers more of the picture than it sounds like it does,
 because most of the picture is architecture that never moves: reproject a static
-wall through a camera that moved and it is smooth. The HUD is 2D, so it is exempt
-by construction. What is left over is anything carrying a position of its own —
+wall through a camera that moved and it is smooth. The HUD is rebuilt by stage 13
+every rendered frame — its digits and gauge widths from the live HP/MP, its
+orientation from the camera — so it is exempt by construction. What is left over is anything carrying a position of its own —
 which still advances once a tick, and which now steps against a world sliding
 smoothly past it. That contrast makes the step **more** visible than it is with
 nothing smoothed at all, which is why this is the other half of frame smoothing
@@ -996,16 +997,33 @@ see: 550–615 fps either way, the run-to-run spread wider than the difference.
 **Off by default**, the house rule for a mechanism that has been measured and whose
 picture has not been looked at.
 
-#### What still steps at the tick rate, and should
+#### The player's arm is the same bug after all
 
-The arm is the case worth stating, because it looks like the same bug and is not.
-**It is 2D**, drawn by the HUD builder `func_80031D5C` out of the fourteen-entry
-table at `0x80067774` — established by difference, since pressing attack over the
-command channel moves that row's packet count and nothing else. So it is already
-welded to the screen and there is no camera to reattach it to; what steps is its
-**sprite index**, advanced once a tick by stage 3's player control. Interpolating
-between two authored sprites is not a thing, and a console running at 20 fps
-stepped it at exactly the same rate.
+**This section used to say the opposite, and the correction is the finding.** It
+read: *"It is 2D, drawn by the HUD builder `func_80031D5C` out of the fourteen-entry
+table at `0x80067774` … what steps is its sprite index … Interpolating between two
+authored sprites is not a thing."* Every clause of that is wrong except "welded to
+the screen".
+
+The arm is drawn by **`func_80032400`**, a fourth drawing callee of stage 13 that
+the census labelled "early 2D" and nobody opened. It is a **3D MO-animated mesh**
+posed by the same clip clock as every creature: `func_80034DA8(0x8019949C, 0x20,
+u8[0x801994AE], (s16)u16[0x801994A4], …)`, which forwards the clip byte and the
+clip time to `func_8003486C` exactly as `func_80032588` does. The full layout is in
+"What in the renderer draws what" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
+
+**Why the original measurement pointed at the wrong routine** is worth keeping,
+because the method was sound and the reading was not. `func_80032400` returns
+before drawing anything while the swing clock reads `-1`, so a census taken
+standing in an area sees it draw nothing, and a thirteen-tick swing inside a
+two-second averaging window barely moves it. The row that *did* move on pressing
+attack — the HUD builder's — moved **downward**, 56.9 → 54.0 → 52.7 packets, which
+is the wrong direction for an arm appearing: attacking collapses the HP/MP gauges,
+and those are entries 9 and 10 of the HUD table. A difference was taken, the only
+row that moved was believed, and the direction was not checked.
+
+So `AnimSmoothing` grew a **second front-end** rather than a second patch — see
+"The arm rides the same clock" below.
 
 A creature's **pose** is an MO mesh morph, not a second copy of object
 motion. `ObjectSmoothing` already carries origin and Euler on all four
@@ -1383,7 +1401,62 @@ was vertex 0 only. Measured not to touch the world clock, which the discarded
 version did: 65 death frames in 3.25-3.28 s with it on at 20, 60 and 144 fps,
 against 3.25-3.27 s with it off.
 
-The arm is still a sprite index. That one stays.
+**The arm is not a sprite index and does not stay.** See "The player's arm is the
+same bug after all" above, and "The arm rides the same clock" below.
+
+#### The arm rides the same clock
+
+`func_80034DA8` hands `func_8003486C` the clip byte and the clip time whoever
+called it, so the arm needs no machinery of its own — only a way into the window
+`BeforeClock`/`AfterClock` already work inside. That is two hook pairs and one
+refactor:
+
+* `BeforeSubmit`'s body below its argument reads became **`Observe(id, clip, time,
+  rootCoupled)`**. Everything above that line is "where do the clip byte, the clip
+  time and the slot identity live in *this* call"; everything below is the same for
+  a creature and for the arm. `rootCoupled` is false for the arm — the hold that
+  keeps a pose with a root `ObjectSmoothing` refused only means anything for
+  something whose root is in one of those tables, and the arm is placed from the
+  equipped weapon's record instead.
+* A pair on **`func_80032400`** sets `_inArm`. That is the scope fence:
+  `func_80034DA8` has four callers — the arm, the HUD builder and both object walks
+  — and only the arm is carried here.
+* A pair on **`func_80034DA8`** does for the arm what `BeforeSubmit` does for a
+  creature: refuse when `_depth != 0` (the creature path already has that call in
+  hand), open the window, and `Observe(a0, a2 & 0xFF, (s16)a3, rootCoupled: false)`.
+  The slot key is `a0` = `0x8019949C`, the MO decoder cache slot, which is disjoint
+  from every position pointer the creature front-end keys on.
+
+**The idle frames are the one thing the arm needs that a creature does not.**
+`func_80032400` draws nothing while the clock is `-1`, so the carry never sees the
+gap between two swings; and the clip byte is the *kind* of attack rather than the
+attack, so a second swing of the same kind would arrive as one enormous backwards
+step off the end of the first and be classified as a re-seek for the whole of it.
+The pre on `func_80032400` reads the clock itself, and resets the slot once per
+idle gap. That needs no rule about what a swing looks like.
+
+Nothing is written to game memory — one register on one call, plus the blender's
+own stack temp, the same as the creature path — so there is no restore, no leak
+check and no ordering constraint against `LoopPacing`. A redraw inside a modal loop
+replays stage 13, so the arm is carried there too, for free.
+
+Measured at `KF2_FPS=144` against the 20 Hz world, twenty-odd swings across areas 1
+and 2, in both `Mode.Timeline` and `Mode.Time`: **clip 0, step 300 a tick, 4096-unit
+clip, 13 ticks a swing, 0 held, 0 rigid**, and 86 of a swing's 94 rendered frames
+carried — the uncarried ones being the opening tick, which has nothing to
+interpolate from. The world clock is untouched: 60 death ticks in 3015 ms (19.9/s),
+and the swing takes the same thirteen ticks and reaches the same clip time with the
+carry on and off, which is the more direct check of the two.
+
+The probe (`KF2_SMOOTH_ANIM_PROBE=1`) reports the arm on **its own line**, because
+one slot against a scene's worth of creatures would otherwise vanish into the
+rounding, and because the two questions it has to answer are its own: is the swing
+a morph clip at all (`rigid 0`), and is its time moving (`step 300`). An idle second
+reads `arm no swing`, which is deliberately not the same answer as `rigid`.
+
+It rides `KF2_SMOOTH_ANIM` and the Video ▸ Enhancements ▸ Pose interpolation combo
+— same mechanism, same predicate, same switch — and so is **off by default** with
+the rest.
 
 ### The menu's cursor repeat is outside the gate by construction
 

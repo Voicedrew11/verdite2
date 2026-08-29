@@ -95,9 +95,11 @@ useful than the question was.
    than not smoothing at all. `patches/ObjectSmoothing.cs`
    (`KF2_SMOOTH_OBJECTS=1`) carries the object table at `0x80177714` across a
    pre/post pair on stage 13 — measured `121/121 frames carried`, no leak, and the
-   death clock still 65 ticks in 3219 ms. **The arm is not the same bug**: it is
-   2D, drawn by the HUD builder `func_80031D5C`, so what steps is its sprite index
-   and the console stepped it too. Both established with a new probe,
+   death clock still 65 ticks in 3219 ms. **The arm was written up as a different
+   bug and is not**: it was called 2D, a sprite index in the HUD builder
+   `func_80031D5C`, on a packet-count difference that was measuring the HP/MP
+   gauges collapsing. It is a 3D MO mesh drawn by `func_80032400` and it is
+   carried now. Both established with a new probe,
    `patches/DrawCensus.cs` (`KF2_DRAWCENSUS`), which attributes the frame's
    primitives to the routine that drew them. See "The camera is not the only thing
    that moves" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md) and "What in the
@@ -115,7 +117,12 @@ useful than the question was.
    clip clock.** Vertex-fetch lerp was tried and did not change the picture.
    `patches/AnimSmoothing.cs` now drives `func_8003486C`'s time
    (`KF2_SMOOTH_ANIM=1`, off by default) so the blender writes the in-between
-   mesh. The arm is still a 2D sprite index and stays that way.
+   mesh. **The arm turned out to be the same bug and is fixed too**:
+   `func_80032400` draws it, `func_80034DA8` poses it from the swing clock at
+   `0x801994A4` — 300 a tick on a 4096-unit clip — and `AnimSmoothing` grew a
+   second front-end for it rather than a second patch. Measured 0 held, 86 of a
+   swing's 94 frames carried at 144 fps, world clock untouched. See "The player's
+   arm is the same bug after all" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
    **What is still left is the part no counter answers**, and it is the user's: is
    20 actually right, is a 20 fps default acceptable or should the picture be drawn

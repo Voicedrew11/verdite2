@@ -39,22 +39,31 @@ namespace Kf2;
 /// ## Reading it
 ///
 /// The routines are the ones stage 13 calls, plus the drawing half of the world
-/// walk. Two of them reach the polygon assembler at all -- `func_80031C94`, which
-/// walks the 24x24 tile visibility grid at `0x80192EAC`, and `func_800331B4`, the
-/// world and object walks -- so anything three-dimensional that is not the map is
-/// under `func_800331B4`.
+/// walk. Three of them reach the polygon assembler at all -- `func_80031C94`,
+/// which walks the 24x24 tile visibility grid at `0x80192EAC`; `func_800331B4`,
+/// the world and object walks; and `func_80032400`, the first-person arm, which
+/// draws only while a swing is running. So anything three-dimensional that is
+/// neither the map nor the player's own weapon is under `func_800331B4`.
 ///
 /// To pick one *object* out of that, difference two windows rather than reading one:
 /// `KF2_SHELL`'s `press Square` swings the weapon, and equipping or unequipping
 /// changes what is drawn, so the routine whose byte count moves with the weapon is
 /// the routine that draws it. That needs no screenshot, which is the point.
 ///
-/// **It has already answered the question it was built for**, and both answers are
-/// in "What in the renderer draws what" in docs/GAME_INTERNALS.md: the arm is
-/// **2D**, drawn by the HUD builder `func_80031D5C` (its packet count is the only
-/// one that moves when attack is pressed), and `func_80032588` is handed the
-/// *object* table at `0x80177714`, not the entity records. Left in because the
-/// next question of this shape will want it.
+/// **It answered the question it was built for and got the arm wrong**, which is
+/// worth keeping here because the failure is a property of the method. The arm is
+/// **not** 2D and is not drawn by the HUD builder: it is a 3D MO mesh drawn by
+/// `func_80032400`, the row below. That routine returns before drawing anything
+/// while the swing clock at `0x801994A4` reads `-1`, so standing in an area it
+/// costs nothing, and a thirteen-tick swing barely moves it inside a two-second
+/// window. The row that *did* move on pressing attack was the HUD builder's, and
+/// it moved **downward** (56.9 -> 54.0 -> 52.7) -- the wrong direction for an arm
+/// appearing, because what changed was the HP/MP gauges collapsing. **A
+/// difference is only evidence if its sign is checked**, and a routine that draws
+/// conditionally needs a window around the condition rather than a two-second
+/// average. Its other answer stands: `func_80032588` is handed the *object* table
+/// at `0x80177714`, not the entity records. See "What in the renderer draws what"
+/// in docs/GAME_INTERNALS.md.
 ///
 /// This is a measurement and nothing else -- it never writes to game memory. It
 /// is off unless asked for, and it costs two memory reads per routine per frame
@@ -83,7 +92,7 @@ public static class DrawCensus
         (0x8002D3A8, "    cull grid build"),
         (0x8002E064, "    OT swap + clear"),
         (0x800353AC, "    head c"),
-        (0x80032400, "    early 2D"),
+        (0x80032400, "    first-person arm"),
         (0x80015374, "    head d"),
         (0x80031D5C, "    HUD"),
         (0x80033E78, "    overlay a"),

@@ -329,9 +329,21 @@ length lookup would look identical to reading a constant. Still to look at: a
 looping clip's turnover, a clip played in reverse, an attack the AI restarts.
 Vertex-fetch lerp was tried and did
 not change the picture. The
-player's arm is a different bug: it is 2D, drawn by the HUD builder
-`func_80031D5C` — proved by its packet count moving during an attack — and a
-sprite index advancing once a tick is what the console did too. **All four
+player's arm was recorded as a different bug and is not: it was called 2D, a
+sprite index in the HUD builder `func_80031D5C`, on a packet-count difference
+that was really the HP/MP gauges collapsing — it moved *down*, the wrong way for
+an arm appearing. It is a **3D MO mesh drawn by `func_80032400`**, a fourth
+drawing callee of stage 13 that draws nothing while the swing clock at
+`0x801994A4` reads `-1`, which is why a census taken standing in an area credited
+it nothing. So `AnimSmoothing` has a **second front-end** rather than a second
+patch: `Observe()` is the shared body, a pair on `func_80032400` fences the scope
+and resets the slot across the idle gap between swings (the clip byte is the
+*kind* of attack, so two swings of one kind would otherwise read as one enormous
+backwards step), and a pair on `func_80034DA8` opens the same window
+`BeforeClock` already works inside. Keyed on `a0` = `0x8019949C`; nothing written
+to game memory. Measured at 144 fps: clip 0, 300 a tick on a 4096-unit clip, 13
+ticks a swing, **0 held**, 86 of 94 frames carried, world clock still 19.9
+ticks/s. **All four
 default to off** — while the boundary was broken the phase was
 pinned to 0 and the
 smoothing never ran at all, so the first three's picture has never been seen.

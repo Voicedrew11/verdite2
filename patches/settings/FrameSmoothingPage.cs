@@ -80,8 +80,9 @@ public sealed class FrameSmoothingPage : IPatchPage
             ImGui.SetTooltip("Position and facing are already carried from the entity and " +
                              "object tables. A creature's pose is a mesh morph (MO clip): this " +
                              "drives that clip's clock between ticks so the game's own blender " +
-                             "fills the in-between shapes. The first-person arm is 2D and is " +
-                             "not this. Off by default.");
+                             "fills the in-between shapes. The player's own first-person swing " +
+                             "is the same kind of clip and is carried by this too. " +
+                             "Off by default.");
 
         DrawPoseMode();
 

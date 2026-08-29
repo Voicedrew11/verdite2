@@ -293,17 +293,59 @@ draws nothing (its exclusive count is 0):
 |---|---|---|
 | `func_80031C94` | the map: a 24x24 walk of the visibility grid at `0x80192EAC` | 27 packets still, 67 turning |
 | `func_800331B4` → `func_80032588` | the object model submitter | 48 packets, ~2 calls |
-| `func_80031D5C` | the HUD **and the player's arm** | 57 packets |
+| `func_80031D5C` | the HUD: HP/MP digits and gauges | 57 packets |
+| `func_80032400` | **the player's first-person arm** | 0 standing still, 19.1-19.4 packets mid-swing |
 
-Two things fell out of it that matter:
+**A fourth routine draws, and the census could not see it.** `func_80032400` — the
+row the table above used to label "early 2D" — returns before it draws anything
+unless `(s16)u16[0x801994A4]` is something other than `-1`, and that word is the
+swing clock. Standing in an area it costs nothing, so a census taken standing in
+an area credits it nothing, and a two-second averaging window over a swing that
+lasts thirteen ticks barely moves it either.
 
-- **The player's first-person weapon is drawn by the HUD builder**, not by the 3D
-  walk. It is 2D, in screen space, out of the fourteen-entry table at
-  `0x80067774`. The proof is a difference rather than a reading: pressing attack
-  over the command channel moves that row and nothing else (56.9 → 54.0 → 52.7
-  packets a frame). So the arm cannot be "reattached" to an extrapolated camera —
-  it is already welded to the screen, and what steps at the tick rate is its
-  sprite index, which is what the console did too.
+That is how **the arm was written up as a 2D sprite in the HUD builder's row, and
+stayed that way for four documents**. The reading behind it was that pressing
+attack moved `func_80031D5C`'s packet count and nothing else — but it moved
+*downward* (56.9 → 54.0 → 52.7), which is the wrong direction for an arm
+appearing. Attacking collapses the HP/MP gauge widths, which are entries 9 and 10
+of the HUD table, and that is what the difference was measuring.
+
+**The arm is a 3D MO-animated mesh, on the same animation system as every creature
+in the game** (`generated/game.cs:38436-38545`):
+
+| step | what |
+|---|---|
+| guard | `if ((s16)u16[0x801994A4] == -1) return;` — nothing is drawn while idle |
+| light | samples the map at the player's own position for a `0x68`-stride record at `0x801930F0`, then `SetColorMatrix`/`SetLightMatrix`/`SetBackColor` |
+| place | translation from `[0x80199494]+0x34/36/38`, rotation from `+0x3C` — the **equipped weapon's record**, and static per weapon |
+| pose | `func_80034834(0x20)` selects model `0x20`, then `func_80034DA8(0x8019949C, 0x20, u8[0x801994AE], (s16)u16[0x801994A4], vertexCount)` |
+| draw | `func_8002E650` transforms the vertices, `func_8002F214(0, 0x64)` assembles them at OT depth 100 |
+
+The arm's matrix is loaded straight into the GTE with no camera composed into it,
+which is what "welded to the screen" turns out to mean mechanically — a view-space
+3D model, not a screen-space sprite. Nothing swing-dependent reaches the matrix:
+**the swing clock's only two destinations are the draw guard and the blender's
+clip time**, so what changes during a swing is the mesh, not its placement.
+
+The animation addresses, none of which were written down before:
+
+| address | width | what |
+|---|---|---|
+| `0x801994A4` | s16 | the **swing clock**: `-1` idle, otherwise 0..4095. Fed to `func_80034DA8` as the MO clip time |
+| `0x801994AE` | u8 | the **clip byte** — which attack |
+| `0x80199494` | ptr | the equipped weapon's record: placement at `+0x34/36/38` and `+0x3C`, hit-window start at `+0x1E`, and the per-tick step `func_800271D0` adds to the clock |
+| `0x801994A6` | s16 | the hit window's start, compared against the clock |
+| `0x80199474` | s16 | must be `0` or `func_800262C8` refuses to start a swing |
+| `0x801994AF` | u8 | player action state; `0xFF` also refuses a swing |
+
+`func_800262C8` starts a swing (clock ← 0, kind ← `a0`) and `func_800271D0`, called
+from **stage 3** and so once a tick, steps the clock by the weapon's own increment
+until it passes 4095 and parks it back at `-1`. Measured on the weapon equipped in
+the test save: **300 a tick, thirteen ticks a swing**, and the clip is 4096 long
+like every other clip in the game. Because the clock is a per-tick counter feeding an MO clip
+time, `patches/AnimSmoothing.cs` carries it exactly as it carries a creature's —
+see "The player's arm is the same bug after all" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 ### The map is an 80x80 tile grid, and a tile's height is one byte
 
 `func_80031C94` (the "map tiles" line in `KF2_DRAWCENSUS`, and 78% of a frame's
@@ -418,7 +460,8 @@ does exactly that — `floor(lerp(prev, cur, LogicPhase))` into `3486C` so the
 segment pick matches the in-between instant, the leftover fraction added (or
 subtracted, on a flagged segment) onto the weight. Vertex-fetch lerp at
 `RotTransPers` was the previous attempt and did not change the picture. The
-arm is a sprite index; origin and Euler are `ObjectSmoothing`.
+arm is `func_80032400`'s MO clip, carried by `AnimSmoothing` like any other;
+origin and Euler are `ObjectSmoothing`.
 
 - **`func_80032588` is fed from *four* tables, one loop each** — and for a long
   time only the first two were written down, which is how two separate "the

@@ -156,6 +156,39 @@ public static class AnimSmoothing
     const uint ClipClock = 0x8003486C;
 
     /// <summary>
+    /// The **first-person arm**, and the reason this patch has a second
+    /// front-end. Stage 13's third drawing callee: it returns immediately unless
+    /// a swing is in progress (`(s16)u16[0x801994A4] != -1`), which is why a
+    /// census taken standing still credited it nothing and the arm was written
+    /// up as a 2D sprite in the HUD builder's row. It is neither: it builds a
+    /// view-space matrix out of the equipped weapon's record at `[0x80199494]`
+    /// (`+0x34/36/38` translation, `+0x3C` rotation), selects model `0x20`, and
+    /// hands <see cref="MoApply"/> the same clip byte and clip time a creature
+    /// gets. `generated/game.cs:38436-38545`.
+    /// </summary>
+    const uint ArmDraw = 0x80032400;
+
+    /// <summary>The MO blender: `a0` the decoder cache slot, `a1` the model,
+    /// `a2` the clip byte, `a3` the clip time, and the vertex count on the
+    /// stack. It forwards `a2`/`a3` to <see cref="ClipClock"/>, which is the
+    /// whole reason the arm needs no machinery of its own. Four callers; only
+    /// the one inside <see cref="ArmDraw"/> is fenced in here.</summary>
+    const uint MoApply = 0x80034DA8;
+
+    /// <summary>The swing clock: `s16`, `-1` while idle, otherwise 0..4095,
+    /// stepped once a tick by a per-weapon increment in `func_800271D0` (from
+    /// stage 3, which is gated). Read only to notice the idle frames the draw
+    /// never reaches, so a second swing of the same kind does not read as one
+    /// enormous backwards step off the end of the first.</summary>
+    const uint SwingClock = 0x801994A4;
+
+    /// <summary>The arm's MO decoder cache slot -- `a0` of the blender call, and
+    /// so the arm's slot key here. One fixed address, because there is one arm;
+    /// it is disjoint from every position pointer <see cref="BeforeSubmit"/>
+    /// keys on, so the two front-ends share <see cref="_slots"/> safely.</summary>
+    const uint ArmSlot = SwingClock - 0x8u;
+
+    /// <summary>
     /// How far a tick's step may differ from the settled playback rate and still
     /// count as playback, as a fraction of that rate.
     ///
@@ -372,6 +405,22 @@ public static class AnimSmoothing
     static int _depth;
     static bool _pending;
 
+    /// <summary>Inside <see cref="ArmDraw"/>. The scope fence: `func_80034DA8`
+    /// is also reached from the HUD builder and from both object walks, and only
+    /// the arm is being carried here.</summary>
+    static bool _inArm;
+
+    /// <summary>This <see cref="MoApply"/> call is the arm's, so its post owns
+    /// the window its pre opened. Without it the creature path's own call --
+    /// which passes through the same hook with `_depth` already 1 -- would
+    /// unwind a window it never opened.</summary>
+    static bool _armOpen;
+
+    /// <summary>The idle reset has already been done for this gap between two
+    /// swings. Idle is the arm's normal state, so without this the reset runs
+    /// every frame of every second the player is not attacking.</summary>
+    static bool _armIdleLatched;
+
     /// <summary>The slot this submit is for. Null on a rigid submit.</summary>
     static Slot? _slot;
 
@@ -419,6 +468,14 @@ public static class AnimSmoothing
     static long _clipTicks, _wraps, _wrapCarried, _stuck, _skipped, _overran;
     static int _maxTimeSeen;
     static double _timeStepSum, _fracSum;
+
+    // The arm, counted apart. It is one slot against a scene's worth of
+    // creatures, so it would otherwise be invisible in the totals -- and the two
+    // questions it has to answer are its own: is the swing a morph clip at all,
+    // and is its time moving.
+    static long _armSubmits, _armRigid, _armPlay, _armHold, _armStill, _armCarried, _armIdle;
+    static long _armTick = -1;
+    static int _armClip = -1, _armTime = -1, _armStep;
     static int _maxStep, _minStep = int.MaxValue;
 
     /// <summary>The widest step a hold turned away, which is the counter that
@@ -512,11 +569,13 @@ public static class AnimSmoothing
         n += Pre(self, Renderer, nameof(BeforeRenderer)) ? 1 : 0;
         n += Pair(self, ModelSubmit, nameof(BeforeSubmit), nameof(AfterSubmit)) ? 1 : 0;
         n += Pair(self, ClipClock, nameof(BeforeClock), nameof(AfterClock)) ? 1 : 0;
+        n += Pair(self, ArmDraw, nameof(BeforeArm), nameof(AfterArm)) ? 1 : 0;
+        n += Pair(self, MoApply, nameof(BeforeArmModel), nameof(AfterArmModel)) ? 1 : 0;
         HookManager.Commit();
 
         Console.WriteLine($"[KF2] anim: {(Enabled ? Carry.ToString().ToLowerInvariant() : "off")}" +
                           (_probe ? ", probe" : "") +
-                          $", hooked {n} of 3 site(s) (clip clock)");
+                          $", hooked {n} of 5 site(s) (clip clock, arm)");
     }
 
     static MethodInfo? Target(uint addr)
@@ -561,6 +620,8 @@ public static class AnimSmoothing
         _depth = 0;
         _pending = false;
         _clockSeen = false;
+        _inArm = false;
+        _armOpen = false;
     }
 
     public static void BeforeSubmit(CpuContext c, IMemory m)
@@ -577,8 +638,23 @@ public static class AnimSmoothing
         // +0x20 the integer clip time.
         int clip = (int)(m.ReadU32(c.SP + 0x1Cu) & 0xFFu);
         int time = (int)(m.ReadU32(c.SP + 0x20u) & 0xFFFFu);
-        uint id = c.A2;
 
+        Observe(c.A2, clip, time, rootCoupled: true);
+    }
+
+    /// <summary>
+    /// One tick's observation of one animated thing, whichever front-end saw it.
+    /// Everything above this line is "where do the clip byte, the clip time and
+    /// the slot identity live in this call"; everything below is the same for a
+    /// creature and for the player's own arm, which is the point of the split.
+    ///
+    /// <paramref name="rootCoupled"/> is false for the arm: the hold that keeps
+    /// a pose with a root <see cref="ObjectSmoothing"/> refused only means
+    /// anything for something whose root is in one of those tables, and the arm
+    /// is placed from the weapon record instead.
+    /// </summary>
+    static void Observe(uint id, int clip, int time, bool rootCoupled)
+    {
         if (clip >= 0x80)
         {
             if (_probe) _rigid++;
@@ -638,7 +714,7 @@ public static class AnimSmoothing
         // frame of the animation. Hold the pose with the root instead, so the
         // creature degrades to a coherent tick-rate creature rather than an
         // incoherent smooth one.
-        if (ObjectSmoothing.PositionHeld(id))
+        if (rootCoupled && ObjectSmoothing.PositionHeld(id))
         {
             if (_probe) _rootHeld++;
             return;
@@ -977,6 +1053,91 @@ public static class AnimSmoothing
         if (_probe) Report();
     }
 
+    // ---- the arm --------------------------------------------------------------
+
+    /// <summary>
+    /// The scope fence, and the one place the idle frames are visible.
+    ///
+    /// <see cref="ArmDraw"/> returns before it draws anything while the swing
+    /// clock reads `-1`, so the carry never sees the gap between two swings. It
+    /// has to: the clock runs 0 -&gt; 4095 and is then parked at `-1`, and the clip
+    /// byte is the *kind* of attack rather than the attack, so a second swing of
+    /// the same kind would otherwise arrive as one enormous backwards step off
+    /// the end of the first and be classified as a re-seek for the whole of it.
+    /// Noticing the idle here and resetting costs nothing and needs no rule
+    /// about what a swing looks like.
+    /// </summary>
+    public static void BeforeArm(CpuContext c, IMemory m)
+    {
+        _inArm = true;
+        if ((short)m.ReadU16(SwingClock) >= 0) { _armIdleLatched = false; return; }
+
+        if (_probe) _armIdle++;
+        if (_armIdleLatched) return;
+        _armIdleLatched = true;
+        if (_slots.TryGetValue(ArmSlot, out var slot)) Reset(slot);
+    }
+
+    public static void AfterArm(CpuContext c, IMemory m) => _inArm = false;
+
+    /// <summary>
+    /// The arm's own front-end. <see cref="MoApply"/> forwards `a2` and `a3` to
+    /// the clip clock unchanged, so opening the same window <see
+    /// cref="BeforeSubmit"/> opens is the whole of it: <see cref="BeforeClock"/>
+    /// and <see cref="AfterClock"/> then hand the blender `floor(t)` and spend
+    /// the leftover fraction on the 12.12 weight exactly as they do for a
+    /// creature.
+    /// </summary>
+    public static void BeforeArmModel(CpuContext c, IMemory m)
+    {
+        _armOpen = false;
+
+        // `_depth != 0` is the creature path reaching the same blender from
+        // inside func_80032588, which already has this call in hand.
+        if (!_inArm || _depth != 0) return;
+
+        _armOpen = true;
+        _depth++;
+        _pending = false;
+        _clockSeen = false;
+        _slot = null;
+
+        int clip = (int)(c.A2 & 0xFFu);
+        int time = (short)(ushort)c.A3;
+        if (_probe) { _armSubmits++; _armClip = clip; _armTime = time; }
+
+        Observe(c.A0, clip, time, rootCoupled: false);
+
+        if (_probe) { ArmCensus(); if (_pending) _armCarried++; }
+    }
+
+    public static void AfterArmModel(CpuContext c, IMemory m)
+    {
+        if (!_armOpen) return;
+        _armOpen = false;
+        if (_depth > 0) _depth--;
+        _pending = false;
+        _clockSeen = false;
+        if (_probe) Report();
+    }
+
+    /// <summary>The arm's verdict for this tick, tallied once however many frames
+    /// the tick is drawn over.</summary>
+    static void ArmCensus()
+    {
+        if (_slot == null) { _armRigid++; return; }
+        if (_armTick == _tick) return;
+        _armTick = _tick;
+
+        _armStep = _slot.Step;
+        switch (_slot.Say)
+        {
+            case Verdict.Play: _armPlay++; break;
+            case Verdict.Hold: _armHold++; break;
+            default: _armStill++; break;
+        }
+    }
+
     /// <summary>
     /// <c>func_8003486C</c>: `a0` is the bank, `a1` the clip, `a2` the integer
     /// clip time. The length is read here because this is the only site that sees
@@ -1270,11 +1431,22 @@ public static class AnimSmoothing
                           $"{_submits} submit(s), morph {_morph} ({morphPct}), " +
                           $"rigid {_rigid}{live}{step}{verdicts}{carry}{root}");
 
+        // The arm is one slot against a whole scene, so it gets its own line or
+        // it is lost in the rounding. `no swing` is the honest reading of an
+        // idle second and is not the same answer as `rigid`, which would mean
+        // the swing is not a morph clip and none of this can work.
+        Console.WriteLine(_armSubmits == 0
+            ? $"[KF2] anim: arm no swing ({_armIdle} idle frame(s))"
+            : $"[KF2] anim: arm {_armSubmits} submit(s), clip {_armClip} time {_armTime} " +
+              $"step {_armStep}, {_armPlay} playback, {_armHold} held, {_armStill} still, " +
+              $"rigid {_armRigid}" + (Enabled ? $", {_armCarried} frame(s) carried" : ""));
+
         _submits = _morph = _rigid = _live = _carried = _reversed = 0;
         _play = _wrapped = _mirrored = _backward = _held = _unsettled = _noLength = _rootHeld = 0;
         _clipTicks = _wraps = _wrapCarried = _stuck = _skipped = _overran = 0;
         _timeStepSum = _fracSum = 0;
         _maxTimeSeen = _maxRefused = 0;
         _maxStep = 0; _minStep = int.MaxValue;
+        _armSubmits = _armRigid = _armPlay = _armHold = _armStill = _armCarried = _armIdle = 0;
     }
 }

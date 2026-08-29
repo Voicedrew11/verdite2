@@ -816,6 +816,7 @@ MO clip: `func_8003486C` already produces a 12.12 weight from integer time,
 and `func_80034A74` already morphs. Driving that clock between ticks lets the
 decoder write the in-between mesh; interpolating object-space `SVECTOR` reads
 did not, because most submits are rigid architecture (`CurAnim >= 0x80`) and
-the first-person arm is a sprite index. Tile height is a different, smaller
+the first-person arm is posed by the MO clip clock like everything else. Tile
+height is a different, smaller
 problem and is not this. See "The model pipeline has no skeleton" in
 [GAME_INTERNALS.md](GAME_INTERNALS.md).
