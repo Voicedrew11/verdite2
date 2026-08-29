@@ -121,17 +121,32 @@ public static class ObjectSmoothing
     /// slot carried but not drawn costs a write and a restore and nothing else.
     ///
     /// `RotOff` is -1 for a table the renderer hands a zeroed rotation triple.
+    ///
+    /// `Fast` is which table the raised placement threshold applies to, and it is
+    /// the whole of the per-table story. The threshold does two jobs -- rejecting
+    /// slot reuse, which wants it tight, and admitting fast honest motion, which
+    /// wants it loose -- and the tables want opposite answers: a boss lunges far
+    /// enough in a tick to be refused at 1024, while the projectile tables recycle
+    /// slots constantly and are wrong at anything above it. One global constant
+    /// cannot serve both, so the raise is scoped to the table that needs it.
     /// </summary>
     sealed record TableSpec(
         string Label, string Noun, uint Base, int Stride, int Count,
-        int FreeOff, int FreeWidth, int FreeValue, int PosOff, int RotOff);
+        int FreeOff, int FreeWidth, int FreeValue, int PosOff, int RotOff,
+        bool Fast = false);
 
     static readonly TableSpec[] Tables =
     [
         // Creatures/enemies. Stage 4 (gated) copies the object position into +0x2C,
         // but the renderer draws from this copy plus a rotation of its own, so this
         // is the only place an enemy's facing lives.
-        new("entities", "creature", 0x8016C544, 0x7C, 0xC8, 0x0, 1, 0xFF, 0x2C, 0x40),
+        // The one table the raised threshold applies to: creatures are what moves
+        // fast enough to be refused while still honestly moving, and a refused
+        // creature is drawn with a stepping root under a pose AnimSmoothing is
+        // still interpolating -- which reads as its head snapping ahead of its
+        // body. Nothing in here is recycled at the rate the projectile tables are.
+        new("entities", "creature", 0x8016C544, 0x7C, 0xC8, 0x0, 1, 0xFF, 0x2C, 0x40,
+            Fast: true),
 
         // Static props, doors and sprites -- the table stage 2 steps. Note the free
         // test is +0x6 and not the +0x4 that stage 2 and AgentServer use; see the
@@ -289,14 +304,15 @@ public static class ObjectSmoothing
     /// </summary>
     public enum Guard
     {
-        /// <summary>A bare <see cref="TeleportUnits"/> on every slot, every tick.
-        /// **The default.** The only mode in which projectiles have been reported
-        /// correct.</summary>
+        /// <summary>A bare <see cref="TeleportUnits"/> on every slot, every tick,
+        /// whatever table it is in. A fast creature's root is then held while its
+        /// pose is still carried, which is the head-snapping case -- though the
+        /// pose now holds with it rather than morphing against it.</summary>
         Strict,
 
-        /// <summary><see cref="RaisedUnits"/>, times <see cref="GlidingFactor"/>
-        /// for a slot that was carried on the previous tick. Was briefly the
-        /// default; reported to make fireballs stutter and jump.</summary>
+        /// <summary><see cref="RaisedUnits"/> on a <c>Fast</c> table, times
+        /// <see cref="GlidingFactor"/> for a slot that was carried on the previous
+        /// tick.</summary>
         Sticky,
 
         /// <summary>As <see cref="Sticky"/>, but a slot that simply *moved* on
@@ -309,17 +325,21 @@ public static class ObjectSmoothing
         /// long as it keeps that speed. This admits it from its second moving
         /// tick onward.
         ///
-        /// It is the **widest** of the three and so the worst for slot reuse: a
-        /// projectile table recycles constantly, and this gives a freshly reused
-        /// slot the raised cap on the strength of the previous occupant's motion.
-        /// Kept for comparison; not a candidate.</summary>
+        /// It is the **widest** of the three and so the weakest against slot
+        /// reuse, which is why it applies only to the entity table: a creature
+        /// spawning into a slot that last held a creature is rare, where a
+        /// projectile table recycles constantly. **The default**, because play
+        /// reported it as visibly the smoothest of the three on a creature; drop
+        /// to <see cref="Sticky"/> if a creature is ever seen sliding in on
+        /// spawn.</summary>
         Continuous,
     }
 
-    /// <summary>Which rule <see cref="Before"/> judges a step by. Defaults to
-    /// <see cref="Guard.Strict"/>: the raised modes buy nothing measured and cost
-    /// projectiles.</summary>
-    public static Guard Placement { get; private set; } = Guard.Strict;
+    /// <summary>Which rule <see cref="Before"/> judges a step by, on the tables
+    /// marked <c>Fast</c>. Defaults to <see cref="Guard.Continuous"/>: what made
+    /// the raise unshippable was projectiles, and the raise no longer reaches
+    /// them.</summary>
+    public static Guard Placement { get; private set; } = Guard.Continuous;
 
     public const string OnKey = "kf2.smoothing.objects";
     public const string GuardKey = "kf2.smoothing.objects.guard";
@@ -331,6 +351,36 @@ public static class ObjectSmoothing
 
     static bool _onFromEnv;
     static bool _guardFromEnv;
+
+    /// <summary>
+    /// Position addresses whose carry this tick was **refused** as a placement.
+    ///
+    /// Published for <see cref="AnimSmoothing"/>, which keys its own per-creature
+    /// state on exactly this address -- `func_80032588`'s `a2` is
+    /// `base + slot*stride + PosOff`, the same expression the carry writes
+    /// through -- so the two patches can agree about a creature without either
+    /// learning the other's table layout.
+    ///
+    /// The reason they must agree: a creature is drawn from **two** smoothers,
+    /// its root from here and its pose from there. When this one refuses a fast
+    /// creature's position, its root steps at the tick rate while its vertices go
+    /// on morphing at the frame rate, and the pose reads as sliding or snapping
+    /// ahead of the body -- which is the same "two smoothers must agree about what
+    /// time it is" rule that the camera and the object tables already had to be
+    /// taught, applied per creature instead of globally.
+    ///
+    /// Rebuilt on the frame the world advanced on and read by every frame of that
+    /// tick, which is the same lifetime as the carry decision itself.
+    /// </summary>
+    static readonly HashSet<uint> _held = [];
+
+    /// <summary>Whether the thing drawn from <paramref name="posAddr"/> had its
+    /// root held at the tick rate this tick, so a pose smoother can hold with it.
+    /// Always false when this patch is off: nothing is carrying any root then, so
+    /// coupling to it would disable pose smoothing everywhere rather than keep two
+    /// smoothers in step.</summary>
+    public static bool PositionHeld(uint posAddr) =>
+        Enabled && _held.Count > 0 && _held.Contains(posAddr);
 
     /// <summary>True once both samples exist. Cleared when an area loads, because the
     /// tables are rebuilt and the last area's positions are meaningless.</summary>
@@ -404,7 +454,11 @@ public static class ObjectSmoothing
         });
     }
 
-    public static void SetEnabled(bool on) => Enabled = on;
+    public static void SetEnabled(bool on)
+    {
+        Enabled = on;
+        if (!on) _held.Clear();
+    }
 
     /// <summary>Switch the placement rule mid-session, which is the point of it
     /// being a setting: the difference between the three is a picture, and the
@@ -465,12 +519,12 @@ public static class ObjectSmoothing
     public static void Before(CpuContext c, IMemory m)
     {
         _applied = false;
-        if (!Enabled || !FramePacing.Gating) return;
+        if (!Enabled || !FramePacing.Gating) { _held.Clear(); return; }
 
         if (_probe) _frames++;
 
-        if (FramePacing.TickedThisFrame) Sample(m);
-        if (!_primed) return;
+        if (FramePacing.TickedThisFrame) { Sample(m); _held.Clear(); }
+        if (!_primed) { _held.Clear(); return; }
 
         // Not gated on a small phase: interpolation must overwrite the tables even at
         // frac ~= 0, because on a tick frame they hold `Cur` (the new tick) and the
@@ -527,7 +581,7 @@ public static class ObjectSmoothing
                     // held and tear itself off the rest of the creature.
                     // Continuous extends that to a slot that merely moved, which
                     // is the lunge-from-a-standstill case Sticky cannot admit.
-                    int cap = Placement switch
+                    int cap = !s.Fast ? TeleportUnits : Placement switch
                     {
                         Guard.Strict => TeleportUnits,
                         Guard.Continuous => t.MovedLast[i] || t.Gliding[i]
@@ -543,7 +597,14 @@ public static class ObjectSmoothing
                     t.Gliding[i] = posLive;
                     t.MovedLast[i] = posMoved;
                     t.Carry[i] = posLive;
-                    if (posMoved && !posLive && _probe) t.Teleports++;
+
+                    if (posMoved && !posLive)
+                    {
+                        // Tell the pose smoother this root is stepping, so it can
+                        // step with it rather than morphing against it.
+                        _held.Add((uint)(s.Base + i * s.Stride + s.PosOff));
+                        if (_probe) t.Teleports++;
+                    }
                 }
                 else posLive = t.Carry[i];
                 if (!posLive && !rotMoved) continue;
