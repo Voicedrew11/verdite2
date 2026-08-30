@@ -346,6 +346,26 @@ public static class FramePacing
     /// only thing that decides where a frame ends -- see <see cref="AfterDrawOTag"/>.</summary>
     static int _vsyncCalls;
 
+    /// <summary>
+    /// Whether a frame boundary has to have seen a <c>VSync</c> call.
+    ///
+    /// True normally, and that is the whole point of the boundary -- see
+    /// <see cref="AfterDrawOTag"/>. **Cleared when no VSync thunk could be hooked**,
+    /// because the alternative is not "a slightly worse boundary", it is *no
+    /// boundary at all*: nothing paced, and <see cref="_tickThisFrame"/> frozen at
+    /// its initial <c>true</c>, so every gated stage runs on every frame and the
+    /// world advances at the render rate. One ordering table per frame is this
+    /// game's own arrangement, so charging every <c>DrawOTag</c> as a frame is
+    /// right here and merely coarse elsewhere. Degrading to coarse beats degrading
+    /// to nothing.
+    /// </summary>
+    static bool _boundaryNeedsVSync = true;
+
+    /// <summary>When the last frame boundary was reached, on <see cref="_clock"/>.
+    /// Negative until the first one. The watchdog in <see cref="BeforeStage"/> is
+    /// what reads it.</summary>
+    static double _lastBoundaryMs = -1.0;
+
     /// <summary>Frames a second over the last window, so the settings can show whether
     /// the chosen rate is the one being achieved. Zero until the first window ends.</summary>
     public static double Measured { get; private set; }
@@ -363,8 +383,39 @@ public static class FramePacing
 
     /// <summary>Whether the gated stages run on the frame now being built. Decided
     /// at the previous frame's boundary, because that is the last moment before
-    /// the stages run.</summary>
+    /// the stages run.
+    ///
+    /// **It starts <c>true</c> and is only ever written at the boundary, so a
+    /// boundary that stops arriving freezes it there** -- every gated stage then
+    /// runs on every frame and the world advances at the render rate. That is the
+    /// single failure that reads as "the whole game runs fast", and it used to be
+    /// silent in both halves: <see cref="Floor"/> has its only call site at the
+    /// boundary too, so the picture went uncapped in the same instant. The
+    /// watchdog in <see cref="BeforeStage"/> is what refuses to let that stand.
+    /// </summary>
     static bool _tickThisFrame = true;
+
+    // ---- the watchdog ---------------------------------------------------------
+
+    /// <summary>
+    /// How long the stage gate will keep believing a boundary it has stopped being
+    /// told about, in ms. Comfortably past the 250 ms the logic clock already
+    /// treats as "the game stopped drawing" and past any real disc read, since a
+    /// blocked game is not calling gated stages either -- a stage running while no
+    /// boundary arrives is the broken case and nothing else.
+    /// </summary>
+    const double BoundaryDeadMs = 500.0;
+
+    /// <summary>
+    /// How long one decision of <see cref="FallbackTick"/> is held. The gated
+    /// stages of one main-loop iteration run microseconds apart and must all get
+    /// the same answer, or the world half-ticks; a quarter of a tick bounds the
+    /// error if two iterations ever do land inside one window. Not a rate.
+    /// </summary>
+    static double FallbackHoldMs => Math.Min(1000.0 / LogicHz * 0.25, 3.0);
+
+    static double _fallbackNextMs = -1.0, _fallbackHoldUntilMs = -1.0;
+    static bool _fallbackTick, _fallbackSaid;
 
     /// <summary>
     /// How far the frame being drawn is past the last logic tick, in ticks, in
@@ -478,14 +529,49 @@ public static class FramePacing
         // Attached whether or not the rate is the default: a rate is a choice that
         // can be taken back, and hooks cannot be added once the game is running
         // past the overlay loads.
-        bool attached = false;
+        //
+        // **Retried on a later overlay load if it did not finish**, and that is the
+        // point rather than caution. Event.Dispatch wraps every listener in a
+        // try/catch that writes one line to stderr, so a throw anywhere in Attach
+        // -- HookManager.Commit's foreach aborts on the first detour that will not
+        // install, and takes every function after it with it -- used to leave the
+        // session unpaced with the latch already set, so it was never tried again.
+        // Attach only claims what it actually hooked, so a retry adds the rest
+        // rather than a second copy of the lot.
         Event.AddListener<OverlayLoadedEvent>(_ =>
         {
-            if (attached) return;
-            attached = true;
-            Attach();
+            if (_attachDone || _attachTries >= MaxAttachTries) return;
+            _attachTries++;
+            try
+            {
+                _attachDone = Attach();
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine($"[KF2] pacing: attach failed -- {e}");
+            }
+            if (!_attachDone && _attachTries >= MaxAttachTries)
+                Console.Error.WriteLine("[KF2] pacing: giving up on the rest; what is hooked is hooked. " +
+                                        "See \"Any frame rate\" in docs/PATCHES_AND_MODS.md.");
         });
     }
+
+    static bool _attachDone;
+    static int _attachTries;
+
+    /// <summary>Overlay loads a partial attach is retried on. A miss is nearly
+    /// always a miss for good -- every overlay is registered before the first load,
+    /// so a role that will not resolve now will not resolve later -- and a session
+    /// loads an area module every time the player walks through a door. Enough
+    /// tries to cover a transient, few enough to stop the console filling up.</summary>
+    const int MaxAttachTries = 3;
+
+    // What is hooked already, so a retry after a partial attach adds only what is
+    // missing. Overlay names for the two per-overlay roles; counts for the rest.
+    static readonly HashSet<string> _otHooked = new(StringComparer.Ordinal);
+    static readonly HashSet<string> _vsHooked = new(StringComparer.Ordinal);
+    static readonly HashSet<uint> _stageHooked = [];
+    static bool _gateHooked, _fullRateHooked;
 
     /// <summary>
     /// The rate a previous run left behind. Migrates the vblank divisor this used
@@ -581,7 +667,13 @@ public static class FramePacing
     public static void SetCap(int vblanks)
         => SetTargetFps(vblanks <= 0 ? 0.0 : 60.0 / Math.Clamp(vblanks, 1, 4));
 
-    static void Attach()
+    /// <summary>
+    /// Attach the hooks, and say what actually landed. Returns true only when every
+    /// role this build knows about is hooked; anything less is reported and left to
+    /// be retried on the next overlay load, since the alternative is a session that
+    /// paces nothing and never says so.
+    /// </summary>
+    static bool Attach()
     {
         SymbolRegistry.Build();
         var self = typeof(FramePacing);
@@ -590,43 +682,43 @@ public static class FramePacing
         var frameGate = self.GetMethod(nameof(BeforeFrameGate), BindingFlags.Public | BindingFlags.Static)!;
         var vsyncCall = self.GetMethod(nameof(BeforeVSync), BindingFlags.Public | BindingFlags.Static)!;
 
-        int n = 0;
         foreach (var (overlay, addr) in DrawOTag)
         {
+            if (_otHooked.Contains(overlay)) continue;
             var target = SymbolRegistry.Resolve(overlay, null, addr);
             if (target == null)
             {
                 Console.Error.WriteLine($"[KF2] pacing: no function at {overlay}/0x{addr:X8}");
                 continue;
             }
-            if (HookManager.AddPost(_self, target, frameDrawn)) n++;
+            if (HookManager.AddPost(_self, target, frameDrawn)) _otHooked.Add(overlay);
         }
 
         // Without this the frame boundary never fires and nothing here paces
         // anything, so say so rather than run silently at whatever the host does.
-        int vsyncHooked = 0;
         foreach (var (overlay, addr) in VSyncThunk)
         {
+            if (_vsHooked.Contains(overlay)) continue;
             var target = SymbolRegistry.Resolve(overlay, null, addr);
             if (target == null)
             {
                 Console.Error.WriteLine($"[KF2] pacing: no VSync at {overlay}/0x{addr:X8}");
                 continue;
             }
-            if (HookManager.AddPre(_self, target, vsyncCall)) { n++; vsyncHooked++; }
+            if (HookManager.AddPre(_self, target, vsyncCall)) _vsHooked.Add(overlay);
         }
 
         // The game's own frame gate, skipped at every rate. Only GAME.EXE's copy is
         // hooked, so the title and the ending pace themselves as they always did --
         // they are CD-bound at 7-15 fps and have no world to tick.
-        bool gateHooked = false;
+        if (!_gateHooked)
         {
             var target = SymbolRegistry.Resolve("game", null, FrameGate);
             if (target == null)
                 Console.Error.WriteLine($"[KF2] pacing: no game function at 0x{FrameGate:X8} -- " +
                                         "the game's own two-vblank wait cannot be removed, so the " +
                                         "port will draw and tick at 30 whatever was asked for.");
-            else if (HookManager.AddPre(_self, target, frameGate)) { n++; gateHooked = true; }
+            else if (HookManager.AddPre(_self, target, frameGate)) _gateHooked = true;
         }
 
         // The stage gate is hooked even when the render rate equals the tick rate,
@@ -636,39 +728,76 @@ public static class FramePacing
         // address in `game`, not just the thirteen main-loop stages -- experimenting
         // is the point.
         var gate = _gated.Count > 0 ? _gated : (IReadOnlyList<uint>)DefaultGate;
-        int gated = 0;
         foreach (uint addr in gate)
         {
+            if (_stageHooked.Contains(addr)) continue;
             var target = SymbolRegistry.Resolve("game", null, addr);
             if (target == null)
             {
                 Console.Error.WriteLine($"[KF2] pacing: no game function at 0x{addr:X8}, not gated");
                 continue;
             }
-            if (HookManager.AddPre(_self, target, stageGate)) { n++; gated++; }
+            if (HookManager.AddPre(_self, target, stageGate)) _stageHooked.Add(addr);
         }
 
-        n += FullRateLogic.Attach(_self);
+        if (!_fullRateHooked && FullRateLogic.Attach(_self) > 0) _fullRateHooked = true;
 
+        // Anything after this line runs only if the detours actually installed. It
+        // is the one step here that is not bookkeeping, and it is where a partial
+        // attach comes from.
         HookManager.Commit();
+
+        int n = _otHooked.Count + _vsHooked.Count + _stageHooked.Count
+              + (_gateHooked ? 1 : 0) + (_fullRateHooked ? 1 : 0);
+
+        // The boundary is the load-bearing pair, so it is stated as a pair rather
+        // than folded into the total: reading "15 hook(s)" and counting on your
+        // fingers is how this went unnoticed.
         Console.WriteLine($"[KF2] pacing: {Describe()}, {n} hook(s), " +
+                          $"boundary {_otHooked.Count}/{DrawOTag.Length} DrawOTag + " +
+                          $"{_vsHooked.Count}/{VSyncThunk.Length} VSync, " +
+                          $"{_stageHooked.Count}/{gate.Count} stage(s), " +
+                          $"frame gate {(_gateHooked ? "skipped" : "IN PLACE")}, " +
                           $"world {(LogicMode == Logic.Full ? "at the render rate" : $"at {LogicHz:0.#} Hz")} " +
                           $"gating {string.Join(" ", gate.Select(g => g.ToString("X8")))}");
 
-        if (vsyncHooked == 0)
-            Console.WriteLine("[KF2] pacing: no VSync thunk could be hooked, so no frame " +
-                              "boundary is ever reached -- nothing is paced and the world is " +
-                              $"not held to {LogicHz:0.#} Hz. See \"Any frame rate\" in " +
-                              "docs/PATCHES_AND_MODS.md.");
+        // No VSync thunk means the boundary can never be reached as defined, which
+        // is not a degraded pacer but no pacer at all -- and the world then runs at
+        // the render rate with nothing said. One ordering table per frame is this
+        // game's own arrangement, so charge every DrawOTag instead.
+        if (_vsHooked.Count == 0 && _otHooked.Count > 0)
+        {
+            _boundaryNeedsVSync = false;
+            Console.Error.WriteLine("[KF2] pacing: no VSync thunk could be hooked -- charging every " +
+                                    "DrawOTag as a frame instead. A frame carrying two ordering " +
+                                    "tables is then paced twice. See \"Any frame rate\" in " +
+                                    "docs/PATCHES_AND_MODS.md.");
+        }
 
-        if (gated == 0 && LogicMode == Logic.Fixed)
-            Console.WriteLine("[KF2] pacing: no stage could be gated -- the world will advance " +
-                              "once per rendered frame instead of at the tick rate. See " +
-                              "\"Frame pacing\" in docs/PATCHES_AND_MODS.md.");
+        if (_otHooked.Count == 0)
+            Console.Error.WriteLine("[KF2] pacing: no DrawOTag could be hooked, so there is no frame " +
+                                    "boundary at all -- the picture is unpaced and the world is held " +
+                                    $"to {LogicHz:0.#} Hz by the stage gate's watchdog alone.");
 
-        if (!gateHooked)
-            Console.WriteLine("[KF2] pacing: the game's own frame gate is still in place, so both " +
-                              "the picture and the world will sit at 30 whatever was asked for.");
+        if (_stageHooked.Count == 0 && LogicMode == Logic.Fixed)
+            Console.Error.WriteLine("[KF2] pacing: no stage could be gated -- the world will advance " +
+                                    "once per rendered frame instead of at the tick rate. See " +
+                                    "\"Frame pacing\" in docs/PATCHES_AND_MODS.md.");
+
+        if (!_gateHooked)
+            Console.Error.WriteLine("[KF2] pacing: the game's own frame gate is still in place, so both " +
+                                    "the picture and the world will sit at 30 whatever was asked for.");
+
+        bool complete = _otHooked.Count == DrawOTag.Length
+                     && _vsHooked.Count == VSyncThunk.Length
+                     && _stageHooked.Count == gate.Count
+                     && _gateHooked;
+
+        if (!complete)
+            Console.Error.WriteLine("[KF2] pacing: attach incomplete -- will try the rest on the next " +
+                                    "overlay load.");
+
+        return complete;
     }
 
     static string Describe() => Enabled ? $"{TargetFps:0.#} fps" : "uncapped";
@@ -732,11 +861,12 @@ public static class FramePacing
     /// </summary>
     public static void AfterDrawOTag(CpuContext c, IMemory m)
     {
-        if (_vsyncCalls == 0) return;
+        if (_boundaryNeedsVSync && _vsyncCalls == 0) return;
         _vsyncCalls = 0;
         _frames++;
 
         double now = _clock.Elapsed.TotalMilliseconds;
+        _lastBoundaryMs = now;
 
         _windowFrames++;
         double elapsed = now - _windowStart;
@@ -780,15 +910,23 @@ public static class FramePacing
             return;
         }
 
-        double dt = _logicClockMs < 0.0 ? 0.0 : nowMs - _logicClockMs;
+        bool first = _logicClockMs < 0.0;
+        double dt = first ? 0.0 : nowMs - _logicClockMs;
         _logicClockMs = nowMs;
 
         // More than a quarter of a second means the game stopped drawing rather
         // than ran late -- a disc read, a module swap, the first frame of all.
         // Tick once and restart, rather than running the world forward through the
         // gap the way a naive accumulator would.
-        if (dt <= 0.0 || dt > 250.0) _logicCredit = 1.0;
-        else _logicCredit = Math.Min(_logicCredit + dt * LogicHz / 1000.0, 2.0);
+        //
+        // **A dt of zero is not that case and no longer takes that branch.** It
+        // used to, which granted a free tick to any two boundaries landing on the
+        // same reading of the clock -- and LoopPacing's fill issues boundaries
+        // back to back with almost no work between them, its own exit condition
+        // being TickedThisFrame. Restarting is for the first sample, which `first`
+        // now says outright; no elapsed time means no credit, and no tick.
+        if (first || dt > 250.0) _logicCredit = 1.0;
+        else if (dt > 0.0) _logicCredit = Math.Min(_logicCredit + dt * LogicHz / 1000.0, 2.0);
 
         _tickThisFrame = _logicCredit >= 1.0;
         if (_tickThisFrame) _logicCredit -= 1.0;
@@ -799,8 +937,85 @@ public static class FramePacing
     /// false makes the recompiled body not run; HookManager's Invoke honours it.
     /// In <see cref="Logic.Full"/> this always runs the original, and at the tick
     /// rate the accumulator ticks on every frame, so it does there too.
+    ///
+    /// **The watchdog is the second half and it is not a tidy-up.** A gated stage
+    /// is only ever reached from the main loop, and the main loop draws, so a
+    /// stage running while no frame boundary has arrived for
+    /// <see cref="BoundaryDeadMs"/> means the boundary is not being reached at all
+    /// -- the <c>DrawOTag</c> post or the <c>VSync</c> pre did not take. Believing
+    /// <see cref="_tickThisFrame"/> then means believing a stale <c>true</c>,
+    /// which runs the world at the render rate; at the rates this port is played
+    /// at that is the whole game several times too fast, and it says nothing.
+    /// So the clock is run from here instead, off the same wall clock, and the
+    /// port says once what it is doing.
     /// </summary>
-    public static bool BeforeStage(CpuContext c, IMemory m) => !Gating || _tickThisFrame;
+    public static bool BeforeStage(CpuContext c, IMemory m)
+    {
+        if (!Gating) return true;
+
+        double now = _clock.Elapsed.TotalMilliseconds;
+        if (_lastBoundaryMs >= 0.0 && now - _lastBoundaryMs <= BoundaryDeadMs)
+            return _tickThisFrame;
+
+        return FallbackTick(now);
+    }
+
+    /// <summary>
+    /// Hold the world to <see cref="LogicHz"/> with no frame boundary to hang it
+    /// on. An absolute grid like <see cref="Floor"/>'s, so the rate averages to
+    /// the target rather than drifting; more than four periods of debt means the
+    /// game stopped rather than ran late, and the grid restarts instead of running
+    /// the world forward through the gap.
+    ///
+    /// One decision is held for <see cref="FallbackHoldMs"/> because the gated
+    /// stages of one main-loop iteration have to agree with each other -- half an
+    /// iteration ticked is a state machine stepped against an entity table that
+    /// was not.
+    /// </summary>
+    static bool FallbackTick(double now)
+    {
+        if (!_fallbackSaid)
+        {
+            _fallbackSaid = true;
+            Console.Error.WriteLine(
+                "[KF2] pacing: no frame boundary has been reached, so the render rate is not " +
+                $"holding the world down -- ticking at {LogicHz:0.#} Hz and pacing the loop from " +
+                "the wall clock instead. Check the boundary counts on the pacing line above; " +
+                "see \"Any frame rate\" in docs/PATCHES_AND_MODS.md.");
+        }
+
+        if (now < _fallbackHoldUntilMs) return _fallbackTick;
+
+        double period = 1000.0 / LogicHz;
+        if (_fallbackNextMs < 0.0 || now - _fallbackNextMs > 4.0 * period) _fallbackNextMs = now;
+
+        _fallbackTick = now >= _fallbackNextMs;
+        if (_fallbackTick)
+        {
+            _fallbackNextMs += period;
+            _logicCredit = 0.0;
+        }
+        else
+        {
+            // The phase the smoothing draws at, from the grid rather than from the
+            // accumulator the boundary would have advanced.
+            _logicCredit = Math.Clamp(1.0 - (_fallbackNextMs - now) / period, 0.0, 1.0);
+        }
+
+        _tickThisFrame = _fallbackTick;
+
+        // A fresh decision means a new main-loop iteration, which without a
+        // boundary is the only thing left that means "a frame". Pace it here so the
+        // picture is not uncapped as well; LoopPacing's own deadline is not asked
+        // for, since its flags are consumed at the boundary that is not arriving.
+        if (Enabled) Floor(1000.0 / TargetFps);
+
+        // Held from *after* the wait, or the sleep above would spend the whole
+        // window and the rest of this iteration's stages would each decide again.
+        _fallbackHoldUntilMs = _clock.Elapsed.TotalMilliseconds + FallbackHoldMs;
+
+        return _fallbackTick;
+    }
 
     /// <summary>
     /// Hold the frame boundary until <paramref name="min"/> ms have passed since

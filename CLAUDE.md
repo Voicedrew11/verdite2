@@ -187,7 +187,20 @@ arrangement. Measured: 20.00 ticks/s at 20, 30, 60, 120, 144 and uncapped, with
 load-bearing**: it used to be a `DrawOTag` that followed an emulated *vblank*, and
 since the vblank is a fixed 60 Hz wall-clock grid, above 60 fps most frames were
 neither paced nor logic-clocked and the world ran at `30 × frames-per-vblank` —
-measured double speed at `KF2_FPS=60`. What is gated is stages **2**, 3, 4, 5, 6 and
+measured double speed at `KF2_FPS=60`. **That boundary is a single point of failure
+and it fails open**: `Floor()` has one call site and `_tickThisFrame` one writer,
+both there, and `_tickThisFrame` starts `true` — so a boundary that stops arriving
+uncaps the picture *and* runs every gated stage on every frame, which at 165 fps
+against a 20 Hz world is the whole game at 8× from the title onward, silently. The
+stage gate therefore carries a **watchdog**: a gated stage is only reached from the
+main loop and the main loop draws, so one running while no boundary has arrived for
+500 ms means the boundary is gone, and `FallbackTick` runs the same wall-clock grid
+and paces the loop from inside `BeforeStage` instead (measured: `walk` reports 2844
+units/2 s at 165 fps both with the boundary intact and with every `DrawOTag` hook
+removed). Losing only the `VSync` pre degrades to charging every `DrawOTag` as a
+frame rather than to no boundary at all, and `Attach` reports the boundary as a
+pair (`boundary 3/3 DrawOTag + 3/3 VSync`), claims only what it hooked and is
+retried. What is gated is stages **2**, 3, 4, 5, 6 and
 stage 13's fade stepper `func_80033FBC` and animated-texture updater
 `func_8002DC78`, and the test each had to pass is **can it draw**. **Stage 2
 (`func_80037C0C`) is where doors, the drawbridge, the minecart and the crystals
@@ -784,8 +797,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-four
-of the twenty-eight are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-five
+of the twenty-nine are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
@@ -1003,6 +1016,18 @@ uncaptured edit inside the checkout is left where it is.
   10 the disc holds it to. Paced from the start of the stream now, since there is no
   free burst on hardware either. **No recompile.** See "The intro movie ran at the
   render rate" in `docs/RUNTIME.md`.
+
+- `0027-commit-each-hook-independently.patch` — `HookManager.Commit`'s `foreach`
+  installed each detour with no guard, so the first `new Hook` that threw abandoned
+  every function after it in the dictionary. Silently: a patch that hooks from an
+  `OverlayLoadedEvent` listener — which is all of them, since `SymbolRegistry` is
+  only readable once the dispatcher's overlay tables are registered — has its
+  exception swallowed by `Event.Dispatch` into one stderr line. Losing
+  `FramePacing`'s frame boundary that way reads as *the whole game running fast*,
+  because `Floor()` and `_tickThisFrame` both hang off it and `_tickThisFrame`
+  fails open. Each function is committed on its own now and a failure names the
+  method. **No recompile.** See "Everything hung off one hook" in
+  `docs/PATCHES_AND_MODS.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

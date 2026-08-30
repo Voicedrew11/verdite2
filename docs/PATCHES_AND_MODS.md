@@ -528,6 +528,63 @@ as its frame rate; it now uses the call boundary too, and a `0:` band in its
 vblanks-per-frame histogram is the correct answer for a frame shorter than a
 vblank.
 
+### Everything hung off one hook, and losing it read as "the whole game runs fast"
+
+The boundary above is a **single point of failure**, and until this was written it
+was an unannounced one. `Floor()` has exactly one call site — the boundary — and
+`_tickThisFrame` is written in exactly one place — the boundary. So a boundary that
+stops arriving takes both halves at once: the picture goes uncapped *and*
+`_tickThisFrame` freezes at whatever it last held. Its initial value is `true`, so
+the freeze runs every gated stage on every frame and the world advances at the
+render rate. At the rate this port is actually played at (165, against a 20 Hz
+world) that is **8× speed**, from the title screen onward, with nothing said on the
+console. That is the shape of the intermittent "the whole game runs fast" report,
+and no other single failure in `patches/` produces both halves together.
+
+Three things now stand between that and the player. None of them changes anything
+when the boundary is healthy — measured, `walk` reports **2844 units per 2 s at 165
+fps** with the boundary intact and **2844 with all three `DrawOTag` hooks
+deliberately removed**.
+
+* **The stage gate refuses to believe a stale boundary.** A gated stage is only
+  ever reached from the main loop, and the main loop draws, so a stage running
+  while no boundary has arrived for `BoundaryDeadMs` (500 ms — past the 250 ms the
+  logic clock already treats as a stall, and past any disc read, since a blocked
+  game is not calling stages either) means the boundary is not being reached at
+  all. `FramePacing.FallbackTick` then runs the same wall-clock grid from inside
+  `BeforeStage`, paces the loop there, and says so once. One decision is held for a
+  quarter of a tick because the seven gated stages of one iteration have to agree
+  with each other — half an iteration ticked is a state machine stepped against an
+  entity table that was not.
+* **No `VSync` thunk is a coarser boundary, not the absence of one.**
+  `_boundaryNeedsVSync` clears when none could be hooked, so every `DrawOTag` is
+  charged as a frame. This game draws one ordering table per frame, so that is
+  simply right here; a frame carrying two would be paced twice, which is the
+  failure worth having.
+* **The attach says what landed, and is retried.** `Event.Dispatch` wraps every
+  listener in a `try`/`catch` that writes one line to stderr, and
+  `HookManager.Commit`'s `foreach` used to abort on the first detour that would not
+  install and take every function after it — so a partial attach was silent *and*
+  permanent, the latch already set. `Attach()` now claims only what it hooked,
+  returns whether it is complete, and is retried on the next overlay load up to
+  `MaxAttachTries`; `patches/recompone/0027` commits each function on its own so
+  one failure cannot take the rest. The pacing line spells the boundary out as a
+  pair rather than folding it into a total, because reading `15 hook(s)` and
+  counting on your fingers is how this went unnoticed:
+
+  ```
+  [KF2] pacing: 165 fps, 15 hook(s), boundary 3/3 DrawOTag + 3/3 VSync,
+        7/7 stage(s), frame gate skipped, world at 20 Hz gating 80037C0C …
+  ```
+
+A related and separate defect fixed at the same time: `AdvanceLogicClock` treated
+`dt <= 0` as "restart the clock", which **granted a free tick** to any two
+boundaries landing on the same reading of the `Stopwatch`. `LoopPacing`'s fill
+issues boundaries back to back with almost no work between them, and its own exit
+condition is `TickedThisFrame`, so a spurious tick both advanced the world and
+ended the fill early. Only the genuine first sample restarts now; no elapsed time
+means no credit and no tick.
+
 ### Three things held the port at 30, and only one of them was the game's
 
 | # | gate | where |
