@@ -480,9 +480,23 @@ origin and Euler are `ObjectSmoothing`.
   describes as "128 effect/projectile lifetimes at `rec+0x0E`" — that name is a
   guess from one field, and the renderer draws it with a full position *and*
   facing, which makes it a general table of things that move. Table 4 is
-  billboards; the renderer zeroes their rotation triple and their positions are
-  written under stage 13 itself (`func_8002DF80`), so they already move at the
-  render rate.
+  billboards; the renderer zeroes their rotation triple, and their positions are
+  computed once when `func_80035550` fills the table from the area's own `0x10`-byte
+  definitions rather than stepped per frame -- so there is no position to carry.
+
+  **Table 4's animation is a different matter, and it was running at the render
+  rate.** A billboard is a strip of authored cels, and four bytes at the head of
+  the record drive it: `+0x2` the visibility mask, `+0x3` the number of cels, `+0x4`
+  the interval, `+0x5` the current cel -- seeded at load to `(rand * cels) >> 15`, so
+  two torches never flicker in step. The object loop draws slot `i` with the cel
+  index `u8[rec+0x5] + 0x80`, then steps it whenever the **single global counter at
+  `0x80195170`** divides exactly by the slot's interval -- and the last instruction
+  of `func_800331B4` increments that counter. It is therefore a count of *rendered
+  frames*: three sites touch it in all of `GAME.EXE` (the init zero in
+  `func_8002DF80`, the modulus, the increment), and `func_800331B4` is called once,
+  from stage 13. `patches/SpriteAnim.cs` holds the word and the 128 cel bytes across
+  a walk the world did not tick on; see "The flames run at the render rate" in
+  [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
   **The object table has two different emptiness tests and they are not
   interchangeable.** Stage 2 steps a slot when the byte at `+0x4` is not `0xFF`;

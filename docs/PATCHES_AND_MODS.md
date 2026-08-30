@@ -11,6 +11,7 @@ lives here — frame pacing and auto reload.
 | `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
 | `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
 | `LoadPacing.cs` | makes a `VSync(0)` inside a disc wait cost a vblank again, so the loading screen's figure walks at the console's rate | this file |
+| `SpriteAnim.cs` | steps the billboard sprites' cels once a world tick, so the flames burn at the console's speed | this file |
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
@@ -1981,6 +1982,117 @@ patch on and off at 20 and 144, `menu-scroll` reads 6.0 and 8.5 repeats a second
 with the spin at 100.6 ms and the blink capped at 16.8, and `modal-rate` at 144
 reads 144.8 modal world frames a second against 22.0 loop iterations. On by
 default and with no settings page. `KF2_LOADPACING=0` is the comparison.
+
+### The flames run at the render rate
+
+Reported from play, with a screenshot of two wall torches: *"These flames still
+run really fast when you play at a high framerate. It's possible other animated
+sprites/billboards are doing this, but I don't know."* They are — it is one
+system and one clock word, and the guess in the second sentence is exactly right.
+
+**These are not the animated textures.** Those are the eight scrolling slots at
+`0x80192D58` that `func_8002DC78` re-uploads to VRAM, and the stage gate has held
+them at the tick rate since they were found (see the sixth gated function, above).
+The flames are **billboard sprites** — table 4 of the four the renderer walks:
+`0x80195174`, 128 records of `0x18`, free when the `u16` at `+0x0` is `0xFFFF`.
+
+`func_80035550` fills the table from the area's own `0x10`-byte definitions when
+the area loads, and the fields that matter are all in the first six bytes:
+
+| offset | what |
+|---|---|
+| `+0x0` | `u16` definition id; `0xFFFF` is a free slot |
+| `+0x2` | the visibility mask the renderer ANDs `func_80032D78`'s answer with |
+| `+0x3` | **how many cels** the strip has |
+| `+0x4` | **the interval** — step the cel every this many counts |
+| `+0x5` | **the current cel**, seeded at load to `(rand * cels) >> 15` |
+| `+0x8` | the position `VECTOR`, three words |
+
+The seed is worth noticing on its own: two torches side by side start on different
+cels *on purpose*, so they do not flicker in step. It is the one piece of evidence
+that these are meant to be read as independent little fires rather than as a
+texture.
+
+The second loop of `func_800331B4` draws slot `i` by handing `func_80032588` the
+cel index `u8[rec+0x5] + 0x80` on the stack, and then steps it:
+
+```c
+if (u8[rec+0x4] != 0 && u32[0x80195170] % u8[rec+0x4] == 0)
+    if (++u8[rec+0x5] >= u8[rec+0x3]) u8[rec+0x5] = 0;
+```
+
+and **the last act of `func_800331B4` is `++u32[0x80195170]`**. That word is the
+whole clock of the system — three sites in all of `GAME.EXE`: the init zero in
+`func_8002DF80`, the modulus here, the increment here — and `func_800331B4` is
+called once, from stage 13. So it counts **rendered frames**, and every animated
+billboard in the game burns, sparks and flickers at the render rate. Measured
+standing in the save's own area: **4488 cel changes a second at `KF2_FPS=144`
+against 640 at 20**, which is the ratio of the two render rates and nothing else.
+
+#### Why the stage gate cannot reach it, and what can
+
+This is the class `docs/TODO.md` records as *"a counter stepped inside a drawing
+function's own body"*, alongside stage 13's shake accumulator at `0x8006E608` and
+`func_800331B4`'s own ambient-sound retrigger at `rec+0x40`. `HookManager` detours
+whole functions; `func_800331B4` **is** the renderer's world and object walk, so
+skipping it draws nothing and the gate is not available.
+
+What is available here and is not available for the other two is that the counter
+is a **single word that everything divides**. Hold it and the whole system holds,
+with no field enumerated and no per-slot rule — which is why this one is a fix and
+those two are still open. `patches/SpriteAnim.cs` is a **hold/restore pair** around
+`func_800331B4`: on a frame the world did not advance on, the pre records
+`0x80195170` and the 128 cel bytes and the post puts them back. The sprite is
+still *drawn* with the cel the tick left it at, because the submit happens before
+the step and the step is then undone.
+
+Three details are load-bearing:
+
+* **The frame identity, not the tick flag alone.** A modal loop's redraw
+  (`LoopPacing`) calls stage 13 again, and the transition fade renders its own
+  frames from inside stage 2. Each of those is its own frame boundary, so keying on
+  `FramePacing.Frames` as well as `FramePacing.TickedThisFrame` makes a second walk
+  inside one frame a held one rather than a second step. `FramePacing.Frames` was
+  added for this — it is an *identity*, not a rate.
+* **A hold fails closed, so it needs the watchdog the stage gate has.** Not
+  hypothetical: the first measured run of this patch lost the frame boundary — the
+  failure `patches/recompone/0027` and `FramePacing.FallbackTick` exist for — and
+  with `Frames` frozen the identity test can never pass again, so every flame in
+  the game stood still for the rest of the session while the world played on at the
+  right speed. A frozen picture is worse than a fast one. When `Frames` has not
+  moved for 500 ms the step comes off a wall-clock grid at `LogicHz` instead, and
+  the port says so once.
+* **The restore is per slot and checks the id**, so an area load rewriting the
+  table under us cannot put a stale cel index into a slot that now holds a
+  different strip.
+
+#### There is nothing to interpolate, and that is the whole design
+
+Unlike the smoothing patches there is no in-between to draw: the cels are authored
+frames of a fire, and a half-way flame does not exist. So this is a **rate and not
+a picture**, it is on by default and it has no settings page — the class of frame
+pacing and the menu repeat, not the class of dithering.
+
+At the tick rate every frame is a tick frame, so the port's own 20 fps default is
+unchanged with this on or off. Measured with `rate_matrix.py sprite-anim`, which
+is the scenario written for it:
+
+| fps | cel/s, patch on | cel/s, `KF2_SPRITEANIM=0` |
+|---|---|---|
+| 20 | 620.2 | 640.3 |
+| 60 | 640.1 | 1861.6 |
+| 144 | 646.1 | 4487.7 |
+
+(31 live slots in that area; the count scales with how many are live, so only
+compare a row against the same area.) The `stepped/s` column is the direct
+statement of the fix: 20.0, 20.6, 20.8 with it on against 20.7, 60.1, 144.8 with
+it off. `KF2_TICKRATE=30` at 60 fps reads 930 cel/s against the 620 that 20 Hz
+gives, which is exactly 1.5x — so it follows the **world's** clock and not the
+render rate. Regression-checked: `walk` reads 2845 units at 20 fps and 2844 at
+144 with the patch on, and 2844 at 144 with it off.
+
+`KF2_SPRITEANIM=0` is the comparison and `KF2_SPRITEANIM_PROBE=1` reports cel
+changes a second, live slots, walks a second and how many walks stepped.
 
 ### The comparison mode
 

@@ -161,9 +161,11 @@ public static class ObjectSmoothing
         new("effects", "effect", 0x8019CC6C, 0x48, 0x80, 0x0, 1, 0xFF, 0x14, 0x24),
 
         // Billboard sprites. The renderer zeroes the rotation triple for these, so
-        // there is no facing to carry -- position at +0x8 only. Its positions are
-        // written under stage 13 itself (func_8002DF80) and so already move at the
-        // render rate; carrying is a no-op there, and harmless.
+        // there is no facing to carry -- position at +0x8 only, and that is written
+        // once by func_80035550 when the area loads rather than stepped, so carrying
+        // is a no-op here and harmless. What *does* move in this table is the cel
+        // index at +0x5, which is an animation rather than a position and belongs to
+        // patches/SpriteAnim.cs.
         new("sprites", "sprite", 0x80195174, 0x18, 0x80, 0x0, 2, 0xFFFF, 0x8, -1),
     ];
 

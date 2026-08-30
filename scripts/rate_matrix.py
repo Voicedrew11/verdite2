@@ -182,6 +182,39 @@ def sc_modal_rate(run: kf2.Run) -> dict:
     }
 
 
+def sc_sprite_anim(run: kf2.Run) -> dict:
+    """Stand in the save's own area and read what rate the billboard cels stepped at.
+
+    The flames. Every animated billboard in the game divides one global counter at
+    `0x80195170`, and `func_800331B4` -- stage 13's world and object walk -- steps
+    that counter once a call, so ungated the whole system ran at the *render* rate.
+    `cel/s` is the number that must not follow the frame rate; `walk/s` is the
+    frame rate and is there to prove the scene was drawn as fast as it was asked
+    to be. Both are per area, since the count scales with how many slots are live,
+    so compare a row only against the same area's row in the other run.
+
+    Needs KF2_SPRITEANIM_PROBE=1, which the scenario asks for below. Pair it with
+    --env KF2_SPRITEANIM=0 for the before.
+    """
+    time.sleep(8.0)
+    rows = [(float(m.group(1)), int(m.group(2)), float(m.group(3)), float(m.group(4)))
+            for m in run.matching(r"sprite anim: ([\d.]+) cel change\(s\) a second over (\d+) "
+                                  r"live slot\(s\), ([\d.]+) walk\(s\) a second, ([\d.]+) stepped")]
+
+    # The first window is short and the last is truncated; the middle ones are the
+    # steady state. A window with no live slot says nothing about a rate at all.
+    steady = [r for r in rows[1:-1] if r[1] > 0] or [r for r in rows if r[1] > 0]
+    if not steady:
+        return {"cel/s": None, "live": 0, "walk/s": None, "stepped/s": None}
+    best = max(steady, key=lambda r: r[0])
+    return {
+        "cel/s": round(best[0], 1),
+        "live": best[1],
+        "walk/s": round(best[2], 1),
+        "stepped/s": round(best[3], 1),
+    }
+
+
 def sc_idle(run: kf2.Run) -> dict:
     """Stand still for five seconds. For pairing with KF2_RATECENSUS."""
     time.sleep(5.0)
@@ -196,6 +229,8 @@ SCENARIOS = {
     "walk":        (sc_walk, {}, "hold Up for 2 s; distance is tick-rate bound"),
     "modal-rate":  (sc_modal_rate, {"KF2_LOOPPACING_PROBE": "1"},
                     "open the menu, then warp; what rate each self-rendered loop ran at"),
+    "sprite-anim": (sc_sprite_anim, {"KF2_SPRITEANIM_PROBE": "1"},
+                    "stand still; what rate the billboard sprites' cels stepped at"),
     "idle":        (sc_idle, {}, "stand still for 5 s (pair with KF2_RATECENSUS)"),
 }
 

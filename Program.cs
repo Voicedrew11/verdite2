@@ -253,6 +253,29 @@ Kf2.LoadPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOADPACING"),
                          Environment.GetEnvironmentVariable("KF2_LOADPACING_PROBE"));
 Kf2.LoadPacing.Install();
 
+// The flames. Billboard sprites -- table 4 of the four the renderer walks,
+// 0x80195174, 128 records of 0x18 -- animate by stepping a cel index at rec+0x5
+// whenever a single global counter at 0x80195170 divides exactly by the slot's
+// interval at rec+0x4, and that counter is incremented as the last act of
+// func_800331B4, stage 13's world and object walk. So it counts *rendered* frames
+// and every animated sprite in the game burns, sparks or flickers at the render
+// rate -- 7.2x too fast at 144 against a 20 Hz world, and reported from play as
+// "these flames still run really fast at a high framerate". These are not the
+// eight scrolling texture slots at 0x80192D58, which func_8002DC78 owns and the
+// stage gate has held since it was found.
+//
+// The gate cannot reach this one: func_800331B4 draws, so it cannot be skipped.
+// A hold/restore pair around it puts the counter and the 128 cel bytes back on a
+// frame the world did not advance on, which holds the whole system through its
+// one clock word. At the tick rate every frame is a tick frame, so the port's own
+// 20 fps default is unchanged with this on or off.
+//
+//     KF2_SPRITEANIM=0        leave the animation on the render rate -- comparison only
+//     KF2_SPRITEANIM_PROBE=1  cel changes a second, live slots, walks a second
+Kf2.SpriteAnim.Configure(Environment.GetEnvironmentVariable("KF2_SPRITEANIM"),
+                         Environment.GetEnvironmentVariable("KF2_SPRITEANIM_PROBE"));
+Kf2.SpriteAnim.Install();
+
 // Which words of the game's memory change at the render rate rather than at the
 // tick rate -- the instrument that turns "something looks too fast" into an
 // address. Samples on the emulated vblank, which is a wall-clock 60 Hz grid since

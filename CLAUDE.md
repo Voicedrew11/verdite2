@@ -90,6 +90,8 @@ KF2_LOOPPACING_PROBE=1                 # modal frames a second, world and interf
 KF2_LOOPPACING_PROBE=2                 # also how far the loop's own view moves per iteration
 KF2_LOADPACING=0                       # the loading screen's walking figure back on the host ceiling (paced by default)
 KF2_LOADPACING_PROBE=1                 # its steps a second, and what one load cost
+KF2_SPRITEANIM=0                       # billboard sprite animation back on the render rate (paced by default)
+KF2_SPRITEANIM_PROBE=1                 # cel changes a second, live slots, and how many walks stepped
 KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
 KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
 KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
@@ -469,6 +471,34 @@ the *default* to 36-40. The cost is that above 60 fps a load now takes as long a
 it already does at the default, 1.7 s rather than 0.35 s. On by default;
 `KF2_LOADPACING=0` is the comparison. See "The loading screen's walking figure" in
 `docs/PATCHES_AND_MODS.md`.
+**The flames are a fourth case and `patches/SpriteAnim.cs` is it**: not the eight
+scrolling texture slots at `0x80192D58` that `func_8002DC78` owns and the gate has
+held since they were found, but the **billboard sprites** — table 4 of the four the
+renderer walks, `0x80195174`, 128 records of `0x18`, free at the `u16` `+0x0`. Each
+is a strip of authored cels: `+0x3` how many, `+0x4` the interval, `+0x5` the
+current one, seeded at load to `(rand * cels) >> 15` so two torches do not flicker
+in step. The object loop of `func_800331B4` draws slot `i` with `u8[rec+0x5] + 0x80`
+and then steps that byte whenever a **single global counter at `0x80195170`**
+divides by the slot's interval — and `func_800331B4`'s last instruction increments
+that counter, so it counts *rendered frames* and every animated billboard in the
+game burned at the render rate (measured **4488 cel changes a second at 144 fps
+against 640 at 20**; reported from play as "these flames still run really fast at a
+high framerate"). The stage gate cannot reach it — `func_800331B4` draws — so it is
+a **hold/restore pair** around that function, putting the counter and the 128 cel
+bytes back on a frame the world did not tick on. **The word is what makes it
+fixable**: hold one global and the whole system holds, which is exactly what stage
+13's shake accumulator and the `rec+0x40` ambient retrigger do *not* offer, and is
+the question to ask of the next one. Keyed on `FramePacing.Frames` (a new
+public *identity*, not a rate) as well as `TickedThisFrame`, so a `LoopPacing`
+redraw or a fade's own render inside one frame is held rather than counted twice —
+and with the same 500 ms boundary watchdog the stage gate has, **because a hold
+fails closed**: the first measured run lost the frame boundary and every flame in
+the game stood still for the session. Nothing to interpolate, so it is a rate and
+not a picture: on by default, no settings page. Measured with `rate_matrix.py
+sprite-anim`: 20.0/20.6/20.8 cel steps a second at 20/60/144 against
+20.7/60.1/144.8 with `KF2_SPRITEANIM=0`, `KF2_TICKRATE=30` reading exactly 1.5x
+the 20 Hz cel rate, and `walk` unchanged at 2844-2845 units. See "The flames run
+at the render rate" in `docs/PATCHES_AND_MODS.md`.
 `patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
 is not shippable — pitch, gravity and every per-tick counter do not scale. **The
 default is 20 fps drawn against a 20 Hz world.** See "Any frame rate" in

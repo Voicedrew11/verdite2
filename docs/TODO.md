@@ -149,14 +149,28 @@ useful than the question was.
      hook can reach it — `func_800331B4` steps the timer and draws the models in
      one loop — so this needs either a sub-function hook or a hold/restore pair
      around the field. **Never listened to**; only the counter has spoken.
+   * ~~**The billboard sprites' cel index.**~~ **Closed** — this was the third
+     member of the class and the one play actually reported ("these flames still
+     run really fast at a high framerate"). Every animated billboard in the game
+     divides one global counter at `0x80195170`, and `func_800331B4` increments it
+     as its last instruction, so it counted rendered frames: 4488 cel changes a
+     second at 144 fps against 640 at 20. `patches/SpriteAnim.cs` is a
+     hold/restore pair on that word and the 128 cel bytes; 20.0/20.6/20.8 steps a
+     second at 20/60/144 with it on. **The lesson generalises to the two below**:
+     the question is not "can it be gated" but "is there one word upstream of all
+     of it". See "The flames run at the render rate" in
+     [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
    * **Stage 13's jitter accumulator at `0x8006E608`**, which no hook can reach
-     because it is in stage 13's own body. With the modal loops closed this and
-     the `rec+0x40` retrigger above are the **only** rate defects left, and they
-     are the same shape as each other: a counter stepped inside a drawing
-     function's own body, which needs a hold/restore pair on the field rather than
-     a deadline on the frame. Neither has been reported from play. **A modal loop's
-     redraws make both of them fire inside it as often as they already do in the
-     main loop** — no worse than an ordinary frame, but no better either.
+     because it is in stage 13's own body. With the modal loops closed and the
+     sprite cels fixed, this and the `rec+0x40` retrigger above are the **only**
+     rate defects left, and they are the same shape as each other: a counter
+     stepped inside a drawing function's own body, which needs a hold/restore pair
+     on the field rather than a deadline on the frame. Neither has been reported
+     from play, and neither has the sprite counter's single-word escape hatch —
+     the shake accumulator is summed from `func_80015374()` in place, and the
+     retrigger is per object. **A modal loop's redraws make both of them fire
+     inside it as often as they already do in the main loop** — no worse than an
+     ordinary frame, but no better either.
 
    * **A counter a modal loop steps in its own body** — a picked-up item's spin, if
      its transform does not come from a table `ObjectSmoothing` carries. Its

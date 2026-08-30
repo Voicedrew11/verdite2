@@ -438,6 +438,16 @@ public static class FramePacing
     public static bool TickedThisFrame => !Gating || _tickThisFrame;
 
     /// <summary>
+    /// How many frame boundaries have been reached. Not a rate and not a clock --
+    /// an *identity*, so a patch that must act once a frame can tell a second call
+    /// inside one frame from the first call of the next. <see cref="SpriteAnim"/>
+    /// is what wants it: a modal loop's redraw and the transition fade both reach
+    /// stage 13's world walk again, and <see cref="TickedThisFrame"/> alone cannot
+    /// separate those from the frame's own walk.
+    /// </summary>
+    public static long Frames => _frames;
+
+    /// <summary>
     /// True when the world is on the logic clock rather than on the loop.
     ///
     /// **This used to require a rate above 30**, because below that the game's own

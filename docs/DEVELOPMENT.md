@@ -342,6 +342,15 @@ counter stepped inside a *drawing function's own body*, which no whole-function
 hook reaches and no deadline holds. See "Loops that render their own frames" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
+**One of that class has since been fixed, and how says what to look for in the
+rest.** The billboard sprites' cel index is stepped inside `func_800331B4`'s own
+body, so nothing could be gated — but every slot divides one **global counter**,
+`0x80195170`, and a hold/restore pair on that single word paces the whole system.
+The question to ask of a render-rate row in a drawing function is therefore not
+"can this be gated" but **"is there one word upstream of all of it"**. See "The
+flames run at the render rate" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
 `--audit` classifies every global on the per-frame path. As of writing: **594
 globals, 73 held to the tick rate, 157 inside a modal loop, 364 under a stage that
 presents.** A writer is any function that stores to the address — an initialiser
@@ -358,6 +367,7 @@ address", never "not written".
     python3 scripts/rate_matrix.py death-clock --fps 20 144 --tickrate 20 30
     python3 scripts/rate_matrix.py menu-scroll --fps 144 --env KF2_MENUPACING=0
     python3 scripts/rate_matrix.py modal-rate --fps 20 144 --env KF2_LOOPPACING=0
+    python3 scripts/rate_matrix.py sprite-anim --fps 20 60 144
     python3 scripts/rate_matrix.py --list
 
 Every empirical claim in these documents should be reproducible by one of these.
