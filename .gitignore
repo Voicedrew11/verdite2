@@ -29,3 +29,6 @@ mods/.cache/
 # RateCensus writes its dump here by default (KF2_RATECENSUS_OUT); it is a
 # diagnostic reading of one session, not source. One was committed once.
 ratecensus.txt
+
+# Working files: extracted disc executables and probe logs.
+scratch/

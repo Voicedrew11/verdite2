@@ -2246,6 +2246,8 @@ kill                  drop HP to zero, the way a hit would
 nearby [radius=8192]  live records of the world tables within radius units of the
                       player, nearest first, tagged by table (objects; buf6
                       "entities", whose reading is still Inferred -- TODO.md)
+ending [boss]         hand the game over to END.EXE; "boss" runs the post-final-
+                      boss sequence first
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the
@@ -2276,6 +2278,44 @@ run depends on whether the command re-enters the loader:
 `kill` is safe at VSync: `AutoReload.Simulate` only snapshots the CPU, writes
 HP, calls `func_8002A264` and restores — and the settings page already runs it
 from inside Present-inside-VSync.
+
+### `ending` exists because the last ten minutes of the game are otherwise untestable
+
+Everything a session can reach it reaches by loading a save. The ending cannot be
+loaded: it is reached by killing the final boss, and a defect reported there —
+"the game crashes after you defeat the final boss" — has nowhere to be reproduced.
+`ending` drains from the same stage 3 post as `load`/`warp`, and takes two forms:
+
+- **`ending`** writes `GAME.EXE`'s own quit word at `0x80199574`. The main loop
+  tests it immediately after stage 13: `1` writes boot-stub index 2 (`END.EXE`),
+  `9` writes index 0 (`OPEN.EXE`, i.e. quit to title), and the loop then returns
+  into the stub, which loads the file. That is the hand-over with no boss in it.
+- **`ending boss`** runs the sequence that normally writes it. `fdat23`'s boss
+  damage handler `func_8019FA2C` calls `func_8019F474` and then `func_8019F688`
+  when the record's HP `u16` at `+0x1A` reaches zero, and `func_8019F688` is
+  **two modal loops that present their own frames** — a camera pull-back of about
+  ninety iterations, then a sixty-four step fade — ending in the quit word. Both
+  have to be called: `func_8019F474` is what fills the pointer at `0x801A0598`
+  that the sequence writes its camera through, and calling `func_8019F688` alone
+  dies on `unmapped address: 0x0145505B`.
+
+Getting there needs `warp 7` to survive, and it does not on its own — area 7's
+centroid drops the player far enough below the floor to trip the bottomless-pit
+test. `KF2_DEBUG_GODMODE=1` (the debug mod's `PreHook` on the death latch
+`func_8002A264`) is what makes the warp survivable, so the rig is:
+
+```bash
+KF2_FPS=144 KF2_SHELL=1 KF2_AUTOSTART=2 KF2_AUTORELOAD=0 KF2_DEBUG_GODMODE=1 …
+# then: warp 7   (wait)   ending boss
+```
+
+**What it has not yet caught is the bug it was built for.** The sequence
+completes and hands over to `END.EXE` at both `KF2_FPS=20` (25 s) and
+`KF2_FPS=144` (~32 s), with `LoopPacing` holding its body to 19.9-20 iterations a
+second and filling with 6.2 redraws each — which is the patch working. So either
+the reported crash is not in `func_8019F688`, or it needs state this route does
+not set up: it is invoked from stage 3's post rather than from inside the boss's
+own damage handler, with a boss that was never fought. See `docs/TODO.md`.
 
 ### One implementation of the warp
 

@@ -93,7 +93,9 @@ deadline under load and landed in the three-vblank band, and since the game's sp
 is its frame rate, 20 is the speed it was played at. That is a judgement no counter
 here can settle, so it is a setting (see "Any frame rate" in
 `docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
-movies and holds "The End" — see "The ending screen" in `docs/RUNTIME.md`.
+movies and holds "The End", and **any button then returns to the title** —
+holding it forever is what the original does, and on a window that is
+indistinguishable from a crash. See "The ending screen" in `docs/RUNTIME.md`.
 
 **Widescreen, sub-pixel positioning, the Z-buffer and every frame rate above the
 tick rate all ship switched off for the same reason** — mechanism measured, picture never
@@ -166,6 +168,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 - The intro movie ran at the render rate, because its pacer never armed
 - The menu deadlock: input only moved when the game drew
 - The ending screen
+- Holding the frame is faithful, and it still reads as a crash
 - The patches to the checkout, one by one
 - The interface only fits a monitor whose scale is a whole number
 - The scale can put the settings out of reach
@@ -226,6 +229,7 @@ How the port's own code attaches, where its settings go, plus frame pacing and a
 - Auto reload
 - Auto start and the agent beacon
 - The command channel
+- `ending` exists because the last ten minutes of the game are otherwise untestable
 - The MCP layer
 
 ### [INPUT.md](docs/INPUT.md)

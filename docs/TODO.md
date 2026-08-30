@@ -435,3 +435,36 @@ useful than the question was.
    is a post hook on `func_800244CC`, so it wins the display; whether the damage
    arithmetic reads those same words is a separate reading). See "Editing the
    character: the split is the design" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
+
+14. **Find the crash after the final boss, at a high frame rate.** Reported from
+   play: at the default 20 fps the ending arrives, and above it the game dies
+   between the boss's death and `END.EXE`. Not reproduced. The sequence is
+   `fdat23`'s `func_8019F474` + `func_8019F688` — two modal loops that present
+   their own frames, so `LoopPacing`'s territory and inert at or below the tick
+   rate, which is the right shape for a defect only high rates see. `ending boss`
+   on the command channel runs exactly those two, and it **completes** at 20 fps
+   (25 s) and at 144 fps (~32 s), with the probe reading 19.9-20 iterations a
+   second and 6.2 redraws each. So the rig does not yet reach the bug. What it
+   does not reproduce is the *call site*: it runs the sequence from stage 3's post
+   with a boss that was never fought, where the game runs it from inside
+   `func_8019FA2C`, one frame after a boss with live effects, projectiles and
+   sound has taken its last hit. The next step is to enter it the game's way —
+   hook `func_8019FA2C` and force the HP `u16` at `a0+0x1A` to zero on a real hit
+   — which needs a save at the boss, or enough play to reach one. Failing that,
+   the two switches that would bisect it from a real playthrough are
+   `KF2_LOOPPACING=0` (loop back on the render rate, no redraws) and
+   `KF2_LOOPPACING=pace` (held to the tick, no redraws): if either survives, the
+   redraws are the cause. Take `dotnet-stack report` on the live process rather
+   than adding logging — the frozen routine names itself. See "`ending` exists
+   because the last ten minutes of the game are otherwise untestable" in
+   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+15. ~~**"The game crashes after The End."**~~ Answered, and it was not a crash:
+   `END.EXE` really does end in `j 0x80011A50` on itself and never asks the boot
+   stub for another executable, so the ending is a hang you leave with the reset
+   button. `EndingHold` was reproducing that faithfully — measured holding, alive
+   and pumping, at 20 fps through `GAME.EXE`'s own hand-over and at 144 fps, and
+   from `KF2_BOOTEXE=end`. A window has no reset button, so any button now returns
+   to the title through the stub's own loader loop. See "Holding the frame is
+   faithful, and it still reads as a crash" in [RUNTIME.md](RUNTIME.md). What is
+   left is by eye: that the title screen that comes back is the real one and not a
+   half-initialised one, since nothing clears RAM between the two.

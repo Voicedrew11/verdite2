@@ -101,6 +101,7 @@ public static class AgentServer
         "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
         "kill - drop HP to zero, the way a hit would",
         "nearby [radius=8192] - live records of the world tables within radius units",
+        "ending [boss] - hand over to END.EXE; 'boss' runs the post-final-boss sequence first",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -310,6 +311,7 @@ public static class AgentServer
                 break;
             case "load":
             case "warp":
+            case "ending":
                 Enqueue(_heavy, cmd);
                 break;
             default:
@@ -367,6 +369,7 @@ public static class AgentServer
         "load" => DoLoad(cmd.Arg1),
         "warp" => DoWarp(cmd.Arg1),
         "nearby" => DoNearby(cmd.Arg1),
+        "ending" => DoEnding(cmd.Arg1),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
 
@@ -541,6 +544,63 @@ public static class AgentServer
 
         string? err = AreaWarp.TryRun(c, m, area);
         return err != null ? Err(err) : ("{\"ok\":true,\"cmd\":\"warp\",\"area\":" + area + "}");
+    }
+
+    // ---- the ending ----
+    //
+    // The game's own hand-over, which no session can otherwise reach without
+    // finishing the game -- and the two moments the port has been reported to
+    // hang at live on either side of it.
+    //
+    // GAME.EXE's main loop tests a word right after stage 13: nonzero means
+    // "stop", and which nonzero it is chooses what runs next. 1 writes the boot
+    // stub's file-name index 2 (END.EXE) and 9 writes index 0 (OPEN.EXE, i.e.
+    // quit to title); the loop then returns, and the stub -- which Execs an
+    // executable as a call and loops -- loads the chosen file. See BootExe for
+    // the loader's own side of that.
+    //
+    //   ending        write the word, and nothing else. The hand-over on its own.
+    //   ending boss   run the post-boss sequence that normally writes it:
+    //                 func_8019F688 in fdat23 (area 7), which fdat23's boss
+    //                 damage handler func_8019FA2C calls when the boss's HP word
+    //                 at rec+0x1A reaches zero. It is two modal loops that
+    //                 present their own frames -- LoopPacing's territory -- and
+    //                 it ends by writing the quit word itself.
+    const uint QuitWord = 0x80199574;      // GAME.EXE; 1 = ending, 9 = title
+    const uint BossSetup = 0x8019F474;     // fdat23
+    const uint BossEnding = 0x8019F688;    // fdat23
+
+    static string DoEnding(string modeArg)
+    {
+        var c = RecompOne.Runtime.Runtime.Cpu;
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (c == null || m == null) return Err("not running");
+
+        string mode = modeArg.Trim().ToLowerInvariant();
+        if (mode.Length == 0)
+        {
+            m.WriteU32(QuitWord, 1u);
+            return "{\"ok\":true,\"cmd\":\"ending\",\"how\":\"quitword\"}";
+        }
+
+        if (mode != "boss") return Err("usage: ending [boss]");
+
+        // Both, in the caller's order. func_8019F474 is what fills the pointer at
+        // 0x801A0598 that func_8019F688 writes the camera through, so calling the
+        // sequence alone dereferences whatever the module's data happens to hold
+        // (measured: "unmapped address: 0x0145505B").
+        var setup = SymbolRegistry.Resolve("fdat23", null, BossSetup);
+        var fn = SymbolRegistry.Resolve("fdat23", null, BossEnding);
+        if (setup == null || fn == null)
+            return Err("fdat23 is not loaded — warp to area 7 first");
+
+        var prepare = setup.CreateDelegate<Action<CpuContext, IMemory>>();
+        var run = fn.CreateDelegate<Action<CpuContext, IMemory>>();
+        var saved = c.Snapshot();
+        try { prepare(c, m); run(c, m); }
+        finally { c.Restore(saved); }
+
+        return "{\"ok\":true,\"cmd\":\"ending\",\"how\":\"boss\"}";
     }
 
     // ---- JSON helpers ----

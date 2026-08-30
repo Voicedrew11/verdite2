@@ -133,6 +133,8 @@ KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
+KF2_BOOTEXE=end                          # boot straight into OPEN.EXE, GAME.EXE or END.EXE
+KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the original does (a button exits by default)
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
 KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill
 KF2_UISCALE=1                            # force the interface scale, and save it
@@ -598,9 +600,16 @@ program tells "stuck at the title" from "in an area" without a screenshot. See
 
 **`KF2_SHELL=1` is the acting half**: while the session runs, a line protocol on
 TCP 127.0.0.1:27900 (`state`, `nearby`, `load <slot>`, `warp <area>`,
-`press <button> [ms]`, `kill`; one request per line, one single-line JSON
-response back) steers the game
-the beacon is only watching. See "The command channel" in
+`press <button> [ms]`, `kill`, `ending [boss]`; one request per line, one
+single-line JSON response back) steers the game
+the beacon is only watching. **`ending` is there because the last ten minutes of
+the game cannot be loaded into**: plain `ending` writes `GAME.EXE`'s own quit
+word at `0x80199574` (1 = `END.EXE`, 9 = title), and `ending boss` runs the
+post-final-boss sequence that normally writes it — `fdat23`'s `func_8019F474`
+then `func_8019F688`, two modal loops that present their own frames, both
+needed because the first fills the pointer at `0x801A0598` the second writes its
+camera through. Reaching it needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the
+player on the way in. See "The command channel" in
 `docs/PATCHES_AND_MODS.md`.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
@@ -999,7 +1008,21 @@ uncaptured edit inside the checkout is left where it is.
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.
 `END.EXE` ends in `while(1);` with no `VSync`; on hardware the last frame stays
-on the CRT, here the window dies. See "The ending screen" in `docs/RUNTIME.md`.
+on the CRT, here the window dies. **Holding it is faithful and still reads as a
+crash**: the spin is real (`08004694 00000000` at `0x80011A50` in the disc image)
+and `END.EXE` never writes the boot stub's next-executable byte, so on hardware
+the ending is a hang you leave with the reset button — and a window has no reset
+button, which is why "the game crashes after The End" was reported again after
+the hold was already in. Measured holding, alive and pumping, at 20 fps through
+`GAME.EXE`'s own hand-over and at 144 fps. So **any button now leaves the still
+for the title** (`KF2_ENDINGEXIT=0` keeps the hang), through the stub's own
+loader: `SLUS_001.58` holds three file names at `0x80010254`
+(`0` = `OPEN.EXE`, `1` = `GAME.EXE`, `2` = `END.EXE`), an index at `0x80010268`
+and a loop in `func_80010038` that `Load`s, `Exec`s *as a call* and re-reads the
+index from `0x800102F0` on return — which is exactly the door `GAME.EXE`'s own
+quit-to-title uses. `patches/BootExe.cs` (`KF2_BOOTEXE`) writes that same index
+before the loop's first pass, **once**, so the ending is reachable in seconds
+rather than by finishing the game. See "The ending screen" in `docs/RUNTIME.md`.
 
 Upstream **rejects AI-authored pull requests outright**. Recompiler fixes go
 upstream as issues, never as PRs, unless the user writes the patch themselves.

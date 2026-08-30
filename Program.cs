@@ -664,6 +664,22 @@ Kf2.ViewClip.Configure(Environment.GetEnvironmentVariable("KF2_VIEWCLIP"),
                        Environment.GetEnvironmentVariable("KF2_VIEWCLIP_PROBE"));
 Kf2.ViewClip.Install();
 
+// What the ending's last frame does when it is reached. END.EXE finishes in a
+// spin with no VSync and never asks the boot stub for anything else, so on
+// hardware "The End" is a hang you leave with the reset button:
+//
+//     KF2_ENDINGEXIT=0    keep that hang; by default any button returns to the title
+Kf2.EndingHold.Configure(Environment.GetEnvironmentVariable("KF2_ENDINGEXIT"));
+
+// Boot straight into one of the three executables, for a defect that lives past
+// the point a session can reach by playing:
+//
+//     KF2_BOOTEXE=end     the ending, without finishing the game
+//
+// It writes the boot stub's own file-name index before its loader loop reads it.
+Kf2.BootExe.Configure(Environment.GetEnvironmentVariable("KF2_BOOTEXE"));
+Kf2.BootExe.Install();
+
 // Where the patches' own settings live. A patch registers a page against one of
 // the runtime's settings sections and is drawn inside it, so the frame rate is in
 // System > Settings > Video beside vsync rather than in a box of its own; the one

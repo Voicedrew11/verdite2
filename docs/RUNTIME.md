@@ -391,6 +391,46 @@ what "it crashed on The End" was. `patches/EndingHold.cs` hooks
 `func_80011CC4` and, after the second movie returns, `VSync(0)`s forever
 instead of reaching the spin.
 
+### Holding the frame is faithful, and it still reads as a crash
+
+The spin is real rather than a mis-sweep — `0x80011A50` is `08004694 00000000`
+in the disc image, `j 0x80011A50` and its delay slot — and **`END.EXE` never
+writes the boot stub's next-executable byte at `0x800102F0`**, so there is no
+path out of the ending at all. On hardware you leave it with the reset button.
+
+A window has no reset button, and that is the whole difference: a still picture
+that answers nothing is indistinguishable from the port having died, and it gets
+reported that way. It was reported that way again, as "the game crashes after
+The End", after the hold was already in. Measured on both sides of the frame
+rate, booting straight into `END.EXE` with `KF2_BOOTEXE=end` and again through
+`GAME.EXE`'s own hand-over at `KF2_FPS=144`: `[KF2] ending: holding the last
+frame` in both, process alive, no exception, and a stack sample inside
+`EndingHold.AfterMovie` → `LibEtc.VSync` → `FrameClock.Throttle`. **The port was
+not crashing; it was holding, and holding is what the complaint is about.**
+
+So any button now leaves the still for the title screen (`KF2_ENDINGEXIT=0`
+keeps the pure hold). The way back is the stub's own, not a new loading path:
+`SLUS_001.58` is a three-entry loader — file names at `0x80010254`
+(`0` = `OPEN.EXE`, `1` = `GAME.EXE`, `2` = `END.EXE`), an index at `0x80010268`,
+and a loop in `func_80010038` that `Load`s the named file, `Exec`s it *as a call*
+and re-reads the index from `0x800102F0` when it returns. Writing index 0 and
+re-entering `func_80010038` is exactly what `GAME.EXE`'s own quit-to-title does.
+`Exec` leaves `SP` alone for this stub — its header carries a zero `s_addr` — so
+re-entering from inside the ending costs a few words of stack. Measured: `overlay
+end overwritten by open`, `loaded overlay: open`, the IRQ callback table rebound
+to `open 0x8003DD48`.
+
+The button has to be seen going *down*, not merely found down: the movie player
+accepts a skip, so whatever ended the credits can still be held when the still
+appears.
+
+**`KF2_BOOTEXE=end|game|open` is how any of this gets tested** (`patches/BootExe.cs`)
+— it writes that same index before the loader loop's first pass, so the ending is
+reachable in seconds instead of by finishing the game. It writes it **once**: the
+loop is re-entered whenever an executable asks for another one, and the first
+version wrote the index every time, which sent the return-to-title straight back
+into `END.EXE`.
+
 Two dispatcher leftovers ride in with the executable swap and are the same
 shape of bug, even though they were not what froze the window:
 
