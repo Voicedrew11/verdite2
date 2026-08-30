@@ -742,6 +742,116 @@ states `0x00`–`0x12`, dispatched from stage 3. `0x11` lands at `0x8002ADAC`.
 `func_80029E5C` is its inverse: it clears the byte to 0 along with eleven timers,
 which is the game's own "back to normal" reset.
 
+### The status screen names the rest of buf2, and the text is a font-index table
+
+The section above got HP, MP, EXP and level out of the save title. The other
+twenty-eight words came from the other direction: **the status screen has to draw
+a label beside every number it shows**, so the two routines that draw it are a
+complete, ordered, self-labelling map of the block.
+
+The route in was the text. `GAME.EXE` holds no English UI strings — a grep for
+ASCII finds only PSY-Q's own diagnostics — because the game's text is **indices
+into its font**, one byte a character, `0x00` = `A`, `0x7F` = space, `0xFF` =
+terminator, in 24-byte records. `0x0B 0x04 0x15 0x04 0x0B 0xFF` is `LEVEL`. Once
+that is known the whole table decodes, and it is worth knowing for its own sake:
+every item, spell, weapon and armour name in the game is in it, from `0x80065794`
+(`EXPERIENCE`) to `0x800663F0` (`LIGHT CRYSTAL`).
+
+Labels reach the drawer two ways, and both are readable statically. A long one is
+a pointer into that table; a short one the routine **builds on its own stack**,
+`sb` by `sb`, so ` SLASH` is `0x7F 0x12 0x0B 0x00 0x12 0x07 0xFF` written to
+`sp+28`. Walking each routine and pairing every label with the next address it
+loads out of buf2 gives the map whole:
+
+**Page one, `func_8001F230`:**
+
+| address | width | label |
+|---|---|---|
+| `0x80199414` | u32 | `EXPERIENCE` |
+| `0x80199418` | u32 | the EXP the next level needs — not drawn, but `func_80024CAC` compares against it |
+| `0x8019941C` | u8 | `LEVEL` |
+| `0x80199426` / `0x80199428` | u16 | `HP`, max then current |
+| `0x8019942A` / `0x8019942C` | u16 | `MP`, max then current |
+| `0x8019943C` | u16 | `STR POWER` |
+| `0x8019943E` | u16 | `MAG POWER` |
+| `0x80199468` | s16 | `CONDITION` ▸ `POISON` |
+| `0x8019946A` | s16 | `CONDITION` ▸ `CURSE` |
+| `0x8019946E` | s16 | `CONDITION` ▸ `DARK` |
+| `0x80199472` | s16 | `CONDITION` ▸ `SLOW` |
+| `0x80199474` | s16 | `CONDITION` ▸ `PARALYZE` |
+| `0x80199440` | u32 | `GOLD` |
+
+`GOOD` is the fifth condition label and has no word of its own: it is what the
+screen prints when all five timers are zero.
+
+**Page two, `func_8001FB4C`** — two blocks of one heading each, `OFFENSE` at
+`0x800657C4` and `DEFENSE` at `0x800657DC`:
+
+| offense | | defense | |
+|---|---|---|---|
+| `0x80199444` | `SLASH` | `0x80199456` | `SLASH` |
+| `0x80199446` | `CHOP` | `0x80199458` | `CHOP` |
+| `0x80199448` | `STAB` | `0x8019945A` | `STAB` |
+| `0x8019944A` | `HOLY MAGIC` | `0x8019945C` | `POISON` |
+| `0x8019944C` | `FIRE MAGIC` | `0x8019945E` | `DARK MAGIC` |
+| `0x8019944E` | `EARTH MAGIC` | `0x80199460` | `FIRE MAGIC` |
+| `0x80199450` | `WIND MAGIC` | `0x80199462` | `EARTH MAGIC` |
+| `0x80199452` | `WATER MAGIC` | `0x80199464` | `WIND MAGIC` |
+| | | `0x80199466` | `WATER MAGIC` |
+
+All seventeen are `u16`. The offense block has no poison or dark entry and the
+defense block has no holy one, which is why they are eight and nine rather than
+a matched pair.
+
+### Nineteen of those words are a cache, and `func_800244CC` owns all of them
+
+The important finding is not the map but the **split inside it**, and it is
+`func_800244CC` that draws the line. The routine opens by storing zero to all
+seventeen offense and defense words in one unrolled run, copies `0x80199438` into
+`0x8019943C` and `0x8019943A` into `0x8019943E`, subtracts 20 from the first if
+`0x8019946A` (`CURSE`) is non-zero, and then adds each equipped item's
+contribution through seven calls to `func_800243B0`.
+
+So:
+
+- **`0x80199438` and `0x8019943A` (u16) are the real attributes** — base strength
+  and base magic. They are what a level-up raises, they are what the save carries,
+  and nothing recomputes them.
+- **`STR POWER`, `MAG POWER` and the seventeen ratings are derived**, rebuilt from
+  the equipment every time `func_800244CC` runs. Twelve sites call it: equip and
+  unequip (`func_80024B7C`, `func_80024C14`), item use (`func_80025FD0`,
+  `func_80026210`, `func_8002658C` twice), the level-up (`func_80024CAC`), the
+  post-load fixup (`func_800240B8`), the new-game setup (`func_800253F0`), the
+  status screen's own opener (`func_800197D4`), and **four sites inside stage 3**.
+
+That is the fact anything editing a character has to respect: writing `STR POWER`
+lasts until the next equip and no longer, while writing base strength is
+permanent and shows the moment `func_800244CC` next runs. See "Editing the
+character" under "Debug tools".
+
+### `func_80024CAC` is the level-up, and it is callable
+
+`func_80024CAC(s16 gain)` is the whole of levelling, and it is short enough to
+state:
+
+```c
+exp += gain;  if (exp > 999999) exp = 999999;   /* 0x80199414 */
+if (exp < *(u32*)0x80199418) return;            /* not there yet */
+if (level == 255) return;                       /* 0x8019941C */
+level++;
+if (level < 100) {
+    maxHp += table_delta;  maxMp += table_delta;     /* 0x80199426, 0x8019942A */
+    baseStr += table_delta;  baseMag += table_delta; /* 0x80199438, 0x8019943A */
+    *(u32*)0x80199418 = next threshold from the table at 0x8007xxxx;
+}
+```
+
+Every constant it adds comes from a table in `GAME.EXE`'s data, so **calling it is
+strictly better than imitating it**: top `0x80199414` up to the threshold word,
+pass a gain of zero, and it levels exactly once by the game's own numbers. That is
+what the debug mod's "Level up" button does. Note the `< 100` guard — past level
+99 the level byte still increments and nothing else does.
+
 ## Saving and loading
 
 Both halves of the memory card now work. Saving was confirmed first — three files
@@ -1082,3 +1192,46 @@ for the duration of the load, so the first snap cannot OOB. Empty tiles in the
 new map can still trip the below-floor latch; `func_80029E5C` clears it, the same
 way autoreload does when it arrives from state `0x11`.
 
+
+### Editing the character: the split is the design
+
+`mods/kf2debug`'s Attributes tab writes every stat the status screen shows, and
+almost all of the thought in it went into one distinction, which is the one
+"Nineteen of those words are a cache" draws.
+
+**The character is plain memory.** EXP, the next-level threshold, level, HP and
+MP with their maxima, gold, base strength, base magic and the five condition
+timers are written and stick. `func_80049A88` packs every one of those addresses
+into the save block, so an edit survives a save and a load. Nothing here needs a
+hook: the panel writes from the UI thread the same way the warp tab's coordinate
+boxes already do.
+
+**The nineteen ratings are not**, and offering an edit box over them without
+saying so would be a lie — `func_800244CC` runs on equip, on item use, on load,
+on level-up and from four sites inside stage 3, and each run zeroes them. So the
+tab holds them behind a switch (`Hold these values`, off by default) whose
+mechanism is a `[PostHook]` on `func_800244CC` itself. A post rather than a pre,
+because the point is to overwrite what it just wrote, and hooking the recompute
+rather than the twelve callers means equip, unequip, load and level-up are all
+covered by one hook. Switching the hold on primes it from live memory first, so
+turning it on changes nothing until a number is typed.
+
+The honest control is the pair above it: **base strength and base magic are real
+attributes**, they persist, and the recompute picks them up. The tab says which
+is which rather than presenting nineteen boxes as if they were all the same kind
+of thing.
+
+Two buttons run recompiled MIPS instead of writing memory, and both are **queued
+and run from the stage-3 post hook** for the reason "Area warp cannot run from
+the panel" gives — the panel draws inside `Present`, which is inside `VSync`.
+"Level up" calls `func_80024CAC` (see above: EXP topped up to the threshold, gain
+of zero, one level by the game's own table), and "Recalculate" calls
+`func_800244CC` so an edited base attribute reaches the status screen without
+waiting for an equip. Both snapshot and restore the `CpuContext` around the call,
+which is `patches/AreaWarp.cs`'s idiom.
+
+**None of this has been looked at by eye.** The addresses and the routine
+behaviour are read out of the executable and the code compiles; what a person
+still has to check is that the status screen shows the numbers the panel does,
+that "Level up" lands on the same level and maxima the game would have given, and
+that a held rating is actually felt in combat rather than merely displayed.

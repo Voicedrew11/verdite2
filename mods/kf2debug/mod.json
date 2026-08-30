@@ -1,7 +1,7 @@
 {
   "id": "kf2.debug",
   "name": "Debug Tools",
-  "version": "1.0",
+  "version": "1.1",
   "author": "KFII-PC",
-  "description": "Noclip flight, invincibility, infinite MP, a speed multiplier, position bookmarks and area warp, with a live readout of the player state the port has identified so far. A dockable panel plus hotkeys; everything is off until you turn it on."
+  "description": "Noclip flight, invincibility, infinite MP, a speed multiplier, position bookmarks, area warp and an editor for the character -- experience, level, HP/MP, gold, the two base attributes, the five condition timers and the status screen's seventeen combat ratings -- with a live readout of the player state the port has identified so far. A dockable panel plus hotkeys; everything is off until you turn it on."
 }

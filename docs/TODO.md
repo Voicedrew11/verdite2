@@ -417,6 +417,21 @@ useful than the question was.
    inventory, equipment, magic, the map — have never run, and each is a screen
    with its own code path. `mods/kf2debug` is the instrument for this: its state
    readout is how the rest of `buf2` gets named, and its area warp reaches an
-   area without walking there. Inventory, equipment, magic and the entity table
-   are all still unmapped.
-
+   area without walking there. **`buf2` itself is now mapped whole** — the status
+   screen labels every word it draws, and the font-index string table decodes,
+   so `EXPERIENCE` through `WATER MAGIC` are named by the game rather than
+   guessed; see "The status screen names the rest of buf2" in
+   [GAME_INTERNALS.md](GAME_INTERNALS.md). Inventory, equipment and the entity
+   table are still unmapped, and the same route should reach them: the item and
+   spell names are all in that table too, from `0x80065B20` (`DAGGER`) to
+   `0x800663F0` (`LIGHT CRYSTAL`), so whichever routine indexes it with a slot
+   number is the inventory.
+13. **Check the Attributes tab by eye.** `mods/kf2debug`'s character editor is
+   written and compiles; nothing in it has been seen running. Three things a
+   person has to confirm: that the status screen shows what the panel shows, that
+   "Level up" — which calls `func_80024CAC` rather than imitating it — lands on
+   the level, maxima and base attributes the game would have given, and that a
+   *held* combat rating is felt in combat rather than merely displayed (the hold
+   is a post hook on `func_800244CC`, so it wins the display; whether the damage
+   arithmetic reads those same words is a separate reading). See "Editing the
+   character: the split is the design" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
