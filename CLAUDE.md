@@ -803,14 +803,14 @@ of the twenty-nine are load-bearing; `0002`, `0003` and `0015` are diagnostics a
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
 
-**`setup_tools.sh` does not currently rebuild the checkout on this branch.**
-`0021-true-color-24bit-output.patch` was authored while `lighting-experiments`'
-`0025`/`0026` were also applied, so three of its hunks quote `_uCoplanarTol` /
-`_uLitCenter` context that only exists there and `git apply` rejects them. Running
-the script resets the checkout to the pin first, so it leaves the tree at `0020`
-and stops. The tree in place has been repaired by hand; do not re-run the script
-here until the patch's context is rebased or the branches are merged. See the
-entry in `docs/TODO.md`.
+`setup_tools.sh` **does** rebuild the checkout on this branch, and that used to be
+false: `0021-true-color-24bit-output.patch` was authored while
+`lighting-experiments`' `0025`/`0026` were applied, so its hunks quoted
+`_uCoplanarTol` / `_uLitCenter` context that exists only there and `git apply`
+rejected them, leaving the tree at `0020`. The patch has been regenerated against
+this branch's context. Verified by applying all twenty-nine patches in glob order
+to a pristine worktree of the pin: every one applies, and the result is
+byte-identical to the tree in place.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
