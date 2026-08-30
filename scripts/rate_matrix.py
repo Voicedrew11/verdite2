@@ -70,9 +70,37 @@ def sc_death_clock(run: kf2.Run) -> dict:
 
     Stage 3 bumps 0x8019951A once per logic tick, so its slope against wall time
     *is* the tick rate. This is the regression check for KF2_TICKRATE.
+
+    **Needs KF2_AUTORELOAD=0, which the scenario asks for below, and reading it
+    without that is what produced the "the death clock stops short above the tick
+    rate" open question.** AutoReload pins this very counter at 31
+    (`AutoReload.HoldAt`) for the whole of its delay, so the animation finishes
+    while the fade and the game's own respawn never come due -- so with it on the
+    numerator is a clamp, the denominator is `AutoReload.Delay`, and the ratio of
+    the two is not a rate at all. Measured at KF2_FPS=165: 31 frames in 2.06 s
+    with auto reload on, 65 in 3.25 s -- 20.02 ticks/s -- with it off.
     """
-    kf2.shell("kill")
-    t0 = time.time()
+    # The kill does not always take on the first ask -- `inGame` goes true as the
+    # save loads, and wait_in_game's fixed settle is not always enough for the
+    # area to be up and the player killable, which at KF2_FPS=20 measured as a
+    # flat `0 death frames` until --settle was raised to 25. Confirm the counter
+    # actually started rather than reporting a zero that means "never died".
+    t0 = None
+    for _ in range(3):
+        kf2.shell("kill")
+        sent = time.time()
+        while time.time() - sent < 3.0:
+            if kf2.state().get("deathFrames", 0):
+                t0 = sent
+                break
+            time.sleep(0.05)
+        if t0 is not None:
+            break
+
+    if t0 is None:
+        return {"death frames": 0, "seconds": None, "ticks/s": None,
+                "note": "kill never took -- not in an area yet, try --settle"}
+
     last = 0
     deadline = t0 + 20.0
     while time.time() < deadline:
@@ -163,7 +191,8 @@ def sc_idle(run: kf2.Run) -> dict:
 SCENARIOS = {
     "menu-scroll": (sc_menu_scroll, {"KF2_MENUPACING_PROBE": "1"},
                     "open the menu, hold Down; cursor repeat and blink rate"),
-    "death-clock": (sc_death_clock, {}, "kill, and time the 65-tick death counter"),
+    "death-clock": (sc_death_clock, {"KF2_AUTORELOAD": "0"},
+                    "kill, and time the 65-tick death counter"),
     "walk":        (sc_walk, {}, "hold Up for 2 s; distance is tick-rate bound"),
     "modal-rate":  (sc_modal_rate, {"KF2_LOOPPACING_PROBE": "1"},
                     "open the menu, then warp; what rate each self-rendered loop ran at"),
