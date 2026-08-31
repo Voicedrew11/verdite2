@@ -125,10 +125,18 @@ namespace Kf2;
 /// (<see cref="Slot.FirstStep"/>). A clip whose length cannot be read (a bad
 /// segment count, a zero total) never carries at all.
 ///
-/// Nothing here writes game state. `c.A2` is a register on one call and the
-/// weight lives in the *caller's* own stack temp, both consumed before
-/// `func_80034DA8` returns -- so unlike the table smoothers there is nothing to
-/// put back and nothing that can leak into the next tick's AI or a save.
+/// **Nothing here outlives the call, which is not the same as writing nothing.**
+/// `c.A2` is a register on one call, and the weight is written *through a
+/// pointer* into the caller's own stack temp, consumed before `func_80034DA8`
+/// returns -- so unlike the table smoothers there is nothing to put back and
+/// nothing that can leak into the next tick's AI or a save. That pointer is the
+/// one address in the file not derived from a table walk: it is `SP+0x10`, read
+/// on the assumption that the clock's caller is `func_80034DA8`, and
+/// <see cref="_clockSeen"/> only guarantees that the *first* clock call inside a
+/// submit wins -- not that the first one is that caller's, since
+/// `func_8003507C` reaches the same clock from elsewhere in the subtree. So it
+/// is bounds-checked before it is written through, as is the segment record the
+/// carry is scaled by.
 ///
 /// The two old modes are kept as <see cref="Mode.Weight"/> and
 /// <see cref="Mode.Time"/> so the picture can be compared by eye, which is the
@@ -341,6 +349,15 @@ public static class AnimSmoothing
         /// for a tick.</summary>
         public bool FirstStep = true;
 
+        /// <summary>This tick was held because the slot has no confirmed rate to
+        /// check against yet, rather than because a confirmed one could not
+        /// explain the step. Recorded here because it is only knowable at the
+        /// exit that took it: both hold paths <see cref="Seed"/> a rate on the
+        /// way out, so by the time <see cref="Census"/> runs every held slot
+        /// looks settled and the probe's "settling" column could never be
+        /// anything but 0.</summary>
+        public bool Settling;
+
         /// <summary>This tick's accepted step along the unwrapped timeline, and
         /// how the path folds back onto the clip. Valid only when
         /// <see cref="Say"/> is <see cref="Verdict.Play"/>.</summary>
@@ -397,6 +414,11 @@ public static class AnimSmoothing
 
     /// <summary>Bumped once per logic tick, at the frame bracket.</summary>
     static long _tick;
+
+    /// <summary>The frame identity <see cref="_tick"/> was last advanced on, so a
+    /// second stage-13 walk inside one frame is not a second tick. See
+    /// <see cref="FramePacing.FirstWalkOfTick"/>.</summary>
+    static long _lastFrame = -1;
 
     /// <summary>This frame's <see cref="FramePacing.LogicPhase"/>, read once at
     /// the bracket. It is stable for the whole frame by construction.</summary>
@@ -466,6 +488,12 @@ public static class AnimSmoothing
     static long _submits, _morph, _rigid, _live, _carried, _reversed;
     static long _play, _wrapped, _mirrored, _backward, _held, _unsettled, _noLength, _rootHeld;
     static long _clipTicks, _wraps, _wrapCarried, _stuck, _skipped, _overran;
+
+    /// <summary>Stage-13 walks that reached a ticked frame which had already had
+    /// its tick -- a LoopPacing redraw, or the transition fade's own render from
+    /// inside stage 2. Each one was a second tick, and a lost prev/cur pair,
+    /// before the frame identity gated it.</summary>
+    static long _reWalks;
     static int _maxTimeSeen;
     static double _timeStepSum, _fracSum;
 
@@ -637,10 +665,21 @@ public static class AnimSmoothing
     /// The frame bracket. The tick is noticed here rather than inside the submit
     /// so that a slot samples once per *tick* however many frames that tick is
     /// drawn over -- and, at the tick rate, so that it samples at all.
+    ///
+    /// **The identity is the frame, not the flag.** `TickedThisFrame` is decided
+    /// at the boundary and is stable for the whole frame, so a `LoopPacing`
+    /// redraw or the transition fade's own render from inside stage 2 would step
+    /// the tick a second time inside one frame. The second step re-samples every
+    /// slot with the clip time unchanged -- a step of 0, a
+    /// <see cref="Verdict.Still"/>, no carry -- so the pose falls back to the tick
+    /// rate for the rest of that tick and the tick's real prev/cur pair is gone
+    /// with it. <see cref="FramePacing.FirstWalkOfTick"/> is that test, watchdog
+    /// included.
     /// </summary>
     public static void BeforeRenderer(CpuContext c, IMemory m)
     {
-        if (FramePacing.TickedThisFrame) _tick++;
+        if (FramePacing.FirstWalkOfTick(ref _lastFrame)) _tick++;
+        else if (_probe && FramePacing.TickedThisFrame) _reWalks++;
         _phase = FramePacing.LogicPhase;
         _depth = 0;
         _pending = false;
@@ -813,6 +852,7 @@ public static class AnimSmoothing
                 Seed(s, best);
                 s.FirstStep = false;
                 if (_probe) Refused(best);
+                s.Settling = true;
                 s.Say = Verdict.Hold;
                 return;
             }
@@ -852,6 +892,7 @@ public static class AnimSmoothing
                     double seen = Nearest(step, d, 0.0);
                     Seed(s, seen);
                     if (_probe) Refused(seen);
+                    s.Settling = false;
                     s.Say = Verdict.Hold;
                     return;
                 }
@@ -889,10 +930,19 @@ public static class AnimSmoothing
     /// </summary>
     static bool Trusted(double delta, int d) => Math.Abs(delta) <= d * FirstStepFrac;
 
-    /// <summary>The acceptance window around the settled rate, floored by
-    /// <see cref="RateTolAbs"/> and capped by <see cref="RateTolCap"/>.</summary>
+    /// <summary>The acceptance window around the settled rate: a fraction
+    /// <see cref="RateTolRel"/> of the rate, capped by <see cref="RateTolCap"/>
+    /// of the clip's length, and only then floored by
+    /// <see cref="RateTolAbs"/>.
+    ///
+    /// **The floor is applied last, and that order is the whole point.** Capping
+    /// afterwards lets the ceiling pull the window back under the floor for any
+    /// clip shorter than `RateTolAbs / RateTolCap` = 40 units -- and a short clip
+    /// is exactly what the floor exists for, so such a slot would fail its window
+    /// every tick, re-seed, and never carry at all. Latent while every clip
+    /// measured is 4096 long; nothing here reads that length as a constant.</summary>
     static double Window(double rate, int d) =>
-        Math.Min(Math.Max(RateTolAbs, Math.Abs(rate) * RateTolRel), d * RateTolCap);
+        Math.Max(RateTolAbs, Math.Min(Math.Abs(rate) * RateTolRel, d * RateTolCap));
 
     /// <summary>
     /// Record what a held tick saw, as the rate the next one is checked against.
@@ -933,9 +983,18 @@ public static class AnimSmoothing
         double raw = s.PrevTime + s.Delta * _phase;
         double t = s.Path == Fold.Mirror ? Mirror(raw, s.Length) : Circle(raw, s.Length);
 
+        // Both ends, because both folds can land exactly on `Length` and that is
+        // one past the last valid clip time -- it is the number the clock's own
+        // accumulator compares against, and the highest time ever observed is
+        // Length-1. `Mirror` returns `d` for a path that turned on the endpoint;
+        // `Circle` reaches it by rounding, for a `raw` a hair below zero on a
+        // reverse carry. Handing that to func_8003486C walks its segment list off
+        // the end of the array and returns whatever is past it, which AfterClock's
+        // `segment == 0` test does not catch.
         _tFloor = (int)Math.Floor(t);
         _carry = t - _tFloor;
         if (_tFloor < 0) { _tFloor = 0; _carry = 0.0; }
+        else if (_tFloor >= s.Length) { _tFloor = s.Length - 1; _carry = 0.0; }
         _pending = true;
     }
 
@@ -1204,13 +1263,17 @@ public static class AnimSmoothing
         if (!_pending) return;
         _pending = false;
         double spend = Carry == Mode.Weight ? _back : _carry;
-        if (_weightPtr == 0 || spend == 0.0) return;
+        // The only address in this file that is not derived from a table walk:
+        // it is `SP+0x10` read on the assumption that the clock's caller is
+        // func_80034DA8. Checked like every other one before it is written
+        // through -- being wrong here is four bytes at an arbitrary address.
+        if (_weightPtr == 0 || !Ram(_weightPtr) || spend == 0.0) return;
         if (Carry != Mode.Weight && spend < 0.0) return;
 
         // v0 is the segment record: +0x0 the direction flag, +0x2 the duration
         // the weight was divided by.
         uint segment = c.V0;
-        if (segment == 0) return;
+        if (segment == 0 || !Ram(segment)) return;
         int duration = m.ReadU16(segment + 2u);
         if (duration <= 0) return;
 
@@ -1362,6 +1425,7 @@ public static class AnimSmoothing
         s.Rate = 0;
         s.HasRate = false;
         s.FirstStep = true;
+        s.Settling = false;
         s.Delta = 0;
         s.Path = Fold.Circle;
         s.Wrapped = s.Mirrored = false;
@@ -1402,7 +1466,7 @@ public static class AnimSmoothing
                     break;
                 case Verdict.Hold:
                     if (s.Length <= 0) _noLength++;
-                    else if (!s.HasRate || s.FirstStep) _unsettled++;
+                    else if (s.Settling) _unsettled++;
                     else _held++;
                     break;
             }
@@ -1440,6 +1504,7 @@ public static class AnimSmoothing
             : $"; {_carried} weight(s) carried ({_reversed} reversed), " +
               $"mean frac {_fracSum / _carried:0.00}";
         string root = _rootHeld == 0 ? "" : $", {_rootHeld} refused (root held)";
+        string re = _reWalks == 0 ? "" : $", {_reWalks} redrawn walk(s) not re-ticked";
 
         string verdicts = Carry == Mode.Timeline
             ? $"; {_play} playback ({_wrapped} on the wrap, {_mirrored} turned, " +
@@ -1454,7 +1519,7 @@ public static class AnimSmoothing
 
         Console.WriteLine($"[KF2] anim({Carry.ToString().ToLowerInvariant()}): " +
                           $"{_submits} submit(s), morph {_morph} ({morphPct}), " +
-                          $"rigid {_rigid}{live}{step}{verdicts}{carry}{root}");
+                          $"rigid {_rigid}{live}{step}{verdicts}{carry}{root}{re}");
 
         // The arm is one slot against a whole scene, so it gets its own line or
         // it is lost in the rounding. `no swing` is the honest reading of an
@@ -1468,7 +1533,7 @@ public static class AnimSmoothing
 
         _submits = _morph = _rigid = _live = _carried = _reversed = 0;
         _play = _wrapped = _mirrored = _backward = _held = _unsettled = _noLength = _rootHeld = 0;
-        _clipTicks = _wraps = _wrapCarried = _stuck = _skipped = _overran = 0;
+        _clipTicks = _wraps = _wrapCarried = _stuck = _skipped = _overran = _reWalks = 0;
         _timeStepSum = _fracSum = 0;
         _maxTimeSeen = _maxRefused = 0;
         _maxStep = 0; _minStep = int.MaxValue;

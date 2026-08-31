@@ -448,6 +448,42 @@ public static class FramePacing
     public static long Frames => _frames;
 
     /// <summary>
+    /// True on the **first stage-13 walk of a frame the world ticked on**, which
+    /// is the test a patch wants when it re-samples once a tick rather than once
+    /// per walk. <paramref name="lastFrame"/> is the caller's own memory of which
+    /// frame it last answered true for; seed it at -1.
+    ///
+    /// <see cref="TickedThisFrame"/> alone cannot say this. It is decided at the
+    /// frame boundary and is stable for the whole frame, so a *second* walk
+    /// inside one frame -- a <see cref="LoopPacing"/> redraw, or the transition
+    /// fade rendering its own frames from inside stage 2 -- reads it true again.
+    /// <see cref="Frames"/> is the identity that separates them, and a patch
+    /// re-sampling on the second walk destroys the tick's real prev/cur pair:
+    /// both samples are the same instant, so every slot reads as standing still
+    /// and drops back to the tick rate for the rest of the tick, on exactly the
+    /// transitions where it shows most.
+    ///
+    /// **The identity fails closed**, which is why the watchdog is in here rather
+    /// than in each caller: with the boundary lost, <see cref="Frames"/> freezes
+    /// and no walk is ever the first of a new frame again, so a sampler would
+    /// carry forever off one stale pair. Past <see cref="BoundaryDeadMs"/> --
+    /// the same window <see cref="BeforeStage"/> falls back on -- the identity is
+    /// dropped and <see cref="TickedThisFrame"/> decides alone, which is the
+    /// behaviour the callers had before the guard.
+    /// </summary>
+    public static bool FirstWalkOfTick(ref long lastFrame)
+    {
+        if (!TickedThisFrame) return false;
+
+        bool live = _lastBoundaryMs >= 0.0 &&
+                    _clock.Elapsed.TotalMilliseconds - _lastBoundaryMs <= BoundaryDeadMs;
+        if (live && _frames == lastFrame) return false;
+
+        lastFrame = _frames;
+        return true;
+    }
+
+    /// <summary>
     /// True when the world is on the logic clock rather than on the loop.
     ///
     /// **This used to require a rate above 30**, because below that the game's own

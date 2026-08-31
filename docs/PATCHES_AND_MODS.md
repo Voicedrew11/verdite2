@@ -1491,7 +1491,8 @@ adding it**, on a 4096-unit clip, so steps past the old ceiling are ordinary.
 
 At `KF2_FPS=144` with `KF2_SMOOTH_ANIM_PROBE=1`, sweeping areas 0, 2 and 7 —
 553 playback ticks over the run, **7 recognised as cycle wraps, 0 as endpoint
-turns**, against 15 holds and 0 slots settling; 381-527 weights carried a second
+turns**, against 15 holds (the `0 slots settling` beside them was a dead counter
+at the time and said nothing; see the review findings below); 381-527 weights carried a second
 at a mean fraction of 0.55-0.59; `0 with no clip length` outside the frames of an
 area transition. The load-bearing number is the **arc**: the widest step carried
 over the whole run is **290 units**, the top of the measured playback range, so
@@ -1546,6 +1547,80 @@ the honest reason to prefer `Timeline`.
   highest clip time seen is 4095, and wrap steps are exactly `rate - 4096`), but
   a *uniform* length means the per-clip lookup would look identical if it were
   reading a constant. Finding one clip with a different `D` is what tests it.
+
+##### Five things review found, and what each one was
+
+Four of them are edges the mechanism never reached in any measured run, which is
+the honest description of all but the last: they are guards, not repairs of an
+observed picture.
+
+* **A tick is a frame identity, not a flag.** `BeforeRenderer` advanced `_tick`
+  on `FramePacing.TickedThisFrame`, which is decided at the frame boundary and is
+  stable for the whole frame — so a *second* stage-13 walk inside one frame would
+  step the tick twice, re-sample every slot at the same instant (a step of 0, a
+  `Still`, no carry) and destroy the tick's real prev/cur pair. The identity that
+  separates the two is `FramePacing.Frames`, which `SpriteAnim` was already
+  keyed on for exactly this; it is now `FramePacing.FirstWalkOfTick(ref
+  _lastFrame)`, shared, with the boundary watchdog **inside the helper** because
+  the identity fails closed — with the boundary lost `Frames` freezes and a
+  sampler would carry forever off one stale pair, so past 500 ms the guard drops
+  and the flag decides alone, as it did before. `ObjectSmoothing.Before` had the
+  same exposure at *three* sites, not one: its `Sample`, and the two hysteresis
+  blocks whose own comment already says the decision is taken once per tick
+  "because the hysteresis reads Gliding and MovedLast, which this same block
+  writes" — a second walk in one frame is that case, and under `Continuous` it
+  can admit a placement the first walk refused. All three now read one
+  `tickFrame` local.
+
+  **Measured: 0 re-walks**, at 144 fps through the autostart load and five area
+  warps (0 ⇄ 2 ⇄ 7), reported as `N redrawn walk(s) not re-ticked` in the probe
+  line. That is consistent with the code rather than with the guard being
+  pointless: `LoopPacing.AfterRenderer` redraws inside `while
+  (!FramePacing.TickedThisFrame …)`, so its redraws are non-ticked frames by
+  construction, and every ordinary stage-13 walk ends in a `DrawOTag` that
+  credits its own boundary. The reachable case is a walk whose `DrawOTag` is
+  *not* credited — the boundary needs a preceding `VSync` — and nothing in these
+  scenes produced one. So: cheap, correct, and its case unobserved.
+
+* **The acceptance window's cap could undercut its floor.** `Window` read
+  `Min(Max(RateTolAbs, |rate| * RateTolRel), d * RateTolCap)`, so for any clip
+  shorter than `RateTolAbs / RateTolCap` = 40 units the ceiling pulled the result
+  back under the floor — and a short clip is precisely what the floor exists for,
+  so such a slot would fail its window every tick, re-seed and never carry at
+  all. The floor is applied last now. Latent while every clip measured is 4096
+  long, which is the same caveat as the bullet above it.
+
+* **`_tFloor` was clamped below but not above.** Both folds can return exactly
+  `Length` — `Mirror` returns `d` for a path that turned on the endpoint, and
+  `Circle` reaches it by rounding for a `raw` a hair below zero on a reverse
+  carry — and `Length` is *one past* the last valid clip time (the highest ever
+  observed is `Length - 1`). Handing that to `func_8003486C` walks its segment
+  list off the end of the array and returns whatever is past it, which
+  `AfterClock`'s `segment == 0` test does not catch. Clamped at both ends.
+
+* **The one write was the one address not checked.** `_weightPtr` is
+  `m.ReadU32(c.SP + 0x10)`, taken on the assumption that the clock's caller is
+  `func_80034DA8`; `_clockSeen` only guarantees the *first* clock call in a
+  submit wins, not that the first one is that caller's, since `func_8003507C`
+  reaches the same clock from elsewhere in the subtree. Guarded by `Ram()` now,
+  as is the segment record `c.V0` the carry is scaled by — the same check
+  `Duration` already puts in front of every load. The class doc claimed *"nothing
+  here writes game state"*, which was true of the write's **lifetime** and not of
+  the write, and is the sentence a future reader would have trusted; it now says
+  what is actually guaranteed.
+
+* **`{_unsettled} settling` was a dead column.** Every `Verdict.Hold` exit
+  `Seed`s a rate on the way out, so by the time `Census` ran its
+  `!s.HasRate || s.FirstStep` test every held slot looked settled and the counter
+  could only ever print 0 — which matters because that 0 was quoted as evidence
+  the mode was behaving. The distinction is only knowable at the exit that took
+  it, so it is recorded there (`Slot.Settling`: true on the no-confirmed-rate
+  hold, false on the rate-did-not-explain-it hold). **It reports now**: windows
+  reading `1 settling` beside `0 held` and `5 held` in the warp run above, where
+  before the fix the same runs read 0 everywhere.
+
+  So the earlier reading of "0 slots settling" carried no information and is
+  struck from the numbers below; the `held` figures beside it were always real.
 
 What no counter here can say is the **picture**. Three cases need looking at: a
 **looping** clip through its turnover (the wrap column proves the tick was

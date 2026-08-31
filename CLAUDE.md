@@ -345,11 +345,23 @@ observation, and `FirstStepFrac` gates only the no-confirmation shortcut. The
 probe gained `widest refused N` for it, which is the counter that makes a
 stranded clip visible at all: a refused step of 1344 on a 4096-unit clip turned
 up in the first run after adding it. Measured after, at 144 fps over areas 0, 2 and 7: 553 playback ticks,
-7 wraps, **0 turns**, 15 holds, 0 settling, 0 without a clip length, and the
+7 wraps, **0 turns**, 15 holds, 0 without a clip length, and the
 widest arc carried over the whole run is **290 units** — the top of the measured
 playback range, so nothing walked round the back of the circle — against a widest
-*refused* step of 1344, the two staying far apart being the shape to want. `Mode.Weight`
+*refused* step of 1344, the two staying far apart being the shape to want. (That
+run also read `0 settling`, and **that number said nothing**: every `Hold` exit
+seeded a rate on the way out, so the census test could never be true and the
+column was dead. It is recorded at the exit that knows it now, and reports.)
+`Mode.Weight`
 refuses 8-17 carries a second for leaving their segment in the same scenes.
+**A tick is a frame identity, not a flag**: `TickedThisFrame` is stable for the
+whole frame, so a second stage-13 walk inside one would step the tick twice and
+re-sample both smoothers at the same instant, wiping the tick's prev/cur pair.
+`FramePacing.FirstWalkOfTick` is that test — `Frames` plus the 500 ms boundary
+watchdog, since the identity fails closed — and `AnimSmoothing` and
+`ObjectSmoothing` (three sites: its sample and both hysteresis blocks) go through
+it. Measured 0 such walks over the autostart load and five area warps, which the
+code agrees with: `LoopPacing`'s redraws run only while `!TickedThisFrame`.
 **`Mode.Timeline` is the default again** — the default moved to `Mode.Time` while
 the shake was diagnosed, since that was the only mode with a positive report by
 eye, and moved back once play reported the fixed one looking very good; the other

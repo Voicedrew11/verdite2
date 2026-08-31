@@ -427,6 +427,10 @@ public static class ObjectSmoothing
     /// tables are rebuilt and the last area's positions are meaningless.</summary>
     static bool _primed;
 
+    /// <summary>The frame identity the tables were last sampled on. See
+    /// <see cref="FramePacing.FirstWalkOfTick"/>.</summary>
+    static long _lastFrame = -1;
+
     /// <summary>True when the pre-hook wrote anything this frame, so the post-hook
     /// knows whether there is a restore to do.</summary>
     static bool _applied;
@@ -591,7 +595,18 @@ public static class ObjectSmoothing
 
         if (_probe) _frames++;
 
-        if (FramePacing.TickedThisFrame) { Sample(m); _held.Clear(); }
+        // The frame the world advanced on, told by identity rather than by the
+        // flag alone: `TickedThisFrame` is stable for the whole frame, so a
+        // second stage-13 walk inside one -- a LoopPacing redraw, or the
+        // transition fade rendering from inside stage 2 -- would read it true
+        // again. Re-sampling there sets Prev = Cur from the same instant and
+        // every slot reads as standing still for the rest of the tick; re-running
+        // the hysteresis there judges the slot against flags this same block
+        // wrote a moment ago, which under Continuous can admit a placement the
+        // first walk refused. Decided once per tick, used at all three sites.
+        bool tickFrame = FramePacing.FirstWalkOfTick(ref _lastFrame);
+
+        if (tickFrame) { Sample(m); _held.Clear(); }
         if (!_primed) { _held.Clear(); return; }
 
         // Not gated on a small phase: interpolation must overwrite the tables even at
@@ -637,7 +652,7 @@ public static class ObjectSmoothing
                     // walk left behind: Continuous reads MovedLast, grants
                     // RaisedUnits * GlidingFactor, and lerps the placement across the
                     // room -- the "sliding in on spawn" failure, from the default.
-                    if (FramePacing.TickedThisFrame)
+                    if (tickFrame)
                     {
                         t.Gliding[i] = false;
                         t.MovedLast[i] = false;
@@ -657,7 +672,7 @@ public static class ObjectSmoothing
                 // Gliding and MovedLast, which this same block writes, so a
                 // second frame would judge itself against its own first frame.
                 bool posLive;
-                if (FramePacing.TickedThisFrame)
+                if (tickFrame)
                 {
                     // Sticky: a slot that was gliding last tick keeps gliding
                     // unless the step is far past the threshold, so a part whose
