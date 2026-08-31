@@ -943,6 +943,68 @@ at 120 fps. The picture was checked by eye after the switch to interpolation and
 reported *"incredible"*; the default stays off until that judgement is settled for
 shipping.
 
+#### Four things review found in it
+
+All four are in `patches/FrameSmoothing.cs`, and three of them are the same shape:
+a guard that reads the wrong predicate, so the patch is silently wrong in a
+configuration nobody had run the probe in.
+
+* **It ran at the tick rate, where it can only add latency.** The pre-hook was
+  gated on `FramePacing.Gating`, which is true at *every* rate — the frame gate is
+  skipped whatever the setting — where the test it wants is
+  `FramePacing.Extrapolating`, "a frame can land part-way between two ticks".
+  `LoopPacing` and the settings page were already using it. At the port's own 20
+  fps default every frame ticks, `LogicPhase` is ~0, and `lerp(prev, cur, 0)` is
+  `prev`: with `KF2_SMOOTH=1` the renderer was handed **last** tick's camera on
+  every single frame — a permanent 50 ms of view latency bought with no smoothing
+  at all, and silent, because the greyed-out checkbox reads as "this is not doing
+  anything". Measured before: `41 of 41 frames carried` a report at
+  `KF2_FPS=20`. After: `0 of 41 … 41 off or at the tick rate, not extrapolating`.
+* **Re-enabling from the Video pane carried from stale samples.** `_prev`/`_cur`
+  are only refreshed on a tick frame *while enabled*, and `_carriable` was cleared
+  only on an overlay load — so unticking the box, turning 180° and walking down a
+  corridor, then ticking it back on, wrote `lerp(stale_prev, stale_cur, phase)`
+  into the live camera words on the very next frame. `SetEnabled` primes again on
+  the off→on edge, which is what `AnimSmoothing.SetCarry` already did with
+  `_slots.Clear()`.
+* **The carried angles were written in a representation the game does not use.**
+  The composer (`func_8002A550`) sums four zero-extended halfwords and stores the
+  low sixteen bits, so a negative pitch is the s16 the field is typed as — -700 is
+  `0xFD44`. `S12` recovered that correctly on the way in, but the write was
+  `(S12(prev) + step) & 0xFFF`, which puts `0x0D44` back: +3396 to any consumer
+  that reads the word as signed rather than indexing a sin/cos table with
+  `& 0xFFF`. Stage 8 is not the only consumer — the two stack blocks it fills go
+  on to stage 9, the 3D sound listener, and to stage 13. Both angles are now
+  stepped from the game's own previous-tick word in the game's own 16-bit domain
+  (`(ushort)(_prevYaw + yawStep)`), which is bit-exact at phase 0 and agrees with
+  `cur` mod 4096 at phase 1.
+* **The probe could not report the thing it was written to report.** `_skipped`
+  had one writer, the "nothing moved between the two ticks" case, and it always
+  fired together with `_skipStill` — so the `_carried == 0` branch printed the same
+  number twice and could never say anything else. Frames dropped for being off, at
+  the tick rate, or not yet primed were counted **nowhere**, so when they were all
+  the frames `total` was 0 and `Report` returned silently: the exact configuration
+  this probe was written to diagnose printed nothing at all. Three buckets now, and
+  no early return on `total == 0`.
+
+#### The position half is knowingly inconsistent
+
+The class comment claimed the stage-8 isolation covers everything it carries. It
+covers the **angles**. `docs/GAME_INTERNALS.md` ("Stage 8 is the render camera, and
+it is the only copy") records the other half: two of stage 13's own callees read
+the player position triple *directly*, after stage 8 has run and after
+`FrameSmoothing.After` has put the raw values back — `func_80032400`, the
+first-person arm, reads `0x801994EC` and `0x801994F4`, and `func_800331B4`, the
+world and object walks, reads all three. So with `KF2_SMOOTH_POS=1` the eye is
+carried and the origin those two place their geometry against is not: on a non-tick
+frame the arm, the torches and the creatures shear against the architecture by
+exactly the distance the carry moved the eye, worst just before a tick lands. That
+is the constant-offset failure `ObjectSmoothing` was written to avoid, in a
+different place. It is why the position is a separate switch and off by default;
+closing it means carrying those two readers too, inside the stage
+`ObjectSmoothing` already brackets. The comment now says so instead of asserting a
+guarantee the code does not have.
+
 ### The camera is not the only thing that moves
 
 Reported after the tick rate became a setting, playing at 60 fps against the 20 Hz

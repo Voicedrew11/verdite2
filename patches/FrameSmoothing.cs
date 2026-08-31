@@ -50,6 +50,20 @@ namespace Kf2;
 /// is the whole reason this is safe, and it is why the hook is not on stage 2 or
 /// stage 13 -- both of which do other things, repeatedly.
 ///
+/// **The isolation argument is about the angles, and only about the angles.** Two
+/// of stage 13's own callees read the player *position* triple directly, after
+/// stage 8 has run and after <see cref="After"/> has put the raw values back:
+/// `func_80032400` (the first-person arm) reads `0x801994EC` and `0x801994F4`, and
+/// `func_800331B4` (the world and object walks) reads all three --
+/// docs/GAME_INTERNALS.md, "Stage 8 is the render camera, and it is the only copy".
+/// So with <see cref="Position"/> on, the eye is carried and the origin those two
+/// place their geometry against is not: on a non-tick frame the arm, the torches
+/// and the creatures shear against the architecture by exactly the distance the
+/// carry moved the eye, worst just before a tick lands. That is knowingly
+/// inconsistent rather than fixed -- it is why the position half is a separate
+/// switch and is off by default, and closing it means carrying those two readers
+/// too, inside the stage <see cref="ObjectSmoothing"/> already brackets.
+///
 /// ## Interpolate, not extrapolate
 ///
 /// **This carried the view *forward* at first -- current angle + this tick's
@@ -79,7 +93,8 @@ namespace Kf2;
 ///   and is left alone, the way <see cref="ObjectSmoothing"/> guards a placement.
 ///
 /// Both agree on time with <see cref="ObjectSmoothing"/>, which interpolates too:
-/// both draw the world at `t - 1 + frac`, so nothing slides against anything else.
+/// both draw the world at `t - 1 + frac`, so nothing slides against anything else
+/// *in the angles*. The position carries the caveat above.
 ///
 /// <see cref="FramePacing.LogicPhase"/> is the fraction used, and it is continuous
 /// across a tick boundary -- it does not reset to zero on the frames where the
@@ -119,7 +134,9 @@ public static class FrameSmoothing
     public static bool Enabled { get; private set; }
 
     /// <summary>Carry the position too. Off by default; the mechanism is measured
-    /// and the picture is not.</summary>
+    /// and the picture is not -- and unlike the angles it is not isolated to stage
+    /// 8, since two of stage 13's callees read the same triple afterwards. See the
+    /// class summary.</summary>
     public static bool Position { get; private set; }
 
     static bool _onFromEnv, _posFromEnv;
@@ -147,10 +164,14 @@ public static class FrameSmoothing
     static double _reportedAt;
     static long _carried, _skipped;
 
-    // Why a frame was skipped. With interpolation the only reason left is that the
-    // view did not change between the two ticks -- the player was standing still --
-    // which reads very differently from "the logic clock is broken".
-    static long _skipStill;
+    // Why a frame was skipped, each reason in its own bucket. One number for all
+    // of them cannot say the thing the probe exists to say: "nothing moving" reads
+    // very differently from "the logic clock is broken", and both read differently
+    // again from "the switch is off / the rate is at the tick rate". _skipOff and
+    // _skipUnprimed used not to be counted at all, so the configuration the class
+    // doc says this probe once diagnosed -- a boundary that never delivers a tick,
+    // leaving _carriable false forever -- made Report print nothing whatever.
+    static long _skipStill, _skipOff, _skipUnprimed;
     static double _yawSum, _pitchSum, _posSum, _fracSum;
 
     static readonly ModInfo _self = new()
@@ -191,7 +212,20 @@ public static class FrameSmoothing
     /// game memory for the next tick's collision query and for the save.</summary>
     static bool _paired;
 
-    public static void SetEnabled(bool on) => Enabled = on && _paired;
+    /// <summary>Turn the carry on or off from the Video pane. Re-enabling primes
+    /// again rather than lerping from whatever the last enabled frame sampled:
+    /// `_prev`/`_cur` are only refreshed on a tick frame while enabled, so a spell
+    /// disabled leaves them describing a heading and a position from wherever the
+    /// player was then, and the first frame back would swing the camera to it --
+    /// up to 180 degrees, since Delta12 takes the short way round.
+    /// <see cref="AnimSmoothing.SetCarry"/> clears its slots for the same
+    /// reason.</summary>
+    public static void SetEnabled(bool on)
+    {
+        if (on && !Enabled) { _primed = false; _carriable = false; }
+        Enabled = on && _paired;
+    }
+
     public static void SetPosition(bool on) => Position = on;
 
     static bool Attach()
@@ -250,7 +284,15 @@ public static class FrameSmoothing
     public static void Before(CpuContext c, IMemory m)
     {
         _applied = false;
-        if (!Enabled || !FramePacing.Gating) return;
+        if (!Enabled) { if (_probe) { _skipped++; _skipOff++; } return; }
+
+        // Extrapolating, not Gating: Gating is true at the tick rate too, where
+        // every frame ticks and LogicPhase is always ~0. Carrying there is not
+        // merely pointless -- lerp(prev, cur, 0) is `prev`, so the renderer would
+        // be handed last tick's camera on every frame, a permanent tick of latency
+        // bought with no smoothing at all. The checkbox greys itself out on the
+        // same test; this is the half that has to agree with it.
+        if (!FramePacing.Extrapolating) { if (_probe) { _skipped++; _skipOff++; } return; }
 
         // Roll forward on a tick, then re-read the values the game just produced.
         // Stage 3 (func_80028DB8 for the angles, func_80028080 for the position)
@@ -274,7 +316,7 @@ public static class FrameSmoothing
         // even at frac ~= 0, because on a tick frame they hold `cur` (the new tick)
         // and the frame is meant to draw `prev`. Skipping there would leave the new
         // value on screen and put a snap back the other way.
-        if (!_carriable) return;
+        if (!_carriable) { if (_probe) { _skipped++; _skipUnprimed++; } return; }
 
         double frac = FramePacing.LogicPhase;
 
@@ -304,8 +346,18 @@ public static class FrameSmoothing
         int yawStep = (int)Math.Round(yawD * frac);
         int pitchStep = (int)Math.Round(pitchD * frac);
 
-        m.WriteU16(ComposedYaw, (ushort)(((_prevYaw & 0xFFF) + yawStep) & 0xFFF));
-        m.WriteU16(ComposedPitch, (ushort)((S12(_prevPitch) + pitchStep) & 0xFFF));
+        // Stepped from the game's own previous-tick word, in the game's own 16-bit
+        // domain, rather than rebuilt out of the 12-bit angle. The composer
+        // (func_8002A550) sums four zero-extended halfwords and stores the low
+        // sixteen bits, so the upper four are whatever that arithmetic left there
+        // -- for a negative pitch, the s16 sign extension (-700 is 0xFD44). Masking
+        // to 0xFFF wrote 0x0D44 back, which every consumer that indexes a sin/cos
+        // table with `& 0xFFF` agrees with and any consumer that reads the field as
+        // the s16 it is typed as (docs/GAME_INTERNALS.md, "Stage 8 is the render
+        // camera") sees as +3396. Adding the step to the raw word is bit-exact at
+        // phase 0 and agrees with `cur` mod 4096 at phase 1.
+        m.WriteU16(ComposedYaw, (ushort)(_prevYaw + yawStep));
+        m.WriteU16(ComposedPitch, (ushort)(_prevPitch + pitchStep));
 
         if (posLive)
         {
@@ -372,19 +424,22 @@ public static class FrameSmoothing
         _reportedAt = now;
 
         long total = _carried + _skipped;
-        if (total == 0) return;
 
         if (_carried == 0)
+            // Not returned on total == 0: zero frames reaching the hook at all is
+            // itself the finding, and it is the one this probe was written for.
             Console.WriteLine($"[KF2] smoothing: 0 of {total} frames carried -- " +
-                              $"{_skipStill} with nothing moving" +
-                              $"{(FramePacing.Gating ? "" : ", not gating")}");
+                              $"{_skipStill} with nothing moving, " +
+                              $"{_skipUnprimed} before two ticks were sampled, " +
+                              $"{_skipOff} off or at the tick rate" +
+                              $"{(FramePacing.Extrapolating ? "" : ", not extrapolating")}");
         else
             Console.WriteLine($"[KF2] smoothing: {_carried}/{total} frames carried, " +
                               $"mean phase {_fracSum / _carried:0.00} tick, " +
                               $"yaw {_yawSum / _carried:0.0} u, pitch {_pitchSum / _carried:0.0} u, " +
                               $"pos {_posSum / _carried:0.0} u");
 
-        _carried = _skipped = _skipStill = 0;
+        _carried = _skipped = _skipStill = _skipOff = _skipUnprimed = 0;
         _yawSum = _pitchSum = _posSum = _fracSum = 0.0;
     }
 }
