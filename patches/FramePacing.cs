@@ -974,6 +974,26 @@ public static class FramePacing
     }
 
     /// <summary>
+    /// Forgive a boundary gap that a caller can *explain*. The watchdog above
+    /// cannot tell "the boundary hook is gone" from "nothing drew", and one window
+    /// in the game legitimately draws nothing for seconds: the disc wait
+    /// <see cref="LoadPacing"/> paces, which by its own measurement issues zero
+    /// `DrawOTag` calls and which pacing stretches to 1.7 s. Called when such a
+    /// window closes, this says a boundary is not overdue rather than that one
+    /// arrived -- no frame is counted, no logic clock is advanced, and the credit
+    /// is untouched, so the load still takes <see cref="AdvanceLogicClock"/>'s
+    /// stopped-drawing branch on the next real boundary. It buys exactly one
+    /// <see cref="BoundaryDeadMs"/>: a boundary that really has been lost trips the
+    /// watchdog again on the frames that follow.
+    /// </summary>
+    public static void ExcuseBoundaryGap()
+    {
+        // Never *before* the first boundary -- that is the case the watchdog is
+        // for, and a load happens before one at the title.
+        if (_lastBoundaryMs >= 0.0) _lastBoundaryMs = _clock.Elapsed.TotalMilliseconds;
+    }
+
+    /// <summary>
     /// Hold the world to <see cref="LogicHz"/> with no frame boundary to hang it
     /// on. An absolute grid like <see cref="Floor"/>'s, so the rate averages to
     /// the target rather than drifting; more than four periods of debt means the

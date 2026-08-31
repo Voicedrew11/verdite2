@@ -2111,7 +2111,7 @@ vblank.**
 
 `patches/LoadPacing.cs` marks the window between the pre and post of
 `func_80017CA8` and `func_800181B0` — depth-counted, since the second calls the
-first — and a pre on GAME.EXE's `VSync` thunk (`0x8005FCC8`) holds every call
+first — and a pre on GAME.EXE's `VSync` thunk (`0x8005FCC8`) holds every *blocking* call
 inside it to the 60 Hz grid, exactly as the cursor repeat's six calls are held.
 That restores the identity the sequence is written against, so its three counters
 and the gates keyed on them are right by construction with nothing enumerated.
@@ -2145,10 +2145,50 @@ for the load measured above. That is the console's own duration and the port's o
 default behaviour, and it is the direct consequence of the figure walking at the
 right speed; the alternative is a loading screen whose *length* depends on the
 render rate, which is the thing this port exists to stop. The window contains no
-gated stage, no stage 13 and no rendered frame, so there is nothing else in it to
-slow down. 60 Hz and not `LogicHz`, for the reason `MenuPacing.BlinkMs` gives: one
-vblank of an interface animation, and `KF2_TICKRATE` is a setting about the speed
-of the *world*.
+gated stage, no stage 13 and no rendered frame, so there is nothing of the
+**game's** in it to slow down. 60 Hz and not `LogicHz`, for the reason
+`MenuPacing.BlinkMs` gives: one vblank of an interface animation, and
+`KF2_TICKRATE` is a setting about the speed of the *world*.
+
+**It does slow something of the port's, and the same measurement is why.** Zero
+`DrawOTag` in the window means no frame boundary in the window, so stretching the
+window stretches the boundary gap with it. Measured at `KF2_FPS=144`, printing
+the staleness of `FramePacing`'s boundary clock as each outermost wait closes:
+the widest gap is **449.6 ms with pacing off and 1827.9 ms with it on**, against
+a `FramePacing.BoundaryDeadMs` of 500 ms. So pacing is precisely what carries an
+area load past the watchdog, at the rates the port is played at and nowhere else
+— the unpaced worst case sits just under the threshold, which is why this was
+never seen before.
+
+Past the watchdog, the first gated stage reached would take `FallbackTick` and
+print *"no frame boundary has been reached…"* — the alarm for the boundary being
+**broken**, and the thing the boundary-loss commit exists to make loud. **That
+alarm does not currently print**, in either configuration: the load ends in the
+transition fade, which renders its own frames through stage 13 and so refreshes
+the boundary before the main loop reaches a gated stage. That is an ordering
+accident of this path rather than a guarantee — the drain wait `func_80017CA8`
+is reached from six sites — so `LoadPacing.AfterWait` closes it explicitly with
+`FramePacing.ExcuseBoundaryGap()`: it moves `_lastBoundaryMs` forward without
+counting a frame or advancing the logic clock, so the next real boundary still
+takes `AdvanceLogicClock`'s stopped-drawing branch, and a boundary that genuinely
+has been lost trips the watchdog again one period later. `SpriteAnim` sees the
+same gap and flips to `_onFallback` for the duration of the load, which is its
+own designed behaviour rather than a defect.
+
+**Two things about the window itself fail closed, so both are guarded.** The
+pre/post pair is depth-counted, and `HookManager` runs a post only after the
+recompiled body *returns* — so an `unmapped call` or a throw from a nested hook
+skips `AfterWait` and leaves the depth up for the session, which paces every
+`VSync` in the game to 60 Hz and quietly turns `KF2_FPS=144` into 60. A window
+open longer than `WaitDeadMs` (30 s — a load's own duration with an order of
+magnitude of room, not the siblings' 500 ms) is therefore dropped, once, with a
+line saying so. And the pace is charged only to a `VSync` mode that **blocked**:
+the window here is a whole disc wait rather than the cursor repeat's six known
+calls, so a libcd poll's `VSync(-1)` counter read can reach it, and
+`LibEtc.VSync` returns from that and from mode 1 without presenting — charging
+them a vblank each would serialise *N* queries into *N* vblanks against
+`func_800181B0`'s unbounded `CdReadSync` retry loop. The animator only ever
+passes 0, so that one is a guard rather than an observed fault.
 
 Regression-checked against `rate_matrix.py`: `walk` is bit-identical with the
 patch on and off at 20 and 144, `menu-scroll` reads 6.0 and 8.5 repeats a second

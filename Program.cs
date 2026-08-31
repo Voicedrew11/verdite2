@@ -243,12 +243,18 @@ Kf2.MenuPacing.Install();
 // func_8001883C four times an iteration, and that function draws the figure
 // straight into VRAM with ClearImage/MoveImage -- no ordering table, so no frame
 // boundary, so neither FramePacing nor LoopPacing can see it at all. It ends in
-// DrawSync(0); VSync(0), so one call was one vblank on hardware; here it ran 167
-// times a second at KF2_FPS=144 against 42.7 at the 20 fps default. Its three
-// words are held on a 60 Hz grid, which caps the walk without pacing the load.
+// DrawSync(0); VSync(0), so one call was one vblank on hardware; here the figure
+// took its 84 steps in 352 ms at KF2_FPS=144 (238.6 a second) against 1715 ms at
+// the 20 fps default (49.0). Every blocking VSync inside the two disc waits is
+// held to the 60 Hz grid instead, which restores the console's 49 a second at
+// every rate -- and costs the load its length back: 1.7 s rather than 0.35 s
+// above 60 fps, which is what the 20 fps default already pays. Holding the
+// animator's three counters instead keeps loads short and was measured worse (it
+// drops the default to 36-40), so it is not what shipped.
 //
 //     KF2_LOADPACING=0        leave it on the render rate -- comparison only
-//     KF2_LOADPACING_PROBE=1  steps a second against calls a second
+//     KF2_LOADPACING_PROBE=1  the figure's steps, elapsed and rate per load, and
+//                             the blocking VSync calls the wait was made of
 Kf2.LoadPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOADPACING"),
                          Environment.GetEnvironmentVariable("KF2_LOADPACING_PROBE"));
 Kf2.LoadPacing.Install();

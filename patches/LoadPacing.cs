@@ -53,7 +53,7 @@ namespace Kf2;
 /// ## Paced, not capped, and the choice is measured rather than assumed
 ///
 /// The window between <see cref="BeforeWait"/> and <see cref="AfterWait"/> holds
-/// every `VSync(0)` to the 60 Hz grid, exactly as
+/// every *blocking* `VSync` to the 60 Hz grid, exactly as
 /// <see cref="MenuPacing.BeforeVSync"/> does for the cursor repeat's six calls.
 /// That restores the identity the whole sequence is written against -- one call,
 /// one vblank -- so the animator's three counters and the `&amp; 3` / `&amp; 7` gates
@@ -77,8 +77,21 @@ namespace Kf2;
 /// At or below 60 fps the ceiling is already 60 and **this class does nothing** --
 /// which is where the defect does not exist either.
 ///
-/// The window contains nothing else that could be slowed: no gated stage, no
-/// stage 13, and no rendered frame. 60 Hz and not <see cref="FramePacing.LogicHz"/>
+/// The window contains nothing of the *game's* that could be slowed: no gated
+/// stage, no stage 13, and no rendered frame. It does slow something of the
+/// **port's**, and that is worth saying rather than leaving to be chased: the
+/// same "no `DrawOTag` in here" that makes this loop invisible to
+/// <see cref="FramePacing"/> also means stretching the load stretches the
+/// boundary gap with it. Measured at 144 fps, the widest gap at a wait's close is
+/// **449.6 ms with this off and 1827.9 ms with it on**, against a
+/// `FramePacing.BoundaryDeadMs` of 500 -- so pacing is what carries a load past
+/// the watchdog for a *broken* boundary, and the unpaced case sat just under it.
+/// The alarm does not currently print, because the fade that ends the load
+/// redraws before the main loop reaches a gated stage, but that is this path's
+/// ordering rather than a guarantee. <see cref="AfterWait"/> therefore excuses
+/// the gap explicitly.
+///
+/// 60 Hz and not <see cref="FramePacing.LogicHz"/>
 /// for the reason <see cref="MenuPacing.BlinkMs"/> gives -- this is one vblank of
 /// an interface animation, and `KF2_TICKRATE` is a setting about the speed of the
 /// *world*.
@@ -120,6 +133,12 @@ public static class LoadPacing
     /// <summary>Silence longer than this ends a load, for the probe's report.</summary>
     const double LoadGapMs = 250.0;
 
+    /// <summary>A disc wait open longer than this is a leaked window rather than a
+    /// slow read. Not the siblings' 500 ms: a *paced* load legitimately runs 1.7 s
+    /// and a large area longer, so this is generous by an order of magnitude and
+    /// still finite. See <see cref="DropLeakedWindow"/>.</summary>
+    const double WaitDeadMs = 30000.0;
+
     public static bool Enabled { get; private set; } = true;
 
     static bool _probe;
@@ -129,6 +148,13 @@ public static class LoadPacing
     /// <summary>How deep we are inside a disc wait. A count rather than a flag
     /// because `func_800181B0` calls `func_80017CA8`, so the two windows nest.</summary>
     static int _depth;
+
+    /// <summary>When the outermost wait opened, on <see cref="_clock"/>. Negative
+    /// when no window is open; <see cref="WaitDeadMs"/> past it the window is
+    /// treated as leaked.</summary>
+    static double _windowOpenMs = -1.0;
+
+    static bool _leakSaid;
 
     /// <summary>When the next paced VSync call may return, in ms. Negative means
     /// the grid has not been seeded for this wait yet.</summary>
@@ -256,7 +282,11 @@ public static class LoadPacing
     /// </summary>
     public static void BeforeWait(CpuContext c, IMemory m)
     {
-        if (_depth++ == 0) _due = -1.0;
+        if (_depth++ == 0)
+        {
+            _due = -1.0;
+            _windowOpenMs = _clock.Elapsed.TotalMilliseconds;
+        }
     }
 
     /// <summary>Close it. Runs even if some other pre on the same function ever
@@ -264,6 +294,39 @@ public static class LoadPacing
     public static void AfterWait(CpuContext c, IMemory m)
     {
         if (_depth > 0) _depth--;
+        if (_depth != 0) return;
+
+        _windowOpenMs = -1.0;
+
+        // The window this class just closed drew nothing -- that is the measured
+        // fact the whole patch rests on -- and pacing stretches the boundary gap
+        // with it, from a widest 449.6 ms to a widest 1827.9 ms at 144 fps, past
+        // `FramePacing.BoundaryDeadMs`. A gated stage reached in that state takes
+        // the fallback path and prints the alarm for a *broken* boundary. The
+        // boundary hook is fine here; it had nothing to do. Excusing it costs one
+        // watchdog period, so a boundary that really is gone still trips on the
+        // frames that follow.
+        FramePacing.ExcuseBoundaryGap();
+    }
+
+    /// <summary>
+    /// Stand the window down after <see cref="WaitDeadMs"/>. A load that long is
+    /// an unbalanced <see cref="BeforeWait"/> rather than a slow disc, and leaving
+    /// `_depth` up paces the rest of the session to 60 Hz with nothing said.
+    /// </summary>
+    static void DropLeakedWindow()
+    {
+        _depth = 0;
+        _windowOpenMs = -1.0;
+        _due = -1.0;
+
+        if (_leakSaid) return;
+        _leakSaid = true;
+        Console.Error.WriteLine(
+            $"[KF2] load pacing: a disc wait has been open for over {WaitDeadMs / 1000.0:0.#} s, so " +
+            "its post never ran -- treating the window as closed rather than pacing every VSync in " +
+            "the game to 60 Hz. See \"The loading screen's walking figure\" in " +
+            "docs/PATCHES_AND_MODS.md.");
     }
 
     /// <summary>
@@ -273,9 +336,40 @@ public static class LoadPacing
     /// </summary>
     public static void BeforeVSync(CpuContext c, IMemory m)
     {
-        if (_depth == 0 || !Enabled) return;
+        // **Only a mode that blocked on hardware is charged a vblank.** The window
+        // here is a whole disc wait rather than a known handful of calls, so a
+        // libcd poll or a timeout check inside it can reach this with the standard
+        // `VSync(-1)` counter-read idiom -- and `LibEtc.VSync` returns from that
+        // and from mode 1 without presenting or advancing anything, exactly as the
+        // hardware call did. Charging them a vblank each would serialise N queries
+        // into N vblanks against an unbounded retry loop (`func_800181B0`'s spin on
+        // `CdReadSync`). The animator only ever passes 0, so this is a guard rather
+        // than an observed fault.
+        int mode = (int)c.A0;
+        if (mode < 0 || mode == 1) return;
+
+        if (_depth == 0) return;
 
         double now = _clock.Elapsed.TotalMilliseconds;
+
+        // The window's own watchdog. `HookManager` runs a post only after the
+        // recompiled body returns, so any escape that is not a normal return -- an
+        // `unmapped call`, a throw from a nested hook -- skips AfterWait and leaves
+        // `_depth` above zero for the session, which paces *every* VSync in the
+        // game to 60 Hz and quietly turns KF2_FPS=144 into KF2_FPS=60. A hold fails
+        // closed, so it needs the watchdog the stage gate and the sprite counter
+        // both carry; the threshold is a load's own duration with room to spare
+        // rather than their 500 ms, since a paced load legitimately runs seconds.
+        if (_windowOpenMs >= 0.0 && now - _windowOpenMs > WaitDeadMs) { DropLeakedWindow(); return; }
+
+        // Counted before the switch is consulted, so the probe measures the
+        // unpaced spin too -- that comparison is the whole claim, and this is
+        // `MenuPacing.BeforeVSync`'s order for the same reason. It counts the
+        // blocking calls in the window, not the ones that waited: a call arriving
+        // after its slot has already passed is not held and is still one of the
+        // calls the load is made of.
+        _held++;
+        if (!Enabled) return;
 
         // Seed on the first call of this wait, and re-seed if the host fell more
         // than a vblank behind -- a stall means the game stopped drawing rather
@@ -283,7 +377,6 @@ public static class LoadPacing
         // spinning flat out.
         if (_due < 0.0 || _due < now - VBlankMs) _due = now;
         _due += VBlankMs;
-        _held++;
 
         if (now >= _due) return;
 
@@ -315,7 +408,8 @@ public static class LoadPacing
         double elapsed = _lastStepMs - _windowMs;
         if (_steps > 0 && elapsed > 0.0)
             Console.WriteLine($"[KF2] load pacing: the figure took {_steps} step(s) in {elapsed:0.#} ms " +
-                              $"-- {_steps * 1000.0 / elapsed:0.#} a second, over {_held} held VSync call(s)");
+                              $"-- {_steps * 1000.0 / elapsed:0.#} a second, over {_held} blocking " +
+                              "VSync call(s) in the wait");
         _windowMs = now;
         _steps = 0;
         _held = 0;
