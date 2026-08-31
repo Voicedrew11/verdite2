@@ -969,11 +969,14 @@ but the display list, so the interpolated positions are gone before the next tic
 AI, a save or a proximity trigger can see them.
 
 **There are two tables, because the renderer walks two.** `func_800331B4` loops
-the **entity table** `0x8016C544` (200 records of `0x7C`, free at `+0x0`, position
-a `VECTOR` at `+0x2C`, rotation three `s16` at `+0x40`) for **creatures/enemies**,
-then loops the **object table** `0x80177714` (396 slots of `0x44`, `VECTOR` at
-`+0x14`, free at `+0x4`) for static props and sprites — both the constants
-`patches/AgentServer.cs` already reads for `nearby` (`entities` and `objects`).
+the **entity table** `0x8016C544` (200 records of `0x7C`, drawn when
+`u8[+0x9] == 1`, position a `VECTOR` at `+0x2C`, rotation three `s16` at `+0x40`)
+for **creatures/enemies**, then loops the **object table** `0x80177714` (396 slots
+of `0x44`, `VECTOR` at `+0x14`, drawn when `u16[+0x6] != 0xFF`) for static props
+and sprites — both the constants `patches/AgentServer.cs` already reads for
+`nearby` (`entities` and `objects`), though **neither of `AgentServer`'s liveness
+tests is the renderer's**: it uses the owning stage's `+0x0` and `+0x4`, which is
+right for "what exists" and wrong for "what is drawn".
 
 For a while this carried only the object table, on the belief — from a
 `KF2_DRAWCENSUS=2` reading of `func_80032588`'s `a2` — that "the renderer reads the

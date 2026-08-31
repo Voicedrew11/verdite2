@@ -40,9 +40,10 @@ namespace Kf2;
 ///   `KF2_DRAWCENSUS=2` reading of `func_80032588`'s `a2` caught
 ///   (`0x80177714 + slot*0x44 + 0x14`) -- but only because the scene it measured
 ///   had props and no creatures near.
-/// * **The entity table -- `0x8016C544`, 200 slots of `0x7C`**, free when the byte
-///   at `+0x0` is `0xFF`, position a `VECTOR` at `+0x2C` and a three-`s16`
-///   rotation at `+0x40`. **Creatures/enemies.**
+/// * **The entity table -- `0x8016C544`, 200 slots of `0x7C`**, drawn when the
+///   byte at `+0x9` is `1`, position a `VECTOR` at `+0x2C` and a three-`s16`
+///   rotation at `+0x40`. **Creatures/enemies.** (`+0x0 != 0xFF` is stage 4's
+///   liveness test, not the renderer's -- see <see cref="TableSpec"/>.)
 ///
 /// **The object table's rotation was missed at first, and a door closing is what
 /// found it.** This comment used to say the object table had no rotation at all,
@@ -112,13 +113,25 @@ public static class ObjectSmoothing
     /// "the animation runs at a low frame rate" before anyone went and read
     /// `func_800331B4` to the end. A new table is a row here now.
     ///
-    /// `FreeOff`/`FreeWidth`/`FreeValue` are **the renderer's own emptiness test**,
-    /// not the owning stage's. The object table has two different ones -- stage 2
-    /// steps a slot when the byte at `+0x4` is not `0xFF`, the renderer draws it
-    /// when the `u16` at `+0x6` is not `0xFF` -- and using stage 2's here silently
-    /// dropped every slot that is drawn but not stepped by it. What is being
-    /// interpolated is what is *drawn*, so the drawing test is the right one; a
-    /// slot carried but not drawn costs a write and a restore and nothing else.
+    /// `TestOff`/`TestWidth`/`TestValue`/`DrawnWhenEqual` are **the renderer's own
+    /// test**, not the owning stage's, and they are a *drawn* test rather than an
+    /// emptiness one because two of the four tables are not written the same way
+    /// round. The object table has two different tests -- stage 2 steps a slot when
+    /// the byte at `+0x4` is not `0xFF`, the renderer draws it when the `u16` at
+    /// `+0x6` is not `0xFF` -- and using stage 2's here silently dropped every slot
+    /// that is drawn but not stepped by it. The entity table was the same mistake
+    /// with the polarity reversed: `u8[+0x0] != 0xFF` is stage 4's and
+    /// `AgentServer`'s liveness test, while the renderer's first loop skips a
+    /// record unless `u8[+0x9] == 1` (`S0 = base + 3`, `ReadU8(S0 + 6)` compared
+    /// against `S4 = 1`, stride `0x7C`), so every creature in the state
+    /// `u8[+0x0] == 0xFF && u8[+0x9] == 1` was drawn and never carried -- the
+    /// original "enemies animate at a visibly lower framerate" report, surviving on
+    /// whichever creatures happen to sit in it.
+    ///
+    /// What is being interpolated is what is *drawn*, so the drawing test is the
+    /// right one; a slot carried but not drawn costs a write and a restore and
+    /// nothing else, while a slot drawn but not carried is the bug this patch
+    /// exists to fix.
     ///
     /// `RotOff` is -1 for a table the renderer hands a zeroed rotation triple.
     ///
@@ -132,8 +145,20 @@ public static class ObjectSmoothing
     /// </summary>
     sealed record TableSpec(
         string Label, string Noun, uint Base, int Stride, int Count,
-        int FreeOff, int FreeWidth, int FreeValue, int PosOff, int RotOff,
-        bool Fast = false);
+        int TestOff, int TestWidth, int TestValue, int PosOff, int RotOff,
+        bool Fast = false, bool DrawnWhenEqual = false)
+    {
+        /// <summary>Does stage 13 draw the record at <paramref name="slot"/>? The
+        /// one place the polarity is resolved, so a row cannot be read one way
+        /// here and the other way in the sampler.</summary>
+        public bool Drawn(IMemory m, uint slot)
+        {
+            uint v = TestWidth == 1
+                ? m.ReadU8((uint)(slot + TestOff))
+                : m.ReadU16((uint)(slot + TestOff));
+            return (v == (uint)TestValue) == DrawnWhenEqual;
+        }
+    }
 
     static readonly TableSpec[] Tables =
     [
@@ -145,8 +170,11 @@ public static class ObjectSmoothing
         // creature is drawn with a stepping root under a pose AnimSmoothing is
         // still interpolating -- which reads as its head snapping ahead of its
         // body. Nothing in here is recycled at the rate the projectile tables are.
-        new("entities", "creature", 0x8016C544, 0x7C, 0xC8, 0x0, 1, 0xFF, 0x2C, 0x40,
-            Fast: true),
+        // Drawn when u8[+0x9] == 1, which is the renderer's test and not the
+        // u8[+0x0] != 0xFF that stage 4 and AgentServer use; see the TableSpec
+        // comment.
+        new("entities", "creature", 0x8016C544, 0x7C, 0xC8, 0x9, 1, 0x1, 0x2C, 0x40,
+            Fast: true, DrawnWhenEqual: true),
 
         // Static props, doors and sprites -- the table stage 2 steps. Note the free
         // test is +0x6 and not the +0x4 that stage 2 and AgentServer use; see the
@@ -183,6 +211,16 @@ public static class ObjectSmoothing
         /// one. Motion is assumed to continue; a cliff is not.</summary>
         public bool[] Gliding = [];
 
+        /// <summary>Slots that read *not drawn* in the previous sample. A slot
+        /// free in either sample is not live -- the rule <see cref="Sample"/>
+        /// states -- and only this remembers the "either": when a slot reads free
+        /// its <c>Cur</c> is left holding the dead tenant, so the very next sample
+        /// finds it occupied with <c>Prev = Cur =</c> that dead position and would
+        /// otherwise walk the new tenant in from it. Reached by the effects table
+        /// on every projectile that dies and respawns a tick apart, where only the
+        /// placement guard was catching it.</summary>
+        public bool[] WasFree = [];
+
         /// <summary>Slots whose position moved at all on the last tick, carried
         /// or refused. <see cref="Guard.Continuous"/> raises the cap on this
         /// rather than on <see cref="Gliding"/>, which is what lets a slot that
@@ -210,6 +248,7 @@ public static class ObjectSmoothing
             Wrote = new int[s.Count],
             Live = new bool[s.Count], Touched = new bool[s.Count],
             Gliding = new bool[s.Count], MovedLast = new bool[s.Count],
+            WasFree = new bool[s.Count],
             Carry = new bool[s.Count],
         };
 
@@ -398,6 +437,13 @@ public static class ObjectSmoothing
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
     static long _frames;
+
+    /// <summary>Frames in the window on which anything at all was carried, which is
+    /// <see cref="_fracSum"/>'s denominator. Not the sum of the tables'
+    /// <c>CarriedFrames</c>: that counts a frame once per table that carried on it,
+    /// so a scene with creatures and props moving together halved the reported mean
+    /// phase and read as the phase being wrong rather than the report.</summary>
+    static long _fracFrames;
     static double _fracSum;
 
     static readonly ModInfo _self = new()
@@ -475,7 +521,15 @@ public static class ObjectSmoothing
     /// being a setting: the difference between the three is a picture, and the
     /// only way to compare pictures is to swap between them while looking at one.
     /// The per-slot hysteresis is dropped so the new rule starts from a clean
-    /// state rather than inheriting decisions the old one made.</summary>
+    /// state rather than inheriting decisions the old one made.
+    ///
+    /// <c>Carry</c> is deliberately **not** cleared with it. It is not hysteresis
+    /// but the tick's decision, already taken and being read by the rest of that
+    /// tick's frames; clearing it mid-tick drops every carried slot to
+    /// <c>posLive = false</c> for the frames that remain, so anything moving and
+    /// not also turning snaps forward to <c>Cur</c> the instant the combo is
+    /// touched. The next tick frame rewrites it under the new rule, which is what
+    /// the page's "takes effect on the next tick" already promises.</summary>
     public static void SetPlacement(Guard g)
     {
         if (Placement == g) return;
@@ -484,7 +538,6 @@ public static class ObjectSmoothing
         {
             Array.Clear(t.Gliding);
             Array.Clear(t.MovedLast);
-            Array.Clear(t.Carry);
         }
     }
 
@@ -575,7 +628,23 @@ public static class ObjectSmoothing
 
                 bool posMoved = dx != 0 || dy != 0 || dz != 0;
                 bool rotMoved = rdx != 0 || rdy != 0 || rdz != 0;
-                if (!posMoved && !rotMoved) continue;
+                if (!posMoved && !rotMoved)
+                {
+                    // Nothing to carry -- but the hysteresis below is never reached
+                    // on this slot, so it has to be cleared here or it survives the
+                    // stand-still. A creature that walked, idled for a few ticks and
+                    // is then teleported would otherwise be judged on the flags its
+                    // walk left behind: Continuous reads MovedLast, grants
+                    // RaisedUnits * GlidingFactor, and lerps the placement across the
+                    // room -- the "sliding in on spawn" failure, from the default.
+                    if (FramePacing.TickedThisFrame)
+                    {
+                        t.Gliding[i] = false;
+                        t.MovedLast[i] = false;
+                        t.Carry[i] = false;
+                    }
+                    continue;
+                }
 
                 // The placement guard is the position's alone. An angle cannot be
                 // "placed too far" -- DeltaAngle already takes the short way round, so
@@ -693,7 +762,7 @@ public static class ObjectSmoothing
             if (_probe && carried > 0) { t.CarriedFrames++; t.CarriedSlots += carried; }
         }
 
-        if (_probe && _applied) _fracSum += frac;
+        if (_probe && _applied) { _fracSum += frac; _fracFrames++; }
         if (_probe) Report();
     }
 
@@ -753,10 +822,7 @@ public static class ObjectSmoothing
             {
                 int b = i * 3;
                 uint slot = (uint)(s.Base + i * s.Stride);
-                uint free = (uint)(slot + s.FreeOff);
-                bool wasFree = s.FreeWidth == 1
-                    ? m.ReadU8(free) == (byte)s.FreeValue
-                    : m.ReadU16(free) == (ushort)s.FreeValue;
+                bool isFree = !s.Drawn(m, slot);
 
                 t.Prev[b] = t.Cur[b];
                 t.Prev[b + 1] = t.Cur[b + 1];
@@ -765,12 +831,13 @@ public static class ObjectSmoothing
                 t.PrevRot[b + 1] = t.CurRot[b + 1];
                 t.PrevRot[b + 2] = t.CurRot[b + 2];
 
-                if (wasFree)
+                if (isFree)
                 {
                     t.Live[i] = false;
                     t.Gliding[i] = false;
                     t.MovedLast[i] = false;
                     t.Carry[i] = false;
+                    t.WasFree[i] = true;
                     continue;
                 }
 
@@ -788,8 +855,11 @@ public static class ObjectSmoothing
                 }
 
                 // Live only once the slot has been occupied for two samples running,
-                // which is also what makes the first sample after an area load safe.
-                t.Live[i] = _primed;
+                // which is also what makes the first sample after an area load safe
+                // -- and what keeps a recycled slot from being walked in from its
+                // previous tenant's grave.
+                t.Live[i] = _primed && !t.WasFree[i];
+                t.WasFree[i] = false;
             }
         }
 
@@ -842,12 +912,14 @@ public static class ObjectSmoothing
                                   (t.Teleports > 0 ? $", {t.Teleports} placement(s) left alone" : "") +
                                   (t.Mismatches > 0 ? $", {t.Mismatches} LEAKED" : ""));
             }
-            Console.WriteLine($"[KF2] smoothing: mean phase {_fracSum / anyCarried:0.00} tick " +
-                              $"over {_frames} frame(s)");
+            if (_fracFrames > 0)
+                Console.WriteLine($"[KF2] smoothing: mean phase {_fracSum / _fracFrames:0.00} tick " +
+                                  $"over {_fracFrames}/{_frames} frame(s)");
         }
 
         _frames = 0;
         _fracSum = 0.0;
+        _fracFrames = 0;
         foreach (var t in _state) t.ResetWindow();
     }
 }

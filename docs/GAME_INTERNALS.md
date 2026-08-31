@@ -468,12 +468,12 @@ origin and Euler are `ObjectSmoothing`.
   animation runs at a low frame rate" reports were caused and then chased. The
   whole inventory, read off `func_800331B4` end to end:
 
-  | # | base | stride | count | free test | position | rotation |
+  | # | base | stride | count | drawn when | position | rotation |
   |---|---|---|---|---|---|---|
-  | 1 | `0x8016C544` | `0x7C` | 200 | byte `+0x0` == `0xFF` | `+0x2C` | `+0x40` |
-  | 2 | `0x80177714` | `0x44` | 396 | **u16 `+0x6` == `0xFF`** | `+0x14` | `+0x24` |
-  | 3 | `0x8019CC6C` | `0x48` | 128 | byte `+0x0` == `0xFF` | `+0x14` | `+0x24` |
-  | 4 | `0x80195174` | `0x18` | 128 | u16 `+0x0` == `0xFFFF` | `+0x8` | none — zeroed |
+  | 1 | `0x8016C544` | `0x7C` | 200 | **byte `+0x9` == `1`** | `+0x2C` | `+0x40` |
+  | 2 | `0x80177714` | `0x44` | 396 | **u16 `+0x6` != `0xFF`** | `+0x14` | `+0x24` |
+  | 3 | `0x8019CC6C` | `0x48` | 128 | byte `+0x0` != `0xFF` | `+0x14` | `+0x24` |
+  | 4 | `0x80195174` | `0x18` | 128 | u16 `+0x0` != `0xFFFF` | `+0x8` | none — zeroed |
 
   Every rotation lane is three `s16` with the yaw (`+2`) biased by `0x800`, the
   same convention throughout. Table 3 is **stage 5's** table, the one FramePacing
@@ -498,16 +498,24 @@ origin and Euler are `ObjectSmoothing`.
   a walk the world did not tick on; see "The flames run at the render rate" in
   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
-  **The object table has two different emptiness tests and they are not
-  interchangeable.** Stage 2 steps a slot when the byte at `+0x4` is not `0xFF`;
-  the renderer draws it when the `u16` at `+0x6` — the definition index — is not
-  `0xFF`. A patch that wants to interpolate *what is drawn* must use the second,
-  and `patches/ObjectSmoothing.cs` used the first, silently dropping any slot that
-  is drawn but not stepped by stage 2.
+  **Two of the four tables have a second, different emptiness test, and they are
+  not interchangeable.** Stage 2 steps an object slot when the byte at `+0x4` is
+  not `0xFF`; the renderer draws it when the `u16` at `+0x6` — the definition
+  index — is not `0xFF`. Stage 4 and `patches/AgentServer.cs` treat an entity slot
+  as live when the byte at `+0x0` is not `0xFF`; the renderer's first loop skips
+  the record unless the byte at `+0x9` is `1` (`S0 = base + 3`, then
+  `ReadU8(S0 + 6)` against `S4 = 1`). A patch that wants to interpolate *what is
+  drawn* must use the renderer's, and `patches/ObjectSmoothing.cs` used the owning
+  stage's for both — dropping any object drawn but not stepped by stage 2, and any
+  creature in the state `+0x0 == 0xFF && +0x9 == 1`, which is the "enemies animate
+  at a visibly lower framerate" report surviving on whichever creatures sat in it.
+  Note the two are opposite ways round: the object and effect tables are written
+  as *free when equal*, the entity table as *drawn when equal*, which is why
+  `TableSpec` carries the polarity rather than assuming it.
 
 - **The first two loops, in the detail they were originally recorded:** `func_800331B4`
-  loops the **entity table** `0x8016C544` (200 records, `0x7C` stride, free at
-  `+0x0`) first — **creatures/enemies**, position at `rec+0x2C` and a three-`s16`
+  loops the **entity table** `0x8016C544` (200 records, `0x7C` stride, drawn when
+  `u8[+0x9] == 1`) first — **creatures/enemies**, position at `rec+0x2C` and a three-`s16`
   rotation at `rec+0x40` (yaw biased by `0x800`) passed as `a3` — then loops the
   **object table** `0x80177714` (`0x44` stride) for static props and sprites. A
   `KF2_DRAWCENSUS=2` reading of `a2` reported only `0x80177714 + slot*0x44 + 0x14`,

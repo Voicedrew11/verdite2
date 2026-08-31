@@ -235,12 +235,22 @@ most of the frame is architecture that never moves, so a moving camera smooths i
 for free, but anything with a position of its own still arrives in tick-sized
 steps — and against a world sliding smoothly past, that step is *more* obvious
 than if nothing were smoothed. Same shape, one pre/post pair around **stage 13**
-(`func_800342D8`), walking the **object table at `0x80177714`** (396 slots of
-`0x44`, `VECTOR` at `+0x14`, free when the byte at `+0x4` is `0xFF` — the same
-constants `AgentServer` reports `nearby` from). It is that table and **not** the
-200-record entity table at `0x8016C544`, which is AI state stage 4 copies *from*
-it; measured by reading `func_80032588`'s arguments, which are
-`0x80177714 + slot*0x44 + 0x14` for slot numbers `nearby` agrees with. It
+(`func_800342D8`), walking **all four tables the renderer draws from** — the
+object table `0x80177714` (396 slots of `0x44`, `VECTOR` at `+0x14`), the entity
+table `0x8016C544` (200 of `0x7C`, `+0x2C`), stage 5's effects table `0x8019CC6C`
+(128 of `0x48`, `+0x14`) and the billboards `0x80195174`. It was first written
+against the object table alone, on a `func_80032588` argument census taken in a
+scene with props and no creatures near; the entity table is AI state stage 4
+copies *from* the object record **and** what the first loop draws creatures from,
+rotation included. **Each row's liveness test is the renderer's own, not the
+owning stage's, and the two are not even the same way round**: an object is drawn
+when `u16[+0x6] != 0xFF` (stage 2 steps it on `u8[+0x4] != 0xFF`) and a creature
+when `u8[+0x9] == 1` (stage 4 and `AgentServer` use `u8[+0x0] != 0xFF`), so
+`TableSpec` carries the polarity. Using the owning stage's for the entity row
+carried records the renderer never draws — measured, a mean carried offset of
+2600 u with 11,400-unit tick steps, against 10-60 u and ≤87 u once the row reads
+what is drawn — and each of those refusals published a `_held` address
+`AnimSmoothing` then obeyed. It
 **interpolates — `lerp(prev, cur, phase)`, never past a position the game
 produced — on the same clock and by the same fraction as the view.** It
 interpolated, was switched to extrapolating, and interpolates again: interpolating
