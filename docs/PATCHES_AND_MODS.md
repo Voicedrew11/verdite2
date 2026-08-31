@@ -561,17 +561,22 @@ deliberately removed**.
   `_boundaryNeedsVSync` clears when none could be hooked, so every `DrawOTag` is
   charged as a frame. This game draws one ordering table per frame, so that is
   simply right here; a frame carrying two would be paced twice, which is the
-  failure worth having.
+  failure worth having. It is **recomputed at the end of every pass** rather than
+  only ever cleared: `Attach` is built to be retried, so a first pass that got
+  `DrawOTag` and no thunk and a second that got all three used to stay permanently
+  in the degraded mode while the summary line reported `3/3 VSync`, with nothing
+  pointing at it.
 * **The attach says what landed, and is retried.** `Event.Dispatch` wraps every
   listener in a `try`/`catch` that writes one line to stderr, and
   `HookManager.Commit`'s `foreach` used to abort on the first detour that would not
   install and take every function after it — so a partial attach was silent *and*
-  permanent, the latch already set. `Attach()` now claims only what it hooked,
-  returns whether it is complete, and is retried on the next overlay load up to
-  `MaxAttachTries`; `patches/recompone/0027` commits each function on its own so
-  one failure cannot take the rest. The pacing line spells the boundary out as a
-  pair rather than folding it into a total, because reading `15 hook(s)` and
-  counting on your fingers is how this went unnoticed:
+  permanent, the latch already set. `Attach()` now claims only what it **installed**
+  (see "A registration is not a hook" below), returns whether it is complete, and is
+  retried on the next overlay load up to `HookAttach.MaxTries`;
+  `patches/recompone/0027` commits each function on its own so one failure cannot
+  take the rest. The pacing line spells the boundary out as a pair rather than
+  folding it into a total, because reading `15 hook(s)` and counting on your
+  fingers is how this went unnoticed:
 
   ```
   [KF2] pacing: 165 fps, 15 hook(s), boundary 3/3 DrawOTag + 3/3 VSync,
@@ -585,6 +590,109 @@ issues boundaries back to back with almost no work between them, and its own exi
 condition is `TickedThisFrame`, so a spurious tick both advanced the world and
 ended the fill early. Only the genuine first sample restarts now; no elapsed time
 means no credit and no tick.
+
+### A registration is not a hook, and seven patches latched before doing the work
+
+The bullet above was written for `FramePacing` and was **not true even there**, for
+a reason that then turned out to apply to every patch in `patches/`. Two separate
+mistakes, both of which report success:
+
+**The latch was set before the work.** Every patch here attaches from an
+`OverlayLoadedEvent` listener, because `SymbolRegistry` is only readable once the
+dispatcher's overlay tables are registered. Seven of them — `FrameSmoothing`,
+`ObjectSmoothing`, `AnimSmoothing`, `MenuPacing`, `LoadPacing`, `LoopPacing`,
+`SpriteAnim` — wrote `attached = true` and *then* called `Attach()`. Anything
+thrown inside it — a renamed method behind a null-forgiving `GetMethod(...)!`, a
+`SymbolRegistry` failure, a detour MonoMod will not install — is swallowed by
+`Event.Dispatch` into one stderr line, so the patch was left permanently
+half-installed, never retried, and its summary line never printed either way to say
+so. `FramePacing` already had the fix; the other seven now share it.
+
+**Counting `Add*` return values counts what was *queued*.** `HookManager.AddPre` /
+`AddPost` only append a delegate to a dictionary and return `true` unless the
+*signature* is wrong. The detour is created later, in `HookManager.Commit()`, which
+since `0027` catches per function and prints `[Mods] could not hook …` rather than
+throwing — which is exactly what makes a partial install possible. So the port could
+print `boundary 3/3 DrawOTag + 3/3 VSync` while no boundary existed, latch itself
+done, and never try again — the uncapped-and-8×-speed failure this whole subsection
+is about, reported as a healthy session. `patches/recompone/0028` adds
+`HookManager.IsCommitted`, and every summary line here is now read back from it
+after the commit.
+
+**A pre and a post on one function share one detour**, so those two land or fail
+together and the read-back cannot separate them; what it is for is a patch whose
+sites are *different functions* — `AnimSmoothing`'s five, `FramePacing`'s
+per-overlay roles — and every claim printed to the console.
+
+`patches/HookAttach.cs` holds both halves: `OnOverlayLoad(label, attach, hint)` is
+the retry latch set from the pass's own success and capped at `MaxTries` (3 — a
+miss is nearly always a miss for good, since every overlay is registered before the
+first load, so this only has to cover a transient), and `Installed(target)` is the
+read-back. A pass must therefore be safe to re-enter and must add only what it is
+still missing, which is why each patch keeps a set or a flag per role.
+
+Measured: with `KF2_FPS_GATE=80037C0C+DEADBEEF`, `pacing` reports `1/2 stage(s)`,
+retries on each of the next two overlay loads without re-adding the role it already
+has, and then says `giving up on the rest; what is hooked is hooked. See "Any frame
+rate" in docs/PATCHES_AND_MODS.md.` With nothing broken, all eleven patches report
+fully attached and `walk` is unchanged — 2928 units/2 s at 20 fps and 2821 at 144.
+
+#### Half a pair cannot be re-enabled from the settings pane
+
+The read-back also closes a hole the safety disables had. `FrameSmoothing`,
+`ObjectSmoothing` and `SpriteAnim` each set `Enabled = false` when only half their
+pair attached — *"half a pair would leave interpolated positions in the table for
+the AI to find, which is the one outcome this must never have"* — but never recorded
+the decision, and `FrameSmoothingPage` calls `SetEnabled(true)` straight from the
+Video checkbox. One click re-enabled a pre with no post, which writes lerped
+positions into the entity, object and effects tables every frame with nothing to put
+them back, so the next tick's AI, collision and any save read interpolated
+coordinates. Each now latches `_paired` in `Attach` and `SetEnabled` is
+`Enabled = on && _paired`, so the disable cannot be talked out of.
+
+`AnimSmoothing` had no such disable at all — its `Pair` return was only ever counted
+into one `Console.WriteLine` — and it is the patch where a half pair is worst,
+because four of its five sites keep state a post balances: `AfterClock` without
+`BeforeClock` writes the carried weight through a pointer left over from an earlier
+frame's stack, `BeforeSubmit` without `AfterSubmit` climbs `_depth` past 1 so every
+later submit is rejected, `BeforeArm` without `AfterArm` latches `_inArm` and keys
+the HUD builder's `MoApply` in under the arm's id. It is now all-or-nothing on all
+five, and reports which site failed.
+
+`SetEnabled` also re-primes. While off, `Before` returns before sampling, so
+`Prev`/`Cur`/`Live`/`Carry` freeze at whatever they held and only an overlay load
+clears them — a player who unticks the box, plays a minute in the same area and
+re-ticks it got one frame in which every object was drawn where it stood a minute
+ago.
+
+#### `LoopPacing`'s degradation was the opposite of what it claimed
+
+Its missing-marker diagnostic said losing the marker means *"every frame reads as
+the main loop's … so this degrades to 'no fix'"*. It is the other way round:
+`MainLoopStage` is what *sets* `_mainLoopSeen`, so with it unhooked the flag is
+permanently false, `FrameMinMs` reads `mainLoop == false` on **every** frame, and
+the class caps the whole game at `InterfaceHz` while `if (mainLoop) Reprime()` never
+fires — which latches `_carriable` and starts lerping stage 13's view in the main
+loop. Anyone chasing an unexplained 60 fps ceiling would have been steered away from
+the cause. `FrameMinMs` now reads `_mainLoopSeen || !_markerHooked`, so an unhooked
+marker really is the stand-down the line claimed, and the message says so.
+
+`MenuPacing` and `LoadPacing` had the same shape as `return`s rather than as
+inverted comments. `MenuPacing`'s repeat gate and blink stepper are separate
+findings on separate functions, and the blink was handled independently in one
+direction but not the other — a resolve miss on the repeat gate returned before the
+blink pair was ever registered. `LoadPacing`'s `VSync`-thunk miss returned *after*
+up to four hooks were registered on the two disc waits, leaving them uncommitted in
+`HookManager`'s dictionary — installed only if some other patch happened to call
+`Commit` later in the same event — and skipping the one line the class prints, in
+the case where it most needs to say what it did. Both now attach each role
+independently, always reach `Commit`, and name each role in the summary:
+
+```
+[KF2] menu pacing: on, repeat every 100 ms, blink capped at 60 Hz
+[KF2] load pacing: on, 2/2 disc wait(s), VSync held to 60 Hz, counting steps
+[KF2] anim: timeline, hooked 5 of 5 site(s) (clip clock, arm)
+```
 
 ### Three things held the port at 30, and only one of them was the game's
 

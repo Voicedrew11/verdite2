@@ -242,16 +242,20 @@ public static class MenuPacing
     /// </summary>
     public static void Install()
     {
-        bool attached = false;
-        Event.AddListener<OverlayLoadedEvent>(_ =>
-        {
-            if (attached) return;
-            attached = true;
-            Attach();
-        });
+        HookAttach.OnOverlayLoad("menu pacing", Attach);
     }
 
-    static void Attach()
+    // What is hooked already, so a retry after a partial attach adds only what is
+    // missing rather than a second copy of it.
+    static bool _repeatHooked, _vsyncHooked, _blinkHooked;
+
+    /// <summary>
+    /// Attach the two halves *independently*. They are separate findings on
+    /// separate functions -- the repeat gate and the frame head -- so a resolve
+    /// miss on one has no business costing the other, which a plain `return` used
+    /// to do in one direction and not the other.
+    /// </summary>
+    static bool Attach()
     {
         SymbolRegistry.Build();
         var self = typeof(MenuPacing);
@@ -259,46 +263,62 @@ public static class MenuPacing
         var after = self.GetMethod(nameof(AfterRepeat), BindingFlags.Public | BindingFlags.Static)!;
         var vsync = self.GetMethod(nameof(BeforeVSync), BindingFlags.Public | BindingFlags.Static)!;
 
-        var gate = SymbolRegistry.Resolve("game", null, RepeatGate);
-        if (gate == null)
+        MethodInfo? gate = null, thunk = null, head = null;
+
+        if (!_repeatHooked)
         {
-            Console.Error.WriteLine($"[KF2] menu pacing: no game function at 0x{RepeatGate:X8} -- " +
-                                    "a held menu direction will keep repeating at the frame rate.");
-            return;
+            gate = SymbolRegistry.Resolve("game", null, RepeatGate);
+            if (gate == null)
+                Console.Error.WriteLine($"[KF2] menu pacing: no game function at 0x{RepeatGate:X8} -- " +
+                                        "a held menu direction will keep repeating at the frame rate.");
+            else
+            {
+                HookManager.AddPre(_self, gate, before);
+                HookManager.AddPost(_self, gate, after);
+            }
         }
 
-        var thunk = SymbolRegistry.Resolve("game", null, VSyncThunk);
-        if (thunk == null)
+        if (!_vsyncHooked)
         {
-            Console.Error.WriteLine($"[KF2] menu pacing: no VSync at game/0x{VSyncThunk:X8} -- " +
-                                    "nothing can be paced, so the repeat is left on the frame rate.");
-            return;
+            thunk = SymbolRegistry.Resolve("game", null, VSyncThunk);
+            if (thunk == null)
+                Console.Error.WriteLine($"[KF2] menu pacing: no VSync at game/0x{VSyncThunk:X8} -- " +
+                                        "the repeat is left on the frame rate. The blink is capped " +
+                                        "on the frame head and is unaffected.");
+            else HookManager.AddPre(_self, thunk, vsync);
         }
 
-        int n = 0;
-        if (HookManager.AddPre(_self, gate, before)) n++;
-        if (HookManager.AddPost(_self, gate, after)) n++;
-        if (HookManager.AddPre(_self, thunk, vsync)) n++;
-
-        // The blink is a separate finding on a separate function, so a missing
-        // frame head costs the blink and leaves the repeat working.
-        var head = SymbolRegistry.Resolve("game", null, BlinkStepper);
-        if (head == null)
-            Console.Error.WriteLine($"[KF2] menu pacing: no game function at 0x{BlinkStepper:X8} -- " +
-                                    "the cursor's blink will keep running at the render rate.");
-        else
+        if (!_blinkHooked)
         {
-            var blinkPre = self.GetMethod(nameof(BeforeFrameHead), BindingFlags.Public | BindingFlags.Static)!;
-            var blinkPost = self.GetMethod(nameof(AfterFrameHead), BindingFlags.Public | BindingFlags.Static)!;
-            if (HookManager.AddPre(_self, head, blinkPre)) n++;
-            if (HookManager.AddPost(_self, head, blinkPost)) n++;
+            head = SymbolRegistry.Resolve("game", null, BlinkStepper);
+            if (head == null)
+                Console.Error.WriteLine($"[KF2] menu pacing: no game function at 0x{BlinkStepper:X8} -- " +
+                                        "the cursor's blink will keep running at the render rate.");
+            else
+            {
+                var blinkPre = self.GetMethod(nameof(BeforeFrameHead), BindingFlags.Public | BindingFlags.Static)!;
+                var blinkPost = self.GetMethod(nameof(AfterFrameHead), BindingFlags.Public | BindingFlags.Static)!;
+                HookManager.AddPre(_self, head, blinkPre);
+                HookManager.AddPost(_self, head, blinkPost);
+            }
         }
 
         HookManager.Commit();
 
-        Console.WriteLine($"[KF2] menu pacing: {(Enabled ? "on" : "off")}, {n} hook(s), " +
-                          $"a held direction every {6.0 * VBlankMs:0.#} ms, " +
-                          $"the blink capped at {1000.0 / BlinkMs:0.#} Hz");
+        // Read the detours back rather than the Add* returns, which only say the
+        // delegate was queued.
+        _repeatHooked |= HookAttach.Installed(gate);
+        _vsyncHooked |= HookAttach.Installed(thunk);
+        _blinkHooked |= HookAttach.Installed(head);
+
+        // The repeat needs both its gate and the thunk it spins on; the blink
+        // needs only the frame head.
+        bool repeat = _repeatHooked && _vsyncHooked;
+        Console.WriteLine($"[KF2] menu pacing: {(Enabled ? "on" : "off")}, " +
+                          $"repeat {(repeat ? $"every {6.0 * VBlankMs:0.#} ms" : "NOT paced")}, " +
+                          $"blink {(_blinkHooked ? $"capped at {1000.0 / BlinkMs:0.#} Hz" : "NOT capped")}");
+
+        return repeat && _blinkHooked;
     }
 
     /// <summary>

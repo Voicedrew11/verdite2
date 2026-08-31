@@ -540,16 +540,19 @@ public static class AnimSmoothing
             _clockSeen = false;
         });
 
-        bool attached = false;
-        Event.AddListener<OverlayLoadedEvent>(_ =>
-        {
-            if (attached) return;
-            attached = true;
-            Attach();
-        });
+        HookAttach.OnOverlayLoad("anim", Attach);
     }
 
-    public static void SetEnabled(bool on) => Enabled = on;
+    /// <summary>Whether all five sites are installed. Unlike the sibling
+    /// smoothers this patch's sites are five *different* functions, so a commit
+    /// really can land one and drop another -- and four of the five keep state a
+    /// post balances, so a half pair is not a smaller effect but a different
+    /// bug: <see cref="AfterClock"/> without <see cref="BeforeClock"/> writes the
+    /// carried weight through a pointer left over from an earlier frame's
+    /// stack.</summary>
+    static bool _sited;
+
+    public static void SetEnabled(bool on) => Enabled = on && _sited;
 
     /// <summary>Switch modes at run time, for comparison by eye. The per-slot
     /// state means different things in each mode, so it is thrown away rather
@@ -561,21 +564,41 @@ public static class AnimSmoothing
         _slots.Clear();
     }
 
-    static void Attach()
+    static bool Attach()
     {
         SymbolRegistry.Build();
         var self = typeof(AnimSmoothing);
-        int n = 0;
-        n += Pre(self, Renderer, nameof(BeforeRenderer)) ? 1 : 0;
-        n += Pair(self, ModelSubmit, nameof(BeforeSubmit), nameof(AfterSubmit)) ? 1 : 0;
-        n += Pair(self, ClipClock, nameof(BeforeClock), nameof(AfterClock)) ? 1 : 0;
-        n += Pair(self, ArmDraw, nameof(BeforeArm), nameof(AfterArm)) ? 1 : 0;
-        n += Pair(self, MoApply, nameof(BeforeArmModel), nameof(AfterArmModel)) ? 1 : 0;
+        (string Name, MethodInfo? Target)[] sites =
+        [
+            ("frame",      Pre(self, Renderer, nameof(BeforeRenderer))),
+            ("submit",     Pair(self, ModelSubmit, nameof(BeforeSubmit), nameof(AfterSubmit))),
+            ("clip clock", Pair(self, ClipClock, nameof(BeforeClock), nameof(AfterClock))),
+            ("arm",        Pair(self, ArmDraw, nameof(BeforeArm), nameof(AfterArm))),
+            ("arm model",  Pair(self, MoApply, nameof(BeforeArmModel), nameof(AfterArmModel))),
+        ];
         HookManager.Commit();
+
+        // Judged after the commit, and all-or-nothing. Every sibling smoother
+        // disables itself on a half attach; this one only ever counted, which left
+        // the dangerous partial states running.
+        int n = 0;
+        foreach (var (name, target) in sites)
+            if (HookAttach.Installed(target)) n++;
+            else Console.Error.WriteLine($"[KF2] anim: the {name} site did not attach.");
+
+        _sited = n == sites.Length;
+        if (!_sited)
+        {
+            Enabled = false;
+            Console.Error.WriteLine($"[KF2] anim: {n} of {sites.Length} site(s) attached; pose " +
+                                    "interpolation is disabled rather than left half applied.");
+            return false;
+        }
 
         Console.WriteLine($"[KF2] anim: {(Enabled ? Carry.ToString().ToLowerInvariant() : "off")}" +
                           (_probe ? ", probe" : "") +
-                          $", hooked {n} of 5 site(s) (clip clock, arm)");
+                          $", hooked {n} of {sites.Length} site(s) (clip clock, arm)");
+        return true;
     }
 
     static MethodInfo? Target(uint addr)
@@ -586,18 +609,20 @@ public static class AnimSmoothing
         return target;
     }
 
-    static bool Pre(Type self, uint addr, string pre)
+    /// <summary>Register a pre, and hand back the function it was registered on so
+    /// the caller can ask after the commit whether a detour actually landed.</summary>
+    static MethodInfo? Pre(Type self, uint addr, string pre)
     {
         var target = Target(addr);
-        if (target == null) return false;
+        if (target == null) return null;
         var before = self.GetMethod(pre, BindingFlags.Public | BindingFlags.Static)!;
-        return HookManager.AddPre(_self, target, before);
+        return HookManager.AddPre(_self, target, before) ? target : null;
     }
 
-    static bool Pair(Type self, uint addr, string pre, string post)
+    static MethodInfo? Pair(Type self, uint addr, string pre, string post)
     {
         var target = Target(addr);
-        if (target == null) return false;
+        if (target == null) return null;
         var before = self.GetMethod(pre, BindingFlags.Public | BindingFlags.Static)!;
         var after = self.GetMethod(post, BindingFlags.Public | BindingFlags.Static)!;
 
@@ -605,7 +630,7 @@ public static class AnimSmoothing
         // unattached and unreported if the post ever failed.
         bool posted = HookManager.AddPost(_self, target, after);
         bool pred = HookManager.AddPre(_self, target, before);
-        return posted && pred;
+        return posted && pred ? target : null;
     }
 
     /// <summary>

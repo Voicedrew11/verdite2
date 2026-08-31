@@ -182,27 +182,31 @@ public static class FrameSmoothing
         // start priming again rather than lerp across the discontinuity.
         Event.AddListener<OverlayLoadedEvent>(_ => { _primed = false; _carriable = false; });
 
-        bool attached = false;
-        Event.AddListener<OverlayLoadedEvent>(_ =>
-        {
-            if (attached) return;
-            attached = true;
-            Attach();
-        });
+        HookAttach.OnOverlayLoad("smoothing", Attach);
     }
 
-    public static void SetEnabled(bool on) => Enabled = on;
+    /// <summary>Whether the pair is installed. The checkbox cannot talk
+    /// <see cref="Attach"/>'s safety disable back out again: with a pre and no
+    /// post nothing runs <see cref="After"/>, so the lerped camera words stay in
+    /// game memory for the next tick's collision query and for the save.</summary>
+    static bool _paired;
+
+    public static void SetEnabled(bool on) => Enabled = on && _paired;
     public static void SetPosition(bool on) => Position = on;
 
-    static void Attach()
+    static bool Attach()
     {
         SymbolRegistry.Build();
         var target = SymbolRegistry.Resolve("game", null, CameraCopy);
         if (target == null)
         {
+            // Nothing is installed, so nothing runs -- but the checkbox and the
+            // summary line would both go on claiming a feature that is not there,
+            // which is the failure mode the rest of this file works to make loud.
+            Enabled = false;
             Console.Error.WriteLine($"[KF2] smoothing: no game function at 0x{CameraCopy:X8}; " +
                                     "the view will step at the logic rate above it.");
-            return;
+            return false;
         }
 
         var self = typeof(FrameSmoothing);
@@ -218,14 +222,23 @@ public static class FrameSmoothing
         // the time this runs. Commit is idempotent; every other patch calls it too.
         HookManager.Commit();
 
-        if (n < 2)
-            Console.Error.WriteLine("[KF2] smoothing: only half the pair attached; " +
-                                    "the interpolation is disabled rather than left applied.");
-        else
-            Console.WriteLine($"[KF2] smoothing: {(Enabled ? "on" : "off")}" +
-                              $"{(Position ? ", carrying position" : "")}, hooked stage 8 at 0x{CameraCopy:X8}");
+        // Both halves *and* the detour: an Add* only queues, and n == 2 with a
+        // commit that refused the function is a patch that claims to be smoothing
+        // and never runs.
+        _paired = n == 2 && HookAttach.Installed(target);
 
-        if (n < 2) Enabled = false;
+        if (!_paired)
+        {
+            Enabled = false;
+            Console.Error.WriteLine("[KF2] smoothing: the pair did not attach" +
+                                    (n == 2 ? " (queued, but the detour did not install)" : " (only half of it)") +
+                                    "; the interpolation is disabled rather than left applied.");
+            return false;
+        }
+
+        Console.WriteLine($"[KF2] smoothing: {(Enabled ? "on" : "off")}" +
+                          $"{(Position ? ", carrying position" : "")}, hooked stage 8 at 0x{CameraCopy:X8}");
+        return true;
     }
 
     /// <summary>

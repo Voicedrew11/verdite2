@@ -184,26 +184,26 @@ public static class SpriteAnim
     /// </summary>
     public static void Install()
     {
-        bool attached = false;
-        Event.AddListener<OverlayLoadedEvent>(_ =>
-        {
-            if (attached) return;
-            attached = true;
-            Attach();
-        });
+        HookAttach.OnOverlayLoad("sprite anim", Attach);
     }
 
-    public static void SetEnabled(bool on) => Enabled = on;
+    /// <summary>Whether the pair is installed, so the switch cannot undo
+    /// <see cref="Attach"/>'s safety disable: a post with no pre writes whatever
+    /// the saved array happens to hold into the game's own table.</summary>
+    static bool _paired;
 
-    static void Attach()
+    public static void SetEnabled(bool on) => Enabled = on && _paired;
+
+    static bool Attach()
     {
         SymbolRegistry.Build();
         var target = SymbolRegistry.Resolve("game", null, Walk);
         if (target == null)
         {
+            Enabled = false;
             Console.Error.WriteLine($"[KF2] sprite anim: no game function at 0x{Walk:X8} -- " +
                                     "billboard sprites stay on the render rate.");
-            return;
+            return false;
         }
 
         var self = typeof(SpriteAnim);
@@ -217,17 +217,21 @@ public static class SpriteAnim
 
         // Half a pair is worse than neither: a pre that saves and no post to put
         // anything back is a pure cost, and a post with no pre would write whatever
-        // the array happened to hold into the game's table.
-        if (n < 2)
+        // the array happened to hold into the game's table. A pair that was only
+        // queued is a hold that never happens, reported as one that does.
+        _paired = n == 2 && HookAttach.Installed(target);
+        if (!_paired)
         {
             Enabled = false;
-            Console.Error.WriteLine("[KF2] sprite anim: only half the pair attached; " +
-                                    "the hold is disabled rather than left applied.");
-            return;
+            Console.Error.WriteLine("[KF2] sprite anim: the pair did not attach" +
+                                    (n == 2 ? " (queued, but the detour did not install)" : " (only half of it)") +
+                                    "; the hold is disabled rather than left applied.");
+            return false;
         }
 
         Console.WriteLine($"[KF2] sprite anim: {(Enabled ? "on" : "off")}, " +
                           $"hooked the world walk at 0x{Walk:X8}");
+        return true;
     }
 
     /// <summary>

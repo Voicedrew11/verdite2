@@ -447,19 +447,28 @@ public static class ObjectSmoothing
         // the fdat area modules, which is exactly the set that invalidates it.
         Event.AddListener<OverlayLoadedEvent>(_ => _primed = false);
 
-        bool attached = false;
-        Event.AddListener<OverlayLoadedEvent>(_ =>
-        {
-            if (attached) return;
-            attached = true;
-            Attach();
-        });
+        HookAttach.OnOverlayLoad("objects", Attach);
     }
+
+    /// <summary>Whether the pair is installed. <see cref="Attach"/> disables
+    /// itself without one, and the Video checkbox must not be able to undo that:
+    /// with a pre and no post, <see cref="Before"/> writes lerped positions into
+    /// the tables every frame and nothing puts them back, so the next tick's AI,
+    /// collision and any save read interpolated coordinates.</summary>
+    static bool _paired;
 
     public static void SetEnabled(bool on)
     {
-        Enabled = on;
-        if (!on) _held.Clear();
+        Enabled = on && _paired;
+        if (!Enabled) _held.Clear();
+
+        // While off, Before returns before sampling, so Prev/Cur/Live/Carry freeze
+        // at whatever they held minutes ago and only an overlay load clears them.
+        // Re-priming costs two ticks of stepping; not re-priming costs one frame in
+        // which every object is drawn where it stood when the checkbox went off.
+        if (!Enabled) return;
+        _primed = false;
+        foreach (var t in _state) Array.Clear(t.Live);
     }
 
     /// <summary>Switch the placement rule mid-session, which is the point of it
@@ -479,15 +488,16 @@ public static class ObjectSmoothing
         }
     }
 
-    static void Attach()
+    static bool Attach()
     {
         SymbolRegistry.Build();
         var target = SymbolRegistry.Resolve("game", null, Renderer);
         if (target == null)
         {
+            Enabled = false;
             Console.Error.WriteLine($"[KF2] objects: no game function at 0x{Renderer:X8}; " +
                                     "objects will step at the logic rate above it.");
-            return;
+            return false;
         }
 
         var self = typeof(ObjectSmoothing);
@@ -500,18 +510,21 @@ public static class ObjectSmoothing
         HookManager.Commit();
 
         // Half a pair would leave interpolated positions in the table for the AI to
-        // find, which is the one outcome this must never have.
-        if (n < 2)
+        // find, which is the one outcome this must never have -- and a pair that
+        // was only ever queued is the same outcome reported as a success.
+        _paired = n == 2 && HookAttach.Installed(target);
+        if (!_paired)
         {
             Enabled = false;
-            Console.Error.WriteLine("[KF2] objects: only half the pair attached; " +
-                                    "the interpolation is disabled rather than left applied.");
+            Console.Error.WriteLine("[KF2] objects: the pair did not attach" +
+                                    (n == 2 ? " (queued, but the detour did not install)" : " (only half of it)") +
+                                    "; the interpolation is disabled rather than left applied.");
+            return false;
         }
-        else
-        {
-            Console.WriteLine($"[KF2] objects: {(Enabled ? "on" : "off")}, " +
-                              $"hooked stage 13 at 0x{Renderer:X8}");
-        }
+
+        Console.WriteLine($"[KF2] objects: {(Enabled ? "on" : "off")}, " +
+                          $"hooked stage 13 at 0x{Renderer:X8}");
+        return true;
     }
 
     /// <summary>

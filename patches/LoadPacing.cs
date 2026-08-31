@@ -160,13 +160,7 @@ public static class LoadPacing
     /// </summary>
     public static void Install()
     {
-        bool attached = false;
-        Event.AddListener<OverlayLoadedEvent>(_ =>
-        {
-            if (attached) return;
-            attached = true;
-            Attach();
-        });
+        HookAttach.OnOverlayLoad("load pacing", Attach);
 
         // The probe reports a load once the load has ended, and a load ends by the
         // calls stopping rather than by anything announcing it -- so the report is
@@ -179,16 +173,17 @@ public static class LoadPacing
         });
     }
 
-    static void Attach()
+    static bool Attach()
     {
         SymbolRegistry.Build();
         var self = typeof(LoadPacing);
         var before = self.GetMethod(nameof(BeforeWait), BindingFlags.Public | BindingFlags.Static)!;
         var after = self.GetMethod(nameof(AfterWait), BindingFlags.Public | BindingFlags.Static)!;
 
-        int n = 0;
+        List<(uint Addr, MethodInfo Fn)> waits = [];
         foreach (uint addr in new[] { DrainWait, SectorWait })
         {
+            if (_waitsHooked.Contains(addr)) continue;
             var fn = SymbolRegistry.Resolve("game", null, addr);
             if (fn == null)
             {
@@ -196,29 +191,64 @@ public static class LoadPacing
                                         "that disc wait stays on the host ceiling.");
                 continue;
             }
-            if (HookManager.AddPre(_self, fn, before)) n++;
-            if (HookManager.AddPost(_self, fn, after)) n++;
+            HookManager.AddPre(_self, fn, before);
+            HookManager.AddPost(_self, fn, after);
+            waits.Add((addr, fn));
         }
 
-        var thunk = SymbolRegistry.Resolve("game", null, VSyncThunk);
-        if (thunk == null)
+        // Not a `return`: by this point up to four hooks are already registered on
+        // the two disc waits, and bailing out left them sitting uncommitted in
+        // HookManager's dictionary -- installed only if some other patch happened
+        // to call Commit later in the same event -- and skipped the one line this
+        // class prints, in the one case where it most needs to say what it did.
+        MethodInfo? thunk = null;
+        if (!_vsyncHooked)
         {
-            Console.Error.WriteLine($"[KF2] load pacing: no VSync at game/0x{VSyncThunk:X8} -- " +
-                                    "nothing can be paced, so the figure stays on the render rate.");
-            return;
+            thunk = SymbolRegistry.Resolve("game", null, VSyncThunk);
+            if (thunk == null)
+                Console.Error.WriteLine($"[KF2] load pacing: no VSync at game/0x{VSyncThunk:X8} -- " +
+                                        "nothing can be paced, so the figure stays on the render rate.");
+            else
+                HookManager.AddPre(_self, thunk,
+                    self.GetMethod(nameof(BeforeVSync), BindingFlags.Public | BindingFlags.Static)!);
         }
-        if (HookManager.AddPre(_self, thunk,
-                self.GetMethod(nameof(BeforeVSync), BindingFlags.Public | BindingFlags.Static)!)) n++;
 
-        var animator = SymbolRegistry.Resolve("game", null, Animator);
-        if (animator != null && HookManager.AddPre(_self, animator,
-                self.GetMethod(nameof(CountStep), BindingFlags.Public | BindingFlags.Static)!)) n++;
+        MethodInfo? animator = null;
+        if (!_animatorHooked)
+        {
+            animator = SymbolRegistry.Resolve("game", null, Animator);
+            if (animator != null)
+                HookManager.AddPre(_self, animator,
+                    self.GetMethod(nameof(CountStep), BindingFlags.Public | BindingFlags.Static)!);
+        }
 
         HookManager.Commit();
 
-        Console.WriteLine($"[KF2] load pacing: {(Enabled ? "on" : "off")}, {n} hook(s), " +
-                          $"a disc wait's VSync held to {1000.0 / VBlankMs:0.#} Hz");
+        foreach (var (addr, fn) in waits)
+            if (HookAttach.Installed(fn)) _waitsHooked.Add(addr);
+            else Console.Error.WriteLine($"[KF2] load pacing: the disc wait at 0x{addr:X8} " +
+                                         "queued but did not install.");
+        _vsyncHooked |= HookAttach.Installed(thunk);
+        _animatorHooked |= HookAttach.Installed(animator);
+
+        // The window is the two waits; the pacing inside it is the thunk. Either
+        // one missing means a load is not paced, so both are named.
+        Console.WriteLine($"[KF2] load pacing: {(Enabled ? "on" : "off")}, " +
+                          $"{_waitsHooked.Count}/2 disc wait(s), " +
+                          $"VSync {(_vsyncHooked ? $"held to {1000.0 / VBlankMs:0.#} Hz" : "NOT held")}" +
+                          $"{(_animatorHooked ? ", counting steps" : "")}");
+
+        // The animator hook is KF2_LOADPACING_PROBE's step counter and nothing
+        // else -- CountStep returns immediately unless the probe is on -- so it is
+        // reported but deliberately not part of the verdict. Letting it decide
+        // would spend all three attach passes and print the give-up line over a
+        // hook that paces nothing.
+        return _waitsHooked.Count == 2 && _vsyncHooked;
     }
+
+    // What is hooked already, so a retry adds only what is missing.
+    static readonly HashSet<uint> _waitsHooked = [];
+    static bool _vsyncHooked, _animatorHooked;
 
     /// <summary>
     /// Open the window. The grid is seeded on the first paced call rather than

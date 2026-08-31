@@ -548,33 +548,9 @@ public static class FramePacing
         // session unpaced with the latch already set, so it was never tried again.
         // Attach only claims what it actually hooked, so a retry adds the rest
         // rather than a second copy of the lot.
-        Event.AddListener<OverlayLoadedEvent>(_ =>
-        {
-            if (_attachDone || _attachTries >= MaxAttachTries) return;
-            _attachTries++;
-            try
-            {
-                _attachDone = Attach();
-            }
-            catch (Exception e)
-            {
-                Console.Error.WriteLine($"[KF2] pacing: attach failed -- {e}");
-            }
-            if (!_attachDone && _attachTries >= MaxAttachTries)
-                Console.Error.WriteLine("[KF2] pacing: giving up on the rest; what is hooked is hooked. " +
-                                        "See \"Any frame rate\" in docs/PATCHES_AND_MODS.md.");
-        });
+        HookAttach.OnOverlayLoad("pacing", Attach,
+                                 "See \"Any frame rate\" in docs/PATCHES_AND_MODS.md.");
     }
-
-    static bool _attachDone;
-    static int _attachTries;
-
-    /// <summary>Overlay loads a partial attach is retried on. A miss is nearly
-    /// always a miss for good -- every overlay is registered before the first load,
-    /// so a role that will not resolve now will not resolve later -- and a session
-    /// loads an area module every time the player walks through a door. Enough
-    /// tries to cover a transient, few enough to stop the console filling up.</summary>
-    const int MaxAttachTries = 3;
 
     // What is hooked already, so a retry after a partial attach adds only what is
     // missing. Overlay names for the two per-overlay roles; counts for the rest.
@@ -692,6 +668,15 @@ public static class FramePacing
         var frameGate = self.GetMethod(nameof(BeforeFrameGate), BindingFlags.Public | BindingFlags.Static)!;
         var vsyncCall = self.GetMethod(nameof(BeforeVSync), BindingFlags.Public | BindingFlags.Static)!;
 
+        // Registered here, *claimed* after the commit below: an Add* only appends a
+        // delegate and returns true, so filling the sets from it claims what was
+        // queued. A boundary reported 3/3 while MonoMod refused the detour is a
+        // silent uncapped session, and the latch would have stopped the retry that
+        // Commit's own null-Hook check would have fixed.
+        List<(string Overlay, MethodInfo Target)> ot = [], vs = [];
+        List<(uint Addr, MethodInfo Target)> stages = [];
+        MethodInfo? gateTarget = null;
+
         foreach (var (overlay, addr) in DrawOTag)
         {
             if (_otHooked.Contains(overlay)) continue;
@@ -701,7 +686,7 @@ public static class FramePacing
                 Console.Error.WriteLine($"[KF2] pacing: no function at {overlay}/0x{addr:X8}");
                 continue;
             }
-            if (HookManager.AddPost(_self, target, frameDrawn)) _otHooked.Add(overlay);
+            if (HookManager.AddPost(_self, target, frameDrawn)) ot.Add((overlay, target));
         }
 
         // Without this the frame boundary never fires and nothing here paces
@@ -715,7 +700,7 @@ public static class FramePacing
                 Console.Error.WriteLine($"[KF2] pacing: no VSync at {overlay}/0x{addr:X8}");
                 continue;
             }
-            if (HookManager.AddPre(_self, target, vsyncCall)) _vsHooked.Add(overlay);
+            if (HookManager.AddPre(_self, target, vsyncCall)) vs.Add((overlay, target));
         }
 
         // The game's own frame gate, skipped at every rate. Only GAME.EXE's copy is
@@ -728,7 +713,7 @@ public static class FramePacing
                 Console.Error.WriteLine($"[KF2] pacing: no game function at 0x{FrameGate:X8} -- " +
                                         "the game's own two-vblank wait cannot be removed, so the " +
                                         "port will draw and tick at 30 whatever was asked for.");
-            else if (HookManager.AddPre(_self, target, frameGate)) _gateHooked = true;
+            else if (HookManager.AddPre(_self, target, frameGate)) gateTarget = target;
         }
 
         // The stage gate is hooked even when the render rate equals the tick rate,
@@ -747,7 +732,7 @@ public static class FramePacing
                 Console.Error.WriteLine($"[KF2] pacing: no game function at 0x{addr:X8}, not gated");
                 continue;
             }
-            if (HookManager.AddPre(_self, target, stageGate)) _stageHooked.Add(addr);
+            if (HookManager.AddPre(_self, target, stageGate)) stages.Add((addr, target));
         }
 
         if (!_fullRateHooked && FullRateLogic.Attach(_self) > 0) _fullRateHooked = true;
@@ -756,6 +741,19 @@ public static class FramePacing
         // is the one step here that is not bookkeeping, and it is where a partial
         // attach comes from.
         HookManager.Commit();
+
+        // What the detours say, not what the dictionary says. A pre and a post on
+        // one function share one detour, so a role is one question per function.
+        foreach (var (overlay, target) in ot)
+            if (HookAttach.Installed(target)) _otHooked.Add(overlay);
+            else Console.Error.WriteLine($"[KF2] pacing: DrawOTag on {overlay} queued but not installed");
+        foreach (var (overlay, target) in vs)
+            if (HookAttach.Installed(target)) _vsHooked.Add(overlay);
+            else Console.Error.WriteLine($"[KF2] pacing: VSync on {overlay} queued but not installed");
+        foreach (var (addr, target) in stages)
+            if (HookAttach.Installed(target)) _stageHooked.Add(addr);
+            else Console.Error.WriteLine($"[KF2] pacing: stage 0x{addr:X8} queued but not installed");
+        if (gateTarget != null && HookAttach.Installed(gateTarget)) _gateHooked = true;
 
         int n = _otHooked.Count + _vsHooked.Count + _stageHooked.Count
               + (_gateHooked ? 1 : 0) + (_fullRateHooked ? 1 : 0);
@@ -775,9 +773,14 @@ public static class FramePacing
         // is not a degraded pacer but no pacer at all -- and the world then runs at
         // the render rate with nothing said. One ordering table per frame is this
         // game's own arrangement, so charge every DrawOTag instead.
-        if (_vsHooked.Count == 0 && _otHooked.Count > 0)
+        // Recomputed every pass rather than only ever cleared: Attach is built to be
+        // retried, so a first pass that got DrawOTag but no VSync thunk and a second
+        // that got all three would otherwise stay permanently in the degraded mode
+        // while the summary line above reported 3/3 VSync.
+        _boundaryNeedsVSync = _vsHooked.Count > 0 || _otHooked.Count == 0;
+
+        if (!_boundaryNeedsVSync && _otHooked.Count > 0)
         {
-            _boundaryNeedsVSync = false;
             Console.Error.WriteLine("[KF2] pacing: no VSync thunk could be hooked -- charging every " +
                                     "DrawOTag as a frame instead. A frame carrying two ordering " +
                                     "tables is then paced twice. See \"Any frame rate\" in " +

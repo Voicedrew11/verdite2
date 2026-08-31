@@ -201,8 +201,19 @@ and paces the loop from inside `BeforeStage` instead (measured: `walk` reports 2
 units/2 s at 165 fps both with the boundary intact and with every `DrawOTag` hook
 removed). Losing only the `VSync` pre degrades to charging every `DrawOTag` as a
 frame rather than to no boundary at all, and `Attach` reports the boundary as a
-pair (`boundary 3/3 DrawOTag + 3/3 VSync`), claims only what it hooked and is
-retried. What is gated is stages **2**, 3, 4, 5, 6 and
+pair (`boundary 3/3 DrawOTag + 3/3 VSync`), claims only what it **installed** and
+is retried. That distinction is the fix rather than the wording: `AddPre`/`AddPost`
+only queue a delegate, the detour is created later in `HookManager.Commit`, and
+since `0027` that fails per function without throwing — so a summary built from the
+`Add*` returns could report `3/3` while no boundary existed and latch itself done.
+`patches/recompone/0028` exposes `HookManager.IsCommitted`, `patches/HookAttach.cs`
+holds the retry latch and the read-back, and **all eleven patches use it** — seven
+of them had also been latching `attached = true` *before* calling `Attach()`, so
+anything thrown inside was swallowed by `Event.Dispatch` into one stderr line and
+never retried. Half a pair can no longer be re-enabled from the Video pane either
+(`_paired`), and `LoopPacing`'s missing-marker case now stands the class down
+instead of reading every frame as modal. See "A registration is not a hook" in
+`docs/PATCHES_AND_MODS.md`. What is gated is stages **2**, 3, 4, 5, 6 and
 stage 13's fade stepper `func_80033FBC` and animated-texture updater
 `func_8002DC78`, and the test each had to pass is **can it draw**. **Stage 2
 (`func_80037C0C`) is where doors, the drawbridge, the minecart and the crystals
@@ -827,8 +838,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-five
-of the twenty-nine are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-six
+of the thirty are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
@@ -838,7 +849,7 @@ false: `0021-true-color-24bit-output.patch` was authored while
 `lighting-experiments`' `0025`/`0026` were applied, so its hunks quoted
 `_uCoplanarTol` / `_uLitCenter` context that exists only there and `git apply`
 rejected them, leaving the tree at `0020`. The patch has been regenerated against
-this branch's context. Verified by applying all twenty-nine patches in glob order
+this branch's context. Verified by applying all thirty patches in glob order
 to a pristine worktree of the pin: every one applies, and the result is
 byte-identical to the tree in place.
 
@@ -1057,6 +1068,16 @@ uncaptured edit inside the checkout is left where it is.
   because `Floor()` and `_tickThisFrame` both hang off it and `_tickThisFrame`
   fails open. Each function is committed on its own now and a failure names the
   method. **No recompile.** See "Everything hung off one hook" in
+  `docs/PATCHES_AND_MODS.md`.
+
+- `0028-hook-manager-commit-state.patch` — `AddPre`/`AddPost` only append a
+  delegate and return `true`; the detour is created later in `Commit`, which since
+  `0027` fails per function without throwing. A patch counting `Add*` returns
+  therefore claimed what it had *queued* — `FramePacing` could print
+  `boundary 3/3 DrawOTag + 3/3 VSync` with no boundary installed, latch itself
+  done, and never retry, which is the uncapped-picture-and-8×-world failure.
+  `IsRegistered` and `IsCommitted` let a caller read back what actually landed.
+  **No recompile.** See "A registration is not a hook" in
   `docs/PATCHES_AND_MODS.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind

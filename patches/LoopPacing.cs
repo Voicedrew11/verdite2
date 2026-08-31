@@ -366,67 +366,83 @@ public static class LoopPacing
     /// </summary>
     public static void Install()
     {
-        bool attached = false;
         // An area or executable swap replaces whatever a loop was drawing, so the
         // previous sample describes a view that no longer means anything.
         Event.AddListener<OverlayLoadedEvent>(_ => Reprime());
 
-        Event.AddListener<OverlayLoadedEvent>(_ =>
-        {
-            if (attached) return;
-            attached = true;
-            Attach();
-        });
+        HookAttach.OnOverlayLoad("loop pacing", Attach);
     }
 
-    static void Attach()
+    // What is hooked already, so a retry adds only what is missing.
+    static bool _markerHooked, _rendererHooked;
+
+    static bool Attach()
     {
         SymbolRegistry.Build();
 
-        var marker = SymbolRegistry.Resolve("game", null, MainLoopMarker);
-        if (marker == null)
+        var marker = _markerHooked ? null : SymbolRegistry.Resolve("game", null, MainLoopMarker);
+        if (marker == null && !_markerHooked)
         {
-            // Without the marker every frame reads as the main loop's, which is
-            // exactly today's behaviour -- so this degrades to "no fix" rather
-            // than to "everything paced at 20", but it degrades silently unless
-            // it says so here.
+            // Without the marker, _mainLoopSeen is permanently false, so every
+            // frame would read as *modal* -- the opposite of what this used to
+            // say. That is not "no fix": it caps the whole game at InterfaceHz,
+            // and `if (mainLoop) Reprime()` never fires, so Carry starts lerping
+            // stage 13's view in the main loop. FrameMinMs therefore reads
+            // _markerHooked and treats an unhooked marker as "all main loop",
+            // which is the degradation that was claimed here.
             Console.Error.WriteLine($"[KF2] loop pacing: no game function at 0x{MainLoopMarker:X8} -- " +
-                                    "a frame produced by a modal loop cannot be told from the main " +
-                                    "loop's, so item, cutscene and fade animations stay on the " +
-                                    "render rate.");
-            return;
+                                    "a modal loop's frame cannot be told from the main loop's, so " +
+                                    "the class stands down: item, cutscene and fade animations stay " +
+                                    "on the render rate.");
+            _canFill = false;
+            return false;
         }
 
         var self = typeof(LoopPacing);
-        var hook = self.GetMethod(nameof(MainLoopStage), BindingFlags.Public | BindingFlags.Static)!;
-        if (!HookManager.AddPre(_self, marker, hook)) return;
+        if (marker != null)
+        {
+            var hook = self.GetMethod(nameof(MainLoopStage), BindingFlags.Public | BindingFlags.Static)!;
+            HookManager.AddPre(_self, marker, hook);
+        }
 
         // The argument recorder and the gap filler. The post must run *after* the
         // smoothing patches' own posts on the same function, or the redraw would be
         // asked for while their interpolated values were still in the tables --
         // hence Program.cs installing this class after all three of them.
         // HookManager runs posts in the order they were added.
-        var renderer = SymbolRegistry.Resolve("game", null, Renderer);
-        if (renderer == null)
-        {
-            _canFill = false;
+        var renderer = _rendererHooked ? null : SymbolRegistry.Resolve("game", null, Renderer);
+        if (renderer == null && !_rendererHooked)
             Console.Error.WriteLine($"[KF2] loop pacing: no game function at 0x{Renderer:X8} -- " +
                                     "a modal loop cannot be handed a redraw, so its speed will be " +
                                     "right and its picture will step at the tick rate.");
-        }
-        else
+        else if (renderer != null)
         {
             var args = self.GetMethod(nameof(BeforeRenderer), BindingFlags.Public | BindingFlags.Static)!;
             var fill = self.GetMethod(nameof(AfterRenderer), BindingFlags.Public | BindingFlags.Static)!;
-            if (!HookManager.AddPre(_self, renderer, args)) _canFill = false;
-            if (!HookManager.AddPost(_self, renderer, fill)) _canFill = false;
+            HookManager.AddPre(_self, renderer, args);
+            HookManager.AddPost(_self, renderer, fill);
         }
 
         HookManager.Commit();
 
-        Console.WriteLine($"[KF2] loop pacing: {(Enabled ? "on" : "off")}, " +
+        // The detours, not the registrations. Without the marker every frame reads
+        // as the main loop's -- today's behaviour -- so that half returns false and
+        // is retried; without the renderer pair the loop is paced but not redrawn,
+        // which is a picture at the tick rate rather than a wrong one.
+        _markerHooked |= HookAttach.Installed(marker);
+        _rendererHooked |= HookAttach.Installed(renderer);
+
+        // Assigned, not latched off: a retry that lands the renderer pair on the
+        // second pass has to be able to turn filling back on. Bind's own refusal
+        // still wins, since it means the delegate could not be made -- though it
+        // resolves the address this just resolved, so the two cannot disagree.
+        _canFill = _rendererHooked && (!_bound || _stage13 != null);
+
+        Console.WriteLine($"[KF2] loop pacing: {(Enabled && _markerHooked ? "on" : "off")}, " +
                           $"a self-rendered world frame {(Filling ? "redrawn to the render rate" : $"paced at {FramePacing.LogicHz:0.#} Hz")}, " +
                           $"an interface frame at {InterfaceHz:0.#} Hz");
+
+        return _markerHooked && _rendererHooked;
     }
 
     /// <summary>
@@ -691,7 +707,9 @@ public static class LoopPacing
     /// </summary>
     public static double FrameMinMs(bool enabled, double targetFps)
     {
-        bool mainLoop = _mainLoopSeen;
+        // An unhooked marker means _mainLoopSeen can never be set, and reading that
+        // as "modal" would pace the entire game rather than stand the class down.
+        bool mainLoop = _mainLoopSeen || !_markerHooked;
         bool world = _worldDrawn;
         _mainLoopSeen = false;
         _worldDrawn = false;
