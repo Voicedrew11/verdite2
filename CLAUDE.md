@@ -105,7 +105,7 @@ KF2_SMOOTH_ANIM=time                   # lerp the clip time between the two tick
 KF2_SMOOTH_ANIM=timeline               # comparison: interpolate on the clip's own timeline
 KF2_SMOOTH_ANIM=weight                 # comparison: the blend weight only, inside the game's segment
 KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the verdict census, carries
-KF2_HITGUARD=0                         # let a malformed hit resolution fault (it is refused by default; docs/TODO.md #14)
+KF2_HITGUARD=0                         # let the hit path's reaction lookup fault (it is fenced by default; docs/TODO.md #14)
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models

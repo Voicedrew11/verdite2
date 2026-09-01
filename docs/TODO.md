@@ -507,6 +507,19 @@ useful than the question was.
    the reaction state, and `func_8003A9CC` branches on it — so this is what the
    console's open-bus read almost certainly produced anyway.
 
+   **The entry guard is now report-only, and that is part of the fix rather than
+   tidying.** Returning false there skipped `func_8003A9CC` outright, which is
+   where the damage, the experience, the knockback and the reaction are applied —
+   a swing that connects and does nothing, with nothing on screen to say why. It
+   was the right trade while it was the only thing between the player and a hard
+   crash; with the read fenced downstream it is the one thing in the port that
+   could silently make a creature unkillable. An area loads only 14–30 descriptors
+   and leaves the rest as `0xFFFFFFFF` filler, so any type between the loaded count
+   and ~107 reached the pointer test and would have been refused on filler.
+   Nothing is known to have been dropped — 0 refusals over 40 swings, and none in
+   an area with a high creature type — which is exactly why it went before
+   something was.
+
    **Reproduced both ways** with the new `ending kill` (see "`ending` exists
    because the last ten minutes of the game are otherwise untestable" in
    [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)), at `KF2_FPS=165` in area 7:

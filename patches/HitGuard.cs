@@ -7,12 +7,19 @@ using RecompOne.Runtime.Modding;
 namespace Kf2;
 
 /// <summary>
-/// Refuse a hit resolution that would read a non-pointer as a pointer, and say
-/// which of the four impossible things it found.
+/// Answer "no reaction" where the hit path would read a non-pointer as a pointer,
+/// and report the four impossible things a hit resolution can be handed.
 ///
 ///     KF2_HITGUARD=0     let the read fault, which is a hard crash -- comparison
 ///     KF2_HITPROBE=1     also report a census of what the hit check saw
 ///     KF2_HITPROBE=2     also report every call, which is very loud
+///
+/// **There are two halves and only one of them intervenes.**
+/// <see cref="BeforeDescLookup"/>, on `func_8003A448`, is the fence: it answers 0
+/// instead of dereferencing a word that is not a pointer. <see cref="BeforeHit"/>,
+/// on `func_8003A9CC`, is a **report only** -- it says what the resolution was
+/// handed and lets it run. It used to refuse, and that is described where it
+/// changed.
 ///
 /// ## The crash this exists for
 ///
@@ -67,9 +74,9 @@ namespace Kf2;
 /// more than the symptom.
 ///
 /// So the intervention is kept as narrow as it can be. It does not weaken
-/// `PSMemory`; it is one function, and it only refuses the call in the four
-/// states where the read is **certain** to fault or the index is arithmetically
-/// impossible:
+/// `PSMemory`; it is one read, in one function. The four states below are the
+/// ones <see cref="BeforeHit"/> names -- it reports them and nothing more, since
+/// the fence downstream is what keeps the port alive:
 ///
 /// * the index is `>= 200`, past the entity table;
 /// * the kind-3 redirect points outside the table;
@@ -78,23 +85,21 @@ namespace Kf2;
 /// * a pointer in that block is neither zero nor a RAM address -- which *is* the
 ///   read that throws.
 ///
-/// **A free slot is reported and not refused.** That the kind byte reads `0xFF`
-/// is the shape you would expect a frame after something dies, and it is the
-/// best current guess at the cause -- but it is an inference, not a guaranteed
-/// fault, and refusing on it would silently drop hits the game meant to land.
-/// Skipping a swing's damage is a worse failure than a log line.
+/// **Every one of them is reported and none is refused.** Skipping a swing's
+/// damage is a worse failure than a log line, and `func_8003A9CC` is where the
+/// damage, the experience, the knockback and the reaction are applied -- so a
+/// refusal there is a hit that connects and does nothing, with nothing on screen
+/// to say why.
 ///
 /// ## The guard is also the diagnostic
 ///
 /// This is the reason it is on by default rather than a probe you remember to
-/// turn on. `func_8003A9CC` is void to all four of its callers -- none reads `V0`
-/// -- so a refused call costs one hit against a record that is not a creature,
-/// which is nothing. What it buys is that the next playthrough **reports which of
-/// the four it was, and keeps running**, instead of dying with a stack trace that
-/// cannot say. Measured cost: the hit check resolves about 1.4 times a second in
-/// combat, so the checks are free, and over a boss fight and 40 swings it found
-/// nothing to refuse -- widest index 57 of 200, widest type 9 against a block
-/// that holds ~108, both far from their bounds.
+/// turn on: the next playthrough **names what it was handed and keeps running**,
+/// instead of dying with a stack trace that cannot say. Measured cost: the hit
+/// check resolves about 1.4 times a second in combat, so the checks are free, and
+/// over a boss fight and 40 swings it found nothing to flag -- widest index 57 of
+/// 200, widest type 9 against a block that holds ~108, both far from their
+/// bounds.
 ///
 /// ## The killing blow blanks the type byte under its own caller
 ///
@@ -192,7 +197,7 @@ internal static class HitGuard
     const int MaxReports = 24;
 
     static int _calls, _reports;
-    static int _badIndex, _badRedirect, _freeSlot, _badType, _badPointer, _refused;
+    static int _badIndex, _badRedirect, _freeSlot, _badType, _badPointer, _flagged;
     static int _walkCalls, _walkRefused;
     static bool _walkSaid;
     static int _maxIdx = -1, _maxType = -1;
@@ -284,10 +289,10 @@ internal static class HitGuard
         _walkHooked |= HookAttach.Installed(walk);
         _windowStart = Now;
 
-        Console.WriteLine($"[KF2] hit guard: {(_hooked && Guard ? "on" : "off")}, watching func_{HitResolve:X8} " +
+        Console.WriteLine($"[KF2] hit guard: {(_walkHooked && Guard ? "on" : "off")}, reporting func_{HitResolve:X8} " +
                           $"(entities 0x{EntityBase:X8}+{EntityCount}, " +
                           $"descriptors 0x{DescBase:X8}..0x{DescBlockEnd:X8})" +
-                          (_walkHooked ? $", func_{DescLookup:X8} fenced" : "") +
+                          (_walkHooked && Guard ? $", func_{DescLookup:X8} fenced" : ", nothing fenced") +
                           (Probe ? ", census on" : "") + (Verbose ? ", reporting every call" : ""));
 
         return _hooked && _walkHooked;
@@ -401,16 +406,26 @@ internal static class HitGuard
             }
         }
 
+        // Report-only, always. This used to return false -- skipping
+        // `func_8003A9CC` outright -- and that was the right trade only while it
+        // was the one thing standing between the player and a hard crash. It is
+        // not any more: <see cref="BeforeDescLookup"/> fences the read that
+        // actually throws, and costs one *reaction lookup* where this costs the
+        // whole hit. `func_8003A9CC` applies the damage, the experience, the
+        // knockback and the reaction, so a refusal here is a swing that connects
+        // and does nothing, silently -- and an area loads only 14-30 descriptors
+        // and leaves the rest as 0xFFFFFFFF filler, so a type anywhere between the
+        // loaded count and ~107 reaches the pointer test and would have been
+        // refused on filler. Nothing is known to have been dropped (0 refusals
+        // over 40 swings, and none in an area with a high creature type), which is
+        // exactly why it had to go before something was.
         if (fatal != null)
         {
-            bool refuse = Guard;
-            if (refuse) _refused++;
+            _flagged++;
             Report(idx, redirect, kind, type, ra,
-                   fatal + (refuse ? " -- hit refused" : " -- letting it fault (KF2_HITGUARD=0)"));
-            return !refuse;
+                   fatal + " -- reported, not refused; the fence is on func_8003A448");
         }
-
-        if (note != null) Report(idx, redirect, kind, type, ra, note);
+        else if (note != null) Report(idx, redirect, kind, type, ra, note);
         else if (Verbose)
             Console.WriteLine($"[KF2] hit guard: idx {idx} kind {kind} type {type} from 0x{ra:X8}");
 
@@ -586,13 +601,13 @@ internal static class HitGuard
         if (_calls == 0) return;
 
         Console.WriteLine($"[KF2] hit guard: {_calls} resolve(s), widest index {_maxIdx}, " +
-                          $"widest type {_maxType}, {_refused} refused " +
+                          $"widest type {_maxType}, {_flagged} flagged " +
                           $"({_badIndex} index, {_badRedirect} redirect, {_freeSlot} free slot, " +
                           $"{_badType} type, {_badPointer} pointer); " +
                           $"{_walkCalls} reaction lookup(s), {_walkRefused} answered 0");
 
         _calls = 0;
-        _badIndex = _badRedirect = _freeSlot = _badType = _badPointer = _refused = 0;
+        _badIndex = _badRedirect = _freeSlot = _badType = _badPointer = _flagged = 0;
         _walkCalls = _walkRefused = 0;
     }
 }
