@@ -7,7 +7,8 @@ Verdite2 is a PC port of King's Field (US) built atop of the [RecompOne](https:/
 - Widescreen support (16:9, 16:10, 21:9), with changed culling behavior
 - Perspective-correct textures and corrected vertex wobbling
 - 24-bit colour
-- Stable game speed (!!!!)
+- 60+ fps
+- Consistent game speed
 - Automatic save reload after death
 - Keyboard and mouse support
 - Modern Twin-stick FPS controls
