@@ -689,7 +689,7 @@ program tells "stuck at the title" from "in an area" without a screenshot. See
 
 **`KF2_SHELL=1` is the acting half**: while the session runs, a line protocol on
 TCP 127.0.0.1:27900 (`state`, `nearby`, `load <slot>`, `warp <area>`,
-`press <button> [ms]`, `kill`, `ending [boss]`; one request per line, one
+`press <button> [ms]`, `kill`, `ending [boss|kill]`; one request per line, one
 single-line JSON response back) steers the game
 the beacon is only watching. **`ending` is there because the last ten minutes of
 the game cannot be loaded into**: plain `ending` writes `GAME.EXE`'s own quit
@@ -697,7 +697,15 @@ word at `0x80199574` (1 = `END.EXE`, 9 = title), and `ending boss` runs the
 post-final-boss sequence that normally writes it — `fdat23`'s `func_8019F474`
 then `func_8019F688`, two modal loops that present their own frames, both
 needed because the first fills the pointer at `0x801A0598` the second writes its
-camera through. Reaching it needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the
+camera through. **`ending kill` is the form that reproduces the final-boss
+crash**, because that crash is in the hit resolution *underneath* those loops,
+which `ending boss` never puts on the stack: it replays `fdat23`'s damage hook
+`func_8019FA2C` and then the death reaction `func_8003A490` that
+`func_8003A9CC` makes next. The ending blanks six entity type bytes to `0xFF`
+on its way out and its caller then indexes the descriptor table with one, which
+is a game bug the console absorbed as an open-bus read; `HitGuard` fences the
+walk `func_8003A448` so it answers "no reaction" instead of faulting. See "The
+crash on the final boss's last hit" in `docs/TODO.md`. Reaching it needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the
 player on the way in. See "The command channel" in
 `docs/PATCHES_AND_MODS.md`.
 

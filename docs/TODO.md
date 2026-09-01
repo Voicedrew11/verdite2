@@ -450,244 +450,89 @@ useful than the question was.
    arithmetic reads those same words is a separate reading). See "Editing the
    character: the split is the design" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
 
-14. **The crash on the final boss's last hit.** Reported from play: at the default
-   20 fps the ending arrives, and above it the game dies. **There is now a stack
-   trace of it, and it refutes what this entry used to say.** The guess was that
-   it lived in `fdat23`'s two post-boss modal loops `func_8019F474` +
-   `func_8019F688` — "so `LoopPacing`'s territory, and inert at or below the tick
-   rate, which is the right shape for a defect only high rates see". There is no
-   `fdat23` frame anywhere on the trace:
+14. ~~**The crash on the final boss's last hit.**~~ **Answered, reproduced and
+   fixed, and it is not a pacing defect.** The state is the game's own, made
+   deliberately, and the port's only fault is that `PSMemory` traps a read the
+   console absorbed.
+
+   **The chain, all of it read from the recompiled code and then confirmed
+   live.** `fdat23`'s module header holds the 32 dispatch slots every area module
+   has; **slot 18** — `module+0x48` — is `func_8019FA2C`, the area's damage hook.
+   `func_8003A9CC` calls that hook through `u32[u32[0x8017E068] + 0x48]` **part
+   of the way through resolving a hit**, and then carries on using the record:
 
    ```
-   func_8001369C   the main loop
-    +- func_8002A550    stage 3, the player and weapon stage
-       +- func_800271D0    steps the swing, walks the object table
-          +- func_8003A9CC    resolve a hit against one entity
-             +- func_8003A490
-                +- func_8003A448   ReadU8(0x0FFF0000) -> unmapped address
+   func_800271D0                 stage 3's reach scan picks the boss
+    +- func_8003A9CC             S4 = the record, entity 0
+       +- func_8019FA2C          the damage hook (fdat23 slot 0x48)
+       |   +- func_8019F474      the ending's setup; fills 0x801A0598
+       |   +- func_8019F688      the ending. At 0x8019F908 it writes
+       |                         u8[+0x2] = 0xFF into entity 0 and entities
+       |                         6..10, runs its fade, and sets the quit word
+       +- func_8003A490          HP - damage <= 0, so: the death reaction --
+          |                      and it re-reads u8[S4+0x2], which is now 0xFF
+          +- func_8003A448       desc = 0x80172624 + 255*120 = 0x80179DAC
+                                 -> ReadU8 through 0x80179DE4 -> unmapped
    ```
 
-   It fires on the **killing blow itself**, from the main loop, before the ending
-   sequence is entered at all. That is why the `ending boss` rig kept passing at
-   144 fps and "the rig does not yet reach the bug" — it runs the two modal loops
-   from stage 3's post with a boss that was never fought, so it never reaches this
-   call. The two switches this entry proposed as the bisect, `KF2_LOOPPACING=0`
-   and `=pace`, are therefore the wrong pair; the crash is not in a modal loop.
+   The six records `CrashDump` named — entity 0 and entities 6, 7, 8, 9, 10 —
+   are **exactly** the six that loop writes (`S2 = 0x8016C544`, then
+   `S1 = 0x8016C82C` stepping by `0x7C` five times), and it is the only write of
+   `+0x2 = 0xFF` anywhere in the module. They were never "uninitialised" and
+   nothing raced to make them: the ending blanks them on its way to `END.EXE`
+   and simply does not expect a hit resolution to still be on the stack beneath
+   it. That also explains why there is **no `fdat23` frame on the trace** — the
+   hook had already returned.
 
-   **The mechanism, as far as reading the recompiled code gets.**
-   `func_800271D0` takes `u16[obj+0x2A]` as an *entity index*; `func_8003A9CC`
-   turns it into `0x8016C544 + idx*0x7C`, redirects through `s16[rec+0x22]` when
-   the record's kind byte is 3, and then computes
-   `desc = 0x80172624 + u8[rec+0x2] * 120`. `u8[rec+0x2]` is the creature **type**,
-   indexing a per-area descriptor table that `func_80017244` copies to
-   `0x80172624` — `0xCB0` *words*, so the block ends at `0x801758E4` and holds at
-   most 108 records, likely fewer since other tables share it.
-   `func_8003A490` walks fifteen pointers at `desc+0x38` and does `ReadU8` on each.
-   `0x0FFF0000` is not a pointer; it is whatever bytes sit at `desc+0x38` once
-   `desc` has walked off the end of the real table. **Neither routine validates
-   anything** — no bound on the type byte, and no check that the slot is occupied
-   before reading its type. A free slot holds `0xFF` at `+0x0`, and the code tests
-   that byte for `3` (the redirect) and never for `0xFF`.
+   **Why it looked like a frame-rate bug.** `desc` lands at `0x80179DAC`, past
+   the descriptor block, so `desc+0x38 .. desc+0x74` is inside the **object
+   table** at `0x80177714` — slot 146 onward, from field `+0x8`. The "pointers"
+   the walk dereferences are therefore live object fields, and `0x0FFF0000` is a
+   pair of `u16`s whose top half is `0x0FFF`, the game's own clamped-angle
+   constant. Whether the first non-zero one happens to look like a RAM address is
+   luck, and the render rate changes the luck. Nothing in `LoopPacing`,
+   `ObjectSmoothing` or the stage gate is involved, and no switch among them
+   could have fixed it — which is why five commits of bisecting them found
+   nothing.
 
-   Note also that the console probably did not crash here: PS1 RAM reads at an
-   unmapped address return open-bus garbage rather than trapping, while
-   `PSMemory` throws. That is a hypothesis about the hardware, not a reading of
-   it, but it is the reason a latent game bug can surface as a hard stop in this
-   port and not on a disc.
+   **`patches/HitGuard.cs`'s entry guard could never have caught this, and
+   saying it did was wrong.** It validates the record when `func_8003A9CC` is
+   *entered*, and at that moment the type byte is still the boss's real type; the
+   state it would have to refuse is created by a call it has already approved.
+   The guard that works is `HitGuard.BeforeDescLookup`, a pre on **`func_8003A448`
+   itself**: it replays the fifteen-pointer walk, and when the pointer the walk is
+   about to dereference is neither zero nor RAM it sets `V0 = 0` and skips the
+   body. Zero is the routine's own "no reaction found" answer and every caller
+   already handles it — `func_8003A490` passes it to `func_80039E08`, which clears
+   the reaction state, and `func_8003A9CC` branches on it — so this is what the
+   console's open-bus read almost certainly produced anyway.
 
-   **It is not the killing blow.** Play reports the boss dying, a cutscene walking
-   the player to the Moonlight Sword and taking it, and the crash coming *after
-   that* — so the window is the sword pickup and what stage 3 does on the first
-   ticks with the new weapon equipped, not the hit that killed the boss. That also
-   explains a run with the probe on that got through the kill and reported nothing:
-   0 refused, widest index 57, widest type 9. `func_800271D0` reads the equipped
-   weapon from `0x80199494` and has **two parameter sets** selected by
-   `u8[0x801994AE]` — `+0x1C/+0x1E/+0x2C` for one and `+0x24/+0x28/+0x2A/+0x30/+0x32`
-   for the other — so a weapon with an alternate attack drives a path an ordinary
-   sword never takes. The Moonlight Sword is the game's one projectile weapon.
-   That is a lead, not a finding: nobody has watched which set is in use at the
-   crash.
-
-   **`patches/HitGuard.cs` is in, on by default.** It replays the derivation and
-   refuses the call in the four states where the read is *certain* to fault — index
-   past 200, a kind-3 redirect outside the table, a descriptor reaching past
-   `0x801758E4`, or a pointer in the descriptor that is neither zero nor RAM. A
-   **free slot is reported and not refused**: it is the best guess at the cause and
-   an inference, and refusing on it would drop hits the game meant to land.
-   `func_8003A9CC` is void to all four of its callers, so a refused call costs one
-   hit against a record that is not a creature. The point is that the next
-   playthrough **names which of the four it was and keeps running** instead of
-   dying with a trace that cannot say.
-
-   The assumption under it, stated because it is load-bearing and unverified: the
-   PS1 has no MMU and a load from unmapped KUSEG returns open-bus rather than
-   trapping, so the console absorbed this and `PSMemory` throwing is a port
-   behaviour. If the console *did* trap, the guard is papering over a state the
-   original never reached.
-
-   Measured with the guard on, 40 swings in ordinary combat at 144 fps: widest
-   index 57 of 200, widest type 2 against a block holding ~108, 0 refused — so it
-   is inert until something is actually wrong, and the hit check resolves about
-   1.4 times a second, which is why the checks cost nothing.
-
-   **The crash is reproducible — 100% at 165 fps — but only with no hook on the
-   faulting path**, which is why the next tool is not another hook.
-   `patches/CrashDump.cs` is a `catch` around `Entry.Run` in `Program.cs`: it adds
-   nothing to any path the game takes and reads memory once, after the fault, when
-   RAM is still intact. It prints the equipped weapon (id, record pointer, the
-   swing clock, the `u8[0x801994AE]` mode flag and **both** parameter sets, since
-   only the second reads `+0x2A`), the descriptor block, and every occupied entity
-   slot whose kind or type byte is suspect. `KF2_CRASHDUMP=0` turns it off.
-
-   **Testing it with a forced throw turned up a fact worth having.** In an ordinary
-   area the descriptor block has room for 108 records but only about **thirty are
-   real** — from type 30 upward every pointer slot reads `0xFFFFFFFF`. That is not
-   a terminator: `func_8003A448` skips a *zero* pointer and dereferences everything
-   else, so a creature whose type byte reached that far would fault on the first
-   read. So the "past the loaded block" bound at `0x801758E4` is a coarse backstop
-   and the pointer check is the real one, and the most likely shape of the crash is
-   a type byte past the area's own loaded count rather than past the block.
-
-   That same test corrected the guard: it used to refuse on *any* bad pointer in a
-   descriptor, which is more aggressive than the game. `func_8003A448` reads the
-   first non-zero pointer unconditionally and later ones only if the walk gets that
-   far, so only the first is fatal now; a junk tail is reported and the hit is
-   allowed, since dropping a hit the game would have landed is the worse error.
-
-   **The dump caught it, and it names the state.** At 165 fps with
-   `KF2_HITGUARD=0`, `unmapped address: 0x0FFF0000`, and:
+   **Reproduced both ways** with the new `ending kill` (see "`ending` exists
+   because the last ten minutes of the game are otherwise untestable" in
+   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)), at `KF2_FPS=165` in area 7:
 
    ```
-   weapon: id 0x01, record 0x801C8000, swing clock -1 (idle),
-           alt-attack flag 0x00 -> first parameter set
-   descriptors: 0x80172624..0x801758E4, 108 fit, filler from type 14
-   entities: 54 occupied or drawn of 200, 6 suspect
-     entity 0:  kind 0x01 type 255 drawn 1
-     entity 6:  kind 0x03 type 255 drawn 1
-     entity 7:  kind 0x00 type 255 drawn 0
-     entity 8:  kind 0x01 type 255 drawn 0
-     entity 9:  kind 0x03 type 255 drawn 1
-     entity 10: kind 0x01 type 255 drawn 1
+   [KF2] ending kill: entity 0 type is now 255, descriptor 0x80179DAC,
+         pointers: 0FFF0000 FF380320 00000000 00001180 FFFFC7C0 ...
+   [KF2] hit guard: descriptor 0x80179DAC pointer 0 at 0x80179DE4 reads
+         0x0FFF0000, which is not RAM -- reaction lookup answered 0 instead of
+         faulting. kind=0x03, called from 0x8003A4C4
+   [KF2] ending kill: the death reaction returned without faulting.
    ```
 
-   **Six entity records are occupied with an uninitialised type byte.** Their kind
-   bytes are 0x00/0x01/0x03 — not `0xFF`, so nothing reads them as free — but
-   `u8[rec+0x2]` is `0xFF`. `255 * 120` puts the descriptor at `0x80179DAC`, past
-   the end of the block entirely, in unrelated RAM whose first pointer reads
-   `0x0FFF0000`. That is the fault, and it is a **type byte**, not an index and not
-   a free slot.
+   With `KF2_HITGUARD=0` the last line never appears and the call faults;
+   `0x8003A4C4` is `func_8003A490`'s call site, which is the reported stack.
 
-   Two earlier leads are dead. The alt-attack flag is `0x00`, so the **first**
-   parameter set is live and the Moonlight Sword's alternate attack is not the
-   path; and the swing clock is `-1`, so the weapon is **idle** — the reach scan in
-   `func_800271D0` runs every tick whether or not a swing is in progress, and the
-   crash does not need one.
+   **What is still open.** The load-bearing assumption is unchanged and still
+   unverified: that a PS1 load from unmapped KUSEG returns open bus rather than
+   trapping, so the console absorbed this. It is reasoned from the game having
+   shipped and people having finished it, not read off hardware. And what the
+   *console* found at `desc+0x38` was a live object field too, so "the walk found
+   no match" is overwhelmingly likely but not certain — if some run of the
+   original did match, the reaction it picked is one this port now declines. The
+   remaining check is by eye: that the ending plays through to `END.EXE` from a
+   real final-boss kill.
 
-   Kind `0x03` on entities 6 and 9 is the "resolve against my parent" redirect
-   `func_8003A9CC` follows through `s16[rec+0x22]`, so at least two of the six are
-   **parts of a multi-part creature** — which the final boss is, and which fits
-   records being torn down in pieces.
-
-   **The guard covers this one**: type 255's descriptor reaches past
-   `0x801758E4`, so the "past the loaded block" check refuses the call. Whether
-   the ending then completes is untested.
-
-   **The live frame-rate lead is `ObjectSmoothing`.** Entities 0, 6 and 9 read
-   `drawn == 1`, which is exactly the renderer's liveness test that patch uses for
-   the entity row — so at a render rate above the tick it carries the positions of
-   these malformed records, and the reach scan in `func_800271D0` selects
-   candidates *by position*. At 20 fps `Extrapolating` is false and it carries
-   nothing, which is the reported difference between 20 and 165. It restores in
-   stage 13's post and stage 3 runs before stage 13, so the balance would have to
-   be broken for this to reach the scan — `LoopPacing`'s redraws re-enter stage 13
-   several times a frame at 165, which is where to look. **`KF2_SMOOTH_OBJECTS=0`
-   at 165 fps is the one-run test.**
-
-   Also unresolved and worth knowing: the run was made with base strength edited to
-   999 to one-shot the boss. `func_80026210` sets the weapon record from static item
-   data (`0x801C7FBC + id*0x44`), so the cheat cannot corrupt `+0x2A` — but a
-   one-hit kill skips whatever the boss's death does over several ticks, which is a
-   plausible route to parts freed out of order. **Whether it reproduces at normal
-   strength is not known.**
-
-   **`KF2_SMOOTH_OBJECTS=0` at 165 fps still crashes**, identically. So
-   `ObjectSmoothing` is not the cause and no smoothing patch is involved in the
-   selection — that lead is dead, and with it the last candidate that made this a
-   port defect in the *choosing* of the record.
-
-   **The game itself selects these records.** `func_800271D0`'s scan does not walk
-   the entity table; it steps a probe point forward four times and calls
-   `func_8003B72C(x, y, z, 0x190)`, a spatial query returning an entity index or
-   `-1`. That query's liveness test is `u8[rec+0x9] == 1` — the renderer's drawn
-   flag, the same one `ObjectSmoothing`'s entity row uses — and entities 0, 6 and 9
-   read `drawn == 1`. So the game picks them, hands the index to `func_8003A9CC`,
-   and nothing between there and `func_8003A448` bounds the type byte. **Once the
-   state exists the crash is the game's own behaviour**, and the console survived it
-   only because the read returns open-bus rather than trapping.
-
-   The descriptor's first pointer reads `0x00000000`, which `func_8003A448`
-   *skips*; the `0x0FFF0000` it dies on is a later slot in the same 15-entry walk.
-   The guard's own walk skips zeros the same way, so it lands on the same pointer —
-   and in any case its "descriptor past the loaded block" check refuses type 255
-   before the walk is reached.
-
-   **What is still unknown is what creates a record that is drawn and typeless.**
-   `patches/HitGuard.cs` now carries an appearance watch behind `KF2_HITPROBE=1`: a
-   post on stage 3 that fires **once**, on the first tick any slot reads
-   `u8[+0x9] == 1` with a type past the area's loaded count, and prints the frame
-   number and the whole `0x7C`-byte record. That distinguishes the three candidate
-   moments — the boss's death, the cutscene, the sword pickup — which nothing so
-   far has separated, and it is the first tool here that looks at when the state
-   *appeared* rather than when something walked into it.
-
-   **It reproduces at normal strength**, so the 999-attack edit is not the cause
-   and this is a defect any player finishing the game hits above the tick rate.
-
-   **`fdat23` builds an entity record in the wrong order, and gives it a type the
-   area has no descriptor for.** Around `generated/fdat23.cs:339-378` the ending
-   sequence fills a record through `u32[0x801A0598]` — the pointer this repo
-   already knows as the one `func_8019F474` fills and `func_8019F688` writes its
-   camera through — field by field:
-
-   ```
-   +0x9 = 1        <- the drawn flag, at line 365
-   +0x2 = 0x11     <- the type byte, at line 369
-   ```
-
-   Two problems, either of which is enough. The **drawn flag is set four
-   instructions before the type byte**, and `func_8003B72C` — the query that picks
-   a hit candidate — selects on exactly that flag, so anything observing the record
-   in between sees a drawn record carrying the previous tenant's type. And the type
-   it settles on is `0x11` = **17**, against a boss area that loads only **14**
-   descriptors: type 17 is filler, its first pointer reads `0xFFFFFFFF`, and a hit
-   resolved against this record faults whatever the timing. `CrashDump` now prints
-   that record and whether the pointer lands in the entity table at all.
-
-   The observed bad records read type **255**, not 17, so this is not yet the same
-   record — but it is the same failure mode in the same overlay, and the write
-   order is a window whose width in wall-clock time is exactly what changes between
-   20 and 165 fps.
-
-   **`KF2_LOOPPACING` is back on the bisect list, and dismissing it was an error.**
-   It was ruled out because the stack trace has no `fdat23` frame — but the trace
-   says where the crash *lands*, not where the state went bad. The record is built
-   during the cutscene, which is a modal loop; `LoopPacing` holds its body to the
-   tick and fills the gap with stage 13 redraws — about eight per tick at 165 fps
-   and **none at all at 20**, which is precisely the reported difference. Stage 13
-   runs game code (`func_800331B4` walks the same tables), so a redraw landing
-   inside that field-by-field build is a concrete mechanism for a record that is
-   drawn but not yet typed.
-
-   The two runs that separate it: `KF2_LOOPPACING=pace` (hold the loop, no
-   redraws) and `KF2_LOOPPACING=0` (loop back on the render rate). If `pace`
-   survives and the default crashes, the redraws are the cause.
-
-   Still open: the root cause. The switches worth bisecting from a real
-   playthrough are `KF2_SMOOTH_OBJECTS=0` (the only patch that writes into the
-   entity table), then `KF2_FPS` stepped up from 20 to find where it starts, then
-   `KF2_SMOOTH_ANIM=0`. See "`ending` exists because the last ten minutes of the
-   game are otherwise untestable" in
-   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 15. ~~**"The game crashes after The End."**~~ Answered, and it was not a crash:
    `END.EXE` really does end in `j 0x80011A50` on itself and never asks the boot
    stub for another executable, so the ending is a hang you leave with the reset

@@ -96,6 +96,51 @@ namespace Kf2;
 /// nothing to refuse -- widest index 57 of 200, widest type 9 against a block
 /// that holds ~108, both far from their bounds.
 ///
+/// ## The killing blow blanks the type byte under its own caller
+///
+/// That is the final-boss crash, `docs/TODO.md` #14, and it is the game's own
+/// code from end to end. `fdat23`'s **dispatch slot 18** -- `module+0x48`, which
+/// is `func_8019FA2C` -- is the area's damage hook, and `func_8003A9CC` calls it
+/// through `u32[u32[0x8017E068] + 0x48]` **part-way through resolving the hit**,
+/// before it has finished with the record:
+///
+///     func_800271D0            the reach scan picks the boss
+///      +- func_8003A9CC        S4 = the boss's record, entity 0
+///         +- func_8019FA2C     the area's damage hook (fdat23 slot 0x48)
+///         |   +- func_8019F474 the ending's setup
+///         |   +- func_8019F688 the ending: at 0x8019F908 it writes
+///         |                    u8[+0x2] = 0xFF into entity 0 and entities 6..10,
+///         |                    then sets the quit word and returns
+///         +- func_8003A490     HP - damage <= 0, so: the death reaction --
+///            |                 and it re-reads u8[S4+0x2], now 0xFF
+///            +- func_8003A448   desc = 0x80172624 + 255*120 = 0x80179DAC
+///                               -> ReadU8 through 0x80179DE4 -> unmapped
+///
+/// The six records `CrashDump` reported as "occupied with an uninitialised type
+/// byte" -- entity 0 and entities 6, 7, 8, 9, 10 -- are **exactly** the six that
+/// loop writes, and it is the only write of `+0x2 = 0xFF` in the module. They are
+/// not uninitialised and nothing raced to produce them; the ending blanks them
+/// deliberately, on its way to handing over to `END.EXE`, and simply does not
+/// expect a hit resolution to still be on the stack underneath it.
+///
+/// **Why the crash is intermittent, and why the frame rate changes it.** `desc`
+/// lands at `0x80179DAC`, past the descriptor block, and `desc+0x38..desc+0x74`
+/// is inside the **object table** at `0x80177714` -- slot 146 onwards, from field
+/// `+0x8`. So the "pointers" the walk dereferences are live object fields whose
+/// values are whatever the world was doing at that instant. `0x0FFF0000` is a
+/// pair of `u16`s, and `0x0FFF` is the game's own clamped-angle constant. Whether
+/// the first non-zero one happens to look like a RAM address is luck, and the
+/// render rate changes the luck -- which is the whole of the "20 fps reaches the
+/// ending and 165 does not" report. It is not a pacing defect, and no smoothing
+/// or loop-pacing switch can fix it.
+///
+/// **So the entry guard above cannot catch this one**, and saying it did was
+/// wrong: it inspects the record when `func_8003A9CC` is entered, and at that
+/// moment the type byte is still the boss's real type. The state it would have to
+/// refuse is created by a call the guard has already approved.
+/// <see cref="BeforeDescLookup"/> is the guard that works, and it sits on the
+/// walk itself.
+///
 /// Every read below is fenced by <see cref="Ram"/>, so the guard cannot fault on
 /// the state it is describing, and it writes nothing to game memory.
 /// </summary>
@@ -105,6 +150,13 @@ internal static class HitGuard
     /// at the pre names the call site, which is worth having because
     /// `func_800271D0` is one of four callers.</summary>
     const uint HitResolve = 0x8003A9CC;
+
+    /// <summary>`func_8003A448(a0 = descriptor, a1 = kind)`, the walk that actually
+    /// faults -- and the only place the final-boss crash can be caught, because the
+    /// state it dies on is created *during* the `func_8003A9CC` call the entry
+    /// guard has already let through. See "The killing blow blanks the type byte
+    /// under its own caller" below.</summary>
+    const uint DescLookup = 0x8003A448;
 
     // The entity table, and the per-area creature-type descriptors immediately
     // after it. Both read off the recompiled func_8003A9CC prologue:
@@ -141,6 +193,8 @@ internal static class HitGuard
 
     static int _calls, _reports;
     static int _badIndex, _badRedirect, _freeSlot, _badType, _badPointer, _refused;
+    static int _walkCalls, _walkRefused;
+    static bool _walkSaid;
     static int _maxIdx = -1, _maxType = -1;
     static readonly HashSet<long> _seen = [];
 
@@ -184,7 +238,7 @@ internal static class HitGuard
         HookAttach.OnOverlayLoad("hit guard", Attach, "docs/TODO.md #14");
     }
 
-    static bool _hooked;
+    static bool _hooked, _walkHooked;
 
     static bool Attach()
     {
@@ -201,6 +255,20 @@ internal static class HitGuard
         var impl = typeof(HitGuard).GetMethod(nameof(BeforeHit), BindingFlags.Public | BindingFlags.Static)!;
         HookManager.AddPre(_self, target, impl);
 
+        // The one that catches the final-boss crash. Separate from the entry guard
+        // above rather than folded into it, because the two answer different
+        // questions: that one asks whether the record was already malformed when
+        // the resolution began, this one whether the pointer about to be read is a
+        // pointer at all -- which is the only question left once fdat23 has blanked
+        // the type byte under a resolution that is still on the stack.
+        var walk = _walkHooked ? null : SymbolRegistry.Resolve("game", null, DescLookup);
+        if (walk == null && !_walkHooked)
+            Console.Error.WriteLine($"[KF2] hit guard: no game function at 0x{DescLookup:X8} -- " +
+                                    "the final boss's last hit will fault (docs/TODO.md #14).");
+        else if (walk != null)
+            HookManager.AddPre(_self, walk,
+                typeof(HitGuard).GetMethod(nameof(BeforeDescLookup), BindingFlags.Public | BindingFlags.Static)!);
+
         // The appearance watch is a separate question from the guard: the guard
         // fires when something *walks into* a malformed record, which is far later
         // than when the record went bad. Only under the probe, since it reads two
@@ -213,14 +281,16 @@ internal static class HitGuard
         HookManager.Commit();
 
         _hooked = HookAttach.Installed(target);
+        _walkHooked |= HookAttach.Installed(walk);
         _windowStart = Now;
 
         Console.WriteLine($"[KF2] hit guard: {(_hooked && Guard ? "on" : "off")}, watching func_{HitResolve:X8} " +
                           $"(entities 0x{EntityBase:X8}+{EntityCount}, " +
                           $"descriptors 0x{DescBase:X8}..0x{DescBlockEnd:X8})" +
+                          (_walkHooked ? $", func_{DescLookup:X8} fenced" : "") +
                           (Probe ? ", census on" : "") + (Verbose ? ", reporting every call" : ""));
 
-        return _hooked;
+        return _hooked && _walkHooked;
     }
 
     /// <summary>Main RAM. Fences every read below, so the guard cannot itself fault
@@ -349,6 +419,69 @@ internal static class HitGuard
     }
 
     /// <summary>
+    /// Fence the fifteen-pointer walk itself: `func_8003A448(a0 = descriptor,
+    /// a1 = kind)` reads `u8[*p]` for every non-zero `p` at `desc+0x38` until one
+    /// matches, and refuses nothing. Returning false makes the recompiled body not
+    /// run; `V0` is set to 0 first, which is the routine's own "no reaction found"
+    /// answer and the one its callers already handle -- `func_8003A490` passes it
+    /// to `func_80039E08`, which clears the reaction state, and `func_8003A9CC`
+    /// branches on it being zero.
+    ///
+    /// **This is the guard the final-boss crash needs, and the entry guard on
+    /// `func_8003A9CC` cannot be it.** That one validates the record when the
+    /// resolution *begins*, and the state it would have to catch does not exist
+    /// yet: it is created part-way through the very call it just approved.
+    /// </summary>
+    public static bool BeforeDescLookup(CpuContext c, IMemory m)
+    {
+        if (!_walkHooked || !Guard) return true;
+
+        _walkCalls++;
+
+        uint desc = c.A0;
+        uint kind = c.A1 & 0xFFu;
+
+        for (int k = 0; k < DescPtrCount; k++)
+        {
+            uint slot = desc + (uint)DescPtrOff + (uint)(k * 4);
+            if (!Ram(slot)) break;
+
+            uint ptr = m.ReadU32(slot);
+            if (ptr == 0u) continue;          // the walk skips a zero
+            if (Ram(ptr))
+            {
+                // The walk stops at the first match, so anything past it is never
+                // read and is not this guard's business.
+                if (m.ReadU8(ptr) == kind) break;
+                continue;
+            }
+
+            // The read that throws. Answer "no reaction" instead, which is what the
+            // console's open-bus read almost certainly produced.
+            _walkRefused++;
+            c.V0 = 0u;
+
+            if (!_walkSaid)
+            {
+                _walkSaid = true;
+                string where = desc >= DescBase && desc < DescBlockEnd
+                    ? ""
+                    : $"; the descriptor is outside the loaded block 0x{DescBase:X8}..0x{DescBlockEnd:X8}, "
+                      + $"so the type byte was {(desc - DescBase) / DescStride} "
+                      + "(docs/TODO.md #14: fdat23 blanks it to 255 mid-resolution)";
+                Console.Error.WriteLine(
+                    $"[KF2] hit guard: descriptor 0x{desc:X8} pointer {k} at 0x{slot:X8} reads "
+                    + $"0x{ptr:X8}, which is not RAM -- reaction lookup answered 0 instead of faulting. "
+                    + $"kind=0x{kind:X2}, called from 0x{c.RA:X8}{where}. Reported once.");
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// One line per distinct finding, on stderr -- so with the guard off it is out
     /// of the buffer before the process dies a call later, and with the guard on it
     /// is the report that replaces the stack trace. Deduplicated on what makes a
@@ -455,9 +588,11 @@ internal static class HitGuard
         Console.WriteLine($"[KF2] hit guard: {_calls} resolve(s), widest index {_maxIdx}, " +
                           $"widest type {_maxType}, {_refused} refused " +
                           $"({_badIndex} index, {_badRedirect} redirect, {_freeSlot} free slot, " +
-                          $"{_badType} type, {_badPointer} pointer)");
+                          $"{_badType} type, {_badPointer} pointer); " +
+                          $"{_walkCalls} reaction lookup(s), {_walkRefused} answered 0");
 
         _calls = 0;
         _badIndex = _badRedirect = _freeSlot = _badType = _badPointer = _refused = 0;
+        _walkCalls = _walkRefused = 0;
     }
 }

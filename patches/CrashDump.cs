@@ -173,20 +173,22 @@ internal static class CrashDump
     }
 
     /// <summary>
-    /// The record `fdat23` builds through `0x801A0598` — the pointer CLAUDE.md
-    /// already names as the one `func_8019F474` fills and `func_8019F688` writes
-    /// its camera through.
+    /// The record `fdat23` builds through `0x801A0598` — the pointer
+    /// `func_8019F474` fills and `func_8019F688` writes its camera through.
     ///
-    /// Two things about that build are worth printing. It writes the **drawn flag
-    /// `+0x9 = 1` four instructions before the type byte `+0x2`**, so anything
-    /// observing the record in between sees a drawn record with the previous
-    /// tenant's type — and `func_8003B72C`, the query that picks a hit candidate,
-    /// selects on exactly that flag. And the type it finally writes is **`0x11`,
-    /// 17**, against a boss area that loads only 14 descriptors, so type 17 is
-    /// filler and a hit resolved against this record faults on its first pointer.
+    /// **It is an effects-table record, not an entity one, and this line used to
+    /// claim otherwise.** `func_8019F474` gets it from `func_80040F58`, which
+    /// scans `0x8019CC6C` — 128 slots of `0x48`, free at `u8[+0x0] == 0xFF` —
+    /// which is stage 5's effects table. So the write order that looked alarming
+    /// (`+0x9 = 1`, the drawn flag, four instructions before `+0x2 = 0x11`, the
+    /// type) is not a window on the entity table at all, and `func_8003B72C`
+    /// never sees this record. The real source of the crash's type-255 entity
+    /// records is `func_8019F688` itself; see "The crash on the final boss's last
+    /// hit" in `docs/TODO.md`.
     ///
-    /// Whether the pointer lands in the entity table at all is the thing to read
-    /// off this line; the offsets match the layout but that is inference.
+    /// Kept because it is still the ending's own record and worth seeing at a
+    /// crash — the line now says which table it landed in rather than asserting
+    /// one.
     /// </summary>
     static void DumpBossRecord(TextWriter w, IMemory m)
     {
@@ -199,14 +201,24 @@ internal static class CrashDump
         bool inTable = rec >= EntityBase &&
                        rec < EntityBase + (uint)(EntityCount * EntityStride) &&
                        (rec - EntityBase) % EntityStride == 0;
-        string where = inTable
-            ? $"entity slot {(rec - EntityBase) / EntityStride}"
-            : "NOT an aligned entity slot";
+        const uint EffectsBase = 0x8019CC6C;   // stage 5's table, 128 x 0x48
+        const int EffectsStride = 0x48;
+        const int EffectsCount = 128;
+
+        bool inEffects = rec >= EffectsBase &&
+                         rec < EffectsBase + (uint)(EffectsCount * EffectsStride) &&
+                         (rec - EffectsBase) % EffectsStride == 0;
+
+        string where = inEffects
+            ? $"effects slot {(rec - EffectsBase) / EffectsStride}, which is where "
+              + "func_80040F58 allocates it"
+            : inTable
+                ? $"entity slot {(rec - EntityBase) / EntityStride}"
+                : "neither an aligned effects slot nor an aligned entity slot";
 
         w.Write($"[KF2] fdat23 record: 0x801A0598 -> 0x{rec:X8} ({where})");
         if (Ram(rec + 0x9u))
-            w.Write($", type {m.ReadU8(rec + 0x2u)} drawn {m.ReadU8(rec + 0x9u)} " +
-                    $"(the build writes +9 before +2, and writes type 0x11)");
+            w.Write($", bytes +2={m.ReadU8(rec + 0x2u)} +9={m.ReadU8(rec + 0x9u)}");
         w.WriteLine();
     }
 

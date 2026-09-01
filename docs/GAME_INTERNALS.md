@@ -1077,6 +1077,42 @@ grep -n "WriteU16((c\.\w* - 0x6BD8u)" generated/*.cs   # direct form
 grep -n -- "- 0x6BD8u;" generated/*.cs                 # register-base form
 ```
 
+### An area module gets a hook on every hit, and `fdat23` ends the game from it
+
+`func_8003A9CC` — the hit resolution, the routine that turns "the reach scan
+picked entity *i*" into damage and a reaction — calls
+`u32[u32[0x8017E068] + 0x48]` before it is done with the record. `0x8017E068`
+holds the loaded area module's base, and `+0x48` is **dispatch slot 18** of the
+32 the module header carries, so that is a **per-area damage hook**: the module
+gets to see, and change, every hit landed in its area, from inside the resolution.
+Read it out of the module bytes directly rather than from a call site, because
+nothing calls these statically:
+
+```bash
+python3 scripts/extract_file.py disc/KingsField2.cue CD/COM/FDAT.T -o /tmp/FDAT.T
+python3 -c "import struct;d=open('/tmp/FDAT.T','rb').read()[821248:821248+8192]; \
+            print([hex(w) for w in struct.unpack_from('<32I',d,0)])"   # fdat23
+```
+
+Most slots point at the module's `jr ra` stub (`0x8019F0FC` in `fdat23`). The
+final boss's area fills three, and slot 18 is `func_8019FA2C`: it acts only on
+entity **0**, and it has two arms. The first killing blow tops the boss's HP
+`u16` at `+0x1A` back up by exactly the damage it just took — so the caller's
+`HP - damage` stays positive and the boss survives — and runs `func_8019F1B0`,
+the phase-two transition, once. Every blow after that runs `func_8019F474` and
+`func_8019F688`, which are the ending.
+
+**`func_8019F688` blanks six entity type bytes and then hands the game over.**
+At `0x8019F908` it writes `u8[+0x2] = 0xFF` into entity 0 and entities 6..10,
+runs a sixty-four step fade, and sets `GAME.EXE`'s quit word at `0x80199574`.
+It is the only write of `+0x2 = 0xFF` in the module, and those six are exactly
+the records the final-boss crash dump reported. The blanking is safe as far as
+`func_8019F688` is concerned — nothing it does afterwards indexes the descriptor
+table by type — but its **caller** is not done: `func_8003A9CC` returns from the
+hook, sees `HP - damage <= 0`, and calls `func_8003A490`, which re-reads
+`u8[rec+0x2]`. See "The crash on the final boss's last hit" in
+[TODO.md](TODO.md) and `patches/HitGuard.cs`.
+
 ### The rate words are written before they are read, inside stage 3
 
 `0x80199558` (walk speed, `0xC8`) and `0x8019955C` (turn rate, `0x1C` moving /

@@ -2768,8 +2768,8 @@ kill                  drop HP to zero, the way a hit would
 nearby [radius=8192]  live records of the world tables within radius units of the
                       player, nearest first, tagged by table (objects; buf6
                       "entities", whose reading is still Inferred -- TODO.md)
-ending [boss]         hand the game over to END.EXE; "boss" runs the post-final-
-                      boss sequence first
+ending [boss|kill]    hand the game over to END.EXE; "boss" runs the post-final-
+                      boss sequence first, "kill" replays the killing blow itself
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the
@@ -2831,13 +2831,32 @@ KF2_FPS=144 KF2_SHELL=1 KF2_AUTOSTART=2 KF2_AUTORELOAD=0 KF2_DEBUG_GODMODE=1 …
 # then: warp 7   (wait)   ending boss
 ```
 
-**What it has not yet caught is the bug it was built for.** The sequence
-completes and hands over to `END.EXE` at both `KF2_FPS=20` (25 s) and
-`KF2_FPS=144` (~32 s), with `LoopPacing` holding its body to 19.9-20 iterations a
-second and filling with 6.2 redraws each — which is the patch working. So either
-the reported crash is not in `func_8019F688`, or it needs state this route does
-not set up: it is invoked from stage 3's post rather than from inside the boss's
-own damage handler, with a boss that was never fought. See `docs/TODO.md`.
+- **`ending kill`** is the form that **does** reproduce the crash, and it exists
+  because `ending boss` never could. `ending boss` calls the two loops directly,
+  and the crash is not in them: it is in the hit resolution *underneath* them,
+  which that route never puts on the stack. `ending kill` replays the two calls
+  that matter, in the game's own order — `fdat23`'s damage hook
+  `func_8019FA2C(entity 0, 1)`, and then the death reaction
+  `func_8003A490(entity 0, 3)` that `func_8003A9CC` makes next — having first set
+  the preconditions the fight leaves behind (`u8[0x801B30A2] = 0`, the ending not
+  yet run; `u8[0x801B30A6] = 1`, the phase-two transition already done, so the
+  hook takes its ending branch rather than the HP top-up that survives the first
+  kill; `u16[0x8016C55E] = 1`, the boss on its last point). It prints entity 0's
+  type byte after the hook and the fifteen descriptor pointers, so the run says
+  what it found even though the reply times out — both `boss` and `kill` run for
+  far longer than the channel's five-second reply deadline, so the JSON never
+  reaches the client and stdout is the record.
+
+**It caught the bug it was built for.** Measured at `KF2_FPS=165` in area 7:
+`entity 0 type is now 255, descriptor 0x80179DAC, pointers: 0FFF0000 FF380320
+00000000 …` — the first pointer being `0x0FFF0000`, the exact value the reported
+crash died on. With `KF2_HITGUARD=0` the death reaction faults there; with the
+guard on it answers 0 and the ending hands over to `END.EXE`. See "The crash on
+the final boss's last hit" in `docs/TODO.md`.
+
+Getting there is still the `warp 7` + `KF2_DEBUG_GODMODE=1` rig above; without
+godmode the warp kills the player on the way in and the session reaches
+`END.EXE` by the death route instead, with `fdat23` already unloaded.
 
 ### One implementation of the warp
 
