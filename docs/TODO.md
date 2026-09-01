@@ -450,27 +450,68 @@ useful than the question was.
    arithmetic reads those same words is a separate reading). See "Editing the
    character: the split is the design" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
 
-14. **Find the crash after the final boss, at a high frame rate.** Reported from
-   play: at the default 20 fps the ending arrives, and above it the game dies
-   between the boss's death and `END.EXE`. Not reproduced. The sequence is
-   `fdat23`'s `func_8019F474` + `func_8019F688` — two modal loops that present
-   their own frames, so `LoopPacing`'s territory and inert at or below the tick
-   rate, which is the right shape for a defect only high rates see. `ending boss`
-   on the command channel runs exactly those two, and it **completes** at 20 fps
-   (25 s) and at 144 fps (~32 s), with the probe reading 19.9-20 iterations a
-   second and 6.2 redraws each. So the rig does not yet reach the bug. What it
-   does not reproduce is the *call site*: it runs the sequence from stage 3's post
-   with a boss that was never fought, where the game runs it from inside
-   `func_8019FA2C`, one frame after a boss with live effects, projectiles and
-   sound has taken its last hit. The next step is to enter it the game's way —
-   hook `func_8019FA2C` and force the HP `u16` at `a0+0x1A` to zero on a real hit
-   — which needs a save at the boss, or enough play to reach one. Failing that,
-   the two switches that would bisect it from a real playthrough are
-   `KF2_LOOPPACING=0` (loop back on the render rate, no redraws) and
-   `KF2_LOOPPACING=pace` (held to the tick, no redraws): if either survives, the
-   redraws are the cause. Take `dotnet-stack report` on the live process rather
-   than adding logging — the frozen routine names itself. See "`ending` exists
-   because the last ten minutes of the game are otherwise untestable" in
+14. **The crash on the final boss's last hit.** Reported from play: at the default
+   20 fps the ending arrives, and above it the game dies. **There is now a stack
+   trace of it, and it refutes what this entry used to say.** The guess was that
+   it lived in `fdat23`'s two post-boss modal loops `func_8019F474` +
+   `func_8019F688` — "so `LoopPacing`'s territory, and inert at or below the tick
+   rate, which is the right shape for a defect only high rates see". There is no
+   `fdat23` frame anywhere on the trace:
+
+   ```
+   func_8001369C   the main loop
+    +- func_8002A550    stage 3, the player and weapon stage
+       +- func_800271D0    steps the swing, walks the object table
+          +- func_8003A9CC    resolve a hit against one entity
+             +- func_8003A490
+                +- func_8003A448   ReadU8(0x0FFF0000) -> unmapped address
+   ```
+
+   It fires on the **killing blow itself**, from the main loop, before the ending
+   sequence is entered at all. That is why the `ending boss` rig kept passing at
+   144 fps and "the rig does not yet reach the bug" — it runs the two modal loops
+   from stage 3's post with a boss that was never fought, so it never reaches this
+   call. The two switches this entry proposed as the bisect, `KF2_LOOPPACING=0`
+   and `=pace`, are therefore the wrong pair; the crash is not in a modal loop.
+
+   **The mechanism, as far as reading the recompiled code gets.**
+   `func_800271D0` takes `u16[obj+0x2A]` as an *entity index*; `func_8003A9CC`
+   turns it into `0x8016C544 + idx*0x7C`, redirects through `s16[rec+0x22]` when
+   the record's kind byte is 3, and then computes
+   `desc = 0x80172624 + u8[rec+0x2] * 120`. `u8[rec+0x2]` is the creature **type**,
+   indexing a per-area descriptor table that `func_80017244` copies to
+   `0x80172624` — `0xCB0` *words*, so the block ends at `0x801758E4` and holds at
+   most 108 records, likely fewer since other tables share it.
+   `func_8003A490` walks fifteen pointers at `desc+0x38` and does `ReadU8` on each.
+   `0x0FFF0000` is not a pointer; it is whatever bytes sit at `desc+0x38` once
+   `desc` has walked off the end of the real table. **Neither routine validates
+   anything** — no bound on the type byte, and no check that the slot is occupied
+   before reading its type. A free slot holds `0xFF` at `+0x0`, and the code tests
+   that byte for `3` (the redirect) and never for `0xFF`.
+
+   Note also that the console probably did not crash here: PS1 RAM reads at an
+   unmapped address return open-bus garbage rather than trapping, while
+   `PSMemory` throws. That is a hypothesis about the hardware, not a reading of
+   it, but it is the reason a latent game bug can surface as a hard stop in this
+   port and not on a disc.
+
+   **`KF2_HITPROBE=1` (`patches/HitProbe.cs`) is the next step and is written.**
+   It replays exactly what `func_8003A9CC` is about to do to its argument and
+   names the first malformed step, on the call *before* the crash rather than in
+   the unwind, separating the three causes that point in different directions: the
+   **index** out of range, the index fine but the **slot free** (the shape to
+   expect one frame after a boss dies), or both fine and the **type byte** out of
+   range. It also walks the fifteen pointers itself and names the first that is
+   neither zero nor RAM. Measured in ordinary combat at 144 fps, 40 swings: widest
+   index 57, widest type 2, 0 malformed — so it is quiet until something is
+   actually wrong, and those two maxima are the only measurement anywhere of what
+   the real bounds are.
+
+   What it still needs is a save at the boss, or enough play to reach one. The
+   switches worth bisecting from a real playthrough are now `KF2_SMOOTH_OBJECTS=0`
+   (the only patch that writes into the entity table), then `KF2_FPS` stepped from
+   20 upward to find where it starts, then `KF2_SMOOTH_ANIM=0`. See "`ending`
+   exists because the last ten minutes of the game are otherwise untestable" in
    [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 15. ~~**"The game crashes after The End."**~~ Answered, and it was not a crash:
    `END.EXE` really does end in `j 0x80011A50` on itself and never asks the boot

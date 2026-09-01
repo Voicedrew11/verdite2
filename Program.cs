@@ -436,6 +436,21 @@ Kf2.DrawCensus.Install();
 Kf2.PacketMatch.Configure(Environment.GetEnvironmentVariable("KF2_PACKETMATCH"));
 Kf2.PacketMatch.Install();
 
+// What the weapon's hit resolution was handed, one call before it faults. For
+// docs/TODO.md #14 -- the crash when the final boss takes its last hit, above the
+// tick rate and not at it. The first stack trace of it puts the fault in stage 3's
+// hit check (func_8003A9CC -> func_8003A490 -> func_8003A448 reading 0x0FFF0000),
+// in the main loop and nowhere near fdat23's post-boss modal loops, which is where
+// it had been assumed to live. The probe replays what that routine does to its
+// argument -- entity index, the kind-3 redirect, the type byte, the descriptor's
+// fifteen pointers -- and names the first step that is malformed, so the line is
+// out on the call before the crash rather than lost in the unwind. Reads only.
+//
+//     KF2_HITPROBE=1      report every malformed record, and a census
+//     KF2_HITPROBE=2      also report every call, which is very loud
+Kf2.HitProbe.Configure(Environment.GetEnvironmentVariable("KF2_HITPROBE"));
+Kf2.HitProbe.Install();
+
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
 // picture the port should be able to offer without a package having to load: the

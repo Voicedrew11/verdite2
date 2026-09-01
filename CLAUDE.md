@@ -105,6 +105,7 @@ KF2_SMOOTH_ANIM=time                   # lerp the clip time between the two tick
 KF2_SMOOTH_ANIM=timeline               # comparison: interpolate on the clip's own timeline
 KF2_SMOOTH_ANIM=weight                 # comparison: the blend weight only, inside the game's segment
 KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the verdict census, carries
+KF2_HITPROBE=1                         # what the weapon's hit resolution was handed; =2 every call (docs/TODO.md #14)
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
