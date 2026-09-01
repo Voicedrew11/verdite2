@@ -373,6 +373,22 @@ public static class FramePacing
     static double _windowStart;
     static long _windowFrames;
 
+    /// <summary>
+    /// `KF2_FPS_PROBE=1`: one line a second saying what the port is actually
+    /// doing -- the rate achieved against the rate asked for, the world's tick
+    /// rate against the ticks it actually took, and whether a frame can land
+    /// between two ticks at all.
+    ///
+    /// It exists because every other probe in the port hangs off a *game*
+    /// function, so none of them says anything at the title screen -- and the
+    /// title screen is where a session that is going to have no smoothing in it
+    /// announces itself, by running at the wrong speed. This one is driven by the
+    /// frame boundary, which is reached in all three executables, so it reports
+    /// from the first frame of the boot.
+    /// </summary>
+    static bool _probe;
+    static long _windowTicks;
+
     // ---- the logic clock ------------------------------------------------------
 
     // Unspent logic ticks, in ticks. Advanced by wall-clock time at the frame
@@ -521,8 +537,10 @@ public static class FramePacing
     };
 
     public static void Configure(string? fps, string? gate, string? logic = null,
-                                 string? tickRate = null)
+                                 string? tickRate = null, string? probe = null)
     {
+        _probe = probe == "1";
+
         if (!string.IsNullOrWhiteSpace(tickRate))
         {
             if (!double.TryParse(tickRate, NumberStyles.Float, CultureInfo.InvariantCulture,
@@ -922,11 +940,19 @@ public static class FramePacing
         if (elapsed >= 1000.0)
         {
             Measured = _windowFrames * 1000.0 / elapsed;
+
+            if (_probe)
+                Console.WriteLine($"[KF2] pacing: {Measured:0.0} fps drawn of {Describe()}, " +
+                                  $"{_windowTicks * 1000.0 / elapsed:0.0} tick(s)/s of {LogicHz:0.#} Hz, " +
+                                  $"{(Extrapolating ? "smoothing can carry" : "nothing to carry at this rate")}");
+
             _windowFrames = 0;
+            _windowTicks = 0;
             _windowStart = now;
         }
 
         AdvanceLogicClock(now);
+        if (_tickThisFrame) _windowTicks++;
 
         // How long this frame is allowed to be is no longer the render rate alone:
         // a frame the main loop did not produce belongs to a loop of the game's own

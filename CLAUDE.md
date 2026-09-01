@@ -81,6 +81,7 @@ KF2_FPS=120                            # 20 (default), any number, or off; see "
 KF2_TICKRATE=30                        # ticks a second the world runs at (20 by default)
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
+KF2_FPS_PROBE=1                        # a line a second: fps drawn, ticks taken, whether the smoothing can carry
 KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
 KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
 KF2_LOOPPACING=0                       # loops that render their own frames back on the render rate (on by default)

@@ -591,6 +591,41 @@ condition is `TickedThisFrame`, so a spurious tick both advanced the world and
 ended the fill early. Only the genuine first sample restarts now; no elapsed time
 means no credit and no tick.
 
+### The rate a session is actually running at (`KF2_FPS_PROBE=1`)
+
+Every other probe in the port hangs off a *game* function, so none of them says
+anything before an area is loaded — and a session that is going to have no
+smoothing in it announces itself long before that, at the title, by running at the
+wrong speed. `KF2_FPS_PROBE=1` is driven by the frame boundary instead, which is
+reached in all three executables, so it reports from the first second of the boot:
+
+```
+[KF2] pacing: 15.0 fps drawn of 165 fps, 15.0 tick(s)/s of 20 Hz, smoothing can carry
+```
+
+Three numbers and a verdict: the rate achieved against the rate asked for, the
+ticks actually taken against `LogicHz`, and `FramePacing.Extrapolating` — which is
+the single test both halves of `FrameSmoothing` and all of `ObjectSmoothing` and
+`AnimSmoothing` sit behind. `nothing to carry at this rate` is the whole of "the
+smoothing patches are doing nothing", stated by the port rather than judged by eye.
+
+**The baseline, measured over a 200 s boot on this machine, is:**
+
+| where | fps drawn | ticks/s | why |
+|---|---|---|---|
+| logos and title (OPEN.EXE) | **15.0** | 15.0 | OPEN.EXE's own four-vblank wait, and `FramePacing` deliberately hooks only GAME.EXE's frame gate — so the title is **not** paced by `KF2_FPS` and reads 15.0 at 20, 60, 165 and 300 alike |
+| the intro movie | **10.0** | 10.0 | disc-paced, `patches/recompone/0026` |
+| an area, attract demo or play | **165.0** | 20.0 | the render rate asked for, against `LogicHz` |
+
+The first row is the one worth knowing, because it is fixed by the emulated vblank
+grid — a wall clock — rather than by anything the port chooses: at the title,
+`KF2_FPS` changes nothing at all. So **a title screen running visibly faster or
+slower than the rest of the boot is a symptom with a short list of causes**, and
+this probe names which: a low `fps drawn of` says the saved rate did not load, a
+`nothing to carry` says the smoothing is inert whatever its checkboxes read, and a
+`tick(s)/s` far above `LogicHz` in an area is the lost-boundary failure the section
+above describes.
+
 ### A registration is not a hook, and seven patches latched before doing the work
 
 The bullet above was written for `FramePacing` and was **not true even there**, for

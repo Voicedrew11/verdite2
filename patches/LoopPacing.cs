@@ -424,10 +424,14 @@ public static class LoopPacing
         {
             Reprime();
 
-            // Only the three executables move this. An fdat is GAME.EXE still
-            // running; see _gameExe for what reading one as a hand-over costs.
+            // Only the three executables move this, plus the boot stub. An fdat is
+            // GAME.EXE still running; see _gameExe for what reading one as a
+            // hand-over costs. `main` is in the list because a hard reset re-runs
+            // Entry.Run's `Dispatcher.Load("main")` without re-running this class's
+            // constructor, so a session reset out of an area would otherwise carry
+            // `true` through the whole of the next boot's title.
             if (e.Name is "game") _gameExe = true;
-            else if (e.Name is "open" or "end") _gameExe = false;
+            else if (e.Name is "open" or "end" or "main") _gameExe = false;
         });
 
         HookAttach.OnOverlayLoad("loop pacing", Attach);

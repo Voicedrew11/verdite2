@@ -215,7 +215,8 @@ Kf2.KeyLayout.Install();
 Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_FPS_GATE"),
                           Environment.GetEnvironmentVariable("KF2_FPS_LOGIC"),
-                          Environment.GetEnvironmentVariable("KF2_TICKRATE"));
+                          Environment.GetEnvironmentVariable("KF2_TICKRATE"),
+                          Environment.GetEnvironmentVariable("KF2_FPS_PROBE"));
 Kf2.FramePacing.Install();
 
 // The one thing frame pacing cannot reach: the in-game menu is a modal sub-loop
