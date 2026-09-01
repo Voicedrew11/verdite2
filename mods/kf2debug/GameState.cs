@@ -66,12 +66,61 @@ internal static class GameState
     internal const uint Pad       = 0x80199554;   // u16
 
     // ---- stats: buf2, the 0x58-byte per-area buffer at 0x80199414 ----
-    internal const uint Exp       = 0x80199414;   // u32
+    //
+    // The whole block is mapped in "The status screen names the rest of buf2" in
+    // docs/GAME_INTERNALS.md. What matters here is the split: a handful of these
+    // words are the character, and nineteen of them are a *cache* that
+    // func_800244CC rebuilds from the equipment. Attributes.cs is where that
+    // distinction is acted on.
+    internal const uint Exp       = 0x80199414;   // u32, capped at 999999 by func_80024CAC
+    internal const uint ExpNext   = 0x80199418;   // u32, EXP the next level needs
     internal const uint Level     = 0x8019941C;   // u8
     internal const uint MaxHp     = 0x80199426;   // u16
     internal const uint Hp        = 0x80199428;   // u16
     internal const uint MaxMp     = 0x8019942A;   // u16
     internal const uint Mp        = 0x8019942C;   // u16
+
+    // The two real attributes: what a level-up raises and what the save carries.
+    // func_800244CC opens by copying these into the two POWER words below.
+    internal const uint BaseStr   = 0x80199438;   // u16
+    internal const uint BaseMag   = 0x8019943A;   // u16
+
+    // "STR POWER" and "MAG POWER" on the status screen: base plus equipment,
+    // minus 20 while cursed. Rebuilt by func_800244CC, so a write here lasts
+    // only until the next equipment change.
+    internal const uint StrPower  = 0x8019943C;   // u16
+    internal const uint MagPower  = 0x8019943E;   // u16
+
+    internal const uint Gold      = 0x80199440;   // u32
+
+    // The status screen's second page. func_800244CC zeroes all seventeen and
+    // then adds each equipped item's contribution, in this order.
+    internal const uint OffSlash  = 0x80199444;   // u16
+    internal const uint OffChop   = 0x80199446;
+    internal const uint OffStab   = 0x80199448;
+    internal const uint OffHoly   = 0x8019944A;
+    internal const uint OffFire   = 0x8019944C;
+    internal const uint OffEarth  = 0x8019944E;
+    internal const uint OffWind   = 0x80199450;
+    internal const uint OffWater  = 0x80199452;
+
+    internal const uint DefSlash  = 0x80199456;   // u16
+    internal const uint DefChop   = 0x80199458;
+    internal const uint DefStab   = 0x8019945A;
+    internal const uint DefPoison = 0x8019945C;
+    internal const uint DefDark   = 0x8019945E;
+    internal const uint DefFire   = 0x80199460;
+    internal const uint DefEarth  = 0x80199462;
+    internal const uint DefWind   = 0x80199464;
+    internal const uint DefWater  = 0x80199466;
+
+    // CONDITION on the status screen, which reads GOOD when all five are zero.
+    // Signed counters -- the screen loads every one of them with lh.
+    internal const uint CondPoison   = 0x80199468;   // s16
+    internal const uint CondCurse    = 0x8019946A;   // s16
+    internal const uint CondDark     = 0x8019946E;   // s16
+    internal const uint CondSlow     = 0x80199472;   // s16
+    internal const uint CondParalyze = 0x80199474;   // s16
 
     // The player's action state, dispatched through a jump table at
     // 0x80011300 + state*4 in stage 3. 0x11 is dead.

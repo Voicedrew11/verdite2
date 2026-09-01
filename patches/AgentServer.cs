@@ -101,6 +101,7 @@ public static class AgentServer
         "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
         "kill - drop HP to zero, the way a hit would",
         "nearby [radius=8192] - live records of the world tables within radius units",
+        "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -310,6 +311,7 @@ public static class AgentServer
                 break;
             case "load":
             case "warp":
+            case "ending":
                 Enqueue(_heavy, cmd);
                 break;
             default:
@@ -367,6 +369,7 @@ public static class AgentServer
         "load" => DoLoad(cmd.Arg1),
         "warp" => DoWarp(cmd.Arg1),
         "nearby" => DoNearby(cmd.Arg1),
+        "ending" => DoEnding(cmd.Arg1),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
 
@@ -541,6 +544,129 @@ public static class AgentServer
 
         string? err = AreaWarp.TryRun(c, m, area);
         return err != null ? Err(err) : ("{\"ok\":true,\"cmd\":\"warp\",\"area\":" + area + "}");
+    }
+
+    // ---- the ending ----
+    //
+    // The game's own hand-over, which no session can otherwise reach without
+    // finishing the game -- and the two moments the port has been reported to
+    // hang at live on either side of it.
+    //
+    // GAME.EXE's main loop tests a word right after stage 13: nonzero means
+    // "stop", and which nonzero it is chooses what runs next. 1 writes the boot
+    // stub's file-name index 2 (END.EXE) and 9 writes index 0 (OPEN.EXE, i.e.
+    // quit to title); the loop then returns, and the stub -- which Execs an
+    // executable as a call and loops -- loads the chosen file. See BootExe for
+    // the loader's own side of that.
+    //
+    //   ending        write the word, and nothing else. The hand-over on its own.
+    //   ending boss   run the post-boss sequence that normally writes it:
+    //                 func_8019F688 in fdat23 (area 7), which fdat23's boss
+    //                 damage handler func_8019FA2C calls when the boss's HP word
+    //                 at rec+0x1A reaches zero. It is two modal loops that
+    //                 present their own frames -- LoopPacing's territory -- and
+    //                 it ends by writing the quit word itself.
+    //   ending kill   the killing blow's own path, which is the only way to reach
+    //                 docs/TODO.md #14 without finishing the game. The game gets
+    //                 there as: func_800271D0 -> func_8003A9CC -> (dispatch slot
+    //                 0x48 = fdat23's func_8019FA2C) -> func_8019F474 +
+    //                 func_8019F688 -> back into func_8003A9CC, which takes the
+    //                 death branch and calls func_8003A490(record, 3). The middle
+    //                 of that blanks u8[+0x2] to 0xFF on entity 0 and entities
+    //                 6..10, so the last call resolves a descriptor 255 records
+    //                 past the block and reads a live object field as a pointer.
+    //                 This replays the two calls that matter, in that order.
+    const uint QuitWord = 0x80199574;      // GAME.EXE; 1 = ending, 9 = title
+    const uint BossSetup = 0x8019F474;     // fdat23
+    const uint BossEnding = 0x8019F688;    // fdat23
+    const uint BossDamageHook = 0x8019FA2C; // fdat23, dispatch slot 0x48
+    const uint DeathReaction = 0x8003A490;  // GAME.EXE, the call that faults
+    const uint EndingRan = 0x801B30A2;      // func_8019F474 sets it; the hook's gate
+    const uint PhaseTwoRan = 0x801B30A6;    // func_8019F1B0 sets it
+    const uint BossHp = EntityTable + 0x1Au;
+
+    static string DoEnding(string modeArg)
+    {
+        var c = RecompOne.Runtime.Runtime.Cpu;
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (c == null || m == null) return Err("not running");
+
+        string mode = modeArg.Trim().ToLowerInvariant();
+        if (mode.Length == 0)
+        {
+            m.WriteU32(QuitWord, 1u);
+            return "{\"ok\":true,\"cmd\":\"ending\",\"how\":\"quitword\"}";
+        }
+
+        if (mode == "kill") return DoEndingKill(c, m);
+        if (mode != "boss") return Err("usage: ending [boss|kill]");
+
+        // Both, in the caller's order. func_8019F474 is what fills the pointer at
+        // 0x801A0598 that func_8019F688 writes the camera through, so calling the
+        // sequence alone dereferences whatever the module's data happens to hold
+        // (measured: "unmapped address: 0x0145505B").
+        var setup = SymbolRegistry.Resolve("fdat23", null, BossSetup);
+        var fn = SymbolRegistry.Resolve("fdat23", null, BossEnding);
+        if (setup == null || fn == null)
+            return Err("fdat23 is not loaded — warp to area 7 first");
+
+        var prepare = setup.CreateDelegate<Action<CpuContext, IMemory>>();
+        var run = fn.CreateDelegate<Action<CpuContext, IMemory>>();
+        var saved = c.Snapshot();
+        try { prepare(c, m); run(c, m); }
+        finally { c.Restore(saved); }
+
+        return "{\"ok\":true,\"cmd\":\"ending\",\"how\":\"boss\"}";
+    }
+
+    /// <summary>
+    /// The final blow, as the game delivers it. Preconditions are set the way the
+    /// fight leaves them -- the phase-two transition already done, the ending not
+    /// yet run, and the boss on its last point of HP -- so the hook takes its
+    /// ending branch rather than the top-up branch that survives the first kill.
+    /// Then the death reaction `func_8003A9CC` would make next is made, which is
+    /// the call that reads the type byte fdat23 has just blanked.
+    /// </summary>
+    static string DoEndingKill(CpuContext c, IMemory m)
+    {
+        var hook = SymbolRegistry.Resolve("fdat23", null, BossDamageHook);
+        var death = SymbolRegistry.Resolve("game", null, DeathReaction);
+        if (hook == null) return Err("fdat23 is not loaded — warp to area 7 first");
+        if (death == null) return Err($"no game function at 0x{DeathReaction:X8}");
+
+        m.WriteU8(EndingRan, 0);
+        m.WriteU8(PhaseTwoRan, 1);
+        m.WriteU16(BossHp, 1);
+
+        var damage = hook.CreateDelegate<Action<CpuContext, IMemory>>();
+        var react = death.CreateDelegate<Action<CpuContext, IMemory>>();
+        var saved = c.Snapshot();
+        int typeAfter;
+        try
+        {
+            c.A0 = EntityTable;
+            c.A1 = 1u;
+            damage(c, m);
+
+            typeAfter = m.ReadU8(EntityTable + 2u);
+
+            // Printed rather than only returned: the two modal loops above take
+            // longer than the reply timeout, so the JSON never reaches the client.
+            uint desc = 0x80172624u + (uint)typeAfter * 120u;
+            var words = new StringBuilder();
+            for (int k = 0; k < 15; k++)
+                words.Append($" {m.ReadU32(desc + 0x38u + (uint)(k * 4)):X8}");
+            Console.WriteLine($"[KF2] ending kill: entity 0 type is now {typeAfter}, " +
+                              $"descriptor 0x{desc:X8}, pointers:{words}");
+
+            c.A0 = EntityTable;
+            c.A1 = 3u;
+            react(c, m);
+            Console.WriteLine("[KF2] ending kill: the death reaction returned without faulting.");
+        }
+        finally { c.Restore(saved); }
+
+        return "{\"ok\":true,\"cmd\":\"ending\",\"how\":\"kill\",\"typeAfter\":" + typeAfter + "}";
     }
 
     // ---- JSON helpers ----

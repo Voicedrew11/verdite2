@@ -61,9 +61,10 @@ Four things worth keeping:
   it three times faster, which — with the cap lifted above — is what took the
   camera from "stiff" to something like a modern shooter's. Fine aim near centre
   is untouched, because the ramp never starts there.
-* **The fractional carry is not optional.** At 30 fps a small deflection rounds
-  to a zero step every frame; without carrying the remainder the player simply
-  does not move below about a third of stick.
+* **The fractional carry is not optional.** A small deflection rounds to a zero
+  step every tick; without carrying the remainder the player simply does not move
+  below about a third of stick. The world ticking at 20 rather than 30 makes this
+  worse, not better — there are fewer chances a second for a remainder to cross 1.
 * **Buttons come from the mask table, never hardcoded**, so the patch follows the
   game's own control-config screen — and gets the byte order right by
   construction, since it ORs the game's own mask words back into the game's own
@@ -406,8 +407,10 @@ variant of the pad one.
 ### The angle scale, and where it comes from
 
 Yaw is 12 bits to the circle (`yaw & 0xFFF`), and the game's own numbers confirm
-it: the D-pad's turn rate of `0x1C` a frame at 30 fps is 74°/s, which is the
-figure the frame-pacing work already measured. Pitch is in the same units, held
+it: the D-pad's turn rate is `0x1C` **a logic tick**, which is 74°/s against the
+30 Hz world this was measured with and 49°/s against the 20 Hz one the port now
+defaults to. It is a tick rate and not a frame rate: drawing faster does not turn
+faster. Pitch is in the same units, held
 inside ±`0x2BC` — about 62° either side of level.
 
 The default is **0.15° a pixel**, so a quarter turn is about 600 px of movement

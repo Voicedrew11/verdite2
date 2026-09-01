@@ -83,6 +83,7 @@ public sealed class DebugMod : IMod
         Cheats.Reset();
         Hotkeys.Reset();
         Warp.Reset();
+        Attributes.Reset();
 
         DebugPanel.Instance.IsOpen = false;
         _panelRegistered = false;
@@ -121,8 +122,9 @@ public sealed class DebugMod : IMod
     public void DrawSettings()
     {
         ImGui.TextWrapped("Noclip flight, invincibility, infinite MP, a speed multiplier, position "
-                        + "bookmarks and area warp, plus a live readout of the player state. "
-                        + "Everything is off until you switch it on.");
+                        + "bookmarks, area warp and an editor for the character's attributes, plus "
+                        + "a live readout of the player state. Everything is off until you switch "
+                        + "it on.");
         ImGui.Separator();
 
         if (ImGui.Button("Open the debug panel"))

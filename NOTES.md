@@ -83,13 +83,23 @@ pop back to affine the moment one vertex clamps off-screen, and a pixel that two
 vertices share no longer hands one polygon the other's depth (see "The table is
 not unique").
 
-**The frame rate is pinned to 30 fps**, NTSC's fastest band — the port used to
-burst past it (see "Frame pacing" in `docs/PATCHES_AND_MODS.md`). **The ending
-runs**: `END.EXE` plays the two STR movies and holds "The End" — see "The ending
-screen" in `docs/RUNTIME.md`.
+**The frame rate is a free number and the world's tick rate is a second one.** The
+port skips the game's own frame gate at every rate — it decides both together and
+knows one answer for both, 30 — paces the picture itself, holds the world to a
+fixed timestep and carries the camera between ticks, so the picture can run at 60,
+120 or 165 while the world keeps a console's timing. **Both default to 20**: the
+literal 2 in that gate is what the code *asks* for, but the console missed the
+deadline under load and landed in the three-vblank band, and since the game's speed
+is its frame rate, 20 is the speed it was played at. That is a judgement no counter
+here can settle, so it is a setting (see "Any frame rate" in
+`docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
+movies and holds "The End", and **any button then returns to the title** —
+holding it forever is what the original does, and on a window that is
+indistinguishable from a crash. See "The ending screen" in `docs/RUNTIME.md`.
 
-**Widescreen, sub-pixel positioning and the Z-buffer all ship switched off for the
-same reason** — mechanism measured, picture never checked by eye. Mouse look is
+**Widescreen, sub-pixel positioning, the Z-buffer and every frame rate above the
+tick rate all ship switched off for the same reason** — mechanism measured, picture never
+checked by eye. Mouse look is
 off for a different one: its path *is* measured end to end, but a pointer that
 disappears into the game unasked is worse than one switch to find. What is open
 and undiagnosed is in `docs/TODO.md`.
@@ -148,13 +158,17 @@ Making the recompiler produce correct code: config, overlays, function maps, SDK
 
 ### [RUNTIME.md](docs/RUNTIME.md)
 
-What a static recompilation loses (interrupts, VSync-driven work) and the twenty patches to the checkout.
+What a static recompilation loses (interrupts, VSync-driven work) and the patches to the checkout.
 
 - DMA callbacks: the thing that was actually missing
 - The three ways a CD read can hang
 - The interrupt-callback table cannot be guessed
+- The vblank fired when the game asked
+- There were three fixed 60s, and only one of them is the host's
+- The intro movie ran at the render rate, because its pacer never armed
 - The menu deadlock: input only moved when the game drew
 - The ending screen
+- Holding the frame is faithful, and it still reads as a crash
 - The patches to the checkout, one by one
 - The interface only fits a monitor whose scale is a whole number
 - The scale can put the settings out of reach
@@ -172,6 +186,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Z-buffer: the same depth, used as occlusion
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding
+- The display list cannot name a face: why packet-level smoothing failed
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 
@@ -191,6 +206,13 @@ Aspect ratio, the HUD and screen-space effects authored 320 wide, and the three 
 The reverse-engineered game: main loop, player state, stats, death, movement, areas, saves, the boot stub.
 
 - The main game loop, stage by stage
+- The loop's own rate gate is `func_80017880`, and the number is a literal 2
+- Stage 2 is the object-table state machine
+- The map is an 80x80 tile grid, and a tile's height is one byte
+- The model pipeline has no skeleton
+- Stage 8 is the render camera, and it is the only copy
+- What in the renderer draws what
+- The frame's applied position delta is a triple of its own
 - Player state: found, and it was in stage 3 all along
 - Saving and loading
 - Debug tools
@@ -203,9 +225,11 @@ How the port's own code attaches, where its settings go, plus frame pacing and a
 - Mods
 - Patch settings: a patch's knobs go in the runtime's own sections
 - Frame pacing: the port is pinned to the fastest band
+- Any frame rate: three gates, one logic clock, and a smoothed view
 - Auto reload
 - Auto start and the agent beacon
 - The command channel
+- `ending` exists because the last ten minutes of the game are otherwise untestable
 - The MCP layer
 
 ### [INPUT.md](docs/INPUT.md)

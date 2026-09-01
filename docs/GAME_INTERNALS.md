@@ -76,11 +76,479 @@ that ran before it. What a steady in-area window says:
   one), and the area module's own data at `0x8019F07C`.
 - **Stage 2 is the biggest function in the loop by far** — 1,917 instructions,
   224 functions reachable, `VSync` and `DrawOTag` in its subtree — and writes four
-  words. Whatever it does, it does somewhere else.
+  words *through literal addresses*. Everything else it writes goes through the
+  object-table base register, which is why the probe saw almost nothing. See
+  "Stage 2 is the object-table state machine" below.
 
 The probe is not free — 220k memory reads a frame drops the port to ~26 fps and
 shifts the band histogram — so it is a diagnostic to run deliberately, not to
 leave on.
+
+### The loop's own rate gate is `func_80017880`, and the number is a literal 2
+
+**Confirmed, read straight out of the emitted C#.** "The loop waits an integer
+number of vblanks" is not a `VSync` argument — every `VSync` call in all three
+overlays passes 0. The wait is the game's own, and it is three pieces:
+
+| address | what |
+|---|---|
+| `func_80017850` | the **vblank callback**. Increments `0x801B6CA8` and `0x801B6CAC` and does nothing else. |
+| `func_80018690` | registers it, on event `0xF2000003` spec `0x0002` (RCntCNT3/EvSpINT), and zeroes `0x801B6CA8`. |
+| `func_80017880` | the **frame gate**. `EnterCriticalSection`; while `*(u32*)0x801B6CA8 < 2`, `ExitCriticalSection` and `VSync(0)`, and loop; then write `0` and return. |
+
+**Stage 13 calls the gate as its last act** (`0x800346B4`), right after the
+presenter `func_8002E0FC` — which is the frame's other `VSync(0)`. So a rendered
+frame costs two `VSync` calls: one to show the picture, and however many the gate
+needs to see two vblanks go by.
+
+The literal `2` at `0x800178A4` **is the frame rate the game asks for**, in
+software. Here, where `patches/recompone/0021-vblank-wall-clock.patch` advances
+the emulated vblank on a wall-clock 60 Hz grid, it paces the port to exactly
+30 fps whatever the host is doing, and nothing above 30 is reachable while it
+runs — which is why `patches/FramePacing.cs` hooks it.
+
+**What it asks for is not what the console delivered, and the port now says so.**
+King's Field is heavy enough that the loop misses that deadline under load and the
+frame costs three vblanks; since the game's speed *is* its frame rate, 20 is the
+speed it was played at. The port's HLE GPU makes the two-vblank deadline every
+time and never bands down, so the gate is now **skipped at every rate, not only
+above 30** — it decides the render rate and the world rate together and knows one
+answer for both. The world runs on `FramePacing.LogicHz` instead, 20 by default
+and 30 as a setting. See "The reference band is 3 vblanks, not 2" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+`0x801B6CAC` is bumped by the same callback and never reset by anything.
+
+**With the gate skipped, a rendered frame costs exactly one `VSync` call** — the
+presenter's, which `func_8002E0FC` makes immediately *before* its `DrawOTag`. That
+is what the port's frame boundary is keyed on, and since the gate is now skipped at
+every rate it is the only case that arises: a `2` on `mods/framestats`' calls-per-
+frame count means the gate is back. (The ordering is why it also worked while the
+gate still ran below 30 — the presenter's call landed before the ordering table and
+the gate's spin calls after it, so the count at the boundary was non-zero exactly
+once per table either way.) See "Any frame rate" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+### What in the loop holds per-call state, and what of it can draw
+
+Answered while fixing the frame pacing, and recorded here because the second half
+is the constraint: a stage that submits primitives cannot be skipped on a frame,
+whatever counters it also owns. Reachability is static, walking the call subtree in
+the emitted C# for `DrawOTag`, `VSync`, `PutDispEnv` or `PutDrawEnv`.
+
+| what | per-call state | can it draw |
+|---|---|---|
+| stage 3 `func_8002A550` | the player, the death counter, the poison tick, the buff timers, the global frame counter `0x80199488` | only through a nested sub-loop — see below |
+| stage 4 `func_80040348` | the 200-record entity table | no |
+| stage 5 `func_80046A60` | 128 effect lifetimes at `rec+0x0E` | no |
+| stage 6 `func_8004910C` | the module's own per-frame logic | **no**, in all nine modules |
+| stage 2 `func_80037C0C` | the object table at `0x80177714` — every world prop that moves | **yes**, but through one edge only — see below; gated regardless |
+| stage 13 `func_800342D8` | the jitter accumulator at `0x8006E608`, in its own body | yes, it is the renderer |
+| — `func_80033FBC` | the fade state machine, called by stage 13 | **no** — three functions, none of them draw |
+
+### Stage 2 is the object-table state machine
+
+`func_80037C0C` is where doors, the drawbridge, the minecart and the crystals
+move. Its shape, read off the emitted C#:
+
+- It walks the **object table at `0x80177714`** — `0x18C` (396) slots of `0x44`,
+  count held on the stack, two base registers advanced by `0x44` at the loop tail.
+  A slot whose **type byte at `rec+0x4`** is `0xFF` is skipped; that is the same
+  free test `AreaWarp` and `AgentServer` use and the value the loader writes when
+  it clears the table.
+- Each iteration **publishes two pointers to globals**: the record itself to
+  `0x8017E04C`, and its definition record to `0x8017E048`. The definition is
+  `0x80175914 + (u16 at rec+0x6) * 0x18` — so `rec+0x6` is a definition index and
+  `0x80175914` (inside `buf5`) is a `0x18`-stride table of object *kinds*.
+  `0x8017E04C` is cleared to 0 on loop exit, so it means "the object being
+  stepped right now" and nothing outside the loop can read it.
+- It then **dispatches on the type byte**: `v1 = type - 2`, rejected if
+  `v1 > 0xDF`, so valid types are `0x02..0xE1` — a **224-entry jump table at
+  `0x8001191C`**, collapsing to thirty distinct arms. One arm is an indirect call
+  through `*(u32*)(*(u32*)0x8017E068 + 0x24)`, slot 9 of the area module's header,
+  which is how a module gives its own props behaviour.
+
+What it writes, by record offset (site counts over the whole function):
+
+| offset | width | sites | what |
+|---|---|---|---|
+| `+0x08` | u16 | 43 | the per-object state word — the state machine's own program counter |
+| `+0x40` | u16/u8/u32 | 20 | a per-object timer |
+| `+0x18` | u32 | 7 | the position VECTOR's **Y** lane — the bob, and a door or lift rising |
+| `+0x26` | u16 | 7 | |
+| `+0x24` | u16 | 6 | |
+| `+0x38` | u8 | 10 | |
+| `+0x3E` | u16 | 8 | |
+| `+0x14`, `+0x1C` | u32 | 2, 3 | position **X** and **Z** |
+| `+0x10`, `+0x0E`, `+0x28`, `+0x2C..0x30`, `+0x01`, `+0x04` | | 1–4 | `+0x04` itself, so a slot can retire or change kind |
+
+`+0x18`, `+0x24` and `+0x40` are the three fields the rate census measured running
+at the render rate — and `+0x24` is **not a timer**. It is the first lane of a
+three-`s16` rotation at `rec+0x24`/`+0x26`/`+0x28`, which the object loop of
+`func_800331B4` reads into the `a3` triple it hands `func_80032588`, applying the
+same `0x800` yaw bias to `+0x26` that the entity table gets on its own `+0x40`.
+The census could not tell the two apart because its sampler is 4-byte aligned, so
+the one word at `+0x24` covers `+0x24` and `+0x26` together. Measured, the four
+objects moving in a quiet area turn **0x80 a tick** — 1/32 of a turn, the constant
+the arm at `0x80038BA8` adds — while they bob in Y.
+
+**`func_80037B5C` is the transition fade**, and it is the one thing in stage 2
+that draws. It steps a tint from `a1` to `a2` by `a3` and, for each step, calls
+the tint drawer `func_8003220C` and then stages 11, 12, 8 and **13** — a modal
+loop rendering its own frames, entered from an in-bounds trigger arm. It is also
+what stage 3 reaches, which is why both stages carry the same gating exception.
+
+**Stage 3 reaches the drawing entry points the same way stage 2 does**, and
+the distinction from the frame's own render is what makes gating both safe. The
+path is
+`func_8002A550 -> func_80037B5C -> func_800342D8` — it calls **stage 13**, the
+renderer, from inside itself. That is a modal sub-loop (the in-game menu and the
+transitions around it) that takes over the main loop and renders its own frames
+while it runs, not a per-frame contribution to the frame the outer loop is
+building. Skipping stage 3 on a frame therefore never chops such a sub-loop in
+half; it only decides whether one is entered. **Unverified by eye:** whether a menu
+open at 120 fps flickers, since on the frames stage 3 is skipped nothing redraws it
+and stage 13 still presents the world underneath.
+
+**Stage 6 dispatches through the module header, so its target is read out of the
+module image rather than the call graph**: `*(u32*)(*(u32*)0x8017E068 + 4)` is slot
+1 of the 32-word table at the start of each `fdat` image in `CD/COM/FDAT.T`, at the
+overlay's own `offset`. Six of the nine leave it an empty `jr $ra` — `fdat02`
+(`0x8019F10C`), `05` (`0x8019F4FC`), `08` (`0x8019F1CC`), `17` (`0x8019F158`), `23`
+(`0x8019F0FC`), `32` (`0x80193FB8`). The three that use it are `fdat11`
+(`0x8019F424`), `fdat14` (`0x8019F5CC`) and `fdat20` (`0x8019F53C`), and it is
+scripted-trigger work: `fdat11`'s reads the player position, calls the angle
+helpers `func_80015394` and `func_80015328`, and writes state bytes.
+
+**The fade, `func_80033FBC`**, is a four-state machine on the byte at `0x80192D42`:
+
+```
+state 0 -> 1   brightness 0x80192D44 += 0x14 each call, until >= 0x64
+state 2        hold counter 0x80192D43 -= 1 each call, until zero
+state 3        brightness 0x80192D44 += 0xEC (i.e. -0x14), until zero
+```
+
+Its only callees are `func_80033FAC` (one byte write) and `func_80022B20` (a small
+byte fill), so it cannot draw and can be run on the game's clock rather than the
+renderer's.
+
+**The jitter accumulator at `0x8006E608`** is inline in `func_800342D8` itself,
+just after a `func_80015374()` call: it adds the result, then subtracts an eighth
+of it (`(v + 7) >> 3` with the sign fixup), so it is a damped accumulator driving
+the screen shake, not a counter. No hook can reach it — `HookManager` detours whole
+functions and stage 13 must draw.
+
+### Stage 8 is the render camera, and it is the only copy
+
+The stage table above credits stage 8 (`func_80025A1C`) with no writes, which is
+true of the *buffers the probe watched* and misleading about what it does. It is
+28 instructions with no branches, called from the loop as
+`func_80025A1C(sp+0x28, sp+0x38)`, and it is the whole of "build the render
+camera from the player state":
+
+```
+a0[0] = 0x801994EC (X)      a1[0] = 0x80199504 (composed pitch)
+a0[8] = 0x801994F4 (Z)      a1[2] = 0x80199506 (composed yaw)
+a0[4] = 0x801994F0 (Y) + s16 0x80199548 + s16 0x8019954C - 0x640
+                            a1[4] = 0x80199508 (composed roll)
+```
+
+`0x640` is the eye height; `0x80199548` is the head bob `func_80028560`
+maintains and `0x8019954C` the landing offset. The two stack blocks it fills are
+handed on to **stage 9** (`func_800140AC`, the 3D sound listener) and **stage 13**
+(`func_800342D8` → `func_8002E22C`, which copies them again into `0x80192E78` /
+`0x80192E88`, derives the tile index `X >> 11`, `Z >> 11`, and builds the view
+matrix that reaches the GTE).
+
+So the composed **angles** are read once per frame, by one function, and nothing
+between there and the picture reads them again. That makes stage 8 the only place
+a port can move the camera without moving the game: a pre hook that nudges those
+globals and a post hook that puts them back is visible to the renderer and to
+nothing else. `patches/FrameSmoothing.cs` is that hook.
+
+**The same is not true of the position, and this used to say it was.** Two of
+stage 13's own callees read the player position triple directly, *after* stage 8
+has run and after `FrameSmoothing.After` has put the un-nudged values back:
+`func_80032400` reads `0x801994EC` and `0x801994F4`, and `func_800331B4` — the
+world and object walks — reads all three. Found by listing every function in the
+emitted C# that loads through the `0x801A0000 - 0x6B14/0x6B10/0x6B0C` base and
+offsets stage 8 uses. It does not break the smoothing, whose position half is off
+by default and which nudges the globals stage 8 copies rather than the copy, but
+it does mean "one reader" is a claim about the angles alone.
+
+### What in the renderer draws what
+
+Stage 13 fills the whole display list, but which of its callees draws the world,
+the map, the HUD and the player's own weapon was never written down, and it has to
+be known before anything can be said about one of them updating at the wrong rate.
+`patches/DrawCensus.cs` (`KF2_DRAWCENSUS=1`) answers it by attribution rather than
+by reading code: the game bumps a `{start, end, current}` descriptor at
+`0x8017E0A4` once per polygon, so the bytes a routine drew are the bump across it —
+two hooks per routine, nothing per polygon, and a stack so nesting is charged once.
+
+Stage 13 calls twenty-one routines. **Three of them draw**, and stage 13's own body
+draws nothing (its exclusive count is 0):
+
+| routine | what | measured, standing in an area |
+|---|---|---|
+| `func_80031C94` | the map: a 24x24 walk of the visibility grid at `0x80192EAC` | 27 packets still, 67 turning |
+| `func_800331B4` → `func_80032588` | the object model submitter | 48 packets, ~2 calls |
+| `func_80031D5C` | the HUD: HP/MP digits and gauges | 57 packets |
+| `func_80032400` | **the player's first-person arm** | 0 standing still, 19.1-19.4 packets mid-swing |
+
+**A fourth routine draws, and the census could not see it.** `func_80032400` — the
+row the table above used to label "early 2D" — returns before it draws anything
+unless `(s16)u16[0x801994A4]` is something other than `-1`, and that word is the
+swing clock. Standing in an area it costs nothing, so a census taken standing in
+an area credits it nothing, and a two-second averaging window over a swing that
+lasts thirteen ticks barely moves it either.
+
+That is how **the arm was written up as a 2D sprite in the HUD builder's row, and
+stayed that way for four documents**. The reading behind it was that pressing
+attack moved `func_80031D5C`'s packet count and nothing else — but it moved
+*downward* (56.9 → 54.0 → 52.7), which is the wrong direction for an arm
+appearing. Attacking collapses the HP/MP gauge widths, which are entries 9 and 10
+of the HUD table, and that is what the difference was measuring.
+
+**The arm is a 3D MO-animated mesh, on the same animation system as every creature
+in the game** (`generated/game.cs:38436-38545`):
+
+| step | what |
+|---|---|
+| guard | `if ((s16)u16[0x801994A4] == -1) return;` — nothing is drawn while idle |
+| light | samples the map at the player's own position for a `0x68`-stride record at `0x801930F0`, then `SetColorMatrix`/`SetLightMatrix`/`SetBackColor` |
+| place | translation from `[0x80199494]+0x34/36/38`, rotation from `+0x3C` — the **equipped weapon's record**, and static per weapon |
+| pose | `func_80034834(0x20)` selects model `0x20`, then `func_80034DA8(0x8019949C, 0x20, u8[0x801994AE], (s16)u16[0x801994A4], vertexCount)` |
+| draw | `func_8002E650` transforms the vertices, `func_8002F214(0, 0x64)` assembles them at OT depth 100 |
+
+The arm's matrix is loaded straight into the GTE with no camera composed into it,
+which is what "welded to the screen" turns out to mean mechanically — a view-space
+3D model, not a screen-space sprite. Nothing swing-dependent reaches the matrix:
+**the swing clock's only two destinations are the draw guard and the blender's
+clip time**, so what changes during a swing is the mesh, not its placement.
+
+The animation addresses, none of which were written down before:
+
+| address | width | what |
+|---|---|---|
+| `0x801994A4` | s16 | the **swing clock**: `-1` idle, otherwise 0..4095. Fed to `func_80034DA8` as the MO clip time |
+| `0x801994AE` | u8 | the **clip byte** — which attack |
+| `0x80199494` | ptr | the equipped weapon's record: placement at `+0x34/36/38` and `+0x3C`, hit-window start at `+0x1E`, and the per-tick step `func_800271D0` adds to the clock |
+| `0x801994A6` | s16 | the hit window's start, compared against the clock |
+| `0x80199474` | s16 | must be `0` or `func_800262C8` refuses to start a swing |
+| `0x801994AF` | u8 | player action state; `0xFF` also refuses a swing |
+
+`func_800262C8` starts a swing (clock ← 0, kind ← `a0`) and `func_800271D0`, called
+from **stage 3** and so once a tick, steps the clock by the weapon's own increment
+until it passes 4095 and parks it back at `-1`. Measured on the weapon equipped in
+the test save: **300 a tick, thirteen ticks a swing**, and the clip is 4096 long
+like every other clip in the game. Because the clock is a per-tick counter feeding an MO clip
+time, `patches/AnimSmoothing.cs` carries it exactly as it carries a creature's —
+see "The player's arm is the same bug after all" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+### The map is an 80x80 tile grid, and a tile's height is one byte
+
+`func_80031C94` (the "map tiles" line in `KF2_DRAWCENSUS`, and 78% of a frame's
+packets in a corridor) walks the 24x24 visibility window at `0x80192EAC` and calls
+`func_80031B1C(tileX, tileZ, flags)` for each lit tile. That resolves the tile
+record as (`generated/game.cs:37716-37727`):
+
+    tile = 0x801C8484 + 800 * tileZ + 10 * tileX
+
+so the map is **80 x 80 tiles of 10 bytes**, 800 bytes a row — the 24x24 grid is a
+window into it, not its size. Both loop bounds test against `0x50` = 80.
+
+Each tile has **two drawn halves**, and the pair is the whole record:
+
+| offset | what |
+|---|---|
+| `+0x0` | model index for half A; drawn when `< 240` and bit 0 of `flags` |
+| `+0x1` | **height byte** for half A |
+| `+0x5` | model index for half B; drawn when `< 240` and bit 1 of `flags` |
+| `+0x6` | **height byte** for half B |
+
+The position handed to the submit routine `func_80031950(model, &vec, flags)` is
+built at `generated/game.cs:37746-37762`, camera-relative:
+
+    X = (tileX << 11) - [0x80192E78] + 0x400
+    Z = (tileZ << 11) - [0x80192E80] + 0x400
+    Y = (-(u8 height) << 7) - [0x80192E7C]
+
+Three consequences worth keeping:
+
+* **A tile's Y is a byte scaled by `<< 7`**, so map geometry moves in 128-unit
+  quanta and cannot express anything finer without changing the computation.
+* **`&vec` is a stack temp** in `func_80031B1C`'s frame, not game state. Anything
+  that rewrites it before `func_80031950` reads it needs no restore and cannot
+  leak into the AI or a save — unlike every other smoothing site in the port.
+* **Moving architecture lives here, not in the model tables.** A `KF2_DRAWCENSUS=2`
+  run taken while a drawbridge cycled listed 11 models, all byte-identical in
+  position and rotation across two windows two seconds apart, while the map pass
+  kept drawing ~593 packets a frame. The bridge is a tile, not a model.
+
+### The model pipeline has no skeleton
+
+In `func_80032588`'s 62-function subtree, `SetRotMatrix` and `SetTransMatrix` are
+each called from **`func_80032588` itself and from none of its 61 callees**. One
+matrix pair is loaded per model and every vertex is transformed under it, so a
+model is rigid: there is no per-part transform stack and therefore no skeleton to
+interpolate. The complete set of per-object transforms in the pipeline is the
+position `VECTOR` and the Euler triple, both of which `patches/ObjectSmoothing.cs`
+already carries. Anything that animates *shape* is doing it in the vertex data or
+by swapping the model index at `a1` (`rec+0x6 + 0x100`), neither of which any
+matrix interpolation can reach.
+
+**Creature pose is an MO morph; most *submits* are still rigid architecture.**
+`a1` is the mesh. **The clip and its time are stack arguments, not table
+fields** — `func_80032588`'s eighth stack word (`caller SP+0x1C`) is the clip
+byte and its ninth (`caller SP+0x20`) is the integer clip time. That is worth
+stating in the argument list rather than as an offset, because
+`func_800331B4` calls it from **five** sites over four tables with four
+strides: the entity loop takes the pair from `S0+0x9` and `S0+0x15`, the
+object loop from `S0-0x5` and `S0+0x9` off a `0x48` cursor, another from
+`S0-0x13`/`S0-0xA`, and one passes a **literal 0** for the time. The
+argument list is the one description true for all of them. (KingsFieldRE names
+these `CurAnim` and the clip time on its own struct; those offsets are its
+frame of reference, not this function's.)
+
+`func_80032588` runs the blender `func_80034DA8` when the clip byte is
+`< 0x80`, else `L800329F8` publishes a pointer *into the model* via
+`func_8002E1F0` and the vertices never move. Walls and props take the second
+path and dominate a frame's submit count — measured 60-122 rigid submits a
+second against 0-61 morph ones. A walking enemy takes the first: MO is a base
+TMD plus packed vertex deltas, and `func_80034A74` is that decoder into
+`0x80190AD8`.
+
+`func_8003486C(bank, clip, time, &segment, &weight)` walks the clip: it
+accumulates the per-segment durations at `segment+0x2` until the time falls
+inside one, publishes `((time - segmentStart) << 12) / duration` as a 12.12
+weight, and returns the segment record in `v0`. **When the flag `u16` at
+`segment+0x0` is set it publishes `0x1000 - that`**, so the weight runs *down*
+as the clip runs forward — anything adding to it has to know which.
+
+**The whole clip record is reachable from that walk, and its total duration is
+the one number the pose smoother needs.** Read off the loop at `L800348B4`:
+
+| what | where |
+|---|---|
+| clip table | `bank + u32[bank + 0x10]` |
+| clip record | `bank + u32[clipTable + clip*4]` |
+| segment count | `u16[clipRec + 0x0]` |
+| segment pointers | `u32[clipRec + 4 + 4*i]`, `bank`-relative |
+| segment: reversed flag | `u16[seg + 0x0]` |
+| segment: duration | `u16[seg + 0x2]` |
+
+so the clip's length is `sum(u16[seg_i + 2])` — exactly the accumulator the
+clock compares the time against, which is why a time past it answers with the
+last segment at a full `0x1000` weight. Measured live: every clip reached in
+areas 0, 2 and 7 has a length of **4096**, and the highest clip time the legacy
+probe ever saw on one is **4095**, which is the same fact read two ways. The
+step a clip takes in a tick is 64-290 units there, so a cycle is 14-64 ticks
+long and a wrap arrives as a step of `rate - 4096` — 3936, 3942, 4032 observed
+against rates of 160, 154 and 64. `patches/AnimSmoothing.cs` reads this table so
+it can treat the clip time as a point on a circle of that circumference; before
+it did, the end of a cycle had to be guessed at from where the time landed.
+
+**Why the clock reaches the mesh at all is `L80034FCC`**, and it is the
+load-bearing part. When the clip *and* the segment index are both unchanged,
+`func_80034DA8` skips rebuilding its keyframe cache — but it still copies the
+base mesh into `0x80190AD8` and still calls the decoder with the weight
+`func_8003486C` just wrote. Stage 13 therefore re-morphs on every rendered
+frame; the only thing stuck on the tick is the time it morphs *to*. Move the
+weight and the mesh moves. `patches/AnimSmoothing.cs` (`KF2_SMOOTH_ANIM=1`)
+does exactly that — `floor(lerp(prev, cur, LogicPhase))` into `3486C` so the
+segment pick matches the in-between instant, the leftover fraction added (or
+subtracted, on a flagged segment) onto the weight. Vertex-fetch lerp at
+`RotTransPers` was the previous attempt and did not change the picture. The
+arm is `func_80032400`'s MO clip, carried by `AnimSmoothing` like any other;
+origin and Euler are `ObjectSmoothing`.
+
+- **`func_80032588` is fed from *four* tables, one loop each** — and for a long
+  time only the first two were written down, which is how two separate "the
+  animation runs at a low frame rate" reports were caused and then chased. The
+  whole inventory, read off `func_800331B4` end to end:
+
+  | # | base | stride | count | drawn when | position | rotation |
+  |---|---|---|---|---|---|---|
+  | 1 | `0x8016C544` | `0x7C` | 200 | **byte `+0x9` == `1`** | `+0x2C` | `+0x40` |
+  | 2 | `0x80177714` | `0x44` | 396 | **u16 `+0x6` != `0xFF`** | `+0x14` | `+0x24` |
+  | 3 | `0x8019CC6C` | `0x48` | 128 | byte `+0x0` != `0xFF` | `+0x14` | `+0x24` |
+  | 4 | `0x80195174` | `0x18` | 128 | u16 `+0x0` != `0xFFFF` | `+0x8` | none — zeroed |
+
+  Every rotation lane is three `s16` with the yaw (`+2`) biased by `0x800`, the
+  same convention throughout. Table 3 is **stage 5's** table, the one FramePacing
+  describes as "128 effect/projectile lifetimes at `rec+0x0E`" — that name is a
+  guess from one field, and the renderer draws it with a full position *and*
+  facing, which makes it a general table of things that move. Table 4 is
+  billboards; the renderer zeroes their rotation triple, and their positions are
+  computed once when `func_80035550` fills the table from the area's own `0x10`-byte
+  definitions rather than stepped per frame -- so there is no position to carry.
+
+  **Table 4's animation is a different matter, and it was running at the render
+  rate.** A billboard is a strip of authored cels, and four bytes at the head of
+  the record drive it: `+0x2` the visibility mask, `+0x3` the number of cels, `+0x4`
+  the interval, `+0x5` the current cel -- seeded at load to `(rand * cels) >> 15`, so
+  two torches never flicker in step. The object loop draws slot `i` with the cel
+  index `u8[rec+0x5] + 0x80`, then steps it whenever the **single global counter at
+  `0x80195170`** divides exactly by the slot's interval -- and the last instruction
+  of `func_800331B4` increments that counter. It is therefore a count of *rendered
+  frames*: three sites touch it in all of `GAME.EXE` (the init zero in
+  `func_8002DF80`, the modulus, the increment), and `func_800331B4` is called once,
+  from stage 13. `patches/SpriteAnim.cs` holds the word and the 128 cel bytes across
+  a walk the world did not tick on; see "The flames run at the render rate" in
+  [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+  **Two of the four tables have a second, different emptiness test, and they are
+  not interchangeable.** Stage 2 steps an object slot when the byte at `+0x4` is
+  not `0xFF`; the renderer draws it when the `u16` at `+0x6` — the definition
+  index — is not `0xFF`. Stage 4 and `patches/AgentServer.cs` treat an entity slot
+  as live when the byte at `+0x0` is not `0xFF`; the renderer's first loop skips
+  the record unless the byte at `+0x9` is `1` (`S0 = base + 3`, then
+  `ReadU8(S0 + 6)` against `S4 = 1`). A patch that wants to interpolate *what is
+  drawn* must use the renderer's, and `patches/ObjectSmoothing.cs` used the owning
+  stage's for both — dropping any object drawn but not stepped by stage 2, and any
+  creature in the state `+0x0 == 0xFF && +0x9 == 1`, which is the "enemies animate
+  at a visibly lower framerate" report surviving on whichever creatures sat in it.
+  Note the two are opposite ways round: the object and effect tables are written
+  as *free when equal*, the entity table as *drawn when equal*, which is why
+  `TableSpec` carries the polarity rather than assuming it.
+
+- **The first two loops, in the detail they were originally recorded:** `func_800331B4`
+  loops the **entity table** `0x8016C544` (200 records, `0x7C` stride, drawn when
+  `u8[+0x9] == 1`) first — **creatures/enemies**, position at `rec+0x2C` and a three-`s16`
+  rotation at `rec+0x40` (yaw biased by `0x800`) passed as `a3` — then loops the
+  **object table** `0x80177714` (`0x44` stride) for static props and sprites. A
+  `KF2_DRAWCENSUS=2` reading of `a2` reported only `0x80177714 + slot*0x44 + 0x14`,
+  which for a while read as "the renderer never touches the entity record"; it was
+  measured in a scene with props and **no creatures near**, so it caught the second
+  loop alone. The truth is that the entity record is both AI state *and* what the
+  first loop draws creatures from — stage 4 copies the object position into
+  `rec+0x2C`, but the renderer then reads that copy, plus a rotation the object
+  table has its own copy of at `+0x24`. This is why `patches/ObjectSmoothing.cs` interpolates
+  **both** tables, and the entity table's rotation on top: smoothing `0x80177714`
+  alone left every enemy stepping in position and facing.
+
+Two traps in measuring it this way, both hit:
+
+- **The arena is swapped, not just rewound.** `func_8002E064` at stage 13's head
+  picks this frame's of two buffers (`0x800FC99C` / `0x8011599C`) and then rewinds
+  it, so across stage 13 the entry and exit bump pointers are in *different*
+  buffers and subtracting them reads as ±0x19000. Comparing the descriptor
+  address, not the pointer, is what catches it.
+- **A routine that unwinds to depth 0 is not necessarily a frame.**
+  `func_80015374` is called from outside stage 13 as well as inside it, and
+  counting frames on "the stack emptied" inflated the frame count 2.5x. Count on
+  the renderer's own slot.
+
+### The frame's applied position delta is a triple of its own
+
+`0x801994FC` / `0x801994FE` / `0x80199500`, s16 each. `func_80028080` writes X and
+Z there after the collision test (`0x80028478`), so it is **the movement that was
+actually applied**, wall slide included, not what was asked for;
+`func_800290D4` zeroes them when neither movement branch ran, and the state arm at
+`0x8002A95C` writes all three as `target - current`. It is the game's own answer
+to "how far did you move this tick", which is what makes extrapolating a position
+between ticks need no trigonometry and no guess about which way strafe points.
 
 ## Player state: found, and it was in stage 3 all along
 
@@ -181,6 +649,59 @@ is what writes the quit-to-title exit reason. One call site, behind a
 just-pressed edge, means that function blocks for the whole menu session rather
 than being re-entered per frame.
 
+### Inside the menu: the cursor, its repeat, and its frame head
+
+Found while chasing a cursor that scrolled faster the higher `KF2_FPS` was set.
+`docs/TODO.md` still lists the menu's screens as unmapped; these five routines are
+the input and frame plumbing under all of them, and are shared by the start menu
+as well.
+
+| function | role |
+|---|---|
+| `func_80018E80` | **the in-game menu** — the modal loop, dispatching a 7-arm jump table at `0x80011098` on a screen index kept in a stack local |
+| `func_8001EA14` | the fixed option-list cursor: `(cursor, maxIndex, *selected, *confirmed, *cancelled) -> newCursor` |
+| `func_8001EB70` | the scrolling-list cursor, taking a descriptor in `a0` |
+| `func_80022E58` | `PadRead(1)`, latching `0x8006E5C4` to 1 whenever anything is down |
+| `func_80022E90` | the auto-repeat delay — consumes that latch and spins on up to six `VSync(0)` calls |
+| `func_80022530` | the menu's frame head: buffer swap, OT pointer, `ClearOTag`, and the cursor blink |
+| `func_800226A8` | the menu's presenter — `DrawSync`, `VSync(0)`, `PutDrawEnv`, `PutDispEnv`, `LoadImage`, `DrawOTag` |
+| `func_80022EFC` | wait for every button to come up; the loop behind the menu deadlock in [RUNTIME.md](RUNTIME.md) |
+
+`func_8001EB70`'s descriptor is five bytes, deduced from its up and down arms:
+
+| offset | meaning |
+|---|---|
+| `+0x1E` | item count (also the "list is non-empty" guard) |
+| `+0x1F` | visible window height, in rows |
+| `+0x20` | scroll offset — the index of the top visible row |
+| `+0x21` | the absolute selected index |
+| `+0x22` | the cursor's row within the window |
+
+**Neither cursor edge-detects.** Both call `func_80022E90` and then
+`func_80022E58`, and then test Up (`0x8006E590`) and Down (`0x8006E594`) against
+the word they just read — so holding a direction steps the cursor once per
+iteration of the menu loop, and the repeat delay is the only thing that makes it
+usable. That delay is six `VSync(0)` calls, which is 100 ms of vblanks on
+hardware and produced 37 steps a second at 144 fps here until
+`patches/MenuPacing.cs`; see "The menu's cursor repeat is outside the gate by
+construction" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+Two words carry the cursor's blink. `func_80022530` steps `0x8006E5CC` (u32) by
+±1 according to the direction in `0x8006E5D0` — 0 counts up, 1 counts down,
+anything else is frozen — clamping to 7 at the top and latching `0xFFFFFFFF` at
+the bottom, and `func_80021A84` reads the counter as `(v + 0x1F4) << 6` into a
+sprite's `+0xE`, which is one of eight cursor frames. `func_8001EA14` zeroes the
+direction on every accepted move (restarting the ramp) and `func_80022E90` zeroes
+the counter when a repeat fires.
+
+**The bottom latch means it is one wink per move, not a continuous pulse**: after
+sixteen steps the direction is `0xFFFFFFFF` and nothing moves until the next
+accepted move zeroes it. Measured, sitting still in a menu steps it zero times a
+second. And **`func_80022530` runs twice per iteration** of `func_80018E80` — the
+menu's inner loop makes two passes and each presents — so the frame-head rate is
+the rendered frame rate, which is what put the blink on the render rate until
+`patches/MenuPacing.cs` capped it.
+
 ### Every control axis has the same three branches
 
 Turn, pitch, forward and strafe are all velocity based and all written the same
@@ -242,6 +763,116 @@ The state byte drives a **jump table at `0x80011300`**, `0x80011300 + state*4`,
 states `0x00`–`0x12`, dispatched from stage 3. `0x11` lands at `0x8002ADAC`.
 `func_80029E5C` is its inverse: it clears the byte to 0 along with eleven timers,
 which is the game's own "back to normal" reset.
+
+### The status screen names the rest of buf2, and the text is a font-index table
+
+The section above got HP, MP, EXP and level out of the save title. The other
+twenty-eight words came from the other direction: **the status screen has to draw
+a label beside every number it shows**, so the two routines that draw it are a
+complete, ordered, self-labelling map of the block.
+
+The route in was the text. `GAME.EXE` holds no English UI strings — a grep for
+ASCII finds only PSY-Q's own diagnostics — because the game's text is **indices
+into its font**, one byte a character, `0x00` = `A`, `0x7F` = space, `0xFF` =
+terminator, in 24-byte records. `0x0B 0x04 0x15 0x04 0x0B 0xFF` is `LEVEL`. Once
+that is known the whole table decodes, and it is worth knowing for its own sake:
+every item, spell, weapon and armour name in the game is in it, from `0x80065794`
+(`EXPERIENCE`) to `0x800663F0` (`LIGHT CRYSTAL`).
+
+Labels reach the drawer two ways, and both are readable statically. A long one is
+a pointer into that table; a short one the routine **builds on its own stack**,
+`sb` by `sb`, so ` SLASH` is `0x7F 0x12 0x0B 0x00 0x12 0x07 0xFF` written to
+`sp+28`. Walking each routine and pairing every label with the next address it
+loads out of buf2 gives the map whole:
+
+**Page one, `func_8001F230`:**
+
+| address | width | label |
+|---|---|---|
+| `0x80199414` | u32 | `EXPERIENCE` |
+| `0x80199418` | u32 | the EXP the next level needs — not drawn, but `func_80024CAC` compares against it |
+| `0x8019941C` | u8 | `LEVEL` |
+| `0x80199426` / `0x80199428` | u16 | `HP`, max then current |
+| `0x8019942A` / `0x8019942C` | u16 | `MP`, max then current |
+| `0x8019943C` | u16 | `STR POWER` |
+| `0x8019943E` | u16 | `MAG POWER` |
+| `0x80199468` | s16 | `CONDITION` ▸ `POISON` |
+| `0x8019946A` | s16 | `CONDITION` ▸ `CURSE` |
+| `0x8019946E` | s16 | `CONDITION` ▸ `DARK` |
+| `0x80199472` | s16 | `CONDITION` ▸ `SLOW` |
+| `0x80199474` | s16 | `CONDITION` ▸ `PARALYZE` |
+| `0x80199440` | u32 | `GOLD` |
+
+`GOOD` is the fifth condition label and has no word of its own: it is what the
+screen prints when all five timers are zero.
+
+**Page two, `func_8001FB4C`** — two blocks of one heading each, `OFFENSE` at
+`0x800657C4` and `DEFENSE` at `0x800657DC`:
+
+| offense | | defense | |
+|---|---|---|---|
+| `0x80199444` | `SLASH` | `0x80199456` | `SLASH` |
+| `0x80199446` | `CHOP` | `0x80199458` | `CHOP` |
+| `0x80199448` | `STAB` | `0x8019945A` | `STAB` |
+| `0x8019944A` | `HOLY MAGIC` | `0x8019945C` | `POISON` |
+| `0x8019944C` | `FIRE MAGIC` | `0x8019945E` | `DARK MAGIC` |
+| `0x8019944E` | `EARTH MAGIC` | `0x80199460` | `FIRE MAGIC` |
+| `0x80199450` | `WIND MAGIC` | `0x80199462` | `EARTH MAGIC` |
+| `0x80199452` | `WATER MAGIC` | `0x80199464` | `WIND MAGIC` |
+| | | `0x80199466` | `WATER MAGIC` |
+
+All seventeen are `u16`. The offense block has no poison or dark entry and the
+defense block has no holy one, which is why they are eight and nine rather than
+a matched pair.
+
+### Nineteen of those words are a cache, and `func_800244CC` owns all of them
+
+The important finding is not the map but the **split inside it**, and it is
+`func_800244CC` that draws the line. The routine opens by storing zero to all
+seventeen offense and defense words in one unrolled run, copies `0x80199438` into
+`0x8019943C` and `0x8019943A` into `0x8019943E`, subtracts 20 from the first if
+`0x8019946A` (`CURSE`) is non-zero, and then adds each equipped item's
+contribution through seven calls to `func_800243B0`.
+
+So:
+
+- **`0x80199438` and `0x8019943A` (u16) are the real attributes** — base strength
+  and base magic. They are what a level-up raises, they are what the save carries,
+  and nothing recomputes them.
+- **`STR POWER`, `MAG POWER` and the seventeen ratings are derived**, rebuilt from
+  the equipment every time `func_800244CC` runs. Twelve sites call it: equip and
+  unequip (`func_80024B7C`, `func_80024C14`), item use (`func_80025FD0`,
+  `func_80026210`, `func_8002658C` twice), the level-up (`func_80024CAC`), the
+  post-load fixup (`func_800240B8`), the new-game setup (`func_800253F0`), the
+  status screen's own opener (`func_800197D4`), and **four sites inside stage 3**.
+
+That is the fact anything editing a character has to respect: writing `STR POWER`
+lasts until the next equip and no longer, while writing base strength is
+permanent and shows the moment `func_800244CC` next runs. See "Editing the
+character" under "Debug tools".
+
+### `func_80024CAC` is the level-up, and it is callable
+
+`func_80024CAC(s16 gain)` is the whole of levelling, and it is short enough to
+state:
+
+```c
+exp += gain;  if (exp > 999999) exp = 999999;   /* 0x80199414 */
+if (exp < *(u32*)0x80199418) return;            /* not there yet */
+if (level == 255) return;                       /* 0x8019941C */
+level++;
+if (level < 100) {
+    maxHp += table_delta;  maxMp += table_delta;     /* 0x80199426, 0x8019942A */
+    baseStr += table_delta;  baseMag += table_delta; /* 0x80199438, 0x8019943A */
+    *(u32*)0x80199418 = next threshold from the table at 0x8007xxxx;
+}
+```
+
+Every constant it adds comes from a table in `GAME.EXE`'s data, so **calling it is
+strictly better than imitating it**: top `0x80199414` up to the threshold word,
+pass a gain of zero, and it levels exactly once by the game's own numbers. That is
+what the debug mod's "Level up" button does. Note the `< 100` guard — past level
+99 the level byte still increments and nothing else does.
 
 ## Saving and loading
 
@@ -446,6 +1077,42 @@ grep -n "WriteU16((c\.\w* - 0x6BD8u)" generated/*.cs   # direct form
 grep -n -- "- 0x6BD8u;" generated/*.cs                 # register-base form
 ```
 
+### An area module gets a hook on every hit, and `fdat23` ends the game from it
+
+`func_8003A9CC` — the hit resolution, the routine that turns "the reach scan
+picked entity *i*" into damage and a reaction — calls
+`u32[u32[0x8017E068] + 0x48]` before it is done with the record. `0x8017E068`
+holds the loaded area module's base, and `+0x48` is **dispatch slot 18** of the
+32 the module header carries, so that is a **per-area damage hook**: the module
+gets to see, and change, every hit landed in its area, from inside the resolution.
+Read it out of the module bytes directly rather than from a call site, because
+nothing calls these statically:
+
+```bash
+python3 scripts/extract_file.py disc/KingsField2.cue CD/COM/FDAT.T -o /tmp/FDAT.T
+python3 -c "import struct;d=open('/tmp/FDAT.T','rb').read()[821248:821248+8192]; \
+            print([hex(w) for w in struct.unpack_from('<32I',d,0)])"   # fdat23
+```
+
+Most slots point at the module's `jr ra` stub (`0x8019F0FC` in `fdat23`). The
+final boss's area fills three, and slot 18 is `func_8019FA2C`: it acts only on
+entity **0**, and it has two arms. The first killing blow tops the boss's HP
+`u16` at `+0x1A` back up by exactly the damage it just took — so the caller's
+`HP - damage` stays positive and the boss survives — and runs `func_8019F1B0`,
+the phase-two transition, once. Every blow after that runs `func_8019F474` and
+`func_8019F688`, which are the ending.
+
+**`func_8019F688` blanks six entity type bytes and then hands the game over.**
+At `0x8019F908` it writes `u8[+0x2] = 0xFF` into entity 0 and entities 6..10,
+runs a sixty-four step fade, and sets `GAME.EXE`'s quit word at `0x80199574`.
+It is the only write of `+0x2 = 0xFF` in the module, and those six are exactly
+the records the final-boss crash dump reported. The blanking is safe as far as
+`func_8019F688` is concerned — nothing it does afterwards indexes the descriptor
+table by type — but its **caller** is not done: `func_8003A9CC` returns from the
+hook, sees `HP - damage <= 0`, and calls `func_8003A490`, which re-reads
+`u8[rec+0x2]`. See "The crash on the final boss's last hit" in
+[TODO.md](TODO.md) and `patches/HitGuard.cs`.
+
 ### The rate words are written before they are read, inside stage 3
 
 `0x80199558` (walk speed, `0xC8`) and `0x8019955C` (turn rate, `0x1C` moving /
@@ -509,6 +1176,36 @@ that split.
 Entries 24–29 are zero length, so areas 8 and 9 do not exist, and area 10 is
 entry 32, the cut one.
 
+### The loading screen is a blocking wait, and its figure is three words
+
+A disc read never returns to the main loop. `func_80024154` calls
+**`func_80017CA8`**, which spins `func_80017818(); if (*(u8*)0x800864DC)
+func_8001883C() x4;` until the CD job queue at `0x801B6F44` drains;
+**`func_800181B0`** is the other shape, `CdRead` then a spin on `CdReadSync`
+calling `func_8001883C` once an iteration.
+
+**`func_8001883C` is the loading screen's animator** — the little figure that
+walks across the screen while an area loads. It draws with no ordering table at
+all: `ClearImage` (`0x800605D4`) over the rectangle the sprite occupied, then
+`MoveImage` (`0x8006069C`) from a 32x32 source in VRAM at (`0x3C0`, `0x1C0`/
+`0x1E0`) to the new position. Its whole state is three globals, and they are the
+only ones it writes:
+
+| address | width | what |
+|---|---|---|
+| `0x8006E5A4` | u32 | frame counter, `++` as the function's last act; the sub-steps are gated on `& 3` and `& 7` of it |
+| `0x8006E5A8` | u32 | the sequence's state; `state - 5 < 0x16` skips the walking branch |
+| `0x8006E5AC` | u32 | the figure's **x**, `+= 3` while state < 5 and `+= 5` once state is past the middle band, only while it is under 288 |
+| `0x8006E5B0` | u32 | its y — read here, written elsewhere |
+
+They sit in the same block of GAME.EXE globals as the menu cursor's blink
+(`0x8006E5CC`/`0x8006E5D0`).
+
+The function ends in `DrawSync(0); VSync(0)`, so **one call was one vblank**, and
+the drain loop's five vblanks an iteration for four steps is where the console's
+48 steps a second comes from. That is what `patches/LoadPacing.cs` restores; see
+"The loading screen's walking figure" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
 ### Noclip's hard limit is the loaded area
 
 Flying far enough leaves the geometry the game has in RAM, and the crash is
@@ -553,3 +1250,46 @@ for the duration of the load, so the first snap cannot OOB. Empty tiles in the
 new map can still trip the below-floor latch; `func_80029E5C` clears it, the same
 way autoreload does when it arrives from state `0x11`.
 
+
+### Editing the character: the split is the design
+
+`mods/kf2debug`'s Attributes tab writes every stat the status screen shows, and
+almost all of the thought in it went into one distinction, which is the one
+"Nineteen of those words are a cache" draws.
+
+**The character is plain memory.** EXP, the next-level threshold, level, HP and
+MP with their maxima, gold, base strength, base magic and the five condition
+timers are written and stick. `func_80049A88` packs every one of those addresses
+into the save block, so an edit survives a save and a load. Nothing here needs a
+hook: the panel writes from the UI thread the same way the warp tab's coordinate
+boxes already do.
+
+**The nineteen ratings are not**, and offering an edit box over them without
+saying so would be a lie — `func_800244CC` runs on equip, on item use, on load,
+on level-up and from four sites inside stage 3, and each run zeroes them. So the
+tab holds them behind a switch (`Hold these values`, off by default) whose
+mechanism is a `[PostHook]` on `func_800244CC` itself. A post rather than a pre,
+because the point is to overwrite what it just wrote, and hooking the recompute
+rather than the twelve callers means equip, unequip, load and level-up are all
+covered by one hook. Switching the hold on primes it from live memory first, so
+turning it on changes nothing until a number is typed.
+
+The honest control is the pair above it: **base strength and base magic are real
+attributes**, they persist, and the recompute picks them up. The tab says which
+is which rather than presenting nineteen boxes as if they were all the same kind
+of thing.
+
+Two buttons run recompiled MIPS instead of writing memory, and both are **queued
+and run from the stage-3 post hook** for the reason "Area warp cannot run from
+the panel" gives — the panel draws inside `Present`, which is inside `VSync`.
+"Level up" calls `func_80024CAC` (see above: EXP topped up to the threshold, gain
+of zero, one level by the game's own table), and "Recalculate" calls
+`func_800244CC` so an edited base attribute reaches the status screen without
+waiting for an equip. Both snapshot and restore the `CpuContext` around the call,
+which is `patches/AreaWarp.cs`'s idiom.
+
+**None of this has been looked at by eye.** The addresses and the routine
+behaviour are read out of the executable and the code compiles; what a person
+still has to check is that the status screen shows the numbers the panel does,
+that "Level up" lands on the same level and maxima the game would have given, and
+that a held rating is actually felt in combat rather than merely displayed.

@@ -63,10 +63,11 @@ internal sealed class DebugPanel : IPanel
 
         if (ImGui.BeginTabBar("##kf2debugtabs"))
         {
-            if (ImGui.BeginTabItem("Cheats")) { DrawCheats(mem); ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Warp"))   { DrawWarp(mem);   ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("State"))  { DrawState(mem);  ImGui.EndTabItem(); }
-            if (ImGui.BeginTabItem("Keys"))   { DrawKeys();      ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Cheats"))     { DrawCheats(mem);     ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Attributes")) { DrawAttributes(mem); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Warp"))       { DrawWarp(mem);       ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("State"))      { DrawState(mem);      ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Keys"))       { DrawKeys();          ImGui.EndTabItem(); }
             ImGui.EndTabBar();
         }
 
@@ -159,6 +160,134 @@ internal sealed class DebugPanel : IPanel
         ImGui.Separator();
         ImGui.TextDisabled($"hits blocked {Cheats.BlockedHits}, deaths refused {Cheats.BlockedDeaths}, "
                          + $"HP restores {Cheats.RestoredHp}");
+    }
+
+    // ---- attributes ----
+    //
+    // Two halves, and the split is the whole point of the tab: the character is
+    // plain memory and a write sticks, while the seventeen combat ratings and the
+    // two POWER words are a cache func_800244CC rebuilds from the equipment.
+    // Attributes.cs carries the reasoning; this draws it.
+
+    void DrawAttributes(IMemory mem)
+    {
+        ImGui.TextWrapped("Everything here writes the game's own state, so it is saved with your "
+                        + "character and it takes effect immediately.");
+
+        if (ImGui.Button("Full heal")) Attributes.FullHeal(mem);
+        ImGui.SameLine();
+        if (ImGui.Button("Cure conditions")) Attributes.CureConditions(mem);
+        ImGui.SameLine();
+        if (ImGui.Button("Level up")) Attributes.QueueLevelUp();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Runs the game's own level-up routine, so the level, both maxima, "
+                           + "both base attributes and the next-level threshold all move by the "
+                           + "game's table. EXP is topped up to the threshold first, since the "
+                           + "routine returns early below it.");
+        ImGui.SameLine();
+        if (ImGui.Button("Recalculate")) Attributes.QueueRecalculate();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Runs func_800244CC, which rebuilds STR/MAG POWER and the seventeen "
+                           + "ratings from your equipment. Press it after editing a base "
+                           + "attribute to see the change on the status screen at once.");
+
+        if (!string.IsNullOrEmpty(Attributes.Status))
+            ImGui.TextDisabled(Attributes.Status);
+
+        ImGui.Separator();
+
+        if (ImGui.CollapsingHeader("Character", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            ImGui.Indent();
+            DrawFields(mem, Attributes.Progress);
+            ImGui.Spacing();
+            DrawFields(mem, Attributes.Vitals);
+            ImGui.Spacing();
+            DrawFields(mem, Attributes.BaseAttributes);
+            ImGui.TextWrapped("Base strength and base magic are the real attributes -- raising one "
+                            + "is what makes you stronger for good. The POWER numbers below are "
+                            + "these plus your equipment, and the game rewrites them.");
+            ImGui.Unindent();
+        }
+
+        if (ImGui.CollapsingHeader("Condition"))
+        {
+            ImGui.Indent();
+            ImGui.TextWrapped("The five timers behind CONDITION on the status screen, which reads "
+                            + "GOOD when all of them are zero.");
+            DrawFields(mem, Attributes.Conditions);
+            ImGui.Unindent();
+        }
+
+        if (ImGui.CollapsingHeader("Combat ratings"))
+        {
+            ImGui.Indent();
+
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.72f, 0.25f, 1f));
+            ImGui.TextWrapped("These nineteen words are a cache. func_800244CC zeroes them and "
+                            + "rebuilds them from your equipment on every equip, item use, load "
+                            + "and level-up, so a number typed here lasts seconds unless you hold "
+                            + "it.");
+            ImGui.PopStyleColor();
+
+            bool locked = Attributes.LockDerived;
+            if (ImGui.Checkbox("Hold these values", ref locked))
+            {
+                // Prime from memory first, so switching the lock on is a no-op
+                // rather than a jump to whatever was last typed.
+                if (locked && !Attributes.LockDerived) Attributes.PrimeHold(mem);
+                Attributes.LockDerived = locked;
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Rewrites all nineteen after every recompute, from a post hook on "
+                               + "func_800244CC itself. Off by default -- the base attributes "
+                               + "above are the honest way to change these.");
+
+            ImGui.Spacing();
+            ImGui.Text("Power");
+            DrawFields(mem, Attributes.Powers);
+
+            ImGui.Spacing();
+            ImGui.Text("Offense");
+            DrawFields(mem, Attributes.Offense, "off");
+
+            ImGui.Spacing();
+            ImGui.Text("Defense");
+            DrawFields(mem, Attributes.Defense, "def");
+
+            ImGui.Unindent();
+        }
+    }
+
+    /// <summary>
+    /// A column of InputInts over live memory. Each box reads the game every
+    /// frame unless it is being edited, so a value the game changes shows here
+    /// without a refresh; an edit writes straight through.
+    ///
+    /// When the hold is on, an edit to one of the held words updates the hold as
+    /// well -- otherwise the next recompute would put the old number back and
+    /// the box would look like it had ignored the typing.
+    /// </summary>
+    void DrawFields(IMemory mem, Attributes.Field[] fields, string id = "")
+    {
+        for (int i = 0; i < fields.Length; i++)
+        {
+            ref readonly var f = ref fields[i];
+            int value = Attributes.Read(mem, f);
+
+            ImGui.PushID($"{id}{f.Address:X8}");
+            ImGui.SetNextItemWidth(140);
+            if (ImGui.InputInt(f.Name, ref value))
+            {
+                Attributes.Write(mem, f, value);
+
+                int held = Attributes.HeldIndex(f.Address);
+                if (held >= 0) Attributes.Held[held] = Attributes.Read(mem, f);
+            }
+            ImGui.PopID();
+
+            if (f.Tip.Length != 0 && ImGui.IsItemHovered()) ImGui.SetTooltip(f.Tip);
+        }
     }
 
     // ---- warp ----

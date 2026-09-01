@@ -223,3 +223,198 @@ measured** and **a picture that has been looked at**. A counter can say that 92%
 of vertices recovered a depth; only a person can say whether the cave looks right.
 Where a feature's mechanism is measured and its picture is not, that feature ships
 switched off, and the reason is recorded with it.
+
+
+## Finding the rate defects
+
+Every rate defect in this port is one defect wearing different clothes. King's
+Field has no clock: it counts time in main-loop iterations and in `VSync` calls,
+and on hardware those were the same clock, because the loop ran at a whole number
+of vblanks. Drawing faster prises that one number into three, and every place the
+game reads one and means another is a site.
+
+`FramePacing` handles the sites a whole-function hook can reach. The rest were
+being found by noticing them in play, one at a time — which is slow, and biased
+toward whatever is *annoying* rather than whatever is *wrong*. These four tools
+exist to replace that.
+
+| tool | question |
+|---|---|
+| `patches/RateCensus.cs` + `scripts/rate_census.py` | which words move at the render rate? |
+| `scripts/find_writers.py` | which code moves them, and what should be holding it back? |
+| `scripts/rate_matrix.py` | did the fix work, at every rate? |
+| `scripts/check_gate.py` | does the gate still obey its own rule? |
+
+`scripts/kf2run.py` is the shared harness (launch, drive through `KF2_SHELL`,
+harvest stdout) and `scripts/callgraph.py` + `scripts/kf2model.py` are the shared
+static model. Nothing here needs a recompile.
+
+### The census: which words move at the render rate
+
+    python3 scripts/rate_census.py --run --seconds 30
+    python3 scripts/rate_census.py --compare census-20.txt census-144.txt
+
+Runs the same scene at two render rates and ranks every word of the game's memory
+by how much more often it changed at the higher one. A word on the tick clock
+changes at the same rate in both runs; a word on the render clock does not.
+
+**The sampling clock is the emulated vblank, and that is the whole trick.**
+Sampling per rendered frame would move the ruler with the thing being measured;
+since `0021` the vblank is a wall-clock 60 Hz grid, so both runs sample at 60/s
+and are directly comparable. Two consequences follow and are worth having in mind
+before reading a number:
+
+* **The measurement ceilings at 60 changes a second.** A word stepping at 144 Hz
+  reports 60, so the ratio between a 20 fps run and a 144 fps run tops out near
+  **3.0**, not 7.2. Read >1.5 as render-clocked and ~1.0 as tick-clocked.
+* **Below 60 fps the vblanks arrive in bursts**, several per `VSync` call, with
+  nothing running between them — so a burst reads as one change, which is what
+  keeps a 20 Hz stepper reporting 20 rather than 60.
+
+The census switches `KF2_SMOOTH`, `KF2_SMOOTH_OBJECTS` and `KF2_SMOOTH_ANIM` off
+for its runs, because they write interpolated values every rendered frame *on
+purpose* and would otherwise be the loudest rows in the report. That is the general caveat in one
+instance: **the output is a candidate list, not a defect list.** A frame counter
+and a primitive-buffer cursor are legitimately per-frame too.
+
+Records of a known structure are folded, so a field stepping in eighty object
+slots is one finding rather than eighty rows. Measured standing still in area 1
+at 20 against 144 fps:
+
+    object table +0x18   4 record(s)   ratio 3.84   13.0/s -> 49.8/s
+    object table +0x24   4 record(s)   ratio 4.05   13.0/s -> 52.4/s
+    object table +0x40   2 record(s)   ratio 3.84   13.8/s -> 52.8/s
+
+That is the spinning-crystal and opening-door complaint, named without anyone
+knowing what a crystal is. These fields are written through an index rather than a
+literal address, so `find_writers` cannot attribute them — which is itself the
+expected answer for anything inside a table.
+
+**How the attribution was got anyway, since `find_writers` could not.** The step
+the tooling does not automate is reading the emitted C# for the *stage* rather
+than for the address. `func_80037C0C` (stage 2) sets a base register to
+`0x80177714` and advances it by `0x44` at the loop tail, so every write it makes
+is `base + k` — invisible to a `lui`/`addiu` scan and obvious to a regex over one
+function's body. Tallying those gave `+0x18` at 7 sites, `+0x24` at 6 and `+0x40`
+at 20, which is the census's three rows and nothing else. **When `find_writers`
+answers "reached through a pointer or an index", the census's own structure
+folding has already told you which structure — go and read the function that walks
+it.**
+
+Two things came out of finishing it that are worth keeping:
+
+* **The first two rows were stage 2, and it is now gated** — see "Any frame rate"
+  in `docs/PATCHES_AND_MODS.md`. `+0x18` and `+0x24` fell to ratio 1.29.
+* **The third row was not.** `+0x40` stayed at 3.69. Adding `800331B4` to
+  `KF2_FPS_GATE` as a one-off experiment dropped it to 17.6/s, which named the
+  writer as stage 13's object pass. **That is the technique worth reusing: an
+  address in `KF2_FPS_GATE` is a free attribution probe.** It does not have to be
+  a change you would ship — gating a drawing function ruins the picture and
+  answers the question anyway, in one run.
+
+### find_writers: which code, and at what rate
+
+    python3 scripts/find_writers.py 8006E5CC
+    python3 scripts/find_writers.py --stage 2
+    python3 scripts/find_writers.py --modal
+    python3 scripts/find_writers.py --audit
+
+Four verdicts, and the fourth is the one that matters:
+
+    tick rate: gated directly           FramePacing skips the call on a non-tick frame
+    tick rate: only under gated stages  ... and everything below it
+    render rate: under ungated <stage>  stage 2 and stage 13 present, so cannot be skipped
+    render rate: inside modal loop      a loop that renders its own frames
+
+**"Which stage contains this" is not enough on its own.** The in-game menu lives
+inside stage 3, which *is* gated, and every counter in it still stepped per
+rendered frame — because `FramePacing` decides whether the loop is *entered* and
+cannot cut one in half. A modal loop is computed, not listed: a function with a
+backward branch whose subtree reaches a drawing entry point. There are 53.
+
+**The fourth verdict is no longer a defect on its own**, and that changes how to
+read a report: `patches/LoopPacing.cs` paces the *frames* a modal loop produces —
+at `LogicHz` if the frame drew the world, at the vblank if it did not — so a
+counter stepped once per iteration of one is already on the world's clock. A
+`render rate: inside modal loop` row is now a row to check with
+`KF2_LOOPPACING_PROBE=1` rather than a row to fix. What is still a defect is a
+counter stepped inside a *drawing function's own body*, which no whole-function
+hook reaches and no deadline holds. See "Loops that render their own frames" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+**One of that class has since been fixed, and how says what to look for in the
+rest.** The billboard sprites' cel index is stepped inside `func_800331B4`'s own
+body, so nothing could be gated — but every slot divides one **global counter**,
+`0x80195170`, and a hold/restore pair on that single word paces the whole system.
+The question to ask of a render-rate row in a drawing function is therefore not
+"can this be gated" but **"is there one word upstream of all of it"**. See "The
+flames run at the render rate" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+`--audit` classifies every global on the per-frame path. As of writing: **594
+globals, 73 held to the tick rate, 157 inside a modal loop, 364 under a stage that
+presents.** A writer is any function that stores to the address — an initialiser
+and a reset count too — so a render-rate row is where to look, not a verdict.
+
+Addresses are recovered from `lui`/`addiu` pairs, which is how PSY-Q reaches
+statics. Anything reached through a pointer, an index or a struct base in a
+register does not appear, so an empty answer means "not written through a literal
+address", never "not written".
+
+### rate_matrix: did it work
+
+    python3 scripts/rate_matrix.py menu-scroll --fps 20 60 144
+    python3 scripts/rate_matrix.py death-clock --fps 20 144 --tickrate 20 30
+    python3 scripts/rate_matrix.py menu-scroll --fps 144 --env KF2_MENUPACING=0
+    python3 scripts/rate_matrix.py modal-rate --fps 20 144 --env KF2_LOOPPACING=0
+    python3 scripts/rate_matrix.py sprite-anim --fps 20 60 144
+    python3 scripts/rate_matrix.py --list
+
+Every empirical claim in these documents should be reproducible by one of these.
+The output is a markdown table ready to paste; `--json` keeps the raw numbers so a
+later run can be diffed against an earlier one.
+
+**Read the rate a scenario reports, not the duration.** Some of these numbers are
+stable and some are not: the menu repeat's spin measured 1.2 ms on one run and
+16.6 ms on the next at identical settings, while the repeat *rate* it produced was
+37.5 and 36.0. A scenario says which of its numbers is load-bearing.
+
+Four things in `kf2run.py` are scar tissue and are why the harness is worth having
+rather than re-glued each session:
+
+* `state.inGame` goes true as the save loads, *before* the area transition
+  finishes, so a press in that window is swallowed — hence the settle delay.
+* Probes report per-second windows; the first is short and the last is truncated,
+  so a scenario must say which windows it means.
+* Never `pkill -f` on a pattern that also matches the calling shell's own command
+  line. The harness kills itself and the symptom is a run that reports nothing
+  rather than an error.
+* These runs open a real window. They are not headless.
+
+### check_gate: does the gate still obey its own rule
+
+    python3 scripts/check_gate.py          # non-zero exit on a violation
+    python3 scripts/check_gate.py --stages # what every stage reaches and writes
+
+`FramePacing` states that **"can it draw" is the test each gate entry had to
+pass**. That test was applied by reading the emitted C# by hand, once, and nothing
+re-applied it since — so adding an address to `DefaultGate` was an assertion. This
+makes it a check: the subtree must reach no `DrawOTag`, `PutDrawEnv` or
+`PutDispEnv`, and anything that does must be a recorded exception with its reason.
+
+Running it corrected a claim in these documents. Stage 3 was described as reaching
+the renderer *only* as `func_8002A550 -> func_80037B5C -> func_800342D8`; it also
+reaches it as `func_8002A550 -> func_80029CBC -> func_80018E80 -> func_800226A8 ->
+DrawOTag`, and it reaches `VSync` outside any modal loop entirely, through the
+menu blip `func_80022DC4`. The *reasoning* survives — those are extra renders
+inside the stage, not the frame's own, and the main loop still runs stage 13
+afterwards — but the single-path claim was wrong, which is the kind of thing a
+hand-applied rule stops catching the moment it is written down.
+
+`--stages` prints the inverse, which is the part that goes stale in prose: what
+each stage reaches and how many globals it writes, so stage 2's deliberate
+exclusion stays a recorded consequence rather than a remembered decision. It also
+lists **four ungated stages that could be gated and are not** — `func_8002C944`,
+`func_800140AC`, `func_80016FC8` and `func_80014534` all submit nothing and write
+between 1 and 14 globals each. Nobody has looked at whether those globals are
+per-tick state; the tool only says they are reachable and unheld.

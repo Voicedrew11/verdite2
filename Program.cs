@@ -183,11 +183,28 @@ Kf2.UiScale.Install();
 Kf2.KeyLayout.Configure();
 Kf2.KeyLayout.Install();
 
-// Frame pacing. The game's speed is its frame rate and the port would otherwise
-// burst past NTSC's fastest band, so a rendered frame is held to two vblanks:
+// Frame pacing. The game's speed is its frame rate, so the rate the port draws at
+// and the rate the game's own clock runs at are two different numbers here:
 //
-//     KF2_FPS=30                       30 fps (default); 60, or off for no floor
-//     KF2_FPS_GATE=80040348+8002A550   at 60, stages to run every other frame
+//     KF2_FPS=20                  frames a second to draw (default); any number,
+//                                 or off for no pacing at all
+//     KF2_TICKRATE=20             ticks a second the world runs at (default); 30
+//                                 is the rate the game's own code asks for
+//     KF2_FPS_LOGIC=full          do not tick the world on its own clock; scale
+//                                 the movement deltas instead -- a comparison mode
+//     KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78   what is ticked
+//
+// The game's own frame gate (func_80017880, which spins on the vblank credit at
+// 0x801B6CA8 until it reaches two) is skipped at every rate, because it decides
+// the render rate and the world rate together and only knows one answer for both:
+// 30. The port's own deadline paces the picture, and everything holding per-tick
+// state that cannot draw -- stages 3, 4, 5, 6 and stage 13's fade stepper -- runs
+// on the wall-clock tick rate instead of once per frame. 20 rather than 30 is a
+// judgement about what the console achieved under load rather than what the code
+// asked for; see FramePacing.LogicHz. A frame ends at the DrawOTag that
+// follows a VSync *call*, not the one that follows an emulated vblank: the vblank
+// is a fixed 60 Hz grid, so keying on it silently stopped pacing and stopped
+// ticking above 60 fps, and the world ran at double speed.
 //
 // This is a correctness fix rather than an optional extra, so it lives in the
 // project rather than in mods/ -- see the class comment. It attaches through
@@ -196,9 +213,247 @@ Kf2.KeyLayout.Install();
 // mods: mods/kf2debug, loaded by ModLoader and toggled in the game's own Mods
 // panel.
 Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
-                          Environment.GetEnvironmentVariable("KF2_FPS_GATE"));
+                          Environment.GetEnvironmentVariable("KF2_FPS_GATE"),
+                          Environment.GetEnvironmentVariable("KF2_FPS_LOGIC"),
+                          Environment.GetEnvironmentVariable("KF2_TICKRATE"));
 Kf2.FramePacing.Install();
+
+// The one thing frame pacing cannot reach: the in-game menu is a modal sub-loop
+// inside stage 3 (func_80029CBC jal's func_80018E80, which blocks for the whole
+// session and renders its own frames), so no gated stage is being called while it
+// runs and nothing in it is on the tick clock. Two things in there are counted in
+// vblanks and so ran at the render rate instead. The cursor's auto-repeat is a
+// spin on six VSync(0) calls in func_80022E90 -- a vblank each on hardware, 1.2 ms
+// at 144 fps here -- and those calls are held to the 60 Hz grid. The cursor's
+// blink steps once per menu frame in func_80022530, the frame head, which cannot
+// be skipped because it swaps the buffer, so a pre/post pair puts its counter
+// back on a frame the grid did not advance on. Nothing sleeps for the blink: the
+// menu still draws at the render rate, the wink is only capped at 60 Hz.
+//
+//     KF2_MENUPACING=0        leave both on the frame clock -- comparison only
+//     KF2_MENUPACING_PROBE=1  what each repeat cost, and the blink's step rate
+Kf2.MenuPacing.Configure(Environment.GetEnvironmentVariable("KF2_MENUPACING"),
+                         Environment.GetEnvironmentVariable("KF2_MENUPACING_PROBE"));
+Kf2.MenuPacing.Install();
+
+// The loading screen's walking figure is the same bug in a third place, and the
+// shared cause is that the game counts time in VSync(0) calls while a VSync(0)
+// call here is no longer a vblank. A disc read is a blocking wait rather than a
+// frame: func_80017CA8 spins until the CD job drains, calling the animator
+// func_8001883C four times an iteration, and that function draws the figure
+// straight into VRAM with ClearImage/MoveImage -- no ordering table, so no frame
+// boundary, so neither FramePacing nor LoopPacing can see it at all. It ends in
+// DrawSync(0); VSync(0), so one call was one vblank on hardware; here the figure
+// took its 84 steps in 352 ms at KF2_FPS=144 (238.6 a second) against 1715 ms at
+// the 20 fps default (49.0). Every blocking VSync inside the two disc waits is
+// held to the 60 Hz grid instead, which restores the console's 49 a second at
+// every rate -- and costs the load its length back: 1.7 s rather than 0.35 s
+// above 60 fps, which is what the 20 fps default already pays. Holding the
+// animator's three counters instead keeps loads short and was measured worse (it
+// drops the default to 36-40), so it is not what shipped.
+//
+//     KF2_LOADPACING=0        leave it on the render rate -- comparison only
+//     KF2_LOADPACING_PROBE=1  the figure's steps, elapsed and rate per load, and
+//                             the blocking VSync calls the wait was made of
+Kf2.LoadPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOADPACING"),
+                         Environment.GetEnvironmentVariable("KF2_LOADPACING_PROBE"));
+Kf2.LoadPacing.Install();
+
+// The flames. Billboard sprites -- table 4 of the four the renderer walks,
+// 0x80195174, 128 records of 0x18 -- animate by stepping a cel index at rec+0x5
+// whenever a single global counter at 0x80195170 divides exactly by the slot's
+// interval at rec+0x4, and that counter is incremented as the last act of
+// func_800331B4, stage 13's world and object walk. So it counts *rendered* frames
+// and every animated sprite in the game burns, sparks or flickers at the render
+// rate -- 7.2x too fast at 144 against a 20 Hz world, and reported from play as
+// "these flames still run really fast at a high framerate". These are not the
+// eight scrolling texture slots at 0x80192D58, which func_8002DC78 owns and the
+// stage gate has held since it was found.
+//
+// The gate cannot reach this one: func_800331B4 draws, so it cannot be skipped.
+// A hold/restore pair around it puts the counter and the 128 cel bytes back on a
+// frame the world did not advance on, which holds the whole system through its
+// one clock word. At the tick rate every frame is a tick frame, so the port's own
+// 20 fps default is unchanged with this on or off.
+//
+//     KF2_SPRITEANIM=0        leave the animation on the render rate -- comparison only
+//     KF2_SPRITEANIM_PROBE=1  cel changes a second, live slots, walks a second
+Kf2.SpriteAnim.Configure(Environment.GetEnvironmentVariable("KF2_SPRITEANIM"),
+                         Environment.GetEnvironmentVariable("KF2_SPRITEANIM_PROBE"));
+Kf2.SpriteAnim.Install();
+
+// Which words of the game's memory change at the render rate rather than at the
+// tick rate -- the instrument that turns "something looks too fast" into an
+// address. Samples on the emulated vblank, which is a wall-clock 60 Hz grid since
+// patches/recompone/0021, so two runs at different render rates are directly
+// comparable. Off by default; it costs a compare over the game's data region
+// sixty times a second.
+//
+//     KF2_RATECENSUS=1                       on
+//     KF2_RATECENSUS_RANGE=80060000:801C0000 the window to watch (the default)
+//     KF2_RATECENSUS_OUT=path                where to write (default ratecensus.txt)
+//     KF2_RATECENSUS_PERIOD=5                seconds between dumps
+Kf2.RateCensus.Configure(Environment.GetEnvironmentVariable("KF2_RATECENSUS"),
+                         Environment.GetEnvironmentVariable("KF2_RATECENSUS_RANGE"),
+                         Environment.GetEnvironmentVariable("KF2_RATECENSUS_OUT"),
+                         Environment.GetEnvironmentVariable("KF2_RATECENSUS_PERIOD"));
+Kf2.RateCensus.Install();
+
+// The other half of drawing above 30: the world advances 30 times a second, so
+// without this the camera does too and the extra frames show the same view twice.
+// One pre/post pair around stage 8 (func_80025A1C), which is the whole of "build
+// the render camera from the player state" and the only thing between that state
+// and the picture -- so the extrapolation lives for one function call and reaches
+// nothing else.
+//
+//     KF2_SMOOTH=1        on; off by default, so the view steps at the logic rate
+//     KF2_SMOOTH_POS=1    carry the position too (off by default)
+//     KF2_SMOOTH_PROBE=1  what is being carried, per second
+Kf2.FrameSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH"),
+                             Environment.GetEnvironmentVariable("KF2_SMOOTH_POS"),
+                             Environment.GetEnvironmentVariable("KF2_SMOOTH_PROBE"));
+Kf2.FrameSmoothing.Install();
+
+// The other half of the same problem: the camera moves every frame now, but an
+// object whose position advances on the tick still arrives in 50 ms steps, and
+// against a smoothly sliding world that reads worse than not smoothing at all.
+// One pre/post pair around stage 13, interpolating the object table at 0x80177714
+// -- the table the renderer is actually handed, not the entity records, which are
+// a copy stage 4 makes of it.
+//
+//     KF2_SMOOTH_OBJECTS=1        on; off by default
+//     KF2_SMOOTH_OBJECTS_PROBE=1  how much is being carried, per second
+//     KF2_SMOOTH_OBJECTS_GUARD=   strict | sticky | continuous; which step counts
+//                                 as a placement rather than as motion, on the
+//                                 entity table only -- every other table keeps the
+//                                 strict limit, since the projectile tables recycle
+//                                 slots. `continuous` by default. A picture, so it
+//                                 is a setting under Video as well.
+Kf2.ObjectSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS"),
+                              Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_PROBE"),
+                              Environment.GetEnvironmentVariable("KF2_SMOOTH_OBJECTS_GUARD"));
+Kf2.ObjectSmoothing.Install();
+
+// The third of the same problem: origin and facing are carried now, but a
+// creature's *pose* is a mesh morph and its clock only advances on the tick, so
+// the shape still steps against a body that glides. Stage 13 re-runs the blender
+// every frame -- what is stuck is the time it blends to -- so this drives that
+// clock instead of touching vertices: one pre on stage 13 for the frame, a
+// pre/post pair on the model submit (func_80032588) and one on the MO clip clock
+// (func_8003486C), handing it floor(lerp(prev, cur, phase)) and adding the
+// leftover fraction onto the 12.12 weight the decoder consumes. Nothing is
+// written to game state -- a register and the caller's own stack temp.
+//
+//     KF2_SMOOTH_ANIM=1         on, in whichever mode the settings hold;
+//                               off by default
+//     KF2_SMOOTH_ANIM=timeline  interpolate on the clip's own timeline, the
+//                               length read out of the segment table (default)
+//     KF2_SMOOTH_ANIM=time      comparison: lerp the clip time between the two
+//                               ticks, with the wrap and re-seek classifiers
+//     KF2_SMOOTH_ANIM=weight    comparison: the blend weight only, clamped to
+//                               the segment the game itself chose
+//     KF2_SMOOTH_ANIM_PROBE=1   morph vs rigid submits, the verdict census and
+//                               the weights carried, per second
+Kf2.AnimSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM"),
+                            Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM_PROBE"));
+Kf2.AnimSmoothing.Install();
+
+// The menu is not the only loop of that shape, and naming them one at a time is
+// how the list was being found. A *modal loop* -- a function that takes the main
+// loop over and presents its own frames -- is entered from a gated stage, so the
+// gate decides only whether it is entered and never cuts one in half; inside, the
+// loop iterates once per rendered frame and everything it steps runs at the render
+// rate. That is the transition fade, the cutscene and message-box loops, and the
+// item-use and spell-cast animations: a picked-up item spinning too fast at 144.
+// The fix is structural rather than per-counter -- the loop's *body* is held to one
+// run per world tick, so every number inside it is right without being found. One
+// pre-hook on stage 9, whose only caller is the main loop, tells a modal frame from
+// the main loop's.
+//
+// Holding it there is only half. Pacing the loop's frames to the tick makes the
+// speed right and the picture step at the tick rate, because the frame the loop
+// draws *is* the tick and LogicPhase is 0 on every one of them, so the smoothing
+// patches have nothing to carry. So the gap between iterations is filled with
+// redraws -- stage 13 called again at the phase the frame stands at, which is what
+// func_80037B5C already does inside a stage. The world then advances at LogicHz
+// while the picture is drawn at the render rate, with objects and poses carried by
+// the patches that already do it everywhere else. The menu draws no world, so it is
+// paced at the vblank instead. It does nothing at or below the tick rate, which is
+// where the defect does not exist either.
+//
+// A redraw replays stage 13 with the two pointers the modal loop itself passed it
+// (func_800342D8(VECTOR *pos, SVECTOR *rot)), recorded by a pre-hook. Calling it
+// without them -- which the first version of this did -- builds the frame's view
+// matrix out of whatever the register file held, which is a black flicker and a
+// stale buffer left on screen. Stage 8 is deliberately not replayed: it would
+// overwrite a cutscene's scripted camera with the player's, and the player camera
+// cannot move inside a modal loop anyway.
+//
+// The player camera cannot move inside a modal loop -- no gated stage runs there --
+// but a camera the *loop itself* builds can: func_8004831C ramps a heading 0->0x1000
+// by 0x200 an iteration, a full turn in 32 steps, which held to the tick is what play
+// reported as "the camera is visibly moving at a lower framerate in the modals". So a
+// redraw carries the block the loop passed, lerp(prev, cur, phase), applied in the
+// pre and taken back in the post.
+//
+//     KF2_LOOPPACING=0        leave them on the render rate -- comparison only
+//     KF2_LOOPPACING=pace     hold the loop but do not redraw -- comparison only
+//     KF2_LOOPPACING=nocarry  redraw, but do not carry the loop's own pan
+//     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface
+//     KF2_LOOPPACING_PROBE=2  also how far the loop's own view moves per iteration
+//
+// Installed *after* the three smoothing patches, and that ordering is
+// load-bearing: HookManager runs the posts on a function in the order they
+// were added, and the redraw has to be asked for once their own posts
+// have put the tables back.
+Kf2.LoopPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
+                         Environment.GetEnvironmentVariable("KF2_LOOPPACING_PROBE"));
+Kf2.LoopPacing.Install();
 Kf2.EndingHold.Install();
+
+// Which routine in the renderer drew how much of the frame. Stage 13 is the only
+// filler of the display list, but nothing records which of its callees draws the
+// map, the objects, or the first-person weapon -- and "the arm steps at the tick
+// rate" has two different fixes depending on which. Measured off the primitive
+// arena's bump pointer across each routine, so it costs two reads per routine per
+// frame and nothing per polygon.
+//
+//     KF2_DRAWCENSUS=1    the per-routine primitive census, every two seconds
+Kf2.DrawCensus.Configure(Environment.GetEnvironmentVariable("KF2_DRAWCENSUS"));
+Kf2.DrawCensus.Install();
+
+// Whether the frame could be smoothed without knowing any of the tables at all.
+// Every smoother in the port carries a named table between ticks, and that set has
+// been incomplete three times running -- each miss found by someone noticing a
+// stepping door rather than by a counter. One layer down, at DrawOTag, the frame
+// is a list of finished primitives; if a primitive can be recognised in the
+// previous tick's list its screen position could be carried by the tick phase, and
+// that would be one hook covering doors, tiles, enemies and the drawbridge alike.
+// Whether it can be recognised is the whole question, and this only measures it.
+//
+//     KF2_PACKETMATCH=1   the match census, once a second, by three candidate keys
+//     KF2_PACKETMATCH=2   also name the worst-matching contexts
+Kf2.PacketMatch.Configure(Environment.GetEnvironmentVariable("KF2_PACKETMATCH"));
+Kf2.PacketMatch.Install();
+
+// Refuse a hit resolution that would read a non-pointer as a pointer. For
+// docs/TODO.md #14 -- the crash after the final boss dies and the cutscene hands
+// the player the Moonlight Sword, above the tick rate and not at it. The first
+// stack trace of it puts the fault in stage 3's weapon reach scan
+// (func_800271D0 -> func_8003A9CC -> func_8003A490 -> func_8003A448 reading
+// 0x0FFF0000), in the main loop and nowhere near fdat23's post-boss modal loops,
+// which is where it had been assumed to live. Nothing on that path bounds the
+// creature type byte or checks the slot is occupied, and the console has no fault
+// path for the read -- so the guard replays the derivation, refuses only the four
+// states that are certain to fault, and names which one it was. Reads only, and
+// the report is what replaces the stack trace on the next playthrough.
+//
+//     KF2_HITGUARD=0      let it fault, which is a hard crash -- comparison only
+//     KF2_HITPROBE=1      also report a census of what the hit check saw
+//     KF2_HITPROBE=2      also report every call, which is very loud
+Kf2.HitGuard.Configure(Environment.GetEnvironmentVariable("KF2_HITGUARD"),
+                       Environment.GetEnvironmentVariable("KF2_HITPROBE"));
+Kf2.HitGuard.Install();
 
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
@@ -457,6 +712,22 @@ Kf2.ViewClip.Configure(Environment.GetEnvironmentVariable("KF2_VIEWCLIP"),
                        Environment.GetEnvironmentVariable("KF2_VIEWCLIP_PROBE"));
 Kf2.ViewClip.Install();
 
+// What the ending's last frame does when it is reached. END.EXE finishes in a
+// spin with no VSync and never asks the boot stub for anything else, so on
+// hardware "The End" is a hang you leave with the reset button:
+//
+//     KF2_ENDINGEXIT=0    keep that hang; by default any button returns to the title
+Kf2.EndingHold.Configure(Environment.GetEnvironmentVariable("KF2_ENDINGEXIT"));
+
+// Boot straight into one of the three executables, for a defect that lives past
+// the point a session can reach by playing:
+//
+//     KF2_BOOTEXE=end     the ending, without finishing the game
+//
+// It writes the boot stub's own file-name index before its loader loop reads it.
+Kf2.BootExe.Configure(Environment.GetEnvironmentVariable("KF2_BOOTEXE"));
+Kf2.BootExe.Install();
+
 // Where the patches' own settings live. A patch registers a page against one of
 // the runtime's settings sections and is drawn inside it, so the frame rate is in
 // System > Settings > Video beside vsync rather than in a box of its own; the one
@@ -464,6 +735,25 @@ Kf2.ViewClip.Install();
 // plays rather than how the machine behaves.
 Kf2.Settings.PatchSettings.Install();
 
+// What the game's state was when an unhandled exception left the recompiled code.
+// For docs/TODO.md #14, which is reproducible at 165 fps but *only with no hook on
+// the faulting path* -- so a diagnostic that has to be present to see it is no use
+// if being present is what stops it. This adds nothing to any path the game takes:
+// it reads memory once, after the fault, from the catch below.
+//
+//     KF2_CRASHDUMP=0     say nothing; let the exception print on its own
+Kf2.CrashDump.Configure(Environment.GetEnvironmentVariable("KF2_CRASHDUMP"));
+
 var memory = new PSMemory();
-Entry.Run(memory, args.Length > 0 ? args[0] : null);
+try
+{
+    Entry.Run(memory, args.Length > 0 ? args[0] : null);
+}
+catch (Exception e)
+{
+    // Dump first, then rethrow: the runtime still prints its own trace, and the
+    // state that explains it goes out immediately above it rather than being lost.
+    Kf2.CrashDump.Dump(e, memory);
+    throw;
+}
 return 0;

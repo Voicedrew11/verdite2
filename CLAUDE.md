@@ -77,8 +77,38 @@ that way.
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
-KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pacing"
-KF2_FPS_GATE=80040348                  # at 60, loop stages to run every other frame
+KF2_FPS=120                            # 20 (default), any number, or off; see "Any frame rate"
+KF2_TICKRATE=30                        # ticks a second the world runs at (20 by default)
+KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
+KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
+KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
+KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
+KF2_LOOPPACING=0                       # loops that render their own frames back on the render rate (on by default)
+KF2_LOOPPACING=pace                    # hold such a loop but do not redraw: right speed, tick-rate picture
+KF2_LOOPPACING=nocarry                 # redraw, but do not carry a view the loop pans itself
+KF2_LOOPPACING_PROBE=1                 # modal frames a second, world and interface, against the main loop's
+KF2_LOOPPACING_PROBE=2                 # also how far the loop's own view moves per iteration
+KF2_LOADPACING=0                       # the loading screen's walking figure back on the host ceiling (paced by default)
+KF2_LOADPACING_PROBE=1                 # its steps a second, and what one load cost
+KF2_SPRITEANIM=0                       # billboard sprite animation back on the render rate (paced by default)
+KF2_SPRITEANIM_PROBE=1                 # cel changes a second, live slots, and how many walks stepped
+KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
+KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
+KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
+KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by default); carry position too
+KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
+KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
+KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
+KF2_SMOOTH_OBJECTS_GUARD=continuous    # strict|sticky|continuous: what counts as a placement (creatures)
+KF2_SMOOTH_ANIM=1                      # carry MO pose between ticks (off by default)
+KF2_SMOOTH_ANIM=time                   # lerp the clip time between the two ticks (the default mode)
+KF2_SMOOTH_ANIM=timeline               # comparison: interpolate on the clip's own timeline
+KF2_SMOOTH_ANIM=weight                 # comparison: the blend weight only, inside the game's segment
+KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the verdict census, carries
+KF2_HITGUARD=0                         # let the hit path's reaction lookup fault (it is fenced by default; docs/TODO.md #14)
+KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
+KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
+KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
@@ -108,6 +138,8 @@ KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
+KF2_BOOTEXE=end                          # boot straight into OPEN.EXE, GAME.EXE or END.EXE
+KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the original does (a button exits by default)
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
 KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill
 KF2_UISCALE=1                            # force the interface scale, and save it
@@ -135,7 +167,388 @@ supply all three of the runtime's languages, unlike an override of an existing
 one.
 
 Frame pacing is load-bearing: without it the port runs faster than the game can on
-hardware, so it lives in `patches/` and is always on. Dithering is a patch for a
+hardware, so it lives in `patches/` and is always on. **It is also where an
+arbitrary frame rate lives, and where the world's own tick rate does.** What pinned
+the port to 30 is the *game's* own frame gate — `func_80017880`, which spins on the
+vblank credit at `0x801B6CA8` until it reaches 2 and is called by stage 13 — not
+the runtime. `FramePacing` **skips it at every rate**, paces the frame itself, and
+runs what holds per-tick state on a wall-clock accumulator at `LogicHz`.
+
+**`LogicHz` is 20, not 30, and that is a judgement rather than a reading.** The
+literal 2 is what the code asks for; the console missed that deadline under load
+and landed in the three-vblank band, and since King's Field's speed *is* its frame
+rate, 20 is the speed it was played at. The port's HLE GPU makes the 2-vblank
+deadline every frame and never bands down, so it has to be told. No counter here
+can settle it — the port cannot observe hardware, and the 30-minute vblank
+histogram that looks like it can is a measurement *of the port* — so it is a
+**setting** (`KF2_TICKRATE`, and a combo under Video), and 30 is one entry away.
+Because the gate decides the render rate and the world rate together and knows one
+answer for both, leaving it running at the 20 fps default would pin the world back
+to 30, which is why it is skipped everywhere rather than only above 30. **The
+default render rate is 20 too**, 1:1 with the tick, which is the console's own
+arrangement. Measured: 20.00 ticks/s at 20, 30, 60, 120, 144 and uncapped, with
+`KF2_TICKRATE=30` reproducing the 2.14 s death clock the 30 Hz world had.
+**A frame boundary is a `DrawOTag` that follows a `VSync` call, and that is
+load-bearing**: it used to be a `DrawOTag` that followed an emulated *vblank*, and
+since the vblank is a fixed 60 Hz wall-clock grid, above 60 fps most frames were
+neither paced nor logic-clocked and the world ran at `30 × frames-per-vblank` —
+measured double speed at `KF2_FPS=60`. **That boundary is a single point of failure
+and it fails open**: `Floor()` has one call site and `_tickThisFrame` one writer,
+both there, and `_tickThisFrame` starts `true` — so a boundary that stops arriving
+uncaps the picture *and* runs every gated stage on every frame, which at 165 fps
+against a 20 Hz world is the whole game at 8× from the title onward, silently. The
+stage gate therefore carries a **watchdog**: a gated stage is only reached from the
+main loop and the main loop draws, so one running while no boundary has arrived for
+500 ms means the boundary is gone, and `FallbackTick` runs the same wall-clock grid
+and paces the loop from inside `BeforeStage` instead (measured: `walk` reports 2844
+units/2 s at 165 fps both with the boundary intact and with every `DrawOTag` hook
+removed). Losing only the `VSync` pre degrades to charging every `DrawOTag` as a
+frame rather than to no boundary at all, and `Attach` reports the boundary as a
+pair (`boundary 3/3 DrawOTag + 3/3 VSync`), claims only what it **installed** and
+is retried. That distinction is the fix rather than the wording: `AddPre`/`AddPost`
+only queue a delegate, the detour is created later in `HookManager.Commit`, and
+since `0027` that fails per function without throwing — so a summary built from the
+`Add*` returns could report `3/3` while no boundary existed and latch itself done.
+`patches/recompone/0028` exposes `HookManager.IsCommitted`, `patches/HookAttach.cs`
+holds the retry latch and the read-back, and **all eleven patches use it** — seven
+of them had also been latching `attached = true` *before* calling `Attach()`, so
+anything thrown inside was swallowed by `Event.Dispatch` into one stderr line and
+never retried. Half a pair can no longer be re-enabled from the Video pane either
+(`_paired`), and `LoopPacing`'s missing-marker case now stands the class down
+instead of reading every frame as modal. See "A registration is not a hook" in
+`docs/PATCHES_AND_MODS.md`. What is gated is stages **2**, 3, 4, 5, 6 and
+stage 13's fade stepper `func_80033FBC` and animated-texture updater
+`func_8002DC78`, and the test each had to pass is **can it draw**. **Stage 2
+(`func_80037C0C`) is where doors, the drawbridge, the minecart and the crystals
+move** — it walks the object table at `0x80177714` and dispatches on the type byte
+at `rec+0x4` through a 224-entry jump table at `0x8001191C` — and it *does* reach
+`DrawOTag`, through exactly one edge: `func_80037B5C`, the transition fade, which
+renders its own frames by calling stage 13. That is an **extra** render inside the
+stage, not the frame's own, which is the same recorded exception stage 3 carries,
+so both are gated and `scripts/check_gate.py`'s `KNOWN` holds the reason. The cost
+is that entering a fade or a cutscene can be deferred by up to one tick. What
+survived the gate is `rec+0x40` on two slots — a per-object ambient-sound
+retrigger stepped by **stage 13's own object pass** `func_800331B4`, which cannot
+be gated because it draws the models in the same loop. `patches/FrameSmoothing.cs` is the other half rather
+than an option beside it: one pre/post pair around **stage 8** (`func_80025A1C`),
+the only copy of the camera between the player state and the renderer, carrying
+yaw and pitch by the fraction of a tick the frame stands at. **Smoothing the camera
+is not the whole picture, and `patches/ObjectSmoothing.cs` is the rest of it**:
+most of the frame is architecture that never moves, so a moving camera smooths it
+for free, but anything with a position of its own still arrives in tick-sized
+steps — and against a world sliding smoothly past, that step is *more* obvious
+than if nothing were smoothed. Same shape, one pre/post pair around **stage 13**
+(`func_800342D8`), walking **all four tables the renderer draws from** — the
+object table `0x80177714` (396 slots of `0x44`, `VECTOR` at `+0x14`), the entity
+table `0x8016C544` (200 of `0x7C`, `+0x2C`), stage 5's effects table `0x8019CC6C`
+(128 of `0x48`, `+0x14`) and the billboards `0x80195174`. It was first written
+against the object table alone, on a `func_80032588` argument census taken in a
+scene with props and no creatures near; the entity table is AI state stage 4
+copies *from* the object record **and** what the first loop draws creatures from,
+rotation included. **Each row's liveness test is the renderer's own, not the
+owning stage's, and the two are not even the same way round**: an object is drawn
+when `u16[+0x6] != 0xFF` (stage 2 steps it on `u8[+0x4] != 0xFF`) and a creature
+when `u8[+0x9] == 1` (stage 4 and `AgentServer` use `u8[+0x0] != 0xFF`), so
+`TableSpec` carries the polarity. Using the owning stage's for the entity row
+carried records the renderer never draws — measured, a mean carried offset of
+2600 u with 11,400-unit tick steps, against 10-60 u and ≤87 u once the row reads
+what is drawn — and each of those refusals published a `_held` address
+`AnimSmoothing` then obeyed. It
+**interpolates — `lerp(prev, cur, phase)`, never past a position the game
+produced — on the same clock and by the same fraction as the view.** It
+interpolated, was switched to extrapolating, and interpolates again: interpolating
+was always right on its own terms, and was abandoned only while the *camera*
+extrapolated, since the two then sat a whole tick apart and a constant offset
+between the world and the things in it reads as the objects moving slower than
+everything else. `FrameSmoothing` interpolates too now, so they agree about what
+time it is. It leaves a
+slot whose step exceeds 1024 units on an axis exactly where the game put it,
+because that is a placement rather than motion (measured: real motion 37 u a tick,
+a placement 233,472). **That threshold was briefly raised to 8192 and made sticky,
+and the raise was reverted**: it was chasing a boss whose parts appeared to tear
+apart mid-attack, and this patch cannot cause that — a creature is *one record* in
+the entity table, one position and one rotation, so it moves a creature as a whole
+and a limb-relative defect is the MO pose. The boss was never confirmed to improve,
+while the raise did make **fireballs stutter and jump**: the effects table recycles
+slots, a slot freed and refilled inside one tick is never seen free, so `Prev` is
+the dead projectile and `Cur` the new one, and 8192 carries that delta instead of
+refusing it. The finding underneath is that the threshold does **two jobs** —
+rejecting slot reuse, which wants it tight, and admitting fast motion, which wants
+it loose — and the real fix is to key the sample on the slot's *identity* rather
+than infer reuse from distance. **The threshold is therefore per table** (`TableSpec.Fast`): the raise applies to
+the **entity table only**, so a boss gets it and the projectile tables keep 1024
+whatever the mode is. That is the compromise, and it comes from play — on `strict`
+the boss is calm and projectiles are perfect but a fast boss's *head snaps into the
+next animation frame*, and on the raised modes the animation gains in-between
+frames and projectiles break. Both halves are one cause: a creature is drawn from
+**two** smoothers, its root here and its pose in `AnimSmoothing`, and a refused
+root steps at the tick rate while the vertices morph at the frame rate. So
+**`ObjectSmoothing` publishes the addresses it refused and `AnimSmoothing` holds
+those poses for the same tick** — they need no knowledge of each other's tables,
+since `func_80032588`'s `a2` *is* `base + slot*stride + PosOff` — and a creature
+past even the raised cap degrades to a coherent tick-rate creature instead of a
+smooth head on a stepping body. The mode is a setting (Video ▸ Enhancements ▸
+Placement guard, `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`, `continuous`
+by default), and the carry decision is made once per tick rather than once per
+frame because the hysteresis reads state it also writes.
+**3D pose is `patches/AnimSmoothing.cs`**, which drives
+the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the
+blender writes the in-between mesh (`KF2_SMOOTH_ANIM=1`). **The clip time is a
+point on a circle, not a number on a line**, and every version of this patch
+before the current one did not know the circumference: it lerped the integer time
+as a scalar and then repaired each way that fails — the end of a looping cycle
+told from a re-seek by *where the time landed*, a turnover synthesised out of the
+last playback step and believed only off a settled run, a clip the AI is fighting
+over counted in direction reversals and held, a magnitude cutoff at 4096 for a
+re-seek, and a default that gave up driving the time at all. **The missing fact
+was the clip's length, and it is in the table `func_8003486C` already walks**:
+clip table at `bank + u32[bank+0x10]`, record at `bank + u32[clipTable +
+clip*4]`, `u16` segment count, `bank`-relative `u32` pointers to segments whose
+`u16` at `+0x2` is the duration — so `D` is their sum, and measured it is 4096
+for every clip reached, confirmed from the other side by a highest-time-seen of
+4095 and wrap steps of `rate - 4096`. `Mode.Timeline` (the default) is one
+predicate where there were five: unwrap the tick's step against the slot's
+settled rate over the candidates `cur + kD - prev` — `k` computed, not searched —
+plus the two ping-pong reflections `-cur - prev` and `2D - cur - prev`, and take
+the nearest if it is within half the rate. That covers playback, the cycle wrap,
+a reverse clip and an endpoint turn at once; anything else is a re-seek or a
+fight and is **held at the game's own time**. A carried tick lerps along the path
+it recognised, folds it back onto the clip, hands `floor(t)` to `func_8003486C`
+and spends the leftover fraction on the 12.12 weight — the fraction is under one
+clip unit, so it cannot leave the segment `floor(t)` landed in and the old
+whole-tick overrun refusal has nothing to refuse. It carries from the **third**
+sample of a clip, since a rate has to be confirmed once, except at a genuine clip
+change where the first moving step *is* the rate and is taken on trust — but only
+within a quarter of the clip, or a seek into the middle of one sweeps most of the
+animation in a 50 ms tick; a zero step touches neither. **Shipped as the default
+it made the teleport crystals shake up and down**, and the probe had already said
+so: it counted 1-6 endpoint *turns* a second while never once counting reverse
+playback, and a real turn is always followed by reverse playback, so every turn
+was spurious — a spurious turn runs the pose to the end of the clip and back
+inside one tick. Three causes: the rate was not reflected after a turn (so every
+turn mispredicted the next tick and turned again), a turn was accepted merely for
+scoring better than straight playback rather than only after it failed, and the
+opening step was unbounded. **The lesson under them is that `Timeline` is the
+only mode that can ask for a pose outside `[prev, cur]`** — deliberately, since
+that is how a loop plays forward through its wrap — so a misclassification gives
+a pose from elsewhere in the clip rather than a slightly wrong one, where
+`Mode.Time`'s guessy classifiers sit on top of an interpolator that stays bounded
+when they are wrong. The two designs differ in **where the risk sits**. Hence the
+fourth fix: the acceptance window, which scales with the rate, is **capped** at a
+twentieth of the clip, so a seek recorded as a rate cannot let the next tick
+accept anything — being wrong costs a held tick rather than a pose out of
+nowhere. **That cap replaced a worse first attempt**: refusing to *record* an
+implausible step at all, which stranded any clip whose real rate exceeded a
+quarter of its length — no rate, so the unsettled branch; too big, so neither
+carried nor recorded; nothing changed, so the next tick reasoned identically,
+for the whole animation. Play found it on a flying gecko's backflip looking like
+it ran at a low frame rate. **Size buys a tick of latency; repetition buys
+correctness** — a big step now waits one tick and is confirmed by a second
+observation, and `FirstStepFrac` gates only the no-confirmation shortcut. The
+probe gained `widest refused N` for it, which is the counter that makes a
+stranded clip visible at all: a refused step of 1344 on a 4096-unit clip turned
+up in the first run after adding it. Measured after, at 144 fps over areas 0, 2 and 7: 553 playback ticks,
+7 wraps, **0 turns**, 15 holds, 0 without a clip length, and the
+widest arc carried over the whole run is **290 units** — the top of the measured
+playback range, so nothing walked round the back of the circle — against a widest
+*refused* step of 1344, the two staying far apart being the shape to want. (That
+run also read `0 settling`, and **that number said nothing**: every `Hold` exit
+seeded a rate on the way out, so the census test could never be true and the
+column was dead. It is recorded at the exit that knows it now, and reports.)
+`Mode.Weight`
+refuses 8-17 carries a second for leaving their segment in the same scenes.
+**A tick is a frame identity, not a flag**: `TickedThisFrame` is stable for the
+whole frame, so a second stage-13 walk inside one would step the tick twice and
+re-sample both smoothers at the same instant, wiping the tick's prev/cur pair.
+`FramePacing.FirstWalkOfTick` is that test — `Frames` plus the 500 ms boundary
+watchdog, since the identity fails closed — and `AnimSmoothing` and
+`ObjectSmoothing` (three sites: its sample and both hysteresis blocks) go through
+it. Measured 0 such walks over the autostart load and five area warps, which the
+code agrees with: `LoopPacing`'s redraws run only while `!TickedThisFrame`.
+**`Mode.Timeline` is the default again** — the default moved to `Mode.Time` while
+the shake was diagnosed, since that was the only mode with a positive report by
+eye, and moved back once play reported the fixed one looking very good; the other
+two are a combo under Video ▸ Enhancements ▸ Pose interpolation, switchable while
+a creature is on screen, and the losers go once the picture is judged. **On the
+invariant it is the correct approach and `Mode.Time` is not**: when the predicate
+cannot explain a tick it holds, which *is* the invariant's second half, whereas
+`Mode.Time` interpolates anyway and synthesises its turnover out of the last
+step, so across a wrap it draws a pose the game never produced. Short of that it
+is not proven: three tuned constants remain (`RateTolRel`, `RateTolAbs`,
+`FirstStepFrac`, each against something measured rather than picked), "playback
+is constant velocity" is an assumption about the game rather than a reading of
+it, **the endpoint-turn and reverse-playback branches have never once been
+exercised** in any run — that is the part with no evidence behind it and the part
+that shipped the shake — and every clip measured is 4096 long, so a per-clip
+length lookup would look identical to reading a constant. Still to look at: a
+looping clip's turnover, a clip played in reverse, an attack the AI restarts.
+Vertex-fetch lerp was tried and did
+not change the picture. The
+player's arm was recorded as a different bug and is not: it was called 2D, a
+sprite index in the HUD builder `func_80031D5C`, on a packet-count difference
+that was really the HP/MP gauges collapsing — it moved *down*, the wrong way for
+an arm appearing. It is a **3D MO mesh drawn by `func_80032400`**, a fourth
+drawing callee of stage 13 that draws nothing while the swing clock at
+`0x801994A4` reads `-1`, which is why a census taken standing in an area credited
+it nothing. So `AnimSmoothing` has a **second front-end** rather than a second
+patch: `Observe()` is the shared body, a pair on `func_80032400` fences the scope
+and resets the slot across the idle gap between swings (the clip byte is the
+*kind* of attack, so two swings of one kind would otherwise read as one enormous
+backwards step), and a pair on `func_80034DA8` opens the same window
+`BeforeClock` already works inside. Keyed on `a0` = `0x8019949C`; nothing written
+to game memory. Measured at 144 fps: clip 0, 300 a tick on a 4096-unit clip, 13
+ticks a swing, **0 held**, 86 of 94 frames carried, world clock still 19.9
+ticks/s. **All four
+default to off** — while the boundary was broken the phase was
+pinned to 0 and the
+smoothing never ran at all, so the first three's picture has never been seen.
+The animation one's has: it was confirmed by eye once the clip-time guard stopped
+discarding every real step. A 50 ms tick makes
+it matter more than the 33 ms one did. **The stage gate cannot reach the in-game
+menu, and `patches/MenuPacing.cs` is why that mattered**: the menu is a modal
+sub-loop (`func_80029CBC` `jal`s `func_80018E80`, which blocks for the whole
+session and renders its own frames), so no gated stage is being called while it
+runs. Two things in there are counted in **vblanks** rather than in ticks, and so
+ran at the render rate. The cursor does not edge-detect — holding a direction
+steps once per menu-loop iteration, throttled only by `func_80022E90`, a spin on
+six `VSync(0)` calls. Those were a vblank each on hardware (100 ms); here `VSync`
+returns as fast as `FrameClock`'s deliberately permissive `max(60, fps*2)` ceiling
+allows, which above 60 is not at all — **measured 36-37 cursor steps a second at
+144 fps** against 7.5 at the 20 fps default. A pre/post pair around
+`func_80022E90` and a pre on the `VSync` thunk hold those six calls to the 60 Hz
+grid, so the six frames still present: 100.2-100.8 ms at 20, 60 and 144. The
+residual 6.0-9.5 steps a second is the menu's own frame, which still lands at the
+render rate. **The cursor's blink is the same bug one layer up** — an eight-step
+ramp at `0x8006E5CC` stepped by the menu's frame head `func_80022530`, one wink
+per accepted move rather than a continuous pulse, measured 73-77 steps a second at
+144 fps against 15-19 at 20. The frame head swaps the buffer so it cannot be
+skipped; a pre/post pair puts the two words back on a frame the grid did not
+advance on, which **caps** the wink at 60 Hz without pacing the menu — nothing
+sleeps, so a 144 fps menu is still a 144 fps menu. On by default;
+`KF2_MENUPACING=0` is the comparison. **Neither number has been looked at by
+eye**, and the 60 Hz is a choice rather than a reading (`MenuPacing.BlinkMs`): if
+the console's menu held 60 fps it stepped the blink twice a vblank, since the
+frame head runs twice an iteration. See "The menu's cursor repeat" in
+`docs/PATCHES_AND_MODS.md`. **The menu is not the only loop of that shape, and
+`patches/LoopPacing.cs` is the generalisation rather than a third instance of it**:
+any *modal loop* — a function that takes the main loop over and presents its own
+frames — is entered from a gated stage, so the gate decides only whether it is
+entered and never cuts one in half, and inside it the loop iterates once per
+**rendered** frame. That is the transition fade `func_80037B5C`, the cutscene and
+message-box loops, the menu box open/close and the item-use and spell-cast
+animations — a picked-up item spinning too fast is that bug, not an entity to be
+found. The fix restores the identity the console had, that a modal loop's
+iteration *was* a frame and a frame *was* a tick: **the loop's body runs once per
+world tick, not once per rendered frame**, so every counter inside it is right
+without being enumerated. Classifying a frame costs **one** hook — a pre on
+**stage 9 `func_800140AC`**, whose only caller is the main loop `func_8001369C`
+(stage 1 looks like the marker and is not: two modal loops and three area modules
+call it too) — plus a flag set in `FramePacing.BeforeFrameGate`, which is already
+hooked on `func_80017880`, stage 13's sole caller, and so says whether the frame
+drew the world. **Holding the loop is only half**: pacing its frames to the tick
+gives the right speed and a 20 fps *picture*, because the frame the loop draws
+*is* the tick and `LogicPhase` is 0 on every one of them, so the smoothing patches
+have nothing to carry. The gap between iterations is therefore filled with
+**redraws** — stage 13 called again at the frame's phase, which is what
+`func_80037B5C` already does inside a stage — so `ObjectSmoothing` and
+`AnimSmoothing`, which bracket stage 13, carry the picture. That post on stage 13
+must run after theirs, which is why `LoopPacing` is installed last in `Program.cs`.
+**A redraw replays stage 13 with the two pointers the loop itself passed it**, and
+that is load-bearing rather than tidy: stage 13 is
+`func_800342D8(VECTOR *pos, SVECTOR *rot)` and builds the frame's whole view matrix
+out of them unless both are zero, so a redraw that leaves the register file alone
+projects the world through the tail of `func_8003549C` — measured, a pointer into
+the sound table near `0x8018EAA4`. That draws next to nothing, and since this
+game's `PutDrawEnv` has `isbg=0` there is no background clear, so the buffer keeps
+what was in it two frames ago: the first version of the redraw shipped that way and
+play reported black flicker and a stale frame alternating with the live one.
+**Stage 8 is deliberately not replayed** — it *writes* through those same two
+pointers, so it corrupted whatever they addressed, and re-running it would
+overwrite a cutscene's scripted camera with the player's; the *player* camera
+cannot move inside a modal loop anyway, since no gated stage runs there (measured:
+`KF2_LOOPPACING_PROBE=2` reads `the loop's own view moved 0.0 u per iteration`
+through a fade, a warp and the menu). **A camera the loop builds itself is the case
+that does move**, and `func_8004831C` — the cutscene and message-box loop — is the
+one play reported: it ramps a heading `0 -> 0x1000` by `0x200` an iteration and
+hands stage 13 the `u16` it just wrote, a full turn in 32 steps, and elsewhere steps
+`rec+0x26` by `0x40` while passing `a1 = 0x80199504`. Held to the tick that is
+11.25° a step. So a redraw **carries it**, in `FrameSmoothing`'s own shape:
+`lerp(prev, cur, phase)` over the three `u16` angles at `a1` and the three position
+words at `a0`, applied in the pre and taken back in the post, re-primed whenever the
+pointer pair changes or the main loop takes over, with a `CutUnits` guard so a
+scene cut is left where the loop put it. The menu draws no world, so it is paced at
+the vblank instead. **Both markers are GAME.EXE's and `DrawOTag` is not**, so
+OPEN.EXE and END.EXE arrived with both flags clear and were read as modal
+interface frames — measured, the title screen pinned to exactly 60.0 fps at
+`KF2_FPS=144`; the class now tracks which *executable* is loaded from
+`OverlayLoadedEvent` (fdat modules are GAME.EXE still running) and classifies a
+frame outside GAME.EXE as the main loop's. The redraw cap is
+`3 x max(TargetFps, Measured) / LogicHz` floored at 64 rather than a pinned 64,
+since `KF2_TICKRATE` reaches 5 and 64 is then a third of a tick, and it announces
+itself once when hit. The reprime that keeps the main loop's own camera out of
+`Carry` runs in `MainLoopStage` rather than at the frame boundary, so a lost
+boundary cannot latch it. Measured at `KF2_FPS=144` with
+`rate_matrix.py modal-rate`: the fade's body 33.8 -> 19.9 iterations a second, its
+picture 33.8 -> 144.0 frames a second, the menu 144.0 -> 60.1. It does nothing at
+or below the tick rate and touches no game memory. What it cannot reach is a counter stepped inside a *drawing function's own
+body* — stage 13's shake accumulator `0x8006E608` and `func_800331B4`'s ambient
+retrigger, which want a hold/restore pair instead and which redraws step as
+often as an ordinary frame already does — or a counter the modal loop steps in its
+own body, whose *speed* is right but which is smooth only if its transform comes
+from a table `ObjectSmoothing` carries or is the view the loop hands stage 13. Both
+are in `docs/TODO.md`.
+See "Loops that render their own frames" in `docs/PATCHES_AND_MODS.md`.
+**A disc wait is neither a modal loop nor a frame, and `patches/LoadPacing.cs` is
+that third case**: the loading screen's walking figure is stepped by
+`func_8001883C`, which draws straight into VRAM with `ClearImage`/`MoveImage` and
+so presents **no ordering table at all** — measured, zero `DrawOTag` calls between
+entering the loader and the fade at the end of it — so no frame boundary exists
+there and neither `FramePacing` nor `LoopPacing` can see it. It ends in
+`DrawSync(0); VSync(0)`, one vblank a call on hardware; here `VSync` returns at
+`FrameClock`'s permissive `max(60, fps*2)` ceiling, so the figure took its 84
+steps in **352 ms at `KF2_FPS=144` and 1715 ms at the 20 fps default**. A pre/post
+pair on the two disc waits `func_80017CA8` and `func_800181B0` (depth-counted, the
+second calls the first) marks a window in which every `VSync(0)` is held to the
+60 Hz grid — `MenuPacing`'s repeat shape — which reads **49.0 steps a second at
+20, 60 and 144**, the console's own four-steps-per-five-vblanks. Holding the
+animator's three counters instead was tried and is worse: the calls arrive in
+bursts of four, so a cap refuses steps that were not early on average and drops
+the *default* to 36-40. The cost is that above 60 fps a load now takes as long as
+it already does at the default, 1.7 s rather than 0.35 s. On by default;
+`KF2_LOADPACING=0` is the comparison. See "The loading screen's walking figure" in
+`docs/PATCHES_AND_MODS.md`.
+**The flames are a fourth case and `patches/SpriteAnim.cs` is it**: not the eight
+scrolling texture slots at `0x80192D58` that `func_8002DC78` owns and the gate has
+held since they were found, but the **billboard sprites** — table 4 of the four the
+renderer walks, `0x80195174`, 128 records of `0x18`, free at the `u16` `+0x0`. Each
+is a strip of authored cels: `+0x3` how many, `+0x4` the interval, `+0x5` the
+current one, seeded at load to `(rand * cels) >> 15` so two torches do not flicker
+in step. The object loop of `func_800331B4` draws slot `i` with `u8[rec+0x5] + 0x80`
+and then steps that byte whenever a **single global counter at `0x80195170`**
+divides by the slot's interval — and `func_800331B4`'s last instruction increments
+that counter, so it counts *rendered frames* and every animated billboard in the
+game burned at the render rate (measured **4488 cel changes a second at 144 fps
+against 640 at 20**; reported from play as "these flames still run really fast at a
+high framerate"). The stage gate cannot reach it — `func_800331B4` draws — so it is
+a **hold/restore pair** around that function, putting the counter and the 128 cel
+bytes back on a frame the world did not tick on. **The word is what makes it
+fixable**: hold one global and the whole system holds, which is exactly what stage
+13's shake accumulator and the `rec+0x40` ambient retrigger do *not* offer, and is
+the question to ask of the next one. Keyed on `FramePacing.Frames` (a new
+public *identity*, not a rate) as well as `TickedThisFrame`, so a `LoopPacing`
+redraw or a fade's own render inside one frame is held rather than counted twice —
+and with the same 500 ms boundary watchdog the stage gate has, **because a hold
+fails closed**: the first measured run lost the frame boundary and every flame in
+the game stood still for the session. Nothing to interpolate, so it is a rate and
+not a picture: on by default, no settings page. Measured with `rate_matrix.py
+sprite-anim`: 20.0/20.6/20.8 cel steps a second at 20/60/144 against
+20.7/60.1/144.8 with `KF2_SPRITEANIM=0`, `KF2_TICKRATE=30` reading exactly 1.5x
+the 20 Hz cel rate, and `walk` unchanged at 2844-2845 units. See "The flames run
+at the render rate" in `docs/PATCHES_AND_MODS.md`.
+`patches/FullRateLogic.cs` (`KF2_FPS_LOGIC=full`) is the comparison mode and
+is not shippable — pitch, gravity and every per-tick counter do not scale. **The
+default is 20 fps drawn against a 20 Hz world.** See "Any frame rate" in
+`docs/PATCHES_AND_MODS.md`. Dithering is a patch for a
 different reason — it is a picture the port should be able to offer without a
 package having to load — and defaults to *off* (no crosshatch). **True color is a
 patch for that same reason** and is the other answer to the same 15-bit banding the
@@ -276,9 +689,24 @@ program tells "stuck at the title" from "in an area" without a screenshot. See
 
 **`KF2_SHELL=1` is the acting half**: while the session runs, a line protocol on
 TCP 127.0.0.1:27900 (`state`, `nearby`, `load <slot>`, `warp <area>`,
-`press <button> [ms]`, `kill`; one request per line, one single-line JSON
-response back) steers the game
-the beacon is only watching. See "The command channel" in
+`press <button> [ms]`, `kill`, `ending [boss|kill]`; one request per line, one
+single-line JSON response back) steers the game
+the beacon is only watching. **`ending` is there because the last ten minutes of
+the game cannot be loaded into**: plain `ending` writes `GAME.EXE`'s own quit
+word at `0x80199574` (1 = `END.EXE`, 9 = title), and `ending boss` runs the
+post-final-boss sequence that normally writes it — `fdat23`'s `func_8019F474`
+then `func_8019F688`, two modal loops that present their own frames, both
+needed because the first fills the pointer at `0x801A0598` the second writes its
+camera through. **`ending kill` is the form that reproduces the final-boss
+crash**, because that crash is in the hit resolution *underneath* those loops,
+which `ending boss` never puts on the stack: it replays `fdat23`'s damage hook
+`func_8019FA2C` and then the death reaction `func_8003A490` that
+`func_8003A9CC` makes next. The ending blanks six entity type bytes to `0xFF`
+on its way out and its caller then indexes the descriptor table with one, which
+is a game bug the console absorbed as an open-bus read; `HitGuard` fences the
+walk `func_8003A448` so it answers "no reaction" instead of faulting. See "The
+crash on the final boss's last hit" in `docs/TODO.md`. Reaching it needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the
+player on the way in. See "The command channel" in
 `docs/PATCHES_AND_MODS.md`.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
@@ -357,7 +785,12 @@ mods/<id>/               runtime-loaded mods (mod.json + C#, Roslyn-compiled)
 mcp/                     stdio MCP server exposing the KF2_SHELL command channel as tools to MCP hosts
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
-scripts/*.py             disc inspection and address-hunting tooling
+scripts/*.py             disc inspection, address-hunting, and the rate tooling:
+                         rate_census (which words move at the render rate),
+                         find_writers (which code moves them), rate_matrix (did
+                         the fix work), check_gate (does the gate obey its rule).
+                         kf2run/callgraph/kf2model are their shared halves.
+                         See "Finding the rate defects" in docs/DEVELOPMENT.md
 Program.cs               hand-owned entry point; calls Entry.Run(PSMemory, cuePath)
 ```
 
@@ -448,20 +881,20 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-two
-of the twenty-six are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-six
+of the thirty are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
 
-**`setup_tools.sh` does not currently rebuild the checkout on this branch.**
-`0021-true-color-24bit-output.patch` was authored while `lighting-experiments`'
-`0025`/`0026` were also applied, so three of its hunks quote `_uCoplanarTol` /
-`_uLitCenter` context that only exists there and `git apply` rejects them. Running
-the script resets the checkout to the pin first, so it leaves the tree at `0020`
-and stops. The tree in place has been repaired by hand; do not re-run the script
-here until the patch's context is rebased or the branches are merged. See the
-entry in `docs/TODO.md`.
+`setup_tools.sh` **does** rebuild the checkout on this branch, and that used to be
+false: `0021-true-color-24bit-output.patch` was authored while
+`lighting-experiments`' `0025`/`0026` were applied, so its hunks quoted
+`_uCoplanarTol` / `_uLitCenter` context that exists only there and `git apply`
+rejected them, leaving the tree at `0020`. The patch has been regenerated against
+this branch's context. Verified by applying all thirty patches in glob order
+to a pristine worktree of the pin: every one applies, and the result is
+byte-identical to the tree in place.
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -647,11 +1080,68 @@ uncaptured edit inside the checkout is left where it is.
   bars back for the length of every area transition. **No recompile.** See "The
   present gate" in `docs/WIDESCREEN.md`.
 
+- `0025-frameclock-target-rate.patch` — `FrameClock.FrameMs` was a `const` 60 Hz,
+  and it is the *host* rate: the emulated vblank grid (`LibEtc.VBlankMs`) and every
+  game clock hanging off it are a different 60 that must not move, or the music
+  speeds up. Now a settable `FrameClock.TargetFps` (0 = off), exposed as
+  `Runtime.TargetFps` because `FrameClock` is `internal`. It still cannot be a
+  frame pacer — it throttles per `VSync` *call* and a frame carries two — so the
+  port hands it a permissive ceiling and keeps its own deadline at `DrawOTag`.
+  **No recompile.** See "There were three fixed 60s" in `docs/RUNTIME.md`.
+
+- `0026-str-pacing-without-a-latch.patch` — an STR movie is paced by the disc:
+  sectors arrive at 150 a second, a frame is 9-14 of them, and the game's display
+  loop blocks in `StGetNext` until one is complete, so the loop's own rate never
+  enters into it. `StreamLoop` modelled that, but only once a latch tripped — two
+  decoded frames sitting in the 32-slot ring at the same time — which for the third
+  intro movie's 13-14-sector frames never happened, because the game drains a frame
+  as soon as it is ready. Unthrottled, that movie played at the **render rate**
+  instead: measured ~56 frames a second at `KF2_FPS=60` and ~93 at 144, against the
+  10 the disc holds it to. Paced from the start of the stream now, since there is no
+  free burst on hardware either. **No recompile.** See "The intro movie ran at the
+  render rate" in `docs/RUNTIME.md`.
+
+- `0027-commit-each-hook-independently.patch` — `HookManager.Commit`'s `foreach`
+  installed each detour with no guard, so the first `new Hook` that threw abandoned
+  every function after it in the dictionary. Silently: a patch that hooks from an
+  `OverlayLoadedEvent` listener — which is all of them, since `SymbolRegistry` is
+  only readable once the dispatcher's overlay tables are registered — has its
+  exception swallowed by `Event.Dispatch` into one stderr line. Losing
+  `FramePacing`'s frame boundary that way reads as *the whole game running fast*,
+  because `Floor()` and `_tickThisFrame` both hang off it and `_tickThisFrame`
+  fails open. Each function is committed on its own now and a failure names the
+  method. **No recompile.** See "Everything hung off one hook" in
+  `docs/PATCHES_AND_MODS.md`.
+
+- `0028-hook-manager-commit-state.patch` — `AddPre`/`AddPost` only append a
+  delegate and return `true`; the detour is created later in `Commit`, which since
+  `0027` fails per function without throwing. A patch counting `Add*` returns
+  therefore claimed what it had *queued* — `FramePacing` could print
+  `boundary 3/3 DrawOTag + 3/3 VSync` with no boundary installed, latch itself
+  done, and never retry, which is the uncapped-picture-and-8×-world failure.
+  `IsRegistered` and `IsCommitted` let a caller read back what actually landed.
+  **No recompile.** See "A registration is not a hook" in
+  `docs/PATCHES_AND_MODS.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.
 `END.EXE` ends in `while(1);` with no `VSync`; on hardware the last frame stays
-on the CRT, here the window dies. See "The ending screen" in `docs/RUNTIME.md`.
+on the CRT, here the window dies. **Holding it is faithful and still reads as a
+crash**: the spin is real (`08004694 00000000` at `0x80011A50` in the disc image)
+and `END.EXE` never writes the boot stub's next-executable byte, so on hardware
+the ending is a hang you leave with the reset button — and a window has no reset
+button, which is why "the game crashes after The End" was reported again after
+the hold was already in. Measured holding, alive and pumping, at 20 fps through
+`GAME.EXE`'s own hand-over and at 144 fps. So **any button now leaves the still
+for the title** (`KF2_ENDINGEXIT=0` keeps the hang), through the stub's own
+loader: `SLUS_001.58` holds three file names at `0x80010254`
+(`0` = `OPEN.EXE`, `1` = `GAME.EXE`, `2` = `END.EXE`), an index at `0x80010268`
+and a loop in `func_80010038` that `Load`s, `Exec`s *as a call* and re-reads the
+index from `0x800102F0` on return — which is exactly the door `GAME.EXE`'s own
+quit-to-title uses. `patches/BootExe.cs` (`KF2_BOOTEXE`) writes that same index
+before the loop's first pass, **once**, so the ending is reachable in seconds
+rather than by finishing the game. See "The ending screen" in `docs/RUNTIME.md`.
 
 Upstream **rejects AI-authored pull requests outright**. Recompiler fixes go
 upstream as issues, never as PRs, unless the user writes the patch themselves.
