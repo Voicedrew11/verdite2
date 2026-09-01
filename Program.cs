@@ -436,20 +436,24 @@ Kf2.DrawCensus.Install();
 Kf2.PacketMatch.Configure(Environment.GetEnvironmentVariable("KF2_PACKETMATCH"));
 Kf2.PacketMatch.Install();
 
-// What the weapon's hit resolution was handed, one call before it faults. For
-// docs/TODO.md #14 -- the crash when the final boss takes its last hit, above the
-// tick rate and not at it. The first stack trace of it puts the fault in stage 3's
-// hit check (func_8003A9CC -> func_8003A490 -> func_8003A448 reading 0x0FFF0000),
-// in the main loop and nowhere near fdat23's post-boss modal loops, which is where
-// it had been assumed to live. The probe replays what that routine does to its
-// argument -- entity index, the kind-3 redirect, the type byte, the descriptor's
-// fifteen pointers -- and names the first step that is malformed, so the line is
-// out on the call before the crash rather than lost in the unwind. Reads only.
+// Refuse a hit resolution that would read a non-pointer as a pointer. For
+// docs/TODO.md #14 -- the crash after the final boss dies and the cutscene hands
+// the player the Moonlight Sword, above the tick rate and not at it. The first
+// stack trace of it puts the fault in stage 3's weapon reach scan
+// (func_800271D0 -> func_8003A9CC -> func_8003A490 -> func_8003A448 reading
+// 0x0FFF0000), in the main loop and nowhere near fdat23's post-boss modal loops,
+// which is where it had been assumed to live. Nothing on that path bounds the
+// creature type byte or checks the slot is occupied, and the console has no fault
+// path for the read -- so the guard replays the derivation, refuses only the four
+// states that are certain to fault, and names which one it was. Reads only, and
+// the report is what replaces the stack trace on the next playthrough.
 //
-//     KF2_HITPROBE=1      report every malformed record, and a census
+//     KF2_HITGUARD=0      let it fault, which is a hard crash -- comparison only
+//     KF2_HITPROBE=1      also report a census of what the hit check saw
 //     KF2_HITPROBE=2      also report every call, which is very loud
-Kf2.HitProbe.Configure(Environment.GetEnvironmentVariable("KF2_HITPROBE"));
-Kf2.HitProbe.Install();
+Kf2.HitGuard.Configure(Environment.GetEnvironmentVariable("KF2_HITGUARD"),
+                       Environment.GetEnvironmentVariable("KF2_HITPROBE"));
+Kf2.HitGuard.Install();
 
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
@@ -731,6 +735,25 @@ Kf2.BootExe.Install();
 // plays rather than how the machine behaves.
 Kf2.Settings.PatchSettings.Install();
 
+// What the game's state was when an unhandled exception left the recompiled code.
+// For docs/TODO.md #14, which is reproducible at 165 fps but *only with no hook on
+// the faulting path* -- so a diagnostic that has to be present to see it is no use
+// if being present is what stops it. This adds nothing to any path the game takes:
+// it reads memory once, after the fault, from the catch below.
+//
+//     KF2_CRASHDUMP=0     say nothing; let the exception print on its own
+Kf2.CrashDump.Configure(Environment.GetEnvironmentVariable("KF2_CRASHDUMP"));
+
 var memory = new PSMemory();
-Entry.Run(memory, args.Length > 0 ? args[0] : null);
+try
+{
+    Entry.Run(memory, args.Length > 0 ? args[0] : null);
+}
+catch (Exception e)
+{
+    // Dump first, then rethrow: the runtime still prints its own trace, and the
+    // state that explains it goes out immediately above it rather than being lost.
+    Kf2.CrashDump.Dump(e, memory);
+    throw;
+}
 return 0;
