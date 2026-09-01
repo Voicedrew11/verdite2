@@ -474,7 +474,17 @@ hands stage 13 the `u16` it just wrote, a full turn in 32 steps, and elsewhere s
 words at `a0`, applied in the pre and taken back in the post, re-primed whenever the
 pointer pair changes or the main loop takes over, with a `CutUnits` guard so a
 scene cut is left where the loop put it. The menu draws no world, so it is paced at
-the vblank instead. Measured at `KF2_FPS=144` with
+the vblank instead. **Both markers are GAME.EXE's and `DrawOTag` is not**, so
+OPEN.EXE and END.EXE arrived with both flags clear and were read as modal
+interface frames — measured, the title screen pinned to exactly 60.0 fps at
+`KF2_FPS=144`; the class now tracks which *executable* is loaded from
+`OverlayLoadedEvent` (fdat modules are GAME.EXE still running) and classifies a
+frame outside GAME.EXE as the main loop's. The redraw cap is
+`3 x max(TargetFps, Measured) / LogicHz` floored at 64 rather than a pinned 64,
+since `KF2_TICKRATE` reaches 5 and 64 is then a third of a tick, and it announces
+itself once when hit. The reprime that keeps the main loop's own camera out of
+`Carry` runs in `MainLoopStage` rather than at the frame boundary, so a lost
+boundary cannot latch it. Measured at `KF2_FPS=144` with
 `rate_matrix.py modal-rate`: the fade's body 33.8 -> 19.9 iterations a second, its
 picture 33.8 -> 144.0 frames a second, the menu 144.0 -> 60.1. It does nothing at
 or below the tick rate and touches no game memory. What it cannot reach is a counter stepped inside a *drawing function's own

@@ -2069,6 +2069,24 @@ cutscene camera the loop pans itself, steps once a tick, which is the console's 
 rate for it, and smoothing *that* would need the model submit's arguments
 interpolated rather than a table.
 
+**The reprime is on the marker, not on the frame boundary.** One line keeps
+`_carriable` false during ordinary play: `Sample` sets `_primed` on every stage 13
+call, and a reprime clears it again, so `_carriable = _primed` reads false on
+every main-loop frame. That reprime used to sit in `FrameMinMs`, which has exactly
+one call site — inside `FramePacing.AfterDrawOTag` — so it rested entirely on the
+frame boundary being reached, and a lost boundary is a failure this repo has hit
+twice (patch `0027`, and the watchdog `FramePacing.BeforeStage` now carries for
+precisely this). With the boundary gone `_primed` stays true across frames,
+`_carriable` latches, and `Carry` starts interpolating stage 13's view **in the
+main loop**, at a frozen phase — `_logicCredit` is advanced by
+`AdvanceLogicClock`, on the same dead path — which is a constant-lag camera on top
+of `FrameSmoothing`'s own. It now runs in `MainLoopStage` itself, which *is* the
+signal that the main loop is running: stage 9 sits after every stage a modal loop
+is entered from and before stage 13, so the main loop's own frame still finds
+`_primed` clear. `Carry` additionally refuses outright when the marker is not
+hooked, because the reprime then never runs at all and the class has already stood
+itself down.
+
 **Install order is load-bearing.** `HookManager` runs the posts on a function in
 the order they were added, so `LoopPacing` is installed in `Program.cs` *after*
 all three smoothing patches: the redraw has to be asked for once their posts
@@ -2091,6 +2109,30 @@ decide what it should pace to instead:
   `func_80017880` is called by stage 13 and by nothing else, and
   `FramePacing.BeforeFrameGate` already hooks it — so that answer costs no hook at
   all.
+
+**The absence of the marker is not evidence of a modal loop outside GAME.EXE.**
+Both answers above are GAME.EXE addresses — the marker is `0x800140AC` and the
+frame gate `0x80017880`, and neither routine exists in OPEN.EXE or END.EXE — but
+`FramePacing.AfterDrawOTag`, the one caller of `LoopPacing.FrameMinMs`, is hooked
+in **all three** overlays (`open 0x80016078`, `game 0x80060818`,
+`end 0x80013D80`). So every title, save-select, intro and ending frame arrived
+with both flags clear, fell through both guards, and was paced at `InterfaceHz`:
+**measured, the title screen ran at exactly 60.0 frames a second with
+`KF2_FPS=144`**, and `if (mainLoop) Reprime()` never fired there either. It also
+contradicted `FramePacing`'s own stated intent for the same pair of overlays —
+"only GAME.EXE's copy is hooked, so the title and the ending pace themselves as
+they always did".
+
+`LoopPacing` therefore tracks which **executable** is loaded, from
+`OverlayLoadedEvent` (`"game"` on, `"open"`/`"end"` off) — the nine `fdat` area
+modules are GAME.EXE still running and are left alone, the same distinction
+`patches/Widescreen.cs` draws for the margin latch — and a frame outside GAME.EXE
+classifies as the main loop's, which is the branch that returns `FramePacing`'s
+own deadline unchanged. Measured with `KF2_LOOPPACING_PROBE=1`: before, OPEN.EXE
+reported 15 (the intro movie, disc-paced) rising to a flat **60.0** modal
+interface frames a second once the title was reached, and END.EXE 10.0; after,
+neither overlay reports a modal frame at all. GAME.EXE's own save-select menu
+still reads 49.7-60 modal interface, which is the class doing its job.
 
 **The interface is the other case, and it is paced rather than filled.** A modal
 loop that draws no world — the menu — has nothing for the smoothing patches to
@@ -2127,6 +2169,29 @@ read the modal columns, not that one. The unpaced world row is 33.8 rather than
 144 because a fade frame is a full world render and never reaches the target: it
 was 1.7× too fast, and this class of complaint scales with whatever the loop can
 achieve rather than with the number asked for.
+
+**The redraw cap is derived, not pinned, and it says something when it is hit.**
+`AfterRenderer`'s loop really ends on the logic clock, which is wall-clock driven
+and always ticks, so the count is a backstop — but it was a constant 64 justified
+against the 20 Hz default ("over three ticks' worth at 1000 fps") while the
+redraws one tick needs are `TargetFps / LogicHz` and **both ends are settings**.
+`FramePacing.ClampLogic` allows `KF2_TICKRATE` down to 5, so that ratio runs to
+`1000 / 5 = 200` and 64 becomes a *third* of one tick: the cap is reached before
+the tick arrives, the loop body runs anyway, and it iterates faster than the world
+— the defect this class exists to remove, silently back. `MaxRedraws()` is three
+ticks' worth of `max(TargetFps, FramePacing.Measured) / LogicHz`, floored at the
+old 64; `Measured` stands in when the rate is uncapped and there is no target to
+divide. Hitting it now prints one line, once, the way `FramePacing`'s boundary
+watchdog and `SpriteAnim`'s do — it used to be recorded only in `_extra`, and only
+if the probe happened to be on.
+
+This is hardening rather than a measured behaviour change: on this host the
+reachable case does not reach the old cap either. `KF2_TICKRATE=5` with
+`KF2_FPS=off` measured 60.0 modal world frames a second against a 5.9 Hz loop
+body — twelve redraws a tick, not sixty-four — because a fade frame is a full
+world render and uncapped throughput in one is around 60. The finding's premise
+that a modern GPU "comfortably clears 320 fps" **in a fade** is what did not hold;
+the arithmetic that makes 64 wrong still does.
 
 **It does nothing at or below the tick rate**, which is where the defect does not
 exist either: `LoopPacing.FrameMinMs` returns the length `FramePacing` would have

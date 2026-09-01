@@ -228,12 +228,37 @@ public static class LoopPacing
     const int CutUnits = 1024;
 
     /// <summary>
-    /// Redraws one modal iteration may be followed by. The loop below ends on the
-    /// logic clock, which is wall-clock driven and therefore always ticks, so this
-    /// is a backstop against a configuration nobody has thought of rather than the
-    /// mechanism -- 64 is over three ticks' worth at 1000 fps.
+    /// The floor under <see cref="MaxRedraws"/>. The loop below ends on the logic
+    /// clock, which is wall-clock driven and therefore always ticks, so the cap is
+    /// a backstop against a configuration nobody has thought of rather than the
+    /// mechanism -- but it must not be a *constant*, because the redraws one tick
+    /// needs are `TargetFps / LogicHz` and both ends of that are settings.
     /// </summary>
-    const int MaxExtraRenders = 64;
+    const int MinRedrawCap = 64;
+
+    /// <summary>
+    /// How many redraws one modal iteration may be followed by, three ticks' worth
+    /// of them at the rate actually in play.
+    ///
+    /// The old fixed 64 was justified against the 20 Hz default -- "over three
+    /// ticks' worth at 1000 fps" -- but <c>KF2_TICKRATE</c> is clamped to [5, 60],
+    /// so the ratio runs to `1000 / 5 = 200` and 64 is a *third* of one tick.
+    /// `KF2_TICKRATE=5` with an uncapped `KF2_FPS` is the reachable case: the cap
+    /// is hit before the tick arrives, the loop body runs anyway, and it iterates
+    /// several times faster than the world -- the defect this class exists to
+    /// remove, silently back.
+    ///
+    /// Uncapped there is no target to divide, so the rate actually being achieved
+    /// stands in for it: <see cref="FramePacing.Measured"/> is a real number
+    /// computed once a second at the boundary.
+    /// </summary>
+    static int MaxRedraws()
+    {
+        double fps = Math.Max(FramePacing.TargetFps, FramePacing.Measured);
+        double hz = Math.Max(FramePacing.LogicHz, 1.0);
+        if (!(fps > 0.0)) return MinRedrawCap;
+        return Math.Max(MinRedrawCap, (int)Math.Ceiling(fps / hz * 3.0));
+    }
 
     public static bool Enabled { get; private set; } = true;
 
@@ -258,6 +283,28 @@ public static class LoopPacing
     /// <summary>Set by <see cref="MainLoopStage"/>, consumed at the frame boundary.
     /// Absent there, the frame was produced by a loop of the game's own.</summary>
     static bool _mainLoopSeen;
+
+    /// <summary>
+    /// Whether the executable now loaded is GAME.EXE, which is the only one this
+    /// class has any addresses in.
+    ///
+    /// **Both markers are GAME.EXE's and `DrawOTag` is not.** `MainLoopStage` is
+    /// hooked on GAME.EXE's `0x800140AC` and <see cref="WorldDrawn"/> comes from
+    /// `FramePacing.BeforeFrameGate` on GAME.EXE's `0x80017880`; neither routine
+    /// exists in OPEN.EXE or END.EXE. But `FramePacing.AfterDrawOTag` -- the one
+    /// caller of <see cref="FrameMinMs"/> -- is hooked in all three, so every
+    /// title, save-select, intro and ending frame arrived here with *both* flags
+    /// clear and fell through to the interface branch: the whole of OPEN.EXE and
+    /// END.EXE capped at <see cref="InterfaceHz"/> whatever `KF2_FPS` asked for,
+    /// and `if (mainLoop) Reprime()` never firing there either.
+    ///
+    /// The absence of the marker was being read as positive evidence of a modal
+    /// loop when in those two overlays it only means "GAME.EXE is not running".
+    /// `OverlayLoadedEvent` names the executable, and the nine fdat area modules
+    /// are GAME.EXE still running, so they are left alone -- the same distinction
+    /// `patches/Widescreen.cs` draws for the margin latch.
+    /// </summary>
+    static bool _gameExe;
 
     /// <summary>Set by <see cref="WorldDrawn"/> -- stage 13 reached its own frame
     /// gate, so this frame is a picture of the world rather than of the
@@ -296,6 +343,11 @@ public static class LoopPacing
 
     /// <summary>Whether a modal world frame is filled with redraws or simply paced.</summary>
     static bool Filling => _canFill && !_paceOnly;
+
+    /// <summary>The cap in <see cref="AfterRenderer"/> has been hit and said so.
+    /// Once a session: it is a standing configuration problem, not an event, so a
+    /// line a frame would bury the one that matters.</summary>
+    static bool _capWarned;
 
     // For the probe: modal world iterations the loop body actually ran, and redraws
     // issued to fill the gaps between them. The first is the number that has to
@@ -368,7 +420,15 @@ public static class LoopPacing
     {
         // An area or executable swap replaces whatever a loop was drawing, so the
         // previous sample describes a view that no longer means anything.
-        Event.AddListener<OverlayLoadedEvent>(_ => Reprime());
+        Event.AddListener<OverlayLoadedEvent>(e =>
+        {
+            Reprime();
+
+            // Only the three executables move this. An fdat is GAME.EXE still
+            // running; see _gameExe for what reading one as a hand-over costs.
+            if (e.Name is "game") _gameExe = true;
+            else if (e.Name is "open" or "end") _gameExe = false;
+        });
 
         HookAttach.OnOverlayLoad("loop pacing", Attach);
     }
@@ -537,6 +597,14 @@ public static class LoopPacing
         if (_noCarry || !Enabled || !_carriable || !FramePacing.Extrapolating) return;
         if (_argPos != _primedPos || _argRot != _primedRot) return;
 
+        // The reprime lives in MainLoopStage, so an unhooked marker means it never
+        // runs -- and every frame then reads as the main loop's, which stops the
+        // redraws but not this. Carrying there is the very defect the move was
+        // made to prevent: stage 13's view lerped in the main loop, on top of
+        // FrameSmoothing's own. Without the marker the class has already stood
+        // itself down; this is the half that is not reached through _lastModal.
+        if (!_markerHooked) return;
+
         double frac = FramePacing.LogicPhase;
 
         if (_argRot != 0u)
@@ -657,12 +725,13 @@ public static class LoopPacing
         if (!_bound) Bind();
         if (_stage13 == null) return;
 
+        int cap = MaxRedraws();
         int n = 0;
         var saved = c.Snapshot();
         _inExtra = true;
         try
         {
-            while (!FramePacing.TickedThisFrame && n < MaxExtraRenders)
+            while (!FramePacing.TickedThisFrame && n < cap)
             {
                 n++;
                 c.A0 = _argPos;
@@ -678,12 +747,49 @@ public static class LoopPacing
             c.Restore(saved);
         }
 
+        // Hitting the cap means the loop body is about to run without the world
+        // having ticked -- the defect this class removes, coming back. Every other
+        // backstop in this port announces itself (FramePacing's boundary watchdog,
+        // SpriteAnim's); this one recorded it in _extra and only when the probe
+        // happened to be on.
+        if (n >= cap && !FramePacing.TickedThisFrame && !_capWarned)
+        {
+            _capWarned = true;
+            Console.Error.WriteLine($"[KF2] loop pacing: {cap} redraws did not reach a tick at " +
+                                    $"{FramePacing.TargetFps:0.#} fps against {FramePacing.LogicHz:0.#} Hz -- " +
+                                    "the modal loop's body is running faster than the world. " +
+                                    "Reported once.");
+        }
+
         if (_probe) _extra += n;
     }
 
-    /// <summary>The main loop reached stage 9, so the frame it is building is its
-    /// own.</summary>
-    public static void MainLoopStage(CpuContext c, IMemory m) => _mainLoopSeen = true;
+    /// <summary>
+    /// The main loop reached stage 9, so the frame it is building is its own -- and
+    /// any modal loop that was running has ended, so the next one must not lerp
+    /// from the view this one left behind.
+    ///
+    /// **The reprime is here rather than at the frame boundary**, which is where it
+    /// used to be. It is the single line keeping <see cref="_carriable"/> false
+    /// during ordinary play -- <see cref="Sample"/> sets `_primed` on every stage 13
+    /// call and this clears it again -- and routing it through
+    /// <see cref="FrameMinMs"/> made that rest on the boundary being reached.
+    /// `FrameMinMs` has one call site, inside `FramePacing.AfterDrawOTag`, and a
+    /// lost frame boundary is a failure this repo has hit twice (patch `0027`, and
+    /// the watchdog `FramePacing.BeforeStage` now carries). It would have latched
+    /// `_carriable` true and started interpolating stage 13's view *in the main
+    /// loop*, at a frozen phase -- `_logicCredit` is advanced on the same dead path
+    /// -- which is a constant-lag camera on top of `FrameSmoothing`'s own carry.
+    ///
+    /// Stage 9 runs after every stage a modal loop is entered from and before stage
+    /// 13, so the main loop's own frame still finds `_primed` clear, and the signal
+    /// is the main loop actually running rather than a frame having been counted.
+    /// </summary>
+    public static void MainLoopStage(CpuContext c, IMemory m)
+    {
+        _mainLoopSeen = true;
+        Reprime();
+    }
 
     /// <summary>Stage 13 reached the game's own frame gate, so this frame drew the
     /// world. Called from <see cref="FramePacing.BeforeFrameGate"/>, which is
@@ -709,7 +815,10 @@ public static class LoopPacing
     {
         // An unhooked marker means _mainLoopSeen can never be set, and reading that
         // as "modal" would pace the entire game rather than stand the class down.
-        bool mainLoop = _mainLoopSeen || !_markerHooked;
+        // Neither marker exists outside GAME.EXE, so OPEN.EXE and END.EXE are the
+        // same trap one overlay wider -- they pace themselves, as FramePacing
+        // already says of them.
+        bool mainLoop = _mainLoopSeen || !_markerHooked || !_gameExe;
         bool world = _worldDrawn;
         _mainLoopSeen = false;
         _worldDrawn = false;
@@ -718,10 +827,6 @@ public static class LoopPacing
         // asked for is stage 13's post, which runs after this.
         _lastModal = !mainLoop;
         _lastWorld = world;
-
-        // The main loop drew this one, so any modal loop that was running has ended;
-        // the next one must not lerp from the view this one left behind.
-        if (mainLoop) Reprime();
 
         double min = enabled && targetFps > 0.0 ? 1000.0 / targetFps : 0.0;
 
