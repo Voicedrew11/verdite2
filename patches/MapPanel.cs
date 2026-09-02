@@ -144,7 +144,7 @@ public sealed class MapPanel : IPanel
 
         dl.PushClipRect(p0, new Vector2(p0.X + size.X, p0.Y + size.Y), true);
         MapRender.Draw(dl, origin, _zoom, x0, z0, x1, z1,
-                       Map.HalfOffset, Map.Shade, Map.Walls, _grid, null);
+                       Map.HalfOffset, Map.Shade, Map.Walls, _grid, MapFog.Predicate);
         MapRender.DrawPlayer(dl, origin, _zoom, MathF.Max(5f, _zoom * 0.7f));
         dl.PopClipRect();
 

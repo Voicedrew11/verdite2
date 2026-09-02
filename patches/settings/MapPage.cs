@@ -95,6 +95,31 @@ public sealed class MapPage : IPatchPage
                              "that bit means a wall is not settled — the full map's hover readout " +
                              "shows the raw bytes.");
 
+        // Fog of war: patches/MapFog.cs. Off by default, for the reason the whole
+        // port uses -- the picture has not been judged by eye.
+        bool fog = MapFog.Enabled;
+        if (ImGui.Checkbox("Fog of war", ref fog))
+        {
+            MapFog.SetEnabled(fog);
+            PatchSettings.Set(MapFog.OnKey, fog);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Show only the tiles you have seen. It remembers what the game's own " +
+                             "visibility grid showed you, per save slot, and keeps it between " +
+                             "sessions in a file beside the memory card.");
+
+        if (MapFog.Enabled)
+        {
+            ImGui.Indent();
+            if (ImGui.Button("Forget this area")) MapFog.ForgetArea();
+            ImGui.SameLine();
+            if (ImGui.Button("Reveal this area")) MapFog.RevealArea();
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("For looking at the two pictures side by side without walking " +
+                                 "the area twice. Both are written to the store immediately.");
+            ImGui.Unindent();
+        }
+
         // A tile record holds two stacked floors and the game says which one you
         // are on (u16[0x801D9C8E]). Pinning one is for looking at the other.
         int floor = System.Math.Clamp(Map.Floor + 1, 0, 2);

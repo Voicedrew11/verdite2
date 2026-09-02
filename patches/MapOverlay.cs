@@ -102,7 +102,7 @@ public sealed class MapOverlay : IFloatingPanel
             dl.PushClipRect(p0, p1, true);
             MapRender.Draw(dl, origin, cell,
                            cx - radius - 1, cz - radius - 1, cx + radius + 1, cz + radius + 1,
-                           Map.HalfOffset, Map.Shade, Map.Walls, false, null);
+                           Map.HalfOffset, Map.Shade, Map.Walls, false, MapFog.Predicate);
             MapRender.DrawPlayer(dl, origin, cell, MathF.Max(5f, cell * 0.7f));
             dl.PopClipRect();
 

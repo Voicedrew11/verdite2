@@ -571,6 +571,22 @@ Kf2.Map.Configure(Environment.GetEnvironmentVariable("KF2_MAP"),
                   Environment.GetEnvironmentVariable("KF2_MAP_PROBE"));
 Kf2.Map.Install();
 
+// Fog of war for that map: the tiles the player has actually seen, remembered per
+// save slot and kept between sessions in a file beside the memory card. It is the
+// game's own 24x24 visibility grid at 0x80192EAC -- occlusion already flooded --
+// ORed into an 80x80 bitset, sampled on the vblank rather than through a hook, so
+// it accumulates with the map closed and at the same 60 Hz whatever the render
+// rate is:
+//
+//     KF2_MAP_FOG=1         fog on for the run (off by default)
+//     KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, records, flushes
+//
+// Off by default for the sub-pixel reason: the mechanism is measured and the
+// picture has never been looked at.
+Kf2.MapFog.Configure(Environment.GetEnvironmentVariable("KF2_MAP_FOG"),
+                     Environment.GetEnvironmentVariable("KF2_MAP_FOG_PROBE"));
+Kf2.MapFog.Install();
+
 // Auto start, and the agent beacon -- the pair that lets an automated tester get
 // into the game and know it got there. Scripted input cannot drive the boot menus
 // (KF2_AUTOPAD's clock only starts once an area has loaded), and screenshots are
@@ -777,5 +793,12 @@ catch (Exception e)
     // state that explains it goes out immediately above it rather than being lost.
     Kf2.CrashDump.Dump(e, memory);
     throw;
+}
+finally
+{
+    // The map's fog store. It flushes on a timer and on ProcessExit, but a run
+    // that ends by throwing runs neither, and the exploration since the last
+    // flush is worth more than the ten lines this costs.
+    Kf2.MapFog.Flush();
 }
 return 0;

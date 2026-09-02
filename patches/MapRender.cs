@@ -13,14 +13,16 @@ namespace Kf2;
 /// about which way the area faces, and a maze is easier to hold in your head when
 /// north stays put.
 ///
-/// The <c>visible</c> predicate is the seam for fog of war. It is
-/// <c>null</c> — everything revealed — in this pass, because that is what was
-/// asked for; filling it in needs no new reverse engineering. The 24x24 grid at
-/// 0x80192EAC that func_8002D3A8 rebuilds each frame *is* the set of tiles the
-/// player can see, occlusion already computed, and the world tile of its cell
-/// (0,0) is the pair at 0x80192EA0/0xA4. OR that into an 80x80 bitset per area
-/// (u8[0x8017E060]) per save slot (u8[0x8006E5D4]) and pass its lookup here. A
-/// cell is visible iff its byte is nonzero — patches/CullGrid.cs:607.
+/// The <c>state</c> predicate is fog of war, and patches/MapFog.cs fills it in:
+/// it answers **0 unexplored, 1 remembered, 2 in view right now** for a tile, and
+/// <c>null</c> — everything revealed — is what both viewports pass while fog is
+/// off. It takes a **world tile**, not a screen row, which is the thing a caller
+/// working in screen space gets wrong.
+///
+/// It is a tri-state rather than the bool it was first seamed as because the
+/// third state costs nothing: the accumulator has the frame's own visibility grid
+/// in its hand anyway, so "you can see this from where you stand" is free and
+/// gives the map a live cone.
 /// </summary>
 public static class MapRender
 {
@@ -28,7 +30,7 @@ public static class MapRender
     // so a corridor reads as a bright line on a dark field rather than as a hole.
     const int Shades = 24;
     static readonly uint[] _shade = new uint[Shades];
-    static uint _flat, _wall, _grid, _arrow, _arrowEdge, _ground;
+    static uint _flat, _wall, _lit, _grid, _arrow, _arrowEdge, _ground;
     static bool _built;
 
     static void Build()
@@ -46,6 +48,7 @@ public static class MapRender
 
         _flat      = Rgba(0.55f, 0.62f, 0.66f, 1f);
         _wall      = Rgba(0.16f, 0.18f, 0.24f, 0.85f);
+        _lit       = Rgba(1f, 0.97f, 0.85f, 0.14f);
         _grid      = Rgba(1f, 1f, 1f, 0.05f);
         _arrow     = Rgba(1.00f, 0.82f, 0.25f, 1f);
         _arrowEdge = Rgba(0.10f, 0.08f, 0.02f, 0.9f);
@@ -67,11 +70,14 @@ public static class MapRender
     /// <c>Map.RowF</c>. Both axes are 0..Span-1 and <c>Map.RowOf</c> converts, so
     /// a caller that works in screen space (which both viewports do) needs no
     /// arithmetic of its own.
+    ///
+    /// <paramref name="state"/> is fog of war: see the class comment. Null draws
+    /// every tile the renderer would.
     /// </summary>
     public static void Draw(ImDrawListPtr dl, Vector2 origin, float cell,
                             int x0, int z0, int x1, int z1,
                             int half, bool shade, bool walls, bool grid,
-                            Func<int, int, bool>? visible)
+                            Func<int, int, int>? state)
     {
         Build();
 
@@ -88,7 +94,9 @@ public static class MapRender
             {
                 int b = row + x * Map.Stride + half;
                 if (Map.Tiles[b + Map.Model] >= Map.NotDrawn) continue;
-                if (visible != null && !visible(x, z)) continue;
+
+                int fog = state == null ? 1 : state(x, z);
+                if (fog == 0) continue;
 
                 uint c = _flat;
                 if (shade)
@@ -105,6 +113,11 @@ public static class MapRender
                 // "see through" is not settled — see the class comment on Map.
                 if (walls && (Map.Tiles[b + Map.Flags] & Map.StopsFlood) != 0)
                     dl.AddRectFilled(a, new Vector2(a.X + cell, a.Y + cell), _wall);
+
+                // In the cull cone as of the last sample: drawn over the tile, so
+                // the shading underneath still reads.
+                if (fog == 2)
+                    dl.AddRectFilled(a, new Vector2(a.X + cell, a.Y + cell), _lit);
             }
         }
 

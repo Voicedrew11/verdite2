@@ -147,6 +147,9 @@ KF2_UISCALE=1                            # force the interface scale, and save i
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
 KF2_MAP_MINIMAP=1                        # the corner minimap on (off by default); N toggles it
 KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, and open the map
+KF2_MAP_FOG=1                            # fog of war: only the tiles you have seen (off by default)
+KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, records held, flushes
+KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 visibility grid, once a second
 ```
 
 Patch settings live in `patches/settings/`. A patch registers an `IPatchPage`
@@ -641,9 +644,29 @@ viewports drawing. What has *not* been looked at is the picture — whether the
 floor plan matches the area, whether the height shading reads, and whether bit
 `0x80` of a half's `+4` is the wall it behaves like or the "see through" the
 widescreen notes call it; the full map's hover readout prints all ten raw bytes
-for that. Fog of war is unbuilt but seamed for: `MapRender.Draw` takes a
-visibility predicate, and the 24×24 grid is already the set of tiles the player
-can see. See "A dynamic map" in `docs/PATCHES_AND_MODS.md`.
+for that. **Fog of war is `patches/MapFog.cs`**, and it needs no hook either: the 24×24 grid
+is already the set of tiles the player can see, so fog is that grid ORed into an
+80×80 bitset per area per save slot, sampled on `VSyncEvent` — a wall-clock 60 Hz
+whatever the render rate is — and kept in `carda.fog` beside the memory card. Off
+by default (`KF2_MAP_FOG=1`), for the sub-pixel reason. **A cell byte is not a
+boolean, and the note that stood here was wrong about it**: the scanline fill
+writes the marker over the whole trapezoid and the flood only clears what it can
+prove is occluded, so "nonzero" is the frustum's *footprint* — measured 190 cells
+nonzero against 26 actually lit, on a trapezoid that cannot hold more than about
+110 tiles. Visible is `byte & 3`, the two bits `func_80031B1C` draws the two
+stacked halves on; `KF2_MAP_FOG_PROBE=2` prints the array that settles it. Three
+guards keep a lie out of a store that never forgets: the camera must be within two
+tiles of the player (the area byte moves before the grid does), the slot and area
+bytes must be ones the game means (measured: a record for "area 99" written while
+a reload unpacked `buf0`), and a sample whose cone drew nothing is not a view of
+anywhere (a New Game before its area is placed reads HP up with everything at
+0,0). The slot is the game's own byte, zero until a save or a load has run, so a
+New Game accumulates into a scratch bucket that is merged the moment it becomes
+1..3. The seam widened from `bool` to **0 unexplored / 1 remembered / 2 in view
+now**, since the third state was free. Measured: separate records across a warp and
+back, persistence across a kill, and 144.0 fps / 20.0 ticks/s with the minimap
+open. Never looked at by eye: whether the revealed shape matches where you walked.
+See "A dynamic map" in `docs/PATCHES_AND_MODS.md`.
 
 **The port ships its own keyboard layout** (`patches/KeyLayout.cs`), because
 RecompOne's defaults are a console's spelled on a keyboard — face buttons on

@@ -358,6 +358,22 @@ record as (`generated/game.cs:37716-37727`):
 so the map is **80 x 80 tiles of 10 bytes**, 800 bytes a row — the 24x24 grid is a
 window into it, not its size. Both loop bounds test against `0x50` = 80.
 
+**A visibility cell's byte is not a boolean, and the low two bits are the whole of
+it.** `func_80031C94` skips a zero cell and passes the byte on as `flags`, and
+`func_80031B1C` draws the lower half on bit 0 and the upper half on bit 1 — the
+same two bits the flood uses, one as its marker (bit 0 while the player is on the
+lower half, bit 1 on the upper, off `u16[0x801D9C8E]`) and the other as its
+ray-alive flag. Everything above them is bookkeeping: the `0xC0` the build's
+epilogue forces over the 3x3 around the eye, and the same value `patches/CullCone.cs`
+ORs over its near-camera rescue discs.
+
+That matters to anything reading the grid for itself, because **the scanline fill
+writes the marker over the whole trapezoid before the flood runs** and the flood
+only clears the cells it can prove are occluded. So "nonzero" is the frustum's
+footprint and `byte & 3` is what the frame actually drew — measured standing still
+in area 1, **190 cells nonzero against 26 lit**, on a trapezoid that cannot hold
+more than about 110 tiles. `KF2_MAP_FOG_PROBE=2` prints the array.
+
 Each tile is **two stacked 5-byte halves**, and the pair is the whole record — a
 lower floor at `+0` and an upper at `+5`, which is why a tile can be walked over
 *and* under. `func_80031B1C` draws half A on bit 0 of `flags` and half B on bit 1.

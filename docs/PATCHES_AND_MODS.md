@@ -2930,17 +2930,148 @@ visibility flood or the "see through" `docs/WIDESCREEN.md` calls it; and whether
 the minimap's size, corner and range are usable in play. The full map's hover
 readout prints all ten bytes of the tile under the cursor for exactly that reason.
 
-### Room for fog
+### Fog of war
 
-The map reveals the whole area. The seam for explored-only fog is the
-`Func<int,int,bool> visible` argument to `MapRender.Draw`, which is `null` today,
-and filling it in needs no new reverse engineering: the 24x24 grid at
-`0x80192EAC` that `func_8002D3A8` rebuilds each frame *is* the set of tiles the
-player can see, occlusion already computed, and the world tile of its cell (0,0)
-is the pair at `0x80192EA0`/`0xA4`. A cell is visible iff its byte is nonzero.
-OR that into an 80x80 bitset per area (`u8[0x8017E060]`) per save slot
-(`u8[0x8006E5D4]`) and pass its lookup in. What is left undesigned is only the
-on-disk format.
+`patches/MapFog.cs`, and the seam it fills is the one the map shipped with.
+
+    KF2_MAP_FOG=1         fog on for the run (off by default)
+    KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, records, flushes
+    KF2_MAP_FOG_PROBE=2   also the raw 24x24 grid, once a second
+
+The map used to reveal the whole area. It now draws only the tiles the player has
+seen, remembered **per save slot** and kept between sessions in a file beside the
+memory card. Off by default, for the sub-pixel reason: the mechanism below is
+measured and the picture has not been judged.
+
+**No new reverse engineering was needed and none was done.** `func_8002D3A8`
+rebuilds the 24x24 grid at `0x80192EAC` at the head of every frame — the 4:3
+frustum flattened onto the map, scanline-filled and then flooded for occlusion —
+and that grid *is* what the player can see. Fog is that grid ORed into an 80x80
+bitset, on the mapping the game's own queries use: `cell = (world >> 11) + Offset`,
+so the world tile of cell (0,0) is the negated pair at `0x80192EA0`/`0xA4`.
+
+#### A cell byte is not a boolean, and "nonzero" over-reveals by 7x
+
+**This is the finding, and the note this section replaced had it wrong.** It said
+"a cell is visible iff its byte is nonzero", which is what `patches/CullGrid.cs`'s
+grid comparison and `patches/CullCone.cs`'s ring census both test — correct for
+*them*, since they are asking whether two builds of the same grid agree. It is not
+what visible means. The scanline fill writes the marker over the **whole
+trapezoid** before the flood runs, the flood then clears the marker on the cells
+it can prove are occluded, and what stays behind in those cells is the flood's own
+working state. So nonzero is the frustum's footprint, not its visible set.
+
+The bits are the two stacked floor halves: `func_80031B1C` draws half A on bit 0
+of the flags byte and half B on bit 1, the flood's `_marker` is bit 0 on the lower
+half and bit 1 on the upper (it reads the half selector at `0x801D9C8E`), and the
+other of those two bits is the ray-alive flag it carries along a row. Everything
+above them is bookkeeping — the `0xC0` the stock epilogue forces over the 3x3
+around the eye, which `patches/CullCone.cs` also ORs over its near-camera rescue
+discs. **`byte & 3` is the test**, and `KF2_MAP_FOG_PROBE=2` is what settled it,
+by printing the array rather than arguing from the flood's source:
+
+    [KF2] fog grid z 16: ..+++++22+++++++++++++..
+    [KF2] fog grid z 17: ...++++22++++++++++++...
+    [KF2] fog grid z 18: ....++++222222++++++....
+    [KF2] fog grid z 23: ........++22+++.........
+
+The `+` is the trapezoid, the `2`s are the corridor the player is actually looking
+down, and the player's own tile is one of them. Measured standing still: **190
+cells nonzero against 26 lit** — and a trapezoid nine tiles wide at ten and a half
+deep cannot hold more than about 110 tiles in the first place, which is the
+arithmetic that says 190 was never a visible set.
+
+#### The sampling clock is the vblank, so there is no hook
+
+The accumulator has to run with the map closed, so it cannot live in a panel's
+`Draw` the way every other read in `patches/Map.cs` does. The obvious seam is a
+post on `func_8002D3A8` — and that is the fallback — but `VSyncEvent` costs **no
+hook at all** and, since `patches/recompone/0021`, fires on a wall-clock 60 Hz grid
+rather than per rendered frame: 60 samples a second at 20 fps and at 144 fps
+alike. The grid is stable for the whole frame once built, so a vblank read gets a
+complete one. At the 20 fps default each grid is sampled three times, which the OR
+makes free; at 144 fps 60 of the 144 grids are sampled, and a cone 72 degrees wide
+would need the player to turn 72 degrees in 16 ms to leave a gap.
+
+#### Three guards, and two of them were written after being measured
+
+* **The camera must be within two tiles of the player.** The area byte at
+  `0x8017E060` moves when a save's area is unpacked while the grid in RAM is still
+  the last frame of the area being left — the same window `Map`'s 250 ms re-copy
+  self-corrects through, except that fog *accumulates*, so one bad sample is a
+  permanent lie. Also a 250 ms hold after any overlay load. A cutscene camera
+  somewhere else stops accumulation, which is the conservative way round.
+* **The slot and area bytes must be bytes the game means** (slots 0..3, areas
+  0..10). Measured: a record for **"area 99"** written while a reload was
+  unpacking `buf0`, on a frame whose HP and camera both still read as a live area.
+* **A sample whose cone drew nothing is not a view of anywhere.** Between a New
+  Game and its area being placed, HP is up and the player and camera both read
+  0,0, so everything above passes; without this the "always reveal the tile the
+  player stands on" rule wrote tile 0,0 into whatever record the area byte named.
+
+#### Identity: the game's slot byte, and a scratch bucket for slot 0
+
+A record is keyed `(slot, area)`. The slot is the game's own at `0x8006E5D4`, which
+both the load `func_80023638` and the save `func_80023764` write and which is
+**zero until one of them has run** — so a New Game accumulates into a scratch
+bucket, and the moment the byte becomes 1..3 the scratch is ORed into that slot's
+records and dropped (measured: `merged 1 unsaved record(s) into slot 2` on the
+autostart path, which New Games and then loads over it). The consequence to know is
+that the identity is the *slot* rather than the save: starting a New Game over
+slot 2 inherits slot 2's old fog, and loading an old save shows everything that
+slot has explored since.
+
+#### The file
+
+Beside the memory card — `Path.ChangeExtension(CardAPath, ".fog")`, so `carda.fog`
+by default — because that is where this game's saves are and what the slot in the
+key refers to. Resolved once on `RuntimeReadyEvent`, since `ConfigManager.Load`
+runs inside `HostWindow.Initialize` and so after `Program.cs`; a card path changed
+mid-session is not followed.
+
+    offset  size  what
+    0       7     "KF2FOG\0"
+    7       1     version = 1
+    8       2     u16 record count
+    10      per record: u8 slot, u8 area, 800 bytes (bit = z*80 + x, LSB first)
+
+802 bytes a record, so a finished game on every slot is about 29 KB. Written whole
+through a temp file and `File.Move(overwrite: true)`, so a kill mid-write leaves
+the old store rather than half a new one; a bad magic, version or length loads as
+empty rather than throwing. **There is no app-exit event** — `Runtime.Shutdown`
+dispatches nothing — so the writes that matter are the periodic one (10 s, only
+when dirty), the one on a `(slot, area)` change and the one on `OverlayLoadedEvent`,
+with `AppDomain.ProcessExit` and a `finally` around `Entry.Run` catching a clean
+exit and a crash respectively.
+
+#### What it draws
+
+The seam widened from `Func<int,int,bool>` to `Func<int,int,int>`, because the
+third state costs nothing: the accumulator has the frame's grid in its hand, so
+**0 unexplored / 1 remembered / 2 in view right now** is free, and the last state
+draws a pale wash over the tile so the map carries a live cone. `MapFog.Predicate`
+is what both viewports pass, and it is `null` — draw everything — both while fog is
+off *and* until the first sample lands, because a fog map with no record yet is a
+blank rectangle and reads as the feature being broken.
+
+Fog is per **tile**, not per floor half: the visibility grid has no notion of the
+two stacked halves, so walking a corridor reveals the tile on both floors of the
+map.
+
+#### What is measured and what is not
+
+**Measured:** the byte test, from the array itself; separate records per area
+across `warp 3` and back with no bleeding; the scratch merge; persistence across a
+kill and a restart (`2 record(s) in carda.fog`, and the area's total carrying on
+from where it stopped); the file's own arithmetic (`10 + 802 * count`); and the
+cost — **144.0 fps drawn and 20.0 ticks/s** at `KF2_FPS=144` with the minimap open,
+which is what the map measured before fog existed.
+
+**Not looked at by eye, and the user's to judge:** whether the revealed shape
+matches where they walked, whether the in-view wash reads or distracts, whether the
+whole-tile reveal is noticeable on a map that draws one half at a time, and whether
+fog belongs on by default. The settings page has *Forget this area* and *Reveal
+this area* for exactly that comparison.
 
 ## Auto start and the agent beacon
 
