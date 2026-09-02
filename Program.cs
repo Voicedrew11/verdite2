@@ -569,6 +569,19 @@ Kf2.AutoReload.Install();
 Kf2.Map.Configure(Environment.GetEnvironmentVariable("KF2_MAP"),
                   Environment.GetEnvironmentVariable("KF2_MAP_MINIMAP"),
                   Environment.GetEnvironmentVariable("KF2_MAP_PROBE"));
+
+// The other half of that map: what is *in* the area rather than what shape it is.
+// The four world tables the renderer walks -- creatures, props, effects,
+// billboards -- read at their own liveness tests and drawn where the game says
+// they stand:
+//
+//     KF2_MAP_MARKERS=0     the marker layer off (on by default)
+//
+// On by default, unlike the minimap, because it adds information to a picture
+// that has already been judged rather than being a new picture of its own.
+// KF2_MAP_PROBE=1 also dumps a per-table census and a histogram of the object
+// table's type byte, which is what would let those types be paired with nouns.
+Kf2.MapMarkers.Configure(Environment.GetEnvironmentVariable("KF2_MAP_MARKERS"));
 Kf2.Map.Install();
 
 // Fog of war for that map: the tiles the player has actually seen, remembered per

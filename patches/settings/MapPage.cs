@@ -135,6 +135,81 @@ public sealed class MapPage : IPatchPage
             ImGui.SetTooltip("Colour each tile by its height byte, so stairs, ledges and the two " +
                              "stacked floors read at a glance.");
 
+        // The marker layer: patches/MapMarkers.cs. On by default, because unlike
+        // the minimap it adds information to a picture that has been judged rather
+        // than a picture of its own -- and because a map that shows the maze but
+        // not what is standing in it is the smaller half of the feature.
+        bool markers = MapMarkers.Enabled;
+        if (ImGui.Checkbox("Show what is in the area", ref markers))
+        {
+            MapMarkers.Enabled = markers;
+            PatchSettings.Set(MapMarkers.OnKey, markers);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Creatures, props, effects and billboard sprites, taken from the four " +
+                             "tables the renderer itself draws from — so the map shows what is on " +
+                             "screen, not what the game has merely loaded.");
+
+        if (MapMarkers.Enabled)
+        {
+            ImGui.Indent();
+
+            bool creatures = MapMarkers.Creatures;
+            if (ImGui.Checkbox("Creatures", ref creatures))
+            {
+                MapMarkers.Creatures = creatures;
+                PatchSettings.Set(MapMarkers.CreaturesKey, creatures);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Red triangles. With fog of war on, only where you can see right " +
+                                 "now — a tile you merely remember does not say what is standing " +
+                                 "in it.");
+
+            bool objects = MapMarkers.Objects;
+            if (ImGui.Checkbox("Objects", ref objects))
+            {
+                MapMarkers.Objects = objects;
+                PatchSettings.Set(MapMarkers.ObjectsKey, objects);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Blue squares: doors, levers, chests, props — everything the " +
+                                 "object table holds. Which is which is not settled, so they are " +
+                                 "one class; the full map's hover readout prints the raw type.");
+
+            bool effects = MapMarkers.Effects;
+            if (ImGui.Checkbox("Effects and projectiles", ref effects))
+            {
+                MapMarkers.Effects = effects;
+                PatchSettings.Set(MapMarkers.EffectsKey, effects);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Purple diamonds: spells in flight and other short-lived things.");
+
+            bool sprites = MapMarkers.Sprites;
+            if (ImGui.Checkbox("Billboard sprites", ref sprites))
+            {
+                MapMarkers.Sprites = sprites;
+                PatchSettings.Set(MapMarkers.SpritesKey, sprites);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Amber dots: torches and flames. Off by default — a lit corridor " +
+                                 "holds dozens of them and they would bury the markers you are " +
+                                 "looking for.");
+
+            bool facing = MapMarkers.Facing;
+            if (ImGui.Checkbox("Creature facing", ref facing))
+            {
+                MapMarkers.Facing = facing;
+                PatchSettings.Set(MapMarkers.FacingKey, facing);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("A spoke off each creature showing the way it faces. The angle is " +
+                                 "derived from the rotation the renderer draws with and has never " +
+                                 "been checked by eye, so it is off by default.");
+
+            ImGui.Unindent();
+        }
+
         bool walls = Map.Walls;
         if (ImGui.Checkbox("Mark sight-blocking tiles", ref walls))
         {

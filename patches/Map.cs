@@ -245,6 +245,7 @@ public static class Map
             Shade         = view.GetBool(ShadeKey, true);
             Walls         = view.GetBool(WallsKey, true);
             Floor         = view.GetInt(FloorKey, -1);
+            MapMarkers.LoadSettings(view);
 
             // Registered whether or not the feature is on, so the switch under
             // Gameplay is not a dead control for the rest of the session. Enabled
@@ -372,7 +373,13 @@ public static class Map
 
         long now = Environment.TickCount64;
         if (Area != _copiedArea || now - _copiedAt >= CopyPeriodMs) Copy(m, now);
-        return Ready;
+        if (!Ready) return false;
+
+        // After the copy, because a marker picks its floor out of the tile record
+        // it stands on -- see MapMarkers.HalfAt -- so the grid has to be this
+        // area's before the markers are matched against it.
+        MapMarkers.Refresh(m, Area, now);
+        return true;
     }
 
     /// <summary>The half a viewport should draw: the player's floor unless the
@@ -454,7 +461,9 @@ public static class Map
         if (_probe && _dumpPending && Ready && Drawn(TileOf(PlayerX), TileOf(PlayerZ), PlayerHalf))
         {
             _dumpPending = false;
+            MapMarkers.Refresh(m, Area, now);
             Dump();
+            MapMarkers.Dump(m);
         }
     }
 

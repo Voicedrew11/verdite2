@@ -31,6 +31,7 @@ public static class MapRender
     const int Shades = 24;
     static readonly uint[] _shade = new uint[Shades];
     static uint _flat, _wall, _lit, _grid, _arrow, _arrowEdge, _ground;
+    static uint _creature, _object, _effect, _sprite, _markEdge;
     static bool _built;
 
     static void Build()
@@ -53,6 +54,15 @@ public static class MapRender
         _arrow     = Rgba(1.00f, 0.82f, 0.25f, 1f);
         _arrowEdge = Rgba(0.10f, 0.08f, 0.02f, 0.9f);
         _ground    = Rgba(0.07f, 0.08f, 0.10f, 1f);
+
+        // The marker palette. Chosen to separate from the tile ramp, which runs
+        // cool-dark to warm-pale: a creature is the one thing a player is looking
+        // for in a hurry, so it gets the only saturated red on the map.
+        _creature  = Rgba(0.95f, 0.25f, 0.22f, 1f);
+        _object    = Rgba(0.35f, 0.80f, 0.95f, 1f);
+        _effect    = Rgba(0.85f, 0.40f, 0.95f, 1f);
+        _sprite    = Rgba(0.95f, 0.75f, 0.30f, 1f);
+        _markEdge  = Rgba(0.05f, 0.05f, 0.07f, 0.85f);
     }
 
     static uint Rgba(float r, float g, float b, float a) => ImGui.GetColorU32(new Vector4(r, g, b, a));
@@ -192,6 +202,109 @@ public static class MapRender
         a.Y = Math.Max(a.Y, cy - halfH); e.Y = Math.Min(e.Y, cy + halfH);
 
         return e.X > a.X && e.Y > a.Y;
+    }
+
+    /// <summary>
+    /// The world tables, over the tiles: patches/MapMarkers.cs sampled them and
+    /// this draws them.
+    ///
+    /// <paramref name="origin"/> and <paramref name="cell"/> are the same two
+    /// numbers <see cref="Draw"/> takes, so a viewport expresses the marker layer
+    /// exactly the way it expresses the floor plan. A marker's screen row is
+    /// <c>Map.RowF</c> of its world Z, sub-tile fraction and all — the map is the
+    /// plane seen from above, so screen Y runs along -Z.
+    ///
+    /// **A marker is a shape as well as a colour**, because the minimap draws them
+    /// at four or five pixels and a colour alone is not enough at that size: a
+    /// creature is a triangle, a prop a square, an effect a diamond, a billboard a
+    /// dot. Each carries a dark outline so it reads over both ends of the height
+    /// ramp.
+    ///
+    /// **They do not fade with the minimap's opacity**, for the reason the
+    /// player's arrow does not: the opacity setting exists so the *ground* stops
+    /// hiding the game, and a marker you cannot see is not worth drawing. The
+    /// outline is what keeps them legible over the game picture instead.
+    /// </summary>
+    public static void DrawMarkers(ImDrawListPtr dl, Vector2 origin, float cell,
+                                   int half, Func<int, int, int>? state, float size,
+                                   Vector2? circleCentre = null, float circleRadius = 0f)
+    {
+        Build();
+
+        bool circle = circleCentre.HasValue && circleRadius > 0f;
+        float rr = circleRadius * circleRadius;
+
+        foreach (var mk in MapMarkers.Live)
+        {
+            if (!MapMarkers.Visible(mk, half, state)) continue;
+
+            var p = new Vector2(origin.X + Map.TileF(mk.X) * cell,
+                                origin.Y + Map.RowF(mk.Z) * cell);
+
+            // The disc is cut on the marker's centre rather than on its shape:
+            // a marker is a few pixels across, so clamping it the way a tile is
+            // clamped would only ever produce a sliver.
+            if (circle)
+            {
+                float dx = p.X - circleCentre!.Value.X, dy = p.Y - circleCentre.Value.Y;
+                if (dx * dx + dy * dy > rr) continue;
+            }
+
+            uint c = mk.Kind switch
+            {
+                MapMarkers.Kind.Creature => _creature,
+                MapMarkers.Kind.Object   => _object,
+                MapMarkers.Kind.Effect   => _effect,
+                _                        => _sprite,
+            };
+
+            switch (mk.Kind)
+            {
+                case MapMarkers.Kind.Creature:
+                {
+                    // North-up like everything else on the map, so the triangle
+                    // points up rather than along the creature's heading; the
+                    // heading is the optional spoke below.
+                    float s = size;
+                    var a = new Vector2(p.X, p.Y - s);
+                    var b = new Vector2(p.X - s * 0.85f, p.Y + s * 0.75f);
+                    var d = new Vector2(p.X + s * 0.85f, p.Y + s * 0.75f);
+                    dl.AddTriangleFilled(a, b, d, c);
+                    dl.AddTriangle(a, b, d, _markEdge, 1f);
+
+                    if (MapMarkers.Facing && size >= 3f)
+                    {
+                        float ang = -(mk.Yaw * (float)(2 * Math.PI) / Map.Turn + (float)(Math.PI / 2));
+                        var tip = new Vector2(p.X + MathF.Cos(ang) * s * 2.2f,
+                                              p.Y + MathF.Sin(ang) * s * 2.2f);
+                        dl.AddLine(p, tip, c, 1.4f);
+                    }
+                    break;
+                }
+
+                case MapMarkers.Kind.Object:
+                {
+                    float s = size * 0.8f;
+                    var a = new Vector2(p.X - s, p.Y - s);
+                    var b = new Vector2(p.X + s, p.Y + s);
+                    dl.AddRectFilled(a, b, c);
+                    dl.AddRect(a, b, _markEdge);
+                    break;
+                }
+
+                case MapMarkers.Kind.Effect:
+                {
+                    float s = size * 0.9f;
+                    dl.AddQuadFilled(new Vector2(p.X, p.Y - s), new Vector2(p.X + s, p.Y),
+                                     new Vector2(p.X, p.Y + s), new Vector2(p.X - s, p.Y), c);
+                    break;
+                }
+
+                default:
+                    dl.AddCircleFilled(p, MathF.Max(1.5f, size * 0.55f), c, 6);
+                    break;
+            }
+        }
     }
 
     /// <summary>

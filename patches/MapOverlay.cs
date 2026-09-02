@@ -153,6 +153,12 @@ public sealed class MapOverlay : IFloatingPanel
                            cx - radius - 1, cz - radius - 1, cx + radius + 1, cz + radius + 1,
                            Map.HalfOffset, Map.Shade, Map.Walls, false, MapFog.Predicate,
                            alpha, round ? centre : null, round ? r : 0f);
+            // Markers do not take the opacity: the setting is there so the
+            // *ground* stops hiding the game, and a creature you cannot see is the
+            // one thing an overlay map is for. Same exemption the arrow has.
+            MapRender.DrawMarkers(dl, origin, cell, Map.HalfOffset, MapFog.Predicate,
+                                  Math.Clamp(cell * 0.35f, 2.5f, 7f),
+                                  round ? centre : null, round ? r : 0f);
             MapRender.DrawPlayer(dl, origin, cell, MathF.Max(5f, cell * 0.7f));
             dl.PopClipRect();
 

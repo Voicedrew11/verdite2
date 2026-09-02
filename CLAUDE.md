@@ -146,7 +146,8 @@ KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: st
 KF2_UISCALE=1                            # force the interface scale, and save it
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
 KF2_MAP_MINIMAP=1                        # the corner minimap on (off by default); N toggles it
-KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, and open the map
+KF2_MAP_MARKERS=0                        # creatures, objects, effects and sprites off (on by default)
+KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII and a marker census, and open the map
 KF2_MAP_FOG=1                            # fog of war: only the tiles you have seen (off by default)
 KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, records held, flushes
 KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 visibility grid, once a second
@@ -640,7 +641,34 @@ with yaw. Negating the arrow alone would have matched the report and left it
 pointing across the direction of travel, since the mirror was in the map — a
 mirror is invisible to any measurement taken inside the mirrored frame. The
 `KF2_MAP_PROBE=1` dump is not flipped, being a dump of the grid rather than of
-the picture. Two traps are
+the picture. **The tile grid is only half of a map, and `patches/MapMarkers.cs` is the other
+half**: it draws what is *standing* in the area, from the **four world tables
+`func_800331B4` itself draws from** — creatures `0x8016C544` (200 x `0x7C`, drawn
+when `u8[+0x9] == 1`, pos `+0x2C`), objects `0x80177714` (396 x `0x44`, `u16[+0x6]
+!= 0xFF`, pos `+0x14`), effects `0x8019CC6C` (128 x `0x48`, pos `+0x14`) and
+billboards `0x80195174` (128 x `0x18`, pos `+0x8`) — so it is a third reader of an
+already-measured fact rather than a new address hunt. Same properties as the map:
+no hook, nothing written, sampled every 50 ms (one sample a tick). **The liveness
+test is the renderer's, not the owning stage's**, the distinction `ObjectSmoothing`
+was fixed for. **The object table outlives its area and the map must not believe
+it**: measured across an area change it reads *258 slots drawn, 0 stepped*, with
+the previous area's positions verbatim, because the loader clears `+0x4` and
+leaves `+0x6` and the `VECTOR` alone — so the sample is **held** while not one slot
+passes `+0x4 != 0xFF`, `Map.Ready`'s shape applied to a second table. In a settled
+area the two tests still disagree (area 0: 258 drawn, 139 stepped) and that is
+*kept*, since a slot the renderer draws is on screen; the readout labels the rest
+`static`. A marker's floor is derived from the drawn half whose `-(height << 7)`
+is nearest its Y — the map's founding equality applied to everything else — and
+fog gives what *moves* the stricter rule (lit now, not merely remembered).
+**What a marker is called is deliberately not claimed**: the object type byte
+dispatches through 224 jump-table entries and nothing here pairs an arm with a
+noun, so the readout prints the raw type and `KF2_MAP_PROBE=1` censuses all four
+tables with a type histogram, which is the instrument for closing that. The one
+confirmed identity is the creature's `u8[+0x2]`, the descriptor index `HitGuard`
+already uses. Billboards and the creature-facing spoke default off. Measured:
+144.0 fps and 20.0 ticks/s at `KF2_FPS=144` with both viewports drawing markers.
+Never judged by eye: whether the markers read at minimap size, and whether the
+facing spoke points the way the creature does. Two traps are
 recorded: **a cleared grid reads as a *full* one** (a zeroed model index is 0,
 which is below the drawn threshold, so all 12,800 halves pass — hence
 `Map.Ready`), and **`func_8001689C` is not a usable "area changed" hook** despite

@@ -76,7 +76,11 @@ public sealed class MapPanel : IPanel
         ImGui.SameLine();
         ImGui.TextDisabled($"| tile {Map.TileOf(Map.PlayerX)},{Map.TileOf(Map.PlayerZ)} " +
                            $"| {(Map.HalfOffset == 0 ? "lower" : "upper")} floor " +
-                           $"| {Map.Occupied} halves");
+                           $"| {Map.Occupied} halves" +
+                           (MapMarkers.Enabled
+                               ? $" | {MapMarkers.Counts[0]} creatures, {MapMarkers.Counts[1]} objects, " +
+                                 $"{MapMarkers.Counts[2]} effects, {MapMarkers.Counts[3]} sprites"
+                               : ""));
 
         ImGui.SetNextItemWidth(160);
         ImGui.SliderFloat("Zoom", ref _zoom, 2f, 24f, "%.1f px/tile");
@@ -89,6 +93,18 @@ public sealed class MapPanel : IPanel
 
         ImGui.SameLine();
         ImGui.Checkbox("Grid", ref _grid);
+
+        ImGui.SameLine();
+        bool marks = MapMarkers.Enabled;
+        if (ImGui.Checkbox("Markers", ref marks))
+        {
+            MapMarkers.Enabled = marks;
+            Settings.PatchSettings.Set(MapMarkers.OnKey, marks);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Creatures, props, effects and billboards, from the four tables the " +
+                             "renderer itself draws from. Which classes show is under " +
+                             "Settings > Gameplay > Map.");
 
         ImGui.SameLine();
         bool shade = Map.Shade;
@@ -145,6 +161,8 @@ public sealed class MapPanel : IPanel
         dl.PushClipRect(p0, new Vector2(p0.X + size.X, p0.Y + size.Y), true);
         MapRender.Draw(dl, origin, _zoom, x0, z0, x1, z1,
                        Map.HalfOffset, Map.Shade, Map.Walls, _grid, MapFog.Predicate);
+        MapRender.DrawMarkers(dl, origin, _zoom, Map.HalfOffset, MapFog.Predicate,
+                              Math.Clamp(_zoom * 0.35f, 2.5f, 8f));
         MapRender.DrawPlayer(dl, origin, _zoom, MathF.Max(5f, _zoom * 0.7f));
         dl.PopClipRect();
 
@@ -180,6 +198,24 @@ public sealed class MapPanel : IPanel
                 ? "  not drawn"
                 : $"  floor Y {-(h << 7)}{((flags & Map.StopsFlood) != 0 ? ", stops the visibility flood" : "")}");
         }
+
+        // The marker readout is the same instrument one layer up: nothing in this
+        // repo maps an object's type byte to a noun, so the tooltip prints the
+        // slot, the type and the definition index of everything standing in the
+        // tile and leaves the naming to whoever pairs them with what is on screen.
+        bool any = false;
+        foreach (var mk in MapMarkers.Live)
+        {
+            if (Map.TileOf(mk.X) != tx || Map.TileOf(mk.Z) != tz) continue;
+            if (!any) { ImGui.Separator(); any = true; }
+            ImGui.Text($"{MapMarkers.Noun(mk.Kind)} #{mk.Slot}: type {mk.Type:X2}" +
+                       (mk.Def >= 0 ? $" def {mk.Def:X2}" : "") +
+                       $"  {(mk.Half == 0 ? "lower" : "upper")}" +
+                       (mk.Kind == MapMarkers.Kind.Object && !mk.Stepped ? "  static" : ""));
+            ImGui.TextDisabled($"  world {mk.X},{mk.Y},{mk.Z}" +
+                               (mk.Kind == MapMarkers.Kind.Sprite ? "" : $"  yaw {mk.Yaw & 0xFFF:X3}"));
+        }
+
         ImGui.EndTooltip();
     }
 }

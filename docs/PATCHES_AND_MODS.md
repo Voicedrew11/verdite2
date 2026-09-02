@@ -15,6 +15,7 @@ lives here — frame pacing and auto reload.
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
+| `Map.cs`, `MapMarkers.cs`, `MapRender.cs`, `MapPanel.cs`, `MapOverlay.cs`, `MapFog.cs` | the area's floor plan, what is standing in it, and the tiles you have seen | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
 | `Perspective.cs`, `Subpixel.cs`, `ZBuffer.cs` | switches and probes over the GTE depth mechanisms | [RENDERING.md](RENDERING.md) |
 | `Widescreen.cs`, `CullCone.cs`, `ViewClip.cs`, `PrimBuffer.cs` | aspect ratio and the culls it runs into | [WIDESCREEN.md](WIDESCREEN.md) |
@@ -2753,12 +2754,14 @@ the move.
 
 ## A dynamic map
 
-`patches/Map.cs`, `patches/MapRender.cs`, `patches/MapPanel.cs`,
-`patches/MapOverlay.cs`, `patches/settings/MapPage.cs`.
+`patches/Map.cs`, `patches/MapMarkers.cs`, `patches/MapRender.cs`,
+`patches/MapPanel.cs`, `patches/MapOverlay.cs`, `patches/settings/MapPage.cs`.
 
     KF2_MAP=0             the whole feature off (on by default)
     KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
-    KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII, and open the map
+    KF2_MAP_MARKERS=0     the marker layer off (on by default)
+    KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII and a marker census, and
+                          open the map
 
 King's Field is a maze, the original shipped no automap, and until now everything
 in this port that knew where you were was a debug instrument — `kf2debug`'s Warp
@@ -3145,6 +3148,109 @@ matches where they walked, whether the in-view wash reads or distracts, whether 
 whole-tile reveal is noticeable on a map that draws one half at a time, and whether
 fog belongs on by default. The settings page has *Forget this area* and *Reveal
 this area* for exactly that comparison.
+
+### What is *in* the area: the marker layer
+
+`patches/MapMarkers.cs`. The tile grid is the half of a map that does not move;
+the other half is everything standing in it, and that is not in the grid at all.
+It is in the **four world tables `func_800331B4` draws from**, which are already
+written down — "`func_80032588` is fed from *four* tables" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md), and the same four rows
+`patches/ObjectSmoothing.cs` carries and `AgentServer`'s `nearby` reports. This is
+a third reader of a measured fact rather than a new address hunt:
+
+| # | base | stride | count | drawn when | position | rotation | drawn as |
+|---|---|---|---|---|---|---|---|
+| 1 | `0x8016C544` | `0x7C` | 200 | `u8[+0x9] == 1` | `+0x2C` | `+0x40` | red triangle |
+| 2 | `0x80177714` | `0x44` | 396 | `u16[+0x6] != 0xFF` | `+0x14` | `+0x24` | blue square |
+| 3 | `0x8019CC6C` | `0x48` | 128 | `u8[+0x0] != 0xFF` | `+0x14` | `+0x24` | purple diamond |
+| 4 | `0x80195174` | `0x18` | 128 | `u16[+0x0] != 0xFFFF` | `+0x8` | none | amber dot |
+
+**The liveness test is the renderer's, not the owning stage's**, for the reason
+`ObjectSmoothing` learned the hard way: an object is *drawn* on `+0x6` and
+*stepped* on `+0x4`, a creature is drawn on `u8[+0x9] == 1` and stepped on
+`u8[+0x0] != 0xFF`, and the two are opposite ways round. A map should show what is
+on screen, so it uses the predicate the screen uses.
+
+**A shape as well as a colour**, because the minimap draws a marker at four or
+five pixels and a colour alone does not separate at that size. Billboards default
+off — a torch-lit corridor holds dozens and they would bury the markers a player
+is looking for — and everything else is on. Markers are exempt from the minimap's
+opacity, the same exemption the player's arrow has: the setting exists so the
+*ground* stops hiding the game, and a creature you cannot see is what an overlay
+map is for.
+
+#### The object table outlives its area, and this is the trap
+
+**Measured, and the guard is in.** The renderer's `u16[+0x6] != 0xFF` is right
+*for the renderer*, because the renderer runs after the loader has filled the
+table. A layer sampling on its own 50 ms clock has no such guarantee. Across an
+area change the object table reads **258 slots drawn and 0 stepped**, carrying the
+previous area's positions verbatim — slot 2 at `141311,-12800,28416` in both — so
+the loader clears the behaviour byte at `+0x4` and leaves `+0x6` and the `VECTOR`
+where they were. The sample is therefore **held** while not one slot passes
+`+0x4 != 0xFF`, which is the shape `Map.Ready` already has for the tile grid, and
+the probe says so in as many words when it fires in that window.
+
+In a settled area the two tests still disagree — measured in area 0, **258 drawn
+against 139 stepped** — and that difference is *kept* rather than filtered, since
+a slot the renderer draws is a thing on screen. `Marker.Stepped` carries it and
+the full map's hover readout labels the other 119 `static`.
+
+#### Which floor a marker is on is derived
+
+A tile record holds two stacked halves and the map draws one at a time, so a
+marker takes the drawn half whose floor `-(height << 7)` is nearest its own Y.
+That is the map's own founding equality — the player stands on a half the renderer
+draws and that half's floor Y *equals* their Y, measured gap 0 — applied to
+everything else in the area.
+
+#### Fog of war, with the stricter rule for what moves
+
+A tile you merely remember does not tell you what is standing in it now. So a
+creature or an effect is drawn only where the tile is lit in the last sample
+(state 2), while a prop or a billboard — architecture in all but name — is drawn
+wherever the tile is at least remembered (state 1). With fog off the predicate is
+`null` and everything shows.
+
+#### What a marker is called is deliberately not claimed
+
+The object table's type byte at `+0x4` dispatches through a 224-entry jump table
+with thirty distinct arms, and nothing in this repo pairs an arm with a noun — so
+a chest, a door and a lever are all "object" and the readout prints the raw type
+and definition index instead. The one identity that *is* confirmed is the
+creature's: `u8[+0x2]` is the index into the per-area descriptor block at
+`0x80172624` (120-byte records; `patches/HitGuard.cs` and `docs/TODO.md` #14), so
+two markers of a kind carry the same number.
+
+`KF2_MAP_PROBE=1` is the instrument for closing that gap: it censuses all four
+tables — **every** class, whatever the settings show, or a census would report
+zero sprites and read as the billboard table being wrong — and prints a histogram
+of the type byte. Area 0, measured:
+
+    map markers: 0 creatures, 258 objects, 0 effects, 5 sprites
+    map markers: of the objects, 139 are stepped by stage 2 and 119 are drawn but never stepped
+    map markers: object types: 02x2 03x3 04x8 05x5 08x25 09x53 0Fx2 10x3 12x1
+                               16x2 1Fx5 51x4 54x5 5Fx1 A0x1 E0x15 F0x4 FFx119
+
+Pairing `09` (53 records) or `E0` (15) with what is actually on screen, area by
+area, is what would turn this class into named ones.
+
+#### What is measured and what is not
+
+**Measured:** the four tables read and their counts move with the area; the
+stale-table guard firing exactly in the reload window and naming itself; five
+billboards in area 0 confirming table 4 is addressed right; and the cost —
+**144.0 fps drawn and 20.0 ticks/s** at `KF2_FPS=144` with the full map and the
+minimap both open and drawing markers, which is what the map measured before the
+layer existed.
+
+**Not looked at by eye, and the user's to judge:** whether the markers read at
+minimap size, whether four classes is too many at once, whether the 119
+drawn-but-never-stepped objects are things a player recognises or clutter, and
+whether the creature *facing* spoke points the way the creature does — that last
+is derived from the rotation the renderer builds (`s16` at `+2` of the triple,
+biased `0x800`) and has never been checked, which is why it defaults off.
 
 ## Auto start and the agent beacon
 
