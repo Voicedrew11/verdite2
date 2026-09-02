@@ -4,14 +4,15 @@ using ImGuiNET;
 namespace Kf2;
 
 /// <summary>
-/// The one drawing routine both map viewports call.
+/// The one drawing routine every map viewport calls.
 ///
-/// The full map (patches/MapPanel.cs) and the corner minimap
-/// (patches/MapOverlay.cs) differ only in their viewport and their chrome, so the
-/// tiles, the palette and the arrow live here and neither owns them. Both are
-/// **north-up**, deliberately: a rotating minimap disagrees with the full map
-/// about which way the area faces, and a maze is easier to hold in your head when
-/// north stays put.
+/// The full-screen map (patches/MapFullscreen.cs), the docked panel
+/// (patches/MapPanel.cs) and the corner minimap (patches/MapOverlay.cs) differ
+/// only in their rectangle, their scale and their chrome, so the tiles, the
+/// palette and the player live here and none of the three owns them. All are
+/// **north-up**, deliberately: a rotating minimap disagrees with the maps about
+/// which way the area faces, and a maze is easier to hold in your head when north
+/// stays put.
 ///
 /// The <c>state</c> predicate is fog of war, and patches/MapFog.cs fills it in:
 /// it answers **0 unexplored, 1 remembered, 2 in view right now** for a tile, and
@@ -30,7 +31,7 @@ public static class MapRender
     // so a corridor reads as a bright line on a dark field rather than as a hole.
     const int Shades = 24;
     static readonly uint[] _shade = new uint[Shades];
-    static uint _flat, _wall, _lit, _grid, _arrow, _arrowEdge, _ground;
+    static uint _flat, _wall, _lit, _grid, _arrow, _arrowEdge, _ground, _dot, _dotEdge;
     static uint _creature, _object, _effect, _sprite, _markEdge;
     static bool _built;
 
@@ -54,6 +55,12 @@ public static class MapRender
         _arrow     = Rgba(1.00f, 0.82f, 0.25f, 1f);
         _arrowEdge = Rgba(0.10f, 0.08f, 0.02f, 0.9f);
         _ground    = Rgba(0.07f, 0.08f, 0.10f, 1f);
+
+        // The dot is the arrow's colour with a heavier rim: it sits inside a
+        // tile rather than on top of one, so its edge is what separates it from
+        // the pale end of the height ramp.
+        _dot       = Rgba(1.00f, 0.86f, 0.36f, 1f);
+        _dotEdge   = Rgba(0.08f, 0.06f, 0.02f, 1f);
 
         // The marker palette. Chosen to separate from the tile ramp, which runs
         // cool-dark to warm-pale: a creature is the one thing a player is looking
@@ -331,14 +338,21 @@ public static class MapRender
     /// arrow with the report and left it pointing across the direction of travel,
     /// because the mirror was in the map rather than in the arrow.
     ///
+    /// **<paramref name="dot"/> draws the other marker entirely**, and it is the
+    /// default: see <see cref="DrawPlayerDot"/>. The arrow above is kept as the
+    /// setting's other entry, so everything this comment records about the angle
+    /// stays live rather than becoming archaeology.
+    ///
     /// **The arrow does not fade with the rest of the map.** The minimap's
     /// opacity is there so the game shows through the ground and the tiles; a
     /// "you are here" marker that dims with them is the one thing that has to
     /// stay findable, so it is drawn at full opacity whatever the setting says.
     /// </summary>
-    public static void DrawPlayer(ImDrawListPtr dl, Vector2 origin, float cell, float size)
+    public static void DrawPlayer(ImDrawListPtr dl, Vector2 origin, float cell, float size, bool dot)
     {
         Build();
+
+        if (dot) { DrawPlayerDot(dl, origin, cell); return; }
 
         var p = new Vector2(origin.X + Map.TileF(Map.PlayerX) * cell,
                             origin.Y + Map.RowF(Map.PlayerZ) * cell);
@@ -356,5 +370,45 @@ public static class MapRender
 
         dl.AddQuadFilled(tip, left, back, right, _arrow);
         dl.AddQuad(tip, left, back, right, _arrowEdge, 1.2f);
+    }
+
+    /// <summary>
+    /// The player as a dot sitting in the middle of the tile they stand in.
+    ///
+    /// **This is a claim about accuracy, not a change of icon.** The arrow says
+    /// two things the game never told the player: exactly where in the room they
+    /// are, and exactly which way they are pointing — which is a satellite fix in
+    /// a game that shipped no map at all. A dot in the centre of the occupied
+    /// tile says only "you are in this square", which is what someone drawing
+    /// their own map on paper would have known, and it is what this port offers
+    /// by default.
+    ///
+    /// It is therefore drawn on the **tile**, not on the position: the world
+    /// coordinate is put through <c>Map.TileOf</c> and back, so the dot steps a
+    /// square at a time and does not slide across the cell as you walk. The
+    /// centre is <c>tile + 0.5</c> along X and <c>Map.RowOf(tile) + 0.5</c> down
+    /// the screen — the same row arithmetic the tiles themselves are drawn with,
+    /// so the dot lands in the square the fill drew rather than half a cell off
+    /// it.
+    ///
+    /// The radius follows the cell rather than the caller's size, because
+    /// "occupies the square" is the whole point: at the minimap's four or five
+    /// pixels a tile it is a dot, and on the full map it fills the square it is
+    /// in. Full opacity for the reason the arrow is: the minimap's opacity is
+    /// there so the ground stops hiding the game, and a "you are here" you cannot
+    /// find is not worth drawing.
+    /// </summary>
+    public static void DrawPlayerDot(ImDrawListPtr dl, Vector2 origin, float cell)
+    {
+        Build();
+
+        int tx = Map.TileOf(Map.PlayerX);
+        int row = Map.RowOf(Map.TileOf(Map.PlayerZ));
+
+        var p = new Vector2(origin.X + (tx + 0.5f) * cell, origin.Y + (row + 0.5f) * cell);
+        float r = MathF.Max(2.5f, cell * 0.34f);
+
+        dl.AddCircleFilled(p, r, _dot, 0);
+        dl.AddCircle(p, r, _dotEdge, 0, MathF.Max(1f, cell * 0.06f));
     }
 }

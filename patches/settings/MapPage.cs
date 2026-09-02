@@ -26,6 +26,19 @@ public sealed class MapPage : IPatchPage
     static readonly string[] Corners =
         ["Top left", "Top right", "Bottom left", "Bottom right", "Top centre"];
     static readonly string[] Shapes  = ["Square", "Circle"];
+
+    // 0 dot, 1 arrow: the stored value, dot first because it is the default.
+    static readonly string[] Marks = ["Dot in the square you are in", "Arrow showing your heading"];
+
+    // The pad button that opens the full-screen map, and the SDL index each entry
+    // stores. Not every pad has every one of them -- a controller with no touchpad
+    // never sends button 20 -- and nothing here can ask the pad what it has, so
+    // they are offered as a list rather than probed.
+    static readonly string[] PadButtons =
+        ["Touchpad (DualSense / DualShock 4)", "L3 (left stick click)", "R3 (right stick click)",
+         "Select / Back", "None"];
+    static readonly int[] PadValues =
+        [Map.PadTouchpad, Map.PadL3, Map.PadR3, Map.PadSelect, Map.PadNone];
     static readonly string[] Floors  = ["Follow the player", "Lower", "Upper"];
 
     public void Draw()
@@ -41,6 +54,31 @@ public sealed class MapPage : IPatchPage
                              "grid. M opens the full map, N toggles the corner minimap.");
 
         if (!Map.Enabled) return;
+
+        // The full-screen map's controller binding. It comes off the raw host
+        // gamepad rather than the PSX pad, which is the only reason the touchpad
+        // is reachable at all -- the PS1 had no such button, so nothing downstream
+        // has a slot for it.
+        int padIdx = System.Array.IndexOf(PadValues, Map.PadButton);
+        if (padIdx < 0) padIdx = PadValues.Length - 1;
+        ImGui.SetNextItemWidth(260);
+        if (ImGui.Combo("Open the full-screen map with", ref padIdx, PadButtons, PadButtons.Length))
+            Map.SetPadButton(PadValues[padIdx]);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The pad button that opens and closes the full-screen map. M does it " +
+                             "from the keyboard whatever this says; Shift+M opens the docked panel " +
+                             "with the per-tile readout instead.");
+
+        // How the player is drawn, on every viewport at once. The dot is the
+        // default: see Map.PlayerMark and MapRender.DrawPlayerDot.
+        int mark = System.Math.Clamp(Map.PlayerMark, 0, Marks.Length - 1);
+        ImGui.SetNextItemWidth(260);
+        if (ImGui.Combo("You are here", ref mark, Marks, Marks.Length))
+            Map.SetPlayerMark(mark);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The dot sits in the middle of the tile you occupy and says nothing " +
+                             "about which way you face — which is as much as anyone drawing this " +
+                             "maze on paper could have known. The arrow is the satellite fix.");
 
         bool mini = Map.Minimap;
         if (ImGui.Checkbox("Corner minimap", ref mini)) Map.SetMinimap(mini);

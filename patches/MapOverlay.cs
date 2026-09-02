@@ -17,7 +17,9 @@ namespace Kf2;
 /// only calls <c>Draw</c> on an open panel: the minimap is on when the setting is
 /// on and an area is running, and closed the rest of the time. That is what keeps
 /// it off the title screen and out of a load, and it is why the setting is read
-/// here rather than tested inside Draw.
+/// here rather than tested inside Draw. **The full-screen map closes it too** — a
+/// corner minimap over a map of the same area, drawn from the same tables at a
+/// different scale, is two answers to one question.
 ///
 /// **North-up, matching the full map.** A rotating minimap would disagree with
 /// the full map about which way the area faces, and a maze is easier to hold in
@@ -52,7 +54,7 @@ public sealed class MapOverlay : IFloatingPanel
     /// </summary>
     public bool IsOpen
     {
-        get => Map.Enabled && Map.Minimap;
+        get => Map.Enabled && Map.Minimap && !MapFullscreen.Instance.IsOpen;
         set { }
     }
 
@@ -159,7 +161,7 @@ public sealed class MapOverlay : IFloatingPanel
             MapRender.DrawMarkers(dl, origin, cell, Map.HalfOffset, MapFog.Predicate,
                                   Math.Clamp(cell * 0.35f, 2.5f, 7f),
                                   round ? centre : null, round ? r : 0f);
-            MapRender.DrawPlayer(dl, origin, cell, MathF.Max(5f, cell * 0.7f));
+            MapRender.DrawPlayer(dl, origin, cell, MathF.Max(5f, cell * 0.7f), Map.PlayerDot);
             dl.PopClipRect();
 
             // The border keeps the map's own edge legible against whatever the game

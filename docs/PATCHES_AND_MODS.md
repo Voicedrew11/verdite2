@@ -2755,20 +2755,23 @@ the move.
 ## A dynamic map
 
 `patches/Map.cs`, `patches/MapMarkers.cs`, `patches/MapRender.cs`,
-`patches/MapPanel.cs`, `patches/MapOverlay.cs`, `patches/settings/MapPage.cs`.
+`patches/MapFullscreen.cs`, `patches/MapPanel.cs`, `patches/MapOverlay.cs`,
+`patches/settings/MapPage.cs`.
 
     KF2_MAP=0             the whole feature off (on by default)
     KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
     KF2_MAP_MARKERS=0     the marker layer off (on by default)
-    KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII and a marker census, and
-                          open the map
+    KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII, its occupied extent and a
+                          marker census, and open both maps
 
 King's Field is a maze, the original shipped no automap, and until now everything
 in this port that knew where you were was a debug instrument — `kf2debug`'s Warp
 tab, `KF2_SHELL`'s `state`, the `[KF2-AGENT]` beacon. A patch rather than a mod
 for auto reload's reason: it is a thing the port itself should offer, so it
 should not be able to be absent or silently disabled, and its knobs go under
-Gameplay beside it. `M` opens the full map, `N` toggles the corner minimap.
+Gameplay beside it. **The pad's touchpad button opens the full-screen map**, `M`
+does the same from the keyboard, `N` toggles the corner minimap, and `Shift+M`
+opens the docked panel with the per-tile readout.
 
 ### The floor plan is already in RAM, and it is not polygon soup
 
@@ -2989,10 +2992,89 @@ at the default 220 px over 25 tiles a cell is 8.8 px.
 Measured cost: 144.0 fps drawn and 20.0 ticks/s with both viewports drawing at
 `KF2_FPS=144`, indistinguishable from `KF2_MAP=0`.
 
+### The full-screen map, and the button the PS1 never had
+
+`patches/MapFullscreen.cs`. Reported from play: *"the minimap is a cool feature,
+but it contrasts hard with the game design."* The two viewports that existed were
+a corner overlay and a **docked ImGui panel** — a title bar, a toolbar, a zoom
+slider, a hover readout printing ten hex bytes — which is a debugger over a
+320x240 picture, not a map you open with a controller in your hands. So there is a
+third viewport: the whole area, over the dimmed game, no chrome, opened and closed
+with one button.
+
+It is a third *viewport* rather than a third map. The palette, the tiles, the
+markers and the player are `MapRender`'s, the reading is `Map.Refresh`'s, and this
+class is a rectangle, a scale and a scrim — the same relationship the minimap has.
+It carries `NoInputs`, so the mouse still reaches the game and the menus behind
+it, and there is nothing on it to click: everything it draws is decided by the
+settings the other two already share. The minimap closes while it is up; a corner
+map over a map of the same area is two answers to one question.
+
+**The touchpad is reachable because it is not a PS1 button.** `InputManager`
+dispatches `ControllerEvent` straight off SDL, `ev.Cbutton.Button` and all,
+*before* `PadState` maps anything onto the PSX pad — so listening there gets the
+raw `SDL_GameControllerButton`, of which the DualSense's touchpad click is **20**
+(SDL 2.0.14 and up, through the PS5 driver). Nothing downstream has a slot for it,
+so it cannot leak into the game as a keypress, and the pad's sixteen real buttons
+are left entirely to the game. The event bus only dispatches `ControllerEvent`
+while something listens, so the listener is also what turns that dispatch on.
+
+A pad whose SDL mapping has no touchpad simply never sends button 20, and
+**nothing here can ask it whether it has one** — `InputManager` keeps the
+`GameController*` to itself, so `GameControllerHasButton` is out of reach. The
+binding is therefore a setting rather than a probe: Gameplay > Map > "Open the
+full-screen map with", offering Touchpad (the default), L3, R3, Select and None,
+stored as the SDL index in `kf2.map.pad.button`. `Device` is deliberately not
+filtered — it is SDL's joystick *instance id*, not a player number, so any pad
+opens the map.
+
+**It fits the area rather than following the player, until the area will not fit
+legibly.** `Map.Copy` gained the occupied box per half (`Map.Extents`), computed
+in the same pass as the height range and printed by the probe, and the view is
+scaled to that box and centred on it — so nothing moves as you walk except the
+dot, and a route can be read off a stable picture. That was expected to be a
+fraction of the grid and **measured as the whole of it**: areas 0 and 1 both run
+`x 0..79, z 0..79` on both halves. Fitting the extent is therefore fitting the
+80x80 grid, which in a small window is a few pixels a tile, so below a floor of 6
+logical px a tile the fit is abandoned and the map centres on the player's
+**tile** instead — the same quantisation the dot has, so the picture steps a
+square at a time rather than sliding under you.
+
+Measured with all three viewports drawing at `KF2_FPS=144`: **144.0 fps drawn,
+20.0 ticks/s**, and no throw over two area loads and an autostart.
+
+### You are here, approximately
+
+`MapRender.DrawPlayerDot`, and it is the default (`kf2.map.player`, Gameplay >
+Map > "You are here"; the arrow is the other entry).
+
+The arrow told the player two things the game never told them: where in the room
+they stand, to the world unit, and which way they face, to a twelfth of a degree.
+That is a satellite fix in a game whose whole difficulty is a maze you are meant
+to be lost in, and it is what "contrasts hard with the game design" meant. A dot
+centred in the occupied tile says only *you are in this square* — which is what
+someone drawing this maze on graph paper would have known.
+
+So it is drawn on the **tile**, not on the position: the world coordinate goes
+through `Map.TileOf` and back out as `tile + 0.5` across and
+`Map.RowOf(tile) + 0.5` down, which is the same row arithmetic the tile fills use,
+so the dot lands in the square the fill drew rather than half a cell off it. It
+steps a square at a time as you walk. The radius follows the **cell** rather than
+the caller's size, because occupying the square is the point: a dot at the
+minimap's four or five pixels a tile, a filled square's worth on the full map.
+Full opacity, for the reason the arrow had it — the minimap's opacity exists so
+the ground stops hiding the game, and a "you are here" you cannot find is not
+worth drawing.
+
+The arrow is kept rather than deleted: what it records about the game's heading is
+measured (`func_80028080`, and the mirror above it), and a setting keeps that
+live rather than turning it into archaeology.
+
 ### What is measured and what is not
 
 **Measured:** the grid address, stride and half layout; the height byte; the half
-selector; the heading; the per-area occupancy; that both viewports draw for
+selector; the heading; the per-area occupancy and its bounding box (the whole
+80x80 grid, both halves, in areas 0 and 1); that all three viewports draw for
 45 seconds without throwing; that they cost no frame rate.
 
 **Not looked at by eye, and the user's to judge:** whether the floor plan looks
@@ -3003,8 +3085,16 @@ reads or muddies; whether bit `0x80` of `+4` is the wall it behaves like in the
 visibility flood or the "see through" `docs/WIDESCREEN.md` calls it; and whether
 the minimap's size, corner, range, shape and opacity are usable in play — the
 scalloped edge of the circle and the readability of a faded map over a dark area
-in particular. The full map's hover
-readout prints all ten bytes of the tile under the cursor for exactly that reason.
+in particular. On the full-screen map: whether the fitted scale is readable in a
+large area, whether the scrim is dark enough to read tiles over a bright scene,
+and whether a whole-area view is what a player wants rather than one centred on
+themselves. On the dot: whether it reads at minimap size, and whether losing the
+heading costs more than the honesty buys. **And the pad button is unverified
+here** — no controller was connected to any of these runs, so that SDL sends
+button 20 for a DualSense touchpad click is read off SDL's mapping rather than
+measured; if it does not arrive, the same setting offers L3 and R3. The docked
+panel's hover readout prints all ten bytes of the tile under the cursor for
+exactly that reason.
 
 ### Fog of war
 

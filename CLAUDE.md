@@ -147,7 +147,7 @@ KF2_UISCALE=1                            # force the interface scale, and save i
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
 KF2_MAP_MINIMAP=1                        # the corner minimap on (off by default); N toggles it
 KF2_MAP_MARKERS=0                        # creatures, objects, effects and sprites off (on by default)
-KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII and a marker census, and open the map
+KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, its occupied extent and a marker census, and open both maps
 KF2_MAP_FOG=1                            # fog of war: only the tiles you have seen (off by default)
 KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, records held, flushes
 KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 visibility grid, once a second
@@ -609,10 +609,36 @@ unasked is worse than one switch to find. What no counter can answer is the feel
 **The map is a patch for auto reload's reason** — King's Field is a maze, the
 original shipped no automap, and everything else in the port that knows where you
 are is a debug instrument — so it is on by default and its knobs are under
-Gameplay. `M` opens the full map, `N` toggles a corner minimap; the minimap
-defaults *off*, for the sub-pixel reason. **It is a fully opaque square by
+Gameplay. **The pad's touchpad button opens a full-screen map** and `M` does the
+same from the keyboard; `N` toggles a corner minimap and `Shift+M` opens the
+docked panel with the per-tile readout. The minimap defaults *off*, for the
+sub-pixel reason. **There are three viewports over one reading, and
+`patches/MapFullscreen.cs` is the one a player opens**: the whole area over the
+dimmed game, no chrome, `NoInputs`, closing the minimap while it is up — the
+docked `MapPanel` with its toolbar and its ten-byte hover readout is the
+*instrument*, and a windowed debugger over a 320x240 picture is what "the minimap
+contrasts hard with the game design" meant. **The touchpad is reachable because it
+is not a PS1 button**: `ControllerEvent` is dispatched off SDL before `PadState`
+maps anything onto the PSX pad, so the raw `SDL_GameControllerButton` 20 arrives
+where nothing downstream has a slot for it and it cannot leak into the game.
+Nothing here can ask a pad whether it *has* a touchpad — `InputManager` keeps the
+`GameController*` to itself — so the binding is a setting (Touchpad by default,
+L3, R3, Select, None) rather than a probe, and **no controller was connected to
+any measured run**, so that button 20 arrives is read off SDL's mapping rather
+than measured. It fits the area rather than following the player, from a new
+occupied-extent pass in `Map.Copy` — which **measured as the whole 80x80 grid**
+on both halves of areas 0 and 1, so below a floor of 6 px a tile the fit is
+abandoned and the view centres on the player's *tile*. **The player is a dot in
+the square they occupy, not an arrow**, and that is the default
+(`MapRender.DrawPlayerDot`, `kf2.map.player`): an arrow gives a sub-tile position
+and a heading to a twelfth of a degree, which is a satellite fix in a maze whose
+difficulty is being lost in it, while a dot says only "you are in this square" —
+what someone mapping it on graph paper would have known. The arrow is kept as the
+other entry, since what it records about `func_80028080`'s heading is measured and
+a setting keeps it live. Measured: 144.0 fps and 20.0 ticks/s with all three
+viewports drawing. **The minimap is a fully opaque square by
 default and can be a circle and semi-transparent** (Gameplay ▸ Map): opacity
-fades the ground and the tiles but never the player's arrow, and the circle is
+fades the ground and the tiles but never the player's marker, and the circle is
 cut **per tile** — ImGui clip rects are rectangles and a draw list cannot erase,
 so the usual mask ring would have to be painted opaque, which is the one thing
 the opacity setting forbids — clamping each tile to the disc's chords at its far

@@ -5,8 +5,15 @@ using RecompOne.Runtime.Host.Window;
 namespace Kf2;
 
 /// <summary>
-/// The full map: the whole 80x80 grid of the loaded area, centred on the player,
-/// with pan, zoom and a hover readout.
+/// The docked map panel: the whole 80x80 grid of the loaded area, centred on the
+/// player, with pan, zoom and a hover readout.
+///
+/// **This is the instrument; patches/MapFullscreen.cs is the map a player opens.**
+/// A title bar, a toolbar, a zoom slider and ten hex bytes on hover are for
+/// settling what a tile record means, not for reading a route with a controller in
+/// your hands — so this one keeps the chrome and the full-screen view has none.
+/// Shift+M opens it, and it is under Game in the menu bar; M and the pad's
+/// touchpad button open the other one.
 ///
 /// **The readout is the instrument, not decoration.** It names the tile under the
 /// cursor and prints all ten of its bytes, which is the only way short of a
@@ -163,7 +170,7 @@ public sealed class MapPanel : IPanel
                        Map.HalfOffset, Map.Shade, Map.Walls, _grid, MapFog.Predicate);
         MapRender.DrawMarkers(dl, origin, _zoom, Map.HalfOffset, MapFog.Predicate,
                               Math.Clamp(_zoom * 0.35f, 2.5f, 8f));
-        MapRender.DrawPlayer(dl, origin, _zoom, MathF.Max(5f, _zoom * 0.7f));
+        MapRender.DrawPlayer(dl, origin, _zoom, MathF.Max(5f, _zoom * 0.7f), Map.PlayerDot);
         dl.PopClipRect();
 
         if (hovered) Readout(origin);

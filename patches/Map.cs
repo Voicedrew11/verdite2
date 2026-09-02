@@ -3,6 +3,7 @@ using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Host.Window;
 using RecompOne.Runtime.Memory;
 using Silk.NET.Input;
+using HostWindow = RecompOne.Runtime.Host.HostWindow;
 
 namespace Kf2;
 
@@ -111,6 +112,8 @@ public static class Map
     public const string ShadeKey    = "kf2.map.shade";
     public const string WallsKey    = "kf2.map.walls";
     public const string FloorKey    = "kf2.map.floor";
+    public const string PlayerKey   = "kf2.map.player";
+    public const string PadButtonKey = "kf2.map.pad.button";
 
     /// <summary>The feature. False leaves both panels unregistered.</summary>
     public static bool Enabled { get; private set; } = true;
@@ -166,6 +169,42 @@ public static class Map
     /// <summary>-1 follows the player (u16[0x801D9C8E]); 0 lower, 1 upper.</summary>
     public static int Floor = -1;
 
+    /// <summary>
+    /// How the player is drawn: 0 a dot in the tile they occupy, 1 the arrow.
+    ///
+    /// **The dot is the default, and it is the more honest of the two.** An arrow
+    /// that turns with you is a satellite fix in a game that shipped no map, knows
+    /// your sub-tile position and your heading to a twelfth of a degree, and reads
+    /// against the design of a maze whose whole difficulty is not knowing exactly
+    /// where you are. A dot centred in the occupied square says only "you are in
+    /// this square" — see <c>MapRender.DrawPlayerDot</c>. The arrow is kept as the
+    /// other entry rather than deleted, since what it records about the game's
+    /// heading is measured (<c>func_80028080</c>) and worth keeping live.
+    /// </summary>
+    public static int PlayerMark;
+
+    public static bool PlayerDot => PlayerMark == 0;
+
+    // ---- the pad button that opens the full-screen map ---------------------
+    //
+    // SDL2's SDL_GameControllerButton, as ControllerEvent carries it: the
+    // runtime dispatches ev.Cbutton.Button straight through, so these are the
+    // SDL indices and not a mapping of this port's own. The DualSense's touchpad
+    // *click* is button 20 (SDL 2.0.14 and up, through the PS5 driver); a pad
+    // whose mapping has no touchpad simply never sends it, which is why the
+    // stick clicks are offered beside it rather than as a fallback the code
+    // guesses at -- nothing here can ask the pad what it has, since
+    // InputManager keeps the handle to itself.
+    public const int PadNone = -1;
+    public const int PadTouchpad = 20;
+    public const int PadL3 = 7;      // SDL_CONTROLLER_BUTTON_LEFTSTICK
+    public const int PadR3 = 8;      // SDL_CONTROLLER_BUTTON_RIGHTSTICK
+    public const int PadSelect = 4;  // SDL_CONTROLLER_BUTTON_BACK
+
+    /// <summary>The pad button that opens and closes the full-screen map.
+    /// Touchpad by default; <see cref="PadNone"/> is off.</summary>
+    public static int PadButton = PadTouchpad;
+
     static bool? _forcedOn, _forcedMinimap;
     static bool _probe;
 
@@ -187,6 +226,22 @@ public static class Map
     /// <summary>Occupied halves in the last copy — the probe's headline, and the
     /// cheapest test that the addresses are still right.</summary>
     public static int Occupied;
+
+    /// <summary>The tiles a half actually uses, inclusive, or an empty extent.
+    ///
+    /// The grid is always 80x80 and an area fills a fraction of it, so a viewport
+    /// that wants to show the *whole* area — the full-screen map does — needs the
+    /// occupied box rather than the array's bounds. Computed with the copy, four
+    /// times a second, because it is a pass over the same 12,800 halves the
+    /// height range is taken from and the answer moves only when the area does.
+    /// Indexed by half / HalfBytes: 0 lower, 1 upper.</summary>
+    public static readonly Extent[] Extents = new Extent[2];
+
+    public struct Extent
+    {
+        public int X0, Z0, X1, Z1;
+        public readonly bool Any => X1 >= X0 && Z1 >= Z0;
+    }
 
     /// <summary>
     /// False while the grid is the cleared one the game leaves between areas.
@@ -245,6 +300,8 @@ public static class Map
             Shade         = view.GetBool(ShadeKey, true);
             Walls         = view.GetBool(WallsKey, true);
             Floor         = view.GetInt(FloorKey, -1);
+            PlayerMark    = view.GetInt(PlayerKey, 0);
+            PadButton     = view.GetInt(PadButtonKey, PadTouchpad);
             MapMarkers.LoadSettings(view);
 
             // Registered whether or not the feature is on, so the switch under
@@ -253,7 +310,8 @@ public static class Map
             RegisterUi();
 
             Console.WriteLine(Enabled
-                ? $"[KF2] map: on, M opens the map, N toggles the minimap " +
+                ? $"[KF2] map: on, M or {PadName(PadButton)} opens the full-screen map, " +
+                  $"N toggles the minimap, Shift+M the tile readout " +
                   $"(minimap {(Minimap ? "on" : "off")}{(_probe ? ", probing" : "")})"
                 : "[KF2] map: off");
         });
@@ -280,10 +338,54 @@ public static class Map
         Event.AddListener<KeyboardEvent>(e =>
         {
             if (!Enabled || !e.Pressed || PopupManager.AnyOpen) return;
-            if (e.Key == (int)Key.M) ToggleMap();
+
+            // M is the *player's* map -- the full-screen one -- and Shift+M is the
+            // docked instrument with the ten-byte hover readout. They were one key
+            // when there was one viewport; the shift is read at the moment the key
+            // arrives because KeyboardEvent carries no modifier state, and
+            // HostWindow.IsKeyDown is the public forwarder for asking.
+            if (e.Key == (int)Key.M)
+            {
+                if (HostWindow.IsKeyDown(Key.ShiftLeft) || HostWindow.IsKeyDown(Key.ShiftRight))
+                    ToggleMap();
+                else
+                    ToggleFullscreen();
+            }
             else if (e.Key == (int)Key.N) SetMinimap(!Minimap);
         });
+
+        // The pad's own way in. ControllerEvent is the raw host gamepad, dispatched
+        // from InputManager.PollGamepadEvents *before* anything maps it to the PSX
+        // pad -- which is what makes the touchpad reachable at all: it is not a
+        // button the PS1 had, so no binding table in the runtime or the game has a
+        // slot for it and nothing downstream will ever see it. The event bus only
+        // dispatches ControllerEvent while something listens, so this listener is
+        // also what turns that dispatch on.
+        Event.AddListener<ControllerEvent>(e =>
+        {
+            // Any pad opens it: ControllerEvent.Device is SDL's joystick *instance
+            // id*, not a 0-based player number, so there is nothing here to compare
+            // it against. An axis event carries Button = -1 and Pressed = false, so
+            // the Pressed test already excludes it -- and PadNone is that same -1,
+            // which is why "off" is checked before the button rather than after.
+            if (!Enabled || !e.Pressed || PadButton == PadNone) return;
+            if (e.Button != PadButton || PopupManager.AnyOpen) return;
+            ToggleFullscreen();
+        });
     }
+
+    /// <summary>What a pad button is called in the console line and the settings
+    /// combo. Only the five the map offers; anything else prints its SDL index,
+    /// which is what a `settings.json` edited by hand would hold.</summary>
+    public static string PadName(int button) => button switch
+    {
+        PadNone     => "none",
+        PadTouchpad => "Touchpad",
+        PadL3       => "L3",
+        PadR3       => "R3",
+        PadSelect   => "Select",
+        _           => $"pad button {button}",
+    };
 
     static bool _registered;
 
@@ -299,14 +401,17 @@ public static class Map
         Localization.Merge("""
         {
           "strings": {
-            "menu.game":     { "en": "Game", "pt-BR": "Jogo",  "es-419": "Juego" },
-            "menu.game.map": { "en": "Map",  "pt-BR": "Mapa",  "es-419": "Mapa"  }
+            "menu.game":      { "en": "Game", "pt-BR": "Jogo",  "es-419": "Juego" },
+            "menu.game.map":  { "en": "Map",  "pt-BR": "Mapa",  "es-419": "Mapa"  },
+            "menu.game.mapfs": { "en": "Full-screen map", "pt-BR": "Mapa em tela cheia",
+                                 "es-419": "Mapa en pantalla completa" }
           }
         }
         """);
 
         PanelManager.Register(MapPanel.Instance);
         PanelManager.Register(MapOverlay.Instance);
+        PanelManager.Register(MapFullscreen.Instance);
 
         // ConfigManager.ApplyViewToPanels runs inside HostWindow's Load, which is
         // *before* RuntimeReadyEvent -- so a panel registered here has already
@@ -317,13 +422,20 @@ public static class Map
         // Panels do not auto-populate the menu bar — MainMenuBar declares every
         // built-in one by hand — so without this the map is hotkey-only.
         MenuRegistry.Menu("menu.game", MenuRegistry.OrderGame)
+                    .Panel<MapFullscreen>("menu.game.mapfs")
                     .Panel<MapPanel>("menu.game.map")
                     .End();
 
-        // The probe opens the map as well as dumping it. A headless run cannot
-        // press M, so without this the panel's own draw path is never exercised
-        // by anything that is not a person at the keyboard.
-        if (_probe) MapPanel.Instance.IsOpen = true;
+        // The probe opens both maps as well as dumping the grid. A headless run
+        // cannot press M, so without this their draw paths are never exercised by
+        // anything that is not a person at the keyboard -- and the full-screen
+        // one is where the new arithmetic is, since it fits a scale to the area's
+        // occupied extent rather than being handed a zoom.
+        if (_probe)
+        {
+            MapPanel.Instance.IsOpen = true;
+            MapFullscreen.Instance.IsOpen = true;
+        }
     }
 
     /// <summary>Turn the whole feature on or off at run time. Closes the full map
@@ -331,13 +443,33 @@ public static class Map
     public static void SetEnabled(bool on)
     {
         Enabled = on;
-        if (!on) MapPanel.Instance.IsOpen = false;
+        if (!on)
+        {
+            MapPanel.Instance.IsOpen = false;
+            MapFullscreen.Instance.IsOpen = false;
+        }
     }
 
     public static void ToggleMap()
     {
         var p = PanelManager.Get<MapPanel>();
         if (p != null) p.IsOpen = !p.IsOpen;
+    }
+
+    /// <summary>The full-screen map: what M and the pad button open.</summary>
+    public static void ToggleFullscreen()
+        => MapFullscreen.Instance.IsOpen = !MapFullscreen.Instance.IsOpen;
+
+    public static void SetPlayerMark(int mark)
+    {
+        PlayerMark = mark;
+        Settings.PatchSettings.Set(PlayerKey, mark);
+    }
+
+    public static void SetPadButton(int button)
+    {
+        PadButton = button;
+        Settings.PatchSettings.Set(PadButtonKey, button);
     }
 
     public static void SetMinimap(bool on)
@@ -436,14 +568,27 @@ public static class Map
         }
 
         int lo = 255, hi = 0, n = 0;
-        for (int i = 0; i < Tiles.Length; i += Stride)
-            for (int half = 0; half < Stride; half += HalfBytes)
+        for (int e = 0; e < Extents.Length; e++)
+            Extents[e] = new Extent { X0 = Span, Z0 = Span, X1 = -1, Z1 = -1 };
+
+        for (int z = 0; z < Span; z++)
+            for (int x = 0; x < Span; x++)
             {
-                if (Tiles[i + half + Model] >= NotDrawn) continue;
-                n++;
-                int h = Tiles[i + half + HeightByte];
-                if (h < lo) lo = h;
-                if (h > hi) hi = h;
+                int i = z * RowBytes + x * Stride;
+                for (int half = 0; half < Stride; half += HalfBytes)
+                {
+                    if (Tiles[i + half + Model] >= NotDrawn) continue;
+                    n++;
+                    int h = Tiles[i + half + HeightByte];
+                    if (h < lo) lo = h;
+                    if (h > hi) hi = h;
+
+                    ref var ext = ref Extents[half / HalfBytes];
+                    if (x < ext.X0) ext.X0 = x;
+                    if (x > ext.X1) ext.X1 = x;
+                    if (z < ext.Z0) ext.Z0 = z;
+                    if (z > ext.Z1) ext.Z1 = z;
+                }
             }
 
         Occupied = n;
@@ -490,6 +635,19 @@ public static class Map
 
         Console.WriteLine($"[KF2] map: area {Area}, {Occupied} occupied halves, " +
                           $"height {MinHeight}..{MaxHeight}");
+
+        // The occupied box per half, which is what the full-screen map fits its
+        // scale to. Printed because that scale is otherwise judgeable only by
+        // eye: a box covering the whole 0..79 grid would mean the extent pass is
+        // seeing the cleared grid rather than the area.
+        for (int half = 0; half < Stride; half += HalfBytes)
+        {
+            var e = Extents[half / HalfBytes];
+            Console.WriteLine($"[KF2] map: {(half == 0 ? "lower" : "upper")} extent " +
+                              (e.Any ? $"x {e.X0}..{e.X1}, z {e.Z0}..{e.Z1} " +
+                                       $"({e.X1 - e.X0 + 1}x{e.Z1 - e.Z0 + 1} tiles)"
+                                     : "empty"));
+        }
 
         // The check worth printing every time: the player has to be standing on a
         // half the renderer draws, and the half's floor Y has to be near their own.
