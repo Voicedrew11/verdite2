@@ -550,6 +550,23 @@ Kf2.AutoReload.Configure(Environment.GetEnvironmentVariable("KF2_AUTORELOAD"),
                          Environment.GetEnvironmentVariable("KF2_AUTORELOAD_SLOT"));
 Kf2.AutoReload.Install();
 
+// The cut eleventh area. FDAT.T entries 30, 31 and 32 are a complete area group
+// of the usual shape -- a 3,571-tile map, the same four-block object chain every
+// live area has -- and RTIM.T entry 10 is 202 KB of its textures, with 8 and 9
+// zero-length beside it. All of that loads through the game's own routine. Three
+// things do not, and this patch is those three: the code module is linked for
+// 0x80193B38 and every module this loader can place goes to 0x8019F07C, so the
+// area runs on the loader's own 32-slot `jr ra` stub table and has no scripted
+// triggers; the per-area saved-state array holds ten slots and two unbounded
+// callers index it by area; and RTMD.T has nine entries against RTIM.T's
+// seventy-five, so the model set has to be borrowed.
+//
+//     KF2_AREA10=0        leave it unreachable, as the disc does
+//     KF2_AREA10_RTMD=8   pin an RTMD.T entry instead of keeping the loaded one
+Kf2.Area10.Configure(Environment.GetEnvironmentVariable("KF2_AREA10"),
+                     Environment.GetEnvironmentVariable("KF2_AREA10_RTMD"));
+Kf2.Area10.Install();
+
 // Auto start, and the agent beacon -- the pair that lets an automated tester get
 // into the game and know it got there. Scripted input cannot drive the boot menus
 // (KF2_AUTOPAD's clock only starts once an area has loaded), and screenshots are

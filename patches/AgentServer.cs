@@ -22,7 +22,8 @@ namespace Kf2;
 ///
 ///     state                 the beacon's snapshot as JSON
 ///     load &lt;slot 1..3&gt;      load a save through AutoReload.LoadSlot
-///     warp &lt;area 0..7&gt;      re-enter an area through AreaWarp.TryRun
+///     warp &lt;area 0..7,10&gt;   re-enter an area through AreaWarp.TryRun
+///                           (10 is the cut area; see patches/Area10.cs)
 ///     press &lt;button&gt; [ms]   hold a pad button for ms (default 150)
 ///     kill                  drop HP to zero, the way a hit would
 ///     nearby [radius]       live world-table records within radius of the
@@ -97,7 +98,7 @@ public static class AgentServer
     [
         "state - the player/area snapshot as JSON",
         "load <slot 1..3> - load a save through the game's own loader",
-        "warp <area 0..7> - re-enter an area through the game's own entry routine",
+        "warp <area 0..7, or 10 for the cut area> - re-enter an area through the game's own entry routine",
         "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
         "kill - drop HP to zero, the way a hit would",
         "nearby [radius=8192] - live records of the world tables within radius units",
@@ -536,7 +537,7 @@ public static class AgentServer
     static string DoWarp(string areaArg)
     {
         if (!int.TryParse(areaArg, out int area))
-            return Err("usage: warp <area 0..7>");
+            return Err("usage: warp <area 0..7, or 10 for the cut area>");
 
         var c = RecompOne.Runtime.Runtime.Cpu;
         var m = RecompOne.Runtime.Runtime.Mem;

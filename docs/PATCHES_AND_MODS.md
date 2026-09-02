@@ -2947,6 +2947,101 @@ and the two must never fight over it. The press itself rides `PadReadEvent` with
 AutoStart's active-low byte-swapped math, which is what makes it work in the
 boot menus and everywhere else the game reads the pad.
 
+## The eleventh area
+
+`patches/Area10.cs`. `KF2_AREA10=0` puts it back; `KF2_AREA10_RTMD=<n>` picks a
+model set.
+
+**The area's content is on the disc and nearly all of it loads unaided.**
+`FDAT.T` entries 30, 31 and 32 are a complete area group of the usual shape and
+`RTIM.T` entry 10 is 202 KB of its textures; entry 30's tile map holds 3,571
+drawn tiles with rooms, corridors and a diagonal passage. What that is, and the
+three archives that disagree about how many areas the game ever had, is in
+"Area 10 is cut content that still loads" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md). `scripts/area_content.py` prints the
+coverage table and `--map 10` draws the level.
+
+This patch is the three things that do **not** load, and each is a different
+kind of hole.
+
+### The module cannot go where it is linked for, so the area runs with no script
+
+Every code module `func_8001689C` can place goes to `0x8019F07C` — a literal
+`lui a2,0x801A / addiu a2,a2,-3972` right before the call — and `fdat32` is
+linked for `0x80193B38`. Loading it where it *is* linked for is not the way out
+either: `0x80193B38` plus its 6 KB reaches `0x80195338`, and the live
+`GAME.EXE` keeps the billboard table at `0x80195174` and two more globals inside
+that window.
+
+**The loader supplies the fallback itself.** At `0x80016978` it writes
+`0x80064B64` — a static table of 32 identical pointers to a bare `jr ra` — into
+the module pointer at `0x8017E068` *before* reading the module, and overwrites
+it with `0x8019F07C` afterwards. The patch puts the stub back, from a post hook
+on the loader step. Every one of the module's thirty-two dispatch slots then
+does nothing: the per-frame stage 6 tick, the area's damage hook at `+0x48`, the
+load-time init at slot 5. **Doors, levers and scripted triggers are what that
+costs.**
+
+The restore runs on **every** loader step rather than once, because the loader
+writes the live base **twice** per entry — measured, from the announcement
+firing twice before it was latched. A one-shot restore would have left the real
+module pointer live on the second write.
+
+The module's bytes are still read into `0x8019F07C`; the read drives the state
+machine and skipping it stalls the loader. They are never executed. The read
+does arm the `fdat32` overlay, which can never *activate* — that wants a write
+inside the first 2 KB of `0x80193B38` — so the pending entry would outlive the
+load and fire on the next unrelated write into `GAME.EXE`'s BSS there.
+`Dispatcher.ClearPending` closes it.
+
+### The per-area saved state has ten slots and two unbounded callers
+
+`func_8004913C` fills exactly **ten** words — its loop counter is a literal 9 —
+from the `u16` table at `0x801B6988`. `func_80049710(area)` restores from that
+array and `func_800492B8(area)` harvests into it, both with `area << 2` off
+their own frame, and neither bounds it. For area 10 the restore reads its own
+saved `s0` and walks it as a pointer; the harvest reads the head of its own 3 KB
+scratch buffer and passes it to `free`.
+
+One pre-hook covers both: skip any index the table cannot hold. **That is the
+bound the routines never had** rather than a workaround — `0xFF` misses them
+today only because each caller happens to test for it first. What it produces
+for area 10 is what every area gets on its first visit, since `func_80049710`
+already returns immediately when the slot is zero.
+
+### `RTMD.T` has no entry for it, so the model set is borrowed
+
+Slot 1 of the request is an `RTMD.T` entry — the area's model data, staged at
+`0x8012E9AC` and published through `func_8002E628(0, …)` into the model-pointer
+table at `0x8018E18C`. `RTMD.T` holds **nine** entries against `RTIM.T`'s
+seventy-five, and `func_80017F1C` bounds nothing, so asking for entry 10 reads
+two words of heap past the header buffer and hands the CD a wild sector.
+
+Slot 1 therefore goes in as `0xFF`, which the loader reads as *keep the current
+one* and skips the read entirely. Area 10 is drawn with the model set of
+whichever area you warped from. `KF2_AREA10_RTMD=8` pins one instead, and **8 is
+the candidate**: `RTMD.T`'s entries 0–7 are the eight live areas, entry 8 is
+26 KB that nothing claims, and unlike `RTIM.T` that archive has no zero-length
+holes where areas 8 and 9 would be — so it was built when the area count was
+nine, not eleven. Both load, walk and warp back out without faulting.
+**Which of the two looks right is a picture, and nobody has looked at it.**
+
+### What is measured
+
+At `KF2_FPS=165`, warping from area 1: the area loads, `KF2_DRAWCENSUS=1` reads
+a steady **632.1 map-tile packets a frame** (against 53.5–1309 in area 1), 10.5
+geometry and 25.4 object submits; `nearby` reports **6 objects and 17 entities**
+live in the tables; pressing Up walks the player 10,000 units and drops HP by 3,
+so something in there is hostile or hazardous. Warping back out works, with
+`KF2_AREA10_RTMD` unset and set to 8. `KF2_AREA10=0` refuses the warp with a
+message. Nothing faulted, and the hit guard stayed quiet.
+
+**Nobody has looked at it.** Every one of those is a counter. Whether the area
+is coherent to the eye — whether the borrowed model set puts the wrong props in
+it, whether the geometry is finished, what the seventeen creatures are — is the
+open question, and it is the only kind of question the port cannot answer for
+itself.
+
 ## The MCP layer
 
 `mcp/` (`KingsField2Mcp.csproj`) is a standalone stdio MCP server that wraps

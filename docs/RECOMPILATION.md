@@ -112,11 +112,13 @@ Two independent things pin the load address:
 | 23 | `0x0C8800` | 8192 | `0x8019F07C` | 810 |
 | 32 | `0x0E2000` | 6144 | `0x80193B38` | 861 |
 
-Entry 32 is the odd one out and is **dead content** — a cut area the loader cannot
-reach, since every code module this game loads goes to `0x8019F07C` and entry 32
-is linked for `0x80193B38`. See "fdat32 is a cut area" below before spending any
-time on it. (The area index the loader takes, and which areas exist at all, are
-in [GAME_INTERNALS.md](GAME_INTERNALS.md).)
+Entry 32 is the odd one out: it is the **code module of a cut area whose data is
+still live**, and it is the only part of that area the loader cannot use, since
+every code module this game loads goes to `0x8019F07C` and entry 32 is linked for
+`0x80193B38`. Entries 30 and 31 — its map and its objects — load through the
+game's own routine and the area is walkable without it; see "fdat32 is a cut
+area" below and "Area 10 is cut content that still loads" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md).
 
 They are declared as overlays like any other. `base` is the address of the byte
 at `offset + skip`, and `ResolveOverlay` derives the LBA as the archive's LBA
@@ -311,20 +313,83 @@ it was linked against moved on. The two empty groups before it — entries 24–
 zero length — are two more areas cut without leaving anything behind. `fdat32`
 only survives because a cut area's files were not stripped.
 
-Consequences for the port, all of them "nothing to do":
-
-- **The fifteen mid-function calls can never fire.** Nothing reads LBA 861 and
-  nothing writes `0x80193B38`, so the overlay is never armed and never activated.
-- Entry 31 ends at LBA 860, one sector short of 861, so no neighbouring read
-  overruns into it.
-- The overlay stays declared. It is correctly based, it costs 13 dead functions,
-  and it is the evidence for this entry — removing it would only make the next
-  person redo the work.
-
 Worth remembering as a general point: **a module's internal `jal` targets confirm
 its base, and its external ones confirm its host.** `fdat32` passes the first and
 fails the second, and only the second test distinguishes live content from
 abandoned content.
+
+### Its data is not dead, and the port loads it
+
+**"Cut" was read as "dead" for longer than the evidence supported.** Only the
+*module* is unusable. Entries 30 and 31 are a complete area group of the usual
+shape, `RTIM.T` entry 10 is 202 KB of its textures, and all of it loads through
+`func_80024154` with the module left on the loader's own 32-slot `jr ra` stub
+table. `patches/Area10.cs` is the whole of what that costs and `KF2_AREA10=0`
+puts it back. See "Area 10 is cut content that still loads" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md).
+
+Two of the consequences listed here before still hold and one does not:
+
+- Entry 31 ends at LBA 860, one sector short of 861, so no neighbouring read
+  overruns into it.
+- The overlay stays declared. It is correctly based, it costs 13 dead functions,
+  and it is the evidence for this entry.
+- **The overlay is armed now**, because the port reads LBA 861 on the way into
+  area 10 — the module's bytes have to be read or the loader's state machine
+  stalls. It still cannot *activate*: `Dispatcher.NotifyWrite` wants a write
+  inside the first 2 KB of `0x80193B38` and the bytes land at `0x8019F07C`. That
+  leaves a pending entry that would fire on the next unrelated write into
+  `GAME.EXE`'s BSS at that address, so `Area10` calls `Dispatcher.ClearPending`.
+
+### What a relocation would have to fix, and the part of it that is now known
+
+Nothing relocates `fdat32` today and the area runs without a script. If it is
+ever attempted, the shape of the problem is: **the text moved and the BSS moved,
+each by a different amount per translation unit**, which is the same granularity
+"The overlay delta" below finds between the three executables.
+
+A single delta was tried and ruled out — the best offset over ±32 KB puts 4 of
+15 external calls on a function start, which is what chance gives. What was not
+tried is matching the **gaps** rather than the addresses: for every pair of
+`fdat32` targets, look for a pair of GAME.EXE functions the live modules call at
+exactly the same distance apart. Two clusters come out of that, and they are
+mutually consistent and order-preserving:
+
+| `fdat32` calls | GAME.EXE | delta | called by live modules |
+|---|---|---|---|
+| `0x8002AE84` | `0x8002C330` | `+0x14AC` | 1× |
+| `0x80046C78` | `0x80048124` | `+0x14AC` | 9× |
+| `0x80046CCC` | `0x80048178` | `+0x14AC` | 6× |
+| `0x80046D5C` | `0x80048208` | `+0x14AC` | 13× |
+| `0x8003B0F4` | `0x8003B72C` | `+0x638` | 3× |
+| `0x8003B3B4` | `0x8003B9EC` | `+0x638` | 2× |
+| `0x8003C440` | `0x8003CA78` | `+0x638` | 1× |
+
+Seven of fifteen, in two runs whose internal spacing matches exactly, mapping to
+three of the four most-called helpers in the area-module vocabulary. The
+remaining eight fall in gaps the vocabulary cannot reach — `fdat32` may call
+GAME.EXE routines no live module does, and there is nothing to match those
+against.
+
+**The data side is in better shape than the code side**, and it was previously
+recorded as hopeless on a test that only asked whether the addresses matched:
+none of `fdat32`'s 36 global addresses is one a live module builds. Matching the
+*offset pattern* of each cluster instead gives three clean per-region deltas:
+
+| `fdat32` cluster | live equivalent | delta | agreement |
+|---|---|---|---|
+| `0x8016FEC8`… | the object table `0x80177714` | `+0x784C` | 5 of 5 offsets |
+| `0x80190EEA`… | the player block `0x80199426` | `+0x853C` | 9 of 9 offsets |
+| `0x801A3B40`… | the flag block `0x801B3084` | `+0xF544` | 9 of 11 offsets |
+
+The object-table match is the convincing one: `fdat32` builds five addresses at
+offsets 0, 6, 8, 0x38 and 0x40 from `0x8016FEC8`, and the live modules build
+`0x80177714`, `+6`, `+8`, `+0x38` and `+0x40` — the record base, its type and
+model `u16`s, and two fields deeper into the same 0x44-byte record.
+`0x8016A498 + 0x784C` is `0x80171CE4`, which four live modules build too.
+
+`scripts/area_content.py` is the disc-side half of this; the address matching is
+not scripted.
 
 
 ## The SDK naming problem

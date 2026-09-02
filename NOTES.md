@@ -114,6 +114,7 @@ mods/<id>/               runtime-loaded mods (mod.json + C#), toggled in-game
 scripts/inspect_disc.py  SYSTEM.CNF + ISO9660 listing from a .cue/.bin
 scripts/extract_file.py  extract a disc file and dump its PS-X EXE header
 scripts/match_overlays.py  carry a function identified in one overlay to the other two
+scripts/area_content.py  which archive entries each area has, and its tile map
 disc/                    your own dump (gitignored)
 generated/               recompiler output (gitignored, derived from the disc)
 tools/RecompOne/         upstream tool checkout (gitignored)
@@ -149,6 +150,8 @@ Making the recompiler produce correct code: config, overlays, function maps, SDK
 - Fixing bad output
 - GAME.EXE loads code
 - fdat32 is a cut area, and nothing can load it
+  - Its data is not dead, and the port loads it
+  - What a relocation would have to fix, and the part of it that is now known
 - The SDK naming problem
 - The overlay delta: identify once, get all three
 - libgpu: found and mapped
@@ -209,6 +212,8 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - The loop's own rate gate is `func_80017880`, and the number is a literal 2
 - Stage 2 is the object-table state machine
 - The map is an 80x80 tile grid, and a tile's height is one byte
+- Slot 1 is the model set and it is the one slot the eleventh area has no entry for
+- Area 10 is cut content that still loads
 - The model pipeline has no skeleton
 - Stage 8 is the render camera, and it is the only copy
 - What in the renderer draws what
@@ -229,6 +234,7 @@ How the port's own code attaches, where its settings go, plus frame pacing and a
 - Auto reload
 - Auto start and the agent beacon
 - The command channel
+- The eleventh area
 - `ending` exists because the last ten minutes of the game are otherwise untestable
 - The MCP layer
 

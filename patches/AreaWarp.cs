@@ -22,22 +22,26 @@ namespace Kf2;
 public static class AreaWarp
 {
     /// <summary>
-    /// The valid area indices.
+    /// The eight areas the shipped game uses.
     ///
     /// FDAT.T runs in groups of three -- data, data, code module -- so area N is
     /// entries 3N, 3N+1, 3N+2 and the code module is entry 3N+2. The nine
     /// modules on the disc are entries 2, 5, 8, 11, 14, 17, 20, 23 and 32, which
     /// makes the areas 0..7 plus 10. Entries 24-29 are zero length, so areas 8
     /// and 9 do not exist.
-    ///
-    /// Area 10 is entry 32, and it is a cut area: every module this game loads is
-    /// linked for 0x8019F07C and entry 32 is linked for 0x80193B38, so the loader
-    /// cannot reach it and warping there hangs. See "fdat32 is a cut area" in
-    /// NOTES.md. It is left out of this list deliberately.
     /// </summary>
     public static readonly int[] Areas = [0, 1, 2, 3, 4, 5, 6, 7];
 
+    /// <summary>The cut eleventh area: FDAT.T entries 30, 31 and 32. Its map,
+    /// objects and textures are all on the disc and load through the game's own
+    /// routine; its code module is linked for a different build and is never
+    /// run. <see cref="Kf2.Area10"/> is the whole of what that costs.</summary>
     public const int CutArea = 10;
+
+    /// <summary>Every area this port can enter, which is <see cref="Areas"/> plus
+    /// <see cref="CutArea"/> while <see cref="Kf2.Area10"/> is on.</summary>
+    public static int[] Reachable =>
+        Area10.Enabled ? [.. Areas, CutArea] : Areas;
 
     // ---- GAME.EXE player state ----
     //
@@ -86,11 +90,10 @@ public static class AreaWarp
         if (m.ReadU16(MaxHp) == 0)
             return "no area running";
 
-        if (area == CutArea)
-            return $"area {CutArea} is the cut area (fdat32) and cannot load";
-
-        if (Array.IndexOf(Areas, area) < 0)
-            return $"area {area} does not exist";
+        if (Array.IndexOf(Reachable, area) < 0)
+            return area == CutArea
+                ? $"area {CutArea} is the cut area; KF2_AREA10=0 is refusing it"
+                : $"area {area} does not exist";
 
         var saved = c.Snapshot();
 
@@ -115,8 +118,12 @@ public static class AreaWarp
         c.SP -= 0x20u;
         m.WriteU32(c.SP + 0x14u, 0xFFu);
         m.WriteU32(c.SP + 0x10u, (uint)area);
+        // Slot 1 is the RTMD.T entry -- the area's model data -- and RTMD.T holds
+        // nine entries against RTIM.T's seventy-five, so area 10 has none and the
+        // lookup is unbounded. Area10 answers with 0xFF ("keep the loaded one")
+        // for it and the area index for everything else.
         c.A0 = (uint)area;
-        c.A1 = (uint)area;
+        c.A1 = Area10.RtmdSlotFor(area);
         c.A2 = (uint)area;
         c.A3 = (uint)area;
         KingsField2.func_80024154(c, m);

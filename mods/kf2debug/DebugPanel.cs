@@ -350,7 +350,7 @@ internal sealed class DebugPanel : IPanel
 
         ImGui.SetNextItemWidth(120);
         ImGui.InputInt("##area", ref _warpArea);
-        _warpArea = Math.Clamp(_warpArea, 0, 7);
+        _warpArea = Math.Clamp(_warpArea, 0, Kf2.AreaWarp.Reachable[^1]);
         ImGui.SameLine();
         if (ImGui.Button("Warp to area")) Warp.ToArea(_warpArea);
         if (ImGui.IsItemHovered())
@@ -360,9 +360,12 @@ internal sealed class DebugPanel : IPanel
                            + "real transition and it takes a moment. You land on the new area's "
                            + "geometry, not at the coordinates you left.");
 
-        ImGui.TextWrapped("Areas 0-7 are the eight real ones. Areas 8 and 9 have no data, and "
-                        + "area 10 (fdat32) is cut content the loader cannot reach -- warping "
-                        + "there would hang, so it is not offered.");
+        ImGui.TextWrapped("Areas 0-7 are the eight the game ships. Areas 8 and 9 have no data "
+                        + "at all. Area 10 is cut content whose map, objects and textures are "
+                        + "still on the disc and do load; only its code module is linked for a "
+                        + "different build of the game, so it has no doors, levers or scripted "
+                        + "triggers, and its props are drawn with the model set of the area you "
+                        + "came from.");
 
         if (!string.IsNullOrEmpty(Warp.Status))
         {

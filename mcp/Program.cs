@@ -152,9 +152,10 @@ internal static class Program
                 "else times out after 5 s.",
                 [IntProp("slot", "Save slot to load.", 1, 3)], ["slot"]),
             Tool("kf2_warp",
-                "Re-enters area index 0..7 (the beacon's area numbering) via the game's own entry " +
-                "routine; also needs a live area (in game); other area indices do not exist.",
-                [IntProp("area", "Area index to re-enter.", 0, 7)], ["area"]),
+                "Re-enters an area via the game's own entry routine; needs a live area (in game). " +
+                "0..7 are the eight the game ships; 10 is cut content whose map, objects and " +
+                "textures still load but which has no area script. 8 and 9 do not exist.",
+                [IntProp("area", "Area index to re-enter.", 0, 10)], ["area"]),
             Tool("kf2_press_button",
                 "Presses a pad button for holdMs (default 150); works wherever the pad is read " +
                 "including boot menus; one synthetic press at a time — the next replaces it.",

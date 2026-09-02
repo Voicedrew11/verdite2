@@ -1171,10 +1171,84 @@ byte `*(u8*)0x8017E060` on the path where the caller passed `0xFF` to keep it.
 `func_800474D0`, the game's own door warp, calls `0x800162DC` twice with exactly
 that split.
 
-**Valid areas are 0–7.** `FDAT.T` is groups of three with the code module at
-`3n+2`, and the modules are entries 2, 5, 8, 11, 14, 17, 20, 23 — areas 0–7.
-Entries 24–29 are zero length, so areas 8 and 9 do not exist, and area 10 is
-entry 32, the cut one.
+**The game ships areas 0–7, and there is an eleventh.** `FDAT.T` is groups of
+three with the code module at `3n+2`, and the modules are entries 2, 5, 8, 11,
+14, 17, 20, 23 — areas 0–7. Entries 24–29 are zero length, so areas 8 and 9
+do not exist. Entry 32 is area 10, and it is not the only thing left of it.
+
+### Slot 1 is the model set and it is the one slot the eleventh area has no entry for
+
+The five slots are five archives, all of them the same
+`u16 count / u16 start-sector table / entries` shape, and the loader consumes
+them in `func_8001689C`'s state machine:
+
+| slot | archive | where | entry |
+|---|---|---|---|
+| 0 | `FDAT.T` | `0x801B6FA8`, `0x8019F07C` | `3N`, `3N+1`, `3N+2` |
+| 1 | `RTMD.T` | `0x8012E9AC`, published by `func_8002E628(0, …)` into the model-pointer table at `0x8018E18C` | `N` |
+| 2 | `RTIM.T` | `0x8012E9AC` via `func_80016F5C(2, …)` — textures | `N` |
+| 3 | `VAB.T` | `func_8001474C(4, N+1, 1)` | `N+1` |
+| 4 | `VAB.T` | `func_80017FA4(4, (N % 100) + 0x140, …)` | `N+320` |
+
+The archive ids are the second argument of the seven `func_800185A0` calls at
+`0x80015E44`, against the name table at `0x80011000`: **0 `MO.T`, 1 `RTMD.T`,
+2 `RTIM.T`, 3 `TALK.T`, 4 `VAB.T`, 5 `FDAT.T`, 6 `ITEM.T`**. They are not in
+registration order and reading them off the call sequence gets two of them
+backwards.
+
+**`func_80017F1C` bounds nothing.** It reads `tab[i]` and `tab[i+1]` out of a
+header buffer `func_800185A0` allocated for exactly `count+1` entries, so an
+index past the end reads two words of heap and hands the CD a wild sector and
+length. `scripts/area_content.py` prints which indices each archive actually
+holds.
+
+### Area 10 is cut content that still loads
+
+`scripts/area_content.py disc/KingsField2.cue`:
+
+```
+area      map  objects  module    RTMD    RTIM   VAB+1 VAB+320  tiles  blocks
+   0      66K      28K      4K    212K    170K    138K      4K   5732  [64000, 3376]
+   7      64K      28K      8K     42K     52K      8K      2K   2490  [64000, 1414]
+   8      0        0       0       26K     0      160K     0        0  []
+   9      0        0       0       -       0        8K     10K      0  []
+  10      66K      28K      6K     -      202K    160K      2K   3571  [64000, 2194]
+```
+
+**Everything but the model set is there, and it is real content.** Area 10's map
+entry decodes as `[64000, 2194]` — the same two-block chain every live area
+has — and its object entry as `[12992, 3200, 8400, 2048]`, which is
+**byte-for-byte the block chain of all eight live areas**. Its 80×80 tile map
+holds **3,571 drawn tiles** against area 0's 5,732 and area 7's 2,490, and
+`--map 10` draws rooms, corridors and a diagonal passage. `RTIM.T` entry 10 is
+202 KB of textures with entries 8 and 9 zero-length beside it, so that archive
+was built while this area existed *and* still counted as number ten.
+
+Three things do not line up, and each is a different kind of evidence about when
+it was cut:
+
+* **Its code module is linked for another build.** Every module `func_8001689C`
+  can place goes to `0x8019F07C`, built from a literal `lui a2,0x801A /
+  addiu a2,a2,-3972`, and `fdat32` is linked for `0x80193B38`. See "fdat32 is a
+  cut area" in [RECOMPILATION.md](RECOMPILATION.md).
+* **The saved-state table has ten slots.** `func_8004913C`'s loop counter is a
+  literal 9, so it fills exactly ten words from the `u16` table at
+  `0x801B6988`, one per area, `0xFFFF` for "no saved state". Both callers index
+  it by area and neither bounds it: `func_80049710(area)` restores and
+  `func_800492B8(area)` harvests, and for area 10 both land on `sp+0x38` — the
+  restore's own saved `s0`, and the harvest's own 3 KB scratch buffer, which it
+  then passes to `free`. So the **save format has room for areas 0..9** and this
+  one is outside it.
+* **`RTMD.T` holds nine entries.** Areas 0–7 claim 0–7; entry 8 is 26 KB and
+  nothing claims it, in an archive with no zero-length holes where areas 8 and 9
+  would be. `RTIM.T` numbers eleven areas and leaves two empty; `RTMD.T` numbers
+  nine and leaves none. **The two archives disagree about how many areas there
+  ever were**, which is the same disagreement `fdat32`'s link address records.
+
+`patches/Area10.cs` is what those three cost, and the area loads, draws and
+walks: measured 632.1 map-tile packets a frame, 6 objects and 17 entities live,
+and the player takes damage walking around in it. See "The eleventh area" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 ### The loading screen is a blocking wait, and its figure is three words
 

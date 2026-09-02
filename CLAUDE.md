@@ -138,6 +138,8 @@ KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities 
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
+KF2_AREA10=0                             # leave the cut eleventh area unreachable (it loads by default)
+KF2_AREA10_RTMD=8                        # which RTMD.T entry gives it its models (default: keep the loaded one)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_BOOTEXE=end                          # boot straight into OPEN.EXE, GAME.EXE or END.EXE
 KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the original does (a button exits by default)
@@ -690,7 +692,7 @@ program tells "stuck at the title" from "in an area" without a screenshot. See
 
 **`KF2_SHELL=1` is the acting half**: while the session runs, a line protocol on
 TCP 127.0.0.1:27900 (`state`, `nearby`, `load <slot>`, `warp <area>`,
-`press <button> [ms]`, `kill`, `ending [boss|kill]`; one request per line, one
+`press <button> [ms]` (`warp 10` included), `kill`, `ending [boss|kill]`; one request per line, one
 single-line JSON response back) steers the game
 the beacon is only watching. **`ending` is there because the last ten minutes of
 the game cannot be loaded into**: plain `ending` writes `GAME.EXE`'s own quit
@@ -709,6 +711,30 @@ walk `func_8003A448` so it answers "no reaction" instead of faulting. See "The
 crash on the final boss's last hit" in `docs/TODO.md`. Reaching it needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the
 player on the way in. See "The command channel" in
 `docs/PATCHES_AND_MODS.md`.
+
+**Area 10 exists and the port loads it** (`patches/Area10.cs`). `FDAT.T` runs in
+groups of three, so entries 30/31/32 are an eleventh area, and only the *module*
+of it is unusable: entry 30 is a 3,571-tile map with the same two-block chain
+every live area has, entry 31 is byte-for-byte the same four-block object chain,
+and `RTIM.T` entry 10 is 202 KB of its textures with 8 and 9 zero-length beside
+it. All of that loads through `func_80024154` unaided. Three things do not, and
+the patch is those three: **the module** is linked for `0x80193B38` while every
+module the loader can place goes to `0x8019F07C` — and it cannot be loaded at its
+own base either, since `GAME.EXE` keeps the billboard table at `0x80195174`
+inside that window — so the area runs on the loader's own 32-slot `jr ra` stub
+table and has no doors, levers or scripted triggers; **the per-area saved-state
+array** holds exactly ten slots (`func_8004913C`'s loop counter is a literal 9)
+and its two callers index it by area with no bound, so `func_80049710` would walk
+its own saved `s0` as a pointer and `func_800492B8` would `free` its own scratch
+buffer; and **`RTMD.T` holds nine entries** against `RTIM.T`'s seventy-five, so
+slot 1 goes in as `0xFF` ("keep the loaded set") and the props are drawn with the
+previous area's models until someone judges `KF2_AREA10_RTMD=8` by eye. Measured:
+632.1 map-tile packets a frame, 6 objects and 17 entities live, the player walks
+and takes damage, warping back out works. **Nobody has looked at it** —
+every one of those is a counter. `scripts/area_content.py` prints which archive
+entries each area has and `--map 10` draws the level. See "The eleventh area" in
+`docs/PATCHES_AND_MODS.md` and "Area 10 is cut content that still loads" in
+`docs/GAME_INTERNALS.md`.
 
 `KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
 its clock starts when the first area module loads, which is the only point in the
@@ -787,6 +813,8 @@ mcp/                     stdio MCP server exposing the KF2_SHELL command channel
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection, address-hunting, and the rate tooling:
+                         area_content (which archive entries each area has, and
+                         its 80x80 tile map -- how area 10 was read),
                          rate_census (which words move at the render rate),
                          find_writers (which code moves them), rate_matrix (did
                          the fix work), check_gate (does the gate obey its rule).

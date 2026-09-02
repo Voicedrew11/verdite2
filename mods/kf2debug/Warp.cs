@@ -143,17 +143,12 @@ internal static class Warp
             return false;
         }
 
-        if (area == Kf2.AreaWarp.CutArea)
+        if (Array.IndexOf(Kf2.AreaWarp.Reachable, area) < 0)
         {
-            // Belt and braces; the panel does not offer it.
-            Status = $"area {Kf2.AreaWarp.CutArea} is the cut area (fdat32) and cannot load";
+            Status = area == Kf2.AreaWarp.CutArea
+                ? $"area {Kf2.AreaWarp.CutArea} is the cut area; KF2_AREA10=0 is refusing it"
+                : $"area {area} does not exist";
             Console.WriteLine($"[kf2debug] refused: {Status}");
-            return false;
-        }
-
-        if (Array.IndexOf(Kf2.AreaWarp.Areas, area) < 0)
-        {
-            Status = $"area {area} does not exist";
             return false;
         }
 
