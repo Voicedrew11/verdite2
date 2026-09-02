@@ -3101,8 +3101,9 @@ exactly that reason.
 `patches/MapFog.cs`, and the seam it fills is the one the map shipped with.
 
     KF2_MAP_FOG=1         fog on for the run (off by default)
-    KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, records, flushes
-    KF2_MAP_FOG_PROBE=2   also the raw 24x24 grid, once a second
+    KF2_MAP_FOG_LOS=0     the line-of-sight gate off (on by default)
+    KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, refused, records, flushes
+    KF2_MAP_FOG_PROBE=2   also the raw 24x24 grid, the gate's verdict and its walls
 
 The map used to reveal the whole area. It now draws only the tiles the player has
 seen, remembered **per save slot** and kept between sessions in a file beside the
@@ -3111,10 +3112,74 @@ measured and the picture has not been judged.
 
 **No new reverse engineering was needed and none was done.** `func_8002D3A8`
 rebuilds the 24x24 grid at `0x80192EAC` at the head of every frame — the 4:3
-frustum flattened onto the map, scanline-filled and then flooded for occlusion —
-and that grid *is* what the player can see. Fog is that grid ORed into an 80x80
-bitset, on the mapping the game's own queries use: `cell = (world >> 11) + Offset`,
-so the world tile of cell (0,0) is the negated pair at `0x80192EA0`/`0xA4`.
+frustum flattened onto the map, scanline-filled and then flooded for occlusion.
+Fog is that grid ORed into an 80x80 bitset, on the mapping the game's own queries
+use: `cell = (world >> 11) + Offset`, so the world tile of cell (0,0) is the
+negated pair at `0x80192EA0`/`0xA4`.
+
+#### The grid is a culling test, and a culling test may over-report
+
+**The sentence that stood here said that grid "*is* what the player can see", and
+it is not.** It is what the frame might have to draw, and the two differ in one
+direction only. The flood (`patches/CullGrid.cs`'s `Cell`, a transcription of
+`func_8002CFC8` / `func_8002D15C`) marches rings out of the eye and lights a cell
+when **either** of its two parents on the ring inside it is lit. Two parents ORed
+is a 45-degree spread per ring, so one lit cell at the mouth of a corridor
+illuminates an expanding wedge behind the wall beside it. For the renderer that
+costs a few polygons nobody sees; for a store that never forgets it paints rooms
+the player has never been able to see into, which is what "the map reveals places
+disconnected from the room I am in" is.
+
+So a lit cell is checked against the floor plan before it is written: **recursive
+symmetric shadowcasting** (eight octants, the standard Bergstrom form) out of the
+player's own tile over the 80x80 map, a tile opaque when it carries no drawn model
+(`+0 >= 240`, the renderer's own test — the gaps between rooms *are* the walls in
+this game). A tile is revealed only when the game lit it **and** a line exists.
+Shadowcasting rather than a Bresenham ray per cell because a ray between tile
+centres clips the corners off a doorway and would under-reveal, and because it is
+symmetric: the tiles the player's tile can see are the tiles that can see it,
+which is the property that makes "I have been able to look at this square"
+defensible.
+
+**Both stacked halves are cast, and a cell is answered by the one its own bit
+names.** Asking the game which floor the player is on is the wrong question and
+two attempts at it failed measurably. The selector at `0x801D9C8E` — what
+`patches/Map.cs` draws from — has its own invariant *failing* in area 5, where it
+says upper and the player is 4200 units above that floor; a cast over the wrong
+half reads the whole area as wall, and it did: 86 of 93 lit cells refused, the
+player's own tile among them. Deriving the half from the player's Y instead only
+moved the failure, leaving four of the eight areas with no floor within a storey
+of the player and so no cast at all. The grid answers it per cell and for free —
+bit 0 is "lit on the lower half", bit 1 "lit on the upper" — so both halves are
+cast and each bit is checked against its own. Two casts cost two 53x53 snapshots
+on a tile step and nothing on a sample.
+
+The cast depends on the player's tile and the map alone, not on where the camera
+points, so it is taken once per tile step and re-taken every 250 ms (a drawbridge
+and a minecart are tiles). **A window with no wall in it is an unloaded map rather
+than an open field** — `patches/Map.cs`'s cleared-grid trap the other way up, since
+a zeroed model index is 0 and 0 is a *drawn* tile — so that half is passed rather
+than refused. The gate fails open, back to the raw cone, never to a blank map.
+
+Measured over a walk through all eight areas at 144 fps: **3993 of 8469 lit cells
+refused**, the player's own tile revealed on every sample, nothing falling outside
+the cast window, and 144.0 fps at 20.0 ticks/s with the minimap open. The picture
+`KF2_MAP_FOG_PROBE=2` prints is the argument — the grid, the gate's verdict and
+the walls it read, over the same 24 cells:
+
+    [KF2] fog grid z27: ..........33333.........  |          xxxxx         |  |..##...###...#######....|
+    [KF2] fog grid z29: .........33333333.......  |         xxx#####       |  |#############.......##..|
+    [KF2] fog grid z33: ........333322222233....  |        ############    |  |#########..............#|
+    [KF2] fog grid z36: .......333222222223333..  |       #############xx  |  |########...........#...#|
+
+The player stands in row 36. The flood lit a wedge running up to row 23; the wall
+column shows a solid mass across rows 29 to 33, and the corridor beyond it is the
+`x` run — lit by the game, five tiles the far side of a wall, and refused. What no
+counter can say is whether the revealed shape now matches where the player walked.
+
+Its switch is *Only what you could see*, under Gameplay > Map beside the fog one,
+because turning it off and walking the same room again is the one comparison a
+player can make by eye in a single session.
 
 #### A cell byte is not a boolean, and "nonzero" over-reveals by 7x
 

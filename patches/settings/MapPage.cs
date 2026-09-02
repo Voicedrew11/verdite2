@@ -275,6 +275,26 @@ public sealed class MapPage : IPatchPage
         if (MapFog.Enabled)
         {
             ImGui.Indent();
+
+            // The gate. On by default: the cull grid it filters is a *culling*
+            // test and over-reports by design, and without this the fog paints
+            // rooms through the wall beside a doorway -- measured, 110 of 136 lit
+            // cells in area 7 sitting behind a wall mass the player cannot see
+            // past. The switch is here because it is the one comparison a player
+            // can make by eye in one session, beside the two buttons below.
+            bool sight = MapFog.LineOfSight;
+            if (ImGui.Checkbox("Only what you could see", ref sight))
+            {
+                MapFog.SetLineOfSight(sight);
+                PatchSettings.Set(MapFog.LosKey, sight);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Check each tile the game lights against a line of sight from " +
+                                 "your own square before remembering it. The game's visibility " +
+                                 "grid decides what to *draw*, so it lights more than you can " +
+                                 "see; without this the map fills in rooms you have only been " +
+                                 "near.");
+
             if (ImGui.Button("Forget this area")) MapFog.ForgetArea();
             ImGui.SameLine();
             if (ImGui.Button("Reveal this area")) MapFog.RevealArea();

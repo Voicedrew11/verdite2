@@ -592,12 +592,21 @@ Kf2.Map.Install();
 // rate is:
 //
 //     KF2_MAP_FOG=1         fog on for the run (off by default)
-//     KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, records, flushes
+//     KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, rejected, flushes
+//     KF2_MAP_FOG_LOS=0     the line-of-sight gate off (on by default)
+//
+// The cull grid is a *culling* test, so it is allowed to over-report and does:
+// its flood lights a cell when either of its two ring parents is lit, which
+// spreads 45 degrees a ring and paints rooms through the wall beside a doorway.
+// A cell is therefore checked against a recursive symmetric shadowcast out of
+// the player's own tile before it is written, and only the intersection is
+// remembered.
 //
 // Off by default for the sub-pixel reason: the mechanism is measured and the
 // picture has never been looked at.
 Kf2.MapFog.Configure(Environment.GetEnvironmentVariable("KF2_MAP_FOG"),
-                     Environment.GetEnvironmentVariable("KF2_MAP_FOG_PROBE"));
+                     Environment.GetEnvironmentVariable("KF2_MAP_FOG_PROBE"),
+                     Environment.GetEnvironmentVariable("KF2_MAP_FOG_LOS"));
 Kf2.MapFog.Install();
 
 // Auto start, and the agent beacon -- the pair that lets an automated tester get

@@ -149,8 +149,9 @@ KF2_MAP_MINIMAP=1                        # the corner minimap on (off by default
 KF2_MAP_MARKERS=0                        # creatures, objects, effects and sprites off (on by default)
 KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, its occupied extent and a marker census, and open both maps
 KF2_MAP_FOG=1                            # fog of war: only the tiles you have seen (off by default)
-KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, records held, flushes
-KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 visibility grid, once a second
+KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on by default)
+KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, tiles refused, records, flushes
+KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 grid, the gate's verdict and its walls
 ```
 
 Patch settings live in `patches/settings/`. A patch registers an `IPatchPage`
@@ -705,10 +706,9 @@ floor plan matches the area, whether the height shading reads, and whether bit
 `0x80` of a half's `+4` is the wall it behaves like or the "see through" the
 widescreen notes call it; the full map's hover readout prints all ten raw bytes
 for that. **Fog of war is `patches/MapFog.cs`**, and it needs no hook either: the 24×24 grid
-is already the set of tiles the player can see, so fog is that grid ORed into an
-80×80 bitset per area per save slot, sampled on `VSyncEvent` — a wall-clock 60 Hz
-whatever the render rate is — and kept in `carda.fog` beside the memory card. Off
-by default (`KF2_MAP_FOG=1`), for the sub-pixel reason. **A cell byte is not a
+ORed into an 80×80 bitset per area per save slot, sampled on `VSyncEvent` — a
+wall-clock 60 Hz whatever the render rate is — and kept in `carda.fog` beside the
+memory card. Off by default (`KF2_MAP_FOG=1`), for the sub-pixel reason. **A cell byte is not a
 boolean, and the note that stood here was wrong about it**: the scanline fill
 writes the marker over the whole trapezoid and the flood only clears what it can
 prove is occluded, so "nonzero" is the frustum's *footprint* — measured 190 cells
@@ -725,7 +725,32 @@ New Game accumulates into a scratch bucket that is merged the moment it becomes
 1..3. The seam widened from `bool` to **0 unexplored / 1 remembered / 2 in view
 now**, since the third state was free. Measured: separate records across a warp and
 back, persistence across a kill, and 144.0 fps / 20.0 ticks/s with the minimap
-open. Never looked at by eye: whether the revealed shape matches where you walked.
+open. **That grid is still not the set of tiles the player can see, and `byte & 3`
+only narrowed the lie**: it is a *culling* test, and the flood lights a cell when
+**either** of its two ring parents is lit — a 45° spread a ring, which paints an
+expanding wedge behind the wall beside a doorway. Harmless as overdraw, permanent
+in a store that never forgets, and the reason the map "reveals places disconnected
+from the room I am in". So each lit cell is checked against a **recursive
+symmetric shadowcast** out of the player's own tile over the 80×80 map — a tile
+opaque when it carries no drawn model (`+0 >= 240`, the renderer's own test: the
+gaps between rooms *are* the walls here) — and only the intersection is written.
+Shadowcasting rather than a ray per cell because a centre-to-centre ray clips a
+doorway's corners, and because it is symmetric. **Both stacked halves are cast and
+a cell is answered by the one its own bit names**, because asking the game which
+floor the player is on fails twice over: the selector at `0x801D9C8E` says upper
+in area 5 with the player 4200 units above that floor, and a cast on the wrong
+half refused 86 of 93 lit cells including the player's own tile; deriving the half
+from the player's Y instead left four of the eight areas with no cast at all. A
+window with **no** wall in it is an unloaded map rather than an open field — the
+cleared-grid trap the other way up, since model 0 is a *drawn* tile — so that half
+is passed: the gate **fails open**, back to the raw cone, never to a blank map.
+Measured over a walk through all eight areas at 144 fps: 3993 of 8469 lit cells
+refused, the player's own tile revealed on every sample, nothing outside the cast
+window, and 144.0 fps / 20.0 ticks/s with the minimap open.
+`KF2_MAP_FOG_PROBE=2` prints the grid, the gate's verdict and the walls it read
+side by side, which is what makes a refusal arguable; `KF2_MAP_FOG_LOS=0` and
+Gameplay ▸ Map ▸ *Only what you could see* are the comparison. Never looked at by
+eye: whether the revealed shape matches where you walked.
 See "A dynamic map" in `docs/PATCHES_AND_MODS.md`.
 
 **The port ships its own keyboard layout** (`patches/KeyLayout.cs`), because

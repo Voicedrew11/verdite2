@@ -7,16 +7,57 @@ namespace Kf2;
 /// Fog of war for the map: the tiles the player has actually *seen*, remembered
 /// per save slot and kept between sessions.
 ///
-/// ## It is the game's own visibility grid, accumulated
+/// ## It is the game's own visibility grid, accumulated — and then checked
 ///
 /// **Nothing here is new reverse engineering.** The renderer's first call each
 /// frame is func_8002D3A8, which rebuilds a **24×24 byte grid of tile visibility
 /// at 0x80192EAC** — the 4:3 frustum flattened onto the map, filled by scanlines
 /// and then flooded for occlusion, which is what gates every object and every
-/// block of geometry the frame draws. That grid *is* "what the player can see",
-/// walls already taken into account, and a cell is visible iff its byte is
-/// nonzero (patches/CullGrid.cs, and the game's own walker func_80031C94 at
-/// generated/game.cs:37862). Fog is that grid ORed into an 80×80 bitset.
+/// block of geometry the frame draws. Fog is that grid ORed into an 80×80 bitset.
+///
+/// ## The grid is a culling test, and a culling test is allowed to over-report
+///
+/// That grid is **not** "what the player can see": it is "what the frame might
+/// have to draw", and the two differ in one direction only. The flood
+/// (patches/CullGrid.cs's <c>Cell</c>, a transcription of func_8002CFC8 /
+/// func_8002D15C) marches rings out of the eye and lights a cell when
+/// **either** of its two parents on the ring inside it is lit. Two parents ORed
+/// is a 45° spread per ring, so one lit cell at the mouth of a corridor
+/// illuminates an expanding wedge behind the wall beside it — for the renderer
+/// that costs a few polygons nobody sees, but for a store that never forgets it
+/// paints rooms the player has never been able to see into. That is what
+/// "the map reveals places disconnected from the room I am in" is.
+///
+/// So a lit cell is **verified against the floor plan** before it is written:
+/// recursive symmetric shadowcasting (eight octants, the standard Bergström
+/// form) out of the player's own tile over the 80×80 map, with a tile opaque
+/// when it carries no drawn model (<c>+0 &gt;= 240</c>, the renderer's own test —
+/// the gaps between rooms *are* the walls in this game). A tile is revealed only
+/// when the game lit it **and** an unobstructed line exists; the two disagreeing
+/// is the leak, and the intersection is the fix. Shadowcasting rather than one
+/// Bresenham ray per cell because a ray between tile centres cuts the corners
+/// off a doorway and would under-reveal, and because it is symmetric: what you
+/// can see from a tile is what can see you.
+///
+/// **Both stacked halves are cast, and a cell is answered by the one its own bit
+/// names** — see <see cref="CastFrom"/> for why asking the game which floor the
+/// player is on is the wrong question. The cast depends on the player's tile and
+/// the map alone, not on where the camera points, so it is taken once per tile
+/// step (and re-taken every <see cref="LosPeriodMs"/> ms, since a drawbridge and
+/// a minecart are tiles) rather than 60 times a second. A window with no wall in
+/// it is an unloaded map rather than an open field, so that half is passed
+/// rather than refused: the gate **fails open**, back to the old behaviour, never
+/// to a blank map.
+///
+/// Measured over a walk through all eight areas: **3993 of 8469 lit cells
+/// refused** — in area 7 a corridor five tiles the far side of a wall mass, lit
+/// by the flood and invisible from where the player stood — the player's own
+/// tile revealed on every sample, nothing outside the cast window, and 144.0 fps
+/// at 20.0 ticks/s with the minimap open. What no counter can say is whether the
+/// revealed shape now matches where the player walked; that is still the one
+/// thing to look at.
+///
+///     KF2_MAP_FOG_LOS=0      the gate off: the raw cull grid, as it was
 ///
 /// The cell/world mapping is the queries' own: `cell = (world &gt;&gt; 11) + Offset`,
 /// so the world tile of cell (0,0) is the negated pair at 0x80192EA0/0xA4 —
@@ -72,11 +113,14 @@ namespace Kf2;
 /// no notion of the halves — is noticeable on a map that draws one half at a time.
 ///
 ///     KF2_MAP_FOG=1          fog on for the run (kf2.map.fog; off by default)
-///     KF2_MAP_FOG_PROBE=1    a line a second: revealed, seen, records, flushes
+///     KF2_MAP_FOG_PROBE=1    a line a second: revealed, seen, lit, rejected, flushes
 /// </summary>
 public static class MapFog
 {
     public const string OnKey = "kf2.map.fog";
+
+    /// <summary>The line-of-sight gate's saved switch.</summary>
+    public const string LosKey = "kf2.map.fog.sight";
 
     // ---- the game's visibility grid ---------------------------------------
 
@@ -109,6 +153,13 @@ public static class MapFog
     const uint MaxHpAddr = 0x80199426;   // u16, 0 until an area is running
     const uint PosXAddr  = 0x801994EC;   // s32
     const uint PosZAddr  = 0x801994F4;   // s32
+
+    /// <summary>The 80×80 grid of 10-byte tile records the line-of-sight gate
+    /// reads its walls from — patches/Map.cs owns the description of it, and this
+    /// class reads the game rather than <c>Map.Tiles</c> because that copy is
+    /// only taken while a viewport is drawing and fog runs with the map shut.</summary>
+    const uint TileBase = 0x801C8484;
+
 
     // ---- the store ---------------------------------------------------------
 
@@ -144,6 +195,17 @@ public static class MapFog
     static bool? _forced;
     static int _probe;
 
+    /// <summary>The line-of-sight gate. On; <c>KF2_MAP_FOG_LOS=0</c> is the
+    /// comparison, which is the fog this class shipped with.</summary>
+    static bool _los = true;
+    static bool? _forcedLos;
+
+    public static bool LineOfSight => _los;
+
+    /// <summary>Turning the gate on mid-session cannot un-reveal what is already
+    /// in the store, so the cast is dropped and re-taken rather than trusted.</summary>
+    public static void SetLineOfSight(bool on) { _los = on; _losKey = -1; }
+
     static string _path = "carda.fog";
     static bool _loaded;
 
@@ -151,12 +213,19 @@ public static class MapFog
     static long _probeAt;
     static int _revealed, _flushes;
 
-    public static void Configure(string? on, string? probe)
+    /// <summary>Cells the cone lit at the last sample, how many of those the
+    /// gate refused, and how many fell outside the cast window at all — the last
+    /// being a number that should stay 0 and is printed so it cannot hide.</summary>
+    static int _coneLit, _blocked, _beyond;
+
+    public static void Configure(string? on, string? probe, string? los = null)
     {
         if (!string.IsNullOrWhiteSpace(on))
             _forced = !on.Equals("0", StringComparison.Ordinal);
         if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
             _probe = probe.Equals("2", StringComparison.Ordinal) ? 2 : 1;
+        if (!string.IsNullOrWhiteSpace(los))
+            _forcedLos = !los.Equals("0", StringComparison.Ordinal);
     }
 
     public static void Install()
@@ -169,9 +238,11 @@ public static class MapFog
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            _los = _forcedLos ?? RecompOne.Runtime.Runtime.View.GetBool(LosKey, true);
             _path = PathFor();
             Load();
             Console.WriteLine($"[KF2] map fog: {(Enabled ? "on" : "off")}, " +
+                              $"line of sight {(_los ? "on" : "off")}, " +
                               $"{_seen.Count} record(s) in {_path}" +
                               (_probe > 0 ? ", probing" : ""));
         });
@@ -182,6 +253,7 @@ public static class MapFog
         Event.AddListener<OverlayLoadedEvent>(_ =>
         {
             _holdUntil = Environment.TickCount64 + HoldMs;
+            _losKey = -1;
             Flush();
         });
 
@@ -241,6 +313,15 @@ public static class MapFog
 
         var bits = Live(slot, area);
 
+        // The tile the player stands on, which is both the cast's origin and the
+        // one tile revealed whatever the cone did with it.
+        int ptx = px >> 11, ptz = pz >> 11;
+
+        // The floor plan as seen from there — one cast per stacked half, since a
+        // cell says for itself which halves it was lit on. Cheap: recomputed on a
+        // tile step rather than on a sample, and it fails open per half.
+        bool gate = _gated = _los && CastFrom(m, ptx, ptz, area, now);
+
         // The origin, plus the crop bias KF2_CULLGRID=on introduces between the
         // 32×32 grid the mirror words then describe and the 24×24 array it crops
         // into. Zero in every normal run.
@@ -248,7 +329,7 @@ public static class MapFog
         int ox = (int)m.ReadU32(MirrorX) + bias;
         int oz = (int)m.ReadU32(MirrorZ) + bias;
 
-        int newly = 0, drawn = 0;
+        int newly = 0, drawn = 0, blocked = 0, beyond = 0;
 
         // 144 words rather than 576 bytes: ReadU32 does the same range checks as
         // ReadU8 and answers four times as much (patches/Map.cs's own idiom).
@@ -269,14 +350,35 @@ public static class MapFog
                 // cell holding only those was never drawn, and counting it lit
                 // over-reveals -- measured 190 lit against a cone that cannot
                 // hold more than about 110 tiles.
-                if (((w >> (b * 8)) & 3) == 0) continue;
+                int seen = (int)((w >> (b * 8)) & 3u);
+                if (seen == 0) continue;
 
                 int cell = i + b;
                 int wx = (ox + cell % GridSpan) & 0xFFFF;
                 int wz = (oz + cell / GridSpan) & 0xFFFF;
                 if (wx >= Map.Span || wz >= Map.Span) continue;
 
+                // The cone drew it; `drawn` counts that and nothing else, because
+                // it is the "is this a view of anywhere at all" test below and an
+                // area seen entirely through a doorway must not read as no view.
                 drawn++;
+
+                // **The gate.** The flood's two-parent OR spreads light 45° a
+                // ring, so a cell the frame drew is not proof the player could
+                // see it; the cast out of their own tile is. See the class
+                // comment.
+                if (gate)
+                {
+                    int lx = wx - ptx + LosR, lz = wz - ptz + LosR;
+                    if ((uint)lx >= LosSpan || (uint)lz >= LosSpan) { beyond++; continue; }
+                    // Each bit names the half it was lit on, so each is answered
+                    // by that half's own cast; a cell lit on both needs only one
+                    // of them to have a line to it.
+                    int l = lz * LosSpan + lx;
+                    if (!(((seen & 1) != 0 && Sighted(0, l)) ||
+                          ((seen & 2) != 0 && Sighted(1, l)))) { blocked++; continue; }
+                }
+
                 newly += Mark(bits, wx, wz);
                 _litStamp[wz * Map.Span + wx] = _samples + 1;
             }
@@ -289,8 +391,6 @@ public static class MapFog
         // whatever the area byte happens to say.
         if (drawn == 0) return;
 
-        // The tile the player is standing on, whatever the cone did with it.
-        int ptx = px >> 11, ptz = pz >> 11;
         if ((uint)ptx < Map.Span && (uint)ptz < Map.Span)
         {
             newly += Mark(bits, ptx, ptz);
@@ -299,6 +399,7 @@ public static class MapFog
 
         _samples++;
         if (newly > 0) { _revealed += newly; _dirty = true; }
+        _coneLit = drawn; _blocked = blocked; _beyond += beyond;
 
         if (_dirty && now - _flushedAt >= FlushPeriodMs) Flush();
         if (_probe > 0 && now - _probeAt >= 1000) Probe(now, slot, area, bits, ptx, ptz);
@@ -349,6 +450,201 @@ public static class MapFog
         _live = null;
         _dirty = true;
         Console.WriteLine($"[KF2] map fog: merged {scratch.Count} unsaved record(s) into slot {slot}");
+    }
+
+    // ---- the line-of-sight gate -------------------------------------------
+
+    /// <summary>Tiles either side of the player the cast covers. The 24-cell
+    /// grid is centred on the eye, which the staleness guard holds within two
+    /// tiles of the player, so 26 reaches every cell the cone can possibly
+    /// light; a cell past it is counted (<c>beyond</c> in the probe) rather than
+    /// guessed at.</summary>
+    const int LosR = 26;
+    const int LosSpan = LosR * 2 + 1;
+
+    /// <summary>How long one cast is trusted for. The floor plan is not static —
+    /// the drawbridge and the minecart are tiles rather than models — but it does
+    /// not move faster than patches/Map.cs re-copies it.</summary>
+    const long LosPeriodMs = 250;
+
+    /// <summary>Window-local, origin at (<see cref="LosR"/>, <see cref="LosR"/>):
+    /// can the player's tile see this one. One per stacked half.</summary>
+    static readonly bool[][] _visible = { new bool[LosSpan * LosSpan], new bool[LosSpan * LosSpan] };
+
+    /// <summary>Window-local: does light pass through this tile, per half. Off
+    /// the map, or a half carrying no drawn model, is a wall.</summary>
+    static readonly bool[][] _open = { new bool[LosSpan * LosSpan], new bool[LosSpan * LosSpan] };
+
+    /// <summary>Whether each half's cast is worth believing — see
+    /// <see cref="CastFrom"/>. A half that is not is passed rather than refused.</summary>
+    static readonly bool[] _castOk = new bool[2];
+
+    /// <summary>What <see cref="_visible"/> was cast for — area and tile — and
+    /// when.</summary>
+    static long _losKey = -1;
+    static long _losAt;
+
+    /// <summary>Whether the last sample was gated at all, for the probe.</summary>
+    static bool _gated;
+
+    /// <summary>Is a lit cell on half <paramref name="h"/> in sight. A half whose
+    /// cast could not be trusted answers yes to everything, which is the
+    /// fail-open half of the gate.</summary>
+    static bool Sighted(int h, int i) => !_castOk[h] || _visible[h][i];
+
+    /// <summary>
+    /// Bring both halves' <see cref="_visible"/> up to date for the player's
+    /// tile, and say whether either is worth consulting.
+    ///
+    /// **There is deliberately no "which floor is the player on" here.** The
+    /// obvious answer is the game's own selector at 0x801D9C8E, and it is not one
+    /// to build on: it is what patches/Map.cs draws from and its own invariant —
+    /// the drawn half's `-(height &lt;&lt; 7)` equalling the player's Y — is
+    /// *measured failing* in area 5, where it says upper and the player is 4200
+    /// units above that floor. A cast taken over the wrong half reads the whole
+    /// area as wall (measured there: 86 of 93 lit cells refused). Deriving the
+    /// half from the player's Y instead only moved the failure — four of the
+    /// eight areas then had no floor within a storey of the player at all.
+    ///
+    /// The grid answers it per cell and for free: bit 0 is "lit on the lower
+    /// half", bit 1 "lit on the upper", which is what func_80031B1C draws each
+    /// on. So both halves are cast and a cell is checked against the cast for the
+    /// bit it carries. Two casts cost two snapshots on a tile step and nothing
+    /// on a sample.
+    ///
+    /// **False is the fail-open answer**: neither half has a floor plan to check
+    /// against, so the caller writes what the cone said, which is exactly the fog
+    /// this class had before the gate existed. Nothing here can make the map
+    /// *less* revealed than the player has walked, and a wrong refusal costs
+    /// accuracy rather than a blank screen.
+    /// </summary>
+    static bool CastFrom(IMemory m, int ptx, int ptz, int area, long now)
+    {
+        if ((uint)ptx >= Map.Span || (uint)ptz >= Map.Span) return false;
+
+        long key = ((long)area * Map.Span + ptz) * Map.Span + ptx;
+        if (key == _losKey && now - _losAt < LosPeriodMs) return _castOk[0] || _castOk[1];
+
+        for (int h = 0; h < 2; h++) _castOk[h] = CastHalf(m, ptx, ptz, h);
+
+        _losKey = key;
+        _losAt = now;
+        return _castOk[0] || _castOk[1];
+    }
+
+    static bool CastHalf(IMemory m, int ptx, int ptz, int h)
+    {
+        var open = _open[h];
+        int half = h * Map.HalfBytes;
+
+        // Snapshot the walls once. The cast reads a tile several times over and
+        // this is the only pass that touches game memory: 2809 bytes a half,
+        // taken on a tile step rather than on a sample.
+        int opens = 0;
+        for (int z = 0; z < LosSpan; z++)
+        {
+            int wz = ptz - LosR + z;
+            uint row = (uint)(Map.RowBytes * wz + half + Map.Model);
+            for (int x = 0; x < LosSpan; x++)
+            {
+                int wx = ptx - LosR + x;
+                bool o = (uint)wx < Map.Span && (uint)wz < Map.Span &&
+                         m.ReadU8(TileBase + row + (uint)(Map.Stride * wx)) < Map.NotDrawn;
+                open[z * LosSpan + x] = o;
+                if (o) opens++;
+            }
+        }
+
+        // **An unloaded map reads as wide open**, which is patches/Map.cs's own
+        // trap the other way up: a cleared record's model index is 0, and 0 is a
+        // *drawn* tile. A window with not one wall in it is that, not an area —
+        // the 53-tile window reaches off an 80-tile map from any tile nearer than
+        // 26 to an edge, and those are walls — so refuse rather than pass the
+        // whole cone through nothing.
+        if (opens == LosSpan * LosSpan) return false;
+
+        _cv = _visible[h];
+        _co = open;
+        Array.Clear(_cv);
+        _cv[LosR * LosSpan + LosR] = true;
+        for (int oct = 0; oct < 8; oct++)
+            Cast(1, 1.0, 0.0, Mult[0, oct], Mult[1, oct], Mult[2, oct], Mult[3, oct]);
+        return true;
+    }
+
+    /// <summary>The half <see cref="Cast"/> is working on. The recursion carries
+    /// enough arguments already.</summary>
+    static bool[] _cv = null!, _co = null!;
+
+    /// <summary>The eight octant transforms — xx, xy, yx, yy down each column.</summary>
+    static readonly int[,] Mult =
+    {
+        { 1, 0, 0, -1, -1,  0,  0, 1 },
+        { 0, 1, -1, 0,  0, -1,  1, 0 },
+        { 0, 1, 1,  0,  0, -1, -1, 0 },
+        { 1, 0, 0,  1, -1,  0,  0, -1 },
+    };
+
+    /// <summary>
+    /// One octant of a recursive symmetric shadowcast, in its standard form: walk
+    /// out row by row holding the angular span still lit, and where a wall
+    /// interrupts that span, recurse on the part of it left over and carry on
+    /// with the rest.
+    ///
+    /// Row-at-a-time rather than a ray per cell because a ray between tile
+    /// centres clips the corners off a doorway — it would refuse tiles a player
+    /// standing in the door can plainly see — and because this form is symmetric:
+    /// the tiles the player's tile can see are the tiles that can see it, which
+    /// is the property that makes "I have been able to look at this square" a
+    /// defensible thing to write into a store that never forgets.
+    ///
+    /// There is deliberately **no range limit** beyond the window: the cone the
+    /// gate is intersected with is the range, and a second one would only refuse
+    /// tiles the game drew.
+    /// </summary>
+    static void Cast(int row, double start, double end, int xx, int xy, int yx, int yy)
+    {
+        if (start < end) return;
+
+        double newStart = 0;
+        bool blocked = false;
+
+        for (int dist = row; dist <= LosR && !blocked; dist++)
+        {
+            int dy = -dist;
+            for (int dx = -dist; dx <= 0; dx++)
+            {
+                // The cell's own angular span, in slopes measured off the origin.
+                double lSlope = (dx - 0.5) / (dy + 0.5);
+                double rSlope = (dx + 0.5) / (dy - 0.5);
+                if (start < rSlope) continue;
+                if (end > lSlope) break;
+
+                int x = LosR + dx * xx + dy * xy;
+                int y = LosR + dx * yx + dy * yy;
+                if ((uint)x >= LosSpan || (uint)y >= LosSpan) continue;
+
+                int i = y * LosSpan + x;
+
+                // The wall that ends a span is itself seen -- a room's own walls
+                // are the shape of it on the map, and refusing them would draw
+                // every room open-sided.
+                _cv[i] = true;
+
+                if (blocked)
+                {
+                    if (!_co[i]) { newStart = rSlope; continue; }
+                    blocked = false;
+                    start = newStart;
+                }
+                else if (!_co[i] && dist < LosR)
+                {
+                    blocked = true;
+                    Cast(dist + 1, start, lSlope, xx, xy, yx, yy);
+                    newStart = rSlope;
+                }
+            }
+        }
     }
 
     // ---- what the viewports ask -------------------------------------------
@@ -517,26 +813,48 @@ public static class MapFog
 
         Console.WriteLine($"[KF2] map fog: slot {slot} area {area}: {seen} tiles seen " +
                           $"(+{_revealed}/s), {lit} lit now, {_seen.Count} records, " +
-                          $"{_flushes} flush(es); player {ptx},{ptz} window " +
-                          $"{ox & 0xFFFF},{oz & 0xFFFF}" +
+                          $"{_flushes} flush(es); cone lit {_coneLit}, " +
+                          $"{(!_los ? "gate off" : !_gated ? "NO CAST" : $"{_blocked} out of sight (cast {(_castOk[0] ? "lower" : "-")}/{(_castOk[1] ? "upper" : "-")})")}" +
+                          $"{(_beyond > 0 ? $", {_beyond} BEYOND THE CAST" : "")}; " +
+                          $"player {ptx},{ptz} window {ox & 0xFFFF},{oz & 0xFFFF}" +
                           $"{(ok ? "" : " -- PLAYER TILE NOT SEEN")}");
         _revealed = 0;
         _flushes = 0;
+        _beyond = 0;
 
         // =2: the raw 24x24 array, so a byte's meaning can be argued from the
         // bytes rather than from the flood's source. Digits are the low two bits
         // (the two stacked halves, which is what func_80031B1C draws on), '+' is
         // a cell carrying only the flood's own high bits, '.' is clear.
         if (_probe < 2 || m == null) return;
+
+        // Two columns over the same 24 cells, because the gate is only arguable
+        // as a difference: the grid as the game left it, and what this class did
+        // with it. In the grid, a digit is the low two bits (the stacked half
+        // func_80031B1C draws each on), '+' a cell carrying only the flood's own
+        // high bits and '.' clear. In the gate, '#' is lit and kept, 'x' lit and
+        // refused as out of sight, '-' a wall in the cast, ' ' open ground.
         for (int z = 0; z < GridSpan; z++)
         {
-            var sb = new System.Text.StringBuilder(GridSpan);
+            var grid = new System.Text.StringBuilder(GridSpan);
+            var gate = new System.Text.StringBuilder(GridSpan);
+            var walls = new System.Text.StringBuilder(GridSpan);
             for (int x = 0; x < GridSpan; x++)
             {
                 byte v = m.ReadU8(Legacy + (uint)(z * GridSpan + x));
-                sb.Append(v == 0 ? '.' : (v & 3) != 0 ? (char)('0' + (v & 3)) : '+');
+                grid.Append(v == 0 ? '.' : (v & 3) != 0 ? (char)('0' + (v & 3)) : '+');
+
+                int wx = (ox + x) & 0xFFFF, wz = (oz + z) & 0xFFFF;
+                int lx = wx - ptx + LosR, lz = wz - ptz + LosR;
+                bool inWindow = (uint)lx < LosSpan && (uint)lz < LosSpan;
+                int l = inWindow ? lz * LosSpan + lx : 0;
+                bool sighted = inWindow && (((v & 1) != 0 && Sighted(0, l)) ||
+                                            ((v & 2) != 0 && Sighted(1, l)));
+                bool open = inWindow && (_open[0][l] || _open[1][l]);
+                gate.Append((v & 3) != 0 ? (sighted ? '#' : 'x') : ' ');
+                walls.Append(open ? '.' : '#');
             }
-            Console.WriteLine($"[KF2] fog grid z{(oz + z) & 0xFFFF,3}: {sb}");
+            Console.WriteLine($"[KF2] fog grid z{(oz + z) & 0xFFFF,3}: {grid}  |{gate}|  |{walls}|");
         }
     }
 }
