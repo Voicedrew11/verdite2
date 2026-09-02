@@ -483,6 +483,11 @@ public static class AnimSmoothing
     static bool _onFromEnv, _modeFromEnv;
     static bool _probe;
 
+    /// <summary>Poses carried since <see cref="TakeHealth"/> last asked. Counted
+    /// whether or not <c>KF2_SMOOTH_ANIM_PROBE</c> is on, because the reader is
+    /// <see cref="FramePacing"/>'s own probe and that one has to stand alone.</summary>
+    static long _carries;
+
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
     static long _submits, _morph, _rigid, _live, _carried, _reversed;
@@ -996,6 +1001,7 @@ public static class AnimSmoothing
         if (_tFloor < 0) { _tFloor = 0; _carry = 0.0; }
         else if (_tFloor >= s.Length) { _tFloor = s.Length - 1; _carry = 0.0; }
         _pending = true;
+        _carries++;
     }
 
     /// <summary>A time folded back onto the clip's circle, for a path that ran
@@ -1094,6 +1100,7 @@ public static class AnimSmoothing
         // would be with this patch absent.
         _back = (1.0 - _phase) * advance;
         _pending = true;
+        _carries++;
     }
 
     // ---- Mode.Time ------------------------------------------------------------
@@ -1123,6 +1130,7 @@ public static class AnimSmoothing
         _tFloor = (int)Math.Floor(t);
         _carry = t - _tFloor;
         _pending = true;
+        _carries++;
     }
 
     // ---- the hooks ------------------------------------------------------------
@@ -1487,6 +1495,31 @@ public static class AnimSmoothing
             if (d < _minStep) _minStep = d;
         }
         if (s.MaxTime > _maxTimeSeen) _maxTimeSeen = s.MaxTime;
+    }
+
+    /// <summary>
+    /// One word for what this patch is doing, for `KF2_FPS_PROBE=1`; it consumes
+    /// the window it reports on. See <see cref="FrameSmoothing.TakeHealth"/> for
+    /// why the pacing line needed this.
+    ///
+    /// There is no <c>unprimed</c> here, and that absence is the point. This patch
+    /// primes **per slot** -- <c>Slot.HasPrev</c>, re-seeded from the clip record
+    /// the next time the slot is seen -- where both siblings gate every frame on a
+    /// single global flag that <c>OverlayLoadedEvent</c> clears. That event fires
+    /// for the fdat area modules too, so the three patches recover from it
+    /// differently, which is the one structural asymmetry between them and the
+    /// first thing to suspect when this one reads `carrying` beside two that do
+    /// not.
+    /// </summary>
+    public static string TakeHealth()
+    {
+        long n = _carries;
+        _carries = 0;
+
+        if (!_sited) return "unsited";
+        if (!Enabled) return "off";
+        if (!FramePacing.Gating) return "not gating";
+        return n > 0 ? "carrying" : "idle";
     }
 
     static void Report()

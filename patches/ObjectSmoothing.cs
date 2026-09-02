@@ -438,6 +438,12 @@ public static class ObjectSmoothing
     // ---- the probe ------------------------------------------------------------
 
     static bool _probe;
+
+    /// <summary>Frames on which at least one slot was carried, since
+    /// <see cref="TakeHealth"/> last asked. Counted whether or not
+    /// <c>KF2_SMOOTH_OBJECTS_PROBE</c> is on, because the reader is
+    /// <see cref="FramePacing"/>'s own probe and that one has to stand alone.</summary>
+    static long _carries;
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
     static long _frames;
@@ -777,6 +783,7 @@ public static class ObjectSmoothing
             if (_probe && carried > 0) { t.CarriedFrames++; t.CarriedSlots += carried; }
         }
 
+        if (_applied) _carries++;
         if (_probe && _applied) { _fracSum += frac; _fracFrames++; }
         if (_probe) Report();
     }
@@ -891,6 +898,28 @@ public static class ObjectSmoothing
         int d = ((to & mask) - (from & mask)) & mask;   // 0 .. AngleMod-1
         if (d > AngleMod / 2) d -= AngleMod;            // to the shorter side
         return d;
+    }
+
+    /// <summary>
+    /// One word for what this patch is doing, for `KF2_FPS_PROBE=1`; it consumes
+    /// the window it reports on. See <see cref="FrameSmoothing.TakeHealth"/> for
+    /// why the pacing line needed this and what each word means.
+    ///
+    /// The gate tested here is <see cref="FramePacing.Gating"/> rather than
+    /// <c>Extrapolating</c>, because that is the one <see cref="Before"/> itself
+    /// returns on -- a health word that disagreed with the code it describes would
+    /// be worse than none.
+    /// </summary>
+    public static string TakeHealth()
+    {
+        long n = _carries;
+        _carries = 0;
+
+        if (!_paired) return "unpaired";
+        if (!Enabled) return "off";
+        if (!FramePacing.Gating) return "not gating";
+        if (!_primed) return "unprimed";
+        return n > 0 ? "carrying" : "idle";
     }
 
     static void Report()

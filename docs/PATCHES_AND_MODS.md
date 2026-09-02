@@ -600,14 +600,56 @@ wrong speed. `KF2_FPS_PROBE=1` is driven by the frame boundary instead, which is
 reached in all three executables, so it reports from the first second of the boot:
 
 ```
-[KF2] pacing: 15.0 fps drawn of 165 fps, 15.0 tick(s)/s of 20 Hz, smoothing can carry
+[KF2] pacing: 165.0 fps drawn of 165 fps, 20.0 tick(s)/s of 20 Hz, smoothing can
+      carry; view carrying, objects carrying, anim idle
 ```
 
-Three numbers and a verdict: the rate achieved against the rate asked for, the
-ticks actually taken against `LogicHz`, and `FramePacing.Extrapolating` — which is
-the single test both halves of `FrameSmoothing` and all of `ObjectSmoothing` and
-`AnimSmoothing` sit behind. `nothing to carry at this rate` is the whole of "the
-smoothing patches are doing nothing", stated by the port rather than judged by eye.
+Three numbers, a verdict, and three health words. The numbers are the rate
+achieved against the rate asked for and the ticks actually taken against
+`LogicHz`. The verdict is `FramePacing.Extrapolating`, which is the single test
+both halves of `FrameSmoothing` and all of `ObjectSmoothing` and `AnimSmoothing`
+sit behind.
+
+**The verdict alone was not enough, and finding that out is what added the three
+words.** `Extrapolating` is `Gating && (!Enabled || TargetFps > LogicHz)` — a pure
+function of `LogicMode`, `Enabled`, `TargetFps` and `LogicHz`. It is
+*configuration*, not a reading: it says the smoothing **may** carry and can never
+say whether it **did**. Neither of the other two fields reads `LogicPhase` or
+mentions a smoother at all. So a session with a dead smoother printed a line
+byte-identical to a healthy one, which is exactly what play reported when this
+probe was pointed at the open question below — the probe was aimed one layer too
+high, at `FramePacing` rather than at the patches whose picture was missing.
+
+Each patch now answers for itself, through `TakeHealth()`, which consumes the
+window it reports on. The counter behind it is incremented whether or not that
+patch's own probe is switched on, because the session that needs this reading is
+precisely the one nobody thought to enable three extra probes for. The words are
+ordered by how far the patch got, so the first one that is not `carrying` names
+the layer:
+
+| word | meaning |
+|---|---|
+| `unpaired` / `unsited` | the detour never installed. `SetEnabled` is `on && _paired`, so the **Video checkbox can never turn it on** for the rest of the session; `Attach` said so once, on stderr, and nothing mentions it again |
+| `off` | the saved setting or the env var reads off |
+| `at the tick rate` / `not gating` | no frame lands between two ticks |
+| `unprimed` | attached and on, but two ticks have not been sampled since the last `OverlayLoadedEvent` — which fires for the `fdat` area modules as well as the executables |
+| `idle` | running, with nothing moving to carry |
+| `carrying` | the healthy reading |
+
+`anim` has no `unprimed`, and **that absence is the finding under it**:
+`AnimSmoothing` primes **per slot** (`Slot.HasPrev`, re-seeded from the clip
+record the next time the slot is seen), where both siblings gate every frame on a
+*single global flag* cleared by `OverlayLoadedEvent`. That is the one structural
+asymmetry between the three patches — their `Install`, `Attach`, settings read and
+`_paired` guard are otherwise the same shape — so it is the first thing to suspect
+whenever `anim carrying` is printed beside two that are not.
+
+Measured on this machine at `KF2_FPS=165`: `view unprimed, objects unprimed, anim
+idle` through OPEN.EXE and the intro movie (stage 8 and stage 13 are GAME.EXE's,
+so they are never reached there and the word is honest rather than a fault);
+`view idle, objects carrying, anim idle` standing still in an area with nobody at
+the keyboard; and `view carrying` from the first window in which `KF2_SHELL`'s
+`press Left` turned the camera.
 
 **The baseline, measured over a 200 s boot on this machine, is:**
 
@@ -622,9 +664,10 @@ grid — a wall clock — rather than by anything the port chooses: at the title
 `KF2_FPS` changes nothing at all. So **a title screen running visibly faster or
 slower than the rest of the boot is a symptom with a short list of causes**, and
 this probe names which: a low `fps drawn of` says the saved rate did not load, a
-`nothing to carry` says the smoothing is inert whatever its checkboxes read, and a
+`nothing to carry` says the rate itself leaves nothing to interpolate, a
 `tick(s)/s` far above `LogicHz` in an area is the lost-boundary failure the section
-above describes.
+above describes, and any health word other than `carrying` or `idle` in an area
+says which patch is inert whatever its checkbox reads.
 
 ### A registration is not a hook, and seven patches latched before doing the work
 

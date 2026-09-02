@@ -172,6 +172,15 @@ public static class FrameSmoothing
     // doc says this probe once diagnosed -- a boundary that never delivers a tick,
     // leaving _carriable false forever -- made Report print nothing whatever.
     static long _skipStill, _skipOff, _skipUnprimed;
+
+    /// <summary>
+    /// Frames carried since <see cref="TakeHealth"/> last asked. Counted whether
+    /// or not <c>KF2_SMOOTH_PROBE</c> is on, because the reader is
+    /// <see cref="FramePacing"/>'s own probe and that one has to work on its own:
+    /// a session reported as having no smoothing in it is exactly the session
+    /// nobody thought to turn three extra probes on for.
+    /// </summary>
+    static long _carries;
     static double _yawSum, _pitchSum, _posSum, _fracSum;
 
     static readonly ModInfo _self = new()
@@ -342,6 +351,7 @@ public static class FrameSmoothing
         _y = m.ReadU32(PosY);
         _z = m.ReadU32(PosZ);
         _applied = true;
+        _carries++;
 
         int yawStep = (int)Math.Round(yawD * frac);
         int pitchStep = (int)Math.Round(pitchD * frac);
@@ -415,6 +425,45 @@ public static class FrameSmoothing
         if (d > 2048) d -= 4096;
         else if (d < -2048) d += 4096;
         return d;
+    }
+
+    /// <summary>
+    /// One word for what this patch is *doing*, for `KF2_FPS_PROBE=1`. It consumes
+    /// the window it reports on, hence `Take`.
+    ///
+    /// The pacing line used to end at <see cref="FramePacing.Extrapolating"/>,
+    /// which is a pure function of <c>LogicMode</c>, <c>Enabled</c>,
+    /// <c>TargetFps</c> and <c>LogicHz</c> -- configuration, not a reading. It says
+    /// the smoothing *may* carry and can never say whether it *did*, so a session
+    /// with a dead smoother printed a line byte-identical to a healthy one. That
+    /// was measured from play: the probe was aimed one layer too high.
+    ///
+    /// The words are ordered by how far the patch got, so the first one that is
+    /// not "carrying" names the layer to look at:
+    /// <list type="bullet">
+    /// <item><c>unpaired</c> -- the detour never installed, so
+    /// <see cref="SetEnabled"/> can never turn it on and the Video checkbox is
+    /// inert for the whole session. <see cref="Attach"/> says so on stderr and
+    /// nothing else ever mentions it again.</item>
+    /// <item><c>off</c> -- the saved setting or the env var reads off.</item>
+    /// <item><c>at the tick rate</c> -- no frame lands between two ticks.</item>
+    /// <item><c>unprimed</c> -- attached and on, but two ticks have not been
+    /// sampled since the last <c>OverlayLoadedEvent</c>, which fires for the fdat
+    /// area modules as well as the executables.</item>
+    /// <item><c>idle</c> -- running, with nothing moving to carry.</item>
+    /// <item><c>carrying</c> -- the healthy reading.</item>
+    /// </list>
+    /// </summary>
+    public static string TakeHealth()
+    {
+        long n = _carries;
+        _carries = 0;
+
+        if (!_paired) return "unpaired";
+        if (!Enabled) return "off";
+        if (!FramePacing.Extrapolating) return "at the tick rate";
+        if (!_carriable) return "unprimed";
+        return n > 0 ? "carrying" : "idle";
     }
 
     static void Report()

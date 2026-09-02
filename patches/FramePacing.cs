@@ -942,9 +942,22 @@ public static class FramePacing
             Measured = _windowFrames * 1000.0 / elapsed;
 
             if (_probe)
+                // The three health words are the half of this line that reports a
+                // *reading*. Everything before them -- including `Extrapolating`,
+                // which is a pure function of LogicMode, Enabled, TargetFps and
+                // LogicHz -- is configuration, and configuration is identical in a
+                // session whose smoothing is dead and one whose is not. That was
+                // measured from play, and it is why this probe could not close the
+                // question it was written for. Each patch answers for itself, so a
+                // line that reads `anim carrying` beside `view unprimed` names both
+                // the layer and the two patches to look at, in one string, without
+                // KF2_SMOOTH_PROBE having been switched on beforehand.
                 Console.WriteLine($"[KF2] pacing: {Measured:0.0} fps drawn of {Describe()}, " +
                                   $"{_windowTicks * 1000.0 / elapsed:0.0} tick(s)/s of {LogicHz:0.#} Hz, " +
-                                  $"{(Extrapolating ? "smoothing can carry" : "nothing to carry at this rate")}");
+                                  $"{(Extrapolating ? "smoothing can carry" : "nothing to carry at this rate")}; " +
+                                  $"view {FrameSmoothing.TakeHealth()}, " +
+                                  $"objects {ObjectSmoothing.TakeHealth()}, " +
+                                  $"anim {AnimSmoothing.TakeHealth()}");
 
             _windowFrames = 0;
             _windowTicks = 0;
