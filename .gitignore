@@ -36,3 +36,7 @@ ratecensus.txt
 
 # Working files: extracted disc executables and probe logs.
 scratch/
+
+# Captured stdout from a run, kept while a defect is being read. A reading of
+# one session, not source -- same reason as ratecensus.txt above.
+*.log
