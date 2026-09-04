@@ -87,7 +87,12 @@ public sealed class MapPanel : IPanel
                            (MapMarkers.Enabled
                                ? $" | {MapMarkers.Counts[0]} creatures, {MapMarkers.Counts[1]} objects, " +
                                  $"{MapMarkers.Counts[2]} effects, {MapMarkers.Counts[3]} sprites"
-                               : ""));
+                               : "") +
+                           // With the layer off the object count above is absent and
+                           // this is all the sample holds, which is worth saying: it
+                           // is how you tell "no save point here" from "nothing is
+                           // being sampled at all".
+                           (MapMarkers.SaveCount > 0 ? $" | {MapMarkers.SaveCount} save point(s)" : ""));
 
         ImGui.SetNextItemWidth(160);
         ImGui.SliderFloat("Zoom", ref _zoom, 2f, 24f, "%.1f px/tile");
@@ -218,7 +223,8 @@ public sealed class MapPanel : IPanel
             ImGui.Text($"{MapMarkers.Noun(mk.Kind)} #{mk.Slot}: type {mk.Type:X2}" +
                        (mk.Def >= 0 ? $" def {mk.Def:X2}" : "") +
                        $"  {(mk.Half == 0 ? "lower" : "upper")}" +
-                       (mk.Kind == MapMarkers.Kind.Object && !mk.Stepped ? "  static" : ""));
+                       (mk.Kind == MapMarkers.Kind.Object && !mk.Stepped ? "  static" : "") +
+                       (mk.Save ? "  SAVE POINT" : ""));
             ImGui.TextDisabled($"  world {mk.X},{mk.Y},{mk.Z}" +
                                (mk.Kind == MapMarkers.Kind.Sprite ? "" : $"  yaw {mk.Yaw & 0xFFF:X3}"));
         }

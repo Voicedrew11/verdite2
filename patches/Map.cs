@@ -261,6 +261,11 @@ public static class Map
     static bool? _forcedOn, _forcedMinimap;
     static bool _probe;
 
+    /// <summary>KF2_MAP_PROBE. Public so the render side can census what it
+    /// actually drew, which is the half of a map defect no count of the tables
+    /// can reach.</summary>
+    public static bool Probe => _probe;
+
     // ---- the reading -------------------------------------------------------
 
     /// <summary>The last copy of the grid. Indexed `Tiles[z * RowBytes + x * Stride + half + field]`.</summary>
@@ -624,6 +629,103 @@ public static class Map
     /// <summary>The tile a screen row draws, which is also its own inverse.</summary>
     public static int RowOf(int tile) => Span - 1 - tile;
 
+    // ---- rooms -------------------------------------------------------------
+
+    /// <summary>Memo for <see cref="RoomCentre"/>, keyed by tile and half and
+    /// cleared with every grid copy, so a save point costs the search once an
+    /// area rather than once a frame.</summary>
+    static readonly Dictionary<(int X, int Z, int Half), (float X, float Z, int Span)> _rooms = new();
+
+    /// <summary>
+    /// The centre of the room a tile is in, in tile coordinates — <c>x + 0.5</c>
+    /// being the middle of tile <c>x</c>.
+    ///
+    /// **A room here is the largest solid rectangle of drawn tiles containing
+    /// this one**, which is a definition rather than a reading: nothing in the
+    /// grid records where one room ends and the next begins. A flood fill would
+    /// be the obvious answer and is the wrong one — every walkable tile in an
+    /// area is connected to every other through the doorways, so a fill returns
+    /// the whole floor and its centroid is a point in the middle of the map. A
+    /// rectangle is bounded by the walls on all four sides at once, so it stops
+    /// at a doorway the way a person's idea of a room does, and it degrades
+    /// sensibly: a save point in a corridor gets a long thin rectangle whose
+    /// centre is still in the corridor beside it.
+    ///
+    /// Opennness is <see cref="Drawn"/> — the renderer's own test, and the same
+    /// one patches/MapFog.cs casts shadows against, where the gaps between rooms
+    /// *are* the walls.
+    ///
+    /// Ties go to the rectangle whose centre is nearest the tile asked about, so
+    /// a chamber that can be read two ways puts the mark next to the thing that
+    /// asked rather than at the far end of it.
+    ///
+    /// <paramref name="span"/> is the rectangle's **short side** in tiles, which
+    /// is how much room a mark drawn at the centre has in the worst direction —
+    /// so a caller can size a label to the room instead of to the grid. It is 1
+    /// for a corridor and for the fallback.
+    /// </summary>
+    public static bool RoomCentre(int tx, int tz, int half, out float cx, out float cz,
+                                  out int span)
+    {
+        cx = tx + 0.5f;
+        cz = tz + 0.5f;
+        span = 1;
+
+        if (!Drawn(tx, tz, half)) return false;
+
+        if (_rooms.TryGetValue((tx, tz, half), out var hit))
+        {
+            cx = hit.X;
+            cz = hit.Z;
+            span = hit.Span;
+            return true;
+        }
+
+        int best = 0, bspan = 1;
+        float bx = cx, bz = cz, bd = float.MaxValue;
+
+        // Every band of rows through this tile, widened as far as it stays solid.
+        // The bands are grown outward from the tile and abandoned the moment a row
+        // blocks the tile's own column, which is what keeps this to a few hundred
+        // tests in a corridor and a few thousand in a hall.
+        for (int z0 = tz; z0 >= 0 && Drawn(tx, z0, half); z0--)
+        {
+            for (int z1 = tz; z1 < Span && Drawn(tx, z1, half); z1++)
+            {
+                int x0 = tx, x1 = tx;
+                while (x0 - 1 >= 0 && Solid(x0 - 1, z0, z1, half)) x0--;
+                while (x1 + 1 < Span && Solid(x1 + 1, z0, z1, half)) x1++;
+
+                int area = (z1 - z0 + 1) * (x1 - x0 + 1);
+                float mx = (x0 + x1 + 1) * 0.5f, mz = (z0 + z1 + 1) * 0.5f;
+                float d = (mx - cx) * (mx - cx) + (mz - cz) * (mz - cz);
+
+                if (area > best || (area == best && d < bd))
+                {
+                    best = area;
+                    bd = d;
+                    bx = mx;
+                    bz = mz;
+                    bspan = Math.Min(z1 - z0 + 1, x1 - x0 + 1);
+                }
+            }
+        }
+
+        _rooms[(tx, tz, half)] = (bx, bz, bspan);
+        cx = bx;
+        cz = bz;
+        span = bspan;
+        return true;
+    }
+
+    /// <summary>Is a whole column of a band drawn?</summary>
+    static bool Solid(int x, int z0, int z1, int half)
+    {
+        for (int z = z0; z <= z1; z++)
+            if (!Drawn(x, z, half)) return false;
+        return true;
+    }
+
     public static bool Drawn(int x, int z, int half)
         => (uint)x < Span && (uint)z < Span
            && Tiles[z * RowBytes + x * Stride + half + Model] < NotDrawn;
@@ -633,6 +735,13 @@ public static class Map
 
     static void Copy(IMemory m, long now)
     {
+        // The memo survives an ordinary re-copy and not an area change. A room's
+        // shape is architecture — the four times a second this runs is for the
+        // handful of tiles that move, the drawbridge and the minecart — so
+        // clearing it here would pay for the search sixteen times a second to
+        // answer the same question.
+        if (_copiedArea != Area) _rooms.Clear();
+
         _copiedArea = Area;
         _copiedAt = now;
 

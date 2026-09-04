@@ -3622,6 +3622,130 @@ of the type byte. Area 0, measured:
 Pairing `09` (53 records) or `E0` (15) with what is actually on screen, area by
 area, is what would turn this class into named ones.
 
+#### Except the save point, which the game names itself
+
+The one object identity the map does claim comes out of the game's own **use
+handler**, `func_800489FC` — the routine the action button runs. It scans for the
+objects in front of the player (`func_80036EC8` over the object table at
+`0x80177714`), resolves each one's **definition** the way stage 2 does —
+`0x80175914 + u16[rec+0x6] * 0x18`, the `0x18`-stride table of object kinds — and
+dispatches on the *kind* byte at `def+0x0` rather than on the behaviour byte at
+`rec+0x4` that the 224-entry jump table uses. Its **`0x0E` arm** at `0x80048FEC`
+is three calls:
+
+```c
+func_800492B8(*(u8*)0x8017E060);  /* pack the 200-slot entity table into the save buffer */
+func_80029C50();
+func_8001C624();                  /* the slot menu -> func_8001C88C -> func_80023764 */
+```
+
+`func_80023764` is the routine that writes the memory card ("The card code is all
+in GAME.EXE" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), and no other arm of the
+handler reaches it — while `func_8001C624` has **exactly one call site in all of
+GAME.EXE**, which is this arm, so the implication runs both ways. **Kind `0x0E` is
+a save point**, read off the dispatch
+rather than guessed from a histogram, and that is the one marker on the map drawn
+as a letter: an **S** on the tile it stands in, which is what "the save room"
+means to someone reading a plan.
+
+Three properties follow from it being a *kind* rather than a tile flag or a room:
+the mark is per object, so an area with two save points gets two letters; it is
+bounds-checked against the `0x1E00` bytes between the definition table's base and
+the object table (320 records), because the index is game data; and the layer is
+**independent of the marker layer entirely** — not merely of the object class
+inside it. `MapMarkers.Saves`, `kf2.map.markers.saves`, Gameplay ▸ Map ▸ Save
+points, on by default.
+
+**That independence is two lines and both of them had to be found the hard way.**
+Shipped first, the S was independent of `Objects` only: `Scan` admitted a save
+point whether or not the prop class was wanted, and the checkbox sat in the
+indented block under "show what is in the area". Reported from play as *no save
+points ever show up on the map*, and the reason is one line above all of that —
+`Refresh` opens with `if (!Enabled) { _count = 0; … return; }`, so a player with
+the marker layer off has an **empty sample** and nothing downstream can draw from
+it. Measured with the census below: `live 0 … markers False`. Turning that layer
+off is most of the reason the switch exists — the object squares are the clutter
+— so the population that wanted a save point marked was exactly the population
+that could not get one. `Shown` now folds `Enabled` into itself and `Refresh`
+stands down only on `!Enabled && !Saves`; the checkbox moved out of the indent.
+
+The other half of that report was a **test that could not fail**:
+`DrawSave` clamped the glyph up to nine pixels and then asked whether it had
+reached nine, so the documented fallback to an ordinary marker was dead code. It
+gates on the **cell** now — below five pixels a tile, the minimap gets a square
+instead — which is the number the caller actually varies.
+`MapRender.DrawSave` needs room for a letter and says so: below nine pixels it
+returns `false` and the marker falls back to the ordinary object square, which is
+the minimap's usual answer and the full map's never. `KF2_MAP_PROBE=1` counts
+them beside the type histogram and prints their tiles:
+
+    map markers: 2 save point(s) — definition kind 0x0E in the 0x18-stride table
+                 at 0x80175914: (79,41 def E6) (65,13 def E6)
+    map markers: 4 save point(s) — … (40,74u def E6) (27,1u def E6)
+                 (48,79u def E6) (36,36u def E6)
+
+Two in area 0 and four in save slot 2's area, **all six carrying the same
+definition index `0xE6`** — which is what a table of *kinds* shared between
+instances should look like, and is the same fact read from the other side.
+
+#### The letter goes in the middle of the room, not on the object
+
+A save point stands against a wall like any other prop, so an S drawn on its tile
+marks the corner of a chamber rather than the chamber. `Map.RoomCentre` puts it
+in the middle instead, and **a room here is a definition rather than a reading**:
+nothing in the grid records where one ends and the next begins, so it is the
+**largest solid rectangle of drawn tiles containing the object's tile**.
+
+A flood fill is the obvious answer and is the wrong one — every walkable tile in
+an area connects to every other through the doorways, so a fill returns the whole
+floor and its centroid is a point in the middle of the map. A rectangle is bounded
+by walls on all four sides at once, so it stops at a doorway the way a person's
+idea of a room does, and it degrades sensibly: a save point in a corridor gets a
+long thin rectangle whose centre is still in the corridor beside it. Openness is
+`Map.Drawn` — the renderer's own test, the one `MapFog`'s shadowcast treats as
+opaque, where the gaps between rooms *are* the walls. Ties go to the rectangle
+whose centre is nearest the tile asked about.
+
+It is memoised per tile and **cleared on an area change rather than on a grid
+copy**: the copy runs four times a second for the handful of tiles that move (the
+drawbridge, the minecart), and clearing there would pay for the search sixteen
+times a second to answer the same question. Two save points that resolve to one
+centre are lettered once, since two S's on a point draw as one heavier S. The
+letter is **white** in both styles — the one mark on the map that is not the
+game's own, the original having no save points on it, so it is allowed to be the
+one thing outside the board's palette; the plan's own ink is what haloes it.
+
+**The letter is sized to the room as well as placed in it.** A cell is 6 to 22
+pixels, so a letter one cell tall is a speck on a full map of a large area — it
+was, and was reported as hard to see. `RoomCentre` therefore also returns the
+rectangle's **short side**, which is how much room a mark at the centre has in
+its worst direction, and the S spans `0.55` of it clamped to 2.0-3.4 tiles: three
+tiles of a six-tile chamber, still two in a corridor, where two tiles of overlap
+is a wall either side and the S is the thing meant to be read. The halo's offset
+grows with it, or a big letter loses the outline that keeps it off the pale end
+of the height ramp.
+
+Measured: the letters sit a mean **2.2 tiles** from their objects in save slot 2's
+area, so the rooms found are real ones rather than the object's own square, and
+draw at **26.4 px** on a 12 px cell against 12.6 px before, at 165 fps unchanged.
+
+`Map.Probe` makes the render side count as well, since a save point can be
+sampled and still not drawn — the sample holds both floors and a viewport shows
+one, which no census of the tables can see:
+
+    map saves: 4 of 4 lettered on the upper half at 12.0 px a tile,
+               2.2 tiles from the object to its room's centre, letter 26.4 px
+
+Measured after the fix, with the marker layer still switched off. The count is of
+the **shown floor**: a save point on the half the map is not displaying is
+filtered like every other marker, so `0 of 2` is a correct reading rather than a
+failure.
+
+**Never looked at by eye:** whether an S lands where the game actually lets you
+save. The dispatch is read out of the emitted C# and the address arithmetic is
+stage 2's own, but nobody has stood on a save point and checked the letter is
+under them.
+
 #### What is measured and what is not
 
 **Measured:** the four tables read and their counts move with the area; the

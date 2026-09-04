@@ -963,6 +963,63 @@ a straight localization of the Japanese KFII would look like.
 not only when the game writes a save, so a fresh timestamp means the port booted
 — nothing more. Check the directory entries or the titles instead.
 
+### A save point is object *kind* `0x0E`, and the use handler is what says so
+
+The save menu is not reachable from the pause menu — it is an object you walk up
+to and use — so "where can I save" is a question about the world tables, and
+`func_800489FC` answers it. That function is the **use/action handler**: it takes
+the player position, scans the object table `0x80177714` for what is in front of
+them (`func_80036EC8`, iterating on a start index so a second call finds the next
+candidate), and for each hit resolves the record's **definition** exactly the way
+stage 2 does:
+
+```c
+def  = 0x80175914 + (u16)rec[0x6] * 0x18;   /* the 0x18-stride table of kinds  */
+kind = *(u8*)def;                            /* NOT rec[0x4], the behaviour byte */
+```
+
+It then dispatches on `kind` through a chain of compares — `0x02`, `0x05`, `0x08`,
+`0x09`, `0x0D`, `0x0E`, `0x0F`, `0x12`, `0x14`, `0x15`, `0x16`, `0x20`, `0x40`,
+`0x51`, `0x53` … — so the *kind* is the vocabulary of "what happens when you press
+the button on this", where `rec+0x4` is the vocabulary of "how does this move".
+Two different tables of arms over the same records.
+
+The **`0x0E` arm at `0x80048FEC`** is three calls and nothing else:
+
+```c
+func_800492B8(*(u8*)0x8017E060);   /* area; walks the 200-slot entity table at
+                                      0x8016C544 and the descriptor block at
+                                      0x80172624, packing them for the save     */
+func_80029C50();
+func_8001C624();                    /* the slot menu: func_8001C88C per slot,
+                                       which calls func_80023764, the write     */
+```
+
+`func_80023764` is the memory-card write, and **no other arm of the handler
+reaches it**. The implication runs both ways, which is what closes it:
+`func_8001C624` — the in-game save menu — has **exactly one call site in all of
+GAME.EXE**, and it is this arm. So saving during play happens *if and only if*
+you use an object whose definition kind is `0x0E`, and kind `0x0E` is a save
+point — read off the dispatch rather than
+inferred from a type histogram, which is the only object identity in these tables
+this repo claims. `patches/MapMarkers.cs` marks them with an **S**; see "Except
+the save point, which the game names itself" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+The definition table's size falls out of the buffer list above: it is the
+`0x1E00` bytes between `0x80175914` and the object table at `0x80177714`, so
+**320 records**, which is the bound anything indexing it with game data should
+check against.
+
+Measured with `KF2_MAP_PROBE=1`, which censuses the save points beside the type
+histogram: **2 in area 0** at tiles (79,41) and (65,13) on the lower half, **4 in
+the area of save slot 2** at (40,74), (27,1), (48,79) and (36,36) on the upper
+half — and **every one of them carries the same definition index, `0xE6`**, which
+is what a table of *kinds* shared between instances should look like and is a
+second reading of the same fact from the other side. What no counter here can
+say is whether an S lands where the game actually lets you save; that needs
+someone standing on one.
+
 ### The card code is all in GAME.EXE, and loading is one call
 
 `OPEN.EXE` has **no card code at all** — no `BASLUS`, no `bu00:`, no `cdrom:`

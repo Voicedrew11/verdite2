@@ -33,7 +33,7 @@ public static class MapRender
     const int Shades = 24;
     static readonly uint[] _shade = new uint[Shades];
     static uint _flat, _wall, _lit, _grid, _arrow, _arrowEdge, _ground, _dot, _dotEdge;
-    static uint _creature, _object, _effect, _sprite, _markEdge;
+    static uint _creature, _object, _effect, _sprite, _markEdge, _save;
     static bool _built;
 
     // ---- the native palette ------------------------------------------------
@@ -59,7 +59,7 @@ public static class MapRender
     static uint _nField, _nInk, _nUnder, _nWall, _nLit;
     static uint _nFrameLo, _nFrameHi, _nFrameIn, _nText, _nTextDim;
     static uint _nBody, _nCore, _nEdge;
-    static uint _nCreature, _nObject, _nEffect, _nSprite;
+    static uint _nCreature, _nObject, _nEffect, _nSprite, _nSave, _nSaveEdge;
 
     static void Build()
     {
@@ -96,6 +96,12 @@ public static class MapRender
         _effect    = Rgba(0.85f, 0.40f, 0.95f, 1f);
         _sprite    = Rgba(0.95f, 0.75f, 0.30f, 1f);
         _markEdge  = Rgba(0.05f, 0.05f, 0.07f, 0.85f);
+
+        // The save point is a letter rather than a shape, so it needs to beat
+        // the pale end of the height ramp on its own: plain white, the brightest
+        // thing on either board and the one colour neither palette uses for
+        // anything else.
+        _save      = Rgba(1f, 1f, 1f, 1f);
 
         _nField   = Rgba(0.227f, 0.322f, 0.227f, 1f);
         _nInk     = Rgba(0.055f, 0.125f, 0.055f, 1f);
@@ -134,6 +140,13 @@ public static class MapRender
         _nObject   = Rgba(0.72f, 0.78f, 0.62f, 1f);
         _nEffect   = Rgba(0.70f, 0.62f, 0.82f, 1f);
         _nSprite   = Rgba(0.85f, 0.72f, 0.42f, 1f);
+
+        // White on the slate board too. It is the one mark on the map that is
+        // not the game's own — the original has no save points on it — so it is
+        // allowed to be the one thing that does not sit in the board's palette,
+        // and the plan's ink underneath it is what keeps it from glowing.
+        _nSave     = Rgba(1f, 1f, 1f, 1f);
+        _nSaveEdge = Rgba(0.055f, 0.125f, 0.055f, 0.9f);
     }
 
     /// <summary>True while the map is drawn as the game's own board.</summary>
@@ -664,8 +677,21 @@ public static class MapRender
         bool circle = circleCentre.HasValue && circleRadius > 0f;
         float rr = circleRadius * circleRadius;
 
+        // The probe's own counters. A save point can be sampled and still not be
+        // drawn — the sample holds both floors and a viewport shows one — and no
+        // census of the tables can see that, which is why this one is here rather
+        // than in patches/MapMarkers.cs.
+        int live = 0, shown = 0;
+        float moved = 0f;
+
+        // Two save points in one room would stack two letters on the same centre,
+        // which draws as one heavier S rather than as two — worse than either.
+        Span<Vector2> lettered = stackalloc Vector2[16];
+        int letters = 0;
+
         foreach (var mk in MapMarkers.Live)
         {
+            if (mk.Save) live++;
             if (!MapMarkers.Visible(mk, half, state)) continue;
 
             var p = new Vector2(origin.X + Map.TileF(mk.X) * cell,
@@ -678,6 +704,38 @@ public static class MapRender
             {
                 float dx = p.X - circleCentre!.Value.X, dy = p.Y - circleCentre.Value.Y;
                 if (dx * dx + dy * dy > rr) continue;
+            }
+
+            // A save point is the one object with a name, so it is drawn as one:
+            // the letter goes on the *tile's* centre rather than on the object's
+            // position, because what it marks is the square you can save in.
+            if (mk.Save && MapMarkers.Saves)
+            {
+                // **The room's centre, not the object's tile.** What the letter
+                // marks is the place you can save, and a save point stands
+                // against a wall like any other prop — an S in the corner of a
+                // chamber reads as marking the corner. Map.RoomCentre answers in
+                // tile coordinates and a screen row is Span - z, the same
+                // conversion Map.RowF does for a world position.
+                Map.RoomCentre(Map.TileOf(mk.X), Map.TileOf(mk.Z), mk.Half,
+                               out float rx, out float rz, out int rspan);
+                var t = new Vector2(origin.X + rx * cell,
+                                    origin.Y + (Map.Span - rz) * cell);
+
+                bool twice = false;
+                for (int i = 0; i < letters; i++)
+                    if (MathF.Abs(lettered[i].X - t.X) < 0.5f &&
+                        MathF.Abs(lettered[i].Y - t.Y) < 0.5f) { twice = true; break; }
+                if (twice) continue;
+
+                if (DrawSave(dl, t, cell, rspan))
+                {
+                    if (letters < lettered.Length) lettered[letters++] = t;
+                    shown++;
+                    moved += MathF.Sqrt(MathF.Pow(rx - Map.TileOf(mk.X) - 0.5f, 2) +
+                                        MathF.Pow(rz - Map.TileOf(mk.Z) - 0.5f, 2));
+                    continue;
+                }
             }
 
             uint c = mk.Kind switch
@@ -735,7 +793,88 @@ public static class MapRender
                     break;
             }
         }
+
+        if (Map.Probe && live > 0 && Environment.TickCount64 - _saveProbeAt > 1000)
+        {
+            _saveProbeAt = Environment.TickCount64;
+            Console.WriteLine($"[KF2] map saves: {shown} of {live} lettered on the " +
+                              $"{(half == 0 ? "lower" : "upper")} half at {cell:0.0} px a tile, " +
+                              $"{(shown > 0 ? moved / shown : 0f):0.0} tiles from the object " +
+                              $"to its room's centre, letter {_saveSize:0.0} px" +
+                              (MapMarkers.Saves ? "" : " (the S is switched off)"));
+        }
     }
+
+    static long _saveProbeAt;
+
+    /// <summary>
+    /// A save point, as the letter <b>S</b> in the middle of the room it is in.
+    ///
+    /// It is a letter and not a shape because it is the one marker on the map
+    /// whose identity is known — patches/MapMarkers.cs reads it out of the kind
+    /// byte the game's own use handler dispatches on — and a letter is what
+    /// someone drawing this maze on graph paper would have written there — in the
+    /// middle of the room rather than on the object, for the same reason: what is
+    /// being marked is the place, and the object itself stands against a wall.
+    /// <c>Map.RoomCentre</c> is what decides where the middle is.
+    ///
+    /// **It needs room, and says so.** The font is drawn at a size taken from the
+    /// cell, clamped so it neither disappears on the minimap nor swells past the
+    /// square on a map zoomed right in; below <see cref="MinGlyph"/> pixels a
+    /// letter is a smudge, so the caller is told <c>false</c> and falls back to
+    /// the ordinary marker rather than drawing a blot no one can read. That is
+    /// the minimap's usual answer and the full map's never.
+    ///
+    /// The dark halo is the outline every other marker has, spelled the only way
+    /// a glyph can have one: the same letter, one pixel off in four directions,
+    /// underneath. Without it the S vanishes into the pale end of the height ramp.
+    /// </summary>
+    const float MinGlyph = 15f, MinCell = 5f;
+
+    /// <summary>Tiles the letter is allowed to span, at its smallest and its
+    /// largest. **Sized to the room, not to the grid**: a cell is 6 to 22 pixels
+    /// and a letter one cell tall is a speck on a full map of a large area, while
+    /// a letter as big as a hall would swamp the plan it sits on. The room's short
+    /// side is what says which — three tiles of a six-tile chamber, still two in a
+    /// corridor, where two tiles of overlap is a wall either side and the S is the
+    /// thing meant to be read.</summary>
+    const float MinSpan = 2.0f, MaxSpan = 3.4f;
+
+    static bool DrawSave(ImDrawListPtr dl, Vector2 centre, float cell, int roomSpan)
+    {
+        Build();
+
+        // **The test is on the cell, not on the glyph.** Clamping the size up to
+        // MinGlyph and then asking whether it reached MinGlyph is a test that
+        // cannot fail — the first version did exactly that, so the fallback was
+        // dead code and the minimap would have drawn a letter far bigger than its
+        // square. A tile smaller than five pixels gets the ordinary marker
+        // instead; the full map's cell runs 6 to 22.
+        if (cell < MinCell) return false;
+
+        float tiles = Math.Clamp(roomSpan * 0.55f, MinSpan, MaxSpan);
+        float size = MathF.Max(cell * tiles, MinGlyph);
+
+        var font = ImGui.GetFont();
+        var half = ImGui.CalcTextSize("S") * (size / ImGui.GetFontSize()) * 0.5f;
+        var at = new Vector2(centre.X - half.X, centre.Y - half.Y);
+
+        uint ink = Native ? _nSave : _save;
+        uint edge = Native ? _nSaveEdge : _markEdge;
+
+        // The halo grows with the letter, or a big S loses the outline that is
+        // what keeps it off the pale end of the height ramp.
+        float o = MathF.Max(1f, size / 12f);
+        dl.AddText(font, size, new Vector2(at.X - o, at.Y), edge, "S");
+        dl.AddText(font, size, new Vector2(at.X + o, at.Y), edge, "S");
+        dl.AddText(font, size, new Vector2(at.X, at.Y - o), edge, "S");
+        dl.AddText(font, size, new Vector2(at.X, at.Y + o), edge, "S");
+        dl.AddText(font, size, at, ink, "S");
+        _saveSize = size;
+        return true;
+    }
+
+    static float _saveSize;
 
     /// <summary>
     /// The player, as an arrow pointing the way they face.

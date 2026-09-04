@@ -42,6 +42,16 @@ namespace Kf2;
 /// docs/TODO.md #14 and patches/HitGuard.cs), so two markers of the same kind
 /// carry the same number and the readout can say so.
 ///
+/// **The one object identity that is claimed is the save point**, and it comes
+/// from the game's own use handler rather than from a guess: func_800489FC
+/// dispatches on the definition kind at <c>0x80175914 + def * 0x18</c> and its
+/// <c>0x0E</c> arm is the only path in it that reaches the memory card. Those are
+/// drawn as an **S** on the tile they stand in — see <see cref="SaveKind"/> — and
+/// the layer is independent of the object squares, because the one prop a player
+/// wants on a map is the one they can save at — independent of the whole marker
+/// layer as well as of the object class inside it, which is one flag in Refresh
+/// and one condition in Shown.
+///
 /// **Which floor a marker is on is derived, not stored.** The tile record holds
 /// two stacked halves and a half's floor is -(height &lt;&lt; 7); the map draws one
 /// half at a time, so a marker picks the drawn half whose floor Y is nearest its
@@ -83,7 +93,7 @@ public static class MapMarkers
     /// matched to, so a viewport showing one floor can filter on it.</summary>
     public readonly record struct Marker(
         Kind Kind, int Slot, int X, int Y, int Z, int Type, int Def, int Yaw, int Half,
-        bool Stepped);
+        bool Stepped, bool Save);
 
     sealed record Spec(
         Kind Kind, string Label, uint Base, int Stride, int Count,
@@ -115,6 +125,44 @@ public static class MapMarkers
             0x8, -1, 0x3, 1, -1, 0),
     ];
 
+    // ---- the save point ----------------------------------------------------
+
+    /// <summary>
+    /// The <c>0x18</c>-stride table of object *kinds*, indexed by the definition
+    /// word at <c>rec+0x6</c>. func_80037C0C publishes
+    /// <c>0x80175914 + def * 0x18</c> to 0x8017E048 for every slot it steps
+    /// (docs/GAME_INTERNALS.md, "Stage 2 is the object-table state machine"), so
+    /// this is the same address the game itself resolves a definition through.
+    /// </summary>
+    const uint DefBase = 0x80175914, DefStride = 0x18;
+
+    /// <summary>Entries in that table: it is exactly the <c>0x1E00</c> bytes
+    /// between its base and the object table at 0x80177714.</summary>
+    const int DefCount = 0x1E00 / (int)DefStride;
+
+    /// <summary>
+    /// **The kind byte of a save point.** Read out of the use/action handler
+    /// func_800489FC, which scans the objects in front of the player
+    /// (func_80036EC8), resolves each one's definition through the table above and
+    /// dispatches on <c>u8[def+0x0]</c>. Its <c>0x0E</c> arm at 0x80048FEC is
+    /// three calls — func_800492B8 (which packs the 200-slot entity table into the
+    /// save buffer), func_80029C50, then **func_8001C624**, the slot menu that
+    /// ends in func_80023764, the routine that writes the memory card
+    /// (docs/GAME_INTERNALS.md, "The card code is all in GAME.EXE"). Nothing else
+    /// in the handler reaches the card.
+    ///
+    /// So a save point is a *definition kind*, not a tile flag and not a room: the
+    /// map marks the tile the object stands in, which is what "the save room" means
+    /// to someone reading the plan.
+    /// </summary>
+    public const int SaveKind = 0x0E;
+
+    /// <summary>Is this definition index a save point? Bounds-checked, because
+    /// the index is game data and a wild one would read the object table as
+    /// kinds.</summary>
+    static bool IsSave(IMemory m, int def) =>
+        (uint)def < DefCount && m.ReadU8(DefBase + (uint)def * DefStride) == SaveKind;
+
     // ---- settings ----------------------------------------------------------
 
     public const string OnKey        = "kf2.map.markers";
@@ -123,6 +171,7 @@ public static class MapMarkers
     public const string EffectsKey   = "kf2.map.markers.effects";
     public const string SpritesKey   = "kf2.map.markers.sprites";
     public const string FacingKey    = "kf2.map.markers.facing";
+    public const string SavesKey     = "kf2.map.markers.saves";
 
     /// <summary>The layer. Off leaves the tables unread entirely.</summary>
     public static bool Enabled = true;
@@ -137,6 +186,13 @@ public static class MapMarkers
     /// derived but never judged by eye — so it defaults off, the rule this port
     /// applies to any picture nobody has looked at.</summary>
     public static bool Facing;
+
+    /// <summary>Draw save points as an <b>S</b> rather than as one more object
+    /// square. On by default, and **independent of <see cref="Objects"/>**: the
+    /// one object in the game a player wants to find on a map is the one they can
+    /// save at, so turning the prop layer off to unclutter the plan must not take
+    /// it with them.</summary>
+    public static bool Saves = true;
 
     static bool? _forced;
 
@@ -157,6 +213,7 @@ public static class MapMarkers
         Effects   = view.GetBool(EffectsKey, true);
         Sprites   = view.GetBool(SpritesKey, false);
         Facing    = view.GetBool(FacingKey, false);
+        Saves     = view.GetBool(SavesKey, true);
     }
 
     // ---- the sample --------------------------------------------------------
@@ -171,6 +228,10 @@ public static class MapMarkers
     /// <summary>Live records per table in the last sample, for the probe and the
     /// panel's status line.</summary>
     public static readonly int[] Counts = new int[4];
+
+    /// <summary>Save points in the last sample, counted apart from the object
+    /// total they are part of.</summary>
+    public static int SaveCount;
 
     static long _sampledAt = long.MinValue;
     static int _sampledArea = -1;
@@ -188,13 +249,19 @@ public static class MapMarkers
     /// </summary>
     public static void Refresh(IMemory m, int area, long now)
     {
-        if (!Enabled) { _count = 0; Array.Clear(Counts); return; }
+        // **Not just `!Enabled`.** The save layer is independent of the marker
+        // layer above it, and this is the line that has to know: a player who
+        // turns "show what is in the area" off — which is most of the reason the
+        // switch exists, since the object squares are the clutter — was getting
+        // an empty sample, so the S's could never be drawn however the save
+        // setting read. Measured before the fix: `live 0, markers False`.
+        if (!Enabled && !Saves) { _count = 0; SaveCount = 0; Array.Clear(Counts); return; }
         if (area == _sampledArea && now - _sampledAt < PeriodMs) return;
         if (!ObjectTableSettled(m)) return;   // keep the last good sample, not a stale one
 
         _sampledArea = area;
         _sampledAt = now;
-        _count = Scan(m, _markers, Counts, Shown);
+        _count = Scan(m, _markers, Counts, Shown, out SaveCount);
     }
 
     /// <summary>
@@ -230,14 +297,20 @@ public static class MapMarkers
     /// <summary>The read itself, into a caller's buffer. Shared by the live
     /// sample and the probe's census, which wants every class whatever the
     /// settings say.</summary>
-    static int Scan(IMemory m, Marker[] dst, int[] counts, Func<Kind, bool> want)
+    static int Scan(IMemory m, Marker[] dst, int[] counts, Func<Kind, bool> want, out int saves)
     {
+        saves = 0;
         int n = 0;
         Array.Clear(counts);
 
         foreach (var t in Tables)
         {
-            if (!want(t.Kind)) continue;
+            // A save point is an object, so the object table is walked whenever
+            // *either* the prop layer or the save layer wants it, and each record
+            // is then admitted by whichever of the two claims it.
+            bool wanted = want(t.Kind);
+            bool saveScan = t.Kind == Kind.Object && Saves;
+            if (!wanted && !saveScan) continue;
 
             for (int i = 0; i < t.Count; i++)
             {
@@ -260,14 +333,18 @@ public static class MapMarkers
                 if ((x | y | z) == 0) continue;
                 if ((uint)Map.TileOf(x) >= Map.Span || (uint)Map.TileOf(z) >= Map.Span) continue;
 
-                counts[(int)t.Kind]++;
-
                 int type = t.TypeOff < 0 ? -1
                     : t.TypeWidth == 1 ? m.ReadU8(rec + (uint)t.TypeOff)
                                        : m.ReadU16(rec + (uint)t.TypeOff);
                 int def = t.DefOff < 0 ? -1
                     : t.DefWidth == 1 ? m.ReadU8(rec + (uint)t.DefOff)
                                       : m.ReadU16(rec + (uint)t.DefOff);
+
+                bool save = saveScan && IsSave(m, def);
+                if (!wanted && !save) continue;
+
+                counts[(int)t.Kind]++;
+                if (save) saves++;
 
                 int yaw = t.RotOff < 0 ? 0 : Yaw(m, rec + (uint)t.RotOff);
 
@@ -277,14 +354,19 @@ public static class MapMarkers
                 bool stepped = t.Kind != Kind.Object || m.ReadU8(rec + 0x4) != 0xFF;
 
                 if (n < dst.Length)
-                    dst[n++] = new Marker(t.Kind, i, x, y, z, type, def, yaw, HalfAt(x, y, z), stepped);
+                    dst[n++] = new Marker(t.Kind, i, x, y, z, type, def, yaw, HalfAt(x, y, z),
+                                          stepped, save);
             }
         }
 
         return n;
     }
 
-    static bool Shown(Kind k) => k switch
+    /// <summary>What the marker layer wants scanned. The save points are *not*
+    /// in here — they are admitted by <see cref="Scan"/> whatever this says, so
+    /// that neither <see cref="Enabled"/> nor <see cref="Objects"/> can take them
+    /// with it.</summary>
+    static bool Shown(Kind k) => Enabled && k switch
     {
         Kind.Creature => Creatures,
         Kind.Object   => Objects,
@@ -368,7 +450,7 @@ public static class MapMarkers
         // billboard table being wrong.
         var all = new Marker[_markers.Length];
         var counts = new int[Counts.Length];
-        int n = Scan(m, all, counts, _ => true);
+        int n = Scan(m, all, counts, _ => true, out int saves);
 
         if (!ObjectTableSettled(m))
             Console.WriteLine("[KF2] map markers: the object table reads between areas " +
@@ -382,6 +464,16 @@ public static class MapMarkers
             if (all[i].Kind == Kind.Object && all[i].Stepped) stepped++;
         Console.WriteLine($"[KF2] map markers: of the objects, {stepped} are stepped by stage 2 " +
                           $"and {counts[1] - stepped} are drawn but never stepped");
+        // Their tiles as well as their count: two save points a tile apart would
+        // be one object recorded twice, and the count alone cannot tell.
+        var where = new List<string>();
+        for (int i = 0; i < n; i++)
+            if (all[i].Save)
+                where.Add($"({Map.TileOf(all[i].X)},{Map.TileOf(all[i].Z)}" +
+                          $"{(all[i].Half == 0 ? "" : "u")} def {all[i].Def:X2})");
+        Console.WriteLine($"[KF2] map markers: {saves} save point(s) — definition kind " +
+                          $"0x{SaveKind:X2} in the 0x18-stride table at 0x{DefBase:X8}" +
+                          (where.Count > 0 ? ": " + string.Join(" ", where) : ""));
 
         foreach (Kind k in Enum.GetValues<Kind>())
         {

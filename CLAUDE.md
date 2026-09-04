@@ -772,7 +772,40 @@ dispatches through 224 jump-table entries and nothing here pairs an arm with a
 noun, so the readout prints the raw type and `KF2_MAP_PROBE=1` censuses all four
 tables with a type histogram, which is the instrument for closing that. The one
 confirmed identity is the creature's `u8[+0x2]`, the descriptor index `HitGuard`
-already uses. Billboards and the creature-facing spoke default off. Measured:
+already uses. **The one exception is the save point, and the game names it
+itself**: the use handler `func_800489FC` resolves each object's *definition* the
+way stage 2 does — `0x80175914 + u16[rec+0x6] * 0x18`, the `0x18`-stride table of
+kinds — and dispatches on `u8[def+0x0]`, not on the behaviour byte; its `0x0E`
+arm at `0x80048FEC` packs the entity table into the save buffer and then opens the
+slot menu `func_8001C624`, which is the only path in the handler that reaches
+`func_80023764` and the memory card. So **kind `0x0E` is a save point** and it is
+drawn as a white **S** in the middle of the *room* rather than on the object's own
+tile, since a save point stands against a wall like any other prop and an S on it
+marks the corner rather than the chamber. **A room is a definition, not a
+reading** (`Map.RoomCentre`): the largest solid rectangle of drawn tiles
+containing the object's tile, because a flood fill returns the whole floor —
+every walkable tile connects to every other through the doorways — while a
+rectangle is bounded on four sides at once and so stops at a doorway, degrading
+to a long thin one in a corridor. Memoised per tile and cleared on an *area*
+change rather than on a grid copy. **The letter is sized to the room too**, since
+a cell is 6-22 px and one cell of letter is a speck on a large area's map:
+`RoomCentre` returns the rectangle's short side and the S spans `0.55` of it
+clamped to 2.0-3.4 tiles, with the halo's offset growing with it. Measured: the
+letters sit a mean 2.2 tiles from their objects and draw at 26.4 px on a 12 px
+cell, against 12.6 px before. It is the one marker that is a letter, and
+**independent of the whole marker layer** rather than only of the object class in
+it. That was reported from play as *no save points ever show up on the map*: the
+first version was independent of `Objects` alone, and `MapMarkers.Refresh` opens
+by clearing the sample when the layer is off, so a player who had turned it off
+— which is most of the reason the switch exists, the object squares being the
+clutter — got an empty sample no draw could recover (measured `live 0, markers
+False`). `Shown` folds `Enabled` in and `Refresh` stands down only on
+`!Enabled && !Saves`. The same report's other half was a **size gate that could
+not fail**: `DrawSave` clamped the glyph up to nine pixels and then tested
+whether it had reached nine, so the fallback was dead code; it gates on the cell
+now, below five pixels a tile. Measured after: `4 of 4 lettered on the upper half
+at 12.0 px a tile`, with the marker layer off. Never looked at by eye: whether an S lands where the game
+actually lets you save. Billboards and the creature-facing spoke default off. Measured:
 144.0 fps and 20.0 ticks/s at `KF2_FPS=144` with both viewports drawing markers.
 Never judged by eye: whether the markers read at minimap size, and whether the
 facing spoke points the way the creature does. Two traps are

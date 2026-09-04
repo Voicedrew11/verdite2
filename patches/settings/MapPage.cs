@@ -214,6 +214,26 @@ public sealed class MapPage : IPatchPage
         // the minimap it adds information to a picture that has been judged rather
         // than a picture of its own -- and because a map that shows the maze but
         // not what is standing in it is the smaller half of the feature.
+        // **Outside the block below, and deliberately.** A save point is not one
+        // of the marker classes: it is independent of "Objects" — a player who
+        // turns the prop squares off to unclutter the plan is exactly the player
+        // who still wants to find a save point — and independent of the layer
+        // switch itself, which is the same argument one level up. Nesting it
+        // under "show what is in the area" is what made the S's invisible for
+        // anyone who had that off.
+        bool saves = MapMarkers.Saves;
+        if (ImGui.Checkbox("Save points", ref saves))
+        {
+            MapMarkers.Saves = saves;
+            PatchSettings.Set(MapMarkers.SavesKey, saves);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("An S on the square you can save in. Read out of the kind byte the " +
+                             "game's own use handler dispatches on, so it marks what the game " +
+                             "itself treats as a save point — the only object on the map with a " +
+                             "name. Needs room for a letter: below five pixels a tile it falls " +
+                             "back to a marker, which is the minimap's usual answer.");
+
         bool markers = MapMarkers.Enabled;
         if (ImGui.Checkbox("Show what is in the area", ref markers))
         {
