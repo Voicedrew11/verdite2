@@ -40,3 +40,6 @@ scratch/
 # Captured stdout from a run, kept while a defect is being read. A reading of
 # one session, not source -- same reason as ratecensus.txt above.
 *.log
+
+# Release artefacts.
+dist/

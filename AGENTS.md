@@ -32,6 +32,7 @@ you would be doing when you need them:
 | `docs/GAME_INTERNALS.md` | the game's own addresses and routines |
 | `docs/PATCHES_AND_MODS.md` | hooking, settings UI, frame pacing, auto reload |
 | `docs/INPUT.md` | pad, sticks, keyboard, mouse |
+| `docs/PACKAGING.md` | the redistributable: the launcher, the first-run build, CI |
 | `docs/TODO.md` | next steps and open, undiagnosed questions |
 
 Update the right document when you learn something — that is where findings
@@ -354,6 +355,9 @@ config/funcmaps/*.json   swept function maps (address/name/size; size is mandato
 patches/                 hand-written C# replacing recompiled functions
 mods/<id>/               runtime-loaded mods (mod.json + C#, Roslyn-compiled)
 mcp/                     stdio MCP server exposing the KF2_SHELL command channel as tools to MCP hosts
+Verdite2.Launcher/       the SHIPPED executable; builds with no disc, and makes the
+                         game at first run from the player's own image. See docs/PACKAGING.md
+packaging/               AppImage and Windows packaging, plus placeholder icons
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection and address-hunting tooling
@@ -447,10 +451,12 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty of
-the twenty-five are load-bearing; `0002`, `0003` and `0015` are diagnostics,
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-eight of
+the thirty-two are load-bearing; `0002`, `0003` and `0015` are diagnostics,
 `0013` is a settings-placement hook, and `0014b` only restores four comment lines
-whose presence patch `0015`'s context assumes.
+whose presence patch `0015`'s context assumes. (This count had drifted to
+twenty-five while the stack grew; it is a count of files, and the glob's sort is
+the apply order.)
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -646,6 +652,16 @@ uncaptured edit inside the checkout is left where it is.
   itself widened never count (`GpuHle.PortWidenedPrim`). **No recompile.** See
   "The present gate" in `docs/WIDESCREEN.md`.
 
+- `0030-expose-host-pump.patch` — the shipped launcher has to build the game
+  before there is a game to run, and that blocks for seconds; a window that stops
+  pumping for seconds is one the desktop offers to force-quit. `HostWindow.Pump`
+  already does exactly the right thing and is `internal`, and `WaitForValidDisc`
+  already runs that loop but only ever for its own condition. Exposed as
+  `Runtime.Pump`. Everything else the progress UI needs was public already —
+  `Popup` is abstract-public and `PopupManager.Register` takes any implementation
+  — so `Verdite2.Launcher/BuildProgressPopup.cs` is not a patch. UI only, **no
+  recompile**. See "The one patch this needed" in `docs/PACKAGING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.
@@ -654,6 +670,76 @@ on the CRT, here the window dies. See "The ending screen" in `docs/RUNTIME.md`.
 
 Upstream **rejects AI-authored pull requests outright**. Recompiler fixes go
 upstream as issues, never as PRs, unless the user writes the patch themselves.
+
+## Shipping it
+
+**The port cannot ship a playable binary, and that is the whole shape of the
+release.** `generated/` is a translation of FromSoftware's code and its compiled
+form is no less derived, so the assembly that plays the game has to be built on
+the machine of somebody who owns the disc. What *is* distributable is every
+**input** to that build: `config/`'s addresses are metadata about the code rather
+than the code, `patches/**` and `Program.cs` are original MIT work, and RecompOne
+is MIT. So the release ships the inputs and makes the output at first run.
+
+That is also a correctness win rather than only a legal one: the generated
+dispatch tables bake **absolute LBAs from one mastering** (`fdat02.cs` reads
+`LbaStart => 457`) and `Dispatcher` arms an overlay swap on a CD read hitting that
+exact sector, so a prebuilt binary would silently fail to load area modules on a
+differently mastered dump. A per-user recompile reads those LBAs off the player's
+own image.
+
+**`Verdite2.Launcher/` is the shipped executable and `KingsField2Recomp.csproj` is
+unchanged.** They are opposites on purpose: the game project compiles `generated/`
+and `patches/` through the SDK's default globs and so needs the disc, which is what
+keeps developer iteration incremental; the launcher compiles **neither** — it
+carries them as payload under `content/` and compiles them at first run. That is
+what lets CI build a release at all, and `.github/workflows/ci.yml` asserts it on
+every push, because it is easy to break by accident and invisible locally where
+`generated/` exists. Anything added to `Verdite2.Launcher/` must keep that
+property; the game csproj has a `Compile Remove` for the directory, the same
+CS0579 trap `tools/**`, `mods/**` and `mcp/**` are removed for.
+
+First run is: chdir into the data directory, register the disc validator, ask for
+a disc, build if this one has not been built, hand over. **The chdir is the whole
+packaging fix for file locations** — the runtime addresses `settings.json`,
+`interface.ini`, `carda.sav`, `carda.fog` and `mods/.cache` with bare relative
+paths, so they all follow it and none of them needed a patch
+(`%LOCALAPPDATA%\Verdite2`, `~/.local/share/verdite2`, `VERDITE2_DATA` to
+override). **`Runtime.DiscValidator` has existed since the runtime was written and
+nothing ever filled it**, so until now any file at all was accepted;
+`DiscCheck.Validate` fills it and names `SLUS-00255` explicitly, that being the
+game most people will reach for and one that would otherwise build. The recompiler
+runs **in process** through `Assembly.EntryPoint` — its `Program.cs` is top-level
+statements, so its entry point is an ordinary invocable method, and a self-contained
+publish has no `dotnet` to launch a second process with. Measured: **12.7 s** from
+launching the AppImage to a running game, of which the recompile is 0.85 s.
+
+**The recompiled output and the port's own sources are compiled in ONE Roslyn
+pass**, because the port reaches into the recompiled code directly — `Program.cs`
+calls `Recompiled.Entry.Run` and `AutoReload`, `AreaWarp` and `CullGrid` make
+fifteen static calls to `Recompiled.KingsField2.func_XXXXXXXX`. Splitting them
+would mean an interface boundary for each, or routing through `Dispatcher.Call`,
+which goes through `HookManager` and so is *not the same call*. Two things about
+that pass were nearly wrong and are worth carrying: **the reference set must come
+from `TRUSTED_PLATFORM_ASSEMBLIES`, not from loaded assemblies** — the first
+version copied `ModCompiler`, which is right for a *mod* (it compiles against what
+the game has, and by then the game has loaded it) and wrong here, because the
+launcher has loaded almost nothing; it failed on `AgentServer.cs` with six errors
+about `System.Net.Sockets` purely because the launcher never opens a socket. And
+**`ImplicitUsings` is an SDK feature, not a compiler one**, so `GameCompile`
+supplies `GlobalUsings.g.cs` itself or the port's 22k lines lose `System` and
+`System.Linq` in hundreds of places that read as the port being broken.
+**`GameCompile`'s options and `KingsField2Recomp.csproj`'s properties are two
+statements of one thing and must stay in step** — a difference between them is a
+bug that exists only in the release, and losing the frame boundary that way is not
+a crash but the whole game running fast, silently. The check is `KF2_FPS=144
+KF2_FPS_PROBE=1` on the packaged binary: measured 144.0 fps drawn at 20.0 ticks/s.
+
+Packaging is `packaging/linux/build-appimage.sh` and
+`packaging/windows/build-windows.ps1`, neither of which needs the disc; trimming is
+off and must stay off (MonoMod detours, Roslyn, `AutoStart`'s reflection). The
+icons under `packaging/shared/` are **placeholders**. Not packaged: macOS and
+Flatpak. Not supported: `.chd`. See `docs/PACKAGING.md`.
 
 ## Repository conventions
 

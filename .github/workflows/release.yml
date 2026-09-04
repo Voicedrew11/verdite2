@@ -1,0 +1,101 @@
+# Build the redistributable for Windows and Linux.
+#
+# The whole reason this can exist is that Verdite2.Launcher builds WITHOUT the
+# disc: it ships the inputs to a build (config/, and the port's own C#) and makes
+# the game on the player's machine from the image they own. So CI never needs,
+# never has and never handles game data.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+          - os: windows-latest
+            name: windows
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      # Clones RecompOne at its pin and applies patches/recompone/*. The patch
+      # stack targets one upstream tree, so this is not optional and not
+      # substitutable by a NuGet package.
+      - name: RecompOne checkout and patches
+        shell: bash
+        run: bash scripts/setup_tools.sh
+
+      # The property the release depends on, asserted rather than assumed: if the
+      # launcher ever gains a dependency on generated/, this is where it is caught,
+      # and not after somebody has downloaded it.
+      - name: Assert the launcher needs no disc
+        shell: bash
+        run: |
+          test ! -e generated || { echo "generated/ exists in CI; it must not"; exit 1; }
+          test -z "$(ls -A disc 2>/dev/null | grep -v README.md || true)" || { echo "disc data in CI"; exit 1; }
+
+      - name: Package (Linux)
+        if: matrix.name == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2t64 || sudo apt-get install -y libfuse2
+          bash packaging/linux/build-appimage.sh
+
+      - name: Package (Windows)
+        if: matrix.name == 'windows'
+        shell: pwsh
+        run: |
+          # Inno Setup is preinstalled on windows-latest; add it to PATH so the
+          # script builds the installer rather than only the zip.
+          $iscc = "C:\Program Files (x86)\Inno Setup 6"
+          if (Test-Path $iscc) { echo $iscc >> $env:GITHUB_PATH }
+          ./packaging/windows/build-windows.ps1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verdite2-${{ matrix.name }}
+          path: |
+            dist/*.AppImage
+            dist/*.zip
+            dist/*setup.exe
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: true
+          body: |
+            **Verdite2 ships no game data.** You need your own dump of King's
+            Field (NTSC-U, `SLUS-00158`) as a `.cue` / `.bin` pair.
+
+            On first launch Verdite2 asks for that image and builds the game from
+            it, which takes about fifteen seconds and happens once. Later launches
+            start straight away.
+
+            Note that the US-boxed *King's Field II* (`SLUS-00255`) is a different
+            game and will be refused.

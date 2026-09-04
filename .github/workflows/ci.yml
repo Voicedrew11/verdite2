@@ -1,0 +1,29 @@
+# Every push: prove the shipped project still builds with no disc present.
+#
+# That is the one property the whole release story rests on, and it is easy to
+# break by accident -- a using directive in the launcher that reaches into
+# generated/, or a source file dropped into Verdite2.Launcher/ that the default
+# glob then compiles. Neither shows up locally, where generated/ exists.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  no-disc-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - run: bash scripts/setup_tools.sh
+
+      - name: Build the launcher with no disc
+        run: dotnet build Verdite2.Launcher/Verdite2.Launcher.csproj -c Release
+
+      # KingsField2Recomp.csproj is deliberately NOT built here: it compiles
+      # generated/ and so cannot build without the disc, by design.

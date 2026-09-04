@@ -1,0 +1,117 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <!--
+      The shipped executable.
+
+      This project is the whole redistributable, and the one property that matters
+      about it is that IT BUILDS WITHOUT THE DISC. generated/ is a derivative of
+      copyrighted code, so it can be neither committed nor shipped; the launcher
+      therefore carries the *inputs* to a build (config/, the port's own C#) and
+      produces the game assembly on the player's machine from the dump they
+      supply. That is also why CI can build a release at all: it has no disc and
+      never needs one.
+
+      KingsField2Recomp.csproj stays exactly as it was (the developer path, where
+      generated/ and patches/ are compiled by the SDK and iteration is incremental).
+      Both compile the same sources; see GameCompile.cs for the options that have
+      to be kept in step between the two.
+    -->
+    <PropertyGroup>
+        <!--
+          WinExe, not Exe: on Windows a console-subsystem binary opens a console
+          window behind the game on every launch, which is right for the developer
+          build (KingsField2Recomp.csproj stays Exe) and wrong for a release. It
+          costs nothing on Linux, where the two are the same thing, and it costs no
+          diagnostics either: Console.cs reattaches to a parent console when there
+          is one, and RecompOne mirrors console output into its own panel anyway.
+        -->
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <AssemblyName>Verdite2</AssemblyName>
+        <RootNamespace>Verdite2.Launcher</RootNamespace>
+
+        <!--
+          The cache key is derived from this, so a released build that changes the
+          port's behaviour must bump it or a player keeps the game.dll they already
+          have. BuildKey hashes the shipped sources too, which catches the ordinary
+          case on its own; this covers a change in the launcher itself.
+        -->
+        <Version>0.1.0</Version>
+
+        <!--
+          Trimming would break this port three ways over: MonoMod.RuntimeDetour
+          builds its detours at run time, ModCompiler hands Roslyn the loaded
+          assemblies as its reference set, and patches/AutoStart.cs reflects over
+          runtime internals. Single-file is off too: the payload below is read as
+          loose files beside the executable.
+        -->
+        <PublishTrimmed>false</PublishTrimmed>
+        <PublishSingleFile>false</PublishSingleFile>
+
+        <!--
+          The recompiler is an Exe, and the SDK refuses an Exe-to-Exe reference
+          across a self-contained boundary (NETSDK1150) because the referenced
+          project's apphost would be built framework-dependent and shipped beside a
+          self-contained one. We never ship or run that apphost: Recompile.cs loads
+          the assembly and calls its entry point in this process. So the check has
+          nothing to protect here, and this is the property that says so.
+        -->
+        <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
+        <InvariantGlobalization>true</InvariantGlobalization>
+        <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+
+        <!--
+          Windows reads the icon out of the executable itself, so it has to be set
+          here rather than by the packaging. Placeholder art; see
+          packaging/shared/README.md.
+        -->
+        <ApplicationIcon>../packaging/shared/verdite2.ico</ApplicationIcon>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="../tools/RecompOne/RecompOne.Runtime/RecompOne.Runtime.csproj" />
+        <!--
+          The recompiler is referenced as an assembly, not shelled out to. It is an
+          Exe with top-level statements, so its entry point is Program.<Main>$ and
+          Recompile.cs invokes it through Assembly.EntryPoint, which needs no
+          upstream change and, more to the point, no `dotnet` on the player's
+          machine to run a second process with.
+        -->
+        <ProjectReference Include="../tools/RecompOne/RecompOne.Recompiler/RecompOne.Recompiler.csproj" />
+    </ItemGroup>
+
+    <!--
+      The build payload, staged into content/ beside the executable.
+      Nothing here contains a byte of disc data:
+        config/    addresses, names and sizes swept from the disc, plus the SDK
+                   address map. Metadata about the code, not the code.
+        src/       the port's own C# - Program.cs and patches/**, MIT and already
+                   public in this repository - compiled at first run together with
+                   the recompiler's output. See GameCompile.cs for why they are
+                   compiled together rather than precompiled.
+        mods/      seeded into the data directory on first run.
+    -->
+    <ItemGroup>
+        <Content Include="../config/**/*.json" LinkBase="content/config" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="../Program.cs" Link="content/src/Program.cs" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="../patches/**/*.cs" LinkBase="content/src/patches" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="../mods/**/*" Exclude="../mods/.cache/**" LinkBase="content/mods" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+
+    <!--
+      ../Program.cs and ../patches/** are payload, NOT sources of this assembly:
+      they call into Recompiled.KingsField2, which does not exist until a disc has
+      been recompiled. Without these removes the SDK's default globs would try to
+      compile them here and the launcher would stop building without the disc,
+      which is the one property it exists to have.
+    -->
+    <ItemGroup>
+        <Compile Remove="content/**" />
+        <Compile Remove="bin/**" />
+    </ItemGroup>
+
+</Project>
