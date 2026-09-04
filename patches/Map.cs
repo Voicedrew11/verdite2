@@ -105,6 +105,9 @@ public static class Map
     public const string SizeKey     = "kf2.map.minimap.size";
     public const string RadiusKey   = "kf2.map.minimap.radius";
     public const string CornerKey   = "kf2.map.minimap.corner";
+    public const string PadKey      = "kf2.map.minimap.pad";
+    public const string ShapeKey    = "kf2.map.minimap.shape";
+    public const string OpacityKey  = "kf2.map.minimap.opacity";
     public const string ShadeKey    = "kf2.map.shade";
     public const string WallsKey    = "kf2.map.walls";
     public const string FloorKey    = "kf2.map.floor";
@@ -121,8 +124,38 @@ public static class Map
     public static int MinimapSize = 220;
     public static int MinimapRadius = 12;
 
-    /// <summary>0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right.</summary>
+    /// <summary>Where the minimap is pinned. 0 top-left, 1 top-right, 2
+    /// bottom-left, 3 bottom-right, 4 top-centre.
+    ///
+    /// **The low two bits are load-bearing for 0..3 and nothing else.** Those
+    /// four were read as a bitmask — bit 0 the right edge, bit 1 the bottom — and
+    /// the numbering is kept because it is what is already in a player's
+    /// <c>interface.ini</c>; but a centred anchor has no such bit, so
+    /// <c>MapOverlay</c> switches on the value rather than masking it.</summary>
     public static int MinimapCorner = 1;
+
+    /// <summary>How far the minimap sits from the edges it is pinned to, in
+    /// logical pixels — scaled by <c>Theme.Scale</c> alongside the size, so the
+    /// gap does not shrink as the interface grows. 12 is what shipped.
+    ///
+    /// A centred anchor spends it on the top edge only; there is no horizontal
+    /// edge to stand off from.</summary>
+    public static int MinimapPad = 12;
+
+    /// <summary>0 square, 1 circle. Square by default, which is what shipped and
+    /// what the tile grid actually is; a circle costs the corners of the window
+    /// and is the shape a player expects an overlay compass to be.</summary>
+    public static int MinimapShape;
+
+    /// <summary>How opaque the minimap's ground and tiles are drawn, 0.15..1.
+    ///
+    /// **1 is the shipped picture and is the default**, for the rule the rest of
+    /// the port follows: a picture nobody has judged by eye does not become the
+    /// default. Below 1 the game shows through the map, which is the point of an
+    /// overlay — the player's arrow is deliberately exempt (see
+    /// <c>MapRender.DrawPlayer</c>), since a marker you cannot find is not worth
+    /// drawing at all.</summary>
+    public static float MinimapOpacity = 1f;
 
     /// <summary>Shade a tile by its height byte.</summary>
     public static bool Shade = true;
@@ -206,6 +239,9 @@ public static class Map
             MinimapSize   = view.GetInt(SizeKey, MinimapSize);
             MinimapRadius = view.GetInt(RadiusKey, MinimapRadius);
             MinimapCorner = view.GetInt(CornerKey, MinimapCorner);
+            MinimapPad    = view.GetInt(PadKey, MinimapPad);
+            MinimapShape   = view.GetInt(ShapeKey, MinimapShape);
+            MinimapOpacity = view.GetFloat(OpacityKey, MinimapOpacity);
             Shade         = view.GetBool(ShadeKey, true);
             Walls         = view.GetBool(WallsKey, true);
             Floor         = view.GetInt(FloorKey, -1);

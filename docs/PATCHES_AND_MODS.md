@@ -2912,6 +2912,77 @@ and out of a load. Panels do not auto-populate the menu bar, so the map also
 registers under a new `menu.game`, whose label key supplies all three of the
 runtime's languages.
 
+**An overlay is a z-order problem before it is a drawing one, and the minimap
+shipped invisible because of it.** Reported from play as "there is no way to
+overlay the map — only the map as a whole tab works": the minimap window carried
+`ImGuiWindowFlags.NoBringToFrontOnFocus`, which reads like chrome politely
+declining to steal focus and is nothing of the kind. ImGui reads that flag **once,
+in `CreateNewWindow`**, and pushes such a window to the *front of `g.Windows`* —
+which is the **back** of the display order — instead of appending it. The window
+also has `NoInputs` and `NoFocusOnAppearing`, so nothing ever focuses it and it
+has no second route forward, and `OutputPanel.Draw` pushes an **opaque** black
+`WindowBg` over the whole dockspace. So the minimap was drawn correctly on every
+frame, underneath the game picture, for the life of the feature. Dropping the flag
+appends it instead: it sits above everything that already exists, the dock tree
+cannot displace it (`##DockHost` carries the flag itself, so focusing a docked
+panel does not bring the tree forward), and a popup created later still covers it,
+which is what should happen. The full map never saw any of this because it is an
+ordinary docked panel — **the split in the report is the diagnosis**, and
+`MapOverlay` is the only `IFloatingPanel` in the tree, so nothing else had ever
+exercised the combination.
+
+What is still true of the anchoring is that the minimap is pinned to the *main
+viewport's* work area rather than to the game picture, and the picture is
+letterboxed inside `OutputPanel`'s content region. At 4:3 in a wide window a
+corner therefore lands on the black bar beside the game rather than over it. That
+is arguably the better place for it and it is the user's to judge; anchoring to
+the image would need the runtime to publish that rectangle, since `OutputPanel` is
+`internal`.
+
+**Five anchors, and the numbering is the old bitmask plus one.** `0..3` were read
+as a mask — bit 0 the right edge, bit 1 the bottom — which is exactly two binary
+choices and therefore cannot express a *centred* one. `4` is top centre, and
+`MapOverlay` switches on the value instead of masking it; the four original
+numbers keep their meanings because they are already written in players'
+`interface.ini`, so "Top centre" is appended to the combo rather than slotted in
+beside the other two top entries. An unrecognised value falls back to the shipped
+top-right rather than landing off-screen.
+
+**The edge gap is a setting** (`kf2.map.minimap.pad`, 0-200 px, 12 by default —
+the constant that shipped). It is scaled by `Theme.Scale` alongside the size, so
+the gap keeps its proportion as the interface scale moves rather than closing up
+on a large one, and it is clamped where it is *used* as well as where it is set:
+it is a saved number, and a big enough one would push the map off the screen
+leaving no control on it to bring it back. A centred anchor spends it on the top
+edge only — there is no horizontal edge to stand off from.
+
+#### The minimap's shape and opacity
+
+Two knobs under Gameplay > Map, both defaulting to the picture that shipped — a
+fully opaque square — for the rule the rest of the port follows: a picture nobody
+has judged by eye does not become the default.
+
+**Opacity** (`kf2.map.minimap.opacity`, 0.15-1) is the ground and the tiles, not
+the window. The window's own background is a rectangle ImGui fills before the draw
+list runs, so it can be neither round nor faded independently of what is drawn over
+it; the overlay carries `NoBackground` instead and fills its own ground, which
+makes the setting the single store for how solid the map is. The palette is built
+once as packed `IM_COL32` words, so fading is `MapRender.Fade` scaling the high
+byte — a colour that is already translucent (the wall tint, the lit tint) stays
+proportionally so. **The player's arrow is exempt**: an overlay you can see the
+game through is the point, and a "you are here" marker you cannot find is not.
+
+**Shape** (`kf2.map.minimap.shape`, square or circle) is a clipping problem with no
+clipping available. ImGui's clip rects are rectangles and a draw list cannot erase
+what it has already drawn, so the usual mask — a ring painted in the background
+colour over the corners — needs the background to be opaque, which is exactly what
+the opacity setting forbids. So the circle is cut per tile instead
+(`MapRender.ClipToCircle`): each tile's rect is clamped to the chords the disc
+allows **at its far edges**, which can fall short of the circle by a fraction of a
+tile but can never spill past it — and spill is the artefact a drawn border ring
+makes obvious. The edge is therefore scalloped by up to one cell at the diagonals;
+at the default 220 px over 25 tiles a cell is 8.8 px.
+
 Measured cost: 144.0 fps drawn and 20.0 ticks/s with both viewports drawing at
 `KF2_FPS=144`, indistinguishable from `KF2_MAP=0`.
 
@@ -2927,7 +2998,9 @@ come from the model index at `+0` (what it uses, because that is the renderer's 
 test) or from the collision bytes at `+2` and `+3`; whether the height shading
 reads or muddies; whether bit `0x80` of `+4` is the wall it behaves like in the
 visibility flood or the "see through" `docs/WIDESCREEN.md` calls it; and whether
-the minimap's size, corner and range are usable in play. The full map's hover
+the minimap's size, corner, range, shape and opacity are usable in play — the
+scalloped edge of the circle and the readability of a faded map over a dark area
+in particular. The full map's hover
 readout prints all ten bytes of the tile under the cursor for exactly that reason.
 
 ### Fog of war

@@ -60,6 +60,23 @@ public static class MapRender
     public static uint Ground { get { Build(); return _ground; } }
 
     /// <summary>
+    /// The same colour, drawn at <paramref name="alpha"/> of its own opacity.
+    ///
+    /// The palette is built once as packed <c>IM_COL32</c> words — R in the low
+    /// byte, **A in the high one** — so a viewport that wants the game to show
+    /// through it scales that byte rather than rebuilding a palette of its own.
+    /// A colour that is already translucent (the wall tint, the lit tint, the
+    /// grid) stays proportionally so, which is what keeps the tints reading as
+    /// tints at any opacity.
+    /// </summary>
+    public static uint Fade(uint c, float alpha)
+    {
+        if (alpha >= 0.999f) return c;
+        uint a = (uint)Math.Clamp((c >> 24) * Math.Clamp(alpha, 0f, 1f), 0f, 255f);
+        return (c & 0x00FFFFFFu) | (a << 24);
+    }
+
+    /// <summary>
     /// Fill the tiles of <paramref name="half"/> that fall in the inclusive
     /// window x0..x1 / z0..z1. <paramref name="origin"/> is where the grid's
     /// top-left corner lands in screen space and <paramref name="cell"/> is a
@@ -77,9 +94,16 @@ public static class MapRender
     public static void Draw(ImDrawListPtr dl, Vector2 origin, float cell,
                             int x0, int z0, int x1, int z1,
                             int half, bool shade, bool walls, bool grid,
-                            Func<int, int, int>? state)
+                            Func<int, int, int>? state,
+                            float alpha = 1f,
+                            Vector2? circleCentre = null, float circleRadius = 0f)
     {
         Build();
+
+        bool circle = circleCentre.HasValue && circleRadius > 0f;
+        float ccx = circle ? circleCentre!.Value.X : 0f;
+        float ccy = circle ? circleCentre!.Value.Y : 0f;
+        float rr = circleRadius * circleRadius;
 
         x0 = Math.Max(x0, 0); z0 = Math.Max(z0, 0);
         x1 = Math.Min(x1, Map.Span - 1); z1 = Math.Min(z1, Map.Span - 1);
@@ -106,28 +130,68 @@ public static class MapRender
                 }
 
                 var a = new Vector2(origin.X + x * cell, origin.Y + r * cell);
-                dl.AddRectFilled(a, new Vector2(a.X + cell, a.Y + cell), c);
+                var e = new Vector2(a.X + cell, a.Y + cell);
+
+                // A round viewport, done by cutting each tile back to the disc
+                // rather than by clipping: ImGui's clip rects are rectangles and a
+                // draw list cannot erase what it has already drawn, so a mask ring
+                // would have to be painted in the ground colour — which is exactly
+                // what must *not* be opaque here. Each tile is clamped instead to
+                // the chords the circle allows at its far edges, which never
+                // reaches outside the disc and can fall a fraction of a tile short
+                // of it: the edge is scalloped by up to one cell at the diagonals.
+                if (circle && !ClipToCircle(ref a, ref e, ccx, ccy, rr)) continue;
+
+                dl.AddRectFilled(a, e, Fade(c, alpha));
 
                 // The bit the visibility flood stops on. Drawn over the tile
                 // rather than instead of it, because whether it means "wall" or
                 // "see through" is not settled — see the class comment on Map.
                 if (walls && (Map.Tiles[b + Map.Flags] & Map.StopsFlood) != 0)
-                    dl.AddRectFilled(a, new Vector2(a.X + cell, a.Y + cell), _wall);
+                    dl.AddRectFilled(a, e, Fade(_wall, alpha));
 
                 // In the cull cone as of the last sample: drawn over the tile, so
                 // the shading underneath still reads.
                 if (fog == 2)
-                    dl.AddRectFilled(a, new Vector2(a.X + cell, a.Y + cell), _lit);
+                    dl.AddRectFilled(a, e, Fade(_lit, alpha));
             }
         }
 
         if (!grid || cell < 6f) return;
+        uint gridCol = Fade(_grid, alpha);
         for (int x = x0; x <= x1 + 1; x++)
             dl.AddLine(new Vector2(origin.X + x * cell, origin.Y + z0 * cell),
-                       new Vector2(origin.X + x * cell, origin.Y + (z1 + 1) * cell), _grid);
+                       new Vector2(origin.X + x * cell, origin.Y + (z1 + 1) * cell), gridCol);
         for (int z = z0; z <= z1 + 1; z++)
             dl.AddLine(new Vector2(origin.X + x0 * cell, origin.Y + z * cell),
-                       new Vector2(origin.X + (x1 + 1) * cell, origin.Y + z * cell), _grid);
+                       new Vector2(origin.X + (x1 + 1) * cell, origin.Y + z * cell), gridCol);
+    }
+
+    /// <summary>
+    /// Shrink a tile's rect to what fits inside the disc, or return false when
+    /// none of it does.
+    ///
+    /// The clamp is taken at each axis's **far** edge — the corner of the tile
+    /// furthest from the centre — so the chord it allows is the narrowest the
+    /// tile spans and the result is always inside the circle. Taking the near
+    /// edge instead would let the corners spill past the border ring, which is
+    /// the one artefact a drawn outline makes obvious.
+    /// </summary>
+    static bool ClipToCircle(ref Vector2 a, ref Vector2 e, float cx, float cy, float rr)
+    {
+        float dxFar = Math.Max(Math.Abs(a.X - cx), Math.Abs(e.X - cx));
+        float dyFar = Math.Max(Math.Abs(a.Y - cy), Math.Abs(e.Y - cy));
+
+        float wSq = rr - dyFar * dyFar;
+        float hSq = rr - dxFar * dxFar;
+        if (wSq <= 0f || hSq <= 0f) return false;
+
+        float halfW = MathF.Sqrt(wSq), halfH = MathF.Sqrt(hSq);
+
+        a.X = Math.Max(a.X, cx - halfW); e.X = Math.Min(e.X, cx + halfW);
+        a.Y = Math.Max(a.Y, cy - halfH); e.Y = Math.Min(e.Y, cy + halfH);
+
+        return e.X > a.X && e.Y > a.Y;
     }
 
     /// <summary>
@@ -153,6 +217,11 @@ public static class MapRender
     /// the player turned left. Negating the angle alone would have squared the
     /// arrow with the report and left it pointing across the direction of travel,
     /// because the mirror was in the map rather than in the arrow.
+    ///
+    /// **The arrow does not fade with the rest of the map.** The minimap's
+    /// opacity is there so the game shows through the ground and the tiles; a
+    /// "you are here" marker that dims with them is the one thing that has to
+    /// stay findable, so it is drawn at full opacity whatever the setting says.
     /// </summary>
     public static void DrawPlayer(ImDrawListPtr dl, Vector2 origin, float cell, float size)
     {

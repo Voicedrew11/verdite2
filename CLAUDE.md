@@ -609,7 +609,13 @@ unasked is worse than one switch to find. What no counter can answer is the feel
 original shipped no automap, and everything else in the port that knows where you
 are is a debug instrument — so it is on by default and its knobs are under
 Gameplay. `M` opens the full map, `N` toggles a corner minimap; the minimap
-defaults *off*, for the sub-pixel reason. **It needs no hook and writes nothing**:
+defaults *off*, for the sub-pixel reason. **It is a fully opaque square by
+default and can be a circle and semi-transparent** (Gameplay ▸ Map): opacity
+fades the ground and the tiles but never the player's arrow, and the circle is
+cut **per tile** — ImGui clip rects are rectangles and a draw list cannot erase,
+so the usual mask ring would have to be painted opaque, which is the one thing
+the opacity setting forbids — clamping each tile to the disc's chords at its far
+edges, which scallops the edge by up to a cell and never spills past it. **It needs no hook and writes nothing**:
 the area loader `func_8001689C` copies 64,000 bytes to `0x801C8484`, which is an
 **80x80 grid of 10-byte tile records** — `tile = 0x801C8484 + 800·z + 10·x`, a
 tile spanning 2048 world units, so `tileX = worldX >> 11` — and each record is two

@@ -19,7 +19,13 @@ public sealed class MapPage : IPatchPage
     public string Id => "map";
     public string Title => "Map";
 
-    static readonly string[] Corners = ["Top left", "Top right", "Bottom left", "Bottom right"];
+    // The order is the stored value's, not a tidy one: 0..3 are the bitmask the
+    // minimap shipped with and are already in players' interface.ini, so "Top
+    // centre" is appended as 4 rather than slotted in beside the other two top
+    // entries.
+    static readonly string[] Corners =
+        ["Top left", "Top right", "Bottom left", "Bottom right", "Top centre"];
+    static readonly string[] Shapes  = ["Square", "Circle"];
     static readonly string[] Floors  = ["Follow the player", "Lower", "Upper"];
 
     public void Draw()
@@ -45,21 +51,52 @@ public sealed class MapPage : IPatchPage
         {
             ImGui.Indent();
 
-            int corner = System.Math.Clamp(Map.MinimapCorner, 0, 3);
+            int corner = System.Math.Clamp(Map.MinimapCorner, 0, Corners.Length - 1);
             ImGui.SetNextItemWidth(180);
-            if (ImGui.Combo("Corner", ref corner, Corners, Corners.Length))
+            if (ImGui.Combo("Position", ref corner, Corners, Corners.Length))
             {
                 Map.MinimapCorner = corner;
                 PatchSettings.Set(Map.CornerKey, corner);
             }
 
+            int pad = Map.MinimapPad;
+            ImGui.SetNextItemWidth(180);
+            if (ImGui.SliderInt("Edge padding", ref pad, 0, 200, "%d px"))
+            {
+                Map.MinimapPad = pad;
+                PatchSettings.Set(Map.PadKey, pad);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("How far the minimap stands off the edges it is pinned to. " +
+                                 "Scaled with the interface, like the size. Top centre spends " +
+                                 "it on the top edge only.");
+
+            int shape = System.Math.Clamp(Map.MinimapShape, 0, 1);
+            ImGui.SetNextItemWidth(180);
+            if (ImGui.Combo("Shape", ref shape, Shapes, Shapes.Length))
+            {
+                Map.MinimapShape = shape;
+                PatchSettings.Set(Map.ShapeKey, shape);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("A circle cuts the corners off the same view. The tiles are cut " +
+                                 "to the disc a tile at a time, so its edge is stepped by up to " +
+                                 "one tile.");
+
+            // The range is MapOverlay's own clamp, not a tidier number: a
+            // slider that stops short of what the code allows is a control that
+            // cannot reach a legal setting, and 480 against a clamp of 640 was
+            // exactly that.
             int size = Map.MinimapSize;
             ImGui.SetNextItemWidth(180);
-            if (ImGui.SliderInt("Size", ref size, 80, 480, "%d px"))
+            if (ImGui.SliderInt("Size", ref size, 80, 640, "%d px"))
             {
                 Map.MinimapSize = size;
                 PatchSettings.Set(Map.SizeKey, size);
             }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("The minimap's side in logical pixels, scaled by the interface " +
+                                 "scale — so a large scale draws it larger than this says.");
 
             int radius = Map.MinimapRadius;
             ImGui.SetNextItemWidth(180);
@@ -70,6 +107,20 @@ public sealed class MapPage : IPatchPage
             }
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip("Tiles either side of you. A tile is 2048 world units.");
+
+            // Opacity is the ground and the tiles, not the arrow: see
+            // MapRender.DrawPlayer. 1 is what shipped, so the default changes
+            // nothing until a player asks it to.
+            float opacity = Map.MinimapOpacity;
+            ImGui.SetNextItemWidth(180);
+            if (ImGui.SliderFloat("Opacity", ref opacity, 0.15f, 1f, "%.2f"))
+            {
+                Map.MinimapOpacity = opacity;
+                PatchSettings.Set(Map.OpacityKey, opacity);
+            }
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("How solid the map is drawn over the game. The player's arrow " +
+                                 "stays fully visible whatever this says.");
 
             ImGui.Unindent();
         }
