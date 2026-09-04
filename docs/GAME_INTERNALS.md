@@ -358,14 +358,44 @@ record as (`generated/game.cs:37716-37727`):
 so the map is **80 x 80 tiles of 10 bytes**, 800 bytes a row — the 24x24 grid is a
 window into it, not its size. Both loop bounds test against `0x50` = 80.
 
-Each tile has **two drawn halves**, and the pair is the whole record:
+Each tile is **two stacked 5-byte halves**, and the pair is the whole record — a
+lower floor at `+0` and an upper at `+5`, which is why a tile can be walked over
+*and* under. `func_80031B1C` draws half A on bit 0 of `flags` and half B on bit 1.
+Per half:
 
-| offset | what |
-|---|---|
-| `+0x0` | model index for half A; drawn when `< 240` and bit 0 of `flags` |
-| `+0x1` | **height byte** for half A |
-| `+0x5` | model index for half B; drawn when `< 240` and bit 1 of `flags` |
-| `+0x6` | **height byte** for half B |
+| offset in half | what | where it is read |
+|---|---|---|
+| `+0` | **model index**; `0xFF` empty, drawn when `< 240` | `func_80031B1C`, `generated/game.cs:37735` |
+| `+1` | **height byte**; the floor's Y is `-(h) << 7` | `generated/game.cs:37754` |
+| `+2` | collision flags, `& 0xFC` tested | `func_8002C700`, `generated/game.cs:31600-31604` |
+| `+3` | collision-shape index into the block at `0x801D8484` | `func_8002B7D0`, `generated/game.cs:30341-30352` |
+| `+4` | flags; bit `0x80` stops the visibility flood | `patches/CullGrid.cs:510` |
+
+Bit `0x80` of `+4` is **not settled**: the flood marks such a cell lit and then
+*stops*, which is an occluder, while `docs/WIDESCREEN.md` labels the same bit "see
+through". Nothing here can tell them apart; `patches/MapPanel.cs`'s hover readout
+prints all ten bytes so a person can.
+
+**Which half you are on is a global the game maintains for you**: `func_8002B6B4`
+leaves the selector — `0` or `5` — at `u16[0x801D9C8E]` on every floor query,
+along with a pointer to the record at `0x801D9C84`, to the half at `0x801D9C88`,
+and the resolved floor Y at `0x801D9C90`.
+
+**The whole block is streamed in per area**: `func_8001689C` copies `0x3E80` words
+to `0x801C8484` and `0x600` to the shape block (`generated/game.cs:4231-4239`).
+That function is *called every frame* with the load in a branch, so it is not a
+usable "the area changed" hook — see "The area loader looks like the right hook
+and is not" in `docs/PATCHES_AND_MODS.md`.
+
+**A cleared grid reads as a full one.** A zeroed record's model index is 0, which
+is below 240, so between areas all 12,800 halves pass the drawn test: measured
+"12800 occupied halves, height 0..0" at the boot against 5,126 and 6,313 in two
+real areas. Anything reading this table for itself needs that test.
+
+**The invariant worth checking against, confirmed over three save slots, two areas
+and both floors:** the player at `0x801994EC`/`F0`/`F4` stands on a half the
+renderer draws, and that half's `-(height << 7)` equals their Y **exactly** —
+measured gap 0 every time. `KF2_MAP_PROBE=1` prints it.
 
 The position handed to the submit routine `func_80031950(model, &vec, flags)` is
 built at `generated/game.cs:37746-37762`, camera-relative:

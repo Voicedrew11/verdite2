@@ -219,7 +219,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 
 ### [PATCHES_AND_MODS.md](docs/PATCHES_AND_MODS.md)
 
-How the port's own code attaches, where its settings go, plus frame pacing and auto reload.
+How the port's own code attaches, where its settings go, plus frame pacing, auto reload and the map.
 
 - Where each patch is written up
 - Mods
@@ -227,6 +227,7 @@ How the port's own code attaches, where its settings go, plus frame pacing and a
 - Frame pacing: the port is pinned to the fastest band
 - Any frame rate: three gates, one logic clock, and a smoothed view
 - Auto reload
+- A dynamic map
 - Auto start and the agent beacon
 - The command channel
 - `ending` exists because the last ten minutes of the game are otherwise untestable

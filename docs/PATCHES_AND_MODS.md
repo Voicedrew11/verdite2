@@ -2751,6 +2751,197 @@ and *Simulate death* from the new tab logged
 result the mod gave, so the hook, the config read and the reload path all survived
 the move.
 
+## A dynamic map
+
+`patches/Map.cs`, `patches/MapRender.cs`, `patches/MapPanel.cs`,
+`patches/MapOverlay.cs`, `patches/settings/MapPage.cs`.
+
+    KF2_MAP=0             the whole feature off (on by default)
+    KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
+    KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII, and open the map
+
+King's Field is a maze, the original shipped no automap, and until now everything
+in this port that knew where you were was a debug instrument — `kf2debug`'s Warp
+tab, `KF2_SHELL`'s `state`, the `[KF2-AGENT]` beacon. A patch rather than a mod
+for auto reload's reason: it is a thing the port itself should offer, so it
+should not be able to be absent or silently disabled, and its knobs go under
+Gameplay beside it. `M` opens the full map, `N` toggles the corner minimap.
+
+### The floor plan is already in RAM, and it is not polygon soup
+
+**Confirmed.** The area loader `func_8001689C` copies `0x3E80` words — 64,000
+bytes — to `0x801C8484`, and 0x600 more to the collision-shape block at
+`0x801D8484` (`generated/game.cs:4231-4239`). That first block is an **80 x 80
+grid of 10-byte tile records**, `tile = 0x801C8484 + 800*z + 10*x`, which is the
+resolution `func_80031B1C` performs before drawing each tile. A tile spans 2048
+world units, so `tileX = worldX >> 11`. The 24x24 grid at `0x80192EAC` that
+`CullCone` and `CullGrid` work on is only a per-frame *visibility window* over
+this map — see "The map is an 80x80 tile grid" in `docs/GAME_INTERNALS.md` for
+the record's five fields and the two stacked halves.
+
+So a map is a **read**. No hook, nothing written to game memory, and with both
+viewports closed it costs one bool test a frame.
+
+### The invariant that proves the whole chain
+
+**Confirmed, and it is the check worth keeping.** The player has to be standing
+on a half the renderer draws, and that half's floor Y — `-(heightByte << 7)` —
+has to equal the player's own Y at `0x801994F0`. `KF2_MAP_PROBE=1` prints it on
+every area load:
+
+    map: player tile 35,36 on the upper floor, drawn, height byte 116
+         -> floor Y -14848 against player Y -14848 (gap 0)
+
+Measured **gap 0** across three save slots, two areas and both floors. One line
+confirms the tile addressing, the 10-byte stride, the 5-byte half layout, the
+height byte at `+1`, the half selector at `0x801D9C8E` and `tileX = worldX >> 11`
+together — which is why the probe prints it rather than just the ASCII dump.
+
+### The arrow's angle is derivable, and the map was the view from below
+
+**Confirmed twice, from the code and from a live walk.** `func_80028080` is what a
+walk step goes through, and it adds `-sin(yaw) * d` to the X at `0x801994EC` and
+`+cos(yaw) * d` to the Z at `0x801994F4` (`generated/game.cs:26043-26071`;
+`func_8005EB08` is odd so it is sine, `func_8005EC10` takes `|a0|` so it is
+cosine). The yaw it reads is the **base** angle at `0x8019950E`, as a signed
+short. So the heading on the ground is `(-sin yaw, cos yaw)`: yaw 0 faces +Z and
+yaw 0x400 faces -X.
+
+The attract demo confirms that much without a hand on the keyboard, which is what
+it is for. Over two seconds of steady heading:
+
+| samples | measured delta | normalised | `(-sin yaw, cos yaw)` |
+|---|---|---|---|
+| yaw 959 -> 959 | dx -2315, dz +217 | (-0.9957, 0.0933) | (-0.9951, 0.0994) |
+| yaw -> 717 | dx -848, dz +432 | (-0.891, 0.454) | (-0.891, 0.454) |
+
+`AgentBeacon.Snapshot()` gained a `yaw` field for this, so `KF2_SHELL`'s `state`
+answers heading as well as position. It reads the *composed* angle at
+`0x80199506` rather than the base, because that is the one the renderer uses and
+so the one the arrow should agree with; the two differ only by the frame's own
+deltas.
+
+**What that measurement cannot see is which way up the map is**, and the first
+version had it upside down. Screen X was world X and screen Y was world Z, so the
+arrow was `(cos, sin)` of `yaw + pi/2` and the screen angle *increased* with yaw —
+self-consistent, and consistent with the walk, because a mirrored map and a
+mirrored arrow agree with each other about everything except handedness. Reported
+from play: **turning left swung the arrow right.**
+
+The world's up is **-Y** — a half's floor is `-(height << 7)`, which is the one
+reading the probe prints every load — so a viewer above the plane looks along
+**+Y**, and with +X to the right that puts **+Z at the top of the screen**. Laying
+screen Y out along +Z is therefore the view from underneath. It also settles the
+handedness the passage above was arguing about: `up x forward` is
+`(-Y) x (+Z) = -X`, so yaw increasing really does turn you left, and on a map
+drawn from above the arrow's screen angle must **decrease** with yaw:
+`(cos, sin)` of `-(yaw + pi/2)`.
+
+So the fix is in the map, not in the arrow. `Map.RowF(worldZ) = Span - TileF(z)`
+is the screen row a world Z draws on and `Map.RowOf` converts a row back to a
+tile; `MapRender.Draw` takes `z0..z1` as **rows** and both viewports place their
+origin from `RowF`, which leaves every screen-space calculation they already had
+alone. Two details are easy to get wrong: the sub-tile fraction runs backwards
+with the flip, so it is `Span - TileF` and not `Span - 1 - TileF`, and the hover
+readout has to run `RowOf` on the row it floors out of the cursor or it names a
+tile mirrored about the middle of the area.
+
+**Negating the arrow alone would have matched the report and been wrong**: it
+would have squared the arrow with the turn and left it pointing across the
+direction of travel, since the mirror was in the map. That is the general shape —
+a mirror is invisible to any measurement taken entirely inside the mirrored frame,
+and only the two facts from *outside* it (the world's up, and a player saying
+which way they turned) can find it.
+
+The ASCII dump `KF2_MAP_PROBE=1` writes is deliberately **not** flipped: it is a
+dump of the grid in memory, row `z` on line `z`, and its job is to say whether the
+copy and the stride are right. It is upside down with respect to the drawn map.
+
+### A blank grid reads as a full one
+
+**Confirmed, and it is the trap in the occupancy test.** The renderer draws a half
+whose model index is below 240, and a *zeroed* record's index is 0 — so between
+areas, when the game has cleared the block, all 12,800 halves pass the test and
+the map draws a solid rectangle over the whole area. Measured "12800 occupied
+halves, height 0..0" at the boot, against 5,126 and 6,313 in the two real areas.
+
+`Map.Ready` is the test: every half occupied at exactly one height is not
+something a real area can be. The panels draw nothing while it is false.
+
+### The area loader looks like the right hook and is not
+
+**Confirmed, and it was tried.** The map is stale for up to a copy period after an
+area load: `OverlayLoadedEvent` fires, the area byte at `0x8017E060` has already
+moved, the next draw re-copies — but `func_8001689C` has not yet run its
+`0x3E80`-word copy, so the grid is still the area you just left. Measured: the
+probe printing a player 12,800 units off the floor the map was reading, on a tile
+the map called empty.
+
+`func_8001689C` is where that copy lives, so a post-hook on it looks like the
+exact "the grid is now the new area's" signal. **It is called every frame** — the
+function is 1,716 bytes with the load in a branch, and the hook fired **5,673
+times in 40 seconds at 144 fps**, turning a four-a-second grid copy into a
+per-frame one and dumping the probe 5,673 times. Reverted.
+
+What is there instead costs nothing: the copy is cheap and self-corrects within
+the 250 ms period, and the *probe's* dump waits for the standing-on-a-drawn-half
+invariant above rather than firing on the area byte. The map's own stale window is
+a fraction of a second of loading screen, which nobody sees.
+
+### Where it draws, and what that decided
+
+A host ImGui surface, not PSX primitives in the game's own frame. The in-frame
+route exists — `GpuPrims.Tri/Quad/Sprite` — but `GpuPrims.SetOrderingTable` is
+**dormant**, nothing in the tree calls it, and `patches/Widescreen.cs` already
+owns the only `Replace` on `DrawOTag` on all three overlays. Left for a later
+pass.
+
+**Every read happens inside the panels' own `Draw()`, and that is correct rather
+than lazy.** `LibEtc.VSync` calls `Runtime.PresentFrame` -> `HostWindow.Present`
+-> `PanelManager.DrawPanels`, all on one thread, so a panel draws *inside the
+game's own VSync call* and sees exactly the memory the game left there. There is
+no snapshot handoff to get wrong. The 64,000-byte copy is still taken only four
+times a second, because the architecture it carries — the drawbridge and the
+minecart are tiles, not models — does not move faster than that.
+
+The full map is an `IPanel`; the minimap is an `IFloatingPanel`, which is the
+interface for a panel that should not count towards the dockspace's layout. The
+minimap's `IsOpen` **is** its feature switch, because `PanelManager.DrawPanels`
+only calls `Draw` on an open panel — that is what keeps it off the title screen
+and out of a load. Panels do not auto-populate the menu bar, so the map also
+registers under a new `menu.game`, whose label key supplies all three of the
+runtime's languages.
+
+Measured cost: 144.0 fps drawn and 20.0 ticks/s with both viewports drawing at
+`KF2_FPS=144`, indistinguishable from `KF2_MAP=0`.
+
+### What is measured and what is not
+
+**Measured:** the grid address, stride and half layout; the height byte; the half
+selector; the heading; the per-area occupancy; that both viewports draw for
+45 seconds without throwing; that they cost no frame rate.
+
+**Not looked at by eye, and the user's to judge:** whether the floor plan looks
+like the area you are standing in — which is what decides whether occupancy should
+come from the model index at `+0` (what it uses, because that is the renderer's own
+test) or from the collision bytes at `+2` and `+3`; whether the height shading
+reads or muddies; whether bit `0x80` of `+4` is the wall it behaves like in the
+visibility flood or the "see through" `docs/WIDESCREEN.md` calls it; and whether
+the minimap's size, corner and range are usable in play. The full map's hover
+readout prints all ten bytes of the tile under the cursor for exactly that reason.
+
+### Room for fog
+
+The map reveals the whole area. The seam for explored-only fog is the
+`Func<int,int,bool> visible` argument to `MapRender.Draw`, which is `null` today,
+and filling it in needs no new reverse engineering: the 24x24 grid at
+`0x80192EAC` that `func_8002D3A8` rebuilds each frame *is* the set of tiles the
+player can see, occlusion already computed, and the world tile of its cell (0,0)
+is the pair at `0x80192EA0`/`0xA4`. A cell is visible iff its byte is nonzero.
+OR that into an 80x80 bitset per area (`u8[0x8017E060]`) per save slot
+(`u8[0x8006E5D4]`) and pass its lookup in. What is left undesigned is only the
+on-disk format.
+
 ## Auto start and the agent beacon
 
 `patches/AutoStart.cs` (`KF2_AUTOSTART=<1..3>`) and `patches/AgentBeacon.cs`

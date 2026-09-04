@@ -550,6 +550,27 @@ Kf2.AutoReload.Configure(Environment.GetEnvironmentVariable("KF2_AUTORELOAD"),
                          Environment.GetEnvironmentVariable("KF2_AUTORELOAD_SLOT"));
 Kf2.AutoReload.Install();
 
+// The map. King's Field is a maze, the original shipped no automap, and every
+// other thing in this port that knows where you are is a debug instrument. The
+// floor plan is already in RAM and is not polygon soup: the area loader copies
+// 64,000 bytes to 0x801C8484, an 80x80 grid of 10-byte tile records, two stacked
+// 5-byte floors each, a tile spanning 2048 world units. So the map is a read --
+// no hook, no write to game memory, and with the panels closed it costs a bool
+// test a frame:
+//
+//     KF2_MAP=0             the whole feature off (on by default)
+//     KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
+//     KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII on each area load
+//
+// A patch rather than a mod for auto reload's reason -- it is something the port
+// itself should offer, so it should not be able to be absent -- and its knobs are
+// under Gameplay beside it. The minimap defaults off because the mechanism is
+// measured and the picture is not.
+Kf2.Map.Configure(Environment.GetEnvironmentVariable("KF2_MAP"),
+                  Environment.GetEnvironmentVariable("KF2_MAP_MINIMAP"),
+                  Environment.GetEnvironmentVariable("KF2_MAP_PROBE"));
+Kf2.Map.Install();
+
 // Auto start, and the agent beacon -- the pair that lets an automated tester get
 // into the game and know it got there. Scripted input cannot drive the boot menus
 // (KF2_AUTOPAD's clock only starts once an area has loaded), and screenshots are

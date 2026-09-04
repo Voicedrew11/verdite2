@@ -144,6 +144,9 @@ KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the origi
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
 KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill
 KF2_UISCALE=1                            # force the interface scale, and save it
+KF2_MAP=0                                # the map off entirely (on by default); M opens it
+KF2_MAP_MINIMAP=1                        # the corner minimap on (off by default); N toggles it
+KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, and open the map
 ```
 
 Patch settings live in `patches/settings/`. A patch registers an `IPatchPage`
@@ -598,6 +601,49 @@ over four windows of real play — but a pointer that disappears into the game
 unasked is worse than one switch to find. What no counter can answer is the feel
 (0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
 `docs/INPUT.md`.
+
+**The map is a patch for auto reload's reason** — King's Field is a maze, the
+original shipped no automap, and everything else in the port that knows where you
+are is a debug instrument — so it is on by default and its knobs are under
+Gameplay. `M` opens the full map, `N` toggles a corner minimap; the minimap
+defaults *off*, for the sub-pixel reason. **It needs no hook and writes nothing**:
+the area loader `func_8001689C` copies 64,000 bytes to `0x801C8484`, which is an
+**80x80 grid of 10-byte tile records** — `tile = 0x801C8484 + 800·z + 10·x`, a
+tile spanning 2048 world units, so `tileX = worldX >> 11` — and each record is two
+stacked 5-byte halves (a lower floor at `+0`, an upper at `+5`) whose fields are
+model index, height, collision flags, collision shape and a flag byte. The 24×24
+grid at `0x80192EAC` that `CullCone`/`CullGrid` work on is only a visibility
+*window* over it. **Every read happens inside the panels' own `Draw()` and that is
+correct rather than lazy**: `LibEtc.VSync` → `PresentFrame` → `HostWindow.Present`
+→ `PanelManager.DrawPanels` is one thread, so a panel draws *inside the game's own
+VSync call*. The one check that proves the whole chain is that the player stands
+on a half the renderer draws and that half's `-(height << 7)` **equals** their Y —
+measured gap 0 over three save slots, two areas and both floors. The arrow's angle
+is derived rather than guessed: `func_80028080` moves the player by
+`(-sin yaw, cos yaw)·d` — confirmed against the attract demo to within 0.6% — and
+the world's up is `-Y`, so yaw increasing turns you left. **A map is that plane
+seen from above, which puts +Z at the top of the screen**: laying screen Y out
+along +Z draws the area mirrored, which is the view from underneath, and it was
+reported from play as the arrow swinging right when the player turned left. So
+screen Y runs along `-Z` (`Map.RowF`, `Map.RowOf`; `MapRender.Draw` takes rows
+rather than tiles) and the arrow's screen angle is `-(yaw + π/2)`, **decreasing**
+with yaw. Negating the arrow alone would have matched the report and left it
+pointing across the direction of travel, since the mirror was in the map — a
+mirror is invisible to any measurement taken inside the mirrored frame. The
+`KF2_MAP_PROBE=1` dump is not flipped, being a dump of the grid rather than of
+the picture. Two traps are
+recorded: **a cleared grid reads as a *full* one** (a zeroed model index is 0,
+which is below the drawn threshold, so all 12,800 halves pass — hence
+`Map.Ready`), and **`func_8001689C` is not a usable "area changed" hook** despite
+owning the copy, because the main loop calls it every frame (5,673 times in 40 s
+at 144 fps). Costs nothing measurable: 144.0 fps and 20.0 ticks/s with both
+viewports drawing. What has *not* been looked at is the picture — whether the
+floor plan matches the area, whether the height shading reads, and whether bit
+`0x80` of a half's `+4` is the wall it behaves like or the "see through" the
+widescreen notes call it; the full map's hover readout prints all ten raw bytes
+for that. Fog of war is unbuilt but seamed for: `MapRender.Draw` takes a
+visibility predicate, and the 24×24 grid is already the set of tiles the player
+can see. See "A dynamic map" in `docs/PATCHES_AND_MODS.md`.
 
 **The port ships its own keyboard layout** (`patches/KeyLayout.cs`), because
 RecompOne's defaults are a console's spelled on a keyboard — face buttons on
