@@ -1,5 +1,6 @@
 using System.Numerics;
 using ImGuiNET;
+using RecompOne.Runtime.Host.Window;
 
 namespace Kf2;
 
@@ -75,6 +76,41 @@ public static class MapRender
     static uint Rgba(float r, float g, float b, float a) => ImGui.GetColorU32(new Vector4(r, g, b, a));
 
     public static uint Ground { get { Build(); return _ground; } }
+
+    /// <summary>
+    /// The rectangle the game picture actually occupies, which is what a viewport
+    /// drawn *over the game* must fit rather than the window.
+    ///
+    /// The picture is an <c>Image</c> inside the runtime's Output panel, fitted to
+    /// that panel's content region at the display's aspect and centred in it — so
+    /// the menu bar, the dockspace border and any docked panel take their share
+    /// off it, and a window whose shape does not match the display's leaves a bar
+    /// on two sides. A full-screen map sized to the viewport therefore covered the
+    /// chrome as well as the game and did not line up with either: it looked like
+    /// a window over the port rather than a screen the game had put up.
+    /// <c>OutputView</c> (patches/recompone/0029) publishes the rectangle from the
+    /// one place that knows it, once per frame, before any floating panel draws —
+    /// <c>PanelManager</c> draws in registration order and the Output panel is
+    /// registered by <c>HostWindow</c> long before <c>Program.cs</c> adds these.
+    ///
+    /// It **falls back to the viewport's work area** when no picture was drawn
+    /// this frame, which is the state before the first frame is presented and
+    /// while the panel is collapsed. Fitting nothing would be a blank map; fitting
+    /// the window is what the map did already.
+    /// </summary>
+    public static void Picture(out Vector2 p0, out Vector2 p1)
+    {
+        if (OutputView.Valid && OutputView.Size.X >= 32f && OutputView.Size.Y >= 32f)
+        {
+            p0 = OutputView.Min;
+            p1 = OutputView.Max;
+            return;
+        }
+
+        var vp = ImGui.GetMainViewport();
+        p0 = vp.WorkPos;
+        p1 = vp.WorkPos + vp.WorkSize;
+    }
 
     /// <summary>
     /// The same colour, drawn at <paramref name="alpha"/> of its own opacity.

@@ -3040,8 +3040,47 @@ logical px a tile the fit is abandoned and the map centres on the player's
 **tile** instead — the same quantisation the dot has, so the picture steps a
 square at a time rather than sliding under you.
 
+#### "Full screen" is the game picture, not the window
+
+Reported from play: *"the fullscreen map conforms to the window and not the draw
+area, so it has a fairly odd appearance."* It did, and the reason is that the game
+picture is **not** the window and nothing outside the runtime's `OutputPanel` knew
+where it was. The picture is an ImGui `Image` inside that panel, fitted to the
+panel's content region at the display's aspect (`FitAspect`) and centred in it, so
+three things eat into it before a pixel of game is drawn: the main menu bar and
+the dockspace border take a strip off the top and the edges, a docked panel takes
+its share of the rest, and a window whose shape does not match the display's
+leaves a bar on two sides — 4:3 in a 16:9 window is a bar either side.
+
+Sized to `viewport.Size`, the map covered all of that. Its scrim dimmed the port's
+own chrome as well as the game, its floor plan was centred on the *window* rather
+than on the picture, and its edges lined up with neither: a window over the port
+rather than a screen the game had put up.
+
+`patches/recompone/0029` publishes the rectangle from the one place that computes
+it — a public `OutputView` set in `OutputPanel.Draw`, from `GetCursorScreenPos`
+and the fitted size, immediately before `ImGui.Image`. Ordering needs no care:
+`PanelManager.DrawPanels` walks its list in registration order, `HostWindow`
+registers the Output panel during initialisation and `Program.cs` registers the
+map viewports long afterwards, so the rectangle is always this frame's.
+
+`MapRender.Picture` is the accessor, and it **falls back to the viewport's work
+area** when `OutputView.Valid` is false — before the first frame is presented, and
+while the panel is collapsed. Fitting nothing would be a blank map; fitting the
+window is what the map did already, so the fallback degrades to the old behaviour
+rather than to a defect.
+
+One consequence needed handling: the picture is now the smaller of the two
+rectangles, so a fixed 24 px margin and a two-line header at a large `Theme.Scale`
+would eat the map they frame. Both are capped at a share of the rectangle (5% and
+10% of its height), which changes nothing at a full-window picture.
+
 Measured with all three viewports drawing at `KF2_FPS=144`: **144.0 fps drawn,
-20.0 ticks/s**, and no throw over two area loads and an autostart.
+20.0 ticks/s**, and no throw over two area loads and an autostart. **Never judged
+by eye**: whether the map now reads as part of the game, which is the whole point
+of the change. The corner minimap still anchors to the viewport's work area rather
+than to the picture, so it can sit over a letterbox bar — the same defect one
+viewport along, deliberately left alone until someone looks at the full map.
 
 ### You are here, approximately
 

@@ -17,6 +17,19 @@ namespace Kf2;
 /// one has no chrome at all: the game dims, the area's floor plan is laid over
 /// it, and the same button puts it away.
 ///
+/// **"Full screen" is the game picture, not the window.** The picture is an
+/// <c>Image</c> inside the runtime's Output panel, fitted to that panel at the
+/// display's aspect and centred in it, so the menu bar and the dockspace take
+/// their share off it and a 4:3 picture in a wider window has a black bar either
+/// side. Sized to the viewport instead, the map covered all of that — a scrim
+/// over the port's own chrome, with its floor plan centred on the window rather
+/// than on the game and its edges nowhere near the picture's. It now takes the
+/// rectangle <c>MapRender.Picture</c> publishes (patches/recompone/0029), which
+/// falls back to the viewport when no picture was drawn, so the map lands exactly
+/// over the game and nowhere else. Its margin and its header band are a share of
+/// that rectangle as well as of the interface scale, since the picture is the
+/// smaller of the two and a fixed margin at a large scale would eat the map.
+///
 /// **It fits the area rather than following the player, until the area will not
 /// fit legibly** — which is the difference between a map and a minimap. The view
 /// is scaled to the occupied extent of the drawn half (<c>Map.Extents</c>,
@@ -84,9 +97,15 @@ public sealed class MapFullscreen : IFloatingPanel
     {
         if (!Map.Refresh()) return;
 
-        var vp = ImGui.GetMainViewport();
-        ImGui.SetNextWindowPos(vp.Pos);
-        ImGui.SetNextWindowSize(vp.Size);
+        // The game picture, not the window: see MapRender.Picture. A map laid over
+        // the whole viewport covered the menu bar, the dockspace border and the
+        // letterbox bars either side of a 4:3 picture in a wider window, so it
+        // read as a window over the port rather than as a screen the game put up.
+        MapRender.Picture(out var g0, out var g1);
+        var size = g1 - g0;
+
+        ImGui.SetNextWindowPos(g0);
+        ImGui.SetNextWindowSize(size);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
 
         // NoBringToFrontOnFocus is absent for the reason patches/MapOverlay.cs
@@ -103,13 +122,17 @@ public sealed class MapFullscreen : IFloatingPanel
         if (ImGui.Begin("##kf2mapfull", flags))
         {
             var p0 = ImGui.GetWindowPos();
-            var p1 = new Vector2(p0.X + vp.Size.X, p0.Y + vp.Size.Y);
+            var p1 = p0 + size;
             var dl = ImGui.GetWindowDrawList();
 
             dl.AddRectFilled(p0, p1, MapRender.Fade(MapRender.Ground, Scrim));
 
-            float margin = 24f * Theme.Scale;
-            float header = ImGui.GetFontSize() * 2.2f;
+            // The margin and the header band are a share of the picture as well as
+            // of the interface scale, because the picture is now the smaller of the
+            // two: at a large Theme.Scale in a small window, a fixed 24 px margin
+            // and two lines of text at full size would eat the map they frame.
+            float margin = MathF.Min(24f * Theme.Scale, size.Y * 0.05f);
+            float header = MathF.Min(ImGui.GetFontSize() * 2.2f, size.Y * 0.10f);
             var c0 = new Vector2(p0.X + margin, p0.Y + margin + header);
             var c1 = new Vector2(p1.X - margin, p1.Y - margin - header);
 

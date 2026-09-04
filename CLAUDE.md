@@ -618,7 +618,20 @@ sub-pixel reason. **There are three viewports over one reading, and
 dimmed game, no chrome, `NoInputs`, closing the minimap while it is up — the
 docked `MapPanel` with its toolbar and its ten-byte hover readout is the
 *instrument*, and a windowed debugger over a 320x240 picture is what "the minimap
-contrasts hard with the game design" meant. **The touchpad is reachable because it
+contrasts hard with the game design" meant. **"Full screen" is the game picture,
+not the window**, and it was the window: the picture is an `Image` inside the
+runtime's Output panel, fitted to that panel at the display's aspect and centred
+in it, so a map sized to the viewport lay over the menu bar, the dockspace border
+and the bars either side of a 4:3 picture in a wider window — centred on the
+window rather than on the game, with its edges nowhere near the picture's, which
+is the "odd appearance" reported from play. `patches/recompone/0029` publishes
+that rectangle as `OutputView` from the one place that computes it, before any
+floating panel draws (`PanelManager` draws in registration order and `HostWindow`
+registers the Output panel long before `Program.cs` adds these), and
+`MapRender.Picture` is the accessor, falling back to the viewport's work area
+when no picture was drawn that frame — a blank map being worse than the old
+behaviour. The map's margin and header band became a share of that rectangle as
+well as of the interface scale, since the picture is now the smaller of the two. **The touchpad is reachable because it
 is not a PS1 button**: `ControllerEvent` is dispatched off SDL before `PadState`
 maps anything onto the PSX pad, so the raw `SDL_GameControllerButton` 20 arrives
 where nothing downstream has a slot for it and it cannot leak into the game.
@@ -1036,8 +1049,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-six
-of the thirty are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-seven
+of the thirty-one are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
@@ -1047,7 +1060,7 @@ false: `0021-true-color-24bit-output.patch` was authored while
 `lighting-experiments`' `0025`/`0026` were applied, so its hunks quoted
 `_uCoplanarTol` / `_uLitCenter` context that exists only there and `git apply`
 rejected them, leaving the tree at `0020`. The patch has been regenerated against
-this branch's context. Verified by applying all thirty patches in glob order
+this branch's context. Verified by applying all thirty-one patches in glob order
 to a pristine worktree of the pin: every one applies, and the result is
 byte-identical to the tree in place.
 
@@ -1276,6 +1289,18 @@ uncaptured edit inside the checkout is left where it is.
   done, and never retry, which is the uncapped-picture-and-8×-world failure.
   `IsRegistered` and `IsCommitted` let a caller read back what actually landed.
   **No recompile.** See "A registration is not a hook" in
+  `docs/PATCHES_AND_MODS.md`.
+
+- `0029-output-panel-image-rect.patch` — the game picture is not the window, and
+  nothing outside `OutputPanel` knew where it was. It is an `Image` inside that
+  panel, fitted to the panel's content region at the display's aspect and centred
+  in it, so the menu bar, the dockspace border and any docked panel take their
+  share off it and a 4:3 picture in a wider window has a bar either side. An
+  overlay could therefore only anchor to the viewport, which is why the
+  full-screen map covered the port's own chrome and lined up with neither. A
+  public `OutputView` publishes the rectangle from the one place that computes it,
+  once a frame, and is invalid when the panel drew no picture so a caller can fall
+  back to the viewport. UI only — **no recompile**. See "A dynamic map" in
   `docs/PATCHES_AND_MODS.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind

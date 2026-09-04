@@ -1,0 +1,59 @@
+diff --git a/RecompOne.Runtime/Host/Window/Panels/Debug/OutputPanel.cs b/RecompOne.Runtime/Host/Window/Panels/Debug/OutputPanel.cs
+index 639c740..9cb2a83 100644
+--- a/RecompOne.Runtime/Host/Window/Panels/Debug/OutputPanel.cs
++++ b/RecompOne.Runtime/Host/Window/Panels/Debug/OutputPanel.cs
+@@ -3,6 +3,30 @@ using ImGuiNET;
+ 
+ namespace RecompOne.Runtime.Host.Window;
+ 
++/// <summary>
++/// Where the game picture actually landed on screen this frame, in the same
++/// coordinates an ImGui draw list works in.
++///
++/// The picture is not the window: it is an <c>Image</c> inside the Output panel,
++/// fitted to that panel's content region at the display's aspect and centred in
++/// it, so a 16:9 window showing a 4:3 game leaves a bar either side, and the menu
++/// bar, the dockspace and any docked panel take their share off the top and the
++/// edges. Nothing outside this file knew that rectangle, so an overlay drawn over
++/// the game could only anchor itself to the viewport and would sit partly over
++/// the surrounding chrome.
++///
++/// <see cref="Valid"/> is false whenever the panel drew no picture this frame
++/// (collapsed, or before the first frame is presented), so a caller can fall back
++/// to the viewport rather than to a stale or empty rectangle.
++/// </summary>
++public static class OutputView
++{
++    public static bool Valid { get; internal set; }
++    public static Vector2 Min { get; internal set; }
++    public static Vector2 Max { get; internal set; }
++    public static Vector2 Size => Max - Min;
++}
++
+ internal sealed class OutputPanel : IPanel
+ {
+     public string Name => "Output";
+@@ -26,6 +50,7 @@ internal sealed class OutputPanel : IPanel
+ 
+         bool visible = ImGui.Begin(this.Title());
+         IsDocked = ImGui.IsWindowDocked();
++        OutputView.Valid = false;
+ 
+         if (!visible)
+         {
+@@ -40,6 +65,15 @@ internal sealed class OutputPanel : IPanel
+             var imageSize = FitAspect(new Vector2(_aspect, 1f), avail);
+             var offset = (avail - imageSize) * 0.5f;
+             ImGui.SetCursorPos(ImGui.GetCursorPos() + offset);
++
++            //Published from here rather than computed from the window: this is the
++            //one point that knows both where the image starts on screen and how
++            //big the aspect fit made it.
++            var min = ImGui.GetCursorScreenPos();
++            OutputView.Min = min;
++            OutputView.Max = min + imageSize;
++            OutputView.Valid = imageSize.X > 0f && imageSize.Y > 0f;
++
+             ImGui.Image((nint)_texId, imageSize);
+         }
+ 
