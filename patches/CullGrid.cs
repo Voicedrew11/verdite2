@@ -115,6 +115,19 @@ public static class CullGrid
     static Mode _mode;
     static bool _compare;
 
+    /// <summary>
+    /// What a reader of the legacy 24×24 array has to add to the mirror words at
+    /// 0x80192EA0/0xA4 to get the world tile of its cell (0,0).
+    ///
+    /// Zero in every normal run. In <c>on</c> mode the offset and mirror words
+    /// describe **this** grid, 32 wide, while the legacy array is cropped from its
+    /// cell (4,4) — so the two disagree by exactly that crop, and anything reading
+    /// the array by way of the mirror words inherits the disagreement. Only
+    /// patches/MapFog.cs does, and only because it must read the array the game's
+    /// own walker reads rather than this class's private one.
+    /// </summary>
+    public static int LegacyBias => _mode == Mode.On ? (Span - LegacySpan) / 2 : 0;
+
     static readonly byte[] _grid = new byte[Span * Span];
     static GCHandle _pin;
 

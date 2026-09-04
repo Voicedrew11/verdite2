@@ -17,6 +17,10 @@ tools/RecompOne/
 settings.json
 interface.ini
 
+# Written by patches/MapFog.cs beside the memory card: explored-tile records.
+*.fog
+*.fog.tmp
+
 # Optional runtime asset-replacement packs
 packs/
 
@@ -32,3 +36,7 @@ ratecensus.txt
 
 # Working files: extracted disc executables and probe logs.
 scratch/
+
+# Captured stdout from a run, kept while a defect is being read. A reading of
+# one session, not source -- same reason as ratecensus.txt above.
+*.log

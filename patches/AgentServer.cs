@@ -102,6 +102,7 @@ public static class AgentServer
         "kill - drop HP to zero, the way a hit would",
         "nearby [radius=8192] - live records of the world tables within radius units",
         "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
+        "map [on|off|toggle] - the full-screen map, which pauses the world unless KF2_MAP_PAUSE=0",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -307,6 +308,7 @@ public static class AgentServer
             case "kill":
             case "help":
             case "nearby":
+            case "map":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -370,6 +372,7 @@ public static class AgentServer
         "warp" => DoWarp(cmd.Arg1),
         "nearby" => DoNearby(cmd.Arg1),
         "ending" => DoEnding(cmd.Arg1),
+        "map" => DoMap(cmd.Arg1),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
 
@@ -379,6 +382,39 @@ public static class AgentServer
     {
         if (RecompOne.Runtime.Runtime.Mem == null) return Err("not running");
         return "{\"ok\":true,\"cmd\":\"state\",\"state\":" + AgentBeacon.Snapshot() + "}";
+    }
+
+    /// <summary>
+    /// Open or close the full-screen map.
+    ///
+    /// **On the fast queue, and that is the whole reason it is here.** The fast
+    /// queue drains on <c>VSyncEvent</c> -- a vblank, which arrives whatever the
+    /// world is doing -- while the heavy one drains on <c>PadReadEvent</c>, which
+    /// is stage 3 and is therefore *not running* while the map has the world
+    /// paused. A map verb on the heavy queue could open the map and then never
+    /// close it.
+    ///
+    /// It exists because a pause is a thing only a person at the keyboard could
+    /// switch on before: M and the pad button are the only two ways in, and
+    /// neither is reachable from a headless run. With it, `map on` followed by the
+    /// tick rate on the KF2_FPS_PROBE line is the measurement that says whether
+    /// the world actually stopped.
+    /// </summary>
+    static string DoMap(string arg)
+    {
+        if (!Map.Enabled) return Err("the map is off (KF2_MAP=0 or the Gameplay switch)");
+
+        bool open = arg switch
+        {
+            "" or "toggle" => !MapFullscreen.Instance.IsOpen,
+            "on" or "1"    => true,
+            "off" or "0"   => false,
+            _              => throw new ArgumentException($"map: expected on, off or toggle, got '{arg}'"),
+        };
+
+        MapFullscreen.Instance.IsOpen = open;
+        return "{\"ok\":true,\"cmd\":\"map\",\"open\":" + (open ? "true" : "false") +
+               ",\"pauses\":" + (Map.Pause ? "true" : "false") + "}";
     }
 
     // ---- world perception (nearby) ----

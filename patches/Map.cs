@@ -1,0 +1,868 @@
+using RecompOne.Runtime.Config;
+using RecompOne.Runtime.Events;
+using RecompOne.Runtime.Host.Window;
+using RecompOne.Runtime.Memory;
+using Silk.NET.Input;
+using HostWindow = RecompOne.Runtime.Host.HostWindow;
+
+namespace Kf2;
+
+/// <summary>
+/// A dynamic map: where you are, drawn from the game's own floor plan.
+///
+///     KF2_MAP=0                the whole feature off (on by default)
+///     KF2_MAP_MINIMAP=1        the corner minimap on (off by default)
+///     KF2_MAP_PROBE=1          dump the 80x80 grid as ASCII on each area load
+///
+/// King's Field is a maze and the original shipped no automap, so a player has
+/// no way to tell where they are. Everything else in this port that knows a
+/// position is a debug instrument — kf2debug's Warp tab, KF2_SHELL's `state`,
+/// the [KF2-AGENT] beacon — rather than something you can look at while playing.
+///
+/// **The floor plan is already in RAM and is not polygon soup.** The area loader
+/// (`func_8001689C`) copies 64,000 bytes off disc to `0x801C8484`, and that is an
+/// **80 x 80 grid of 10-byte tile records** — `tile = 0x801C8484 + 800*z + 10*x`,
+/// the resolution `func_80031B1C` performs before drawing each tile. A tile spans
+/// 2048 world units, so `tileX = worldX &gt;&gt; 11` and the world runs 0..163,839 per
+/// axis. The 24x24 grid at `0x80192EAC` that CullCone and CullGrid work on is
+/// only a per-frame *visibility window* over this map, not the map.
+///
+/// A record is **two stacked 5-byte halves** — a lower floor at +0 and an upper
+/// at +5, which is why a tile can be walked over and under. Per half:
+///
+///     +0  model index; 0xFF empty, drawn when &lt; 240   (func_80031B1C)
+///     +1  height byte; the floor's Y is -(h) &lt;&lt; 7
+///     +2  collision flags, &amp; 0xFC tested              (func_8002C700)
+///     +3  collision-shape index into 0x801D8484       (func_8002B7D0)
+///     +4  flags; bit 0x80 stops the visibility flood  (patches/CullGrid.cs)
+///
+/// **Occupancy here is the model index, because that is the renderer's own test.**
+/// `+4 &amp; 0x80` is drawn as a separate tint rather than trusted as "wall": the
+/// flood at patches/CullGrid.cs:510 marks such a cell lit and then *stops*, which
+/// is an occluder, while docs/WIDESCREEN.md:499 labels the same bit "see through".
+/// The two readings disagree and no counter here can settle it, so the panel's
+/// hover readout shows all ten bytes and the picture is the user's to judge.
+///
+/// **Nothing is written to game memory and no game function is hooked.** Position,
+/// map and area are plain reads, which is unusual for this repo and is what makes
+/// the patch cheap: with the map closed it costs one bool test a frame.
+///
+/// **Every read happens inside the panels' own Draw(), and that is correct rather
+/// than lazy.** `LibEtc.VSync` calls `Runtime.PresentFrame` -&gt; `HostWindow.Present`
+/// -&gt; `PanelManager.DrawPanels`, all on one thread, so a panel draws *inside the
+/// game's own VSync call* and sees exactly the memory the game left there. There
+/// is no snapshot handoff to get wrong. The 64,000-byte tile copy is still only
+/// taken four times a second, because it is 16,000 reads and the architecture it
+/// carries — the drawbridge and the minecart are tiles, not models
+/// (docs/GAME_INTERNALS.md "The map is an 80x80 tile grid") — does not move faster
+/// than that.
+///
+/// See "A dynamic map" in docs/PATCHES_AND_MODS.md.
+/// </summary>
+public static class Map
+{
+    // ---- the grid ----------------------------------------------------------
+
+    /// <summary>Tiles a side. Both of func_80031C94's loop bounds test 0x50.</summary>
+    public const int Span = 80;
+
+    /// <summary>Bytes a record, and bytes a row: 800 = 80 * 10.</summary>
+    public const int Stride = 10;
+    public const int RowBytes = Span * Stride;
+
+    /// <summary>World units a tile: func_80031B1C positions half A at tileX &lt;&lt; 11.</summary>
+    public const int TileUnits = 2048;
+
+    /// <summary>A record is two of these, the lower floor then the upper.</summary>
+    public const int HalfBytes = 5;
+
+    /// <summary>Offsets inside a half.</summary>
+    public const int Model = 0, HeightByte = 1, Collide = 2, Shape = 3, Flags = 4;
+
+    /// <summary>A model index at or above this is not drawn; 0xFF is an empty half.</summary>
+    public const int NotDrawn = 240;
+
+    /// <summary>Bit of +4 at which the visibility flood stops.</summary>
+    public const byte StopsFlood = 0x80;
+
+    // ---- addresses (read only) --------------------------------------------
+
+    const uint TileBase = 0x801C8484;   // 80 * 80 * 10
+    const uint PosXAddr = 0x801994EC;   // s32
+    const uint PosYAddr = 0x801994F0;   // s32, normally negative
+    const uint PosZAddr = 0x801994F4;   // s32
+    const uint YawAddr  = 0x80199506;   // s16, composed view — what the renderer reads
+    const uint AreaAddr = 0x8017E060;   // u8, 0..7
+    const uint MaxHpAddr = 0x80199426;  // u16; zero until an area is running
+    const uint HalfSelAddr = 0x801D9C8E; // u16, 0 or 5 — the floor the player is on
+
+    /// <summary>A full turn in the game's angles. Yaw increases turning *left*.</summary>
+    public const int Turn = 0x1000;
+
+    // ---- settings ----------------------------------------------------------
+
+    public const string OnKey       = "kf2.map.on";
+    public const string MinimapKey  = "kf2.map.minimap";
+    public const string SizeKey     = "kf2.map.minimap.size";
+    public const string RadiusKey   = "kf2.map.minimap.radius";
+    public const string CornerKey   = "kf2.map.minimap.corner";
+    public const string PadKey      = "kf2.map.minimap.pad";
+    public const string ShapeKey    = "kf2.map.minimap.shape";
+    public const string OpacityKey  = "kf2.map.minimap.opacity";
+    public const string ShadeKey    = "kf2.map.shade";
+    public const string WallsKey    = "kf2.map.walls";
+    public const string FloorKey    = "kf2.map.floor";
+    public const string PlayerKey   = "kf2.map.player";
+    public const string PadButtonKey = "kf2.map.pad.button";
+    public const string StyleKey    = "kf2.map.style";
+    public const string PauseKey    = "kf2.map.pause";
+
+    /// <summary>The feature. False leaves both panels unregistered.</summary>
+    public static bool Enabled { get; private set; } = true;
+
+    /// <summary>
+    /// Whether opening the full-screen map stops the world.
+    ///
+    /// **On by default, and it is a correctness argument rather than a
+    /// convenience one.** The map is the whole area over a dimmed picture with no
+    /// chrome and no input -- a screen you stop to read -- and reading it takes as
+    /// long as it takes. King's Field's own map was an *item*, used from a menu
+    /// that already stopped the game; this map is opened with a button in the
+    /// middle of a corridor, so without a pause the port would be asking the
+    /// player to plan a route while something walks up behind them. Nothing else
+    /// the port adds puts a full-screen surface between the player and the game.
+    ///
+    /// The minimap and the docked panel deliberately do not do this: a heads-up
+    /// corner map is meant to be read while walking, and the instrument is for
+    /// looking at the game while it runs.
+    ///
+    /// The mechanism is <see cref="FramePacing.PauseWhen"/> -- the stage gate held
+    /// shut, so nothing is written to game memory and the picture keeps being
+    /// drawn underneath.
+    /// </summary>
+    public static bool Pause = true;
+
+    static bool? _forcedPause;
+
+    /// <summary>The corner minimap. Off by default: it is a picture nobody has
+    /// judged by eye, and this repo's rule for those is that they default off.</summary>
+    public static bool Minimap;
+
+    /// <summary>Minimap side in logical pixels, and how many tiles either side of
+    /// the player it covers.</summary>
+    public static int MinimapSize = 220;
+    public static int MinimapRadius = 12;
+
+    /// <summary>Where the minimap is pinned. 0 top-left, 1 top-right, 2
+    /// bottom-left, 3 bottom-right, 4 top-centre.
+    ///
+    /// **The low two bits are load-bearing for 0..3 and nothing else.** Those
+    /// four were read as a bitmask — bit 0 the right edge, bit 1 the bottom — and
+    /// the numbering is kept because it is what is already in a player's
+    /// <c>interface.ini</c>; but a centred anchor has no such bit, so
+    /// <c>MapOverlay</c> switches on the value rather than masking it.</summary>
+    public static int MinimapCorner = 1;
+
+    /// <summary>How far the minimap sits from the edges it is pinned to, in
+    /// logical pixels — scaled by <c>Theme.Scale</c> alongside the size, so the
+    /// gap does not shrink as the interface grows. 12 is what shipped.
+    ///
+    /// A centred anchor spends it on the top edge only; there is no horizontal
+    /// edge to stand off from.</summary>
+    public static int MinimapPad = 12;
+
+    /// <summary>0 square, 1 circle. Square by default, which is what shipped and
+    /// what the tile grid actually is; a circle costs the corners of the window
+    /// and is the shape a player expects an overlay compass to be.</summary>
+    public static int MinimapShape;
+
+    /// <summary>How opaque the minimap's ground and tiles are drawn, 0.15..1.
+    ///
+    /// **1 is the shipped picture and is the default**, for the rule the rest of
+    /// the port follows: a picture nobody has judged by eye does not become the
+    /// default. Below 1 the game shows through the map, which is the point of an
+    /// overlay — the player's arrow is deliberately exempt (see
+    /// <c>MapRender.DrawPlayer</c>), since a marker you cannot find is not worth
+    /// drawing at all.</summary>
+    public static float MinimapOpacity = 1f;
+
+    /// <summary>
+    /// How the map is drawn: 0 the game's own board, 1 the blueprint this port
+    /// shipped with.
+    ///
+    /// **The native style is the default, and it is a claim about belonging
+    /// rather than about taste.** The blueprint fills every walkable tile pale
+    /// on near-black and rules a grid over it, which is a debugger's picture:
+    /// clear, accurate and from a different game. King's Field II's own map is a
+    /// slate-green board in a metal frame whose plan is *outlined* rather than
+    /// filled, and the port draws that instead — same reading of the same 80x80
+    /// grid, same fog, same markers, laid out the way the game lays it out.
+    /// See <c>MapRender.DrawNative</c> for what the difference actually is.
+    ///
+    /// The blueprint is kept as the other entry rather than deleted: it is the
+    /// picture the fog, the extents and the marker layer were all judged against,
+    /// and a style setting keeps it live for the next thing that has to be.
+    /// </summary>
+    public static int Style;
+
+    public const int StyleNative = 0, StyleBlueprint = 1;
+
+    /// <summary>Shade a tile by its height byte.</summary>
+    public static bool Shade = true;
+
+    /// <summary>Tint the tiles whose +4 bit 0x80 is set.</summary>
+    public static bool Walls = true;
+
+    /// <summary>-1 follows the player (u16[0x801D9C8E]); 0 lower, 1 upper.</summary>
+    public static int Floor = -1;
+
+    /// <summary>
+    /// How the player is drawn: 0 a dot in the tile they occupy, 1 the arrow.
+    ///
+    /// **The dot is the default, and it is the more honest of the two.** An arrow
+    /// that turns with you is a satellite fix in a game that shipped no map, knows
+    /// your sub-tile position and your heading to a twelfth of a degree, and reads
+    /// against the design of a maze whose whole difficulty is not knowing exactly
+    /// where you are. A dot centred in the occupied square says only "you are in
+    /// this square" — see <c>MapRender.DrawPlayerDot</c>. The arrow is kept as the
+    /// other entry rather than deleted, since what it records about the game's
+    /// heading is measured (<c>func_80028080</c>) and worth keeping live.
+    ///
+    /// **In the native style entry 0 is the game's own pointer, turned to the nearest quarter
+    /// turn**, which is the same bargain read the other way: the objection to the
+    /// arrow was the *precision*, not the heading, and "north, roughly" is what
+    /// someone holding a paper map in a corridor knows. See
+    /// <c>MapRender.DrawPlayerPointer</c>.
+    /// </summary>
+    public static int PlayerMark;
+
+    public static bool PlayerDot => PlayerMark == 0;
+
+    // ---- the pad button that opens the full-screen map ---------------------
+    //
+    // SDL2's SDL_GameControllerButton, as ControllerEvent carries it: the
+    // runtime dispatches ev.Cbutton.Button straight through, so these are the
+    // SDL indices and not a mapping of this port's own. The DualSense's touchpad
+    // *click* is button 20 (SDL 2.0.14 and up, through the PS5 driver); a pad
+    // whose mapping has no touchpad simply never sends it, which is why the
+    // stick clicks are offered beside it rather than as a fallback the code
+    // guesses at -- nothing here can ask the pad what it has, since
+    // InputManager keeps the handle to itself.
+    public const int PadNone = -1;
+    public const int PadTouchpad = 20;
+    public const int PadL3 = 7;      // SDL_CONTROLLER_BUTTON_LEFTSTICK
+    public const int PadR3 = 8;      // SDL_CONTROLLER_BUTTON_RIGHTSTICK
+    public const int PadSelect = 4;  // SDL_CONTROLLER_BUTTON_BACK
+
+    /// <summary>The pad button that opens and closes the full-screen map.
+    /// Touchpad by default; <see cref="PadNone"/> is off.</summary>
+    public static int PadButton = PadTouchpad;
+
+    static bool? _forcedOn, _forcedMinimap;
+    static bool _probe;
+
+    /// <summary>KF2_MAP_PROBE. Public so the render side can census what it
+    /// actually drew, which is the half of a map defect no count of the tables
+    /// can reach.</summary>
+    public static bool Probe => _probe;
+
+    // ---- the reading -------------------------------------------------------
+
+    /// <summary>The last copy of the grid. Indexed `Tiles[z * RowBytes + x * Stride + half + field]`.</summary>
+    public static readonly byte[] Tiles = new byte[Span * RowBytes];
+
+    /// <summary>True once <see cref="Refresh"/> has seen an area running.</summary>
+    public static bool InGame { get; private set; }
+
+    public static int PlayerX, PlayerY, PlayerZ, PlayerYaw, PlayerHalf, Area;
+
+    /// <summary>The height bytes actually present in the loaded area, over the
+    /// halves that are drawn. Recomputed with the copy, so a flat area does not
+    /// come out uniformly black.</summary>
+    public static int MinHeight, MaxHeight;
+
+    /// <summary>Occupied halves in the last copy — the probe's headline, and the
+    /// cheapest test that the addresses are still right.</summary>
+    public static int Occupied;
+
+    /// <summary>The tiles a half actually uses, inclusive, or an empty extent.
+    ///
+    /// The grid is always 80x80 and an area fills a fraction of it, so a viewport
+    /// that wants to show the *whole* area — the full-screen map does — needs the
+    /// occupied box rather than the array's bounds. Computed with the copy, four
+    /// times a second, because it is a pass over the same 12,800 halves the
+    /// height range is taken from and the answer moves only when the area does.
+    /// Indexed by half / HalfBytes: 0 lower, 1 upper.</summary>
+    public static readonly Extent[] Extents = new Extent[2];
+
+    public struct Extent
+    {
+        public int X0, Z0, X1, Z1;
+        public readonly bool Any => X1 >= X0 && Z1 >= Z0;
+    }
+
+    /// <summary>
+    /// False while the grid is the cleared one the game leaves between areas.
+    ///
+    /// **A blank grid reads as a full one**, which is the trap here: the renderer
+    /// draws a half whose model index is below 240, and a zeroed record's index is
+    /// 0, so 80x80x2 zeroed halves all pass the test — measured, "12800 occupied
+    /// halves, height 0..0" at the boot, against 5,126 and 6,313 in the two real
+    /// areas. Drawn as-is that is a solid block covering the map. Every half
+    /// occupied at exactly one height is not something a real area can be, so that
+    /// is the test.
+    /// </summary>
+    public static bool Ready => Occupied < Span * Span * 2 && MaxHeight != MinHeight;
+
+    static long _copiedAt = long.MinValue;
+    static int _copiedArea = -1;
+    static bool _dumpPending;
+
+    /// <summary>Milliseconds between grid copies. Four a second is plenty for
+    /// architecture that moves at a drawbridge's pace.</summary>
+    const long CopyPeriodMs = 250;
+
+    // ---- lifecycle ---------------------------------------------------------
+
+    public static void Configure(string? on, string? minimap, string? probe,
+                                 string? pause = null)
+    {
+        if (!string.IsNullOrWhiteSpace(on))
+            _forcedOn = !on.Equals("0", StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(pause))
+            _forcedPause = !pause.Equals("0", StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(minimap))
+            _forcedMinimap = !minimap.Equals("0", StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
+            _probe = true;
+    }
+
+    public static void Install()
+    {
+        Enabled = _forcedOn ?? true;
+        Minimap = _forcedMinimap ?? false;
+        Pause   = _forcedPause ?? true;
+
+        // ConfigManager.Load runs inside HostWindow.Initialize, which is after
+        // Program.cs — so the saved settings can only be read here, and an env var
+        // beats them for the run. RuntimeReadyEvent is also the first moment
+        // PanelManager and the ImGui context exist, which is why registration
+        // shares the listener.
+        Event.AddListener<RuntimeReadyEvent>(_ =>
+        {
+            var view = RecompOne.Runtime.Runtime.View;
+            Enabled       = _forcedOn ?? view.GetBool(OnKey, true);
+            Minimap       = _forcedMinimap ?? view.GetBool(MinimapKey, false);
+            Pause         = _forcedPause ?? view.GetBool(PauseKey, true);
+            MinimapSize   = view.GetInt(SizeKey, MinimapSize);
+            MinimapRadius = view.GetInt(RadiusKey, MinimapRadius);
+            MinimapCorner = view.GetInt(CornerKey, MinimapCorner);
+            MinimapPad    = view.GetInt(PadKey, MinimapPad);
+            MinimapShape   = view.GetInt(ShapeKey, MinimapShape);
+            MinimapOpacity = view.GetFloat(OpacityKey, MinimapOpacity);
+            Style         = view.GetInt(StyleKey, StyleNative);
+            Shade         = view.GetBool(ShadeKey, true);
+            Walls         = view.GetBool(WallsKey, true);
+            Floor         = view.GetInt(FloorKey, -1);
+            PlayerMark    = view.GetInt(PlayerKey, 0);
+            PadButton     = view.GetInt(PadButtonKey, PadTouchpad);
+            MapMarkers.LoadSettings(view);
+
+            // Registered whether or not the feature is on, so the switch under
+            // Gameplay is not a dead control for the rest of the session. Enabled
+            // gates the panels' own IsOpen instead.
+            RegisterUi();
+
+            Console.WriteLine(Enabled
+                ? $"[KF2] map: on, M or {PadName(PadButton)} opens the full-screen map, " +
+                  $"N toggles the minimap, Shift+M the tile readout " +
+                  $"(minimap {(Minimap ? "on" : "off")}, " +
+                  $"{(Pause ? "the world pauses while it is up" : "the world keeps running")}" +
+                  $"{(_probe ? ", probing" : "")})"
+                : "[KF2] map: off");
+        });
+
+        // **Opening the full-screen map stops the world.** The predicate rather
+        // than a call from ToggleFullscreen, because the panel closes by three
+        // routes -- M, the pad button and the runtime's own menu bar -- and a
+        // latch missed by one of them is a game that never resumes. See
+        // FramePacing.PauseWhen and Map.Pause.
+        //
+        // Gated on InGame as well as on the panel: the map can be opened at the
+        // title screen, where it draws nothing, and pausing there would freeze the
+        // intro. InGame is a per-frame reading taken by Refresh, which the panel's
+        // own Draw calls first thing, so it is this frame's answer.
+        FramePacing.PauseWhen(() => Enabled && Pause && InGame &&
+                                    MapFullscreen.Instance.IsOpen);
+
+        // An area module load invalidates the copy, so the next Draw re-reads
+        // rather than showing the old area until the timer runs out.
+        //
+        // **This is deliberately not hooked on the area loader, and that was
+        // measured.** func_8001689C is where the 0x3E80-word copy into
+        // 0x801C8484 lives (generated/game.cs:4231), so a post-hook on it looks
+        // like the exact "the grid is now the new area's" signal -- but the
+        // function is 1716 bytes with the load in a branch and **the main loop
+        // calls it every frame**: 5,673 calls in 40 seconds at 144 fps. Hooking
+        // it turned a four-a-second grid copy into a per-frame one and dumped the
+        // probe 5,673 times. The copy is cheap and self-correcting instead.
+        Event.AddListener<OverlayLoadedEvent>(_ => Invalidate());
+
+        // The hotkeys come off the event bus rather than being polled, for the
+        // reason patches/Mouse.cs records: every hook this port owns is in the
+        // walking-around part of the game, so a polled toggle would be dead in the
+        // in-game menu, on the title screen and through a load. PadReadEvent is
+        // emphatically not the bus for this — that call is polled hundreds of
+        // thousands of times a second.
+        Event.AddListener<KeyboardEvent>(e =>
+        {
+            if (!Enabled || !e.Pressed || PopupManager.AnyOpen) return;
+
+            // M is the *player's* map -- the full-screen one -- and Shift+M is the
+            // docked instrument with the ten-byte hover readout. They were one key
+            // when there was one viewport; the shift is read at the moment the key
+            // arrives because KeyboardEvent carries no modifier state, and
+            // HostWindow.IsKeyDown is the public forwarder for asking.
+            if (e.Key == (int)Key.M)
+            {
+                if (HostWindow.IsKeyDown(Key.ShiftLeft) || HostWindow.IsKeyDown(Key.ShiftRight))
+                    ToggleMap();
+                else
+                    ToggleFullscreen();
+            }
+            else if (e.Key == (int)Key.N) SetMinimap(!Minimap);
+        });
+
+        // The pad's own way in. ControllerEvent is the raw host gamepad, dispatched
+        // from InputManager.PollGamepadEvents *before* anything maps it to the PSX
+        // pad -- which is what makes the touchpad reachable at all: it is not a
+        // button the PS1 had, so no binding table in the runtime or the game has a
+        // slot for it and nothing downstream will ever see it. The event bus only
+        // dispatches ControllerEvent while something listens, so this listener is
+        // also what turns that dispatch on.
+        Event.AddListener<ControllerEvent>(e =>
+        {
+            // Any pad opens it: ControllerEvent.Device is SDL's joystick *instance
+            // id*, not a 0-based player number, so there is nothing here to compare
+            // it against. An axis event carries Button = -1 and Pressed = false, so
+            // the Pressed test already excludes it -- and PadNone is that same -1,
+            // which is why "off" is checked before the button rather than after.
+            if (!Enabled || !e.Pressed || PadButton == PadNone) return;
+            if (e.Button != PadButton || PopupManager.AnyOpen) return;
+            ToggleFullscreen();
+        });
+    }
+
+    /// <summary>What a pad button is called in the console line and the settings
+    /// combo. Only the five the map offers; anything else prints its SDL index,
+    /// which is what a `settings.json` edited by hand would hold.</summary>
+    public static string PadName(int button) => button switch
+    {
+        PadNone     => "none",
+        PadTouchpad => "Touchpad",
+        PadL3       => "L3",
+        PadR3       => "R3",
+        PadSelect   => "Select",
+        _           => $"pad button {button}",
+    };
+
+    static bool _registered;
+
+    static void RegisterUi()
+    {
+        if (_registered) return;
+        _registered = true;
+
+        // Localization.T falls back to English with a warning and then prints the
+        // key itself, so a key the runtime has never heard of has to supply all
+        // three of its languages. menu.game is new; the runtime has only
+        // menu.system, menu.mods and menu.debug.
+        Localization.Merge("""
+        {
+          "strings": {
+            "menu.game":      { "en": "Game", "pt-BR": "Jogo",  "es-419": "Juego" },
+            "menu.game.map":  { "en": "Map",  "pt-BR": "Mapa",  "es-419": "Mapa"  },
+            "menu.game.mapfs": { "en": "Full-screen map", "pt-BR": "Mapa em tela cheia",
+                                 "es-419": "Mapa en pantalla completa" }
+          }
+        }
+        """);
+
+        PanelManager.Register(MapPanel.Instance);
+        PanelManager.Register(MapOverlay.Instance);
+        PanelManager.Register(MapFullscreen.Instance);
+
+        // ConfigManager.ApplyViewToPanels runs inside HostWindow's Load, which is
+        // *before* RuntimeReadyEvent -- so a panel registered here has already
+        // missed it and would always come up closed. Apply it to ours by hand.
+        // (MapOverlay ignores it: its open state is the setting, not the view.)
+        ConfigManager.ApplyViewToPanels([MapPanel.Instance]);
+
+        // Panels do not auto-populate the menu bar — MainMenuBar declares every
+        // built-in one by hand — so without this the map is hotkey-only.
+        MenuRegistry.Menu("menu.game", MenuRegistry.OrderGame)
+                    .Panel<MapFullscreen>("menu.game.mapfs")
+                    .Panel<MapPanel>("menu.game.map")
+                    .End();
+
+        // The probe opens both maps as well as dumping the grid. A headless run
+        // cannot press M, so without this their draw paths are never exercised by
+        // anything that is not a person at the keyboard -- and the full-screen
+        // one is where the new arithmetic is, since it fits a scale to the area's
+        // occupied extent rather than being handed a zoom.
+        if (_probe)
+        {
+            MapPanel.Instance.IsOpen = true;
+            MapFullscreen.Instance.IsOpen = true;
+        }
+    }
+
+    /// <summary>Turn the whole feature on or off at run time. Closes the full map
+    /// on the way out, since a panel whose feature is off should not stay up.</summary>
+    public static void SetEnabled(bool on)
+    {
+        Enabled = on;
+        if (!on)
+        {
+            MapPanel.Instance.IsOpen = false;
+            MapFullscreen.Instance.IsOpen = false;
+        }
+    }
+
+    public static void ToggleMap()
+    {
+        var p = PanelManager.Get<MapPanel>();
+        if (p != null) p.IsOpen = !p.IsOpen;
+    }
+
+    /// <summary>The full-screen map: what M and the pad button open.</summary>
+    public static void ToggleFullscreen()
+        => MapFullscreen.Instance.IsOpen = !MapFullscreen.Instance.IsOpen;
+
+    public static void SetStyle(int style)
+    {
+        Style = style;
+        Settings.PatchSettings.Set(StyleKey, style);
+    }
+
+    public static void SetPlayerMark(int mark)
+    {
+        PlayerMark = mark;
+        Settings.PatchSettings.Set(PlayerKey, mark);
+    }
+
+    public static void SetPadButton(int button)
+    {
+        PadButton = button;
+        Settings.PatchSettings.Set(PadButtonKey, button);
+    }
+
+    public static void SetMinimap(bool on)
+    {
+        Minimap = on;
+        Settings.PatchSettings.Set(MinimapKey, on);
+    }
+
+    // ---- reading the game --------------------------------------------------
+
+    /// <summary>
+    /// Bring <see cref="Tiles"/> and the player fix up to date. Called at the top
+    /// of each panel's Draw, which runs inside the game's own VSync call, so the
+    /// memory read here is the memory the game left. Returns false when no area is
+    /// running, which is the panels' cue to draw nothing.
+    /// </summary>
+    public static bool Refresh()
+    {
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (m == null) { InGame = false; return false; }
+
+        // buf2 is cleared until an area is up, so a max HP of zero is "the title
+        // screen or a load", not "a dead character".
+        if (m.ReadU16(MaxHpAddr) == 0) { InGame = false; return false; }
+
+        InGame = true;
+        PlayerX = (int)m.ReadU32(PosXAddr);
+        PlayerY = (int)m.ReadU32(PosYAddr);
+        PlayerZ = (int)m.ReadU32(PosZAddr);
+        PlayerYaw = (short)m.ReadU16(YawAddr);
+        PlayerHalf = m.ReadU16(HalfSelAddr) == 0 ? 0 : HalfBytes;
+        Area = m.ReadU8(AreaAddr);
+
+        long now = Environment.TickCount64;
+        if (Area != _copiedArea || now - _copiedAt >= CopyPeriodMs) Copy(m, now);
+        if (!Ready) return false;
+
+        // After the copy, because a marker picks its floor out of the tile record
+        // it stands on -- see MapMarkers.HalfAt -- so the grid has to be this
+        // area's before the markers are matched against it.
+        MapMarkers.Refresh(m, Area, now);
+        return true;
+    }
+
+    /// <summary>The half a viewport should draw: the player's floor unless the
+    /// settings pin one.</summary>
+    public static int HalfOffset => Floor < 0 ? PlayerHalf : (Floor == 0 ? 0 : HalfBytes);
+
+    public static int TileOf(int world) => world / TileUnits;
+
+    /// <summary>Tile coordinates carrying the sub-tile fraction, for the arrow.</summary>
+    public static float TileF(int world) => world / (float)TileUnits;
+
+    /// <summary>
+    /// The screen row a world Z draws on, sub-tile fraction and all.
+    ///
+    /// **A map is the plane seen from above and this world's Y axis points
+    /// down** — a half's floor is <c>-(height &lt;&lt; 7)</c>, so up is -Y. Looking
+    /// along +Y with +X to the right therefore puts +Z at the *top* of the
+    /// screen, and laying screen Y out along +Z instead draws the area
+    /// mirrored. That mirror is what made the arrow swing clockwise when the
+    /// player turned left: the heading func_80028080 walks is
+    /// <c>(-sin yaw, cos yaw)</c>, so yaw increasing takes you from +Z toward
+    /// -X, which is left of forward only while the view is not flipped.
+    ///
+    /// Row 0 is tile <c>Span-1</c>, and the sub-tile fraction runs backwards with
+    /// it — a point a tenth of the way into a tile is nine tenths of the way down
+    /// its row — so this is <c>Span - TileF</c>, not <c>Span - 1 - TileF</c>.
+    /// </summary>
+    public static float RowF(int world) => Span - TileF(world);
+
+    /// <summary>The tile a screen row draws, which is also its own inverse.</summary>
+    public static int RowOf(int tile) => Span - 1 - tile;
+
+    // ---- rooms -------------------------------------------------------------
+
+    /// <summary>Memo for <see cref="RoomCentre"/>, keyed by tile and half and
+    /// cleared with every grid copy, so a save point costs the search once an
+    /// area rather than once a frame.</summary>
+    static readonly Dictionary<(int X, int Z, int Half), (float X, float Z, int Span)> _rooms = new();
+
+    /// <summary>
+    /// The centre of the room a tile is in, in tile coordinates — <c>x + 0.5</c>
+    /// being the middle of tile <c>x</c>.
+    ///
+    /// **A room here is the largest solid rectangle of drawn tiles containing
+    /// this one**, which is a definition rather than a reading: nothing in the
+    /// grid records where one room ends and the next begins. A flood fill would
+    /// be the obvious answer and is the wrong one — every walkable tile in an
+    /// area is connected to every other through the doorways, so a fill returns
+    /// the whole floor and its centroid is a point in the middle of the map. A
+    /// rectangle is bounded by the walls on all four sides at once, so it stops
+    /// at a doorway the way a person's idea of a room does, and it degrades
+    /// sensibly: a save point in a corridor gets a long thin rectangle whose
+    /// centre is still in the corridor beside it.
+    ///
+    /// Opennness is <see cref="Drawn"/> — the renderer's own test, and the same
+    /// one patches/MapFog.cs casts shadows against, where the gaps between rooms
+    /// *are* the walls.
+    ///
+    /// Ties go to the rectangle whose centre is nearest the tile asked about, so
+    /// a chamber that can be read two ways puts the mark next to the thing that
+    /// asked rather than at the far end of it.
+    ///
+    /// <paramref name="span"/> is the rectangle's **short side** in tiles, which
+    /// is how much room a mark drawn at the centre has in the worst direction —
+    /// so a caller can size a label to the room instead of to the grid. It is 1
+    /// for a corridor and for the fallback.
+    /// </summary>
+    public static bool RoomCentre(int tx, int tz, int half, out float cx, out float cz,
+                                  out int span)
+    {
+        cx = tx + 0.5f;
+        cz = tz + 0.5f;
+        span = 1;
+
+        if (!Drawn(tx, tz, half)) return false;
+
+        if (_rooms.TryGetValue((tx, tz, half), out var hit))
+        {
+            cx = hit.X;
+            cz = hit.Z;
+            span = hit.Span;
+            return true;
+        }
+
+        int best = 0, bspan = 1;
+        float bx = cx, bz = cz, bd = float.MaxValue;
+
+        // Every band of rows through this tile, widened as far as it stays solid.
+        // The bands are grown outward from the tile and abandoned the moment a row
+        // blocks the tile's own column, which is what keeps this to a few hundred
+        // tests in a corridor and a few thousand in a hall.
+        for (int z0 = tz; z0 >= 0 && Drawn(tx, z0, half); z0--)
+        {
+            for (int z1 = tz; z1 < Span && Drawn(tx, z1, half); z1++)
+            {
+                int x0 = tx, x1 = tx;
+                while (x0 - 1 >= 0 && Solid(x0 - 1, z0, z1, half)) x0--;
+                while (x1 + 1 < Span && Solid(x1 + 1, z0, z1, half)) x1++;
+
+                int area = (z1 - z0 + 1) * (x1 - x0 + 1);
+                float mx = (x0 + x1 + 1) * 0.5f, mz = (z0 + z1 + 1) * 0.5f;
+                float d = (mx - cx) * (mx - cx) + (mz - cz) * (mz - cz);
+
+                if (area > best || (area == best && d < bd))
+                {
+                    best = area;
+                    bd = d;
+                    bx = mx;
+                    bz = mz;
+                    bspan = Math.Min(z1 - z0 + 1, x1 - x0 + 1);
+                }
+            }
+        }
+
+        _rooms[(tx, tz, half)] = (bx, bz, bspan);
+        cx = bx;
+        cz = bz;
+        span = bspan;
+        return true;
+    }
+
+    /// <summary>Is a whole column of a band drawn?</summary>
+    static bool Solid(int x, int z0, int z1, int half)
+    {
+        for (int z = z0; z <= z1; z++)
+            if (!Drawn(x, z, half)) return false;
+        return true;
+    }
+
+    public static bool Drawn(int x, int z, int half)
+        => (uint)x < Span && (uint)z < Span
+           && Tiles[z * RowBytes + x * Stride + half + Model] < NotDrawn;
+
+    public static byte Byte(int x, int z, int off)
+        => (uint)x < Span && (uint)z < Span ? Tiles[z * RowBytes + x * Stride + off] : (byte)0xFF;
+
+    static void Copy(IMemory m, long now)
+    {
+        // The memo survives an ordinary re-copy and not an area change. A room's
+        // shape is architecture — the four times a second this runs is for the
+        // handful of tiles that move, the drawbridge and the minecart — so
+        // clearing it here would pay for the search sixteen times a second to
+        // answer the same question.
+        if (_copiedArea != Area) _rooms.Clear();
+
+        _copiedArea = Area;
+        _copiedAt = now;
+
+        // 16,000 words rather than 64,000 bytes: ReadU32 does the same range
+        // checks as ReadU8 and answers four times as much.
+        for (int i = 0; i < Tiles.Length; i += 4)
+        {
+            uint w = m.ReadU32(TileBase + (uint)i);
+            Tiles[i]     = (byte)w;
+            Tiles[i + 1] = (byte)(w >> 8);
+            Tiles[i + 2] = (byte)(w >> 16);
+            Tiles[i + 3] = (byte)(w >> 24);
+        }
+
+        int lo = 255, hi = 0, n = 0;
+        for (int e = 0; e < Extents.Length; e++)
+            Extents[e] = new Extent { X0 = Span, Z0 = Span, X1 = -1, Z1 = -1 };
+
+        for (int z = 0; z < Span; z++)
+            for (int x = 0; x < Span; x++)
+            {
+                int i = z * RowBytes + x * Stride;
+                for (int half = 0; half < Stride; half += HalfBytes)
+                {
+                    if (Tiles[i + half + Model] >= NotDrawn) continue;
+                    n++;
+                    int h = Tiles[i + half + HeightByte];
+                    if (h < lo) lo = h;
+                    if (h > hi) hi = h;
+
+                    ref var ext = ref Extents[half / HalfBytes];
+                    if (x < ext.X0) ext.X0 = x;
+                    if (x > ext.X1) ext.X1 = x;
+                    if (z < ext.Z0) ext.Z0 = z;
+                    if (z > ext.Z1) ext.Z1 = z;
+                }
+            }
+
+        Occupied = n;
+        MinHeight = n == 0 ? 0 : lo;
+        MaxHeight = n == 0 ? 0 : hi;
+
+        // **A dump waits for the reading to settle.** An overlay load moves the
+        // area byte before func_8001689C has copied the new grid in, so the first
+        // copy after one can be the area you just left -- measured, a player
+        // 12,800 units off the floor the map was reading, on a tile the map
+        // called empty. The player standing on a half the renderer draws is the
+        // invariant that says the two agree, so the dump waits for it and the
+        // 250 ms timer keeps re-copying until it holds. The map itself is stale
+        // for the same window, which is a fraction of a second of loading screen.
+        if (_probe && _dumpPending && Ready && Drawn(TileOf(PlayerX), TileOf(PlayerZ), PlayerHalf))
+        {
+            _dumpPending = false;
+            MapMarkers.Refresh(m, Area, now);
+            Dump();
+            MapMarkers.Dump(m);
+        }
+    }
+
+    /// <summary>An area module has loaded: re-copy on the next Draw rather than
+    /// waiting out the timer, and arm a dump for once the reading settles.</summary>
+    public static void Invalidate() { _copiedArea = -1; _dumpPending = true; }
+
+    // ---- the probe ---------------------------------------------------------
+
+    /// <summary>
+    /// The grid as ASCII, one line a row, both halves. This is the only oracle
+    /// short of a person looking at the screen: an empty dump means the address or
+    /// the stride is wrong, and a dump whose occupied extent does not move between
+    /// areas means the copy is not being taken.
+    /// </summary>
+    public static void Dump()
+    {
+        const string ramp = ".:-=+*#%@";
+        int range = Math.Max(1, MaxHeight - MinHeight);
+
+        int px = TileOf(PlayerX), pz = TileOf(PlayerZ);
+        bool stands = Drawn(px, pz, PlayerHalf);
+        int hb = Byte(px, pz, PlayerHalf + HeightByte);
+
+        Console.WriteLine($"[KF2] map: area {Area}, {Occupied} occupied halves, " +
+                          $"height {MinHeight}..{MaxHeight}");
+
+        // The occupied box per half, which is what the full-screen map fits its
+        // scale to. Printed because that scale is otherwise judgeable only by
+        // eye: a box covering the whole 0..79 grid would mean the extent pass is
+        // seeing the cleared grid rather than the area.
+        for (int half = 0; half < Stride; half += HalfBytes)
+        {
+            var e = Extents[half / HalfBytes];
+            Console.WriteLine($"[KF2] map: {(half == 0 ? "lower" : "upper")} extent " +
+                              (e.Any ? $"x {e.X0}..{e.X1}, z {e.Z0}..{e.Z1} " +
+                                       $"({e.X1 - e.X0 + 1}x{e.Z1 - e.Z0 + 1} tiles)"
+                                     : "empty"));
+        }
+
+        // The check worth printing every time: the player has to be standing on a
+        // half the renderer draws, and the half's floor Y has to be near their own.
+        // A "not drawn" here means the half selector or the model test is wrong; a
+        // large gap means the height byte is not the floor.
+        Console.WriteLine($"[KF2] map: player tile {px},{pz} on the " +
+                          $"{(PlayerHalf == 0 ? "lower" : "upper")} floor, " +
+                          $"{(stands ? "drawn" : "NOT DRAWN")}, " +
+                          $"height byte {hb} -> floor Y {-(hb << 7)} against player Y {PlayerY} " +
+                          $"(gap {PlayerY - -(hb << 7)})");
+
+        for (int half = 0; half < Stride; half += HalfBytes)
+        {
+            Console.WriteLine($"[KF2] map: --- {(half == 0 ? "lower" : "upper")} floor ---");
+            for (int z = 0; z < Span; z++)
+            {
+                var line = new char[Span];
+                for (int x = 0; x < Span; x++)
+                {
+                    int b = z * RowBytes + x * Stride + half;
+                    if (Tiles[b + Model] >= NotDrawn) { line[x] = ' '; continue; }
+                    int h = (Tiles[b + HeightByte] - MinHeight) * (ramp.Length - 1) / range;
+                    line[x] = ramp[Math.Clamp(h, 0, ramp.Length - 1)];
+                }
+                Console.WriteLine($"[KF2] map: {z,2} |{new string(line)}|");
+            }
+        }
+    }
+}

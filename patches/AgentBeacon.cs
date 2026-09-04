@@ -15,7 +15,13 @@ namespace Kf2;
 ///     walk is legible;
 ///   * a JSON snapshot about once a second carrying the fields an agent needs to
 ///     answer "am I in the game yet": inGame (the same MaxHp != 0 test the rest of
-///     the port uses), the overlay, HP/MP/level/exp/area/slot, dead, and position.
+///     the port uses), the overlay, HP/MP/level/exp/area/slot, dead, position and
+///     heading.
+///
+/// `yaw` is the composed view angle at 0x80199506 -- 0x1000 to a full turn, and
+/// the heading on the ground is (-sin yaw, cos yaw), which is what func_80028080
+/// adds to the position on a walk step. It is here because a map needs to know
+/// which way you are facing and a screenshot is not allowed to be the answer.
 ///
 /// The point is the failure the port kept hitting with automated testers: an agent
 /// that cannot see the screen cannot tell "stuck at the title" from "in an area",
@@ -43,6 +49,7 @@ public static class AgentBeacon
     const uint DeathFrames = 0x8019951A;   // u16
     const uint Area        = 0x8017E060;   // u8
     const uint CurrentSlot = 0x8006E5D4;   // u8
+    const uint Yaw         = 0x80199506;   // s16, composed view; 0x1000 to a turn
     const uint PosX        = 0x801994EC;   // s32
     const uint PosY        = 0x801994F0;   // s32
     const uint PosZ        = 0x801994F4;   // s32
@@ -110,6 +117,6 @@ public static class AgentBeacon
             $"\"level\":{m.ReadU8(Level)},\"exp\":{m.ReadU32(Exp)}," +
             $"\"area\":{m.ReadU8(Area)},\"slot\":{m.ReadU8(CurrentSlot)}," +
             $"\"deathFrames\":{m.ReadU16(DeathFrames)}," +
-            $"\"pos\":[{x},{y},{z}]}}";
+            $"\"pos\":[{x},{y},{z}],\"yaw\":{(short)m.ReadU16(Yaw)}}}";
     }
 }

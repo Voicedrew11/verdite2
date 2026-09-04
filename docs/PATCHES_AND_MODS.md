@@ -15,6 +15,7 @@ lives here — frame pacing and auto reload.
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `AutoReload.cs` | reloads the last save on death | this file |
+| `Map.cs`, `MapMarkers.cs`, `MapRender.cs`, `MapPanel.cs`, `MapOverlay.cs`, `MapFog.cs` | the area's floor plan, what is standing in it, and the tiles you have seen | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
 | `Perspective.cs`, `Subpixel.cs`, `ZBuffer.cs` | switches and probes over the GTE depth mechanisms | [RENDERING.md](RENDERING.md) |
 | `Widescreen.cs`, `CullCone.cs`, `ViewClip.cs`, `PrimBuffer.cs` | aspect ratio and the culls it runs into | [WIDESCREEN.md](WIDESCREEN.md) |
@@ -2751,6 +2752,1016 @@ and *Simulate death* from the new tab logged
 result the mod gave, so the hook, the config read and the reload path all survived
 the move.
 
+## A dynamic map
+
+`patches/Map.cs`, `patches/MapMarkers.cs`, `patches/MapRender.cs`,
+`patches/MapFullscreen.cs`, `patches/MapPanel.cs`, `patches/MapOverlay.cs`,
+`patches/settings/MapPage.cs`.
+
+    KF2_MAP=0             the whole feature off (on by default)
+    KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
+    KF2_MAP_MARKERS=0     the marker layer off (on by default)
+    KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII, its occupied extent and a
+                          marker census, and open both maps
+
+King's Field is a maze, the original shipped no automap, and until now everything
+in this port that knew where you were was a debug instrument — `kf2debug`'s Warp
+tab, `KF2_SHELL`'s `state`, the `[KF2-AGENT]` beacon. A patch rather than a mod
+for auto reload's reason: it is a thing the port itself should offer, so it
+should not be able to be absent or silently disabled, and its knobs go under
+Gameplay beside it. **The pad's touchpad button opens the full-screen map**, `M`
+does the same from the keyboard, `N` toggles the corner minimap, and `Shift+M`
+opens the docked panel with the per-tile readout.
+
+### The floor plan is already in RAM, and it is not polygon soup
+
+**Confirmed.** The area loader `func_8001689C` copies `0x3E80` words — 64,000
+bytes — to `0x801C8484`, and 0x600 more to the collision-shape block at
+`0x801D8484` (`generated/game.cs:4231-4239`). That first block is an **80 x 80
+grid of 10-byte tile records**, `tile = 0x801C8484 + 800*z + 10*x`, which is the
+resolution `func_80031B1C` performs before drawing each tile. A tile spans 2048
+world units, so `tileX = worldX >> 11`. The 24x24 grid at `0x80192EAC` that
+`CullCone` and `CullGrid` work on is only a per-frame *visibility window* over
+this map — see "The map is an 80x80 tile grid" in `docs/GAME_INTERNALS.md` for
+the record's five fields and the two stacked halves.
+
+So a map is a **read**. No hook, nothing written to game memory, and with both
+viewports closed it costs one bool test a frame.
+
+### The invariant that proves the whole chain
+
+**Confirmed, and it is the check worth keeping.** The player has to be standing
+on a half the renderer draws, and that half's floor Y — `-(heightByte << 7)` —
+has to equal the player's own Y at `0x801994F0`. `KF2_MAP_PROBE=1` prints it on
+every area load:
+
+    map: player tile 35,36 on the upper floor, drawn, height byte 116
+         -> floor Y -14848 against player Y -14848 (gap 0)
+
+Measured **gap 0** across three save slots, two areas and both floors. One line
+confirms the tile addressing, the 10-byte stride, the 5-byte half layout, the
+height byte at `+1`, the half selector at `0x801D9C8E` and `tileX = worldX >> 11`
+together — which is why the probe prints it rather than just the ASCII dump.
+
+### The arrow's angle is derivable, and the map was the view from below
+
+**Confirmed twice, from the code and from a live walk.** `func_80028080` is what a
+walk step goes through, and it adds `-sin(yaw) * d` to the X at `0x801994EC` and
+`+cos(yaw) * d` to the Z at `0x801994F4` (`generated/game.cs:26043-26071`;
+`func_8005EB08` is odd so it is sine, `func_8005EC10` takes `|a0|` so it is
+cosine). The yaw it reads is the **base** angle at `0x8019950E`, as a signed
+short. So the heading on the ground is `(-sin yaw, cos yaw)`: yaw 0 faces +Z and
+yaw 0x400 faces -X.
+
+The attract demo confirms that much without a hand on the keyboard, which is what
+it is for. Over two seconds of steady heading:
+
+| samples | measured delta | normalised | `(-sin yaw, cos yaw)` |
+|---|---|---|---|
+| yaw 959 -> 959 | dx -2315, dz +217 | (-0.9957, 0.0933) | (-0.9951, 0.0994) |
+| yaw -> 717 | dx -848, dz +432 | (-0.891, 0.454) | (-0.891, 0.454) |
+
+`AgentBeacon.Snapshot()` gained a `yaw` field for this, so `KF2_SHELL`'s `state`
+answers heading as well as position. It reads the *composed* angle at
+`0x80199506` rather than the base, because that is the one the renderer uses and
+so the one the arrow should agree with; the two differ only by the frame's own
+deltas.
+
+**What that measurement cannot see is which way up the map is**, and the first
+version had it upside down. Screen X was world X and screen Y was world Z, so the
+arrow was `(cos, sin)` of `yaw + pi/2` and the screen angle *increased* with yaw —
+self-consistent, and consistent with the walk, because a mirrored map and a
+mirrored arrow agree with each other about everything except handedness. Reported
+from play: **turning left swung the arrow right.**
+
+The world's up is **-Y** — a half's floor is `-(height << 7)`, which is the one
+reading the probe prints every load — so a viewer above the plane looks along
+**+Y**, and with +X to the right that puts **+Z at the top of the screen**. Laying
+screen Y out along +Z is therefore the view from underneath. It also settles the
+handedness the passage above was arguing about: `up x forward` is
+`(-Y) x (+Z) = -X`, so yaw increasing really does turn you left, and on a map
+drawn from above the arrow's screen angle must **decrease** with yaw:
+`(cos, sin)` of `-(yaw + pi/2)`.
+
+So the fix is in the map, not in the arrow. `Map.RowF(worldZ) = Span - TileF(z)`
+is the screen row a world Z draws on and `Map.RowOf` converts a row back to a
+tile; `MapRender.Draw` takes `z0..z1` as **rows** and both viewports place their
+origin from `RowF`, which leaves every screen-space calculation they already had
+alone. Two details are easy to get wrong: the sub-tile fraction runs backwards
+with the flip, so it is `Span - TileF` and not `Span - 1 - TileF`, and the hover
+readout has to run `RowOf` on the row it floors out of the cursor or it names a
+tile mirrored about the middle of the area.
+
+**Negating the arrow alone would have matched the report and been wrong**: it
+would have squared the arrow with the turn and left it pointing across the
+direction of travel, since the mirror was in the map. That is the general shape —
+a mirror is invisible to any measurement taken entirely inside the mirrored frame,
+and only the two facts from *outside* it (the world's up, and a player saying
+which way they turned) can find it.
+
+The ASCII dump `KF2_MAP_PROBE=1` writes is deliberately **not** flipped: it is a
+dump of the grid in memory, row `z` on line `z`, and its job is to say whether the
+copy and the stride are right. It is upside down with respect to the drawn map.
+
+### A blank grid reads as a full one
+
+**Confirmed, and it is the trap in the occupancy test.** The renderer draws a half
+whose model index is below 240, and a *zeroed* record's index is 0 — so between
+areas, when the game has cleared the block, all 12,800 halves pass the test and
+the map draws a solid rectangle over the whole area. Measured "12800 occupied
+halves, height 0..0" at the boot, against 5,126 and 6,313 in the two real areas.
+
+`Map.Ready` is the test: every half occupied at exactly one height is not
+something a real area can be. The panels draw nothing while it is false.
+
+### The area loader looks like the right hook and is not
+
+**Confirmed, and it was tried.** The map is stale for up to a copy period after an
+area load: `OverlayLoadedEvent` fires, the area byte at `0x8017E060` has already
+moved, the next draw re-copies — but `func_8001689C` has not yet run its
+`0x3E80`-word copy, so the grid is still the area you just left. Measured: the
+probe printing a player 12,800 units off the floor the map was reading, on a tile
+the map called empty.
+
+`func_8001689C` is where that copy lives, so a post-hook on it looks like the
+exact "the grid is now the new area's" signal. **It is called every frame** — the
+function is 1,716 bytes with the load in a branch, and the hook fired **5,673
+times in 40 seconds at 144 fps**, turning a four-a-second grid copy into a
+per-frame one and dumping the probe 5,673 times. Reverted.
+
+What is there instead costs nothing: the copy is cheap and self-corrects within
+the 250 ms period, and the *probe's* dump waits for the standing-on-a-drawn-half
+invariant above rather than firing on the area byte. The map's own stale window is
+a fraction of a second of loading screen, which nobody sees.
+
+### Where it draws, and what that decided
+
+A host ImGui surface, not PSX primitives in the game's own frame. The in-frame
+route exists — `GpuPrims.Tri/Quad/Sprite` — but `GpuPrims.SetOrderingTable` is
+**dormant**, nothing in the tree calls it, and `patches/Widescreen.cs` already
+owns the only `Replace` on `DrawOTag` on all three overlays. Left for a later
+pass.
+
+**Every read happens inside the panels' own `Draw()`, and that is correct rather
+than lazy.** `LibEtc.VSync` calls `Runtime.PresentFrame` -> `HostWindow.Present`
+-> `PanelManager.DrawPanels`, all on one thread, so a panel draws *inside the
+game's own VSync call* and sees exactly the memory the game left there. There is
+no snapshot handoff to get wrong. The 64,000-byte copy is still taken only four
+times a second, because the architecture it carries — the drawbridge and the
+minecart are tiles, not models — does not move faster than that.
+
+The full map is an `IPanel`; the minimap is an `IFloatingPanel`, which is the
+interface for a panel that should not count towards the dockspace's layout. The
+minimap's `IsOpen` **is** its feature switch, because `PanelManager.DrawPanels`
+only calls `Draw` on an open panel — that is what keeps it off the title screen
+and out of a load. Panels do not auto-populate the menu bar, so the map also
+registers under a new `menu.game`, whose label key supplies all three of the
+runtime's languages.
+
+**An overlay is a z-order problem before it is a drawing one, and the minimap
+shipped invisible because of it.** Reported from play as "there is no way to
+overlay the map — only the map as a whole tab works": the minimap window carried
+`ImGuiWindowFlags.NoBringToFrontOnFocus`, which reads like chrome politely
+declining to steal focus and is nothing of the kind. ImGui reads that flag **once,
+in `CreateNewWindow`**, and pushes such a window to the *front of `g.Windows`* —
+which is the **back** of the display order — instead of appending it. The window
+also has `NoInputs` and `NoFocusOnAppearing`, so nothing ever focuses it and it
+has no second route forward, and `OutputPanel.Draw` pushes an **opaque** black
+`WindowBg` over the whole dockspace. So the minimap was drawn correctly on every
+frame, underneath the game picture, for the life of the feature. Dropping the flag
+appends it instead: it sits above everything that already exists, the dock tree
+cannot displace it (`##DockHost` carries the flag itself, so focusing a docked
+panel does not bring the tree forward), and a popup created later still covers it,
+which is what should happen. The full map never saw any of this because it is an
+ordinary docked panel — **the split in the report is the diagnosis**, and
+`MapOverlay` is the only `IFloatingPanel` in the tree, so nothing else had ever
+exercised the combination.
+
+What is still true of the anchoring is that the minimap is pinned to the *main
+viewport's* work area rather than to the game picture, and the picture is
+letterboxed inside `OutputPanel`'s content region. At 4:3 in a wide window a
+corner therefore lands on the black bar beside the game rather than over it. That
+is arguably the better place for it and it is the user's to judge; anchoring to
+the image would need the runtime to publish that rectangle, since `OutputPanel` is
+`internal`.
+
+**Five anchors, and the numbering is the old bitmask plus one.** `0..3` were read
+as a mask — bit 0 the right edge, bit 1 the bottom — which is exactly two binary
+choices and therefore cannot express a *centred* one. `4` is top centre, and
+`MapOverlay` switches on the value instead of masking it; the four original
+numbers keep their meanings because they are already written in players'
+`interface.ini`, so "Top centre" is appended to the combo rather than slotted in
+beside the other two top entries. An unrecognised value falls back to the shipped
+top-right rather than landing off-screen.
+
+**The edge gap is a setting** (`kf2.map.minimap.pad`, 0-200 px, 12 by default —
+the constant that shipped). It is scaled by `Theme.Scale` alongside the size, so
+the gap keeps its proportion as the interface scale moves rather than closing up
+on a large one, and it is clamped where it is *used* as well as where it is set:
+it is a saved number, and a big enough one would push the map off the screen
+leaving no control on it to bring it back. A centred anchor spends it on the top
+edge only — there is no horizontal edge to stand off from.
+
+#### The minimap's shape and opacity
+
+Two knobs under Gameplay > Map, both defaulting to the picture that shipped — a
+fully opaque square — for the rule the rest of the port follows: a picture nobody
+has judged by eye does not become the default.
+
+**Opacity** (`kf2.map.minimap.opacity`, 0.15-1) is the ground and the tiles, not
+the window. The window's own background is a rectangle ImGui fills before the draw
+list runs, so it can be neither round nor faded independently of what is drawn over
+it; the overlay carries `NoBackground` instead and fills its own ground, which
+makes the setting the single store for how solid the map is. The palette is built
+once as packed `IM_COL32` words, so fading is `MapRender.Fade` scaling the high
+byte — a colour that is already translucent (the wall tint, the lit tint) stays
+proportionally so. **The player's arrow is exempt**: an overlay you can see the
+game through is the point, and a "you are here" marker you cannot find is not.
+
+**Shape** (`kf2.map.minimap.shape`, square or circle) is a clipping problem with no
+clipping available. ImGui's clip rects are rectangles and a draw list cannot erase
+what it has already drawn, so the usual mask — a ring painted in the background
+colour over the corners — needs the background to be opaque, which is exactly what
+the opacity setting forbids. So the circle is cut per tile instead
+(`MapRender.ClipToCircle`): each tile's rect is clamped to the chords the disc
+allows **at its far edges**, which can fall short of the circle by a fraction of a
+tile but can never spill past it — and spill is the artefact a drawn border ring
+makes obvious. The edge is therefore scalloped by up to one cell at the diagonals;
+at the default 220 px over 25 tiles a cell is 8.8 px.
+
+Measured cost: 144.0 fps drawn and 20.0 ticks/s with both viewports drawing at
+`KF2_FPS=144`, indistinguishable from `KF2_MAP=0`.
+
+### The full-screen map, and the button the PS1 never had
+
+`patches/MapFullscreen.cs`. Reported from play: *"the minimap is a cool feature,
+but it contrasts hard with the game design."* The two viewports that existed were
+a corner overlay and a **docked ImGui panel** — a title bar, a toolbar, a zoom
+slider, a hover readout printing ten hex bytes — which is a debugger over a
+320x240 picture, not a map you open with a controller in your hands. So there is a
+third viewport: the whole area, over the dimmed game, no chrome, opened and closed
+with one button.
+
+It is a third *viewport* rather than a third map. The palette, the tiles, the
+markers and the player are `MapRender`'s, the reading is `Map.Refresh`'s, and this
+class is a rectangle, a scale and a scrim — the same relationship the minimap has.
+It carries `NoInputs`, so the mouse still reaches the game and the menus behind
+it, and there is nothing on it to click: everything it draws is decided by the
+settings the other two already share. The minimap closes while it is up; a corner
+map over a map of the same area is two answers to one question.
+
+**The touchpad is reachable because it is not a PS1 button.** `InputManager`
+dispatches `ControllerEvent` straight off SDL, `ev.Cbutton.Button` and all,
+*before* `PadState` maps anything onto the PSX pad — so listening there gets the
+raw `SDL_GameControllerButton`, of which the DualSense's touchpad click is **20**
+(SDL 2.0.14 and up, through the PS5 driver). Nothing downstream has a slot for it,
+so it cannot leak into the game as a keypress, and the pad's sixteen real buttons
+are left entirely to the game. The event bus only dispatches `ControllerEvent`
+while something listens, so the listener is also what turns that dispatch on.
+
+A pad whose SDL mapping has no touchpad simply never sends button 20, and
+**nothing here can ask it whether it has one** — `InputManager` keeps the
+`GameController*` to itself, so `GameControllerHasButton` is out of reach. The
+binding is therefore a setting rather than a probe: Gameplay > Map > "Open the
+full-screen map with", offering Touchpad (the default), L3, R3, Select and None,
+stored as the SDL index in `kf2.map.pad.button`. `Device` is deliberately not
+filtered — it is SDL's joystick *instance id*, not a player number, so any pad
+opens the map.
+
+**It fits the area rather than following the player, until the area will not fit
+legibly.** `Map.Copy` gained the occupied box per half (`Map.Extents`), computed
+in the same pass as the height range and printed by the probe, and the view is
+scaled to that box and centred on it — so nothing moves as you walk except the
+dot, and a route can be read off a stable picture. That was expected to be a
+fraction of the grid and **measured as the whole of it**: areas 0 and 1 both run
+`x 0..79, z 0..79` on both halves. Fitting the extent is therefore fitting the
+80x80 grid, which in a small window is a few pixels a tile, so below a floor of 6
+logical px a tile the fit is abandoned and the map centres on the player's
+**tile** instead — the same quantisation the dot has, so the picture steps a
+square at a time rather than sliding under you.
+
+#### "Full screen" is the game picture, not the window
+
+Reported from play: *"the fullscreen map conforms to the window and not the draw
+area, so it has a fairly odd appearance."* It did, and the reason is that the game
+picture is **not** the window and nothing outside the runtime's `OutputPanel` knew
+where it was. The picture is an ImGui `Image` inside that panel, fitted to the
+panel's content region at the display's aspect (`FitAspect`) and centred in it, so
+three things eat into it before a pixel of game is drawn: the main menu bar and
+the dockspace border take a strip off the top and the edges, a docked panel takes
+its share of the rest, and a window whose shape does not match the display's
+leaves a bar on two sides — 4:3 in a 16:9 window is a bar either side.
+
+Sized to `viewport.Size`, the map covered all of that. Its scrim dimmed the port's
+own chrome as well as the game, its floor plan was centred on the *window* rather
+than on the picture, and its edges lined up with neither: a window over the port
+rather than a screen the game had put up.
+
+`patches/recompone/0029` publishes the rectangle from the one place that computes
+it — a public `OutputView` set in `OutputPanel.Draw`, from `GetCursorScreenPos`
+and the fitted size, immediately before `ImGui.Image`. Ordering needs no care:
+`PanelManager.DrawPanels` walks its list in registration order, `HostWindow`
+registers the Output panel during initialisation and `Program.cs` registers the
+map viewports long afterwards, so the rectangle is always this frame's.
+
+`MapRender.Picture` is the accessor, and it **falls back to the viewport's work
+area** when `OutputView.Valid` is false — before the first frame is presented, and
+while the panel is collapsed. Fitting nothing would be a blank map; fitting the
+window is what the map did already, so the fallback degrades to the old behaviour
+rather than to a defect.
+
+One consequence needed handling: the picture is now the smaller of the two
+rectangles, so a fixed 24 px margin and a two-line header at a large `Theme.Scale`
+would eat the map they frame. Both are capped at a share of the rectangle (5% and
+10% of its height), which changes nothing at a full-window picture.
+
+Measured with all three viewports drawing at `KF2_FPS=144`: **144.0 fps drawn,
+20.0 ticks/s**, and no throw over two area loads and an autostart. **Never judged
+by eye**: whether the map now reads as part of the game, which is the whole point
+of the change. The corner minimap still anchors to the viewport's work area rather
+than to the picture, so it can sit over a letterbox bar — the same defect one
+viewport along, deliberately left alone until someone looks at the full map.
+
+### You are here, approximately
+
+`MapRender.DrawPlayerDot`, and it is the default (`kf2.map.player`, Gameplay >
+Map > "You are here"; the arrow is the other entry).
+
+The arrow told the player two things the game never told them: where in the room
+they stand, to the world unit, and which way they face, to a twelfth of a degree.
+That is a satellite fix in a game whose whole difficulty is a maze you are meant
+to be lost in, and it is what "contrasts hard with the game design" meant. A dot
+centred in the occupied tile says only *you are in this square* — which is what
+someone drawing this maze on graph paper would have known.
+
+So it is drawn on the **tile**, not on the position: the world coordinate goes
+through `Map.TileOf` and back out as `tile + 0.5` across and
+`Map.RowOf(tile) + 0.5` down, which is the same row arithmetic the tile fills use,
+so the dot lands in the square the fill drew rather than half a cell off it. It
+steps a square at a time as you walk. The radius follows the **cell** rather than
+the caller's size, because occupying the square is the point: a dot at the
+minimap's four or five pixels a tile, a filled square's worth on the full map.
+Full opacity, for the reason the arrow had it — the minimap's opacity exists so
+the ground stops hiding the game, and a "you are here" you cannot find is not
+worth drawing.
+
+The arrow is kept rather than deleted: what it records about the game's heading is
+measured (`func_80028080`, and the mirror above it), and a setting keeps that
+live rather than turning it into archaeology.
+
+### The map the game itself draws
+
+`Map.Style` (`kf2.map.style`, Gameplay ▸ Map ▸ Style), `MapRender.DrawNative`,
+`MapRender.Frame`, `MapRender.DrawPlayerPointer`. **The game's own map is the
+default; the blueprint the port shipped with is the other entry.**
+
+The first version of this map was accurate and did not belong to the game. It
+filled every walkable tile pale blue-grey on near-black, ruled a faint grid over
+it, put a yellow dot in it and left the whole thing floating over a dimmed
+picture. Everything in that sentence is a decision an instrument makes: it is the
+docked panel's palette, scaled up. Reported from play as not conforming to the
+game's own styles, against a capture of the map item King's Field II actually
+hands the player.
+
+**What the original does is the one difference that matters: it does not fill.**
+Its board is one flat slate green, and the plan on it is the *wall* between a
+walkable tile and a void one, inked in a green so dark it reads as black. Room
+interiors and the unexplored field are the same colour. So a corridor is two
+parallel lines rather than a bright ribbon, and the picture reads as something
+drawn on paper by somebody walking the maze — which is what a map in a game with
+no automap is — instead of as a photograph of it from above.
+
+Everything else is sampled rather than chosen. From a capture of the in-game map:
+
+| | |
+|---|---|
+| field | `#3A523A` — the board, and the void alike |
+| ink | `#0E200E` — the plan |
+| under | `#2D3A2D` — the mottled shading inside it |
+| frame | `#7B8C7F` at the bevel's highlight, over `#43433A` |
+| player | `#E7C4C5` body, `#F78272` core |
+
+The frame is three concentric rectangles reproducing a bevel measured across the
+original's edge (dark outside, brightening to the highlight, dropping to a grey
+shadow at the slate), width a share of the board rather than a pixel count, and
+**drawn inside the rectangle it is given** — both callers hand it the edge of
+something already clipped, so a bevel painted outside would be cut away on the
+two edges a minimap is pinned to.
+
+Four consequences follow from copying the original rather than recolouring the
+port's map:
+
+- **The board is square**, because the game's is. A plan stretched across a 16:9
+  picture reads as a widescreen HUD however green it is.
+- **The scrim drops from 0.93 to 0.55.** The game's map is a board held up in
+  front of you, drawn into the world with the dungeon lit around it; a black-out
+  behind it is the one thing that would still read as an emulator overlay after
+  everything else matched. The board itself stays opaque, so nothing is harder to
+  read — only the surround is visible. It is black rather than the map's own
+  ground: a green wash over the dungeon would read as a filter on the game.
+- **There is no grid**, at any scale. The `grid` argument is simply not consulted.
+- **The player is the original's marker** — a pale **pointer** with a salmon boss
+  at its middle, drawn on the tile so it steps a square at a time, and **turned to
+  the cardinal direction you face**. It is traced off the marker in the game's own
+  map rather than invented: a long thin blade through the tile, a short crossbar
+  at the centre, a filled salmon square on that centre with a pale pip in it and
+  short salmon arms running down the blade, and a third of the way forward a
+  **two-step chevron** — a plate the height of the crossbar with a narrower one
+  the height of the boss stepping out in front of it, which is what a pixel
+  triangle looks like at this size. Every dimension is a share of the marker's
+  length, taken from the capture at 63 px: blade 5/63 thick and running -0.45 to
+  0.53 (the capture's own forward bias — it is the *boss* that sits on the tile's
+  centre), crossbar 26/63 across, boss 16/63 square, its arms 27/63 long, pip 4/63
+  square, chevron plates at 0.29-0.36 and 0.29-0.44 with half-widths 0.21 and
+  0.13. **The chevron is the only asymmetric thing in it**, which is exactly why
+  the first version — a plain cross — said nothing about facing until it was
+  rotated and then read as a cross rather than as a pointer once it was.
+  Quantising to a quarter is the arrow's bargain read the other way round: the
+  objection to the arrow was never that a heading is shown, it was a heading good
+  to a twelfth of a degree on top of a sub-tile position. A quarter turn is
+  "north, roughly" — what someone standing in a corridor with a paper map knows,
+  and the piece that tells you which way to hold the page without telling you
+  where in the room you are. It is also the only rotation that leaves a marker
+  built out of axis-aligned rectangles axis-aligned: the snap is taken in the
+  game's own angle units (`q = round(yaw / (Turn/4)) mod 4`) and the rotation
+  comes off a four-entry cosine table, so the bars stay exactly square rather than
+  a float sine's worth off it; `MapRender.Cardinals` is 4, and 8 would cost only
+  that alignment. `PlayerMark == 1` still draws the arrow, recoloured into the
+  palette and unchanged in what it claims.
+
+Two things in the picture are readings rather than measurements, and are marked as
+such. The **mottled darker shapes** in the original are reproduced as *the other
+stacked half* — a square with something drawn on the floor you are not standing on
+is washed in `under` before the plan goes over it. Nothing here proves that is
+what the game shaded; it is the only thing in the tile record that produces shapes
+of that kind, and it is information the blueprint style throws away. And the
+**height ramp** is kept, in the board's own green at about a fifth of the
+blueprint's contrast, because a room interior that reads as a fill is exactly what
+this style undoes.
+
+An edge is drawn by the tile that is *visible*, on each side whose neighbour is
+not, so a shared wall is inked once and no seam is doubled — and the neighbour
+test asks the 80x80 grid rather than the drawing window, so a plan does not sprout
+a border along the edge of whatever rectangle a caller happened to ask for. Fog
+counts as opaque there, so a half-walked area is inked at its frontier and reads
+as a plan rather than as a shape with a torn edge.
+
+The blueprint is kept rather than deleted: it is the picture the fog, the extents
+and the marker layer were all judged against.
+
+**Never looked at by eye:** any of it. The palette is sampled, the geometry is
+arithmetic, and whether the result actually reads as the game's map — at
+full-screen scale, at minimap scale, with fog on, with markers on — is the user's
+call.
+
+### Opening the map stops the world
+
+`Map.Pause` (Gameplay ▸ Map ▸ *Pause while the full-screen map is open*,
+`KF2_MAP_PAUSE=0`), on by default.
+
+The full-screen map is the whole area over a dimmed picture with no chrome and no
+input — a screen you stop to read — and reading it takes as long as it takes.
+King's Field's own map was an *item*, used from a menu that already stopped the
+game; this one is opened with a button in the middle of a corridor, so without a
+pause the port is asking the player to plan a route while something walks up
+behind them. The minimap and the docked panel deliberately do not pause: a
+heads-up corner map is meant to be read while walking, and the instrument is for
+watching the game run.
+
+**The mechanism is the stage gate held shut, not a new one.** `FramePacing` already
+declines to run the six gated stages on a frame the logic clock did not tick, and
+those six stages *are* the per-tick world — the object state machine, the pad read
+and player movement, the entity table, the effect lifetimes, the area module's own
+logic, the fade and the texture scroll. A pause is that decision taken on every
+frame instead of on three in four. So:
+
+- **Nothing is written to game memory and nothing is restored.** A pause that ends
+  leaves the game exactly where the last tick put it; there is no state to get
+  wrong and nothing to unwind if the process dies with the map open.
+- **Stage 13 is not gated, so the picture keeps being drawn** at the render rate,
+  and the map is laid over a live frame rather than over a still the port would
+  have to keep re-presenting itself.
+- **Every counter in the game stops together**, because they all hang off those
+  stages. There is no list of timers to remember.
+- **The pad is not read**, since the read is in stage 3. That is what a pause is,
+  and it is also why the command channel's `map` verb is on the fast queue: the
+  heavy queue drains on stage 3.
+
+`FramePacing.PauseWhen(predicate)` is the entry point, and it is a *predicate*
+rather than a flag deliberately. The panel closes by three routes — `M`, the pad
+button, and the runtime's own menu bar — and a latch missed by one of them is a
+game that never resumes. It is read once a frame, at the two places that already
+mean "a new frame" (the frame boundary, and `FallbackTick` when the boundary has
+been lost), because host input is polled from inside the game's own `VSync`
+(patches/recompone/0007) and a predicate read per stage could otherwise run half a
+tick — a state machine stepped against an entity table that was not. It is gated
+on `Map.InGame` as well as on the panel, since the map can be opened at the title
+screen, where it draws nothing and where pausing would freeze the intro.
+
+**A modal loop needs the other half, and `LoopPacing` is where it goes.** A gated
+stage can simply be skipped; a modal loop — a transition fade, a message box, a
+cutscene — *is* the main loop, on the stack, presenting its own frames, and no gate
+can reach its body. `LoopPacing` already holds such a loop to one iteration per
+tick by filling the gap with redraws; a pause is that fill not ending. Two changes
+make it one: the fill is entered when paused even at the tick rate (where
+`Extrapolating` is false and it would otherwise return at once), and while paused
+it is **not subject to the redraw cap** — capped, a message box would advance
+itself a couple of times a second through a pause. It cannot spin, because each
+redraw passes the frame boundary, is paced by `FramePacing.Floor`, and presents
+through the game's own `VSync`, which is also where host input is polled: the map
+is drawn on every one of those frames and the key that closes it is read on them.
+Pause redraws are counted separately from fill redraws (`held` against `n`) so the
+cap warning keeps its meaning — it fired once, spuriously, on the frame a paused
+map was closed inside the fill.
+
+**What the pause does not stop.** The music and ambient audio, which is the usual
+behaviour for a map screen. `MapFog` keeps sampling on the vblank, harmlessly
+re-writing cells it already has. `func_800331B4`'s per-object ambient-sound
+retrigger at `rec+0x40` is stepped inside a drawing function's own body and is
+outside every gate in the port, pause included — the same exception the frame
+pacing notes record.
+
+**Measured** at `KF2_FPS=144`, area 1, through the command channel's `map` verb:
+20.0 ticks/s before, **0.0 ticks/s** for the whole time the map was up, 20.0 again
+on closing it, with the picture holding 144.0 fps throughout. The world's phase
+holds at 0 while paused, so the frame the pause holds is a tick-aligned one — a
+pose the game produced, not an interpolated one. Repeated three times with the
+pause landing *inside* a warp's transition fade (areas 5, 2 and 7): the fade froze,
+resumed cleanly on closing the map, and no redraw-cap warning fired. A heavy shell
+command issued while paused times out after five seconds saying stage 3 never ran,
+which is the pause seen from the other side.
+
+**Never looked at by eye:** whether a frozen frame under the scrim reads as
+paused or as a stall, and whether the map is quick enough to open and close that
+pausing is what a player wants rather than an interruption.
+
+### What is measured and what is not
+
+**Measured:** the grid address, stride and half layout; the height byte; the half
+selector; the heading; the per-area occupancy and its bounding box (the whole
+80x80 grid, both halves, in areas 0 and 1); that all three viewports draw for
+45 seconds without throwing; that they cost no frame rate.
+
+**Not looked at by eye, and the user's to judge:** whether the floor plan looks
+like the area you are standing in — which is what decides whether occupancy should
+come from the model index at `+0` (what it uses, because that is the renderer's own
+test) or from the collision bytes at `+2` and `+3`; whether the height shading
+reads or muddies; whether bit `0x80` of `+4` is the wall it behaves like in the
+visibility flood or the "see through" `docs/WIDESCREEN.md` calls it; and whether
+the minimap's size, corner, range, shape and opacity are usable in play — the
+scalloped edge of the circle and the readability of a faded map over a dark area
+in particular. On the full-screen map: whether the fitted scale is readable in a
+large area, whether the scrim is dark enough to read tiles over a bright scene,
+and whether a whole-area view is what a player wants rather than one centred on
+themselves. On the dot: whether it reads at minimap size, and whether losing the
+heading costs more than the honesty buys — and, on the native cross, whether a
+quarter turn is coarse enough to keep that bargain and fine enough to be worth
+having, and whether the blade reads as the pointing end at a minimap's scale. **On the native style, everything**:
+the palette is sampled off a capture and the geometry is arithmetic, but whether
+an outlined plan reads at a minimap's four pixels a tile, whether the 0.55 scrim
+is dark enough behind a bright scene, and whether the other-floor wash reproduces
+the original's mottling or merely resembles it, are all pictures. **And the pad button is unverified
+here** — no controller was connected to any of these runs, so that SDL sends
+button 20 for a DualSense touchpad click is read off SDL's mapping rather than
+measured; if it does not arrive, the same setting offers L3 and R3. The docked
+panel's hover readout prints all ten bytes of the tile under the cursor for
+exactly that reason.
+
+### Fog of war
+
+`patches/MapFog.cs`, and the seam it fills is the one the map shipped with.
+
+    KF2_MAP_FOG=1         fog on for the run (off by default)
+    KF2_MAP_FOG_LOS=0     the line-of-sight gate off (on by default)
+    KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, refused, records, flushes
+    KF2_MAP_FOG_PROBE=2   also the raw 24x24 grid, the gate's verdict and its walls
+
+The map used to reveal the whole area. It now draws only the tiles the player has
+seen, remembered **per save slot** and kept between sessions in a file beside the
+memory card. Off by default, for the sub-pixel reason: the mechanism below is
+measured and the picture has not been judged.
+
+**No new reverse engineering was needed and none was done.** `func_8002D3A8`
+rebuilds the 24x24 grid at `0x80192EAC` at the head of every frame — the 4:3
+frustum flattened onto the map, scanline-filled and then flooded for occlusion.
+Fog is that grid ORed into an 80x80 bitset, on the mapping the game's own queries
+use: `cell = (world >> 11) + Offset`, so the world tile of cell (0,0) is the
+negated pair at `0x80192EA0`/`0xA4`.
+
+#### The grid is a culling test, and a culling test may over-report
+
+**The sentence that stood here said that grid "*is* what the player can see", and
+it is not.** It is what the frame might have to draw, and the two differ in one
+direction only. The flood (`patches/CullGrid.cs`'s `Cell`, a transcription of
+`func_8002CFC8` / `func_8002D15C`) marches rings out of the eye and lights a cell
+when **either** of its two parents on the ring inside it is lit. Two parents ORed
+is a 45-degree spread per ring, so one lit cell at the mouth of a corridor
+illuminates an expanding wedge behind the wall beside it. For the renderer that
+costs a few polygons nobody sees; for a store that never forgets it paints rooms
+the player has never been able to see into, which is what "the map reveals places
+disconnected from the room I am in" is.
+
+So a lit cell is checked against the floor plan before it is written: **recursive
+symmetric shadowcasting** (eight octants, the standard Bergstrom form) out of the
+player's own tile over the 80x80 map, a tile opaque when it carries no drawn model
+(`+0 >= 240`, the renderer's own test — the gaps between rooms *are* the walls in
+this game). A tile is revealed only when the game lit it **and** a line exists.
+Shadowcasting rather than a Bresenham ray per cell because a ray between tile
+centres clips the corners off a doorway and would under-reveal, and because it is
+symmetric: the tiles the player's tile can see are the tiles that can see it,
+which is the property that makes "I have been able to look at this square"
+defensible.
+
+**Both stacked halves are cast, and a cell is answered by the one its own bit
+names.** Asking the game which floor the player is on is the wrong question and
+two attempts at it failed measurably. The selector at `0x801D9C8E` — what
+`patches/Map.cs` draws from — has its own invariant *failing* in area 5, where it
+says upper and the player is 4200 units above that floor; a cast over the wrong
+half reads the whole area as wall, and it did: 86 of 93 lit cells refused, the
+player's own tile among them. Deriving the half from the player's Y instead only
+moved the failure, leaving four of the eight areas with no floor within a storey
+of the player and so no cast at all. The grid answers it per cell and for free —
+bit 0 is "lit on the lower half", bit 1 "lit on the upper" — so both halves are
+cast and each bit is checked against its own. Two casts cost two 53x53 snapshots
+on a tile step and nothing on a sample.
+
+The cast depends on the player's tile and the map alone, not on where the camera
+points, so it is taken once per tile step and re-taken every 250 ms (a drawbridge
+and a minecart are tiles). **A window with no wall in it is an unloaded map rather
+than an open field** — `patches/Map.cs`'s cleared-grid trap the other way up, since
+a zeroed model index is 0 and 0 is a *drawn* tile — so that half is passed rather
+than refused. The gate fails open, back to the raw cone, never to a blank map.
+
+Measured over a walk through all eight areas at 144 fps: **3993 of 8469 lit cells
+refused**, the player's own tile revealed on every sample, nothing falling outside
+the cast window, and 144.0 fps at 20.0 ticks/s with the minimap open. The picture
+`KF2_MAP_FOG_PROBE=2` prints is the argument — the grid, the gate's verdict and
+the walls it read, over the same 24 cells:
+
+    [KF2] fog grid z27: ..........33333.........  |          xxxxx         |  |..##...###...#######....|
+    [KF2] fog grid z29: .........33333333.......  |         xxx#####       |  |#############.......##..|
+    [KF2] fog grid z33: ........333322222233....  |        ############    |  |#########..............#|
+    [KF2] fog grid z36: .......333222222223333..  |       #############xx  |  |########...........#...#|
+
+The player stands in row 36. The flood lit a wedge running up to row 23; the wall
+column shows a solid mass across rows 29 to 33, and the corridor beyond it is the
+`x` run — lit by the game, five tiles the far side of a wall, and refused. What no
+counter can say is whether the revealed shape now matches where the player walked.
+
+Its switch is *Only what you could see*, under Gameplay > Map beside the fog one,
+because turning it off and walking the same room again is the one comparison a
+player can make by eye in a single session.
+
+#### A cell byte is not a boolean, and "nonzero" over-reveals by 7x
+
+**This is the finding, and the note this section replaced had it wrong.** It said
+"a cell is visible iff its byte is nonzero", which is what `patches/CullGrid.cs`'s
+grid comparison and `patches/CullCone.cs`'s ring census both test — correct for
+*them*, since they are asking whether two builds of the same grid agree. It is not
+what visible means. The scanline fill writes the marker over the **whole
+trapezoid** before the flood runs, the flood then clears the marker on the cells
+it can prove are occluded, and what stays behind in those cells is the flood's own
+working state. So nonzero is the frustum's footprint, not its visible set.
+
+The bits are the two stacked floor halves: `func_80031B1C` draws half A on bit 0
+of the flags byte and half B on bit 1, the flood's `_marker` is bit 0 on the lower
+half and bit 1 on the upper (it reads the half selector at `0x801D9C8E`), and the
+other of those two bits is the ray-alive flag it carries along a row. Everything
+above them is bookkeeping — the `0xC0` the stock epilogue forces over the 3x3
+around the eye, which `patches/CullCone.cs` also ORs over its near-camera rescue
+discs. **`byte & 3` is the test**, and `KF2_MAP_FOG_PROBE=2` is what settled it,
+by printing the array rather than arguing from the flood's source:
+
+    [KF2] fog grid z 16: ..+++++22+++++++++++++..
+    [KF2] fog grid z 17: ...++++22++++++++++++...
+    [KF2] fog grid z 18: ....++++222222++++++....
+    [KF2] fog grid z 23: ........++22+++.........
+
+The `+` is the trapezoid, the `2`s are the corridor the player is actually looking
+down, and the player's own tile is one of them. Measured standing still: **190
+cells nonzero against 26 lit** — and a trapezoid nine tiles wide at ten and a half
+deep cannot hold more than about 110 tiles in the first place, which is the
+arithmetic that says 190 was never a visible set.
+
+#### The sampling clock is the vblank, so there is no hook
+
+The accumulator has to run with the map closed, so it cannot live in a panel's
+`Draw` the way every other read in `patches/Map.cs` does. The obvious seam is a
+post on `func_8002D3A8` — and that is the fallback — but `VSyncEvent` costs **no
+hook at all** and, since `patches/recompone/0021`, fires on a wall-clock 60 Hz grid
+rather than per rendered frame: 60 samples a second at 20 fps and at 144 fps
+alike. The grid is stable for the whole frame once built, so a vblank read gets a
+complete one. At the 20 fps default each grid is sampled three times, which the OR
+makes free; at 144 fps 60 of the 144 grids are sampled, and a cone 72 degrees wide
+would need the player to turn 72 degrees in 16 ms to leave a gap.
+
+#### Three guards, and two of them were written after being measured
+
+* **The camera must be within two tiles of the player.** The area byte at
+  `0x8017E060` moves when a save's area is unpacked while the grid in RAM is still
+  the last frame of the area being left — the same window `Map`'s 250 ms re-copy
+  self-corrects through, except that fog *accumulates*, so one bad sample is a
+  permanent lie. Also a 250 ms hold after any overlay load. A cutscene camera
+  somewhere else stops accumulation, which is the conservative way round.
+* **The slot and area bytes must be bytes the game means** (slots 0..3, areas
+  0..10). Measured: a record for **"area 99"** written while a reload was
+  unpacking `buf0`, on a frame whose HP and camera both still read as a live area.
+* **A sample whose cone drew nothing is not a view of anywhere.** Between a New
+  Game and its area being placed, HP is up and the player and camera both read
+  0,0, so everything above passes; without this the "always reveal the tile the
+  player stands on" rule wrote tile 0,0 into whatever record the area byte named.
+
+#### Identity: the game's slot byte, and a scratch bucket for slot 0
+
+A record is keyed `(slot, area)`. The slot is the game's own at `0x8006E5D4`, which
+both the load `func_80023638` and the save `func_80023764` write and which is
+**zero until one of them has run** — so a New Game accumulates into a scratch
+bucket, and the moment the byte becomes 1..3 the scratch is ORed into that slot's
+records and dropped (measured: `merged 1 unsaved record(s) into slot 2` on the
+autostart path, which New Games and then loads over it). The consequence to know is
+that the identity is the *slot* rather than the save: starting a New Game over
+slot 2 inherits slot 2's old fog, and loading an old save shows everything that
+slot has explored since.
+
+#### The file
+
+Beside the memory card — `Path.ChangeExtension(CardAPath, ".fog")`, so `carda.fog`
+by default — because that is where this game's saves are and what the slot in the
+key refers to. Resolved once on `RuntimeReadyEvent`, since `ConfigManager.Load`
+runs inside `HostWindow.Initialize` and so after `Program.cs`; a card path changed
+mid-session is not followed.
+
+    offset  size  what
+    0       7     "KF2FOG\0"
+    7       1     version = 1
+    8       2     u16 record count
+    10      per record: u8 slot, u8 area, 800 bytes (bit = z*80 + x, LSB first)
+
+802 bytes a record, so a finished game on every slot is about 29 KB. Written whole
+through a temp file and `File.Move(overwrite: true)`, so a kill mid-write leaves
+the old store rather than half a new one; a bad magic, version or length loads as
+empty rather than throwing. **There is no app-exit event** — `Runtime.Shutdown`
+dispatches nothing — so the writes that matter are the periodic one (10 s, only
+when dirty), the one on a `(slot, area)` change and the one on `OverlayLoadedEvent`,
+with `AppDomain.ProcessExit` and a `finally` around `Entry.Run` catching a clean
+exit and a crash respectively.
+
+#### What it draws
+
+The seam widened from `Func<int,int,bool>` to `Func<int,int,int>`, because the
+third state costs nothing: the accumulator has the frame's grid in its hand, so
+**0 unexplored / 1 remembered / 2 in view right now** is free, and the last state
+draws a pale wash over the tile so the map carries a live cone. `MapFog.Predicate`
+is what both viewports pass, and it is `null` — draw everything — both while fog is
+off *and* until the first sample lands, because a fog map with no record yet is a
+blank rectangle and reads as the feature being broken.
+
+Fog is per **tile**, not per floor half: the visibility grid has no notion of the
+two stacked halves, so walking a corridor reveals the tile on both floors of the
+map.
+
+#### What is measured and what is not
+
+**Measured:** the byte test, from the array itself; separate records per area
+across `warp 3` and back with no bleeding; the scratch merge; persistence across a
+kill and a restart (`2 record(s) in carda.fog`, and the area's total carrying on
+from where it stopped); the file's own arithmetic (`10 + 802 * count`); and the
+cost — **144.0 fps drawn and 20.0 ticks/s** at `KF2_FPS=144` with the minimap open,
+which is what the map measured before fog existed.
+
+**Not looked at by eye, and the user's to judge:** whether the revealed shape
+matches where they walked, whether the in-view wash reads or distracts, whether the
+whole-tile reveal is noticeable on a map that draws one half at a time, and whether
+fog belongs on by default. The settings page has *Forget this area* and *Reveal
+this area* for exactly that comparison.
+
+### What is *in* the area: the marker layer
+
+`patches/MapMarkers.cs`. The tile grid is the half of a map that does not move;
+the other half is everything standing in it, and that is not in the grid at all.
+It is in the **four world tables `func_800331B4` draws from**, which are already
+written down — "`func_80032588` is fed from *four* tables" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md), and the same four rows
+`patches/ObjectSmoothing.cs` carries and `AgentServer`'s `nearby` reports. This is
+a third reader of a measured fact rather than a new address hunt:
+
+| # | base | stride | count | drawn when | position | rotation | drawn as |
+|---|---|---|---|---|---|---|---|
+| 1 | `0x8016C544` | `0x7C` | 200 | `u8[+0x9] == 1` | `+0x2C` | `+0x40` | red triangle |
+| 2 | `0x80177714` | `0x44` | 396 | `u16[+0x6] != 0xFF` | `+0x14` | `+0x24` | blue square |
+| 3 | `0x8019CC6C` | `0x48` | 128 | `u8[+0x0] != 0xFF` | `+0x14` | `+0x24` | purple diamond |
+| 4 | `0x80195174` | `0x18` | 128 | `u16[+0x0] != 0xFFFF` | `+0x8` | none | amber dot |
+
+**The liveness test is the renderer's, not the owning stage's**, for the reason
+`ObjectSmoothing` learned the hard way: an object is *drawn* on `+0x6` and
+*stepped* on `+0x4`, a creature is drawn on `u8[+0x9] == 1` and stepped on
+`u8[+0x0] != 0xFF`, and the two are opposite ways round. A map should show what is
+on screen, so it uses the predicate the screen uses.
+
+**A shape as well as a colour**, because the minimap draws a marker at four or
+five pixels and a colour alone does not separate at that size. Billboards default
+off — a torch-lit corridor holds dozens and they would bury the markers a player
+is looking for — and everything else is on. Markers are exempt from the minimap's
+opacity, the same exemption the player's arrow has: the setting exists so the
+*ground* stops hiding the game, and a creature you cannot see is what an overlay
+map is for.
+
+#### The object table outlives its area, and this is the trap
+
+**Measured, and the guard is in.** The renderer's `u16[+0x6] != 0xFF` is right
+*for the renderer*, because the renderer runs after the loader has filled the
+table. A layer sampling on its own 50 ms clock has no such guarantee. Across an
+area change the object table reads **258 slots drawn and 0 stepped**, carrying the
+previous area's positions verbatim — slot 2 at `141311,-12800,28416` in both — so
+the loader clears the behaviour byte at `+0x4` and leaves `+0x6` and the `VECTOR`
+where they were. The sample is therefore **held** while not one slot passes
+`+0x4 != 0xFF`, which is the shape `Map.Ready` already has for the tile grid, and
+the probe says so in as many words when it fires in that window.
+
+In a settled area the two tests still disagree — measured in area 0, **258 drawn
+against 139 stepped** — and that difference is *kept* rather than filtered, since
+a slot the renderer draws is a thing on screen. `Marker.Stepped` carries it and
+the full map's hover readout labels the other 119 `static`.
+
+#### Which floor a marker is on is derived
+
+A tile record holds two stacked halves and the map draws one at a time, so a
+marker takes the drawn half whose floor `-(height << 7)` is nearest its own Y.
+That is the map's own founding equality — the player stands on a half the renderer
+draws and that half's floor Y *equals* their Y, measured gap 0 — applied to
+everything else in the area.
+
+#### Fog of war, with the stricter rule for what moves
+
+A tile you merely remember does not tell you what is standing in it now. So a
+creature or an effect is drawn only where the tile is lit in the last sample
+(state 2), while a prop or a billboard — architecture in all but name — is drawn
+wherever the tile is at least remembered (state 1). With fog off the predicate is
+`null` and everything shows.
+
+#### What a marker is called is deliberately not claimed
+
+The object table's type byte at `+0x4` dispatches through a 224-entry jump table
+with thirty distinct arms, and nothing in this repo pairs an arm with a noun — so
+a chest, a door and a lever are all "object" and the readout prints the raw type
+and definition index instead. The one identity that *is* confirmed is the
+creature's: `u8[+0x2]` is the index into the per-area descriptor block at
+`0x80172624` (120-byte records; `patches/HitGuard.cs` and `docs/TODO.md` #14), so
+two markers of a kind carry the same number.
+
+`KF2_MAP_PROBE=1` is the instrument for closing that gap: it censuses all four
+tables — **every** class, whatever the settings show, or a census would report
+zero sprites and read as the billboard table being wrong — and prints a histogram
+of the type byte. Area 0, measured:
+
+    map markers: 0 creatures, 258 objects, 0 effects, 5 sprites
+    map markers: of the objects, 139 are stepped by stage 2 and 119 are drawn but never stepped
+    map markers: object types: 02x2 03x3 04x8 05x5 08x25 09x53 0Fx2 10x3 12x1
+                               16x2 1Fx5 51x4 54x5 5Fx1 A0x1 E0x15 F0x4 FFx119
+
+Pairing `09` (53 records) or `E0` (15) with what is actually on screen, area by
+area, is what would turn this class into named ones.
+
+#### Except the save point, which the game names itself
+
+The one object identity the map does claim comes out of the game's own **use
+handler**, `func_800489FC` — the routine the action button runs. It scans for the
+objects in front of the player (`func_80036EC8` over the object table at
+`0x80177714`), resolves each one's **definition** the way stage 2 does —
+`0x80175914 + u16[rec+0x6] * 0x18`, the `0x18`-stride table of object kinds — and
+dispatches on the *kind* byte at `def+0x0` rather than on the behaviour byte at
+`rec+0x4` that the 224-entry jump table uses. Its **`0x0E` arm** at `0x80048FEC`
+is three calls:
+
+```c
+func_800492B8(*(u8*)0x8017E060);  /* pack the 200-slot entity table into the save buffer */
+func_80029C50();
+func_8001C624();                  /* the slot menu -> func_8001C88C -> func_80023764 */
+```
+
+`func_80023764` is the routine that writes the memory card ("The card code is all
+in GAME.EXE" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), and no other arm of the
+handler reaches it — while `func_8001C624` has **exactly one call site in all of
+GAME.EXE**, which is this arm, so the implication runs both ways. **Kind `0x0E` is
+a save point**, read off the dispatch
+rather than guessed from a histogram, and that is the one marker on the map drawn
+as a letter: an **S** on the tile it stands in, which is what "the save room"
+means to someone reading a plan.
+
+Three properties follow from it being a *kind* rather than a tile flag or a room:
+the mark is per object, so an area with two save points gets two letters; it is
+bounds-checked against the `0x1E00` bytes between the definition table's base and
+the object table (320 records), because the index is game data; and the layer is
+**independent of the marker layer entirely** — not merely of the object class
+inside it. `MapMarkers.Saves`, `kf2.map.markers.saves`, Gameplay ▸ Map ▸ Save
+points, on by default.
+
+**That independence is two lines and both of them had to be found the hard way.**
+Shipped first, the S was independent of `Objects` only: `Scan` admitted a save
+point whether or not the prop class was wanted, and the checkbox sat in the
+indented block under "show what is in the area". Reported from play as *no save
+points ever show up on the map*, and the reason is one line above all of that —
+`Refresh` opens with `if (!Enabled) { _count = 0; … return; }`, so a player with
+the marker layer off has an **empty sample** and nothing downstream can draw from
+it. Measured with the census below: `live 0 … markers False`. Turning that layer
+off is most of the reason the switch exists — the object squares are the clutter
+— so the population that wanted a save point marked was exactly the population
+that could not get one. `Shown` now folds `Enabled` into itself and `Refresh`
+stands down only on `!Enabled && !Saves`; the checkbox moved out of the indent.
+
+The other half of that report was a **test that could not fail**:
+`DrawSave` clamped the glyph up to nine pixels and then asked whether it had
+reached nine, so the documented fallback to an ordinary marker was dead code. It
+gates on the **cell** now — below five pixels a tile, the minimap gets a square
+instead — which is the number the caller actually varies.
+`MapRender.DrawSave` needs room for a letter and says so: below nine pixels it
+returns `false` and the marker falls back to the ordinary object square, which is
+the minimap's usual answer and the full map's never. `KF2_MAP_PROBE=1` counts
+them beside the type histogram and prints their tiles:
+
+    map markers: 2 save point(s) — definition kind 0x0E in the 0x18-stride table
+                 at 0x80175914: (79,41 def E6) (65,13 def E6)
+    map markers: 4 save point(s) — … (40,74u def E6) (27,1u def E6)
+                 (48,79u def E6) (36,36u def E6)
+
+Two in area 0 and four in save slot 2's area, **all six carrying the same
+definition index `0xE6`** — which is what a table of *kinds* shared between
+instances should look like, and is the same fact read from the other side.
+
+#### The letter goes in the middle of the room, not on the object
+
+A save point stands against a wall like any other prop, so an S drawn on its tile
+marks the corner of a chamber rather than the chamber. `Map.RoomCentre` puts it
+in the middle instead, and **a room here is a definition rather than a reading**:
+nothing in the grid records where one ends and the next begins, so it is the
+**largest solid rectangle of drawn tiles containing the object's tile**.
+
+A flood fill is the obvious answer and is the wrong one — every walkable tile in
+an area connects to every other through the doorways, so a fill returns the whole
+floor and its centroid is a point in the middle of the map. A rectangle is bounded
+by walls on all four sides at once, so it stops at a doorway the way a person's
+idea of a room does, and it degrades sensibly: a save point in a corridor gets a
+long thin rectangle whose centre is still in the corridor beside it. Openness is
+`Map.Drawn` — the renderer's own test, the one `MapFog`'s shadowcast treats as
+opaque, where the gaps between rooms *are* the walls. Ties go to the rectangle
+whose centre is nearest the tile asked about.
+
+It is memoised per tile and **cleared on an area change rather than on a grid
+copy**: the copy runs four times a second for the handful of tiles that move (the
+drawbridge, the minecart), and clearing there would pay for the search sixteen
+times a second to answer the same question. Two save points that resolve to one
+centre are lettered once, since two S's on a point draw as one heavier S. The
+letter is **white** in both styles — the one mark on the map that is not the
+game's own, the original having no save points on it, so it is allowed to be the
+one thing outside the board's palette; the plan's own ink is what haloes it.
+
+**The letter is sized to the room as well as placed in it.** A cell is 6 to 22
+pixels, so a letter one cell tall is a speck on a full map of a large area — it
+was, and was reported as hard to see. `RoomCentre` therefore also returns the
+rectangle's **short side**, which is how much room a mark at the centre has in
+its worst direction, and the S spans `0.55` of it clamped to 2.0-3.4 tiles: three
+tiles of a six-tile chamber, still two in a corridor, where two tiles of overlap
+is a wall either side and the S is the thing meant to be read. The halo's offset
+grows with it, or a big letter loses the outline that keeps it off the pale end
+of the height ramp.
+
+Measured: the letters sit a mean **2.2 tiles** from their objects in save slot 2's
+area, so the rooms found are real ones rather than the object's own square, and
+draw at **26.4 px** on a 12 px cell against 12.6 px before, at 165 fps unchanged.
+
+`Map.Probe` makes the render side count as well, since a save point can be
+sampled and still not drawn — the sample holds both floors and a viewport shows
+one, which no census of the tables can see:
+
+    map saves: 4 of 4 lettered on the upper half at 12.0 px a tile,
+               2.2 tiles from the object to its room's centre, letter 26.4 px
+
+Measured after the fix, with the marker layer still switched off. The count is of
+the **shown floor**: a save point on the half the map is not displaying is
+filtered like every other marker, so `0 of 2` is a correct reading rather than a
+failure.
+
+**Never looked at by eye:** whether an S lands where the game actually lets you
+save. The dispatch is read out of the emitted C# and the address arithmetic is
+stage 2's own, but nobody has stood on a save point and checked the letter is
+under them.
+
+#### What is measured and what is not
+
+**Measured:** the four tables read and their counts move with the area; the
+stale-table guard firing exactly in the reload window and naming itself; five
+billboards in area 0 confirming table 4 is addressed right; and the cost —
+**144.0 fps drawn and 20.0 ticks/s** at `KF2_FPS=144` with the full map and the
+minimap both open and drawing markers, which is what the map measured before the
+layer existed.
+
+**Not looked at by eye, and the user's to judge:** whether the markers read at
+minimap size, whether four classes is too many at once, whether the 119
+drawn-but-never-stepped objects are things a player recognises or clutter, and
+whether the creature *facing* spoke points the way the creature does — that last
+is derived from the rotation the renderer builds (`s16` at `+2` of the triple,
+biased `0x800`) and has never been checked, which is why it defaults off.
+
 ## Auto start and the agent beacon
 
 `patches/AutoStart.cs` (`KF2_AUTOSTART=<1..3>`) and `patches/AgentBeacon.cs`
@@ -2848,6 +3859,7 @@ nearby [radius=8192]  live records of the world tables within radius units of th
                       "entities", whose reading is still Inferred -- TODO.md)
 ending [boss|kill]    hand the game over to END.EXE; "boss" runs the post-final-
                       boss sequence first, "kill" replays the killing blow itself
+map [on|off|toggle]   open or close the full-screen map, which pauses the world
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the
@@ -2862,9 +3874,12 @@ enable a package would get nothing.
 Commands arrive on socket threads and must run on the game thread. Where they
 run depends on whether the command re-enters the loader:
 
-- **`state`, `press`, `kill`, `help`, `nearby` drain from a `VSyncEvent` listener** — the
+- **`state`, `press`, `kill`, `help`, `nearby`, `map` drain from a `VSyncEvent` listener** — the
   same place the beacon reads memory, so no cross-thread access and no new
-  machinery.
+  machinery. **`map` has a second reason to be there**: the full-screen map
+  pauses the world, and a paused world does not run stage 3, so a `map` verb on
+  the heavy queue could open the map and then never be able to close it. A vblank
+  arrives whatever the world is doing.
 - **`load` and `warp` drain from a post hook on main-loop stage 3**
   (`0x8002A550`). `func_80024154` waits on the CD by looping `func_80017818`,
   which calls VSync: running it inside the VSync event nests VSync inside
