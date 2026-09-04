@@ -561,6 +561,8 @@ Kf2.AutoReload.Install();
 //     KF2_MAP=0             the whole feature off (on by default)
 //     KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
 //     KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII on each area load
+//     KF2_MAP_PAUSE=0       leave the world running while the full map is up
+//                           (it pauses by default)
 //
 // A patch rather than a mod for auto reload's reason -- it is something the port
 // itself should offer, so it should not be able to be absent -- and its knobs are
@@ -568,7 +570,8 @@ Kf2.AutoReload.Install();
 // measured and the picture is not.
 Kf2.Map.Configure(Environment.GetEnvironmentVariable("KF2_MAP"),
                   Environment.GetEnvironmentVariable("KF2_MAP_MINIMAP"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_PROBE"));
+                  Environment.GetEnvironmentVariable("KF2_MAP_PROBE"),
+                  Environment.GetEnvironmentVariable("KF2_MAP_PAUSE"));
 
 // The other half of that map: what is *in* the area rather than what shape it is.
 // The four world tables the renderer walks -- creatures, props, effects,

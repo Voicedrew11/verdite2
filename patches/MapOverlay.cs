@@ -166,9 +166,22 @@ public sealed class MapOverlay : IFloatingPanel
 
             // The border keeps the map's own edge legible against whatever the game
             // is drawing behind it, so it fades with the rest.
-            uint border = MapRender.Fade(ImGui.GetColorU32(ImGuiCol.Border), alpha);
-            if (round) dl.AddCircle(centre, r, border, 0, 1.5f);
-            else       dl.AddRect(p0, p1, border);
+            //
+            // **A square minimap in the native style wears the board's frame**,
+            // which is the same bevel the full map has and the reason it reads as
+            // the game's map rather than as a widget pinned to the corner. A
+            // circle cannot: the original has no round map and so no round frame,
+            // so that shape keeps the interface's own thin border.
+            if (!round && Map.Style == Map.StyleNative)
+            {
+                MapRender.Frame(dl, p0, p1, alpha);
+            }
+            else
+            {
+                uint border = MapRender.Fade(ImGui.GetColorU32(ImGuiCol.Border), alpha);
+                if (round) dl.AddCircle(centre, r, border, 0, 1.5f);
+                else       dl.AddRect(p0, p1, border);
+            }
         }
 
         ImGui.End();

@@ -3109,6 +3109,192 @@ The arrow is kept rather than deleted: what it records about the game's heading 
 measured (`func_80028080`, and the mirror above it), and a setting keeps that
 live rather than turning it into archaeology.
 
+### The map the game itself draws
+
+`Map.Style` (`kf2.map.style`, Gameplay ▸ Map ▸ Style), `MapRender.DrawNative`,
+`MapRender.Frame`, `MapRender.DrawPlayerPointer`. **The game's own map is the
+default; the blueprint the port shipped with is the other entry.**
+
+The first version of this map was accurate and did not belong to the game. It
+filled every walkable tile pale blue-grey on near-black, ruled a faint grid over
+it, put a yellow dot in it and left the whole thing floating over a dimmed
+picture. Everything in that sentence is a decision an instrument makes: it is the
+docked panel's palette, scaled up. Reported from play as not conforming to the
+game's own styles, against a capture of the map item King's Field II actually
+hands the player.
+
+**What the original does is the one difference that matters: it does not fill.**
+Its board is one flat slate green, and the plan on it is the *wall* between a
+walkable tile and a void one, inked in a green so dark it reads as black. Room
+interiors and the unexplored field are the same colour. So a corridor is two
+parallel lines rather than a bright ribbon, and the picture reads as something
+drawn on paper by somebody walking the maze — which is what a map in a game with
+no automap is — instead of as a photograph of it from above.
+
+Everything else is sampled rather than chosen. From a capture of the in-game map:
+
+| | |
+|---|---|
+| field | `#3A523A` — the board, and the void alike |
+| ink | `#0E200E` — the plan |
+| under | `#2D3A2D` — the mottled shading inside it |
+| frame | `#7B8C7F` at the bevel's highlight, over `#43433A` |
+| player | `#E7C4C5` body, `#F78272` core |
+
+The frame is three concentric rectangles reproducing a bevel measured across the
+original's edge (dark outside, brightening to the highlight, dropping to a grey
+shadow at the slate), width a share of the board rather than a pixel count, and
+**drawn inside the rectangle it is given** — both callers hand it the edge of
+something already clipped, so a bevel painted outside would be cut away on the
+two edges a minimap is pinned to.
+
+Four consequences follow from copying the original rather than recolouring the
+port's map:
+
+- **The board is square**, because the game's is. A plan stretched across a 16:9
+  picture reads as a widescreen HUD however green it is.
+- **The scrim drops from 0.93 to 0.55.** The game's map is a board held up in
+  front of you, drawn into the world with the dungeon lit around it; a black-out
+  behind it is the one thing that would still read as an emulator overlay after
+  everything else matched. The board itself stays opaque, so nothing is harder to
+  read — only the surround is visible. It is black rather than the map's own
+  ground: a green wash over the dungeon would read as a filter on the game.
+- **There is no grid**, at any scale. The `grid` argument is simply not consulted.
+- **The player is the original's marker** — a pale **pointer** with a salmon boss
+  at its middle, drawn on the tile so it steps a square at a time, and **turned to
+  the cardinal direction you face**. It is traced off the marker in the game's own
+  map rather than invented: a long thin blade through the tile, a short crossbar
+  at the centre, a filled salmon square on that centre with a pale pip in it and
+  short salmon arms running down the blade, and a third of the way forward a
+  **two-step chevron** — a plate the height of the crossbar with a narrower one
+  the height of the boss stepping out in front of it, which is what a pixel
+  triangle looks like at this size. Every dimension is a share of the marker's
+  length, taken from the capture at 63 px: blade 5/63 thick and running -0.45 to
+  0.53 (the capture's own forward bias — it is the *boss* that sits on the tile's
+  centre), crossbar 26/63 across, boss 16/63 square, its arms 27/63 long, pip 4/63
+  square, chevron plates at 0.29-0.36 and 0.29-0.44 with half-widths 0.21 and
+  0.13. **The chevron is the only asymmetric thing in it**, which is exactly why
+  the first version — a plain cross — said nothing about facing until it was
+  rotated and then read as a cross rather than as a pointer once it was.
+  Quantising to a quarter is the arrow's bargain read the other way round: the
+  objection to the arrow was never that a heading is shown, it was a heading good
+  to a twelfth of a degree on top of a sub-tile position. A quarter turn is
+  "north, roughly" — what someone standing in a corridor with a paper map knows,
+  and the piece that tells you which way to hold the page without telling you
+  where in the room you are. It is also the only rotation that leaves a marker
+  built out of axis-aligned rectangles axis-aligned: the snap is taken in the
+  game's own angle units (`q = round(yaw / (Turn/4)) mod 4`) and the rotation
+  comes off a four-entry cosine table, so the bars stay exactly square rather than
+  a float sine's worth off it; `MapRender.Cardinals` is 4, and 8 would cost only
+  that alignment. `PlayerMark == 1` still draws the arrow, recoloured into the
+  palette and unchanged in what it claims.
+
+Two things in the picture are readings rather than measurements, and are marked as
+such. The **mottled darker shapes** in the original are reproduced as *the other
+stacked half* — a square with something drawn on the floor you are not standing on
+is washed in `under` before the plan goes over it. Nothing here proves that is
+what the game shaded; it is the only thing in the tile record that produces shapes
+of that kind, and it is information the blueprint style throws away. And the
+**height ramp** is kept, in the board's own green at about a fifth of the
+blueprint's contrast, because a room interior that reads as a fill is exactly what
+this style undoes.
+
+An edge is drawn by the tile that is *visible*, on each side whose neighbour is
+not, so a shared wall is inked once and no seam is doubled — and the neighbour
+test asks the 80x80 grid rather than the drawing window, so a plan does not sprout
+a border along the edge of whatever rectangle a caller happened to ask for. Fog
+counts as opaque there, so a half-walked area is inked at its frontier and reads
+as a plan rather than as a shape with a torn edge.
+
+The blueprint is kept rather than deleted: it is the picture the fog, the extents
+and the marker layer were all judged against.
+
+**Never looked at by eye:** any of it. The palette is sampled, the geometry is
+arithmetic, and whether the result actually reads as the game's map — at
+full-screen scale, at minimap scale, with fog on, with markers on — is the user's
+call.
+
+### Opening the map stops the world
+
+`Map.Pause` (Gameplay ▸ Map ▸ *Pause while the full-screen map is open*,
+`KF2_MAP_PAUSE=0`), on by default.
+
+The full-screen map is the whole area over a dimmed picture with no chrome and no
+input — a screen you stop to read — and reading it takes as long as it takes.
+King's Field's own map was an *item*, used from a menu that already stopped the
+game; this one is opened with a button in the middle of a corridor, so without a
+pause the port is asking the player to plan a route while something walks up
+behind them. The minimap and the docked panel deliberately do not pause: a
+heads-up corner map is meant to be read while walking, and the instrument is for
+watching the game run.
+
+**The mechanism is the stage gate held shut, not a new one.** `FramePacing` already
+declines to run the six gated stages on a frame the logic clock did not tick, and
+those six stages *are* the per-tick world — the object state machine, the pad read
+and player movement, the entity table, the effect lifetimes, the area module's own
+logic, the fade and the texture scroll. A pause is that decision taken on every
+frame instead of on three in four. So:
+
+- **Nothing is written to game memory and nothing is restored.** A pause that ends
+  leaves the game exactly where the last tick put it; there is no state to get
+  wrong and nothing to unwind if the process dies with the map open.
+- **Stage 13 is not gated, so the picture keeps being drawn** at the render rate,
+  and the map is laid over a live frame rather than over a still the port would
+  have to keep re-presenting itself.
+- **Every counter in the game stops together**, because they all hang off those
+  stages. There is no list of timers to remember.
+- **The pad is not read**, since the read is in stage 3. That is what a pause is,
+  and it is also why the command channel's `map` verb is on the fast queue: the
+  heavy queue drains on stage 3.
+
+`FramePacing.PauseWhen(predicate)` is the entry point, and it is a *predicate*
+rather than a flag deliberately. The panel closes by three routes — `M`, the pad
+button, and the runtime's own menu bar — and a latch missed by one of them is a
+game that never resumes. It is read once a frame, at the two places that already
+mean "a new frame" (the frame boundary, and `FallbackTick` when the boundary has
+been lost), because host input is polled from inside the game's own `VSync`
+(patches/recompone/0007) and a predicate read per stage could otherwise run half a
+tick — a state machine stepped against an entity table that was not. It is gated
+on `Map.InGame` as well as on the panel, since the map can be opened at the title
+screen, where it draws nothing and where pausing would freeze the intro.
+
+**A modal loop needs the other half, and `LoopPacing` is where it goes.** A gated
+stage can simply be skipped; a modal loop — a transition fade, a message box, a
+cutscene — *is* the main loop, on the stack, presenting its own frames, and no gate
+can reach its body. `LoopPacing` already holds such a loop to one iteration per
+tick by filling the gap with redraws; a pause is that fill not ending. Two changes
+make it one: the fill is entered when paused even at the tick rate (where
+`Extrapolating` is false and it would otherwise return at once), and while paused
+it is **not subject to the redraw cap** — capped, a message box would advance
+itself a couple of times a second through a pause. It cannot spin, because each
+redraw passes the frame boundary, is paced by `FramePacing.Floor`, and presents
+through the game's own `VSync`, which is also where host input is polled: the map
+is drawn on every one of those frames and the key that closes it is read on them.
+Pause redraws are counted separately from fill redraws (`held` against `n`) so the
+cap warning keeps its meaning — it fired once, spuriously, on the frame a paused
+map was closed inside the fill.
+
+**What the pause does not stop.** The music and ambient audio, which is the usual
+behaviour for a map screen. `MapFog` keeps sampling on the vblank, harmlessly
+re-writing cells it already has. `func_800331B4`'s per-object ambient-sound
+retrigger at `rec+0x40` is stepped inside a drawing function's own body and is
+outside every gate in the port, pause included — the same exception the frame
+pacing notes record.
+
+**Measured** at `KF2_FPS=144`, area 1, through the command channel's `map` verb:
+20.0 ticks/s before, **0.0 ticks/s** for the whole time the map was up, 20.0 again
+on closing it, with the picture holding 144.0 fps throughout. The world's phase
+holds at 0 while paused, so the frame the pause holds is a tick-aligned one — a
+pose the game produced, not an interpolated one. Repeated three times with the
+pause landing *inside* a warp's transition fade (areas 5, 2 and 7): the fade froze,
+resumed cleanly on closing the map, and no redraw-cap warning fired. A heavy shell
+command issued while paused times out after five seconds saying stage 3 never ran,
+which is the pause seen from the other side.
+
+**Never looked at by eye:** whether a frozen frame under the scrim reads as
+paused or as a stall, and whether the map is quick enough to open and close that
+pausing is what a player wants rather than an interruption.
+
 ### What is measured and what is not
 
 **Measured:** the grid address, stride and half layout; the height byte; the half
@@ -3128,7 +3314,13 @@ in particular. On the full-screen map: whether the fitted scale is readable in a
 large area, whether the scrim is dark enough to read tiles over a bright scene,
 and whether a whole-area view is what a player wants rather than one centred on
 themselves. On the dot: whether it reads at minimap size, and whether losing the
-heading costs more than the honesty buys. **And the pad button is unverified
+heading costs more than the honesty buys — and, on the native cross, whether a
+quarter turn is coarse enough to keep that bargain and fine enough to be worth
+having, and whether the blade reads as the pointing end at a minimap's scale. **On the native style, everything**:
+the palette is sampled off a capture and the geometry is arithmetic, but whether
+an outlined plan reads at a minimap's four pixels a tile, whether the 0.55 scrim
+is dark enough behind a bright scene, and whether the other-floor wash reproduces
+the original's mottling or merely resembles it, are all pictures. **And the pad button is unverified
 here** — no controller was connected to any of these runs, so that SDL sends
 button 20 for a DualSense touchpad click is read off SDL's mapping rather than
 measured; if it does not arrive, the same setting offers L3 and R3. The docked
@@ -3543,6 +3735,7 @@ nearby [radius=8192]  live records of the world tables within radius units of th
                       "entities", whose reading is still Inferred -- TODO.md)
 ending [boss|kill]    hand the game over to END.EXE; "boss" runs the post-final-
                       boss sequence first, "kill" replays the killing blow itself
+map [on|off|toggle]   open or close the full-screen map, which pauses the world
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the
@@ -3557,9 +3750,12 @@ enable a package would get nothing.
 Commands arrive on socket threads and must run on the game thread. Where they
 run depends on whether the command re-enters the loader:
 
-- **`state`, `press`, `kill`, `help`, `nearby` drain from a `VSyncEvent` listener** — the
+- **`state`, `press`, `kill`, `help`, `nearby`, `map` drain from a `VSyncEvent` listener** — the
   same place the beacon reads memory, so no cross-thread access and no new
-  machinery.
+  machinery. **`map` has a second reason to be there**: the full-screen map
+  pauses the world, and a paused world does not run stage 3, so a `map` verb on
+  the heavy queue could open the map and then never be able to close it. A vblank
+  arrives whatever the world is doing.
 - **`load` and `warp` drain from a post hook on main-loop stage 3**
   (`0x8002A550`). `func_80024154` waits on the CD by looping `func_80017818`,
   which calls VSync: running it inside the VSync event nests VSync inside

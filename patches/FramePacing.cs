@@ -411,6 +411,67 @@ public static class FramePacing
     /// </summary>
     static bool _tickThisFrame = true;
 
+    // ---- pause ----------------------------------------------------------------
+
+    /// <summary>
+    /// What is asking for the world to stand still, if anything.
+    ///
+    /// **Pause is the stage gate held shut rather than a new mechanism**, which is
+    /// what makes it cheap and what bounds what it can break: the six gated stages
+    /// are already the whole of the per-tick world -- the object state machine, the
+    /// pad read and player movement, the entity table, the effect lifetimes, the
+    /// area module's own logic, the fade and the texture scroll -- and
+    /// <see cref="BeforeStage"/> already declines to run them on a frame the logic
+    /// clock did not tick. A pause is that decision made for every frame instead of
+    /// for three in four. Nothing is written to game memory and nothing is
+    /// restored, so a pause that ends leaves the game exactly where the last tick
+    /// put it.
+    ///
+    /// **Stage 13 is not gated, so the picture keeps being drawn** -- which is the
+    /// property that lets an overlay be laid over a *live* frame rather than over
+    /// a frozen buffer that the port would have to keep re-presenting itself. The
+    /// world in it simply does not move.
+    ///
+    /// It is a predicate rather than a flag because the thing that pauses is a
+    /// panel whose open state is owned elsewhere and can be closed by three routes
+    /// -- the key, the pad button, and the runtime's own menu bar. A latch set by
+    /// whichever of those opened it would have to be cleared by all three, and a
+    /// latch left set is a game that never resumes. Asking the panel is the state.
+    /// </summary>
+    static Func<bool>? _pauseWhen;
+
+    /// <summary>
+    /// Ask for the world to stand still while <paramref name="predicate"/> is
+    /// true. Several callers OR together, so a second pause request does not
+    /// silently take the first one's place.
+    /// </summary>
+    public static void PauseWhen(Func<bool> predicate)
+    {
+        var prev = _pauseWhen;
+        _pauseWhen = prev == null ? predicate : () => prev() || predicate();
+    }
+
+    /// <summary>
+    /// Whether the world is standing still on the frame now being built.
+    ///
+    /// **Latched once a frame rather than read per call**, for the reason
+    /// <see cref="_tickThisFrame"/> is: host input is polled from inside the
+    /// game's own <c>VSync</c> (patches/recompone/0007), so the key that opens the
+    /// map can arrive between two stages of one main-loop iteration, and a
+    /// predicate read per stage would then run half a tick -- a state machine
+    /// stepped against an entity table that was not. The latch is taken at the two
+    /// places that already mean "a new frame": the frame boundary, and
+    /// <see cref="FallbackTick"/> when the boundary has been lost.
+    /// </summary>
+    public static bool Paused => _paused;
+
+    static bool _paused;
+
+    /// <summary>Read the pause predicate for the frame about to run. Cheap enough
+    /// to be unconditional -- one delegate call and two bool reads, once a
+    /// frame.</summary>
+    static void LatchPause() => _paused = _pauseWhen != null && _pauseWhen();
+
     // ---- the watchdog ---------------------------------------------------------
 
     /// <summary>
@@ -439,7 +500,7 @@ public static class FramePacing
     /// it is continuous across a tick boundary, so the camera does not jump on the
     /// frames where the world did advance.
     /// </summary>
-    public static double LogicPhase => Gating ? Math.Clamp(_logicCredit, 0.0, 1.0) : 0.0;
+    public static double LogicPhase => Paused || !Gating ? 0.0 : Math.Clamp(_logicCredit, 0.0, 1.0);
 
     /// <summary>
     /// Whether the gated stages ran on the frame now being drawn -- that is,
@@ -451,7 +512,7 @@ public static class FramePacing
     /// between ticks you need last tick's position as well as this one's, and the
     /// only moment worth re-sampling is a frame the world actually moved on.
     /// </summary>
-    public static bool TickedThisFrame => !Gating || _tickThisFrame;
+    public static bool TickedThisFrame => !Paused && (!Gating || _tickThisFrame);
 
     /// <summary>
     /// How many frame boundaries have been reached. Not a rate and not a clock --
@@ -990,6 +1051,20 @@ public static class FramePacing
     /// </summary>
     static void AdvanceLogicClock(double nowMs)
     {
+        LatchPause();
+
+        // Paused: the credit does not accrue and the clock is carried forward, so
+        // resuming starts from now rather than paying out however many ticks the
+        // map was open for. The frame boundary still arrives -- stage 13 is not
+        // gated -- so this runs once a frame throughout.
+        if (_paused)
+        {
+            _logicClockMs = nowMs;
+            _logicCredit = 0.0;
+            _tickThisFrame = false;
+            return;
+        }
+
         if (!Gating)
         {
             _logicCredit = 0.0;
@@ -1039,13 +1114,16 @@ public static class FramePacing
     /// </summary>
     public static bool BeforeStage(CpuContext c, IMemory m)
     {
-        if (!Gating) return true;
+        if (!Gating) return !Paused;
 
         double now = _clock.Elapsed.TotalMilliseconds;
         if (_lastBoundaryMs >= 0.0 && now - _lastBoundaryMs <= BoundaryDeadMs)
-            return _tickThisFrame;
+            return _tickThisFrame && !Paused;
 
-        return FallbackTick(now);
+        // Not short-circuited on the pause: FallbackTick is also where the picture
+        // is paced when there is no boundary to pace it at, and a paused game still
+        // has to present frames or the overlay that paused it could never be closed.
+        return FallbackTick(now) && !Paused;
     }
 
     /// <summary>
@@ -1093,6 +1171,22 @@ public static class FramePacing
         }
 
         if (now < _fallbackHoldUntilMs) return _fallbackTick;
+
+        LatchPause();
+
+        // Paused, with no boundary: hold the grid rather than let it run on, so
+        // resuming does not find four periods of debt and restart. Still paced,
+        // for the reason BeforeStage does not short-circuit.
+        if (_paused)
+        {
+            _fallbackNextMs = -1.0;
+            _fallbackTick = false;
+            _tickThisFrame = false;
+            _logicCredit = 0.0;
+            _fallbackHoldUntilMs = now + FallbackHoldMs;
+            if (Enabled) Floor(1000.0 / TargetFps);
+            return false;
+        }
 
         double period = 1000.0 / LogicHz;
         if (_fallbackNextMs < 0.0 || now - _fallbackNextMs > 4.0 * period) _fallbackNextMs = now;

@@ -147,6 +147,7 @@ KF2_UISCALE=1                            # force the interface scale, and save i
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
 KF2_MAP_MINIMAP=1                        # the corner minimap on (off by default); N toggles it
 KF2_MAP_MARKERS=0                        # creatures, objects, effects and sprites off (on by default)
+KF2_MAP_PAUSE=0                          # leave the world running while the full map is up (it pauses by default)
 KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, its occupied extent and a marker census, and open both maps
 KF2_MAP_FOG=1                            # fog of war: only the tiles you have seen (off by default)
 KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on by default)
@@ -607,6 +608,36 @@ unasked is worse than one switch to find. What no counter can answer is the feel
 (0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
 `docs/INPUT.md`.
 
+**Opening the full-screen map stops the world** (`Map.Pause`, `kf2.map.pause`,
+Gameplay ▸ Map, `KF2_MAP_PAUSE=0`), and the mechanism is **the stage gate held
+shut rather than a new one**: `FramePacing.PauseWhen(predicate)` makes
+`BeforeStage` refuse on every frame instead of on three in four, and the six gated
+stages already *are* the per-tick world — objects, the pad read and movement, the
+entity table, effect lifetimes, the area module's logic, the fade and the texture
+scroll. So nothing is written to game memory and nothing is restored, every
+counter stops together with no list to remember, and stage 13 is not gated so the
+picture keeps being drawn at the render rate under the map. A **predicate** rather
+than a flag because the panel closes by three routes — M, the pad button, the menu
+bar — and a latch one of them misses is a game that never resumes; it is latched
+once a frame (the boundary, and `FallbackTick` when the boundary is lost) because
+host input is polled from inside the game's own `VSync`, and gated on `Map.InGame`
+so opening it at the title cannot freeze the intro. **A modal loop needs the other
+half**: a fade or a message box is the main loop on the stack, so `LoopPacing`'s
+redraw fill is entered when paused even at the tick rate and is **uncapped** while
+paused — it cannot spin, since each redraw passes the frame boundary, is paced by
+`Floor` and presents through the `VSync` where input is polled, which is what makes
+the map closable from inside one. Pause redraws are counted apart from fill
+redraws so the cap warning keeps its meaning (it fired once, spuriously, on the
+frame a paused map was closed inside the fill). The pad is not read while paused,
+which is what a pause *is* and also why the shell's new `map [on|off|toggle]` verb
+is on the fast (vblank) queue rather than the heavy (stage 3) one. Measured at
+`KF2_FPS=144`: 20.0 ticks/s → **0.0** for the whole time the map is up → 20.0 on
+closing it, the picture holding 144.0 fps throughout, and the same through three
+warps with the pause landing inside the transition fade, with no cap warning.
+Never looked at by eye: whether a frozen frame under the scrim reads as paused
+rather than as a stall. The minimap and the docked panel deliberately do not
+pause. See "Opening the map stops the world" in `docs/PATCHES_AND_MODS.md`.
+
 **The map is a patch for auto reload's reason** — King's Field is a maze, the
 original shipped no automap, and everything else in the port that knows where you
 are is a debug instrument — so it is on by default and its knobs are under
@@ -650,7 +681,43 @@ difficulty is being lost in it, while a dot says only "you are in this square" �
 what someone mapping it on graph paper would have known. The arrow is kept as the
 other entry, since what it records about `func_80028080`'s heading is measured and
 a setting keeps it live. Measured: 144.0 fps and 20.0 ticks/s with all three
-viewports drawing. **The minimap is a fully opaque square by
+viewports drawing. **The map is drawn the way the game's own map is, and that is
+the default** (`Map.Style`, `kf2.map.style`, Gameplay ▸ Map ▸ Style;
+`MapRender.DrawNative`): the port's first map was accurate and belonged to a
+different game — walkable tiles filled pale on near-black under a ruled grid,
+which is the docked instrument's palette scaled up, and was reported from play as
+not conforming to the game's styles. **The one difference that matters is that the
+original does not fill**: its board is one flat slate green and the plan on it is
+the *wall* between a walkable tile and a void one, so interiors and the
+unexplored field are the same colour and a corridor is two lines rather than a
+ribbon. Everything else is sampled off a capture of the map item — field
+`#3A523A`, ink `#0E200E`, the other-floor wash `#2D3A2D`, a bevelled frame
+highlighting at `#7B8C7F`, and a pale pointer with a `#F78272` boss for the player.
+**That pointer turns to the cardinal direction you face**, which is the arrow's
+bargain read the other way: the objection was the precision — a heading to a
+twelfth of a degree on top of a sub-tile position — not the heading, and a
+quarter turn is "north, roughly", what someone holding a paper map in a corridor
+knows. The snap is in the game's own angle units (`q = round(yaw / (Turn/4)) mod
+4`) off a four-entry cosine table, so the bars stay exactly axis-aligned — which
+a marker built out of axis-aligned rectangles needs. **Its shape is traced off
+the capture rather than invented**: a blade through the tile, a crossbar and a
+salmon boss with a pale pip at the centre, and a third of the way forward a
+two-step chevron, which is what a pixel triangle looks like at that size and the
+only asymmetric thing in it. The first version was a plain cross, and a cross
+rotated still reads as a cross rather than as a pointer. Four things follow from copying rather than
+recolouring: the board is **square**, there is **no grid** at any scale, the scrim
+drops 0.93 → 0.55 (the game's map is a board held up with the dungeon lit around
+it, so a black-out is what would still read as an overlay) and it is black rather
+than the map's own now-green ground, and the frame is drawn **inside** the rect it
+is given, since both callers hand it the edge of something already clipped. An
+edge is drawn by the tile that is *visible*, on each side whose neighbour is not —
+asking the 80x80 grid, not the drawing window — so a shared wall is inked once and
+a window's edge grows no border. Two parts are readings rather than measurements:
+the original's mottled shapes are reproduced as the **other stacked half**, and
+the height ramp is kept in the board's green at a fifth of the blueprint's
+contrast. The blueprint is the other entry, being the picture the fog, the extents
+and the marker layer were judged against. **None of the native style has been
+looked at by eye.** **The minimap is a fully opaque square by
 default and can be a circle and semi-transparent** (Gameplay ▸ Map): opacity
 fades the ground and the tiles but never the player's marker, and the circle is
 cut **per tile** — ImGui clip rects are rectangles and a draw list cannot erase,
@@ -857,8 +924,8 @@ program tells "stuck at the title" from "in an area" without a screenshot. See
 
 **`KF2_SHELL=1` is the acting half**: while the session runs, a line protocol on
 TCP 127.0.0.1:27900 (`state`, `nearby`, `load <slot>`, `warp <area>`,
-`press <button> [ms]`, `kill`, `ending [boss|kill]`; one request per line, one
-single-line JSON response back) steers the game
+`press <button> [ms]`, `kill`, `ending [boss|kill]`, `map [on|off|toggle]`; one
+request per line, one single-line JSON response back) steers the game
 the beacon is only watching. **`ending` is there because the last ten minutes of
 the game cannot be loaded into**: plain `ending` writes `GAME.EXE`'s own quit
 word at `0x80199574` (1 = `END.EXE`, 9 = title), and `ending boss` runs the

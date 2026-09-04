@@ -81,11 +81,25 @@ public sealed class MapFullscreen : IFloatingPanel
         set => _open = value;
     }
 
-    /// <summary>How opaque the scrim over the game is. The map is a screen you
-    /// stop to read rather than a heads-up overlay — that is what separates it
-    /// from the minimap, which has its own opacity setting for the opposite
-    /// reason — so the game is dimmed nearly out rather than shown through.</summary>
-    const float Scrim = 0.93f;
+    /// <summary>
+    /// How opaque the scrim over the game is, per style.
+    ///
+    /// The blueprint dims the game nearly out: it is a screen you stop to read
+    /// rather than a heads-up overlay, which is what separates it from the
+    /// minimap and its opposite opacity setting.
+    ///
+    /// **The native style dims much less, because the original does not dim at
+    /// all.** The game's map is a board held up in front of you, drawn into the
+    /// world with the dungeon lit around it — so a black-out behind it is the one
+    /// thing that would still read as an emulator overlay after everything else
+    /// matched. The board itself is opaque, so nothing is harder to read; only
+    /// the surround stays visible. The dim is not nothing, since the port's board
+    /// is far larger than the game's and a bright scene at its edge would fight
+    /// the frame.
+    /// </summary>
+    const float ScrimBlueprint = 0.93f, ScrimNative = 0.55f;
+
+    static float Scrim => Map.Style == Map.StyleNative ? ScrimNative : ScrimBlueprint;
 
     /// <summary>Pixels a tile, before the interface scale. The lower bound is
     /// where the fit gives up and the view centres on the player instead; the
@@ -125,7 +139,10 @@ public sealed class MapFullscreen : IFloatingPanel
             var p1 = p0 + size;
             var dl = ImGui.GetWindowDrawList();
 
-            dl.AddRectFilled(p0, p1, MapRender.Fade(MapRender.Ground, Scrim));
+            // Black, not the map's own ground: in the native style the ground is
+            // the green board, and a green wash over the dungeon would read as a
+            // filter on the game rather than as a map in front of it.
+            dl.AddRectFilled(p0, p1, ImGui.GetColorU32(new Vector4(0.03f, 0.035f, 0.04f, Scrim)));
 
             // The margin and the header band are a share of the picture as well as
             // of the interface scale, because the picture is now the smaller of the
@@ -136,9 +153,32 @@ public sealed class MapFullscreen : IFloatingPanel
             var c0 = new Vector2(p0.X + margin, p0.Y + margin + header);
             var c1 = new Vector2(p1.X - margin, p1.Y - margin - header);
 
+            // **The board is square in the native style, and that is the game's
+            // own shape**: its map is a square slate in a frame, so a plan
+            // stretched across a 16:9 picture would read as a widescreen HUD
+            // however green it was. The blueprint keeps the whole content
+            // rectangle, which is what it shipped with.
+            if (Map.Style == Map.StyleNative)
+            {
+                float side = MathF.Min(c1.X - c0.X, c1.Y - c0.Y);
+                c0 = new Vector2((c0.X + c1.X - side) * 0.5f, (c0.Y + c1.Y - side) * 0.5f);
+                c1 = new Vector2(c0.X + side, c0.Y + side);
+            }
+
             if (c1.X - c0.X >= 32 && c1.Y - c0.Y >= 32)
             {
-                DrawArea(dl, c0, c1);
+                // The board is opaque whatever the scrim is: a map you can see
+                // the dungeon through is not a map, and in the native style the
+                // surround is deliberately left visible instead.
+                dl.AddRectFilled(c0, c1, MapRender.Ground);
+
+                // The plan clears the bevel, so the outermost tiles are not drawn
+                // half under the frame. Zero in the blueprint style.
+                float w = MapRender.FrameWidth(c0, c1);
+                DrawArea(dl, new Vector2(c0.X + w * 2.2f, c0.Y + w * 2.2f),
+                             new Vector2(c1.X - w * 2.2f, c1.Y - w * 2.2f));
+
+                MapRender.Frame(dl, c0, c1);
                 Chrome(dl, p0, p1, margin);
             }
         }
@@ -217,8 +257,8 @@ public sealed class MapFullscreen : IFloatingPanel
     /// — <c>NoInputs</c> means there is nothing for ImGui's cursor to serve.</summary>
     void Chrome(ImDrawListPtr dl, Vector2 p0, Vector2 p1, float margin)
     {
-        uint text = ImGui.GetColorU32(ImGuiCol.Text);
-        uint dim  = MapRender.Fade(text, 0.45f);
+        uint text = MapRender.Text;
+        uint dim  = MapRender.TextDim;
 
         string title = $"Area {Map.Area}  ·  {(Map.HalfOffset == 0 ? "lower" : "upper")} floor";
         dl.AddText(new Vector2(p0.X + margin, p0.Y + margin * 0.6f), text, title);

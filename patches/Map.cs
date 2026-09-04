@@ -114,9 +114,35 @@ public static class Map
     public const string FloorKey    = "kf2.map.floor";
     public const string PlayerKey   = "kf2.map.player";
     public const string PadButtonKey = "kf2.map.pad.button";
+    public const string StyleKey    = "kf2.map.style";
+    public const string PauseKey    = "kf2.map.pause";
 
     /// <summary>The feature. False leaves both panels unregistered.</summary>
     public static bool Enabled { get; private set; } = true;
+
+    /// <summary>
+    /// Whether opening the full-screen map stops the world.
+    ///
+    /// **On by default, and it is a correctness argument rather than a
+    /// convenience one.** The map is the whole area over a dimmed picture with no
+    /// chrome and no input -- a screen you stop to read -- and reading it takes as
+    /// long as it takes. King's Field's own map was an *item*, used from a menu
+    /// that already stopped the game; this map is opened with a button in the
+    /// middle of a corridor, so without a pause the port would be asking the
+    /// player to plan a route while something walks up behind them. Nothing else
+    /// the port adds puts a full-screen surface between the player and the game.
+    ///
+    /// The minimap and the docked panel deliberately do not do this: a heads-up
+    /// corner map is meant to be read while walking, and the instrument is for
+    /// looking at the game while it runs.
+    ///
+    /// The mechanism is <see cref="FramePacing.PauseWhen"/> -- the stage gate held
+    /// shut, so nothing is written to game memory and the picture keeps being
+    /// drawn underneath.
+    /// </summary>
+    public static bool Pause = true;
+
+    static bool? _forcedPause;
 
     /// <summary>The corner minimap. Off by default: it is a picture nobody has
     /// judged by eye, and this repo's rule for those is that they default off.</summary>
@@ -160,6 +186,27 @@ public static class Map
     /// drawing at all.</summary>
     public static float MinimapOpacity = 1f;
 
+    /// <summary>
+    /// How the map is drawn: 0 the game's own board, 1 the blueprint this port
+    /// shipped with.
+    ///
+    /// **The native style is the default, and it is a claim about belonging
+    /// rather than about taste.** The blueprint fills every walkable tile pale
+    /// on near-black and rules a grid over it, which is a debugger's picture:
+    /// clear, accurate and from a different game. King's Field II's own map is a
+    /// slate-green board in a metal frame whose plan is *outlined* rather than
+    /// filled, and the port draws that instead — same reading of the same 80x80
+    /// grid, same fog, same markers, laid out the way the game lays it out.
+    /// See <c>MapRender.DrawNative</c> for what the difference actually is.
+    ///
+    /// The blueprint is kept as the other entry rather than deleted: it is the
+    /// picture the fog, the extents and the marker layer were all judged against,
+    /// and a style setting keeps it live for the next thing that has to be.
+    /// </summary>
+    public static int Style;
+
+    public const int StyleNative = 0, StyleBlueprint = 1;
+
     /// <summary>Shade a tile by its height byte.</summary>
     public static bool Shade = true;
 
@@ -180,6 +227,12 @@ public static class Map
     /// this square" — see <c>MapRender.DrawPlayerDot</c>. The arrow is kept as the
     /// other entry rather than deleted, since what it records about the game's
     /// heading is measured (<c>func_80028080</c>) and worth keeping live.
+    ///
+    /// **In the native style entry 0 is the game's own pointer, turned to the nearest quarter
+    /// turn**, which is the same bargain read the other way: the objection to the
+    /// arrow was the *precision*, not the heading, and "north, roughly" is what
+    /// someone holding a paper map in a corridor knows. See
+    /// <c>MapRender.DrawPlayerPointer</c>.
     /// </summary>
     public static int PlayerMark;
 
@@ -266,10 +319,13 @@ public static class Map
 
     // ---- lifecycle ---------------------------------------------------------
 
-    public static void Configure(string? on, string? minimap, string? probe)
+    public static void Configure(string? on, string? minimap, string? probe,
+                                 string? pause = null)
     {
         if (!string.IsNullOrWhiteSpace(on))
             _forcedOn = !on.Equals("0", StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(pause))
+            _forcedPause = !pause.Equals("0", StringComparison.Ordinal);
         if (!string.IsNullOrWhiteSpace(minimap))
             _forcedMinimap = !minimap.Equals("0", StringComparison.Ordinal);
         if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
@@ -280,6 +336,7 @@ public static class Map
     {
         Enabled = _forcedOn ?? true;
         Minimap = _forcedMinimap ?? false;
+        Pause   = _forcedPause ?? true;
 
         // ConfigManager.Load runs inside HostWindow.Initialize, which is after
         // Program.cs — so the saved settings can only be read here, and an env var
@@ -291,12 +348,14 @@ public static class Map
             var view = RecompOne.Runtime.Runtime.View;
             Enabled       = _forcedOn ?? view.GetBool(OnKey, true);
             Minimap       = _forcedMinimap ?? view.GetBool(MinimapKey, false);
+            Pause         = _forcedPause ?? view.GetBool(PauseKey, true);
             MinimapSize   = view.GetInt(SizeKey, MinimapSize);
             MinimapRadius = view.GetInt(RadiusKey, MinimapRadius);
             MinimapCorner = view.GetInt(CornerKey, MinimapCorner);
             MinimapPad    = view.GetInt(PadKey, MinimapPad);
             MinimapShape   = view.GetInt(ShapeKey, MinimapShape);
             MinimapOpacity = view.GetFloat(OpacityKey, MinimapOpacity);
+            Style         = view.GetInt(StyleKey, StyleNative);
             Shade         = view.GetBool(ShadeKey, true);
             Walls         = view.GetBool(WallsKey, true);
             Floor         = view.GetInt(FloorKey, -1);
@@ -312,9 +371,24 @@ public static class Map
             Console.WriteLine(Enabled
                 ? $"[KF2] map: on, M or {PadName(PadButton)} opens the full-screen map, " +
                   $"N toggles the minimap, Shift+M the tile readout " +
-                  $"(minimap {(Minimap ? "on" : "off")}{(_probe ? ", probing" : "")})"
+                  $"(minimap {(Minimap ? "on" : "off")}, " +
+                  $"{(Pause ? "the world pauses while it is up" : "the world keeps running")}" +
+                  $"{(_probe ? ", probing" : "")})"
                 : "[KF2] map: off");
         });
+
+        // **Opening the full-screen map stops the world.** The predicate rather
+        // than a call from ToggleFullscreen, because the panel closes by three
+        // routes -- M, the pad button and the runtime's own menu bar -- and a
+        // latch missed by one of them is a game that never resumes. See
+        // FramePacing.PauseWhen and Map.Pause.
+        //
+        // Gated on InGame as well as on the panel: the map can be opened at the
+        // title screen, where it draws nothing, and pausing there would freeze the
+        // intro. InGame is a per-frame reading taken by Refresh, which the panel's
+        // own Draw calls first thing, so it is this frame's answer.
+        FramePacing.PauseWhen(() => Enabled && Pause && InGame &&
+                                    MapFullscreen.Instance.IsOpen);
 
         // An area module load invalidates the copy, so the next Draw re-reads
         // rather than showing the old area until the timer runs out.
@@ -459,6 +533,12 @@ public static class Map
     /// <summary>The full-screen map: what M and the pad button open.</summary>
     public static void ToggleFullscreen()
         => MapFullscreen.Instance.IsOpen = !MapFullscreen.Instance.IsOpen;
+
+    public static void SetStyle(int style)
+    {
+        Style = style;
+        Settings.PatchSettings.Set(StyleKey, style);
+    }
 
     public static void SetPlayerMark(int mark)
     {

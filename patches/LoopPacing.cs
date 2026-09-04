@@ -723,21 +723,40 @@ public static class LoopPacing
         if (!Enabled || !Filling || !_argsSeen) return;
 
         // Below or at the tick rate there is no gap: the loop's own frame is
-        // already at least a tick long.
-        if (!FramePacing.Extrapolating) return;
+        // already at least a tick long. **A pause is the exception**, since there
+        // the gap is not a fraction of a tick but the whole of one -- and at the
+        // default rate, where the render rate equals the tick rate, this guard
+        // would otherwise leave a modal loop running through a pause.
+        if (!FramePacing.Extrapolating && !FramePacing.Paused) return;
 
         if (!_bound) Bind();
         if (_stage13 == null) return;
 
         int cap = MaxRedraws();
-        int n = 0;
+        int n = 0;      // redraws spent filling the gap to the next tick
+        int held = 0;   // redraws spent holding a pause -- uncapped, and not the same thing
         var saved = c.Snapshot();
         _inExtra = true;
         try
         {
-            while (!FramePacing.TickedThisFrame && n < cap)
+            // **The pause is not subject to the cap, and that is what makes a
+            // modal loop pausable at all.** A gated stage can simply be skipped;
+            // a modal loop is the main loop, on the stack, and the only thing
+            // standing between its body and the next iteration is this fill. So
+            // while the world is held the fill does not end -- each redraw passes
+            // the frame boundary, is paced by FramePacing.Floor and presents
+            // through the game's own VSync, which is also where host input is
+            // polled, so the overlay that asked for the pause is drawn on every
+            // one of these frames and the key that closes it is read on them too.
+            // Capping it instead would let the loop body run a couple of times a
+            // second through a pause -- a message box advancing itself while the
+            // map is up.
+            while (true)
             {
-                n++;
+                bool paused = FramePacing.Paused;
+                if (!paused && (FramePacing.TickedThisFrame || n >= cap)) break;
+
+                if (paused) held++; else n++;
                 c.A0 = _argPos;
                 c.A1 = _argRot;
                 _stage13(c, m);
@@ -756,7 +775,12 @@ public static class LoopPacing
         // backstop in this port announces itself (FramePacing's boundary watchdog,
         // SpriteAnim's); this one recorded it in _extra and only when the probe
         // happened to be on.
-        if (n >= cap && !FramePacing.TickedThisFrame && !_capWarned)
+        // `held == 0` as well as the live pause, because a pause released *inside*
+        // the loop above leaves n at the cap with no tick yet reached -- which is
+        // this warning's exact shape and none of its meaning. Measured: it fired
+        // once, on the frame a paused map was closed.
+        if (n >= cap && !FramePacing.TickedThisFrame && !FramePacing.Paused &&
+            held == 0 && !_capWarned)
         {
             _capWarned = true;
             Console.Error.WriteLine($"[KF2] loop pacing: {cap} redraws did not reach a tick at " +

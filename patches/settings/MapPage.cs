@@ -27,8 +27,14 @@ public sealed class MapPage : IPatchPage
         ["Top left", "Top right", "Bottom left", "Bottom right", "Top centre"];
     static readonly string[] Shapes  = ["Square", "Circle"];
 
+    // 0 native, 1 blueprint: the stored value, the game's own board first
+    // because it is the default. See Map.Style.
+    static readonly string[] Styles =
+        ["The game's own map", "Blueprint"];
+
     // 0 dot, 1 arrow: the stored value, dot first because it is the default.
-    static readonly string[] Marks = ["Dot in the square you are in", "Arrow showing your heading"];
+    static readonly string[] Marks =
+        ["Marker in the square you are in", "Arrow showing your heading"];
 
     // The pad button that opens the full-screen map, and the SDL index each entry
     // stores. Not every pad has every one of them -- a controller with no touchpad
@@ -69,6 +75,19 @@ public sealed class MapPage : IPatchPage
                              "from the keyboard whatever this says; Shift+M opens the docked panel " +
                              "with the per-tile readout instead.");
 
+        // How the whole map is drawn, on every viewport at once. Native is the
+        // default: see Map.Style and MapRender.DrawNative.
+        int style = System.Math.Clamp(Map.Style, 0, Styles.Length - 1);
+        ImGui.SetNextItemWidth(260);
+        if (ImGui.Combo("Style", ref style, Styles, Styles.Length))
+            Map.SetStyle(style);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The game's own map is a slate-green board in a metal frame whose " +
+                             "floor plan is outlined rather than filled — the colours are sampled " +
+                             "off King's Field II's own map screen. The blueprint is the picture " +
+                             "this port shipped with: walkable tiles filled pale on near-black, " +
+                             "with a grid.");
+
         // How the player is drawn, on every viewport at once. The dot is the
         // default: see Map.PlayerMark and MapRender.DrawPlayerDot.
         int mark = System.Math.Clamp(Map.PlayerMark, 0, Marks.Length - 1);
@@ -76,9 +95,27 @@ public sealed class MapPage : IPatchPage
         if (ImGui.Combo("You are here", ref mark, Marks, Marks.Length))
             Map.SetPlayerMark(mark);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The dot sits in the middle of the tile you occupy and says nothing " +
-                             "about which way you face — which is as much as anyone drawing this " +
-                             "maze on paper could have known. The arrow is the satellite fix.");
+            ImGui.SetTooltip("The marker sits in the middle of the tile you occupy, and in the " +
+                             "game's own style it is the game's own pointer, turned to the nearest quarter " +
+                             "— your square and roughly which way you face, which is as much as " +
+                             "anyone drawing this maze on paper would have known. The arrow is " +
+                             "the satellite fix: sub-tile position and a heading to a twelfth of " +
+                             "a degree.");
+
+        // Whether the map stops the game. Beside the pad binding rather than down
+        // with the minimap's knobs, because it is a property of the full-screen
+        // map those two controls are about.
+        bool pause = Map.Pause;
+        if (ImGui.Checkbox("Pause while the full-screen map is open", ref pause))
+        {
+            Map.Pause = pause;
+            PatchSettings.Set(Map.PauseKey, pause);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The full-screen map is a screen you stop to read, so the world " +
+                             "stands still while it is up — nothing moves, nothing attacks and " +
+                             "no timer runs down. The corner minimap and the docked panel never " +
+                             "pause the game.");
 
         bool mini = Map.Minimap;
         if (ImGui.Checkbox("Corner minimap", ref mini)) Map.SetMinimap(mini);
