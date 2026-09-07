@@ -383,9 +383,10 @@ public static class Map
         });
 
         // **Opening the full-screen map stops the world.** The predicate rather
-        // than a call from ToggleFullscreen, because the panel closes by three
-        // routes -- M, the pad button and the runtime's own menu bar -- and a
-        // latch missed by one of them is a game that never resumes. See
+        // than a call from ToggleFullscreen, because the panel closes by more
+        // than one route -- M, the pad button, and the Gameplay switch that turns
+        // the whole map off -- and a latch missed by one of them is a game that
+        // never resumes. See
         // FramePacing.PauseWhen and Map.Pause.
         //
         // Gated on InGame as well as on the panel: the map can be opened at the
@@ -475,12 +476,11 @@ public static class Map
 
         // Localization.T falls back to English with a warning and then prints the
         // key itself, so a key the runtime has never heard of has to supply all
-        // three of its languages. menu.game is new; the runtime has only
-        // menu.system, menu.mods and menu.debug.
+        // three of its languages. These two are the panels' own window titles;
+        // they keep the menu.game prefix they were named under.
         Localization.Merge("""
         {
           "strings": {
-            "menu.game":      { "en": "Game", "pt-BR": "Jogo",  "es-419": "Juego" },
             "menu.game.map":  { "en": "Map",  "pt-BR": "Mapa",  "es-419": "Mapa"  },
             "menu.game.mapfs": { "en": "Full-screen map", "pt-BR": "Mapa em tela cheia",
                                  "es-419": "Mapa en pantalla completa" }
@@ -498,12 +498,13 @@ public static class Map
         // (MapOverlay ignores it: its open state is the setting, not the view.)
         ConfigManager.ApplyViewToPanels([MapPanel.Instance]);
 
-        // Panels do not auto-populate the menu bar — MainMenuBar declares every
-        // built-in one by hand — so without this the map is hotkey-only.
-        MenuRegistry.Menu("menu.game", MenuRegistry.OrderGame)
-                    .Panel<MapFullscreen>("menu.game.mapfs")
-                    .Panel<MapPanel>("menu.game.map")
-                    .End();
+        // No menu-bar entry: the top bar is the port's own chrome over someone
+        // else's game, and a "Game" heading beside System, Mods and Debug reads
+        // as part of the machine rather than part of King's Field. Panels do not
+        // auto-populate the bar anyway -- MainMenuBar declares every built-in one
+        // by hand -- so both maps are reached the way a player reaches them: M
+        // and the pad's touchpad button for the full-screen one, Shift+M for the
+        // docked instrument.
 
         // The probe opens both maps as well as dumping the grid. A headless run
         // cannot press M, so without this their draw paths are never exercised by

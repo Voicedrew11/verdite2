@@ -12,8 +12,9 @@ namespace Kf2;
 /// A title bar, a toolbar, a zoom slider and ten hex bytes on hover are for
 /// settling what a tile record means, not for reading a route with a controller in
 /// your hands — so this one keeps the chrome and the full-screen view has none.
-/// Shift+M opens it, and it is under Game in the menu bar; M and the pad's
-/// touchpad button open the other one.
+/// Shift+M opens it; M and the pad's touchpad button open the other one. Neither
+/// is in the menu bar: the port's chrome carries no heading of its own over the
+/// game.
 ///
 /// **The readout is the instrument, not decoration.** It names the tile under the
 /// cursor and prints all ten of its bytes, which is the only way short of a
@@ -23,9 +24,9 @@ namespace Kf2;
 /// +2 and +3, and whether bit 0x80 of +4 is the wall it behaves like in the
 /// visibility flood or the "see through" docs/WIDESCREEN.md calls it.
 ///
-/// Registered from patches/Map.cs on RuntimeReadyEvent, with a menu entry —
-/// panels do not auto-populate the menu bar, MainMenuBar declares every built-in
-/// one by hand, so without the entry the map would be hotkey-only.
+/// Registered from patches/Map.cs on RuntimeReadyEvent. Panels do not
+/// auto-populate the menu bar — MainMenuBar declares every built-in one by hand
+/// — so with no entry declared, both maps are hotkey-only by design.
 /// </summary>
 public sealed class MapPanel : IPanel
 {

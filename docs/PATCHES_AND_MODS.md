@@ -3001,9 +3001,14 @@ The full map is an `IPanel`; the minimap is an `IFloatingPanel`, which is the
 interface for a panel that should not count towards the dockspace's layout. The
 minimap's `IsOpen` **is** its feature switch, because `PanelManager.DrawPanels`
 only calls `Draw` on an open panel — that is what keeps it off the title screen
-and out of a load. Panels do not auto-populate the menu bar, so the map also
-registers under a new `menu.game`, whose label key supplies all three of the
-runtime's languages.
+and out of a load. Panels do not auto-populate the menu bar, and neither map
+declares an entry there: the top bar is the port's own chrome, and a *Game*
+heading beside System, Mods and Debug reads as part of the machine rather than
+part of King's Field. Both are reached the way a player reaches them — `M` and
+the pad's touchpad button for the full-screen one, `Shift+M` for the docked
+instrument. The two panel titles still supply all three of the runtime's
+languages, since `Localization.T` prints the key itself for one it has never
+heard of.
 
 **An overlay is a z-order problem before it is a drawing one, and the minimap
 shipped invisible because of it.** Reported from play as "there is no way to
@@ -3335,9 +3340,9 @@ frame instead of on three in four. So:
   heavy queue drains on stage 3.
 
 `FramePacing.PauseWhen(predicate)` is the entry point, and it is a *predicate*
-rather than a flag deliberately. The panel closes by three routes — `M`, the pad
-button, and the runtime's own menu bar — and a latch missed by one of them is a
-game that never resumes. It is read once a frame, at the two places that already
+rather than a flag deliberately. The panel closes by more than one route — `M`,
+the pad button, and the Gameplay switch that turns the map off — and a latch
+missed by one of them is a game that never resumes. It is read once a frame, at the two places that already
 mean "a new frame" (the frame boundary, and `FallbackTick` when the boundary has
 been lost), because host input is polled from inside the game's own `VSync`
 (patches/recompone/0007) and a predicate read per stage could otherwise run half a

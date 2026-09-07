@@ -444,9 +444,10 @@ public static class FramePacing
     /// world in it simply does not move.
     ///
     /// It is a predicate rather than a flag because the thing that pauses is a
-    /// panel whose open state is owned elsewhere and can be closed by three routes
-    /// -- the key, the pad button, and the runtime's own menu bar. A latch set by
-    /// whichever of those opened it would have to be cleared by all three, and a
+    /// panel whose open state is owned elsewhere and can be closed by more than
+    /// one route -- the key, the pad button, and the Gameplay switch that turns
+    /// the map off. A latch set by whichever of those opened it would have to be
+    /// cleared by all of them, and a
     /// latch left set is a game that never resumes. Asking the panel is the state.
     /// </summary>
     static Func<bool>? _pauseWhen;
