@@ -53,9 +53,16 @@ static class Recompile
             var target = Path.Combine(dst, Path.GetRelativePath(Paths.ContentConfig, src));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
 
+            // File.Copy carries the source's mtime across, so an unchanged payload
+            // file compares equal here and is skipped. The test is equality rather
+            // than "the copy is no older", because the staged copy being NEWER is
+            // not evidence that it is current: an install rolled back, or two
+            // builds sharing one VERDITE2_DATA, hands us a payload whose files are
+            // older than what is staged, and a config staged from the wrong build
+            // is a recompile against the wrong addresses.
             var from = new FileInfo(src);
             var to = new FileInfo(target);
-            if (to.Exists && to.Length == from.Length && to.LastWriteTimeUtc >= from.LastWriteTimeUtc) continue;
+            if (to.Exists && to.Length == from.Length && to.LastWriteTimeUtc == from.LastWriteTimeUtc) continue;
 
             File.Copy(src, target, overwrite: true);
         }
