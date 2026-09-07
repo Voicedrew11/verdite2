@@ -144,6 +144,7 @@ public static class PatchSettings
         Register("input", new KeyLayoutPage());
         Register("input", new AnalogPage());
         Register("input", new MousePage());
+        Register("input", new MapButtonPage());
         Register("gameplay", new AutoReloadPage());
         Register("gameplay", new MapPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());

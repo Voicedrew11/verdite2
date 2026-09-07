@@ -549,7 +549,10 @@ Kf2.TrueColor.Install();
 // death costs a couple of seconds instead of four screens of menu:
 //
 //     KF2_AUTORELOAD=1        on (the default); 0 leaves the death alone
-//     KF2_AUTORELOAD_DELAY=2  seconds of the game's death sequence first
+//     KF2_AUTORELOAD_DELAY=2  seconds of the game's death sequence first -- the
+//                             comparison, not a setting: 0 puts the reload inside
+//                             the death animation and 10 leaves the player long
+//                             enough to reach the menu this patch exists to skip
 //     KF2_AUTORELOAD_SLOT=0   0 = the game's own "last used" slot, 1..3 pins one
 //
 // A patch rather than a mod because it answers a design of the original that a
@@ -573,6 +576,25 @@ Kf2.AutoReload.Install();
 //     KF2_MAP_PAUSE=0       leave the world running while the full map is up
 //                           (it pauses by default)
 //
+// Three comparisons for what are no longer settings. The map is drawn the way
+// the game's own map screen is, with no height ramp and no wall tint on it: the
+// argument for that picture is that it belongs, so offering the debugger's one
+// beside it asks the player to settle what the port is for. The blueprint is
+// still the picture the fog, the extents and the markers were judged against,
+// so it stays reachable:
+//
+//     KF2_MAP_STYLE=blueprint   the port's original blueprint plan
+//     KF2_MAP_SHADE=1           colour each tile by its height byte
+//     KF2_MAP_WALLS=1           tint the tiles whose +4 bit 0x80 is set
+//     KF2_MAP_FLOOR=lower       pin a stacked half instead of following the player
+//     KF2_MAP_ARROW=1           the player as an arrow with a heading, not a dot
+//
+// KF2_MAP_MINIMAP and KF2_MAP_PAUSE are in that list now too. The minimap's
+// picture has never been judged by eye, which is the port's standing reason for a
+// default and a poor reason for a settings block, so its six knobs went with its
+// checkbox and N toggles it for the session. The pause is not a preference: the
+// full map is a screen with no chrome and no input, opened in a corridor.
+//
 // A patch rather than a mod for auto reload's reason -- it is something the port
 // itself should offer, so it should not be able to be absent -- and its knobs are
 // under Gameplay beside it. The minimap defaults off because the mechanism is
@@ -580,17 +602,27 @@ Kf2.AutoReload.Install();
 Kf2.Map.Configure(Environment.GetEnvironmentVariable("KF2_MAP"),
                   Environment.GetEnvironmentVariable("KF2_MAP_MINIMAP"),
                   Environment.GetEnvironmentVariable("KF2_MAP_PROBE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_PAUSE"));
+                  Environment.GetEnvironmentVariable("KF2_MAP_PAUSE"),
+                  Environment.GetEnvironmentVariable("KF2_MAP_STYLE"),
+                  Environment.GetEnvironmentVariable("KF2_MAP_SHADE"),
+                  Environment.GetEnvironmentVariable("KF2_MAP_WALLS"),
+                  Environment.GetEnvironmentVariable("KF2_MAP_FLOOR"),
+                  Environment.GetEnvironmentVariable("KF2_MAP_ARROW"));
 
 // The other half of that map: what is *in* the area rather than what shape it is.
 // The four world tables the renderer walks -- creatures, props, effects,
 // billboards -- read at their own liveness tests and drawn where the game says
 // they stand:
 //
-//     KF2_MAP_MARKERS=0     the marker layer off (on by default)
+//     KF2_MAP_MARKERS=1     the marker layer on (off, and no longer a setting)
 //
-// On by default, unlike the minimap, because it adds information to a picture
-// that has already been judged rather than being a new picture of its own.
+// **Off, and the save points are the exception rather than part of it.** A live
+// read of where every creature, prop, effect and torch is standing is an
+// instrument, not a map, and King's Field's difficulty is not knowing what is
+// round the corner. A save point is the opposite case -- the one object in a
+// maze a player wants a map to find, and the game names it itself (definition
+// kind 0x0E) -- so it is drawn always and independently, which is why
+// MapMarkers.Refresh stands down only when both are off.
 // KF2_MAP_PROBE=1 also dumps a per-table census and a histogram of the object
 // table's type byte, which is what would let those types be paired with nouns.
 Kf2.MapMarkers.Configure(Environment.GetEnvironmentVariable("KF2_MAP_MARKERS"));

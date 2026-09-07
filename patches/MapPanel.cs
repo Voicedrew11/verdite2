@@ -108,26 +108,62 @@ public sealed class MapPanel : IPanel
         ImGui.Checkbox("Grid", ref _grid);
 
         ImGui.SameLine();
+        // These three are the instrument's, and they are the *only* controls left
+        // for what they switch: the marker layer, the height ramp and the
+        // sight-blocking tint stopped being player settings, because a live read
+        // of what is standing in the area and a debugger's reading of the grid
+        // are not a map. They do not save -- their keys are retired -- so the
+        // panel is where you turn them on to look at something and they are gone
+        // again next session.
         bool marks = MapMarkers.Enabled;
-        if (ImGui.Checkbox("Markers", ref marks))
-        {
-            MapMarkers.Enabled = marks;
-            Settings.PatchSettings.Set(MapMarkers.OnKey, marks);
-        }
+        if (ImGui.Checkbox("Markers", ref marks)) MapMarkers.Enabled = marks;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Creatures, props, effects and billboards, from the four tables the " +
-                             "renderer itself draws from. Which classes show is under " +
-                             "Settings > Gameplay > Map.");
+                             "renderer itself draws from. This session only. " +
+                             "Save points show on every map whatever this says.");
 
         ImGui.SameLine();
         bool shade = Map.Shade;
-        if (ImGui.Checkbox("Height", ref shade))
-        {
-            Map.Shade = shade;
-            Settings.PatchSettings.Set(Map.ShadeKey, shade);
-        }
+        if (ImGui.Checkbox("Height", ref shade)) Map.Shade = shade;
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Shade each tile by its height byte, so stairs and ledges read.");
+            ImGui.SetTooltip("Shade each tile by its height byte, so stairs and ledges read. " +
+                             "This session only.");
+
+        ImGui.SameLine();
+        bool walls = Map.Walls;
+        if (ImGui.Checkbox("Walls", ref walls)) Map.Walls = walls;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Tint the tiles whose +4 bit 0x80 is set -- what that bit means is " +
+                             "the open question. This session only.");
+
+        // The fog's own instruments, for the same reason: the gate is a
+        // correctness argument rather than a preference, and Forget and Reveal
+        // are how you look at what it did. They were the indented block under
+        // "Fog of war" on the Gameplay page and are the only things there that
+        // did any work. Disabled rather than hidden while the fog is off, so the
+        // panel says why they do nothing.
+        ImGui.BeginDisabled(!MapFog.Enabled);
+
+        ImGui.SameLine();
+        bool sight = MapFog.LineOfSight;
+        if (ImGui.Checkbox("Sight", ref sight)) MapFog.SetLineOfSight(sight);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The fog's line-of-sight gate: fill in only what you had a clear " +
+                             "view of, not the whole cull cone. Off is the fog this class " +
+                             "shipped with, which paints through the wall beside a doorway. " +
+                             "This session only.");
+
+        ImGui.SameLine();
+        if (ImGui.Button("Forget")) MapFog.ForgetArea();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Wipe this area's fog back to unexplored.");
+
+        ImGui.SameLine();
+        if (ImGui.Button("Reveal")) MapFog.RevealArea();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Fill in this area's whole map.");
+
+        ImGui.EndDisabled();
     }
 
     void DrawCanvas()

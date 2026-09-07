@@ -249,6 +249,8 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Any frame rate: three gates, one logic clock, and a smoothed view
 - Auto reload
 - A dynamic map
+- Five map controls that were not choices
+- What the Map page is down to
 - Auto start and the agent beacon
 - The command channel
 - `ending` exists because the last ten minutes of the game are otherwise untestable

@@ -140,7 +140,8 @@ KF2_MOUSE=1                              # mouse look (off by default; Escape ca
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
-KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
+KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
+KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_BOOTEXE=end                          # boot straight into OPEN.EXE, GAME.EXE or END.EXE
 KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the original does (a button exits by default)
@@ -148,12 +149,17 @@ KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: ov
 KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill
 KF2_UISCALE=1                            # force the interface scale, and save it
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
-KF2_MAP_MINIMAP=1                        # the corner minimap on (off by default); N toggles it
-KF2_MAP_MARKERS=0                        # creatures, objects, effects and sprites off (on by default)
-KF2_MAP_PAUSE=0                          # leave the world running while the full map is up (it pauses by default)
+KF2_MAP_MINIMAP=1                        # the corner minimap on (off; no longer a setting); N toggles it
+KF2_MAP_MARKERS=1                        # creatures, objects, effects and sprites on (off; no longer a setting)
+KF2_MAP_STYLE=blueprint                  # the port's original blueprint plan (the game's own map; no longer a setting)
+KF2_MAP_SHADE=1                          # colour each tile by its height byte (off; no longer a setting)
+KF2_MAP_WALLS=1                          # tint the tiles whose +4 bit 0x80 is set (off; no longer a setting)
+KF2_MAP_PAUSE=0                          # leave the world running while the full map is up (it pauses; no longer a setting)
+KF2_MAP_FLOOR=lower                      # pin a stacked half instead of following the player (no longer a setting)
+KF2_MAP_ARROW=1                          # the player as an arrow with a heading, not a dot (no longer a setting)
 KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, its occupied extent and a marker census, and open both maps
 KF2_MAP_FOG=1                            # fog of war: only the tiles you have seen (off by default)
-KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on by default)
+KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on; no longer a setting)
 KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, tiles refused, records, flushes
 KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 grid, the gate's verdict and its walls
 ```
@@ -613,7 +619,10 @@ from the console by `KF2_ZBUFFER` / `KF2_ZBUFFER_PROBE`.
 See "Sub-pixel vertex positioning" and "Z-buffer" in `docs/RENDERING.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
-default and its knobs are under Gameplay. Analog twin-stick control is the same
+default and its knobs — the switch and the slot — are under Gameplay; **the
+delay is a fixed 2 s** and `KF2_AUTORELOAD_DELAY` is the comparison, both ends of
+the slider it had being wrong (0 reloads inside the death animation, 10 leaves
+time to reach the menu the patch exists to skip). Analog twin-stick control is the same
 test applied to the pad — without it a modern controller's left stick is wired to
 the D-pad and *turns* rather than walking — so it is on by default too, and its
 knobs are under Input, below the button-binding table. It costs nothing when a
@@ -632,8 +641,8 @@ unasked is worse than one switch to find. What no counter can answer is the feel
 (0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
 `docs/INPUT.md`.
 
-**Opening the full-screen map stops the world** (`Map.Pause`, `kf2.map.pause`,
-Gameplay ▸ Map, `KF2_MAP_PAUSE=0`), and the mechanism is **the stage gate held
+**Opening the full-screen map stops the world** (`Map.Pause`, `KF2_MAP_PAUSE=0`
+the comparison; not a setting), and the mechanism is **the stage gate held
 shut rather than a new one**: `FramePacing.PauseWhen(predicate)` makes
 `BeforeStage` refuse on every frame instead of on three in four, and the six gated
 stages already *are* the per-tick world — objects, the pad read and movement, the
@@ -667,8 +676,13 @@ original shipped no automap, and everything else in the port that knows where yo
 are is a debug instrument — so it is on by default and its knobs are under
 Gameplay. **The pad's touchpad button opens a full-screen map** and `M` does the
 same from the keyboard; `N` toggles a corner minimap and `Shift+M` opens the
-docked panel with the per-tile readout. The minimap defaults *off*, for the
-sub-pixel reason. **There are three viewports over one reading, and
+docked panel with the per-tile readout. **The Gameplay page is down to two
+switches** — the map, and fog of war — since a picture nobody has judged is a
+comparison rather than a feature and everything else there was the port's
+question to answer rather than the player's; the pad binding moved to Input,
+where a player looks for what a button does. The minimap is *off* and its seven
+controls went with it, for the sub-pixel reason. See "What the Map page is down
+to" in `docs/PATCHES_AND_MODS.md`. **There are three viewports over one reading, and
 `patches/MapFullscreen.cs` is the one a player opens**: the whole area over the
 dimmed game, no chrome, `NoInputs`, closing the minimap while it is up — the
 docked `MapPanel` with its toolbar and its ten-byte hover readout is the
@@ -699,15 +713,16 @@ occupied-extent pass in `Map.Copy` — which **measured as the whole 80x80 grid*
 on both halves of areas 0 and 1, so below a floor of 6 px a tile the fit is
 abandoned and the view centres on the player's *tile*. **The player is a dot in
 the square they occupy, not an arrow**, and that is the default
-(`MapRender.DrawPlayerDot`, `kf2.map.player`): an arrow gives a sub-tile position
+(`MapRender.DrawPlayerDot`; `KF2_MAP_ARROW=1` is the comparison): an arrow gives a sub-tile position
 and a heading to a twelfth of a degree, which is a satellite fix in a maze whose
 difficulty is being lost in it, while a dot says only "you are in this square" —
 what someone mapping it on graph paper would have known. The arrow is kept as the
-other entry, since what it records about `func_80028080`'s heading is measured and
-a setting keeps it live. Measured: 144.0 fps and 20.0 ticks/s with all three
+other entry in the code, since what it records about `func_80028080`'s heading is
+measured, but it is no longer a setting: how much the map gives away is a question
+about the game rather than about the player's screen. Measured: 144.0 fps and 20.0 ticks/s with all three
 viewports drawing. **The map is drawn the way the game's own map is, and that is
-the default** (`Map.Style`, `kf2.map.style`, Gameplay ▸ Map ▸ Style;
-`MapRender.DrawNative`): the port's first map was accurate and belonged to a
+the only way it is drawn** (`Map.Style`, `MapRender.DrawNative`;
+`KF2_MAP_STYLE=blueprint` is the comparison): the port's first map was accurate and belonged to a
 different game — walkable tiles filled pale on near-black under a ruled grid,
 which is the docked instrument's palette scaled up, and was reported from play as
 not conforming to the game's styles. **The one difference that matters is that the
@@ -739,10 +754,17 @@ asking the 80x80 grid, not the drawing window — so a shared wall is inked once
 a window's edge grows no border. Two parts are readings rather than measurements:
 the original's mottled shapes are reproduced as the **other stacked half**, and
 the height ramp is kept in the board's green at a fifth of the blueprint's
-contrast. The blueprint is the other entry, being the picture the fog, the extents
-and the marker layer were judged against. **None of the native style has been
-looked at by eye.** **The minimap is a fully opaque square by
-default and can be a circle and semi-transparent** (Gameplay ▸ Map): opacity
+contrast — and is now **off**, along with the sight-blocking tint, the style
+combo and the marker layer: five controls came off the Gameplay page because
+none of them was a choice, none reads its saved key any more, and
+`KF2_MAP_STYLE=blueprint`, `KF2_MAP_SHADE=1` and `KF2_MAP_WALLS=1` are what is
+left of the first three (see "Five map controls that were not choices" in
+`docs/PATCHES_AND_MODS.md`). The blueprint is kept in the code, being the picture
+the fog, the extents and the marker layer were judged against.
+**None of the native style has been
+looked at by eye**, and it is now the only map anybody sees. **The minimap is a fully opaque square and can be a circle and semi-transparent,
+though nothing in the window says so any more** (its seven controls came off the
+Gameplay page with it; the fields keep the values that shipped): opacity
 fades the ground and the tiles but never the player's marker, and the circle is
 cut **per tile** — ImGui clip rects are rectangles and a draw list cannot erase,
 so the usual mask ring would have to be painted opaque, which is the one thing
@@ -773,7 +795,11 @@ pointing across the direction of travel, since the mirror was in the map — a
 mirror is invisible to any measurement taken inside the mirrored frame. The
 `KF2_MAP_PROBE=1` dump is not flipped, being a dump of the grid rather than of
 the picture. **The tile grid is only half of a map, and `patches/MapMarkers.cs` is the other
-half**: it draws what is *standing* in the area, from the **four world tables
+half — which is now off, and not a setting** (`KF2_MAP_MARKERS=1` and the docked
+panel's session tick are the comparisons): a live read of where every creature,
+prop, spell and torch is standing, through walls, is an instrument rather than a
+map, and King's Field's difficulty is not knowing what is round the corner. It
+draws what is *standing* in the area, from the **four world tables
 `func_800331B4` itself draws from** — creatures `0x8016C544` (200 x `0x7C`, drawn
 when `u8[+0x9] == 1`, pos `+0x2C`), objects `0x80177714` (396 x `0x44`, `u16[+0x6]
 != 0xFF`, pos `+0x14`), effects `0x8019CC6C` (128 x `0x48`, pos `+0x14`) and
@@ -829,7 +855,9 @@ not fail**: `DrawSave` clamped the glyph up to nine pixels and then tested
 whether it had reached nine, so the fallback was dead code; it gates on the cell
 now, below five pixels a tile. Measured after: `4 of 4 lettered on the upper half
 at 12.0 px a tile`, with the marker layer off. Never looked at by eye: whether an S lands where the game
-actually lets you save. Billboards and the creature-facing spoke default off. Measured:
+actually lets you save. **The save points are the exception and stay on**, being
+the one object a player wants a map to find and one the game names itself;
+billboards and the creature-facing spoke default off. Measured:
 144.0 fps and 20.0 ticks/s at `KF2_FPS=144` with both viewports drawing markers.
 Never judged by eye: whether the markers read at minimap size, and whether the
 facing spoke points the way the creature does. Two traps are
@@ -885,8 +913,9 @@ Measured over a walk through all eight areas at 144 fps: 3993 of 8469 lit cells
 refused, the player's own tile revealed on every sample, nothing outside the cast
 window, and 144.0 fps / 20.0 ticks/s with the minimap open.
 `KF2_MAP_FOG_PROBE=2` prints the grid, the gate's verdict and the walls it read
-side by side, which is what makes a refusal arguable; `KF2_MAP_FOG_LOS=0` and
-Gameplay ▸ Map ▸ *Only what you could see* are the comparison. Never looked at by
+side by side, which is what makes a refusal arguable; `KF2_MAP_FOG_LOS=0` and the
+docked panel's *Sight* tick are the comparison, the gate being a correctness
+argument rather than a preference and so no longer a setting. Never looked at by
 eye: whether the revealed shape matches where you walked.
 See "A dynamic map" in `docs/PATCHES_AND_MODS.md`.
 

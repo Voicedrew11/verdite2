@@ -2762,8 +2762,17 @@ Two details that are the patch's and not the game's:
   therefore has nothing to reload, and it logs once and leaves the death alone
   rather than inventing a slot. A fixed slot can be pinned in the settings.
 
-`KF2_AUTORELOAD`, `KF2_AUTORELOAD_DELAY` and `KF2_AUTORELOAD_SLOT` mirror the
-three settings, which persist to `interface.ini` under `kf2.autoreload.*`.
+`KF2_AUTORELOAD` and `KF2_AUTORELOAD_SLOT` mirror the two settings, which persist
+to `interface.ini` under `kf2.autoreload.*`. **The delay is the third env var and
+is no longer a setting**: `KF2_AUTORELOAD_DELAY` still moves it, but the slider is
+gone and `kf2.autoreload.delay` is not read any more. It decides only whether the
+death reads as a death before the screen changes, and both ends of the 0-10 s
+range it offered were wrong — at 0 the reload lands inside the death animation and
+reads as a glitch, and at 10 the player has had time to reach for the menu this
+patch exists to save them from. 2 s is what shipped, and what every measurement of
+the death clock at `0x8019951A` is taken against. Retiring the key rather than
+leaving it read is the rule the map's nine went by: a key still read after its
+control is gone strands whoever set it.
 
 **Dying on demand is the hard part of testing this**, so the settings page has a
 *Simulate death* button: it zeroes HP and calls `func_8002A264(0)`, which is
@@ -2846,8 +2855,14 @@ the move.
 `patches/settings/MapPage.cs`.
 
     KF2_MAP=0             the whole feature off (on by default)
-    KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
-    KF2_MAP_MARKERS=0     the marker layer off (on by default)
+    KF2_MAP_MINIMAP=1     the corner minimap on (off, and not a setting)
+    KF2_MAP_PAUSE=0       the world keeps running under the full map (not a setting)
+    KF2_MAP_FLOOR=lower   pin a stacked half instead of following the player
+    KF2_MAP_ARROW=1       the player as an arrow with a heading, not a dot
+    KF2_MAP_MARKERS=1     the marker layer on (off, and not a setting)
+    KF2_MAP_STYLE=blueprint  the port's original blueprint plan (not a setting)
+    KF2_MAP_SHADE=1       colour each tile by its height byte (off, not a setting)
+    KF2_MAP_WALLS=1       tint the tiles whose +4 bit 0x80 is set (off, not a setting)
     KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII, its occupied extent and a
                           marker census, and open both maps
 
@@ -3046,8 +3061,10 @@ numbers keep their meanings because they are already written in players'
 beside the other two top entries. An unrecognised value falls back to the shipped
 top-right rather than landing off-screen.
 
-**The edge gap is a setting** (`kf2.map.minimap.pad`, 0-200 px, 12 by default —
-the constant that shipped). It is scaled by `Theme.Scale` alongside the size, so
+**The edge gap was a setting** (`kf2.map.minimap.pad`, 0-200 px, 12 — the
+constant that shipped, and the value the field now keeps; the control and the key
+went with the minimap, see "What the Map page is down to"). It is scaled by
+`Theme.Scale` alongside the size, so
 the gap keeps its proportion as the interface scale moves rather than closing up
 on a large one, and it is clamped where it is *used* as well as where it is set:
 it is a saved number, and a big enough one would push the map off the screen
@@ -3056,9 +3073,10 @@ edge only — there is no horizontal edge to stand off from.
 
 #### The minimap's shape and opacity
 
-Two knobs under Gameplay > Map, both defaulting to the picture that shipped — a
-fully opaque square — for the rule the rest of the port follows: a picture nobody
-has judged by eye does not become the default.
+Two knobs that were under Gameplay ▸ Map, both pinned to the picture that shipped
+— a fully opaque square — for the rule the rest of the port follows: a picture
+nobody has judged by eye does not become the default. That same rule is why they
+are no longer controls at all: see "What the Map page is down to".
 
 **Opacity** (`kf2.map.minimap.opacity`, 0.15-1) is the ground and the tiles, not
 the window. The window's own background is a rectangle ImGui fills before the draw
@@ -3114,8 +3132,10 @@ while something listens, so the listener is also what turns that dispatch on.
 A pad whose SDL mapping has no touchpad simply never sends button 20, and
 **nothing here can ask it whether it has one** — `InputManager` keeps the
 `GameController*` to itself, so `GameControllerHasButton` is out of reach. The
-binding is therefore a setting rather than a probe: Gameplay > Map > "Open the
-full-screen map with", offering Touchpad (the default), L3, R3, Select and None,
+binding is therefore a setting rather than a probe: **Input ▸ Map ▸** "Open the
+full-screen map with" (`patches/settings/MapButtonPage.cs` — it was on the Map
+page under Gameplay until a binding was judged to belong with the bindings),
+offering Touchpad (the default), L3, R3, Select and None,
 stored as the SDL index in `kf2.map.pad.button`. `Device` is deliberately not
 filtered — it is SDL's joystick *instance id*, not a player number, so any pad
 opens the map.
@@ -3176,8 +3196,10 @@ viewport along, deliberately left alone until someone looks at the full map.
 
 ### You are here, approximately
 
-`MapRender.DrawPlayerDot`, and it is the default (`kf2.map.player`, Gameplay >
-Map > "You are here"; the arrow is the other entry).
+`MapRender.DrawPlayerDot`, and it is now the only one a player gets
+(`KF2_MAP_ARROW=1` is the comparison). It was the default of a two-entry combo;
+the argument below is about the game rather than about the player's screen, which
+is what took the combo away — see "What the Map page is down to".
 
 The arrow told the player two things the game never told them: where in the room
 they stand, to the world unit, and which way they face, to a twelfth of a degree.
@@ -3198,14 +3220,16 @@ the ground stops hiding the game, and a "you are here" you cannot find is not
 worth drawing.
 
 The arrow is kept rather than deleted: what it records about the game's heading is
-measured (`func_80028080`, and the mirror above it), and a setting keeps that
-live rather than turning it into archaeology.
+measured (`func_80028080`, and the mirror above it), and `KF2_MAP_ARROW=1` keeps
+that live rather than turning it into archaeology.
 
 ### The map the game itself draws
 
-`Map.Style` (`kf2.map.style`, Gameplay ▸ Map ▸ Style), `MapRender.DrawNative`,
-`MapRender.Frame`, `MapRender.DrawPlayerPointer`. **The game's own map is the
-default; the blueprint the port shipped with is the other entry.**
+`Map.Style`, `MapRender.DrawNative`, `MapRender.Frame`,
+`MapRender.DrawPlayerPointer`. **The game's own map is the only one a player
+gets**; the blueprint the port shipped with survives on the console as
+`KF2_MAP_STYLE=blueprint`. See "Five map controls that were not choices" below for
+why that stopped being a combo.
 
 The first version of this map was accurate and did not belong to the game. It
 filled every walkable tile pale blue-grey on near-black, ruled a faint grid over
@@ -3308,8 +3332,9 @@ call.
 
 ### Opening the map stops the world
 
-`Map.Pause` (Gameplay ▸ Map ▸ *Pause while the full-screen map is open*,
-`KF2_MAP_PAUSE=0`), on by default.
+`Map.Pause`, on and **not a setting** (`KF2_MAP_PAUSE=0` is the comparison). It
+had a checkbox; the paragraph below is the whole argument and it does not have two
+sides, which is why — see "What the Map page is down to".
 
 The full-screen map is the whole area over a dimmed picture with no chrome and no
 input — a screen you stop to read — and reading it takes as long as it takes.
@@ -3500,9 +3525,12 @@ column shows a solid mass across rows 29 to 33, and the corridor beyond it is th
 `x` run — lit by the game, five tiles the far side of a wall, and refused. What no
 counter can say is whether the revealed shape now matches where the player walked.
 
-Its switch is *Only what you could see*, under Gameplay > Map beside the fog one,
-because turning it off and walking the same room again is the one comparison a
-player can make by eye in a single session.
+Its switch was *Only what you could see*, under Gameplay ▸ Map beside the fog
+one, because turning it off and walking the same room again is the one comparison
+a player can make by eye in a single session. That is a comparison rather than a
+preference — the ungated fog writes a permanent lie into a store that never
+forgets — so it is on, the key is retired, and the comparison lives on the docked
+panel's *Sight* tick and `KF2_MAP_FOG_LOS=0`.
 
 #### A cell byte is not a boolean, and "nonzero" over-reveals by 7x
 
@@ -3745,8 +3773,8 @@ the mark is per object, so an area with two save points gets two letters; it is
 bounds-checked against the `0x1E00` bytes between the definition table's base and
 the object table (320 records), because the index is game data; and the layer is
 **independent of the marker layer entirely** — not merely of the object class
-inside it. `MapMarkers.Saves`, `kf2.map.markers.saves`, Gameplay ▸ Map ▸ Save
-points, on by default.
+inside it. `MapMarkers.Saves`, on always and not a setting, which is what that
+independence became once the marker layer went off by default.
 
 **That independence is two lines and both of them had to be found the hard way.**
 Shipped first, the S was independent of `Objects` only: `Scan` admitted a save
@@ -3853,6 +3881,134 @@ drawn-but-never-stepped objects are things a player recognises or clutter, and
 whether the creature *facing* spoke points the way the creature does — that last
 is derived from the rotation the renderer builds (`s16` at `+2` of the triple,
 biased `0x800`) and has never been checked, which is why it defaults off.
+
+## Five map controls that were not choices
+
+The Map page under Gameplay carried eleven controls and now carries six. Five
+went, and the argument is the one the Video page had already been through
+("Three checkboxes that were not choices" in `docs/WIDESCREEN.md`): a setting is
+for a thing a player can reasonably want either way, and each of these was
+instead a question the port is better placed to answer, offered as a tick.
+
+**Style.** The whole case for `DrawNative` is that the map *belongs* — same
+board, same ink, same frame as the map item the game itself hands you. Offering
+the blueprint beside it as the other half of a preference asks the player to
+settle what the port is for, and the answer is not a taste. So `Map.Style` is
+`StyleNative` and the combo is gone. The blueprint stays in the code: it is the
+picture the fog, the extents and the marker layer were all judged against, and
+whatever has to be judged next will want it. `KF2_MAP_STYLE=blueprint`.
+
+**Shade by height** and **mark sight-blocking tiles.** Both are the blueprint's
+instrumentation showing through onto a board that is one flat slate green. The
+height ramp was kept in the native style at a fifth of the blueprint's contrast,
+which is either invisible or wrong; the wall tint reads a bit (`+4` bit `0x80`)
+whose *meaning is an open question* — the widescreen notes read it as "see
+through" rather than as a wall, and nothing here has settled it. A layer nobody
+can say the meaning of is an instrument, not a map. Both off: `KF2_MAP_SHADE=1`,
+`KF2_MAP_WALLS=1`, and the docked `MapPanel` keeps a session tick for each,
+because that panel *is* the instrument.
+
+**Show what is in the area** — the marker layer, and its four class ticks with
+it. **Off.** A live read of the four tables the renderer walks tells you where
+every creature, prop, spell and torch is standing, right now, through walls.
+King's Field's difficulty is not knowing what is round the corner; the map exists
+because the maze is a maze, not because the bestiary is a secret being kept
+badly. That is the same argument the player dot won over the arrow, one layer
+out. `KF2_MAP_MARKERS=1` and the panel's Markers tick are the comparisons.
+
+**Save points.** **On, and the exception rather than a survivor.** The one object
+in a maze a player wants a map to find is the one they can save at, the game
+names it itself (definition kind `0x0E`), and it is a fixed feature of the
+architecture rather than a live reading of what is walking about. It draws
+whatever the marker layer says — which is the independence found the hard way
+above, and is now load-bearing rather than a courtesy, since the layer it is
+independent of is off for everybody.
+
+**None of the five reads its saved key any more**, and that is the part worth
+copying from the Video page: a key still read after its control is gone strands
+whoever set it — `interface.ini` says one thing, the window says nothing, and
+there is no control left to put it back with. `kf2.map.style`,
+`kf2.map.shade`, `kf2.map.walls`, `kf2.map.markers` and its five relatives are
+retired. The panel's ticks are deliberately session-only for the same reason.
+
+What the page keeps is the map itself, the pad button that opens it, whether it
+pauses, how the player is drawn, the minimap with its own knobs, and fog of war
+— pictures a player can reasonably want or not want.
+
+**Never looked at by eye:** the native board with the height ramp and the wall
+tint off, which is now the only map anybody sees.
+
+## What the Map page is down to
+
+The Gameplay page carried **eleven** controls when the map shipped. It carries
+**two**: the map, and fog of war. One more — the pad button — moved to Input. The
+eight that went split three ways, and the split is the point rather than the
+count.
+
+**Not a choice** (five; "Five map controls that were not choices" above): the
+style, the height ramp, the sight-blocking tint, the marker layer with its four
+classes, and the save points.
+
+**Not a choice** (three more, same argument, this pass):
+
+- **Pause while the full-screen map is open.** On. The full map is the whole area
+  over a dimmed picture with no chrome and `NoInputs` — a screen you stop at, and
+  reading it takes as long as it takes. King's Field's own map was an *item*, used
+  from a menu that already stopped the game; this one opens with a button in the
+  middle of a corridor. Offering "…but keep the game running" is offering to put a
+  full-screen surface between the player and something walking up behind them.
+  `KF2_MAP_PAUSE=0`.
+- **Floor.** Follows the player. Pinning a stacked half is for looking at the
+  *other* one, which is a thing you do while checking the map is right, not while
+  playing — and the followed answer is the measured one: the founding equality is
+  that the player stands on a drawn half whose `-(height << 7)` equals their Y,
+  gap 0 over three save slots, two areas and both floors. `KF2_MAP_FLOOR=lower`
+  or `upper`.
+- **You are here.** The dot. The argument is already written down under "You are
+  here, approximately" and it is about the game, not about the player's screen: an
+  arrow gives a sub-tile position and a heading to a twelfth of a degree in a maze
+  whose difficulty is being lost in it. A combo asks the player to settle how much
+  the port should give away. The arrow is kept in the code because what it records
+  about `func_80028080`'s heading is measured. `KF2_MAP_ARROW=1`.
+- **The fog's line-of-sight gate.** On, and the fog's own checkbox stays. Without
+  the gate the cull cone paints an expanding wedge behind the wall beside a
+  doorway — measured, 110 of 136 lit cells in area 7 sitting behind a wall mass
+  the player cannot see past — into a store that never forgets. A permanent lie in
+  a save file is a defect. `KF2_MAP_FOG_LOS=0`.
+
+**A comparison rather than a feature** (the corner minimap, and its six knobs —
+corner, edge padding, shape, size, range, opacity). It is off because *the picture
+has never been judged by eye*, which is this port's standing reason for a default
+— and a picture in that state is a poor thing to hang seven controls off, since
+every one of them tunes something nobody has established is usable. So the whole
+block went, the fields keep the values that shipped (a fully opaque square, 220
+px, 12 tiles, top right), `KF2_MAP_MINIMAP=1` brings it back for a run, and **N
+still toggles it for the session**, which is how it gets looked at. If it is
+judged good the block comes back; that is what "for the time being" means here.
+
+**Somewhere else** (the pad button). `patches/settings/MapButtonPage.cs`, under
+Input, sorted between the keyboard layout and mouse look. It sat on the Map page
+because it arrived with the map, which is the wrong reason: a player looking for
+what a button does looks under Input, and nothing else in the port asks them to
+look elsewhere for one binding. What the map *is* stays under Gameplay. The page
+disables itself and says so when the map is switched off, rather than vanishing —
+a binding that disappears reads as a bug.
+
+**Retired keys.** `kf2.map.minimap` and its six, `kf2.map.pause`, `kf2.map.floor`,
+`kf2.map.player`, `kf2.map.fog.sight`. None is read any more, for the reason the
+last pass retired the other nine: a key still read after its control is gone
+strands whoever set it. `kf2.map.on`, `kf2.map.pad.button` and `kf2.map.fog` are
+what is left. Session-only controls — N, and the docked panel's Markers, Height,
+Walls, Sight, Forget and Reveal — deliberately write nothing.
+
+**Where the instruments went.** `MapPanel`'s toolbar is now the whole comparison
+set: zoom, follow, grid, markers, height shading, wall tint, the fog gate, and
+Forget/Reveal this area. That panel is `Shift+M`, it is session-only already, and
+it is what a windowed debugger over the game is *for* — which is the same
+sentence that took its palette off the player's map in the first place.
+
+**Never looked at by eye:** the Gameplay page at two switches, and whether the
+Input page reads right with a map binding on it.
 
 ## Auto start and the agent beacon
 

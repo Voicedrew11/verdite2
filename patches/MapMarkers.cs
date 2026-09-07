@@ -165,16 +165,25 @@ public static class MapMarkers
 
     // ---- settings ----------------------------------------------------------
 
-    public const string OnKey        = "kf2.map.markers";
-    public const string CreaturesKey = "kf2.map.markers.creatures";
-    public const string ObjectsKey   = "kf2.map.markers.objects";
-    public const string EffectsKey   = "kf2.map.markers.effects";
-    public const string SpritesKey   = "kf2.map.markers.sprites";
-    public const string FacingKey    = "kf2.map.markers.facing";
-    public const string SavesKey     = "kf2.map.markers.saves";
+    // The layer had a saved key and a checkbox, its four classes had four more,
+    // and the save points had a seventh. All seven are gone and none is read any
+    // more, for the reason the rest of this port retires a key: one still read
+    // after its control is gone strands whoever set it.
+    //
+    // The split is between the two things this file draws. **Save points are on
+    // and are not a setting** -- the one object in a maze that a player wants a
+    // map to find is the one they can save at, and the game names it itself
+    // (definition kind 0x0E), so an option to hide it is an option to make the
+    // map worse. **Everything else is off and is not a setting either**: a live
+    // read of where every creature, prop, effect and torch is standing is an
+    // instrument, not a map, and King's Field's difficulty is not knowing what
+    // is round the corner. KF2_MAP_MARKERS=1 is the comparison, and the docked
+    // MapPanel keeps a session toggle for it.
 
-    /// <summary>The layer. Off leaves the tables unread entirely.</summary>
-    public static bool Enabled = true;
+    /// <summary>The layer. Off leaves the tables unread entirely, unless
+    /// <see cref="Saves"/> still wants a sample. **Off, and no longer a
+    /// setting**; <c>KF2_MAP_MARKERS=1</c> is the comparison.</summary>
+    public static bool Enabled;
 
     /// <summary>Per class. Billboards default off: a torch-lit corridor holds
     /// dozens of them and they are decoration rather than information, so they
@@ -188,32 +197,17 @@ public static class MapMarkers
     public static bool Facing;
 
     /// <summary>Draw save points as an <b>S</b> rather than as one more object
-    /// square. On by default, and **independent of <see cref="Objects"/>**: the
-    /// one object in the game a player wants to find on a map is the one they can
-    /// save at, so turning the prop layer off to unclutter the plan must not take
-    /// it with them.</summary>
+    /// square. **On, and not a setting**, and **independent of
+    /// <see cref="Enabled"/> and <see cref="Objects"/>**: the layer above is off
+    /// precisely so the plan is uncluttered, and the one thing on it worth
+    /// keeping must not go with it. <see cref="Refresh"/> therefore stands down
+    /// only when this is off too.</summary>
     public static bool Saves = true;
-
-    static bool? _forced;
 
     public static void Configure(string? on)
     {
         if (!string.IsNullOrWhiteSpace(on))
-            _forced = !on.Equals("0", StringComparison.Ordinal);
-    }
-
-    /// <summary>Read the saved settings. Called from <c>Map.Install</c>'s
-    /// RuntimeReadyEvent listener, which is the first moment ConfigManager.Load
-    /// has run; an env var beats them for the run.</summary>
-    public static void LoadSettings(RecompOne.Runtime.Config.ViewConfig view)
-    {
-        Enabled   = _forced ?? view.GetBool(OnKey, true);
-        Creatures = view.GetBool(CreaturesKey, true);
-        Objects   = view.GetBool(ObjectsKey, true);
-        Effects   = view.GetBool(EffectsKey, true);
-        Sprites   = view.GetBool(SpritesKey, false);
-        Facing    = view.GetBool(FacingKey, false);
-        Saves     = view.GetBool(SavesKey, true);
+            Enabled = !on.Equals("0", StringComparison.Ordinal);
     }
 
     // ---- the sample --------------------------------------------------------

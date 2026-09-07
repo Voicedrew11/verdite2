@@ -3,7 +3,7 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// Auto reload's three knobs, under Gameplay — which is where the mod's gear
+/// Auto reload's two knobs, under Gameplay — which is where the mod's gear
 /// button used to be the only way to reach them.
 ///
 /// The mod's panel opened with a paragraph explaining that nothing is restored by
@@ -31,15 +31,11 @@ public sealed class AutoReloadPage : IPatchPage
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Puts you back at your last save instead of the menus.");
 
-        float delay = AutoReload.Delay;
-        if (ImGui.SliderFloat("Delay after death (s)", ref delay, 0f, 10f))
-        {
-            AutoReload.SetDelay(delay);
-            PatchSettings.Set(AutoReload.DelayKey, AutoReload.Delay);
-        }
-
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("How much of the death plays before the reload.");
+        // "Delay after death" was a 0-10 s slider and is a fixed 2 s. It is not a
+        // choice: at 0 the reload lands inside the death animation and reads as a
+        // glitch, and at 10 the player has had time to reach for the menu this
+        // patch exists to save them from. See AutoReload.Delay;
+        // KF2_AUTORELOAD_DELAY is the comparison.
 
         int slot = AutoReload.Slot;
         if (ImGui.Combo("Save slot", ref slot, "Last used\0Slot 1\0Slot 2\0Slot 3\0"))
