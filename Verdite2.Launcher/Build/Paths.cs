@@ -66,9 +66,16 @@ static class Paths
     /// Make the data directory, move into it, and seed the mods the port ships.
     ///
     /// Seeding copies rather than links, and only files that are not there yet, so
-    /// a player who has edited a shipped mod keeps their edit and a player who has
-    /// deleted one does not get it back on every launch. mods/.cache is the
+    /// a player who has edited a shipped mod keeps their edit. mods/.cache is the
     /// ModLoader's own and is never seeded.
+    ///
+    /// "Not there yet" is not enough on its own, because a player who DELETES a
+    /// shipped mod would get it back on the next launch. So the record is of what
+    /// has ever been seeded, one relative path a line, rather than a single marker
+    /// saying seeding has happened: a deleted mod stays deleted because its path is
+    /// in the record, and a mod added by a later release is still seeded because
+    /// its path is not. A bare marker gets the first of those right and the second
+    /// wrong -- silently, since nothing reports a mod that never arrived.
     /// </summary>
     public static void Prepare()
     {
@@ -78,18 +85,25 @@ static class Paths
 
         if (!Directory.Exists(ContentMods)) return;
 
-        var seeded = Path.Combine(Data, ".mods-seeded");
-        if (File.Exists(seeded)) return;
+        var record = Path.Combine(Data, ".mods-seeded");
+        var already = File.Exists(record)
+            ? new HashSet<string>(File.ReadAllLines(record), StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
 
+        var added = new List<string>();
         foreach (var src in Directory.EnumerateFiles(ContentMods, "*", SearchOption.AllDirectories))
         {
-            var rel = Path.GetRelativePath(ContentMods, src);
+            var rel = Path.GetRelativePath(ContentMods, src).Replace('\\', '/');
+            if (already.Contains(rel)) continue;
+
+            added.Add(rel);
+
             var dst = Path.Combine(Data, "mods", rel);
             if (File.Exists(dst)) continue;
             Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
             File.Copy(src, dst);
         }
 
-        File.WriteAllText(seeded, "");
+        if (added.Count > 0) File.AppendAllLines(record, added);
     }
 }

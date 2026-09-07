@@ -49,7 +49,13 @@ Beside the executable, `content/`:
 - `content/config/` — `kf2.json` and the thirteen funcmaps. Addresses, names and
   sizes; no disc bytes.
 - `content/src/` — `Program.cs` and `patches/**`, as source text.
-- `content/mods/` — seeded into the data directory on first run.
+- `content/mods/` — copied into the data directory the first time each file is
+  seen. `.mods-seeded` records the relative paths that have ever been seeded,
+  rather than being a bare "seeding has happened" marker: a mod the player has
+  deleted stays deleted because its path is in the record, and a mod a later
+  release adds is still seeded because its path is not. A bare marker gets the
+  first of those right and the second wrong, silently — nothing reports a mod
+  that never arrived.
 
 Plus `RecompOne.Runtime.dll`, `recompone.dll`, Roslyn and the self-contained .NET
 runtime. About 109 MB laid out, 41 MB as an AppImage.
