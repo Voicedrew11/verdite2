@@ -805,6 +805,42 @@ reads at a large scale has not been checked by eye**, and neither has the
 underlying question of what the chrome *should* look like on this monitor, which
 is the unwritten fix in the section above.
 
+## The picture is inset inside its own panel
+
+Reported from play as thin black bars all the way round the game even in full
+screen with the menu bar hidden. Three things eat that edge and only two of them
+are the same kind of thing:
+
+- **The Output panel's own window padding**, `Theme`'s `(12, 10)` multiplied by
+  `Theme.Scale`. It is the largest of the three, and on a display whose scale is
+  misread (the section above) it is *doubled* along with everything else, which
+  is why the band looks wider on Linux than on Windows.
+- **The panel's 1 px window border**, `style.WindowBorderSize`.
+- **The aspect fit.** `OutputPanel.FitAspect` scales the display's aspect into
+  whatever is left and centres it, so a 4:3 picture in a 16:9 window keeps a bar
+  either side. That one is the picture being correct, not chrome.
+
+The dockspace itself is already flush — `DrawDockspace` pushes zero padding, zero
+border and zero rounding around `##DockHost`, sizes it to the viewport's work
+area, and passes `ImGuiDockNodeFlags` `1<<12` (the internal *no tab bar*) whenever
+one panel is open, so a solo Output panel has no tab strip either. The inset was
+entirely inside the panel that draws the picture.
+
+`patches/recompone/0031-output-panel-fills-its-dock-node.patch` pushes
+`WindowPadding` to zero and `WindowBorderSize` to zero **around `Begin` only**,
+popping both on the line after it. `Begin` reads them when it computes the
+window's inner rect, so that is the whole window they need to be in force for, and
+popping immediately leaves `ToastNotifications.Draw` — which lays itself out on
+`style.WindowPadding` a few lines later — reading the real theme. No other panel
+sees the change. UI only, **no recompile**.
+
+What is left after it is the letterbox, and that is arithmetic rather than a
+setting: a 4:3 game on a 16:9 display has bars, and the way to fill the screen is
+to give the game the display's aspect — `KF2_WIDESCREEN=16:9`, or Video ▸
+Widescreen — not to stretch the picture. **Never looked at by eye**: whether the
+picture now runs to the edge of the dock node, and whether a toast still sits
+where it did.
+
 ## Two general shapes worth keeping
 
 `0007`, `0008` and `patches/EndingHold.cs` are the pattern to keep in mind:

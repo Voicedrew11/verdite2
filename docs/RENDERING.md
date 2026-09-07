@@ -820,3 +820,71 @@ the first-person arm is posed by the MO clip clock like everything else. Tile
 height is a different, smaller
 problem and is not this. See "The model pipeline has no skeleton" in
 [GAME_INTERNALS.md](GAME_INTERNALS.md).
+
+## "No textures on the other machine": splitting the three layers
+
+Reported from play on a Windows PC with an Nvidia card: the game runs, the HUD is
+correct, and every wall, floor and ceiling is one flat colour. The dev machine
+(AMD RX 9070 XT, Mesa 26.2, GL 4.6, `Gl45`) draws the same scene textured.
+
+A picture cannot say which layer failed, and there are three, each of which
+produces *exactly* the same flat-shaded surface:
+
+1. **The game submitted flat polygons.** Textured-ness is a bit in the GP0
+   command the game itself wrote — `tex = (cmd & 0x04)` in `GpuRaster` — decided
+   long before any GL call. If the game's own state is wrong, no renderer change
+   puts a texture back.
+2. **The VRAM page is uniform.** A textured polygon sampling a page that never
+   received its upload draws one colour per surface. Indistinguishable from (1)
+   by eye.
+3. **The fetch is wrong.** Textured prims, populated pages, and still no texture
+   leaves `PrimFs`'s `texelFetch` — the only part of this that is vendor-specific.
+
+`patches/TexProbe.cs` (`KF2_TEXPROBE=1`) separates them, writing to
+`texprobe.log` beside the saves as well as to the console, because a Windows
+release is a `WinExe` and its console output goes nowhere a player can send. It
+hooks nothing and writes nothing to game memory: the census is a
+`RenderPrimEvent` listener, which **both** renderers pass through and which
+carries `Textured`, `Raw`, `Gouraud` and `Clut`; the page count is a
+`ReadVram(0,0,1024,512)` from a `VSyncEvent` listener — the backend's own thread,
+once a second, since the read stalls the pipeline — reduced to the number of
+*distinct* 16-bit words in each of the 32 texture pages. A page holding art holds
+hundreds; a page that never received its upload holds one.
+
+Measured on the dev machine, in an area, at `KF2_FPS=60`:
+
+```
+gl: AMD | AMD Radeon RX 9070 XT (radeonsi, gfx1201, ACO) | 4.6 (Core Profile) Mesa 26.2.0-devel
+backend Gl45  ready True  active True  scale 4  truecolor False  perspective True  subpixel False  zbuffer False
+prims/s 70500  textured 70440 (99%)  flat 60  raw 0  gouraud 69600  semitrans 17400  distinct cluts 11
+vram y0  :  150  147   98  142  196 1000 1000    2 1000 1000 1000 1000 1000 1000 1000 1000
+vram y256:  358  452  446  479  394 1000 1000 1000  428  270  800 1000 1000  423  122   76
+```
+
+**That reading is from the shipped launcher, not the developer build**, run
+against a fresh data directory (`VERDITE2_DATA`) so every setting is at its
+release default — true color off, sub-pixel off, dither on, 4:3. It is the same
+99% textured picture the developer build gives, so **the release path is not the
+cause and this is not a packaging regression**; the difference is the other
+machine. The developer build reads the same census with the dev config
+(true color on, sub-pixel on, 16:9).
+
+### What the other machine can be asked without a new build
+
+Three controls in the shipped release already split the remaining space, and all
+three are in System ▸ Settings ▸ Video (each needs a restart):
+
+* **Backend → `gl33`.** Same fragment shader, completely different VRAM path: no
+  `glTextureBarrier`, no `glCopyImageSubData`, ping-pong FBOs for the destination
+  read. Textures returning here indicts `Gl45Vram`.
+* **Backend → `gl21`.** A *different shader* (`PrimFs120`, GLSL 120, no
+  `texelFetch`, no dual-source blending) and a different VRAM path again.
+  Textures returning only here indicts the 330 shader.
+* **Render scale → 1.** `uScale` becomes 1, so `fetch()` stops striding
+  (`texelFetch(uVram, c * uScale, 0)`) and `WriteRect`'s upload blit stops
+  magnifying 4x. Textures returning at 1x indicts the scaled VRAM texture.
+
+And **Debug ▸ VRAM viewer** answers layer (2) on its own, by eye, in one look.
+
+Never checked: any of this on Nvidia hardware. Nothing here owns an Nvidia GPU,
+so the vendor half of the question is a report rather than a measurement.

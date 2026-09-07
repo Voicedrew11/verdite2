@@ -5,7 +5,8 @@ Static recompilation of **King's Field** (NTSC-U, `SLUS-00158`) using
 
 **This file is the index.** It carries what the project is and where it stands;
 everything else lives in `docs/`, split by what you would be doing when you need
-it.
+it. **Nine documents became ten**: `docs/PACKAGING.md` is how the port becomes
+something a person can download, which is a different job from building it.
 
 **Source comments still say `See "X" in NOTES.md`, and the text they mean is no
 longer in this file.** The section titles are unchanged, so the map below resolves
@@ -140,6 +141,20 @@ Build it, run it, and measure what it did.
 - Getting pixels out without a screenshot
 - What counts as verification
 
+### [PACKAGING.md](docs/PACKAGING.md)
+
+Turning the port into something a person can download.
+
+- The problem a release has to solve
+- The two projects
+- What the release contains
+- First run
+- Two things that were nearly wrong
+- Versioning
+- Building a release
+- The one patch this needed
+- Not done
+
 ### [RECOMPILATION.md](docs/RECOMPILATION.md)
 
 Making the recompiler produce correct code: config, overlays, function maps, SDK addresses.
@@ -172,6 +187,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 - The patches to the checkout, one by one
 - The interface only fits a monitor whose scale is a whole number
 - The scale can put the settings out of reach
+- The picture is inset inside its own panel
 - Two general shapes worth keeping
 - Upstream contribution policy
 
@@ -187,6 +203,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding
 - The display list cannot name a face: why packet-level smoothing failed
+- "No textures on the other machine": splitting the three layers
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 
@@ -254,8 +271,8 @@ Same rule as before, one level down: **the finding goes in the document, not in
 the commit message.** Pick by what a reader would be doing when they need it, not
 by what the finding is about — a GTE fact learned while chasing a cull belongs
 with the culls if that is where it will be looked for. If it fits nowhere, put it
-in the general-purpose part of the nearest file rather than starting a tenth
-document.
+in the general-purpose part of the nearest file rather than starting an
+eleventh document.
 
 Three markers are used where a passage's standing is not obvious from its prose:
 **Confirmed** (measured, or read straight out of the emitted code), **Inferred**
