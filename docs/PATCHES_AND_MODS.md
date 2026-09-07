@@ -302,6 +302,67 @@ existing config keeps the rate it had. And the settings page is presets **plus a
 free number**: a player on a 165 Hz panel should be able to say 165, and the
 slider only appears once Custom is chosen, so the common case stays one control.
 
+### One switch for all of the smoothing
+
+The smoothing arrived one patch at a time and the settings page grew the same
+way: four checkboxes and two combos, one control per implementation part —
+*Smooth the view between game ticks*, *Also smooth movement*, *Smooth other
+things that move*, *Smooth model animation*, plus *Placement guard* under the
+third and *Pose interpolation* under the fourth. Ten controls sat under
+Video ▸ Enhancements and **four of them were this one idea spelled out in
+parts**.
+
+That is the implementation's shape, not the player's. Nobody wants the camera
+carried between ticks and the creatures left stepping — the two smoothers were
+made to agree about what time it is precisely so that they would not be used
+apart (see "The camera is not the only thing that moves"), and a creature drawn
+from a carried root and a stepping pose is the defect the per-table threshold
+exists to avoid. The parts are separable because the *mechanism* needed them
+separable while each was being built, which is a fact about the work rather than
+a question to put to somebody playing.
+
+So `patches/settings/FrameSmoothingPage.cs` is **one tick**: *Smooth motion
+between game ticks*, which writes `FrameSmoothing`, `FrameSmoothing.Position`,
+`ObjectSmoothing` and `AnimSmoothing` together, and writes all four of their
+`interface.ini` keys, so a restart restores what was clicked. The parts stay
+reachable from the console — `KF2_SMOOTH`, `KF2_SMOOTH_POS`,
+`KF2_SMOOTH_OBJECTS`, `KF2_SMOOTH_ANIM` — and that is now the only way to set
+them apart.
+
+Three things about how it is wired:
+
+* **The displayed state is `FrameSmoothing.Enabled`**, not an AND of the four.
+  A config or an environment variable that turns one part on alone keeps doing
+  that until the box is clicked, and clicking it harmonises them. The view is
+  the master because it is the part that cannot sensibly be off while the rest
+  are on: everything else is carried *against* the camera.
+* **Each key is written from what the patch ended up with, not from what was
+  asked for.** All three `SetEnabled` calls can refuse — `FrameSmoothing` and
+  `ObjectSmoothing` need their hook pair (`_paired`), `AnimSmoothing` needs its
+  clock sited (`_sited`) — so writing the requested value would persist a claim
+  that a part had attached when it had not, and it would come back next session
+  still claiming it.
+* **The two combos came out with the checkboxes they belonged to.** Both are
+  comparison controls rather than preferences: their own write-ups say so, and
+  say the losers go once the picture is judged. `KF2_SMOOTH_OBJECTS_GUARD` and
+  `KF2_SMOOTH_ANIM=timeline|weight|time` still set them, which is where an A/B
+  belongs.
+
+**The position half is in the tick and carries a known inconsistency.** Two of
+stage 13's own callees read the player position triple *after*
+`FrameSmoothing.After` has put the raw value back — `func_80032400`, the
+first-person arm, and `func_800331B4`, the world and object walks — so on a
+non-tick frame those shear against the architecture by however far the carry
+moved the eye, worst just before a tick lands. That is why it used to be its own
+switch, off by default. It is inside the one tick now because a player asked for
+one tick; dropping it back out is deleting the `SetPosition` pair in `Apply`.
+Closing it properly means carrying those two readers too, inside the stage
+`ObjectSmoothing` already brackets — `docs/TODO.md`.
+
+**Never looked at by eye:** the merged tick has not been played. The parts had
+each been judged separately and the position half had been judged *and rejected*
+for the shear above, so the combination is a picture nobody has seen.
+
 ## Frame pacing: the port is pinned to the fastest band
 
 King's Field's game speed **is** its frame rate — everything advances a fixed
@@ -1279,8 +1340,11 @@ Two things about it are worth stating:
   the boss, but everything else in between is documentation or the per-tick
   decision below, which under `strict` is a provable no-op.
 * **The guard is a setting**, since the comparison is worth being able to make by
-  eye: Video ▸ Enhancements ▸
-  Placement guard, or `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`.
+  eye: `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`. It had a combo under
+  Video ▸ Enhancements as well, and that came out when the four smoothing
+  checkboxes were merged into one — a control for judging a picture is not a
+  preference a player holds, and the console is where a comparison belongs. See
+  "One switch for all of the smoothing" below.
   `strict` is 1024 on every table. `sticky` is the raise described above,
   creatures only.
   `continuous` additionally raises the cap on a slot that merely *moved* last tick
@@ -1773,9 +1837,9 @@ which is why the refusal has nothing left to catch there.
 
 **All three are selectable, because only the picture can separate them** — which
 is not a formality here: the mode with the best argument behind it is the one
-play caught shaking, and the switch is how that was found. The combo is
-Video ▸ Enhancements ▸ Pose interpolation, under the animation checkbox, and
-`KF2_SMOOTH_ANIM=timeline|weight|time` sets it from the console; switching clears
+play caught shaking, and the switch is how that was found. The switch is
+`KF2_SMOOTH_ANIM=timeline|weight|time` sets it from the console, which since the
+merge below is the only place it is set from; switching clears
 the per-slot state, so a creature on screen steps for one tick and then draws
 under the new mode, which is what makes an A/B while something is animating
 possible at all. **`Time` is the default**, because it is the only mode with a
@@ -1840,7 +1904,7 @@ rounding, and because the two questions it has to answer are its own: is the swi
 a morph clip at all (`rigid 0`), and is its time moving (`step 300`). An idle second
 reads `arm no swing`, which is deliberately not the same answer as `rigid`.
 
-It rides `KF2_SMOOTH_ANIM` and the Video ▸ Enhancements ▸ Pose interpolation combo
+It rides `KF2_SMOOTH_ANIM` and the one Video ▸ Enhancements smoothing tick
 — same mechanism, same predicate, same switch — and so is **off by default** with
 the rest.
 

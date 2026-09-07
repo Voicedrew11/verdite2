@@ -299,9 +299,9 @@ root steps at the tick rate while the vertices morph at the frame rate. So
 those poses for the same tick** — they need no knowledge of each other's tables,
 since `func_80032588`'s `a2` *is* `base + slot*stride + PosOff` — and a creature
 past even the raised cap degrades to a coherent tick-rate creature instead of a
-smooth head on a stepping body. The mode is a setting (Video ▸ Enhancements ▸
-Placement guard, `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`, `continuous`
-by default), and the carry decision is made once per tick rather than once per
+smooth head on a stepping body. The mode is a setting (`KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`,
+`continuous` by default; its combo came out of Video ▸ Enhancements with the
+merge below), and the carry decision is made once per tick rather than once per
 frame because the hysteresis reads state it also writes.
 **3D pose is `patches/AnimSmoothing.cs`**, which drives
 the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the
@@ -380,8 +380,8 @@ code agrees with: `LoopPacing`'s redraws run only while `!TickedThisFrame`.
 **`Mode.Timeline` is the default again** — the default moved to `Mode.Time` while
 the shake was diagnosed, since that was the only mode with a positive report by
 eye, and moved back once play reported the fixed one looking very good; the other
-two are a combo under Video ▸ Enhancements ▸ Pose interpolation, switchable while
-a creature is on screen, and the losers go once the picture is judged. **On the
+two are `KF2_SMOOTH_ANIM=weight|time`, switchable while a creature is on screen,
+and the losers go once the picture is judged. **On the
 invariant it is the correct approach and `Mode.Time` is not**: when the predicate
 cannot explain a tick it holds, which *is* the invariant's second half, whereas
 `Mode.Time` interpolates anyway and synthesises its turnover out of the last
@@ -411,8 +411,17 @@ backwards step), and a pair on `func_80034DA8` opens the same window
 to game memory. Measured at 144 fps: clip 0, 300 a tick on a 4096-unit clip, 13
 ticks a swing, **0 held**, 86 of 94 frames carried, world clock still 19.9
 ticks/s. **All four
-default to off** — while the boundary was broken the phase was
-pinned to 0 and the
+default to off, and they are now one checkbox** — *Video ▸ Enhancements ▸ Smooth
+motion between game ticks* writes all four patches and all four keys together,
+since four controls for one idea was the implementation's shape rather than the
+player's, and the two expert combos came out with the checkboxes they hung under
+(see "One switch for all of the smoothing" in `docs/PATCHES_AND_MODS.md`). **The
+position half is inside that tick and carries a known shear**: two of stage 13's
+callees read the raw player position after `FrameSmoothing.After` restores it, so
+the arm, the torches and the creatures slide against the architecture on a
+non-tick frame — which is why it used to be its own switch, off by default, and
+the merged tick has never been looked at by eye. While the boundary was broken
+the phase was pinned to 0 and the
 smoothing never ran at all, so the first three's picture has never been seen.
 The animation one's has: it was confirmed by eye once the clip-time guard stopped
 discarding every real step. A 50 ms tick makes
