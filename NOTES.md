@@ -202,6 +202,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding
 - The display list cannot name a face: why packet-level smoothing failed
+- "No textures on the other machine": splitting the three layers
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 

@@ -465,6 +465,15 @@ Kf2.HitGuard.Install();
 Kf2.NoDither.Configure(Environment.GetEnvironmentVariable("KF2_NODITHER_PROBE"));
 Kf2.NoDither.Install();
 
+// What the renderer was asked to draw, and what was in VRAM to draw it from. For
+// "the game runs but has no textures" on a machine that cannot be attached to: it
+// separates a game that submitted flat polygons from a VRAM page that never
+// received its upload from a fetch that is sampling it wrongly, and writes the
+// answer to texprobe.log beside the saves.
+//
+//     KF2_TEXPROBE=1   a line a second, plus a per-page VRAM census
+Kf2.TexProbe.Configure(Environment.GetEnvironmentVariable("KF2_TEXPROBE"));
+
 // Perspective-correct textures. The GPU is handed polygons with no depth in them,
 // so it interpolates U and V linearly and the texture swims; the depth still exists
 // one step earlier, in the GTE, and the address the coordinate is stored at is what

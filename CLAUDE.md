@@ -111,6 +111,7 @@ KF2_HITGUARD=0                         # let the hit path's reaction lookup faul
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
+KF2_TEXPROBE=1                         # textured vs flat prims a second, and a per-page VRAM census, into texprobe.log
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
