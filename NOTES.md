@@ -187,6 +187,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 - The patches to the checkout, one by one
 - The interface only fits a monitor whose scale is a whole number
 - The scale can put the settings out of reach
+- The picture is inset inside its own panel
 - Two general shapes worth keeping
 - Upstream contribution policy
 

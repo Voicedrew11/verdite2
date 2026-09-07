@@ -1154,8 +1154,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-eight
-of the thirty-two are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-nine
+of the thirty-three are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
@@ -1165,7 +1165,7 @@ false: `0021-true-color-24bit-output.patch` was authored while
 `lighting-experiments`' `0025`/`0026` were applied, so its hunks quoted
 `_uCoplanarTol` / `_uLitCenter` context that exists only there and `git apply`
 rejected them, leaving the tree at `0020`. The patch has been regenerated against
-this branch's context. Verified by applying all thirty-two patches in glob order
+this branch's context. Verified by applying all thirty-three patches in glob order
 to a pristine worktree of the pin: every one applies, and the result is
 byte-identical to the tree in place.
 
@@ -1417,6 +1417,17 @@ uncaptured edit inside the checkout is left where it is.
   `Popup` is abstract-public and `PopupManager.Register` takes any implementation
   — so `Verdite2.Launcher/BuildProgressPopup.cs` is not a patch. UI only, **no
   recompile**. See "The one patch this needed" in `docs/PACKAGING.md`.
+
+- `0031-output-panel-fills-its-dock-node.patch` — the picture is the point of the
+  Output panel, so it gets none of the chrome every other panel wants. The themed
+  `WindowPadding` (12,10) and the 1px `WindowBorderSize` are read by `Begin` when
+  it computes the inner rect, so a docked, tab-bar-less Output panel filling the
+  dockspace still letterboxed the game behind a band of window background on all
+  four sides — scaled by `Theme.Scale`, so widest exactly where the DPI is misread
+  highest. Both are pushed around `Begin` only and popped straight after it, so
+  the toasts drawn below still lay themselves out on the real style and no other
+  panel is affected. UI only — **no recompile**. See "The picture is inset
+  inside its own panel" in `docs/RUNTIME.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
