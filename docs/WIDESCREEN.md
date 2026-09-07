@@ -185,8 +185,10 @@ why this replaces `DrawOTag` and walks the table itself — one pass to count th
 entries, one to emit them, mirroring `LibGpu.DrawOTag` including its
 custom-primitive branch. `HookManager.Invoke` runs pre-hooks, then the replacement,
 then post-hooks, so the frame pacing's `DrawOTag` post-hook still runs. Being
-wrong now costs one small triangle in a corner instead of the whole frame after it,
-and the anchoring has its own toggle.
+wrong now costs one small triangle in a corner instead of the whole frame after it.
+**The anchoring is off and is no longer a setting** — `KF2_WIDESCREEN_HUD=1` is the
+only way to reach it, and with it off this replacement defers to the original at
+every aspect. See "Three checkboxes that were not choices".
 ## The screen-space effects are 320 wide too, and one drawer makes all of them
 
 The first of the two things the census could not see, reported from a real
@@ -268,10 +270,14 @@ primitive covering most of the clip rectangle, once per distinct shape, with its
 flags, CLUT and OT position. It is a page of output per scene, which is why the
 plain `=1` no longer includes it.
 
-**The switch** is `kf2.widescreen.stretcheffects` / `KF2_WIDESCREEN_EFFECTS=0`, a
-checkbox under Video below the HUD anchoring, **on by default**. This one is not
-the sub-pixel argument: the picture *has* been looked at, before and after, and
-the default-off picture is a defect rather than a taste.
+**There is no switch any more.** It is `KF2_WIDESCREEN_EFFECTS=0` and nothing
+else: the stretching is **on whenever an aspect is chosen**, and the saved key it
+used to read (`kf2.widescreen.stretcheffects`) is deliberately no longer read, so a
+player who had ticked it off is not stuck with it now the tick is gone. This one
+was never the sub-pixel argument — the picture *has* been looked at, before and
+after, and the default-off picture is a defect rather than a taste, which is
+exactly the thing a checkbox should not have been asking a player to decide. See
+"Three checkboxes that were not choices" below.
 
 ## Widescreen became a patch, and the default stayed 4:3
 
@@ -282,9 +288,9 @@ having to load, and Video is where a player looks for it rather than a gear butt
 in the Mods popup. The conversion is the usual one — `[Replace]` attributes became
 `SymbolRegistry.Resolve` plus `HookManager.AddReplace` from an `Attach` deferred to
 the first `OverlayLoadedEvent`, and `OnLoad`'s config read became a
-`RuntimeReadyEvent` listener. The `interface.ini` keys are unchanged
-(`kf2.widescreen.aspect`, `kf2.widescreen.anchorhud`), so a player who had the mod
-on keeps the picture they had.
+`RuntimeReadyEvent` listener. The aspect's `interface.ini` key is unchanged
+(`kf2.widescreen.aspect`), so a player who had the mod on keeps the picture they
+had; the three sub-option keys are no longer read at all (see below).
 
 **Where it differs from the four conversions before it: the switch stays off.**
 Those flipped their default *on*, each with the same argument — a mod that can be
@@ -299,7 +305,7 @@ same answer: mechanism measured, picture not, so the default is 4:3 —
 under Video. The census left the settings page with it and stayed on the console
 under `KF2_WIDESCREEN_PROBE=1`, as the dither counters did.
 
-**The page is a combo and a checkbox, drawn directly under the render scale** —
+**The page is one combo, drawn directly under the render scale** —
 inside the runtime's own display section, not in a group of the port's below it.
 An aspect ratio is an ordinary picture option and belongs among the ordinary
 picture options; getting there is `patches/recompone/0013` and
@@ -330,6 +336,41 @@ prims on the title screen, 0.0% and 4.4% on the GAME.EXE menus, 19-55% per windo
 in an area, which is the same shape as the mod measured. At 4:3 the replacement is
 a straight call to the original and no `RenderPrimEvent` listener is attached at
 all, so the default costs nothing per primitive rather than merely little.
+
+## Three checkboxes that were not choices
+
+The widescreen page shipped as a combo and three ticks — anchor the HUD, widen the
+cull cone, stretch the full-screen tints. **Only the combo was a choice**, and the
+other three are gone from the window.
+
+Two of them were the picture being *correct* at a width the player had already
+picked. A cull cone left at 4:3 makes the margin fill in and empty as you turn; a
+death fade left 320 wide blacks out the middle of the screen and leaves the dungeon
+showing either side. Nobody wants a widescreen picture with either of those, and
+neither is a taste — so both now follow the aspect, on the moment one is chosen,
+with `KF2_WIDESCREEN_CULL=0` and `KF2_WIDESCREEN_EFFECTS=0` kept as comparisons.
+
+The HUD anchoring went the other way and is **off**. Everything else widescreen
+does *presents geometry the game submitted and the GPU used to clip* — the sides
+were always there. Anchoring is the only part that **moves** something the game
+placed where it meant to place it, and where the HP/MP panel and the equipment
+icons land has never been looked at by eye. That is the port's usual reason for a
+default; putting it in the window as a tick asked the player to make that judgement
+instead. `KF2_WIDESCREEN_HUD=1` is the comparison, and it is the only way to reach
+it now.
+
+**None of the three reads its saved key any more**, which is the part worth
+copying. A key that is still read after its control is gone strands whoever had
+changed it: their `interface.ini` says off, the window no longer says anything, and
+there is nothing left to put it back with. The value now comes from the code and
+the environment only.
+
+One consequence in the mechanism: the `DrawOTag` **replacement's two-pass walk only
+runs when the HUD is anchored**, so with the anchoring off it is a straight call to
+the original at every aspect. That is the same path 4:3 has always taken, and it is
+why the replacement's obligation to pass the source address to `WriteGp0` — the one
+that keeps perspective correction alive — now only matters under
+`KF2_WIDESCREEN_HUD=1`.
 
 ## The cull the margin runs into: a 24×24 tile grid, and a trapezoid drawn on it
 
@@ -535,12 +576,15 @@ size.** At x1.781 the probe reports 181 rows dropped over 60 frames, three of th
 grid — near the camera as readily as far from it. That is the failure that loses
 chunks of the world, and it is not a far-corner problem.
 
-**The switch** is `kf2.widescreen.widencull` / `KF2_WIDESCREEN_CULL`, a checkbox on
-the widescreen page under Video, **on by default**: a wide picture whose cull is
-still 4:3 shows the margin filling in and emptying as you turn, which is a worse
-picture than no widescreen at all. It costs nothing at 4:3, where the factor is 1
-and the table is written back as its own values. `KF2_WIDESCREEN_CULL=1.5` pins a
-factor for measuring against the aspect's own.
+**There is no switch any more.** It is `KF2_WIDESCREEN_CULL` and nothing else: the
+widening is **on whenever an aspect is chosen**, and the saved key it used to read
+(`kf2.widescreen.widencull`) is deliberately no longer read. A wide picture whose
+cull is still 4:3 shows the margin filling in and emptying as you turn, which is a
+worse picture than no widescreen at all — it is the other half of choosing an
+aspect, not a preference beside it. It costs nothing at 4:3, where the factor is 1
+and the table is written back as its own values. `KF2_WIDESCREEN_CULL=0` is the
+comparison and `KF2_WIDESCREEN_CULL=1.5` pins a factor against the aspect's own.
+See "Three checkboxes that were not choices".
 
 ## There is a third cull and it is none of the obvious ones
 

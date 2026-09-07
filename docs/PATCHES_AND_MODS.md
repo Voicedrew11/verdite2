@@ -410,13 +410,32 @@ that the reference speed is the top band, 30 fps, "which is both the design
 ceiling and where the port already spends 87% of its frames". The second half of
 that was circular, per the paragraph above. The first half confuses two things:
 
-* **What the code asks for.** Two vblanks, the literal `2` at `0x800178A4`. That
+* **What the code permits.** Two vblanks, the literal `2` at `0x800178A4`. That
   is a reading, it is confirmed, and it has not changed — see "The loop's own rate
-  gate" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
+  gate" in [GAME_INTERNALS.md](GAME_INTERNALS.md). **Confirmed** from the other end
+  too: `func_80018690` opens the vblank event
+  (`OpenEvent(0xF2000003, 2, EvMdINTR, 0x80017850)`) and `func_80017850` increments
+  the credit at `0x801B6CA8` once per vblank, so the gate's `< 2` spin is two
+  vblanks of *wall clock*.
+* **That literal is a ceiling, not a target, and the difference matters.** The
+  gate spins *while* the credit is below 2: it forbids a frame faster than 30 and
+  asks nothing whatever of a slower one. So it is a speed limit, and a limit that
+  was never the binding constraint is not evidence of an intended speed. Calling 30
+  "what the code asks for" — which this document and the source comments did — reads
+  as design intent and claims more than the instruction supports.
 * **What the console delivered.** King's Field is heavy enough that the loop
   misses that deadline under load and the frame costs three vblanks. Since the
   game's speed *is* its frame rate, the band it actually lands in is the speed the
-  game was played at — 20.
+  game was played at — 20, and by the paragraph above that is the only one of the
+  two numbers with a claim to being the speed it was *built* at.
+* **Open, and reported rather than measured here:** that the original Japanese
+  release, *King's Field II* `SLPS-00069`, is itself capped at 20. If that is a
+  three-vblank gate in the JP executable it would settle the question outright —
+  the same game shipped with 20 as its stated ceiling, and the US `2` a regional
+  change rather than the design. **Not checked**: this project has only
+  `SLUS-00158`, whose gate reads `2`, and nothing here can read a disc it does not
+  have. Worth an hour with the JP image if one is ever to hand — the address to
+  look at is that literal.
 
 A port that makes the 2-vblank deadline on every frame therefore plays the whole
 game **half again as fast** as the console did, not "the same as hardware's best
@@ -424,9 +443,13 @@ case". The reference is **20**, and it is now the default: `FramePacing.LogicHz`
 
 **No counter here can settle that**, and it should not be presented as though one
 did. The port cannot observe hardware, and the histogram above is the shape of
-evidence that looks like it can and does not. It is a judgement about the console,
-so it is a *setting* — 30 is one combo entry away, under Video, and every
-measurement below was taken at both.
+evidence that looks like it can and does not. It is a judgement about the console
+— **and a judgement the port has to make, not hand over**. It was a combo under
+Video offering 20 and 30, and that combo is gone: 20 is the rate, every measurement
+below was taken at both, and 30 is now reachable only as `KF2_TICKRATE=30`, which is
+where a comparison belongs. `kf2.framepacing.logichz` is no longer read either, so a
+config left saying 30 does not quietly run a session half again too fast with
+nothing in the window to explain it.
 
 **Step one is a floor, not a scale factor.** Enforce a minimum of two vblanks
 (33.3 ms) per rendered frame and the port is a constant 30 fps: exactly NTSC's
@@ -484,7 +507,7 @@ Three env vars, all read in `Program.cs`:
 
 ```bash
 KF2_FPS=20          # 20 fps, the default; any number, or off for no floor
-KF2_TICKRATE=20     # ticks a second the world runs at; 30 is the other answer
+KF2_TICKRATE=20     # ticks a second the world runs at; 20 is it, and 30 is the comparison
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78   # what is ticked
 ```
 

@@ -701,6 +701,11 @@ Kf2.Mouse.Install();
 //     KF2_WIDESCREEN=16:9       aspect for the run; "1.777" and "off" also parse
 //     KF2_WIDESCREEN_PROBE=1    the margin census, on the console
 //     KF2_WIDESCREEN_EFFECTS=0  leave the death fade and the damage flash 320 wide
+//     KF2_WIDESCREEN_HUD=1      anchor the HP/MP panel and the icons to the new
+//                               edges -- off, and no longer a setting: it is the
+//                               one thing widescreen does that moves something the
+//                               game placed deliberately, and where it lands has
+//                               never been looked at by eye
 //
 // A patch rather than a mod because an aspect ratio is a picture the port should
 // be able to offer without a package having to load, and Video is where a player
@@ -711,7 +716,8 @@ Kf2.Mouse.Install();
 // have never been checked by eye.
 Kf2.Widescreen.Configure(Environment.GetEnvironmentVariable("KF2_WIDESCREEN"),
                          Environment.GetEnvironmentVariable("KF2_WIDESCREEN_PROBE"),
-                         Environment.GetEnvironmentVariable("KF2_WIDESCREEN_EFFECTS"));
+                         Environment.GetEnvironmentVariable("KF2_WIDESCREEN_EFFECTS"),
+                         Environment.GetEnvironmentVariable("KF2_WIDESCREEN_HUD"));
 Kf2.Widescreen.Install();
 
 // Present-path census. Counts, per two-second window, what PresentDisplay

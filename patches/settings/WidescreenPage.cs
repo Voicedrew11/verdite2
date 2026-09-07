@@ -15,11 +15,23 @@ namespace Kf2.Settings;
 /// <c>PatchSettings.RegisterSlot("display.render_scale", …)</c> and draws bare —
 /// no heading, so <see cref="Title"/> is unused.
 ///
-/// Four presets and a switch, and deliberately no slider: an arbitrary ratio is a
-/// number to type, not a picture anyone wants to hunt for by dragging, and the
-/// four cover what a display actually is. <c>KF2_WIDESCREEN=1.9</c> still takes
-/// any value, and a value that is not one of the four shows up here as Custom
-/// rather than being rounded away.
+/// **One combo, and deliberately no slider and no sub-options**: an arbitrary
+/// ratio is a number to type, not a picture anyone wants to hunt for by dragging,
+/// and the four presets cover what a display actually is.
+/// <c>KF2_WIDESCREEN=1.9</c> still takes any value, and a value that is not one of
+/// the four shows up here as Custom rather than being rounded away.
+///
+/// Three checkboxes used to sit under it and none of them was a choice. Widening
+/// the game's cull cone and stretching its full-screen tints are what the rest of
+/// the picture needs to be *correct* once it is wide — off, the sides fill in and
+/// empty as you turn, and a death fade blacks out the middle of the screen and
+/// leaves the dungeon showing either side — so both follow the aspect now, on
+/// whenever one is chosen. Anchoring the HUD went the other way and is off: it is
+/// the one thing widescreen does that *moves* something the game placed
+/// deliberately, rather than presenting geometry the GPU used to clip, and where
+/// it lands has never been looked at by eye. All three are still switchable from
+/// the console — <c>KF2_WIDESCREEN_CULL=0</c>, <c>KF2_WIDESCREEN_EFFECTS=0</c>,
+/// <c>KF2_WIDESCREEN_HUD=1</c> — which is where a comparison belongs.
 ///
 /// The primitive census the mod drew in its panel is not here. It is the answer to
 /// "would this scene gain anything", which is worth asking from a headless run and
@@ -56,51 +68,6 @@ public sealed class WidescreenPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Renders extra columns either side of the game's 320-pixel screen — 54 " +
-                             "a side at 16:9. The projection is untouched, so nothing is stretched: " +
-                             "the sides show geometry the game submitted and the GPU used to clip, " +
-                             "about a quarter of what it draws in an area. A 2D screen has nothing " +
-                             "out there and shows the frame's background clear instead.");
-
-        bool anchor = Widescreen.AnchorHud;
-        if (ImGui.Checkbox("Anchor the HUD to the new edges", ref anchor))
-        {
-            Widescreen.SetAnchorHud(anchor);
-            PatchSettings.Set(Widescreen.AnchorKey, anchor);
-        }
-
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Off, the HUD keeps the 4:3 box it was authored in and sits inset from " +
-                             "the sides. On, the HP/MP panel and the equipment icons move out to the " +
-                             "edge they belong to. Only those two corners move, and only what the " +
-                             "game draws in front of everything else — the world is never touched.");
-
-        bool cull = CullCone.Enabled;
-        if (ImGui.Checkbox("Widen the game's cull cone to match", ref cull))
-        {
-            CullCone.SetEnabled(cull);
-            PatchSettings.Set(CullCone.Key, cull);
-        }
-
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The game decides what to draw from a top-down trapezoid shaped for a " +
-                             "4:3 screen, so off, the extra columns show only what it happened to " +
-                             "overdraw and objects pop in at the sides as you turn. On, the trapezoid " +
-                             "opens to the same ratio the picture does. Its 24-tile working grid caps " +
-                             "how far that can go, so the far corners of a very wide aspect still clip.");
-
-        bool effects = Widescreen.StretchEffects;
-        if (ImGui.Checkbox("Stretch full-screen effects to the new edges", ref effects))
-        {
-            Widescreen.SetStretchEffects(effects);
-            PatchSettings.Set(Widescreen.EffectsKey, effects);
-        }
-
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The fade to black when you die, the flash when you are hit, and every " +
-                             "other whole-screen tint are drawn as one 320-pixel-wide quad. Off, they " +
-                             "cover only the middle of a wide picture and the sides carry on showing " +
-                             "the world. On, they are widened to the margin. 2D pictures — the title, " +
-                             "the menus — are opaque and are left at their authored width either way.");
+            ImGui.SetTooltip("How wide the picture is. Wider shows more of the room, not a stretched 4:3.");
     }
 }

@@ -150,12 +150,15 @@ public static class CullCone
     /// <summary>How wide the grid is, in tiles, on both axes.</summary>
     const int Span = 24;
 
-    /// <summary>Where the choice is kept between runs.</summary>
-    public const string Key = "kf2.widescreen.widencull";
-
-    /// <summary>Widen the cone with the aspect. On by default: a wide picture
-    /// whose cull is still 4:3 shows the margin filling in and emptying as you
-    /// turn, which is a worse picture than no widescreen at all.</summary>
+    /// <summary>Widen the cone with the aspect. **On whenever an aspect is chosen,
+    /// and no longer a setting** — a wide picture whose cull is still 4:3 shows the
+    /// margin filling in and emptying as you turn, which is a worse picture than no
+    /// widescreen at all, so it is the other half of choosing an aspect rather than
+    /// a preference beside it. <c>KF2_WIDESCREEN_CULL=0</c> is the comparison, and
+    /// the saved key it used to read (<c>kf2.widescreen.widencull</c>) is
+    /// deliberately not read any more: a player who had turned it off would
+    /// otherwise be stuck with it, with nothing left in the window to undo
+    /// it.</summary>
     public static bool Enabled { get; private set; } = true;
 
     /// <summary>The factor in force, 1 when the cone is the game's own.</summary>
@@ -271,7 +274,7 @@ public static class CullCone
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(Key, true);
+            Enabled = _forced ?? true;
             Apply();
         });
 
@@ -290,13 +293,6 @@ public static class CullCone
             if (!attached) { attached = true; Attach(); }
             Apply();
         });
-    }
-
-    /// <summary>Turn the widening on or off at run time.</summary>
-    public static void SetEnabled(bool on)
-    {
-        Enabled = on;
-        Apply();
     }
 
     /// <summary>Called by <see cref="Widescreen"/> whenever the aspect moves, so

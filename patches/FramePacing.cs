@@ -174,9 +174,19 @@ public static class FramePacing
     /// has an HLE GPU and native MIPS, so it makes the two-vblank deadline every
     /// single frame and never bands down -- which is why it needs to be told.
     ///
-    /// No counter here can settle it, so it is a setting: 30 is the other answer
-    /// and is one combo entry away. See "Frame pacing" in
-    /// docs/PATCHES_AND_MODS.md.
+    /// **The literal 2 is a ceiling, not a target**, and it is worth being exact
+    /// about that: <c>func_80017880</c> spins *while* the vblank credit is below 2,
+    /// so it forbids a frame faster than 30 and asks nothing of a slower one. A
+    /// limit that was never the binding constraint is not a statement of intended
+    /// speed. 20 is: it is the band the console actually landed in, and King's
+    /// Field's speed *is* its frame rate, so it is the speed the game was built and
+    /// tuned at.
+    ///
+    /// No counter here can settle it, and **that is not a reason to make the player
+    /// settle it**: 20 is the rate, and 30 -- the fastest the gate permits -- is a
+    /// comparison. It lives on the console under <c>KF2_TICKRATE</c>, which is where
+    /// comparisons belong; the combo that used to offer both is gone. See "Frame
+    /// pacing" in docs/PATCHES_AND_MODS.md.
     /// </summary>
     public static double LogicHz { get; private set; } = 20.0;
 
@@ -227,8 +237,12 @@ public static class FramePacing
     /// and converted, so an existing config keeps the rate it had.</summary>
     public const string VBlankKey = "kf2.framepacing.vblanks";
 
-    /// <summary>Where the chosen tick rate is kept between runs.</summary>
-    public const string LogicHzKey = "kf2.framepacing.logichz";
+    // The tick rate had a key here (kf2.framepacing.logichz) and a combo under
+    // Video, and both are gone: 20 is the speed the game was played at, and the
+    // 30 beside it was a comparison rather than a preference. KF2_TICKRATE still
+    // takes any rate. The key is deliberately not read any more -- a saved 30 with
+    // no combo left to see it would be a session running half again too fast with
+    // nothing in the window to explain it.
 
     /// <summary>What to do about the game advancing once per loop iteration.</summary>
     public enum Logic
@@ -330,9 +344,6 @@ public static class FramePacing
 
     /// <summary>True once KF2_FPS has spoken, so the saved rate does not overrule it.</summary>
     static bool _fromEnv;
-
-    /// <summary>The same, for KF2_TICKRATE and the saved tick rate.</summary>
-    static bool _logicFromEnv;
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
 
@@ -608,8 +619,9 @@ public static class FramePacing
                                  out double hz))
                 throw new ArgumentException($"KF2_TICKRATE: cannot read '{tickRate}'");
 
+            // Nothing else writes LogicHz after this: there is no saved tick rate
+            // to overrule, so KF2_TICKRATE needs no latch to defend itself with.
             LogicHz = ClampLogic(hz);
-            _logicFromEnv = true;
         }
 
         if (!string.IsNullOrWhiteSpace(fps))
@@ -646,7 +658,11 @@ public static class FramePacing
         {
             // Order matters: the tick rate is read first, because SetTargetFps
             // resets the accumulator and the default render rate is the tick rate.
-            if (!_logicFromEnv) SetLogicHz(SavedLogicHz(), save: false);
+            // The tick rate is no longer read from the config: it is 20 unless
+            // KF2_TICKRATE says otherwise, and Configure has already applied that.
+            // SetTargetFps still runs first-ish for the same reason it always did
+            // -- it resets the accumulator, and the default render rate is the
+            // tick rate.
             if (!_fromEnv) SetTargetFps(SavedRate());
             else ApplyHostCeiling();
         });
@@ -679,16 +695,6 @@ public static class FramePacing
     /// to be saved as, once, so an existing config keeps the rate it had: n
     /// vblanks was 60/n fps, and 0 was uncapped.
     /// </summary>
-    /// <summary>The tick rate a previous run left behind. No migration: the key is
-    /// new, and an older config simply has not chosen.</summary>
-    static double SavedLogicHz()
-    {
-        var view = RecompOne.Runtime.Runtime.View;
-        return view.Values.ContainsKey(LogicHzKey)
-            ? ClampLogic(view.GetFloat(LogicHzKey, (float)LogicHz))
-            : LogicHz;
-    }
-
     static double SavedRate()
     {
         var view = RecompOne.Runtime.Runtime.View;
@@ -722,14 +728,12 @@ public static class FramePacing
     /// the credit, so the change lands on the next tick instead of part-way
     /// through one.
     /// </summary>
-    public static void SetLogicHz(double hz, bool save = true)
+    public static void SetLogicHz(double hz)
     {
         LogicHz = ClampLogic(hz);
         _logicClockMs = -1.0;
         _logicCredit = 0.0;
         _tickThisFrame = true;
-
-        if (save) RecompOne.Runtime.Runtime.View.SetFloat(LogicHzKey, (float)LogicHz);
     }
 
     /// <summary>The game's own achievable rates are 60/n, so 60, 30, 20, 15, 12.

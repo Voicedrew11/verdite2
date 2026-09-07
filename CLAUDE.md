@@ -79,7 +79,7 @@ KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
 KF2_FPS=120                            # 20 (default), any number, or off; see "Any frame rate"
-KF2_TICKRATE=30                        # ticks a second the world runs at (20 by default)
+KF2_TICKRATE=30                        # ticks a second the world runs at (20, and no longer a setting)
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_FPS_PROBE=1                        # a line a second: fps drawn, ticks taken, and what each smoother is doing
@@ -114,8 +114,9 @@ KF2_DRAWCENSUS=1                       # which renderer routine drew how much of
 KF2_TEXPROBE=1                         # textured vs flat prims a second, and a per-page VRAM census, into texprobe.log
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
-KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
-KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3 shape
+KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide (stretched by default)
+KF2_WIDESCREEN_HUD=1                     # anchor the HP/MP panel and icons to the new edges (off; no longer a setting)
+KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3 shape (widened by default)
 KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the aspect's
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
 KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
@@ -187,13 +188,25 @@ the runtime. `FramePacing` **skips it at every rate**, paces the frame itself, a
 runs what holds per-tick state on a wall-clock accumulator at `LogicHz`.
 
 **`LogicHz` is 20, not 30, and that is a judgement rather than a reading.** The
-literal 2 is what the code asks for; the console missed that deadline under load
-and landed in the three-vblank band, and since King's Field's speed *is* its frame
-rate, 20 is the speed it was played at. The port's HLE GPU makes the 2-vblank
+literal 2 is a **ceiling, not a target** — `func_80017880` spins *while* the vblank
+credit is below 2, so it forbids a frame faster than 30 and asks nothing of a
+slower one, and a limit that was never the binding constraint says nothing about
+intended speed. The console missed that deadline under load and landed in the
+three-vblank band, and since King's Field's speed *is* its frame rate, 20 is the
+speed it was played at and the only one of the two with a claim to being the speed
+it was built at. (**Open:** the JP original `SLPS-00069` is reported to be capped
+at 20 outright, which would settle it — unchecked, since this project has only
+`SLUS-00158`.) The port's HLE GPU makes the 2-vblank
 deadline every frame and never bands down, so it has to be told. No counter here
 can settle it — the port cannot observe hardware, and the 30-minute vblank
-histogram that looks like it can is a measurement *of the port* — so it is a
-**setting** (`KF2_TICKRATE`, and a combo under Video), and 30 is one entry away.
+histogram that looks like it can is a measurement *of the port* — **and that is not
+a reason to make the player settle it**. It had a combo under Video offering both
+answers and that combo is gone: 20 is the rate, it is what every measurement in
+this port is taken against, and 30 is a comparison, which lives on the console
+under `KF2_TICKRATE` with the rest of them. The saved key
+(`kf2.framepacing.logichz`) is deliberately no longer read — a config left saying
+30 with no control to show it would be a session running half again too fast and
+nothing in the window to say why.
 Because the gate decides the render rate and the world rate together and knows one
 answer for both, leaving it running at the 20 fps default would pin the world back
 to 30, which is why it is skipped everywhere rather than only above 30. **The
@@ -899,9 +912,14 @@ that is how v1's swapped attack/use was fixed. See "The keyboard layout" in
 **Widescreen is a patch for the dither reason** — an aspect ratio is a picture the port should be able to offer without a
 package having to load, and Video is where a player looks for it — but it is the
 one patch that defaults to *doing nothing*, for the sub-pixel reason: the picture
-has never been checked by eye. (Its two sub-options are on by default, since they
-only do anything once an aspect has been chosen; the tint stretch is on because
-the picture without it *was* checked and was wrong.) The measurement tools are the mods that are left
+has never been checked by eye. **The page is now one combo and nothing else**: the
+three ticks under it were not choices, so the cull widening and the tint stretch
+follow the aspect (on the moment one is chosen — the picture without either *was*
+checked and was wrong both times), the HUD anchoring is **off**, and none of the
+three reads its saved key any more, so nobody is stranded by a value they set when
+it was still a tick. `KF2_WIDESCREEN_CULL=0`, `KF2_WIDESCREEN_EFFECTS=0` and
+`KF2_WIDESCREEN_HUD=1` are the comparisons. See "Three checkboxes that were not
+choices" in `docs/WIDESCREEN.md`. The measurement tools are the mods that are left
 under `mods/` — **enable them in the game's Mods panel**, since mods default to
 off and load silently when disabled. Prefer them to `KF2_LOG=sdk`, which is
 gigabytes a minute.
@@ -913,7 +931,9 @@ its primitives in an area. The one piece of machinery in `patches/Widescreen.cs`
 is a **replacement of `DrawOTag`**, and it is there for the HUD rather than for
 the picture: anchoring the HP/MP panel and the equipment icons to the new edges
 needs to know which ordering-table entry a primitive came from, and the primitive
-event cannot say. That replacement is the reason every other `DrawOTag` hook in
+event cannot say. **With the anchoring off by default its two-pass walk no longer
+runs** — the replacement is a straight call to the original at every aspect unless
+`KF2_WIDESCREEN_HUD=1`, which is the path 4:3 always took. That replacement is the reason every other `DrawOTag` hook in
 `patches/` is a pre or a post — `HookManager` allows one `Replace` owner per
 function. It must also pass the **source address** to `WriteGp0`, or the recovered
 GTE depth misses and perspective correction quietly turns itself off whenever the
