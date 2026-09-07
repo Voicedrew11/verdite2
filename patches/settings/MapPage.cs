@@ -56,8 +56,7 @@ public sealed class MapPage : IPatchPage
             PatchSettings.Set(Map.OnKey, on);
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("A map of the area you are in, drawn from the game's own 80x80 tile " +
-                             "grid. M opens the full map, N toggles the corner minimap.");
+            ImGui.SetTooltip("A map of the area you are in. M opens it, N toggles the minimap.");
 
         if (!Map.Enabled) return;
 
@@ -71,9 +70,7 @@ public sealed class MapPage : IPatchPage
         if (ImGui.Combo("Open the full-screen map with", ref padIdx, PadButtons, PadButtons.Length))
             Map.SetPadButton(PadValues[padIdx]);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The pad button that opens and closes the full-screen map. M does it " +
-                             "from the keyboard whatever this says; Shift+M opens the docked panel " +
-                             "with the per-tile readout instead.");
+            ImGui.SetTooltip("The pad button that opens the map. M always does too.");
 
         // How the whole map is drawn, on every viewport at once. Native is the
         // default: see Map.Style and MapRender.DrawNative.
@@ -82,11 +79,7 @@ public sealed class MapPage : IPatchPage
         if (ImGui.Combo("Style", ref style, Styles, Styles.Length))
             Map.SetStyle(style);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The game's own map is a slate-green board in a metal frame whose " +
-                             "floor plan is outlined rather than filled — the colours are sampled " +
-                             "off King's Field II's own map screen. The blueprint is the picture " +
-                             "this port shipped with: walkable tiles filled pale on near-black, " +
-                             "with a grid.");
+            ImGui.SetTooltip("How the map looks: the game's own map screen, or a blueprint.");
 
         // How the player is drawn, on every viewport at once. The dot is the
         // default: see Map.PlayerMark and MapRender.DrawPlayerDot.
@@ -95,12 +88,7 @@ public sealed class MapPage : IPatchPage
         if (ImGui.Combo("You are here", ref mark, Marks, Marks.Length))
             Map.SetPlayerMark(mark);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The marker sits in the middle of the tile you occupy, and in the " +
-                             "game's own style it is the game's own pointer, turned to the nearest quarter " +
-                             "— your square and roughly which way you face, which is as much as " +
-                             "anyone drawing this maze on paper would have known. The arrow is " +
-                             "the satellite fix: sub-tile position and a heading to a twelfth of " +
-                             "a degree.");
+            ImGui.SetTooltip("How much the map tells you: your square, or your exact heading.");
 
         // Whether the map stops the game. Beside the pad binding rather than down
         // with the minimap's knobs, because it is a property of the full-screen
@@ -112,15 +100,12 @@ public sealed class MapPage : IPatchPage
             PatchSettings.Set(Map.PauseKey, pause);
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The full-screen map is a screen you stop to read, so the world " +
-                             "stands still while it is up — nothing moves, nothing attacks and " +
-                             "no timer runs down. The corner minimap and the docked panel never " +
-                             "pause the game.");
+            ImGui.SetTooltip("The world stands still while the full map is up.");
 
         bool mini = Map.Minimap;
         if (ImGui.Checkbox("Corner minimap", ref mini)) Map.SetMinimap(mini);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Always on over the game picture while you are in an area. N toggles it.");
+            ImGui.SetTooltip("A small map in the corner, always up. N toggles it.");
 
         if (Map.Minimap)
         {
@@ -142,9 +127,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(Map.PadKey, pad);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("How far the minimap stands off the edges it is pinned to. " +
-                                 "Scaled with the interface, like the size. Top centre spends " +
-                                 "it on the top edge only.");
+                ImGui.SetTooltip("How far the minimap sits from the edge of the screen.");
 
             int shape = System.Math.Clamp(Map.MinimapShape, 0, 1);
             ImGui.SetNextItemWidth(180);
@@ -154,9 +137,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(Map.ShapeKey, shape);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("A circle cuts the corners off the same view. The tiles are cut " +
-                                 "to the disc a tile at a time, so its edge is stepped by up to " +
-                                 "one tile.");
+                ImGui.SetTooltip("Square, or a circle with the corners cut off.");
 
             // The range is MapOverlay's own clamp, not a tidier number: a
             // slider that stops short of what the code allows is a control that
@@ -170,8 +151,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(Map.SizeKey, size);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("The minimap's side in logical pixels, scaled by the interface " +
-                                 "scale — so a large scale draws it larger than this says.");
+                ImGui.SetTooltip("How large the minimap is drawn.");
 
             int radius = Map.MinimapRadius;
             ImGui.SetNextItemWidth(180);
@@ -181,7 +161,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(Map.RadiusKey, radius);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Tiles either side of you. A tile is 2048 world units.");
+                ImGui.SetTooltip("How much of the area around you the minimap shows.");
 
             // Opacity is the ground and the tiles, not the arrow: see
             // MapRender.DrawPlayer. 1 is what shipped, so the default changes
@@ -194,8 +174,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(Map.OpacityKey, opacity);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("How solid the map is drawn over the game. The player's arrow " +
-                                 "stays fully visible whatever this says.");
+                ImGui.SetTooltip("How solid the minimap is over the game. Your marker stays visible.");
 
             ImGui.Unindent();
         }
@@ -207,8 +186,7 @@ public sealed class MapPage : IPatchPage
             PatchSettings.Set(Map.ShadeKey, shade);
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Colour each tile by its height byte, so stairs, ledges and the two " +
-                             "stacked floors read at a glance.");
+            ImGui.SetTooltip("Colour the floor by height, so stairs and ledges stand out.");
 
         // The marker layer: patches/MapMarkers.cs. On by default, because unlike
         // the minimap it adds information to a picture that has been judged rather
@@ -228,11 +206,7 @@ public sealed class MapPage : IPatchPage
             PatchSettings.Set(MapMarkers.SavesKey, saves);
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("An S on the square you can save in. Read out of the kind byte the " +
-                             "game's own use handler dispatches on, so it marks what the game " +
-                             "itself treats as a save point — the only object on the map with a " +
-                             "name. Needs room for a letter: below five pixels a tile it falls " +
-                             "back to a marker, which is the minimap's usual answer.");
+            ImGui.SetTooltip("Marks the rooms you can save in with an S.");
 
         bool markers = MapMarkers.Enabled;
         if (ImGui.Checkbox("Show what is in the area", ref markers))
@@ -241,9 +215,7 @@ public sealed class MapPage : IPatchPage
             PatchSettings.Set(MapMarkers.OnKey, markers);
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Creatures, props, effects and billboard sprites, taken from the four " +
-                             "tables the renderer itself draws from — so the map shows what is on " +
-                             "screen, not what the game has merely loaded.");
+            ImGui.SetTooltip("Show creatures, props and effects on the map.");
 
         if (MapMarkers.Enabled)
         {
@@ -256,9 +228,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(MapMarkers.CreaturesKey, creatures);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Red triangles. With fog of war on, only where you can see right " +
-                                 "now — a tile you merely remember does not say what is standing " +
-                                 "in it.");
+                ImGui.SetTooltip("Red triangles, where you can see right now.");
 
             bool objects = MapMarkers.Objects;
             if (ImGui.Checkbox("Objects", ref objects))
@@ -267,9 +237,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(MapMarkers.ObjectsKey, objects);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Blue squares: doors, levers, chests, props — everything the " +
-                                 "object table holds. Which is which is not settled, so they are " +
-                                 "one class; the full map's hover readout prints the raw type.");
+                ImGui.SetTooltip("Blue squares: doors, levers, chests and other props.");
 
             bool effects = MapMarkers.Effects;
             if (ImGui.Checkbox("Effects and projectiles", ref effects))
@@ -278,7 +246,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(MapMarkers.EffectsKey, effects);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Purple diamonds: spells in flight and other short-lived things.");
+                ImGui.SetTooltip("Purple diamonds: spells in flight.");
 
             bool sprites = MapMarkers.Sprites;
             if (ImGui.Checkbox("Billboard sprites", ref sprites))
@@ -287,9 +255,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(MapMarkers.SpritesKey, sprites);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Amber dots: torches and flames. Off by default — a lit corridor " +
-                                 "holds dozens of them and they would bury the markers you are " +
-                                 "looking for.");
+                ImGui.SetTooltip("Amber dots: torches and flames.");
 
             bool facing = MapMarkers.Facing;
             if (ImGui.Checkbox("Creature facing", ref facing))
@@ -298,9 +264,7 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(MapMarkers.FacingKey, facing);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("A spoke off each creature showing the way it faces. The angle is " +
-                                 "derived from the rotation the renderer draws with and has never " +
-                                 "been checked by eye, so it is off by default.");
+                ImGui.SetTooltip("A spoke showing which way each creature is facing.");
 
             ImGui.Unindent();
         }
@@ -312,9 +276,7 @@ public sealed class MapPage : IPatchPage
             PatchSettings.Set(Map.WallsKey, walls);
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Darken the tiles the game's own visibility flood stops at. Whether " +
-                             "that bit means a wall is not settled — the full map's hover readout " +
-                             "shows the raw bytes.");
+            ImGui.SetTooltip("Darken the tiles that block your view.");
 
         // Fog of war: patches/MapFog.cs. Off by default, for the reason the whole
         // port uses -- the picture has not been judged by eye.
@@ -325,9 +287,7 @@ public sealed class MapPage : IPatchPage
             PatchSettings.Set(MapFog.OnKey, fog);
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Show only the tiles you have seen. It remembers what the game's own " +
-                             "visibility grid showed you, per save slot, and keeps it between " +
-                             "sessions in a file beside the memory card.");
+            ImGui.SetTooltip("Hide the parts of the area you have not seen yet.");
 
         if (MapFog.Enabled)
         {
@@ -346,18 +306,13 @@ public sealed class MapPage : IPatchPage
                 PatchSettings.Set(MapFog.LosKey, sight);
             }
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("Check each tile the game lights against a line of sight from " +
-                                 "your own square before remembering it. The game's visibility " +
-                                 "grid decides what to *draw*, so it lights more than you can " +
-                                 "see; without this the map fills in rooms you have only been " +
-                                 "near.");
+                ImGui.SetTooltip("Only fill in what you had a clear view of, not what you walked past.");
 
             if (ImGui.Button("Forget this area")) MapFog.ForgetArea();
             ImGui.SameLine();
             if (ImGui.Button("Reveal this area")) MapFog.RevealArea();
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("For looking at the two pictures side by side without walking " +
-                                 "the area twice. Both are written to the store immediately.");
+                ImGui.SetTooltip("Fill in this area's whole map, or wipe it back to unexplored.");
             ImGui.Unindent();
         }
 
@@ -371,7 +326,6 @@ public sealed class MapPage : IPatchPage
             PatchSettings.Set(Map.FloorKey, Map.Floor);
         }
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Each tile holds two stacked floors. By default the map shows the one " +
-                             "you are standing on.");
+            ImGui.SetTooltip("Which of the two stacked floors the map shows.");
     }
 }

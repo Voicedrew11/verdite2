@@ -7,11 +7,12 @@ namespace Kf2.Settings;
 /// button used to be the only way to reach them.
 ///
 /// The mod's panel opened with a paragraph explaining that nothing is restored by
-/// hand; a settings section is a list of switches, so that became the tooltips
-/// and the reasoning stayed in <see cref="AutoReload"/> and in NOTES.md. What did
-/// come across whole is the *Simulate death* button: dying on purpose is the hard
-/// part of testing this, and the alternative is waiting for the attract demo to
-/// kill itself.
+/// hand; a settings section is a list of switches, so none of that came across —
+/// the reasoning is in <see cref="AutoReload"/> and in <c>docs/</c>, and the
+/// tooltips say only what each control does (see <see cref="IPatchPage.Draw"/>).
+/// What did come across whole is the *Simulate death* button: dying on purpose is
+/// the hard part of testing this, and the alternative is waiting for the attract
+/// demo to kill itself.
 /// </summary>
 public sealed class AutoReloadPage : IPatchPage
 {
@@ -28,9 +29,7 @@ public sealed class AutoReloadPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Calls the game's own loader and its own post-load area re-entry, so a " +
-                             "death costs a couple of seconds instead of the menu, the load screen " +
-                             "and the slot. Nothing is restored by hand.");
+            ImGui.SetTooltip("Puts you back at your last save instead of the menus.");
 
         float delay = AutoReload.Delay;
         if (ImGui.SliderFloat("Delay after death (s)", ref delay, 0f, 10f))
@@ -40,9 +39,7 @@ public sealed class AutoReloadPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("How much of the game's own death sequence plays before the reload. " +
-                             "Zero reloads the frame you die, which reads as a glitch rather than " +
-                             "as a death.");
+            ImGui.SetTooltip("How much of the death plays before the reload.");
 
         int slot = AutoReload.Slot;
         if (ImGui.Combo("Save slot", ref slot, "Last used\0Slot 1\0Slot 2\0Slot 3\0"))
@@ -52,10 +49,7 @@ public sealed class AutoReloadPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("\"Last used\" is the game's own record at 0x8006E5D4, which both " +
-                             "saving and loading write. It is empty until you have saved or loaded " +
-                             "once, and a death before that is left alone. Pinning a slot ignores " +
-                             "where you actually saved.");
+            ImGui.SetTooltip("Which save to reload. \"Last used\" follows where you saved.");
 
         ImGui.Spacing();
         Note(AutoReload.Deaths == 0
@@ -66,8 +60,7 @@ public sealed class AutoReloadPage : IPatchPage
             AutoReload.Simulate();
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Zeroes HP and calls the game's own death latch, exactly as the damage " +
-                             "path does. Does nothing unless an area is running.");
+            ImGui.SetTooltip("Kills you, for testing. Does nothing outside an area.");
     }
 
     /// <summary>Wrapped and dimmed. TextDisabled does not wrap, and unwrapped prose
