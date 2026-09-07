@@ -41,12 +41,50 @@ static class DiscCheck
         ("CD/COM/FDAT.T", 0),
     ];
 
-    /// <summary>Null if the image is usable, otherwise the reason it is not.</summary>
+    /// <summary>
+    /// Null if the image is usable, otherwise the reason it is not.
+    ///
+    /// Memoised, because HostWindow.WaitForValidDisc calls this from inside its own
+    /// frame loop: a saved CdPath that no longer validates -- a moved image, a dump
+    /// replaced in place, a settings.json written before there was a validator at
+    /// all -- would otherwise reopen the cue and re-parse the ISO directory sixty
+    /// times a second for as long as the picker is up, which is exactly when the
+    /// interface has to stay responsive.
+    ///
+    /// Keyed on the cue's size and mtime as well as its path, and nothing is cached
+    /// for a path with no file at it, so a player who puts a missing image back or
+    /// re-points the cue at the right bin gets a fresh reading rather than the
+    /// verdict from before they fixed it. What that does NOT see is a bin swapped
+    /// under an unchanged cue, and it does not need to: a wrong disc is refused
+    /// here and never saved, so the only path that reaches the loop is one that
+    /// validated when it was chosen.
+    /// </summary>
     public static string? Validate(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return "No disc image selected.";
         if (!File.Exists(path)) return $"Not found: {path}";
 
+        string key;
+        try
+        {
+            var info = new FileInfo(path);
+            key = $"{info.FullName}|{info.Length}|{info.LastWriteTimeUtc.Ticks}";
+        }
+        catch { return Check(path); }
+
+        lock (_cache)
+            if (_cache.TryGetValue(key, out var known)) return known;
+
+        var verdict = Check(path);
+
+        lock (_cache) _cache[key] = verdict;
+        return verdict;
+    }
+
+    static readonly Dictionary<string, string?> _cache = new(StringComparer.Ordinal);
+
+    static string? Check(string path)
+    {
         CueFs fs;
         try { fs = CueFs.Open(path); }
         catch (Exception e) { return $"Could not read this image as a cue/bin pair: {e.Message}"; }
