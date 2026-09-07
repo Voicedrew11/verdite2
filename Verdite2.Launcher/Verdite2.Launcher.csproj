@@ -68,7 +68,17 @@
           nothing to protect here, and this is the property that says so.
         -->
         <ValidateExecutableReferencesMatchSelfContained>false</ValidateExecutableReferencesMatchSelfContained>
-        <InvariantGlobalization>true</InvariantGlobalization>
+        <!--
+          InvariantGlobalization is deliberately NOT set. It would drop ICU and a
+          few MB with it, and it would also make CultureInfo.CurrentUICulture the
+          invariant culture, whose Name is "". That is the only thing the runtime
+          has to pick a language with: Localization.SetLanguage(null) resolves the
+          configured code, then CurrentUICulture.Name, then falls back to English,
+          so an invariant build starts every player in English however their
+          desktop is set. The port ships pt-BR and es-419 strings for the
+          first-run build popup specifically because that first launch is before
+          anyone can reach the language setting.
+        -->
         <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
 
         <!--
