@@ -82,17 +82,28 @@ runtime. About 109 MB laid out, 41 MB as an AppImage.
    native file dialog and saves the accepted path. It needed nothing but the
    validator.
 
-4. If `builds/<key>/KingsField2.dll` is absent, build it. `BuildKey` hashes the
+4. A cue on the command line — the developer form, `Verdite2 other.cue` — is
+   settled **here**, before the key, and is validated like any other disc. It has
+   to be: the generated dispatch tables bake absolute LBAs from one mastering, so
+   an assembly keyed on the saved disc and then handed a different image would
+   silently fail to load its area modules, which is the exact failure the per-user
+   recompile exists to prevent. Whatever is played is what is keyed and built.
+
+5. If `builds/<key>/KingsField2.dll` is absent, build it. `BuildKey` hashes the
    three executables and `FDAT.T` off the disc (not the file: an image can differ
    in padding, track layout or the 180 MB of streamed media and still recompile
-   identically), the shipped sources, and the launcher's version.
+   identically), the shipped sources **and the shipped config**, and the
+   launcher's version. `content/config` is in there because it is the other half
+   of what goes into the build — the function maps decide where each function
+   starts and the SDK map decides which are bound to the runtime's HLE, so a
+   corrected sweep changes the emitted C# with no source file having moved.
 
-5. `Recompile.Run` drives the recompiler **in process** through
+6. `Recompile.Run` drives the recompiler **in process** through
    `Assembly.EntryPoint` — its `Program.cs` is top-level statements, so its entry
    point is an ordinary invocable method. A second process was not an option: a
    self-contained publish has no `dotnet` to launch one with.
 
-6. `GameCompile.Run` compiles the recompiler's output *and* the port's sources in
+7. `GameCompile.Run` compiles the recompiler's output *and* the port's sources in
    one Roslyn pass. Together, because the port reaches into the recompiled code
    directly — `Program.cs` calls `Recompiled.Entry.Run`, and `AutoReload`,
    `AreaWarp` and `CullGrid` make fifteen static calls to
@@ -100,12 +111,12 @@ runtime. About 109 MB laid out, 41 MB as an AppImage.
    boundary for each, or routing through `Dispatcher.Call`, which goes through
    `HookManager` and is therefore not the same call.
 
-7. `AssemblyLoadContext.Default.LoadFromAssemblyPath`, then the assembly's entry
+8. `AssemblyLoadContext.Default.LoadFromAssemblyPath`, then the assembly's entry
    point with the cue as `argv[0]`.
 
 Measured on a 16-thread machine: **12.7 s** from launching the AppImage to a
 built `KingsField2.dll` and a running game, of which the recompile is 0.85 s and
-the rest is Roslyn. Warm launches skip to step 7.
+the rest is Roslyn. Warm launches skip to step 8.
 
 ## Two things that were nearly wrong
 
@@ -173,8 +184,8 @@ string.**
 
 The sha is deliberately **not** part of `BuildKey`. Hashing it would make every
 commit — a docs-only one included — throw away the player's built game and
-recompile it. What goes into that assembly is the shipped sources, and `BuildKey`
-hashes those directly.
+recompile it. What goes into that assembly is the shipped sources and the shipped
+config, and `BuildKey` hashes those directly.
 
 ### Cutting one
 

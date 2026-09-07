@@ -31,13 +31,13 @@ Console.WriteLine($"[Verdite2] {Ver.Full}");
 
 try
 {
-    Paths.Prepare();
-
     // Before anything reads a relative path. Every file the runtime owns --
     // settings.json, interface.ini, carda.sav, carda.fog, mods/.cache -- is
     // addressed relatively and would otherwise land beside the executable, which
     // an installed build cannot write to, or in whatever directory a shortcut
     // happened to start us in.
+    Paths.Prepare();
+
     Runtime.DiscValidator = DiscCheck.Validate;
 
     Runtime.Initialize($"Verdite2 {Ver.Number}");
@@ -49,11 +49,28 @@ try
     Runtime.WaitForValidDisc();
 
     var cuePath = Runtime.CdPath;
+
+    // A cue on the command line is the developer form -- `Verdite2 other.cue` --
+    // and it has to be settled HERE, before the build key, rather than only handed
+    // to the game at the end. The recompiled dispatch tables bake absolute LBAs
+    // from one mastering, and Dispatcher arms an overlay swap on a CD read hitting
+    // that exact sector, so an assembly built from the saved disc and then pointed
+    // at a different image silently fails to load its area modules -- which is the
+    // whole failure the per-user recompile exists to avoid. Whatever is played is
+    // what is keyed and built, and an argument that is not a usable disc is
+    // refused now rather than after fifteen seconds of building.
+    if (args.Length > 0)
+    {
+        if (DiscCheck.Validate(args[0]) is { } problem)
+            throw new InvalidOperationException($"{args[0]}: {problem}");
+        cuePath = args[0];
+    }
+
     var gameDll = Path.Combine(Paths.Builds, BuildKey.Compute(cuePath), "KingsField2.dll");
 
     if (!File.Exists(gameDll)) BuildGame(cuePath, gameDll);
 
-    Play(gameDll, cuePath, args);
+    Play(gameDll, cuePath);
 }
 catch (Exception e)
 {
@@ -141,17 +158,16 @@ static void BuildGame(string cuePath, string gameDll)
 // Loading into the default context rather than a collectible one is deliberate:
 // the game is the rest of this process's life, MonoMod detours into it, and
 // nothing is ever unloaded.
-static void Play(string gameDll, string cuePath, string[] args)
+//
+// The cue handed over is the one the build was keyed on, which is what makes the
+// baked LBAs in that build correct for it.
+static void Play(string gameDll, string cuePath)
 {
     var asm = AssemblyLoadContext.Default.LoadFromAssemblyPath(gameDll);
     var main = asm.EntryPoint
         ?? throw new InvalidOperationException($"{gameDll} has no entry point.");
 
-    // Arguments the player passed take precedence, so the developer form
-    // `Verdite2 /path/to/other.cue` still works against a build already made.
-    string[] forwarded = args.Length > 0 ? args : [cuePath];
-
-    try { main.Invoke(null, [forwarded]); }
+    try { main.Invoke(null, [new[] { cuePath }]); }
     catch (TargetInvocationException e) when (e.InnerException is not null)
     {
         // Unwrap, or every crash in the game is reported as a reflection failure

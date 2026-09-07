@@ -20,6 +20,13 @@ namespace Verdite2.Launcher.Build;
 ///     updated port must rebuild. Hashing the text catches that without asking
 ///     anyone to remember to bump anything.
 ///
+///   - The shipped config. content/config is the OTHER half of what goes into the
+///     build: the function maps decide where every function starts and the SDK
+///     address map decides which of them are bound to the runtime's HLE, so a
+///     corrected sweep or a newly mapped library entry point changes the emitted
+///     C# with no source file having moved. Hashed for the same reason and in the
+///     same way, so a config-only change cannot be served a stale assembly.
+///
 ///   - The launcher's version, which covers a change in how the build is done
 ///     rather than in what goes into it.
 ///
@@ -47,7 +54,7 @@ static class BuildKey
                 catch { Add(hash, "<missing>"); }
             }
 
-        foreach (var src in Sources.All())
+        foreach (var src in Sources.All().Concat(Sources.Config()))
         {
             Add(hash, Path.GetRelativePath(Paths.Content, src).Replace('\\', '/'));
             hash.AppendData(SHA256.HashData(File.ReadAllBytes(src)));
@@ -68,14 +75,20 @@ static class BuildKey
     }
 }
 
-/// <summary>The shipped C# the game assembly is built from, in a stable order.</summary>
+/// <summary>The shipped payload the game assembly is built from, in a stable order.</summary>
 static class Sources
 {
-    public static IEnumerable<string> All()
-    {
-        if (!Directory.Exists(Paths.ContentSrc)) yield break;
+    /// <summary>The port's own C#, compiled into the assembly.</summary>
+    public static IEnumerable<string> All() => In(Paths.ContentSrc, "*.cs");
 
-        var files = Directory.GetFiles(Paths.ContentSrc, "*.cs", SearchOption.AllDirectories);
+    /// <summary>The recompiler's inputs: kf2.json and the function maps under it.</summary>
+    public static IEnumerable<string> Config() => In(Paths.ContentConfig, "*.json");
+
+    static IEnumerable<string> In(string dir, string pattern)
+    {
+        if (!Directory.Exists(dir)) yield break;
+
+        var files = Directory.GetFiles(dir, pattern, SearchOption.AllDirectories);
         // Ordinal, so the key does not move with the host's locale.
         Array.Sort(files, StringComparer.Ordinal);
         foreach (var f in files) yield return f;
