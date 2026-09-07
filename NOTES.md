@@ -150,6 +150,7 @@ Turning the port into something a person can download.
 - What the release contains
 - First run
 - Two things that were nearly wrong
+- Versioning
 - Building a release
 - The one patch this needed
 - Not done

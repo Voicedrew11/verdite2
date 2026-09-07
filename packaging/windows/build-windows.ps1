@@ -13,7 +13,12 @@ $dist = Join-Path $root 'dist'
 $stage = Join-Path $dist 'win-x64'
 
 $csproj = Join-Path $root 'Verdite2.Launcher\Verdite2.Launcher.csproj'
-$version = ([xml](Get-Content $csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+
+# One source of the number, for everything that names a build: the launcher's
+# csproj reads this same file, so the zip and the installer cannot be named
+# something other than what is inside them.
+$version = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
+if (-not $version) { throw "VERSION is empty" }
 
 Write-Host "==> publishing win-x64 ($version)"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
@@ -28,9 +33,10 @@ Write-Host "==> $zip"
 if (Test-Path $zip) { Remove-Item -Force $zip }
 Compress-Archive -Path "$stage\*" -DestinationPath $zip
 
+$env:VERDITE2_VERSION = $version
+
 if (Get-Command iscc -ErrorAction SilentlyContinue) {
     Write-Host "==> installer"
-    $env:VERDITE2_VERSION = $version
     iscc (Join-Path $PSScriptRoot 'verdite2.iss')
     if ($LASTEXITCODE -ne 0) { throw "iscc failed" }
 } else {

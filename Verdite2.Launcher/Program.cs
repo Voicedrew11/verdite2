@@ -24,6 +24,11 @@ using Verdite2.Launcher.Build;
 // and everything written to one is discarded unless it is given the terminal's.
 ConsoleAttach.ToParent();
 
+// Say which build this is, before anything can go wrong in it. A release is many
+// commits wide, so the number alone does not identify one; Ver.Full carries the
+// commit as well and is what a bug report should quote.
+Console.WriteLine($"[Verdite2] {Ver.Full}");
+
 try
 {
     Paths.Prepare();
@@ -35,7 +40,7 @@ try
     // happened to start us in.
     Runtime.DiscValidator = DiscCheck.Validate;
 
-    Runtime.Initialize("Verdite2");
+    Runtime.Initialize($"Verdite2 {Ver.Number}");
     Localization.Merge(BuildProgressPopup.Strings);
 
     // The runtime's own picker: it opens a native file dialog, refuses anything
@@ -55,7 +60,7 @@ catch (Exception e)
     // Nothing above this point has a window to report into for certain, so the
     // console is the last resort. A failure inside BuildGame is reported in the
     // popup and never reaches here.
-    Console.Error.WriteLine($"[Verdite2] {e}");
+    Console.Error.WriteLine($"[Verdite2 {Ver.Full}] {e}");
     return 1;
 }
 
@@ -119,7 +124,9 @@ static void BuildGame(string cuePath, string gameDll)
         return;
     }
 
-    File.WriteAllText(Paths.BuildLog, log.ToString());
+    // The build log is the file a failed first run asks the player to send, so it
+    // leads with the build that wrote it.
+    File.WriteAllText(Paths.BuildLog, $"Verdite2 {Ver.Full}\n\n{log}");
 
     // Hold the failure on screen. Runtime.Pump exits the process itself when the
     // window is closed, so this is how the player reads the message and then

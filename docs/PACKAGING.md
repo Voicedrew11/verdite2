@@ -127,6 +127,62 @@ crash — it is the whole game running fast from the title onward, silently. The
 check for it is `KF2_FPS=144 KF2_FPS_PROBE=1` against the packaged binary, which
 must read 20.0 ticks/s. Measured: 144.0 fps drawn, 19.9-20.0 ticks/s.
 
+## Versioning
+
+**The version is one line in `VERSION` at the repository root, and everything
+else reads it.** That is the whole design, and it is a design rather than a
+convention because five things have to agree about the number and only one of
+them can parse XML: the launcher's assembly version, the AppImage's file name,
+the Windows zip's, the Inno installer's, and the tag the release is cut on. The
+number used to live in `<Version>` in `Verdite2.Launcher.csproj`, which the
+AppImage script scraped with `grep -oP`, the Windows script parsed as XML, and
+`verdite2.iss` simply **duplicated as a literal fallback** — three readers, one
+of which could silently disagree.
+
+`MAJOR.MINOR.PATCH`, no suffix. CI refuses anything else.
+
+| what | how it gets the number |
+|---|---|
+| the assembly | the csproj reads `../VERSION` into `<Version>` |
+| `Verdite2-<v>-x86_64.AppImage` | `build-appimage.sh` reads `VERSION` |
+| `Verdite2-<v>-win-x64.zip` | `build-windows.ps1` reads `VERSION` |
+| `…-win-x64-setup.exe` | the script exports `VERDITE2_VERSION`; the `.iss` **errors** if it is unset |
+| the git tag | `release.yml` asserts `v$(cat VERSION)` equals the tag it was triggered by |
+
+That last row is the one that matters most, and it closes a failure that is
+invisible until somebody has downloaded it: a `v0.2.0` tag on a tree that still
+says `0.1.0` would publish `0.1.0` files under a `0.2.0` release, with nothing in
+the process disagreeing.
+
+### The number is not the build
+
+A release is many commits wide, so `0.1.0` does not identify a binary. The
+assembly's `InformationalVersion` is therefore `0.1.0+<9-char sha>`, stamped by
+the csproj's `StampBuild` target off `git rev-parse` (or `VERDITE2_BUILD`, for a
+build made outside a checkout — a source tarball, a distro package — falling back
+to `local`). `Ver.Full` reads it back, and it is printed at startup, written at
+the head of the build log, and quoted on an unhandled exception; `Ver.Number`
+alone is in the window title. **What a bug report should quote is the full
+string.**
+
+The sha is deliberately **not** part of `BuildKey`. Hashing it would make every
+commit — a docs-only one included — throw away the player's built game and
+recompile it. What goes into that assembly is the shipped sources, and `BuildKey`
+hashes those directly.
+
+### Cutting one
+
+```bash
+bash scripts/release.sh 0.2.0        # bumps VERSION, commits, tags. Does not push.
+git push origin HEAD && git push origin v0.2.0
+```
+
+The script refuses a malformed number, a dirty tree, a tag that already exists
+and a bump to the version already in the file. It does not push, because pushing
+the tag is what publishes the draft release and that is a decision rather than a
+step. The workflow builds both platforms, asserts the tag against `VERSION`, and
+opens a **draft** with the commits since the previous tag appended to the body.
+
 ## Building a release
 
 ```bash
@@ -137,8 +193,15 @@ pwsh packaging/windows/build-windows.ps1    # dist/…-win-x64.zip and the insta
 ```
 
 Neither needs the disc. `.github/workflows/release.yml` runs both on a `v*` tag
-and opens a draft release; it asserts that `generated/` and `disc/` are absent
-before it packages anything.
+and opens a draft release; it asserts that `generated/` and `disc/` are absent,
+and that the tag matches `VERSION`, before it packages anything.
+
+**The release workflow has never run.** The tag pushed to test it was
+`test-win-0.1.0`, which does not match the `tags: ['v*']` trigger, so only `ci`
+fired; and `workflow_dispatch` is not offered for a workflow absent from the
+**default branch**, which `release.yml` still is. So the Windows leg — the
+installer, and the launcher on real Windows — is unexercised. Merging `dist` and
+tagging `v*` is what settles it.
 
 Trimming is off and must stay off: `MonoMod.RuntimeDetour` builds detours at run
 time, `ModCompiler` hands Roslyn the loaded assemblies, and

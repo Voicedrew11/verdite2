@@ -9,7 +9,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="${OUT:-$ROOT/dist}"
 APPDIR="$OUT/Verdite2.AppDir"
-VERSION="${VERSION:-$(grep -oP '(?<=<Version>)[^<]+' "$ROOT/Verdite2.Launcher/Verdite2.Launcher.csproj")}"
+# One source of the number, for everything that names a build: the launcher's
+# csproj reads this same file, so a package can never be named something other
+# than what is inside it.
+VERSION="${VERSION:-$(tr -d '[:space:]' < "$ROOT/VERSION")}"
 
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/256x256/apps"
@@ -31,8 +34,14 @@ exec "$HERE/usr/bin/Verdite2" "$@"
 RUN
 chmod +x "$APPDIR/AppRun"
 
-cp "$ROOT/packaging/shared/verdite2.desktop" "$APPDIR/usr/share/applications/verdite2.desktop"
-cp "$ROOT/packaging/shared/verdite2.desktop" "$APPDIR/verdite2.desktop"
+# X-AppImage-Version is what an AppImage reports about itself to the desktop and
+# to update tooling; without it the number lives only in the file name, which a
+# player renames. Added here rather than kept in the .desktop, so there is still
+# one place the version is written.
+for d in "$APPDIR/usr/share/applications/verdite2.desktop" "$APPDIR/verdite2.desktop"; do
+    mkdir -p "$(dirname "$d")"
+    { cat "$ROOT/packaging/shared/verdite2.desktop"; echo "X-AppImage-Version=$VERSION"; } > "$d"
+done
 cp "$ROOT/packaging/shared/verdite2.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/verdite2.png"
 cp "$ROOT/packaging/shared/verdite2.png" "$APPDIR/verdite2.png"
 

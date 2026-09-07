@@ -9,9 +9,13 @@
 ; uninstall leaves saves alone, and reinstalling does not force a rebuild.
 
 #define AppName    "Verdite2"
+; The version comes from build-windows.ps1, which reads ../../VERSION -- the one
+; place it is written. A literal fallback here would be a second source of it and
+; would quietly ship an installer whose name disagreed with its contents, so a
+; missing value is an error instead.
 #define AppVersion GetEnv("VERDITE2_VERSION")
 #if AppVersion == ""
-  #define AppVersion "0.1.0"
+  #error VERDITE2_VERSION is not set. Run packaging/windows/build-windows.ps1 rather than iscc directly.
 #endif
 
 [Setup]

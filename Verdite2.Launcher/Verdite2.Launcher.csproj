@@ -34,12 +34,20 @@
         <RootNamespace>Verdite2.Launcher</RootNamespace>
 
         <!--
-          The cache key is derived from this, so a released build that changes the
-          port's behaviour must bump it or a player keeps the game.dll they already
-          have. BuildKey hashes the shipped sources too, which catches the ordinary
-          case on its own; this covers a change in the launcher itself.
+          The version is NOT declared here: ../VERSION at the repository root is
+          the single source of it, because four other things need to read the same
+          number and only one of them can parse XML: the AppImage script, the
+          Windows script, the Inno installer and the release workflow's tag check.
+          A number kept in a csproj is a number those either duplicate or scrape.
+
+          The cache key is derived from it, so a released build that changes how
+          the build is done must bump it or a player keeps the game.dll they
+          already have. BuildKey hashes the shipped sources too, which catches the
+          ordinary case on its own; this covers a change in the launcher itself.
         -->
-        <Version>0.1.0</Version>
+        <VersionFile>$(MSBuildThisFileDirectory)../VERSION</VersionFile>
+        <VersionRaw>$([System.IO.File]::ReadAllText('$(VersionFile)'))</VersionRaw>
+        <Version>$(VersionRaw.Trim())</Version>
 
         <!--
           Trimming would break this port three ways over: MonoMod.RuntimeDetour
@@ -113,5 +121,33 @@
         <Compile Remove="content/**" />
         <Compile Remove="bin/**" />
     </ItemGroup>
+
+    <!--
+      What a bug report needs and a version number cannot carry: WHICH build.
+      0.1.0 is every commit between one release and the next, so the assembly also
+      records the commit it was published in InformationalVersion, read back
+      by Ver.cs and printed at startup and on a crash.
+
+      Deliberately not part of BuildKey: hashing it would make every commit, a
+      docs-only one included, throw away the player's built game and recompile.
+      What goes into the game is the shipped sources, and BuildKey hashes those.
+
+      VERDITE2_BUILD overrides it, which is how a build made outside a git
+      checkout (a source tarball, a distro package) can still say what it is.
+    -->
+    <Target Name="StampBuild" BeforeTargets="GetAssemblyAttributes">
+        <Exec Command="git -C &quot;$(MSBuildThisFileDirectory)..&quot; rev-parse --short=9 HEAD"
+              Condition="'$(VERDITE2_BUILD)' == '' And Exists('$(MSBuildThisFileDirectory)../.git')"
+              ConsoleToMSBuild="true" StandardOutputImportance="low"
+              ContinueOnError="true" IgnoreExitCode="true">
+            <Output TaskParameter="ConsoleOutput" PropertyName="GitSha" />
+        </Exec>
+        <PropertyGroup>
+            <BuildTag>$(VERDITE2_BUILD)</BuildTag>
+            <BuildTag Condition="'$(BuildTag)' == '' And '$(GitSha)' != ''">$(GitSha.Trim())</BuildTag>
+            <BuildTag Condition="'$(BuildTag)' == ''">local</BuildTag>
+            <InformationalVersion>$(Version)+$(BuildTag)</InformationalVersion>
+        </PropertyGroup>
+    </Target>
 
 </Project>

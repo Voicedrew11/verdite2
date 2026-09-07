@@ -49,6 +49,29 @@ jobs:
           test ! -e generated || { echo "generated/ exists in CI; it must not"; exit 1; }
           test -z "$(ls -A disc 2>/dev/null | grep -v README.md || true)" || { echo "disc data in CI"; exit 1; }
 
+      # The tag names the release and VERSION names the artifacts inside it, and
+      # nothing but this makes them the same number. Without it a v0.2.0 tag on a
+      # tree that still says 0.1.0 publishes 0.1.0 files under a 0.2.0 release --
+      # silently, and only visible after somebody has downloaded it.
+      - name: Assert the tag matches VERSION
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version="$(tr -d '[:space:]' < VERSION)"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$version tag=$GITHUB_REF_NAME"
+          test "$version" = "$tag" || { echo "tag $GITHUB_REF_NAME does not match VERSION $version"; exit 1; }
+          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "VERSION is not MAJOR.MINOR.PATCH"; exit 1; }
+
+      # The commit stamped into the assembly, so a downloaded build can say which
+      # one it is. The checkout is a detached HEAD at the tag, so the sha the
+      # csproj's own `git rev-parse` would find is the right one anyway; this is
+      # here so the value is identical on both legs and does not depend on git
+      # being reachable from inside MSBuild on a Windows runner.
+      - name: Stamp the build
+        shell: bash
+        run: echo "VERDITE2_BUILD=$(git rev-parse --short=9 HEAD)" >> "$GITHUB_ENV"
+
       - name: Package (Linux)
         if: matrix.name == 'linux'
         run: |
@@ -89,6 +112,11 @@ jobs:
         with:
           files: dist/*
           draft: true
+          name: Verdite2 ${{ github.ref_name }}
+          # Appended under the text below: the commits since the previous tag,
+          # which is what makes a tag worth cutting rather than a number worth
+          # remembering.
+          generate_release_notes: true
           body: |
             **Verdite2 ships no game data.** You need your own dump of King's
             Field (NTSC-U, `SLUS-00158`) as a `.cue` / `.bin` pair.

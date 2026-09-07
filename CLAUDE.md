@@ -1504,6 +1504,18 @@ bug that exists only in the release, and losing the frame boundary that way is n
 a crash but the whole game running fast, silently. The check is `KF2_FPS=144
 KF2_FPS_PROBE=1` on the packaged binary: measured 144.0 fps drawn at 20.0 ticks/s.
 
+**The version is one line in `VERSION` at the repository root and everything else
+reads it** — the launcher's assembly version, the AppImage's name, the zip's, the
+installer's (`VERDITE2_VERSION`, an error if unset), and `release.yml`, which
+asserts the tag it fired on equals `v$(cat VERSION)`; a tag that disagrees with
+the tree would otherwise publish the old artifacts under the new number. The
+assembly also carries `0.1.0+<sha>` (`Ver.Full`, printed at startup, on a crash
+and at the head of the build log), stamped by the csproj's `StampBuild` target
+and *not* part of `BuildKey`, since hashing the commit would recompile the
+player's game on every docs commit. `bash scripts/release.sh 0.2.0` is the bump;
+it commits and tags and deliberately does not push. See "Versioning" in
+`docs/PACKAGING.md`.
+
 Packaging is `packaging/linux/build-appimage.sh` and
 `packaging/windows/build-windows.ps1`, neither of which needs the disc; trimming is
 off and must stay off (MonoMod detours, Roslyn, `AutoStart`'s reflection). The
