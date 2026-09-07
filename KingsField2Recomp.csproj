@@ -73,4 +73,18 @@
         <None Remove="Verdite2.Launcher/**" />
     </ItemGroup>
 
+    <!--
+      dist/ is where the packaging stages a release, and a staged release contains
+      a COPY of Program.cs and patches/** under content/src. The default glob picks
+      those up as a second definition of every type in patches/, so the developer
+      build stops compiling the moment anyone has run build-appimage.sh or
+      build-windows.ps1: 1412 CS0101/CS0111 errors, and none of them in a file
+      anybody edited. It is gitignored, so this never shows up in a fresh clone.
+    -->
+    <ItemGroup>
+        <Compile Remove="dist/**" />
+        <EmbeddedResource Remove="dist/**" />
+        <None Remove="dist/**" />
+    </ItemGroup>
+
 </Project>
