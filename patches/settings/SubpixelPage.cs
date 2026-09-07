@@ -29,8 +29,6 @@ public sealed class SubpixelPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Stops geometry twitching and shimmering as you move: an edge drifts " +
-                             "smoothly instead of snapping a whole pixel at a time. Off gives the " +
-                             "console's own whole-pixel vertices.");
+            ImGui.SetTooltip("Stops edges twitching and shimmering as you move.");
     }
 }

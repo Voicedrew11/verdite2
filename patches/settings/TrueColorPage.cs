@@ -28,8 +28,6 @@ public sealed class TrueColorPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Renders shading at 24-bit, so fog gradients no longer band into " +
-                             "steps — without the dither crosshatch. Off gives the console's own " +
-                             "15-bit output. Textures are unchanged either way.");
+            ImGui.SetTooltip("Removes the banding from fog and shading.");
     }
 }

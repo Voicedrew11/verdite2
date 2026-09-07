@@ -54,15 +54,8 @@ public sealed class FrameSmoothingPage : IPatchPage
         if (ImGui.Checkbox("Smooth motion between game ticks", ref on)) Apply(on);
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Above the tick rate the game's world still advances only that many " +
-                             "times a second, so everything in it arrives in tick-sized steps. " +
-                             "This draws each frame partway between the two ticks either side of " +
-                             "it -- the camera, your own movement, every creature, door and " +
-                             "projectile, and the poses they are animating -- so motion is as " +
-                             "smooth as the frame rate rather than as smooth as the game. It " +
-                             "never draws a position the game did not produce, at the cost of the " +
-                             "picture trailing a tick behind. Off gives a faster picture of a " +
-                             "world that steps.");
+            ImGui.SetTooltip("Smooths the camera, your movement and everything that moves to " +
+                             "your frame rate.");
 
         if (!active)
         {

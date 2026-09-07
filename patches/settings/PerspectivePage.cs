@@ -26,7 +26,6 @@ public sealed class PerspectivePage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Stops textures swimming and rippling on floors, walls and stairs. " +
-                             "Off gives the console's own affine mapping.");
+            ImGui.SetTooltip("Stops textures swimming on floors, walls and stairs.");
     }
 }

@@ -18,6 +18,21 @@ public interface IPatchPage
     /// frame rate, keeps its own.</summary>
     string Title { get; }
 
+    /// <summary>
+    /// Draw the page's controls.
+    ///
+    /// **A tooltip says what the control <em>does</em>, in one short line.** These
+    /// were each a small essay — the crosshatch named as 4x4, affine mapping,
+    /// whole-pixel vertices, the 15-bit frame buffer, the tick the picture trails
+    /// by. All of that is true and none of it is a player's question, which is only
+    /// ever "what changes if I tick this". The mechanism is written up in the
+    /// patch's own doc comment and in <c>docs/</c>, and the numbers that justify it
+    /// belong on the console behind the probe env vars; a hover in a settings
+    /// window is not the place for either. Where a control genuinely needs a
+    /// paragraph — the frame rate's consequences, the smoothing being inert at the
+    /// tick rate — that goes in a wrapped note under the control, where it can be
+    /// read rather than raced against a mouse.
+    /// </summary>
     void Draw();
 }
 

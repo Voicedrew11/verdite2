@@ -6,9 +6,9 @@ namespace Kf2.Settings;
 /// The dither switch, under Video beside vsync and render scale — which is
 /// where the mod's gear button used to be the only way to reach it.
 ///
-/// One checkbox and a tooltip: the trade it makes is worth a sentence, and the
-/// counters that justify it belong on the console under
-/// <c>KF2_NODITHER_PROBE=1</c>, not in a settings window. It shares the
+/// One checkbox and a one-line tooltip; the counters that justify it belong on
+/// the console under <c>KF2_NODITHER_PROBE=1</c>, not in a settings window. It
+/// shares the
 /// "Enhancements" heading rather than taking one of its own, since a heading over
 /// a single checkbox is just the checkbox's label written twice. See "Dithering"
 /// in NOTES.md.
@@ -28,7 +28,6 @@ public sealed class NoDitherPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Removes the 4x4 crosshatch over shaded surfaces; the 15-bit frame " +
-                             "buffer bands in those gradients instead.");
+            ImGui.SetTooltip("Removes the crosshatch pattern over shaded surfaces.");
     }
 }
