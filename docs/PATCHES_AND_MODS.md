@@ -191,7 +191,7 @@ the prose became a hover tooltip and the counters stayed on the console.
 checkbox is the checkbox's own label written twice with a rule through it, so the
 shading control is titled `Enhancements` and anything else of that size can join
 it there — perspective correction, sub-pixel positioning and the Z-buffer all
-did; `FramePacingPage`, which is a combo plus a live measurement, keeps its own.
+did; `FramePacingPage`, which is a slider plus a live measurement, keeps its own.
 Drawing a heading only when the title changes is the whole implementation.
 
 **The title is the heading and `Order` is the sort key, and that used to be one
@@ -211,7 +211,7 @@ a page between two of them draws the heading twice.
 **The order it produces is the argument.** Frame pacing goes above Enhancements
 because the frame rate is the option a player came to Video for and the fidelity
 switches are the port's extras, and *Smooth motion between game ticks* moved out
-of Enhancements to sit directly under the frame-rate combo — it is greyed out
+of Enhancements to sit directly under the frame-rate slider — it is greyed out
 whenever the rate is not above the world's tick, which is the shipped default, and
 the control that decides that is the one immediately above it. A dead tick met
 before its cause reads as a bug; met under its cause it reads as a note.
@@ -406,9 +406,39 @@ Two further shapes worth copying. The rate is a **double, not a vblank divisor**
 "arbitrary" was the point, and 144 is not 60/n — and the saved key changed with
 it, from `kf2.framepacing.vblanks` to `kf2.framepacing.fps`. `SavedRate` reads the
 old key once, converts (`n` → `60/n`, `0` → uncapped) and writes the new one, so an
-existing config keeps the rate it had. And the settings page is presets **plus a
-free number**: a player on a 165 Hz panel should be able to say 165, and the
-slider only appears once Custom is chosen, so the common case stays one control.
+existing config keeps the rate it had. And the settings page is **one slider with
+detents**: a player on a 165 Hz panel should be able to say 165, and a player who
+wants 61 should be able to say that too.
+
+That control was a combo of presets with a `Custom...` entry that revealed a
+second slider, and it was the wrong shape for a continuous quantity twice over —
+it made the free number a *mode* to be selected before it could be reached, and
+it put the ordinary case, a panel's own refresh rate, behind an extra click for
+the sake of the rare one. So there is one `SliderFloat` from 10 to 300 fps and
+the presets are **pins**: 20, 30, 60, 75, 90, 120, 144, 165, 170, 240, drawn as
+tick marks on the track and snapped to while a drag is within five pixels of one.
+Three details make it behave:
+
+- **The tolerance is in pixels, not in fps.** The same 4 fps is a third of the
+  gap between 20 and 30 and a twentieth of the gap between 170 and 240; the hand
+  is working in pixels. It is then capped at half the distance to the pin's
+  nearest neighbour, so on a wide window two close pins cannot both claim the
+  space between them.
+- **Only a drag snaps.** The gate is the left mouse button being held, which is
+  what separates a drag from ImGui's ctrl-click text entry and from keyboard nav:
+  a typed 61 is a rate asked for by name and is left alone, a dragged 61 is a
+  miss.
+- **The marks use ImGui's own mapping**, not the raw fraction of the frame: the
+  grab travels between `FramePadding.x + GrabMinSize/2` and the far edge less the
+  same, so marks drawn at the fraction would sit half a grab out at both ends and
+  the 20 fps pin — the shipped default — would look as though it had missed.
+
+The slider re-reads `FramePacing` on every frame it is not being held, so a rate
+set from `KF2_FPS` or from anywhere else shows up in it. Pacing switched off
+entirely (`KF2_FPS=off`) has no position on the scale, so the handle parks at the
+world's tick rate and nothing is written until it is moved — 0 is not a rate any
+control here can express, and a handle at the far left claiming 10 fps would be a
+lie about what the port is doing.
 
 ### One switch for all of the smoothing
 
