@@ -119,8 +119,12 @@ public static class MapFog
 {
     public const string OnKey = "kf2.map.fog";
 
-    /// <summary>The line-of-sight gate's saved switch.</summary>
-    public const string LosKey = "kf2.map.fog.sight";
+    // The gate had a saved key and a checkbox under the fog's, and both are gone:
+    // without it the fog paints rooms through the wall beside a doorway into a
+    // store that never forgets, which is a defect rather than a preference. The
+    // key is not read any more, for the reason the rest of the map's retired keys
+    // are not; KF2_MAP_FOG_LOS=0 is the comparison and the docked MapPanel keeps
+    // a session tick beside Forget and Reveal.
 
     // ---- the game's visibility grid ---------------------------------------
 
@@ -195,8 +199,9 @@ public static class MapFog
     static bool? _forced;
     static int _probe;
 
-    /// <summary>The line-of-sight gate. On; <c>KF2_MAP_FOG_LOS=0</c> is the
-    /// comparison, which is the fog this class shipped with.</summary>
+    /// <summary>The line-of-sight gate. **On, and no longer a setting**;
+    /// <c>KF2_MAP_FOG_LOS=0</c> is the comparison, which is the fog this class
+    /// shipped with.</summary>
     static bool _los = true;
     static bool? _forcedLos;
 
@@ -231,6 +236,7 @@ public static class MapFog
     public static void Install()
     {
         Enabled = _forced ?? false;
+        _los    = _forcedLos ?? true;
 
         // ConfigManager.Load runs inside HostWindow.Initialize, which is after
         // Program.cs, so both the saved switch and the memory card's path can only
@@ -238,7 +244,6 @@ public static class MapFog
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
-            _los = _forcedLos ?? RecompOne.Runtime.Runtime.View.GetBool(LosKey, true);
             _path = PathFor();
             Load();
             Console.WriteLine($"[KF2] map fog: {(Enabled ? "on" : "off")}, " +

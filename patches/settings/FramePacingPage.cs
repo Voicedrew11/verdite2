@@ -3,8 +3,7 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The rate the port draws at and the rate the world runs at, under Video beside
-/// vsync and render scale.
+/// The rate the port draws at, under Video beside vsync and render scale.
 ///
 /// The frame rate sits there because that is where a user looks for one, but it is
 /// not quite the graphics option it resembles: King's Field's speed *is* its frame
@@ -12,48 +11,57 @@ namespace Kf2.Settings;
 /// at, which is what <see cref="FramePacing"/> does. The note under the combo says
 /// so rather than leaving a player to find out by playing.
 ///
-/// **The tick rate is the second control and it is not a graphics option at all.**
-/// It is here because the two numbers are only meaningful against each other -- a
-/// frame rate below the tick rate makes the smoothing pointless, one above it
-/// makes it load-bearing -- and splitting them across two panes would hide that.
-/// It has two entries because the argument has two answers: 20, the band the
-/// console actually landed in under load, and 30, what the game's own frame gate
-/// asks for. See FramePacing.LogicHz.
+/// **The world's tick rate was the second control and it is gone.** It offered
+/// two entries -- 20, the band the console actually landed in, and 30, the fastest
+/// the game's own frame gate permits -- and offering both made the *player* settle
+/// a question about what King's Field's speed is. It is 20: that is the speed the
+/// game was built and played at, it is what every rate in this port is measured
+/// against, and 30 is a comparison rather than a preference. <c>KF2_TICKRATE</c> still takes any rate, which is where a
+/// comparison belongs. See FramePacing.LogicHz.
 ///
-/// The frame-rate list is presets plus a free number, because "arbitrary" is the
-/// point: a player on a 165 Hz panel should be able to say 165. The slider only
-/// appears once Custom is chosen, so the common case stays one control.
+/// What is left is one number, and one line under it saying that the number is the
+/// picture only -- which is the part a frame-rate combo in any other game would not
+/// have to explain. It used to be a paragraph that changed with the rate, spelling
+/// out the below-tick case, the 1:1 case and the extrapolated case; a player
+/// choosing 144 does not need the other two, and the only fact any of them carried
+/// that a player acts on is that the game does not speed up.
+///
+/// **The smoothing tick shares this heading**, directly under the combo. It is
+/// greyed out whenever the rate is not above the world's tick — which is the
+/// shipped default — and the control that decides that is this one, so the two
+/// belong together rather than a group apart. See <see cref="FrameSmoothingPage"/>.
+///
+/// The frame-rate list is the panels people own plus a free number, because
+/// "arbitrary" is the point. **Uncapped came out**: the entry existed, and what it
+/// produced was not a working uncapped port, so offering it was offering a defect.
+/// <c>KF2_FPS=off</c> still reaches it, which is where an unbounded picture belongs
+/// until it is fixed -- and a config already sitting there still opens here, as
+/// Custom, rather than snapping to a preset.
 /// </summary>
 public sealed class FramePacingPage : IPatchPage
 {
     public string Id => "framepacing";
     public string Title => "Frame pacing";
+    public int Order => 10;
 
-    // Index into Rates; both arrays are read together. 0 is uncapped, -1 is
-    // "whatever the custom slider says".
-    static readonly double[] Rates = [20.0, 30.0, 60.0, 90.0, 120.0, 144.0, 0.0, -1.0];
+    // Index into Rates; both arrays are read together. -1 is "whatever the custom
+    // slider says".
+    static readonly double[] Rates =
+        [20.0, 30.0, 60.0, 75.0, 90.0, 120.0, 144.0, 165.0, 170.0, 240.0, -1.0];
 
     static readonly string[] Labels =
     [
-        "20 fps - the rate on hardware",
-        "30 fps - what the code asks for",
+        "20 fps",
+        "30 fps",
         "60 fps",
+        "75 fps",
         "90 fps",
         "120 fps",
         "144 fps",
-        "Uncapped - the world still ticks",
+        "165 fps",
+        "170 fps",
+        "240 fps",
         "Custom...",
-    ];
-
-    // The tick rate has no custom entry: the game's own achievable bands are 60/n,
-    // and the only two anyone can argue for are these. KF2_TICKRATE takes any
-    // number for experimenting.
-    static readonly double[] TickRates = [20.0, 30.0];
-
-    static readonly string[] TickLabels =
-    [
-        "20 Hz - the speed the console played at",
-        "30 Hz - the speed the code asks for",
     ];
 
     static float _custom = 75f;
@@ -78,33 +86,12 @@ public sealed class FramePacingPage : IPatchPage
                 Apply(_custom);
         }
 
-        Note(FramePacing.Measured > 0.0
+        PatchSettings.Note(FramePacing.Measured > 0.0
             ? $"Measured: {FramePacing.Measured:F1} fps"
             : "Measured: waiting for the first second of frames");
 
         ImGui.Spacing();
-
-        int tick = TickIndex();
-        if (ImGui.Combo("World tick rate", ref tick, TickLabels, TickLabels.Length))
-        {
-            FramePacing.SetLogicHz(TickRates[tick]);
-            PatchSettings.Set(FramePacing.LogicHzKey, (float)FramePacing.LogicHz);
-        }
-
-        ImGui.Spacing();
-        Note(Describe());
-    }
-
-    /// <summary>A tick rate from KF2_TICKRATE that is neither preset shows as the
-    /// nearer of the two rather than being silently snapped, since the combo has
-    /// nowhere to put it and the note below spells the real number out.</summary>
-    static int TickIndex()
-    {
-        int best = 0;
-        for (int i = 1; i < TickRates.Length; i++)
-            if (Math.Abs(TickRates[i] - FramePacing.LogicHz)
-                < Math.Abs(TickRates[best] - FramePacing.LogicHz)) best = i;
-        return best;
+        PatchSettings.Note("Picture only: the game's own speed does not change with this.");
     }
 
     static int Index()
@@ -117,8 +104,11 @@ public sealed class FramePacingPage : IPatchPage
 
         // A rate that is not one of the presets -- from KF2_FPS, or from a config
         // written by an older build -- shows as Custom rather than silently
-        // snapping to 30.
-        _custom = (float)rate;
+        // snapping to 30. Pacing switched off entirely (KF2_FPS=off) has no entry
+        // at all now, so it lands here too: the slider is clamped rather than
+        // parked at 0, since 0 is a rate no control on this page can produce and
+        // one drag of the slider would leave it anyway.
+        _custom = (float)Math.Clamp(rate > 0.0 ? rate : FramePacing.LogicHz, 10.0, 300.0);
         _customChosen = true;
         return Rates.Length - 1;
     }
@@ -127,39 +117,5 @@ public sealed class FramePacingPage : IPatchPage
     {
         FramePacing.SetTargetFps(rate);
         PatchSettings.Set(FramePacing.FpsKey, (float)(FramePacing.Enabled ? FramePacing.TargetFps : 0.0));
-    }
-
-    static string Describe()
-    {
-        string hz = $"{FramePacing.LogicHz:0.#} Hz";
-
-        if (!FramePacing.Enabled)
-            return $"No pacing at all: the port draws as fast as it can. The world still runs at " +
-                   $"{hz}, so the game does not speed up -- only the picture is unbounded, and " +
-                   "the view between ticks is carried by the frame smoothing below.";
-
-        if (FramePacing.TargetFps < FramePacing.LogicHz - 0.001)
-            return $"Drawing at {FramePacing.TargetFps:0.#} fps, below the world's own {hz}. A " +
-                   "stage can be skipped but not run twice, so the world cannot catch up: it " +
-                   $"ticks once per frame and the whole game plays slower than {hz}. A " +
-                   "diagnostic setting.";
-
-        if (FramePacing.TargetFps <= FramePacing.LogicHz + 0.001)
-            return $"One drawn frame per tick, at {hz} -- the console's own arrangement, where " +
-                   "the game's speed and its frame rate are the same number. Nothing is " +
-                   "extrapolated, so the frame smoothing below does nothing here.";
-
-        return $"Draws at {FramePacing.TargetFps:0.#} and runs the game's own stages on a {hz} " +
-               "clock, so the world keeps a console's timing while the picture updates more " +
-               "often. The view is carried between ticks by the frame smoothing below.";
-    }
-
-    /// <summary>Wrapped and dimmed. TextDisabled does not wrap, and unwrapped prose
-    /// runs straight out of the settings window.</summary>
-    static void Note(string text)
-    {
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
-        ImGui.TextWrapped(text);
-        ImGui.PopStyleColor();
     }
 }

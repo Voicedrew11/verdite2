@@ -102,15 +102,29 @@ public static class AutoReload
 
     /// <summary>interface.ini keys, read and written by the settings page.</summary>
     public const string OnKey    = "kf2.autoreload.enabled";
-    public const string DelayKey = "kf2.autoreload.delay";
     public const string SlotKey  = "kf2.autoreload.slot";
+
+    // The delay had a saved key and a slider, and both are gone. It is not a
+    // choice: it decides only whether the death reads as a death before the
+    // screen changes, which is a question about pacing that the port is better
+    // placed to answer than the player -- and at either end of the range it was
+    // offering, the answer was wrong. At 0 the reload lands inside the death
+    // animation and reads as a glitch; at 10 the player is watching a dead body
+    // for long enough to reach for the menu themselves, which is the four screens
+    // of menu this patch exists to remove. 2 s is the shipped value and what
+    // every measurement of the death clock is taken against.
+    // kf2.autoreload.delay is deliberately no longer read: a key still read after
+    // its control is gone strands whoever set it. KF2_AUTORELOAD_DELAY is the
+    // comparison.
 
     /// <summary>Live rather than fixed at startup: the hook stays attached and
     /// does nothing when this is off, so it can be taken back mid-session.</summary>
     public static bool Enabled { get; private set; } = true;
 
     /// <summary>Seconds of the game's own death sequence before the reload. Long
-    /// enough that the death registers as a death.</summary>
+    /// enough that the death registers as a death, short enough that it is not a
+    /// wait. **Fixed at 2 s and no longer a setting**;
+    /// <c>KF2_AUTORELOAD_DELAY</c> is the comparison.</summary>
     public static float Delay { get; private set; } = 2.0f;
 
     /// <summary>0 = whatever the game says the current slot is; 1..3 pins one.</summary>
@@ -191,7 +205,6 @@ public static class AutoReload
         {
             var view = RecompOne.Runtime.Runtime.View;
             if (!_onFromEnv) Enabled = view.GetBool(OnKey, Enabled);
-            if (!_delayFromEnv) SetDelay(view.GetFloat(DelayKey, Delay));
             if (!_slotFromEnv) SetSlot(view.GetInt(SlotKey, Slot));
         });
 

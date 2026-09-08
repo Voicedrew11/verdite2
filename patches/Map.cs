@@ -102,20 +102,29 @@ public static class Map
     // ---- settings ----------------------------------------------------------
 
     public const string OnKey       = "kf2.map.on";
-    public const string MinimapKey  = "kf2.map.minimap";
-    public const string SizeKey     = "kf2.map.minimap.size";
-    public const string RadiusKey   = "kf2.map.minimap.radius";
-    public const string CornerKey   = "kf2.map.minimap.corner";
-    public const string PadKey      = "kf2.map.minimap.pad";
-    public const string ShapeKey    = "kf2.map.minimap.shape";
-    public const string OpacityKey  = "kf2.map.minimap.opacity";
-    public const string ShadeKey    = "kf2.map.shade";
-    public const string WallsKey    = "kf2.map.walls";
-    public const string FloorKey    = "kf2.map.floor";
-    public const string PlayerKey   = "kf2.map.player";
     public const string PadButtonKey = "kf2.map.pad.button";
-    public const string StyleKey    = "kf2.map.style";
-    public const string PauseKey    = "kf2.map.pause";
+
+    // Two keys left of twelve. The minimap's six went with the minimap, and the
+    // pause, the floor and the player marker went the way the style, the shading
+    // and the tint did -- see "Five map controls that were not choices" and "What
+    // the Map page is down to" in docs/PATCHES_AND_MODS.md. None of them is read
+    // any more, deliberately: a key still read after its control is gone strands
+    // whoever set it. The console keeps every one as a comparison
+    // (KF2_MAP_MINIMAP=1, KF2_MAP_PAUSE=0, KF2_MAP_FLOOR=lower|upper,
+    // KF2_MAP_ARROW=1), and N still toggles the minimap for the session.
+
+    // The style, the height shading and the sight-blocking tint had a saved key
+    // each and a control each, and all three are gone. None of them was a choice.
+    // The style is the game's own map -- the whole argument for drawing it that
+    // way is that it belongs, and an option to make it not belong is not a taste.
+    // The other two are the blueprint's instrumentation showing through: a
+    // height ramp and a wall tint are how a debugger reads a plan, and on the
+    // game's own board they are ink the game never put there. So they are off,
+    // and the console keeps all three as comparisons (KF2_MAP_STYLE=blueprint,
+    // KF2_MAP_SHADE=1, KF2_MAP_WALLS=1). Not read any more, deliberately: a key
+    // still read after its control is gone strands whoever set it -- the file
+    // says one thing, the window says nothing, and there is nothing left to put
+    // it back with.
 
     /// <summary>The feature. False leaves both panels unregistered.</summary>
     public static bool Enabled { get; private set; } = true;
@@ -140,6 +149,10 @@ public static class Map
     /// shut, so nothing is written to game memory and the picture keeps being
     /// drawn underneath.
     /// </summary>
+    /// <remarks>**On, and no longer a setting**; <c>KF2_MAP_PAUSE=0</c> is the
+    /// comparison. The paragraph above is the whole argument, and it does not
+    /// have two sides: a full-screen surface with no chrome and no input, opened
+    /// in the middle of a corridor, is a screen you stop at.</remarks>
     public static bool Pause = true;
 
     static bool? _forcedPause;
@@ -190,7 +203,7 @@ public static class Map
     /// How the map is drawn: 0 the game's own board, 1 the blueprint this port
     /// shipped with.
     ///
-    /// **The native style is the default, and it is a claim about belonging
+    /// **The native style is the only one, and that is a claim about belonging
     /// rather than about taste.** The blueprint fills every walkable tile pale
     /// on near-black and rules a grid over it, which is a debugger's picture:
     /// clear, accurate and from a different game. King's Field II's own map is a
@@ -199,21 +212,39 @@ public static class Map
     /// grid, same fog, same markers, laid out the way the game lays it out.
     /// See <c>MapRender.DrawNative</c> for what the difference actually is.
     ///
-    /// The blueprint is kept as the other entry rather than deleted: it is the
-    /// picture the fog, the extents and the marker layer were all judged against,
-    /// and a style setting keeps it live for the next thing that has to be.
+    /// Which is why it stopped being a combo: offering the debugger's picture as
+    /// the other half of a preference asks the player to settle a question about
+    /// what the port is for. The blueprint is kept in the code rather than
+    /// deleted — it is the picture the fog, the extents and the marker layer were
+    /// all judged against, and the next thing that has to be judged will want it
+    /// — so it moves to the console with the rest of the comparisons.
     /// </summary>
-    public static int Style;
+    /// <remarks>**No longer a setting**: <see cref="StyleNative"/> unless
+    /// <c>KF2_MAP_STYLE=blueprint</c> says otherwise.</remarks>
+    public static int Style = StyleNative;
 
     public const int StyleNative = 0, StyleBlueprint = 1;
 
-    /// <summary>Shade a tile by its height byte.</summary>
-    public static bool Shade = true;
+    /// <summary>Shade a tile by its height byte. **Off, and no longer a setting**
+    /// (<c>KF2_MAP_SHADE=1</c> is the comparison): a height ramp is the
+    /// blueprint's reading of the grid, and the game's own board is one flat
+    /// slate green with the plan inked on it.</summary>
+    public static bool Shade;
 
-    /// <summary>Tint the tiles whose +4 bit 0x80 is set.</summary>
-    public static bool Walls = true;
+    /// <summary>Tint the tiles whose +4 bit 0x80 is set. **Off, and no longer a
+    /// setting** (<c>KF2_MAP_WALLS=1</c> is the comparison): what that bit
+    /// actually means has never been settled — the widescreen notes read it as
+    /// "see through" rather than as a wall — so it is an instrument for
+    /// answering that question, not a layer to draw on a player's map.</summary>
+    public static bool Walls;
 
     /// <summary>-1 follows the player (u16[0x801D9C8E]); 0 lower, 1 upper.</summary>
+    /// <remarks>**Follows the player, and no longer a setting**;
+    /// <c>KF2_MAP_FLOOR=lower</c> or <c>upper</c> is the comparison. Pinning a
+    /// half is for looking at the *other* one, which is a thing you do while
+    /// checking the map is right rather than while playing -- and the founding
+    /// equality (the player stands on a drawn half whose <c>-(height &lt;&lt; 7)</c>
+    /// is their Y) means the followed answer is the measured one.</remarks>
     public static int Floor = -1;
 
     /// <summary>
@@ -234,6 +265,10 @@ public static class Map
     /// someone holding a paper map in a corridor knows. See
     /// <c>MapRender.DrawPlayerPointer</c>.
     /// </summary>
+    /// <remarks>**The dot, and no longer a setting**; <c>KF2_MAP_ARROW=1</c> is
+    /// the comparison. The doc above says why the dot is right, and an option
+    /// beside it asks the player to decide how much the map should give away,
+    /// which is a question about the game rather than about their screen.</remarks>
     public static int PlayerMark;
 
     public static bool PlayerDot => PlayerMark == 0;
@@ -259,6 +294,17 @@ public static class Map
     public static int PadButton = PadTouchpad;
 
     static bool? _forcedOn, _forcedMinimap;
+
+    /// <summary>KF2_MAP_FLOOR, KF2_MAP_ARROW: the comparisons for two more that
+    /// are no longer settings.</summary>
+    static int? _forcedFloor;
+    static bool? _forcedArrow;
+
+    /// <summary>KF2_MAP_STYLE, KF2_MAP_SHADE, KF2_MAP_WALLS: the comparisons for
+    /// the three that are no longer settings, which are otherwise unreachable.</summary>
+    static int? _forcedStyle;
+    static bool? _forcedShade, _forcedWalls;
+
     static bool _probe;
 
     /// <summary>KF2_MAP_PROBE. Public so the render side can census what it
@@ -325,10 +371,26 @@ public static class Map
     // ---- lifecycle ---------------------------------------------------------
 
     public static void Configure(string? on, string? minimap, string? probe,
-                                 string? pause = null)
+                                 string? pause = null, string? style = null,
+                                 string? shade = null, string? walls = null,
+                                 string? floor = null, string? arrow = null)
     {
         if (!string.IsNullOrWhiteSpace(on))
             _forcedOn = !on.Equals("0", StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(style))
+            _forcedStyle = style.StartsWith("b", StringComparison.OrdinalIgnoreCase)
+                        || style.Equals("1", StringComparison.Ordinal)
+                         ? StyleBlueprint : StyleNative;
+        if (!string.IsNullOrWhiteSpace(shade))
+            _forcedShade = !shade.Equals("0", StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(walls))
+            _forcedWalls = !walls.Equals("0", StringComparison.Ordinal);
+        if (!string.IsNullOrWhiteSpace(floor))
+            _forcedFloor = floor.StartsWith("u", StringComparison.OrdinalIgnoreCase) ? 1
+                         : floor.StartsWith("l", StringComparison.OrdinalIgnoreCase) ? 0
+                         : -1;
+        if (!string.IsNullOrWhiteSpace(arrow))
+            _forcedArrow = !arrow.Equals("0", StringComparison.Ordinal);
         if (!string.IsNullOrWhiteSpace(pause))
             _forcedPause = !pause.Equals("0", StringComparison.Ordinal);
         if (!string.IsNullOrWhiteSpace(minimap))
@@ -342,6 +404,11 @@ public static class Map
         Enabled = _forcedOn ?? true;
         Minimap = _forcedMinimap ?? false;
         Pause   = _forcedPause ?? true;
+        Style   = _forcedStyle ?? StyleNative;
+        Shade   = _forcedShade ?? false;
+        Walls   = _forcedWalls ?? false;
+        Floor   = _forcedFloor ?? -1;
+        PlayerMark = (_forcedArrow ?? false) ? 1 : 0;
 
         // ConfigManager.Load runs inside HostWindow.Initialize, which is after
         // Program.cs — so the saved settings can only be read here, and an env var
@@ -352,21 +419,7 @@ public static class Map
         {
             var view = RecompOne.Runtime.Runtime.View;
             Enabled       = _forcedOn ?? view.GetBool(OnKey, true);
-            Minimap       = _forcedMinimap ?? view.GetBool(MinimapKey, false);
-            Pause         = _forcedPause ?? view.GetBool(PauseKey, true);
-            MinimapSize   = view.GetInt(SizeKey, MinimapSize);
-            MinimapRadius = view.GetInt(RadiusKey, MinimapRadius);
-            MinimapCorner = view.GetInt(CornerKey, MinimapCorner);
-            MinimapPad    = view.GetInt(PadKey, MinimapPad);
-            MinimapShape   = view.GetInt(ShapeKey, MinimapShape);
-            MinimapOpacity = view.GetFloat(OpacityKey, MinimapOpacity);
-            Style         = view.GetInt(StyleKey, StyleNative);
-            Shade         = view.GetBool(ShadeKey, true);
-            Walls         = view.GetBool(WallsKey, true);
-            Floor         = view.GetInt(FloorKey, -1);
-            PlayerMark    = view.GetInt(PlayerKey, 0);
             PadButton     = view.GetInt(PadButtonKey, PadTouchpad);
-            MapMarkers.LoadSettings(view);
 
             // Registered whether or not the feature is on, so the switch under
             // Gameplay is not a dead control for the rest of the session. Enabled
@@ -383,9 +436,10 @@ public static class Map
         });
 
         // **Opening the full-screen map stops the world.** The predicate rather
-        // than a call from ToggleFullscreen, because the panel closes by three
-        // routes -- M, the pad button and the runtime's own menu bar -- and a
-        // latch missed by one of them is a game that never resumes. See
+        // than a call from ToggleFullscreen, because the panel closes by more
+        // than one route -- M, the pad button, and the Gameplay switch that turns
+        // the whole map off -- and a latch missed by one of them is a game that
+        // never resumes. See
         // FramePacing.PauseWhen and Map.Pause.
         //
         // Gated on InGame as well as on the panel: the map can be opened at the
@@ -475,12 +529,11 @@ public static class Map
 
         // Localization.T falls back to English with a warning and then prints the
         // key itself, so a key the runtime has never heard of has to supply all
-        // three of its languages. menu.game is new; the runtime has only
-        // menu.system, menu.mods and menu.debug.
+        // three of its languages. These two are the panels' own window titles;
+        // they keep the menu.game prefix they were named under.
         Localization.Merge("""
         {
           "strings": {
-            "menu.game":      { "en": "Game", "pt-BR": "Jogo",  "es-419": "Juego" },
             "menu.game.map":  { "en": "Map",  "pt-BR": "Mapa",  "es-419": "Mapa"  },
             "menu.game.mapfs": { "en": "Full-screen map", "pt-BR": "Mapa em tela cheia",
                                  "es-419": "Mapa en pantalla completa" }
@@ -498,12 +551,13 @@ public static class Map
         // (MapOverlay ignores it: its open state is the setting, not the view.)
         ConfigManager.ApplyViewToPanels([MapPanel.Instance]);
 
-        // Panels do not auto-populate the menu bar — MainMenuBar declares every
-        // built-in one by hand — so without this the map is hotkey-only.
-        MenuRegistry.Menu("menu.game", MenuRegistry.OrderGame)
-                    .Panel<MapFullscreen>("menu.game.mapfs")
-                    .Panel<MapPanel>("menu.game.map")
-                    .End();
+        // No menu-bar entry: the top bar is the port's own chrome over someone
+        // else's game, and a "Game" heading beside System, Mods and Debug reads
+        // as part of the machine rather than part of King's Field. Panels do not
+        // auto-populate the bar anyway -- MainMenuBar declares every built-in one
+        // by hand -- so both maps are reached the way a player reaches them: M
+        // and the pad's touchpad button for the full-screen one, Shift+M for the
+        // docked instrument.
 
         // The probe opens both maps as well as dumping the grid. A headless run
         // cannot press M, so without this their draw paths are never exercised by
@@ -539,29 +593,15 @@ public static class Map
     public static void ToggleFullscreen()
         => MapFullscreen.Instance.IsOpen = !MapFullscreen.Instance.IsOpen;
 
-    public static void SetStyle(int style)
-    {
-        Style = style;
-        Settings.PatchSettings.Set(StyleKey, style);
-    }
-
-    public static void SetPlayerMark(int mark)
-    {
-        PlayerMark = mark;
-        Settings.PatchSettings.Set(PlayerKey, mark);
-    }
-
     public static void SetPadButton(int button)
     {
         PadButton = button;
         Settings.PatchSettings.Set(PadButtonKey, button);
     }
 
-    public static void SetMinimap(bool on)
-    {
-        Minimap = on;
-        Settings.PatchSettings.Set(MinimapKey, on);
-    }
+    /// <summary>What N does. **Session only** — the minimap has no settings any
+    /// more, so there is no key to write and nothing to strand.</summary>
+    public static void SetMinimap(bool on) => Minimap = on;
 
     // ---- reading the game --------------------------------------------------
 

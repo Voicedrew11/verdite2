@@ -144,11 +144,12 @@ public static class Widescreen
     /// them, so a player who had the mod on keeps the picture they had.</summary>
     public const string AspectKey = "kf2.widescreen.aspect";
 
-    /// <summary>See <see cref="AspectKey"/>.</summary>
-    public const string AnchorKey = "kf2.widescreen.anchorhud";
-
-    /// <summary>See <see cref="AspectKey"/>.</summary>
-    public const string EffectsKey = "kf2.widescreen.stretcheffects";
+    // The HUD anchoring and the tint stretching had a saved key each and a
+    // checkbox each, and both are gone. They are not choices: a wide picture whose
+    // death fade covers the middle 320 pixels is a defect, not a preference, and
+    // the HUD anchoring is the one part of widescreen that moves something the
+    // game drew where it meant to draw it. So the tints follow the aspect always
+    // and the HUD never moves, with the console keeping both as comparisons.
 
     /// <summary>The game's own aspect, and the one that means "off".</summary>
     public const float FourThree = 4f / 3f;
@@ -172,12 +173,21 @@ public static class Widescreen
     public static float Aspect { get; private set; } = FourThree;
 
     /// <summary>Move the HP/MP panel and the equipment icons out to the new edges.
-    /// Costs nothing while <see cref="Aspect"/> is 4:3.</summary>
-    public static bool AnchorHud { get; private set; } = true;
+    /// **Off, and no longer a setting** (<c>KF2_WIDESCREEN_HUD=1</c> is the
+    /// comparison): everything else widescreen does presents geometry the game
+    /// submitted and the GPU clipped, and this alone *moves* something the game
+    /// placed deliberately. Where it lands has never been looked at by eye, which
+    /// is the port's usual reason for a default, and offering it as a tick asked
+    /// the player to judge that instead. Costs nothing while
+    /// <see cref="Aspect"/> is 4:3.</summary>
+    public static bool AnchorHud { get; private set; }
 
     /// <summary>Widen the game's full-screen tints — the death fade, the damage
-    /// flash — across the margin. Costs nothing while <see cref="Aspect"/> is
-    /// 4:3.</summary>
+    /// flash — across the margin. **On whenever an aspect is chosen, and no longer
+    /// a setting** (<c>KF2_WIDESCREEN_EFFECTS=0</c> is the comparison): a death
+    /// fade that blacks out the middle of the screen and leaves the sides showing
+    /// the dungeon is a defect rather than a preference. Costs nothing while
+    /// <see cref="Aspect"/> is 4:3.</summary>
     public static bool StretchEffects { get; private set; } = true;
 
     /// <summary>Whether the aspect is actually widening anything.</summary>
@@ -196,9 +206,13 @@ public static class Widescreen
     /// report to the console.</summary>
     static bool _measure;
 
-    /// <summary>KF2_WIDESCREEN_EFFECTS, which wins over the saved setting the way
-    /// <see cref="_forced"/> does.</summary>
+    /// <summary>KF2_WIDESCREEN_EFFECTS: the comparison, since there is no longer a
+    /// checkbox.</summary>
     static bool? _forcedEffects;
+
+    /// <summary>KF2_WIDESCREEN_HUD: the comparison for the anchoring, which is
+    /// otherwise unreachable.</summary>
+    static bool? _forcedHud;
 
     /// <summary>KF2_WIDESCREEN_PROBE=2: also list the wide primitives themselves.</summary>
     static bool _listWide;
@@ -244,7 +258,8 @@ public static class Widescreen
         Description = "Renders a margin either side of the game's 320-pixel screen.",
     };
 
-    public static void Configure(string? aspect, string? probe, string? effects = null)
+    public static void Configure(string? aspect, string? probe, string? effects = null,
+                                 string? hud = null)
     {
         if (Parse(aspect) is { } ratio) _forced = ratio;
 
@@ -259,6 +274,9 @@ public static class Widescreen
 
         if (!string.IsNullOrWhiteSpace(effects))
             _forcedEffects = !effects.Equals("0", StringComparison.Ordinal);
+
+        if (!string.IsNullOrWhiteSpace(hud))
+            _forcedHud = !hud.Equals("0", StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -277,8 +295,13 @@ public static class Widescreen
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             Aspect = _forced ?? RecompOne.Runtime.Runtime.View.GetFloat(AspectKey, FourThree);
-            AnchorHud = RecompOne.Runtime.Runtime.View.GetBool(AnchorKey, true);
-            StretchEffects = _forcedEffects ?? RecompOne.Runtime.Runtime.View.GetBool(EffectsKey, true);
+
+            // Neither of these reads the saved config any more, deliberately: a
+            // player who ticked one off before it stopped being a tick would
+            // otherwise be stuck with that forever, with nothing in the settings
+            // window to put it back.
+            AnchorHud = _forcedHud ?? false;
+            StretchEffects = _forcedEffects ?? true;
             Apply();
             Console.WriteLine(On
                 ? $"[KF2] widescreen: {Aspect:0.###}:1, margin {Margin} px a side, " +
@@ -315,20 +338,6 @@ public static class Widescreen
     {
         Aspect = Math.Clamp(aspect, FourThree, Widest);
         Apply();
-    }
-
-    /// <summary>Change the HUD anchoring at run time.</summary>
-    public static void SetAnchorHud(bool on)
-    {
-        AnchorHud = on;
-        Listen();
-    }
-
-    /// <summary>Change the tint stretching at run time.</summary>
-    public static void SetStretchEffects(bool on)
-    {
-        StretchEffects = on;
-        Listen();
     }
 
     static void Apply()

@@ -25,13 +25,14 @@ namespace Kf2;
 /// the full map about which way the area faces, and a maze is easier to hold in
 /// your head when north stays put.
 ///
-/// Off by default. The mechanism is measured but the picture is not — nobody has
-/// yet judged whether the size, the corner or the radius are usable in play —
-/// and this repo's rule for a picture nobody has looked at is that it defaults
-/// off. N toggles it; the knobs — corner, size, range, **shape** (square or
-/// circle) and **opacity** — are under Settings > Gameplay > Map. Shape and
-/// opacity default to the picture that shipped, a fully opaque square, for the
-/// same reason: neither has been judged by eye.
+/// **Off, and no longer a setting.** The mechanism is measured but the picture is
+/// not — nobody has yet judged whether the size, the corner or the radius are
+/// usable in play — and a picture nobody has looked at is a comparison rather
+/// than a feature, which is a poor thing to hang seven controls off. So the
+/// checkbox and the six knobs came off the Gameplay page together and the fields
+/// below keep the values that shipped: a fully opaque square, 220 px, 12 tiles,
+/// top right. <c>KF2_MAP_MINIMAP=1</c> brings it back for a run and **N still
+/// toggles it for the session**, which is how it gets looked at.
 /// </summary>
 public sealed class MapOverlay : IFloatingPanel
 {
@@ -50,7 +51,7 @@ public sealed class MapOverlay : IFloatingPanel
     /// it back through <c>ApplyViewToPanels</c> and <c>ResetView</c> — so a setter
     /// that wrote the setting would give the minimap two stores that disagree, and
     /// "Reset view" would silently turn it on or off. The setting is the one
-    /// store; N and the Gameplay page are how it moves.
+    /// store; N and <c>KF2_MAP_MINIMAP</c> are how it moves.
     /// </summary>
     public bool IsOpen
     {

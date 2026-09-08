@@ -242,6 +242,12 @@ public static class Mouse
     {
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
+            // Registered here rather than in Program.cs so it lands after the
+            // map's three viewports: PanelManager draws in registration order,
+            // and a capture announcement belongs over the map rather than under
+            // it. It is never persisted -- see MouseIndicator.IsOpen.
+            PanelManager.Register(MouseIndicator.Instance);
+
             Analog.Saved(OnKey, ref Enabled, _fromEnv);
             Analog.Saved(TurnKey, ref TurnSens, _fromEnv);
             Analog.Saved(LookKey, ref LookSens, _fromEnv);
@@ -343,13 +349,14 @@ public static class Mouse
         {
             // Said once, and here rather than at boot: this runs from the game's
             // own look routine, so reaching it means the player is walking around
-            // with mouse look on and a pointer that is still a pointer. A key that
-            // has to be pressed before anything happens is worth naming somewhere
-            // other than the settings page.
+            // with mouse look on and a pointer that is still a pointer. The cut
+            // mouse is the whole of the answer -- moving the mouse and getting
+            // nothing is the question "is this on?", not "which key is it?", and
+            // the console line and the settings page both name the key.
             if (!_hinted)
             {
                 _hinted = true;
-                ToastNotifications.ShowText("Mouse look", $"Press {CaptureKey} to capture the pointer");
+                MouseIndicator.Show(false);
             }
             return (0f, 0f);
         }
@@ -362,9 +369,14 @@ public static class Mouse
     }
 
     /// <summary>
-    /// Lock or release, and say so on screen. Reads the host back rather than
-    /// trusting the write: no mouse, or a platform without the cursor mode, and
-    /// the answer is no.
+    /// Lock or release, and say so on screen -- through patches/MouseIndicator.cs
+    /// rather than through a toast, since this is a state a player changes while
+    /// playing and a titled card over the game every time is an interruption
+    /// reporting something they just asked for. The failure below keeps its
+    /// toast: it is rare, it is not a state, and it needs words.
+    ///
+    /// Reads the host back rather than trusting the write: no mouse, or a
+    /// platform without the cursor mode, and the answer is no.
     /// </summary>
     public static void SetCaptured(bool on)
     {
@@ -388,8 +400,7 @@ public static class Mouse
         HostWindow.TakeMouseMotion();
         _taken = Environment.TickCount64;
 
-        ToastNotifications.ShowText("Mouse look",
-            Captured ? $"Captured — {CaptureKey} to release" : "Released");
+        MouseIndicator.Show(Captured);
     }
 
     /// <summary>

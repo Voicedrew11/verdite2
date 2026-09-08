@@ -694,8 +694,15 @@ VRAM, costing one transition frame that presents from VRAM.
 **Off by default**, so the default picture is the console's 15-bit output. Unlike
 sub-pixel and the Z-buffer this is not off because the picture is unchecked — it is
 off because 24-bit shading is deliberately *not* what the hardware did, and a
-player who wants the authentic look should get it without a package to load. Its
-switch is under Video with the others (`KF2_TRUECOLOR=1` forces it on for the run).
+player who wants the authentic look should get it without a package to load.
+(`KF2_TRUECOLOR=1` forces it on for the run.)
+
+**It is not a checkbox of its own any more, and neither is the dither.** The two
+are answers to the one question this section is named for, so they are asked once,
+as the three-entry `Shading` combo under Video ▸ Enhancements — `Dither
+(original)` / `None` / `Smooth (24-bit)`. `None` is what both switches' defaults
+already were, so nothing anybody had saved changed meaning. See "Two shading
+checkboxes were one question asked twice" in `docs/PATCHES_AND_MODS.md`.
 
 ## The display list cannot name a face: why packet-level smoothing failed
 

@@ -157,40 +157,42 @@ windows reported the patch driving the game: `look 185 move 279` frames out of
 300, `mean |step| 58` against a turn rate of 28, which is the overspeed path (see
 the per-frame speed limit above) working exactly as it did as a mod.
 
-### Open: the page is under the fold, and the fix is a section rather than a hoist
+### The page was under the fold, and the fix was the wrapper after all
 
-The page is in the right *section* and the wrong *place in it*. `Extend` draws
+The page was in the right *section* and the wrong *place in it*. `Extend` draws
 after a section's own content, and the input section's own content is two tab
 bars, sixteen binding rows and a reset button — around 450px of a 500px window —
-so "Analog sticks" starts below the fold and is only found by scrolling past every
-button in the game. Left as it is for now; the options were weighed and two of
-three were rejected on their merits:
+so "Analog sticks" started below the fold and was only found by scrolling past
+every button in the game. Worse than the scrolling: the two keyboard-layout
+buttons *write* the sixteen rows of a table a screen above them, and the stick
+settings sat nowhere near the pad one.
 
-- **Wrapping the input section** to draw the page above the binding table works —
-  `Register` replaces by id, so a wrapper forwarding `Id`/`TitleKey`/`Order` can
-  draw first and then delegate — but it has the port taking ownership of a section
-  the runtime registers, in a checkout that is gitignored and moves under us. That
-  is the same pattern already tried and dropped under "Renaming a runtime section"
-  in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md),
-  and it was rejected again here.
-- **Moving it to `gameplay`** puts deadzone, curve and invert-Y under a heading
-  that means rules of play, and leaves the pane about controls with no sign the
-  sticks are configurable at all.
-- **A `controls` section of the port's own**, `Order = 1` so it sits beside Input,
-  is the one to build: a sidebar entry rather than a hoist, and no wrapper, since
-  registering a *new* id needs no patch to the checkout — the `gameplay` lever.
-  The intended shape is a tab bar inside it, one tab per control page, which also
-  makes the id and the label agree from the start (`controls` / "Controls", and
-  "Controles" covers both pt-BR and es-419). Note a tab bar cannot be added to the
-  runtime's *own* Input pane: `InputSettingsSection.Draw` opens and closes both of
-  its bars inside itself, so a third tab beside Keyboard/Gamepad needs the wrapper
-  above. With one page the tab bar should stay off — a lone tab promises siblings
-  that do not exist, the same objection as a `SeparatorText` over a lone checkbox,
-  and it would sit directly on the rule the page's own `Title` already draws.
+Three options were weighed here and the one picked was **a `controls` section of
+the port's own**, `Order = 1` so it sits beside Input — a sidebar entry rather
+than a hoist, needing no wrapper and no patch to the checkout. **That option is
+dead, on a fact nobody had checked: `settings.input` already renders "Controles"
+in pt-BR *and* es-419** (`languages.json:398`). A second sidebar entry called
+Controls collides head-on with the Input pane's own name in two of the three
+languages, giving a sidebar with two identically-labelled rows. The general
+finding is worth more than the instance: **a new sidebar entry has to be checked
+against every language of the ones already there, not just English.**
 
-The underlying gap is upstream's: **`SettingsRegistry.Extend` has no ordering
-argument**, so an extension can only ever land at the bottom of a pane. Worth an
-issue, and it is the gap behind all three options above.
+So the rejected option was taken instead. **The port wraps the section** —
+`patches/settings/InputSection.cs`, `Id => "input"`, and
+`SettingsRegistry.Register` replaces by id. The old objection is unchanged and is
+now a cost being paid rather than an argument that lost: the port owns a section
+the runtime registers, in a checkout that is gitignored and moves under us. Two
+things pay it. The wrapper is cheap to abandon — deleting one `Register` line
+restores the runtime's pane exactly — and the copied half names its source, so a
+pin bump has something to diff. Splitting the pane could not have delivered the
+point of the exercise anyway: the layout buttons have to sit with the table they
+write, and that is one pane by definition.
+
+The upstream gap is unchanged and is still worth an issue, with a second half
+found here: **`SettingsRegistry.Extend` has no ordering argument, and no
+un-extend.** The list is append-only with no removal API, which is why the four
+pages had to be *dropped from the registry* rather than reordered in it — see
+below.
 
 ### Open: the camera does not feel consistent in every direction
 
@@ -270,6 +272,128 @@ Cheap next step: reproduce with `KF2_ANALOG_PROBE=1`, which already reports the
 control state, and read `0x8019955C` / `0x80199558` / `0x801994E1` at the moment
 it breaks. All three candidates are one memory read apart.
 
+## The Input pane is the port's
+
+`patches/settings/InputSection.cs` and `patches/settings/BindingTable.cs`. One
+pane, one tab bar, three tabs:
+
+```
+— Input ————————————————————————————————
+[ Keyboard ]  [ Gamepad ]  [ Mouse ]
+
+  [King's Field layout]  [RecompOne layout]
+  The port's layout is in place. …
+
+  Button    In King's Field        Key
+  ──────────────────────────────────────────
+  Cross     use, open; confirm     F
+  Circle    the in-game menu       Tab
+  Square    attack                 Space
+  …
+  That middle column is what the buttons do by default. …
+
+  [ Reset to Defaults ]
+```
+
+Gamepad is the same shape with the twin-stick block and the map's pad button
+above the table and the pad column beside it; Mouse is `MousePage` and nothing
+else.
+
+**Four things are load-bearing.**
+
+**A page drawn in a tab is a body, not a page.** `IPatchPage.Order` is inert —
+the sequence is written out in three small arrays, so there is no list to sort
+and no tie to break — and `Title` keeps only its degenerate half, that an empty
+title declines the heading. `KeyLayoutPage` and `MousePage` are alone in tabs
+that already name them and take `Title => ""`; `AnalogPage` and `MapButtonPage`
+share the Gamepad tab and keep theirs.
+
+**The four pages had to leave the registry, not just be reordered in it.**
+`SettingsPopup` draws `current.Draw()` and *then* every
+`GetExtensions(current.Id)`, and there is no un-extend, so a page still
+registered against `"input"` would draw a second time under the tab bar, outside
+every tab, permanently and irreversibly. The `Register("input", …)` calls are
+gone from `PatchSettings.Install` and `PatchSettings.Register` now refuses that
+id with a message naming the page, so the hole cannot be re-opened by a later
+patch.
+
+**Replace, do not unregister.** `Register` already removes by id. An explicit
+`Unregister("input")` would state removal where the intent is substitution and
+would hide the one failure that matters — if upstream renames the id, the
+unregister no-ops silently and the register adds a *second* Input tab. That is
+warned about directly instead, in the shape the existing section-id check uses.
+
+**The tab bar has to stay out of the scroll.** The table alone is about 490px —
+sixteen rows at a frame height plus cell padding, plus a header — against roughly
+365px of tab body in a 500px popup, so every tab scrolls whatever is above it.
+Drawn in the flow of the settings content child, the bar would scroll off the top
+with everything else and the pane would be *worse* than the one it replaces. Each
+tab body therefore gets a `BeginChild` of its own that takes the remaining height
+and owns the scrollbar, with the padding push around `BeginChild` only — patch
+`0031`'s shape — so it is not inset a second time inside a child that has already
+padded it.
+
+Two smaller things fell out. The capture row is **one field per device**
+(`_keyRow`, `_padRow`) rather than the runtime's single index shared by two
+devices and two pad slots, which had to be cleared in four places; two fields
+make switching tab mid-capture a non-event by construction. And the Keyboard
+tab's Reset routes through **`KeyLayout.ApplyStock()`** rather than writing
+`Keys = new KeyBindings()` as the runtime did — the same object, plus the marker
+that stops `KeyLayout.Install`'s next-launch migration putting the port's layout
+back over it. The "RecompOne layout" button a few lines above does exactly this,
+and two buttons that agree on screen have to agree in code; they could afford not
+to while they were 450px apart.
+
+### The Pad 1 / Pad 2 tab bar is gone
+
+It was a whole tab of bindings that could not reach this game. `BiosB.PadRead`
+packs pad 2 into the high half of the pad word and the game keeps only the low
+sixteen bits, at `0x80199554` — the global stage 3 stores the pad to and every
+consumer reads.
+
+Say it precisely, because two statements are easy to confuse and only one is
+true: **the port stopped offering pad 2; the runtime has not stopped having
+one.** `InputManager.Poll` still fills `Controller.State2` from `Keys2`/`Pad2`,
+and `BindingTable` never reads or writes either, so a `settings.json` that
+already carries them keeps them byte for byte. `settings.input.pad` (`"Pad {0}"`)
+is the one runtime string that stops being used; it stays in the runtime's table
+untouched.
+
+### The table names the action, and that reverses a rule
+
+Sixteen rows reading `Cross`, `L1`, `Triangle` told a King's Field player
+nothing, and the port reads the game's own action-mask table every frame. So the
+table has a dimmed middle column headed **In King's Field**: walk forward, turn
+left, strafe right, look down, attack, cast, the in-game menu, use.
+
+That is a deliberate reversal of "A correction: the mask table names the button,
+not the verb" below, which ends by saying the settings page would be lying if it
+claimed a verb. **The rule is kept and the column is not a breach of it**, on
+three counts: the strings are the game's *measured defaults* (the action-mask
+table at `0x8006E568`–`0x8006E5D0`, and `func_8002957C`'s four branches, both
+already written up here), the header says which game they are for, and one
+wrapped note under the table says the game's own control configuration screen
+reassigns them. What the old rule was quietly charging for its silence was a
+table nobody could read.
+
+`MousePage` carried the same denial and now points at the column instead of
+refusing to say. Three entries are deliberately not verbs: `Start` is blank,
+because its branch has never been identified and a guess in a column read as
+measurement is worse than a gap, and `L3`/`R3` say *the game does not read it*,
+which is a fact a blank would not carry.
+
+**The column is English**, like every other string this port writes — every
+tooltip, every note, every combo entry under Video and Gameplay — while its two
+neighbours in the header row come from the runtime's three-language table. That
+is a choice rather than an oversight: a verb mistranslated in a column a player
+reads as measurement is worse than one they can see is the port's, and it keeps
+sixteen strings out of `Localization.Merge`.
+
+**Never looked at by eye:** whether three tabs read as three devices rather than
+as three settings groups, whether the Gamepad tab — which stacks the whole
+twin-stick block above the table — reproduces the fold problem it was built to
+fix, and whether the action column is worth its width.
+
 ## The keyboard layout, and changing a default RecompOne provides
 
 `patches/KeyLayout.cs`. RecompOne's default keyboard bindings are a *console's*
@@ -341,12 +465,24 @@ The marker lives in `interface.ini` rather than in `settings.json` because
 `settings.json` is the thing being migrated, and a flag inside it would mean
 growing the runtime's own config schema.
 
-**The one thing this cannot do** is change what the runtime's *own* "Reset to
-defaults" button under Input resets to — that is `new KeyBindings()` inside
-`InputSettingsSection`, and reaching it would mean patching the checkout to hold
-an opinion about one game. So the port adds its own pair of buttons instead
-(`Kf2.Settings.KeyLayoutPage`): "King's Field layout" and "RecompOne layout",
-beside the table they both write.
+**A third thing drifted with that version bump and was not caught until the pane
+was rebuilt**: `KeyLayoutPage`'s tooltip still described v1. It said *"R and F
+look up and down"* and *"E uses"*, while `Layout()` has `L2` and `R2` empty —
+pitch is the mouse's alone — `Space` on Square and `F` on Cross. The console line
+`Install` prints was correct the whole time, which is what the fix was checked
+against, and that is the general lesson: **the bookkeeping a changed default costs
+is `Version` and `Superseded` *and every sentence that describes the layout*.**
+
+**This could not change what the runtime's own "Reset to defaults" button reset
+to** — `new KeyBindings()` inside `InputSettingsSection`, unreachable without
+patching the checkout to hold an opinion about one game — so the port added its
+own pair of buttons instead (`Kf2.Settings.KeyLayoutPage`): "King's Field layout"
+and "RecompOne layout", beside the table they both write. Now that the port draws
+the pane, that reset is the port's too and goes through `KeyLayout.ApplyStock()`,
+which writes the same bindings **and** the marker — so the button and the
+"RecompOne layout" button a few lines above it can no longer disagree about
+whether the next launch migrates the config back. See "The Input pane is the
+port's" above.
 
 ### The second binding the schema cannot hold
 
@@ -514,7 +650,56 @@ preference: every hook this port owns is in the walking-around part of the game,
 and a pointer captured and then swallowed by the in-game menu has to be
 releasable *from inside it*.
 
-### What the runtime had to grow: `0017`
+### Saying so on screen: a glyph rather than a toast
+
+Capture used to be announced by `ToastNotifications.ShowText("Mouse look", …)` —
+a titled card sliding in over the game on every capture, every release, and once
+on the first uncaptured motion. It was reported from play as *really annoying*,
+and the reason is structural rather than cosmetic: capturing and releasing is
+something a player does **while playing**, since it is how you reach the menu bar
+and come back, so the notification fires often and every firing is a modal-looking
+card reporting a state the player has just this moment asked for. There is nothing
+in it to read.
+
+`patches/MouseIndicator.cs` is what replaced it: a white pixel-art mouse in the
+top right of the game picture, faded in over 140 ms, held for 1.1 s and faded out
+over 420 ms. **The glyph carries the state and the fade carries the change** —
+captured is a solid mouse, released is the same silhouette with a two-cell
+diagonal cut out of it, computed from the one bitmap rather than authored twice.
+The cut is the universal "off" and so needs no learning, which a filled-versus-
+hollow pair would have; that was the choice between them. A one-cell black shadow
+sits under the white, because the picture behind it is whatever the dungeon
+happens to be and a torch-lit wall is bright enough to lose a white shell — and
+the cut only reads as a cut if something separates the two halves.
+
+Three things follow the map's viewports rather than being invented again. It is
+an `IFloatingPanel` anchored to **`MapRender.Picture`**, the game picture rather
+than the window (`patches/recompone/0029`), so it does not sit over the port's
+menu bar or in the letterbox bar beside a 4:3 picture. Its cell is a whole number
+of screen pixels — `max(2, round(height / 180))`, off the picture rather than off
+`Theme.Scale`, since it belongs to the game's image and not to the port's chrome
+— because a one-cell outline on a half pixel softens the whole thing. And its
+`IsOpen` is `true` with a no-op setter, the shape `MapOverlay` uses: the fade *is*
+the open state, `Draw` returns before it begins a window while faded out, and a
+setter that wrote anything would give "Reset view" an opinion about a transient.
+
+It is registered from `Mouse.Install`'s `RuntimeReadyEvent` rather than from
+`Program.cs`, which puts it after the map's three viewports — `PanelManager` draws
+in registration order, and a capture announcement belongs over the map rather than
+under it.
+
+**One toast is kept.** "This display cannot lock the pointer" is a failure rather
+than a state, it is rare, and it needs words; no glyph says it. The once-a-session
+"press Escape" hint is *not* kept, and that is the same argument as the card: a
+player who moves the mouse and gets nothing is asking "is this on?", not "which
+key is it?", and the cut mouse answers exactly that. The key is still named on the
+console line at boot and in the settings page.
+
+**Never judged by eye**: whether the top right is where the eye is, whether 1.75 s
+total is long enough to notice and short enough not to nag, and whether the cut
+reads as "released" over a bright scene.
+
+### What the runtime had to grow: `0017`, and later `0032`
 
 `InputManager` owns the `IMouse` and is `internal`, so the port could not reach
 the cursor at all. The patch adds three things to it and forwards them from
@@ -535,6 +720,13 @@ keyboard:
 
 `Shutdown` gives the cursor back, so a crash on the way out does not leave a
 hidden pointer behind.
+
+`0032` is the same problem with a much smaller answer, and the port's own binding
+table is what wanted it: `InputManager.IsPadConnected` and
+`GetFirstPressedPadButton` are **already `public static`** on that internal class,
+so unlike the mouse nothing had to be added there — only the two forwards from
+`HostWindow`, beside `IsKeyDown` and the mouse block. Two lines against `0017`'s
+sixty. UI only, so no recompile.
 
 ### What is measured, and what is not
 

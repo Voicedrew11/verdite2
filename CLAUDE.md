@@ -79,7 +79,7 @@ KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
 KF2_FPS=120                            # 20 (default), any number, or off; see "Any frame rate"
-KF2_TICKRATE=30                        # ticks a second the world runs at (20 by default)
+KF2_TICKRATE=30                        # ticks a second the world runs at (20, and no longer a setting)
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_FPS_PROBE=1                        # a line a second: fps drawn, ticks taken, and what each smoother is doing
@@ -114,8 +114,9 @@ KF2_DRAWCENSUS=1                       # which renderer routine drew how much of
 KF2_TEXPROBE=1                         # textured vs flat prims a second, and a per-page VRAM census, into texprobe.log
 KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
-KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
-KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3 shape
+KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide (stretched by default)
+KF2_WIDESCREEN_HUD=1                     # anchor the HP/MP panel and icons to the new edges (off; no longer a setting)
+KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3 shape (widened by default)
 KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the aspect's
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
 KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
@@ -139,7 +140,8 @@ KF2_MOUSE=1                              # mouse look (off by default; Escape ca
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
-KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
+KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
+KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_BOOTEXE=end                          # boot straight into OPEN.EXE, GAME.EXE or END.EXE
 KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the original does (a button exits by default)
@@ -147,12 +149,17 @@ KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: ov
 KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill
 KF2_UISCALE=1                            # force the interface scale, and save it
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
-KF2_MAP_MINIMAP=1                        # the corner minimap on (off by default); N toggles it
-KF2_MAP_MARKERS=0                        # creatures, objects, effects and sprites off (on by default)
-KF2_MAP_PAUSE=0                          # leave the world running while the full map is up (it pauses by default)
+KF2_MAP_MINIMAP=1                        # the corner minimap on (off; no longer a setting); N toggles it
+KF2_MAP_MARKERS=1                        # creatures, objects, effects and sprites on (off; no longer a setting)
+KF2_MAP_STYLE=blueprint                  # the port's original blueprint plan (the game's own map; no longer a setting)
+KF2_MAP_SHADE=1                          # colour each tile by its height byte (off; no longer a setting)
+KF2_MAP_WALLS=1                          # tint the tiles whose +4 bit 0x80 is set (off; no longer a setting)
+KF2_MAP_PAUSE=0                          # leave the world running while the full map is up (it pauses; no longer a setting)
+KF2_MAP_FLOOR=lower                      # pin a stacked half instead of following the player (no longer a setting)
+KF2_MAP_ARROW=1                          # the player as an arrow with a heading, not a dot (no longer a setting)
 KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, its occupied extent and a marker census, and open both maps
 KF2_MAP_FOG=1                            # fog of war: only the tiles you have seen (off by default)
-KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on by default)
+KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on; no longer a setting)
 KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, tiles refused, records, flushes
 KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 grid, the gate's verdict and its walls
 ```
@@ -164,10 +171,42 @@ it, so the frame rate and the dither switch sit in System ▸ Settings ▸ Video
 beside vsync rather than in a panel of their own. That is where a mod's
 `DrawSettings` body goes when the mod becomes a patch. Pages that give the same
 `Title` share one heading, so single checkboxes group under "Enhancements"
-instead of each getting a rule of its own. That section is the runtime's
+instead of each getting a rule of its own; `IPatchPage.Order` (defaulted to 0)
+decides the order and the title is only the heading, which is what stopped
+Video's group order being an accident of `E` sorting before `F` — pages sharing
+a title need adjacent orders or the heading is drawn twice. Video reads *Frame
+pacing* (the rate, then the smoothing tick that is inert below it) and then
+*Enhancements* (perspective, sub-pixel, shading). That section is the runtime's
 `display` — still that id everywhere in code; the port renames only its *label*,
 through `Localization.Merge`, which needs no patch to the checkout. See "Patch
 settings" in `docs/PATCHES_AND_MODS.md`.
+
+**Input is the one pane the port takes over outright.** Everything above joins a
+runtime section through `Extend`, which can only append; the runtime's own Input
+body fills the popup, so the port's four input pages landed below the fold and the
+keyboard-layout buttons sat a screen from the table they write.
+`patches/settings/InputSection.cs` registers with `Id => "input"` —
+`SettingsRegistry.Register` replaces by id, so this needs no patch to the checkout
+either — and draws one tab bar over **Keyboard / Gamepad / Mouse**, each device's
+port settings above its own binding table (`patches/settings/BindingTable.cs`,
+which is a copy of the runtime's, since `InputSettingsSection` is `internal`).
+Three things came out of that pass. **`Extend` has no un-extend**, so the four
+pages had to be *dropped* from `PatchSettings.Install` rather than reordered — a
+page still registered against `"input"` would draw again outside every tab,
+irreversibly — and `Register` refuses that id now. **The Pad 1 / Pad 2 tab bar is
+gone**: `BiosB.PadRead` packs pad 2 into the high half of the pad word and the
+game keeps only the low sixteen bits at `0x80199554`, so it was a tab of bindings
+that could not reach the game; `Keys2`/`Pad2` are never read or written, so a
+config carrying them keeps them. **The table names the action** — a dimmed
+`In King's Field` column, out of the action-mask table and `func_8002957C` — which
+reverses the standing rule against naming the verb, on the grounds that the header
+and a note under the table both say these are the game's *defaults*. The
+`controls` section `docs/INPUT.md` was going to build instead is dead:
+`settings.input` already reads **"Controles"** in pt-BR and es-419, so a second
+sidebar entry by that name collides with the first in two of three languages —
+**check a new sidebar entry against every language of the ones already there.**
+`0032` is the one thing it needed from the checkout. See "The Input pane is the
+port's" in `docs/INPUT.md`.
 
 **`gameplay` is the one section the port adds itself**, for patches that change
 how the *game* behaves rather than how the machine does — auto reload is not a
@@ -187,13 +226,25 @@ the runtime. `FramePacing` **skips it at every rate**, paces the frame itself, a
 runs what holds per-tick state on a wall-clock accumulator at `LogicHz`.
 
 **`LogicHz` is 20, not 30, and that is a judgement rather than a reading.** The
-literal 2 is what the code asks for; the console missed that deadline under load
-and landed in the three-vblank band, and since King's Field's speed *is* its frame
-rate, 20 is the speed it was played at. The port's HLE GPU makes the 2-vblank
+literal 2 is a **ceiling, not a target** — `func_80017880` spins *while* the vblank
+credit is below 2, so it forbids a frame faster than 30 and asks nothing of a
+slower one, and a limit that was never the binding constraint says nothing about
+intended speed. The console missed that deadline under load and landed in the
+three-vblank band, and since King's Field's speed *is* its frame rate, 20 is the
+speed it was played at and the only one of the two with a claim to being the speed
+it was built at. (**Open:** the JP original `SLPS-00069` is reported to be capped
+at 20 outright, which would settle it — unchecked, since this project has only
+`SLUS-00158`.) The port's HLE GPU makes the 2-vblank
 deadline every frame and never bands down, so it has to be told. No counter here
 can settle it — the port cannot observe hardware, and the 30-minute vblank
-histogram that looks like it can is a measurement *of the port* — so it is a
-**setting** (`KF2_TICKRATE`, and a combo under Video), and 30 is one entry away.
+histogram that looks like it can is a measurement *of the port* — **and that is not
+a reason to make the player settle it**. It had a combo under Video offering both
+answers and that combo is gone: 20 is the rate, it is what every measurement in
+this port is taken against, and 30 is a comparison, which lives on the console
+under `KF2_TICKRATE` with the rest of them. The saved key
+(`kf2.framepacing.logichz`) is deliberately no longer read — a config left saying
+30 with no control to show it would be a session running half again too fast and
+nothing in the window to say why.
 Because the gate decides the render rate and the world rate together and knows one
 answer for both, leaving it running at the 20 fps default would pin the world back
 to 30, which is why it is skipped everywhere rather than only above 30. **The
@@ -299,9 +350,9 @@ root steps at the tick rate while the vertices morph at the frame rate. So
 those poses for the same tick** — they need no knowledge of each other's tables,
 since `func_80032588`'s `a2` *is* `base + slot*stride + PosOff` — and a creature
 past even the raised cap degrades to a coherent tick-rate creature instead of a
-smooth head on a stepping body. The mode is a setting (Video ▸ Enhancements ▸
-Placement guard, `KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`, `continuous`
-by default), and the carry decision is made once per tick rather than once per
+smooth head on a stepping body. The mode is a setting (`KF2_SMOOTH_OBJECTS_GUARD=strict|sticky|continuous`,
+`continuous` by default; its combo came out of Video ▸ Enhancements with the
+merge below), and the carry decision is made once per tick rather than once per
 frame because the hysteresis reads state it also writes.
 **3D pose is `patches/AnimSmoothing.cs`**, which drives
 the MO clip clock (`func_80032588`'s ninth stack word / `func_8003486C`) so the
@@ -380,8 +431,8 @@ code agrees with: `LoopPacing`'s redraws run only while `!TickedThisFrame`.
 **`Mode.Timeline` is the default again** — the default moved to `Mode.Time` while
 the shake was diagnosed, since that was the only mode with a positive report by
 eye, and moved back once play reported the fixed one looking very good; the other
-two are a combo under Video ▸ Enhancements ▸ Pose interpolation, switchable while
-a creature is on screen, and the losers go once the picture is judged. **On the
+two are `KF2_SMOOTH_ANIM=weight|time`, switchable while a creature is on screen,
+and the losers go once the picture is judged. **On the
 invariant it is the correct approach and `Mode.Time` is not**: when the predicate
 cannot explain a tick it holds, which *is* the invariant's second half, whereas
 `Mode.Time` interpolates anyway and synthesises its turnover out of the last
@@ -411,8 +462,17 @@ backwards step), and a pair on `func_80034DA8` opens the same window
 to game memory. Measured at 144 fps: clip 0, 300 a tick on a 4096-unit clip, 13
 ticks a swing, **0 held**, 86 of 94 frames carried, world clock still 19.9
 ticks/s. **All four
-default to off** — while the boundary was broken the phase was
-pinned to 0 and the
+default to off, and they are now one checkbox** — *Video ▸ Enhancements ▸ Smooth
+motion between game ticks* writes all four patches and all four keys together,
+since four controls for one idea was the implementation's shape rather than the
+player's, and the two expert combos came out with the checkboxes they hung under
+(see "One switch for all of the smoothing" in `docs/PATCHES_AND_MODS.md`). **The
+position half is inside that tick and carries a known shear**: two of stage 13's
+callees read the raw player position after `FrameSmoothing.After` restores it, so
+the arm, the torches and the creatures slide against the architecture on a
+non-tick frame — which is why it used to be its own switch, off by default, and
+the merged tick has never been looked at by eye. While the boundary was broken
+the phase was pinned to 0 and the
 smoothing never ran at all, so the first three's picture has never been seen.
 The animation one's has: it was confirmed by eye once the clip-time guard stopped
 discarding every real step. A 50 ms tick makes
@@ -568,6 +628,14 @@ dither hides: it renders the shaded gradient at 24 bits so it does not band, wit
 no crosshatch (`patches/recompone/0021`, switch in `patches/TrueColor.cs`). It
 defaults to *off* too, but not for the sub-pixel reason — 24-bit shading is
 deliberately not what the hardware did, so the default is the authentic look.
+**Being one question they are asked once**: the two checkboxes are a single
+three-entry `Shading` combo under Video ▸ Enhancements
+(`patches/settings/ShadingPage.cs`) — `Dither (original)` / `None` /
+`Smooth (24-bit)` — because two ticks cross into four states carrying three
+meanings and the fourth is a crosshatch laid over a smooth gradient. `None` is
+what both defaults already were, so no saved config changed meaning, and both
+patches keep their key and their env var. See "Two shading checkboxes were one
+question asked twice" in `docs/PATCHES_AND_MODS.md`.
 **Perspective
 correction is a patch for that same reason and is on by default**, beside it under
 Video. Unlike the others its work is not in `patches/` at all: a texture
@@ -591,7 +659,10 @@ from the console by `KF2_ZBUFFER` / `KF2_ZBUFFER_PROBE`.
 See "Sub-pixel vertex positioning" and "Z-buffer" in `docs/RENDERING.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
-default and its knobs are under Gameplay. Analog twin-stick control is the same
+default and its knobs — the switch and the slot — are under Gameplay; **the
+delay is a fixed 2 s** and `KF2_AUTORELOAD_DELAY` is the comparison, both ends of
+the slider it had being wrong (0 reloads inside the death animation, 10 leaves
+time to reach the menu the patch exists to skip). Analog twin-stick control is the same
 test applied to the pad — without it a modern controller's left stick is wired to
 the D-pad and *turns* rather than walking — so it is on by default too, and its
 knobs are under Input, below the button-binding table. It costs nothing when a
@@ -610,8 +681,8 @@ unasked is worse than one switch to find. What no counter can answer is the feel
 (0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
 `docs/INPUT.md`.
 
-**Opening the full-screen map stops the world** (`Map.Pause`, `kf2.map.pause`,
-Gameplay ▸ Map, `KF2_MAP_PAUSE=0`), and the mechanism is **the stage gate held
+**Opening the full-screen map stops the world** (`Map.Pause`, `KF2_MAP_PAUSE=0`
+the comparison; not a setting), and the mechanism is **the stage gate held
 shut rather than a new one**: `FramePacing.PauseWhen(predicate)` makes
 `BeforeStage` refuse on every frame instead of on three in four, and the six gated
 stages already *are* the per-tick world — objects, the pad read and movement, the
@@ -645,8 +716,23 @@ original shipped no automap, and everything else in the port that knows where yo
 are is a debug instrument — so it is on by default and its knobs are under
 Gameplay. **The pad's touchpad button opens a full-screen map** and `M` does the
 same from the keyboard; `N` toggles a corner minimap and `Shift+M` opens the
-docked panel with the per-tile readout. The minimap defaults *off*, for the
-sub-pixel reason. **There are three viewports over one reading, and
+docked panel with the per-tile readout. **The Gameplay page is down to three
+widgets** — a Map combo, and auto reload's checkbox and slot — since a picture
+nobody has judged is a comparison rather than a feature and everything else there
+was the port's question to answer rather than the player's; the pad binding moved
+to Input, where a player looks for what a button does. The minimap is *off* and
+its seven controls went with it, for the sub-pixel reason. **The map and fog of
+war are one combo** — `Off` / `Whole area` / `Fill in as you go` — for the reason
+the two shading checkboxes are one: two ticks cross into four states carrying
+three meanings, and fog on with the map off is nobody's answer; both patches keep
+their key and their env var, and the map is read as the master so any click
+harmonises the pair. Auto reload's slot dims rather than vanishing, and its
+*Simulate death* button and death census are gone, being instruments — the shell's
+`kill`, the MCP `kf2_kill` and the attract demo are where dying on purpose lives,
+and `AutoReload.Status` still prints. **Neither page names itself any more**: an
+empty `IPatchPage.Title` declines the heading, because `SettingsPopup` already
+draws one saying Gameplay and the section has no content of its own to separate
+from. See "What the Map page is down to" in `docs/PATCHES_AND_MODS.md`. **There are three viewports over one reading, and
 `patches/MapFullscreen.cs` is the one a player opens**: the whole area over the
 dimmed game, no chrome, `NoInputs`, closing the minimap while it is up — the
 docked `MapPanel` with its toolbar and its ten-byte hover readout is the
@@ -677,15 +763,16 @@ occupied-extent pass in `Map.Copy` — which **measured as the whole 80x80 grid*
 on both halves of areas 0 and 1, so below a floor of 6 px a tile the fit is
 abandoned and the view centres on the player's *tile*. **The player is a dot in
 the square they occupy, not an arrow**, and that is the default
-(`MapRender.DrawPlayerDot`, `kf2.map.player`): an arrow gives a sub-tile position
+(`MapRender.DrawPlayerDot`; `KF2_MAP_ARROW=1` is the comparison): an arrow gives a sub-tile position
 and a heading to a twelfth of a degree, which is a satellite fix in a maze whose
 difficulty is being lost in it, while a dot says only "you are in this square" —
 what someone mapping it on graph paper would have known. The arrow is kept as the
-other entry, since what it records about `func_80028080`'s heading is measured and
-a setting keeps it live. Measured: 144.0 fps and 20.0 ticks/s with all three
+other entry in the code, since what it records about `func_80028080`'s heading is
+measured, but it is no longer a setting: how much the map gives away is a question
+about the game rather than about the player's screen. Measured: 144.0 fps and 20.0 ticks/s with all three
 viewports drawing. **The map is drawn the way the game's own map is, and that is
-the default** (`Map.Style`, `kf2.map.style`, Gameplay ▸ Map ▸ Style;
-`MapRender.DrawNative`): the port's first map was accurate and belonged to a
+the only way it is drawn** (`Map.Style`, `MapRender.DrawNative`;
+`KF2_MAP_STYLE=blueprint` is the comparison): the port's first map was accurate and belonged to a
 different game — walkable tiles filled pale on near-black under a ruled grid,
 which is the docked instrument's palette scaled up, and was reported from play as
 not conforming to the game's styles. **The one difference that matters is that the
@@ -717,10 +804,17 @@ asking the 80x80 grid, not the drawing window — so a shared wall is inked once
 a window's edge grows no border. Two parts are readings rather than measurements:
 the original's mottled shapes are reproduced as the **other stacked half**, and
 the height ramp is kept in the board's green at a fifth of the blueprint's
-contrast. The blueprint is the other entry, being the picture the fog, the extents
-and the marker layer were judged against. **None of the native style has been
-looked at by eye.** **The minimap is a fully opaque square by
-default and can be a circle and semi-transparent** (Gameplay ▸ Map): opacity
+contrast — and is now **off**, along with the sight-blocking tint, the style
+combo and the marker layer: five controls came off the Gameplay page because
+none of them was a choice, none reads its saved key any more, and
+`KF2_MAP_STYLE=blueprint`, `KF2_MAP_SHADE=1` and `KF2_MAP_WALLS=1` are what is
+left of the first three (see "Five map controls that were not choices" in
+`docs/PATCHES_AND_MODS.md`). The blueprint is kept in the code, being the picture
+the fog, the extents and the marker layer were judged against.
+**None of the native style has been
+looked at by eye**, and it is now the only map anybody sees. **The minimap is a fully opaque square and can be a circle and semi-transparent,
+though nothing in the window says so any more** (its seven controls came off the
+Gameplay page with it; the fields keep the values that shipped): opacity
 fades the ground and the tiles but never the player's marker, and the circle is
 cut **per tile** — ImGui clip rects are rectangles and a draw list cannot erase,
 so the usual mask ring would have to be painted opaque, which is the one thing
@@ -751,7 +845,11 @@ pointing across the direction of travel, since the mirror was in the map — a
 mirror is invisible to any measurement taken inside the mirrored frame. The
 `KF2_MAP_PROBE=1` dump is not flipped, being a dump of the grid rather than of
 the picture. **The tile grid is only half of a map, and `patches/MapMarkers.cs` is the other
-half**: it draws what is *standing* in the area, from the **four world tables
+half — which is now off, and not a setting** (`KF2_MAP_MARKERS=1` and the docked
+panel's session tick are the comparisons): a live read of where every creature,
+prop, spell and torch is standing, through walls, is an instrument rather than a
+map, and King's Field's difficulty is not knowing what is round the corner. It
+draws what is *standing* in the area, from the **four world tables
 `func_800331B4` itself draws from** — creatures `0x8016C544` (200 x `0x7C`, drawn
 when `u8[+0x9] == 1`, pos `+0x2C`), objects `0x80177714` (396 x `0x44`, `u16[+0x6]
 != 0xFF`, pos `+0x14`), effects `0x8019CC6C` (128 x `0x48`, pos `+0x14`) and
@@ -807,7 +905,9 @@ not fail**: `DrawSave` clamped the glyph up to nine pixels and then tested
 whether it had reached nine, so the fallback was dead code; it gates on the cell
 now, below five pixels a tile. Measured after: `4 of 4 lettered on the upper half
 at 12.0 px a tile`, with the marker layer off. Never looked at by eye: whether an S lands where the game
-actually lets you save. Billboards and the creature-facing spoke default off. Measured:
+actually lets you save. **The save points are the exception and stay on**, being
+the one object a player wants a map to find and one the game names itself;
+billboards and the creature-facing spoke default off. Measured:
 144.0 fps and 20.0 ticks/s at `KF2_FPS=144` with both viewports drawing markers.
 Never judged by eye: whether the markers read at minimap size, and whether the
 facing spoke points the way the creature does. Two traps are
@@ -863,8 +963,9 @@ Measured over a walk through all eight areas at 144 fps: 3993 of 8469 lit cells
 refused, the player's own tile revealed on every sample, nothing outside the cast
 window, and 144.0 fps / 20.0 ticks/s with the minimap open.
 `KF2_MAP_FOG_PROBE=2` prints the grid, the gate's verdict and the walls it read
-side by side, which is what makes a refusal arguable; `KF2_MAP_FOG_LOS=0` and
-Gameplay ▸ Map ▸ *Only what you could see* are the comparison. Never looked at by
+side by side, which is what makes a refusal arguable; `KF2_MAP_FOG_LOS=0` and the
+docked panel's *Sight* tick are the comparison, the gate being a correctness
+argument rather than a preference and so no longer a setting. Never looked at by
 eye: whether the revealed shape matches where you walked.
 See "A dynamic map" in `docs/PATCHES_AND_MODS.md`.
 
@@ -890,9 +991,14 @@ that is how v1's swapped attack/use was fixed. See "The keyboard layout" in
 **Widescreen is a patch for the dither reason** — an aspect ratio is a picture the port should be able to offer without a
 package having to load, and Video is where a player looks for it — but it is the
 one patch that defaults to *doing nothing*, for the sub-pixel reason: the picture
-has never been checked by eye. (Its two sub-options are on by default, since they
-only do anything once an aspect has been chosen; the tint stretch is on because
-the picture without it *was* checked and was wrong.) The measurement tools are the mods that are left
+has never been checked by eye. **The page is now one combo and nothing else**: the
+three ticks under it were not choices, so the cull widening and the tint stretch
+follow the aspect (on the moment one is chosen — the picture without either *was*
+checked and was wrong both times), the HUD anchoring is **off**, and none of the
+three reads its saved key any more, so nobody is stranded by a value they set when
+it was still a tick. `KF2_WIDESCREEN_CULL=0`, `KF2_WIDESCREEN_EFFECTS=0` and
+`KF2_WIDESCREEN_HUD=1` are the comparisons. See "Three checkboxes that were not
+choices" in `docs/WIDESCREEN.md`. The measurement tools are the mods that are left
 under `mods/` — **enable them in the game's Mods panel**, since mods default to
 off and load silently when disabled. Prefer them to `KF2_LOG=sdk`, which is
 gigabytes a minute.
@@ -904,7 +1010,9 @@ its primitives in an area. The one piece of machinery in `patches/Widescreen.cs`
 is a **replacement of `DrawOTag`**, and it is there for the HUD rather than for
 the picture: anchoring the HP/MP panel and the equipment icons to the new edges
 needs to know which ordering-table entry a primitive came from, and the primitive
-event cannot say. That replacement is the reason every other `DrawOTag` hook in
+event cannot say. **With the anchoring off by default its two-pass walk no longer
+runs** — the replacement is a straight call to the original at every aspect unless
+`KF2_WIDESCREEN_HUD=1`, which is the path 4:3 always took. That replacement is the reason every other `DrawOTag` hook in
 `patches/` is a pre or a post — `HookManager` allows one `Replace` owner per
 function. It must also pass the **source address** to `WriteGp0`, or the recovered
 GTE depth misses and perspective correction quietly turns itself off whenever the
@@ -1154,8 +1262,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-nine
-of the thirty-three are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirty
+of the thirty-four are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
@@ -1167,7 +1275,9 @@ false: `0021-true-color-24bit-output.patch` was authored while
 rejected them, leaving the tree at `0020`. The patch has been regenerated against
 this branch's context. Verified by applying all thirty-three patches in glob order
 to a pristine worktree of the pin: every one applies, and the result is
-byte-identical to the tree in place.
+byte-identical to the tree in place. (`0032` was added after that verification and
+is checked the same way — two consecutive `setup_tools.sh` runs, the second still
+reporting `applied` after a clean peel.)
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -1339,7 +1449,7 @@ uncaptured edit inside the checkout is left where it is.
   gradient gains precision; the writeback/present blits convert automatically.
   GL backend only — the software rasterizer is always 15-bit. Off by default (the
   authentic look). `patches/TrueColor.cs` (`KF2_TRUECOLOR`) is the switch and
-  `patches/settings/TrueColorPage.cs` the checkbox under Video. **No recompile** —
+  `patches/settings/ShadingPage.cs`'s combo is where it is chosen. **No recompile** —
   render-target format and shaders are runtime. See "True color" in
   `docs/RENDERING.md`.
 
@@ -1417,6 +1527,14 @@ uncaptured edit inside the checkout is left where it is.
   `Popup` is abstract-public and `PopupManager.Register` takes any implementation
   — so `Verdite2.Launcher/BuildProgressPopup.cs` is not a patch. UI only, **no
   recompile**. See "The one patch this needed" in `docs/PACKAGING.md`.
+
+- `0032-expose-pad-queries.patch` — `InputManager` is `internal`, so a port
+  drawing its **own** binding table could not ask whether a pad is connected or
+  what is held down on it. Both methods were already `public` on that class, so
+  unlike `0017` nothing had to be added there — only the two forwards from
+  `HostWindow`, beside `IsKeyDown` and the mouse block. Two lines against `0017`'s
+  sixty. UI only — **no recompile**. See "The Input pane is the port's" in
+  `docs/INPUT.md`.
 
 - `0031-output-panel-fills-its-dock-node.patch` — the picture is the point of the
   Output panel, so it gets none of the chrome every other panel wants. The themed

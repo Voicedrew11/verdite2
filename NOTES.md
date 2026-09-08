@@ -84,16 +84,19 @@ pop back to affine the moment one vertex clamps off-screen, and a pixel that two
 vertices share no longer hands one polygon the other's depth (see "The table is
 not unique").
 
-**The frame rate is a free number and the world's tick rate is a second one.** The
+**The frame rate is a free number and the world's tick rate is a fixed 20.** The
 port skips the game's own frame gate at every rate — it decides both together and
 knows one answer for both, 30 — paces the picture itself, holds the world to a
 fixed timestep and carries the camera between ticks, so the picture can run at 60,
-120 or 165 while the world keeps a console's timing. **Both default to 20**: the
-literal 2 in that gate is what the code *asks* for, but the console missed the
-deadline under load and landed in the three-vblank band, and since the game's speed
-is its frame rate, 20 is the speed it was played at. That is a judgement no counter
-here can settle, so it is a setting (see "Any frame rate" in
-`docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
+120 or 165 while the world keeps a console's timing. **The render rate defaults to
+20 too**, 1:1 with the tick, which is the console's own arrangement. The literal 2
+in that gate is a *ceiling* rather than a target — it forbids a frame faster than
+30 and asks nothing of a slower one — and the console missed that deadline under
+load and landed in the three-vblank band, so since the game's speed is its frame
+rate, 20 is the speed it was played at and built at. That is a judgement no counter here can
+settle — which is a reason to make it, not a reason to hand it to the player, so
+the tick rate is **not** a setting and `KF2_TICKRATE=30` is the comparison (see
+"Any frame rate" in `docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
 movies and holds "The End", and **any button then returns to the title** —
 holding it forever is what the original does, and on a window that is
 indistinguishable from a crash. See "The ending screen" in `docs/RUNTIME.md`.
@@ -213,6 +216,7 @@ Aspect ratio, the HUD and screen-space effects authored 320 wide, and the three 
 - The HUD does not widen with the world, and finding it is the problem
 - The screen-space effects are 320 wide too, and one drawer makes all of them
 - Widescreen became a patch, and the default stayed 4:3
+- Three checkboxes that were not choices
 - The cull the margin runs into: a 24×24 tile grid, and a trapezoid drawn on it
 - The second cull: a view-space clipper, and it is set to twice the screen
 - Is the 24-tile window worth lifting? Measured: binding, and barely
@@ -245,6 +249,8 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Any frame rate: three gates, one logic clock, and a smoothed view
 - Auto reload
 - A dynamic map
+- Five map controls that were not choices
+- What the Map page is down to
 - Auto start and the agent beacon
 - The command channel
 - `ending` exists because the last ten minutes of the game are otherwise untestable
@@ -255,6 +261,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 Pad, analog sticks, keyboard layout and mouse look.
 
 - Analog twin-stick control
+- The Input pane is the port's
 - The keyboard layout, and changing a default RecompOne provides
 - Mouse look
 

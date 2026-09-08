@@ -48,8 +48,10 @@ namespace Kf2;
 ///
 /// **It takes no input.** The window carries <c>NoInputs</c>, so the mouse still
 /// reaches the game and the ImGui menus behind it, and there is nothing on it to
-/// click: no zoom, no pan, no toolbar. Everything it draws is decided by the
-/// settings under Gameplay ▸ Map, which the other two viewports already share.
+/// click: no zoom, no pan, no toolbar. Everything it draws the port decides —
+/// the game's own board, no height ramp, no wall tint, no marker layer, a dot for
+/// the player and the half they are standing on — with only the map itself and
+/// the fog left as settings, under Gameplay ▸ Map.
 ///
 /// The palette, the tiles, the markers and the player are patches/MapRender.cs,
 /// so this is a third viewport rather than a third map — it differs from the

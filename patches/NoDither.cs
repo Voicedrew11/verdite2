@@ -12,7 +12,9 @@ namespace Kf2;
 ///
 ///     KF2_NODITHER_PROBE=1   also report the two draw-mode sources to the console
 ///
-/// It is a setting, under Video — see Kf2.Settings.NoDitherPage. The saved
+/// It is a setting, under Video — one of the three entries of
+/// Kf2.Settings.ShadingPage's combo, which is where it and true color are asked
+/// as the one question they are. The saved
 /// choice is read on RuntimeReadyEvent rather than in <see cref="Configure"/>,
 /// since ConfigManager only loads inside HostWindow.Initialize, after Program.cs.
 ///

@@ -25,7 +25,10 @@ namespace Kf2;
 /// the runtime (<c>patches/recompone/0021</c>), because a pixel's precision is
 /// decided in the render target's format and the fragment shader, far below
 /// anything <c>HookManager</c> can reach. Off by default, so the default picture is
-/// the console's. The software rasterizer is always 15-bit; this affects the GL
+/// the console's. It is a setting, under Video — one of the three entries of
+/// <see cref="Kf2.Settings.ShadingPage"/>'s combo, since the dither and this are
+/// two answers to one question and were two checkboxes crossing into a fourth
+/// state (a crosshatch over a smooth gradient) that answers nothing. The software rasterizer is always 15-bit; this affects the GL
 /// backend alone. See "True color" in NOTES.md.
 /// </summary>
 public static class TrueColor

@@ -15,9 +15,51 @@ public interface IPatchPage
     /// **Pages that give the same title share one heading** — a single checkbox
     /// does not deserve a rule and a name of its own, so several of them can sit
     /// together under "Enhancements" while something with real structure, like the
-    /// frame rate, keeps its own.</summary>
+    /// frame rate, keeps its own.
+    ///
+    /// The title is the heading and nothing else: it used to be the sort key too,
+    /// which made the order of the port's groups an accident of how they were
+    /// spelled — "Enhancements" drew above "Frame pacing" because E sorts before
+    /// F. <see cref="Order"/> is the sort key now.
+    ///
+    /// **An empty title declines the heading**, which is the degenerate case of
+    /// that sharing rule: <c>SettingsPopup</c> draws a rule naming the section
+    /// before any extension runs, so a section whose pages are the whole pane —
+    /// <see cref="GameplaySection"/> is the one — gets a second rule immediately
+    /// under the first with nothing between them. The pages still get their
+    /// spacing and their order; they just do not name themselves twice.</summary>
     string Title { get; }
 
+    /// <summary>Where the page sits among the section's other pages, low first.
+    ///
+    /// Defaulted, so a page that does not care states nothing and falls back to
+    /// the title comparison it had before. **Pages sharing a <see cref="Title"/>
+    /// have to be given adjacent orders**: <see cref="PatchSettings.Draw"/> opens
+    /// a heading whenever the title changes, so a page separating two of them
+    /// draws the heading twice.
+    ///
+    /// **A page drawn by a section wrapper is a body, not a page**, and this is
+    /// inert for one: <see cref="InputSection"/> writes its sequence out in three
+    /// small arrays, so there is no list to sort and no tie to break. Only the
+    /// degenerate half of the <see cref="Title"/> rule survives there — an empty
+    /// title declines the heading — because the tab is already the heading.</summary>
+    int Order => 0;
+
+    /// <summary>
+    /// Draw the page's controls.
+    ///
+    /// **A tooltip says what the control <em>does</em>, in one short line.** These
+    /// were each a small essay — the crosshatch named as 4x4, affine mapping,
+    /// whole-pixel vertices, the 15-bit frame buffer, the tick the picture trails
+    /// by. All of that is true and none of it is a player's question, which is only
+    /// ever "what changes if I tick this". The mechanism is written up in the
+    /// patch's own doc comment and in <c>docs/</c>, and the numbers that justify it
+    /// belong on the console behind the probe env vars; a hover in a settings
+    /// window is not the place for either. Where a control genuinely needs a
+    /// paragraph — the frame rate's consequences, the smoothing being inert at the
+    /// tick rate — that goes in a wrapped note under the control, where it can be
+    /// read rather than raced against a mouse.
+    /// </summary>
     void Draw();
 }
 
@@ -40,12 +82,18 @@ public interface IPatchPage
 /// PatchSettings.Register("display", new FramePacingPage());
 /// </code>
 ///
-/// The section ids are the runtime's own: <c>interface</c>, <c>input</c>,
-/// <c>display</c>, <c>paths</c>, <c>audio</c> — plus <c>gameplay</c>, the one
-/// section the port adds itself (see <see cref="GameplaySection"/>), for patches
-/// that change how the game plays rather than how the machine behaves. An id that
-/// matches no section is reported at startup rather than silently drawing
-/// nothing.
+/// The section ids are the runtime's own: <c>interface</c>, <c>display</c>,
+/// <c>paths</c>, <c>audio</c> — plus <c>gameplay</c>, the one section the port
+/// adds itself (see <see cref="GameplaySection"/>), for patches that change how
+/// the game plays rather than how the machine behaves. An id that matches no
+/// section is reported at startup rather than silently drawing nothing.
+///
+/// <c>input</c> is not on that list any more, and it is the other way the port can
+/// own a pane: <see cref="InputSection"/> **replaces** the runtime's section
+/// rather than extending it, because <c>Extend</c> can only append and the
+/// runtime's own Input body fills the popup. Registering a page against
+/// <c>"input"</c> is refused with a message, since <c>Extend</c> has no un-extend
+/// and such a page would draw outside every tab forever.
 ///
 /// Settings persist through <see cref="Set(string,bool)"/> and friends, which is
 /// <c>Runtime.View</c> plus an immediate <c>SaveView</c> -- the same
@@ -67,17 +115,35 @@ public static class PatchSettings
     /// Add a page to one of the runtime's settings sections. Registering the same
     /// page id again replaces it, so a patch reloaded during development does not
     /// stack up duplicates.
+    ///
+    /// The list is kept in <see cref="IPatchPage.Order"/> order, ties broken by
+    /// title, so the order the pages are registered in below carries no meaning —
+    /// keep it matching the drawn order anyway, so the file reads as the pane does.
     /// </summary>
     public static void Register(string sectionId, IPatchPage page)
     {
         if (string.IsNullOrWhiteSpace(sectionId) || page == null) return;
+
+        // "input" is the port's own pane now (InputSection), and Extend has no
+        // un-extend -- a page registered here would draw under the tab bar,
+        // outside every tab, permanently. Add it to one of InputSection's tab
+        // lists instead.
+        if (string.Equals(sectionId, "input", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine($"[KF2] settings: \"{page.Id}\" registered against " +
+                                    "\"input\", which the port draws itself; add it to " +
+                                    "InputSection's tabs instead");
+            return;
+        }
 
         if (!_pages.TryGetValue(sectionId, out var list))
             _pages[sectionId] = list = [];
 
         list.RemoveAll(p => p.Id == page.Id);
         list.Add(page);
-        list.Sort((a, b) => string.Compare(a.Title, b.Title, StringComparison.Ordinal));
+        list.Sort((a, b) => a.Order != b.Order
+            ? a.Order.CompareTo(b.Order)
+            : string.Compare(a.Title, b.Title, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -120,17 +186,18 @@ public static class PatchSettings
         _installed = true;
 
         Register("display", new FramePacingPage());
-        Register("display", new NoDitherPage());
+        Register("display", new FrameSmoothingPage());
         Register("display", new PerspectivePage());
         Register("display", new SubpixelPage());
-        Register("display", new FrameSmoothingPage());
-        Register("display", new TrueColorPage());
+        Register("display", new ShadingPage());
         RegisterSlot("display.render_scale", new WidescreenPage());
-        Register("input", new KeyLayoutPage());
-        Register("input", new AnalogPage());
-        Register("input", new MousePage());
-        Register("gameplay", new AutoReloadPage());
+        // Nothing registers against "input": the port draws that whole pane
+        // itself (InputSection), and SettingsRegistry.Extend has no un-extend --
+        // a page left here would draw a second time under the tab bar, outside
+        // every tab, with no way to take it back. The four pages that were here
+        // are held by InputSection and drawn inside the tab each belongs to.
         Register("gameplay", new MapPage());
+        Register("gameplay", new AutoReloadPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
     }
 
@@ -181,6 +248,15 @@ public static class PatchSettings
         // first frame of the settings popup.
         SettingsRegistry.Register(new GameplaySection());
 
+        // Input is a *replacement*, not an addition: Register removes by id, so
+        // this takes the runtime's own pane over. If upstream ever renames that
+        // id we would silently add a second Input tab rather than replacing the
+        // first, which is the one failure worth naming out loud.
+        if (!SectionExists("input"))
+            Console.Error.WriteLine("[KF2] settings: no \"input\" section to replace; " +
+                                    "the port's Input pane will be a second tab");
+        SettingsRegistry.Register(new InputSection());
+
         foreach (var (sectionId, pages) in _pages)
         {
             if (!SectionExists(sectionId))
@@ -224,7 +300,10 @@ public static class PatchSettings
             {
                 heading = page.Title;
                 ImGui.Spacing();
-                ImGui.SeparatorText(heading);
+                // An empty title declines the heading: the section's own rule is
+                // already above it and a second one under it, with nothing in
+                // between, is a rule for its own sake. See IPatchPage.Title.
+                if (!string.IsNullOrEmpty(heading)) ImGui.SeparatorText(heading);
             }
 
             ImGui.PushID(page.Id);
@@ -271,5 +350,19 @@ public static class PatchSettings
     {
         Rt.View.SetFloat(key, value);
         Rt.SaveView();
+    }
+
+    /// <summary>
+    /// A dimmed, wrapped line under a control, for the paragraph a tooltip is the
+    /// wrong place for — why a control is inert at this frame rate, what the rate
+    /// does not change. <c>TextDisabled</c> does not wrap and unwrapped prose runs
+    /// straight out of the settings window, so it is the colour plus
+    /// <c>TextWrapped</c> rather than the one call it looks like.
+    /// </summary>
+    public static void Note(string text)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+        ImGui.TextWrapped(text);
+        ImGui.PopStyleColor();
     }
 }

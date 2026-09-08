@@ -3,8 +3,10 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The twin-stick knobs, under Input — below the button-binding table, which is
-/// the only other place in the port where what a control does is decided.
+/// The twin-stick knobs, in Input's Gamepad tab — above the button-binding table,
+/// which is the only other place in the port where what a control does is
+/// decided. (It used to sit *below* that table and below the fold with it; see
+/// <see cref="InputSection"/> for why the pane is the port's now.)
 ///
 /// It is the largest patch page so far, so it is the first one shaped rather than
 /// listed: the three switches and the three sensitivities are what a player
