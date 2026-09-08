@@ -4013,10 +4013,11 @@ tint off, which is now the only map anybody sees.
 
 ## What the Map page is down to
 
-The Gameplay page carried **eleven** controls when the map shipped. It carries
-**two**: the map, and fog of war. One more — the pad button — moved to Input. The
-eight that went split three ways, and the split is the point rather than the
-count.
+The Gameplay page carried **eleven** controls when the map shipped. It came down
+to **two**: the map, and fog of war — and then those two became one combo and the
+pane was rebuilt around them, which is the pass at the end of this section. One
+more control — the pad button — moved to Input. The eight that went split three
+ways, and the split is the point rather than the count.
 
 **Not a choice** (five; "Five map controls that were not choices" above): the
 style, the height ramp, the sight-blocking tint, the marker layer with its four
@@ -4080,8 +4081,71 @@ Forget/Reveal this area. That panel is `Shift+M`, it is session-only already, an
 it is what a windowed debugger over the game is *for* — which is the same
 sentence that took its palette off the player's map in the first place.
 
-**Never looked at by eye:** the Gameplay page at two switches, and whether the
-Input page reads right with a map binding on it.
+### Then the page itself was looked at
+
+Two switches was the right *set*. Opened and looked at, the pane they made was
+not, and none of the four things wrong with it was about which options exist.
+
+**The order was an accident.** Both pages left `Order` at its default 0, so the
+pane sorted on the `Title` ordinal tie-break — "Auto reload" < "Map" — which is
+precisely the accident `IPatchPage.Order` was added to stop the first time, in
+Video. It is also a trap for whatever comes next: a third gameplay page at the
+default 0 whose title sorts between the two would have split a shared heading in
+half. The map leads now (10, then 20): what the game *has* before what happens
+when you fail at it, and the shorter block first.
+
+**The map and fog of war were one question asked twice.** Two ticks cross into
+four states carrying three meanings and fog-on-with-the-map-off is nobody's
+answer — the same sentence, and the same fix, as "Two shading checkboxes were one
+question asked twice" above. One combo: `Off` / `Whole area` / `Fill in as you
+go`. `kf2.map.on` and `kf2.map.fog` are both still written and both still read,
+`KF2_MAP` and `KF2_MAP_FOG` are untouched, and the map is the master on read-back
+— the state only `KF2_MAP=0 KF2_MAP_FOG=1` can reach opens as `Off` rather than
+earning an entry, and one click on any entry leaves the pair consistent.
+
+**Three instruments were on a player-facing page.** *Simulate death*, the
+`N death(s) seen, N reload(s)` census and the "no death yet" line. The button's
+own defence — dying on purpose is the hard part of testing this — is a sentence
+about testing, and this port already knows where its instruments go: the same
+argument that sent Forget and Reveal to the docked `MapPanel`. Nothing is lost.
+`AutoReload.Simulate` is still the shell's `kill` verb and the MCP `kf2_kill`
+tool, the attract demo still kills itself unattended, and `AutoReload.Status` —
+including the two failures a player could actually hit, "no save to reload" and
+"slot N would not load" — still prints on stdout every time it changes.
+
+**Three rules over four controls.** `SettingsPopup` draws a `SeparatorText`
+naming the section before any extension runs, so "Gameplay", "Auto reload" and
+"Map" stacked up with nothing between the first two. An empty `IPatchPage.Title`
+now declines the heading — the degenerate case of the rule that pages sharing a
+title share one — and `PatchSettings.Draw` keeps the `Spacing` outside the guard
+so two title-less pages still get air between them. This is deliberately *not*
+`DrawBare`, which is the slots' path: these pages still want their spacing and
+their order, they just do not name themselves under a rule that already did.
+
+Two smaller things went with them. The Save slot combo stretched to the full pane
+width, pushing its label out to the right margin — Video's combos omit
+`SetNextItemWidth` on purpose, to line up with the runtime's own, and Gameplay has
+no runtime content to line up with, so both combos take `MapButtonPage`'s 260. And
+the pane had both dependent-control idioms at once: the slot stayed live with auto
+reload off, while fog vanished on an early `return`. The slot is now indented and
+`BeginDisabled`, which is `MapButtonPage`'s rule and `FrameSmoothingPage`'s — a
+control that disappears reads as a setting that was lost — and fog is inside the
+combo, so there is one idiom left on the page.
+
+The whole pane, three widgets:
+
+```
+— Gameplay ————————————————————
+
+  Map        [ Fill in as you go ▼ ]
+
+  [x] Reload the last save on death
+        Save slot  [ Last used ▼ ]
+```
+
+**Never looked at by eye:** the pane at three widgets, whether "Whole area" and
+"Fill in as you go" say what they do without the word *fog* in the label, and
+whether the Input page reads right with a map binding on it.
 
 ## Auto start and the agent beacon
 

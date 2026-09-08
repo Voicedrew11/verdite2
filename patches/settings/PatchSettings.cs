@@ -20,7 +20,14 @@ public interface IPatchPage
     /// The title is the heading and nothing else: it used to be the sort key too,
     /// which made the order of the port's groups an accident of how they were
     /// spelled — "Enhancements" drew above "Frame pacing" because E sorts before
-    /// F. <see cref="Order"/> is the sort key now.</summary>
+    /// F. <see cref="Order"/> is the sort key now.
+    ///
+    /// **An empty title declines the heading**, which is the degenerate case of
+    /// that sharing rule: <c>SettingsPopup</c> draws a rule naming the section
+    /// before any extension runs, so a section whose pages are the whole pane —
+    /// <see cref="GameplaySection"/> is the one — gets a second rule immediately
+    /// under the first with nothing between them. The pages still get their
+    /// spacing and their order; they just do not name themselves twice.</summary>
     string Title { get; }
 
     /// <summary>Where the page sits among the section's other pages, low first.
@@ -164,8 +171,8 @@ public static class PatchSettings
         Register("input", new AnalogPage());
         Register("input", new MousePage());
         Register("input", new MapButtonPage());
-        Register("gameplay", new AutoReloadPage());
         Register("gameplay", new MapPage());
+        Register("gameplay", new AutoReloadPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
     }
 
@@ -259,7 +266,10 @@ public static class PatchSettings
             {
                 heading = page.Title;
                 ImGui.Spacing();
-                ImGui.SeparatorText(heading);
+                // An empty title declines the heading: the section's own rule is
+                // already above it and a second one under it, with nothing in
+                // between, is a rule for its own sake. See IPatchPage.Title.
+                if (!string.IsNullOrEmpty(heading)) ImGui.SeparatorText(heading);
             }
 
             ImGui.PushID(page.Id);

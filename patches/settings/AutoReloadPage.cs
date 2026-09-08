@@ -10,14 +10,29 @@ namespace Kf2.Settings;
 /// hand; a settings section is a list of switches, so none of that came across —
 /// the reasoning is in <see cref="AutoReload"/> and in <c>docs/</c>, and the
 /// tooltips say only what each control does (see <see cref="IPatchPage.Draw"/>).
-/// What did come across whole is the *Simulate death* button: dying on purpose is
-/// the hard part of testing this, and the alternative is waiting for the attract
-/// demo to kill itself.
+///
+/// **The Simulate death button and the death census went with it.** They are
+/// instruments — dying on purpose is the hard part of testing this, which is a
+/// sentence about testing rather than about playing — and this port already knows
+/// where its instruments go: the same argument that moved Forget and Reveal to the
+/// docked MapPanel. Nothing is lost. <c>AutoReload.Simulate</c> is still the
+/// shell's <c>kill</c> verb (<c>patches/AgentServer.cs</c>) and the MCP
+/// <c>kf2_kill</c> tool, the attract demo still kills itself unattended, and
+/// <c>AutoReload.Status</c> — including the two failures a player could see, "no
+/// save to reload" and "slot N would not load" — is still printed on stdout every
+/// time it changes.
 /// </summary>
 public sealed class AutoReloadPage : IPatchPage
 {
     public string Id => "autoreload";
-    public string Title => "Auto reload";
+
+    /// <summary>No heading of its own; the section's own rule says Gameplay. See
+    /// <see cref="IPatchPage.Title"/>.</summary>
+    public string Title => "";
+
+    public int Order => 20;
+
+    static readonly string[] Slots = ["Last used", "Slot 1", "Slot 2", "Slot 3"];
 
     public void Draw()
     {
@@ -25,7 +40,7 @@ public sealed class AutoReloadPage : IPatchPage
         if (ImGui.Checkbox("Reload the last save on death", ref on))
         {
             AutoReload.SetEnabled(on);
-            PatchSettings.Set(AutoReload.OnKey, on);
+            PatchSettings.Set(AutoReload.OnKey, AutoReload.Enabled);
         }
 
         if (ImGui.IsItemHovered())
@@ -37,8 +52,15 @@ public sealed class AutoReloadPage : IPatchPage
         // patch exists to save them from. See AutoReload.Delay;
         // KF2_AUTORELOAD_DELAY is the comparison.
 
+        // Dimmed and indented rather than hidden: a control that disappears reads
+        // as a setting that was lost, which is MapButtonPage's rule for the pad
+        // button and FrameSmoothingPage's for the smoothing tick.
+        ImGui.Indent();
+        ImGui.BeginDisabled(!AutoReload.Enabled);
+
         int slot = AutoReload.Slot;
-        if (ImGui.Combo("Save slot", ref slot, "Last used\0Slot 1\0Slot 2\0Slot 3\0"))
+        ImGui.SetNextItemWidth(260);
+        if (ImGui.Combo("Save slot", ref slot, Slots, Slots.Length))
         {
             AutoReload.SetSlot(slot);
             PatchSettings.Set(AutoReload.SlotKey, AutoReload.Slot);
@@ -47,24 +69,7 @@ public sealed class AutoReloadPage : IPatchPage
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Which save to reload. \"Last used\" follows where you saved.");
 
-        ImGui.Spacing();
-        Note(AutoReload.Deaths == 0
-            ? AutoReload.Status
-            : $"{AutoReload.Status} — {AutoReload.Deaths} death(s) seen, {AutoReload.Reloads} reload(s)");
-
-        if (ImGui.Button("Simulate death"))
-            AutoReload.Simulate();
-
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Kills you, for testing. Does nothing outside an area.");
-    }
-
-    /// <summary>Wrapped and dimmed. TextDisabled does not wrap, and unwrapped prose
-    /// runs straight out of the settings window.</summary>
-    static void Note(string text)
-    {
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
-        ImGui.TextWrapped(text);
-        ImGui.PopStyleColor();
+        ImGui.EndDisabled();
+        ImGui.Unindent();
     }
 }

@@ -689,13 +689,23 @@ original shipped no automap, and everything else in the port that knows where yo
 are is a debug instrument — so it is on by default and its knobs are under
 Gameplay. **The pad's touchpad button opens a full-screen map** and `M` does the
 same from the keyboard; `N` toggles a corner minimap and `Shift+M` opens the
-docked panel with the per-tile readout. **The Gameplay page is down to two
-switches** — the map, and fog of war — since a picture nobody has judged is a
-comparison rather than a feature and everything else there was the port's
-question to answer rather than the player's; the pad binding moved to Input,
-where a player looks for what a button does. The minimap is *off* and its seven
-controls went with it, for the sub-pixel reason. See "What the Map page is down
-to" in `docs/PATCHES_AND_MODS.md`. **There are three viewports over one reading, and
+docked panel with the per-tile readout. **The Gameplay page is down to three
+widgets** — a Map combo, and auto reload's checkbox and slot — since a picture
+nobody has judged is a comparison rather than a feature and everything else there
+was the port's question to answer rather than the player's; the pad binding moved
+to Input, where a player looks for what a button does. The minimap is *off* and
+its seven controls went with it, for the sub-pixel reason. **The map and fog of
+war are one combo** — `Off` / `Whole area` / `Fill in as you go` — for the reason
+the two shading checkboxes are one: two ticks cross into four states carrying
+three meanings, and fog on with the map off is nobody's answer; both patches keep
+their key and their env var, and the map is read as the master so any click
+harmonises the pair. Auto reload's slot dims rather than vanishing, and its
+*Simulate death* button and death census are gone, being instruments — the shell's
+`kill`, the MCP `kf2_kill` and the attract demo are where dying on purpose lives,
+and `AutoReload.Status` still prints. **Neither page names itself any more**: an
+empty `IPatchPage.Title` declines the heading, because `SettingsPopup` already
+draws one saying Gameplay and the section has no content of its own to separate
+from. See "What the Map page is down to" in `docs/PATCHES_AND_MODS.md`. **There are three viewports over one reading, and
 `patches/MapFullscreen.cs` is the one a player opens**: the whole area over the
 dimmed game, no chrome, `NoInputs`, closing the minimap while it is up — the
 docked `MapPanel` with its toolbar and its ten-byte hover readout is the
