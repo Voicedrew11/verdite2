@@ -406,39 +406,54 @@ Two further shapes worth copying. The rate is a **double, not a vblank divisor**
 "arbitrary" was the point, and 144 is not 60/n — and the saved key changed with
 it, from `kf2.framepacing.vblanks` to `kf2.framepacing.fps`. `SavedRate` reads the
 old key once, converts (`n` → `60/n`, `0` → uncapped) and writes the new one, so an
-existing config keeps the rate it had. And the settings page is **one slider with
-detents**: a player on a 165 Hz panel should be able to say 165, and a player who
-wants 61 should be able to say that too.
+existing config keeps the rate it had. And the settings page is **a slider whose
+positions are a list**, which is the shape of the render-scale slider it sits
+directly under.
 
-That control was a combo of presets with a `Custom...` entry that revealed a
-second slider, and it was the wrong shape for a continuous quantity twice over —
-it made the free number a *mode* to be selected before it could be reached, and
-it put the ordinary case, a panel's own refresh rate, behind an extra click for
-the sake of the rare one. So there is one `SliderFloat` from 10 to 300 fps and
-the presets are **pins**: 20, 30, 60, 75, 90, 120, 144, 165, 170, 240, drawn as
-tick marks on the track and snapped to while a drag is within five pixels of one.
-Three details make it behave:
+That control has been three things. It was a combo of presets with a
+`Custom...` entry that revealed a second slider, and it was the wrong shape for
+the free number twice over — it made an arbitrary rate a *mode* to be selected
+before it could be reached, and it put the ordinary case, a panel's own refresh
+rate, behind an extra click for the sake of the rare one. So it became one
+`SliderFloat` from 10 to 300 fps with the presets as **pins**: tick marks drawn
+on the track, snapped to while a drag came within five pixels of one, the
+tolerance in pixels rather than in fps and capped at half the gap to the next
+pin, and the snap gated on the left button being held so that ctrl-click entry
+and keyboard nav could still reach a rate by name.
 
-- **The tolerance is in pixels, not in fps.** The same 4 fps is a third of the
-  gap between 20 and 30 and a twentieth of the gap between 170 and 240; the hand
-  is working in pixels. It is then capped at half the distance to the pin's
-  nearest neighbour, so on a wide window two close pins cannot both claim the
-  space between them.
-- **Only a drag snaps.** The gate is the left mouse button being held, which is
-  what separates a drag from ImGui's ctrl-click text entry and from keyboard nav:
-  a typed 61 is a rate asked for by name and is left alone, a dragged 61 is a
-  miss.
-- **The marks use ImGui's own mapping**, not the raw fraction of the frame: the
-  grab travels between `FramePadding.x + GrabMinSize/2` and the far edge less the
-  same, so marks drawn at the fraction would sit half a grab out at both ends and
-  the 20 fps pin — the shipped default — would look as though it had missed.
+**That was three mechanisms to make a continuous control behave like a discrete
+one, and the discrete one was the answer.** Every integer from 10 to 300 was a
+position the handle could land on, so the rates a player actually wants had to be
+recovered by a magnet and then drawn back onto the track to say where they were
+— and a value the player could reach but the magnet would pull off is a control
+that argues with the hand. A frame rate is not a continuous quantity to a player
+in the first place: it is the panel they own. So the slider is a `SliderInt`
+over an index into the list — 20, 30, 40, 50, 60, 75, 90, 100, 120, 144, 165,
+180, 240 — and it needs neither the magnet, nor the pixel tolerance, nor the
+drawn ticks, all three of which are gone with the `Snap` and `DrawPins` bodies
+that held them.
 
-The slider re-reads `FramePacing` on every frame it is not being held, so a rate
-set from `KF2_FPS` or from anywhere else shows up in it. Pacing switched off
-entirely (`KF2_FPS=off`) has no position on the scale, so the handle parks at the
-world's tick rate and nothing is written until it is moved — 0 is not a rate any
-control here can express, and a handle at the far left claiming 10 fps would be a
-lie about what the port is doing.
+Two details make it read as a rate rather than as an index:
+
+- **The format string is a literal**, `$"{Pins[_index]:0} fps"`, rather than a
+  specifier. ImGui hands the format to `sprintf` with the slider's own value, so
+  a format carrying no `%` prints the label and never the index — its own trick
+  for a named-position slider.
+- **Ctrl-click entry is off** (`ImGuiSliderFlags.NoInput`), because the box would
+  open on the text `144 fps` and there is no specifier to read a number back out
+  of it. A typed rate has nowhere to land on a slider whose positions are a list
+  anyway; `KF2_FPS` is where a rate that is not on the list belongs.
+
+`FramePacing` still takes an arbitrary double and that is still the point of the
+patch, so a rate set outside the menu is **left running and said out loud**: the
+slider re-reads `FramePacing` on every frame it is not being held, parks the
+handle on the nearest position, and prints `Running at N fps, set outside this
+menu.` under it whenever the two disagree by more than half a frame. Nothing is
+written until the slider is moved. Pacing switched off entirely (`KF2_FPS=off`)
+has no position on the scale either, so the handle parks at the world's tick
+rate — 0 is not a rate any control here can express, and a handle at the far
+left claiming 20 fps while the port draws unbounded would be a lie about what it
+is doing.
 
 ### One switch for all of the smoothing
 
