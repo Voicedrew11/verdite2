@@ -45,6 +45,14 @@ done
 cp "$ROOT/packaging/shared/verdite2.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/verdite2.png"
 cp "$ROOT/packaging/shared/verdite2.png" "$APPDIR/verdite2.png"
 
+# Third-party licences the artifact is obliged to carry. Noto Sans is embedded in
+# RecompOne.Runtime.dll by patches/recompone/0033 and is SIL OFL 1.1, which
+# requires its licence to travel with the font; the port's own MIT terms go beside
+# it rather than only in the source tree.
+mkdir -p "$APPDIR/usr/share/doc/verdite2"
+cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/verdite2/LICENSE"
+cp "$ROOT/patches/recompone/assets/NotoSans-OFL.txt" "$APPDIR/usr/share/doc/verdite2/NotoSans-OFL.txt"
+
 echo "==> appimagetool"
 TOOL="${APPIMAGETOOL:-}"
 if [ -z "$TOOL" ]; then

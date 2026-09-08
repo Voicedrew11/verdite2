@@ -35,6 +35,18 @@ echo "==> pinning RecompOne to $PIN"
 git -C "$TOOLS" checkout --quiet --force "$PIN"
 git -C "$TOOLS" clean -qfd
 
+# Patches are text; a font is not. 0033 replaces ImGui's 13px bitmap face with
+# Noto Sans, and the face itself is a 569 KB TTF that would have to be a base85
+# binary hunk inside the patch -- one the peel loop above would reverse-check on
+# every run. So the asset is a file in this repository and is copied into the
+# checkout here, after `clean -fd` has removed the previous run's copy and before
+# the patch that adds the <EmbeddedResource> entry naming it. A missing asset is
+# an error rather than a silent fall back to the bitmap font, because the csproj
+# entry would fail the build several minutes later with nothing pointing here.
+echo "==> copying interface assets"
+cp "$ROOT/patches/recompone/assets/NotoSans-Regular.ttf" \
+   "$TOOLS/RecompOne.Runtime/Host/Window/Assets/NotoSans-Regular.ttf"
+
 echo "==> applying local patches"
 shopt -s nullglob
 patches=("$ROOT"/patches/recompone/*.patch)

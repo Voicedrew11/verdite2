@@ -60,6 +60,14 @@ Beside the executable, `content/`:
 Plus `RecompOne.Runtime.dll`, `recompone.dll`, Roslyn and the self-contained .NET
 runtime. About 109 MB laid out, 41 MB as an AppImage.
 
+**And the licences the artifact is obliged to carry**, which until the interface
+font arrived it did not have: `patches/recompone/0033` embeds Noto Sans in
+`RecompOne.Runtime.dll`, and SIL OFL 1.1 requires the licence to travel with the
+font. Both packaging scripts now stage `LICENSE` and `NotoSans-OFL.txt` — under
+`usr/share/doc/verdite2/` in the AppImage, under `licenses/` in the zip. Adding a
+third-party asset to the build means adding its licence here; nothing checks
+this.
+
 ## First run
 
 1. `Paths.Prepare()` resolves the data directory and **chdirs into it**. That one

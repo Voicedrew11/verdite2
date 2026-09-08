@@ -841,6 +841,60 @@ Widescreen — not to stretch the picture. **Never looked at by eye**: whether t
 picture now runs to the edge of the dock node, and whether a toast still sits
 where it did.
 
+## The interface's font
+
+The interface was drawn in ProggyClean, ImGui's built-in face: a 13 px bitmap.
+Three things follow from *bitmap* that no amount of styling fixes — it is pixel
+art, so it carries a debug-overlay look into a settings window laid over a
+commercial game; it does not scale, so every size other than 13 is a stretched
+bitmap and the UI-scale slider (and the misread DPI above it) blur the text
+rather than resize it; and it has no glyphs outside its own small range, so a
+path or a mod name with an accent draws boxes.
+
+Upstream fixed this in `aaf7be0` ("improved font to use noto-sans"), which our
+pin `870c5ba` predates, so `patches/recompone/0033-sans-serif-interface-font.patch`
+is that commit back-ported: `Icons` becomes `FontSet`, Noto Sans is embedded and
+added as the base face with Font Awesome merged over it in the private-use range
+the icons already used, and `HostWindow` asks for `16f * _dpiScale` where it asked
+for `13f`. The four call sites are `Icons.Load`, `Icons.Or` and two `Icons.Gear` /
+`Icons.Ellipsis` glyphs in `ModsPopup`; nothing in `patches/` referenced the class,
+so the rename costs the port nothing.
+
+**Upstream's second face is deliberately not carried.** `aaf7be0` also embeds
+`NotoSansCJK-Regular.otf` for the Japanese and Chinese ranges — 16.5 MB, which
+would sit in `RecompOne.Runtime.dll` and therefore in the AppImage, the zip and
+the installer. The runtime ships three languages and every string in
+`languages.json` is Latin (checked: no character above U+024F), so those ranges
+would render nothing anybody can select. Cyrillic, Greek and Vietnamese *are*
+kept: they are Noto Sans's own coverage, they cost atlas space rather than
+megabytes, and they are what a non-Latin path or mod name falls back to instead of
+boxes.
+
+**The asset is a file in this repository, not a hunk in the patch.** A 569 KB TTF
+inside a `.patch` is a base85 blob that `setup_tools.sh`'s peel loop would
+reverse-check on every run; instead `patches/recompone/assets/NotoSans-Regular.ttf`
+is copied into the checkout between `git clean -fd` and the apply loop, and the
+patch adds only the `<EmbeddedResource>` entry naming it. A missing asset stops
+the script there rather than failing the build minutes later with nothing pointing
+back here. The font is SIL OFL 1.1 and its licence travels with it
+(`assets/NotoSans-OFL.txt`); a release that ships the font ships that file.
+
+`FontSet.Load` falls back to `AddFontDefault` when the resource is missing, which
+is the icon font's own miss the other way up: the interface loses its face, not
+its text.
+
+**This is the one patch that wants to stop applying.** When the pin moves past
+`aaf7be0` the change is upstream's own, and a `FAILED TO APPLY` on `0033` means
+delete it (and the asset copy in `setup_tools.sh`) rather than rebase it — though
+the CJK face comes back with it, so weigh the 16 MB then.
+
+Measured: the resource is embedded (`NotoSans-Regular.ttf` present in the built
+`RecompOne.Runtime.dll`), a run prints no `[fonts]` line, and two consecutive
+`setup_tools.sh` runs both report `0033 ... applied`. **Never looked at by eye** —
+whether 16 px is the right size, whether the icons still sit on the baseline after
+the size change, and whether anything in the port's own panes now wraps or
+overflows at the larger metrics.
+
 ## Two general shapes worth keeping
 
 `0007`, `0008` and `patches/EndingHold.cs` are the pattern to keep in mind:
