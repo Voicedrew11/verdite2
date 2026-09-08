@@ -92,32 +92,32 @@
     },
     {
       "address": "0x80012574",
-      "name": "func_80012574",
+      "name": "InitHeap",
       "size": 64
     },
     {
       "address": "0x800125B4",
-      "name": "func_800125B4",
+      "name": "malloc",
       "size": 564
     },
     {
       "address": "0x800127E8",
-      "name": "func_800127E8",
+      "name": "free",
       "size": 20
     },
     {
       "address": "0x800127FC",
-      "name": "func_800127FC",
+      "name": "realloc",
       "size": 144
     },
     {
       "address": "0x8001288C",
-      "name": "func_8001288C",
+      "name": "calloc",
       "size": 88
     },
     {
       "address": "0x800128E4",
-      "name": "func_800128E4",
+      "name": "ExitCriticalSection",
       "size": 16
     },
     {
@@ -137,37 +137,37 @@
     },
     {
       "address": "0x80012924",
-      "name": "func_80012924",
+      "name": "DecDCTReset",
       "size": 56
     },
     {
       "address": "0x8001295C",
-      "name": "func_8001295C",
+      "name": "DecDCTBufSize",
       "size": 12
     },
     {
       "address": "0x80012968",
-      "name": "func_80012968",
+      "name": "DecDCTvlc",
       "size": 64
     },
     {
       "address": "0x800129A8",
-      "name": "func_800129A8",
+      "name": "DecDCTin",
       "size": 124
     },
     {
       "address": "0x80012A24",
-      "name": "func_80012A24",
+      "name": "DecDCTout",
       "size": 32
     },
     {
       "address": "0x80012A44",
-      "name": "func_80012A44",
+      "name": "DecDCTinSync",
       "size": 32
     },
     {
       "address": "0x80012A64",
-      "name": "func_80012A64",
+      "name": "DecDCToutSync",
       "size": 32
     },
     {
@@ -217,17 +217,17 @@
     },
     {
       "address": "0x80012F24",
-      "name": "func_80012F24",
+      "name": "MDEC_vlc",
       "size": 592
     },
     {
       "address": "0x80013174",
-      "name": "func_80013174",
+      "name": "MDEC_vlc2",
       "size": 1000
     },
     {
       "address": "0x8001355C",
-      "name": "func_8001355C",
+      "name": "ivlc_dct_dc_size",
       "size": 528
     },
     {
@@ -237,17 +237,17 @@
     },
     {
       "address": "0x80013794",
-      "name": "func_80013794",
+      "name": "ResetGraph",
       "size": 460
     },
     {
       "address": "0x80013960",
-      "name": "func_80013960",
+      "name": "SetGraphReverse",
       "size": 208
     },
     {
       "address": "0x80013A30",
-      "name": "func_80013A30",
+      "name": "SetGraphDebug",
       "size": 100
     },
     {
@@ -267,7 +267,7 @@
     },
     {
       "address": "0x80013ACC",
-      "name": "func_80013ACC",
+      "name": "SetDispMask",
       "size": 64
     },
     {
@@ -297,17 +297,17 @@
     },
     {
       "address": "0x80013C70",
-      "name": "func_80013C70",
+      "name": "ClearOTag",
       "size": 84
     },
     {
       "address": "0x80013CC4",
-      "name": "func_80013CC4",
+      "name": "ClearOTagR",
       "size": 56
     },
     {
       "address": "0x80013CFC",
-      "name": "func_80013CFC",
+      "name": "DrawPrim",
       "size": 132
     },
     {
@@ -322,7 +322,7 @@
     },
     {
       "address": "0x80013E98",
-      "name": "func_80013E98",
+      "name": "GetDrawEnv",
       "size": 96
     },
     {
@@ -332,37 +332,37 @@
     },
     {
       "address": "0x80014274",
-      "name": "func_80014274",
+      "name": "GetDispEnv",
       "size": 100
     },
     {
       "address": "0x800142D8",
-      "name": "func_800142D8",
+      "name": "SetTexWindow",
       "size": 56
     },
     {
       "address": "0x80014310",
-      "name": "func_80014310",
+      "name": "SetDrawArea",
       "size": 112
     },
     {
       "address": "0x80014380",
-      "name": "func_80014380",
+      "name": "SetDrawOffset",
       "size": 64
     },
     {
       "address": "0x800143C0",
-      "name": "func_800143C0",
+      "name": "SetPriority",
       "size": 40
     },
     {
       "address": "0x800143E8",
-      "name": "func_800143E8",
+      "name": "SetDrawMode",
       "size": 84
     },
     {
       "address": "0x8001443C",
-      "name": "func_8001443C",
+      "name": "SetDrawEnv",
       "size": 676
     },
     {
@@ -442,7 +442,7 @@
     },
     {
       "address": "0x80015420",
-      "name": "func_80015420",
+      "name": "gpu_param",
       "size": 52
     },
     {
@@ -497,207 +497,207 @@
     },
     {
       "address": "0x80015D34",
-      "name": "func_80015D34",
+      "name": "LoadTPage",
       "size": 232
     },
     {
       "address": "0x80015E1C",
-      "name": "func_80015E1C",
+      "name": "LoadClut",
       "size": 100
     },
     {
       "address": "0x80015E80",
-      "name": "func_80015E80",
+      "name": "SetDefDrawEnv",
       "size": 140
     },
     {
       "address": "0x80015F0C",
-      "name": "func_80015F0C",
+      "name": "SetDefDispEnv",
       "size": 60
     },
     {
       "address": "0x80015F48",
-      "name": "func_80015F48",
+      "name": "GetTPage",
       "size": 148
     },
     {
       "address": "0x80015FDC",
-      "name": "func_80015FDC",
+      "name": "GetClut",
       "size": 24
     },
     {
       "address": "0x80015FF4",
-      "name": "func_80015FF4",
+      "name": "DumpTPage",
       "size": 144
     },
     {
       "address": "0x80016084",
-      "name": "func_80016084",
+      "name": "DumpClut",
       "size": 64
     },
     {
       "address": "0x800160C4",
-      "name": "func_800160C4",
+      "name": "NextPrim",
       "size": 28
     },
     {
       "address": "0x800160E0",
-      "name": "func_800160E0",
+      "name": "IsEndPrim",
       "size": 28
     },
     {
       "address": "0x800160FC",
-      "name": "func_800160FC",
+      "name": "AddPrim",
       "size": 60
     },
     {
       "address": "0x80016138",
-      "name": "func_80016138",
+      "name": "AddPrims",
       "size": 60
     },
     {
       "address": "0x80016174",
-      "name": "func_80016174",
+      "name": "CatPrim",
       "size": 36
     },
     {
       "address": "0x80016198",
-      "name": "func_80016198",
+      "name": "TermPrim",
       "size": 24
     },
     {
       "address": "0x800161B0",
-      "name": "func_800161B0",
+      "name": "SetSemiTrans",
       "size": 40
     },
     {
       "address": "0x800161D8",
-      "name": "func_800161D8",
+      "name": "SetShadeTex",
       "size": 40
     },
     {
       "address": "0x80016200",
-      "name": "func_80016200",
+      "name": "SetPolyF3",
       "size": 20
     },
     {
       "address": "0x80016214",
-      "name": "func_80016214",
+      "name": "SetPolyFT3",
       "size": 20
     },
     {
       "address": "0x80016228",
-      "name": "func_80016228",
+      "name": "SetPolyG3",
       "size": 20
     },
     {
       "address": "0x8001623C",
-      "name": "func_8001623C",
+      "name": "SetPolyGT3",
       "size": 20
     },
     {
       "address": "0x80016250",
-      "name": "func_80016250",
+      "name": "SetPolyF4",
       "size": 20
     },
     {
       "address": "0x80016264",
-      "name": "func_80016264",
+      "name": "SetPolyFT4",
       "size": 20
     },
     {
       "address": "0x80016278",
-      "name": "func_80016278",
+      "name": "SetPolyG4",
       "size": 20
     },
     {
       "address": "0x8001628C",
-      "name": "func_8001628C",
+      "name": "SetPolyGT4",
       "size": 20
     },
     {
       "address": "0x800162A0",
-      "name": "func_800162A0",
+      "name": "SetSprt8",
       "size": 20
     },
     {
       "address": "0x800162B4",
-      "name": "func_800162B4",
+      "name": "SetSprt16",
       "size": 20
     },
     {
       "address": "0x800162C8",
-      "name": "func_800162C8",
+      "name": "SetSprt",
       "size": 20
     },
     {
       "address": "0x800162DC",
-      "name": "func_800162DC",
+      "name": "SetTile1",
       "size": 20
     },
     {
       "address": "0x800162F0",
-      "name": "func_800162F0",
+      "name": "SetTile8",
       "size": 20
     },
     {
       "address": "0x80016304",
-      "name": "func_80016304",
+      "name": "SetTile16",
       "size": 20
     },
     {
       "address": "0x80016318",
-      "name": "func_80016318",
+      "name": "SetTile",
       "size": 20
     },
     {
       "address": "0x8001632C",
-      "name": "func_8001632C",
+      "name": "SetBlockFill",
       "size": 20
     },
     {
       "address": "0x80016340",
-      "name": "func_80016340",
+      "name": "SetLineF2",
       "size": 20
     },
     {
       "address": "0x80016354",
-      "name": "func_80016354",
+      "name": "SetLineG2",
       "size": 20
     },
     {
       "address": "0x80016368",
-      "name": "func_80016368",
+      "name": "SetLineF3",
       "size": 32
     },
     {
       "address": "0x80016388",
-      "name": "func_80016388",
+      "name": "SetLineG3",
       "size": 32
     },
     {
       "address": "0x800163A8",
-      "name": "func_800163A8",
+      "name": "SetLineF4",
       "size": 32
     },
     {
       "address": "0x800163C8",
-      "name": "func_800163C8",
+      "name": "SetLineG4",
       "size": 32
     },
     {
       "address": "0x800163E8",
-      "name": "func_800163E8",
+      "name": "MargePrim",
       "size": 52
     },
     {
       "address": "0x8001641C",
-      "name": "func_8001641C",
+      "name": "DumpDrawEnv",
       "size": 324
     },
     {
       "address": "0x80016560",
-      "name": "func_80016560",
+      "name": "DumpDispEnv",
       "size": 176
     },
     {
@@ -712,267 +712,267 @@
     },
     {
       "address": "0x800166D8",
-      "name": "func_800166D8",
+      "name": "DrawOTagIO",
       "size": 168
     },
     {
       "address": "0x80016780",
-      "name": "func_80016780",
+      "name": "DumpOTag",
       "size": 328
     },
     {
       "address": "0x800168C8",
-      "name": "func_800168C8",
+      "name": "CheckPrim",
       "size": 148
     },
     {
       "address": "0x8001695C",
-      "name": "func_8001695C",
+      "name": "SetVertex0",
       "size": 16
     },
     {
       "address": "0x8001696C",
-      "name": "func_8001696C",
+      "name": "SetVertex1",
       "size": 16
     },
     {
       "address": "0x8001697C",
-      "name": "func_8001697C",
+      "name": "SetVertex2",
       "size": 16
     },
     {
       "address": "0x8001698C",
-      "name": "func_8001698C",
+      "name": "SetVertexTri",
       "size": 32
     },
     {
       "address": "0x800169AC",
-      "name": "func_800169AC",
+      "name": "SetRGBcd",
       "size": 12
     },
     {
       "address": "0x800169B8",
-      "name": "func_800169B8",
+      "name": "SetRGBfifo",
       "size": 20
     },
     {
       "address": "0x800169CC",
-      "name": "func_800169CC",
+      "name": "SetIR123",
       "size": 20
     },
     {
       "address": "0x800169E0",
-      "name": "func_800169E0",
+      "name": "SetIR0",
       "size": 12
     },
     {
       "address": "0x800169EC",
-      "name": "func_800169EC",
+      "name": "SetBackColor",
       "size": 32
     },
     {
       "address": "0x80016A0C",
-      "name": "func_80016A0C",
+      "name": "SetFarColor",
       "size": 32
     },
     {
       "address": "0x80016A2C",
-      "name": "func_80016A2C",
+      "name": "SetSZfifo3",
       "size": 20
     },
     {
       "address": "0x80016A40",
-      "name": "func_80016A40",
+      "name": "SetSZfifo4",
       "size": 24
     },
     {
       "address": "0x80016A58",
-      "name": "func_80016A58",
+      "name": "SetSXSYfifo",
       "size": 20
     },
     {
       "address": "0x80016A6C",
-      "name": "func_80016A6C",
+      "name": "SetRii",
       "size": 20
     },
     {
       "address": "0x80016A80",
-      "name": "func_80016A80",
+      "name": "SetMAC123",
       "size": 20
     },
     {
       "address": "0x80016A94",
-      "name": "func_80016A94",
+      "name": "SetData32",
       "size": 12
     },
     {
       "address": "0x80016AA0",
-      "name": "func_80016AA0",
+      "name": "SetGeomOffset",
       "size": 24
     },
     {
       "address": "0x80016AB8",
-      "name": "func_80016AB8",
+      "name": "SetGeomScreen",
       "size": 12
     },
     {
       "address": "0x80016AC4",
-      "name": "func_80016AC4",
+      "name": "SetDQA",
       "size": 12
     },
     {
       "address": "0x80016AD0",
-      "name": "func_80016AD0",
+      "name": "SetDQB",
       "size": 12
     },
     {
       "address": "0x80016ADC",
-      "name": "func_80016ADC",
+      "name": "ReadOTZ",
       "size": 12
     },
     {
       "address": "0x80016AE8",
-      "name": "func_80016AE8",
+      "name": "ReadIR0",
       "size": 12
     },
     {
       "address": "0x80016AF4",
-      "name": "func_80016AF4",
+      "name": "ReadIR123",
       "size": 20
     },
     {
       "address": "0x80016B08",
-      "name": "func_80016B08",
+      "name": "ReadSZ2",
       "size": 12
     },
     {
       "address": "0x80016B14",
-      "name": "func_80016B14",
+      "name": "ReadSZfifo3",
       "size": 20
     },
     {
       "address": "0x80016B28",
-      "name": "func_80016B28",
+      "name": "ReadSZfifo4",
       "size": 24
     },
     {
       "address": "0x80016B40",
-      "name": "func_80016B40",
+      "name": "ReadSXSYfifo",
       "size": 20
     },
     {
       "address": "0x80016B54",
-      "name": "func_80016B54",
+      "name": "ReadRGBfifo",
       "size": 20
     },
     {
       "address": "0x80016B68",
-      "name": "func_80016B68",
+      "name": "ReadMac0",
       "size": 12
     },
     {
       "address": "0x80016B74",
-      "name": "func_80016B74",
+      "name": "ReadMAC123",
       "size": 20
     },
     {
       "address": "0x80016B88",
-      "name": "func_80016B88",
+      "name": "ReadORGB",
       "size": 48
     },
     {
       "address": "0x80016BB8",
-      "name": "func_80016BB8",
+      "name": "ReadLZC",
       "size": 12
     },
     {
       "address": "0x80016BC4",
-      "name": "func_80016BC4",
+      "name": "ReadFLAG",
       "size": 12
     },
     {
       "address": "0x80016BD0",
-      "name": "func_80016BD0",
+      "name": "ReadGeomOffset",
       "size": 32
     },
     {
       "address": "0x80016BF0",
-      "name": "func_80016BF0",
+      "name": "ReadGeomScreen",
       "size": 12
     },
     {
       "address": "0x80016BFC",
-      "name": "func_80016BFC",
+      "name": "InitGeom",
       "size": 104
     },
     {
       "address": "0x80016C64",
-      "name": "func_80016C64",
+      "name": "LoadAverage12",
       "size": 80
     },
     {
       "address": "0x80016CB4",
-      "name": "func_80016CB4",
+      "name": "LoadAverage0",
       "size": 80
     },
     {
       "address": "0x80016D04",
-      "name": "func_80016D04",
+      "name": "LoadAverageShort12",
       "size": 136
     },
     {
       "address": "0x80016D8C",
-      "name": "func_80016D8C",
+      "name": "LoadAverageShort0",
       "size": 136
     },
     {
       "address": "0x80016E14",
-      "name": "func_80016E14",
+      "name": "LoadAverageByte",
       "size": 92
     },
     {
       "address": "0x80016E70",
-      "name": "func_80016E70",
+      "name": "LoadAverageCol",
       "size": 116
     },
     {
       "address": "0x80016EE4",
-      "name": "func_80016EE4",
+      "name": "VectorNormal",
       "size": 200
     },
     {
       "address": "0x80016FAC",
-      "name": "func_80016FAC",
+      "name": "VectorNormalS",
       "size": 200
     },
     {
       "address": "0x80017074",
-      "name": "func_80017074",
+      "name": "SquareRoot0",
       "size": 132
     },
     {
       "address": "0x800170F8",
-      "name": "func_800170F8",
+      "name": "SquareRoot12",
       "size": 148
     },
     {
       "address": "0x8001718C",
-      "name": "func_8001718C",
+      "name": "InvSquareRoot",
       "size": 140
     },
     {
       "address": "0x80017218",
-      "name": "func_80017218",
+      "name": "gteMIMefunc",
       "size": 128
     },
     {
       "address": "0x80017298",
-      "name": "func_80017298",
+      "name": "InterpolShort",
       "size": 120
     },
     {
       "address": "0x80017310",
-      "name": "func_80017310",
+      "name": "InterpolByte",
       "size": 72
     },
     {
@@ -982,7 +982,7 @@
     },
     {
       "address": "0x800173E8",
-      "name": "func_800173E8",
+      "name": "CdInitFileSystem",
       "size": 120
     },
     {
@@ -1027,17 +1027,17 @@
     },
     {
       "address": "0x80017568",
-      "name": "func_80017568",
+      "name": "CdSetDebug",
       "size": 24
     },
     {
       "address": "0x80017580",
-      "name": "func_80017580",
+      "name": "CdComstr",
       "size": 56
     },
     {
       "address": "0x800175B8",
-      "name": "func_800175B8",
+      "name": "CdIntstr",
       "size": 56
     },
     {
@@ -1092,17 +1092,17 @@
     },
     {
       "address": "0x80017904",
-      "name": "func_80017904",
+      "name": "CdRead2",
       "size": 112
     },
     {
       "address": "0x80017974",
-      "name": "func_80017974",
+      "name": "CdIntToPos",
       "size": 300
     },
     {
       "address": "0x80017AA0",
-      "name": "func_80017AA0",
+      "name": "CdPosToInt",
       "size": 168
     },
     {
@@ -1147,27 +1147,27 @@
     },
     {
       "address": "0x800182D4",
-      "name": "func_800182D4",
+      "name": "CD_cw",
       "size": 652
     },
     {
       "address": "0x80018560",
-      "name": "func_80018560",
+      "name": "CD_vol",
       "size": 176
     },
     {
       "address": "0x80018610",
-      "name": "func_80018610",
+      "name": "CD_init",
       "size": 256
     },
     {
       "address": "0x80018710",
-      "name": "func_80018710",
+      "name": "CD_readm",
       "size": 292
     },
     {
       "address": "0x80018834",
-      "name": "func_80018834",
+      "name": "CD_readsync",
       "size": 188
     },
     {
@@ -1177,12 +1177,12 @@
     },
     {
       "address": "0x80018A0C",
-      "name": "func_80018A0C",
+      "name": "CD_read",
       "size": 308
     },
     {
       "address": "0x80018B40",
-      "name": "func_80018B40",
+      "name": "CD_set_test_parmnum",
       "size": 16
     },
     {
@@ -1202,7 +1202,7 @@
     },
     {
       "address": "0x80018C30",
-      "name": "func_80018C30",
+      "name": "data_ready_callback",
       "size": 104
     },
     {
@@ -1212,7 +1212,7 @@
     },
     {
       "address": "0x80018CFC",
-      "name": "func_80018CFC",
+      "name": "StSetEmulate",
       "size": 112
     },
     {
@@ -1237,7 +1237,7 @@
     },
     {
       "address": "0x80018F48",
-      "name": "func_80018F48",
+      "name": "StCdInterrupt",
       "size": 2484
     },
     {
@@ -1252,12 +1252,12 @@
     },
     {
       "address": "0x80019AB8",
-      "name": "func_80019AB8",
+      "name": "StSetChannel",
       "size": 36
     },
     {
       "address": "0x80019ADC",
-      "name": "func_80019ADC",
+      "name": "EnterCriticalSection",
       "size": 16
     },
     {
@@ -1267,7 +1267,7 @@
     },
     {
       "address": "0x80019AF4",
-      "name": "func_80019AF4",
+      "name": "_96_vec",
       "size": 128
     },
     {
@@ -1282,7 +1282,7 @@
     },
     {
       "address": "0x80019BC4",
-      "name": "func_80019BC4",
+      "name": "CdGetStatus",
       "size": 60
     },
     {
@@ -1342,12 +1342,12 @@
     },
     {
       "address": "0x8001A698",
-      "name": "func_8001A698",
+      "name": "DecDCTinCallback",
       "size": 36
     },
     {
       "address": "0x8001A6BC",
-      "name": "func_8001A6BC",
+      "name": "DecDCToutCallback",
       "size": 36
     },
     {
@@ -1357,37 +1357,37 @@
     },
     {
       "address": "0x8001A704",
-      "name": "func_8001A704",
+      "name": "SpuDataCallback",
       "size": 36
     },
     {
       "address": "0x8001A728",
-      "name": "func_8001A728",
+      "name": "PioDataCallback",
       "size": 36
     },
     {
       "address": "0x8001A74C",
-      "name": "func_8001A74C",
+      "name": "CdCallback",
       "size": 36
     },
     {
       "address": "0x8001A770",
-      "name": "func_8001A770",
+      "name": "SpuCallback",
       "size": 36
     },
     {
       "address": "0x8001A794",
-      "name": "func_8001A794",
+      "name": "PioCallback",
       "size": 36
     },
     {
       "address": "0x8001A7B8",
-      "name": "func_8001A7B8",
+      "name": "VBLNKInit",
       "size": 124
     },
     {
       "address": "0x8001A834",
-      "name": "func_8001A834",
+      "name": "VBLNKStop",
       "size": 52
     },
     {
@@ -1412,17 +1412,17 @@
     },
     {
       "address": "0x8001A938",
-      "name": "func_8001A938",
+      "name": "PadInit",
       "size": 88
     },
     {
       "address": "0x8001A990",
-      "name": "func_8001A990",
+      "name": "PadRead",
       "size": 40
     },
     {
       "address": "0x8001A9B8",
-      "name": "func_8001A9B8",
+      "name": "PadStop",
       "size": 32
     },
     {
@@ -1442,12 +1442,12 @@
     },
     {
       "address": "0x8001AA08",
-      "name": "func_8001AA08",
+      "name": "ResetCallback",
       "size": 48
     },
     {
       "address": "0x8001AA38",
-      "name": "func_8001AA38",
+      "name": "InterruptCallback",
       "size": 48
     },
     {
@@ -1457,17 +1457,17 @@
     },
     {
       "address": "0x8001AA98",
-      "name": "func_8001AA98",
+      "name": "VSyncCallback",
       "size": 48
     },
     {
       "address": "0x8001AAC8",
-      "name": "func_8001AAC8",
+      "name": "StopCallback",
       "size": 48
     },
     {
       "address": "0x8001AAF8",
-      "name": "func_8001AAF8",
+      "name": "CheckCallback",
       "size": 16
     },
     {
@@ -1502,12 +1502,12 @@
     },
     {
       "address": "0x8001AEB0",
-      "name": "func_8001AEB0",
+      "name": "DMAInit",
       "size": 100
     },
     {
       "address": "0x8001AF14",
-      "name": "func_8001AF14",
+      "name": "DMAStop",
       "size": 88
     },
     {
@@ -1537,22 +1537,22 @@
     },
     {
       "address": "0x8001B3F4",
-      "name": "func_8001B3F4",
+      "name": "SsInit",
       "size": 32
     },
     {
       "address": "0x8001B414",
-      "name": "func_8001B414",
+      "name": "SsInitHot",
       "size": 32
     },
     {
       "address": "0x8001B434",
-      "name": "func_8001B434",
+      "name": "SsSetTableSize",
       "size": 420
     },
     {
       "address": "0x8001B5D8",
-      "name": "func_8001B5D8",
+      "name": "SsSetTickMode",
       "size": 192
     },
     {
@@ -1567,22 +1567,22 @@
     },
     {
       "address": "0x8001B94C",
-      "name": "func_8001B94C",
+      "name": "SsStart",
       "size": 32
     },
     {
       "address": "0x8001B96C",
-      "name": "func_8001B96C",
+      "name": "SsStart2",
       "size": 32
     },
     {
       "address": "0x8001B98C",
-      "name": "func_8001B98C",
+      "name": "SsEnd",
       "size": 104
     },
     {
       "address": "0x8001B9F4",
-      "name": "func_8001B9F4",
+      "name": "SsQuit",
       "size": 32
     },
     {
@@ -1597,27 +1597,27 @@
     },
     {
       "address": "0x8001BA34",
-      "name": "func_8001BA34",
+      "name": "SetRCnt",
       "size": 156
     },
     {
       "address": "0x8001BAD0",
-      "name": "func_8001BAD0",
+      "name": "GetRCnt",
       "size": 56
     },
     {
       "address": "0x8001BB08",
-      "name": "func_8001BB08",
+      "name": "StartRCnt",
       "size": 52
     },
     {
       "address": "0x8001BB3C",
-      "name": "func_8001BB3C",
+      "name": "StopRCnt",
       "size": 52
     },
     {
       "address": "0x8001BB70",
-      "name": "func_8001BB70",
+      "name": "ResetRCnt",
       "size": 52
     },
     {
@@ -1632,12 +1632,12 @@
     },
     {
       "address": "0x8001BBC4",
-      "name": "func_8001BBC4",
+      "name": "SsSetMVol",
       "size": 88
     },
     {
       "address": "0x8001BC1C",
-      "name": "func_8001BC1C",
+      "name": "SsSetSerialVol",
       "size": 436
     },
     {
@@ -1712,62 +1712,62 @@
     },
     {
       "address": "0x8001D0D4",
-      "name": "func_8001D0D4",
+      "name": "SsUtVibrateOn",
       "size": 52
     },
     {
       "address": "0x8001D108",
-      "name": "func_8001D108",
+      "name": "SsUtVibrateOff",
       "size": 36
     },
     {
       "address": "0x8001D12C",
-      "name": "func_8001D12C",
+      "name": "SpuVmInit",
       "size": 780
     },
     {
       "address": "0x8001D438",
-      "name": "func_8001D438",
+      "name": "SpuVmNoiseOnWithAdsr",
       "size": 144
     },
     {
       "address": "0x8001D4C8",
-      "name": "func_8001D4C8",
+      "name": "SpuVmNoiseOff",
       "size": 148
     },
     {
       "address": "0x8001D55C",
-      "name": "func_8001D55C",
+      "name": "SpuVmNoiseOn",
       "size": 44
     },
     {
       "address": "0x8001D588",
-      "name": "func_8001D588",
+      "name": "SpuVmPitchBend",
       "size": 704
     },
     {
       "address": "0x8001D848",
-      "name": "func_8001D848",
+      "name": "SpuVmFlush",
       "size": 764
     },
     {
       "address": "0x8001DB44",
-      "name": "func_8001DB44",
+      "name": "SpuVmKeyOn",
       "size": 1032
     },
     {
       "address": "0x8001DF4C",
-      "name": "func_8001DF4C",
+      "name": "SpuVmKeyOff",
       "size": 340
     },
     {
       "address": "0x8001E0A0",
-      "name": "func_8001E0A0",
+      "name": "SpuVmSeKeyOn",
       "size": 240
     },
     {
       "address": "0x8001E190",
-      "name": "func_8001E190",
+      "name": "SpuVmSeKeyOff",
       "size": 52
     },
     {
@@ -1777,17 +1777,17 @@
     },
     {
       "address": "0x8001E1CC",
-      "name": "func_8001E1CC",
+      "name": "SpuVmSetSeqVol",
       "size": 444
     },
     {
       "address": "0x8001E388",
-      "name": "func_8001E388",
+      "name": "SpuVmGetSeqVol",
       "size": 108
     },
     {
       "address": "0x8001E3F4",
-      "name": "func_8001E3F4",
+      "name": "SpuVmGetSeqLVol",
       "size": 56
     },
     {
@@ -1797,122 +1797,122 @@
     },
     {
       "address": "0x8001E464",
-      "name": "func_8001E464",
+      "name": "SpuVmGetSeqPan",
       "size": 72
     },
     {
       "address": "0x8001E4AC",
-      "name": "func_8001E4AC",
+      "name": "SpuVmSeqKeyOff",
       "size": 148
     },
     {
       "address": "0x8001E540",
-      "name": "func_8001E540",
+      "name": "SpuVmSetProgVol",
       "size": 112
     },
     {
       "address": "0x8001E5B0",
-      "name": "func_8001E5B0",
+      "name": "SpuVmGetProgVol",
       "size": 80
     },
     {
       "address": "0x8001E600",
-      "name": "func_8001E600",
+      "name": "SpuVmSetProgPan",
       "size": 112
     },
     {
       "address": "0x8001E670",
-      "name": "func_8001E670",
+      "name": "SpuVmGetProgPan",
       "size": 80
     },
     {
       "address": "0x8001E6C0",
-      "name": "func_8001E6C0",
+      "name": "SsUtKeyOn",
       "size": 1064
     },
     {
       "address": "0x8001EAE8",
-      "name": "func_8001EAE8",
+      "name": "SsUtKeyOff",
       "size": 292
     },
     {
       "address": "0x8001EC0C",
-      "name": "func_8001EC0C",
+      "name": "SsUtKeyOnV",
       "size": 1008
     },
     {
       "address": "0x8001EFFC",
-      "name": "func_8001EFFC",
+      "name": "SsUtKeyOffV",
       "size": 116
     },
     {
       "address": "0x8001F070",
-      "name": "func_8001F070",
+      "name": "SsUtPitchBend",
       "size": 60
     },
     {
       "address": "0x8001F0AC",
-      "name": "func_8001F0AC",
+      "name": "SsUtChangePitch",
       "size": 344
     },
     {
       "address": "0x8001F204",
-      "name": "func_8001F204",
+      "name": "SsUtChangeADSR",
       "size": 232
     },
     {
       "address": "0x8001F2EC",
-      "name": "func_8001F2EC",
+      "name": "SsUtGetDetVVol",
       "size": 88
     },
     {
       "address": "0x8001F344",
-      "name": "func_8001F344",
+      "name": "SsUtSetDetVVol",
       "size": 116
     },
     {
       "address": "0x8001F3B8",
-      "name": "func_8001F3B8",
+      "name": "SsUtGetVVol",
       "size": 176
     },
     {
       "address": "0x8001F468",
-      "name": "func_8001F468",
+      "name": "SsUtSetVVol",
       "size": 152
     },
     {
       "address": "0x8001F500",
-      "name": "func_8001F500",
+      "name": "SsUtAutoVol",
       "size": 28
     },
     {
       "address": "0x8001F51C",
-      "name": "func_8001F51C",
+      "name": "SsUtAutoPan",
       "size": 28
     },
     {
       "address": "0x8001F538",
-      "name": "func_8001F538",
+      "name": "SsUtAllKeyOff",
       "size": 336
     },
     {
       "address": "0x8001F688",
-      "name": "func_8001F688",
+      "name": "SpuVmVSetUp",
       "size": 212
     },
     {
       "address": "0x8001F75C",
-      "name": "func_8001F75C",
+      "name": "SsSeqCalledTbyT",
       "size": 568
     },
     {
       "address": "0x8001F994",
-      "name": "func_8001F994",
+      "name": "Snd_decrescendo",
       "size": 1140
     },
     {
       "address": "0x8001FE08",
-      "name": "func_8001FE08",
+      "name": "Snd_replay",
       "size": 96
     },
     {
@@ -1922,182 +1922,182 @@
     },
     {
       "address": "0x8001FE94",
-      "name": "func_8001FE94",
+      "name": "SeqPlay",
       "size": 264
     },
     {
       "address": "0x8001FF9C",
-      "name": "func_8001FF9C",
+      "name": "GetSeqData",
       "size": 664
     },
     {
       "address": "0x80020234",
-      "name": "func_80020234",
+      "name": "NoteOn",
       "size": 256
     },
     {
       "address": "0x80020334",
-      "name": "func_80020334",
+      "name": "SetProgramChange",
       "size": 112
     },
     {
       "address": "0x800203A4",
-      "name": "func_800203A4",
+      "name": "SetControlChange",
       "size": 728
     },
     {
       "address": "0x8002067C",
-      "name": "func_8002067C",
+      "name": "ContModulation",
       "size": 288
     },
     {
       "address": "0x8002079C",
-      "name": "func_8002079C",
+      "name": "ContPortaTime",
       "size": 288
     },
     {
       "address": "0x800208BC",
-      "name": "func_800208BC",
+      "name": "ContPortamento",
       "size": 416
     },
     {
       "address": "0x80020A5C",
-      "name": "func_80020A5C",
+      "name": "ContResetAll",
       "size": 184
     },
     {
       "address": "0x80020B14",
-      "name": "func_80020B14",
+      "name": "ContNrpn1",
       "size": 292
     },
     {
       "address": "0x80020C38",
-      "name": "func_80020C38",
+      "name": "ContNrpn2",
       "size": 296
     },
     {
       "address": "0x80020D60",
-      "name": "func_80020D60",
+      "name": "ContRpn1",
       "size": 112
     },
     {
       "address": "0x80020DD0",
-      "name": "func_80020DD0",
+      "name": "ContRpn2",
       "size": 112
     },
     {
       "address": "0x80020E40",
-      "name": "func_80020E40",
+      "name": "ContDataEntry",
       "size": 1472
     },
     {
       "address": "0x80021400",
-      "name": "func_80021400",
+      "name": "Snd_setVabAttr",
       "size": 856
     },
     {
       "address": "0x80021758",
-      "name": "func_80021758",
+      "name": "SetPitchBend",
       "size": 164
     },
     {
       "address": "0x800217FC",
-      "name": "func_800217FC",
+      "name": "GetMetaEvent",
       "size": 856
     },
     {
       "address": "0x80021B54",
-      "name": "func_80021B54",
+      "name": "ReadDeltaValue",
       "size": 180
     },
     {
       "address": "0x80021C08",
-      "name": "func_80021C08",
+      "name": "SsUtReverbOn",
       "size": 32
     },
     {
       "address": "0x80021C28",
-      "name": "func_80021C28",
+      "name": "SsUtReverbOff",
       "size": 32
     },
     {
       "address": "0x80021C48",
-      "name": "func_80021C48",
+      "name": "SsUtSetReverbType",
       "size": 96
     },
     {
       "address": "0x80021CA8",
-      "name": "func_80021CA8",
+      "name": "SsUtGetReverbType",
       "size": 16
     },
     {
       "address": "0x80021CB8",
-      "name": "func_80021CB8",
+      "name": "SsUtSetReverbDepth",
       "size": 188
     },
     {
       "address": "0x80021D74",
-      "name": "func_80021D74",
+      "name": "SsUtSetReverbFeedback",
       "size": 64
     },
     {
       "address": "0x80021DB4",
-      "name": "func_80021DB4",
+      "name": "SsUtSetReverbDelay",
       "size": 64
     },
     {
       "address": "0x80021DF4",
-      "name": "func_80021DF4",
+      "name": "Snd_nextseq",
       "size": 304
     },
     {
       "address": "0x80021F24",
-      "name": "func_80021F24",
+      "name": "SsUtResolveADSR",
       "size": 92
     },
     {
       "address": "0x80021F80",
-      "name": "func_80021F80",
+      "name": "SsUtBuildADSR",
       "size": 140
     },
     {
       "address": "0x8002200C",
-      "name": "func_8002200C",
+      "name": "SsUtGetVagAtr",
       "size": 572
     },
     {
       "address": "0x80022248",
-      "name": "func_80022248",
+      "name": "SsUtSetVagAtr",
       "size": 456
     },
     {
       "address": "0x80022410",
-      "name": "func_80022410",
+      "name": "SpuVmDamperOn",
       "size": 20
     },
     {
       "address": "0x80022424",
-      "name": "func_80022424",
+      "name": "Snd_crescendo",
       "size": 1140
     },
     {
       "address": "0x80022898",
-      "name": "func_80022898",
+      "name": "SsSeqStop",
       "size": 148
     },
     {
       "address": "0x8002292C",
-      "name": "func_8002292C",
+      "name": "SsSepStop",
       "size": 188
     },
     {
       "address": "0x800229E8",
-      "name": "func_800229E8",
+      "name": "Snd_stop",
       "size": 264
     },
     {
       "address": "0x80022AF0",
-      "name": "func_80022AF0",
+      "name": "SsUtGetProgAtr",
       "size": 264
     },
     {
@@ -2107,22 +2107,22 @@
     },
     {
       "address": "0x80022C08",
-      "name": "func_80022C08",
+      "name": "Snd_pause",
       "size": 140
     },
     {
       "address": "0x80022C94",
-      "name": "func_80022C94",
+      "name": "Snd_nextpause",
       "size": 92
     },
     {
       "address": "0x80022CF0",
-      "name": "func_80022CF0",
+      "name": "Snd_tempo",
       "size": 472
     },
     {
       "address": "0x80022EC8",
-      "name": "func_80022EC8",
+      "name": "SsSetSerialAttr",
       "size": 160
     },
     {
@@ -2132,22 +2132,22 @@
     },
     {
       "address": "0x80023048",
-      "name": "func_80023048",
+      "name": "SpuInit",
       "size": 32
     },
     {
       "address": "0x80023068",
-      "name": "func_80023068",
+      "name": "SpuInitHot",
       "size": 32
     },
     {
       "address": "0x80023088",
-      "name": "func_80023088",
+      "name": "SpuStart",
       "size": 124
     },
     {
       "address": "0x80023104",
-      "name": "func_80023104",
+      "name": "SpuQuit",
       "size": 112
     },
     {
@@ -2157,17 +2157,17 @@
     },
     {
       "address": "0x800231D4",
-      "name": "func_800231D4",
+      "name": "_spu_init",
       "size": 608
     },
     {
       "address": "0x80023434",
-      "name": "func_80023434",
+      "name": "_spu_close",
       "size": 40
     },
     {
       "address": "0x8002345C",
-      "name": "func_8002345C",
+      "name": "_spu_open",
       "size": 40
     },
     {
@@ -2182,7 +2182,7 @@
     },
     {
       "address": "0x800234E4",
-      "name": "func_800234E4",
+      "name": "_spu_write",
       "size": 104
     },
     {
@@ -2192,7 +2192,7 @@
     },
     {
       "address": "0x8002374C",
-      "name": "func_8002374C",
+      "name": "_spu_read",
       "size": 40
     },
     {
@@ -2202,22 +2202,22 @@
     },
     {
       "address": "0x80023800",
-      "name": "func_80023800",
+      "name": "_spu_w",
       "size": 308
     },
     {
       "address": "0x80023934",
-      "name": "func_80023934",
+      "name": "_spu_r",
       "size": 272
     },
     {
       "address": "0x80023A44",
-      "name": "func_80023A44",
+      "name": "_spu_r_",
       "size": 192
     },
     {
       "address": "0x80023B04",
-      "name": "func_80023B04",
+      "name": "_spu_ioctl",
       "size": 2068
     },
     {
@@ -2242,12 +2242,12 @@
     },
     {
       "address": "0x80024E30",
-      "name": "func_80024E30",
+      "name": "SysSpu_setRegister",
       "size": 28
     },
     {
       "address": "0x80024E4C",
-      "name": "func_80024E4C",
+      "name": "SysSpu_getRegister",
       "size": 28
     },
     {
@@ -2257,7 +2257,7 @@
     },
     {
       "address": "0x80024E98",
-      "name": "func_80024E98",
+      "name": "SpuSetReverbModeParam",
       "size": 1264
     },
     {
@@ -2267,12 +2267,12 @@
     },
     {
       "address": "0x80025684",
-      "name": "func_80025684",
+      "name": "SpuInitMalloc",
       "size": 112
     },
     {
       "address": "0x800256F4",
-      "name": "func_800256F4",
+      "name": "SpuMalloc",
       "size": 704
     },
     {
@@ -2282,52 +2282,52 @@
     },
     {
       "address": "0x80025D10",
-      "name": "func_80025D10",
+      "name": "SpuMallocWithStartAddr",
       "size": 680
     },
     {
       "address": "0x80025FB8",
-      "name": "func_80025FB8",
+      "name": "_SpuIsInAllocateArea",
       "size": 112
     },
     {
       "address": "0x80026028",
-      "name": "func_80026028",
+      "name": "_SpuIsInAllocateArea_",
       "size": 40
     },
     {
       "address": "0x80026050",
-      "name": "func_80026050",
+      "name": "SpuFree",
       "size": 124
     },
     {
       "address": "0x800260CC",
-      "name": "func_800260CC",
+      "name": "_print",
       "size": 176
     },
     {
       "address": "0x8002617C",
-      "name": "func_8002617C",
+      "name": "SpuClearReverbWorkArea",
       "size": 328
     },
     {
       "address": "0x800262C4",
-      "name": "func_800262C4",
+      "name": "SpuSetReverb",
       "size": 172
     },
     {
       "address": "0x80026370",
-      "name": "func_80026370",
+      "name": "SpuIsTransferCompleted",
       "size": 176
     },
     {
       "address": "0x80026420",
-      "name": "func_80026420",
+      "name": "_spu_setInTransfer",
       "size": 44
     },
     {
       "address": "0x8002644C",
-      "name": "func_8002644C",
+      "name": "_spu_getInTransfer",
       "size": 16
     },
     {
@@ -2337,7 +2337,7 @@
     },
     {
       "address": "0x8002646C",
-      "name": "func_8002646C",
+      "name": "SpuSetTransferStartAddr",
       "size": 80
     },
     {
