@@ -529,8 +529,39 @@ Kf2.Subpixel.Install();
 // the same one, but the picture has not been checked by eye. Its switch is under
 // Video with the others.
 Kf2.ZBuffer.Configure(Environment.GetEnvironmentVariable("KF2_ZBUFFER"),
-                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_PROBE"));
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_PROBE"),
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_THRESHOLD"));
 Kf2.ZBuffer.Install();
+
+// PGXP -- upstream RecompOne's own vertex tracking, backported as
+// patches/recompone/0034-0036, and the second mechanism the port has for the one
+// number everything above depends on. GteVertexMap pairs memory reads and writes
+// by value and cannot see a vertex the game computes; PGXP is told what every
+// register holds, by hooks the recompiler emits, so it does not have to guess.
+//
+//     KF2_PGXP=1              use it instead of the address map
+//     KF2_PGXP_TEXTURE=0      its share of perspective correction off
+//     KF2_PGXP_CULLING=0      leave backface culling on truncated positions
+//     KF2_PGXP_CPU=0          no per-instruction register tracking
+//     KF2_PGXP_MEMORY=0       no RAM shadow
+//     KF2_PGXP_VERTEXCACHE=0  no screen-position fallback
+//     KF2_PGXP_CACHEW=0       let that fallback answer positions but not depths
+//     KF2_PGXP_TOLERANCE=2    how far a recovered position may sit from the
+//                             packet's before it is refused; -1 turns it off
+//     KF2_PGXP_PROBE=1        report the coverage, against the address map's
+//
+// Off by default: the coverage is measured, the picture is not. Installed after
+// ZBuffer because the depth buffer reads whatever this decides.
+Kf2.Pgxp.Configure(Environment.GetEnvironmentVariable("KF2_PGXP"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_TEXTURE"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_CULLING"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_CPU"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_MEMORY"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_VERTEXCACHE"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_CACHEW"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_TOLERANCE"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_PROBE"));
+Kf2.Pgxp.Install();
 
 // True color (24-bit) output for the GL backend. The console renders into 15-bit
 // VRAM, so a shaded fog gradient bands into steps unless the dither hides it with

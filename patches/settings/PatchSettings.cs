@@ -190,6 +190,7 @@ public static class PatchSettings
         Register("display", new PerspectivePage());
         Register("display", new SubpixelPage());
         Register("display", new ShadingPage());
+        Register("display", new PgxpPage());
         RegisterSlot("display.render_scale", new WidescreenPage());
         // Nothing registers against "input": the port draws that whole pane
         // itself (InputSection), and SettingsRegistry.Extend has no un-extend --

@@ -75,6 +75,9 @@ public static class ZBuffer
     /// <summary>Where the choice is kept between runs.</summary>
     public const string OnKey = "kf2.zbuffer.on";
 
+    /// <summary>Where the depth-clear threshold is kept between runs.</summary>
+    public const string ThresholdKey = "kf2.zbuffer.threshold";
+
     /// <summary>False leaves occlusion to the ordering table, as the console does.</summary>
     public static bool Enabled
     {
@@ -107,10 +110,20 @@ public static class ZBuffer
     /// that costs.</summary>
     static bool _census;
 
-    public static void Configure(string? on, string? probe)
+    /// <summary>KF2_ZBUFFER_THRESHOLD: how far the scene may jump towards the
+    /// camera between two primitives before the depth buffer is started again.
+    /// Zero or less is one buffer for the whole frame.</summary>
+    static float? _forcedThreshold;
+
+    public static void Configure(string? on, string? probe, string? threshold = null)
     {
         if (!string.IsNullOrWhiteSpace(on))
             _forced = !on.Equals("0", StringComparison.Ordinal);
+
+        if (!string.IsNullOrWhiteSpace(threshold) &&
+            float.TryParse(threshold, System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float t))
+            _forcedThreshold = t;
 
         if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
         {
@@ -133,7 +146,10 @@ public static class ZBuffer
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
-            Console.WriteLine($"[KF2] zbuffer: {(Enabled ? "on" : "off (ordering table)")}");
+            GteDepth.DepthClearThreshold = _forcedThreshold ??
+                RecompOne.Runtime.Runtime.View.GetFloat(ThresholdKey, GteDepth.DepthClearThreshold);
+            Console.WriteLine($"[KF2] zbuffer: {(Enabled ? "on" : "off (ordering table)")}" +
+                              $", clear threshold {(GteDepth.DepthClearThreshold <= 0f ? "off" : GteDepth.DepthClearThreshold.ToString("0"))}");
         });
 
         bool attached = false;
@@ -148,6 +164,8 @@ public static class ZBuffer
     /// <summary>Change the setting at run time. The next triangle starts or stops
     /// testing; a frame drawn during the change is at worst partly sorted, which
     /// is a frame of the flicker the setting is about.</summary>
+    static string ZPct(long n, long total) => $"{(total == 0 ? 0.0 : 100.0 * n / total):F1}%";
+
     public static void SetEnabled(bool on) => Enabled = on;
 
     static void Attach()
@@ -192,6 +210,25 @@ public static class ZBuffer
                           $"{(total == 0 ? "" : $", {(100.0 * tested / total):F1}% of submitted")}" +
                           $"{(rejected == 0 ? "" : $", {rejected / window:F0} px rejected/s")}, " +
                           $"over {_frames / window:F0} frames/s");
+
+        // The depth-clear census. The threshold is only worth a nonzero value if
+        // this game has two populations of forward step — ordinary sorting inside
+        // one scene, and a scene the game started again under the same projection.
+        // If every drop is small and the clear never fires, the right threshold is
+        // 0; if it fires in steady play, it is cutting the world's own depth
+        // buffer in half mid-frame, which is worse than not having one.
+        var drops = GteDepth.ZDrops;
+        long dropTotal = 0;
+        foreach (var n in drops) dropTotal += n;
+
+        if (dropTotal > 0)
+            Console.WriteLine($"[KF2] zbuffer: {GteDepth.ZClears / window:F1} depth clear(s)/s at threshold " +
+                              $"{(GteDepth.DepthClearThreshold <= 0f ? "off" : GteDepth.DepthClearThreshold.ToString("0"))}; " +
+                              $"forward steps {dropTotal / window:F0}/s: " +
+                              $"{ZPct(drops[0], dropTotal)} under 10, {ZPct(drops[1], dropTotal)} under 50, " +
+                              $"{ZPct(drops[2], dropTotal)} under 150, {ZPct(drops[3], dropTotal)} under 300, " +
+                              $"{ZPct(drops[4], dropTotal)} under 1000, {ZPct(drops[5], dropTotal)} beyond; " +
+                              $"widest {GteDepth.ZDropMax:F0}");
 
         GteDepth.ResetZCounters();
         _frames = 0;
