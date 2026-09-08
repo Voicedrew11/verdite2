@@ -249,8 +249,17 @@ progress UI needs was already public — `Popup` and `PopupManager.Register` —
 
 macOS (`.app` for `osx-arm64` and `osx-x64`) and Flatpak. The data-directory work
 both need is done; what is missing is the packaging and, for macOS, signing and
-notarization. `.chd` is not supported — `CueFs` reads cue/bin, at recompile time
-and at play time both, and a CHD decoder is real work rather than a wrapper.
+notarization.
+
+`.chd` **is** supported now — see "CHD disc images" in [RUNTIME.md](RUNTIME.md).
+Two things about it belong here rather than there. The disc the player picks is
+what `BuildKey.Compute` opens, and the key hashes the **six files** the recompile
+reads rather than the container, so the same dump as a cue and as a CHD produces
+the same key, shares one build directory, and switching between them costs no
+rebuild. And the format is chosen by `DiscImage.Open` off the extension (falling
+back to the CHD magic), so nothing in the launcher branches on it: `DiscCheck`
+validates and `Recompile` rewrites the config's `cue` key exactly as before — that
+key is the recompiler's schema and keeps its name.
 
 **Never looked at by eye:** the progress popup itself, and the placeholder icon at
 the sizes a desktop actually draws it.

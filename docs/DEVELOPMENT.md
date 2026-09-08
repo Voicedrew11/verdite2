@@ -5,7 +5,9 @@ The recompiler's own quirks are in [RECOMPILATION.md](RECOMPILATION.md); the
 patches to the RecompOne checkout are in [RUNTIME.md](RUNTIME.md).
 
 **Nothing here builds without the disc** (gitignored, `disc/KingsField2.cue`) or
-without `tools/RecompOne` (a gitignored checkout, not a submodule).
+without `tools/RecompOne` (a gitignored checkout, not a submodule). A `.chd` works
+everywhere a `.cue` does — `DiscImage.Open` picks by extension — see "CHD disc
+images" in [RUNTIME.md](RUNTIME.md).
 
 ## Prerequisites
 
@@ -17,13 +19,14 @@ with no Windows-only P/Invoke. Verified working on Fedora 43 / Wayland / Mesa.
 
 ## Disc structure
 
-Converted from CHD with:
+The CHD can be handed to the recompiler and to the game directly. Converting it is
+still useful, because the Python tooling under `scripts/` reads cue/bin only:
 
 ```bash
 chdman extractcd -i "King's Field (USA).chd" -o KingsField2.cue -ob KingsField2.bin
 ```
 
-Result is a single MODE2/2352 track. `python3 scripts/inspect_disc.py` gives the
+Either way it is a single MODE2/2352 track. `python3 scripts/inspect_disc.py` gives the
 full listing; the part that matters:
 
 | File | Size | Role |

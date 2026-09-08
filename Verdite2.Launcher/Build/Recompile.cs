@@ -18,10 +18,10 @@ namespace Verdite2.Launcher.Build;
 static class Recompile
 {
     /// <summary>
-    /// Recompile <paramref name="cuePath"/> into <paramref name="outDir"/>.
+    /// Recompile <paramref name="discPath"/> into <paramref name="outDir"/>.
     /// Throws with the recompiler's own message on failure.
     /// </summary>
-    public static void Run(string cuePath, string outDir)
+    public static void Run(string discPath, string outDir)
     {
         Directory.CreateDirectory(outDir);
 
@@ -36,7 +36,7 @@ static class Recompile
         var staged = Stage();
 
         var cfgPath = Path.Combine(staged, "kf2.build.json");
-        File.WriteAllText(cfgPath, Rewrite(File.ReadAllText(Path.Combine(staged, "kf2.json")), cuePath, outDir));
+        File.WriteAllText(cfgPath, Rewrite(File.ReadAllText(Path.Combine(staged, "kf2.json")), discPath, outDir));
 
         try { Invoke(cfgPath); }
         finally { try { File.Delete(cfgPath); } catch { } }
@@ -73,6 +73,8 @@ static class Recompile
     /// <summary>
     /// Point "cue" at the player's image and "output" at our build directory,
     /// leaving every address, overlay and SDK patch in the shipped config alone.
+    /// The key is still called "cue" because that is the recompiler's schema;
+    /// DiscFs.Open dispatches on the extension, so a .chd goes in the same slot.
     ///
     /// Done as a string edit rather than by parsing and re-emitting, because
     /// kf2.json carries comments and trailing commas -- the recompiler's loader
@@ -81,9 +83,9 @@ static class Recompile
     /// documented copy of the overlay layout into a machine-written blob the next
     /// time anyone looked at it.
     /// </summary>
-    static string Rewrite(string json, string cuePath, string outDir)
+    static string Rewrite(string json, string discPath, string outDir)
     {
-        json = ReplaceStringValue(json, "cue", cuePath);
+        json = ReplaceStringValue(json, "cue", discPath);
         json = ReplaceStringValue(json, "output", outDir);
         return json;
     }
