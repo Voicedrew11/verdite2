@@ -750,7 +750,7 @@ Packaging is `packaging/linux/build-appimage.sh` and
 `packaging/windows/build-windows.ps1`, neither of which needs the disc; trimming is
 off and must stay off (MonoMod detours, Roslyn, `AutoStart`'s reflection). The
 icons under `packaging/shared/` are **placeholders**. Not packaged: macOS and
-Flatpak. Not supported: `.chd`. See `docs/PACKAGING.md`.
+Flatpak. **`.chd` is supported**, as of `0037`. See `docs/PACKAGING.md`.
 
 ## Repository conventions
 

@@ -119,7 +119,7 @@ jobs:
           generate_release_notes: true
           body: |
             **Verdite2 ships no game data.** You need your own dump of King's
-            Field (NTSC-U, `SLUS-00158`) as a `.cue` / `.bin` pair.
+            Field (NTSC-U, `SLUS-00158`) as a `.chd`, or as a `.cue` / `.bin` pair.
 
             On first launch Verdite2 asks for that image and builds the game from
             it, which takes about fifteen seconds and happens once. Later launches

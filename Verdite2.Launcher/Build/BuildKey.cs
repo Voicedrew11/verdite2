@@ -39,14 +39,14 @@ namespace Verdite2.Launcher.Build;
 /// </summary>
 static class BuildKey
 {
-    public static string Compute(string cuePath)
+    public static string Compute(string discPath)
     {
         var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         Add(hash, "verdite2");
         Add(hash, typeof(BuildKey).Assembly.GetName().Version?.ToString() ?? "0");
 
-        using (var fs = CueFs.Open(cuePath))
+        using (var fs = DiscFs.Open(discPath))
             foreach (var file in new[] { "SYSTEM.CNF", "SLUS_001.58", "OPEN.EXE", "GAME.EXE", "END.EXE", "CD/COM/FDAT.T" })
             {
                 Add(hash, file);

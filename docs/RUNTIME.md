@@ -562,6 +562,15 @@ field and `Apply` only resets some — leaving a `WindowMinSize` that grows on e
 call and eventually floors a window past the screen, over `0019`'s clamp. **No
 recompile.** See "The scale can put the settings out of reach" below.
 
+**`0037-chd-disc-images.patch`** is upstream's `137a793` back-ported: `CueFs`
+becomes `DiscFs` over an `IDiscImage` with `CueBinImage` and `ChdImage` behind it,
+so one disc path serves cue/bin and CHD at recompile time and at play time both.
+It also carries the commit's unrelated RAM-size change, which is where
+`Runtime.RamWordMask` comes from. **Forces a recompile** — the third patch that
+does, after `0004` and `0035` — because `EntryWriter` emits `DiscFs.Open` into
+`generated/Entry.cs`, so an existing `generated/` will not compile against the
+patched runtime. See "CHD disc images" below.
+
 **`0026-str-pacing-without-a-latch.patch`** paces an STR stream from the moment it
 starts instead of after two decoded frames happen to sit in the ring together,
 which for a movie of 13-14 sectors a frame never happened — so it was delivered
@@ -894,6 +903,82 @@ Measured: the resource is embedded (`NotoSans-Regular.ttf` present in the built
 whether 16 px is the right size, whether the icons still sit on the baseline after
 the size change, and whether anything in the port's own panes now wraps or
 overflows at the larger metrics.
+
+## CHD disc images
+
+The port read cue/bin and nothing else, at recompile time and at play time both,
+because `CueFs` was the only filesystem the runtime had. Upstream fixed that in
+`137a793` ("merge back experimental chd support, heavely based on libchd"), which
+our pin `870c5ba` predates by six commits, so
+`patches/recompone/0037-chd-disc-images.patch` is that commit back-ported.
+
+**What it changes is the shape rather than the format.** `CueFs` becomes `DiscFs`
+and `CueBin` becomes `CueBinImage`, both behind a new `IDiscImage` — track list,
+leadout, `ReadSectorData(lba, size)` — with `ChdImage` beside it over a
+from-scratch libchdr port (`Cdrom/Chd/`: the header, the hunk map, a bit reader,
+Huffman, LZMA, FLAC, CD-sector ECC regeneration). `DiscImage.Open` picks between
+them on the file extension and falls back to the CHD magic for a file named
+neither, so **one call site serves both formats** and every layer above it — the
+recompiler's `OverlayWriter` and `Parser`, the runtime's `CdController` and
+`BiosA`, the launcher's `DiscCheck` and `BuildKey` — only changed a type name.
+
+**The commit bundles a second, unrelated change and it is carried.** RAM size
+becomes a `PSMemory` ctor argument, and the literal `0x1FFFFCu` at three sites
+(`Dma`'s linked-list walk, `LibGpu.DrawOTag` twice) becomes `Runtime.RamWordMask`
+derived from it. Nothing in this port passes a size, so the RAM is the same 2 MB
+it always was and the mask is the same `0x1FFFFC`; it is carried because the rest
+of the commit's context is written against it, and dropping it would mean
+maintaining a divergence for no gain. That change is why `setup_tools.sh`'s own
+comment cites `0x1FFFFCu became Runtime.RamWordMask` as the example of upstream
+drift that breaks the stack — it was the drift, and now it is in the stack.
+
+**Two hunks conflicted, and both are in files a port patch had already edited.**
+`PSMemory`'s constructor is where `0034` initialises the PGXP shadow, and its
+comment said this pin has no `ramSize` argument to size it from — true then, false
+now; the `PgxpMemory.Init((uint)_ram.Length)` moved below the allocation and the
+comment says why it still reads the array rather than `MemoryMap`. `DrawOTag`'s
+first statement carries `0003`'s SDK trace above it and `0012`'s
+`WriteGp0(value, src)` below it, so the one-line mask change had to be merged
+between them rather than applied.
+
+**Codec coverage is cdzl, cdlz, cdfl, zlib and lzma.** Not zstd: a `chdman -c cdzs`
+image raises `chd codec cdzs its not supported` out of `ChdCodecSet`, which reaches
+`DiscCheck.Validate` as a refusal at the picker rather than as a crash minutes
+later. The image measured here is v5, `cdlz`/`cdzl`/`cdfl`, one MODE2_RAW track.
+
+**The build key does not see the format.** `BuildKey.Compute` hashes the six files
+the recompile reads, and they come out identical from either container, so the same
+dump as a cue and as a CHD produces the same key and shares one build directory —
+switching between them costs no rebuild. The launcher's variable is `discPath` now
+rather than `cuePath`; the recompiler config's key is still `"cue"`, that being its
+schema, and a `.chd` goes in the same slot.
+
+### Measured
+
+- **The recompile is byte-identical.** `generated/` built from the CHD and from the
+  cue/bin of the same dump differ in nothing (`diff -r`, 13 files).
+- **It costs about half a second, once.** Three recompiles each: 0.86-0.89 s from
+  the cue, 1.35-1.39 s from the CHD, against a 12.7 s first run overall.
+- **An area load costs nothing measurable.** `KF2_LOADPACING=0
+  KF2_LOADPACING_PROBE=1` on the autostart load reads 84 steps in **305.8 ms over
+  105 blocking VSync calls** from the cue and **305.1 ms over 105** from the CHD —
+  the same figure, the same waits.
+- **It boots the whole chain.** `KF2_AUTOSTART=2` from the CHD walks
+  `open` → `game` → `fdat02` → `fdat05`: three EXE overlays *and* two area-module
+  swaps, and a module swap is armed on a CD read hitting an absolute LBA, so that
+  is the raw sector path and not only the ISO directory. It lands in slot 2, area 1,
+  and holds **144.0 fps drawn at 20.0 ticks/s**.
+- **The STR stream decodes.** 100 s at the title from the CHD gives 1098 `[mdec]`
+  lines and no errors, which is `LibCdStream` reading 2352-byte sectors.
+- **The shipped launcher's first run works from a CHD.** `Verdite2` against a fresh
+  data directory validates it, keys it, recompiles, compiles and plays, at 144.0 fps
+  / 20.0 ticks/s.
+- **The key really is format-blind.** Pointing the same data directory at the
+  cue/bin of that dump afterwards runs zero recompiler lines and leaves one build
+  directory (`4be97cc3237e2cd1`): the cue reused the CHD's build.
+
+Nothing here is a picture, so there is nothing new to look at by eye: a CHD is the
+same disc.
 
 ## Two general shapes worth keeping
 

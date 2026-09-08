@@ -197,6 +197,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 - The scale can put the settings out of reach
 - The picture is inset inside its own panel
 - The interface's font
+- CHD disc images
 - Two general shapes worth keeping
 - Upstream contribution policy
 
