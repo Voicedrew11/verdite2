@@ -514,6 +514,55 @@ preference: every hook this port owns is in the walking-around part of the game,
 and a pointer captured and then swallowed by the in-game menu has to be
 releasable *from inside it*.
 
+### Saying so on screen: a glyph rather than a toast
+
+Capture used to be announced by `ToastNotifications.ShowText("Mouse look", …)` —
+a titled card sliding in over the game on every capture, every release, and once
+on the first uncaptured motion. It was reported from play as *really annoying*,
+and the reason is structural rather than cosmetic: capturing and releasing is
+something a player does **while playing**, since it is how you reach the menu bar
+and come back, so the notification fires often and every firing is a modal-looking
+card reporting a state the player has just this moment asked for. There is nothing
+in it to read.
+
+`patches/MouseIndicator.cs` is what replaced it: a white pixel-art mouse in the
+top right of the game picture, faded in over 140 ms, held for 1.1 s and faded out
+over 420 ms. **The glyph carries the state and the fade carries the change** —
+captured is a solid mouse, released is the same silhouette with a two-cell
+diagonal cut out of it, computed from the one bitmap rather than authored twice.
+The cut is the universal "off" and so needs no learning, which a filled-versus-
+hollow pair would have; that was the choice between them. A one-cell black shadow
+sits under the white, because the picture behind it is whatever the dungeon
+happens to be and a torch-lit wall is bright enough to lose a white shell — and
+the cut only reads as a cut if something separates the two halves.
+
+Three things follow the map's viewports rather than being invented again. It is
+an `IFloatingPanel` anchored to **`MapRender.Picture`**, the game picture rather
+than the window (`patches/recompone/0029`), so it does not sit over the port's
+menu bar or in the letterbox bar beside a 4:3 picture. Its cell is a whole number
+of screen pixels — `max(2, round(height / 180))`, off the picture rather than off
+`Theme.Scale`, since it belongs to the game's image and not to the port's chrome
+— because a one-cell outline on a half pixel softens the whole thing. And its
+`IsOpen` is `true` with a no-op setter, the shape `MapOverlay` uses: the fade *is*
+the open state, `Draw` returns before it begins a window while faded out, and a
+setter that wrote anything would give "Reset view" an opinion about a transient.
+
+It is registered from `Mouse.Install`'s `RuntimeReadyEvent` rather than from
+`Program.cs`, which puts it after the map's three viewports — `PanelManager` draws
+in registration order, and a capture announcement belongs over the map rather than
+under it.
+
+**One toast is kept.** "This display cannot lock the pointer" is a failure rather
+than a state, it is rare, and it needs words; no glyph says it. The once-a-session
+"press Escape" hint is *not* kept, and that is the same argument as the card: a
+player who moves the mouse and gets nothing is asking "is this on?", not "which
+key is it?", and the cut mouse answers exactly that. The key is still named on the
+console line at boot and in the settings page.
+
+**Never judged by eye**: whether the top right is where the eye is, whether 1.75 s
+total is long enough to notice and short enough not to nag, and whether the cut
+reads as "released" over a bright scene.
+
 ### What the runtime had to grow: `0017`
 
 `InputManager` owns the `IMouse` and is `internal`, so the port could not reach
