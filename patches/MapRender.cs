@@ -883,7 +883,9 @@ public static class MapRender
     /// func_80028080 is what a walk step goes through, and it adds
     /// `-sin(yaw) * d` to the X at 0x801994EC and `+cos(yaw) * d` to the Z at
     /// 0x801994F4 (generated/game.cs:26043-26071; func_8005EB08 is odd, so it is
-    /// sine, and func_8005EC10 takes |a0|, so it is cosine). So the heading on the
+    /// sine, and func_8005EC10 takes |a0|, so it is cosine -- a signature match
+    /// against the PSY-Q bank has since named them libgte's `rsin` and `rcos`,
+    /// which is where those two now appear in the generated code). So the heading on the
     /// ground is `(-sin yaw, cos yaw)` — yaw 0 faces +Z and yaw 0x400 faces -X.
     ///
     /// Since the world's own up is -Y, that heading turns you **left** as yaw

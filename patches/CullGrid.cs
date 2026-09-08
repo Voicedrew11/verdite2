@@ -275,7 +275,7 @@ public static class CullGrid
         // The seven (level, pitched) pairs, lerped by 0x1000 - rcos(pitch) — the
         // live table, which CullCone has already widened.
         c_.A0 = (uint)(short)m.ReadU16(PitchAddr);
-        KingsField2.func_8005EC10(c_, m);
+        KingsField2.rcos(c_, m);
         int t = 0x1000 - (int)c_.V0;
         for (int i = 0; i < 7; i++)
         {
@@ -287,10 +287,10 @@ public static class CullGrid
         // Rotation by yaw, the game's own fixed-point trig.
         int yaw = (short)m.ReadU16(YawAddr);
         c_.A0 = (uint)yaw;
-        KingsField2.func_8005EB08(c_, m);
+        KingsField2.rsin(c_, m);
         int sinv = (int)c_.V0;
         c_.A0 = (uint)yaw;
-        KingsField2.func_8005EC10(c_, m);
+        KingsField2.rcos(c_, m);
         int cosv = (int)c_.V0;
 
         // func_8002B6B4's side effect picks the sub-map number the flood tests

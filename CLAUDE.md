@@ -1167,6 +1167,10 @@ packaging/               AppImage and Windows packaging, plus placeholder icons
 patches/recompone/*.patch  local fixes to the RecompOne checkout itself
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection, address-hunting, and the rate tooling:
+                         merge_sdk_names (write the PSY-Q names a signature
+                         match found into config/funcmaps/, refusing the ones
+                         SdkPatches would bind -- see "Merging the SDK names" in
+                         docs/RECOMPILATION.md),
                          rate_census (which words move at the render rate),
                          find_writers (which code moves them), rate_matrix (did
                          the fix work), check_gate (does the gate obey its rule).
@@ -1197,7 +1201,19 @@ mapped by address in `patches[]`:
 ```
 
 63 such patches exist today (`libetc`, `libcd`, four `libgpu` entry points, six
-`libcdstream`, libapi's `DMACallback`). `libpad` is the notable gap. Only map a
+`libcdstream`, libapi's `DMACallback`). `libpad` is the notable gap — and a
+signature match confirms it is not a gap at all: the game links no `libpad`, which
+is consistent with it reading `PAD_dr` through `BiosB` instead.
+
+**997 non-binding functions now carry their real PSY-Q names** (`rsin`, `rcos`,
+`SsSetMVol`, `RotTransPers`...), from upstream's signature bank via
+`scripts/merge_sdk_names.py`. That is legibility only: the script **refuses every
+name `SdkPatches` binds**, reading that list out of the patched checkout rather
+than copying it, so all 63 entries above still do the binding and the recompiler
+still reports `applied 63 patches, 0 reimplementations`. The generated C# was
+verified identical apart from identifiers. It needs no pin move —
+`--autoconfigure` is a standalone command. See "Merging the SDK names" in
+`docs/RECOMPILATION.md`. Only map a
 function the runtime actually implements — check
 `tools/RecompOne/RecompOne.Runtime/sdk/Lib*.cs` first; unmapped library routines
 run fine as recompiled MIPS because `PSMemory` traps their register writes.

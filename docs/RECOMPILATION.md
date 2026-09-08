@@ -380,6 +380,61 @@ What worked for identifying them, roughly in order of payoff:
   game is spinning in. See "For a hang, take the managed stack of the live
   process" in [DEVELOPMENT.md](DEVELOPMENT.md).
 
+## Merging the SDK names: 997 functions stop being addresses
+
+The sweep names everything positionally, which is what "The SDK naming problem"
+above is about. Upstream RecompOne grew a **PSY-Q signature bank** (2,949
+functions, 9,674 variants, matched on exact word sequences with an object-layout
+anchor to break ties), and it runs as a standalone command — `--autoconfigure` —
+so it needs **no pin move** and no change to the recompiler this port builds
+against. `scripts/merge_sdk_names.py` writes what it found into
+`config/funcmaps/*.json`.
+
+Run against `SLUS-00158` it named 347 of 515 functions in OPEN.EXE, 425 of 1103
+in GAME.EXE and 324 of 471 in END.EXE. Its function boundaries agree with this
+project's swept-and-merged maps almost exactly — 1,096 shared addresses, at most
+two on either side unshared — so the merge is a join on address, and the script
+asserts that: addresses and sizes are untouched, only `name` changes.
+
+**It independently reproduced the hand-mapped SDK addresses.** Of the 63 entries
+in `patches[]`, it agrees with 54 exactly, differs on 3 only by naming `CdSync`
+through its alias `CD_sync`, and leaves 6 unnamed. **Zero contradictions.** Two
+of the port's own hand deductions came back confirmed by name: `func_8005EB08`
+and `func_8005EC10`, which `MapRender` had argued were sine and cosine from
+parity and from one of them taking `|a0|`, are libgte's `rsin` and `rcos`.
+`patches/CullGrid.cs` calls them by those names now.
+
+**Naming a function is binding it, so the merge refuses the names that would.**
+`SdkPatches` matches by name, so writing `CdSearchFile` into a funcmap does not
+label that function — it reroutes it to the runtime's HLE. That is a behaviour
+change, and three of the four `libgpu` image routines it would newly bind
+(`ClearImage`, `MoveImage`, `LoadImage`) are the ones `func_8001883C` draws the
+loading screen with, which is the measured fact `patches/LoadPacing.cs` is built
+on. So the script skips every name the recompiler binds — 97 of them — and they
+stay `func_`-named. `patches[]` keeps all 63 entries and the recompiler still
+reports `applied 63 patches, 0 reimplementations`, exactly as before.
+
+**The exclusion list is read out of the patched checkout, not copied.** It was
+first written from the pristine pin's `SdkPatches.cs` and so missed
+`DMACallback`, which `0004-libapi-dma-callbacks` adds — and the matcher's name
+for it bound a *second* address alongside the one `patches[]` binds by hand,
+turning up as `applied 3 reimplementations` where there had been 0. Reading the
+table the recompiler will actually use cannot drift that way. That near-miss also
+surfaced a real disagreement about where `DMACallback` is; see `docs/TODO.md`.
+
+**A name that matched twice is refused at both addresses.** `SpuVmDamperOn`
+matched two places in GAME.EXE, so one of them is wrong and nothing here says
+which. The whole value of the merge is that a stack trace can be read at face
+value, so an ambiguous name is worth less than none.
+
+What this buys is legibility, not behaviour: `dotnet-stack report` on a hang —
+the documented technique for one — now names `rsin`, `SsSetMVol`, `RotTransPers`
+rather than three hex addresses to look up, and any future address hunt starts
+from 45 named `libcd`, 134 `libgte`, 113 `libsnd` and 75 `libgpu` routines in
+GAME.EXE instead of from nothing. Verified rename-only: the generated C# is
+byte-identical once the renames are undone, allowing for the overlay suffix the
+recompiler drops when a name stops colliding.
+
 ## The overlay delta: identify once, get all three
 
 The three executables are three separate links of the *same* PSY-Q libraries, so
