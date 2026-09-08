@@ -704,8 +704,8 @@ first PGXP is the screen-position guess the ring replaced. What it has that the 
 is backface culling decided on precise positions, true float positions rather than
 a recovered fraction, and coverage by construction instead of by luck of the copy.
 The emitted hooks are free when it is off: 144.0 fps at 20.0 ticks/s with PGXP
-disabled on the recompiled binary. `0035` is the only patch besides `0004` that
-forces a recompile.
+disabled on the recompiled binary. `0035` is one of three patches that force a
+recompile, with `0004` and `0037`.
 See "Sub-pixel vertex positioning", "Z-buffer" and "PGXP" in `docs/RENDERING.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
@@ -1328,8 +1328,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirty-four
-of the thirty-eight are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirty-five
+of the thirty-nine are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order. **One patch has an asset beside
@@ -1649,8 +1649,8 @@ uncaptured edit inside the checkout is left where it is.
   separate experimental feature that arrived in the same commit. Inert until
   something turns it on. **No recompile.**
 
-- `0035-pgxp-cpu-hooks.patch` — the recompiler half, and the **only patch besides
-  `0004` that forces a recompile**. `InstructionEmitter` emits
+- `0035-pgxp-cpu-hooks.patch` — the recompiler half, and one of three patches that
+  **force a recompile**, with `0004` and `0037`. `InstructionEmitter` emits
   `if (Pgxp.CpuTracking) PgxpCpu.X(...)` beside every load, store, move, shift,
   add, multiply and divide, which is what makes PGXP's coverage a fact rather
   than a rate. The gate is emitted rather than taken inside the hook, so with PGXP
@@ -1676,6 +1676,23 @@ uncaptured edit inside the checkout is left where it is.
   **depth-clear threshold** (`GteDepth.DepthClearThreshold`, DuckStation's 300),
   which bumps the existing `Generation` rather than adding a clear path. **No
   recompile.**
+
+- `0037-chd-disc-images.patch` — **upstream's CHD support, backported** (`137a793`,
+  six commits past our pin). `CueFs` becomes `DiscFs` over a new `IDiscImage`, with
+  `CueBinImage` and a from-scratch libchdr port (`Cdrom/Chd/`: header, hunk map,
+  Huffman, LZMA, FLAC, CD-sector ECC) behind it; `DiscImage.Open` picks by
+  extension and falls back to the CHD magic, so the recompiler, the runtime and the
+  launcher only changed a type name. The commit's unrelated **RAM-size** change
+  comes with it — `PSMemory(uint ramSize)` and `Runtime.RamWordMask` replacing the
+  literal `0x1FFFFCu` — and nothing here passes a size, so the RAM is the same 2 MB
+  and the mask the same value. Codecs: cdzl, cdlz, cdfl, zlib, lzma; **not zstd**,
+  and a `cdzs` image is refused at the picker rather than crashing. **Forces a
+  recompile** — `EntryWriter` emits `DiscFs.Open`. Measured: `generated/` from the
+  CHD is byte-identical to `generated/` from the cue; the recompile costs
+  1.35-1.39 s against 0.86-0.89 s; the autostart area load is 305.1 ms against
+  305.8 ms, the same 84 steps over the same 105 blocking VSyncs; a CHD run walks
+  `open` → `game` → `fdat02` → `fdat05` at 144.0 fps / 20.0 ticks/s, and the intro
+  STR decodes. See "CHD disc images" in `docs/RUNTIME.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
@@ -1780,7 +1797,7 @@ Packaging is `packaging/linux/build-appimage.sh` and
 `packaging/windows/build-windows.ps1`, neither of which needs the disc; trimming is
 off and must stay off (MonoMod detours, Roslyn, `AutoStart`'s reflection). The
 icons under `packaging/shared/` are **placeholders**. Not packaged: macOS and
-Flatpak. Not supported: `.chd`. See `docs/PACKAGING.md`.
+Flatpak. **`.chd` is supported**, as of `0037`. See `docs/PACKAGING.md`.
 
 ## Repository conventions
 

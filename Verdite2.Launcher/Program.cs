@@ -48,29 +48,30 @@ try
     // it waits. A player who has already chosen passes straight through.
     Runtime.WaitForValidDisc();
 
-    var cuePath = Runtime.CdPath;
+    var discPath = Runtime.CdPath;
 
-    // A cue on the command line is the developer form -- `Verdite2 other.cue` --
-    // and it has to be settled HERE, before the build key, rather than only handed
-    // to the game at the end. The recompiled dispatch tables bake absolute LBAs
-    // from one mastering, and Dispatcher arms an overlay swap on a CD read hitting
-    // that exact sector, so an assembly built from the saved disc and then pointed
-    // at a different image silently fails to load its area modules -- which is the
-    // whole failure the per-user recompile exists to avoid. Whatever is played is
-    // what is keyed and built, and an argument that is not a usable disc is
-    // refused now rather than after fifteen seconds of building.
+    // An image on the command line is the developer form -- `Verdite2 other.cue`,
+    // or a .chd -- and it has to be settled HERE, before the build key, rather than
+    // only handed to the game at the end. The recompiled dispatch tables bake
+    // absolute LBAs from one mastering, and Dispatcher arms an overlay swap on a
+    // CD read hitting that exact sector, so an assembly built from the saved disc
+    // and then pointed at a different image silently fails to load its area
+    // modules -- which is the whole failure the per-user recompile exists to
+    // avoid. Whatever is played is what is keyed and built, and an argument that
+    // is not a usable disc is refused now rather than after fifteen seconds of
+    // building.
     if (args.Length > 0)
     {
         if (DiscCheck.Validate(args[0]) is { } problem)
             throw new InvalidOperationException($"{args[0]}: {problem}");
-        cuePath = args[0];
+        discPath = args[0];
     }
 
-    var gameDll = Path.Combine(Paths.Builds, BuildKey.Compute(cuePath), "KingsField2.dll");
+    var gameDll = Path.Combine(Paths.Builds, BuildKey.Compute(discPath), "KingsField2.dll");
 
-    if (!File.Exists(gameDll)) BuildGame(cuePath, gameDll);
+    if (!File.Exists(gameDll)) BuildGame(discPath, gameDll);
 
-    Play(gameDll, cuePath);
+    Play(gameDll, discPath);
 }
 catch (Exception e)
 {
@@ -89,7 +90,7 @@ return 0;
 // block for seconds and a window that stops pumping for seconds is a window the
 // desktop offers to force-quit. The main thread is the one that must do the
 // pumping: it owns the GL context.
-static void BuildGame(string cuePath, string gameDll)
+static void BuildGame(string discPath, string gameDll)
 {
     var popup = new BuildProgressPopup();
     PopupManager.Register(popup);
@@ -112,7 +113,7 @@ static void BuildGame(string cuePath, string gameDll)
 
             popup.Status = "verdite2.build.translating";
             popup.Step = 1;
-            Recompile.Run(cuePath, generated);
+            Recompile.Run(discPath, generated);
 
             popup.Status = "verdite2.build.compiling";
             popup.Step = 2;
@@ -154,20 +155,20 @@ static void BuildGame(string cuePath, string gameDll)
 // Hand over to the built game.
 //
 // Its entry point is Program.<Main>$(string[]) -- Program.cs is top-level
-// statements -- and it takes the cue as argv[0], which is what Entry.Run reads.
-// Loading into the default context rather than a collectible one is deliberate:
-// the game is the rest of this process's life, MonoMod detours into it, and
-// nothing is ever unloaded.
+// statements -- and it takes the disc image as argv[0], which is what Entry.Run
+// reads. Loading into the default context rather than a collectible one is
+// deliberate: the game is the rest of this process's life, MonoMod detours into
+// it, and nothing is ever unloaded.
 //
-// The cue handed over is the one the build was keyed on, which is what makes the
-// baked LBAs in that build correct for it.
-static void Play(string gameDll, string cuePath)
+// The image handed over is the one the build was keyed on, which is what makes
+// the baked LBAs in that build correct for it.
+static void Play(string gameDll, string discPath)
 {
     var asm = AssemblyLoadContext.Default.LoadFromAssemblyPath(gameDll);
     var main = asm.EntryPoint
         ?? throw new InvalidOperationException($"{gameDll} has no entry point.");
 
-    try { main.Invoke(null, [new[] { cuePath }]); }
+    try { main.Invoke(null, [new[] { discPath }]); }
     catch (TargetInvocationException e) when (e.InnerException is not null)
     {
         // Unwrap, or every crash in the game is reported as a reflection failure

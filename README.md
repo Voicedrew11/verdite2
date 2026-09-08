@@ -21,7 +21,7 @@ Game is playable from start to finish. There may still be some intermittent issu
 
 ## Requirements
 
-A dump of the North American PlayStation release (`SLUS-00158`) in `.cue` / `.bin`
+A dump of the North American PlayStation release (`SLUS-00158`) as a `.chd`, or as a `.cue` / `.bin`
 format. **Verdite2 ships no game data** and cannot be played without one.
 
 Note that the US-boxed *King's Field II* (`SLUS-00255`) is a **different game** —
