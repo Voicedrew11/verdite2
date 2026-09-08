@@ -181,6 +181,33 @@ pacing* (the rate, then the smoothing tick that is inert below it) and then
 through `Localization.Merge`, which needs no patch to the checkout. See "Patch
 settings" in `docs/PATCHES_AND_MODS.md`.
 
+**Input is the one pane the port takes over outright.** Everything above joins a
+runtime section through `Extend`, which can only append; the runtime's own Input
+body fills the popup, so the port's four input pages landed below the fold and the
+keyboard-layout buttons sat a screen from the table they write.
+`patches/settings/InputSection.cs` registers with `Id => "input"` —
+`SettingsRegistry.Register` replaces by id, so this needs no patch to the checkout
+either — and draws one tab bar over **Keyboard / Gamepad / Mouse**, each device's
+port settings above its own binding table (`patches/settings/BindingTable.cs`,
+which is a copy of the runtime's, since `InputSettingsSection` is `internal`).
+Three things came out of that pass. **`Extend` has no un-extend**, so the four
+pages had to be *dropped* from `PatchSettings.Install` rather than reordered — a
+page still registered against `"input"` would draw again outside every tab,
+irreversibly — and `Register` refuses that id now. **The Pad 1 / Pad 2 tab bar is
+gone**: `BiosB.PadRead` packs pad 2 into the high half of the pad word and the
+game keeps only the low sixteen bits at `0x80199554`, so it was a tab of bindings
+that could not reach the game; `Keys2`/`Pad2` are never read or written, so a
+config carrying them keeps them. **The table names the action** — a dimmed
+`In King's Field` column, out of the action-mask table and `func_8002957C` — which
+reverses the standing rule against naming the verb, on the grounds that the header
+and a note under the table both say these are the game's *defaults*. The
+`controls` section `docs/INPUT.md` was going to build instead is dead:
+`settings.input` already reads **"Controles"** in pt-BR and es-419, so a second
+sidebar entry by that name collides with the first in two of three languages —
+**check a new sidebar entry against every language of the ones already there.**
+`0032` is the one thing it needed from the checkout. See "The Input pane is the
+port's" in `docs/INPUT.md`.
+
 **`gameplay` is the one section the port adds itself**, for patches that change
 how the *game* behaves rather than how the machine does — auto reload is not a
 video option and not an input option. `ISettingsSection` is public and
@@ -1235,8 +1262,8 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-nine
-of the thirty-three are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirty
+of the thirty-four are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
 of files, and the glob's sort is the apply order.
@@ -1248,7 +1275,9 @@ false: `0021-true-color-24bit-output.patch` was authored while
 rejected them, leaving the tree at `0020`. The patch has been regenerated against
 this branch's context. Verified by applying all thirty-three patches in glob order
 to a pristine worktree of the pin: every one applies, and the result is
-byte-identical to the tree in place.
+byte-identical to the tree in place. (`0032` was added after that verification and
+is checked the same way — two consecutive `setup_tools.sh` runs, the second still
+reporting `applied` after a clean peel.)
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -1498,6 +1527,14 @@ uncaptured edit inside the checkout is left where it is.
   `Popup` is abstract-public and `PopupManager.Register` takes any implementation
   — so `Verdite2.Launcher/BuildProgressPopup.cs` is not a patch. UI only, **no
   recompile**. See "The one patch this needed" in `docs/PACKAGING.md`.
+
+- `0032-expose-pad-queries.patch` — `InputManager` is `internal`, so a port
+  drawing its **own** binding table could not ask whether a pad is connected or
+  what is held down on it. Both methods were already `public` on that class, so
+  unlike `0017` nothing had to be added there — only the two forwards from
+  `HostWindow`, beside `IsKeyDown` and the mouse block. Two lines against `0017`'s
+  sixty. UI only — **no recompile**. See "The Input pane is the port's" in
+  `docs/INPUT.md`.
 
 - `0031-output-panel-fills-its-dock-node.patch` — the picture is the point of the
   Output panel, so it gets none of the chrome every other panel wants. The themed

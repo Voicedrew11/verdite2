@@ -36,7 +36,13 @@ public interface IPatchPage
     /// the title comparison it had before. **Pages sharing a <see cref="Title"/>
     /// have to be given adjacent orders**: <see cref="PatchSettings.Draw"/> opens
     /// a heading whenever the title changes, so a page separating two of them
-    /// draws the heading twice.</summary>
+    /// draws the heading twice.
+    ///
+    /// **A page drawn by a section wrapper is a body, not a page**, and this is
+    /// inert for one: <see cref="InputSection"/> writes its sequence out in three
+    /// small arrays, so there is no list to sort and no tie to break. Only the
+    /// degenerate half of the <see cref="Title"/> rule survives there — an empty
+    /// title declines the heading — because the tab is already the heading.</summary>
     int Order => 0;
 
     /// <summary>
@@ -76,12 +82,18 @@ public interface IPatchPage
 /// PatchSettings.Register("display", new FramePacingPage());
 /// </code>
 ///
-/// The section ids are the runtime's own: <c>interface</c>, <c>input</c>,
-/// <c>display</c>, <c>paths</c>, <c>audio</c> — plus <c>gameplay</c>, the one
-/// section the port adds itself (see <see cref="GameplaySection"/>), for patches
-/// that change how the game plays rather than how the machine behaves. An id that
-/// matches no section is reported at startup rather than silently drawing
-/// nothing.
+/// The section ids are the runtime's own: <c>interface</c>, <c>display</c>,
+/// <c>paths</c>, <c>audio</c> — plus <c>gameplay</c>, the one section the port
+/// adds itself (see <see cref="GameplaySection"/>), for patches that change how
+/// the game plays rather than how the machine behaves. An id that matches no
+/// section is reported at startup rather than silently drawing nothing.
+///
+/// <c>input</c> is not on that list any more, and it is the other way the port can
+/// own a pane: <see cref="InputSection"/> **replaces** the runtime's section
+/// rather than extending it, because <c>Extend</c> can only append and the
+/// runtime's own Input body fills the popup. Registering a page against
+/// <c>"input"</c> is refused with a message, since <c>Extend</c> has no un-extend
+/// and such a page would draw outside every tab forever.
 ///
 /// Settings persist through <see cref="Set(string,bool)"/> and friends, which is
 /// <c>Runtime.View</c> plus an immediate <c>SaveView</c> -- the same
@@ -111,6 +123,18 @@ public static class PatchSettings
     public static void Register(string sectionId, IPatchPage page)
     {
         if (string.IsNullOrWhiteSpace(sectionId) || page == null) return;
+
+        // "input" is the port's own pane now (InputSection), and Extend has no
+        // un-extend -- a page registered here would draw under the tab bar,
+        // outside every tab, permanently. Add it to one of InputSection's tab
+        // lists instead.
+        if (string.Equals(sectionId, "input", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine($"[KF2] settings: \"{page.Id}\" registered against " +
+                                    "\"input\", which the port draws itself; add it to " +
+                                    "InputSection's tabs instead");
+            return;
+        }
 
         if (!_pages.TryGetValue(sectionId, out var list))
             _pages[sectionId] = list = [];
@@ -167,10 +191,11 @@ public static class PatchSettings
         Register("display", new SubpixelPage());
         Register("display", new ShadingPage());
         RegisterSlot("display.render_scale", new WidescreenPage());
-        Register("input", new KeyLayoutPage());
-        Register("input", new AnalogPage());
-        Register("input", new MousePage());
-        Register("input", new MapButtonPage());
+        // Nothing registers against "input": the port draws that whole pane
+        // itself (InputSection), and SettingsRegistry.Extend has no un-extend --
+        // a page left here would draw a second time under the tab bar, outside
+        // every tab, with no way to take it back. The four pages that were here
+        // are held by InputSection and drawn inside the tab each belongs to.
         Register("gameplay", new MapPage());
         Register("gameplay", new AutoReloadPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
@@ -222,6 +247,15 @@ public static class PatchSettings
         // earliest moment a sixth can join them and still be in place for the
         // first frame of the settings popup.
         SettingsRegistry.Register(new GameplaySection());
+
+        // Input is a *replacement*, not an addition: Register removes by id, so
+        // this takes the runtime's own pane over. If upstream ever renames that
+        // id we would silently add a second Input tab rather than replacing the
+        // first, which is the one failure worth naming out loud.
+        if (!SectionExists("input"))
+            Console.Error.WriteLine("[KF2] settings: no \"input\" section to replace; " +
+                                    "the port's Input pane will be a second tab");
+        SettingsRegistry.Register(new InputSection());
 
         foreach (var (sectionId, pages) in _pages)
         {

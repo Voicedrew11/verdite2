@@ -20,6 +20,7 @@ lives here — frame pacing and auto reload.
 | `Perspective.cs`, `Subpixel.cs`, `ZBuffer.cs` | switches and probes over the GTE depth mechanisms | [RENDERING.md](RENDERING.md) |
 | `Widescreen.cs`, `CullCone.cs`, `ViewClip.cs`, `PrimBuffer.cs` | aspect ratio and the culls it runs into | [WIDESCREEN.md](WIDESCREEN.md) |
 | `Analog.cs`, `AnalogProbe.cs`, `Mouse.cs`, `KeyLayout.cs` | pad, mouse and keyboard | [INPUT.md](INPUT.md) |
+| `settings/InputSection.cs`, `settings/BindingTable.cs` | the Input pane, which the port draws itself | [INPUT.md](INPUT.md) |
 | `EndingHold.cs` | keeps the window alive through `END.EXE`'s final spin | [RUNTIME.md](RUNTIME.md) |
 | `UiScale.cs` | forces and saves the interface scale, for a config too large to edit in | [RUNTIME.md](RUNTIME.md) |
 | `settings/*` | the pages all of the above draw into | this file |
@@ -293,6 +294,47 @@ already names, and it is one more thing to keep working against an upstream that
 does not know about it. The pane is `Video` and the port's groups are named under
 it. If the runtime ever grows more sections worth grouping, the missing per-group
 heading is upstream's to fix and is worth an issue rather than a wrapper.
+
+**That judgement was about Video and it did not survive Input**, which is the
+next subsection: a wrapper buying a rule and a word for four controls a pane title
+already names is a bad trade, and one buying a pane the port's own pages could not
+otherwise be *seen* in is not the same trade at all.
+
+### A section can be taken over as well as extended
+
+`Extend` appends, and for Video and Gameplay that is right. For **Input** it was
+not: the runtime's own pane is two tab bars, sixteen binding rows and a reset
+button, about 450px of a 500px popup, so the port's four pages landed below the
+fold — and the two keyboard-layout buttons *write* the sixteen rows of the table
+a screen above them. So `patches/settings/InputSection.cs` **replaces** that
+section rather than joining it. Four things are worth carrying:
+
+- **`Register` replaces by id** — `RemoveAll(s => s.Id == section.Id)` then
+  `Add` — so a wrapper needs nothing but the same id, and no patch to the
+  checkout. Do **not** `Unregister` first: it states removal where the intent is
+  substitution, and it hides the one failure that matters, which is upstream
+  renaming the id and turning a replacement into a *second* tab. Warn on that
+  directly, in the shape the existing section-id check uses.
+- **`Extend` has no un-extend.** The list is append-only with no removal API, and
+  `SettingsPopup` draws the section body and *then* the extensions — so a page
+  still registered against a taken-over id draws a second time under the wrapper's
+  own layout, outside whatever structure it built, permanently. The pages have to
+  be **dropped from the registry**, not reordered in it, and `PatchSettings.Register`
+  refuses that id now so a later patch cannot re-open the hole.
+- **A page drawn by a wrapper is a body, not a page.** `Order` is inert — the
+  wrapper writes its sequence out — and `Title` keeps only its degenerate half,
+  that an empty title declines the heading. That is the same rule `MapPage` and
+  `AutoReloadPage` already use, reached from the other direction.
+- **What it costs is an upstream copy.** `InputSettingsSection` is `internal`, so
+  the binding table is a copy rather than a call, and a change to it upstream is
+  silent — the checkout is gitignored, so `git diff` will not show it.
+  `BindingTable`'s doc comment names the file and the pin, so a pin bump has
+  something to diff. Set against that, the wrapper is three files and one
+  `Register` line: deleting the line restores the runtime's pane exactly.
+
+The full write-up, including why the `controls` section that was going to be
+built is dead — `settings.input` already reads "Controles" in pt-BR and es-419 —
+is "The Input pane is the port's" in [INPUT.md](INPUT.md).
 
 Settings persist through `PatchSettings.Get/Set`, which is `Runtime.View` plus an
 immediate `SaveView` — the same `interface.ini` store the mods use, keyed

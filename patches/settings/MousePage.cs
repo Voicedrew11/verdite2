@@ -14,14 +14,19 @@ namespace Kf2.Settings;
 /// need a sensitivity. And the **buttons** are named as pad buttons rather than
 /// as actions, because that is what they are — the game's own control-config
 /// screen decides what Cross does, and this page would be lying if it said
-/// "Attack".
+/// "Attack". The Gamepad tab's table now names the *defaults* in a column of its
+/// own, under a header and a note that say they are defaults, which is the
+/// qualification this page used to carry by staying silent; the note below points
+/// there rather than repeating it.
 ///
 /// See "Mouse look" in NOTES.md.
 /// </summary>
 public sealed class MousePage : IPatchPage
 {
     public string Id => "mouse";
-    public string Title => "Mouse look";
+    /// <summary>No heading of its own: it is the whole of a tab already called
+    /// Mouse. See <see cref="IPatchPage.Title"/>.</summary>
+    public string Title => "";
 
     public void Draw()
     {
@@ -42,8 +47,11 @@ public sealed class MousePage : IPatchPage
         Check("Invert look Y", Mouse.InvertKey, ref Mouse.InvertY);
 
         ImGui.Spacing();
-        Note("Mouse buttons press pad buttons — what each one then does is whatever the game's " +
-             "own control configuration says, exactly as for a controller.");
+        // This used to end "...exactly as for a controller", which was a denial
+        // of the verb. The Gamepad tab now names the defaults in a column, so
+        // this points at them instead of refusing to say.
+        Note("Mouse buttons press pad buttons. What each one does by default is in the Gamepad " +
+             "tab's table, and the game's own control configuration can reassign it.");
         Button("Left button", Mouse.LeftKey, ref Mouse.LeftButton);
         Button("Right button", Mouse.RightKey, ref Mouse.RightButton);
         Button("Middle button", Mouse.MiddleKey, ref Mouse.MiddleButton);

@@ -261,6 +261,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 Pad, analog sticks, keyboard layout and mouse look.
 
 - Analog twin-stick control
+- The Input pane is the port's
 - The keyboard layout, and changing a default RecompOne provides
 - Mouse look
 
