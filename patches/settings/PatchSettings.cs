@@ -15,8 +15,22 @@ public interface IPatchPage
     /// **Pages that give the same title share one heading** — a single checkbox
     /// does not deserve a rule and a name of its own, so several of them can sit
     /// together under "Enhancements" while something with real structure, like the
-    /// frame rate, keeps its own.</summary>
+    /// frame rate, keeps its own.
+    ///
+    /// The title is the heading and nothing else: it used to be the sort key too,
+    /// which made the order of the port's groups an accident of how they were
+    /// spelled — "Enhancements" drew above "Frame pacing" because E sorts before
+    /// F. <see cref="Order"/> is the sort key now.</summary>
     string Title { get; }
+
+    /// <summary>Where the page sits among the section's other pages, low first.
+    ///
+    /// Defaulted, so a page that does not care states nothing and falls back to
+    /// the title comparison it had before. **Pages sharing a <see cref="Title"/>
+    /// have to be given adjacent orders**: <see cref="PatchSettings.Draw"/> opens
+    /// a heading whenever the title changes, so a page separating two of them
+    /// draws the heading twice.</summary>
+    int Order => 0;
 
     /// <summary>
     /// Draw the page's controls.
@@ -82,6 +96,10 @@ public static class PatchSettings
     /// Add a page to one of the runtime's settings sections. Registering the same
     /// page id again replaces it, so a patch reloaded during development does not
     /// stack up duplicates.
+    ///
+    /// The list is kept in <see cref="IPatchPage.Order"/> order, ties broken by
+    /// title, so the order the pages are registered in below carries no meaning —
+    /// keep it matching the drawn order anyway, so the file reads as the pane does.
     /// </summary>
     public static void Register(string sectionId, IPatchPage page)
     {
@@ -92,7 +110,9 @@ public static class PatchSettings
 
         list.RemoveAll(p => p.Id == page.Id);
         list.Add(page);
-        list.Sort((a, b) => string.Compare(a.Title, b.Title, StringComparison.Ordinal));
+        list.Sort((a, b) => a.Order != b.Order
+            ? a.Order.CompareTo(b.Order)
+            : string.Compare(a.Title, b.Title, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -135,11 +155,10 @@ public static class PatchSettings
         _installed = true;
 
         Register("display", new FramePacingPage());
-        Register("display", new NoDitherPage());
+        Register("display", new FrameSmoothingPage());
         Register("display", new PerspectivePage());
         Register("display", new SubpixelPage());
-        Register("display", new FrameSmoothingPage());
-        Register("display", new TrueColorPage());
+        Register("display", new ShadingPage());
         RegisterSlot("display.render_scale", new WidescreenPage());
         Register("input", new KeyLayoutPage());
         Register("input", new AnalogPage());
@@ -287,5 +306,19 @@ public static class PatchSettings
     {
         Rt.View.SetFloat(key, value);
         Rt.SaveView();
+    }
+
+    /// <summary>
+    /// A dimmed, wrapped line under a control, for the paragraph a tooltip is the
+    /// wrong place for — why a control is inert at this frame rate, what the rate
+    /// does not change. <c>TextDisabled</c> does not wrap and unwrapped prose runs
+    /// straight out of the settings window, so it is the colour plus
+    /// <c>TextWrapped</c> rather than the one call it looks like.
+    /// </summary>
+    public static void Note(string text)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+        ImGui.TextWrapped(text);
+        ImGui.PopStyleColor();
     }
 }

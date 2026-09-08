@@ -180,17 +180,40 @@ which is what makes this the landing site for a converted mod: its `DrawSettings
 body moves across unchanged. `NoDitherPage` is the first one that arrived that
 way — `mods/nodither`'s checkbox, in Video under the frame rate, with the mod's
 `_on` field now `NoDither.Enabled` and its `Runtime.View` calls now
-`PatchSettings.Set`. Its explanatory paragraphs did *not* come across: a mod's
+`PatchSettings.Set`. (That page no longer exists as a file: it is one entry of
+`ShadingPage`'s combo now — see "Two shading checkboxes were one question asked
+twice" — but the conversion is what the paragraph is about and is unchanged.) Its explanatory paragraphs did *not* come across: a mod's
 panel is a place to explain itself, a settings section is a list of switches, so
 the prose became a hover tooltip and the counters stayed on the console.
 
 **Pages sharing a `Title` share one heading.** `SeparatorText` over a lone
 checkbox is the checkbox's own label written twice with a rule through it, so the
-dither switch is titled `Enhancements` and anything else of that size can join it
-there — perspective correction, sub-pixel positioning and the Z-buffer all did;
-`FramePacingPage`, which is a combo plus a live measurement, keeps its own. The
-list is already sorted by title, so drawing a heading only when it changes is the
-whole implementation.
+shading control is titled `Enhancements` and anything else of that size can join
+it there — perspective correction, sub-pixel positioning and the Z-buffer all
+did; `FramePacingPage`, which is a combo plus a live measurement, keeps its own.
+Drawing a heading only when the title changes is the whole implementation.
+
+**The title is the heading and `Order` is the sort key, and that used to be one
+field doing both jobs.** The list was sorted by `Title` alone, which meant the
+order of the port's two groups in Video was an accident of how they were spelled:
+`Enhancements` drew above `Frame pacing` because `E` sorts before `F`, and
+nothing said so. The order *within* a group was worse — five pages with equal
+keys, held in registration order only because `List<T>.Sort` happens to use an
+insertion sort below sixteen elements, which is an implementation detail and not
+a documented guarantee. So `IPatchPage` has an `int Order => 0`, defaulted, sorted
+ahead of the title. The eight pages outside Video state nothing and are unchanged
+(their titles are all distinct, so none of them depended on the tie-break); the
+six in Video number themselves 10, 11, 20, 21, 22. The one constraint the
+heading logic imposes is that **pages sharing a title need adjacent orders**, or
+a page between two of them draws the heading twice.
+
+**The order it produces is the argument.** Frame pacing goes above Enhancements
+because the frame rate is the option a player came to Video for and the fidelity
+switches are the port's extras, and *Smooth motion between game ticks* moved out
+of Enhancements to sit directly under the frame-rate combo — it is greyed out
+whenever the rate is not above the world's tick, which is the shipped default, and
+the control that decides that is the one immediately above it. A dead tick met
+before its cause reads as a bug; met under its cause it reads as a note.
 
 **A page could not get *inside* a runtime section, and now it can.** `Extend`
 draws after the section's whole body, so an option that is one of the section's
@@ -281,6 +304,49 @@ away. Read it on `RuntimeReadyEvent`, dispatched at the end of that same
 `Initialize`. `FramePacing` does this and keeps the precedence the mods use:
 `KF2_FPS` beats the saved value.
 
+### Two shading checkboxes were one question asked twice
+
+*Dither off* and *True color (24-bit)* were two ticks under Enhancements, and
+they are the console's two treatments of the **same** 15-bit banding: the dither
+hides it with a 4x4 crosshatch, true color removes it by keeping eight bits (see
+"True color" in `docs/RENDERING.md`). Two ticks cross into four states carrying
+three meanings, and the fourth — dither on *and* 24-bit — is a smooth gradient
+with a crosshatch laid over it, which is nobody's answer to anything.
+
+So `patches/settings/ShadingPage.cs` is one combo, `Shading`, with the three
+states that mean something:
+
+| entry | `NoDither.Enabled` | `TrueColor.Enabled` |
+|---|---|---|
+| `Dither (original)` | `false` | `false` |
+| `None` | `true` | `false` |
+| `Smooth (24-bit)` | `true` | `true` |
+
+Note the polarity: `NoDither.Enabled` true means the crosshatch is *off*. `None`
+is the port's shipped default (`kf2.nodither.on` defaults to `true`,
+`kf2.truecolor.on` to `false`), so **no saved config changes meaning and nobody's
+picture moves** — which is what made a combo the right answer here rather than the
+single checkbox the pair looks like. A checkbox would have had to drop one of the
+three states, and the one it would have dropped is the default.
+
+Both patches keep their key and their environment variable — `KF2_NODITHER`,
+`KF2_TRUECOLOR` — so merging the control strands no config and takes no
+comparison off the console.
+
+**Reading the state back follows `FrameSmoothingPage`'s shape, not
+`WidescreenPage`'s.** An aspect matching no preset gets a `Custom` entry, because
+an arbitrary ratio is a real thing to have asked for. The contradictory shading
+state is not: it is only reachable from `KF2_NODITHER=0 KF2_TRUECOLOR=1`, and
+giving it an entry would put the pointless combination back on the page. So true
+color is read as the master — on means `Smooth` — and any click writes both
+patches, harmonising the pair, exactly as the smoothing tick writes its four.
+
+**Not done: a note when the backend cannot do 24 bits.** True color is GL-only
+and the software rasterizer is always 15-bit, so a note under `Smooth (24-bit)`
+saying so looked right — but the Graphics backend combo offers `auto`, `gl45`,
+`gl33` and `gl21`, all four of them GL, and `GlBackendKind` has no software
+entry. The note would be for a state the pane cannot produce.
+
 ### The rate became a setting, so every hook is installed whatever it is set to
 
 Hooks attach at the first overlay load; the rate is chosen from the settings long
@@ -328,6 +394,13 @@ between game ticks*, which writes `FrameSmoothing`, `FrameSmoothing.Position`,
 reachable from the console — `KF2_SMOOTH`, `KF2_SMOOTH_POS`,
 `KF2_SMOOTH_OBJECTS`, `KF2_SMOOTH_ANIM` — and that is now the only way to set
 them apart.
+
+**The tick sits under the frame rate rather than in Enhancements**, sharing the
+`Frame pacing` heading with it. Everything else under Enhancements is a choice
+about how faithful the picture is to the hardware; this one is a consequence of
+the rate, and it is *inert* at or below the world's 20 Hz tick — which is the
+shipped default, so out of the box the control a player meets is greyed. Its
+explanation is the combo directly above it.
 
 Three things about how it is wired:
 

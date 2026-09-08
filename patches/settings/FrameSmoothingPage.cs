@@ -3,9 +3,15 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// **One switch for all of the smoothing**, under Video, sharing the
-/// "Enhancements" heading with the dither, perspective, sub-pixel and true-color
-/// ones.
+/// **One switch for all of the smoothing**, under Video — sharing the "Frame
+/// pacing" heading with the frame rate, directly under it.
+///
+/// It sat in Enhancements with the picture switches, and that was the wrong
+/// group: this is not a choice about how faithful the picture is, it is a
+/// consequence of the rate. It does nothing at or below the world's tick rate and
+/// so draws greyed at the shipped default, and the control that explains the grey
+/// is the combo above it — a dead tick met before its cause is a defect, met
+/// under its cause it is a note.
 ///
 /// There were four checkboxes and two combos here, one per patch, and that was
 /// the implementation's shape rather than the player's: nobody wants the camera
@@ -43,7 +49,8 @@ namespace Kf2.Settings;
 public sealed class FrameSmoothingPage : IPatchPage
 {
     public string Id => "framesmoothing";
-    public string Title => "Enhancements";
+    public string Title => "Frame pacing";
+    public int Order => 11;
 
     public void Draw()
     {
@@ -60,7 +67,7 @@ public sealed class FrameSmoothingPage : IPatchPage
         if (!active)
         {
             ImGui.EndDisabled();
-            Note($"Nothing to smooth at this frame rate: the world's {FramePacing.LogicHz:0.#} Hz " +
+            PatchSettings.Note($"Nothing to smooth at this frame rate: the world's {FramePacing.LogicHz:0.#} Hz " +
                  "is not below it, so every drawn frame lands on a tick.");
         }
     }
@@ -86,12 +93,5 @@ public sealed class FrameSmoothingPage : IPatchPage
 
         AnimSmoothing.SetEnabled(on);
         PatchSettings.Set(AnimSmoothing.OnKey, AnimSmoothing.Enabled);
-    }
-
-    static void Note(string text)
-    {
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
-        ImGui.TextWrapped(text);
-        ImGui.PopStyleColor();
     }
 }

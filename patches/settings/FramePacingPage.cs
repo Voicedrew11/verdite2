@@ -26,6 +26,11 @@ namespace Kf2.Settings;
 /// choosing 144 does not need the other two, and the only fact any of them carried
 /// that a player acts on is that the game does not speed up.
 ///
+/// **The smoothing tick shares this heading**, directly under the combo. It is
+/// greyed out whenever the rate is not above the world's tick — which is the
+/// shipped default — and the control that decides that is this one, so the two
+/// belong together rather than a group apart. See <see cref="FrameSmoothingPage"/>.
+///
 /// The frame-rate list is the panels people own plus a free number, because
 /// "arbitrary" is the point. **Uncapped came out**: the entry existed, and what it
 /// produced was not a working uncapped port, so offering it was offering a defect.
@@ -37,6 +42,7 @@ public sealed class FramePacingPage : IPatchPage
 {
     public string Id => "framepacing";
     public string Title => "Frame pacing";
+    public int Order => 10;
 
     // Index into Rates; both arrays are read together. -1 is "whatever the custom
     // slider says".
@@ -80,12 +86,12 @@ public sealed class FramePacingPage : IPatchPage
                 Apply(_custom);
         }
 
-        Note(FramePacing.Measured > 0.0
+        PatchSettings.Note(FramePacing.Measured > 0.0
             ? $"Measured: {FramePacing.Measured:F1} fps"
             : "Measured: waiting for the first second of frames");
 
         ImGui.Spacing();
-        Note("Picture only: the game's own speed does not change with this.");
+        PatchSettings.Note("Picture only: the game's own speed does not change with this.");
     }
 
     static int Index()
@@ -111,14 +117,5 @@ public sealed class FramePacingPage : IPatchPage
     {
         FramePacing.SetTargetFps(rate);
         PatchSettings.Set(FramePacing.FpsKey, (float)(FramePacing.Enabled ? FramePacing.TargetFps : 0.0));
-    }
-
-    /// <summary>Wrapped and dimmed. TextDisabled does not wrap, and unwrapped prose
-    /// runs straight out of the settings window.</summary>
-    static void Note(string text)
-    {
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
-        ImGui.TextWrapped(text);
-        ImGui.PopStyleColor();
     }
 }

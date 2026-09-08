@@ -171,7 +171,12 @@ it, so the frame rate and the dither switch sit in System ▸ Settings ▸ Video
 beside vsync rather than in a panel of their own. That is where a mod's
 `DrawSettings` body goes when the mod becomes a patch. Pages that give the same
 `Title` share one heading, so single checkboxes group under "Enhancements"
-instead of each getting a rule of its own. That section is the runtime's
+instead of each getting a rule of its own; `IPatchPage.Order` (defaulted to 0)
+decides the order and the title is only the heading, which is what stopped
+Video's group order being an accident of `E` sorting before `F` — pages sharing
+a title need adjacent orders or the heading is drawn twice. Video reads *Frame
+pacing* (the rate, then the smoothing tick that is inert below it) and then
+*Enhancements* (perspective, sub-pixel, shading). That section is the runtime's
 `display` — still that id everywhere in code; the port renames only its *label*,
 through `Localization.Merge`, which needs no patch to the checkout. See "Patch
 settings" in `docs/PATCHES_AND_MODS.md`.
@@ -596,6 +601,14 @@ dither hides: it renders the shaded gradient at 24 bits so it does not band, wit
 no crosshatch (`patches/recompone/0021`, switch in `patches/TrueColor.cs`). It
 defaults to *off* too, but not for the sub-pixel reason — 24-bit shading is
 deliberately not what the hardware did, so the default is the authentic look.
+**Being one question they are asked once**: the two checkboxes are a single
+three-entry `Shading` combo under Video ▸ Enhancements
+(`patches/settings/ShadingPage.cs`) — `Dither (original)` / `None` /
+`Smooth (24-bit)` — because two ticks cross into four states carrying three
+meanings and the fourth is a crosshatch laid over a smooth gradient. `None` is
+what both defaults already were, so no saved config changed meaning, and both
+patches keep their key and their env var. See "Two shading checkboxes were one
+question asked twice" in `docs/PATCHES_AND_MODS.md`.
 **Perspective
 correction is a patch for that same reason and is on by default**, beside it under
 Video. Unlike the others its work is not in `patches/` at all: a texture
@@ -1397,7 +1410,7 @@ uncaptured edit inside the checkout is left where it is.
   gradient gains precision; the writeback/present blits convert automatically.
   GL backend only — the software rasterizer is always 15-bit. Off by default (the
   authentic look). `patches/TrueColor.cs` (`KF2_TRUECOLOR`) is the switch and
-  `patches/settings/TrueColorPage.cs` the checkbox under Video. **No recompile** —
+  `patches/settings/ShadingPage.cs`'s combo is where it is chosen. **No recompile** —
   render-target format and shaders are runtime. See "True color" in
   `docs/RENDERING.md`.
 
