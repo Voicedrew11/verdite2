@@ -129,7 +129,17 @@ KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
 KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
 KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
+KF2_PGXP=1                             # upstream's PGXP as the vertex source (off; the address map answers)
+KF2_PGXP_TEXTURE=0                     # its share of perspective correction off
+KF2_PGXP_CULLING=0                     # leave backface culling on truncated positions
+KF2_PGXP_CPU=0                         # no per-instruction register tracking (and so no RAM shadow)
+KF2_PGXP_MEMORY=0                      # no RAM shadow
+KF2_PGXP_VERTEXCACHE=0                 # no screen-position fallback
+KF2_PGXP_CACHEW=0                      # let that fallback answer positions but not depths
+KF2_PGXP_TOLERANCE=2                   # how far a recovered position may sit from the packet's; -1 off
+KF2_PGXP_PROBE=1                       # its coverage, and where each answer came from
 KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off by default)
+KF2_ZBUFFER_THRESHOLD=300              # restart the depth buffer when the scene jumps forward (0, off)
 KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-tested
 KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map of the depth buffer
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
@@ -651,12 +661,52 @@ is shaped the same way — mechanism in `patches/recompone/0010` and `0012`, swi
 mechanism has been measured and the picture has not. **The Z-buffer is the same
 depth used as occlusion** rather than as a texture denominator: the GPU has none,
 so intersecting surfaces take turns in front of each other on the ordering table,
-and `patches/recompone/0014` tests the recovered SZ per pixel instead. It has
-**no user-facing switch** — the Video checkbox was removed because the picture is
-effectively unbridgeable (DuckStation's PGXP depth buffer fails on the same
-per-polygon OTZ averages), so the mechanism is kept for diagnosis only, driven
-from the console by `KF2_ZBUFFER` / `KF2_ZBUFFER_PROBE`.
-See "Sub-pixel vertex positioning" and "Z-buffer" in `docs/RENDERING.md`. Auto reload is a
+and `patches/recompone/0014` tests the recovered SZ per pixel instead. **Its
+checkbox is back**, under Video ▸ Geometry precision, along with a depth-clear
+threshold that **defaults to off**, because the cause the notes had left open was
+found: `vDepth` is an
+ordinary varying, so OpenGL interpolates it in `1/w`, and `HleTri` set the clip W
+only for triangles whose *texture* was being corrected — so every untextured wall
+arrived with `w = 1` and its interior depths came out linear in screen space,
+which is the one thing a view depth is not. The software rasterizer never had it
+(it interpolates the reciprocals and takes one back), so the two renderers had
+disagreed about the interior of most of the architecture. `0036` gives a
+depth-tested triangle a real clip W whichever mechanism recovered it; the cost is
+that "depth buffer on, perspective correction off" now corrects textures too,
+which is a comparison rather than a shipped picture. Still off by default and
+still unjudged by eye. **Both of the new guards were picked by census rather than
+by copying DuckStation, and one of them changed as a result.** The depth-clear
+threshold looks for a scene the game restarted mid-frame; measured, the forward
+steps between consecutive primitives are one smoothly decaying population with no
+gap (39.4% under 10 units, 47.7% under 50, 9.2% under 150, 2.8% under 300, 0.9%
+beyond, widest 318), because this game draws one world and a 2D HUD and 2D never
+enters the mean — so there is no break to find, and DuckStation's 300 fired **2575
+times a second**, twenty times a frame, taking 144 fps down to 34-76 as each clear
+flushed the GL batch. It is 0 now. PGXP's tolerance censused the same way is one
+population too: nothing past 2 px ever, widest 1.87, so 2 is inert and stays as a
+tripwire — and the 2.6-7.7% sitting between 1 and 2 px is not a wrong vertex but
+the **divider**, `PushPrecise`'s double-precision `H/w` against the GTE's own `Unr`
+reciprocal table. **The second mechanism beside it is PGXP**
+(`patches/recompone/0034`-`0036`, upstream RecompOne's own, backported from
+`39fb337a`/`91c20fcf`/`95f0585b`/`6aae910a`): the same two numbers followed through
+the CPU's registers by hooks the recompiler emits, rather than paired by value out
+of `PSMemory`'s traffic. `patches/Pgxp.cs` is the switch and the probe and
+`KF2_PGXP*` the console equivalents; both sources ship and one combo chooses.
+**Measured in area 2 at 144 fps, PGXP bought no coverage in this game** — the
+address map answers for 92.2-97.1% of vertices against PGXP's 93.4-96.7%, because
+King's Field assembles its packets with whole-word `lw`/`sw` out of a transform
+cache, the one shape a value ring follows perfectly — **and it costs a fifth of
+the frame rate** (144.0 fps against 106.7-114.9). `KF2_PGXP_CPU=0` isolates that
+cost to the emitted hooks — 144.0 fps again, but 79.2-85.7% coverage and **zero**
+answers from the RAM shadow, since `PgxpMemory.Store` is only reached from
+`PgxpCpu`: upstream's CPU and memory ticks are not independent, and without the
+first PGXP is the screen-position guess the ring replaced. What it has that the ring cannot
+is backface culling decided on precise positions, true float positions rather than
+a recovered fraction, and coverage by construction instead of by luck of the copy.
+The emitted hooks are free when it is off: 144.0 fps at 20.0 ticks/s with PGXP
+disabled on the recompiled binary. `0035` is the only patch besides `0004` that
+forces a recompile.
+See "Sub-pixel vertex positioning", "Z-buffer" and "PGXP" in `docs/RENDERING.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
 default and its knobs — the switch and the slot — are under Gameplay; **the
@@ -1278,11 +1328,15 @@ AssemblyInfo files (CS0579).
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirty
-of the thirty-four are load-bearing; `0002`, `0003` and `0015` are diagnostics and
+`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirty-four
+of the thirty-eight are load-bearing; `0002`, `0003` and `0015` are diagnostics and
 `0013` is a settings-placement hook. The numbering has doubled up twice
 (`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
-of files, and the glob's sort is the apply order.
+of files, and the glob's sort is the apply order. **One patch has an asset beside
+it**: `patches/recompone/assets/` holds the TTF `0033` embeds, copied into the
+checkout by `setup_tools.sh` between the clean and the apply loop, because a
+569 KB binary hunk inside a patch is one the peel loop would reverse-check on
+every run.
 
 `setup_tools.sh` **does** rebuild the checkout on this branch, and that used to be
 false: `0021-true-color-24bit-output.patch` was authored while
@@ -1291,9 +1345,9 @@ false: `0021-true-color-24bit-output.patch` was authored while
 rejected them, leaving the tree at `0020`. The patch has been regenerated against
 this branch's context. Verified by applying all thirty-three patches in glob order
 to a pristine worktree of the pin: every one applies, and the result is
-byte-identical to the tree in place. (`0032` was added after that verification and
-is checked the same way — two consecutive `setup_tools.sh` runs, the second still
-reporting `applied` after a clean peel.)
+byte-identical to the tree in place. (`0032` and `0033` were added after that verification
+and are checked the same way — two consecutive `setup_tools.sh` runs, the second
+still reporting `applied` after a clean peel.)
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -1562,6 +1616,66 @@ uncaptured edit inside the checkout is left where it is.
   the toasts drawn below still lay themselves out on the real style and no other
   panel is affected. UI only — **no recompile**. See "The picture is inset
   inside its own panel" in `docs/RUNTIME.md`.
+
+- `0033-sans-serif-interface-font.patch` — ImGui's built-in face is ProggyClean,
+  a 13 px bitmap: it is pixel art, it does not scale (every other size is a
+  stretched bitmap), and it makes the port's own settings window read as a debug
+  overlay laid over the game. This is upstream's own fix back-ported —
+  RecompOne `aaf7be0`, which our pin `870c5ba` predates — so `Icons` becomes
+  `FontSet`, Noto Sans is embedded and merged with the Font Awesome range, and
+  the size goes 13 → 16 px. **Upstream's CJK face is deliberately not carried**:
+  it is a second 16.5 MB resource, and every string in the runtime's three
+  languages (en, pt-BR, es-419) is Latin, so it would cost 16 MB in every release
+  artifact to render nothing anyone can select. Cyrillic, Greek and Vietnamese are
+  kept, being Noto's own coverage and only atlas space — they are what a path or a
+  mod name falls back to instead of boxes. A missing resource falls back to the
+  bitmap font rather than to no text. The font is OFL 1.1
+  (`patches/recompone/assets/NotoSans-OFL.txt`, which the packaging must ship).
+  UI only — **no recompile**. This is the one patch that *wants* to stop applying:
+  when the pin moves past `aaf7be0` it is upstream's, and the right response to
+  `FAILED TO APPLY` here is to delete it. See "The interface's font" in
+  `docs/RUNTIME.md`.
+
+- `0034-pgxp-value-tracking.patch` — **upstream's PGXP, backported.** RecompOne
+  grew a real PGXP after our pin (`39fb337a`, `91c20fcf`, `95f0585b`, `6aae910a`,
+  2026-08-31 to 09-07): the GTE's own divide publishes a float screen position and
+  view depth, and those follow the value through the CPU's registers and a
+  `PgxpValue`-per-word RAM shadow to the GP0 packet. `RecompOne.Runtime/Pgxp/` is
+  verbatim from `6aae910a` apart from living one directory up, beside `GteDepth`
+  rather than under it; the edits are `Gte.Rtp` publishing the precise vertex,
+  `Nclip` doing backface culling on precise positions, the transform-serial ring,
+  `PSMemory`'s ctor sizing the shadow and `Runtime.Run` initialising the vertex
+  cache. **Upstream's frame interpolation is deliberately not carried** — it is a
+  separate experimental feature that arrived in the same commit. Inert until
+  something turns it on. **No recompile.**
+
+- `0035-pgxp-cpu-hooks.patch` — the recompiler half, and the **only patch besides
+  `0004` that forces a recompile**. `InstructionEmitter` emits
+  `if (Pgxp.CpuTracking) PgxpCpu.X(...)` beside every load, store, move, shift,
+  add, multiply and divide, which is what makes PGXP's coverage a fact rather
+  than a rate. The gate is emitted rather than taken inside the hook, so with PGXP
+  off the cost is a predictable branch. Loads and stores hold the address in a
+  local rather than emitting the expression twice — upstream evaluates it again
+  after the access, which hands the hook the wrong address for `lw $t0, 0($t0)`.
+  Measured: 68,188 hook sites in `game.cs`, no change in generated line count
+  (the hooks append to existing lines), build 15 s → 37 s.
+
+- `0036-pgxp-vertex-and-depth-source.patch` — where the two mechanisms meet.
+  `DrawPolygon` asks PGXP when it is on and `GteVertexMap` when it is not, filling
+  the same `Vert` fields either way, so `HleVertex`, both rasterizers and the
+  shaders are untouched by the choice. Three things are ours rather than
+  upstream's: the **tolerance is actually spent** (upstream defines
+  `pgxp.tolerance` and never reads it — here a recovered position more than that
+  many pixels from the packet's is refused, because it is a different vertex
+  rather than a better version of this one), **`PgxpStats`** counts where each
+  answer came from, and **a depth-tested triangle is given a real clip W whether
+  or not its texture is being corrected** — `vDepth` is an ordinary varying, so
+  with `w = 1` an untextured wall's interior depths came out linear in screen
+  space when it is `1/z` that is affine there. The software rasterizer had always
+  interpolated the reciprocals; this makes the GL path agree. Also the
+  **depth-clear threshold** (`GteDepth.DepthClearThreshold`, DuckStation's 300),
+  which bumps the existing `Generation` rather than adding a clear path. **No
+  recompile.**
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

@@ -133,6 +133,9 @@ public static class Perspective
         {
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             Console.WriteLine($"[KF2] perspective: {(Enabled ? "on" : "off (affine)")}");
+            // Runs before Pgxp's own listener only by registration order, so this
+            // is belt and braces: Pgxp.Reload reads GteDepth.Enabled either way.
+            if (Pgxp.Enabled) Pgxp.Reload();
         });
 
         bool attached = false;
@@ -146,7 +149,14 @@ public static class Perspective
 
     /// <summary>Change the setting at run time. The table starts or stops filling;
     /// a frame drawn during the change is at worst partly corrected.</summary>
-    public static void SetEnabled(bool on) => Enabled = on;
+    public static void SetEnabled(bool on)
+    {
+        Enabled = on;
+
+        // The same question, asked once. PGXP keeps its own flag for it and reads
+        // it out of the view store on Load, so it has to be told when this moves.
+        if (Pgxp.Enabled) Pgxp.Reload();
+    }
 
     // Only attached under the probe: without it there is nothing to count and the
     // patch has no reason to touch the game's code at all.
