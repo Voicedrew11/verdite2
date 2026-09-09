@@ -151,6 +151,38 @@ contains the current display area, on the same reasoning `0022` used, but nobody
 has yet seen bars that outlast the latch fix, so it is written down rather than
 written.
 
+### The margin's only clear is the game's own, and the merge narrowed it
+
+**The `isbg` background clear in `LibGpu.PutDrawEnv` is the one thing that paints
+the margin columns every frame, and losing it does not look like a missing
+clear.** `GlCore.Writeback` blits a target's middle `W` columns back to VRAM and
+`SyncRtFromVram` refills the same middle `W`, so the margin columns exist nowhere
+but in the render target itself. Nothing else touches them: the game's own clip
+is 320 wide, so ordinary geometry reaches out there only where a primitive
+happens to spill past it, and `GteDepth`/the present path never write them. A
+render target is created once and kept, so whatever lands in a margin column
+stays there until something draws over that exact pixel.
+
+The merge to `0409bc2` took upstream's `PutDrawEnv` whole, and upstream has no
+margin to widen for: its clear covers `clipW` at `clipX - ofsX` where the port's
+covered `clipW + 2*margin` at `clipX - margin - ofsX`. The result is that the
+margins stop being cleared and start accumulating — every primitive that ever
+crossed the game's own edge, kept for the rest of the session. Reported from play
+as ghosting, and the three things said about it are the three halves of this one
+cause: it **persists while standing still** (nothing erases a margin column),
+**only gains new content when you move** (only spill paints one), and a damage
+flash leaves the ghosted area **permanently red** (`Stretch` widens the tint quad
+across the margin by design, so the flash reaches out there and then never
+washes off). No setting affects it because it is not a setting; only turning the
+aspect back to 4:3 removes the margin that is accumulating.
+
+Restored in `LibGpu.PutDrawEnv`, which is the port's version of that block again.
+The widened rect is not scissored back, because `GlCore` opens the GL scissor to
+`rt.Wide1x` for any primitive whose clip already covers the whole framebuffer
+width — the same test that lets the stretched screen tints reach the margin.
+**Confirmed from play**: the ghosting is gone at 16:9. The rest of widescreen is
+still unjudged by eye.
+
 ## The HUD does not widen with the world, and finding it is the problem
 
 The world gets wider; the HUD is drawn in screen space, so it keeps the 4:3 box it

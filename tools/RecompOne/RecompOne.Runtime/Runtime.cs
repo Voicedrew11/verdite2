@@ -339,7 +339,17 @@ public static class Runtime
         }
 
         Interp.Interp.Backend?.Publish();
-        
+
+        // The port presents from inside the game's own VSync, on one thread:
+        // LibEtc.VSync -> PresentFrame -> HostWindow.Present -> DrawPanels. The
+        // merge to 0409bc2 moved presentation onto upstream's PresentLoop, which
+        // only runs when the host calls Runtime.Run(boot) -- and this port's
+        // hand-owned Program.cs calls Entry.Run directly, so nothing ever called
+        // DoRender and the window stayed black while the game ran normally
+        // underneath it. Restored here, where it was and where every measurement
+        // in the port was taken.
+        HostWindow.Present(Gpu);
+
         Audio.Attach(Spu);
         FrameClock.Throttle();
         Sdk.LibCd.Tick();

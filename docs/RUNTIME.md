@@ -307,6 +307,55 @@ port's timeline; upstream raises IRQ 0 from `Interrupts.PollSlow`'s own
 deliver every vblank twice — at the render rate, which is the failure the wall
 clock was introduced to fix in the first place.
 
+## The window went black: nothing drove the present
+
+**Symptom:** after the merge to `0409bc2` the window is entirely black, and
+everything else is fine. The game boots, loads and plays underneath it —
+`open → game → fdat02 → fdat05`, slot 2 restored at HP 46/86 in area 1, the agent
+beacon reporting a live position, `KF2_DRAWCENSUS=1` counting 8260 bytes of
+primitives a frame in the HUD, the map tiles and the geometry submit. Nothing
+throws and nothing warns.
+
+**Cause, and it is two independent breaks of the same thing.** Upstream moved
+presentation off the game's thread. `Runtime.Run(boot)` now starts the emulation
+on a background thread and runs `PresentLoop` on the main one, and that loop is
+what calls `HostWindow.Compose` → `DoRender`. It also wraps the GL backend:
+`Hle.GpuHle.Backend = new Interp.InterpBackend(_glBackend)`, which records every
+primitive into a `FrameGraph` and issues no GL at all until `PresentLoop` calls
+`interp.Compose(i)`.
+
+**This port enters neither.** `Program.cs` is hand-owned and calls
+`Entry.Run(memory, cue)` directly — `Runtime.Run` is called from nowhere in the
+tree — because the port presents from inside the game's own `VSync`, on one
+thread: `LibEtc.VSync → Runtime.PresentFrame → HostWindow.Present →
+PanelManager.DrawPanels`. The merge dropped the `HostWindow.Present(Gpu)` call
+out of `PresentFrame` and left the interp wrapper in. So `DoRender` never ran and
+the frame graph was never replayed: two ways for the same frame to reach no
+screen, either of which is a black window on its own.
+
+**The fix keeps the port's model, which is the rule the merge was resolved
+by — upstream wins on structure, the port wins on behaviour.** `PresentFrame`
+calls `HostWindow.Present(Gpu)` again, where it was, and `OnLoad` uses the GL
+backend unwrapped so `Interp.Backend` stays null. Frame interpolation is
+deliberately not carried here, so `PresentLoop` and `HostWindow.Compose` are
+simply unreached; `Interp.Interp.Backend?.Publish()` in `PresentFrame` is then a
+no-op, and upstream's own frame-rate control in `DisplaySettingsSection` is inert
+beside the port's Video ▸ Frame pacing page.
+
+**Why the acceptance test did not catch it.** The test recorded for a merge is
+the boot walk plus `144.0 fps drawn at 20.0 ticks/s`, and every number in it was
+still true with a black window: the frame boundary is a `DrawOTag` after a
+`VSync`, and both of those are the *game* calling the runtime. Nothing in that
+chain touches GL. **A rate measured from inside the game says nothing about
+whether a picture reached the screen** — the counter to pair with it is
+`KF2_PRESENT_PROBE=1`, which reads `wide 288, plain 0, vram fallback 0` when
+`PresentDisplay` is being reached and prints nothing at all when it is not.
+
+Measured after: `KF2_FPS=144` on slot 2 in area 1, `open → game → fdat02 →
+fdat05`, 144.0 fps drawn at 19.9-20.0 ticks/s, the present census reading
+`wide 288, plain 0, vram fallback 0` every two seconds. Never looked at by eye
+here: the picture itself, which is the user's job.
+
 ## The intro movie ran at the render rate, because its pacer never armed
 
 **Symptom:** boot the port with a high frame rate chosen and the third and
