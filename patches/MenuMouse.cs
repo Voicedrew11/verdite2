@@ -4,13 +4,13 @@ using System.Reflection;
 using ImGuiNET;
 using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Events;
+using RecompOne.Runtime.Hle;
 using RecompOne.Runtime.Host;
 using RecompOne.Runtime.Host.Window;
 using RecompOne.Runtime.Memory;
 using RecompOne.Runtime.Modding;
-// Three namespaces in scope define a MouseButton or a Mouse; these two aliases
-// pick the ones meant here. Silk's is what HostWindow.IsMouseButtonDown takes,
-// and RecompOne.Runtime.Events' is what the wheel event carries.
+// Three namespaces in scope define a MouseButton or a Mouse; this alias picks
+// the one meant here -- Silk's, which HostWindow.IsMouseButtonDown takes.
 using HostMouseButton = Silk.NET.Input.MouseButton;
 // Upstream 0409bc2 emits one class per overlay. Every func_ named here is
 // GAME.EXE's, so the alias names the overlay once.
@@ -19,111 +19,124 @@ using KingsField2 = Recompiled.KingsField2_game;
 namespace Kf2;
 
 /// <summary>
-/// Hover the in-game menu with the mouse: point at an item and the game's own
+/// Hover the in-game menus with the mouse: point at an item and the game's own
 /// cursor moves to it, left click confirms, right click backs out.
 ///
-///     KF2_MENUMOUSE=0        off -- the menu is pad and keyboard only again
-///     KF2_MENUMOUSE_PROBE=1  the layout table, the pointer's row, and what it did
+///     KF2_MENUMOUSE=0        off -- the menus are pad and keyboard only again
+///     KF2_MENUMOUSE_PROBE=1  which list is live, the pointer's row, and what it did
 ///
 /// The switch is a setting, on the Mouse tab of the port's Input pane, and it is
 /// **independent of mouse look**: a player who never captures the pointer still
 /// has a pointer, and pointing it at a menu is the one thing a mouse can do in
 /// this game without being locked to the window first.
 ///
-/// ## Two things rule out every obvious approach
+/// ## There are three menus, not one
 ///
-/// **The cursor index is a stack local.** `func_80018E80` keeps it in `S2` and
-/// the open page at `SP+0x18`; the scrolling lists keep theirs in a
-/// caller-supplied descriptor. There is no global to write. The only ways in are
-/// the stepper's return value in `V0` and its out-pointers.
+/// The first version of this patch knew only the first of them, which is why it
+/// worked on the tab menu and did nothing in any submenu. The game builds a menu
+/// out of three unrelated widgets, each with its own cursor, its own geometry and
+/// its own idea of where that cursor lives:
 ///
-/// **Injecting Up/Down does not work, and is already recorded as not working.**
-/// See "The wall is the title, not the Continue menu" in docs/PATCHES_AND_MODS.md
-/// -- driving `PAD_dr` at the start menu moved nothing, while Cross registered.
-/// The other injection route is worse: the menu does not read stage 3's pad word
-/// at `0x80199554` at all, it calls `PadRead(1)` itself through `func_80022E58`,
-/// so <see cref="Analog"/>'s mechanism cannot reach it either.
+/// | widget | drawn by | stepped by | the cursor is |
+/// |---|---|---|---|
+/// | fixed option list | `func_800208D8` | `func_8001EA14` | the caller's register, returned in `V0` |
+/// | scrolling list | `func_800209E0` | `func_8001EB70` | `u8[desc+0x21]` in memory |
+/// | two-line prompt | `func_80021478` | inline in `func_800206E0` | that function's `S1`, and nowhere else |
 ///
-/// So this drives the stepper's **return value**, not the pad. Which also
-/// answers the question a synthetic Cross would have raised: neither stepper
-/// edge-detects (that is the whole finding behind <see cref="MenuPacing"/>), so a
-/// held synthetic confirm would fire on every iteration of the menu loop and run
-/// away through the submenus. A click is edge-detected here and spent once.
+/// So there are three mechanisms below rather than one generalisation, because
+/// the three cursors are not the same kind of thing. What they share is the
+/// pointer, the hit test and the "whichever device moved last owns the cursor"
+/// rule.
 ///
-/// ## Where the items are
+/// ## The hit test is the rectangle the game drew
 ///
-/// The fixed option lists are drawn by `func_800208D8(group, count, cursor,
-/// confirmed)`, and their positions are a **static layout table in GAME.EXE
-/// data** -- so hover is exact rather than calibrated:
+/// Not a band, and not one axis. Every one of the three widgets draws its rows as
+/// quads whose corners this patch can compute from the same numbers the drawing
+/// routine uses, so the test is `pointer in rect` on the actual item:
 ///
-///     base   = 0x80064CD4 + 0x134 * group      /* the emitted chain computes 308*a0 */
-///     header = base                            /* drawn only when its X is non-zero */
-///     item i = base + 0x1C * (i + 1)           /* 0x134 is 11 records of 0x1C */
-///     record +0x00 = u16 X, +0x02 = u16 Y      /* screen coordinates */
+///  * **fixed list** -- `func_800218B4(template, record)` emits the quad
+///    `(X-6, Y-6)` to `(X-6 + w-6, Y-6 + h-6)`, with `X`/`Y` out of the layout
+///    table and `w`/`h` out of the *template* at `+0x8`/`+0xA` (124x24, so a
+///    118x18 box six pixels up and left of the record's own position).
+///  * **scrolling list** -- `func_800209E0` lays its rows out itself: row `r` is
+///    `(u8[desc+0x1C], u8[desc+0x1D] + 5 + 14*r)`, 236x14, packed with no gap.
+///  * **prompt** -- the same `func_800218B4`, with the 54x24 template at
+///    `0x80064C08` and the two records `func_800206E0` builds.
 ///
-/// and `func_800218B4(template, record)` draws the box `(X, Y)` to
-/// `(X + w - 6, Y + h - 6)` with `w`/`h` out of the *template* at `+0x8`/`+0xA`,
-/// not out of the record. See "The menu's item positions are a table" in
-/// docs/GAME_INTERNALS.md.
+/// The version this replaces synthesised a band per row instead: the smallest gap
+/// between two rows, floored at the box height, tested against Y alone. That was
+/// wrong in three ways at once. It was six pixels low, because the record's `Y`
+/// is not the box's top edge. It ran a row's band into the 8px gutter the game
+/// leaves between boxes, so a click in the gap selected the row above. And
+/// testing Y alone made the whole width of the screen live, so a click far off to
+/// the right of a 118-pixel box confirmed it.
 ///
-/// The table is read live out of RAM every time the menu draws, and it is read
-/// off the arguments `func_800208D8` was actually called with, so nothing here
-/// knows how many pages the menu has or how many items each holds.
+/// **X is exact rather than avoided.** The old note reasoned that widescreen
+/// moves X and Y is safe, and that is true of the *conversion* and not of the
+/// test: the presented picture is `GameW + 2*margin` game pixels wide with the
+/// game's own column 0 at `margin`, and <c>Display.WideMargin</c> is that number.
+/// Subtract it and a game X is a game X at every aspect. See <see cref="Point"/>.
 ///
-/// ## The hit test is on Y alone
+/// ## What each mechanism writes
 ///
-/// Two reasons, and the second is the load-bearing one. The lists are vertical,
-/// so a row band spanning the picture is what a menu wants anyway; and **X is the
-/// axis widescreen moves**. The picture is the widened display buffer, so a game
-/// X of 160 is not the middle of it, while a game Y of 120 is always the middle
-/// of the picture whatever the aspect. Testing Y alone means the aspect cannot
-/// make the pointer miss. The rect's X is read and reported by the probe anyway,
-/// because a row whose X moves is the first sign the table was misread.
+/// **The fixed list** is driven by its stepper's **return value**: a post-hook on
+/// `func_8001EA14` writes `V0`, and a click writes the stepper's own
+/// out-parameters exactly as its Cross arm does -- including the arm's quirk that
+/// confirming the last entry is a cancel. Nothing else, plus `0x8006E5D0`, the
+/// blink direction, zeroed where the Up/Down arms zero it.
 ///
-/// A row owns the half-open band `[y, y + pitch)`, pitch being the smallest
-/// positive gap between two rows -- which for an evenly spaced list *is* the
-/// spacing -- floored at the box's own height. So there are no dead gaps between
-/// items, and the band stops one row past the last one rather than running to the
-/// bottom of the screen.
+/// **The scrolling list** keeps its cursor in the descriptor its caller passes,
+/// so there is a cursor in memory to write: `u8[desc+0x21]` (the absolute index)
+/// and `u8[desc+0x22]` (its row on the page). Hover never scrolls -- it can only
+/// reach a row that is on screen -- so `u8[desc+0x20]` is left alone and the two
+/// stay consistent by construction. A move also replays the stepper's own move
+/// arm: the blip, and `func_80022CAC(items[cursor])`, which is what loads the
+/// item's preview model. Without that call the list moves and the picture beside
+/// it does not.
+///
+/// **The prompt** has no cursor to write at all -- `func_800206E0` keeps it in
+/// `S1` for the length of its own modal loop -- so it is the one place that goes
+/// through the pad, and it can only do that safely because the loop *tells* this
+/// patch its state every iteration: `func_80021478` is handed the flag as `a2`.
+/// A post-hook on `func_80022E58` (the loop's `PadRead`) ORs in one synthetic Up
+/// while the hovered row disagrees with the drawn flag, and a Cross once they
+/// agree. Neither stepper edge-detects -- that is the finding
+/// <see cref="MenuPacing"/> exists for -- so an injection that was not closed
+/// over the state it changes would run away; this one cannot, because the next
+/// iteration reads the flag it just produced and stops asking. It is scoped to
+/// `func_800206E0` being on the stack, so no other menu sees an injected button.
 ///
 /// ## Whichever device moved last owns the cursor
 ///
 /// Hover only takes over once the pointer has **moved**, and hands back the
 /// moment the pad or the keyboard moves the cursor itself. Without that a mouse
-/// resting anywhere over the picture would pin the selection to whatever row it
-/// happens to sit on, and the D-pad would appear broken. <see cref="IdleMs"/> is
-/// how long a move stays live.
-///
-/// ## What it writes
-///
-/// `V0`, the stepper's own out-parameters, and `0x8006E5D0` -- the blink
-/// direction, zeroed to restart the wink exactly where the Up/Down arms zero it.
-/// Nothing else in game memory. `0x8006E5C4`, the repeat gate's latch, is
-/// deliberately untouched, so <see cref="MenuPacing"/> is unaffected: a hover
-/// costs no repeat delay because it never goes through the pad.
+/// resting over the picture would pin the selection to whatever row it happens to
+/// sit on, and the D-pad would look broken. <see cref="IdleMs"/> is how long a
+/// move stays live.
 ///
 /// **The wheel is deliberately not here.** It was written and taken out: a wheel
 /// steps the cursor relative to where it is, hover puts it where the pointer is,
-/// and the two contradict each other on the very next iteration of the menu loop
-/// -- scroll two rows and hover snaps it straight back to whatever the pointer is
-/// over. One of them has to own the cursor, and pointing at a thing is the
-/// gesture that was asked for.
+/// and the two contradict each other on the very next iteration of the menu loop.
+/// One of them has to own the cursor, and pointing at a thing is the gesture that
+/// was asked for.
 ///
 /// **Never judged by eye**: whether the cursor lands on the item the pointer is
-/// actually over (the measurements can only say it lands on the row the *table*
-/// says is there), whether the desktop pointer over a 1996 menu reads
-/// acceptably, and whether a move blip on every row crossed is pleasant or noisy.
+/// actually over, whether a desktop pointer over a 1996 menu reads acceptably,
+/// and whether the gutters between the fixed list's boxes -- 8 pixels in 26, and
+/// now dead rather than assigned to a neighbour -- are felt when sweeping down a
+/// list.
 ///
-/// Scrolling lists -- inventory, magic, equipment, `func_8001EB70` -- are **not**
-/// covered yet: their rows are drawn by per-page loops rather than by
-/// `func_800208D8`, so the geometry has to be found once per page. See "The menu
-/// pointer" in docs/INPUT.md.
+/// **Not covered**: `func_8001BB7C` and `func_8001BE60` draw a fixed list and
+/// then read the pad themselves rather than calling `func_8001EA14`, so they are
+/// a fourth shape. See "The menu pointer" in docs/INPUT.md.
 /// </summary>
 public static class MenuMouse
 {
     /// <summary>The in-game menu's modal loop. It blocks for the whole session,
     /// so a pre and a post on it are "opened" and "closed".</summary>
     const uint MenuLoop = 0x80018E80;
+
+    // --- the fixed option list ----------------------------------------------
 
     /// <summary>The fixed option list's drawer: `(group, count, cursor,
     /// confirmed)`. Ten call sites, each beside the stepper in the same
@@ -142,18 +155,81 @@ public static class MenuMouse
     const uint RecordStride = 0x1C;
 
     /// <summary>`0x134 / 0x1C` is 11 records, one of which is the header.</summary>
-    const int MaxRows = 10;
+    const int MaxFixedRows = 10;
 
-    /// <summary>The sprite template an unselected item is drawn with; its `+0x8`
-    /// and `+0xA` are the box's width and height, and the drawn box is six pixels
-    /// short of each.</summary>
+    /// <summary>The sprite template an item box is drawn with. `func_800218B4`
+    /// reads its `+0x8`/`+0xA` as the box's size and puts the box's top-left six
+    /// pixels up and left of the record's own position, so the drawn rect is
+    /// `(X - 6, Y - 6)` by `(w, h)` -- 124x24 here, which leaves a 2px gutter in
+    /// a list whose records are 26 apart.</summary>
     const uint ItemTemplate = 0x80064C20;
     const int TemplateInset = 6;
 
-    /// <summary>The blink's direction word. Zeroed on an accepted move, which is
-    /// what restarts the wink; see <see cref="MenuPacing"/>, which holds the
-    /// counter beside it.</summary>
+    /// <summary>The blink's direction word. Zeroed on an accepted move in the
+    /// fixed list, which is what restarts the wink; see <see cref="MenuPacing"/>,
+    /// which holds the counter beside it. The scrolling list's stepper does not
+    /// touch it, so neither does this.</summary>
     const uint BlinkDir = 0x8006E5D0;
+
+    // --- the scrolling list --------------------------------------------------
+
+    /// <summary>The scrolling list's cursor stepper:
+    /// `(desc, items, *confirmed, *cancelled) -> padWord`. Sixteen call sites --
+    /// inventory, magic, equipment, the shops, the save slots.</summary>
+    const uint ScrollCursor = 0x8001EB70;
+
+    /// <summary>What loads the preview model for the item under the cursor, and
+    /// resets its rotation and zoom. The stepper calls it on every accepted move,
+    /// so a hover move must too.</summary>
+    const uint LoadPreview = 0x80022CAC;
+
+    // The descriptor `func_8001EB70` and `func_800209E0` share. Both of them read
+    // every one of these; none of it is inferred.
+    const uint DescX = 0x1C;        // u8, the list's left edge
+    const uint DescY = 0x1D;        // u8, the top of row 0, before the +5 inset
+    const uint DescCount = 0x1E;    // u8, entries in the whole list
+    const uint DescVisible = 0x1F;  // u8, rows drawn on one page
+    const uint DescScroll = 0x20;   // u8, the entry drawn on row 0
+    const uint DescCursor = 0x21;   // u8, the selected entry, absolute
+    const uint DescRow = 0x22;      // u8, its row on the page: cursor - scroll
+
+    /// <summary>Row 0's top is `DescY + 5` and each row is 14 tall, packed. Both
+    /// are `func_800209E0`'s own literals -- the `0xE` its highlight loop adds per
+    /// row, and the `+5` every one of its quad corners carries.</summary>
+    const int RowInset = 5, RowPitch = 14;
+
+    /// <summary>The row quad's width, out of the highlight sprite at
+    /// `0x80064C44 + 0x8`. Unlike the fixed list's box this is not drawn through
+    /// `func_800218B4`, so there is no six-pixel inset on it.</summary>
+    const uint RowSprite = 0x80064C44;
+
+    /// <summary>A page can show more rows than the fixed table has records, and
+    /// this is the bound on a `u8` read out of a descriptor that could be
+    /// anything if the hook ever fired somewhere unexpected.</summary>
+    const int MaxScrollRows = 32;
+
+    // --- the two-line prompt -------------------------------------------------
+
+    /// <summary>The prompt's modal loop: `(desc, ?, listFlag, page) -> choice`.
+    /// It keeps its cursor in a register, so this is a scope rather than a
+    /// hook target.</summary>
+    const uint PromptLoop = 0x800206E0;
+
+    /// <summary>The prompt's drawer: `(rec0, rec1, flag, confirmed)`. Its third
+    /// argument is the state the loop's register holds, which is the only way to
+    /// read it.</summary>
+    const uint PromptDraw = 0x80021478;
+
+    /// <summary>The prompt's box template, 54x24 through `func_800218B4`.</summary>
+    const uint PromptTemplate = 0x80064C08;
+
+    /// <summary>The menu's `PadRead(1)`, called once per iteration of every menu
+    /// loop. The prompt's injected button is ORed into its return value.</summary>
+    const uint MenuPadRead = 0x80022E58;
+
+    /// <summary>The pad masks, live out of the game's own control config: Up,
+    /// Down, Cross and the first of the two cancel buttons the loops test.</summary>
+    const uint MaskUp = 0x8006E590, MaskCross = 0x8006E568, MaskCancel = 0x8006E56C;
 
     /// <summary>The menu's own blips: move, confirm, cancel. The arguments
     /// `func_80022DC4` takes.</summary>
@@ -164,9 +240,10 @@ public static class MenuMouse
     /// mouse left alone gives the pad the cursor back before the next menu.</summary>
     const long IdleMs = 2000;
 
-    /// <summary>How stale a layout read may be and still be used. A page change
-    /// redraws immediately, so anything older than this means the menu is drawing
-    /// something else and the rows on file are not on screen.</summary>
+    /// <summary>How stale a fixed-list layout read may be and still be used. Only
+    /// that list needs it: its geometry comes from a drawer call rather than from
+    /// the stepper's own arguments, so a page change has to be able to invalidate
+    /// it. The other two read their geometry live.</summary>
     const long GeomStaleMs = 500;
 
     /// <summary>A field rather than a property because the settings page and
@@ -184,8 +261,8 @@ public static class MenuMouse
     {
         Id = "kf2.menumouse",
         Name = "Menu pointer",
-        Version = "1.0",
-        Description = "Hover and click the in-game menu with the mouse.",
+        Version = "2.0",
+        Description = "Hover and click the in-game menus with the mouse.",
     };
 
     // --- the menu session ----------------------------------------------------
@@ -201,14 +278,12 @@ public static class MenuMouse
     /// player points with.</summary>
     static bool _tookCapture;
 
-    // --- the geometry --------------------------------------------------------
+    // --- the fixed list's geometry -------------------------------------------
 
-    static readonly int[] _rowX = new int[MaxRows];
-    static readonly int[] _rowY = new int[MaxRows];
-    static int _rowCount;
-    static int _rowH, _rowPitch;
-    static int _group = -1;
-    static long _drawnAt;
+    static readonly int[] _fixX = new int[MaxFixedRows];
+    static readonly int[] _fixY = new int[MaxFixedRows];
+    static int _fixCount, _fixW, _fixH, _fixGroup = -1;
+    static long _fixDrawnAt;
 
     // --- the pointer ---------------------------------------------------------
 
@@ -223,26 +298,40 @@ public static class MenuMouse
     static bool _clickLeft, _clickRight;
     static bool _inPicture;
 
-    /// <summary>The pointer's Y in the game's own pixels, valid while
-    /// <see cref="_inPicture"/>. Kept for the probe as much as for the hit
-    /// test.</summary>
-    static float _gameY = float.NaN;
+    /// <summary>The pointer in the game's own pixels, valid while
+    /// <see cref="_inPicture"/>.</summary>
+    static float _gameX = float.NaN, _gameY = float.NaN;
 
-    /// <summary>The row the pointer is over, or -1. Recomputed once per stepper
-    /// call, which is once per iteration of the menu loop.</summary>
+    /// <summary>The row the pointer is over and the widget it belongs to, for the
+    /// probe. Recomputed once per stepper call.</summary>
     static int _hover = -1;
+    static string _live = "none";
 
-    // The stepper's arguments, stashed by the pre because the body clobbers them.
-    static bool _haveArgs;
-    static int _cursorIn, _maxIn;
-    static uint _selPtr, _confirmPtr, _cancelPtr;
+    // The fixed stepper's arguments, stashed by the pre because the body
+    // clobbers them.
+    static bool _haveFixed;
+    static int _fixCursorIn, _fixMaxIn;
+    static uint _fixSelPtr, _fixConfirmPtr, _fixCancelPtr;
+
+    // The scrolling stepper's.
+    static bool _haveScroll;
+    static uint _scDesc, _scItems, _scConfirmPtr, _scCancelPtr;
+    static int _scCursorIn;
+
+    // The prompt's.
+    static int _promptDepth;
+    static bool _promptSeen;
+    static uint _promptRec0, _promptRec1;
+    static int _promptFlag = -1, _promptAsked = -1;
 
     // --- the probe -----------------------------------------------------------
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _windowMs = -1.0;
-    static int _samples, _hovers, _moves, _confirms, _cancels;
+    static int _samples, _hovers, _moves, _confirms, _cancels, _injects;
     static int _lastReported = -2;
+    static uint _lastScDesc;
+    static int _lastScCount = -1;
 
     public static void Configure(string? enabled, string? probe)
     {
@@ -255,7 +344,7 @@ public static class MenuMouse
     }
 
     /// <summary>
-    /// Attach the three hooks, deferred to the first overlay load for the reason
+    /// Attach the hooks, deferred to the first overlay load for the reason
     /// <see cref="MenuPacing.Install"/> gives: <c>SymbolRegistry</c> reads the
     /// dispatcher's overlay tables, which are registered inside Entry.Run.
     ///
@@ -270,10 +359,10 @@ public static class MenuMouse
         });
 
         HookAttach.OnOverlayLoad("menu pointer", Attach,
-                                 "The in-game menu stays pad and keyboard only.");
+                                 "The in-game menus stay pad and keyboard only.");
     }
 
-    static bool _loopHooked, _drawHooked, _cursorHooked;
+    static bool _loopHooked, _drawHooked, _cursorHooked, _scrollHooked, _promptHooked;
 
     static bool Attach()
     {
@@ -281,15 +370,21 @@ public static class MenuMouse
         var self = typeof(MenuMouse);
         MethodInfo Own(string name) => self.GetMethod(name, BindingFlags.Public | BindingFlags.Static)!;
 
-        MethodInfo? loop = null, draw = null, cursor = null;
+        MethodInfo? At(uint addr, string lost)
+        {
+            var mi = SymbolRegistry.Resolve("game", null, addr);
+            if (mi == null)
+                Console.Error.WriteLine($"[KF2] menu pointer: no game function at 0x{addr:X8} -- {lost}");
+            return mi;
+        }
+
+        MethodInfo? loop = null, draw = null, cursor = null, scroll = null,
+                    promptLoop = null, promptDraw = null, padRead = null;
 
         if (!_loopHooked)
         {
-            loop = SymbolRegistry.Resolve("game", null, MenuLoop);
-            if (loop == null)
-                Console.Error.WriteLine($"[KF2] menu pointer: no game function at 0x{MenuLoop:X8} -- " +
-                                        "a captured pointer will not be given back inside the menu.");
-            else
+            loop = At(MenuLoop, "a captured pointer will not be given back inside the menu.");
+            if (loop != null)
             {
                 HookManager.AddPre(_self, loop, Own(nameof(BeforeMenu)));
                 HookManager.AddPost(_self, loop, Own(nameof(AfterMenu)));
@@ -298,23 +393,41 @@ public static class MenuMouse
 
         if (!_drawHooked)
         {
-            draw = SymbolRegistry.Resolve("game", null, OptionDraw);
-            if (draw == null)
-                Console.Error.WriteLine($"[KF2] menu pointer: no game function at 0x{OptionDraw:X8} -- " +
-                                        "no item positions, so hover has nothing to point at.");
-            else HookManager.AddPre(_self, draw, Own(nameof(BeforeOptionDraw)));
+            draw = At(OptionDraw, "no item positions, so the tab menu has nothing to point at.");
+            if (draw != null) HookManager.AddPre(_self, draw, Own(nameof(BeforeOptionDraw)));
         }
 
         if (!_cursorHooked)
         {
-            cursor = SymbolRegistry.Resolve("game", null, FixedCursor);
-            if (cursor == null)
-                Console.Error.WriteLine($"[KF2] menu pointer: no game function at 0x{FixedCursor:X8} -- " +
-                                        "nothing can move the cursor but the pad.");
-            else
+            cursor = At(FixedCursor, "nothing but the pad can move the tab menu's cursor.");
+            if (cursor != null)
             {
                 HookManager.AddPre(_self, cursor, Own(nameof(BeforeCursor)));
                 HookManager.AddPost(_self, cursor, Own(nameof(AfterCursor)));
+            }
+        }
+
+        if (!_scrollHooked)
+        {
+            scroll = At(ScrollCursor, "the inventory, magic and equipment lists stay pad only.");
+            if (scroll != null)
+            {
+                HookManager.AddPre(_self, scroll, Own(nameof(BeforeScroll)));
+                HookManager.AddPost(_self, scroll, Own(nameof(AfterScroll)));
+            }
+        }
+
+        if (!_promptHooked)
+        {
+            promptLoop = At(PromptLoop, "the yes/no prompt stays pad only.");
+            promptDraw = At(PromptDraw, "the yes/no prompt's state cannot be read.");
+            padRead = At(MenuPadRead, "the yes/no prompt has no way in.");
+            if (promptLoop != null && promptDraw != null && padRead != null)
+            {
+                HookManager.AddPre(_self, promptLoop, Own(nameof(BeforePrompt)));
+                HookManager.AddPost(_self, promptLoop, Own(nameof(AfterPrompt)));
+                HookManager.AddPre(_self, promptDraw, Own(nameof(BeforePromptDraw)));
+                HookManager.AddPost(_self, padRead, Own(nameof(AfterPadRead)));
             }
         }
 
@@ -325,13 +438,17 @@ public static class MenuMouse
         _loopHooked |= HookAttach.Installed(loop);
         _drawHooked |= HookAttach.Installed(draw);
         _cursorHooked |= HookAttach.Installed(cursor);
+        _scrollHooked |= HookAttach.Installed(scroll);
+        _promptHooked |= HookAttach.Installed(promptLoop) && HookAttach.Installed(promptDraw) &&
+                         HookAttach.Installed(padRead);
 
         Console.WriteLine($"[KF2] menu pointer: {(Enabled ? "on" : "off")}, " +
                           $"session {(_loopHooked ? "scoped" : "NOT scoped")}, " +
-                          $"items {(_drawHooked ? "read" : "NOT read")}, " +
-                          $"cursor {(_cursorHooked ? "driven" : "NOT driven")}");
+                          $"tab menu {(_drawHooked && _cursorHooked ? "driven" : "NOT driven")}, " +
+                          $"lists {(_scrollHooked ? "driven" : "NOT driven")}, " +
+                          $"prompt {(_promptHooked ? "driven" : "NOT driven")}");
 
-        return _loopHooked && _drawHooked && _cursorHooked;
+        return _loopHooked && _drawHooked && _cursorHooked && _scrollHooked && _promptHooked;
     }
 
     // ------------------------------------------------------------------------
@@ -349,9 +466,10 @@ public static class MenuMouse
     {
         if (_depth++ > 0) return true;
 
-        _rowCount = 0;
-        _group = -1;
+        _fixCount = 0;
+        _fixGroup = -1;
         _hover = -1;
+        _live = "none";
         _padOwns = true;          // the pad opened the menu; it owns the cursor
         _clickLeft = _clickRight = false;
         _lastPos = new Vector2(float.NaN, float.NaN);
@@ -379,8 +497,9 @@ public static class MenuMouse
         if (--_depth > 0) return;
         _depth = 0;
 
-        _rowCount = 0;
+        _fixCount = 0;
         _hover = -1;
+        _live = "none";
 
         if (_tookCapture)
         {
@@ -390,7 +509,7 @@ public static class MenuMouse
     }
 
     // ------------------------------------------------------------------------
-    // The geometry
+    // The fixed option list
     // ------------------------------------------------------------------------
 
     /// <summary>
@@ -409,50 +528,35 @@ public static class MenuMouse
         // The group indexes a fixed-stride table with no bound of its own, so
         // this is the bound: a wild argument would otherwise read the rows out of
         // whatever follows the table.
-        if (count <= 0 || count > MaxRows || group < 0 || group > 31) return true;
+        if (count <= 0 || count > MaxFixedRows || group < 0 || group > 31) return true;
 
         uint bas = LayoutBase + (uint)group * GroupStride;
 
-        int h = (int)m.ReadU16(ItemTemplate + 0xA) - TemplateInset;
         for (int i = 0; i < count; i++)
         {
             uint rec = bas + RecordStride * (uint)(i + 1);
-            _rowX[i] = (short)m.ReadU16(rec);
-            _rowY[i] = (short)m.ReadU16(rec + 2);
+            // The record's position is the sprite's, and func_800218B4 draws the
+            // box six pixels up and left of it.
+            _fixX[i] = (short)m.ReadU16(rec) - TemplateInset;
+            _fixY[i] = (short)m.ReadU16(rec + 2) - TemplateInset;
         }
 
-        _rowCount = count;
-        _rowH = h > 0 ? h : 1;
-        _group = group;
-        _drawnAt = Environment.TickCount64;
-
-        // The pitch is the smallest positive gap between two rows, which for an
-        // evenly spaced list is the spacing. Floored at the box height so a list
-        // drawn with its boxes touching still has a band each, and defaulted to
-        // the box height for a list of one.
-        int pitch = int.MaxValue;
-        for (int i = 0; i < count; i++)
-        for (int j = i + 1; j < count; j++)
-        {
-            int d = Math.Abs(_rowY[i] - _rowY[j]);
-            if (d > 0 && d < pitch) pitch = d;
-        }
-        _rowPitch = pitch == int.MaxValue ? _rowH : Math.Max(pitch, _rowH);
+        _fixW = Math.Max(1, (int)m.ReadU16(ItemTemplate + 0x8));
+        _fixH = Math.Max(1, (int)m.ReadU16(ItemTemplate + 0xA));
+        _fixCount = count;
+        _fixGroup = group;
+        _fixDrawnAt = Environment.TickCount64;
 
         if (_probe && _lastReported != group)
         {
             _lastReported = group;
-            var ys = string.Join(",", _rowY.Take(count));
-            Console.WriteLine($"[KF2] menu pointer: group {group} at 0x{bas:X8}, {count} rows, " +
-                              $"x {_rowX[0]}, y {ys}, box {_rowH}, pitch {_rowPitch}");
+            var ys = string.Join(",", _fixY.Take(count));
+            Console.WriteLine($"[KF2] menu pointer: fixed group {group} at 0x{bas:X8}, {count} rows, " +
+                              $"x {_fixX[0]}, y {ys}, box {_fixW}x{_fixH}");
         }
 
         return true;
     }
-
-    // ------------------------------------------------------------------------
-    // The cursor
-    // ------------------------------------------------------------------------
 
     /// <summary>
     /// Stash the stepper's arguments. The body clobbers `A0`-`A3` and unwinds the
@@ -464,12 +568,12 @@ public static class MenuMouse
     {
         if (!Enabled) return true;
 
-        _cursorIn = (int)c.A0;
-        _maxIn = (int)c.A1;
-        _selPtr = c.A2;
-        _confirmPtr = c.A3;
-        _cancelPtr = m.ReadU32(c.SP + 0x10u);
-        _haveArgs = true;
+        _fixCursorIn = (int)c.A0;
+        _fixMaxIn = (int)c.A1;
+        _fixSelPtr = c.A2;
+        _fixConfirmPtr = c.A3;
+        _fixCancelPtr = m.ReadU32(c.SP + 0x10u);
+        _haveFixed = true;
         return true;
     }
 
@@ -481,29 +585,28 @@ public static class MenuMouse
     /// </summary>
     public static void AfterCursor(CpuContext c, IMemory m)
     {
-        if (!_haveArgs) return;
-        _haveArgs = false;
+        if (!_haveFixed) return;
+        _haveFixed = false;
         if (!Enabled) return;
 
         uint cursor = c.V0;
-        bool gameMoved = (int)cursor != _cursorIn;
-        bool gameConfirmed = m.ReadU32(_confirmPtr) != 0;
+        bool gameMoved = (int)cursor != _fixCursorIn;
+        bool gameConfirmed = m.ReadU32(_fixConfirmPtr) != 0;
 
         // The pad or the keyboard just moved it, so it owns the cursor until the
         // pointer moves again. Read before Sample, which is what clears the latch.
         if (gameMoved) _padOwns = true;
 
         Sample();
+        _live = "fixed";
+        int hover = _hover = HoverLive() ? HitFixed() : -1;
 
         if (gameMoved || gameConfirmed) { Report(); return; }
-
-        bool live = !_padOwns && Environment.TickCount64 - _movedAt < IdleMs;
-        int hover = live ? _hover : -1;
 
         // Everything that blips has to happen before V0 is written: the blip is a
         // real call into the recompiled routine and it clobbers V0 along with the
         // argument registers.
-        int target = hover >= 0 && hover <= _maxIn ? hover : (int)cursor;
+        int target = hover >= 0 && hover <= _fixMaxIn ? hover : (int)cursor;
 
         bool moved = target != (int)cursor;
         if (moved) Blip(c, m, BlipMove);
@@ -521,9 +624,9 @@ public static class MenuMouse
                 // The stepper's Cross arm, reproduced exactly -- including that
                 // confirming the *last* entry is a cancel rather than a select.
                 Blip(c, m, BlipConfirm);
-                m.WriteU32(_confirmPtr, 1u);
-                if (target < _maxIn) m.WriteU32(_selPtr, (uint)target);
-                else if (_cancelPtr != 0) m.WriteU32(_cancelPtr, 0xFFFFFFFFu);
+                m.WriteU32(_fixConfirmPtr, 1u);
+                if (target < _fixMaxIn) m.WriteU32(_fixSelPtr, (uint)target);
+                else if (_fixCancelPtr != 0) m.WriteU32(_fixCancelPtr, 0xFFFFFFFFu);
                 _confirms++;
             }
         }
@@ -533,7 +636,7 @@ public static class MenuMouse
             if (_inPicture)
             {
                 Blip(c, m, BlipCancel);
-                if (_cancelPtr != 0) m.WriteU32(_cancelPtr, 0xFFFFFFFFu);
+                if (_fixCancelPtr != 0) m.WriteU32(_fixCancelPtr, 0xFFFFFFFFu);
                 _cancels++;
             }
         }
@@ -551,6 +654,276 @@ public static class MenuMouse
         Report();
     }
 
+    /// <summary>Which fixed-list box the pointer is inside, or -1. The rows are
+    /// the boxes `func_800218B4` drew, with the 2px gutter between them left
+    /// dead: a click in the gap is a click on nothing, not on the row above.</summary>
+    static int HitFixed()
+    {
+        if (_fixCount == 0 || Environment.TickCount64 - _fixDrawnAt > GeomStaleMs) return -1;
+        for (int i = 0; i < _fixCount; i++)
+            if (In(_fixX[i], _fixY[i], _fixW, _fixH)) { _hovers++; return i; }
+        return -1;
+    }
+
+    // ------------------------------------------------------------------------
+    // The scrolling list
+    // ------------------------------------------------------------------------
+
+    /// <summary>
+    /// `func_8001EB70(desc, items, *confirmed, *cancelled)`. Unlike the fixed
+    /// list's stepper this one returns the pad word rather than the cursor: the
+    /// cursor is three bytes in the descriptor, and that is what both this and
+    /// the drawer read.
+    /// </summary>
+    public static bool BeforeScroll(CpuContext c, IMemory m)
+    {
+        if (!Enabled) return true;
+
+        _scDesc = c.A0;
+        _scItems = c.A1;
+        _scConfirmPtr = c.A2;
+        _scCancelPtr = c.A3;
+        _scCursorIn = m.ReadU8(_scDesc + DescCursor);
+        _haveScroll = true;
+        return true;
+    }
+
+    public static void AfterScroll(CpuContext c, IMemory m)
+    {
+        if (!_haveScroll) return;
+        _haveScroll = false;
+        if (!Enabled) return;
+
+        int cursor = m.ReadU8(_scDesc + DescCursor);
+        int scroll = m.ReadU8(_scDesc + DescScroll);
+        int count = m.ReadU8(_scDesc + DescCount);
+        int visible = m.ReadU8(_scDesc + DescVisible);
+
+        bool gameMoved = cursor != _scCursorIn;
+        bool gameConfirmed = _scConfirmPtr != 0 && m.ReadU32(_scConfirmPtr) != 0;
+        if (gameMoved) _padOwns = true;
+
+        Sample();
+        _live = "list";
+
+        if (_probe && (_scDesc != _lastScDesc || count != _lastScCount))
+        {
+            _lastScDesc = _scDesc; _lastScCount = count;
+            Console.WriteLine($"[KF2] menu pointer: list at 0x{_scDesc:X8}, {count} entries, " +
+                              $"{visible} visible from {scroll}, cursor {cursor}/row {m.ReadU8(_scDesc + DescRow)}, " +
+                              $"rows at x {m.ReadU8(_scDesc + DescX)} y {m.ReadU8(_scDesc + DescY) + RowInset} " +
+                              $"{m.ReadU16(RowSprite + 0x8)}x{RowPitch}");
+        }
+
+        // Rows on screen, which is all hover can reach: a pointer cannot ask for
+        // an entry that is scrolled off, so DescScroll is never written and the
+        // cursor and its row stay consistent without a second rule.
+        int rows = Math.Min(Math.Min(visible, MaxScrollRows), count - scroll);
+        int hover = _hover = HoverLive() ? HitScroll(m, rows) : -1;
+
+        if (gameMoved || gameConfirmed) { Report(); return; }
+
+        int target = hover >= 0 ? scroll + hover : cursor;
+
+        if (target != cursor && target >= 0 && target < count)
+        {
+            // The stepper's own move arm: the blip, the two cursor bytes, and the
+            // preview load. Written before the click below for the reason the
+            // fixed list writes V0 last -- a call into the recompiled routine
+            // clobbers the argument registers.
+            Blip(c, m, BlipMove);
+            m.WriteU8(_scDesc + DescCursor, (byte)target);
+            m.WriteU8(_scDesc + DescRow, (byte)(target - scroll));
+            if (_scItems != 0) Preview(c, m, m.ReadU8(_scItems + (uint)target));
+            _moves++;
+            cursor = target;
+        }
+
+        if (_clickLeft)
+        {
+            _clickLeft = false;
+            if (hover >= 0 && _scConfirmPtr != 0)
+            {
+                Blip(c, m, BlipConfirm);
+                m.WriteU32(_scConfirmPtr, 1u);
+                _confirms++;
+            }
+        }
+        else if (_clickRight)
+        {
+            _clickRight = false;
+            if (_inPicture && _scCancelPtr != 0)
+            {
+                Blip(c, m, BlipCancel);
+                m.WriteU32(_scCancelPtr, 0xFFFFFFFFu);
+                _cancels++;
+            }
+        }
+
+        Report();
+    }
+
+    /// <summary>Which visible row the pointer is over, or -1. `func_800209E0`
+    /// lays the page out itself -- row 0 at `DescY + 5`, 14 apart, 236 wide from
+    /// `DescX` -- so this is that arithmetic and not a measurement.</summary>
+    static int HitScroll(IMemory m, int rows)
+    {
+        if (rows <= 0) return -1;
+        int x = m.ReadU8(_scDesc + DescX);
+        int y = m.ReadU8(_scDesc + DescY) + RowInset;
+        int w = m.ReadU16(RowSprite + 0x8);
+        if (w <= 0) return -1;
+
+        for (int r = 0; r < rows; r++)
+            if (In(x, y + RowPitch * r, w, RowPitch)) { _hovers++; return r; }
+        return -1;
+    }
+
+    // ------------------------------------------------------------------------
+    // The two-line prompt
+    // ------------------------------------------------------------------------
+
+    public static bool BeforePrompt(CpuContext c, IMemory m)
+    {
+        if (_promptDepth++ == 0)
+        {
+            _promptSeen = false;
+            _promptFlag = _promptAsked = -1;
+            // A click made on the list underneath does not carry into the prompt
+            // the click opened.
+            _clickLeft = _clickRight = false;
+        }
+        return true;
+    }
+
+    public static void AfterPrompt(CpuContext c, IMemory m)
+    {
+        if (--_promptDepth > 0) return;
+        _promptDepth = 0;
+        _promptSeen = false;
+        _promptFlag = _promptAsked = -1;
+        _live = "none";
+    }
+
+    /// <summary>
+    /// `func_80021478(rec0, rec1, flag, confirmed)` -- the only reader of the
+    /// prompt's cursor that is outside the register it lives in. Both records are
+    /// on the loop's stack, so their addresses are taken here rather than assumed.
+    /// </summary>
+    public static bool BeforePromptDraw(CpuContext c, IMemory m)
+    {
+        if (_promptDepth <= 0) return true;
+
+        int flag = (int)c.A2 != 0 ? 1 : 0;
+
+        // The flag changed and it was not the injection asking: the pad moved it,
+        // so the pad owns the cursor again.
+        if (_promptSeen && flag != _promptFlag && flag != _promptAsked) _padOwns = true;
+
+        if (_probe && !_promptSeen)
+        {
+            int pw = (int)m.ReadU16(PromptTemplate + 0x8);
+            int ph = (int)m.ReadU16(PromptTemplate + 0xA);
+            Console.WriteLine($"[KF2] menu pointer: prompt boxes " +
+                              $"({(short)m.ReadU16(c.A0) - TemplateInset},{(short)m.ReadU16(c.A0 + 2) - TemplateInset}) and " +
+                              $"({(short)m.ReadU16(c.A1) - TemplateInset},{(short)m.ReadU16(c.A1 + 2) - TemplateInset}), " +
+                              $"{pw}x{ph}, flag {flag}");
+        }
+
+        _promptRec0 = c.A0;
+        _promptRec1 = c.A1;
+        _promptFlag = flag;
+        _promptAsked = -1;
+        _promptSeen = true;
+        return true;
+    }
+
+    /// <summary>
+    /// The menu's `PadRead(1)`, after it has run. This is the one place in the
+    /// patch that goes through the pad, and it is scoped to the prompt's loop
+    /// being on the stack -- every other menu is driven by writing its cursor
+    /// directly, and would run away on a held synthetic button.
+    ///
+    /// It cannot run away here either, because the loop reports the state back
+    /// through <see cref="BeforePromptDraw"/> on the same iteration: an Up is
+    /// asked for only while the drawn flag disagrees with the hovered row, so the
+    /// toggle that answers it also stops the asking.
+    ///
+    /// The latch at `0x8006E5C4` is `func_80022E58`'s own, set from the *real*
+    /// pad word before this runs, so an injected button costs no repeat delay --
+    /// exactly as a hover elsewhere costs none.
+    /// </summary>
+    public static void AfterPadRead(CpuContext c, IMemory m)
+    {
+        if (!Enabled || _promptDepth <= 0 || !_promptSeen) return;
+
+        Sample();
+        _live = "prompt";
+        int hover = _hover = HoverLive() ? HitPrompt(m) : -1;
+
+        uint add = 0;
+        if (_clickRight)
+        {
+            _clickRight = false;
+            if (_inPicture) add = m.ReadU32(MaskCancel);
+        }
+        else if (hover < 0)
+        {
+            // A click off both boxes is a click on nothing, and is spent rather
+            // than left pending for wherever the pointer goes next.
+            _clickLeft = false;
+        }
+        else if (hover != _promptFlag)
+        {
+            // One toggle. A click is deliberately left pending: the next
+            // iteration draws the row the pointer is on and confirms it there.
+            add = m.ReadU32(MaskUp);
+            _promptAsked = hover;
+        }
+        else if (_clickLeft)
+        {
+            _clickLeft = false;
+            add = m.ReadU32(MaskCross);
+            _confirms++;
+        }
+
+        if (add != 0)
+        {
+            c.V0 |= add;
+            _injects++;
+        }
+
+        Report();
+    }
+
+    /// <summary>Which of the prompt's two boxes the pointer is inside, or -1.
+    /// Both are drawn through `func_800218B4` with the 54x24 template at
+    /// `0x80064C08`, so they carry the same six-pixel origin inset the fixed
+    /// list's boxes do. The records are on `func_800206E0`'s stack, so their
+    /// addresses are taken from the drawer's arguments rather than assumed --
+    /// which is also what makes this correct for a prompt drawn anywhere
+    /// else.</summary>
+    static int HitPrompt(IMemory m)
+    {
+        int w = (int)m.ReadU16(PromptTemplate + 0x8);
+        int h = (int)m.ReadU16(PromptTemplate + 0xA);
+        if (w <= 0 || h <= 0) return -1;
+
+        for (int i = 0; i < 2; i++)
+        {
+            uint rec = i == 0 ? _promptRec0 : _promptRec1;
+            if (rec == 0) continue;
+            int x = (short)m.ReadU16(rec) - TemplateInset;
+            int y = (short)m.ReadU16(rec + 2) - TemplateInset;
+            if (In(x, y, w, h)) { _hovers++; return i; }
+        }
+        return -1;
+    }
+
+    // ------------------------------------------------------------------------
+    // Calling back into the game
+    // ------------------------------------------------------------------------
+
     /// <summary>
     /// The menu's own blip. A real call into the recompiled routine rather than a
     /// reimplementation, so the sound is the game's; it clobbers `V0`, `A0`-`A3`
@@ -565,27 +938,41 @@ public static class MenuMouse
         (c.V0, c.A0, c.A1, c.A2, c.A3, c.RA) = (v0, a0, a1, a2, a3, ra);
     }
 
+    /// <summary>
+    /// `func_80022CAC(item)` -- what the scrolling stepper calls on every accepted
+    /// move. It loads the item's preview model and resets that model's rotation
+    /// and zoom, so a hover move that skipped it would leave the picture beside
+    /// the list showing the item the cursor was on before. Same register
+    /// discipline as <see cref="Blip"/>.
+    /// </summary>
+    static void Preview(CpuContext c, IMemory m, uint item)
+    {
+        uint v0 = c.V0, a0 = c.A0, a1 = c.A1, a2 = c.A2, a3 = c.A3, ra = c.RA;
+        c.A0 = item;
+        KingsField2.func_80022CAC(c, m);
+        (c.V0, c.A0, c.A1, c.A2, c.A3, c.RA) = (v0, a0, a1, a2, a3, ra);
+    }
+
     // ------------------------------------------------------------------------
     // The pointer
     // ------------------------------------------------------------------------
 
     /// <summary>
-    /// Where the pointer is, whether it moved, and what is pressed -- and from
-    /// that, which row it is over.
+    /// Where the pointer is, whether it moved, and what is pressed.
     ///
     /// The position comes from ImGui's own IO rather than from a new host API:
     /// it is in the same screen space as <c>OutputView</c>, it is a plain field
     /// read so it costs nothing per call, and patches/MapPanel.cs already reads
     /// it. It carries the last presented frame's value, which is the right one --
-    /// the menu presents through `func_800226A8`, and the panels draw inside that
-    /// `VSync`.
+    /// every menu loop presents through `func_800226A8`, and the panels draw
+    /// inside that `VSync`.
     /// </summary>
     static void Sample()
     {
         _samples++;
         _hover = -1;
         _inPicture = false;
-        _gameY = float.NaN;
+        _gameX = _gameY = float.NaN;
 
         // Before the first frame there is no context to read an IO out of.
         if (ImGui.GetCurrentContext() == IntPtr.Zero) return;
@@ -606,24 +993,45 @@ public static class MenuMouse
         _leftWas = left;
         _rightWas = right;
 
-        // OutputView directly, and deliberately *not* MapRender.Picture: that
-        // helper falls back to the whole viewport when the panel drew no picture,
-        // which is right for something that has to be drawn somewhere and wrong
-        // for a coordinate conversion. A hit test would rather answer "nowhere"
-        // than answer confidently against a rectangle the game is not in.
+        Point(pos);
+    }
+
+    /// <summary>
+    /// The pointer in the game's own pixels, or nowhere.
+    ///
+    /// **OutputView directly, and deliberately not MapRender.Picture**: that
+    /// helper falls back to the whole viewport when the panel drew no picture,
+    /// which is right for something that has to be drawn somewhere and wrong for
+    /// a coordinate conversion. A hit test would rather answer "nowhere" than
+    /// answer confidently against a rectangle the game is not in.
+    ///
+    /// **X carries the widescreen margin.** The presented picture is
+    /// `GameW + 2*margin` game pixels wide with the game's own column 0 sitting at
+    /// `margin` -- that is what `GlCore.PresentDisplay` builds and what
+    /// <c>Display.WideMargin</c> computes -- so the margin comes off after the
+    /// scale and a game X is a game X at every aspect. `GameW` is the game's own
+    /// width rather than the presented one (0029 says so explicitly), which is
+    /// why the margin has to be added back here rather than read off the picture.
+    /// </summary>
+    static void Point(Vector2 pos)
+    {
         if (!OutputView.Valid) return;
         var g0 = OutputView.Min;
         var size = OutputView.Size;
-        int gameH = OutputView.GameH;
-        if (size.X < 32f || size.Y < 32f || gameH <= 0) return;
+        int gameW = OutputView.GameW, gameH = OutputView.GameH;
+        if (size.X < 32f || size.Y < 32f || gameW <= 0 || gameH <= 0) return;
 
         if (pos.X < g0.X || pos.X > OutputView.Max.X ||
             pos.Y < g0.Y || pos.Y > OutputView.Max.Y) return;
+
+        int margin = Display.WideMargin(gameW);
+        float picW = gameW + 2 * margin;
 
         // Set before the geometry is consulted: whether the pointer is over the
         // picture is a fact about the pointer, and a right click means "back" on
         // a screen with no list on it just as much as on one with.
         _inPicture = true;
+        _gameX = (pos.X - g0.X) / size.X * picW - margin;
         _gameY = (pos.Y - g0.Y) / size.Y * gameH;
 
         // The rectangle and the scale come from two different places, so this is
@@ -632,18 +1040,17 @@ public static class MenuMouse
         // GL backend's *render target*, which the render-scale setting makes
         // three times the picture, and the probe read a pointer "in the picture
         // at game y 582" on a 240-line screen.
-        if (_gameY < 0f || _gameY > gameH) { _inPicture = false; _gameY = float.NaN; return; }
-
-        if (_rowCount == 0 || Environment.TickCount64 - _drawnAt > GeomStaleMs) return;
-
-        for (int i = 0; i < _rowCount; i++)
-        {
-            if (_gameY < _rowY[i] || _gameY >= _rowY[i] + _rowPitch) continue;
-            _hover = i;
-            _hovers++;
-            break;
-        }
+        if (_gameY < 0f || _gameY > gameH) { _inPicture = false; _gameX = _gameY = float.NaN; }
     }
+
+    /// <summary>Is the pointer inside a rectangle in the game's own pixels? The
+    /// rect is half-open, so two rows that touch share no pixel.</summary>
+    static bool In(int x, int y, int w, int h) =>
+        _inPicture && _gameX >= x && _gameX < x + w && _gameY >= y && _gameY < y + h;
+
+    /// <summary>Whether hover is allowed to move anything: the pointer has moved
+    /// recently and the pad has not moved the cursor since.</summary>
+    static bool HoverLive() => !_padOwns && Environment.TickCount64 - _movedAt < IdleMs;
 
     static bool Down(HostMouseButton b) => HostWindow.MouseAvailable && HostWindow.IsMouseButtonDown(b);
 
@@ -659,14 +1066,14 @@ public static class MenuMouse
 
         Console.WriteLine($"[KF2] menu pointer: {_samples * 1000.0 / elapsed:0.#} samples/s, " +
                           $"pointer ({_lastPos.X:0.},{_lastPos.Y:0.}) " +
-                          $"{(_inPicture ? $"in the picture at game y {_gameY:0.#}" : "outside the picture")} " +
-                          $"of {OutputView.GameW}x{OutputView.GameH} " +
-                          $"-> row {_hover} of {_rowCount} (group {_group}), " +
+                          $"{(_inPicture ? $"in the picture at game ({_gameX:0.#},{_gameY:0.#})" : "outside the picture")} " +
+                          $"of {OutputView.GameW}x{OutputView.GameH} +{Display.WideMargin(OutputView.GameW)} " +
+                          $"-> {_live} row {_hover}, " +
                           $"{(_padOwns ? "pad owns" : "pointer owns")}, " +
                           $"hovered {_hovers}, moved {_moves}, " +
-                          $"confirmed {_confirms}, cancelled {_cancels}");
+                          $"confirmed {_confirms}, cancelled {_cancels}, injected {_injects}");
 
         _windowMs = now;
-        _samples = _hovers = _moves = _confirms = _cancels = 0;
+        _samples = _hovers = _moves = _confirms = _cancels = _injects = 0;
     }
 }

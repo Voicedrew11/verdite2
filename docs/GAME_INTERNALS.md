@@ -780,12 +780,20 @@ carries the *size*:
 | `0x80064BF0` | `func_80021E10` | the label pass |
 
 `func_800218B4(template, record)` builds its quad out of both — the position from
-the record and the size from the template, with a six-pixel inset on each:
+the record and the size from the template. **The six-pixel inset is on the
+origin, not on the size**, and the first version of this note had it the other way
+round:
 
-    x0 = X,             y0 = Y
-    x1 = X + w - 6,     y1 = Y
-    x2 = X,             y2 = Y + h - 6
+    x0 = X - 6,         y0 = Y - 6
+    x1 = X + w - 6,     y1 = Y - 6
+    x2 = X - 6,         y2 = Y + h - 6
     x3 = X + w - 6,     y3 = Y + h - 6      /* w = u16[t+0x8], h = u16[t+0xA] */
+
+so the drawn rect is `(X - 6, Y - 6)` by `w` × `h` — 124 × 24 for an item. Getting
+that backwards spends the same six pixels twice in the wrong places: a box six
+low, six right, and six short in each axis. It cost `patches/MenuMouse.cs` a hit
+test that was offset by six *and* left an 8-pixel dead gutter between rows where
+the real one is 2 (26 apart, 24 tall).
 
 `func_80021A84(template, record)` reads the *same* record and puts the cursor
 sprite to the left of it, at `X - 8 - w`, which is why one hook on it gives the
@@ -799,9 +807,65 @@ two rows, x 98, y 94/120, the same 26 and 18. That the second one lands where
 `base + 6 * 0x134` says it does is the check on the stride.
 
 What this does **not** cover is the scrolling lists — inventory, magic,
-equipment. Those are `func_8001EB70` with the descriptor above, and their rows
-are drawn by per-page loops (`func_80019444` is the inventory's, over a base of
-its own in the same `0x8006xxxx` data), so each is its own read.
+equipment — and the note that stood here said each of those would be its own
+read. It is one read, and the next section is it.
+
+### The scrolling list is one descriptor, and it carries its own geometry
+
+The sixteen scrolling pages — inventory, magic, equipment, the shops, the save
+slots — are all `func_8001EB70` stepping a cursor and `func_800209E0` drawing it,
+and both are handed the **same caller-allocated descriptor**. Everything either
+of them needs is in it, so unlike the fixed list there is no table to look up and
+no drawer call to pair with:
+
+| field | what |
+|---|---|
+| `+0x00` | `s16` X, `+0x02` `s16` Y — the header box, drawn through `func_800218B4` when X is non-zero |
+| `+0x1C` | `u8` the list's left edge |
+| `+0x1D` | `u8` the top of row 0, before a `+5` inset |
+| `+0x1E` | `u8` entries in the whole list |
+| `+0x1F` | `u8` rows drawn on one page |
+| `+0x20` | `u8` the entry drawn on row 0 (the scroll offset) |
+| `+0x21` | `u8` the selected entry, absolute |
+| `+0x22` | `u8` its row on the page — always `+0x21` minus `+0x20` |
+| `+0x23` | `u8` characters per row |
+| `+0x24`, `+0x28`, `+0x2C`, `+0x30` | the four buffers the rows are drawn out of |
+
+`func_800209E0` lays the page out itself rather than reading a table: row `r`'s
+highlight quad is `(u8[+0x1C], u8[+0x1D] + 5 + 14*r)` at the size of the sprite at
+`0x80064C44 + 0x8`, which is **236 × 14**. The pitch and the height are the same
+number, so the rows are packed with no gutter at all. The `14` is the `0xE` its
+highlight loop adds per row, and the `5` is on every one of that quad's corners;
+the same two numbers appear again in the scrollbar arithmetic at the tail of the
+function, as `u8[+0x1D] + ((visible << 3) - visible) * 2 + 5`.
+
+**The cursor is in memory, and that is the whole difference from the fixed
+list.** `func_8001EA14` keeps its cursor in the caller's register and returns it
+in `V0`; `func_8001EB70` returns the **pad word** and steps `+0x21`/`+0x22`/`+0x20`
+in the descriptor instead. So a patch that wants to move a scrolling cursor writes
+two bytes, where the fixed one has to be met at its return.
+
+Its move arm does one more thing worth copying: after stepping the cursor it calls
+`func_80022CAC(items[cursor])` — `items` being its second argument — which is what
+loads the entry's preview. `func_80022CAC` **always returns 0**, so the
+`if (V0 != 0)` guards around its four call sites are dead code.
+
+**Measured**, off `KF2_MENUMOUSE_PROBE=1` in area 1: the inventory is 10 entries,
+10 visible from 0, rows at x 42 y 44, 236 × 14; a sub-list on the same page is 3
+entries, 4 visible, rows at x 42 y 164, the same size.
+
+### The two-line prompt keeps its cursor nowhere
+
+`func_800206E0(desc, ?, listFlag, page)` is the yes/no prompt every scrolling page
+opens, and it is a third shape again: a modal loop with the pad read, the cursor
+step and the draw all in its own body. Its cursor is `S1` — a register, live only
+for the length of the loop — so there is neither a return value to meet nor a byte
+to write. The only way to read it is that the loop hands it to its drawer:
+`func_80021478(rec0, rec1, flag, confirmed)`, whose third argument *is* `S1`.
+
+The two records are built on the loop's own stack from static X/Y pairs at
+`0x80064E24` (31, 45) and `0x80064E40` (31, 71), and both boxes are drawn through
+`func_800218B4` with the 54 × 24 template at `0x80064C08`.
 
 ### Every control axis has the same three branches
 
