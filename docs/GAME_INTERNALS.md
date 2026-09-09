@@ -748,6 +748,161 @@ menu's inner loop makes two passes and each presents — so the frame-head rate 
 the rendered frame rate, which is what put the blink on the render rate until
 `patches/MenuPacing.cs` capped it.
 
+### The menu's item positions are a table, and it is what makes hover possible
+
+Found while building `patches/MenuMouse.cs`, which needs to know where an item is
+before it can say the pointer is over it. The fixed option lists do not compute
+their layout: they read it.
+
+`func_800208D8(group, count, cursor, confirmed)` is the drawer, called ten times
+across the menu's pages and always beside a `func_8001EA14` call in the same
+function. It indexes a **static table in `GAME.EXE`'s data**:
+
+| what | where |
+|---|---|
+| the group's record block | `0x80064CD4 + 0x134 * group` |
+| the header record | that base — drawn only when its X is non-zero |
+| item *i* | `base + 0x1C * (i + 1)` |
+| the record's position | `+0x00` = `u16` X, `+0x02` = `u16` Y |
+
+`0x134` is 308, which the emitted shift chain computes as `308 * a0`
+(`((((a<<2)+a)<<2)-a)<<2)+a)<<2`), and 308 is exactly **eleven `0x1C` records** —
+a header and ten items, which is the most any of these lists holds.
+
+The four sprite templates it draws each row with are next door, and they are what
+carries the *size*:
+
+| template | drawn by | when |
+|---|---|---|
+| `0x80064C20` | `func_800218B4` | every item |
+| `0x80064C2C` | `func_800218B4` | the item under the cursor while confirmed |
+| `0x80064BFC` | `func_80021A84` | the blinking cursor, on the selected item only |
+| `0x80064BF0` | `func_80021E10` | the label pass |
+
+`func_800218B4(template, record)` builds its quad out of both — the position from
+the record and the size from the template. **The six-pixel inset is on the
+origin, not on the size**, and the first version of this note had it the other way
+round:
+
+    x0 = X - 6,         y0 = Y - 6
+    x1 = X + w - 6,     y1 = Y - 6
+    x2 = X - 6,         y2 = Y + h - 6
+    x3 = X + w - 6,     y3 = Y + h - 6      /* w = u16[t+0x8], h = u16[t+0xA] */
+
+so the drawn rect is `(X - 6, Y - 6)` by `w` × `h` — 124 × 24 for an item. Getting
+that backwards spends the same six pixels twice in the wrong places: a box six
+low, six right, and six short in each axis. It cost `patches/MenuMouse.cs` a hit
+test that was offset by six *and* left an 8-pixel dead gutter between rows where
+the real one is 2 (26 apart, 24 tall).
+
+`func_80021A84(template, record)` reads the *same* record and puts the cursor
+sprite to the left of it, at `X - 8 - w`, which is why one hook on it gives the
+selected row's position on any screen — including the scrolling lists, whose rows
+are not in this table.
+
+**Measured**, off `KF2_MENUMOUSE_PROBE=1`: the in-game menu is group 0 at
+`0x80064CD4`, eight rows, x 31, y 19/45/71/97/123/149/175/201 — a pitch of
+exactly 26 against an 18-pixel box. The start menu is group 6 at `0x8006540C`,
+two rows, x 98, y 94/120, the same 26 and 18. That the second one lands where
+`base + 6 * 0x134` says it does is the check on the stride.
+
+What this does **not** cover is the scrolling lists — inventory, magic,
+equipment — and the note that stood here said each of those would be its own
+read. It is one read, and the next section is it.
+
+### The scrolling list is one descriptor, and it carries its own geometry
+
+The sixteen scrolling pages — inventory, magic, equipment, the shops, the save
+slots — are all `func_8001EB70` stepping a cursor and `func_800209E0` drawing it,
+and both are handed the **same caller-allocated descriptor**. Everything either
+of them needs is in it, so unlike the fixed list there is no table to look up and
+no drawer call to pair with:
+
+| field | what |
+|---|---|
+| `+0x00` | `s16` X, `+0x02` `s16` Y — the header box, drawn through `func_800218B4` when X is non-zero |
+| `+0x1C` | `u8` the list's left edge |
+| `+0x1D` | `u8` the top of row 0, before a `+5` inset |
+| `+0x1E` | `u8` entries in the whole list |
+| `+0x1F` | `u8` rows drawn on one page |
+| `+0x20` | `u8` the entry drawn on row 0 (the scroll offset) |
+| `+0x21` | `u8` the selected entry, absolute |
+| `+0x22` | `u8` its row on the page — always `+0x21` minus `+0x20` |
+| `+0x23` | `u8` characters per row |
+| `+0x24`, `+0x28`, `+0x2C`, `+0x30` | the four buffers the rows are drawn out of |
+
+`func_800209E0` lays the page out itself rather than reading a table: row `r`'s
+highlight quad is `(u8[+0x1C], u8[+0x1D] + 5 + 14*r)` at the size of the sprite at
+`0x80064C44 + 0x8`, which is **236 × 14**. The pitch and the height are the same
+number, so the rows are packed with no gutter at all. The `14` is the `0xE` its
+highlight loop adds per row, and the `5` is on every one of that quad's corners;
+the same two numbers appear again in the scrollbar arithmetic at the tail of the
+function, as `u8[+0x1D] + ((visible << 3) - visible) * 2 + 5`.
+
+**The cursor is in memory, and that is the whole difference from the fixed
+list.** `func_8001EA14` keeps its cursor in the caller's register and returns it
+in `V0`; `func_8001EB70` returns the **pad word** and steps `+0x21`/`+0x22`/`+0x20`
+in the descriptor instead. So a patch that wants to move a scrolling cursor writes
+two bytes, where the fixed one has to be met at its return.
+
+**The page and the cursor are two axes, and the stepper moves each of them
+alone.** Read out of `func_8001EB70`'s Up and Down arms, which is what makes a
+mouse wheel possible on this widget at all:
+
+```c
+/* Down */
+if (cursor < count - 1) {
+    cursor++;
+    if (row == visible - 1) scroll++;   /* at the bottom of the window: page */
+    else                    row++;      /* inside it: cursor only */
+} else {
+    cursor = scroll = row = 0;          /* wrap to the top */
+}
+
+/* Up */
+if (cursor > 0) {
+    cursor--;
+    if (row == 0) scroll--;             /* at the top of the window: page */
+    else          row--;
+} else if (count >= visible) {          /* wrap to the bottom */
+    cursor = count - 1; scroll = count - visible; row = visible - 1;
+} else {
+    cursor = count - 1; scroll = 0;     /* the whole list fits */; row = count - 1;
+}
+```
+
+Three facts fall out of it. `+0x20` moves by **one at a time** and only when the
+cursor is already at the edge of the window. Its range is `0 .. count - visible`,
+which is exactly where the wrap-to-the-bottom arm puts it. And
+`+0x22 == +0x21 - +0x20` holds after every one of the six branches — so a patch
+that moves the page under a cursor that did not move still has to rewrite `+0x22`,
+or the highlight is drawn on a row the cursor is not on. `patches/MenuMouse.cs`'s
+wheel is that: the page is the one byte hover never writes, so the wheel can own
+it without contesting the cursor. See "The wheel owns the page, not the cursor"
+in [INPUT.md](INPUT.md).
+
+Its move arm does one more thing worth copying: after stepping the cursor it calls
+`func_80022CAC(items[cursor])` — `items` being its second argument — which is what
+loads the entry's preview. `func_80022CAC` **always returns 0**, so the
+`if (V0 != 0)` guards around its four call sites are dead code.
+
+**Measured**, off `KF2_MENUMOUSE_PROBE=1` in area 1: the inventory is 10 entries,
+10 visible from 0, rows at x 42 y 44, 236 × 14; a sub-list on the same page is 3
+entries, 4 visible, rows at x 42 y 164, the same size.
+
+### The two-line prompt keeps its cursor nowhere
+
+`func_800206E0(desc, ?, listFlag, page)` is the yes/no prompt every scrolling page
+opens, and it is a third shape again: a modal loop with the pad read, the cursor
+step and the draw all in its own body. Its cursor is `S1` — a register, live only
+for the length of the loop — so there is neither a return value to meet nor a byte
+to write. The only way to read it is that the loop hands it to its drawer:
+`func_80021478(rec0, rec1, flag, confirmed)`, whose third argument *is* `S1`.
+
+The two records are built on the loop's own stack from static X/Y pairs at
+`0x80064E24` (31, 45) and `0x80064E40` (31, 71), and both boxes are drawn through
+`func_800218B4` with the 54 × 24 template at `0x80064C08`.
+
 ### Every control axis has the same three branches
 
 Turn, pitch, forward and strafe are all velocity based and all written the same

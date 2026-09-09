@@ -269,12 +269,13 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 
 ### [INPUT.md](docs/INPUT.md)
 
-Pad, analog sticks, keyboard layout and mouse look.
+Pad, analog sticks, keyboard layout, mouse look and the menu pointer.
 
 - Analog twin-stick control
 - The Input pane is the port's
 - The keyboard layout, and changing a default RecompOne provides
 - Mouse look
+- The menu pointer
 
 ### [TODO.md](docs/TODO.md)
 

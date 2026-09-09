@@ -774,3 +774,372 @@ It stays **off by default** anyway, and for a reason the measurements do not
 touch: a pointer that disappears into the game unasked is worse than one switch
 to find.
 
+
+## The menu pointer
+
+Mouse look leaves the menus pad-only: Circle opens `func_80018E80`, and from
+there every list is walked with Up/Down and confirmed with Cross. A hand on the
+mouse has to go back to the keyboard to use an inventory.
+`patches/MenuMouse.cs` closes that — point at an item and the game's **own**
+cursor moves to it, left click confirms, right click backs out, and a left click
+off to the side of the menu backs out too — and it is on by default, because
+unlike mouse look it needs no captured pointer: a player who never locks the
+pointer still has one.
+
+### There are three menus, not one
+
+The first version of this patch shipped knowing only the first of them, and was
+reported from play as *working on the main tab menu and doing nothing in any
+submenu*. That is exactly right and it is not a bug in the mechanism: the game
+builds a menu out of three unrelated widgets, and the patch implemented one.
+
+| widget | drawn by | stepped by | the cursor is | pages |
+|---|---|---|---|---|
+| fixed option list | `func_800208D8` | `func_8001EA14` | the caller's register, returned in `V0` | 7 |
+| scrolling list | `func_800209E0` | `func_8001EB70` | `u8[desc+0x21]`, in memory | 16 |
+| two-line prompt | `func_80021478` | inline in `func_800206E0` | that function's `S1`, and nowhere else | 15 call sites |
+
+So there are three mechanisms in the patch rather than one generalisation,
+because the three cursors are not the same kind of thing. What they share is the
+pointer, the hit test, and the "whichever device moved last owns the cursor"
+rule. See "The scrolling list is one descriptor" and "The two-line prompt keeps
+its cursor nowhere" in [GAME_INTERNALS.md](GAME_INTERNALS.md) for the widgets
+themselves.
+
+### The fixed list is met at its return
+
+**Injecting Up/Down does not work, and that was already written down.** See "The
+wall is the title, not the Continue menu" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md): driving `PAD_dr` at the start menu
+moved `func_8001EA14`'s cursor not at all, while Cross registered every time.
+And the second-guess route is worse — the menu does not read stage 3's pad word
+at `0x80199554`; `func_80022E58` calls `PadRead(1)` itself.
+
+So this drives the stepper's **return value**. The stepper is
+`func_8001EA14(cursor, maxIndex, *selected, *confirmed, *cancelled) -> cursor`, a
+post-hook writes `V0`, and the whole of the pad is left alone.
+
+That also answers the question a synthetic Cross would have raised. **Neither
+stepper edge-detects** — that is the finding `patches/MenuPacing.cs` exists for —
+so a held synthetic confirm fires on every iteration of the menu loop and runs
+away through the submenus. A click is edge-detected in the patch and spent once,
+by writing the stepper's own out-parameters exactly as its Cross arm does:
+
+```c
+*confirmed = 1;
+if (cursor < maxIndex) *selected = cursor; else *cancelled = -1;
+```
+
+including the arm's own quirk that **confirming the last entry is a cancel**.
+
+Its geometry is the one thing here that cannot come from the stepper's own
+arguments: it is read at the *drawer*, `func_800208D8`, out of the static layout
+table, and cached with a 500 ms staleness bound so a page change cannot leave a
+list on file that is no longer on screen. The other two need no such pairing.
+
+### The scrolling list has a cursor in memory
+
+`func_8001EB70(desc, items, *confirmed, *cancelled)` returns the **pad word**, not
+the cursor: the cursor is `u8[desc+0x21]` and its row on the page is
+`u8[desc+0x22]`, both stepped in place. So hover writes those two bytes and is
+done. `u8[desc+0x20]`, the page, is what *hover* never writes — a pointer can only
+reach a row that is on screen, so the three stay consistent by construction — and
+that is the byte the wheel took, two sections below.
+
+A move also replays the stepper's own move arm, which is not only the blip:
+`func_80022CAC(items[cursor])` is what loads the entry's preview. Skip it and the
+list moves while the picture beside it does not.
+
+The geometry comes off the same descriptor, live — row `r` is
+`(u8[+0x1C], u8[+0x1D] + 5 + 14*r)` at 236 × 14 — so there is nothing to cache and
+nothing to pair, and a page this patch has never heard of is measured correctly
+the first time it is drawn.
+
+### The prompt is the one place that goes through the pad
+
+`func_800206E0` keeps its yes/no cursor in `S1` for the length of its own modal
+loop. There is no return value to meet and no byte to write, so this is the one
+widget that has to press a button — and it can do that safely only because the
+loop *tells the patch its state every iteration*: `func_80021478` is handed the
+flag as its third argument.
+
+A post-hook on `func_80022E58` — the loop's own `PadRead(1)` — ORs one synthetic
+Up into the returned word while the hovered box disagrees with the drawn flag, and
+one Cross once they agree. **The injection is closed over the state it changes**,
+which is what the no-edge-detection finding actually forbids: the next iteration
+reads the flag its own toggle produced and stops asking, so a held pointer cannot
+run away the way a held synthetic Cross would. A left click is left *pending*
+while the flag is still wrong, so pointing at the far box and clicking is one
+gesture that takes two iterations rather than a click that misses.
+
+It is scoped to `func_800206E0` being on the stack, so no other menu — and nothing
+outside a menu — ever sees an injected button. The latch at `0x8006E5C4` is
+`func_80022E58`'s own and is set from the *real* pad word before the post runs, so
+an injected button costs no repeat delay, exactly as a hover elsewhere costs none.
+
+### Backing out is the pad read's, not each widget's
+
+**Reported from play: "the back out behaviour in menus is pretty inconsistent —
+sometimes right click works, other times you need to press Tab to get out."**
+That is exactly what the patch did, and the reason is countable. Backing out was
+implemented three times, once inside each widget's own hook, writing that
+widget's `*cancelled` out-parameter. But **six** routines read the pad inside a
+menu:
+
+| routine | what it is | has a cancel arm |
+|---|---|---|
+| `func_8001EA14` | the fixed list's stepper | yes |
+| `func_8001EB70` | the scrolling list's stepper | yes |
+| `func_800206E0` | the two-line prompt's loop | yes |
+| `func_8001BB7C` | draws a fixed list, reads the pad itself | yes |
+| `func_8001BE60` | draws a fixed list, reads the pad itself | **no** |
+| `func_8001B0D0` | reads the pad itself | no masks of its own |
+
+The patch covered the first three. So right click backed out of the tab menu, the
+inventory and a yes/no prompt, and did nothing at all on the two screens that
+draw a fixed list and then read the pad themselves — the fourth shape this
+document already recorded as uncovered. Two of six was the inconsistency.
+
+**All six call `func_80022E58`**, the menu's `PadRead(1)`. So the gesture no
+longer writes anything: it raises one flag, and a post-hook on that read ORs the
+game's own cancel mask (`0x8006E56C`, the first of the two every arm above tests)
+into the word it returns. Whichever routine is reading gets it, its own cancel arm
+runs, and the blip and the out-parameter are the game's rather than a copy of
+them. A screen with no cancel arm ignores it — which is the honest answer, because
+that is what the pad's cancel button does there too. `func_8001BE60` is the one
+such screen found so far.
+
+**It cannot run away**, which is the thing the no-edge-detection finding forbids.
+The flag is spent on the read that delivers it and one menu-loop iteration is one
+pad read, so a click backs out exactly one level; a held button is not a held
+injection.
+
+**Two gestures raise it.** Right click anywhere over the picture — including the
+widescreen margin, which is part of the presented picture and is about as far
+"off to the side of the menu" as a pointer can get. And left click **clear of the
+widget's own boxes**, by 8 game pixels on every side. Clear of them rather than
+merely off a row: the fixed list's boxes are 26 apart and 24 tall, so testing
+`!hit` would turn the 2px gutter between two of them into a back-out and a sweep
+down the list would close the menu on the way past. The three answers are on a
+box (confirm), near the boxes (nothing), clear of them (back out).
+
+**The bounds are the union of the boxes the widget drew and nothing more.** The
+frame around them, the item picture beside a list and the description under it are
+drawn somewhere this patch does not know, so a click on those reads as a click off
+the menu. Whether that is felt as wrong is a question for the eye, not for a
+counter.
+
+**The button edges are sampled at the pad read too**, not only in the widget
+hooks, and that is a second half of the same defect: a press *and* release that
+both happened while no hooked stepper ran used to be seen by nothing, so a click
+made on an uncovered screen was simply lost. The same hook carries the session
+scope for those edges — a gap of 500 ms in `func_80022E58` calls means the menu
+that was reading the pad is not the one reading it now, so the buttons are re-read
+rather than left to fire an edge, and a back-out asked of a screen that has gone
+is dropped. A menu-loop iteration is 105–166 ms here (`func_80022E90`'s six held
+vblanks are 100 ms of it), so 500 ms is three of the longest of them. That scope
+covers the menus **outside** `func_80018E80` as well, which `BeforeMenu` never
+could: the save-slot list off the object-use handler, a shop off an NPC.
+
+### The hit test is the rectangle the game drew
+
+Not a band, and not one axis. Each of the three widgets draws its rows as quads
+whose corners the patch computes from the numbers the drawing routine itself uses:
+
+- **fixed list** — `func_800218B4(template, record)`, so `(X-6, Y-6)` by `w` × `h`
+  with `w`/`h` from the template at `0x80064C20` (124 × 24).
+- **scrolling list** — `func_800209E0`'s own layout, 236 × 14 packed at 14.
+- **prompt** — `func_800218B4` again, the 54 × 24 template at `0x80064C08`, the
+  two records taken from the drawer's arguments rather than assumed.
+
+The version this replaces synthesised a band per row instead — the smallest gap
+between two rows, floored at the box height, tested against Y alone — and it was
+wrong in three ways at once. It was **six pixels low**, because the record's `Y`
+is the sprite's position and the box is drawn six up and left of it (the note in
+[GAME_INTERNALS.md](GAME_INTERNALS.md) had that inset on the *size* instead of on
+the origin, and has been corrected). It ran each row's band into the gutter, so a
+click between two boxes selected the one above. And testing Y alone made the whole
+width of the screen live, so a click far to the right of a 124-pixel box confirmed
+it.
+
+**X is exact rather than avoided.** The old reasoning was that widescreen moves X
+and Y is safe — true of the *conversion* and not of the test. The presented
+picture is `GameW + 2*margin` game pixels wide with the game's own column 0 at
+`margin`, `GlCore.PresentDisplay` builds it that way, and `Display.WideMargin` is
+that number. Subtract it after the scale and a game X is a game X at every aspect;
+measured at 16:9, `of 320x240 +54`.
+
+The gutters are now dead rather than assigned to a neighbour: 2 pixels in 26 for
+the fixed list and the prompt, and none at all in a scrolling list. A click in one
+is a click on nothing.
+
+### Where the pointer comes from
+
+The pointer's own position comes from **ImGui's IO** rather than from a new host
+API. It is in the same screen space as `OutputView`, it is a plain field read so
+it costs nothing per call, and `patches/MapPanel.cs` already reads it. It carries
+the last presented frame's value, which is the right one: every menu loop presents
+through `func_800226A8`, and the panels draw inside that `VSync`.
+
+Turning a window pixel back into a game pixel needed one thing the runtime did
+not publish — the picture's size in the game's *own* pixels. `OutputView` had
+`Min`/`Max` and no scale, and `Display.LastDisplayW/H` is not re-exported, so
+`patches/recompone/0029` grew `GameW`/`GameH`, set from the `SetTexture` call
+that already receives both. UI only, no recompile. `GameW` is deliberately the
+game's own width and not the presented one, which is why the widescreen margin is
+added back in the patch rather than read off the picture.
+
+**`OutputView` is read directly here and `MapRender.Picture` deliberately is
+not.** That helper falls back to the whole viewport when the panel drew no
+picture, which is right for something that has to be drawn *somewhere* and wrong
+for a coordinate conversion: a hit test would rather answer "nowhere" than answer
+confidently against a rectangle the game is not in.
+
+### Whichever device moved last owns the cursor
+
+Hover takes the cursor only once the pointer has **moved**, and hands it back the
+instant the pad or the keyboard moves it. Without that, a mouse resting anywhere
+over the picture would pin the selection to whatever row it happens to sit on and
+the D-pad would appear broken. A movement stays live for two seconds.
+
+In the prompt that hand-back needs one extra thing, since there is no cursor to
+compare: the drawn flag changing to something the patch did **not** ask for is the
+pad, and takes the cursor back.
+
+Opening the menu also **gives the pointer back** if mouse look had it: under
+`CursorMode.Raw` GLFW reports an unbounded virtual position, so there is no "over
+the picture" while it is locked, and no visible cursor to point with either. It
+is retaken on the way out. Both ends go through `Mouse.SetCaptured`, so the glyph
+in `patches/MouseIndicator.cs` announces them, and the `PadReadEvent` button
+listener detaches with the capture — which is what keeps a menu click from also
+arriving as a Square.
+
+### The wheel owns the page, not the cursor
+
+**A list longer than its window was unreachable with the mouse.** Pointing gets
+you any row that is *drawn*, and the pad's Down is the only thing that turns the
+page — so with an inventory of seven entries in a four-row window, three of them
+could not be selected without going back to the keyboard. Measured, off
+`KF2_MENUMOUSE_PROBE=1` in area 1: `list at 0x801FF8C8, 7 entries, 4 visible from
+0`. That is the whole of the report from play that this section answers.
+
+The first version of this patch had a wheel and took it out, and the reason was
+good: it stepped the **cursor**, relative to where the cursor was, while hover
+puts the cursor where the pointer is. Two rules for one byte, contradicting each
+other on the very next iteration of the menu loop — scroll two rows and hover
+snaps it straight back to whatever the pointer is over.
+
+The way out is that the scrolling list has a **second axis**, and it is the one
+byte hover has never written. `+0x20` is the page and `+0x21` is the selection.
+Give the wheel the page and leave hover the cursor and there is nothing to
+contest: scrolling under a still pointer changes which entries the rows *show*,
+hover then reads off the row the pointer is on, and both orders give the same
+answer. The invariant `+0x22 = +0x21 − +0x20` is what makes it exact — a page
+that moves under a cursor that did not still rewrites both bytes, or the
+highlight is drawn on the wrong row.
+
+**Clamped, not wrapped.** The page may reach `count − visible` and no further,
+which is where `func_8001EB70`'s own wrap-to-the-bottom arm puts it; but the
+wheel deliberately does not wrap, because it is a continuous gesture and a list
+that jumped to the far end when it ran out would be unusable. The pad's Down
+still wraps — the game's stepper is untouched.
+
+**It is the scrolling list's alone**, and that asymmetry is the finding rather
+than a gap. A fixed list and a prompt draw every row they have, so there is no
+page to move; on those two the cursor *is* the only axis and a wheel would be
+straight back to fighting the pointer for it. A notch spent over one of them is
+therefore discarded rather than saved, or it would fire the moment a scrolling
+list opened — a list that pages itself on the frame it appears.
+
+### The notch is taken from the host, not listened for
+
+`patches/recompone/0038` gives `HostWindow` a `TakeMouseWheel()` beside the
+`TakeMouseMotion()` that `0017` added, and it is the same shape for the same
+reason: the host produces scroll as **discrete events**, so an accumulator that
+is drained cannot miss one or spend one twice, where a caller reading a level
+would do both. ImGui's `io.MouseWheel` is that level — it is refilled each
+`NewFrame`, and a menu loop iterates at 30 a second against a 144 fps window, so
+a notch would be lost whenever two frames passed between steps and repeated
+whenever none did.
+
+Two more things follow from taking it off the host rather than off a
+`MouseEvent` listener. **Not every scrolling list is inside `func_80018E80`** —
+the save-slot menu is opened from the object-use handler and a shop from an NPC —
+so a listener scoped to the menu session would have covered the inventory and
+quietly missed both. And nothing in the runtime listens for `MouseEvent` at all,
+so registering one would have started dispatching an allocation for every pointer
+*move*, hundreds a second, all through play.
+
+The wheel is a **float** end to end. `OnScroll` had `Wheel = (int)wheel.Y`, which
+is exact for a discrete wheel — GLFW steps that by ±1 — and rounds a trackpad's
+two-finger scroll, which arrives in fractions of a notch, away to nothing. The
+patch keeps the remainder and spends whole notches, one notch to one row: a notch
+is the gesture's own unit and the pad's Down at the window's edge pages by
+exactly one, so a wheel that moved faster than the D-pad can would be a different
+control rather than the same one on another device.
+
+### What it writes
+
+For the fixed list, `V0`, the stepper's own out-parameters, and `0x8006E5D0` — the
+blink direction, zeroed to restart the wink exactly where the Up/Down arms zero
+it. For the scrolling list, `u8[desc+0x21]` and `u8[desc+0x22]`, `u8[desc+0x20]`
+when the wheel turns, plus that stepper's own `*confirmed`; it does
+*not* write `0x8006E5D0`, because `func_8001EB70` does not either. For the prompt, nothing at all in game memory —
+only one bit ORed into a register on the way out of `PadRead`. **No `*cancelled`
+is written by any of them any more**: backing out is one bit ORed into that same
+register, and the game's own arm writes the out-parameter.
+
+`0x8006E5C4`, the repeat gate's latch, is untouched by all three, so `MenuPacing`
+is unaffected in both directions: a hover costs no repeat delay because it never
+goes through the pad, and the pad's own repeat is exactly what it was.
+
+### What is measured, and what is not
+
+Measured at `KF2_FPS=144` in area 1, off `KF2_MENUMOUSE_PROBE=1`:
+
+- All six hook groups attach and are read back from `HookManager`, not from the
+  `Add*` returns: `session scoped, tab menu driven, lists driven, prompt driven,
+  back out driven`.
+- The fixed table reads correctly on two groups — group 0 at `0x80064CD4`, eight
+  boxes at x 25, y 13/39/65/91/117/143/169/195, 124 × 24; group 6 at `0x8006540C`,
+  two at x 92, y 88/114, the same size. That the second lands where
+  `base + 6 * 0x134` says it does is the check on the stride.
+- The scrolling descriptor reads correctly on two lists on the same page — 10
+  entries, 10 visible from 0, rows at x 42 y 44, 236 × 14; and 3 entries, 4
+  visible, rows at x 42 y 164.
+- A list **longer than its window** exists and is the reported defect: 7 entries
+  in a 4-row window at x 42 y 164, three of them unreachable by pointing. The
+  probe's per-second line names the page for it now — `list, rows 0-3 of 7`.
+- The pointer converts: at 16:9 the probe reads `of 320x240 +54`, and a desktop
+  pointer sweeping the inventory answers rows 0, 1, 2, 4, 5 and 6 in order, with
+  −1 above the first row of the short list.
+- Hover, confirm and cancel all fire from a real hand on a real mouse, and the
+  session ran with no exception. Backing out fires through the pad read from
+  both gestures and from both sides of the picture — `cancelled 1, injected 1`
+  at game x −14.4 and again at x 346.9, the two widescreen margins, with the tab
+  menu's eight boxes drawn between them.
+- It costs nothing: 20.0 ticks/s with the menu open, and the menu's own 60 fps
+  under `LoopPacing` is unchanged.
+
+**The wheel's own gesture is not measured, and cannot be from here.** The shell's
+`press` verb reaches Circle and Cross but not the menu's Up/Down — that is the
+"injecting Up/Down does not work" finding above — and there is no way at all to
+inject a scroll, so the arithmetic below `TakeWheel` has been read rather than
+run. What *is* established from the game's own code is the two arms it copies:
+`func_8001EB70`'s Down steps `+0x22` while the cursor is inside the window and
+`+0x20` only at its last row, and its Up mirrors that at row 0 — so `+0x20` moves
+by one at a time, is bounded by `count − visible`, and `+0x22` is `+0x21 − +0x20`
+at every step of both.
+
+**Not measured, and it needs a person.** Whether one notch a row is the right
+speed. Whether the cursor lands on the item the pointer is *actually* over — the numbers can only say it lands on the row the
+descriptor or the table says is there. Whether a desktop arrow over a 1996 menu
+reads acceptably. Whether a move blip on every row crossed is pleasant or noisy.
+Whether the 2-pixel dead gutters are felt when sweeping down a list. And the
+prompt's injection path has been reasoned about rather than watched: no run so
+far has opened a yes/no prompt with the pointer over it.
+
+**Still not covered.** `func_8001BB7C` and `func_8001BE60` draw a fixed list with
+`func_800208D8` and then read the pad themselves rather than calling
+`func_8001EA14`, so they are a fourth shape, with a fourth place the cursor could
+be living. Neither has been identified by what it is on screen.

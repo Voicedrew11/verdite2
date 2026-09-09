@@ -2,7 +2,7 @@ diff --git a/RecompOne.Runtime/Host/Window/Panels/Debug/OutputPanel.cs b/RecompO
 index 639c740..9cb2a83 100644
 --- a/RecompOne.Runtime/Host/Window/Panels/Debug/OutputPanel.cs
 +++ b/RecompOne.Runtime/Host/Window/Panels/Debug/OutputPanel.cs
-@@ -3,6 +3,30 @@ using ImGuiNET;
+@@ -3,6 +3,41 @@ using ImGuiNET;
  
  namespace RecompOne.Runtime.Host.Window;
  
@@ -28,12 +28,23 @@ index 639c740..9cb2a83 100644
 +    public static Vector2 Min { get; internal set; }
 +    public static Vector2 Max { get; internal set; }
 +    public static Vector2 Size => Max - Min;
++
++    /// <summary>
++    /// The size of that picture in the game's *own* pixels -- 320x240 at 4:3,
++    /// wider when a port has widened the display buffer. Published here because
++    /// <see cref="Min"/> and <see cref="Max"/> alone cannot turn a window pixel
++    /// back into a game pixel, and that inverse is what an overlay needs to ask
++    /// "which thing the game drew is the pointer over": the two together are the
++    /// scale. Zero until the first frame is presented.
++    /// </summary>
++    public static int GameW { get; internal set; }
++    public static int GameH { get; internal set; }
 +}
 +
  internal sealed class OutputPanel : IPanel
  {
      public string Name => "Output";
-@@ -26,6 +50,7 @@ internal sealed class OutputPanel : IPanel
+@@ -26,6 +61,7 @@ internal sealed class OutputPanel : IPanel
  
          bool visible = ImGui.Begin(this.Title());
          IsDocked = ImGui.IsWindowDocked();
@@ -41,7 +52,7 @@ index 639c740..9cb2a83 100644
  
          if (!visible)
          {
-@@ -40,6 +65,15 @@ internal sealed class OutputPanel : IPanel
+@@ -40,6 +76,15 @@ internal sealed class OutputPanel : IPanel
              var imageSize = FitAspect(new Vector2(_aspect, 1f), avail);
              var offset = (avail - imageSize) * 0.5f;
              ImGui.SetCursorPos(ImGui.GetCursorPos() + offset);
@@ -57,3 +68,8 @@ index 639c740..9cb2a83 100644
              ImGui.Image((nint)_texId, imageSize);
          }
  
+@@ -18,4 +94,5 @@ internal sealed class OutputPanel : IPanel
+     {
+         (_texId, _texW, _texH, _aspect) = (id, w, h, aspect > 0f ? aspect : 4f / 3f);
++        (OutputView.GameW, OutputView.GameH) = (w, h);
+     }
