@@ -110,9 +110,20 @@ public static class LibGpu
 
         if (isbg != 0)
         {
-            var w = Math.Clamp((int)clipW, 0, VramShadow.Width - 1);
+            // 0022-0024. The background clear is the only thing that paints the
+            // widescreen margin every frame. GlCore writes back and re-syncs a
+            // target's *middle* columns only, so the margin columns live nowhere
+            // but in the render target and are otherwise touched only by geometry
+            // that happens to spill past the game's own 320-wide clip -- which
+            // means that without this widening they accumulate every primitive
+            // ever drawn out there and never lose one. That reads as ghosting
+            // that persists while standing still, gains new content as you move,
+            // and keeps a damage flash's red for good. Upstream has no margin, so
+            // the merge to 0409bc2 took its narrower clear; this is the port's.
+            var margin = GpuHle.WideMargin(clipW);
+            var w = Math.Clamp(clipW + margin * 2, 0, VramShadow.Width - 1);
             var h = Math.Clamp((int)clipH, 0, VramShadow.Height - 1);
-            int x = clipX - ofsX, y = clipY - ofsY;
+            int x = clipX - margin - ofsX, y = clipY - ofsY;
             gpu.WriteGp0(0x60000000u | ((uint)b0 << 16) | ((uint)g0 << 8) | r0);
             gpu.WriteGp0(((uint)(ushort)y << 16) | (ushort)x);
             gpu.WriteGp0(((uint)(ushort)h << 16) | (ushort)w);

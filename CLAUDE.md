@@ -1411,6 +1411,22 @@ gate. The counter that named it is `KF2_PERSPECTIVE_PROBE=1` reading `0 caught/s
 93.0-93.7% hit, inside the band this was first measured at. See "The RAM fast path
 went round both hooks" in `docs/RENDERING.md`.
 
+**The third is `0022`-`0024`'s background clear, and it is the one that was
+visible.** `LibGpu.PutDrawEnv`'s `isbg` rectangle is the *only* thing that paints
+the widescreen margin every frame — `GlCore` writes back and re-syncs a target's
+middle `W` columns only, so the margin columns live nowhere but in the render
+target and are otherwise reached only by geometry that spills past the game's own
+320-wide clip. Upstream has no margin, so its clear covers `clipW` where the
+port's covered `clipW + 2*margin`, and the merge took upstream's. Without it the
+margins accumulate every primitive that ever crossed the edge and never lose one:
+reported from play as ghosting that **persists while standing still**, **only
+gains content as you move**, and keeps a damage flash's red **permanently** —
+`Widescreen.Stretch` widens that tint across the margin by design, so the flash
+reaches out there and then nothing ever washes it off. No setting touches it
+because it is not a setting; only going back to 4:3 removes the margin that is
+accumulating. See "The margin's only clear is the game's own" in
+`docs/WIDESCREEN.md`.
+
 **`patches/recompone/` is still the record of what the port changed and why**,
 and the numbering below is still how each change is referred to in the source.
 Thirty-five of the thirty-nine are load-bearing; `0002`, `0003` and `0015` are
