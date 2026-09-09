@@ -43,11 +43,12 @@ direct hit. Grep `docs/` for the title, not `NOTES.md`.
 
 ## Build and run
 
-Nothing here builds without the disc (gitignored, `disc/KingsField2.cue`) and
-without `tools/RecompOne` (a gitignored checkout, not a submodule).
+Nothing here builds without the disc (gitignored, `disc/KingsField2.cue`).
+`tools/RecompOne` is **vendored** — its sources are tracked here, so a fresh
+clone already has it and nothing needs cloning.
 
 ```bash
-bash scripts/setup_tools.sh          # clone RecompOne, apply patches/recompone/*, build recompiler
+bash scripts/setup_tools.sh          # build the vendored recompiler
 
 # recompile MIPS -> C# into generated/ (~2099 functions, ~163k lines)
 dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build -- config/kf2.json
@@ -56,9 +57,10 @@ dotnet build KingsField2Recomp.csproj -c Release
 dotnet run --project KingsField2Recomp.csproj -- disc/KingsField2.cue
 ```
 
-`setup_tools.sh` is idempotent and is also how you re-apply the local patches
-after pulling upstream. The cue path is needed at *play* time as well as at
-recompile time.
+`setup_tools.sh` builds; `--sync-upstream` starts the next three-way merge from
+upstream, and `--signatures` fetches the 15.7 MB PSY-Q bank (gitignored, read
+only by the standalone `--autoconfigure`). The cue path is needed at *play* time
+as well as at recompile time.
 
 There are no tests. Verification is empirical: run the game with log channels on
 and check the trace against what the SDK sequence should look like (see the
@@ -124,6 +126,7 @@ KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, c
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_TRUECOLOR=1                        # 24-bit shaded output, no 15-bit banding (off by default; GL backend only)
+KF2_VSYNC=block                        # upstream's blocking vblank timeline instead of the port's grid (caps the picture at 60)
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
 KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
@@ -1326,17 +1329,82 @@ AssemblyInfo files (CS0579).
 
 ## The RecompOne checkout
 
-`tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
-clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirty-five
-of the thirty-nine are load-bearing; `0002`, `0003` and `0015` are diagnostics and
-`0013` is a settings-placement hook. The numbering has doubled up twice
-(`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
-of files, and the glob's sort is the apply order. **One patch has an asset beside
-it**: `patches/recompone/assets/` holds the TTF `0033` embeds, copied into the
-checkout by `setup_tools.sh` between the clean and the apply loop, because a
-569 KB binary hunk inside a patch is one the peel loop would reverse-check on
-every run.
+**`tools/RecompOne/` is vendored: its sources are tracked here, so an edit made
+inside it is a change to this repository like any other.** It used to be a
+gitignored clone of an upstream pin with `patches/recompone/*.patch` replayed
+over it on every run, and the patches are *kept* — they are no longer replayed.
+
+**Why that changed, because the reason generalises.** `git apply` matches text
+context and knows nothing about what upstream changed, so upstream's Rider
+reformat (`410f0d4`) broke 28 of the 39 patches at once — and would have broken
+them again on every future pin move, because a diff is permanently written
+against context that has to still be there. A vendored fork has a **merge base**,
+and a three-way merge reasons about changes rather than appearances: the reformat
+is absorbed once, as a commit. Measured: taking one real upstream commit
+(`67fc37c`, 23 files) costs 23 conflict hunks as a merge, against hand-authoring
+a ~700-line patch carried for the life of the project — which is exactly what
+`0034` (1,315 lines) and `0037` (2,479 lines) already were. **In the patch
+workflow every gift from upstream becomes permanent debt.**
+
+  - `tools/RecompOne/UPSTREAM` — the upstream commit this tree was merged from,
+    and so the merge base for the next harvest. Currently `0409bc2`.
+  - `tools/RecompOne.git/` — the fork's own history: the 39 patches as commits,
+    the merge, and the upstream remote. Gitignored and rebuilt on demand, so a
+    fresh clone needs none of it to build or play. Reach it with
+    `git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne <cmd>`.
+  - `bash scripts/setup_tools.sh --sync-upstream` — fetch upstream, list what is
+    new, and leave a three-way merge in the tree to resolve. A single commit is
+    `cherry-pick -n <sha>` through the same git-dir.
+
+**What the merge to `0409bc2` decided is the model for the next one.** Upstream
+wins on structure and on anything it has since implemented itself; the port wins
+on behaviour, and nothing of the port's is dropped without evidence that upstream
+carries the same code. Four patches collapsed into upstream's own: `0037` (all 14
+CHD files byte-identical to `137a793`), `0034` (our `Runtime/Pgxp/` differed from
+upstream's `Gpu/Pgxp/` only by the reformat — one directory now, with `0036`'s
+`PgxpStats` beside it), `0033` (upstream's `FontSet` verbatim; the 16.5 MB CJK
+face is simply not embedded, so the load is inert and the file will never
+conflict again) and the GTE transform ring, `PushPrecise` and `Nclip`. Four were
+kept because upstream converged differently and worse for this game — `0006`,
+`0026`, `0035`, and the vblank timeline below. **Four were kept whole because
+upstream deleted what the port needs**: it removed the software rasterizer and
+does perspective correction with its own shader attribute, so `GpuRaster`,
+`GlCore`, `GlShaders` and `GpuHleForward` stay one unit. Upstream's VRAM-dirty
+tracking and its PGXP `ResolveAmbiguous` are left unharvested on purpose and are
+the obvious next thing to take.
+
+**The one that had to be put back by measurement is `0005`.** The merge took
+upstream's rewritten `LibCd` whole, on the theory that its new IRQ and callback
+pump subsumed it. It does not: upstream signals a CD interrupt only through the
+sync/ready/data callbacks and has no `DeliverEvent` on `HwCdRom` at all, and
+King's Field's loader is event-driven (`EvMdINTR`). Measured before the graft —
+`GAME.EXE` loads, no `fdat` module ever does, the agent beacon reads `hp 0` at
+`pos 0,0,0` forever, and `LoadPacing` reports a disc wait open for over 30 s.
+After — `open → game → fdat02 → fdat05`, slot 2 restored at hp 46/86 in area 1,
+144.0 fps drawn at 20.0 ticks/s, no exceptions and every hook attached. **That
+run is the acceptance test for any future merge.**
+
+**`patches/recompone/` is still the record of what the port changed and why**,
+and the numbering below is still how each change is referred to in the source.
+Thirty-five of the thirty-nine are load-bearing; `0002`, `0003` and `0015` are
+diagnostics and `0013` is a settings-placement hook. **One patch has an asset
+beside it**: `patches/recompone/assets/` holds the TTF `0033` embeds, which is
+now simply a tracked file in the vendored tree.
+
+**Upstream 0409bc2 emits one class per overlay** (`Recompiled.KingsField2_game`
+rather than `Recompiled.KingsField2`), because CoreCLR caps a class at 65535
+methods. The fourteen direct static call sites in `patches/AreaWarp.cs`,
+`patches/AutoReload.cs`, `patches/CullGrid.cs`, `mods/kf2debug/Noclip.cs` and
+`mods/kf2debug/Attributes.cs` carry a one-line `using KingsField2 =
+Recompiled.KingsField2_game;` alias instead of being rewritten — every function
+named in them is GAME.EXE's, so the alias names the overlay once. `MenuRegistry`
+also lost its numeric ordering for anchor-by-name, which is the one thing that
+broke `mods/kf2debug`.
+
+**Historical, and kept because the finding outlives the mechanism.** What follows
+describes the replay loop `setup_tools.sh` no longer has. It is the clearest
+statement of why a diff stack cannot be maintained against a moving upstream,
+which is the argument the vendoring rests on.
 
 `setup_tools.sh` **does** rebuild the checkout on this branch, and that used to be
 false: `0021-true-color-24bit-output.patch` was authored while
