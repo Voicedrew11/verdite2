@@ -18,6 +18,7 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 | Z-buffer | **measured**, same recovered SZ | **checked and still wrong** — a second cause remains | off |
 | Dithering (removal) | **measured**, all three routes | **checked**, twice-drawn pair | off (no crosshatch) |
 | True color (24-bit) | **measured**, RGBA8 target + shader | the point of the switch | off (authentic 15-bit) |
+| Anisotropic filtering | **measured**, sparkle sd 51.2 -> 11.4 | **not checked** | off |
 
 That "mechanism measured / picture never checked" split is the rule the whole
 port is written to: a feature whose mechanism has counters behind it but whose
@@ -954,6 +955,209 @@ as the three-entry `Shading` combo under Video ▸ Enhancements — `Dither
 (original)` / `None` / `Smooth (24-bit)`. `None` is what both switches' defaults
 already were, so nothing anybody had saved changed meaning. See "Two shading
 checkboxes were one question asked twice" in `docs/PATCHES_AND_MODS.md`.
+
+## Anisotropic filtering: a pixel covers an area, and the console read a point
+
+**Confirmed mechanism; picture never checked by eye.**
+
+This is the *minification* half of the story perspective correction tells about
+interpolation. A screen pixel does not cover a point of a texture, it covers an
+area, and the shape of that area is the parallelogram spanned by the two screen
+derivatives of the texture coordinate. Square-on to a wall it is about a square.
+On a floor running away to the horizon, or along a corridor wall seen edge-on, it
+is a long thin sliver — many texels along one axis and barely one across the
+other. The console read a single texel out of that sliver, and *which* texel it
+read changes completely for a sub-pixel movement of the camera. That is the
+crawling, sparkling floor, and it is the artefact the port's own render scale
+makes more visible rather than less: more output pixels means more independently
+sparkling samples of the same sliver.
+
+`patches/recompone/0041` samples along the sliver instead, in both prim fragment
+shaders, driven by `GteDepth.Anisotropy`, with `patches/Anisotropic.cs` as the
+switch (`KF2_ANISO=<1..16>`, `KF2_ANISO_PROBE=1`, and a combo under
+Video ▸ Enhancements).
+
+### Why it is a shader change and not a sampler setting
+
+The obvious implementation — `GL_TEXTURE_MAX_ANISOTROPY_EXT` on the VRAM sampler
+— does nothing at all here, and both reasons are what make this a shader change.
+They are the same two the port records against any filter placed on this
+geometry:
+
+- **The VRAM texture is not a texture.** It is a 1024×512 (×`GlVram.Scale`) sheet
+  holding every texture page, every CLUT and both display buffers at once. A
+  filter running across it bleeds one texture page into the next, and bleeds a
+  *palette* into the palette beside it.
+- **A paletted texel is an index, not a colour.** In the 4-bit and 8-bit modes the
+  value read from the page is a CLUT index, and the average of index 3 and index 4
+  is index 3.5 — a different colour entirely, with no relation to either. Any
+  filter has to run *after* the palette lookup, which is inside the shader by
+  construction.
+
+So `decode(raw)` does the whole per-texel job — texture window, the 8-bit page
+wrap, the page fetch, the nibble/byte extract, the CLUT lookup — and the kernel
+calls it once per tap. The single-sample path calls the same function, so with
+the filter off the fragment is the one the port drew before, to the bit.
+
+### There is no mip chain, and there cannot be one
+
+A modern GPU does anisotropy as *N bilinear taps at a LOD chosen from the minor
+axis*, and the LOD is what stops the major axis needing a tap per texel. The
+first reason above forbids a mip chain outright: one page's lower level would
+average in the pages beside it and a CLUT's would average in the palette next to
+it. So this is supersampling — the taps are spread across the axis the footprint
+is longest on, one per texel it spans, capped at the setting.
+
+Two consequences are worth recording rather than glossed:
+
+- **A footprint large on *both* axes is still averaged along one of them only.**
+  The short axis keeps the console's single sample. That is the right trade in
+  this game — it magnifies far more often than it minifies, and the artefact being
+  chased is the anisotropic one — but it is a limit, not a completeness.
+- **The cost is paid only where the footprint is actually long.** `taps` is
+  `ceil(length(majorAxis))` clamped to the setting, so a surface facing the camera
+  takes one tap at 16× exactly as it does at Off. That is why the measurement
+  below shows no frame-rate difference rather than a small one.
+
+### Two things the hardware's encoding forces
+
+These are shared with any filter placed after the CLUT and neither is optional.
+
+**A transparent texel is black.** The PlayStation marks a texel transparent by
+storing it as all zero — RGB 0 with the STP bit clear — so a plain average next to
+a punch-through edge averages *black* in and draws a dark fringe round every
+grate, torch and bush in the game. Each tap is therefore weighed by whether it is
+solid, the colour renormalised by the surviving weight, and the fragment discarded
+below half coverage. Half is where truncation put the silhouette, so the edge
+neither grows nor shrinks.
+
+**The semi-transparency bit is a mode, not a colour.** `texel.a` selects whether
+the fragment goes through the blend equation at all — it is what picks between
+`uBlend` and `uBlendOpaque` on the dual-source output. Interpolating it would ask
+the GPU for a state halfway between two blend equations. It is taken whole from
+the centre tap, which is the texel the unfiltered path would have read.
+
+### It needs no "is this 3D" test, and that is the part worth keeping
+
+Any filter that softens texels has to be kept off the HUD, the menus, the 2D
+screens and the billboard sprites, which are drawn at or near 1:1 where there is
+no detail to recover and only text and icons to blur. That normally costs a test,
+and the only test available here is whether the exact GTE vertex map answered for
+the primitive's vertices — which **exists only while perspective correction is
+on**, so it has to fold in `!Enabled` or the whole picture silently reverts with
+the combo still claiming otherwise.
+
+Anisotropy needs none of it. A 2D primitive is axis-aligned and unminified, so
+both derivatives are about one texel, the major axis spans one texel, `taps` comes
+out 1, and the fragment takes the single-sample path — the same `decode()` call,
+bit for bit. **The kernel is self-gating on exactly the geometry it should be**,
+with no varying to carry, no dependence on the vertex map, and nothing to go wrong
+when perspective correction is switched off. It is the one place in this file
+where the cheap answer is also the complete one.
+
+### Scope
+
+**GL backend only**, on both the core-profile and the GLSL 120 paths; the software
+rasterizer is always a single sample. **The native VRAM paths only** (`texMode` 0,
+1, 2/3, and only while `vRepClut` is clear): an asset pack's replacement textures
+and replacement CLUTs already sample real GL textures through their own sampler
+state, which is where their filtering belongs. Nothing is rebuilt when the setting
+changes — it is a plain uniform the next batch reads, unlike true color, which has
+to rebuild its render targets.
+
+### What it measures
+
+The shader loop is bounded at 16 and `Anisotropic.Level` is clamped to 1..16, so
+raising the ceiling needs both changed together.
+
+`GteDepth.AnisotropyLive` is the counter that matters, and it exists because of
+what this port has already been bitten by twice: the RAM fast path went round the
+vertex map's hooks and left `[KF2] perspective: on` printing at boot over a dead
+mechanism, and a hook summary counted registrations rather than detours. A picture
+switch that cannot reach the shader should say so. It is set from the one place
+that uploads the uniform, and `KF2_ANISO_PROBE=1` reports it on the first frame
+that has actually presented — the prim program is built on the first present, so
+it cannot be asked at `RuntimeReadyEvent`:
+
+```
+[KF2] aniso: on, up to 8 taps
+[KF2] aniso: level 8, uniform bound and uploading
+```
+
+Both shader pairs were compiled and linked through Mesa directly — headless EGL,
+the same driver the runtime uses — because `glslangValidator` cannot parse GLSL
+120 at all and its SPIR-V mode rejects the dual-source outputs the prim shader
+needs. Both link, and `uAniso` survives optimisation in both (locations 16 and
+18), which is what says the kernel is reachable rather than folded away. That was
+the check the GLSL 120 path actually needed: its loop bound is a constant with a
+`break` inside precisely because 1.20 does not promise dynamic loop bounds.
+
+The port's own acceptance run at `KF2_ANISO=8`: `open` → `game` → `fdat02` →
+`fdat05`, slot 2 restored at HP 46/86 in area 1, **144.0 fps drawn at 20.0
+ticks/s**, no exceptions and no `compile failed` or `link failed`. The same at
+`KF2_ANISO=16`, with **no frame-boundary warning** — worth stating because a
+short run killed during the area load does print one, and that reads as a
+regression when it is only a load that never reached steady state.
+
+### The frame rate cannot answer this one, and what can
+
+Uncapped in area 1, the port draws **861.6 fps at `KF2_ANISO=1` and 860.7 at
+`KF2_ANISO=16`** — no difference at all. That number is worth nothing on its own,
+and it is the exact shape of mistake this file keeps recording: the port is
+CPU-bound at ~860 fps, so the whole GPU cost of the kernel hides under the
+recompiled MIPS, and "costs nothing" and "never runs" produce the same reading.
+`AnisotropyLive` says the uniform arrives; it does not say a pixel changed.
+
+`scripts/shader_probe.c` answers that directly — it drives the **real** fragment
+shader headless, with a substitute vertex shader supplying its varyings, over a
+noise texture at a chosen footprint, and reads the pixels back. Extract `PrimFs`
+from `GlShaders.cs` into `PrimFs.frag` (strip the eight leading spaces of the raw
+string literal), then:
+
+```bash
+gcc -O0 -o /tmp/shader_probe scripts/shader_probe.c -lEGL -lGL -lm
+FOOT=16 /tmp/shader_probe PrimFs.frag 1 2 4 8 16
+```
+
+**The statistic is the spread across neighbouring pixels, not the mean.** Pixels
+covering nearly the same texels returning wildly different colours *is* the
+sparkle; a filter that works collapses that spread. Over a 16-texel footprint:
+
+| `uAniso` | min | max | mean | spread (sd) | range |
+|---|---|---|---|---|---|
+| 1 | 99 | 247 | 173.75 | **51.23** | 148 |
+| 2 | 82 | 230 | 174.75 | 41.56 | 148 |
+| 4 | 90 | 206 | 157.19 | 28.68 | 116 |
+| 8 | 115 | 197 | 163.38 | 23.61 | 82 |
+| 16 | 140 | 181 | 162.88 | **11.41** | 41 |
+
+A monotonic 4.5x collapse, which is the mechanism working and is the number to
+re-take after any change to either shader.
+
+**The self-gating claim is measured rather than argued.** At a footprint of 1.0
+texel per pixel — a HUD sprite, a menu box, a font glyph — `uAniso=1` and
+`uAniso=16` return *identical* pixels (min 66, max 247, mean 170.98, sd 53.86,
+both), and the same at 0.5 texels. Filtering begins at 2 texels (sd 61.24 ->
+41.33) and reaches the table above at 16. So "a 2D primitive takes the unfiltered
+path by construction" is a reading rather than a hope.
+
+**One honest limitation the probe found.** Tap spacing is uniform, so it can alias
+against periodic texture content when the taps are fewer than the texels spanned.
+The first version of this test used one-texel stripes, and a period-2 pattern
+against an even tap spacing puts *every* tap on one parity — which read as the
+filter doing nothing at 2 and 4 taps and as a wildly dark result at 8. That is a
+property of mip-free supersampling rather than of this kernel (a mipmapped
+anisotropy prefilters along the minor axis and cannot hit it), it needs texture
+content periodic at almost exactly the tap spacing to show, and the noise figures
+above are the fair case. It is recorded because that stripe run looks like a bug
+report and is not one.
+
+**Off by default**, for the sub-pixel reason rather than any risk — the mechanism
+is measured and **the picture has not been looked at**. What wants judging by eye
+is whether a receding floor stops crawling, whether the half-coverage threshold
+puts punch-through edges where nearest put them, and how the average reads against
+the 15-bit quantisation: `quant5` still crushes the filtered result to five bits
+unless true color is also on, and the two have never been seen together.
 
 ## The render scale did not survive a menu
 

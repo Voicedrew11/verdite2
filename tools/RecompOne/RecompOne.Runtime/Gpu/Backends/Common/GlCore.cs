@@ -68,6 +68,7 @@ public sealed class GlCore : IGpuBackend
     int _kRepClutCount;
     int _uTexWindow, _uBlend, _uBlendOpaque, _uSetMask, _uCheckMask, _uPosBias, _uFbInv;
     int _uTrueColor;
+    int _uAniso;
     // The true-color flag the live display targets were built with. When it drifts
     // from GteDepth.TrueColor the targets carry the wrong pixel format, so they are
     // torn down at the next present and rebuilt (their content survives in VRAM).
@@ -115,6 +116,7 @@ public sealed class GlCore : IGpuBackend
         _uPosBias = _gl.GetUniformLocation(_progPrim, "uPosBias");
         _uFbInv = _gl.GetUniformLocation(_progPrim, "uFbInv");
         _uTrueColor = _gl.GetUniformLocation(_progPrim, "uTrueColor");
+        _uAniso = _gl.GetUniformLocation(_progPrim, "uAniso");
         _rtsTrueColor = GteDepth.TrueColor;
         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
@@ -892,6 +894,10 @@ public sealed class GlCore : IGpuBackend
             _gl.Uniform2(_uFbInv, 2f / VramShadow.Width, 2f / VramShadow.Height);
         }
         if (_uTrueColor >= 0) _gl.Uniform1(_uTrueColor, GteDepth.TrueColor ? 1f : 0f);
+        // A plain uniform the next batch reads: unlike true color, changing the
+        // anisotropy rebuilds nothing.
+        GteDepth.AnisotropyLive = _uAniso >= 0;
+        if (_uAniso >= 0) _gl.Uniform1(_uAniso, (float)GteDepth.Anisotropy);
         if (_legacy)
         {
             _gl.Uniform4(_uTexWindow, (float)_kTwAndX, _kTwAndY, _kTwOrX, _kTwOrY);

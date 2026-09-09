@@ -132,6 +132,8 @@ KF2_VSYNC=block                        # upstream's blocking vblank timeline ins
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
 KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
+KF2_ANISO=8                            # anisotropic filtering: taps along the footprint's long axis (1, off)
+KF2_ANISO_PROBE=1                      # the level, and whether the uniform reaches the shader
 KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
 KF2_PGXP=1                             # upstream's PGXP as the vertex source (off; the address map answers)
@@ -653,6 +655,53 @@ meanings and the fourth is a crosshatch laid over a smooth gradient. `None` is
 what both defaults already were, so no saved config changed meaning, and both
 patches keep their key and their env var. See "Two shading checkboxes were one
 question asked twice" in `docs/PATCHES_AND_MODS.md`.
+**Anisotropic filtering is a patch for that same reason** and is the *minification*
+half of the story perspective correction tells about interpolation: a screen pixel
+covers an area of the texture, not a point, and on a floor running away to the
+horizon that area is a long thin sliver of texels. The console read one texel out
+of it, and which texel it read changes completely for a sub-pixel camera movement
+— the crawling, sparkling floor, which the port's own render scale makes *more*
+visible rather than less. Mechanism in `patches/recompone/0041`, switch and probe
+in `patches/Anisotropic.cs`, a five-entry combo under Video ▸ Enhancements;
+`KF2_ANISO=<1..16>`. **It cannot be sampler state**, for the two reasons any filter
+on this geometry runs into: the VRAM texture is one 1024x512 sheet holding every
+page, every CLUT and both display buffers, so a filter across it bleeds a page into
+its neighbour and a palette into the palette beside it — and a paletted texel is an
+*index*, so the average of index 3 and index 4 is index 3.5, an unrelated colour.
+The filter has to run after the CLUT lookup, which is inside the shader. So
+`decode()` holds the whole per-texel job and the kernel calls it per tap; the
+single-sample path calls the same function, so with the filter off the fragment is
+bit-identical to what the port drew before. **There is no mip chain and there
+cannot be one** (that first reason again), so this is supersampling — one tap per
+texel along the long axis, capped at the setting — and the recorded limit is that a
+footprint large on *both* axes is still averaged along one of them only.
+Transparency forces two things it shares with any post-CLUT filter: a transparent
+texel is stored as **black**, so taps are weighed by solidity and the result
+renormalised, discarding below half coverage (half is where truncation put the
+silhouette), and the semi-transparency bit is a **mode rather than a colour** —
+it picks the blend equation — so it is taken whole from the centre tap.
+**It needs no "is this 3D" test, which is the part worth keeping**: a HUD sprite,
+a menu box or a font glyph is axis-aligned and unminified, so both derivatives are
+about one texel, the tap count comes out 1, and the fragment takes the unfiltered
+path by construction — no varying to carry, no dependence on whether the GTE vertex
+map answered, and nothing to go wrong when perspective correction is off. Off by
+default for the sub-pixel reason: both shader pairs were compiled and linked
+through Mesa directly (headless EGL — `glslangValidator` cannot parse GLSL 120 at
+all and its SPIR-V mode rejects the prim shader's dual-source outputs) with
+`uAniso` surviving optimisation in both, and `GteDepth.AnisotropyLive` reports from
+the one place that uploads it, because this port has twice shipped a picture switch
+printing "on" over a dead mechanism. **The frame rate cannot check this one** —
+uncapped it reads 861.6 fps at `KF2_ANISO=1` against 860.7 at 16, because the port
+is CPU-bound at ~860 and "costs nothing" and "never runs" are the same reading. So
+`scripts/shader_probe.c` drives the real fragment shader headless over a noise
+texture and reads the pixels back, and **the statistic is the spread between
+neighbouring pixels**, that spread *being* the sparkle: over a 16-texel footprint
+it collapses monotonically from sd 51.23 at 1 tap to 11.41 at 16, and at a 1.0
+texel footprint — a HUD sprite — 1 and 16 return *identical* pixels, which is the
+self-gating claim measured rather than argued. Acceptance run at `KF2_ANISO=8`:
+`open` -> `game` -> `fdat02` -> `fdat05`, slot 2 at HP 46/86 in area 1, 144.0 fps
+drawn at 20.0 ticks/s. **The picture has never been looked at.** See "Anisotropic
+filtering" in `docs/RENDERING.md`.
 **Perspective
 correction is a patch for that same reason and is on by default**, beside it under
 Video. Unlike the others its work is not in `patches/` at all: a texture
@@ -1361,6 +1410,10 @@ scripts/*.py             disc inspection, address-hunting, and the rate tooling:
                          match found into config/funcmaps/, refusing the ones
                          SdkPatches would bind -- see "Merging the SDK names" in
                          docs/RECOMPILATION.md),
+                         shader_probe.c (run a real prim fragment shader
+                         headless over a known texture and read the pixels back:
+                         the only thing here that can say a shader change moved a
+                         pixel, since the port is CPU-bound and frame rate cannot),
                          rate_census (which words move at the render rate),
                          find_writers (which code moves them), rate_matrix (did
                          the fix work), check_gate (does the gate obey its rule).
@@ -1977,6 +2030,35 @@ uncaptured edit inside the checkout is left where it is.
   is the comparison; no control in the window, a render scale surviving a menu
   not being a choice. GL backend only. **No recompile.** See "The render scale
   did not survive a menu" in `docs/RENDERING.md`.
+
+- `0041-anisotropic-filtering.patch` — a screen pixel covers an *area* of the
+  texture, and the shape of it is the parallelogram spanned by the two screen
+  derivatives of the texture coordinate: about a square square-on to a wall, and a
+  long thin sliver on a floor running away to the horizon. The console read one
+  texel out of that sliver, and which texel changes completely for a sub-pixel
+  movement of the camera — the crawling, sparkling floor. **The interesting part is
+  where the filter had to go.** `GL_TEXTURE_MAX_ANISOTROPY` on the VRAM sampler does
+  nothing at all: the game's textures are never sampled by a GL sampler, the shader
+  `texelFetch`es a sheet holding every page and every CLUT at once (so no filter may
+  run across it), and in the 4- and 8-bit modes the value read is a CLUT *index*
+  whose average with its neighbour is an unrelated colour. So `decode(raw)` holds
+  the whole per-texel job — texture window, page wrap, nibble extract, CLUT lookup —
+  and the kernel calls it once per texel along the long axis, up to `uAniso`, and
+  averages. The single-sample path calls the same function, so off is bit-identical
+  to before. There is **no mip chain and there cannot be one** for that same first
+  reason, so this is supersampling rather than mipmapped anisotropy, and a footprint
+  large on both axes is still averaged along one only. Two things the encoding
+  forces: a transparent texel is stored as black, so taps are weighed by solidity
+  and renormalised, discarding below half coverage; and the semi-transparency bit
+  picks a blend equation rather than being a colour, so it comes whole from the
+  centre tap. **No "is this 3D" test is needed** — a 2D primitive is axis-aligned
+  and unminified, so the tap count is 1 and it takes the unfiltered path by
+  construction, which is why this needs no varying and does not care whether
+  perspective correction is on. Both prim shaders, core profile and GLSL 120 (whose
+  loop is a constant bound with a `break`, 1.20 not promising dynamic bounds); GL
+  backend only, native VRAM paths only. `GteDepth.AnisotropyLive` is read back from
+  the one place that uploads the uniform. Off by default. **No recompile** — a plain
+  uniform the next batch reads. See "Anisotropic filtering" in `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

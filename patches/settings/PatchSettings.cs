@@ -195,6 +195,10 @@ public static class PatchSettings
         // depth buffer's picture has never been judged -- both are comparisons, so
         // they are KF2_PGXP* and KF2_ZBUFFER* on the console and nothing in Video.
         RegisterSlot("display.render_scale", new WidescreenPage());
+        // Registered here rather than up with the other Enhancements pages purely
+        // to keep this list's edits apart from the ambient-occlusion branch's; the
+        // pane's order is IPatchPage.Order (24), not this call's position.
+        Register("display", new AnisotropicPage());
         // Nothing registers against "input": the port draws that whole pane
         // itself (InputSection), and SettingsRegistry.Extend has no un-extend --
         // a page left here would draw a second time under the tab bar, outside
