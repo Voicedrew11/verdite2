@@ -575,6 +575,25 @@ Kf2.Pgxp.Install();
 Kf2.TrueColor.Configure(Environment.GetEnvironmentVariable("KF2_TRUECOLOR"));
 Kf2.TrueColor.Install();
 
+// Which vblank timeline VSync runs on. Upstream grew its own after the pin this
+// port was vendored from: Interrupts owns a wall-clock grid and VSync *blocks*
+// in WaitVBlanks until the count reaches its target, which is what the hardware
+// does -- and is also a hard 60 Hz ceiling on every VSync call. This port cannot
+// have that ceiling: FramePacing hands FrameClock a deliberately permissive rate
+// and keeps its own deadline at DrawOTag, and MenuPacing, LoadPacing and
+// SpriteAnim are each measured against a VSync that returns immediately. So the
+// port's own non-blocking grid (patches/recompone/0021-vblank-wall-clock) is the
+// default and upstream's is the comparison:
+//
+//     KF2_VSYNC=block  upstream's blocking timeline; anything else keeps ours
+//
+// Both ship. Interrupts.PollSlow and Runtime.PresentFrame gate their own IRQ 0
+// on this, so whichever timeline is chosen delivers each vblank exactly once.
+RecompOne.Runtime.Sdk.LibEtc.BlockingVSync =
+    Environment.GetEnvironmentVariable("KF2_VSYNC") == "block";
+if (RecompOne.Runtime.Sdk.LibEtc.BlockingVSync)
+    Console.WriteLine("[KF2] vsync: upstream's blocking timeline (the port's own grid is off)");
+
 // Auto reload. One post-hook on the end of main-loop stage 3 watches for the
 // player's death and reloads the last save through the game's own loader, so a
 // death costs a couple of seconds instead of four screens of menu:

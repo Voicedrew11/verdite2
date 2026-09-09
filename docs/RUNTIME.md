@@ -275,6 +275,38 @@ on the driver's swap blocks to a panel whose rate nobody here knows. A rate abov
 the panel's is capped by it, silently.
 
 
+## Two vblank timelines now ship, and the port's is the default
+
+Upstream grew its own wall-clock vblank grid after the pin this port was vendored
+from (`0409bc2`). `Interrupts` owns the grid — `VBlankCount`, `TickVBlank`,
+`MsToNextVBlank` — and `LibEtc.VSync` *blocks* in `WaitVBlanks` until the count
+reaches its target. That is what the hardware does, and it is also **a hard 60 Hz
+ceiling on every VSync call**, which is the one thing this port cannot have:
+`FramePacing` hands `FrameClock` a deliberately permissive rate and keeps its own
+deadline at `DrawOTag`, and `MenuPacing`, `LoadPacing` and `SpriteAnim` are each
+measured against a VSync that returns immediately.
+
+So both timelines ship and `LibEtc.BlockingVSync` chooses, defaulting to the
+port's own (`patches/recompone/0021-vblank-wall-clock`). `KF2_VSYNC=block` is the
+comparison. Measured at `KF2_FPS=144`, same save, same area:
+
+| | picture | world |
+|---|---|---|
+| the port's grid (default) | **144.0 fps** | 20.0 ticks/s |
+| `KF2_VSYNC=block` | **60.0 fps** | 19.7-20.0 ticks/s |
+
+Both reach the area and restore the save, so this is a rate difference and not a
+correctness one — but 60 is the ceiling the whole frame-rate feature exists to
+get past.
+
+**Whichever is chosen delivers each vblank exactly once**, and that took two
+gates rather than one. `LibEtc.TickVBlank` calls `Runtime.DispatchIrq(0)` on the
+port's timeline; upstream raises IRQ 0 from `Interrupts.PollSlow`'s own
+`TickVBlank` *and* from `Runtime.PresentFrame`. Both of those are now gated on
+`BlockingVSync`, because a present is not a vblank and the pair would otherwise
+deliver every vblank twice — at the render rate, which is the failure the wall
+clock was introduced to fix in the first place.
+
 ## The intro movie ran at the render rate, because its pacer never armed
 
 **Symptom:** boot the port with a high frame rate chosen and the third and
