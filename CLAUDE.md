@@ -1782,8 +1782,11 @@ quit-to-title uses. `patches/BootExe.cs` (`KF2_BOOTEXE`) writes that same index
 before the loop's first pass, **once**, so the ending is reachable in seconds
 rather than by finishing the game. See "The ending screen" in `docs/RUNTIME.md`.
 
-Upstream **rejects AI-authored pull requests outright**. Recompiler fixes go
-upstream as issues, never as PRs, unless the user writes the patch themselves.
+**Nothing goes upstream. Not a pull request, and not an issue either.** Upstream
+rejects AI-authored pull requests outright, and this project does not file
+issues against it: a defect found here is recorded in `docs/` and fixed in the
+vendored tree, which is the whole point of vendoring it. If the user wants
+something reported upstream they will write it themselves.
 
 ## Shipping it
 
