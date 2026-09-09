@@ -740,6 +740,12 @@ public static class HostWindow
         var gpu = _gpu;
         if (gpu != null)
         {
+            //Beside the picture's rectangle, the size of the picture in the
+            //game's own pixels -- the two together are what turns a window pixel
+            //back into a game one. Taken here rather than in SetTexture because
+            //the GL backend passes that a render-scaled target.
+            (OutputView.GameW, OutputView.GameH) = (gpu.DisplayWidth, gpu.DisplayHeight);
+
             if (Hle.GpuHle.Active && _glBackend is { Ready: true } && gpu.DisplayEnabled)
             {
                 var wf = _window!.FramebufferSize;

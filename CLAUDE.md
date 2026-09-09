@@ -153,6 +153,8 @@ KF2_MOUSE=1                              # mouse look (off by default; Escape ca
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
+KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
+KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
 KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
@@ -740,6 +742,55 @@ over four windows of real play — but a pointer that disappears into the game
 unasked is worse than one switch to find. What no counter can answer is the feel
 (0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
 `docs/INPUT.md`.
+
+**The menu pointer is the other thing a mouse can do here, and unlike mouse look
+it is on by default** (`patches/MenuMouse.cs`, `KF2_MENUMOUSE=0` the comparison,
+switch on the Mouse tab of Input): point at an in-game menu item and the game's
+own cursor moves to it, left click confirms, right click backs out. On by
+default because it needs **no captured pointer** — a player who never locks the
+pointer still has one, and pointing it at a menu is the one thing a mouse can do
+in this game without being locked to the window first; opening a menu in fact
+*releases* a captured pointer and retakes it on the way out, since
+`CursorMode.Raw` reports an unbounded virtual position and there is no "over the
+picture" while it is locked. **It drives the cursor stepper's return value, not
+the pad, and that is forced rather than chosen.** The cursor index is a *stack
+local* (`func_80018E80`'s `S2`, the page at `SP+0x18`), so there is nothing to
+write; injected Up/Down is already recorded as not moving `func_8001EA14` at all
+("The wall is the title, not the Continue menu"); and the menu never reads stage
+3's pad word at `0x80199554` — `func_80022E58` calls `PadRead(1)` itself, so
+`Analog`'s route cannot reach it either. A post-hook on `func_8001EA14` writes
+`V0`, and a click writes the stepper's own out-parameters exactly as its Cross
+arm does, **including that confirming the last entry is a cancel**. A synthetic
+Cross was the alternative and is unsafe: neither stepper edge-detects — the whole
+finding `MenuPacing` exists for — so a held one confirms on every iteration of
+the menu loop and runs away through the submenus. **The geometry is the game's
+own table, not a calibration**: `func_800208D8(group, count, cursor, confirmed)`
+reads item *i* at `0x80064CD4 + 0x134*group + 0x1C*(i+1)`, `+0x00`/`+0x02` being
+X and Y, and `func_800218B4` sizes the box off the *template* at `0x80064C20`
+(`+0x8`/`+0xA`, inset six) rather than off the record — so a page this patch has
+never heard of is measured correctly the first time it draws (measured: group 0,
+eight rows at y 19..201, pitch 26, box 18; group 6, two rows at y 94/120, same
+numbers). **The hit test is on Y alone**, because X is the axis widescreen moves:
+a game Y of 120 is the middle of the picture at every aspect and a game X of 160
+is not. A row owns `[y, y + pitch)` with pitch the smallest positive gap between
+two rows, so there are no dead gaps and the band stops one row past the last.
+**Hover only takes the cursor once the pointer has moved and hands it back the
+moment the pad moves it**, or a mouse resting over the picture would pin the
+selection and the D-pad would look broken. It writes `V0`, the out-parameters and
+`0x8006E5D0` (the blink direction, zeroed where the Up/Down arms zero it) and
+nothing else; `0x8006E5C4` is untouched, so `MenuPacing` is unaffected both ways.
+The pointer's position is `ImGui.GetIO().MousePos` — same screen space as
+`OutputView`, a plain field read — and `OutputView` is read **directly** rather
+than through `MapRender.Picture`, whose viewport fallback is right for something
+that must be drawn somewhere and wrong for a coordinate conversion. The one
+runtime change is `0029` growing `GameW`/`GameH`. **A wheel was written and taken
+out**: it steps relative to where the cursor is, hover puts it where the pointer
+is, and the two fight on the next iteration. **The scrolling lists — inventory,
+magic, equipment, `func_8001EB70` — are not covered**, their rows being drawn by
+per-page loops; and nothing here has been judged by eye, including whether the
+cursor lands on the item the pointer is actually over. See "The menu pointer" in
+`docs/INPUT.md` and "The menu's item positions are a table" in
+`docs/GAME_INTERNALS.md`.
 
 **Opening the full-screen map stops the world** (`Map.Pause`, `KF2_MAP_PAUSE=0`
 the comparison; not a setting), and the mechanism is **the stage gate held
@@ -1703,8 +1754,12 @@ uncaptured edit inside the checkout is left where it is.
   full-screen map covered the port's own chrome and lined up with neither. A
   public `OutputView` publishes the rectangle from the one place that computes it,
   once a frame, and is invalid when the panel drew no picture so a caller can fall
-  back to the viewport. UI only — **no recompile**. See "A dynamic map" in
-  `docs/PATCHES_AND_MODS.md`.
+  back to the viewport. It also publishes **`GameW`/`GameH`**, the picture's size
+  in the game's *own* pixels, off the `SetTexture` call that already receives
+  both: `Min`/`Max` alone are a rectangle and not a scale, so nothing could turn
+  a window pixel back into a game pixel — which is what the menu pointer needs to
+  ask which item is under the cursor. UI only — **no recompile**. See "A dynamic
+  map" in `docs/PATCHES_AND_MODS.md` and "The menu pointer" in `docs/INPUT.md`.
 
 - `0030-expose-host-pump.patch` — the shipped launcher has to build the game
   before there is a game to run, and that blocks for seconds; a window that stops

@@ -25,6 +25,23 @@ public static class OutputView
     public static Vector2 Min { get; internal set; }
     public static Vector2 Max { get; internal set; }
     public static Vector2 Size => Max - Min;
+
+    /// <summary>
+    /// The display buffer the *game* programmed, in its own pixels -- 320x240
+    /// here. Published because <see cref="Min"/> and <see cref="Max"/> are a
+    /// rectangle and not a scale, and the inverse of that rectangle is what an
+    /// overlay needs to ask which thing the game drew is under the pointer.
+    ///
+    /// **Deliberately the GPU's numbers and not the render target's.** The GL
+    /// backend hands <c>SetTexture</c> a target sized by the render-scale
+    /// setting, and a 960x720 target is still a 320x240 picture as far as the
+    /// game's own coordinates are concerned. It is also the game's *own* width,
+    /// so a port rendering a widescreen margin either side presents something
+    /// wider than <see cref="GameW"/> -- the height is the axis that stays
+    /// exact. Zero until the first frame is presented.
+    /// </summary>
+    public static int GameW { get; internal set; }
+    public static int GameH { get; internal set; }
 }
 
 internal sealed class OutputPanel : IPanel

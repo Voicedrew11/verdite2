@@ -748,6 +748,61 @@ menu's inner loop makes two passes and each presents — so the frame-head rate 
 the rendered frame rate, which is what put the blink on the render rate until
 `patches/MenuPacing.cs` capped it.
 
+### The menu's item positions are a table, and it is what makes hover possible
+
+Found while building `patches/MenuMouse.cs`, which needs to know where an item is
+before it can say the pointer is over it. The fixed option lists do not compute
+their layout: they read it.
+
+`func_800208D8(group, count, cursor, confirmed)` is the drawer, called ten times
+across the menu's pages and always beside a `func_8001EA14` call in the same
+function. It indexes a **static table in `GAME.EXE`'s data**:
+
+| what | where |
+|---|---|
+| the group's record block | `0x80064CD4 + 0x134 * group` |
+| the header record | that base — drawn only when its X is non-zero |
+| item *i* | `base + 0x1C * (i + 1)` |
+| the record's position | `+0x00` = `u16` X, `+0x02` = `u16` Y |
+
+`0x134` is 308, which the emitted shift chain computes as `308 * a0`
+(`((((a<<2)+a)<<2)-a)<<2)+a)<<2`), and 308 is exactly **eleven `0x1C` records** —
+a header and ten items, which is the most any of these lists holds.
+
+The four sprite templates it draws each row with are next door, and they are what
+carries the *size*:
+
+| template | drawn by | when |
+|---|---|---|
+| `0x80064C20` | `func_800218B4` | every item |
+| `0x80064C2C` | `func_800218B4` | the item under the cursor while confirmed |
+| `0x80064BFC` | `func_80021A84` | the blinking cursor, on the selected item only |
+| `0x80064BF0` | `func_80021E10` | the label pass |
+
+`func_800218B4(template, record)` builds its quad out of both — the position from
+the record and the size from the template, with a six-pixel inset on each:
+
+    x0 = X,             y0 = Y
+    x1 = X + w - 6,     y1 = Y
+    x2 = X,             y2 = Y + h - 6
+    x3 = X + w - 6,     y3 = Y + h - 6      /* w = u16[t+0x8], h = u16[t+0xA] */
+
+`func_80021A84(template, record)` reads the *same* record and puts the cursor
+sprite to the left of it, at `X - 8 - w`, which is why one hook on it gives the
+selected row's position on any screen — including the scrolling lists, whose rows
+are not in this table.
+
+**Measured**, off `KF2_MENUMOUSE_PROBE=1`: the in-game menu is group 0 at
+`0x80064CD4`, eight rows, x 31, y 19/45/71/97/123/149/175/201 — a pitch of
+exactly 26 against an 18-pixel box. The start menu is group 6 at `0x8006540C`,
+two rows, x 98, y 94/120, the same 26 and 18. That the second one lands where
+`base + 6 * 0x134` says it does is the check on the stride.
+
+What this does **not** cover is the scrolling lists — inventory, magic,
+equipment. Those are `func_8001EB70` with the descriptor above, and their rows
+are drawn by per-page loops (`func_80019444` is the inventory's, over a base of
+its own in the same `0x8006xxxx` data), so each is its own read.
+
 ### Every control axis has the same three branches
 
 Turn, pitch, forward and strafe are all velocity based and all written the same

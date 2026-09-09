@@ -774,6 +774,24 @@ Kf2.Analog.Install();
 Kf2.Mouse.Configure();
 Kf2.Mouse.Install();
 
+// The menu pointer: hover an in-game menu item and the game's own cursor moves to
+// it, left click confirms, right click backs out.
+//
+//     KF2_MENUMOUSE=0        off -- the menu is pad and keyboard only again
+//     KF2_MENUMOUSE_PROBE=1  the layout table, the pointer's row, and what it did
+//
+// Independent of mouse look and on by default, because it needs no capture: a
+// player who never locks the pointer still has one, and pointing it at a menu is
+// the one thing a mouse can do here without being locked to the window first. It
+// drives the cursor stepper's return value rather than the pad, which is not a
+// preference -- injected Up/Down is already recorded as not moving func_8001EA14
+// at all, and the menu never reads the pad word Analog writes. Hover only takes
+// the cursor once the pointer has moved, and hands it back the moment the pad
+// moves it, so nothing about playing with a pad changes.
+Kf2.MenuMouse.Configure(Environment.GetEnvironmentVariable("KF2_MENUMOUSE"),
+                        Environment.GetEnvironmentVariable("KF2_MENUMOUSE_PROBE"));
+Kf2.MenuMouse.Install();
+
 // Widescreen. The runtime already renders a margin either side of the display
 // buffer and presents the whole thing at Display.WideAspect, so setting that one
 // number is the entire hookup; the replacement of DrawOTag here is only for the
