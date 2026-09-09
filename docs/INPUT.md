@@ -781,9 +781,10 @@ Mouse look leaves the menus pad-only: Circle opens `func_80018E80`, and from
 there every list is walked with Up/Down and confirmed with Cross. A hand on the
 mouse has to go back to the keyboard to use an inventory.
 `patches/MenuMouse.cs` closes that — point at an item and the game's **own**
-cursor moves to it, left click confirms, right click backs out — and it is on by
-default, because unlike mouse look it needs no captured pointer: a player who
-never locks the pointer still has one.
+cursor moves to it, left click confirms, right click backs out, and a left click
+off to the side of the menu backs out too — and it is on by default, because
+unlike mouse look it needs no captured pointer: a player who never locks the
+pointer still has one.
 
 ### There are three menus, not one
 
@@ -875,6 +876,70 @@ It is scoped to `func_800206E0` being on the stack, so no other menu — and not
 outside a menu — ever sees an injected button. The latch at `0x8006E5C4` is
 `func_80022E58`'s own and is set from the *real* pad word before the post runs, so
 an injected button costs no repeat delay, exactly as a hover elsewhere costs none.
+
+### Backing out is the pad read's, not each widget's
+
+**Reported from play: "the back out behaviour in menus is pretty inconsistent —
+sometimes right click works, other times you need to press Tab to get out."**
+That is exactly what the patch did, and the reason is countable. Backing out was
+implemented three times, once inside each widget's own hook, writing that
+widget's `*cancelled` out-parameter. But **six** routines read the pad inside a
+menu:
+
+| routine | what it is | has a cancel arm |
+|---|---|---|
+| `func_8001EA14` | the fixed list's stepper | yes |
+| `func_8001EB70` | the scrolling list's stepper | yes |
+| `func_800206E0` | the two-line prompt's loop | yes |
+| `func_8001BB7C` | draws a fixed list, reads the pad itself | yes |
+| `func_8001BE60` | draws a fixed list, reads the pad itself | **no** |
+| `func_8001B0D0` | reads the pad itself | no masks of its own |
+
+The patch covered the first three. So right click backed out of the tab menu, the
+inventory and a yes/no prompt, and did nothing at all on the two screens that
+draw a fixed list and then read the pad themselves — the fourth shape this
+document already recorded as uncovered. Two of six was the inconsistency.
+
+**All six call `func_80022E58`**, the menu's `PadRead(1)`. So the gesture no
+longer writes anything: it raises one flag, and a post-hook on that read ORs the
+game's own cancel mask (`0x8006E56C`, the first of the two every arm above tests)
+into the word it returns. Whichever routine is reading gets it, its own cancel arm
+runs, and the blip and the out-parameter are the game's rather than a copy of
+them. A screen with no cancel arm ignores it — which is the honest answer, because
+that is what the pad's cancel button does there too. `func_8001BE60` is the one
+such screen found so far.
+
+**It cannot run away**, which is the thing the no-edge-detection finding forbids.
+The flag is spent on the read that delivers it and one menu-loop iteration is one
+pad read, so a click backs out exactly one level; a held button is not a held
+injection.
+
+**Two gestures raise it.** Right click anywhere over the picture — including the
+widescreen margin, which is part of the presented picture and is about as far
+"off to the side of the menu" as a pointer can get. And left click **clear of the
+widget's own boxes**, by 8 game pixels on every side. Clear of them rather than
+merely off a row: the fixed list's boxes are 26 apart and 24 tall, so testing
+`!hit` would turn the 2px gutter between two of them into a back-out and a sweep
+down the list would close the menu on the way past. The three answers are on a
+box (confirm), near the boxes (nothing), clear of them (back out).
+
+**The bounds are the union of the boxes the widget drew and nothing more.** The
+frame around them, the item picture beside a list and the description under it are
+drawn somewhere this patch does not know, so a click on those reads as a click off
+the menu. Whether that is felt as wrong is a question for the eye, not for a
+counter.
+
+**The button edges are sampled at the pad read too**, not only in the widget
+hooks, and that is a second half of the same defect: a press *and* release that
+both happened while no hooked stepper ran used to be seen by nothing, so a click
+made on an uncovered screen was simply lost. The same hook carries the session
+scope for those edges — a gap of 500 ms in `func_80022E58` calls means the menu
+that was reading the pad is not the one reading it now, so the buttons are re-read
+rather than left to fire an edge, and a back-out asked of a screen that has gone
+is dropped. A menu-loop iteration is 105–166 ms here (`func_80022E90`'s six held
+vblanks are 100 ms of it), so 500 ms is three of the longest of them. That scope
+covers the menus **outside** `func_80018E80` as well, which `BeforeMenu` never
+could: the save-slot list off the object-use handler, a shop off an NPC.
 
 ### The hit test is the rectangle the game drew
 
@@ -1018,9 +1083,11 @@ control rather than the same one on another device.
 For the fixed list, `V0`, the stepper's own out-parameters, and `0x8006E5D0` — the
 blink direction, zeroed to restart the wink exactly where the Up/Down arms zero
 it. For the scrolling list, `u8[desc+0x21]` and `u8[desc+0x22]`, `u8[desc+0x20]`
-when the wheel turns, plus that stepper's own `*confirmed`/`*cancelled`; it does
+when the wheel turns, plus that stepper's own `*confirmed`; it does
 *not* write `0x8006E5D0`, because `func_8001EB70` does not either. For the prompt, nothing at all in game memory —
-only one bit ORed into a register on the way out of `PadRead`.
+only one bit ORed into a register on the way out of `PadRead`. **No `*cancelled`
+is written by any of them any more**: backing out is one bit ORed into that same
+register, and the game's own arm writes the out-parameter.
 
 `0x8006E5C4`, the repeat gate's latch, is untouched by all three, so `MenuPacing`
 is unaffected in both directions: a hover costs no repeat delay because it never
@@ -1030,8 +1097,9 @@ goes through the pad, and the pad's own repeat is exactly what it was.
 
 Measured at `KF2_FPS=144` in area 1, off `KF2_MENUMOUSE_PROBE=1`:
 
-- All five hook groups attach and are read back from `HookManager`, not from the
-  `Add*` returns: `session scoped, tab menu driven, lists driven, prompt driven`.
+- All six hook groups attach and are read back from `HookManager`, not from the
+  `Add*` returns: `session scoped, tab menu driven, lists driven, prompt driven,
+  back out driven`.
 - The fixed table reads correctly on two groups — group 0 at `0x80064CD4`, eight
   boxes at x 25, y 13/39/65/91/117/143/169/195, 124 × 24; group 6 at `0x8006540C`,
   two at x 92, y 88/114, the same size. That the second lands where
@@ -1046,7 +1114,10 @@ Measured at `KF2_FPS=144` in area 1, off `KF2_MENUMOUSE_PROBE=1`:
   pointer sweeping the inventory answers rows 0, 1, 2, 4, 5 and 6 in order, with
   −1 above the first row of the short list.
 - Hover, confirm and cancel all fire from a real hand on a real mouse, and the
-  session ran with no exception.
+  session ran with no exception. Backing out fires through the pad read from
+  both gestures and from both sides of the picture — `cancelled 1, injected 1`
+  at game x −14.4 and again at x 346.9, the two widescreen margins, with the tab
+  menu's eight boxes drawn between them.
 - It costs nothing: 20.0 ticks/s with the menu open, and the menu's own 60 fps
   under `LoopPacing` is unchanged.
 

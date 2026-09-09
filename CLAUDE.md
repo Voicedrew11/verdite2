@@ -746,7 +746,8 @@ unasked is worse than one switch to find. What no counter can answer is the feel
 **The menu pointer is the other thing a mouse can do here, and unlike mouse look
 it is on by default** (`patches/MenuMouse.cs`, `KF2_MENUMOUSE=0` the comparison,
 switch on the Mouse tab of Input): point at an in-game menu item and the game's
-own cursor moves to it, left click confirms, right click backs out. On by
+own cursor moves to it, left click confirms, right click backs out, and a left
+click clear of the menu's own boxes backs out too. On by
 default because it needs **no captured pointer** — a player who never locks the
 pointer still has one, and pointing it at a menu is the one thing a mouse can do
 in this game without being locked to the window first; opening a menu in fact
@@ -807,9 +808,10 @@ none at all in a scrolling list. **Hover only takes the cursor once the pointer
 has moved and hands it back the moment the pad moves it**, or a mouse resting
 over the picture would pin the selection and the D-pad would look broken; in the
 prompt, where there is no cursor to compare, a drawn flag the patch did *not*
-ask for is the pad. It writes `V0` and the out-parameters plus `0x8006E5D0` for
+ask for is the pad. It writes `V0` and the confirm out-parameters plus `0x8006E5D0` for
 the fixed list, two descriptor bytes for the scrolling one, and **nothing at all
-in game memory** for the prompt; `0x8006E5C4` is untouched by all three, so
+in game memory** for the prompt or for any back-out; `0x8006E5C4` is untouched by
+all three, so
 `MenuPacing` is unaffected both ways. The pointer's position is
 `ImGui.GetIO().MousePos` — same screen space as `OutputView`, a plain field read
 — and `OutputView` is read **directly** rather than through
@@ -837,11 +839,32 @@ menu comes off the object-use handler, a shop off an NPC). It is a float end to
 end, `(int)wheel.Y` having rounded a trackpad's sub-notch scroll away entirely.
 Nothing about the gesture is measured — the shell's `press` reaches Cross but not
 the menu's Up/Down and cannot inject a scroll at all — so the arithmetic is read
-off `func_8001EB70`'s own six branches rather than run. **What is still not covered is a fourth shape**: `func_8001BB7C`
+off `func_8001EB70`'s own six branches rather than run. **Backing out is not one of the three and used to be**, and that is what
+"sometimes right click works, other times you need Tab" was: it was written three
+times, once per widget, against that widget's `*cancelled` out-parameter, and
+**six** routines read the pad inside a menu — the three steppers plus
+`func_8001BB7C`, `func_8001BE60` and `func_8001B0D0`. Two of six. All six call
+`func_80022E58`, so the gesture now raises one flag and a post on that read ORs
+the game's own cancel mask `0x8006E56C` into the word it returns; whichever
+routine is reading gets it, its own arm blips and writes its own out-parameter,
+and a screen with no cancel arm ignores it exactly as it ignores the pad's cancel
+button (`func_8001BE60` is the one found). It cannot run away the way a held
+synthetic Cross would: the flag is spent on the read that delivers it and one
+iteration is one pad read. The second gesture is a left click **clear of the
+widget's boxes by 8 px on every side** — clear of them rather than merely off a
+row, or the fixed list's 2px gutters would each be a back-out — with the bounds
+being the union of the boxes drawn and nothing else, so a click on the frame or
+on the item picture beside a list reads as off the menu. The **button edges are
+sampled at that pad read** as well, which is the other half of the same defect: a
+press and release that both fell while no hooked stepper ran used to be seen by
+nothing. Its 500 ms gap is also the session scope for the menus outside
+`func_80018E80` that `BeforeMenu` cannot see. **What is still not covered is a
+fourth shape**: `func_8001BB7C`
 and `func_8001BE60` draw a fixed list and then read the pad themselves rather
-than calling `func_8001EA14`. Nothing here has been judged by eye, including
-whether the cursor lands on the item the pointer is actually over, and no run so
-far has opened a yes/no prompt with the pointer over it. See "The menu pointer"
+than calling `func_8001EA14`, so hover and confirm do nothing on them. Nothing here has been judged by eye, including
+whether the cursor lands on the item the pointer is actually over, and whether a
+click on the frame or on the picture beside a list reads as "off the menu" the
+way the bounds say it does. See "The menu pointer"
 in `docs/INPUT.md` and "The menu's item positions are a table", "The scrolling
 list is one descriptor" and "The two-line prompt keeps its cursor nowhere" in
 `docs/GAME_INTERNALS.md`.

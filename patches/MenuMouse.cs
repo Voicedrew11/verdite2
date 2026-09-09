@@ -77,6 +77,38 @@ namespace Kf2;
 /// game's own column 0 at `margin`, and <c>Display.WideMargin</c> is that number.
 /// Subtract it and a game X is a game X at every aspect. See <see cref="Point"/>.
 ///
+/// ## One back-out, and the pad read spends it
+///
+/// Backing out is **not** one of the three mechanisms, and it used to be: each
+/// widget's cancel out-parameter was written where that widget was hooked. Three
+/// of the game's six menu-side pad readers were covered that way and three were
+/// not -- `func_8001BB7C` and `func_8001BE60` draw a fixed list and then read the
+/// pad themselves rather than calling `func_8001EA14`, and `func_8001B0D0` reads
+/// it too -- so right click worked on some screens and did nothing on others,
+/// which is what "sometimes you have to press the menu button to get out" was.
+///
+/// All six call `func_80022E58`, the menu's `PadRead(1)`. So the gesture asks for
+/// one thing, a flag, and a post-hook on that read ORs the game's own cancel
+/// mask into the word it returns. Whichever widget is reading gets it; its own
+/// cancel arm blips and writes its own out-parameter; a screen with no cancel arm
+/// ignores it, which is exactly what the pad's cancel button does there. The
+/// gesture is the cancel button, on every screen, including the ones this patch
+/// has never heard of.
+///
+/// It cannot run away the way a held synthetic Cross would (see
+/// <see cref="MenuPacing"/> on the missing edge detection): the flag is spent on
+/// the read that delivers it, and one menu-loop iteration is one pad read, so a
+/// click backs out exactly one level.
+///
+/// **Two gestures ask for it.** Right click anywhere over the picture, and left
+/// click clear of the widget's own boxes -- "off to the side of the menu". Clear
+/// of them by <see cref="EdgeSlack"/> on every side rather than merely off a row,
+/// so the gutter between two boxes stays dead and a sweep down a list cannot
+/// close the menu on the way past. The bounds are the union of the boxes the
+/// widget drew and nothing more: the frame around them, the item picture beside a
+/// list and the description under it are drawn elsewhere, so a click on those is
+/// a click off the menu as far as this can tell. Never judged by eye.
+///
 /// ## What each mechanism writes
 ///
 /// **The fixed list** is driven by its stepper's **return value**: a post-hook on
@@ -95,16 +127,14 @@ namespace Kf2;
 /// it does not.
 ///
 /// **The prompt** has no cursor to write at all -- `func_800206E0` keeps it in
-/// `S1` for the length of its own modal loop -- so it is the one place that goes
-/// through the pad, and it can only do that safely because the loop *tells* this
-/// patch its state every iteration: `func_80021478` is handed the flag as `a2`.
-/// A post-hook on `func_80022E58` (the loop's `PadRead`) ORs in one synthetic Up
-/// while the hovered row disagrees with the drawn flag, and a Cross once they
-/// agree. Neither stepper edge-detects -- that is the finding
-/// <see cref="MenuPacing"/> exists for -- so an injection that was not closed
-/// over the state it changes would run away; this one cannot, because the next
-/// iteration reads the flag it just produced and stops asking. It is scoped to
-/// `func_800206E0` being on the stack, so no other menu sees an injected button.
+/// `S1` for the length of its own modal loop -- so its *move* also goes through
+/// the pad, and it can only do that safely because the loop *tells* this patch
+/// its state every iteration: `func_80021478` is handed the flag as `a2`. The
+/// same post-hook on `func_80022E58` ORs in one synthetic Up while the hovered
+/// row disagrees with the drawn flag, and a Cross once they agree, so the toggle
+/// that answers the request also stops it being made. That part is scoped to
+/// `func_800206E0` being on the stack; the back-out above is not, being every
+/// screen's.
 ///
 /// ## Whichever device moved last owns the cursor
 ///
@@ -160,7 +190,10 @@ namespace Kf2;
 ///
 /// **Not covered**: `func_8001BB7C` and `func_8001BE60` draw a fixed list and
 /// then read the pad themselves rather than calling `func_8001EA14`, so they are
-/// a fourth shape. See "The menu pointer" in docs/INPUT.md.
+/// a fourth shape -- hover and confirm still do nothing on them. Backing out
+/// does work there now, being the pad read's rather than a widget's, except on
+/// `func_8001BE60`, which has no cancel arm for the pad either. See "The menu
+/// pointer" in docs/INPUT.md.
 /// </summary>
 public static class MenuMouse
 {
@@ -256,16 +289,35 @@ public static class MenuMouse
     const uint PromptTemplate = 0x80064C08;
 
     /// <summary>The menu's `PadRead(1)`, called once per iteration of every menu
-    /// loop. The prompt's injected button is ORed into its return value.</summary>
+    /// loop and by every one of the six routines that read the pad inside one --
+    /// `func_8001B0D0`, `func_8001BB7C`, `func_8001BE60`, both steppers and the
+    /// prompt's loop. It is therefore the definition of "a menu is reading the
+    /// pad", which is what makes it the one place a back-out is spent.</summary>
     const uint MenuPadRead = 0x80022E58;
 
     /// <summary>The pad masks, live out of the game's own control config: Up,
-    /// Down, Cross and the first of the two cancel buttons the loops test.</summary>
+    /// Down, Cross and the first of the two cancel buttons the loops test. Every
+    /// routine above that has a cancel arm at all tests this one first.</summary>
     const uint MaskUp = 0x8006E590, MaskCross = 0x8006E568, MaskCancel = 0x8006E56C;
 
-    /// <summary>The menu's own blips: move, confirm, cancel. The arguments
-    /// `func_80022DC4` takes.</summary>
-    const uint BlipMove = 0x10, BlipConfirm = 0x11, BlipCancel = 0x12;
+    /// <summary>The menu's own blips: move and confirm. The arguments
+    /// `func_80022DC4` takes. There is no cancel blip here any more -- backing
+    /// out goes through the game's own cancel arm, which blips itself.</summary>
+    const uint BlipMove = 0x10, BlipConfirm = 0x11;
+
+    /// <summary>A gap in <see cref="MenuPadRead"/> calls this long means the menu
+    /// that was reading the pad is not the one reading it now. A menu-loop
+    /// iteration is 105-166 ms here -- `func_80022E90`'s six held vblanks are
+    /// 100 ms of that -- so this is three of the longest of them, and it is the
+    /// scope for the button edges and for a pending back-out.</summary>
+    const long SessionGapMs = 500;
+
+    /// <summary>How far outside a widget's own boxes a left click has to land
+    /// before it reads as a click *off* the menu rather than one in the gutter
+    /// between two rows. The fixed list's boxes are 26 apart and 24 tall, so
+    /// anything under the 2px gutter would turn the gutter into a back-out.
+    /// Never judged by eye.</summary>
+    const int EdgeSlack = 8;
 
     /// <summary>How long a pointer movement keeps the cursor. Long enough that
     /// reading an item and then clicking it is one gesture, short enough that a
@@ -336,6 +388,21 @@ public static class MenuMouse
     static bool _leftWas, _rightWas;
     static bool _clickLeft, _clickRight;
     static bool _inPicture;
+
+    /// <summary>A back-out the mouse has asked for and the next menu pad read
+    /// has not spent yet. One flag rather than three cancel writes: see "One
+    /// back-out, and the pad read spends it" in the class summary.</summary>
+    static bool _backOut;
+
+    /// <summary>Set for the rest of the iteration once a cancel has been ORed
+    /// into a pad read, so the widget's own post-hook -- which runs after the
+    /// read, inside the same stepper -- leaves the cursor where the game's
+    /// cancel arm left it.</summary>
+    static bool _cancelled;
+
+    /// <summary>When a menu last read the pad, for <see cref="SessionGapMs"/>.
+    /// </summary>
+    static long _padReadAt;
 
     /// <summary>How long a gap in stepper calls means the widget being stepped
     /// has only just opened, and any wheel held over from before it is not a
@@ -418,7 +485,7 @@ public static class MenuMouse
                                  "The in-game menus stay pad and keyboard only.");
     }
 
-    static bool _loopHooked, _drawHooked, _cursorHooked, _scrollHooked, _promptHooked;
+    static bool _loopHooked, _drawHooked, _cursorHooked, _scrollHooked, _promptHooked, _padHooked;
 
     static bool Attach()
     {
@@ -473,17 +540,24 @@ public static class MenuMouse
             }
         }
 
+        // The pad read stands on its own rather than riding the prompt's block,
+        // because it is no longer the prompt's alone: it is where every screen's
+        // back-out is spent, including the ones no widget hook covers.
+        if (!_padHooked)
+        {
+            padRead = At(MenuPadRead, "nothing can back out of a menu with the mouse.");
+            if (padRead != null) HookManager.AddPost(_self, padRead, Own(nameof(AfterPadRead)));
+        }
+
         if (!_promptHooked)
         {
             promptLoop = At(PromptLoop, "the yes/no prompt stays pad only.");
             promptDraw = At(PromptDraw, "the yes/no prompt's state cannot be read.");
-            padRead = At(MenuPadRead, "the yes/no prompt has no way in.");
-            if (promptLoop != null && promptDraw != null && padRead != null)
+            if (promptLoop != null && promptDraw != null)
             {
                 HookManager.AddPre(_self, promptLoop, Own(nameof(BeforePrompt)));
                 HookManager.AddPost(_self, promptLoop, Own(nameof(AfterPrompt)));
                 HookManager.AddPre(_self, promptDraw, Own(nameof(BeforePromptDraw)));
-                HookManager.AddPost(_self, padRead, Own(nameof(AfterPadRead)));
             }
         }
 
@@ -495,16 +569,18 @@ public static class MenuMouse
         _drawHooked |= HookAttach.Installed(draw);
         _cursorHooked |= HookAttach.Installed(cursor);
         _scrollHooked |= HookAttach.Installed(scroll);
-        _promptHooked |= HookAttach.Installed(promptLoop) && HookAttach.Installed(promptDraw) &&
-                         HookAttach.Installed(padRead);
+        _padHooked |= HookAttach.Installed(padRead);
+        _promptHooked |= HookAttach.Installed(promptLoop) && HookAttach.Installed(promptDraw);
 
         Console.WriteLine($"[KF2] menu pointer: {(Enabled ? "on" : "off")}, " +
                           $"session {(_loopHooked ? "scoped" : "NOT scoped")}, " +
                           $"tab menu {(_drawHooked && _cursorHooked ? "driven" : "NOT driven")}, " +
                           $"lists {(_scrollHooked ? "driven" : "NOT driven")}, " +
-                          $"prompt {(_promptHooked ? "driven" : "NOT driven")}");
+                          $"prompt {(_promptHooked ? "driven" : "NOT driven")}, " +
+                          $"back out {(_padHooked ? "driven" : "NOT driven")}");
 
-        return _loopHooked && _drawHooked && _cursorHooked && _scrollHooked && _promptHooked;
+        return _loopHooked && _drawHooked && _cursorHooked && _scrollHooked && _promptHooked &&
+               _padHooked;
     }
 
     // ------------------------------------------------------------------------
@@ -528,6 +604,7 @@ public static class MenuMouse
         _live = "none";
         _padOwns = true;          // the pad opened the menu; it owns the cursor
         _clickLeft = _clickRight = false;
+        _backOut = _cancelled = false;
         _lastPos = new Vector2(float.NaN, float.NaN);
         _lastReported = -2;
 
@@ -658,7 +735,9 @@ public static class MenuMouse
         _live = "fixed";
         int hover = _hover = HoverLive() ? HitFixed() : -1;
 
-        if (gameMoved || gameConfirmed) { Report(); return; }
+        // The pad read inside this very stepper carried an injected cancel, so
+        // the game's own cancel arm has already run: leave its answer alone.
+        if (gameMoved || gameConfirmed || _cancelled) { Report(); return; }
 
         // Everything that blips has to happen before V0 is written: the blip is a
         // real call into the recompiled routine and it clobbers V0 along with the
@@ -672,10 +751,6 @@ public static class MenuMouse
         {
             _clickLeft = false;
 
-            // Only a click *on a row*. A click over the picture but off the list
-            // is a click on the menu's background, and the game has no action for
-            // that -- confirming whatever happened to be selected would make a
-            // misdirected click do something irreversible.
             if (hover >= 0)
             {
                 // The stepper's Cross arm, reproduced exactly -- including that
@@ -686,15 +761,12 @@ public static class MenuMouse
                 else if (_fixCancelPtr != 0) m.WriteU32(_fixCancelPtr, 0xFFFFFFFFu);
                 _confirms++;
             }
-        }
-        else if (_clickRight)
-        {
-            _clickRight = false;
-            if (_inPicture)
+            else if (Off(FixedBounds()))
             {
-                Blip(c, m, BlipCancel);
-                if (_fixCancelPtr != 0) m.WriteU32(_fixCancelPtr, 0xFFFFFFFFu);
-                _cancels++;
+                // Clear of the whole list rather than merely off a row: the 2px
+                // gutter between two boxes stays dead, so a sweep down the list
+                // cannot close the menu on the way past.
+                _backOut = true;
             }
         }
 
@@ -790,7 +862,7 @@ public static class MenuMouse
         // the whole reason the wheel exists, and it is invisible in a row index.
         if (_probe) _live = $"list, rows {scroll}-{scroll + Math.Max(rows, 1) - 1} of {count}";
 
-        if (gameMoved || gameConfirmed) { Report(); return; }
+        if (gameMoved || gameConfirmed || _cancelled) { Report(); return; }
 
         // Under the pointer if it is on a row; otherwise the entry the page
         // carried with it, which is the same row of the window it already was --
@@ -830,16 +902,7 @@ public static class MenuMouse
                 m.WriteU32(_scConfirmPtr, 1u);
                 _confirms++;
             }
-        }
-        else if (_clickRight)
-        {
-            _clickRight = false;
-            if (_inPicture && _scCancelPtr != 0)
-            {
-                Blip(c, m, BlipCancel);
-                m.WriteU32(_scCancelPtr, 0xFFFFFFFFu);
-                _cancels++;
-            }
+            else if (Off(ScrollBounds(m, rows))) _backOut = true;
         }
 
         Report();
@@ -910,8 +973,8 @@ public static class MenuMouse
             _promptSeen = false;
             _promptFlag = _promptAsked = -1;
             // A click made on the list underneath does not carry into the prompt
-            // the click opened.
-            _clickLeft = _clickRight = false;
+            // the click opened, and neither does a back-out asked of it.
+            _clickLeft = _clickRight = _backOut = false;
         }
         return true;
     }
@@ -960,38 +1023,93 @@ public static class MenuMouse
 
     /// <summary>
     /// The menu's `PadRead(1)`, after it has run. This is the one place in the
-    /// patch that goes through the pad, and it is scoped to the prompt's loop
-    /// being on the stack -- every other menu is driven by writing its cursor
-    /// directly, and would run away on a held synthetic button.
+    /// patch that goes through the pad, and it now does two jobs.
     ///
-    /// It cannot run away here either, because the loop reports the state back
-    /// through <see cref="BeforePromptDraw"/> on the same iteration: an Up is
-    /// asked for only while the drawn flag disagrees with the hovered row, so the
-    /// toggle that answers it also stops the asking.
+    /// **It is where every back-out is spent.** `func_80022E58` is called by all
+    /// six routines that read the pad inside a menu, so a cancel ORed into its
+    /// return is delivered to whichever widget is reading -- the tab menu, either
+    /// list, the prompt, and the two fixed lists that read the pad themselves
+    /// rather than calling `func_8001EA14`. That is the whole reason it replaced
+    /// three per-widget cancel writes: those covered three of the six, so the
+    /// gesture worked on some screens and not others.
+    ///
+    /// **It is also the prompt's mechanism**, unchanged: an Up is asked for only
+    /// while the drawn flag disagrees with the hovered row, so the toggle that
+    /// answers it also stops the asking, and a Cross once they agree. Neither
+    /// stepper edge-detects -- that is the finding <see cref="MenuPacing"/>
+    /// exists for -- so an injection has to be closed over the state it changes;
+    /// a back-out is, differently, because the latch is spent on the read that
+    /// delivers it and one iteration is one pad read.
     ///
     /// The latch at `0x8006E5C4` is `func_80022E58`'s own, set from the *real*
     /// pad word before this runs, so an injected button costs no repeat delay --
     /// exactly as a hover elsewhere costs none.
+    ///
+    /// **The button edges are sampled here rather than only in the widget
+    /// hooks**, which is what makes a click on a screen this patch has never
+    /// heard of arrive at all: a press and a release that both happen while no
+    /// hooked stepper runs used to be seen by nothing.
     /// </summary>
     public static void AfterPadRead(CpuContext c, IMemory m)
     {
-        if (!Enabled || _promptDepth <= 0 || !_promptSeen) return;
+        if (!Enabled) return;
+
+        // A gap this long means the menu that was reading the pad is not the one
+        // reading it now -- a submenu opened, or a whole session did. Read the
+        // buttons once rather than leaving the last one's state to fire an edge,
+        // and drop a back-out asked of a screen that has gone. This is the
+        // session scope for every menu, including the ones outside
+        // `func_80018E80`: the save-slot list off the object-use handler, a shop
+        // off an NPC.
+        long now = Environment.TickCount64;
+        bool opening = now - _padReadAt > SessionGapMs;
+        _padReadAt = now;
+        _cancelled = false;
+
+        if (opening)
+        {
+            _leftWas = Down(HostMouseButton.Left);
+            _rightWas = Down(HostMouseButton.Right);
+            _clickLeft = _clickRight = _backOut = false;
+        }
 
         Sample();
+
+        // Right click over the picture is the back-out gesture on every screen,
+        // whether or not this patch knows what is drawn on it.
+        if (_clickRight)
+        {
+            _clickRight = false;
+            if (_inPicture) _backOut = true;
+        }
+
+        if (_backOut)
+        {
+            // The game's own cancel arm does the rest -- the blip, the out
+            // parameter, and on a screen with no cancel arm nothing at all,
+            // which is exactly what the pad's cancel button does there.
+            _backOut = false;
+            _cancelled = true;
+            c.V0 |= m.ReadU32(MaskCancel);
+            _cancels++;
+            _injects++;
+            Report();
+            return;
+        }
+
+        if (_promptDepth <= 0 || !_promptSeen) { Report(); return; }
+
         TakeWheel();          // nothing to scroll here either
         _live = "prompt";
         int hover = _hover = HoverLive() ? HitPrompt(m) : -1;
 
         uint add = 0;
-        if (_clickRight)
+        if (hover < 0)
         {
-            _clickRight = false;
-            if (_inPicture) add = m.ReadU32(MaskCancel);
-        }
-        else if (hover < 0)
-        {
-            // A click off both boxes is a click on nothing, and is spent rather
-            // than left pending for wherever the pointer goes next.
+            // Off both boxes: clear of them is a back-out on the next read, and
+            // in the gap between them is a click on nothing. Either way it is
+            // spent rather than left pending for wherever the pointer goes next.
+            if (_clickLeft && Off(PromptBounds(m))) _backOut = true;
             _clickLeft = false;
         }
         else if (hover != _promptFlag)
@@ -1168,6 +1286,70 @@ public static class MenuMouse
     /// rect is half-open, so two rows that touch share no pixel.</summary>
     static bool In(int x, int y, int w, int h) =>
         _inPicture && _gameX >= x && _gameX < x + w && _gameY >= y && _gameY < y + h;
+
+    /// <summary>
+    /// Is the pointer clear of a widget by <see cref="EdgeSlack"/> on every side?
+    ///
+    /// This is deliberately not `!In(...)`. A widget's bounds are the union of
+    /// the boxes it drew and nothing else -- the frame around them, the item
+    /// picture beside a list and the description under it are drawn elsewhere and
+    /// this patch does not know where -- so the test has to answer three ways
+    /// rather than two: on a row (confirm), near the rows (nothing, which keeps
+    /// the gutters dead), clear of them (back out). A `null` rect is a widget
+    /// with no geometry, and nothing is clear of a widget that was never drawn.
+    /// </summary>
+    static bool Off((int X, int Y, int W, int H)? r) =>
+        _inPicture && r is { } b &&
+        (_gameX < b.X - EdgeSlack || _gameX >= b.X + b.W + EdgeSlack ||
+         _gameY < b.Y - EdgeSlack || _gameY >= b.Y + b.H + EdgeSlack);
+
+    /// <summary>The fixed list's boxes, as one rectangle. The rows are not laid
+    /// out on a grid -- the layout table gives each its own X and Y -- so this is
+    /// their union rather than the first one's column.</summary>
+    static (int, int, int, int)? FixedBounds()
+    {
+        if (_fixCount == 0 || Environment.TickCount64 - _fixDrawnAt > GeomStaleMs) return null;
+
+        int x0 = int.MaxValue, y0 = int.MaxValue, x1 = int.MinValue, y1 = int.MinValue;
+        for (int i = 0; i < _fixCount; i++)
+        {
+            x0 = Math.Min(x0, _fixX[i]); y0 = Math.Min(y0, _fixY[i]);
+            x1 = Math.Max(x1, _fixX[i] + _fixW); y1 = Math.Max(y1, _fixY[i] + _fixH);
+        }
+        return (x0, y0, x1 - x0, y1 - y0);
+    }
+
+    /// <summary>The scrolling list's page, as one rectangle: the rows are packed,
+    /// so this is <see cref="HitScroll"/>'s arithmetic with the loop taken
+    /// out.</summary>
+    static (int, int, int, int)? ScrollBounds(IMemory m, int rows)
+    {
+        if (rows <= 0) return null;
+        int w = m.ReadU16(RowSprite + 0x8);
+        if (w <= 0) return null;
+        return (m.ReadU8(_scDesc + DescX), m.ReadU8(_scDesc + DescY) + RowInset,
+                w, RowPitch * rows);
+    }
+
+    /// <summary>The prompt's two boxes, as one rectangle.</summary>
+    static (int, int, int, int)? PromptBounds(IMemory m)
+    {
+        int w = (int)m.ReadU16(PromptTemplate + 0x8);
+        int h = (int)m.ReadU16(PromptTemplate + 0xA);
+        if (w <= 0 || h <= 0 || (_promptRec0 == 0 && _promptRec1 == 0)) return null;
+
+        int x0 = int.MaxValue, y0 = int.MaxValue, x1 = int.MinValue, y1 = int.MinValue;
+        for (int i = 0; i < 2; i++)
+        {
+            uint rec = i == 0 ? _promptRec0 : _promptRec1;
+            if (rec == 0) continue;
+            int x = (short)m.ReadU16(rec) - TemplateInset;
+            int y = (short)m.ReadU16(rec + 2) - TemplateInset;
+            x0 = Math.Min(x0, x); y0 = Math.Min(y0, y);
+            x1 = Math.Max(x1, x + w); y1 = Math.Max(y1, y + h);
+        }
+        return (x0, y0, x1 - x0, y1 - y0);
+    }
 
     /// <summary>
     /// The whole notches scrolled since the last call, the remainder carried.
