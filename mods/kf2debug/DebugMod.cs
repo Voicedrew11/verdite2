@@ -107,7 +107,11 @@ public sealed class DebugMod : IMod
             if (ReferenceEquals(p, DebugPanel.Instance)) return;
 
         PanelManager.Register(DebugPanel.Instance);
-        MenuRegistry.Menu("menu.debug", MenuRegistry.OrderDebug)
+        // Upstream 0409bc2 replaced MenuRegistry's numeric ordering with
+        // anchor-by-name (MenuOrder), so OrderDebug is gone and Menu() takes
+        // one argument. Anchored after the runtime's own Debug menu, which is
+        // where this sat when the order was a number.
+        MenuRegistry.Menu("menu.debug")
                     .Panel<DebugPanel>("KF2 Debug")
                     .End();
     }

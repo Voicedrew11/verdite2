@@ -1,6 +1,10 @@
 using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Memory;
 using Recompiled;
+// Upstream 0409bc2 emits one class per overlay, because CoreCLR caps a class
+// at 65535 methods. Every func_ named here is GAME.EXE's, so the alias names the
+// overlay once and the call sites below are unchanged.
+using KingsField2 = Recompiled.KingsField2_game;
 
 namespace Kf2;
 
