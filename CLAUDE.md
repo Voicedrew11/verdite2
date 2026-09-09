@@ -664,9 +664,9 @@ is shaped the same way — mechanism in `patches/recompone/0010` and `0012`, swi
 mechanism has been measured and the picture has not. **The Z-buffer is the same
 depth used as occlusion** rather than as a texture denominator: the GPU has none,
 so intersecting surfaces take turns in front of each other on the ordering table,
-and `patches/recompone/0014` tests the recovered SZ per pixel instead. **Its
-checkbox is back**, under Video ▸ Geometry precision, along with a depth-clear
-threshold that **defaults to off**, because the cause the notes had left open was
+and `patches/recompone/0014` tests the recovered SZ per pixel instead. **It has
+no control in the window** — `KF2_ZBUFFER` and `KF2_ZBUFFER_THRESHOLD`, the
+threshold defaulting to off — because the cause the notes had left open was
 found: `vDepth` is an
 ordinary varying, so OpenGL interpolates it in `1/w`, and `HleTri` set the clip W
 only for triangles whose *texture* was being corrected — so every untextured wall
@@ -694,7 +694,14 @@ reciprocal table. **The second mechanism beside it is PGXP**
 `39fb337a`/`91c20fcf`/`95f0585b`/`6aae910a`): the same two numbers followed through
 the CPU's registers by hooks the recompiler emits, rather than paired by value out
 of `PSMemory`'s traffic. `patches/Pgxp.cs` is the switch and the probe and
-`KF2_PGXP*` the console equivalents; both sources ship and one combo chooses.
+`KF2_PGXP*` the console equivalents; both sources ship and **`KF2_PGXP` alone
+chooses** — PGXP has no control in the settings window and its saved key is not
+read, so a config that ticked it while upstream's block was drawn is not left
+running a fifth slower with nothing to explain it. Upstream's own frame-rate
+slider went with it: it writes `Interp`'s key, disables itself unless PGXP is on,
+and this port never enters `PresentLoop`, so it changed nothing it claimed to and
+was the second frame-rate slider in one pane. See "PGXP has no control in the
+window" in `docs/RENDERING.md`.
 **Measured in area 2 at 144 fps, PGXP bought no coverage in this game** — the
 address map answers for 92.2-97.1% of vertices against PGXP's 93.4-96.7%, because
 King's Field assembles its packets with whole-word `lw`/`sw` out of a transform
