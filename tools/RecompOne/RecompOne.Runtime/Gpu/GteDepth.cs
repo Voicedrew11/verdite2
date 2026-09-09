@@ -1,0 +1,739 @@
+namespace RecompOne.Runtime;
+
+/// <summary>
+/// Per-vertex view depth and sub-pixel position, recovered from the GTE and looked
+/// up again by screen position — the two pieces of information the GPU never gets,
+/// and the reason PlayStation textures swim and its vertices wobble.
+///
+/// The GTE does the perspective divide itself: <c>RTPS</c>/<c>RTPT</c> project a
+/// vertex to a 2D screen coordinate and the game copies that coordinate into a
+/// GP0 packet. By the time the GPU sees a polygon there is no depth left in it, so
+/// it can only interpolate U and V linearly across the screen — affine mapping,
+/// which is exact only for a surface parallel to the screen and increasingly wrong
+/// the more a surface is foreshortened. That is the swimming, and the diagonal
+/// crease down a quad where its two triangles disagree.
+///
+/// So the depth has to be caught upstream and carried forward. <c>Gte.Rtp</c> knows
+/// both halves at once — it computes the screen coordinate and the view depth SZ3
+/// in the same call — and the screen coordinate is exactly what turns up in the
+/// packet: <c>SatX</c>/<c>SatY</c> clamp it to 11 bits signed, which is the same
+/// 11 bits <c>GpuRaster.CoordX</c> decodes. That makes the screen position a key
+/// the two ends can share without tracking a single register or store.
+///
+/// The sub-pixel position is the same story told about the same number. The GTE
+/// projects to 16.16 fixed point and then throws the low sixteen bits away:
+/// <c>SX2</c> is a whole pixel, so a vertex sliding slowly across the screen sits
+/// still and then jumps, and the polygon it belongs to shears as its corners jump
+/// at different moments. That is the wobble. The fraction is right there in the
+/// same expression as the depth, one shift earlier, and it is dropped for the same
+/// reason — so it is caught in the same place and keyed the same way.
+///
+/// Hence a small hash table: the GTE writes (x, y) -> (z, fx, fy) as it projects,
+/// and the GPU asks for it again as it decodes a vertex word. A hit gives the
+/// polygon a W per vertex, so both renderers switch to perspective-correct
+/// interpolation, and the fraction of a pixel the GTE truncated, so the vertex
+/// lands where it was actually projected; a miss leaves the vertex exactly as it
+/// was. **2D work therefore corrects itself** — a HUD sprite whose coordinates the
+/// CPU computed was never in the table, so it keeps the affine mapping and the
+/// pixel grid that 2D wants.
+///
+/// The two halves are read independently: <see cref="Enabled"/> serves the depth
+/// and <see cref="Subpixel"/> the fraction, one lookup either way.
+///
+/// Screen position is not a unique key. Two vertices of different depths land on
+/// the same pixel all the time — a distant wall behind a nearby column, or several
+/// off-screen vertices clamped to ±1024 — and last-write-wins then hands one
+/// polygon the other's W. A nearby floor that inherits a far Z looks as if the
+/// camera jumped to the horizon; a vertex that inherits the wrong fraction jumps
+/// by up to a pixel every time the winner changes. The table therefore keeps the
+/// last few samples at each key, and <see cref="Apply"/> picks the set whose
+/// depths belong together on the primitive being drawn. A leftover that is still
+/// an obvious high outlier (one corner tens of times further than the other two,
+/// with no geometric progression toward it) is dropped, so that triangle stays
+/// affine rather than tearing.
+///
+/// Saturated coordinates are recorded too. Dropping them made every large nearby
+/// wall and floor — the polygons that want correction most — fall back to affine
+/// the moment one vertex left the ±1024 window, which is the pop that looks like
+/// the vantage point jumped. The clamp is still the key, because that is what the
+/// packet carries; uniqueness for W comes from keeping several samples and from
+/// the primitive-level pick. **The position is not moved past the clamp.** Every
+/// off-screen vertex the GPU would have stuck at ±1024 stays there, so a shared
+/// edge whose other end is still on the wall does not open a hole. Only the
+/// [0, 1) fraction of an on-screen vertex is served, and it is a function of the
+/// key alone — two triangles that share a vertex look up the same fraction even
+/// when they pick different depths.
+///
+/// The other properties of the table are unchanged:
+///
+///   * **Nothing is cleared per frame.** Entries carry a monotonic sequence number
+///     and expire once the table's own capacity of vertices has been written past
+///     them, which is a frame or two of geometry. That keeps the frame boundary
+///     out of this file entirely — there is no hook to place and nothing to keep
+///     in step with double buffering.
+///   * **A primitive is all-or-nothing for W.** The caller only interpolates
+///     perspectively when *every* vertex of the triangle hit, so a polygon can
+///     never mix a real W with a fallback of 1 and shear itself apart. The
+///     fraction needs no such rule and does not have one — see below.
+///   * **A vertex behind the eye is not recorded at all.** <c>SZ3</c> of zero is a
+///     vertex the divide could not place, and it is dropped for both halves
+///     rather than for one, so turning the fraction on cannot change which
+///     vertices carry a depth.
+///
+/// Why the fraction is per vertex where W is per primitive: W is an interpolation
+/// parameter, and one corner disagreeing about it tears the texture across the
+/// whole triangle. A fraction is just where the corner is. A triangle with one
+/// corner moved by half a pixel is a triangle with one corner moved by half a
+/// pixel, and — because two triangles sharing a vertex look up the same key and
+/// get the same answer — a shared edge still has identical endpoints on both
+/// sides of it, so no crack can open along one.
+/// </summary>
+public static class GteDepth
+{
+    // Screen position turned out not to be an identity at all, and everything below
+    // that picks between samples is a heuristic standing in for one. GteVertexMap
+    // has the real thing -- the address of the word the coordinate lives at -- and
+    // it serves both halves now. What is left here is the switches, the
+    // accounting, and this table, which answers only when PositionFallback asks it
+    // to so that the two mechanisms can be compared in one build.
+
+    static bool _enabled, _subpixel, _zbuffer;
+
+    /// <summary>
+    /// While false the depth is not served, so both renderers interpolate affinely
+    /// exactly as they did before this existed. Safe to change at run time: the
+    /// map simply starts or stops being consulted for it.
+    /// </summary>
+    public static bool Enabled
+    {
+        get => _enabled;
+        set { _enabled = value; GteVertexMap.SetActive(Active); }
+    }
+
+    /// <summary>
+    /// While false the recovered fraction is not served, so every vertex snaps to
+    /// the whole pixel the GTE truncated it to, exactly as the console does. Also
+    /// safe to change at run time.
+    /// </summary>
+    public static bool Subpixel
+    {
+        get => _subpixel;
+        set { _subpixel = value; GteVertexMap.SetActive(Active); }
+    }
+
+    /// <summary>
+    /// While false both renderers keep the console's painter's algorithm: the
+    /// ordering table is the whole of occlusion. On, a triangle whose vertices
+    /// all recovered a view depth is depth-tested per pixel against that depth,
+    /// so two surfaces that actually interpenetrate stop taking turns in front
+    /// of each other. A miss is the old behaviour — 2D never hits, so the HUD
+    /// still draws on top in table order. Safe to change at run time: the next
+    /// triangle starts or stops testing.
+    /// </summary>
+    public static bool ZBuffer
+    {
+        get => _zbuffer;
+        set
+        {
+            if (_zbuffer == value) return;
+            _zbuffer = value;
+            Generation++;
+            GteVertexMap.SetActive(Active);
+        }
+    }
+
+    /// <summary>Bumped when <see cref="ZBuffer"/> is flipped, so a render target
+    /// that already has a depth buffer from last frame knows to clear it rather
+    /// than test against whatever was sitting there while the setting was off.</summary>
+    public static int Generation;
+
+    /// <summary>
+    /// How far the mean view depth of a primitive may fall below the previous
+    /// primitive's before the depth buffer is cleared, in GTE view-depth units.
+    /// DuckStation's <c>pgxp_depth_clear_threshold</c>, and its default of 300.
+    ///
+    /// A frame is not one scene. A game that draws the world, then a weapon in the
+    /// player's hand, then a menu behind the same projection hands the depth buffer
+    /// three ranges that have nothing to do with each other, and testing the second
+    /// against the first hides it. The console had no depth buffer and so no such
+    /// problem: everything took its turn on the ordering table. The break is
+    /// detected the only way it can be without knowing what the game means -- a
+    /// large step towards the camera between consecutive primitives -- and the
+    /// clear is the existing per-frame one, reached by bumping
+    /// <see cref="Generation"/> rather than by a clear path of its own.
+    ///
+    /// Zero or less turns it off, which is one depth buffer for the whole frame,
+    /// **and that is the default here.** DuckStation's 300 is for games that draw
+    /// several 3D scenes in one frame; King's Field draws one world and a 2D HUD,
+    /// and 2D never recovers a depth so it never enters the mean. Measured over a
+    /// walk through area 2, the forward steps between consecutive primitives are a
+    /// single smoothly decaying population with no gap in it — 39.4% under 10
+    /// units, 47.7% under 50, 9.2% under 150, 2.8% under 300, 0.9% beyond, widest
+    /// 318 — which is ordinary depth sorting inside one scene and nothing else.
+    /// With no second population there is no scene break to detect, and at 300 the
+    /// guard fired **2575 times a second**, some twenty times a frame, throwing the
+    /// world's own depth away mid-frame and taking the frame rate from 144 to
+    /// 34-76 fps with it (each clear flushes the GL batch). Left in the code
+    /// because it is the right mechanism for a game that needs it; set to zero
+    /// because this one does not.
+    /// </summary>
+    public static float DepthClearThreshold;
+
+    /// <summary>How many times the threshold above has fired. A rate rather than a
+    /// picture: several a frame means the threshold is too small and the buffer is
+    /// being thrown away, none at all means it is doing nothing.</summary>
+    public static long ZClears;
+
+    /// <summary>Every positive step towards the camera between consecutive
+    /// primitives, bucketed at &lt;10, &lt;50, &lt;150, &lt;300, &lt;1000, &gt;=1000 view-depth
+    /// units, and the largest seen. Censused whether or not the threshold fired,
+    /// so the two populations — ordinary sorting inside one scene, and a genuine
+    /// scene break — can be told apart if they exist.</summary>
+    public static readonly long[] ZDrops = new long[6];
+
+    /// <summary>Largest drop seen in the window, in view-depth units.</summary>
+    public static float ZDropMax;
+
+    /// <summary>
+    /// True color (24-bit). While false the GL backend renders into an RGB5A1
+    /// display target and the fragment shader crushes every shaded pixel to five
+    /// bits per channel, exactly as the PlayStation's 15-bit VRAM does — which
+    /// bands a smooth fog gradient. On, the display target is RGBA8 and the shader
+    /// keeps eight bits, so the gradient is smooth without the dither crosshatch.
+    /// Textures are still sampled at five bits (they live in 15-bit VRAM), so only
+    /// the shaded gradient gains precision, not the texture palette. GL backend
+    /// only; the software rasterizer is always 15-bit. Safe to change at run time:
+    /// <see cref="GlCore"/> rebuilds its display targets on the next present when
+    /// this differs from the format they were built with.
+    /// </summary>
+    public static bool TrueColor;
+
+    /// <summary>Nothing is recorded and every lookup misses while every consumer
+    /// is off, which is what makes this cost nothing when none of them is wanted.</summary>
+    public static bool Active => _enabled || _subpixel || _zbuffer;
+
+    /// <summary>Consult the screen-position table below for vertices the exact map
+    /// could not answer for. Off by default — it is the guess this was all built to
+    /// stop making, and it is kept only so the two can be measured against each
+    /// other. Wired to KF2_PERSPECTIVE_FALLBACK.</summary>
+    public static bool PositionFallback;
+
+    const int Bits = 14;
+    const int Size = 1 << Bits;
+    const int Mask = Size - 1;
+
+    // Linear probing, bounded. A key that cannot be placed within this many slots
+    // displaces the oldest of them rather than searching further, so both Record
+    // and Collect are constant time no matter how full the table is. Wider than
+    // the four samples kept per key, so a hot pixel and its hash neighbours still
+    // fit in the window.
+    const int ProbeLen = 16;
+
+    // Several vertices share a screen pixel; last-write-wins is what hands a
+    // nearby floor a far wall's W. Four is enough for a quad's corners to collide
+    // on the clamp and still all be sitting in the table when the primitive is
+    // drawn.
+    public const int MaxCand = 4;
+
+    // An entry is stale once a table's worth of vertices has been recorded since.
+    // At a few thousand projected vertices a frame that is the last frame or two.
+    const long MaxAge = Size;
+
+    // A high outlier: the furthest vertex is more than this times the middle one,
+    // *and* that jump is at least four times the step between the nearer two. A
+    // corridor floor (100, 500, 2000) is a geometric progression and passes; a
+    // collision (100, 120, 8000) is a cliff and does not. Only the far end is
+    // tested — a vertex next to the camera among two distant ones is legitimate.
+    const float OutlierRatio = 8f;
+    const float OutlierCliff = 4f;
+
+    // Fx and Fy are the [0, 1) fraction the GTE truncated, or zero for a vertex
+    // that saturated: the packet coordinate is then the whole position, which is
+    // what keeps a shared edge closed when one end is on the clamp wall.
+    struct Slot { public int Key; public long Seq; public float Z, Fx, Fy; }
+
+    public struct Sample
+    {
+        public float Z, Fx, Fy;
+        public long Seq;
+    }
+
+    /// <summary>One vertex of the primitive being bound: the lookup key is the
+    /// packet coordinate, and the rest is filled in by <see cref="Apply"/>.</summary>
+    public struct Attr
+    {
+        public int X, Y;
+        public float Z, Fx, Fy;
+        public bool HasW, HasSub;
+    }
+
+    static readonly Slot[] _slots = new Slot[Size];
+    static long _seq;
+
+    /// <summary>Vertices recorded, and lookups that found one or did not. The
+    /// hit rate is the only real evidence that the two ends agree on the key.</summary>
+    public static long Recorded, Hits, Misses;
+
+    /// <summary>Vertices whose screen position was the GTE clamp, not the true
+    /// projection. They used to be dropped entirely; they are now the main source
+    /// of extra hits on nearby walls and floors.</summary>
+    public static long Saturated;
+
+    /// <summary>Vertices that <see cref="Apply"/> rebound from the newest sample
+    /// at their key to an older one whose depth fitted the rest of the primitive.</summary>
+    public static long Refined;
+
+    /// <summary>Vertices whose recovered W was an obvious high outlier with no
+    /// better candidate, so perspective was refused for that corner.</summary>
+    public static long Rejected;
+
+    public static void ResetCounters() =>
+        Recorded = Hits = Misses = Saturated = Refined = Rejected = 0;
+
+    /// <summary>Triangles that depth-tested, triangles that had no recovered Z
+    /// and so kept painter's order, and software-rasterizer pixels that lost the
+    /// test. The hardware path cannot count pixels without reading the buffer
+    /// back, so <see cref="ZRejects"/> stays at zero there.</summary>
+    public static long ZTris, ZSkipped, ZRejects;
+
+    public static void ResetZCounters()
+    {
+        ZTris = ZSkipped = ZRejects = ZClears = 0;
+        Array.Clear(ZDrops);
+        ZDropMax = 0f;
+    }
+
+    /// <summary>A census of the frame's <i>large</i> polygons, in the order the
+    /// ordering table submitted them, with the depth each one recovered. It exists
+    /// to answer one question a rate cannot: when a depth-tested surface disappears,
+    /// which earlier primitive claimed to be in front of it. The table is walked
+    /// back to front, so an earlier entry is one the game itself sorted as farther
+    /// away — an early entry holding a near depth over a wide area is a recovered
+    /// depth that disagrees with the game's own sort, and that is what a hole in
+    /// the picture looks like from here.
+    ///
+    /// Off unless <see cref="TriCensus"/> is set, and capped, so it costs a compare
+    /// per polygon while nobody is asking. Small polygons are counted and not kept:
+    /// a surface that hides half the view is never a small one.</summary>
+    public static bool TriCensus;
+
+    /// <summary>The ordering-table entry currently being emitted, counted from the
+    /// head — which is the <i>far</i> end, since <c>DrawOTag</c> walks back to
+    /// front. -1 outside a walk.
+    ///
+    /// This is the game's own opinion of a primitive's depth, and it is the only
+    /// thing in the port that can contradict a recovered SZ. The two normally
+    /// agree, because the entry is <c>OTZ</c> and <c>OTZ</c> is the average of the
+    /// same SZs. Where they disagree, the game overrode depth on purpose — a
+    /// skybox is a small box drawn around the camera, so it projects <i>near</i>
+    /// and is linked at the far end of the table to keep it behind everything.
+    /// Believing its SZ puts the sky in front of the world.</summary>
+    public static int OtEntry = -1;
+
+    /// <summary>How many entries the last completed walk had, so an entry can be
+    /// read back as the OTZ the game linked at: <c>otz = OtLength - 1 - OtEntry</c>.
+    /// Published one walk late, which is what makes it free.</summary>
+    public static int OtLength;
+
+    /// <summary>One large polygon: where it landed, what depth it recovered, and
+    /// whether it depth-tested at all. <see cref="MinZ"/> is the nearest of its
+    /// corners, so "entirely in front of" is <c>MaxZ &lt; other.MinZ</c>.</summary>
+    public struct BigTri
+    {
+        public int Order;
+        /// <summary>The ordering-table entry it was linked at. See <see cref="OtEntry"/>.</summary>
+        public int Ot;
+        public float MinZ, MaxZ;
+        public int X0, Y0, X1, Y1;
+        public bool Tested, Tex, Semi;
+        /// <summary>A corner the GTE saturated at ±1024. The packet then carries a
+        /// screen position that is not the projection of the vertex, so the depth
+        /// ramp across the polygon is compressed — the visible part of it reads
+        /// nearer than the surface is. That is a depth the console never had, and
+        /// the reason this flag is worth a column.</summary>
+        public bool Clamped;
+        public int R, G, B;
+
+        public long Area => (long)(X1 - X0 + 1) * (Y1 - Y0 + 1);
+        public bool Overlaps(in BigTri o) => X0 <= o.X1 && o.X0 <= X1 && Y0 <= o.Y1 && o.Y0 <= Y1;
+    }
+
+    /// <summary>Big enough to be worth a line of its own, in pixels of the 320x240
+    /// the game draws — a fiftieth of the picture. Only the *printed* lines are
+    /// filtered by it; every polygon is kept, because the surface that vanishes is
+    /// usually a crowd of small ones and the thing standing in front of them is the
+    /// only large one in the pair.</summary>
+    public const long CensusBigArea = 1500;
+
+    const int CensusMax = 2048;
+
+    static readonly BigTri[] _census = new BigTri[CensusMax];
+    static int _censusCount, _censusOrder, _censusDropped;
+
+    /// <summary>The polygons kept this frame, in submission order.</summary>
+    public static ReadOnlySpan<BigTri> Census => _census.AsSpan(0, _censusCount);
+
+    /// <summary>Polygons that were large enough but arrived after the table filled.</summary>
+    public static int CensusDropped => _censusDropped;
+
+    /// <summary>Every polygon submitted this frame, large or not — the denominator
+    /// the kept ones are a fraction of.</summary>
+    public static int CensusSubmitted => _censusOrder;
+
+    /// <summary>Called once per polygon from the rasterizer's common path, with the
+    /// vertex positions already relative to the draw area. Cheap and unconditional
+    /// on the caller's side: the size test is here.</summary>
+    public static void NoteTri(int x0, int y0, int x1, int y1, float minZ, float maxZ,
+                               bool tested, bool tex, bool semi, bool clamped, int r, int g, int b)
+    {
+        int order = _censusOrder++;
+        if (_censusCount >= CensusMax) { _censusDropped++; return; }
+
+        _census[_censusCount++] = new BigTri
+        {
+            Order = order, Ot = OtEntry, MinZ = minZ, MaxZ = maxZ,
+            X0 = x0, Y0 = y0, X1 = x1, Y1 = y1,
+            Tested = tested, Tex = tex, Semi = semi, Clamped = clamped, R = r, G = g, B = b,
+        };
+    }
+
+    /// <summary>Ask the hardware backend to read its depth attachment back at the
+    /// next <c>Present</c> and reduce it to <see cref="DepthMap"/>. One frame, on
+    /// request: a full-resolution readback is a pipeline stall, and this exists to
+    /// be looked at every couple of seconds, not every frame.</summary>
+    public static bool WantDepthMap;
+
+    public const int DepthMapCols = 32, DepthMapRows = 16;
+
+    /// <summary>The nearest depth in each cell of the finished frame, as SZ rather
+    /// than as a [0,1) window value — the same units the census prints — with
+    /// <see cref="DepthMapEmpty"/> for a cell nothing wrote. This is the occlusion
+    /// the frame actually ended up with, which no amount of reasoning about
+    /// submission order can substitute for.</summary>
+    public static float[]? DepthMap;
+
+    public const float DepthMapEmpty = 65536f;
+
+    /// <summary>Depth-testing batches by where they were drawn: a display render
+    /// target, which has a depth attachment, or the VRAM framebuffer, which has
+    /// none — and where OpenGL therefore passes every depth test silently. If the
+    /// second number is the large one, the hardware Z-buffer is not running at all
+    /// and whatever changed in the picture changed for some other reason.</summary>
+    public static long ZBatchRt, ZBatchVram;
+
+    /// <summary>Display targets thrown away and rebuilt while the Z-buffer was on.
+    /// Each one drops a depth attachment, so anything already tested into it stops
+    /// occluding. A steady count per frame means the depth buffer is being reset
+    /// underneath the frame that is using it.</summary>
+    public static long ZRtRecreated;
+
+    /// <summary>Called by the backend with the raw depth attachment. Reduces to the
+    /// grid by taking the nearest sample in each cell, since occlusion is decided
+    /// by the nearest thing there.</summary>
+    public static void SetDepthMap(ReadOnlySpan<float> depth, int w, int h)
+    {
+        var map = DepthMap ??= new float[DepthMapCols * DepthMapRows];
+        Array.Fill(map, DepthMapEmpty);
+        if (w <= 0 || h <= 0) return;
+
+        for (int y = 0; y < h; y++)
+        {
+            // The readback is bottom-up, the picture is top-down.
+            int row = (h - 1 - y) * DepthMapRows / h;
+            int rowBase = y * w;
+            for (int x = 0; x < w; x++)
+            {
+                float d = depth[rowBase + x];
+                if (d >= 1f) continue;
+                int cell = row * DepthMapCols + x * DepthMapCols / w;
+                float sz = d * 65536f;
+                if (sz < map[cell]) map[cell] = sz;
+            }
+        }
+        WantDepthMap = false;
+    }
+
+    /// <summary>Start a new frame's census. The reporter calls this after it has
+    /// read the frame it wanted, so a window that reports every two seconds still
+    /// prints one whole frame rather than a smear of several.</summary>
+    public static void ResetCensus() { _censusCount = 0; _censusOrder = 0; _censusDropped = 0; }
+
+    /// <summary>While false <see cref="Offset"/> and <see cref="OffsetMax"/> are not
+    /// accumulated, so measuring the wobble costs nothing when nobody is asking.
+    /// It is a separate switch from the counters above because the two probes
+    /// report over their own windows and must not reset each other's numbers.</summary>
+    public static bool Probe;
+
+    /// <summary>How far the recorded vertices sat from the pixel they snapped to,
+    /// summed and at worst, in pixels. Divided by <see cref="OffsetCount"/> the sum
+    /// is the mean, and for positions spread evenly inside a pixel that mean is the
+    /// mean distance from a corner of a unit square, 0.7652 — the number that says
+    /// the recovered fraction is a real fraction and not a table full of zeroes.
+    /// Clamped vertices are kept out of this sum, so the measurement stays about
+    /// the 16.16 fraction and is not blown up by the unclamped remainder.</summary>
+    public static double Offset;
+    public static float OffsetMax;
+    public static long OffsetCount;
+
+    public static void ResetOffsets() { Offset = 0; OffsetMax = 0f; OffsetCount = 0; }
+
+    // +1 so that 0 can mean "never written", which is what lets Collect stop early.
+    static int KeyOf(int x, int y) => (((y & 0x7FF) << 11) | (x & 0x7FF)) + 1;
+
+    static int Bucket(int key) => (int)(((uint)key * 2654435761u) >> (32 - Bits));
+
+    /// <summary>Called from <c>Gte.Rtp</c> with the (possibly clamped) screen
+    /// position the packet will carry, the view depth that produced it, and the
+    /// GTE's true 16.16 position. <paramref name="z"/> is SZ3, the same quantity
+    /// the divider used, so it is proportional to view-space W.
+    /// <paramref name="clipped"/> is a vertex that saturated at ±1024.</summary>
+    /// <summary>Called from <c>Gte.Rtp</c> for every vertex it projects, whether the
+    /// fallback table is filling or not: this is the accounting the two probes read,
+    /// and it has to describe what the GTE did rather than what one of the two
+    /// mechanisms happened to keep.</summary>
+    public static void NoteProjected(float fx, float fy, bool clipped, bool valid)
+    {
+        if (!valid) return;
+
+        Recorded++;
+        if (clipped) { Saturated++; return; }
+
+        if (Probe)
+        {
+            float d = MathF.Sqrt(fx * fx + fy * fy);
+            Offset += d;
+            if (d > OffsetMax) OffsetMax = d;
+            OffsetCount++;
+        }
+    }
+
+    public static void Record(int x, int y, int z, float trueX, float trueY, bool clipped)
+    {
+        if (!Active || z <= 0) return;
+
+        // On-screen: the 16.16 remainder in [0, 1). Clamped: leave the vertex on
+        // the packet coordinate. Serving the true position past ±1024 opened a
+        // hole along every shared edge whose other end was still on the wall.
+        float fx = 0f, fy = 0f;
+        if (!clipped)
+        {
+            fx = trueX - x;
+            fy = trueY - y;
+        }
+
+        int key = KeyOf(x, y);
+        int bucket = Bucket(key);
+        long now = ++_seq;
+
+        int copies = 0;
+        int oldestSame = -1;
+        long oldestSameSeq = long.MaxValue;
+        int firstEmpty = -1;
+        int oldestAny = bucket;
+        long oldestAnySeq = long.MaxValue;
+
+        for (int i = 0; i < ProbeLen; i++)
+        {
+            int s = (bucket + i) & Mask;
+            ref var slot = ref _slots[s];
+            bool stale = slot.Key == 0 || now - slot.Seq > MaxAge;
+            if (stale)
+            {
+                if (firstEmpty < 0) firstEmpty = s;
+            }
+            else if (slot.Key == key)
+            {
+                copies++;
+                if (slot.Seq < oldestSameSeq) { oldestSameSeq = slot.Seq; oldestSame = s; }
+            }
+            if (!stale && slot.Seq < oldestAnySeq) { oldestAnySeq = slot.Seq; oldestAny = s; }
+        }
+
+        int dest;
+        if (copies < MaxCand && firstEmpty >= 0) dest = firstEmpty;
+        else if (copies >= MaxCand && oldestSame >= 0) dest = oldestSame;
+        else if (firstEmpty >= 0) dest = firstEmpty;
+        else dest = oldestAny;
+
+        _slots[dest] = new Slot { Key = key, Seq = now, Z = z, Fx = fx, Fy = fy };
+    }
+
+    /// <summary>The depth and sub-pixel position last projected to this screen
+    /// position, if they are recent enough to belong to the geometry being drawn
+    /// now. One probe of the table serves both halves; which of them the caller is
+    /// allowed to use is <see cref="Enabled"/> and <see cref="Subpixel"/>.
+    /// Prefer <see cref="Apply"/> at primitive decode — this is the single-vertex
+    /// last-write path, kept for anything that is not a polygon.</summary>
+    public static bool TryGet(int x, int y, out float z, out float fx, out float fy)
+    {
+        z = 0f; fx = 0f; fy = 0f;
+        if (!Active) return false;
+
+        Span<Sample> one = stackalloc Sample[1];
+        if (Collect(x, y, one) == 0)
+        {
+            Misses++;
+            return false;
+        }
+
+        z = one[0].Z;
+        fx = one[0].Fx;
+        fy = one[0].Fy;
+        Hits++;
+        return true;
+    }
+
+    /// <summary>Bind every vertex of a triangle or quad at once. Newest-at-the-key
+    /// is the first guess; a key that has several samples is then rebound to the
+    /// depth that sits with the rest of the primitive, and a leftover high outlier
+    /// is dropped so the triangle stays affine rather than tearing.</summary>
+    public static void Apply(Span<Attr> verts, bool wantW, bool wantSub)
+    {
+        int n = verts.Length;
+        Span<Sample> pool = stackalloc Sample[MaxCand * 4];
+        Span<int> count = stackalloc int[4];
+
+        for (int i = 0; i < n; i++)
+        {
+            int c = Collect(verts[i].X, verts[i].Y, pool.Slice(i * MaxCand, MaxCand));
+            count[i] = c;
+            if (c > 0)
+            {
+                Hits++;
+                ref readonly var s = ref pool[i * MaxCand];
+                verts[i].Z = s.Z;
+                verts[i].Fx = wantSub ? s.Fx : 0f;
+                verts[i].Fy = wantSub ? s.Fy : 0f;
+                verts[i].HasW = wantW && s.Z > 0f;
+                verts[i].HasSub = wantSub;
+            }
+            else
+            {
+                Misses++;
+                verts[i].Z = 1f;
+                verts[i].Fx = 0f;
+                verts[i].Fy = 0f;
+                verts[i].HasW = false;
+                verts[i].HasSub = false;
+            }
+        }
+
+        if (n < 3) return;
+
+        int hitN = 0;
+        float logSum = 0f;
+        for (int i = 0; i < n; i++)
+        {
+            if (count[i] == 0) continue;
+            float z = pool[i * MaxCand].Z;
+            if (z <= 0f) continue;
+            logSum += MathF.Log(z);
+            hitN++;
+        }
+
+        if (hitN >= 2)
+        {
+            float target = MathF.Exp(logSum / hitN);
+            for (int i = 0; i < n; i++)
+            {
+                if (count[i] < 2) continue;
+                int best = 0;
+                float bestD = Rel(pool[i * MaxCand].Z, target);
+                for (int k = 1; k < count[i]; k++)
+                {
+                    float d = Rel(pool[i * MaxCand + k].Z, target);
+                    if (d < bestD) { bestD = d; best = k; }
+                }
+                if (best == 0) continue;
+                Refined++;
+                (pool[i * MaxCand], pool[i * MaxCand + best]) =
+                    (pool[i * MaxCand + best], pool[i * MaxCand]);
+                verts[i].Z = pool[i * MaxCand].Z;
+                verts[i].HasW = wantW && verts[i].Z > 0f;
+                // Position stays the newest-at-the-key fraction: a shared edge
+                // must not move just because this triangle picked a different Z.
+            }
+        }
+
+        if (!wantW) return;
+
+        CheckTri(verts, count, pool, 0, 1, 2);
+        if (n == 4) CheckTri(verts, count, pool, 1, 2, 3);
+    }
+
+    static void CheckTri(Span<Attr> v, Span<int> count, Span<Sample> pool,
+        int ia, int ib, int ic)
+    {
+        if (!v[ia].HasW || !v[ib].HasW || !v[ic].HasW) return;
+        int o = HighOutlier(v[ia].Z, v[ib].Z, v[ic].Z);
+        if (o < 0) return;
+
+        int idx = o == 0 ? ia : o == 1 ? ib : ic;
+        float za = v[ia].Z, zb = v[ib].Z, zc = v[ic].Z;
+        for (int k = 1; k < count[idx]; k++)
+        {
+            float z = pool[idx * MaxCand + k].Z;
+            float na = idx == ia ? z : za, nb = idx == ib ? z : zb, nc = idx == ic ? z : zc;
+            if (HighOutlier(na, nb, nc) >= 0) continue;
+
+            Refined++;
+            v[idx].Z = pool[idx * MaxCand + k].Z;
+            return;
+        }
+
+        Rejected++;
+        v[idx].HasW = false;
+    }
+
+    static int Collect(int x, int y, Span<Sample> dst)
+    {
+        int key = KeyOf(x, y);
+        int bucket = Bucket(key);
+        long now = _seq;
+        Span<Sample> tmp = stackalloc Sample[ProbeLen];
+        int n = 0;
+
+        for (int i = 0; i < ProbeLen; i++)
+        {
+            ref var slot = ref _slots[(bucket + i) & Mask];
+            if (slot.Key == 0) break;
+            if (slot.Key != key) continue;
+            if (now - slot.Seq > MaxAge) continue;
+            tmp[n++] = new Sample { Z = slot.Z, Fx = slot.Fx, Fy = slot.Fy, Seq = slot.Seq };
+        }
+
+        for (int i = 1; i < n; i++)
+        {
+            var t = tmp[i];
+            int j = i - 1;
+            while (j >= 0 && tmp[j].Seq < t.Seq) { tmp[j + 1] = tmp[j]; j--; }
+            tmp[j + 1] = t;
+        }
+
+        int outN = n < dst.Length ? n : dst.Length;
+        for (int i = 0; i < outN; i++) dst[i] = tmp[i];
+        return outN;
+    }
+
+    static float Rel(float z, float target)
+    {
+        if (z <= 0f || target <= 0f) return float.MaxValue;
+        return z > target ? z / target : target / z;
+    }
+
+    // Returns 0/1/2 for the far vertex of (a,b,c), or -1 if the three depths
+    // could belong on one surface.
+    static int HighOutlier(float a, float b, float c)
+    {
+        int i0 = 0, i1 = 1, i2 = 2;
+        float z0 = a, z1 = b, z2 = c;
+        if (z0 > z1) { (z0, z1) = (z1, z0); (i0, i1) = (i1, i0); }
+        if (z1 > z2) { (z1, z2) = (z2, z1); (i1, i2) = (i2, i1); }
+        if (z0 > z1) { (z0, z1) = (z1, z0); (i0, i1) = (i1, i0); }
+        if (z0 <= 0f || z1 <= 0f) return -1;
+        float rHigh = z2 / z1;
+        float rLow = z1 / z0;
+        if (rHigh > OutlierRatio && rHigh > rLow * OutlierCliff) return i2;
+        return -1;
+    }
+}

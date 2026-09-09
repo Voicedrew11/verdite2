@@ -1,0 +1,110 @@
+using System.Numerics;
+using ImGuiNET;
+
+namespace RecompOne.Runtime.Host.Window;
+
+/// <summary>
+/// Where the game picture actually landed on screen this frame, in the same
+/// coordinates an ImGui draw list works in.
+///
+/// The picture is not the window: it is an <c>Image</c> inside the Output panel,
+/// fitted to that panel's content region at the display's aspect and centred in
+/// it, so a 16:9 window showing a 4:3 game leaves a bar either side, and the menu
+/// bar, the dockspace and any docked panel take their share off the top and the
+/// edges. Nothing outside this file knew that rectangle, so an overlay drawn over
+/// the game could only anchor itself to the viewport and would sit partly over
+/// the surrounding chrome.
+///
+/// <see cref="Valid"/> is false whenever the panel drew no picture this frame
+/// (collapsed, or before the first frame is presented), so a caller can fall back
+/// to the viewport rather than to a stale or empty rectangle.
+/// </summary>
+public static class OutputView
+{
+    public static bool Valid { get; internal set; }
+    public static Vector2 Min { get; internal set; }
+    public static Vector2 Max { get; internal set; }
+    public static Vector2 Size => Max - Min;
+}
+
+internal sealed class OutputPanel : IPanel
+{
+    public string Name => "Output";
+    public string TitleKey => "panel.output";
+
+    public bool IsOpen
+    {
+        get => true;
+        set { }
+    }
+
+    private static uint _texId;
+    private static int _texW, _texH;
+    private static float _aspect = 4f / 3f;
+
+    public static bool IsDocked { get; private set; }
+
+    public static void SetTexture(uint id, int w, int h, float aspect = 0f)
+    {
+        (_texId, _texW, _texH, _aspect) = (id, w, h, aspect > 0f ? aspect : 4f / 3f);
+    }
+
+    //idea: in the future make this be able to draw images so you can have ornamented backgrounds
+    public void Draw()
+    {
+        ImGui.SetNextWindowSize(new Vector2(640, 480), ImGuiCond.FirstUseEver);
+        ImGui.PushStyleColor(ImGuiCol.WindowBg, new Vector4(0f, 0f, 0f, 1f));
+
+        //The picture is the point of this panel, so it gets none of the chrome
+        //every other panel wants. The themed WindowPadding (12,10) and the 1px
+        //WindowBorderSize are read by Begin when it computes the inner rect, so
+        //they are pushed around Begin only and popped straight after it: the
+        //toasts drawn below still lay themselves out on the real style, and no
+        //other panel is affected. Without this a docked, tab-bar-less Output
+        //panel filling the dockspace still letterboxes the game behind a band of
+        //window background on all four sides -- scaled by Theme.Scale, so it is
+        //widest exactly where the DPI is misread highest.
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowBorderSize, 0f);
+        var visible = ImGui.Begin(this.Title());
+        ImGui.PopStyleVar(2);
+        IsDocked = ImGui.IsWindowDocked();
+        OutputView.Valid = false;
+
+        if (!visible)
+        {
+            ImGui.End();
+            ImGui.PopStyleColor();
+            return;
+        }
+
+        if (_texId != 0 && _texW > 0 && _texH > 0)
+        {
+            var avail = ImGui.GetContentRegionAvail();
+            var imageSize = FitAspect(new Vector2(_aspect, 1f), avail);
+            var offset = (avail - imageSize) * 0.5f;
+            ImGui.SetCursorPos(ImGui.GetCursorPos() + offset);
+
+            //Published from here rather than computed from the window: this is the
+            //one point that knows both where the image starts on screen and how
+            //big the aspect fit made it.
+            var min = ImGui.GetCursorScreenPos();
+            OutputView.Min = min;
+            OutputView.Max = min + imageSize;
+            OutputView.Valid = imageSize.X > 0f && imageSize.Y > 0f;
+
+            ImGui.Image((nint)_texId, imageSize);
+        }
+
+        ToastNotifications.Draw();
+
+        ImGui.End();
+        ImGui.PopStyleColor();
+    }
+
+    private static Vector2 FitAspect(Vector2 src, Vector2 dst)
+    {
+        var scale = MathF.Min(dst.X / src.X, dst.Y / src.Y);
+        return src * scale;
+    }
+}
