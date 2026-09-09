@@ -190,6 +190,10 @@ public static class PatchSettings
         Register("display", new PerspectivePage());
         Register("display", new SubpixelPage());
         Register("display", new ShadingPage());
+        // Nothing registers a PGXP or a geometry-precision page either. PGXP buys
+        // no coverage in this game and costs a fifth of the frame rate, and the
+        // depth buffer's picture has never been judged -- both are comparisons, so
+        // they are KF2_PGXP* and KF2_ZBUFFER* on the console and nothing in Video.
         RegisterSlot("display.render_scale", new WidescreenPage());
         // Nothing registers against "input": the port draws that whole pane
         // itself (InputSection), and SettingsRegistry.Extend has no un-extend --

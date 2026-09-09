@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Linux AppImage.
 #
-# Needs the RecompOne checkout (scripts/setup_tools.sh) and the .NET 10 SDK. It
+# Needs the vendored RecompOne built (scripts/setup_tools.sh) and the .NET 10 SDK. It
 # does NOT need the disc: the launcher carries the inputs to a build and makes
 # the game on the player's machine, which is what lets this run in CI at all.
 set -euo pipefail
@@ -44,6 +44,15 @@ for d in "$APPDIR/usr/share/applications/verdite2.desktop" "$APPDIR/verdite2.des
 done
 cp "$ROOT/packaging/shared/verdite2.png" "$APPDIR/usr/share/icons/hicolor/256x256/apps/verdite2.png"
 cp "$ROOT/packaging/shared/verdite2.png" "$APPDIR/verdite2.png"
+
+# Third-party licences the artifact is obliged to carry. Noto Sans is embedded in
+# RecompOne.Runtime.dll (patches/recompone/0033, now upstream's own FontSet)
+# and is SIL OFL 1.1, which
+# requires its licence to travel with the font; the port's own MIT terms go beside
+# it rather than only in the source tree.
+mkdir -p "$APPDIR/usr/share/doc/verdite2"
+cp "$ROOT/LICENSE" "$APPDIR/usr/share/doc/verdite2/LICENSE"
+cp "$ROOT/patches/recompone/assets/NotoSans-OFL.txt" "$APPDIR/usr/share/doc/verdite2/NotoSans-OFL.txt"
 
 echo "==> appimagetool"
 TOOL="${APPIMAGETOOL:-}"

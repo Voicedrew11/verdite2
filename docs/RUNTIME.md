@@ -275,6 +275,87 @@ on the driver's swap blocks to a panel whose rate nobody here knows. A rate abov
 the panel's is capped by it, silently.
 
 
+## Two vblank timelines now ship, and the port's is the default
+
+Upstream grew its own wall-clock vblank grid after the pin this port was vendored
+from (`0409bc2`). `Interrupts` owns the grid — `VBlankCount`, `TickVBlank`,
+`MsToNextVBlank` — and `LibEtc.VSync` *blocks* in `WaitVBlanks` until the count
+reaches its target. That is what the hardware does, and it is also **a hard 60 Hz
+ceiling on every VSync call**, which is the one thing this port cannot have:
+`FramePacing` hands `FrameClock` a deliberately permissive rate and keeps its own
+deadline at `DrawOTag`, and `MenuPacing`, `LoadPacing` and `SpriteAnim` are each
+measured against a VSync that returns immediately.
+
+So both timelines ship and `LibEtc.BlockingVSync` chooses, defaulting to the
+port's own (`patches/recompone/0021-vblank-wall-clock`). `KF2_VSYNC=block` is the
+comparison. Measured at `KF2_FPS=144`, same save, same area:
+
+| | picture | world |
+|---|---|---|
+| the port's grid (default) | **144.0 fps** | 20.0 ticks/s |
+| `KF2_VSYNC=block` | **60.0 fps** | 19.7-20.0 ticks/s |
+
+Both reach the area and restore the save, so this is a rate difference and not a
+correctness one — but 60 is the ceiling the whole frame-rate feature exists to
+get past.
+
+**Whichever is chosen delivers each vblank exactly once**, and that took two
+gates rather than one. `LibEtc.TickVBlank` calls `Runtime.DispatchIrq(0)` on the
+port's timeline; upstream raises IRQ 0 from `Interrupts.PollSlow`'s own
+`TickVBlank` *and* from `Runtime.PresentFrame`. Both of those are now gated on
+`BlockingVSync`, because a present is not a vblank and the pair would otherwise
+deliver every vblank twice — at the render rate, which is the failure the wall
+clock was introduced to fix in the first place.
+
+## The window went black: nothing drove the present
+
+**Symptom:** after the merge to `0409bc2` the window is entirely black, and
+everything else is fine. The game boots, loads and plays underneath it —
+`open → game → fdat02 → fdat05`, slot 2 restored at HP 46/86 in area 1, the agent
+beacon reporting a live position, `KF2_DRAWCENSUS=1` counting 8260 bytes of
+primitives a frame in the HUD, the map tiles and the geometry submit. Nothing
+throws and nothing warns.
+
+**Cause, and it is two independent breaks of the same thing.** Upstream moved
+presentation off the game's thread. `Runtime.Run(boot)` now starts the emulation
+on a background thread and runs `PresentLoop` on the main one, and that loop is
+what calls `HostWindow.Compose` → `DoRender`. It also wraps the GL backend:
+`Hle.GpuHle.Backend = new Interp.InterpBackend(_glBackend)`, which records every
+primitive into a `FrameGraph` and issues no GL at all until `PresentLoop` calls
+`interp.Compose(i)`.
+
+**This port enters neither.** `Program.cs` is hand-owned and calls
+`Entry.Run(memory, cue)` directly — `Runtime.Run` is called from nowhere in the
+tree — because the port presents from inside the game's own `VSync`, on one
+thread: `LibEtc.VSync → Runtime.PresentFrame → HostWindow.Present →
+PanelManager.DrawPanels`. The merge dropped the `HostWindow.Present(Gpu)` call
+out of `PresentFrame` and left the interp wrapper in. So `DoRender` never ran and
+the frame graph was never replayed: two ways for the same frame to reach no
+screen, either of which is a black window on its own.
+
+**The fix keeps the port's model, which is the rule the merge was resolved
+by — upstream wins on structure, the port wins on behaviour.** `PresentFrame`
+calls `HostWindow.Present(Gpu)` again, where it was, and `OnLoad` uses the GL
+backend unwrapped so `Interp.Backend` stays null. Frame interpolation is
+deliberately not carried here, so `PresentLoop` and `HostWindow.Compose` are
+simply unreached; `Interp.Interp.Backend?.Publish()` in `PresentFrame` is then a
+no-op, and upstream's own frame-rate control in `DisplaySettingsSection` is inert
+beside the port's Video ▸ Frame pacing page.
+
+**Why the acceptance test did not catch it.** The test recorded for a merge is
+the boot walk plus `144.0 fps drawn at 20.0 ticks/s`, and every number in it was
+still true with a black window: the frame boundary is a `DrawOTag` after a
+`VSync`, and both of those are the *game* calling the runtime. Nothing in that
+chain touches GL. **A rate measured from inside the game says nothing about
+whether a picture reached the screen** — the counter to pair with it is
+`KF2_PRESENT_PROBE=1`, which reads `wide 288, plain 0, vram fallback 0` when
+`PresentDisplay` is being reached and prints nothing at all when it is not.
+
+Measured after: `KF2_FPS=144` on slot 2 in area 1, `open → game → fdat02 →
+fdat05`, 144.0 fps drawn at 19.9-20.0 ticks/s, the present census reading
+`wide 288, plain 0, vram fallback 0` every two seconds. Never looked at by eye
+here: the picture itself, which is the user's job.
+
 ## The intro movie ran at the render rate, because its pacer never armed
 
 **Symptom:** boot the port with a high frame rate chosen and the third and
@@ -562,6 +643,15 @@ field and `Apply` only resets some — leaving a `WindowMinSize` that grows on e
 call and eventually floors a window past the screen, over `0019`'s clamp. **No
 recompile.** See "The scale can put the settings out of reach" below.
 
+**`0037-chd-disc-images.patch`** is upstream's `137a793` back-ported: `CueFs`
+becomes `DiscFs` over an `IDiscImage` with `CueBinImage` and `ChdImage` behind it,
+so one disc path serves cue/bin and CHD at recompile time and at play time both.
+It also carries the commit's unrelated RAM-size change, which is where
+`Runtime.RamWordMask` comes from. **Forces a recompile** — the third patch that
+does, after `0004` and `0035` — because `EntryWriter` emits `DiscFs.Open` into
+`generated/Entry.cs`, so an existing `generated/` will not compile against the
+patched runtime. See "CHD disc images" below.
+
 **`0026-str-pacing-without-a-latch.patch`** paces an STR stream from the moment it
 starts instead of after two decoded frames happen to sit in the ring together,
 which for a movie of 13-14 sectors a frame never happened — so it was delivered
@@ -840,6 +930,136 @@ to give the game the display's aspect — `KF2_WIDESCREEN=16:9`, or Video ▸
 Widescreen — not to stretch the picture. **Never looked at by eye**: whether the
 picture now runs to the edge of the dock node, and whether a toast still sits
 where it did.
+
+## The interface's font
+
+The interface was drawn in ProggyClean, ImGui's built-in face: a 13 px bitmap.
+Three things follow from *bitmap* that no amount of styling fixes — it is pixel
+art, so it carries a debug-overlay look into a settings window laid over a
+commercial game; it does not scale, so every size other than 13 is a stretched
+bitmap and the UI-scale slider (and the misread DPI above it) blur the text
+rather than resize it; and it has no glyphs outside its own small range, so a
+path or a mod name with an accent draws boxes.
+
+Upstream fixed this in `aaf7be0` ("improved font to use noto-sans"), which our
+pin `870c5ba` predates, so `patches/recompone/0033-sans-serif-interface-font.patch`
+is that commit back-ported: `Icons` becomes `FontSet`, Noto Sans is embedded and
+added as the base face with Font Awesome merged over it in the private-use range
+the icons already used, and `HostWindow` asks for `16f * _dpiScale` where it asked
+for `13f`. The four call sites are `Icons.Load`, `Icons.Or` and two `Icons.Gear` /
+`Icons.Ellipsis` glyphs in `ModsPopup`; nothing in `patches/` referenced the class,
+so the rename costs the port nothing.
+
+**Upstream's second face is deliberately not carried.** `aaf7be0` also embeds
+`NotoSansCJK-Regular.otf` for the Japanese and Chinese ranges — 16.5 MB, which
+would sit in `RecompOne.Runtime.dll` and therefore in the AppImage, the zip and
+the installer. The runtime ships three languages and every string in
+`languages.json` is Latin (checked: no character above U+024F), so those ranges
+would render nothing anybody can select. Cyrillic, Greek and Vietnamese *are*
+kept: they are Noto Sans's own coverage, they cost atlas space rather than
+megabytes, and they are what a non-Latin path or mod name falls back to instead of
+boxes.
+
+**The asset is a file in this repository, not a hunk in the patch.** A 569 KB TTF
+inside a `.patch` is a base85 blob that `setup_tools.sh`'s peel loop would
+reverse-check on every run; instead `patches/recompone/assets/NotoSans-Regular.ttf`
+is copied into the checkout between `git clean -fd` and the apply loop, and the
+patch adds only the `<EmbeddedResource>` entry naming it. A missing asset stops
+the script there rather than failing the build minutes later with nothing pointing
+back here. The font is SIL OFL 1.1 and its licence travels with it
+(`assets/NotoSans-OFL.txt`); a release that ships the font ships that file.
+
+`FontSet.Load` falls back to `AddFontDefault` when the resource is missing, which
+is the icon font's own miss the other way up: the interface loses its face, not
+its text.
+
+**This is the one patch that wants to stop applying.** When the pin moves past
+`aaf7be0` the change is upstream's own, and a `FAILED TO APPLY` on `0033` means
+delete it (and the asset copy in `setup_tools.sh`) rather than rebase it — though
+the CJK face comes back with it, so weigh the 16 MB then.
+
+Measured: the resource is embedded (`NotoSans-Regular.ttf` present in the built
+`RecompOne.Runtime.dll`), a run prints no `[fonts]` line, and two consecutive
+`setup_tools.sh` runs both report `0033 ... applied`. **Never looked at by eye** —
+whether 16 px is the right size, whether the icons still sit on the baseline after
+the size change, and whether anything in the port's own panes now wraps or
+overflows at the larger metrics.
+
+## CHD disc images
+
+The port read cue/bin and nothing else, at recompile time and at play time both,
+because `CueFs` was the only filesystem the runtime had. Upstream fixed that in
+`137a793` ("merge back experimental chd support, heavely based on libchd"), which
+our pin `870c5ba` predates by six commits, so
+`patches/recompone/0037-chd-disc-images.patch` is that commit back-ported.
+
+**What it changes is the shape rather than the format.** `CueFs` becomes `DiscFs`
+and `CueBin` becomes `CueBinImage`, both behind a new `IDiscImage` — track list,
+leadout, `ReadSectorData(lba, size)` — with `ChdImage` beside it over a
+from-scratch libchdr port (`Cdrom/Chd/`: the header, the hunk map, a bit reader,
+Huffman, LZMA, FLAC, CD-sector ECC regeneration). `DiscImage.Open` picks between
+them on the file extension and falls back to the CHD magic for a file named
+neither, so **one call site serves both formats** and every layer above it — the
+recompiler's `OverlayWriter` and `Parser`, the runtime's `CdController` and
+`BiosA`, the launcher's `DiscCheck` and `BuildKey` — only changed a type name.
+
+**The commit bundles a second, unrelated change and it is carried.** RAM size
+becomes a `PSMemory` ctor argument, and the literal `0x1FFFFCu` at three sites
+(`Dma`'s linked-list walk, `LibGpu.DrawOTag` twice) becomes `Runtime.RamWordMask`
+derived from it. Nothing in this port passes a size, so the RAM is the same 2 MB
+it always was and the mask is the same `0x1FFFFC`; it is carried because the rest
+of the commit's context is written against it, and dropping it would mean
+maintaining a divergence for no gain. That change is why `setup_tools.sh`'s own
+comment cites `0x1FFFFCu became Runtime.RamWordMask` as the example of upstream
+drift that breaks the stack — it was the drift, and now it is in the stack.
+
+**Two hunks conflicted, and both are in files a port patch had already edited.**
+`PSMemory`'s constructor is where `0034` initialises the PGXP shadow, and its
+comment said this pin has no `ramSize` argument to size it from — true then, false
+now; the `PgxpMemory.Init((uint)_ram.Length)` moved below the allocation and the
+comment says why it still reads the array rather than `MemoryMap`. `DrawOTag`'s
+first statement carries `0003`'s SDK trace above it and `0012`'s
+`WriteGp0(value, src)` below it, so the one-line mask change had to be merged
+between them rather than applied.
+
+**Codec coverage is cdzl, cdlz, cdfl, zlib and lzma.** Not zstd: a `chdman -c cdzs`
+image raises `chd codec cdzs its not supported` out of `ChdCodecSet`, which reaches
+`DiscCheck.Validate` as a refusal at the picker rather than as a crash minutes
+later. The image measured here is v5, `cdlz`/`cdzl`/`cdfl`, one MODE2_RAW track.
+
+**The build key does not see the format.** `BuildKey.Compute` hashes the six files
+the recompile reads, and they come out identical from either container, so the same
+dump as a cue and as a CHD produces the same key and shares one build directory —
+switching between them costs no rebuild. The launcher's variable is `discPath` now
+rather than `cuePath`; the recompiler config's key is still `"cue"`, that being its
+schema, and a `.chd` goes in the same slot.
+
+### Measured
+
+- **The recompile is byte-identical.** `generated/` built from the CHD and from the
+  cue/bin of the same dump differ in nothing (`diff -r`, 13 files).
+- **It costs about half a second, once.** Three recompiles each: 0.86-0.89 s from
+  the cue, 1.35-1.39 s from the CHD, against a 12.7 s first run overall.
+- **An area load costs nothing measurable.** `KF2_LOADPACING=0
+  KF2_LOADPACING_PROBE=1` on the autostart load reads 84 steps in **305.8 ms over
+  105 blocking VSync calls** from the cue and **305.1 ms over 105** from the CHD —
+  the same figure, the same waits.
+- **It boots the whole chain.** `KF2_AUTOSTART=2` from the CHD walks
+  `open` → `game` → `fdat02` → `fdat05`: three EXE overlays *and* two area-module
+  swaps, and a module swap is armed on a CD read hitting an absolute LBA, so that
+  is the raw sector path and not only the ISO directory. It lands in slot 2, area 1,
+  and holds **144.0 fps drawn at 20.0 ticks/s**.
+- **The STR stream decodes.** 100 s at the title from the CHD gives 1098 `[mdec]`
+  lines and no errors, which is `LibCdStream` reading 2352-byte sectors.
+- **The shipped launcher's first run works from a CHD.** `Verdite2` against a fresh
+  data directory validates it, keys it, recompiles, compiles and plays, at 144.0 fps
+  / 20.0 ticks/s.
+- **The key really is format-blind.** Pointing the same data directory at the
+  cue/bin of that dump afterwards runs zero recompiler lines and leaves one build
+  directory (`4be97cc3237e2cd1`): the cue reused the CHD's build.
+
+Nothing here is a picture, so there is nothing new to look at by eye: a CHD is the
+same disc.
 
 ## Two general shapes worth keeping
 

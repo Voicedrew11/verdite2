@@ -529,8 +529,39 @@ Kf2.Subpixel.Install();
 // the same one, but the picture has not been checked by eye. Its switch is under
 // Video with the others.
 Kf2.ZBuffer.Configure(Environment.GetEnvironmentVariable("KF2_ZBUFFER"),
-                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_PROBE"));
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_PROBE"),
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_THRESHOLD"));
 Kf2.ZBuffer.Install();
+
+// PGXP -- upstream RecompOne's own vertex tracking, backported as
+// patches/recompone/0034-0036, and the second mechanism the port has for the one
+// number everything above depends on. GteVertexMap pairs memory reads and writes
+// by value and cannot see a vertex the game computes; PGXP is told what every
+// register holds, by hooks the recompiler emits, so it does not have to guess.
+//
+//     KF2_PGXP=1              use it instead of the address map
+//     KF2_PGXP_TEXTURE=0      its share of perspective correction off
+//     KF2_PGXP_CULLING=0      leave backface culling on truncated positions
+//     KF2_PGXP_CPU=0          no per-instruction register tracking
+//     KF2_PGXP_MEMORY=0       no RAM shadow
+//     KF2_PGXP_VERTEXCACHE=0  no screen-position fallback
+//     KF2_PGXP_CACHEW=0       let that fallback answer positions but not depths
+//     KF2_PGXP_TOLERANCE=2    how far a recovered position may sit from the
+//                             packet's before it is refused; -1 turns it off
+//     KF2_PGXP_PROBE=1        report the coverage, against the address map's
+//
+// Off by default: the coverage is measured, the picture is not. Installed after
+// ZBuffer because the depth buffer reads whatever this decides.
+Kf2.Pgxp.Configure(Environment.GetEnvironmentVariable("KF2_PGXP"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_TEXTURE"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_CULLING"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_CPU"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_MEMORY"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_VERTEXCACHE"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_CACHEW"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_TOLERANCE"),
+                   Environment.GetEnvironmentVariable("KF2_PGXP_PROBE"));
+Kf2.Pgxp.Install();
 
 // True color (24-bit) output for the GL backend. The console renders into 15-bit
 // VRAM, so a shaded fog gradient bands into steps unless the dither hides it with
@@ -543,6 +574,25 @@ Kf2.ZBuffer.Install();
 // fragment shader). Its switch is under Video with the others.
 Kf2.TrueColor.Configure(Environment.GetEnvironmentVariable("KF2_TRUECOLOR"));
 Kf2.TrueColor.Install();
+
+// Which vblank timeline VSync runs on. Upstream grew its own after the pin this
+// port was vendored from: Interrupts owns a wall-clock grid and VSync *blocks*
+// in WaitVBlanks until the count reaches its target, which is what the hardware
+// does -- and is also a hard 60 Hz ceiling on every VSync call. This port cannot
+// have that ceiling: FramePacing hands FrameClock a deliberately permissive rate
+// and keeps its own deadline at DrawOTag, and MenuPacing, LoadPacing and
+// SpriteAnim are each measured against a VSync that returns immediately. So the
+// port's own non-blocking grid (patches/recompone/0021-vblank-wall-clock) is the
+// default and upstream's is the comparison:
+//
+//     KF2_VSYNC=block  upstream's blocking timeline; anything else keeps ours
+//
+// Both ship. Interrupts.PollSlow and Runtime.PresentFrame gate their own IRQ 0
+// on this, so whichever timeline is chosen delivers each vblank exactly once.
+RecompOne.Runtime.Sdk.LibEtc.BlockingVSync =
+    Environment.GetEnvironmentVariable("KF2_VSYNC") == "block";
+if (RecompOne.Runtime.Sdk.LibEtc.BlockingVSync)
+    Console.WriteLine("[KF2] vsync: upstream's blocking timeline (the port's own grid is off)");
 
 // Auto reload. One post-hook on the end of main-loop stage 3 watches for the
 // player's death and reloads the last save through the game's own loader, so a

@@ -31,6 +31,28 @@ at a `.EXE` therefore needs `"skip": 2048` to step over the 0x800-byte header.
 (The *boot* executable is different: it goes through `Psx/Parser.cs`, which
 strips the header itself.)
 
+## Two patches change the generated code, and only two
+
+Most of `patches/recompone/` is runtime: change it, rebuild the checkout, run.
+**Two patches change what the recompiler *emits*, so a stale `generated/` is a
+silent wrong answer rather than a build error.** Re-run the recompiler after
+touching either, and after any `setup_tools.sh` that reports them newly applied:
+
+- `0004-libapi-dma-callbacks.patch` — `SdkPatches` gains an entry, so which calls
+  bind to the runtime's HLE changes.
+- `0035-pgxp-cpu-hooks.patch` — `InstructionEmitter` appends
+  `if (Pgxp.CpuTracking) PgxpCpu.X(...)` to every load, store, move, shift, add,
+  multiply and divide. Measured: 68,188 sites in `game.cs`, no change in line
+  count (they append to existing lines), and the release build 15 s → 37 s. The
+  emitted gate is a static bool, so with PGXP off the game still measures 144.0 fps
+  at 20.0 ticks/s — an unrecompiled tree does not run *slower*, it runs with PGXP
+  permanently unable to answer, which the probe reports as a coverage collapse to
+  the vertex cache rather than as an error.
+
+```bash
+dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build -- config/kf2.json
+```
+
 ## Generating function maps
 
 There is no King's Field decompilation producing an ELF + `.map`, so the

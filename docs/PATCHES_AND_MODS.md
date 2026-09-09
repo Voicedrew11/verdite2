@@ -191,7 +191,7 @@ the prose became a hover tooltip and the counters stayed on the console.
 checkbox is the checkbox's own label written twice with a rule through it, so the
 shading control is titled `Enhancements` and anything else of that size can join
 it there — perspective correction, sub-pixel positioning and the Z-buffer all
-did; `FramePacingPage`, which is a combo plus a live measurement, keeps its own.
+did; `FramePacingPage`, which is a slider plus a live measurement, keeps its own.
 Drawing a heading only when the title changes is the whole implementation.
 
 **The title is the heading and `Order` is the sort key, and that used to be one
@@ -211,7 +211,7 @@ a page between two of them draws the heading twice.
 **The order it produces is the argument.** Frame pacing goes above Enhancements
 because the frame rate is the option a player came to Video for and the fidelity
 switches are the port's extras, and *Smooth motion between game ticks* moved out
-of Enhancements to sit directly under the frame-rate combo — it is greyed out
+of Enhancements to sit directly under the frame-rate slider — it is greyed out
 whenever the rate is not above the world's tick, which is the shipped default, and
 the control that decides that is the one immediately above it. A dead tick met
 before its cause reads as a bug; met under its cause it reads as a note.
@@ -406,9 +406,54 @@ Two further shapes worth copying. The rate is a **double, not a vblank divisor**
 "arbitrary" was the point, and 144 is not 60/n — and the saved key changed with
 it, from `kf2.framepacing.vblanks` to `kf2.framepacing.fps`. `SavedRate` reads the
 old key once, converts (`n` → `60/n`, `0` → uncapped) and writes the new one, so an
-existing config keeps the rate it had. And the settings page is presets **plus a
-free number**: a player on a 165 Hz panel should be able to say 165, and the
-slider only appears once Custom is chosen, so the common case stays one control.
+existing config keeps the rate it had. And the settings page is **a slider whose
+positions are a list**, which is the shape of the render-scale slider it sits
+directly under.
+
+That control has been three things. It was a combo of presets with a
+`Custom...` entry that revealed a second slider, and it was the wrong shape for
+the free number twice over — it made an arbitrary rate a *mode* to be selected
+before it could be reached, and it put the ordinary case, a panel's own refresh
+rate, behind an extra click for the sake of the rare one. So it became one
+`SliderFloat` from 10 to 300 fps with the presets as **pins**: tick marks drawn
+on the track, snapped to while a drag came within five pixels of one, the
+tolerance in pixels rather than in fps and capped at half the gap to the next
+pin, and the snap gated on the left button being held so that ctrl-click entry
+and keyboard nav could still reach a rate by name.
+
+**That was three mechanisms to make a continuous control behave like a discrete
+one, and the discrete one was the answer.** Every integer from 10 to 300 was a
+position the handle could land on, so the rates a player actually wants had to be
+recovered by a magnet and then drawn back onto the track to say where they were
+— and a value the player could reach but the magnet would pull off is a control
+that argues with the hand. A frame rate is not a continuous quantity to a player
+in the first place: it is the panel they own. So the slider is a `SliderInt`
+over an index into the list — 20, 30, 40, 50, 60, 75, 90, 100, 120, 144, 165,
+180, 240 — and it needs neither the magnet, nor the pixel tolerance, nor the
+drawn ticks, all three of which are gone with the `Snap` and `DrawPins` bodies
+that held them.
+
+Two details make it read as a rate rather than as an index:
+
+- **The format string is a literal**, `$"{Pins[_index]:0} fps"`, rather than a
+  specifier. ImGui hands the format to `sprintf` with the slider's own value, so
+  a format carrying no `%` prints the label and never the index — its own trick
+  for a named-position slider.
+- **Ctrl-click entry is off** (`ImGuiSliderFlags.NoInput`), because the box would
+  open on the text `144 fps` and there is no specifier to read a number back out
+  of it. A typed rate has nowhere to land on a slider whose positions are a list
+  anyway; `KF2_FPS` is where a rate that is not on the list belongs.
+
+`FramePacing` still takes an arbitrary double and that is still the point of the
+patch, so a rate set outside the menu is **left running and said out loud**: the
+slider re-reads `FramePacing` on every frame it is not being held, parks the
+handle on the nearest position, and prints `Running at N fps, set outside this
+menu.` under it whenever the two disagree by more than half a frame. Nothing is
+written until the slider is moved. Pacing switched off entirely (`KF2_FPS=off`)
+has no position on the scale either, so the handle parks at the world's tick
+rate — 0 is not a rate any control here can express, and a handle at the far
+left claiming 20 fps while the port draws unbounded would be a lie about what it
+is doing.
 
 ### One switch for all of the smoothing
 

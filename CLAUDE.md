@@ -43,11 +43,12 @@ direct hit. Grep `docs/` for the title, not `NOTES.md`.
 
 ## Build and run
 
-Nothing here builds without the disc (gitignored, `disc/KingsField2.cue`) and
-without `tools/RecompOne` (a gitignored checkout, not a submodule).
+Nothing here builds without the disc (gitignored, `disc/KingsField2.cue`).
+`tools/RecompOne` is **vendored** — its sources are tracked here, so a fresh
+clone already has it and nothing needs cloning.
 
 ```bash
-bash scripts/setup_tools.sh          # clone RecompOne, apply patches/recompone/*, build recompiler
+bash scripts/setup_tools.sh          # build the vendored recompiler
 
 # recompile MIPS -> C# into generated/ (~2099 functions, ~163k lines)
 dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build -- config/kf2.json
@@ -56,9 +57,10 @@ dotnet build KingsField2Recomp.csproj -c Release
 dotnet run --project KingsField2Recomp.csproj -- disc/KingsField2.cue
 ```
 
-`setup_tools.sh` is idempotent and is also how you re-apply the local patches
-after pulling upstream. The cue path is needed at *play* time as well as at
-recompile time.
+`setup_tools.sh` builds; `--sync-upstream` starts the next three-way merge from
+upstream, and `--signatures` fetches the 15.7 MB PSY-Q bank (gitignored, read
+only by the standalone `--autoconfigure`). The cue path is needed at *play* time
+as well as at recompile time.
 
 There are no tests. Verification is empirical: run the game with log channels on
 and check the trace against what the SDK sequence should look like (see the
@@ -124,12 +126,23 @@ KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, c
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_TRUECOLOR=1                        # 24-bit shaded output, no 15-bit banding (off by default; GL backend only)
+KF2_VSYNC=block                        # upstream's blocking vblank timeline instead of the port's grid (caps the picture at 60)
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
 KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
 KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
+KF2_PGXP=1                             # upstream's PGXP as the vertex source (off; the address map answers)
+KF2_PGXP_TEXTURE=0                     # its share of perspective correction off
+KF2_PGXP_CULLING=0                     # leave backface culling on truncated positions
+KF2_PGXP_CPU=0                         # no per-instruction register tracking (and so no RAM shadow)
+KF2_PGXP_MEMORY=0                      # no RAM shadow
+KF2_PGXP_VERTEXCACHE=0                 # no screen-position fallback
+KF2_PGXP_CACHEW=0                      # let that fallback answer positions but not depths
+KF2_PGXP_TOLERANCE=2                   # how far a recovered position may sit from the packet's; -1 off
+KF2_PGXP_PROBE=1                       # its coverage, and where each answer came from
 KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off by default)
+KF2_ZBUFFER_THRESHOLD=300              # restart the depth buffer when the scene jumps forward (0, off)
 KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-tested
 KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map of the depth buffer
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
@@ -651,12 +664,59 @@ is shaped the same way — mechanism in `patches/recompone/0010` and `0012`, swi
 mechanism has been measured and the picture has not. **The Z-buffer is the same
 depth used as occlusion** rather than as a texture denominator: the GPU has none,
 so intersecting surfaces take turns in front of each other on the ordering table,
-and `patches/recompone/0014` tests the recovered SZ per pixel instead. It has
-**no user-facing switch** — the Video checkbox was removed because the picture is
-effectively unbridgeable (DuckStation's PGXP depth buffer fails on the same
-per-polygon OTZ averages), so the mechanism is kept for diagnosis only, driven
-from the console by `KF2_ZBUFFER` / `KF2_ZBUFFER_PROBE`.
-See "Sub-pixel vertex positioning" and "Z-buffer" in `docs/RENDERING.md`. Auto reload is a
+and `patches/recompone/0014` tests the recovered SZ per pixel instead. **It has
+no control in the window** — `KF2_ZBUFFER` and `KF2_ZBUFFER_THRESHOLD`, the
+threshold defaulting to off — because the cause the notes had left open was
+found: `vDepth` is an
+ordinary varying, so OpenGL interpolates it in `1/w`, and `HleTri` set the clip W
+only for triangles whose *texture* was being corrected — so every untextured wall
+arrived with `w = 1` and its interior depths came out linear in screen space,
+which is the one thing a view depth is not. The software rasterizer never had it
+(it interpolates the reciprocals and takes one back), so the two renderers had
+disagreed about the interior of most of the architecture. `0036` gives a
+depth-tested triangle a real clip W whichever mechanism recovered it; the cost is
+that "depth buffer on, perspective correction off" now corrects textures too,
+which is a comparison rather than a shipped picture. Still off by default and
+still unjudged by eye. **Both of the new guards were picked by census rather than
+by copying DuckStation, and one of them changed as a result.** The depth-clear
+threshold looks for a scene the game restarted mid-frame; measured, the forward
+steps between consecutive primitives are one smoothly decaying population with no
+gap (39.4% under 10 units, 47.7% under 50, 9.2% under 150, 2.8% under 300, 0.9%
+beyond, widest 318), because this game draws one world and a 2D HUD and 2D never
+enters the mean — so there is no break to find, and DuckStation's 300 fired **2575
+times a second**, twenty times a frame, taking 144 fps down to 34-76 as each clear
+flushed the GL batch. It is 0 now. PGXP's tolerance censused the same way is one
+population too: nothing past 2 px ever, widest 1.87, so 2 is inert and stays as a
+tripwire — and the 2.6-7.7% sitting between 1 and 2 px is not a wrong vertex but
+the **divider**, `PushPrecise`'s double-precision `H/w` against the GTE's own `Unr`
+reciprocal table. **The second mechanism beside it is PGXP**
+(`patches/recompone/0034`-`0036`, upstream RecompOne's own, backported from
+`39fb337a`/`91c20fcf`/`95f0585b`/`6aae910a`): the same two numbers followed through
+the CPU's registers by hooks the recompiler emits, rather than paired by value out
+of `PSMemory`'s traffic. `patches/Pgxp.cs` is the switch and the probe and
+`KF2_PGXP*` the console equivalents; both sources ship and **`KF2_PGXP` alone
+chooses** — PGXP has no control in the settings window and its saved key is not
+read, so a config that ticked it while upstream's block was drawn is not left
+running a fifth slower with nothing to explain it. Upstream's own frame-rate
+slider went with it: it writes `Interp`'s key, disables itself unless PGXP is on,
+and this port never enters `PresentLoop`, so it changed nothing it claimed to and
+was the second frame-rate slider in one pane. See "PGXP has no control in the
+window" in `docs/RENDERING.md`.
+**Measured in area 2 at 144 fps, PGXP bought no coverage in this game** — the
+address map answers for 92.2-97.1% of vertices against PGXP's 93.4-96.7%, because
+King's Field assembles its packets with whole-word `lw`/`sw` out of a transform
+cache, the one shape a value ring follows perfectly — **and it costs a fifth of
+the frame rate** (144.0 fps against 106.7-114.9). `KF2_PGXP_CPU=0` isolates that
+cost to the emitted hooks — 144.0 fps again, but 79.2-85.7% coverage and **zero**
+answers from the RAM shadow, since `PgxpMemory.Store` is only reached from
+`PgxpCpu`: upstream's CPU and memory ticks are not independent, and without the
+first PGXP is the screen-position guess the ring replaced. What it has that the ring cannot
+is backface culling decided on precise positions, true float positions rather than
+a recovered fraction, and coverage by construction instead of by luck of the copy.
+The emitted hooks are free when it is off: 144.0 fps at 20.0 ticks/s with PGXP
+disabled on the recompiled binary. `0035` is one of three patches that force a
+recompile, with `0004` and `0037`.
+See "Sub-pixel vertex positioning", "Z-buffer" and "PGXP" in `docs/RENDERING.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
 default and its knobs — the switch and the slot — are under Gameplay; **the
@@ -1276,13 +1336,125 @@ AssemblyInfo files (CS0579).
 
 ## The RecompOne checkout
 
-`tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
-clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Thirty
-of the thirty-four are load-bearing; `0002`, `0003` and `0015` are diagnostics and
-`0013` is a settings-placement hook. The numbering has doubled up twice
-(`0014b`, and `0021` naming both true-color and the vblank clock), so the count is
-of files, and the glob's sort is the apply order.
+**`tools/RecompOne/` is vendored: its sources are tracked here, so an edit made
+inside it is a change to this repository like any other.** It used to be a
+gitignored clone of an upstream pin with `patches/recompone/*.patch` replayed
+over it on every run, and the patches are *kept* — they are no longer replayed.
+
+**Why that changed, because the reason generalises.** `git apply` matches text
+context and knows nothing about what upstream changed, so upstream's Rider
+reformat (`410f0d4`) broke 28 of the 39 patches at once — and would have broken
+them again on every future pin move, because a diff is permanently written
+against context that has to still be there. A vendored fork has a **merge base**,
+and a three-way merge reasons about changes rather than appearances: the reformat
+is absorbed once, as a commit. Measured: taking one real upstream commit
+(`67fc37c`, 23 files) costs 23 conflict hunks as a merge, against hand-authoring
+a ~700-line patch carried for the life of the project — which is exactly what
+`0034` (1,315 lines) and `0037` (2,479 lines) already were. **In the patch
+workflow every gift from upstream becomes permanent debt.**
+
+  - `tools/RecompOne/UPSTREAM` — the upstream commit this tree was merged from,
+    and so the merge base for the next harvest. Currently `0409bc2`.
+  - `tools/RecompOne.git/` — the fork's own history: the 39 patches as commits,
+    the merge, and the upstream remote. Gitignored and rebuilt on demand, so a
+    fresh clone needs none of it to build or play. Reach it with
+    `git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne <cmd>`.
+  - `bash scripts/setup_tools.sh --sync-upstream` — fetch upstream, list what is
+    new, and leave a three-way merge in the tree to resolve. A single commit is
+    `cherry-pick -n <sha>` through the same git-dir.
+
+**What the merge to `0409bc2` decided is the model for the next one.** Upstream
+wins on structure and on anything it has since implemented itself; the port wins
+on behaviour, and nothing of the port's is dropped without evidence that upstream
+carries the same code. Four patches collapsed into upstream's own: `0037` (all 14
+CHD files byte-identical to `137a793`), `0034` (our `Runtime/Pgxp/` differed from
+upstream's `Gpu/Pgxp/` only by the reformat — one directory now, with `0036`'s
+`PgxpStats` beside it), `0033` (upstream's `FontSet` verbatim; the 16.5 MB CJK
+face is simply not embedded, so the load is inert and the file will never
+conflict again) and the GTE transform ring, `PushPrecise` and `Nclip`. Four were
+kept because upstream converged differently and worse for this game — `0006`,
+`0026`, `0035`, and the vblank timeline below. **Four were kept whole because
+upstream deleted what the port needs**: it removed the software rasterizer and
+does perspective correction with its own shader attribute, so `GpuRaster`,
+`GlCore`, `GlShaders` and `GpuHleForward` stay one unit. Upstream's VRAM-dirty
+tracking and its PGXP `ResolveAmbiguous` are left unharvested on purpose and are
+the obvious next thing to take.
+
+**The one that had to be put back by measurement is `0005`.** The merge took
+upstream's rewritten `LibCd` whole, on the theory that its new IRQ and callback
+pump subsumed it. It does not: upstream signals a CD interrupt only through the
+sync/ready/data callbacks and has no `DeliverEvent` on `HwCdRom` at all, and
+King's Field's loader is event-driven (`EvMdINTR`). Measured before the graft —
+`GAME.EXE` loads, no `fdat` module ever does, the agent beacon reads `hp 0` at
+`pos 0,0,0` forever, and `LoadPacing` reports a disc wait open for over 30 s.
+After — `open → game → fdat02 → fdat05`, slot 2 restored at hp 46/86 in area 1,
+144.0 fps drawn at 20.0 ticks/s, no exceptions and every hook attached. **That
+run is the acceptance test for any future merge — and it is not sufficient on its
+own, because every number in it was still true with a completely black window.**
+The merge also moved presentation onto upstream's `Runtime.Run`/`PresentLoop`,
+which this port never enters (`Program.cs` calls `Entry.Run` directly and presents
+from inside the game's own `VSync`), and wrapped the GL backend in upstream's
+`InterpBackend`, which records primitives into a `FrameGraph` that only
+`PresentLoop` replays. Two independent ways for a frame to reach no screen, with
+nothing thrown and the whole game running normally underneath. `PresentFrame`
+calls `HostWindow.Present(Gpu)` again and the GL backend is used unwrapped, so
+`Interp.Backend` stays null and frame interpolation stays uncarried. **The rate is
+measured from inside the game — a `DrawOTag` after a `VSync`, neither of which
+touches GL — so pair it with `KF2_PRESENT_PROBE=1`,** which reads `wide 288, plain
+0, vram fallback 0` when `PresentDisplay` is reached and prints nothing at all
+when it is not. See "The window went black" in `docs/RUNTIME.md`.
+
+**The second thing the merge broke silently is `0012`'s address map.** Upstream
+added RAM fast paths to `PSMemory.ReadU32`/`WriteU32` — an `Unsafe` access
+straight into the array, taken by every `lw` and `sw` the game makes — which
+return before the slow paths where `GteVertexMap.NoteRead`/`NoteWrite` live. This
+mechanism *is* following a value through the game's `lw`/`sw`, so skipping the
+hooks skips the mechanism: nothing bound to an address, every `TryGet` a miss, and
+both halves quietly falling back to what a miss means — **affine textures and
+whole-pixel vertex wobble, with `[KF2] perspective: on` still printed at boot**.
+The hooks are offered from the fast paths now, on the same `GteVertexMap.Active`
+gate. The counter that named it is `KF2_PERSPECTIVE_PROBE=1` reading `0 caught/s,
+0 copied/s` beside a healthy `projected/s`; measured after, in area 2 at 144 fps,
+93.0-93.7% hit, inside the band this was first measured at. See "The RAM fast path
+went round both hooks" in `docs/RENDERING.md`.
+
+**The third is `0022`-`0024`'s background clear, and it is the one that was
+visible.** `LibGpu.PutDrawEnv`'s `isbg` rectangle is the *only* thing that paints
+the widescreen margin every frame — `GlCore` writes back and re-syncs a target's
+middle `W` columns only, so the margin columns live nowhere but in the render
+target and are otherwise reached only by geometry that spills past the game's own
+320-wide clip. Upstream has no margin, so its clear covers `clipW` where the
+port's covered `clipW + 2*margin`, and the merge took upstream's. Without it the
+margins accumulate every primitive that ever crossed the edge and never lose one:
+reported from play as ghosting that **persists while standing still**, **only
+gains content as you move**, and keeps a damage flash's red **permanently** —
+`Widescreen.Stretch` widens that tint across the margin by design, so the flash
+reaches out there and then nothing ever washes it off. No setting touches it
+because it is not a setting; only going back to 4:3 removes the margin that is
+accumulating. See "The margin's only clear is the game's own" in
+`docs/WIDESCREEN.md`.
+
+**`patches/recompone/` is still the record of what the port changed and why**,
+and the numbering below is still how each change is referred to in the source.
+Thirty-five of the thirty-nine are load-bearing; `0002`, `0003` and `0015` are
+diagnostics and `0013` is a settings-placement hook. **One patch has an asset
+beside it**: `patches/recompone/assets/` holds the TTF `0033` embeds, which is
+now simply a tracked file in the vendored tree.
+
+**Upstream 0409bc2 emits one class per overlay** (`Recompiled.KingsField2_game`
+rather than `Recompiled.KingsField2`), because CoreCLR caps a class at 65535
+methods. The fourteen direct static call sites in `patches/AreaWarp.cs`,
+`patches/AutoReload.cs`, `patches/CullGrid.cs`, `mods/kf2debug/Noclip.cs` and
+`mods/kf2debug/Attributes.cs` carry a one-line `using KingsField2 =
+Recompiled.KingsField2_game;` alias instead of being rewritten — every function
+named in them is GAME.EXE's, so the alias names the overlay once. `MenuRegistry`
+also lost its numeric ordering for anchor-by-name, which is the one thing that
+broke `mods/kf2debug`.
+
+**Historical, and kept because the finding outlives the mechanism.** What follows
+describes the replay loop `setup_tools.sh` no longer has. It is the clearest
+statement of why a diff stack cannot be maintained against a moving upstream,
+which is the argument the vendoring rests on.
 
 `setup_tools.sh` **does** rebuild the checkout on this branch, and that used to be
 false: `0021-true-color-24bit-output.patch` was authored while
@@ -1291,9 +1463,9 @@ false: `0021-true-color-24bit-output.patch` was authored while
 rejected them, leaving the tree at `0020`. The patch has been regenerated against
 this branch's context. Verified by applying all thirty-three patches in glob order
 to a pristine worktree of the pin: every one applies, and the result is
-byte-identical to the tree in place. (`0032` was added after that verification and
-is checked the same way — two consecutive `setup_tools.sh` runs, the second still
-reporting `applied` after a clean peel.)
+byte-identical to the tree in place. (`0032` and `0033` were added after that verification
+and are checked the same way — two consecutive `setup_tools.sh` runs, the second
+still reporting `applied` after a clean peel.)
 
 `setup_tools.sh` **peels the stack off newest-first before applying it
 oldest-first**, rather than asking each patch on its own whether it is already
@@ -1563,6 +1735,83 @@ uncaptured edit inside the checkout is left where it is.
   panel is affected. UI only — **no recompile**. See "The picture is inset
   inside its own panel" in `docs/RUNTIME.md`.
 
+- `0033-sans-serif-interface-font.patch` — ImGui's built-in face is ProggyClean,
+  a 13 px bitmap: it is pixel art, it does not scale (every other size is a
+  stretched bitmap), and it makes the port's own settings window read as a debug
+  overlay laid over the game. This is upstream's own fix back-ported —
+  RecompOne `aaf7be0`, which our pin `870c5ba` predates — so `Icons` becomes
+  `FontSet`, Noto Sans is embedded and merged with the Font Awesome range, and
+  the size goes 13 → 16 px. **Upstream's CJK face is deliberately not carried**:
+  it is a second 16.5 MB resource, and every string in the runtime's three
+  languages (en, pt-BR, es-419) is Latin, so it would cost 16 MB in every release
+  artifact to render nothing anyone can select. Cyrillic, Greek and Vietnamese are
+  kept, being Noto's own coverage and only atlas space — they are what a path or a
+  mod name falls back to instead of boxes. A missing resource falls back to the
+  bitmap font rather than to no text. The font is OFL 1.1
+  (`patches/recompone/assets/NotoSans-OFL.txt`, which the packaging must ship).
+  UI only — **no recompile**. This is the one patch that *wants* to stop applying:
+  when the pin moves past `aaf7be0` it is upstream's, and the right response to
+  `FAILED TO APPLY` here is to delete it. See "The interface's font" in
+  `docs/RUNTIME.md`.
+
+- `0034-pgxp-value-tracking.patch` — **upstream's PGXP, backported.** RecompOne
+  grew a real PGXP after our pin (`39fb337a`, `91c20fcf`, `95f0585b`, `6aae910a`,
+  2026-08-31 to 09-07): the GTE's own divide publishes a float screen position and
+  view depth, and those follow the value through the CPU's registers and a
+  `PgxpValue`-per-word RAM shadow to the GP0 packet. `RecompOne.Runtime/Pgxp/` is
+  verbatim from `6aae910a` apart from living one directory up, beside `GteDepth`
+  rather than under it; the edits are `Gte.Rtp` publishing the precise vertex,
+  `Nclip` doing backface culling on precise positions, the transform-serial ring,
+  `PSMemory`'s ctor sizing the shadow and `Runtime.Run` initialising the vertex
+  cache. **Upstream's frame interpolation is deliberately not carried** — it is a
+  separate experimental feature that arrived in the same commit. Inert until
+  something turns it on. **No recompile.**
+
+- `0035-pgxp-cpu-hooks.patch` — the recompiler half, and one of three patches that
+  **force a recompile**, with `0004` and `0037`. `InstructionEmitter` emits
+  `if (Pgxp.CpuTracking) PgxpCpu.X(...)` beside every load, store, move, shift,
+  add, multiply and divide, which is what makes PGXP's coverage a fact rather
+  than a rate. The gate is emitted rather than taken inside the hook, so with PGXP
+  off the cost is a predictable branch. Loads and stores hold the address in a
+  local rather than emitting the expression twice — upstream evaluates it again
+  after the access, which hands the hook the wrong address for `lw $t0, 0($t0)`.
+  Measured: 68,188 hook sites in `game.cs`, no change in generated line count
+  (the hooks append to existing lines), build 15 s → 37 s.
+
+- `0036-pgxp-vertex-and-depth-source.patch` — where the two mechanisms meet.
+  `DrawPolygon` asks PGXP when it is on and `GteVertexMap` when it is not, filling
+  the same `Vert` fields either way, so `HleVertex`, both rasterizers and the
+  shaders are untouched by the choice. Three things are ours rather than
+  upstream's: the **tolerance is actually spent** (upstream defines
+  `pgxp.tolerance` and never reads it — here a recovered position more than that
+  many pixels from the packet's is refused, because it is a different vertex
+  rather than a better version of this one), **`PgxpStats`** counts where each
+  answer came from, and **a depth-tested triangle is given a real clip W whether
+  or not its texture is being corrected** — `vDepth` is an ordinary varying, so
+  with `w = 1` an untextured wall's interior depths came out linear in screen
+  space when it is `1/z` that is affine there. The software rasterizer had always
+  interpolated the reciprocals; this makes the GL path agree. Also the
+  **depth-clear threshold** (`GteDepth.DepthClearThreshold`, DuckStation's 300),
+  which bumps the existing `Generation` rather than adding a clear path. **No
+  recompile.**
+
+- `0037-chd-disc-images.patch` — **upstream's CHD support, backported** (`137a793`,
+  six commits past our pin). `CueFs` becomes `DiscFs` over a new `IDiscImage`, with
+  `CueBinImage` and a from-scratch libchdr port (`Cdrom/Chd/`: header, hunk map,
+  Huffman, LZMA, FLAC, CD-sector ECC) behind it; `DiscImage.Open` picks by
+  extension and falls back to the CHD magic, so the recompiler, the runtime and the
+  launcher only changed a type name. The commit's unrelated **RAM-size** change
+  comes with it — `PSMemory(uint ramSize)` and `Runtime.RamWordMask` replacing the
+  literal `0x1FFFFCu` — and nothing here passes a size, so the RAM is the same 2 MB
+  and the mask the same value. Codecs: cdzl, cdlz, cdfl, zlib, lzma; **not zstd**,
+  and a `cdzs` image is refused at the picker rather than crashing. **Forces a
+  recompile** — `EntryWriter` emits `DiscFs.Open`. Measured: `generated/` from the
+  CHD is byte-identical to `generated/` from the cue; the recompile costs
+  1.35-1.39 s against 0.86-0.89 s; the autostart area load is 305.1 ms against
+  305.8 ms, the same 84 steps over the same 105 blocking VSyncs; a CHD run walks
+  `open` → `game` → `fdat02` → `fdat05` at 144.0 fps / 20.0 ticks/s, and the intro
+  STR decodes. See "CHD disc images" in `docs/RUNTIME.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.
@@ -1583,8 +1832,11 @@ quit-to-title uses. `patches/BootExe.cs` (`KF2_BOOTEXE`) writes that same index
 before the loop's first pass, **once**, so the ending is reachable in seconds
 rather than by finishing the game. See "The ending screen" in `docs/RUNTIME.md`.
 
-Upstream **rejects AI-authored pull requests outright**. Recompiler fixes go
-upstream as issues, never as PRs, unless the user writes the patch themselves.
+**Nothing goes upstream. Not a pull request, and not an issue either.** Upstream
+rejects AI-authored pull requests outright, and this project does not file
+issues against it: a defect found here is recorded in `docs/` and fixed in the
+vendored tree, which is the whole point of vendoring it. If the user wants
+something reported upstream they will write it themselves.
 
 ## Shipping it
 
@@ -1666,7 +1918,7 @@ Packaging is `packaging/linux/build-appimage.sh` and
 `packaging/windows/build-windows.ps1`, neither of which needs the disc; trimming is
 off and must stay off (MonoMod detours, Roslyn, `AutoStart`'s reflection). The
 icons under `packaging/shared/` are **placeholders**. Not packaged: macOS and
-Flatpak. Not supported: `.chd`. See `docs/PACKAGING.md`.
+Flatpak. **`.chd` is supported**, as of `0037`. See `docs/PACKAGING.md`.
 
 ## Repository conventions
 

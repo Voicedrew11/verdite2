@@ -9,8 +9,17 @@ generated/
 bin/
 obj/
 
-# Tool checkout (cloned, not vendored)
-tools/RecompOne/
+# Tool checkout: VENDORED, not cloned. See scripts/setup_tools.sh.
+# tools/RecompOne is VENDORED -- its sources are tracked, so a fresh clone has a
+# working recompiler and nothing is lost by editing inside it. What is ignored:
+# The fork's own history and its upstream remote: rebuildable by
+# scripts/setup_tools.sh --sync-upstream, so it is not carried here.
+tools/RecompOne.git/
+tools/RecompOne/**/bin/
+tools/RecompOne/**/obj/
+# 15.7 MB of PSY-Q signatures, read only by the standalone --autoconfigure
+# command. setup_tools.sh fetches it on demand.
+tools/RecompOne/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json
 
 # Written by the runtime at play time: memory card saves and host settings.
 *.sav

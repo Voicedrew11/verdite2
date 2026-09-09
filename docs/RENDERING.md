@@ -442,6 +442,35 @@ presence bitmap — 64 KB for the retail 2 MB of RAM. The attribute array itself
 10 MB, allocated on first use, and only touched on a bitmap hit. The frame rate
 does not move.
 
+### The RAM fast path went round both hooks
+
+**Symptom, after the merge to upstream `0409bc2`:** textures affine and vertices
+back on whole pixels, with every switch still reporting itself on — `[KF2]
+perspective: on`, `[KF2] subpixel: on`. `KF2_PERSPECTIVE_PROBE=1` names the
+failure exactly: `36720 vertices projected/s, 0 caught/s, 0 copied/s, 91872
+looked up/s, 0.0% hit`. The GTE was projecting and the GPU was asking; nothing in
+between was being *bound*.
+
+**Cause.** Upstream added RAM fast paths to `PSMemory.ReadU32` and `WriteU32` —
+an `Unsafe.ReadUnaligned`/`WriteUnaligned` straight into the array, taken by every
+`lw` and `sw` in the game, returning before `ReadU32Slow`/`WriteU32Slow` is
+reached. `GteVertexMap.NoteRead` and `NoteWrite` live in those slow paths, and the
+merge kept them there. This whole mechanism *is* following a value through the
+game's `lw`/`sw`, so a fast path that skips the hooks skips the mechanism: nothing
+is ever published to an address, so every `TryGet` misses and both halves silently
+fall back to what they do on a miss — affine, and the whole pixel.
+
+**Fix:** offer the word to the map in the fast path too, still gated on the same
+`GteVertexMap.Active` static bool, so the fast path keeps its speed and the
+association is made where the game actually makes it.
+
+**What the counters say to look at.** `Roots` (`caught/s`) reading exactly zero
+while `projected/s` is healthy means the *store* side is not being seen; the hit
+rate alone would not distinguish that from a game that stopped copying vertices.
+Measured after, in area 2 at 144 fps: `364896-383616 projected/s, 369648-388368
+caught/s, 465984-524100 copied/s, 93.0-93.7% hit`, inside the 92.2-97.1% band this
+mechanism was first measured at, and 144.0 fps at 20.0 ticks/s with it on.
+
 ## Z-buffer: the same depth, used as occlusion
 
 **Confirmed mechanism; picture checked and still wrong — a second cause is Open.**
@@ -565,7 +594,14 @@ from the far end); `GlCore` remembers which RT the depth batches went to, since
 the presented one is last frame's under double buffering and the most recently
 drawn one may have just been cleared by a fill. Diagnostic only.
 
-**This did not fix the picture.** Checked by eye after `0016`: the sky still
+**This did not fix the picture, and the cause turned out to be the paragraph at
+the end of this section.** See "The clip W was the Z-buffer's second cause" under
+"PGXP" below: `vDepth` was interpolated screen-linearly on every triangle whose
+texture was not being corrected, which is most of the architecture. What follows
+is the state of the investigation before that was found, kept because it is what
+ruled the other explanations out.
+
+Checked by eye after `0016`: the sky still
 draws over walls a few metres ahead. So the clear timing was a real defect —
 the buffer measurably did not survive its own frame, and now does — but it is
 not the cause of the reported symptom, or not the only one. A second cause
@@ -584,6 +620,221 @@ corners, and the map is a 32×16 minimum-per-cell reduction. Screen-linear
 interpolation of a view depth is wrong (it is 1/z that is linear in screen
 space), which biases a polygon's interior; whether that bias is large enough to
 lose a wall in front of the sky is the next thing to measure, not to assume.
+
+## PGXP: upstream's own recovery, and what taking it actually bought
+
+**Mechanism confirmed and measured; the picture has not been looked at.**
+
+Everything above this point recovers the same two numbers — a vertex's true
+screen position and the view depth the GTE divided by — and carries them from
+`Gte.Rtp` to the GP0 packet by watching `PSMemory`'s words go past
+(`GteVertexMap`, "Following the value through memory"). RecompOne grew a second
+answer to that after our pin: a full **PGXP**, in `39fb337a`, `91c20fcf`,
+`95f0585b` and `6aae910a` (2026-08-31 to 09-07). It is backported here as
+`patches/recompone/0034`-`0036`, and both mechanisms ship, chosen between by
+`KF2_PGXP` — **and by nothing in the settings window**. See "PGXP has no control
+in the window" below.
+
+The difference is where the following happens. `GteVertexMap` sees only that a
+word left one address and arrived at another, and pairs the two by value; a
+coordinate the game *computes* rather than copies is invisible to it. PGXP is
+told what every register holds, by hooks the recompiler emits beside every load,
+store, move, shift, add, multiply and divide (`0035`), and keeps a `PgxpValue`
+per word of RAM. Nothing is inferred.
+
+**Three things about the backport are ours rather than upstream's.**
+
+- **The tolerance is spent.** Upstream defines `pgxp.tolerance`, draws a slider
+  for it, and never reads the value. It is exactly the guard this wants: a
+  recovered position more than a couple of pixels from the one in the packet is
+  not a more precise version of this vertex, it is a different vertex, and
+  believing it moves geometry. See "Picking the tolerance" below.
+- **`PgxpStats`** counts where each answer came from — the RAM shadow, the
+  screen-position cache, or the per-primitive ambiguity pass — because the whole
+  question about a second mechanism is how often it answers and with what.
+- **A depth-tested triangle is given a real clip W** whether or not its texture is
+  being corrected, and that one is a genuine fix. See below.
+
+### The clip W was the Z-buffer's second cause
+
+The section above left this open: with a correctly cleared buffer and correct
+per-vertex depths, the sky still drew through nearby walls, and the untested
+suspect was *"screen-linear interpolation of a view depth is wrong (it is 1/z
+that is linear in screen space), which biases a polygon's interior"*.
+
+That is exactly what was happening, and only on the GL path. `vDepth` is an
+ordinary varying, so OpenGL interpolates it in `1/w` — which is exact when `w` is
+the view depth and **screen-linear when `w` is 1**. `HleTri` set the clip W only
+for triangles whose *texture* was being corrected:
+
+```csharp
+bool persp = tex && a.HasW && b.HasW && c.HasW;   // before
+```
+
+An untextured wall never asked for texture correction, so it arrived with `w = 1`
+and every depth between its corners came out linear in screen space. The software
+rasterizer never had the bug — it interpolates the reciprocals and takes one back
+(`useZ` in `DrawPolygon`) — so the two renderers disagreed about the interior of
+every flat-shaded surface in the game, which is most of the architecture.
+
+```csharp
+bool persp = z || (tex && a.HasW && b.HasW && c.HasW);   // after
+```
+
+The cost is that a textured triangle drawn with the depth buffer on and
+perspective correction *off* is now corrected anyway. That pair is a comparison
+rather than a picture anyone ships, and a depth buffer fed wrong depths is not a
+comparison of anything. **This fix applies to both sources**, so it is not a
+reason to prefer PGXP — it is the reason the Z-buffer was worth revisiting at all.
+
+### The depth-clear threshold, and why it is off
+
+A frame is not one scene. `GteDepth.DepthClearThreshold` (DuckStation's
+`pgxp_depth_clear_threshold`) watches the mean view depth of consecutive
+primitives and starts the buffer again when it falls by more than that, which is a
+scene the game began afresh under the same projection. It reaches the existing
+per-frame clear by bumping `Generation` rather than adding a clear path of its
+own, and it flushes the GL batch first so the clear cannot take this frame's
+earlier triangles with it. `KF2_ZBUFFER_THRESHOLD`; zero turns it off, **and zero
+is the default**.
+
+DuckStation ships 300 and this port shipped 300 with it, and that was wrong. The
+value is pickable the same way any threshold in this project is: look for two
+populations and put the cut in the gap. `KF2_ZBUFFER_PROBE=1` censuses **every**
+forward step between consecutive primitives, fired on or not, so the histogram is
+of the game rather than of the setting. Measured over a walk through area 2:
+
+```
+forward steps 15696/s: 39.4% under 10, 47.7% under 50, 9.2% under 150,
+                       2.8% under 300, 0.9% under 1000, 0.0% beyond; widest 318
+```
+
+**One population, decaying smoothly, with no gap anywhere in it** — which is what
+ordinary depth sorting inside a single scene looks like, and there is nothing
+else. King's Field draws one world and a 2D HUD, and 2D never recovers a depth so
+it never enters the mean; there is no second scene to detect. The widest step in
+the whole run is 318, barely past DuckStation's 300, so any threshold that fires
+at all is firing on the game's own geometry.
+
+Confirmed from the other side by turning it on:
+
+```
+2575.2 depth clear(s)/s at threshold 300
+```
+
+Some twenty clears a frame — the depth buffer thrown away and rebuilt over and
+over inside one picture, which is worse than not having one — and the frame rate
+went from 144 to 34-76 fps with it, because each clear flushes the GL batch. The
+mechanism is kept because it is the right one for a game that needs it. This game
+does not.
+
+### Picking the tolerance
+
+Same method, and the same answer shape. `KF2_PGXP_PROBE=1` buckets the
+disagreement between every recovered position and the coordinate in the packet,
+taken **before** the tolerance test so both populations would show if both
+existed. Two windows, area 2, `KF2_PGXP_TOLERANCE=-1` so nothing was filtered:
+
+```
+disagreement with the packet, 409642/s: 29.2% under 0.5px, 68.2% under 1,
+                              2.6% under 2, 0.0% under 4, 0.0% under 8,
+                              0.0% beyond; widest 1.27px
+disagreement with the packet,  57888/s: 24.1% under 0.5px, 68.2% under 1,
+                              7.7% under 2, 0.0% under 4, 0.0% under 8,
+                              0.0% beyond; widest 1.87px
+```
+
+**Nothing at all past 2 px, in either window, and the widest ever seen is 1.87.**
+There is one population again: PGXP has never once answered with a different
+vertex in anything measured here, so the guard has nothing to catch and any value
+of 2 or above is inert.
+
+The interesting part is the 2.6-7.7% *between* 1 and 2 pixels, because a genuinely
+more precise version of the same vertex can only differ by the fraction the GTE
+truncated, which is under one pixel by construction. That excess is not a wrong
+vertex, it is **the divider**: `PushPrecise` recomputes the projection in doubles
+as `OFX/65536 + IR1·(H/w)`, while the GTE used its own reciprocal lookup
+(`Divide(H, SZ3)`, the `Unr` table). The two disagree by up to about two pixels on
+a far vertex, and that is a real difference between what PGXP believes and what
+the packet says, not noise.
+
+So: **2 is the right number and it is right by luck rather than by argument** —
+below 2 it starts refusing correct answers (7.7% of them at 1 px), above 2 it
+refuses nothing anyone has ever seen. It stays at 2 as a tripwire: if a scene ever
+does produce a wrong-vertex population, the refusal counter is what will say so.
+`-1` turns it off and costs nothing measurable today.
+
+### Measured: the coverage was already there, and PGXP costs a fifth of the frame
+
+Both sources, autostart into slot 2, `warp 2` over the shell once the loader had
+finished, then walked around for 45 s at `KF2_FPS=144`. Eight probe windows each:
+
+| | address map (`0012`) | PGXP, full | PGXP, `KF2_PGXP_CPU=0` |
+|---|---|---|---|
+| vertices answered | 92.2 - 97.1% | 93.4 - 96.7% | 79.2 - 85.7% |
+| of those, from the RAM shadow | — | 93 - 97% | **0** |
+| triangles depth-tested | 90.2 - 96.2% | 91.4 - 95.6% | 77.4 - 79.3% |
+| frames a second | **144.0** | **106.7 - 114.9** | **143.8 - 144.1** |
+
+That third column is the cost isolated, and it also shows that **upstream's two
+tracking options are not independent**: `PgxpMemory.Store` is only ever reached
+from `PgxpCpu`, so turning CPU tracking off empties the RAM shadow whatever the
+memory tick says, and PGXP degrades to the screen-position cache — the same class
+of guess the address map was written to replace, and it measures like one.
+
+**The honest reading is that PGXP did not buy coverage in this game.** The address
+map was already answering for 95% of vertices, because King's Field assembles its
+packets with whole-word `lw`/`sw` out of a transform cache — the one shape a
+value-matching ring follows perfectly. What PGXP costs is real and measured: a
+fifth of the frame rate under load, and the third column above places all of it in
+the emitted hooks rather than in the lookup. With PGXP *off* the recompiled binary
+still reads 144.0 fps at 20.0 ticks/s, so `0035`'s emitted
+`if (Pgxp.CpuTracking)` branch is free when nothing is using it.
+
+What PGXP does have that the address map cannot:
+
+- **Backface culling on precise positions** (`Nclip`). A sliver polygon whose true
+  area is a fraction of a pixel can come out the wrong sign from three truncated
+  screen positions and drop out of the frame entirely. Nothing in this port
+  measures how often that happens, and nobody has looked.
+- **Positions rather than fractions.** PGXP produces the projection in floats;
+  `GteVertexMap` produces the fraction the GTE truncated, which is the same number
+  only where the packet coordinate is the one the GTE wrote.
+- **Correctness by construction.** The address map's 95% is a rate that happens to
+  be high for this game's packet assembly. PGXP's is what a tracked value does.
+
+So it stays off, and it stays. The thing to keep in mind before reaching for it
+is that **the number that fixed the Z-buffer here was the clip W, not the source
+of the depth.**
+
+### PGXP has no control in the window
+
+It had one — a *Vertex source* combo and six checkboxes under Video ▸ Geometry
+precision, plus upstream's own PGXP block, which the vendoring merge brought back
+into `DisplaySettingsSection` alongside it. Both are gone, and so is the depth
+buffer's checkbox that shared that heading.
+
+The test is the one the map's style, the widescreen ticks and the two shading
+checkboxes were each measured against: **is this a choice the player owns?** PGXP
+is not. It buys no coverage in this game (92.2-97.1% against 93.4-96.7%), it costs
+a fifth of the frame rate, and its picture has never been judged by eye — which
+makes it a comparison between two mechanisms, and every comparison in this port
+lives on the console. Nine controls asking a player to arbitrate between two
+implementations of a number the console discarded is the pane describing the
+implementation rather than the game.
+
+Two consequences worth stating:
+
+- **The saved key is no longer read.** `Pgxp.Reload` forces `pgxp.enable` false
+  unless `KF2_PGXP` says otherwise, so a config that ticked it while the combo
+  was drawn is not left running a fifth slower with nothing in the window to
+  explain it. That is the `kf2.framepacing.logichz` rule applied again.
+- **Upstream's frame-rate slider went with it.** It is the *interpolated* rate —
+  it writes `Interp`'s key and disables itself unless PGXP is on — and this port
+  never enters `PresentLoop`, so `Interp.Backend` stays null and the slider
+  changes nothing it claims to. The port's own rate is `FramePacingPage`, under
+  Video, and two frame-rate sliders in one pane is one of them lying. The comment
+  left in `DisplaySettingsSection.Draw` says so, for the next merge.
 
 ## Dithering: one flag, and it lives in the draw environment
 

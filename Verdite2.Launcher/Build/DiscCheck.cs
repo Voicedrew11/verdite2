@@ -51,13 +51,14 @@ static class DiscCheck
     /// times a second for as long as the picker is up, which is exactly when the
     /// interface has to stay responsive.
     ///
-    /// Keyed on the cue's size and mtime as well as its path, and nothing is cached
-    /// for a path with no file at it, so a player who puts a missing image back or
-    /// re-points the cue at the right bin gets a fresh reading rather than the
-    /// verdict from before they fixed it. What that does NOT see is a bin swapped
-    /// under an unchanged cue, and it does not need to: a wrong disc is refused
-    /// here and never saved, so the only path that reaches the loop is one that
-    /// validated when it was chosen.
+    /// Keyed on the image's size and mtime as well as its path, and nothing is
+    /// cached for a path with no file at it, so a player who puts a missing image
+    /// back or re-points the cue at the right bin gets a fresh reading rather than
+    /// the verdict from before they fixed it. What that does NOT see is a bin
+    /// swapped under an unchanged cue -- a CHD, being one file, has no such gap --
+    /// and it does not need to: a wrong disc is refused here and never saved, so
+    /// the only path that reaches the loop is one that validated when it was
+    /// chosen.
     /// </summary>
     public static string? Validate(string path)
     {
@@ -85,9 +86,14 @@ static class DiscCheck
 
     static string? Check(string path)
     {
-        CueFs fs;
-        try { fs = CueFs.Open(path); }
-        catch (Exception e) { return $"Could not read this image as a cue/bin pair: {e.Message}"; }
+        // DiscFs.Open dispatches on the extension, falling back to the CHD magic
+        // for a file named neither .cue nor .chd, so one message covers every way
+        // it can refuse: an unreadable cue/bin pair, an unsupported CHD codec (only
+        // cdzl/cdlz/cdfl/zlib/lzma are decoded, so a `chdman -c cdzs` image lands
+        // here rather than crashing during the build), and a file that is neither.
+        DiscFs fs;
+        try { fs = DiscFs.Open(path); }
+        catch (Exception e) { return $"Could not read this image as a cue/bin pair or a CHD: {e.Message}"; }
 
         using (fs)
         {

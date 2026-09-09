@@ -1,77 +1,144 @@
 #!/usr/bin/env bash
-# Clone RecompOne and apply the local fixes this port depends on.
+# Build the vendored RecompOne, and harvest from upstream when asked.
 #
-# tools/RecompOne is a gitignored checkout, so any change made inside it is lost
-# on a fresh clone. Fixes live in patches/recompone/ and are re-applied here.
-# Upstream rejects AI-authored pull requests, so these stay local and should be
-# reported as issues rather than sent as PRs.
+# tools/RecompOne is VENDORED: its sources are tracked in this repository, so a
+# fresh clone already has a working recompiler and an edit made inside it is a
+# change to this repo like any other. It used to be a gitignored clone of an
+# upstream pin with patches/recompone/*.patch replayed over it on every run.
+#
+# Why that changed. `git apply` matches text context; it does not know what
+# upstream changed. So upstream's Rider reformat (410f0d4) broke 28 of the 39
+# patches at once, and would have broken them again on every future pin move,
+# because a diff is written against context that has to still be there. A
+# vendored fork gets a real merge base instead, and a three-way merge reasons
+# about changes rather than appearances: the reformat is absorbed once, as a
+# commit. Measured at the time of vendoring, a single upstream commit
+# (67fc37c, 23 files) cost 23 conflict hunks to take as a merge, against
+# hand-authoring a ~700 line patch to be carried for the life of the project.
+#
+# patches/recompone/*.patch is KEPT and is no longer replayed. Each one is a
+# commit in the fork's history (tools/RecompOne.git, gitignored) and the diffs
+# stay as the record of what the port changed and why -- and as the way back,
+# since `--sync-upstream` rebuilds the checkout from upstream if you ever want
+# to start over.
+#
+# Upstream rejects AI-authored pull requests. Fixes go upstream as issues, never
+# as PRs, and only when the user writes them.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TOOLS="$ROOT/tools/RecompOne"
-UPSTREAM="https://github.com/BlackLabelHQ/RecompOne.git"
+FORK_GIT="$ROOT/tools/RecompOne.git"
+UPSTREAM_URL="https://github.com/BlackLabelHQ/RecompOne.git"
+SIGS="$TOOLS/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json"
 
-# The patch stack in patches/recompone/ targets one specific upstream tree.
-# main drifts -- files get renamed (0x1FFFFCu became Runtime.RamWordMask), which
-# makes `git apply` reject the diffs against context that no longer exists -- so
-# a plain clone of HEAD breaks the build. Pin to the newest commit the whole
-# stack still applies to cleanly, in order. Re-run this after moving the pin to
-# re-derive the patched checkout; bump it only alongside rebasing the patches.
-PIN="870c5baa735111687c62d637a159eb47a08e94ae"
+fork() { git --git-dir="$FORK_GIT" --work-tree="$TOOLS" "$@"; }
 
-if [ ! -d "$TOOLS/.git" ]; then
-    echo "==> cloning RecompOne"
-    git clone "$UPSTREAM" "$TOOLS"
-else
-    echo "==> RecompOne already present at $TOOLS"
-    git -C "$TOOLS" fetch --quiet origin || true
+usage() {
+    cat <<'USAGE'
+usage: setup_tools.sh [--sync-upstream] [--signatures] [--no-build]
+
+  (no flags)        build the vendored recompiler
+  --signatures      fetch AutoConfigure/signatures/psyq.json (15.7 MB, gitignored;
+                    only the standalone --autoconfigure command reads it)
+  --sync-upstream   fetch upstream and start a three-way merge into the vendored
+                    tree, on a branch, for you to resolve
+  --no-build        skip the build
+USAGE
+}
+
+SYNC=0 SIGNATURES=0 BUILD=1
+for arg in "$@"; do
+    case "$arg" in
+        --sync-upstream) SYNC=1 ;;
+        --signatures)    SIGNATURES=1 ;;
+        --no-build)      BUILD=0 ;;
+        -h|--help)       usage; exit 0 ;;
+        *) echo "unknown argument: $arg" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+if [ ! -d "$TOOLS" ]; then
+    echo "tools/RecompOne is missing. It is tracked in this repository -- restore it" >&2
+    echo "with 'git checkout -- tools/RecompOne' rather than cloning upstream." >&2
+    exit 1
 fi
 
-echo "==> pinning RecompOne to $PIN"
-# --force resets tracked files but leaves untracked ones; several patches CREATE
-# files (0004 -> LibApi.cs, 0009 -> GteDepth.cs), so a re-run would hit "already
-# exists" without also removing them. clean -fd gives a pristine pinned tree,
-# which the apply loop below then patches from a known state every time.
-git -C "$TOOLS" checkout --quiet --force "$PIN"
-git -C "$TOOLS" clean -qfd
-
-echo "==> applying local patches"
-shopt -s nullglob
-patches=("$ROOT"/patches/recompone/*.patch)
-
-# The stack is peeled off newest-first before it is applied oldest-first.
-#
-# Asking each patch on its own "are you already applied?" -- reverse-check it and
-# see -- only works while no patch touches lines an earlier one added. 0010 edits
-# GteDepth.cs, which 0009 creates, and 0011, 0012 and 0014 edit it again, so on an
-# already-patched checkout 0009 reverses against text a later patch has since
-# changed, fails, and gets reported as upstream having moved. Undoing the stack in
-# the exact opposite order to the one it was applied in has no such problem, and
-# leaves a tree every patch applies to cleanly.
-#
-# A patch that does not reverse stops the peeling rather than forcing it: on a
-# fresh clone the first check fails at once and nothing is undone, and an
-# uncaptured edit inside the checkout stops it at that patch instead of being
-# rolled over.
-for (( i=${#patches[@]}-1 ; i>=0 ; i-- )); do
-    git -C "$TOOLS" apply --reverse --check "${patches[i]}" 2>/dev/null || break
-    git -C "$TOOLS" apply --reverse "${patches[i]}"
-done
-
-for patch in "${patches[@]}"; do
-    name="$(basename "$patch")"
-    if git -C "$TOOLS" apply --check "$patch" 2>/dev/null; then
-        git -C "$TOOLS" apply "$patch"
-        echo "    $name: applied"
-    elif git -C "$TOOLS" apply --reverse --check "$patch" 2>/dev/null; then
-        echo "    $name: already applied"
-    else
-        echo "    $name: FAILED TO APPLY (upstream likely changed)" >&2
-        exit 1
+# The fork repository is what makes upstream reachable: it holds the port's 39
+# patches as commits, the merge, and the upstream remote. It is gitignored and
+# rebuildable, so a fresh clone has none -- create it on demand.
+ensure_fork() {
+    if [ -d "$FORK_GIT" ]; then
+        fork fetch --quiet origin || true
+        return
     fi
-done
+    echo "==> creating the fork repository (tools/RecompOne.git)"
+    git clone --quiet --bare "$UPSTREAM_URL" "$FORK_GIT"
+    git --git-dir="$FORK_GIT" config core.bare false
+    git --git-dir="$FORK_GIT" config core.worktree "$TOOLS"
+    git --git-dir="$FORK_GIT" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+    fork fetch --quiet origin
+    # The vendored tree is the port's; record it as a commit whose parent is the
+    # upstream commit it was merged from, so a merge has a real base.
+    base="$(cat "$TOOLS/UPSTREAM")"
+    fork checkout --quiet -B vendored "$base"
+    fork add -A
+    fork -c user.name="vendored" -c user.email="vendored@localhost" \
+         commit --quiet -m "The vendored tree, as tracked in the game repository"
+}
 
-echo "==> building recompiler"
-dotnet build "$TOOLS/RecompOne.Recompiler" -c Release
+if [ "$SIGNATURES" = 1 ]; then
+    echo "==> fetching PSY-Q signatures"
+    ensure_fork
+    mkdir -p "$(dirname "$SIGS")"
+    fork show "origin/master:RecompOne.Recompiler/AutoConfigure/signatures/psyq.json" > "$SIGS"
+    echo "    $(du -h "$SIGS" | cut -f1) -> ${SIGS#$ROOT/}"
+fi
+
+if [ "$SYNC" = 1 ]; then
+    ensure_fork
+    base="$(cat "$TOOLS/UPSTREAM")"
+    head="$(fork rev-parse origin/master)"
+    echo "==> vendored tree is at upstream $base"
+    echo "==> upstream master is at $head"
+    if [ "$base" = "$head" ]; then
+        echo "    already current; nothing to harvest."
+        exit 0
+    fi
+    echo "    $(fork rev-list --count "$base..$head") commit(s) to consider:"
+    fork log --oneline "$base..$head" | sed 's/^/      /'
+    echo
+    echo "==> merging upstream into the vendored tree"
+    fork checkout --quiet -B vendored
+    fork add -A
+    fork -c user.name="vendored" -c user.email="vendored@localhost" \
+         commit --quiet -m "The vendored tree, as tracked in the game repository" || true
+    set +e
+    fork merge --no-commit origin/master
+    rc=$?
+    set -e
+    cat <<EOF
+
+The merge is in tools/RecompOne, with conflicts left in the files.
+
+  resolve:  \$EDITOR the conflicted files, then
+            git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne add <file>
+  finish:   echo $head > tools/RecompOne/UPSTREAM
+            bash scripts/setup_tools.sh          # build it
+            # then run the game and check: 144 fps drawn at 20 ticks/s, the
+            # agent beacon reaching an fdat overlay with a real position
+  abandon:  git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne \\
+                merge --abort && git checkout -- tools/RecompOne
+
+Take one upstream commit rather than all of them with:
+  git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne cherry-pick -n <sha>
+EOF
+    exit $rc
+fi
+
+if [ "$BUILD" = 1 ]; then
+    echo "==> building recompiler"
+    dotnet build "$TOOLS/RecompOne.Recompiler" -c Release
+fi
 
 echo "done."
