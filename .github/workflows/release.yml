@@ -33,10 +33,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      # Clones RecompOne at its pin and applies patches/recompone/*. The patch
-      # stack targets one upstream tree, so this is not optional and not
-      # substitutable by a NuGet package.
-      - name: RecompOne checkout and patches
+      # RecompOne is vendored -- its sources are tracked in this repository, so
+      # nothing is cloned or patched here and there is no network dependency on
+      # upstream. This only builds the recompiler.
+      - name: Build the vendored RecompOne
         shell: bash
         run: bash scripts/setup_tools.sh
 
