@@ -81,9 +81,11 @@ is off by default until its picture has been measured the way the textures were
 recovered depth** — per-pixel occlusion instead of the ordering table — and is off
 by default for the same reason (see "Z-buffer"); the cause that had it looking
 unfixable was found, and it was the clip W rather than the depth (see "PGXP").
-**Upstream's own PGXP is backported and is the second, selectable source of that
-depth**, measured as the same coverage for a fifth of the frame rate in this
-game, and kept for what it decides exactly rather than by luck of the copy. Nearby walls and floors no longer
+**Upstream's own PGXP is backported and is the second source of that depth**,
+measured as the same coverage for a fifth of the frame rate in this game, and
+kept for what it decides exactly rather than by luck of the copy — but it is
+chosen on the console and nowhere else: it has no control in the settings window
+and neither does the Z-buffer (see "PGXP has no control in the window"). Nearby walls and floors no longer
 pop back to affine the moment one vertex clamps off-screen, and a pixel that two
 vertices share no longer hands one polygon the other's depth (see "The table is
 not unique").
@@ -211,6 +213,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Following the value through memory: the address is the vertex
 - Z-buffer: the same depth, used as occlusion
 - PGXP: upstream's own recovery, and what taking it actually bought
+- PGXP has no control in the window
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding
 - The display list cannot name a face: why packet-level smoothing failed

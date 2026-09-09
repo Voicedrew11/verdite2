@@ -631,8 +631,9 @@ screen position and the view depth the GTE divided by — and carries them from
 (`GteVertexMap`, "Following the value through memory"). RecompOne grew a second
 answer to that after our pin: a full **PGXP**, in `39fb337a`, `91c20fcf`,
 `95f0585b` and `6aae910a` (2026-08-31 to 09-07). It is backported here as
-`patches/recompone/0034`-`0036`, and both mechanisms ship, chosen between by one
-combo under Video ▸ Geometry precision or by `KF2_PGXP`.
+`patches/recompone/0034`-`0036`, and both mechanisms ship, chosen between by
+`KF2_PGXP` — **and by nothing in the settings window**. See "PGXP has no control
+in the window" below.
 
 The difference is where the following happens. `GteVertexMap` sees only that a
 word left one address and arrived at another, and pairs the two by value; a
@@ -802,9 +803,38 @@ What PGXP does have that the address map cannot:
 - **Correctness by construction.** The address map's 95% is a rate that happens to
   be high for this game's packet assembly. PGXP's is what a tracked value does.
 
-So it stays off by default, and it stays. The thing to keep in mind before
-reaching for it is that **the number that fixed the Z-buffer here was the clip W,
-not the source of the depth.**
+So it stays off, and it stays. The thing to keep in mind before reaching for it
+is that **the number that fixed the Z-buffer here was the clip W, not the source
+of the depth.**
+
+### PGXP has no control in the window
+
+It had one — a *Vertex source* combo and six checkboxes under Video ▸ Geometry
+precision, plus upstream's own PGXP block, which the vendoring merge brought back
+into `DisplaySettingsSection` alongside it. Both are gone, and so is the depth
+buffer's checkbox that shared that heading.
+
+The test is the one the map's style, the widescreen ticks and the two shading
+checkboxes were each measured against: **is this a choice the player owns?** PGXP
+is not. It buys no coverage in this game (92.2-97.1% against 93.4-96.7%), it costs
+a fifth of the frame rate, and its picture has never been judged by eye — which
+makes it a comparison between two mechanisms, and every comparison in this port
+lives on the console. Nine controls asking a player to arbitrate between two
+implementations of a number the console discarded is the pane describing the
+implementation rather than the game.
+
+Two consequences worth stating:
+
+- **The saved key is no longer read.** `Pgxp.Reload` forces `pgxp.enable` false
+  unless `KF2_PGXP` says otherwise, so a config that ticked it while the combo
+  was drawn is not left running a fifth slower with nothing in the window to
+  explain it. That is the `kf2.framepacing.logichz` rule applied again.
+- **Upstream's frame-rate slider went with it.** It is the *interpolated* rate —
+  it writes `Interp`'s key and disables itself unless PGXP is on — and this port
+  never enters `PresentLoop`, so `Interp.Backend` stays null and the slider
+  changes nothing it claims to. The port's own rate is `FramePacingPage`, under
+  Video, and two frame-rate sliders in one pane is one of them lying. The comment
+  left in `DisplaySettingsSection.Draw` says so, for the next merge.
 
 ## Dithering: one flag, and it lives in the draw environment
 

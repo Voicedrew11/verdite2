@@ -52,7 +52,15 @@ namespace Kf2;
 /// screen-position cache alone, since <c>PgxpMemory.Store</c> is only ever reached
 /// from <c>PgxpCpu</c>).
 ///
-/// It is kept, and it is off by default, for what it has that the ring cannot:
+/// **It is off, not off-by-default, and it has no control in the settings
+/// window.** A mechanism whose picture nobody has judged, which buys no coverage
+/// here and costs a fifth of the frame rate, is a comparison rather than a
+/// setting -- so it went the way the map's style and the widescreen ticks went,
+/// out of the pane and onto the console. <c>KF2_PGXP=1</c> is the only way in and
+/// the saved key is no longer read, so a config that ticked it while upstream's
+/// PGXP block was drawn is not left running slow with nothing to explain it.
+///
+/// It is kept, for what it has that the ring cannot:
 /// backface culling decided on precise positions rather than truncated ones, a
 /// projection in floats rather than a recovered fraction, and coverage that is a
 /// property of the mechanism instead of a rate that happens to be high for this
@@ -171,7 +179,12 @@ public static class Pgxp
         // overrides it, for isolating one half of PGXP from the other.
         (string Key, bool? Forced)[] flags =
         [
-            (Rp.Pgxp.KeyEnable, _forcedOn),
+            // Deliberately not read out of the store. PGXP has no control in the
+            // window any more, and a saved `true` with nothing to untick it is a
+            // session running a fifth slower for no reason the player can see --
+            // the same trap kf2.framepacing.logichz was retired for. KF2_PGXP=1
+            // is the comparison, and it is the only way in.
+            (Rp.Pgxp.KeyEnable, _forcedOn ?? false),
             (Rp.Pgxp.KeyTextureCorrection, _forcedTexture ?? GteDepth.Enabled),
             (Rp.Pgxp.KeyCulling, _forcedCulling),
             (Rp.Pgxp.KeyCpu, _forcedCpu),
