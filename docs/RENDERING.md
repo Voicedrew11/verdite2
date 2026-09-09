@@ -955,6 +955,73 @@ as the three-entry `Shading` combo under Video ▸ Enhancements — `Dither
 already were, so nothing anybody had saved changed meaning. See "Two shading
 checkboxes were one question asked twice" in `docs/PATCHES_AND_MODS.md`.
 
+## The render scale did not survive a menu
+
+**Measured mechanism; the picture is what the report was.**
+
+Reported from play: *in subscenes like when you open the menu, or talk to an NPC,
+the render scale is overwritten in the 4:3 area in the middle of the screen, and
+it renders at 1x.* That sentence names the mechanism precisely, because the middle
+of the screen is exactly the region that goes through VRAM.
+
+A modal sub-loop keeps the world behind it without redrawing it: it reads the
+finished frame out of VRAM into system RAM once (`StoreImage`, GP0 `0xC0`) and
+blits that copy back at the head of every iteration (`LoadImage`, GP0 `0xA0`), so
+each pass erases the last one's menu boxes and text against a still world. **That
+roundtrip is 1x by construction** — VRAM is the console's own 320×240, and
+`GlCore.ReadVram` reads it back at that resolution whatever `GlVram.Scale` is — so
+the restore stamped a one-sample-per-game-pixel picture over the display area
+every single frame the menu was up.
+
+Why the *middle* and not the whole picture: `Writeback` copies a render target's
+middle `W` columns into VRAM and nothing else, because the widescreen margin lives
+nowhere but in the render target ("The margin's only clear is the game's own" in
+`docs/WIDESCREEN.md`). So the game's own 320 columns are the only ones a VRAM
+roundtrip can reach, and the margin stayed at full scale beside them — which is
+the seam the report describes.
+
+Measured with `KF2_VRAMPROBE` (an ad-hoc census, not committed), at 16:9 and scale
+4: in an area, every VRAM upload is at `x = 320` — texture space, outside the
+display area — and the display columns are never written. Press Circle and the
+census reads `read 1` followed by `write … 0,240 320x240` at 60 a second, forever.
+
+**The fix is to keep a scaled copy of what was read.** `ReadVram` now also blits
+the region into a snapshot texture at `GlVram.Scale` (`SnapTake`), and `WriteVram`
+compares the 1x pixels it has been handed against that snapshot's; on a match it
+blits the scaled copy back into VRAM instead of uploading (`SnapRestore`). The key
+is **the content and the size, not the address** — the frame may be restored into
+either display buffer, and identical pixels are identical wherever they land.
+Anything the game actually built or changed in RAM fails the compare and takes the
+upload path exactly as before, so a texture, an MDEC frame or a decoded sprite is
+untouched; a readback smaller than 64×64 is not snapshotted at all, being a tile
+rather than a frame. Two slots, LRU, invalidated by a scale change.
+
+Measured at `KF2_FPS=144`, 16:9, scale 4, autostart into slot 2, with
+`KF2_VRAMSNAP_PROBE=1`: in the menu, **120-121 restores per two seconds and 0
+uploads that missed**, with the present census still reading `wide 180, plain 0,
+vram fallback 0` and the world still at 20.0 ticks/s. In an area the counters are
+`0, 0` — nothing reads the frame back, so the mechanism costs nothing. Boot and
+the area transitions read `39 restored, 13 uploaded` and similar: the loading
+screen and the fades do the same roundtrip and gain the same way, and the misses
+there are the real image loads.
+
+**Counting restores says the path fires, not that it wrote the right pixels**, so
+under the probe the first restore of a run is read straight back out of VRAM at 1x
+and compared against the upload it replaced — a scaled copy of the same frame must
+downsample to the same picture, so any disagreement is the blit's geometry rather
+than the resolution. Measured: `verify 320x240 at 0,0: 0 of 76800 pixels differ`.
+That it lands at `0,0` and the menu's at `0,240` is also the evidence for the
+address-independent key: both display buffers are restored from the one snapshot.
+
+`KF2_VRAMSNAP=0` is the comparison and puts the 1x upload back. There is no
+control in the window, because a render scale that survives a menu is not a
+choice. **Not looked at by eye** — what is measured is that the restore is served
+from the scaled copy on every frame of a menu, not that the menu now looks like
+the world behind it.
+
+The mechanism is `patches/recompone/0039`. GL backend only: the software
+rasterizer has a 1x VRAM and nothing to preserve.
+
 ## The display list cannot name a face: why packet-level smoothing failed
 
 The port smooths between logic ticks by carrying *tables* — the camera in

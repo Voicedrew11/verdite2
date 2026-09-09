@@ -575,6 +575,27 @@ Kf2.Pgxp.Install();
 Kf2.TrueColor.Configure(Environment.GetEnvironmentVariable("KF2_TRUECOLOR"));
 Kf2.TrueColor.Install();
 
+// The render scale survives a menu. A modal sub-loop -- the in-game menu, a shop,
+// an NPC's message box -- keeps the world behind it by reading the finished frame
+// out of VRAM once and blitting it back at the head of every iteration, and that
+// roundtrip goes through the console's own resolution: the restore stamped a 1x
+// picture over the game's own 320 columns every frame, leaving the widescreen
+// margin (which never goes through VRAM) at full scale beside it. The GL backend
+// keeps a scaled copy of every readback and serves an upload of the same pixels
+// from it instead:
+//
+//     KF2_VRAMSNAP=0        off, the 1x upload the game asked for
+//     KF2_VRAMSNAP_PROBE=1  restores served against uploads that missed
+//
+// Content-keyed, so anything the game actually built in RAM -- a texture, an MDEC
+// frame, a decoded sprite -- fails the compare and uploads as it always did.
+RecompOne.Runtime.Hle.GlVram.Snapshots =
+    Environment.GetEnvironmentVariable("KF2_VRAMSNAP") != "0";
+RecompOne.Runtime.Hle.GlVram.SnapshotProbe =
+    Environment.GetEnvironmentVariable("KF2_VRAMSNAP_PROBE") == "1";
+if (!RecompOne.Runtime.Hle.GlVram.Snapshots)
+    Console.WriteLine("[KF2] vram snapshots: off (a menu restores the frame at 1x)");
+
 // Which vblank timeline VSync runs on. Upstream grew its own after the pin this
 // port was vendored from: Interrupts owns a wall-clock grid and VSync *blocks*
 // in WaitVBlanks until the count reaches its target, which is what the hardware

@@ -126,6 +126,8 @@ KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, c
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_TRUECOLOR=1                        # 24-bit shaded output, no 15-bit banding (off by default; GL backend only)
+KF2_VRAMSNAP=0                         # a menu restores the frozen frame at 1x again (the scaled copy is kept by default)
+KF2_VRAMSNAP_PROBE=1                   # frame restores served from that copy, against uploads that missed
 KF2_VSYNC=block                        # upstream's blocking vblank timeline instead of the port's grid (caps the picture at 60)
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
@@ -1564,7 +1566,7 @@ accumulating. See "The margin's only clear is the game's own" in
 
 **`patches/recompone/` is still the record of what the port changed and why**,
 and the numbering below is still how each change is referred to in the source.
-Thirty-six of the forty are load-bearing; `0002`, `0003` and `0015` are
+Thirty-seven of the forty-one are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. **One patch has an asset
 beside it**: `patches/recompone/assets/` holds the TTF `0033` embeds, which is
 now simply a tracked file in the vendored tree.
@@ -1956,6 +1958,25 @@ uncaptured edit inside the checkout is left where it is.
   arrives in fractions of a notch. `patches/MenuMouse.cs` is the only caller.
   Input only — **no recompile**. See "The wheel owns the page, not the cursor" in
   `docs/INPUT.md`.
+
+- `0039-render-scale-survives-a-menu.patch` — a modal sub-loop keeps the world
+  behind it by reading the finished frame out of VRAM once (`StoreImage`) and
+  blitting it back every iteration (`LoadImage`), and that roundtrip is 1x by
+  construction: VRAM is the console's own resolution, so at any render scale the
+  restore stamped a 1x picture over the display area on every frame of the menu,
+  a shop or an NPC's message box. Only the *middle* of the picture, because
+  `Writeback` copies a target's middle `W` columns and the widescreen margin
+  lives nowhere but in the render target — which is the seam the report named.
+  `ReadVram` now also takes a scaled copy on the GPU and `WriteVram` serves an
+  upload of byte-identical pixels from it. Keyed on content and size rather than
+  address, since the frame may be restored into either display buffer; anything
+  the game actually built in RAM fails the compare and uploads as before.
+  Measured in the menu at 144 fps, 16:9, scale 4: 120 restores per two seconds
+  and **0** misses, present still `wide`, world still 20.0 ticks/s; `0, 0` in an
+  area, so it costs nothing when nothing reads the frame back. `KF2_VRAMSNAP=0`
+  is the comparison; no control in the window, a render scale surviving a menu
+  not being a choice. GL backend only. **No recompile.** See "The render scale
+  did not survive a menu" in `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
