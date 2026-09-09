@@ -533,6 +533,47 @@ Kf2.ZBuffer.Configure(Environment.GetEnvironmentVariable("KF2_ZBUFFER"),
                       Environment.GetEnvironmentVariable("KF2_ZBUFFER_THRESHOLD"));
 Kf2.ZBuffer.Install();
 
+// Ambient occlusion -- contact shading in the corners, under the doorframes and
+// where a pillar meets the floor, from the same recovered view depth. The GPU has
+// no depth buffer and the game hands it none, so there is no G-buffer to run a
+// screen-space pass against and no way to build one by a prepass: the geometry
+// arrives incrementally through GP0 and nothing knows the frame is finished until
+// it is. What supplies it instead is painter's order -- with every 3D triangle
+// writing its recovered depth and the test left at GL_ALWAYS, the last write at a
+// pixel is the nearest visible surface, so the finished attachment is a correct
+// visible-surface depth buffer that rejected nothing on the way:
+//
+//     KF2_AO=1              on; 0 or unset leaves the picture flat
+//     KF2_AO_RADIUS=512     how far a surface reaches to shade its neighbour, in
+//                           the game's own world units (a floor tile is 2048)
+//     KF2_AO_STRENGTH=0.8   how dark a fully occluded pixel goes, 0..1
+//     KF2_AO_BIAS=0.08      the angular bias that stops a flat wall shading itself
+//     KF2_AO_SAMPLES=16     samples per pixel in the occlusion pass
+//     KF2_AO_MAXDEPTH=24000 beyond this view depth the pass returns unoccluded
+//     KF2_AO_PROBE=1        the coverage, the projection recovered from the GTE,
+//                           and the passes actually run
+//     KF2_AO_PROBE=2        also read the occlusion texture back and census it --
+//                           the one reading that tells a pass that shaded
+//                           something from a pass that ran and returned white
+//
+// Everything with no recovered depth stamps the *far* plane instead, so the HUD,
+// the menus and any triangle the vertex map missed are neither shaded nor allowed
+// to occlude; semi-transparent primitives write nothing, so a death fade does not
+// erase the world's depth under it. Off by default for the sub-pixel reason -- the
+// mechanism is measured, the picture has not been judged -- and it is deliberately
+// not authentic. Installed after ZBuffer because it shares that patch's writes and
+// after Pgxp would be too late for nothing; its switch is under Video with the
+// others and the tuning is on the console. GL backend only; the work is
+// patches/recompone/0040.
+Kf2.AmbientOcclusion.Configure(Environment.GetEnvironmentVariable("KF2_AO"),
+                               Environment.GetEnvironmentVariable("KF2_AO_RADIUS"),
+                               Environment.GetEnvironmentVariable("KF2_AO_STRENGTH"),
+                               Environment.GetEnvironmentVariable("KF2_AO_BIAS"),
+                               Environment.GetEnvironmentVariable("KF2_AO_SAMPLES"),
+                               Environment.GetEnvironmentVariable("KF2_AO_MAXDEPTH"),
+                               Environment.GetEnvironmentVariable("KF2_AO_PROBE"));
+Kf2.AmbientOcclusion.Install();
+
 // PGXP -- upstream RecompOne's own vertex tracking, backported as
 // patches/recompone/0034-0036, and the second mechanism the port has for the one
 // number everything above depends on. GteVertexMap pairs memory reads and writes

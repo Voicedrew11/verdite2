@@ -6,7 +6,14 @@ public sealed class GlDisplayRt
 {
     public int X, Y, W, H;
     public int Margin;
-    public uint Tex, Fbo, Depth;
+    public uint Tex, Fbo;
+    // A texture rather than a renderbuffer, because the ambient-occlusion pass
+    // reads the finished buffer back in a full-screen shader and a renderbuffer
+    // cannot be sampled. Nothing else changes: it is still the same
+    // DEPTH_COMPONENT24 attachment, still cleared at the head of a frame that
+    // draws to this target, and ReadPixels off the FBO (the KF2_ZBUFFER_PROBE=2
+    // census) reads it exactly as before.
+    public uint Depth;
     public bool Dirty;
     public long Stamp;
     public long LastDrawFrame;
@@ -42,7 +49,7 @@ public sealed class GlDisplayRt
         return rx < X + W && X < rx + rw && ry < Y + H && Y < ry + rh;
     }
 
-    public void Create(GL gl)
+    public unsafe void Create(GL gl)
     {
         Tex = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, Tex);
@@ -68,12 +75,21 @@ public sealed class GlDisplayRt
         gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
             TextureTarget.Texture2D, Tex, 0);
 
-        Depth = gl.GenRenderbuffer();
-        gl.BindRenderbuffer(RenderbufferTarget.Renderbuffer, Depth);
-        gl.RenderbufferStorage(RenderbufferTarget.Renderbuffer, InternalFormat.DepthComponent24,
-            (uint)TexW, (uint)TexH);
-        gl.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
-            RenderbufferTarget.Renderbuffer, Depth);
+        Depth = gl.GenTexture();
+        gl.BindTexture(TextureTarget.Texture2D, Depth);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        // Explicitly not a shadow sampler: with the compare mode left at whatever
+        // the driver defaults to, an ordinary sampler2D read of this texture is
+        // undefined rather than the stored depth.
+        gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, (int)GLEnum.None);
+        gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent24, (uint)TexW, (uint)TexH, 0,
+            PixelFormat.DepthComponent, PixelType.Float, null);
+        gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+            TextureTarget.Texture2D, Depth, 0);
+        gl.BindTexture(TextureTarget.Texture2D, 0);
 
         gl.ClearColor(0f, 0f, 0f, 0f);
         gl.ClearDepth(1.0);
@@ -86,7 +102,7 @@ public sealed class GlDisplayRt
     {
         if (Fbo != 0) gl.DeleteFramebuffer(Fbo);
         if (Tex != 0) gl.DeleteTexture(Tex);
-        if (Depth != 0) gl.DeleteRenderbuffer(Depth);
+        if (Depth != 0) gl.DeleteTexture(Depth);
         Fbo = Tex = Depth = 0;
     }
 }

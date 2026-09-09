@@ -47,7 +47,11 @@ public sealed partial class Gpu
         // depth into gl_Position.w, and one vertex left at 1 would tear the
         // triangle's texture in half. The Z-buffer is the same rule for a different
         // reason — a corner at ndc.z = 0 among two real depths would punch a hole.
-        bool z = GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
+        // DepthWanted rather than ZBuffer: ambient occlusion reads the same
+        // attachment and so needs the same writes, and differs only in that
+        // nothing is ever rejected by them (GlCore.Flush leaves the func at
+        // GL_ALWAYS unless the Z-buffer is on as well).
+        bool z = GteDepth.DepthWanted && a.HasZ && b.HasZ && c.HasZ;
 
         // **A depth-tested triangle gets a real clip W whether or not its texture
         // is being corrected**, and that is a fix rather than tidiness. `vDepth` is
@@ -65,7 +69,7 @@ public sealed partial class Gpu
         // comparison rather than a picture anyone ships, and a depth buffer fed
         // wrong depths is not a comparison of anything.
         bool persp = z || (tex && a.HasW && b.HasW && c.HasW);
-        if (GteDepth.ZBuffer) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
+        if (GteDepth.DepthWanted) { if (z) GteDepth.ZTris++; else GteDepth.ZSkipped++; }
 
         var be = GpuHle.Backend!;
         be.SetDrawEnv(CurEnv());

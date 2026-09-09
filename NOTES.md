@@ -81,6 +81,14 @@ is off by default until its picture has been measured the way the textures were
 recovered depth** — per-pixel occlusion instead of the ordering table — and is off
 by default for the same reason (see "Z-buffer"); the cause that had it looking
 unfixable was found, and it was the clip W rather than the depth (see "PGXP").
+**Ambient occlusion runs on that same depth**, and the point of it is where the
+G-buffer comes from: there is no depth prepass to be had here — the geometry
+arrives incrementally through GP0 and nothing knows the frame is finished until it
+is — but `DrawOTag` walks the ordering table back to front, so a depth *write* with
+the test left at `GL_ALWAYS` ends the frame holding the nearest visible surface at
+every pixel. Everything with no recovered depth writes the far plane instead, which
+is the HUD mask for free (see "Ambient occlusion"). Off by default: the mechanism is
+measured and the picture has not been looked at.
 **Upstream's own PGXP is backported and is the second source of that depth**,
 measured as the same coverage for a fifth of the frame rate in this game, and
 kept for what it decides exactly rather than by luck of the copy — but it is
@@ -205,7 +213,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 
 ### [RENDERING.md](docs/RENDERING.md)
 
-Recovering the depth and the sub-pixel fraction the GP0 packet threw away: perspective correction, sub-pixel positions, Z-buffer, dither, true color.
+Recovering the depth and the sub-pixel fraction the GP0 packet threw away: perspective correction, sub-pixel positions, Z-buffer, ambient occlusion, dither, true color.
 
 - Perspective correction: the depth is one step upstream, and the screen position is the key
 - Sub-pixel vertex positioning: the same number's other half
@@ -213,6 +221,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Following the value through memory: the address is the vertex
 - Z-buffer: the same depth, used as occlusion
 - PGXP: upstream's own recovery, and what taking it actually bought
+- Ambient occlusion: painter's order is the G-buffer
 - PGXP has no control in the window
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding

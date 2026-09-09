@@ -16,6 +16,7 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 | Perspective correction | **measured**, 92% hit | **checked**, 76.6% of pixels | **on** |
 | Sub-pixel vertex positions | **measured**, offsets uniform | **not checked** | off |
 | Z-buffer | **measured**, same recovered SZ | **checked and still wrong** — a second cause remains | off |
+| Ambient occlusion | **measured**, occlusion read back | **not checked** | off |
 | Dithering (removal) | **measured**, all three routes | **checked**, twice-drawn pair | off (no crosshatch) |
 | True color (24-bit) | **measured**, RGBA8 target + shader | the point of the switch | off (authentic 15-bit) |
 
@@ -835,6 +836,240 @@ Two consequences worth stating:
   changes nothing it claims to. The port's own rate is `FramePacingPage`, under
   Video, and two frame-rate sliders in one pane is one of them lying. The comment
   left in `DisplaySettingsSection.Draw` says so, for the next merge.
+
+## Ambient occlusion: painter's order is the G-buffer
+
+**Mechanism confirmed and measured; the picture has not been looked at. Off by
+default.**
+
+Contact shading — the corners going dark, the join between a wall and the floor,
+the underside of a doorframe — is the one thing a dungeon this dark could use and
+the one thing a PlayStation could not compute. It is a screen-space pass over a
+depth buffer, and the whole of this file is about the fact that there is no depth
+buffer and never was.
+
+The depth is the same recovered SZ perspective correction runs on. What is new is
+how it is turned into a *G-buffer*, and that is the part worth keeping.
+
+### There is no prepass to be had, and painter's order supplies one anyway
+
+A screen-space pass needs the depth of the **nearest visible surface at every
+pixel**, complete, before any shading happens. The usual way to get one is a depth
+prepass: submit the frame's geometry once with colour writes off, then again for
+real. Nothing here can do that. The geometry arrives incrementally through GP0 as
+the game walks its ordering table, the port does not hold it, and — this is the
+part that has no workaround — **nothing knows the frame is finished until it is**.
+There is no point at which the geometry could be replayed that is not after the
+frame has already been drawn.
+
+What supplies the G-buffer instead is the console's own occlusion algorithm.
+`DrawOTag` walks the ordering table **back to front**, so the last thing drawn at
+a pixel is the nearest thing at that pixel. Give every 3D triangle a depth write
+and leave the test at `GL_ALWAYS`, and the attachment ends the frame holding
+exactly the visible-surface depth — arrived at with no test, no prepass and no
+second pass over anything, because painter's algorithm has already done the
+sorting that a depth prepass exists to do.
+
+**That is also what makes this safe where the Z-buffer is not.** The Z-buffer
+*rejects* fragments on the recovered depth, so a wrong depth loses geometry, and
+that picture has never come out right (see "Z-buffer" above). Occlusion shading
+reads the same numbers and lets them decide nothing: the ordering table remains
+in sole charge of what is visible, and a wrong depth costs a wrong shade of grey.
+The two share the whole write path and differ in one statement —
+
+```csharp
+_gl.DepthFunc(GteDepth.ZBuffer ? DepthFunction.Lequal : DepthFunction.Always);
+```
+
+— which is why `GteDepth.DepthWanted` (`ZBuffer || AmbientOcclusion`) replaced
+`GteDepth.ZBuffer` at every site that decides whether a depth is recovered at all.
+
+**There are more of those sites than there look to be, and missing them reads as
+the feature simply not existing.** The first run reported `0 tris/s carrying a
+depth, 0.0% of 3D` while every other number was healthy — the projection was being
+read forty thousand times a second, the passes were running at the frame rate —
+because `GpuRaster` still had `bool wantZ = GteDepth.ZBuffer`. Fixing that alone
+would have been worse than not fixing it: the gate above it reads
+
+```csharp
+if ((GteDepth.Active || pgxp) && (tex || GteDepth.Subpixel || GteDepth.DepthWanted))
+```
+
+and without the last term the only geometry reaching the recovery block at all is
+the *textured* geometry, which in this game is a minority of the architecture —
+most of a King's Field wall is flat-shaded. The result would have been a depth
+buffer with the walls missing and an occlusion pass shading around holes, which is
+a picture nobody here can see.
+
+### The far plane is the mask, and it is not an optimisation
+
+A screen-space pass over the finished frame would shade the HUD, because the HUD
+is drawn over geometry and the depth under it is that geometry's. Every version of
+this that keeps a separate "is this 3D" mask — a stencil, a second attachment —
+costs an attachment and a bind. It is free instead: **anything with no recovered
+depth writes `1.0`**.
+
+```glsl
+gl_FragDepth = vDepth > 0.0 ? vDepth : 1.0;   // was gl_FragCoord.z
+```
+
+so a fourth batch mode joins the three the Z-buffer had — 0 painter's, 1 opaque 3D
+test-and-write, 2 semi-transparent 3D test-only, **3 opaque with no depth, write
+the far plane**. The pass then treats a far texel as the absence of a surface in
+both directions: it is neither shaded nor allowed to occlude anything, so a
+silhouette against the HUD draws no dark halo. Three things fall out of it at once:
+
+- **The HUD, the menus and the item pictures are untouched**, by the same argument
+  that keeps them out of perspective correction — the CPU computed those
+  coordinates and they were never in the vertex map.
+- **A hole in the depth buffer costs occlusion rather than inventing it.** The
+  vertex map answers for 61-63% of the *triangles* in the areas measured (all three
+  corners, which is the cube of a per-vertex rate), and the 37-39% it misses go to
+  mode 3 and are left flat. That is the same "a miss is the old behaviour" guarantee
+  the rest of this file rests on.
+- **Semi-transparent primitives write nothing at all**, which is mode 0 and is the
+  case that would otherwise be a visible bug: the death fade, the damage flash and
+  the wash on an area load are full-screen quads you see the world *through*, and
+  stamping the far plane under them would switch the shading off for exactly the
+  frames they cover.
+
+### Undoing the game's own projection, and the number that caught the error
+
+A depth texel is a view depth and nothing else; the pass needs a view *position*.
+The GTE's divide is `screen = centre + IR * H / z`, so the inverse is
+`view.xy = (screen - centre) * z / H` — with `H` and the `OFX`/`OFY` centre read
+out of `Gte.Rtp` as it projects rather than assumed. `GteDepth.ProjH` is 200 in
+this game, not the 320 a reasonable guess would have used, and a wrong H tilts
+every reconstructed normal.
+
+Placing that centre on the presented picture is where this went wrong, and the
+failure is worth recording because it was **silent, intermittent and invisible to
+every other counter**. The first version added the GP0 drawing offset of the last
+depth-writing triangle, on the reasoning that the GTE's centre is in packet
+coordinates while the render target holds VRAM ones. The offset it recorded
+belongs to the buffer being *drawn*; the pass runs against the buffer being
+*presented*; with two display buffers those differ by a screen on alternate
+frames. So half the frames reconstructed correctly and half put the projection
+centre a whole screen above or below the picture.
+
+The right answer is that a display target's drawing offset **is** its own origin —
+if it were not, the prim shader's `uPosBias` of `-rt.X`/`-rt.Y` would already be
+putting every polygon in the wrong place — so the two cancel and nothing
+per-triangle needs recording at all.
+
+**The probe prints the reconstructed centre for this reason**: it should read
+`0.500,0.500` on every frame, and it read `0.500,1.500` and `0.500,-0.500` on
+alternating frames while the bug was in. Nothing else moved. The pass still ran at
+the full rate, the depth still arrived, the coverage was unchanged, and the census
+still reported occlusion — just less of it, in the wrong places.
+
+### The pass
+
+Two full-screen draws between the finished target and the present blit, in
+`patches/recompone/0040`:
+
+- **Occlusion.** Reconstruct the view position, take the normal from the *nearer*
+  neighbour on each axis (so a pixel on a silhouette takes the surface it belongs
+  to rather than straddling the edge), then a golden-angle spiral of samples inside
+  the world radius as it projects at this depth. A sample occludes by
+  `max(0, dot(normalize(S - P), N) - bias)`, falling off past the radius rather
+  than stopping at it. The per-pixel rotation is a **4x4 interleaved pattern rather
+  than a hash**, because the blur below is a 4x4 box and a pattern with that period
+  cancels exactly where noise leaves noise.
+- **Blur.** That 4x4 box, refusing any tap whose depth differs from the centre's by
+  more than a twentieth — relative rather than absolute, since a step that is a
+  crease at arm's length is a rounding error across a room.
+
+It runs at **present**, and writes only its own `R8` texture; the present shader
+multiplies. Nothing the game can read back carries the shading — not VRAM, not
+either display buffer, and not the frame a modal loop stores and restores — so a
+menu cannot bake it in and then re-shade it on every iteration. `uAoOn` skips the
+multiply rather than multiplying by one, so a run with the pass off is
+bit-identical to a build without it.
+
+GL backend only. The software rasterizer keeps its own float-per-pixel depth and
+has no full-screen pass to run this in.
+
+### What is measured, and what is not
+
+`KF2_AO_PROBE=1` reports the coverage, the projection recovered from the GTE, the
+reconstructed centre, and the passes actually run. **`KF2_AO_PROBE=2` is the one
+that matters**, and it exists because of the rule at the top of this file: nobody
+here looks at the picture, and *every number the first probe prints stays exactly
+the same if the shader returns 1.0 on every pixel*. The depth still arrives, the
+projection is still read, both draws are still issued, the present still
+multiplies. So the occlusion texture is read back once a window and reduced to a
+darkest value, a mean, a shaded share and a 32x16 map.
+
+Beside it is a **surface** map, and that is the pair that makes a blank patch
+arguable rather than a matter of opinion. The pass carries a second channel saying
+whether it found a surface at all — nothing draws with it — because a cell at 1.00
+occlusion means two quite different things: no surface there (the far-plane mask
+doing exactly its job over the HUD), or a surface the pass looked at and found
+nothing near enough to shade, which is a radius too small or a reconstruction that
+is wrong. Without the second map every blank column is an argument, and the first
+version of this had one: a third of the picture read unshaded and it took a
+turn-on-the-spot to establish that the geometry there was a flat wall.
+
+Measured in area 1 at `KF2_FPS=144`:
+
+```
+[KF2] ao: 23616 tris/s carrying a depth, 61.2% of 3D, H 200 centre 160.0,120.0
+          -> 0.500,0.500 of the picture (42336 reads/s), 144.0 passes/s,
+          0.0 no target/s, over 144 frames/s
+[KF2] ao: darkest 0.67, mean 0.983, 18.0% of the picture shaded,
+          98.7% of it carrying a surface
+[KF2] ao:  occlusion (9 = faint, 0 = black)      surface (# full, + partial, . none)
+[KF2] ao:  8899999..99899..................   ################################
+[KF2] ao:  8877888999899...................   ################################
+[KF2] ao:  999988887889....................   ################################
+[KF2] ao:  ....9999879.....................   ################################
+[KF2] ao:  ........989.....................   ################################
+[KF2] ao:  .......9989.....................   ################################
+[KF2] ao:  .......9989.....................   ################################
+[KF2] ao:  .......9989.....................   ################################
+[KF2] ao:  .......9989.....................   ################################
+[KF2] ao:  .......9989.....................   ################################
+[KF2] ao:  .......9989.....................   ################################
+[KF2] ao:  .......9989.....................   ################################
+[KF2] ao:  .....9.9999.....................   #####+++++######################
+[KF2] ao:  .....999999.....................   #####++++++#############+++#####
+[KF2] ao:  ..999988889.....................   #####++++++#############+++#####
+[KF2] ao:  .99988899999....................   ################################
+```
+
+- **It costs nothing measurable.** 144.0 fps drawn at 20.0 ticks/s with the pass
+  on, against 144.0-144.1 at 20.0 with it off. The 141.8 that turns up alongside
+  `KF2_AO_PROBE=2` is the census's own readback stalling the pipeline once every
+  two seconds, not the two draws.
+- **The mask lands exactly on the HUD.** The only cells the surface map marks as
+  anything but full are the HP/MP gauges (rows 12-15, columns 5-10) and the
+  equipment icons (columns 24-26), which is 1.3% of the picture and is the whole
+  of what the far-plane write excluded.
+- **The reconstruction is right.** `0.500,0.500` on every frame at 4:3 and at
+  16:9, where the present still reports `wide` and the frame rate is still 144.0.
+- **It coexists with the Z-buffer.** With `KF2_ZBUFFER=1` as well the occlusion
+  census is identical to the digit — they read one buffer and only one of them
+  rejects anything with it.
+- **The radius is the whole of the look.** The share of the picture the pass
+  darkens goes **9.2% / 18.0% / 33.9% / 39.6%** at a radius of 192 / 512 / 1024 /
+  2048 world units, over one fixed view.
+- **The shading follows the camera, which is what rules out a screen-space
+  artefact.** Turning on the spot through four headings at radius 1024 reads
+  33.9% / 9.3% / 59.5% / 52.3%, and the map resolves doorframes as rectangles
+  that move with the view. The first view has a large flat wall filling its right
+  third and the pass correctly finds nothing there — a flat plane occludes itself
+  nowhere, whatever the radius.
+- **At the shipped 20 fps default**: 20.0 fps, 20.0 ticks/s, same census.
+
+**What has not been looked at is the picture** — whether the shading lands where a
+person would expect it, whether the radius is the right one, and whether it reads
+as contact shading rather than as dirt. That is why it is off by default, and why
+the radius, the strength, the bias and the sample count are console settings
+rather than sliders: they are all real knobs, and every one of them is the port's
+question to answer once someone has looked, not the player's to answer every time
+they open the pane. It is also deliberately not authentic — the console could not
+have drawn this — which is the same footing true color is on.
 
 ## Dithering: one flag, and it lives in the draw environment
 

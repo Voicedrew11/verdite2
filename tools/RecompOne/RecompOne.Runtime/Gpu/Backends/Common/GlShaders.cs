@@ -18,13 +18,23 @@ internal static class GlShaders
         #version 330 core
         in vec2 vUv;
         uniform sampler2D uVram;
+        uniform sampler2D uAo;
         uniform vec2 uOrigin;
         uniform vec2 uSize;
         uniform vec2 uTexSize;
+        // 0 leaves the present bit-identical to what it has always been: the
+        // multiply is skipped, not multiplied by one, so a build with the pass
+        // switched off cannot round a colour by a least significant bit.
+        uniform float uAoOn;
         out vec4 oColor;
         void main() {
             vec2 t = (uOrigin + vUv * uSize) / uTexSize;
-            oColor = vec4(texture(uVram, t).rgb, 1.0);
+            vec3 c = texture(uVram, t).rgb;
+            // The occlusion texture is rendered at exactly this framebuffer's
+            // size, so it is indexed by the present's own uv and needs no
+            // geometry of its own.
+            if (uAoOn > 0.5) c *= texture(uAo, vUv).r;
+            oColor = vec4(c, 1.0);
         }
         """;
 
@@ -53,6 +63,188 @@ internal static class GlShaders
             int base = (ty * 1024 + int(uOrigin.x)) * 2 + px * 3;
             oColor = vec4(float(byteAt(base)) / 255.0, float(byteAt(base + 1)) / 255.0,
                           float(byteAt(base + 2)) / 255.0, 1.0);
+        }
+        """;
+
+    /// <summary>
+    /// Ambient occlusion, first pass: the finished frame's depth attachment in,
+    /// one occlusion factor per output pixel out.
+    ///
+    /// The depth texel holds the GTE's own view depth over 65536, so undoing the
+    /// game's projection gets a view position straight back out of it — the divide
+    /// was <c>screen = centre + IR * H / z</c>, so <c>view.xy = (screen - centre) *
+    /// z / H</c> with H and the centre published from <c>Gte.Rtp</c> rather than
+    /// assumed. That is what makes this the game's geometry rather than a
+    /// plausible-looking depth trick: the reconstructed normal is the surface's
+    /// own, to whatever precision the recovered SZ has.
+    ///
+    /// A texel at the far plane is one nothing wrote: 2D, or a triangle the vertex
+    /// map missed. It is neither shaded nor allowed to occlude, so the HUD, the
+    /// menus and the death fade come through untouched and a hole in the depth
+    /// buffer costs occlusion rather than inventing it.
+    /// </summary>
+    public const string AoFs = """
+        #version 330 core
+        in vec2 vUv;
+        out vec4 oColor;
+
+        uniform sampler2D uDepth;
+        // The display area inside the render target, and the target's size, both
+        // in the game's own 1x pixels -- the same three numbers the present shader
+        // is given, so the two passes address the same rectangle.
+        uniform vec2  uOrigin;
+        uniform vec2  uSize;
+        uniform vec2  uTexSize;
+        // One depth texel as a step in this pass's own uv, which is not 1/uSize:
+        // the target is rendered at the render scale and the fine structure of the
+        // depth buffer is at that scale, not the game's.
+        uniform vec2  uTexel;
+        // The GTE's projection: distance, and the screen centre the divide is
+        // offset by, expressed in this pass's uv so no pixel arithmetic has to be
+        // repeated here.
+        uniform float uProjH;
+        uniform vec2  uCentre;
+        uniform float uRadius;
+        uniform float uStrength;
+        uniform float uBias;
+        uniform float uMaxDepth;
+        uniform int   uSamples;
+
+        const float FAR = 65536.0;
+        const float GOLDEN = 2.39996323;
+
+        float depthAt(vec2 uv) {
+            return texture(uDepth, (uOrigin + clamp(uv, 0.0, 1.0) * uSize) / uTexSize).r;
+        }
+
+        // The view position of the point this pass's uv names, given its depth.
+        // Screen X and Y are in the game's own pixels measured from the projection
+        // centre, which is what uCentre and uSize turn a uv into.
+        vec3 viewAt(vec2 uv, float d) {
+            float z = d * FAR;
+            return vec3((uv - uCentre) * uSize * (z / uProjH), z);
+        }
+
+        // The neighbour on each axis that is nearer in depth, so a pixel on a
+        // silhouette takes its normal from the surface it belongs to instead of
+        // straddling the edge and coming out facing the camera.
+        vec3 nearer(vec3 p, vec3 a, vec3 b) {
+            return abs(a.z - p.z) < abs(b.z - p.z) ? a - p : p - b;
+        }
+
+        void main() {
+            // Red is the occlusion factor the present multiplies by. Green says
+            // whether there was a surface here at all -- it is not used to draw
+            // anything, it is what lets the census tell "the mask refused this
+            // pixel" from "the pass looked and found nothing to shade it with",
+            // which are the two ways a blank patch happens and are not the same
+            // bug. See KF2_AO_PROBE=2.
+            float d = depthAt(vUv);
+            // Nothing wrote here (2D, or a triangle with no recovered depth), or
+            // the fog has the picture: unoccluded, and the present multiplies by 1.
+            if (d >= 1.0 || d <= 0.0) { oColor = vec4(1.0, 0.0, 0.0, 1.0); return; }
+
+            vec3 p = viewAt(vUv, d);
+            if (p.z > uMaxDepth) { oColor = vec4(1.0, 0.0, 0.0, 1.0); return; }
+
+            vec2 sx = vec2(uTexel.x, 0.0), sy = vec2(0.0, uTexel.y);
+            float dl = depthAt(vUv - sx), dr = depthAt(vUv + sx);
+            float du = depthAt(vUv - sy), dd = depthAt(vUv + sy);
+            // A neighbour with no depth is not a position; fall back to this
+            // pixel's own so the difference is taken against the other side.
+            vec3 l = dl > 0.0 && dl < 1.0 ? viewAt(vUv - sx, dl) : p;
+            vec3 r = dr > 0.0 && dr < 1.0 ? viewAt(vUv + sx, dr) : p;
+            vec3 u = du > 0.0 && du < 1.0 ? viewAt(vUv - sy, du) : p;
+            vec3 b = dd > 0.0 && dd < 1.0 ? viewAt(vUv + sy, dd) : p;
+
+            vec3 n = cross(nearer(p, r, l), nearer(p, b, u));
+            if (dot(n, n) < 1e-12) { oColor = vec4(1.0, 1.0, 0.0, 1.0); return; }
+            n = normalize(n);
+            // The camera is at the origin looking down +Z, so a surface facing it
+            // has a negative dot with its own position.
+            if (dot(n, p) > 0.0) n = -n;
+
+            // The world radius as it projects at this depth, in uv. Clamped at the
+            // near end because a sphere a hand's width across fills the screen when
+            // the camera is inside it, and at the far end to a texel so the kernel
+            // never collapses onto the pixel it is shading.
+            float rPix = clamp(uRadius * uProjH / p.z, 1.5, 96.0);
+            vec2 rUv = rPix / uSize;
+
+            // A 4x4 interleaved rotation rather than a hash: the blur below is a
+            // 4x4 box, so a pattern with that period cancels exactly and leaves no
+            // residual grain, where noise leaves noise.
+            ivec2 px = ivec2(gl_FragCoord.xy) & 3;
+            float a0 = float((px.y << 2) | px.x) * (6.28318531 / 16.0);
+
+            float occ = 0.0;
+            for (int i = 0; i < uSamples; i++) {
+                float t = (float(i) + 0.5) / float(uSamples);
+                float ang = a0 + float(i) * GOLDEN;
+                vec2 off = vec2(cos(ang), sin(ang)) * sqrt(t) * rUv;
+
+                float sd = depthAt(vUv + off);
+                // The far plane is the absence of a surface, not a surface a long
+                // way off: it must not occlude, or every silhouette against the
+                // HUD would draw a dark halo.
+                if (sd >= 1.0 || sd <= 0.0) continue;
+
+                vec3 v = viewAt(vUv + off, sd) - p;
+                float len = length(v);
+                if (len < 1e-4) continue;
+                // Falls off past the radius instead of stopping at it, so a wall
+                // sliding out of range dims rather than switching off.
+                float range = uRadius / max(uRadius, len);
+                occ += max(0.0, dot(v / len, n) - uBias) * range;
+            }
+
+            float ao = 1.0 - uStrength * (occ / float(uSamples));
+            oColor = vec4(clamp(ao, 0.0, 1.0), 1.0, 0.0, 1.0);
+        }
+        """;
+
+    /// <summary>
+    /// Ambient occlusion, second pass: the 4x4 box that cancels the first pass's
+    /// 4x4 rotation exactly, weighted by depth so it does not carry a wall's
+    /// occlusion across a silhouette onto whatever is behind it.
+    /// </summary>
+    public const string AoBlurFs = """
+        #version 330 core
+        in vec2 vUv;
+        out vec4 oColor;
+
+        uniform sampler2D uAo;
+        uniform sampler2D uDepth;
+        uniform vec2  uOrigin;
+        uniform vec2  uSize;
+        uniform vec2  uTexSize;
+        uniform vec2  uTexel;
+        // How far apart two depths may be, as a fraction of the nearer one, and
+        // still be treated as the same surface. Relative rather than absolute
+        // because the recovered depth is a view depth: a step that is a crease at
+        // arm's length is a rounding error across a room.
+        uniform float uEdge;
+
+        float depthAt(vec2 uv) {
+            return texture(uDepth, (uOrigin + clamp(uv, 0.0, 1.0) * uSize) / uTexSize).r;
+        }
+
+        void main() {
+            float d = depthAt(vUv);
+            if (d >= 1.0 || d <= 0.0) { oColor = vec4(1.0, 0.0, 0.0, 1.0); return; }
+
+            float sum = 0.0, wsum = 0.0;
+            for (int y = -2; y <= 1; y++) {
+                for (int x = -2; x <= 1; x++) {
+                    vec2 uv = vUv + vec2(float(x), float(y)) * uTexel;
+                    float sd = depthAt(uv);
+                    if (sd >= 1.0 || sd <= 0.0) continue;
+                    if (abs(sd - d) > uEdge * d) continue;
+                    sum += texture(uAo, uv).r;
+                    wsum += 1.0;
+                }
+            }
+            oColor = vec4(wsum > 0.0 ? sum / wsum : texture(uAo, vUv).r, 1.0, 0.0, 1.0);
         }
         """;
 
@@ -176,11 +368,16 @@ internal static class GlShaders
 
         void main() {
             // Written on every path so a 3D triangle's recovered SZ is the
-            // window depth, and a 2D primitive (vDepth == 0, test off) keeps
-            // the interpolated clip Z it has always had. Assigning this also
-            // turns off early-Z, so a punch-through discard cannot occlude
-            // whatever is behind the hole.
-            gl_FragDepth = vDepth > 0.0 ? vDepth : gl_FragCoord.z;
+            // window depth. Everything that recovered none writes the *far*
+            // plane rather than the interpolated clip Z it used to, which is
+            // the ambient-occlusion pass's whole mask: 2D, and any triangle the
+            // vertex map missed, then say "no surface here" and are left alone
+            // instead of being shaded against the geometry standing behind
+            // them. The Z-buffer never saw the old value either -- a batch with
+            // no recovered depth does not test and does not write -- so this
+            // costs it nothing. Assigning this also turns off early-Z, so a
+            // punch-through discard cannot occlude whatever is behind the hole.
+            gl_FragDepth = vDepth > 0.0 ? vDepth : 1.0;
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 
             if (texMode == 4) {
@@ -455,7 +652,7 @@ internal static class GlShaders
         }
 
         void main() {
-            gl_FragDepth = vDepth > 0.0 ? vDepth : gl_FragCoord.z;
+            gl_FragDepth = vDepth > 0.0 ? vDepth : 1.0;
             vec2 destUv = gl_FragCoord.xy / uDestSize;
             vec4 dstTexel = texture2D(uDest, destUv);
             if (uCheckMask > 0.5 && dstTexel.a >= 0.5) discard;

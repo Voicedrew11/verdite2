@@ -101,10 +101,15 @@ public sealed partial class Gpu
         // recompiler emitted. PGXP wins whenever it is on -- that is what the
         // switch means -- and everything below this block is shared.
         bool pgxp = Pgxp.Pgxp.Enabled;
-        if ((GteDepth.Active || pgxp) && (tex || GteDepth.Subpixel || GteDepth.ZBuffer))
+        // DepthWanted, not ZBuffer: ambient occlusion needs the same recovered
+        // depth on the same vertices and differs only in what is done with it
+        // downstream. Untextured geometry reaches this block through that term
+        // alone -- most of the architecture in this game is flat-shaded, so
+        // leaving it at ZBuffer meant a depth buffer holding only the textures.
+        if ((GteDepth.Active || pgxp) && (tex || GteDepth.Subpixel || GteDepth.DepthWanted))
         {
             bool wantW = tex && (pgxp ? Pgxp.Pgxp.TextureCorrection : GteDepth.Enabled);
-            bool wantZ = GteDepth.ZBuffer;
+            bool wantZ = GteDepth.DepthWanted;
             bool wantSub = GteDepth.Subpixel;
 
             // The old screen-position table, kept only as a comparison: it answers

@@ -97,7 +97,7 @@ public static class GteDepth
     // accounting, and this table, which answers only when PositionFallback asks it
     // to so that the two mechanisms can be compared in one build.
 
-    static bool _enabled, _subpixel, _zbuffer;
+    static bool _enabled, _subpixel, _zbuffer, _ao;
 
     /// <summary>
     /// While false the depth is not served, so both renderers interpolate affinely
@@ -195,6 +195,221 @@ public static class GteDepth
     public static float ZDropMax;
 
     /// <summary>
+    /// Ambient occlusion. While false nothing below runs and the depth attachment
+    /// is written only when <see cref="ZBuffer"/> asks for it.
+    ///
+    /// On, every triangle whose corners all recovered a view depth *writes* that
+    /// depth — with the test left at <c>GL_ALWAYS</c> unless the Z-buffer is also
+    /// on, so nothing is ever rejected and the ordering table stays the whole of
+    /// occlusion. **Painter's order is what makes that a usable G-buffer**: the
+    /// table is walked back to front, so the last write at a pixel is the nearest
+    /// visible surface, which is exactly the depth a screen-space pass wants and
+    /// is arrived at without a depth test, a prepass or a second submission of the
+    /// frame's geometry. Everything without a recovered depth writes the far plane
+    /// instead of the interpolated clip Z it used to, so the 2D HUD, the menus and
+    /// any triangle the map missed read as "no surface here" and are left alone by
+    /// the pass — semi-transparent primitives write nothing at all, so a death fade
+    /// or a damage flash does not erase the world's depth underneath it.
+    ///
+    /// Safe to change at run time: <see cref="Generation"/> is bumped so the next
+    /// draw onto a target clears the attachment rather than shading against
+    /// whatever was left in it while the setting was off. GL backend only — the
+    /// software rasterizer keeps its own float-per-pixel buffer and has no
+    /// full-screen pass to run this in.
+    /// </summary>
+    public static bool AmbientOcclusion
+    {
+        get => _ao;
+        set
+        {
+            if (_ao == value) return;
+            _ao = value;
+            Generation++;
+            GteVertexMap.SetActive(Active);
+        }
+    }
+
+    /// <summary>Whether the depth attachment is worth writing at all. The two
+    /// consumers want the same numbers in the same buffer and differ only in what
+    /// is done with them — one rejects fragments, the other reads the finished
+    /// buffer back in a full-screen pass — so the write is shared and the test is
+    /// not.</summary>
+    public static bool DepthWanted => _zbuffer || _ao;
+
+    /// <summary>How far a sample may sit from the shaded point and still occlude
+    /// it, in GTE view-depth units, which are the game's own world units — a floor
+    /// tile is 2048 of them. This is the whole of the look: too small and only the
+    /// creases in a wall darken, too large and a corridor goes grey end to end.
+    ///
+    /// A quarter of a tile, which is the scale of the things it is meant to find —
+    /// the recess of a doorframe, the base of a pillar, the join of a wall and a
+    /// floor. Measured over one view in area 1, the share of the picture the pass
+    /// darkens goes 9.2% / 18.0% / 33.9% / 39.6% at 192 / 512 / 1024 / 2048, so by
+    /// a tile it is shading a third of everything in sight and has stopped being
+    /// contact shading. Nobody has looked at any of the four; this is the one whose
+    /// *scale* matches what the effect is for.</summary>
+    public static float AoRadius = 512f;
+
+    /// <summary>How dark a fully occluded pixel goes, 0 (nothing) to 1 (black).</summary>
+    public static float AoStrength = 0.8f;
+
+    /// <summary>The angular bias, as a cosine: a sample within this much of the
+    /// shaded surface's own plane is treated as part of that surface rather than as
+    /// something standing in front of it. It is what keeps a flat wall from
+    /// shading itself out of the recovered depth's own quantisation.</summary>
+    public static float AoBias = 0.08f;
+
+    /// <summary>Samples per pixel in the occlusion pass. Rotated by a 4x4
+    /// interleaved pattern and blurred by a 4x4 kernel that cancels it exactly, so
+    /// this buys smoothness rather than the absence of a visible grid.</summary>
+    public static int AoSamples = 16;
+
+    /// <summary>Beyond this view depth the pass returns unoccluded. The game's own
+    /// fog has taken the picture by then, and the projected radius of a world-unit
+    /// sphere has fallen under a pixel, so the samples would all land in the same
+    /// texel and produce nothing but noise.</summary>
+    public static float AoMaxDepth = 24000f;
+
+    /// <summary>The projection the GTE is actually using, published from
+    /// <c>Gte.Rtp</c>: the projection distance H and the screen-space centre
+    /// OFX/OFY the divide is offset by. The pass has to undo the game's own
+    /// projection to get a view position back out of a depth texel, and these are
+    /// that projection rather than an assumption about it — a wrong H tilts every
+    /// reconstructed normal and a wrong centre tilts them more towards the edges of
+    /// the picture, which is exactly the kind of error a screenshot cannot tell
+    /// from a look.</summary>
+    public static float ProjH = 320f, ProjCx = 160f, ProjCy = 120f;
+
+    // There was a ProjOffX/ProjOffY here -- the GP0 drawing offset of the last
+    // depth-writing triangle -- on the reasoning that the GTE's centre is in
+    // packet coordinates while the target holds VRAM ones, so the offset is the
+    // difference. It is not, and it made the reconstruction wrong on half the
+    // frames: the offset it recorded belonged to the buffer being *drawn*, while
+    // the pass runs against the buffer being *presented*, and with two display
+    // buffers those differ by a screen on alternate frames. The right answer is
+    // that a display target's own origin already is that offset -- if it were not,
+    // the prim shader's uPosBias of -rt.X/-rt.Y would put every polygon in the
+    // wrong place and the picture would be broken long before this pass ran. So
+    // the target answers, and nothing per-triangle is recorded at all.
+
+    /// <summary>Where the pass put the projection centre, as a fraction of the
+    /// display area, published so the probe can print it. It should be 0.5, 0.5 on
+    /// every frame; anything else is the display origin and the drawing offset
+    /// disagreeing, which is silent, intermittent (the two display buffers differ
+    /// by a screen) and shows up only as the shading being subtly wrong.</summary>
+    public static float AoCentreX = 0.5f, AoCentreY = 0.5f;
+
+    /// <summary>Vertices whose projection was read for <see cref="ProjH"/>. A rate
+    /// of zero with the setting on means the GTE is not projecting and the numbers
+    /// above are the defaults, not a reading.</summary>
+    public static long ProjSeen;
+
+    /// <summary>Full-screen occlusion passes run, and presents that had no target
+    /// to run one against (the VRAM fallback, or an MDEC frame).</summary>
+    public static long AoPasses, AoNoTarget;
+
+    /// <summary>KF2_AO_PROBE=1: the coverage, the projection and the pass count.</summary>
+    public static bool AoProbe;
+
+    public static void ResetAoCounters()
+    {
+        AoPasses = AoNoTarget = ProjSeen = 0;
+    }
+
+    /// <summary>KF2_AO_PROBE=2: read the blurred occlusion texture back after the
+    /// next pass and reduce it to <see cref="AoMap"/> and the three numbers below.
+    /// One frame, on request, for the same reason the depth map is.
+    ///
+    /// **It is the only counter that can tell the pass working from the pass
+    /// running.** Every other number here says the depth arrived and the two
+    /// draws were issued; a shader that returns white on every pixel produces
+    /// exactly the same report and exactly no shading, and this is a project where
+    /// nobody is allowed to go and look.</summary>
+    public static bool WantAoMap;
+
+    public const int AoMapCols = 32, AoMapRows = 16;
+
+    /// <summary>The mean occlusion factor in each cell of the finished frame, 1
+    /// being unshaded. Cells over the HUD and over anything the vertex map missed
+    /// read exactly 1, which is what the far-plane mask is for.</summary>
+    public static float[]? AoMap;
+
+    /// <summary>The share of each cell the pass found a surface in, from the mask
+    /// channel. It is the other half of reading <see cref="AoMap"/>: a cell at 1.00
+    /// occlusion with no surface under it is the mask doing its job, and the same
+    /// cell with a surface under it is the pass finding nothing to shade with —
+    /// which is a radius that is too small, or a reconstruction that is wrong.
+    /// Without this the two are indistinguishable and every blank patch is an
+    /// argument.</summary>
+    public static float[]? AoCoverage;
+
+    /// <summary>The darkest factor anywhere in the frame, the mean over the whole
+    /// frame, the share of pixels the pass actually darkened, and the share it
+    /// found a surface at all. The last is the denominator the third wants: 9% of
+    /// the picture shaded is a different claim when 60% of it carries a surface
+    /// than when 100% does.</summary>
+    public static float AoMin = 1f, AoMean = 1f, AoShadedPct, AoCoveragePct;
+
+    /// <summary>Two bytes a pixel: red the occlusion factor, green the mask.</summary>
+    public static void SetAoMap(ReadOnlySpan<byte> ao, int w, int h)
+    {
+        var map = AoMap ??= new float[AoMapCols * AoMapRows];
+        var cov = AoCoverage ??= new float[AoMapCols * AoMapRows];
+        Array.Fill(map, 1f);
+        Array.Fill(cov, 0f);
+        AoMin = 1f; AoMean = 1f; AoShadedPct = 0f; AoCoveragePct = 0f;
+        WantAoMap = false;
+        if (w <= 0 || h <= 0) return;
+
+        Span<int> cellN = stackalloc int[AoMapCols * AoMapRows];
+        Span<int> cellHit = stackalloc int[AoMapCols * AoMapRows];
+        Span<float> cellSum = stackalloc float[AoMapCols * AoMapRows];
+        double sum = 0;
+        long shaded = 0, covered = 0, n = 0;
+
+        for (int y = 0; y < h; y++)
+        {
+            // The readback is bottom-up, the picture is top-down.
+            int row = (h - 1 - y) * AoMapRows / h;
+            int rowBase = y * w * 2;
+            for (int x = 0; x < w; x++)
+            {
+                float v = ao[rowBase + x * 2] * (1f / 255f);
+                bool surface = ao[rowBase + x * 2 + 1] >= 128;
+                sum += v;
+                n++;
+                // A pixel is "shaded" once it is more than one 8-bit step from
+                // white, so the quantisation of the target is not counted as
+                // occlusion.
+                if (v < 254f / 255f) shaded++;
+                if (surface) covered++;
+                if (v < AoMin) AoMin = v;
+                int cell = row * AoMapCols + x * AoMapCols / w;
+                cellSum[cell] += v;
+                cellN[cell]++;
+                if (surface) cellHit[cell]++;
+            }
+        }
+
+        for (int i = 0; i < map.Length; i++)
+            if (cellN[i] > 0) { map[i] = cellSum[i] / cellN[i]; cov[i] = (float)cellHit[i] / cellN[i]; }
+        if (n > 0)
+        {
+            AoMean = (float)(sum / n);
+            AoShadedPct = 100f * shaded / n;
+            AoCoveragePct = 100f * covered / n;
+        }
+    }
+
+    /// <summary>Called from <c>Gte.Rtp</c> while the pass is on. Last writer wins,
+    /// which is right: a frame is projected under one H and one centre, and the
+    /// pass runs after the last vertex of it.</summary>
+    public static void NoteProjection(float h, float cx, float cy)
+    {
+        if (h > 0f) { ProjH = h; ProjCx = cx; ProjCy = cy; ProjSeen++; }
+    }
+
+    /// <summary>
     /// True color (24-bit). While false the GL backend renders into an RGB5A1
     /// display target and the fragment shader crushes every shaded pixel to five
     /// bits per channel, exactly as the PlayStation's 15-bit VRAM does — which
@@ -210,7 +425,7 @@ public static class GteDepth
 
     /// <summary>Nothing is recorded and every lookup misses while every consumer
     /// is off, which is what makes this cost nothing when none of them is wanted.</summary>
-    public static bool Active => _enabled || _subpixel || _zbuffer;
+    public static bool Active => _enabled || _subpixel || _zbuffer || _ao;
 
     /// <summary>Consult the screen-position table below for vertices the exact map
     /// could not answer for. Off by default — it is the guess this was all built to
