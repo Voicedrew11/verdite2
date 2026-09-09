@@ -479,6 +479,8 @@ public static class HostWindow
     /// it.</summary>
     public static (float X, float Y) TakeMouseMotion() => InputManager.TakeMouseMotion();
 
+    public static float TakeMouseWheel() => InputManager.TakeMouseWheel();
+
     public static bool IsMouseButtonDown(MouseButton button) => InputManager.IsMouseButtonDown(button);
 
     public static void RequestDiscPath()

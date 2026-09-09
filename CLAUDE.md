@@ -816,9 +816,28 @@ in game memory** for the prompt; `0x8006E5C4` is untouched by all three, so
 `MapRender.Picture`, whose viewport fallback is right for something that must be
 drawn somewhere and wrong for a coordinate conversion. The one runtime change is
 `0029` growing `GameW`/`GameH`, which is deliberately the game's own width, not
-the presented one. **A wheel was written and taken out**: it steps relative to
-where the cursor is, hover puts it where the pointer is, and the two fight on the
-next iteration. **What is still not covered is a fourth shape**: `func_8001BB7C`
+the presented one. **A wheel was written, taken out, and put back on the other
+axis**: it stepped the *cursor*, relative to where the cursor was, while hover
+puts it where the pointer is, and the two fought on the next iteration — but a
+list longer than its window was unreachable by pointing at all (measured, `7
+entries, 4 visible`), so three of its rows needed the D-pad. `u8[desc+0x20]`, the
+page, is the one byte hover never writes, so the wheel owns that and hover keeps
+the cursor and nothing is contested: the page changes which entries the rows show
+and hover reads off the row the pointer is on. It is clamped to `count - visible`
+rather than wrapped like the game's own arm, one notch to one row (the pad's Down
+pages by exactly one), and it rewrites `+0x22` for a page that moved under a
+cursor that did not, since `+0x22` is `+0x21` minus `+0x20`. **The scrolling list
+alone**: a fixed list and a prompt draw every row they have, so a notch over one
+is discarded rather than saved. The notch is **taken from the host, not listened
+for** (`HostWindow.TakeMouseWheel`, `0038`, `TakeMouseMotion`'s own shape) —
+ImGui's per-frame `MouseWheel` is a level and would lose a notch whenever two
+frames passed between menu iterations, and a `MouseEvent` listener would have to
+be scoped to a session that **not every scrolling list is inside** (the save-slot
+menu comes off the object-use handler, a shop off an NPC). It is a float end to
+end, `(int)wheel.Y` having rounded a trackpad's sub-notch scroll away entirely.
+Nothing about the gesture is measured — the shell's `press` reaches Cross but not
+the menu's Up/Down and cannot inject a scroll at all — so the arithmetic is read
+off `func_8001EB70`'s own six branches rather than run. **What is still not covered is a fourth shape**: `func_8001BB7C`
 and `func_8001BE60` draw a fixed list and then read the pad themselves rather
 than calling `func_8001EA14`. Nothing here has been judged by eye, including
 whether the cursor lands on the item the pointer is actually over, and no run so
@@ -1522,7 +1541,7 @@ accumulating. See "The margin's only clear is the game's own" in
 
 **`patches/recompone/` is still the record of what the port changed and why**,
 and the numbering below is still how each change is referred to in the source.
-Thirty-five of the thirty-nine are load-bearing; `0002`, `0003` and `0015` are
+Thirty-six of the forty are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. **One patch has an asset
 beside it**: `patches/recompone/assets/` holds the TTF `0033` embeds, which is
 now simply a tracked file in the vendored tree.
@@ -1901,6 +1920,19 @@ uncaptured edit inside the checkout is left where it is.
   305.8 ms, the same 84 steps over the same 105 blocking VSyncs; a CHD run walks
   `open` → `game` → `fdat02` → `fdat05` at 144.0 fps / 20.0 ticks/s, and the intro
   STR decodes. See "CHD disc images" in `docs/RUNTIME.md`.
+
+- `0038-expose-the-mouse-wheel.patch` — `InputManager` owns the `IMouse` and is
+  `internal`, so a port could not read the wheel at all; nothing in the runtime
+  listened for the `MouseEvent` that carried it either. Adds `TakeMouseWheel` in
+  the drained shape `0017`'s `TakeMouseMotion` already has — scroll arrives as
+  discrete events, so a drained accumulator cannot miss a notch or spend one
+  twice, where ImGui's per-frame `io.MouseWheel` is a level and a menu loop
+  iterating at 30 a second against a 144 fps window would do both. The value is a
+  **float** throughout: `OnScroll` had `Wheel = (int)wheel.Y`, exact for a
+  discrete wheel and a total loss for a trackpad's two-finger scroll, which
+  arrives in fractions of a notch. `patches/MenuMouse.cs` is the only caller.
+  Input only — **no recompile**. See "The wheel owns the page, not the cursor" in
+  `docs/INPUT.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

@@ -24,5 +24,9 @@ public sealed class MouseEvent : IEvent
     public int X, Y;
     public MouseButton Button = MouseButton.None;
     public bool Pressed;
-    public int Wheel;
+    /// <summary>Notches scrolled, positive away from the user. A float for the
+    /// reason <c>InputManager.TakeMouseWheel</c> is one: a trackpad delivers a
+    /// fraction of a notch at a time, and an int throws every one of them
+    /// away.</summary>
+    public float Wheel;
 }

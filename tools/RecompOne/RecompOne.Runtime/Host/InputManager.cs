@@ -110,6 +110,7 @@ internal static unsafe class InputManager
     static Vector2 _mousePos;
     static bool _mouseSeen;
     static float _mouseDx, _mouseDy;
+    static float _mouseWheel;
     static bool _mouseCaptured;
 
     public static bool MouseAvailable => _mouse != null;
@@ -151,6 +152,23 @@ internal static unsafe class InputManager
         var motion = (_mouseDx, _mouseDy);
         _mouseDx = _mouseDy = 0f;
         return motion;
+    }
+
+    /// <summary>Notches scrolled since the last call, positive away from the
+    /// user, and cleared by it. Drained rather than polled for the reason
+    /// <see cref="TakeMouseMotion"/> is: the host produces these as discrete
+    /// events, and a caller reading a level would miss a notch that arrived
+    /// between two reads or spend the same one twice.
+    ///
+    /// A **float** because a wheel is not the only device that produces one: a
+    /// discrete wheel steps it by exactly +-1, but a trackpad's two-finger
+    /// scroll arrives in fractions of a notch, and rounding those away makes a
+    /// whole class of pointing device report nothing at all.</summary>
+    public static float TakeMouseWheel()
+    {
+        var wheel = _mouseWheel;
+        _mouseWheel = 0f;
+        return wheel;
     }
 
     public static bool IsMouseButtonDown(MouseButton button) =>
@@ -574,11 +592,13 @@ internal static unsafe class InputManager
 
     private static void OnScroll(IMouse mouse, ScrollWheel wheel)
     {
+        _mouseWheel += wheel.Y;
+
         if (EventBus.HasAnyListeners<MouseEvent>())
             EventBus.Dispatch(new MouseEvent
             {
                 Action = MouseAction.Wheel,
-                Wheel = (int)wheel.Y,
+                Wheel = wheel.Y,
                 X = (int)mouse.Position.X,
                 Y = (int)mouse.Position.Y
             });

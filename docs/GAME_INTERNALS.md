@@ -845,6 +845,42 @@ in `V0`; `func_8001EB70` returns the **pad word** and steps `+0x21`/`+0x22`/`+0x
 in the descriptor instead. So a patch that wants to move a scrolling cursor writes
 two bytes, where the fixed one has to be met at its return.
 
+**The page and the cursor are two axes, and the stepper moves each of them
+alone.** Read out of `func_8001EB70`'s Up and Down arms, which is what makes a
+mouse wheel possible on this widget at all:
+
+```c
+/* Down */
+if (cursor < count - 1) {
+    cursor++;
+    if (row == visible - 1) scroll++;   /* at the bottom of the window: page */
+    else                    row++;      /* inside it: cursor only */
+} else {
+    cursor = scroll = row = 0;          /* wrap to the top */
+}
+
+/* Up */
+if (cursor > 0) {
+    cursor--;
+    if (row == 0) scroll--;             /* at the top of the window: page */
+    else          row--;
+} else if (count >= visible) {          /* wrap to the bottom */
+    cursor = count - 1; scroll = count - visible; row = visible - 1;
+} else {
+    cursor = count - 1; scroll = 0;     /* the whole list fits */; row = count - 1;
+}
+```
+
+Three facts fall out of it. `+0x20` moves by **one at a time** and only when the
+cursor is already at the edge of the window. Its range is `0 .. count - visible`,
+which is exactly where the wrap-to-the-bottom arm puts it. And
+`+0x22 == +0x21 - +0x20` holds after every one of the six branches — so a patch
+that moves the page under a cursor that did not move still has to rewrite `+0x22`,
+or the highlight is drawn on a row the cursor is not on. `patches/MenuMouse.cs`'s
+wheel is that: the page is the one byte hover never writes, so the wheel can own
+it without contesting the cursor. See "The wheel owns the page, not the cursor"
+in [INPUT.md](INPUT.md).
+
 Its move arm does one more thing worth copying: after stepping the cursor it calls
 `func_80022CAC(items[cursor])` — `items` being its second argument — which is what
 loads the entry's preview. `func_80022CAC` **always returns 0**, so the

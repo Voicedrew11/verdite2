@@ -841,9 +841,9 @@ list on file that is no longer on screen. The other two need no such pairing.
 `func_8001EB70(desc, items, *confirmed, *cancelled)` returns the **pad word**, not
 the cursor: the cursor is `u8[desc+0x21]` and its row on the page is
 `u8[desc+0x22]`, both stepped in place. So hover writes those two bytes and is
-done. `u8[desc+0x20]`, the scroll offset, is deliberately never written — hover
-can only reach a row that is on screen, so the three stay consistent by
-construction and a pointer cannot scroll a list it is only pointing at.
+done. `u8[desc+0x20]`, the page, is what *hover* never writes — a pointer can only
+reach a row that is on screen, so the three stay consistent by construction — and
+that is the byte the wheel took, two sections below.
 
 A move also replays the stepper's own move arm, which is not only the blip:
 `func_80022CAC(items[cursor])` is what loads the entry's preview. Skip it and the
@@ -949,21 +949,77 @@ in `patches/MouseIndicator.cs` announces them, and the `PadReadEvent` button
 listener detaches with the capture — which is what keeps a menu click from also
 arriving as a Square.
 
-### The wheel was written and taken out
+### The wheel owns the page, not the cursor
 
-A wheel steps the cursor relative to where it is; hover puts it where the pointer
-is. The two contradict each other on the very next iteration of the menu loop —
-scroll two rows and hover snaps it straight back to whatever the pointer is over.
-One of them has to own the cursor, and pointing at a thing is the gesture that
-was asked for.
+**A list longer than its window was unreachable with the mouse.** Pointing gets
+you any row that is *drawn*, and the pad's Down is the only thing that turns the
+page — so with an inventory of seven entries in a four-row window, three of them
+could not be selected without going back to the keyboard. Measured, off
+`KF2_MENUMOUSE_PROBE=1` in area 1: `list at 0x801FF8C8, 7 entries, 4 visible from
+0`. That is the whole of the report from play that this section answers.
+
+The first version of this patch had a wheel and took it out, and the reason was
+good: it stepped the **cursor**, relative to where the cursor was, while hover
+puts the cursor where the pointer is. Two rules for one byte, contradicting each
+other on the very next iteration of the menu loop — scroll two rows and hover
+snaps it straight back to whatever the pointer is over.
+
+The way out is that the scrolling list has a **second axis**, and it is the one
+byte hover has never written. `+0x20` is the page and `+0x21` is the selection.
+Give the wheel the page and leave hover the cursor and there is nothing to
+contest: scrolling under a still pointer changes which entries the rows *show*,
+hover then reads off the row the pointer is on, and both orders give the same
+answer. The invariant `+0x22 = +0x21 − +0x20` is what makes it exact — a page
+that moves under a cursor that did not still rewrites both bytes, or the
+highlight is drawn on the wrong row.
+
+**Clamped, not wrapped.** The page may reach `count − visible` and no further,
+which is where `func_8001EB70`'s own wrap-to-the-bottom arm puts it; but the
+wheel deliberately does not wrap, because it is a continuous gesture and a list
+that jumped to the far end when it ran out would be unusable. The pad's Down
+still wraps — the game's stepper is untouched.
+
+**It is the scrolling list's alone**, and that asymmetry is the finding rather
+than a gap. A fixed list and a prompt draw every row they have, so there is no
+page to move; on those two the cursor *is* the only axis and a wheel would be
+straight back to fighting the pointer for it. A notch spent over one of them is
+therefore discarded rather than saved, or it would fire the moment a scrolling
+list opened — a list that pages itself on the frame it appears.
+
+### The notch is taken from the host, not listened for
+
+`patches/recompone/0038` gives `HostWindow` a `TakeMouseWheel()` beside the
+`TakeMouseMotion()` that `0017` added, and it is the same shape for the same
+reason: the host produces scroll as **discrete events**, so an accumulator that
+is drained cannot miss one or spend one twice, where a caller reading a level
+would do both. ImGui's `io.MouseWheel` is that level — it is refilled each
+`NewFrame`, and a menu loop iterates at 30 a second against a 144 fps window, so
+a notch would be lost whenever two frames passed between steps and repeated
+whenever none did.
+
+Two more things follow from taking it off the host rather than off a
+`MouseEvent` listener. **Not every scrolling list is inside `func_80018E80`** —
+the save-slot menu is opened from the object-use handler and a shop from an NPC —
+so a listener scoped to the menu session would have covered the inventory and
+quietly missed both. And nothing in the runtime listens for `MouseEvent` at all,
+so registering one would have started dispatching an allocation for every pointer
+*move*, hundreds a second, all through play.
+
+The wheel is a **float** end to end. `OnScroll` had `Wheel = (int)wheel.Y`, which
+is exact for a discrete wheel — GLFW steps that by ±1 — and rounds a trackpad's
+two-finger scroll, which arrives in fractions of a notch, away to nothing. The
+patch keeps the remainder and spends whole notches, one notch to one row: a notch
+is the gesture's own unit and the pad's Down at the window's edge pages by
+exactly one, so a wheel that moved faster than the D-pad can would be a different
+control rather than the same one on another device.
 
 ### What it writes
 
 For the fixed list, `V0`, the stepper's own out-parameters, and `0x8006E5D0` — the
 blink direction, zeroed to restart the wink exactly where the Up/Down arms zero
-it. For the scrolling list, `u8[desc+0x21]` and `u8[desc+0x22]`, plus that
-stepper's own `*confirmed`/`*cancelled`; it does *not* write `0x8006E5D0`, because
-`func_8001EB70` does not either. For the prompt, nothing at all in game memory —
+it. For the scrolling list, `u8[desc+0x21]` and `u8[desc+0x22]`, `u8[desc+0x20]`
+when the wheel turns, plus that stepper's own `*confirmed`/`*cancelled`; it does
+*not* write `0x8006E5D0`, because `func_8001EB70` does not either. For the prompt, nothing at all in game memory —
 only one bit ORed into a register on the way out of `PadRead`.
 
 `0x8006E5C4`, the repeat gate's latch, is untouched by all three, so `MenuPacing`
@@ -983,6 +1039,9 @@ Measured at `KF2_FPS=144` in area 1, off `KF2_MENUMOUSE_PROBE=1`:
 - The scrolling descriptor reads correctly on two lists on the same page — 10
   entries, 10 visible from 0, rows at x 42 y 44, 236 × 14; and 3 entries, 4
   visible, rows at x 42 y 164.
+- A list **longer than its window** exists and is the reported defect: 7 entries
+  in a 4-row window at x 42 y 164, three of them unreachable by pointing. The
+  probe's per-second line names the page for it now — `list, rows 0-3 of 7`.
 - The pointer converts: at 16:9 the probe reads `of 320x240 +54`, and a desktop
   pointer sweeping the inventory answers rows 0, 1, 2, 4, 5 and 6 in order, with
   −1 above the first row of the short list.
@@ -991,8 +1050,18 @@ Measured at `KF2_FPS=144` in area 1, off `KF2_MENUMOUSE_PROBE=1`:
 - It costs nothing: 20.0 ticks/s with the menu open, and the menu's own 60 fps
   under `LoopPacing` is unchanged.
 
-**Not measured, and it needs a person.** Whether the cursor lands on the item the
-pointer is *actually* over — the numbers can only say it lands on the row the
+**The wheel's own gesture is not measured, and cannot be from here.** The shell's
+`press` verb reaches Circle and Cross but not the menu's Up/Down — that is the
+"injecting Up/Down does not work" finding above — and there is no way at all to
+inject a scroll, so the arithmetic below `TakeWheel` has been read rather than
+run. What *is* established from the game's own code is the two arms it copies:
+`func_8001EB70`'s Down steps `+0x22` while the cursor is inside the window and
+`+0x20` only at its last row, and its Up mirrors that at row 0 — so `+0x20` moves
+by one at a time, is bounded by `count − visible`, and `+0x22` is `+0x21 − +0x20`
+at every step of both.
+
+**Not measured, and it needs a person.** Whether one notch a row is the right
+speed. Whether the cursor lands on the item the pointer is *actually* over — the numbers can only say it lands on the row the
 descriptor or the table says is there. Whether a desktop arrow over a 1996 menu
 reads acceptably. Whether a move blip on every row crossed is pleasant or noisy.
 Whether the 2-pixel dead gutters are felt when sweeping down a list. And the

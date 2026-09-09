@@ -114,17 +114,49 @@ namespace Kf2;
 /// sit on, and the D-pad would look broken. <see cref="IdleMs"/> is how long a
 /// move stays live.
 ///
-/// **The wheel is deliberately not here.** It was written and taken out: a wheel
-/// steps the cursor relative to where it is, hover puts it where the pointer is,
-/// and the two contradict each other on the very next iteration of the menu loop.
-/// One of them has to own the cursor, and pointing at a thing is the gesture that
-/// was asked for.
+/// ## The wheel owns the page, not the cursor
+///
+/// A list longer than its window could only be paged with the D-pad, so half an
+/// inventory was unreachable with the mouse. The wheel is the gesture for that,
+/// and the first version of this patch had one and took it out for a good
+/// reason: it stepped the **cursor**, relative to where the cursor was, while
+/// hover puts the cursor where the pointer is. Two rules for one byte, and they
+/// contradict each other on the very next iteration of the menu loop.
+///
+/// The scrolling list has a second axis, and it is the way out. `+0x20` is the
+/// entry drawn on row 0 -- the page -- and `+0x21` is the selection; hover has
+/// never written the first of them, precisely because a pointer can only reach a
+/// row that is on screen. So the wheel takes the page and hover keeps the
+/// cursor. Scrolling under a still pointer changes which entries the rows show,
+/// hover reads the row the pointer is on, and the answer is the same one either
+/// order would have given. Nothing has to tie-break, because nothing is
+/// contested.
+///
+/// It is the scrolling list's alone. A fixed list and a prompt draw every row
+/// they have, so there is no page to move and a notch over one is spent rather
+/// than saved -- see <see cref="TakeWheel"/>. The asymmetry is the finding
+/// above, not a gap: on those two the cursor *is* the only axis, and the wheel
+/// would be back to fighting the pointer for it.
+///
+/// The notch is **taken from the host, not listened for**
+/// (`HostWindow.TakeMouseWheel`, patches/recompone/0038), which is the shape
+/// `TakeMouseMotion` already had and which matters twice here. A drained
+/// accumulator cannot miss a notch that arrived between two iterations of a
+/// menu loop, where ImGui's per-frame `MouseWheel` would lose one whenever two
+/// frames passed between steps and repeat one whenever none did. And it needs
+/// no scope: **not every scrolling list is inside `func_80018E80`** -- the
+/// save-slot menu is opened from the object-use handler and a shop from an NPC
+/// -- so a listener hung on this class's own session would have covered the
+/// inventory and quietly missed both.
 ///
 /// **Never judged by eye**: whether the cursor lands on the item the pointer is
 /// actually over, whether a desktop pointer over a 1996 menu reads acceptably,
-/// and whether the gutters between the fixed list's boxes -- 8 pixels in 26, and
+/// whether the gutters between the fixed list's boxes -- 8 pixels in 26, and
 /// now dead rather than assigned to a neighbour -- are felt when sweeping down a
-/// list.
+/// list, and whether one notch a row is the right speed. No list measured so far
+/// has been longer than its window, so the scroll itself has been exercised only
+/// against the arithmetic; and a trackpad's fractional notch is read off Silk's
+/// contract rather than measured, no such device having been used here.
 ///
 /// **Not covered**: `func_8001BB7C` and `func_8001BE60` draw a fixed list and
 /// then read the pad themselves rather than calling `func_8001EA14`, so they are
@@ -240,6 +272,13 @@ public static class MenuMouse
     /// mouse left alone gives the pad the cursor back before the next menu.</summary>
     const long IdleMs = 2000;
 
+    /// <summary>How many entries one notch of the wheel moves the page by. One,
+    /// because a notch is the gesture's own unit and the pad's Down at the
+    /// window's edge scrolls by exactly one: a wheel that moved the page faster
+    /// than the D-pad can would be a different control rather than the same one
+    /// on a different device.</summary>
+    const int WheelRows = 1;
+
     /// <summary>How stale a fixed-list layout read may be and still be used. Only
     /// that list needs it: its geometry comes from a drawer call rather than from
     /// the stepper's own arguments, so a page change has to be able to invalidate
@@ -298,6 +337,23 @@ public static class MenuMouse
     static bool _clickLeft, _clickRight;
     static bool _inPicture;
 
+    /// <summary>How long a gap in stepper calls means the widget being stepped
+    /// has only just opened, and any wheel held over from before it is not a
+    /// request made of it. A live widget is stepped once per iteration of its
+    /// own loop, measured at 30 a second, so this is seven of those.</summary>
+    const long WidgetGapMs = 250;
+
+    /// <summary>When a widget was last stepped, for that test.</summary>
+    static long _steppedAt;
+
+    /// <summary>Part of a notch left over from the last drain. The host is asked
+    /// for the wheel rather than listened to, so nothing accumulates here except
+    /// the fraction: <c>HostWindow.TakeMouseWheel</c> clears its own accumulator
+    /// on every read, which is what makes a notch impossible to miss or to spend
+    /// twice, and a trackpad's sub-notch scroll is carried here until enough of
+    /// them add up to a row.</summary>
+    static float _wheel;
+
     /// <summary>The pointer in the game's own pixels, valid while
     /// <see cref="_inPicture"/>.</summary>
     static float _gameX = float.NaN, _gameY = float.NaN;
@@ -328,7 +384,7 @@ public static class MenuMouse
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _windowMs = -1.0;
-    static int _samples, _hovers, _moves, _confirms, _cancels, _injects;
+    static int _samples, _hovers, _moves, _scrolls, _confirms, _cancels, _injects;
     static int _lastReported = -2;
     static uint _lastScDesc;
     static int _lastScCount = -1;
@@ -598,6 +654,7 @@ public static class MenuMouse
         if (gameMoved) _padOwns = true;
 
         Sample();
+        TakeWheel();          // nothing to scroll here; see TakeWheel
         _live = "fixed";
         int hover = _hover = HoverLive() ? HitFixed() : -1;
 
@@ -706,6 +763,13 @@ public static class MenuMouse
         Sample();
         _live = "list";
 
+        // The wheel moves the page, and the pointer still owns the cursor: the
+        // two touch different bytes of the descriptor, which is the whole reason
+        // this can exist where a wheel that stepped the cursor could not. Left
+        // alone while the game moved the cursor itself this iteration -- the
+        // notch is not discarded, so it is spent on the next one instead.
+        int delta = gameMoved || gameConfirmed ? 0 : Page(m, TakeWheel(), ref scroll, count, visible);
+
         if (_probe && (_scDesc != _lastScDesc || count != _lastScCount))
         {
             _lastScDesc = _scDesc; _lastScCount = count;
@@ -715,28 +779,46 @@ public static class MenuMouse
                               $"{m.ReadU16(RowSprite + 0x8)}x{RowPitch}");
         }
 
-        // Rows on screen, which is all hover can reach: a pointer cannot ask for
-        // an entry that is scrolled off, so DescScroll is never written and the
-        // cursor and its row stay consistent without a second rule.
+        // Rows on screen, off the page the wheel may just have moved: hover can
+        // only ever reach a row that is drawn, which is what keeps the cursor
+        // inside the window without a rule of its own.
         int rows = Math.Min(Math.Min(visible, MaxScrollRows), count - scroll);
         int hover = _hover = HoverLive() ? HitScroll(m, rows) : -1;
 
+        // The page is something this class writes now, so the per-second line
+        // has to show it: a list whose window is shorter than its contents is
+        // the whole reason the wheel exists, and it is invisible in a row index.
+        if (_probe) _live = $"list, rows {scroll}-{scroll + Math.Max(rows, 1) - 1} of {count}";
+
         if (gameMoved || gameConfirmed) { Report(); return; }
 
-        int target = hover >= 0 ? scroll + hover : cursor;
+        // Under the pointer if it is on a row; otherwise the entry the page
+        // carried with it, which is the same row of the window it already was --
+        // so the cursor never leaves the page, whichever of the two moved.
+        int target = hover >= 0 ? scroll + hover : cursor + delta;
+        if (target < 0 || target >= count) target = cursor;
+        bool moved = target != cursor;
 
-        if (target != cursor && target >= 0 && target < count)
+        // The stepper's own move arm, in its three parts: the blip, the two
+        // cursor bytes, the preview load. All of it before the click below for
+        // the reason the fixed list writes V0 last -- a call into the recompiled
+        // routine clobbers the argument registers.
+        if (moved) Blip(c, m, BlipMove);
+
+        // Both bytes, for a page that moved under a cursor that did not, as well
+        // as for a cursor that moved: `+0x22` is `+0x21` minus `+0x20`, so a
+        // scroll alone changes it and leaving it stale draws the highlight on
+        // the wrong row.
+        if (moved || delta != 0)
         {
-            // The stepper's own move arm: the blip, the two cursor bytes, and the
-            // preview load. Written before the click below for the reason the
-            // fixed list writes V0 last -- a call into the recompiled routine
-            // clobbers the argument registers.
-            Blip(c, m, BlipMove);
             m.WriteU8(_scDesc + DescCursor, (byte)target);
             m.WriteU8(_scDesc + DescRow, (byte)(target - scroll));
+        }
+
+        if (moved)
+        {
             if (_scItems != 0) Preview(c, m, m.ReadU8(_scItems + (uint)target));
             _moves++;
-            cursor = target;
         }
 
         if (_clickLeft)
@@ -761,6 +843,44 @@ public static class MenuMouse
         }
 
         Report();
+    }
+
+    /// <summary>
+    /// Spend whole notches on the page, and say how far it moved.
+    ///
+    /// **`+0x20` is the one byte of the descriptor hover never writes**, and
+    /// that is what makes a wheel possible here at all. The note above records
+    /// a wheel that was written and taken out, and it was right to take out:
+    /// that one stepped the *cursor*, relative to where it was, while hover puts
+    /// the cursor where the pointer is -- two rules for one byte, contradicting
+    /// each other on the next iteration of the menu loop. The page is a second
+    /// axis. Scrolling it under a still pointer changes which entries the rows
+    /// show, hover then reads off the row the pointer is on, and the two agree
+    /// by construction rather than by a tie-break.
+    ///
+    /// The clamp is the game's own window: `+0x20` may reach `count - visible`
+    /// and no further, which is exactly where `func_8001EB70`'s own wrap-to-the-
+    /// bottom arm puts it. It deliberately does **not** wrap, unlike that arm --
+    /// a wheel is a continuous gesture and a list that jumped to the far end
+    /// when it ran out would be unusable; the pad's Down still wraps, since the
+    /// game's stepper is untouched.
+    /// </summary>
+    static int Page(IMemory m, int notches, ref int scroll, int count, int visible)
+    {
+        if (notches == 0 || count <= 0 || visible <= 0) return 0;
+
+        int max = count - visible;
+        if (max <= 0) return 0;   // the whole list is on screen; pointing reaches it all
+
+        // Positive is away from the user, which is toward the top of the list.
+        int want = Math.Clamp(scroll - notches * WheelRows, 0, max);
+        int delta = want - scroll;
+        if (delta == 0) return 0;
+
+        m.WriteU8(_scDesc + DescScroll, (byte)want);
+        scroll = want;
+        _scrolls++;
+        return delta;
     }
 
     /// <summary>Which visible row the pointer is over, or -1. `func_800209E0`
@@ -858,6 +978,7 @@ public static class MenuMouse
         if (!Enabled || _promptDepth <= 0 || !_promptSeen) return;
 
         Sample();
+        TakeWheel();          // nothing to scroll here either
         _live = "prompt";
         int hover = _hover = HoverLive() ? HitPrompt(m) : -1;
 
@@ -1048,6 +1169,42 @@ public static class MenuMouse
     static bool In(int x, int y, int w, int h) =>
         _inPicture && _gameX >= x && _gameX < x + w && _gameY >= y && _gameY < y + h;
 
+    /// <summary>
+    /// The whole notches scrolled since the last call, the remainder carried.
+    ///
+    /// **Every live widget takes them, and only the scrolling list can use
+    /// them.** A notch spent over a fixed list or a prompt has nothing to move
+    /// -- both draw every one of their rows -- and leaving it in the
+    /// accumulator would fire it the moment a scrolling list opened, which is a
+    /// list that jumps on the frame it appears.
+    /// </summary>
+    static int TakeWheel()
+    {
+        if (!HostWindow.MouseAvailable) return 0;
+
+        long now = Environment.TickCount64;
+        bool opening = now - _steppedAt > WidgetGapMs;
+        _steppedAt = now;
+
+        _wheel += HostWindow.TakeMouseWheel();
+
+        // Nothing drains the host's accumulator while the game is being played,
+        // where the wheel is bound to nothing, so the first step of a widget
+        // throws away whatever was scrolled before it existed -- a list that
+        // pages itself on the frame it opens is worse than one that ignores a
+        // gesture made at the world.
+        if (opening) { _wheel = 0f; return 0; }
+
+        int notches = (int)_wheel;   // toward zero, so a part-notch is kept
+        _wheel -= notches;
+
+        // A notch is the pointer moving, so it takes the cursor the way a move
+        // or a click does. Otherwise scrolling a list the pad owns would page
+        // the view and leave the selection behind on a row it no longer names.
+        if (notches != 0) { _movedAt = Environment.TickCount64; _padOwns = false; }
+        return notches;
+    }
+
     /// <summary>Whether hover is allowed to move anything: the pointer has moved
     /// recently and the pad has not moved the cursor since.</summary>
     static bool HoverLive() => !_padOwns && Environment.TickCount64 - _movedAt < IdleMs;
@@ -1070,10 +1227,10 @@ public static class MenuMouse
                           $"of {OutputView.GameW}x{OutputView.GameH} +{Display.WideMargin(OutputView.GameW)} " +
                           $"-> {_live} row {_hover}, " +
                           $"{(_padOwns ? "pad owns" : "pointer owns")}, " +
-                          $"hovered {_hovers}, moved {_moves}, " +
+                          $"hovered {_hovers}, moved {_moves}, scrolled {_scrolls}, " +
                           $"confirmed {_confirms}, cancelled {_cancels}, injected {_injects}");
 
         _windowMs = now;
-        _samples = _hovers = _moves = _confirms = _cancels = _injects = 0;
+        _samples = _hovers = _moves = _scrolls = _confirms = _cancels = _injects = 0;
     }
 }
