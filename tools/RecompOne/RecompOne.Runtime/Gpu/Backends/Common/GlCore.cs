@@ -603,6 +603,8 @@ public sealed class GlCore : IGpuBackend
     static int _snapHit, _snapMiss;
     bool _snapVerified;
     static double _snapWindow;
+    int _lastVerdict = int.MinValue;
+    static int _snapMissW, _snapMissH;
 
     // Below this a readback is a sprite or a small tile rather than a frame, and
     // a snapshot of it would evict the one that matters.
@@ -613,7 +615,9 @@ public sealed class GlCore : IGpuBackend
         if (!GlVram.SnapshotProbe) return;
         double now = Environment.TickCount64 / 1000.0;
         if (now - _snapWindow < 2.0) return;
-        Console.WriteLine($"[vramsnap] restored {_snapHit}, uploaded 1x {_snapMiss}");
+        Console.WriteLine($"[vramsnap] restored {_snapHit}, uploaded 1x {_snapMiss}" +
+                          (_snapMiss > 0 ? $", widest miss {_snapMissW}x{_snapMissH}" : ""));
+        _snapMissW = _snapMissH = 0;
         _snapHit = _snapMiss = 0;
         _snapWindow = now;
     }
@@ -713,6 +717,7 @@ public sealed class GlCore : IGpuBackend
             return true;
         }
         _snapMiss++;
+        if ((long)w * h > (long)_snapMissW * _snapMissH) { _snapMissW = w; _snapMissH = h; }
         return false;
     }
 
@@ -1084,8 +1089,36 @@ public sealed class GlCore : IGpuBackend
         // that never latched margin content; a target that did keeps serving, which
         // is what keeps the in-game menu, dialogs, shops and signs wide instead of
         // collapsing to the 320-wide 4:3 fallback the moment the world render stops.
-        if (src is { Margin: > 0 } && src.MarginContentFlip < 0)
+        bool latchRefused = src is { Margin: > 0 } && src.MarginContentFlip < 0;
+        if (latchRefused)
             src = null;
+        // KF2_PRESENT_PROBE=2: the census cannot say *why* a present dropped to the
+        // 4:3 fallback -- no target covered the display area, the margin latch
+        // refused the one that did, or the target has no margin at all. Print the
+        // display rect and every live target the frame a verdict changes, which is
+        // the only frame that carries the answer.
+        if (GpuHle.PresentVerdictProbe && !rgb24)
+        {
+            int verdict = src is { Margin: > 0 } ? 2 : src != null ? 1 : latchRefused ? -1 : 0;
+            if (verdict != _lastVerdict)
+            {
+                _lastVerdict = verdict;
+                string name = verdict switch
+                {
+                    2 => "wide", 1 => "plain (margin 0)",
+                    -1 => "vram fallback (margin latch refused)",
+                    _ => "vram fallback (no target covers the display)"
+                };
+                var sb = new System.Text.StringBuilder();
+                sb.Append($"[present] -> {name}; display {w}x{h} at {dispX},{dispY}, frame {_frame}");
+                for (int i = 0; i < _rts.Length; i++)
+                {
+                    if (_rts[i] is not { } t) { sb.Append($"; rt{i} none"); continue; }
+                    sb.Append($"; rt{i} {t.W}x{t.H} at {t.X},{t.Y} margin {t.Margin} latch {t.MarginContentFlip} idle {_frame - t.LastDrawFrame}");
+                }
+                Console.WriteLine(sb.ToString());
+            }
+        }
         // Only the non-rgb24 path searches for a target, so src is meaningful only
         // there; an rgb24 present (FMV) draws raw VRAM by a different route and would
         // otherwise be miscounted as the 4:3 margin fallback the census is watching for.

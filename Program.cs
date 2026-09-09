@@ -847,8 +847,14 @@ Kf2.Widescreen.Install();
 // -- see "Widescreen" in docs/WIDESCREEN.md and patches/recompone/0022:
 //
 //     KF2_PRESENT_PROBE=1    the census, on the console
-if (Environment.GetEnvironmentVariable("KF2_PRESENT_PROBE") == "1")
-    RecompOne.Runtime.Hle.GpuHle.PresentProbe = true;
+//     KF2_PRESENT_PROBE=2    also name the verdict, and every live target, the
+//                            frame the verdict changes -- which is the only frame
+//                            that says *why* the picture dropped to 4:3
+{
+    var pp = Environment.GetEnvironmentVariable("KF2_PRESENT_PROBE");
+    if (pp == "1" || pp == "2") RecompOne.Runtime.Hle.GpuHle.PresentProbe = true;
+    if (pp == "2") RecompOne.Runtime.Hle.GpuHle.PresentVerdictProbe = true;
+}
 
 // The cull the margin runs into. King's Field decides what to draw from a 24x24
 // grid of tile visibility, rebuilt each frame as a top-down trapezoid whose corners

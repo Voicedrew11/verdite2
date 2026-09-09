@@ -17,6 +17,9 @@ public static class GpuHle
     // one, or a fallback to raw VRAM. GlCore.PresentDisplay counts; Program.cs
     // sets the switch.
     public static bool PresentProbe;
+    // KF2_PRESENT_PROBE=2: also name the verdict, and every live target, the frame
+    // the verdict changes. GlCore.PresentDisplay prints.
+    public static bool PresentVerdictProbe;
     public static long PresentWide, PresentPlain, PresentFallback;
     public static double PresentWindowStart = Environment.TickCount64 / 1000.0;
     // DisplayFlip counts genuine display-area flips (NotifyDisplay seeing a
