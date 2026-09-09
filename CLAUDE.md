@@ -1382,7 +1382,34 @@ King's Field's loader is event-driven (`EvMdINTR`). Measured before the graft �
 `pos 0,0,0` forever, and `LoadPacing` reports a disc wait open for over 30 s.
 After — `open → game → fdat02 → fdat05`, slot 2 restored at hp 46/86 in area 1,
 144.0 fps drawn at 20.0 ticks/s, no exceptions and every hook attached. **That
-run is the acceptance test for any future merge.**
+run is the acceptance test for any future merge — and it is not sufficient on its
+own, because every number in it was still true with a completely black window.**
+The merge also moved presentation onto upstream's `Runtime.Run`/`PresentLoop`,
+which this port never enters (`Program.cs` calls `Entry.Run` directly and presents
+from inside the game's own `VSync`), and wrapped the GL backend in upstream's
+`InterpBackend`, which records primitives into a `FrameGraph` that only
+`PresentLoop` replays. Two independent ways for a frame to reach no screen, with
+nothing thrown and the whole game running normally underneath. `PresentFrame`
+calls `HostWindow.Present(Gpu)` again and the GL backend is used unwrapped, so
+`Interp.Backend` stays null and frame interpolation stays uncarried. **The rate is
+measured from inside the game — a `DrawOTag` after a `VSync`, neither of which
+touches GL — so pair it with `KF2_PRESENT_PROBE=1`,** which reads `wide 288, plain
+0, vram fallback 0` when `PresentDisplay` is reached and prints nothing at all
+when it is not. See "The window went black" in `docs/RUNTIME.md`.
+
+**The second thing the merge broke silently is `0012`'s address map.** Upstream
+added RAM fast paths to `PSMemory.ReadU32`/`WriteU32` — an `Unsafe` access
+straight into the array, taken by every `lw` and `sw` the game makes — which
+return before the slow paths where `GteVertexMap.NoteRead`/`NoteWrite` live. This
+mechanism *is* following a value through the game's `lw`/`sw`, so skipping the
+hooks skips the mechanism: nothing bound to an address, every `TryGet` a miss, and
+both halves quietly falling back to what a miss means — **affine textures and
+whole-pixel vertex wobble, with `[KF2] perspective: on` still printed at boot**.
+The hooks are offered from the fast paths now, on the same `GteVertexMap.Active`
+gate. The counter that named it is `KF2_PERSPECTIVE_PROBE=1` reading `0 caught/s,
+0 copied/s` beside a healthy `projected/s`; measured after, in area 2 at 144 fps,
+93.0-93.7% hit, inside the band this was first measured at. See "The RAM fast path
+went round both hooks" in `docs/RENDERING.md`.
 
 **`patches/recompone/` is still the record of what the port changed and why**,
 and the numbering below is still how each change is referred to in the source.

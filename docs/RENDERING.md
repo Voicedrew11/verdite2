@@ -442,6 +442,35 @@ presence bitmap — 64 KB for the retail 2 MB of RAM. The attribute array itself
 10 MB, allocated on first use, and only touched on a bitmap hit. The frame rate
 does not move.
 
+### The RAM fast path went round both hooks
+
+**Symptom, after the merge to upstream `0409bc2`:** textures affine and vertices
+back on whole pixels, with every switch still reporting itself on — `[KF2]
+perspective: on`, `[KF2] subpixel: on`. `KF2_PERSPECTIVE_PROBE=1` names the
+failure exactly: `36720 vertices projected/s, 0 caught/s, 0 copied/s, 91872
+looked up/s, 0.0% hit`. The GTE was projecting and the GPU was asking; nothing in
+between was being *bound*.
+
+**Cause.** Upstream added RAM fast paths to `PSMemory.ReadU32` and `WriteU32` —
+an `Unsafe.ReadUnaligned`/`WriteUnaligned` straight into the array, taken by every
+`lw` and `sw` in the game, returning before `ReadU32Slow`/`WriteU32Slow` is
+reached. `GteVertexMap.NoteRead` and `NoteWrite` live in those slow paths, and the
+merge kept them there. This whole mechanism *is* following a value through the
+game's `lw`/`sw`, so a fast path that skips the hooks skips the mechanism: nothing
+is ever published to an address, so every `TryGet` misses and both halves silently
+fall back to what they do on a miss — affine, and the whole pixel.
+
+**Fix:** offer the word to the map in the fast path too, still gated on the same
+`GteVertexMap.Active` static bool, so the fast path keeps its speed and the
+association is made where the game actually makes it.
+
+**What the counters say to look at.** `Roots` (`caught/s`) reading exactly zero
+while `projected/s` is healthy means the *store* side is not being seen; the hit
+rate alone would not distinguish that from a game that stopped copying vertices.
+Measured after, in area 2 at 144 fps: `364896-383616 projected/s, 369648-388368
+caught/s, 465984-524100 copied/s, 93.0-93.7% hit`, inside the 92.2-97.1% band this
+mechanism was first measured at, and 144.0 fps at 20.0 ticks/s with it on.
+
 ## Z-buffer: the same depth, used as occlusion
 
 **Confirmed mechanism; picture checked and still wrong — a second cause is Open.**

@@ -555,7 +555,15 @@ public static class HostWindow
             Hle.GpuBackendFactory.Parse(ConfigManager.View.GpuBackend));
         _glBackend.InitGl();
         Hle.GpuHle.Active = _glBackend.Ready;
-        Hle.GpuHle.Backend = new Interp.InterpBackend(_glBackend);
+        // Upstream wraps the GL backend in its frame-interpolation backend, which
+        // records every primitive into a FrameGraph and issues nothing until
+        // Runtime.PresentLoop calls Compose. This port never enters that loop --
+        // Program.cs calls Entry.Run directly and presents from inside the game's
+        // own VSync -- so the wrapper swallowed the whole frame and the window drew
+        // black. Frame interpolation is deliberately not carried here (see the
+        // checkout section in CLAUDE.md), so the GL backend is used unwrapped and
+        // Interp.Backend stays null.
+        Hle.GpuHle.Backend = _glBackend;
         ApplySwapInterval();
 
         _imgui = new ImGuiController(_gl, _window, input, null, ConfigureImGui);

@@ -209,7 +209,17 @@ public sealed class PSMemory : IMemory
         var phys = MemoryMap.ToPhysical(address);
         var off = phys & _ramMask;
         if (phys < MemoryMap.RamWindow && off + 4u <= (uint)_ram.Length && !RamLogger.TrackReads)
-            return Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_ram), (nint)off));
+        {
+            var fastWord = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_ram), (nint)off));
+            // 0012. Upstream's RAM fast path is the one every lw in the game takes,
+            // so the map has to be offered the word here as well as in ReadU32Slow
+            // -- without this the association is never made and every vertex misses,
+            // which is affine textures and whole-pixel wobble with the mechanism
+            // still reporting itself on. Inert (one predictable branch) while
+            // perspective correction and sub-pixel positioning are both off.
+            if (GteVertexMap.Active) GteVertexMap.NoteRead(phys, fastWord);
+            return fastWord;
+        }
 
         if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadSize - 3u)
             return Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_scratchpad),
@@ -271,6 +281,10 @@ public sealed class PSMemory : IMemory
         if (_frozenCount == 0 && phys < MemoryMap.RamWindow && off + 4u <= (uint)_ram.Length && !RamLogger.TrackWrites)
         {
             Dispatcher.NotifyWrite(off);
+            // 0012, and the other half of the read above: every sw the game makes
+            // into a primitive packet takes this path, so the store has to be
+            // offered here too or nothing is ever bound to an address.
+            if (GteVertexMap.Active) GteVertexMap.NoteWrite(phys, value);
             Unsafe.WriteUnaligned(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_ram), (nint)off), value);
             return;
         }
