@@ -382,6 +382,12 @@ public static class Gte
             // The probes measure what the GTE projected, not what either mechanism
             // chose to keep, so this is counted whichever of the two is answering.
             GteDepth.NoteProjected(SP[2].Fx, SP[2].Fy, clipped, sz > 0);
+            // The projection itself, for the ambient-occlusion pass: it has to undo
+            // this divide to get a view position back out of a depth texel, and H
+            // and the OFX/OFY centre are that projection rather than a guess at it.
+            // OFX/OFY are 16.16 here, as SX/SY are before the shift.
+            if (GteDepth.AmbientOcclusion)
+                GteDepth.NoteProjection(H, OFX * (1f / 65536f), OFY * (1f / 65536f));
             if (GteDepth.PositionFallback)
                 GteDepth.Record(nx, ny, sz, sx * (1f / 65536f), sy * (1f / 65536f), clipped);
         }

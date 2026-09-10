@@ -190,15 +190,13 @@ public static class PatchSettings
         Register("display", new PerspectivePage());
         Register("display", new SubpixelPage());
         Register("display", new ShadingPage());
+        Register("display", new AmbientOcclusionPage());
+        Register("display", new AnisotropicPage());
         // Nothing registers a PGXP or a geometry-precision page either. PGXP buys
         // no coverage in this game and costs a fifth of the frame rate, and the
         // depth buffer's picture has never been judged -- both are comparisons, so
         // they are KF2_PGXP* and KF2_ZBUFFER* on the console and nothing in Video.
         RegisterSlot("display.render_scale", new WidescreenPage());
-        // Registered here rather than up with the other Enhancements pages purely
-        // to keep this list's edits apart from the ambient-occlusion branch's; the
-        // pane's order is IPatchPage.Order (24), not this call's position.
-        Register("display", new AnisotropicPage());
         // Nothing registers against "input": the port draws that whole pane
         // itself (InputSection), and SettingsRegistry.Extend has no un-extend --
         // a page left here would draw a second time under the tab bar, outside

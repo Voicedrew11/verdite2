@@ -38,6 +38,18 @@ public sealed class GlCore : IGpuBackend
     int _presentW, _presentH;
     bool _presentNearest;
 
+    // Ambient occlusion: two full-screen passes between the finished render target
+    // and the present blit. Core profile only -- GLSL 120 has no textureless
+    // fullscreen conveniences worth the second copy of the shader, and that backend
+    // has never been available to test on.
+    uint _progAo, _progAoBlur;
+    uint _aoFbo, _aoTex, _aoBlurFbo, _aoBlurTex;
+    int _aoW, _aoH;
+    int _uAoOrigin, _uAoSize, _uAoTexSize, _uAoTexel, _uAoProjH, _uAoCentre;
+    int _uAoRadius, _uAoStrength, _uAoBias, _uAoMaxDepth, _uAoSamples;
+    int _uAoBOrigin, _uAoBSize, _uAoBTexSize, _uAoBTexel, _uAoBEdge;
+    int _uPresentAoOn;
+
     uint _postProg, _postFbo, _postTex;
     int _postW, _postH, _postVersion = -1;
     int _uPostTexSize, _uPostOutputSize, _uPostTime, _uPostFrame;
@@ -133,8 +145,48 @@ public sealed class GlCore : IGpuBackend
         _uPresentOrigin = _gl.GetUniformLocation(_progPresent, "uOrigin");
         _uPresentSize = _gl.GetUniformLocation(_progPresent, "uSize");
         _uPresentTexSize = _gl.GetUniformLocation(_progPresent, "uTexSize");
+        _uPresentAoOn = _gl.GetUniformLocation(_progPresent, "uAoOn");
         _gl.UseProgram(_progPresent);
         _gl.Uniform1(_gl.GetUniformLocation(_progPresent, "uVram"), 0);
+        int uPresentAo = _gl.GetUniformLocation(_progPresent, "uAo");
+        if (uPresentAo >= 0) _gl.Uniform1(uPresentAo, 1);
+        if (_uPresentAoOn >= 0) _gl.Uniform1(_uPresentAoOn, 0f);
+
+        // Ambient occlusion. A failure here disables the pass and nothing else --
+        // the backend is perfectly usable without it, so it is deliberately not
+        // part of the early return above.
+        if (!_legacy)
+        {
+            _progAo = GlShaders.BuildFullscreen(_gl, fullVs, GlShaders.AoFs, "ao");
+            _progAoBlur = GlShaders.BuildFullscreen(_gl, fullVs, GlShaders.AoBlurFs, "aoblur");
+            if (_progAo != 0)
+            {
+                _uAoOrigin = _gl.GetUniformLocation(_progAo, "uOrigin");
+                _uAoSize = _gl.GetUniformLocation(_progAo, "uSize");
+                _uAoTexSize = _gl.GetUniformLocation(_progAo, "uTexSize");
+                _uAoTexel = _gl.GetUniformLocation(_progAo, "uTexel");
+                _uAoProjH = _gl.GetUniformLocation(_progAo, "uProjH");
+                _uAoCentre = _gl.GetUniformLocation(_progAo, "uCentre");
+                _uAoRadius = _gl.GetUniformLocation(_progAo, "uRadius");
+                _uAoStrength = _gl.GetUniformLocation(_progAo, "uStrength");
+                _uAoBias = _gl.GetUniformLocation(_progAo, "uBias");
+                _uAoMaxDepth = _gl.GetUniformLocation(_progAo, "uMaxDepth");
+                _uAoSamples = _gl.GetUniformLocation(_progAo, "uSamples");
+                _gl.UseProgram(_progAo);
+                _gl.Uniform1(_gl.GetUniformLocation(_progAo, "uDepth"), 0);
+            }
+            if (_progAoBlur != 0)
+            {
+                _uAoBOrigin = _gl.GetUniformLocation(_progAoBlur, "uOrigin");
+                _uAoBSize = _gl.GetUniformLocation(_progAoBlur, "uSize");
+                _uAoBTexSize = _gl.GetUniformLocation(_progAoBlur, "uTexSize");
+                _uAoBTexel = _gl.GetUniformLocation(_progAoBlur, "uTexel");
+                _uAoBEdge = _gl.GetUniformLocation(_progAoBlur, "uEdge");
+                _gl.UseProgram(_progAoBlur);
+                _gl.Uniform1(_gl.GetUniformLocation(_progAoBlur, "uAo"), 0);
+                _gl.Uniform1(_gl.GetUniformLocation(_progAoBlur, "uDepth"), 1);
+            }
+        }
 
         _uPresent24Origin = _gl.GetUniformLocation(_progPresent24, "uOrigin");
         _uPresent24Size = _gl.GetUniformLocation(_progPresent24, "uSize");
@@ -487,19 +539,34 @@ public sealed class GlCore : IGpuBackend
             (int)Math.Max(a.U, Math.Max(b.U, c.U)), (int)Math.Max(a.V, Math.Max(b.V, c.V)));
         // 0 = painter's (2D, or a vertex missed). 1 = opaque 3D, test and write.
         // 2 = semi-transparent 3D, test but leave Z so overlapping additives still
-        // blend in table order.
+        // blend in table order. 3 = the occlusion pass's mask: an opaque primitive
+        // with no recovered depth stamps the far plane, so the HUD, the menus and
+        // any triangle the vertex map missed read as "no surface" rather than as
+        // the geometry standing behind them. Semi-transparent stays at 0 there,
+        // because a death fade or a damage flash is something you see the world
+        // *through* and must not erase its depth.
         int zMode = 0;
         if (a.HasGteZ && b.HasGteZ && c.HasGteZ)
             zMode = f.SemiTrans ? 2 : 1;
+        else if (GteDepth.AmbientOcclusion && !f.SemiTrans)
+            zMode = 3;
         Begin(f, 3, zMode);
         bool dith = DitherOf(f);
         _verts[_count++] = V(a, f, dith); _verts[_count++] = V(b, f, dith); _verts[_count++] = V(c, f, dith);
     }
 
+    /// <summary>The zMode a primitive with no recovered depth takes: 3 (stamp the
+    /// far plane) while the occlusion pass is on and the primitive is opaque, 0 --
+    /// which is what everything did before this existed -- otherwise.</summary>
+    static int FarMask(in PrimFlags f) => GteDepth.AmbientOcclusion && !f.SemiTrans ? 3 : 0;
+
     public void DrawRect(in HleRect r, in PrimFlags f)
     {
         ResolveReplacement(f, r.U, r.V, r.U + Math.Max(0, r.W - 1), r.V + Math.Max(0, r.H - 1));
-        Begin(f, 6);
+        // A sprite never carries a recovered depth, so under the occlusion pass it
+        // is the mask (see DrawTri): opaque stamps the far plane, semi-transparent
+        // leaves the depth under it alone.
+        Begin(f, 6, FarMask(f));
         var a = new HleVertex { X = r.X, Y = r.Y, R = r.R, G = r.G, B = r.B, U = r.U, V = r.V };
         var b = new HleVertex { X = r.X + r.W, Y = r.Y, R = r.R, G = r.G, B = r.B, U = (short)(r.U + r.W), V = r.V };
         var c = new HleVertex { X = r.X, Y = r.Y + r.H, R = r.R, G = r.G, B = r.B, U = r.U, V = (short)(r.V + r.H) };
@@ -512,7 +579,7 @@ public sealed class GlCore : IGpuBackend
     {
         _pendingRepTex = 0;
         _pendingRepClut = 0;
-        Begin(f, 6);
+        Begin(f, 6, FarMask(f));
         bool dith = _env.Dither;
         float x1 = a.X, y1 = a.Y;
         float x2 = b.X, y2 = b.Y;
@@ -605,6 +672,8 @@ public sealed class GlCore : IGpuBackend
     static int _snapHit, _snapMiss;
     bool _snapVerified;
     static double _snapWindow;
+    int _lastVerdict = int.MinValue;
+    static int _snapMissW, _snapMissH;
 
     // Below this a readback is a sprite or a small tile rather than a frame, and
     // a snapshot of it would evict the one that matters.
@@ -615,7 +684,9 @@ public sealed class GlCore : IGpuBackend
         if (!GlVram.SnapshotProbe) return;
         double now = Environment.TickCount64 / 1000.0;
         if (now - _snapWindow < 2.0) return;
-        Console.WriteLine($"[vramsnap] restored {_snapHit}, uploaded 1x {_snapMiss}");
+        Console.WriteLine($"[vramsnap] restored {_snapHit}, uploaded 1x {_snapMiss}" +
+                          (_snapMiss > 0 ? $", widest miss {_snapMissW}x{_snapMissH}" : ""));
+        _snapMissW = _snapMissH = 0;
         _snapHit = _snapMiss = 0;
         _snapWindow = now;
     }
@@ -715,6 +786,7 @@ public sealed class GlCore : IGpuBackend
             return true;
         }
         _snapMiss++;
+        if ((long)w * h > (long)_snapMissW * _snapMissH) { _snapMissW = w; _snapMissH = h; }
         return false;
     }
 
@@ -807,7 +879,7 @@ public sealed class GlCore : IGpuBackend
         // — or after the setting was flipped — clears the attachment so last
         // frame's depths cannot occlude this one. The clear is not gated on this
         // batch's mode, so a 2D primitive arriving first cannot skip it.
-        if (rt != null && GteDepth.ZBuffer && (rt.LastDrawFrame != _frame || rt.ZGen != GteDepth.Generation))
+        if (rt != null && GteDepth.DepthWanted && (rt.LastDrawFrame != _frame || rt.ZGen != GteDepth.Generation))
         {
             _gl.Disable(EnableCap.ScissorTest);
             _gl.DepthMask(true);
@@ -816,11 +888,29 @@ public sealed class GlCore : IGpuBackend
             _gl.Enable(EnableCap.ScissorTest);
             rt.ZGen = GteDepth.Generation;
         }
-        if (_kZMode != 0)
+        if (_kZMode == 3)
+        {
+            // The far-plane mask: write, never reject. GL_ALWAYS rather than
+            // GL_LEQUAL because the far plane loses every LEQUAL test against a
+            // surface already stamped there, and this has to overwrite one -- the
+            // HUD is drawn over the world, and the point of the mask is that the
+            // world's depth under it is gone.
+            if (rt != null) _lastZRt = rt;
+            _gl.Enable(EnableCap.DepthTest);
+            _gl.DepthFunc(DepthFunction.Always);
+            _gl.DepthMask(true);
+        }
+        else if (_kZMode != 0)
         {
             if (rt != null) { GteDepth.ZBatchRt++; _lastZRt = rt; } else GteDepth.ZBatchVram++;
             _gl.Enable(EnableCap.DepthTest);
-            _gl.DepthFunc(DepthFunction.Lequal);
+            // The two consumers of the attachment differ here and nowhere else.
+            // The Z-buffer rejects what the recovered depth says is behind; the
+            // occlusion pass wants the buffer filled and the ordering table left
+            // in sole charge of what is visible, which is GL_ALWAYS -- and under
+            // painter's order the last write at a pixel is then the nearest
+            // visible surface, which is exactly the depth the pass reads back.
+            _gl.DepthFunc(GteDepth.ZBuffer ? DepthFunction.Lequal : DepthFunction.Always);
             _gl.DepthMask(_kZMode == 1);
         }
         else
@@ -1090,8 +1180,36 @@ public sealed class GlCore : IGpuBackend
         // that never latched margin content; a target that did keeps serving, which
         // is what keeps the in-game menu, dialogs, shops and signs wide instead of
         // collapsing to the 320-wide 4:3 fallback the moment the world render stops.
-        if (src is { Margin: > 0 } && src.MarginContentFlip < 0)
+        bool latchRefused = src is { Margin: > 0 } && src.MarginContentFlip < 0;
+        if (latchRefused)
             src = null;
+        // KF2_PRESENT_PROBE=2: the census cannot say *why* a present dropped to the
+        // 4:3 fallback -- no target covered the display area, the margin latch
+        // refused the one that did, or the target has no margin at all. Print the
+        // display rect and every live target the frame a verdict changes, which is
+        // the only frame that carries the answer.
+        if (GpuHle.PresentVerdictProbe && !rgb24)
+        {
+            int verdict = src is { Margin: > 0 } ? 2 : src != null ? 1 : latchRefused ? -1 : 0;
+            if (verdict != _lastVerdict)
+            {
+                _lastVerdict = verdict;
+                string name = verdict switch
+                {
+                    2 => "wide", 1 => "plain (margin 0)",
+                    -1 => "vram fallback (margin latch refused)",
+                    _ => "vram fallback (no target covers the display)"
+                };
+                var sb = new System.Text.StringBuilder();
+                sb.Append($"[present] -> {name}; display {w}x{h} at {dispX},{dispY}, frame {_frame}");
+                for (int i = 0; i < _rts.Length; i++)
+                {
+                    if (_rts[i] is not { } t) { sb.Append($"; rt{i} none"); continue; }
+                    sb.Append($"; rt{i} {t.W}x{t.H} at {t.X},{t.Y} margin {t.Margin} latch {t.MarginContentFlip} idle {_frame - t.LastDrawFrame}");
+                }
+                Console.WriteLine(sb.ToString());
+            }
+        }
         // Only the non-rgb24 path searches for a target, so src is meaningful only
         // there; an rgb24 present (FMV) draws raw VRAM by a different route and would
         // otherwise be miscounted as the 4:3 margin fallback the census is watching for.
@@ -1132,6 +1250,18 @@ public sealed class GlCore : IGpuBackend
         int fbH = h1x * presentScale;
         EnsurePresentSize(fbW, fbH, GlVram.Scale == 1);
 
+        // Ambient occlusion, between the finished target and the present blit. It
+        // reads that target's depth attachment and writes only its own texture, so
+        // nothing the game can read back -- VRAM, the display buffers, the frame a
+        // menu restores -- carries the shading. Present is where it has to happen:
+        // the pass needs the *whole* frame's depth, and painter's order means that
+        // does not exist until the last primitive has been drawn.
+        bool aoOn = AoReady(src, rgb24);
+        if (aoOn)
+            RunAo(src!, dispX - src!.X, dispY - src.Y, w1x, h1x, fbW, fbH);
+        else if (GteDepth.AmbientOcclusion && !rgb24)
+            GteDepth.AoNoTarget++;
+
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _presentFbo);
         _gl.Viewport(0, 0, (uint)fbW, (uint)fbH);
         _gl.Disable(EnableCap.DepthTest);
@@ -1141,6 +1271,15 @@ public sealed class GlCore : IGpuBackend
 
         _gl.UseProgram(rgb24 ? _progPresent24 : _progPresent);
         _gl.BindVertexArray(_presentVao);
+        if (!rgb24 && _uPresentAoOn >= 0)
+        {
+            _gl.Uniform1(_uPresentAoOn, aoOn ? 1f : 0f);
+            if (aoOn)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture1);
+                _gl.BindTexture(TextureTarget.Texture2D, _aoBlurTex);
+            }
+        }
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, src?.Tex ?? _vram.Texture);
         if (rgb24)
@@ -1261,6 +1400,160 @@ public sealed class GlCore : IGpuBackend
         return true;
     }
 
+    /// <summary>
+    /// Whether an occlusion pass can run for this present. It needs the setting,
+    /// the two programs, and a render target — the VRAM fallback and an MDEC frame
+    /// have no depth attachment behind them and are left alone.
+    /// </summary>
+    bool AoReady(GlDisplayRt? src, bool rgb24) =>
+        GteDepth.AmbientOcclusion && !rgb24 && !_legacy
+        && _progAo != 0 && _progAoBlur != 0 && src is { Depth: not 0 };
+
+    /// <summary>
+    /// The two occlusion passes: the finished frame's depth attachment in, a
+    /// blurred occlusion factor in <see cref="_aoBlurTex"/> out, at exactly the
+    /// present framebuffer's size so the present can index it with its own uv.
+    ///
+    /// <paramref name="ox"/>/<paramref name="oy"/> and
+    /// <paramref name="sw"/>/<paramref name="sh"/> are the display area inside the
+    /// target in the game's own pixels — the same rectangle the present blit uses,
+    /// margin included — so both passes address one rectangle and cannot drift
+    /// apart.
+    /// </summary>
+    unsafe void RunAo(GlDisplayRt src, float ox, float oy, int sw, int sh, int fbW, int fbH)
+    {
+        EnsureAoSize(fbW, fbH);
+        if (_aoTex == 0 || _aoBlurTex == 0) return;
+
+        // The GTE's projection centre, as a fraction of the display area, so the
+        // shader needs no pixel arithmetic of its own.
+        //
+        // Follow one coordinate the whole way rather than trusting the shape of
+        // this. A vertex reaches the target at `ny + drawOff - rt.Y` and the prim
+        // shader's uPosBias is `-rt.Y`, so a display target's drawing offset *is*
+        // its own origin -- were it not, every polygon would already be landing in
+        // the wrong place. The two therefore cancel and the target's coordinate is
+        // simply `ny`, which the present samples at `(dispY - rt.Y) + uv*sh`. The
+        // margin is the one asymmetry: the target's column 0 sits `margin` to the
+        // left of the game's own.
+        //
+        // The version before this one recorded the drawing offset of the last
+        // depth-writing triangle and added it, which is right only when the buffer
+        // being drawn is the buffer being presented -- with two display buffers it
+        // is not, on alternate frames, and half the frames reconstructed with the
+        // projection centre a whole screen below the picture. It read
+        // `0.500,1.500`, which is why the probe prints this number.
+        float cx = (GteDepth.ProjCx + src.Margin - ox) / Math.Max(1, sw);
+        float cy = (GteDepth.ProjCy - oy) / Math.Max(1, sh);
+        GteDepth.AoCentreX = cx; GteDepth.AoCentreY = cy;
+        // One depth texel as a step in this pass's uv. The attachment is at the
+        // render scale, so this is not 1/size: at scale 4 the useful structure in
+        // the depth buffer is four times finer than the game's own pixels.
+        float tx = 1f / Math.Max(1, sw * GlVram.Scale);
+        float ty = 1f / Math.Max(1, sh * GlVram.Scale);
+
+        _gl.Disable(EnableCap.DepthTest);
+        _gl.Disable(EnableCap.Blend);
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.Disable(EnableCap.CullFace);
+        _gl.DepthMask(false);
+        _gl.BindVertexArray(_presentVao);
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _aoFbo);
+        _gl.Viewport(0, 0, (uint)fbW, (uint)fbH);
+        _gl.UseProgram(_progAo);
+        if (_uAoOrigin >= 0) _gl.Uniform2(_uAoOrigin, ox, oy);
+        if (_uAoSize >= 0) _gl.Uniform2(_uAoSize, (float)sw, sh);
+        if (_uAoTexSize >= 0) _gl.Uniform2(_uAoTexSize, (float)src.Wide1x, src.H);
+        if (_uAoTexel >= 0) _gl.Uniform2(_uAoTexel, tx, ty);
+        if (_uAoProjH >= 0) _gl.Uniform1(_uAoProjH, Math.Max(1f, GteDepth.ProjH));
+        if (_uAoCentre >= 0) _gl.Uniform2(_uAoCentre, cx, cy);
+        if (_uAoRadius >= 0) _gl.Uniform1(_uAoRadius, Math.Max(1f, GteDepth.AoRadius));
+        if (_uAoStrength >= 0) _gl.Uniform1(_uAoStrength, GteDepth.AoStrength);
+        if (_uAoBias >= 0) _gl.Uniform1(_uAoBias, GteDepth.AoBias);
+        if (_uAoMaxDepth >= 0) _gl.Uniform1(_uAoMaxDepth, GteDepth.AoMaxDepth);
+        if (_uAoSamples >= 0) _gl.Uniform1(_uAoSamples, Math.Clamp(GteDepth.AoSamples, 1, 64));
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, src.Depth);
+        _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _aoBlurFbo);
+        _gl.Viewport(0, 0, (uint)fbW, (uint)fbH);
+        _gl.UseProgram(_progAoBlur);
+        if (_uAoBOrigin >= 0) _gl.Uniform2(_uAoBOrigin, ox, oy);
+        if (_uAoBSize >= 0) _gl.Uniform2(_uAoBSize, (float)sw, sh);
+        if (_uAoBTexSize >= 0) _gl.Uniform2(_uAoBTexSize, (float)src.Wide1x, src.H);
+        if (_uAoBTexel >= 0) _gl.Uniform2(_uAoBTexel, tx, ty);
+        // A twentieth of the depth: wide enough that a wall's own slope never
+        // splits the kernel, tight enough that a doorway's edge does.
+        if (_uAoBEdge >= 0) _gl.Uniform1(_uAoBEdge, 0.05f);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.BindTexture(TextureTarget.Texture2D, _aoTex);
+        _gl.ActiveTexture(TextureUnit.Texture1);
+        _gl.BindTexture(TextureTarget.Texture2D, src.Depth);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
+
+        GteDepth.AoPasses++;
+
+        // The census, on request and for one frame: the only reading that can tell
+        // a pass that shaded something from a pass that ran and returned white.
+        if (GteDepth.WantAoMap) CaptureAoMap(fbW, fbH);
+    }
+
+    unsafe void CaptureAoMap(int w, int h)
+    {
+        if (w <= 0 || h <= 0) return;
+        var buf = new byte[(long)w * h * 2];
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _aoBlurFbo);
+        _gl.PixelStore(PixelStoreParameter.PackAlignment, 1);
+        fixed (byte* p = buf)
+            _gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.RG, PixelType.UnsignedByte, p);
+        _gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        GteDepth.SetAoMap(buf, w, h);
+    }
+
+    unsafe void EnsureAoSize(int w, int h)
+    {
+        if (w == _aoW && h == _aoH && _aoTex != 0) return;
+        if (_aoTex == 0)
+        {
+            _aoTex = MakeAoTexture();
+            _aoBlurTex = MakeAoTexture();
+            _aoFbo = _gl.GenFramebuffer();
+            _aoBlurFbo = _gl.GenFramebuffer();
+        }
+        Resize(_aoTex, _aoFbo);
+        Resize(_aoBlurTex, _aoBlurFbo);
+        _aoW = w; _aoH = h;
+
+        void Resize(uint tex, uint fbo)
+        {
+            _gl.BindTexture(TextureTarget.Texture2D, tex);
+            // RG8: red is the occlusion the present multiplies by, green is the
+            // "there was a surface here" mask the census reads. See AoFs.
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.RG8, (uint)w, (uint)h, 0,
+                PixelFormat.RG, PixelType.UnsignedByte, null);
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
+            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+                TextureTarget.Texture2D, tex, 0);
+        }
+    }
+
+    uint MakeAoTexture()
+    {
+        uint t = _gl.GenTexture();
+        _gl.BindTexture(TextureTarget.Texture2D, t);
+        // Linear, so the present can read it at any output size without the 4x4
+        // blur's own footprint showing up as blocks.
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        return t;
+    }
+
     unsafe void EnsurePresentSize(int w, int h, bool nearest)
     {
         if (w == _presentW && h == _presentH && nearest == _presentNearest) return;
@@ -1279,6 +1572,10 @@ public sealed class GlCore : IGpuBackend
         _vram.Dispose();
         if (_vbo != 0) _gl.DeleteBuffer(_vbo);
         if (_presentVbo != 0) _gl.DeleteBuffer(_presentVbo);
+        if (_aoTex != 0) _gl.DeleteTexture(_aoTex);
+        if (_aoBlurTex != 0) _gl.DeleteTexture(_aoBlurTex);
+        if (_aoFbo != 0) _gl.DeleteFramebuffer(_aoFbo);
+        if (_aoBlurFbo != 0) _gl.DeleteFramebuffer(_aoBlurFbo);
         if (_vao != 0) _gl.DeleteVertexArray(_vao);
         if (_presentVao != 0) _gl.DeleteVertexArray(_presentVao);
         if (_progPrim != 0) _gl.DeleteProgram(_progPrim);

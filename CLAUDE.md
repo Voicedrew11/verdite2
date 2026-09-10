@@ -149,6 +149,11 @@ KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off
 KF2_ZBUFFER_THRESHOLD=300              # restart the depth buffer when the scene jumps forward (0, off)
 KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-tested
 KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map of the depth buffer
+KF2_AO=1                               # ambient occlusion (off by default; GL backend only)
+KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
+KF2_AO_BIAS=0.08 KF2_AO_SAMPLES=16 KF2_AO_MAXDEPTH=24000
+KF2_AO_PROBE=1                         # coverage, the projection read off the GTE, passes run
+KF2_AO_PROBE=2                         # also read the occlusion back: how dark, how much, and where
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
@@ -795,7 +800,24 @@ a recovered fraction, and coverage by construction instead of by luck of the cop
 The emitted hooks are free when it is off: 144.0 fps at 20.0 ticks/s with PGXP
 disabled on the recompiled binary. `0035` is one of three patches that force a
 recompile, with `0004` and `0037`.
-See "Sub-pixel vertex positioning", "Z-buffer" and "PGXP" in `docs/RENDERING.md`. Auto reload is a
+**Ambient occlusion is that same depth used a third way, and it is the one use
+that lets the depth decide nothing.** `patches/recompone/0040`,
+`patches/AmbientOcclusion.cs` for the switch and the probe, one checkbox under
+Video ▸ Enhancements, off by default. There is no depth prepass to be had here —
+the geometry arrives incrementally through GP0 and nothing knows the frame is
+finished until it is — but **painter's order is a G-buffer**: `DrawOTag` walks
+back to front, so a depth *write* with the test at `GL_ALWAYS` ends the frame
+holding the nearest visible surface at every pixel, having rejected nothing. The
+Z-buffer's picture has never come out right because it *tests*; this reads the
+same numbers and shades with them, so a wrong depth costs a wrong shade of grey
+rather than a lost wall. **Everything with no recovered depth writes the far
+plane**, which is the HUD mask for nothing, and semi-transparent primitives write
+nothing at all so a fade does not blink the shading off. Off for the sub-pixel
+reason — the mechanism has counters and the picture has not been looked at — and
+because the console could not have drawn it; the radius, strength, bias and
+sample count are `KF2_AO_*` rather than sliders, being the port's question to
+answer once someone has looked.
+See "Sub-pixel vertex positioning", "Z-buffer", "PGXP" and "Ambient occlusion" in `docs/RENDERING.md`. Auto reload is a
 patch for the same kind of reason: a death costing four screens of menu is
 something a player expects the port itself to have dealt with, so it is on by
 default and its knobs — the switch and the slot — are under Gameplay; **the
@@ -1645,7 +1667,7 @@ accumulating. See "The margin's only clear is the game's own" in
 
 **`patches/recompone/` is still the record of what the port changed and why**,
 and the numbering below is still how each change is referred to in the source.
-Thirty-seven of the forty-one are load-bearing; `0002`, `0003` and `0015` are
+Thirty-nine of the forty-three are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. **One patch has an asset
 beside it**: `patches/recompone/assets/` holds the TTF `0033` embeds, which is
 now simply a tracked file in the vendored tree.
@@ -2056,6 +2078,48 @@ uncaptured edit inside the checkout is left where it is.
   is the comparison; no control in the window, a render scale surviving a menu
   not being a choice. GL backend only. **No recompile.** See "The render scale
   did not survive a menu" in `docs/RENDERING.md`.
+
+- `0040-ambient-occlusion.patch` — contact shading in the corners, from the same
+  recovered SZ. **The interesting part is not the SSAO, it is where the G-buffer
+  comes from.** A screen-space pass needs the nearest visible surface at every
+  pixel before any shading happens, and this port cannot build one the usual way:
+  the geometry arrives incrementally through GP0, nothing holds it, and nothing
+  knows the frame is finished until it is, so there is no moment at which a depth
+  prepass could run. Painter's order supplies it instead — `DrawOTag` walks the
+  ordering table back to front, so give every 3D triangle a depth *write* with the
+  test left at `GL_ALWAYS` and the attachment ends the frame holding exactly the
+  visible-surface depth, with nothing rejected and the ordering table still in
+  sole charge of what is visible. That one `DepthFunc` is the whole difference
+  from the Z-buffer, which is why `GteDepth.DepthWanted` replaced
+  `GteDepth.ZBuffer` at every site that decides whether a depth is recovered —
+  including `GpuRaster`'s `wantZ` and the `tex || Subpixel || ZBuffer` gate above
+  it, without which the buffer holds only the *textured* geometry and most of this
+  game's architecture is flat-shaded. **The far plane is the HUD mask and it is
+  free**: everything with no recovered depth writes `1.0` instead of the clip Z it
+  used to, so the HUD, the menus and any triangle the vertex map missed are
+  neither shaded nor allowed to occlude, and semi-transparent primitives write
+  nothing at all, so a death fade or a damage flash does not switch the shading
+  off for the frames it covers. Two full-screen draws at present (spiral SSAO with
+  a 4x4 interleaved rotation, then the 4x4 depth-aware box that cancels it
+  exactly) into the pass's own RG8 texture, which the present shader multiplies —
+  so nothing the game can read back carries the shading, not VRAM, not either
+  display buffer, and not the frame a modal loop restores. The pass undoes the
+  game's own projection to get a view position out of a depth texel, with `H` and
+  the `OFX`/`OFY` centre read off `Gte.Rtp` — measured `H 200`, not the 320 a guess
+  would have used. **The one error worth recording was silent and intermittent**:
+  the first version added the drawing offset of the last depth-writing triangle,
+  which belongs to the buffer being *drawn* while the pass runs against the buffer
+  being *presented*, so with two display buffers half the frames put the
+  projection centre a whole screen out; a display target's offset already **is**
+  its own origin, or `uPosBias` would be misplacing every polygon. The probe
+  prints the reconstructed centre for that reason and it should read `0.500,0.500`.
+  `KF2_AO_PROBE=2` is the counter that matters — every other number stays
+  identical if the shader returns white on every pixel — and it reads the
+  occlusion back as a darkest value, a mean, a shaded share, a surface share and a
+  32x16 map. Off by default, for the sub-pixel reason and because it is
+  deliberately not authentic; one checkbox under Video ▸ Enhancements and the
+  tuning on the console. GL backend only. **No recompile.** See "Ambient
+  occlusion" in `docs/RENDERING.md`.
 
 - `0041-anisotropic-filtering.patch` — a screen pixel covers an *area* of the
   texture, and the shape of it is the parallelogram spanned by the two screen
