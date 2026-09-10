@@ -1005,11 +1005,25 @@ A modern GPU does anisotropy as *N bilinear taps at a LOD chosen from the minor
 axis*, and the LOD is what stops the major axis needing a tap per texel. The
 first reason above forbids a mip chain outright: one page's lower level would
 average in the pages beside it and a CLUT's would average in the palette next to
-it. So this is supersampling — the taps are spread across the axis the footprint
-is longest on, one per texel it spans, capped at the setting.
+it. So this is supersampling — the taps run along the axis the footprint is
+longest on, **one texel apart**, `min(ceil(len), uAniso)` of them, centred on the
+pixel.
 
-Two consequences are worth recording rather than glossed:
+**The spacing is the part that had to be got right, and the first version got it
+wrong**; see "The taps were spread over the whole footprint" below. Spreading
+`uAniso` taps across the *whole* major axis is what a mipmapped filter does, and
+it is only correct there because each tap is a pre-filtered sample covering the
+gap to the next one. Here a tap is a point sample, so the honest choice is
+between estimating the whole footprint from a strided handful and filtering the
+part of it nearest the pixel exactly. This does the second.
 
+Three consequences are worth recording rather than glossed:
+
+- **Past `uAniso` texels of footprint it filters a part rather than the whole.**
+  A distant floor may read fifty texels per pixel; at 16 taps the kernel averages
+  the middle sixteen and degrades toward nearest beyond that, rather than toward
+  a full box filter. That is the price of the reach cap, and it is the right one:
+  the alternative reads other textures (below).
 - **A footprint large on *both* axes is still averaged along one of them only.**
   The short axis keeps the console's single sample. That is the right trade in
   this game — it magnifies far more often than it minifies, and the artefact being
@@ -1019,6 +1033,64 @@ Two consequences are worth recording rather than glossed:
   takes one tap at 16× exactly as it does at Off. That is why the measurement
   below shows no frame-rate difference rather than a small one.
 
+### The taps were spread over the whole footprint
+
+Reported from play, at oblique angles, against the first version: *it barely looks
+different, there are white artefacts on the floor, and the fire billboards show a
+bit of texture overlap at the edge of the texture area.* All three are one line —
+
+```glsl
+vec2 t = vUV + axis * ((float(i) + 0.5) / float(taps) - 0.5);   // the defect
+```
+
+— which places the taps across the **whole** major axis whatever its length, so
+the spacing is `len / taps` texels and the reach is `±len/2`. At the very angles
+the filter exists for, `len` is not 8 or 16 texels but tens or hundreds.
+
+**A derivative is in unclamped texture-space units, and a texture is not.** A
+floor tile is 64 texels wide inside a 256×256 page that holds three others beside
+it; the page itself sits in a 1024×512 sheet holding every page, every CLUT and
+both display buffers. Once the reach passes the texture's own width the taps wrap
+— by the texture window, or by the page's `& 0xff` — onto **other art**. In the 4-
+and 8-bit modes that art is a table of *indices*, and they are read through *this*
+primitive's CLUT, so the colour that comes back is not a blurred neighbour but an
+arbitrary entry of an unrelated palette. Bright entries are the **white speckle on
+the floor**. On a billboard, whose sprite is one small rectangle among many in its
+page, it is the **neighbouring sprite arriving at this one's edge**.
+
+And it barely looked different because a strided undersample of a two-hundred-
+texel span is not a low-pass of anything: it is sixteen more chances to sparkle.
+The probe shows that directly at a 64-texel footprint, where the old kernel's
+spread *rises* from 2 taps to 4 —
+
+| `uAniso` | spread (sd), taps over the whole span | spread (sd), taps one texel apart |
+|---|---|---|
+| 1 | 59.42 | 59.42 |
+| 2 | **21.18** | 48.44 |
+| 4 | **25.06** | 33.90 |
+| 8 | 19.55 | 16.86 |
+| 16 | 12.97 | **7.09** |
+
+— a filter whose output gets *noisier* as you give it more taps is not filtering.
+The one-texel spacing is monotonic. (At a 16-texel footprint the two are the same
+kernel at 16 taps by construction, which is why the table further down is
+unchanged there.)
+
+**What the probe cannot see is the reach itself**, and that is worth stating
+plainly: its texture is white noise, where every texel is independent, so reading
+a texel a hundred away and reading the one next door are statistically the same
+draw. The reach is arithmetic rather than a measurement — `±len/2` before,
+`±taps/2` after — and the picture it produces is the user's to judge.
+
+**The second defect was the silhouette.** The colour came from a coverage vote —
+average the solid taps, discard below half — while `texel.a` came from the centre
+tap, so the two disagreed about what the pixel was. A fragment whose own texel is
+transparent, which the console did not draw at all, was drawn whenever half its
+taps came back solid: the sprite grows outward by up to half a footprint, into
+exactly the neighbouring art the reach was already reading. The centre tap decides
+the silhouette now, alone, so it is bit-for-bit where truncation put it, and the
+kernel does not run at all on a transparent fragment.
+
 ### Two things the hardware's encoding forces
 
 These are shared with any filter placed after the CLUT and neither is optional.
@@ -1027,9 +1099,16 @@ These are shared with any filter placed after the CLUT and neither is optional.
 storing it as all zero — RGB 0 with the STP bit clear — so a plain average next to
 a punch-through edge averages *black* in and draws a dark fringe round every
 grate, torch and bush in the game. Each tap is therefore weighed by whether it is
-solid, the colour renormalised by the surviving weight, and the fragment discarded
-below half coverage. Half is where truncation put the silhouette, so the edge
-neither grows nor shrinks.
+solid, and the colour renormalised by the surviving weight.
+
+**The silhouette is not the filter's to decide.** Weighing the transparent taps
+out is a statement about colour only: whether the fragment is drawn at all is the
+centre tap's answer and nothing else's, which is where truncation put it. An
+earlier version discarded below half coverage instead, on the argument that half
+is where the edge sits — see "The taps were spread over the whole footprint" — and
+that both grows and shrinks a punch-through edge by up to half a footprint. An
+even tap count puts no tap at the centre, so every tap can come back transparent
+on a fragment that is drawn; the average is then simply not applied.
 
 **The semi-transparency bit is a mode, not a colour.** `texel.a` selects whether
 the fragment goes through the blend equation at all — it is what picks between
@@ -1054,6 +1133,15 @@ bit for bit. **The kernel is self-gating on exactly the geometry it should be**,
 with no varying to carry, no dependence on the vertex map, and nothing to go wrong
 when perspective correction is switched off. It is the one place in this file
 where the cheap answer is also the complete one.
+
+**A billboard is not in that list, and the first version of this section said it
+was.** The HUD, the menus and the 2D screens are drawn at 1:1 and do gate
+themselves out. A billboard sprite is a *world-space quad*: it minifies with
+distance like anything else, so its footprint is genuinely several texels and the
+kernel genuinely runs on it. That is correct — a distant torch flame should be
+filtered — and it is why the two defects above showed up on the fire before they
+showed up anywhere else: a sprite is a small rectangle in a shared page, so it is
+the geometry with the least room either side of it for a filter to reach.
 
 ### Scope
 
@@ -1126,13 +1214,16 @@ sparkle; a filter that works collapses that spread. Over a 16-texel footprint:
 | `uAniso` | min | max | mean | spread (sd) | range |
 |---|---|---|---|---|---|
 | 1 | 99 | 247 | 173.75 | **51.23** | 148 |
-| 2 | 82 | 230 | 174.75 | 41.56 | 148 |
-| 4 | 90 | 206 | 157.19 | 28.68 | 116 |
-| 8 | 115 | 197 | 163.38 | 23.61 | 82 |
+| 2 | 107 | 238 | 167.00 | 35.57 | 131 |
+| 4 | 123 | 222 | 169.62 | 24.87 | 99 |
+| 8 | 132 | 206 | 170.69 | 24.38 | 74 |
 | 16 | 140 | 181 | 162.88 | **11.41** | 41 |
 
 A monotonic 4.5x collapse, which is the mechanism working and is the number to
-re-take after any change to either shader.
+re-take after any change to either shader. (Re-taken after the tap spacing was
+fixed; the 1 and 16 rows are unchanged, since at a 16-texel footprint sixteen taps
+one texel apart *are* sixteen taps over the whole span. The rows between moved
+because they no longer stride.)
 
 **The self-gating claim is measured rather than argued.** At a footprint of 1.0
 texel per pixel — a HUD sprite, a menu box, a font glyph — `uAniso=1` and
@@ -1152,12 +1243,15 @@ content periodic at almost exactly the tap spacing to show, and the noise figure
 above are the fair case. It is recorded because that stripe run looks like a bug
 report and is not one.
 
-**Off by default**, for the sub-pixel reason rather than any risk — the mechanism
-is measured and **the picture has not been looked at**. What wants judging by eye
-is whether a receding floor stops crawling, whether the half-coverage threshold
-puts punch-through edges where nearest put them, and how the average reads against
-the 15-bit quantisation: `quant5` still crushes the filtered result to five bits
-unless true color is also on, and the two have never been seen together.
+**Off by default.** The mechanism is measured; the picture **has** been looked at
+once, and that is where the two defects above came from — the frame rate and the
+noise probe both read healthy while the kernel was reading other textures, which
+is the same shape of mistake this file keeps recording. What has not been looked
+at is the picture since they were fixed: whether a receding floor stops crawling,
+whether the white speckle and the billboard's edge are gone, and how the average
+reads against the 15-bit quantisation, since `quant5` still crushes the filtered
+result to five bits unless true color is also on and the two have never been seen
+together.
 
 ## The render scale did not survive a menu
 

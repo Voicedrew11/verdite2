@@ -41,45 +41,73 @@ namespace Kf2;
 /// So <c>patches/recompone/0041</c> does the work — a <c>decode()</c> function
 /// holding the whole per-texel job (texture window, page wrap, nibble extract,
 /// CLUT lookup) and a kernel that calls it once per texel along the long axis and
-/// averages — and this patch is only the switch and the probe. Both prim shaders,
+/// averages what comes back — and this patch is only the switch and the probe.
+/// Both prim shaders,
 /// core profile and GLSL 120.
 ///
 /// **There is no mip chain and there cannot be one**, for the first reason above,
 /// so this is supersampling rather than the mipmapped anisotropy a modern GPU
-/// does: the taps are spread across the axis the footprint is longest on, one per
-/// texel, capped at the level. The consequence worth recording is that a footprint
-/// that is large on *both* axes is still averaged along one of them only — the
-/// short axis keeps the console's single sample. That is the right trade here
-/// (this game magnifies far more often than it minifies, and the artefact being
-/// chased is the anisotropic one) but it is a limit rather than a completeness.
+/// does: the taps run along the axis the footprint is longest on, **one texel
+/// apart**, <c>min(ceil(len), level)</c> of them, centred on the pixel.
+///
+/// **The spacing is the part that had to be got right.** The first version spread
+/// the taps across the *whole* major axis instead, which is what a mipmapped
+/// filter does and is only correct there because each of its taps is a
+/// pre-filtered sample covering the gap to the next. Here a tap is a point sample,
+/// and a derivative is in unclamped texture-space units while a texture is not: at
+/// the oblique angles this exists for the axis is tens or hundreds of texels, so
+/// the taps wrapped past the texture's own width — by the texture window or by the
+/// page — onto other art in the same 256x256 page, read through *this* primitive's
+/// CLUT, which is an arbitrary entry of an unrelated palette. That was reported
+/// from play as white speckle on the floor and the neighbouring sprite showing at
+/// a fire billboard's edge, and as barely looking different, a strided
+/// undersample of a long span being sixteen more chances to sparkle rather than a
+/// low-pass of anything. The cost of the cap is that past <c>level</c> texels of
+/// footprint the kernel filters a *part* of the footprint exactly rather than
+/// estimating the whole of it, degrading toward nearest rather than toward a full
+/// box filter. The other consequence worth recording is that a footprint that is
+/// large on *both* axes is still averaged along one of them only — the short axis
+/// keeps the console's single sample. That is the right trade here (this game
+/// magnifies far more often than it minifies, and the artefact being chased is the
+/// anisotropic one) but it is a limit rather than a completeness.
 ///
 /// **Two things the hardware's encoding forces**, both shared with any filter
 /// placed after the CLUT. A transparent texel is stored as black with the STP bit
 /// clear, so a plain average next to a punch-through edge averages *black* in and
 /// draws a dark fringe round every grate, torch and bush in the game; each tap is
 /// therefore weighed by whether it is solid and the result renormalised by what
-/// survived, discarding below half coverage — half being where truncation put the
-/// silhouette, so the edge neither grows nor shrinks. And the semi-transparency
+/// survived. **That is a statement about colour only** — the silhouette is the
+/// centre tap's alone, so it is bit-for-bit where truncation put it, and the
+/// kernel does not run on a transparent fragment at all. Deciding it by coverage
+/// instead, which the first version did while still taking <c>texel.a</c> from the
+/// centre tap, draws pixels the console did not: a sprite grows outward by up to
+/// half a footprint, into the neighbouring art. And the semi-transparency
 /// bit is a *mode*, not a colour: it picks whether the fragment goes through the
 /// blend equation at all, so interpolating it would ask the GPU for a state
 /// halfway between two blend equations. It is taken whole from the centre tap.
 ///
 /// **It needs no "is this 3D" test, and that is worth stating** because the
-/// port's other texture work does need one. The HUD, the menus, the 2D screens and
-/// the billboard sprites are drawn at or near 1:1 and axis-aligned, so both
+/// port's other texture work does need one. The HUD, the menus and the 2D screens
+/// are drawn at or near 1:1 and axis-aligned, so both
 /// derivatives are about one texel, the long axis spans one texel, the tap count
 /// comes out 1 and the fragment takes the unfiltered path — bit for bit, since it
-/// is the same <c>decode()</c> call the single-sample path makes. The kernel is
+/// is the same <c>decode()</c> call the single-sample path makes. **A billboard is
+/// not in that list**, and the first version of this note said it was: a sprite is
+/// a world-space quad and minifies with distance like anything else, so the kernel
+/// genuinely runs on it. That is correct, and it is why the two defects above
+/// showed on the fire first — a sprite is a small rectangle in a shared page, with
+/// the least room either side of it for a filter to reach. The kernel is
 /// self-gating on exactly the geometry it should be, with no varying to carry, no
 /// dependence on whether the GTE vertex map answered, and nothing to go wrong when
 /// perspective correction is switched off.
 ///
-/// **Off by default**, for the sub-pixel reason rather than any risk: the
-/// mechanism is measured — the shaders compile, link and render at every level,
-/// and <see cref="GteDepth.AnisotropyLive"/> says the uniform reaches the program
-/// — and **the picture has not been looked at**. What wants judging by eye is
-/// whether a receding floor stops crawling, whether the half-coverage threshold
-/// leaves punch-through edges where nearest put them, and how the average reads
+/// **Off by default.** The mechanism is measured — the shaders compile, link and
+/// render at every level, <see cref="GteDepth.AnisotropyLive"/> says the uniform
+/// reaches the program, and <c>scripts/shader_probe.c</c> reads the spread
+/// collapsing monotonically — and the picture *has* now been looked at once, which
+/// is where the two defects above came from. What has not been looked at is the
+/// picture since they were fixed: whether a receding floor stops crawling, whether
+/// the white speckle and the billboard's edge are gone, and how the average reads
 /// against the 15-bit quantisation, since <c>quant5</c> still crushes the filtered
 /// result to five bits unless true color is also on and the two have never been
 /// seen together.

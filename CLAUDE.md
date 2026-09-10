@@ -672,9 +672,31 @@ The filter has to run after the CLUT lookup, which is inside the shader. So
 `decode()` holds the whole per-texel job and the kernel calls it per tap; the
 single-sample path calls the same function, so with the filter off the fragment is
 bit-identical to what the port drew before. **There is no mip chain and there
-cannot be one** (that first reason again), so this is supersampling — one tap per
-texel along the long axis, capped at the setting — and the recorded limit is that a
-footprint large on *both* axes is still averaged along one of them only.
+cannot be one** (that first reason again), so this is supersampling — taps one
+texel apart along the long axis, `min(ceil(len), level)` of them, centred on the
+pixel. **The spacing is the part that had to be got right, and the first version
+got it wrong**: it spread the taps over the *whole* major axis, which is what a
+mipmapped filter does and is only correct there because each tap is pre-filtered
+over the gap to the next. A derivative is in unclamped texture-space units and a
+texture is not, so at the very angles this exists for the reach was `±len/2` —
+tens or hundreds of texels — and the taps wrapped past the texture's own width,
+by the window or by the page, onto other art in the same 256x256 page, read
+through *this* primitive's CLUT and so coming back as an arbitrary entry of an
+unrelated palette. Reported from play as **white speckle on the floor**, the
+**neighbouring sprite at a fire billboard's edge**, and **barely looking
+different**, a strided undersample of a long span being more chances to sparkle
+rather than a low-pass of anything (the probe reads the old kernel's spread
+*rising* from 2 taps to 4 at a 64-texel footprint; one-texel spacing is
+monotonic, 59.42 → 7.09). The second defect was the **silhouette**: the colour
+came from a coverage vote while `texel.a` came from the centre tap, so a fragment
+whose own texel is transparent was drawn whenever half its taps came back solid
+— the sprite grows outward by up to half a footprint into exactly that
+neighbouring art. The centre tap decides it alone now and the kernel does not run
+on a transparent fragment. The cost of the reach cap is that past `level` texels
+of footprint it filters a *part* of the footprint exactly rather than estimating
+the whole of it, degrading toward nearest rather than toward a full box; the
+other recorded limit is that a footprint large on *both* axes is still averaged
+along one of them only.
 Transparency forces two things it shares with any post-CLUT filter: a transparent
 texel is stored as **black**, so taps are weighed by solidity and the result
 renormalised, discarding below half coverage (half is where truncation put the
@@ -683,7 +705,9 @@ it picks the blend equation — so it is taken whole from the centre tap.
 **It needs no "is this 3D" test, which is the part worth keeping**: a HUD sprite,
 a menu box or a font glyph is axis-aligned and unminified, so both derivatives are
 about one texel, the tap count comes out 1, and the fragment takes the unfiltered
-path by construction — no varying to carry, no dependence on whether the GTE vertex
+path by construction — a *billboard* is not in that list, being a world-space quad
+that minifies like anything else, which is why the two defects showed on the fire
+first — no varying to carry, no dependence on whether the GTE vertex
 map answered, and nothing to go wrong when perspective correction is off. Off by
 default for the sub-pixel reason: both shader pairs were compiled and linked
 through Mesa directly (headless EGL — `glslangValidator` cannot parse GLSL 120 at
@@ -700,8 +724,10 @@ it collapses monotonically from sd 51.23 at 1 tap to 11.41 at 16, and at a 1.0
 texel footprint — a HUD sprite — 1 and 16 return *identical* pixels, which is the
 self-gating claim measured rather than argued. Acceptance run at `KF2_ANISO=8`:
 `open` -> `game` -> `fdat02` -> `fdat05`, slot 2 at HP 46/86 in area 1, 144.0 fps
-drawn at 20.0 ticks/s. **The picture has never been looked at.** See "Anisotropic
-filtering" in `docs/RENDERING.md`.
+drawn at 20.0 ticks/s. **The picture has been looked at once** — that is where the
+two defects came from, with the frame rate and the noise probe both reading
+healthy while the kernel was reading other textures — **and not since they were
+fixed.** See "Anisotropic filtering" in `docs/RENDERING.md`.
 **Perspective
 correction is a patch for that same reason and is on by default**, beside it under
 Video. Unlike the others its work is not in `patches/` at all: a texture
