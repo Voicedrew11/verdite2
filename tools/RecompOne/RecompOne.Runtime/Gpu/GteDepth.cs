@@ -218,6 +218,37 @@ public static class GteDepth
     /// other. Wired to KF2_PERSPECTIVE_FALLBACK.</summary>
     public static bool PositionFallback;
 
+    /// <summary>
+    /// Anisotropic filtering: how many texels of the pixel's footprint may be
+    /// sampled along its longest axis. 1 is off and is the console's own single
+    /// point sample.
+    ///
+    /// The footprint of a screen pixel in texture space is the parallelogram
+    /// spanned by the two screen derivatives of the texture coordinate. Square-on
+    /// to a wall it is roughly a square; on a floor running away to the horizon it
+    /// is long and thin, covering many texels along one axis and barely one across
+    /// the other. Reading a single texel out of that is what makes a receding floor
+    /// crawl and sparkle as the camera moves. The fragment shader takes up to this
+    /// many samples along the long axis instead and averages them, which is the
+    /// only mip-free way to do it — the VRAM sheet cannot carry a mip chain, since
+    /// one page's lower level would average in its neighbours and a CLUT's would
+    /// average in the palette beside it.
+    ///
+    /// Clamped to 1..16 by <c>Kf2.Anisotropic</c>. GL backend only; the software
+    /// rasterizer is always a single sample. Safe to change at run time — it is a
+    /// plain uniform the next batch reads, with nothing rebuilt.
+    /// </summary>
+    public static int Anisotropy = 1;
+
+    /// <summary>True once the GL backend has found <c>uAniso</c> on the prim
+    /// program and is uploading it. This is the counter that matters: the port has
+    /// twice shipped a picture switch that printed "on" at boot while the mechanism
+    /// underneath it was dead — the RAM fast path went round the vertex map's
+    /// hooks, and a hook summary counted registrations rather than detours. A
+    /// setting that cannot reach the shader should say so rather than be believed.
+    /// </summary>
+    public static bool AnisotropyLive;
+
     const int Bits = 14;
     const int Size = 1 << Bits;
     const int Mask = Size - 1;

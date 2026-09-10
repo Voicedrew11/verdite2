@@ -575,6 +575,24 @@ Kf2.Pgxp.Install();
 Kf2.TrueColor.Configure(Environment.GetEnvironmentVariable("KF2_TRUECOLOR"));
 Kf2.TrueColor.Install();
 
+// Anisotropic filtering. A screen pixel covers an *area* of the texture, not a
+// point, and on a floor running away to the horizon that area is a long thin
+// sliver of texels; the console read one texel out of it, and which texel it read
+// changes completely for a sub-pixel movement of the camera. That is the crawling,
+// sparkling floor. The fragment shader samples along the sliver instead:
+//
+//     KF2_ANISO=8           taps along the long axis; 1 or "off" is one sample
+//     KF2_ANISO_PROBE=1     the level, and whether the uniform reaches the shader
+//
+// Off by default -- the mechanism is measured and the picture has not been looked
+// at. The mechanism is patches/recompone/0041 (a decode() holding the whole
+// per-texel job, and the kernel that calls it per tap); a paletted texel is a CLUT
+// index, so no filter can run before the lookup and none of this can be sampler
+// state. Its switch is under Video with the others.
+Kf2.Anisotropic.Configure(Environment.GetEnvironmentVariable("KF2_ANISO"),
+                          Environment.GetEnvironmentVariable("KF2_ANISO_PROBE"));
+Kf2.Anisotropic.Install();
+
 // The render scale survives a menu. A modal sub-loop -- the in-game menu, a shop,
 // an NPC's message box -- keeps the world behind it by reading the finished frame
 // out of VRAM once and blitting it back at the head of every iteration, and that

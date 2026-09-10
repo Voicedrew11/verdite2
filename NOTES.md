@@ -89,6 +89,24 @@ and neither does the Z-buffer (see "PGXP has no control in the window"). Nearby 
 pop back to affine the moment one vertex clamps off-screen, and a pixel that two
 vertices share no longer hands one polygon the other's depth (see "The table is
 not unique").
+**Anisotropic filtering is the minification half of that first sentence**: a
+screen pixel covers an *area* of the texture rather than a point, and on a floor
+running away to the horizon that area is a long thin sliver of texels the console
+sampled once — which is the crawling, sparkling floor, and which the port's own
+render scale makes more visible rather than less. It cannot be sampler state,
+because the VRAM texture is one sheet holding every page and every CLUT (so no
+filter may run across it) and a paletted texel is an *index* (so no filter may run
+before the lookup); the kernel therefore lives in both prim shaders, after the
+CLUT. It needs no "is this 3D" test, unlike anything else that softens a texel: a
+HUD sprite is axis-aligned and unminified, so its footprint is isotropic, the tap
+count comes out 1 and it takes the unfiltered path by construction — measured,
+not argued: at a 1:1 footprint 1 tap and 16 return identical pixels. **Frame rate
+cannot check this feature at all** (861.6 fps against 860.7, the port being
+CPU-bound at ~860, so "costs nothing" and "never runs" read the same), so
+`scripts/shader_probe.c` runs the real fragment shader headless and measures the
+spread between neighbouring pixels — that spread being the sparkle — which
+collapses from sd 51.2 to 11.4 across the levels. Off by default, the picture not
+looked at (see "Anisotropic filtering").
 
 **The frame rate is a free number and the world's tick rate is a fixed 20.** The
 port skips the game's own frame gate at every rate — it decides both together and
@@ -205,7 +223,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 
 ### [RENDERING.md](docs/RENDERING.md)
 
-Recovering the depth and the sub-pixel fraction the GP0 packet threw away: perspective correction, sub-pixel positions, Z-buffer, dither, true color.
+Recovering the depth and the sub-pixel fraction the GP0 packet threw away: perspective correction, sub-pixel positions, Z-buffer, anisotropic filtering, dither, true color.
 
 - Perspective correction: the depth is one step upstream, and the screen position is the key
 - Sub-pixel vertex positioning: the same number's other half
@@ -216,6 +234,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - PGXP has no control in the window
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding
+- Anisotropic filtering: a pixel covers an area, and the console read a point
 - The render scale did not survive a menu
 - The display list cannot name a face: why packet-level smoothing failed
 - "No textures on the other machine": splitting the three layers
