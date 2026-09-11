@@ -306,6 +306,18 @@ Pad, analog sticks, keyboard layout, mouse look and the menu pointer.
 - Mouse look
 - The menu pointer
 
+### [ENV_VARS.md](docs/ENV_VARS.md)
+
+Every `KF2_*` switch the port reads, in one list.
+
+### [RECOMPONE_FORK.md](docs/RECOMPONE_FORK.md)
+
+How the vendored RecompOne checkout is kept, why it is not a patch stack, and what the merge to `0409bc2` decided.
+
+### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
+
+Every change the port made to RecompOne, `0001`-`0041`, one entry each.
+
 ### [TODO.md](docs/TODO.md)
 
 Next steps, and an index of what is reported but not diagnosed.
