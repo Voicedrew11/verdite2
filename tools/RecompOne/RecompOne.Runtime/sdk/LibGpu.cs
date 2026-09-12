@@ -286,6 +286,9 @@ public static class LibGpu
     private static int _flipX = -1, _flipY = -1;
     private static double _autoMark;
 
+    //0042. Presents forced from a display flip; see LibEtc.VSyncCalls.
+    public static long AutoPresents;
+
     //this is not the best method probably, but some games get stuck on this and i havent found a better way
     private const double FlipGrace = 100.0;
 
@@ -305,6 +308,7 @@ public static class LibGpu
         if (now - _autoMark < Host.FrameClock.FrameMs * 0.5) return;
 
         _autoMark = now;
+        AutoPresents++; //0042
         Runtime.PresentFrame();
     }
 

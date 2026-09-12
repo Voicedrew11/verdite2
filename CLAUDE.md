@@ -29,7 +29,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
 | `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0041` |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0042` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/GAME_INTERNALS.md` | the game's own addresses and routines |
@@ -409,7 +409,7 @@ removed for the same reason.
 
 **`tools/RecompOne/` is vendored: an edit inside it is a change to this
 repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0041`) are how the source
+what the port changed and why, and the numbers (`0001`-`0042`) are how the source
 refers to each change, but they are **no longer replayed**. The merge base is
 `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
 gitignored `tools/RecompOne.git/`, reached with
@@ -462,7 +462,13 @@ fail to load area modules on a differently mastered dump.
 - Packaging is `packaging/linux/build-appimage.sh` and
   `packaging/windows/build-windows.ps1`, neither of which needs the disc.
   **Trimming is off and must stay off** (MonoMod detours, Roslyn, `AutoStart`'s
-  reflection). `DiscCheck.Validate` fills `Runtime.DiscValidator` and refuses
+  reflection).
+- **QuickJit is off and must stay off, in both `KingsField2Recomp.csproj` and
+  `Verdite2.Launcher.csproj`** (`TieredCompilationQuickJit`). Tier-up recompiles a
+  hooked method and MonoMod's detour does not reliably follow, so a committed hook
+  stops firing for the session with `IsCommitted` still true — that was the boot
+  that ran at twice the chosen rate. `FramePacing`'s sentinel prints
+  `[KF2] pacing sentinel:` if a pacing hook is ever lost again. `DiscCheck.Validate` fills `Runtime.DiscValidator` and refuses
   `SLUS-00255` by name.
 
 See `docs/PACKAGING.md`.

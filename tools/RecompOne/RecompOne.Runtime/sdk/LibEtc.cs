@@ -29,6 +29,15 @@ public static class LibEtc
     /// </summary>
     public static bool BlockingVSync;
 
+    //0042. Presents counted where they happen, not where a hook says they do. A
+    //port that paces from hooks on this function cannot use those hooks to notice
+    //that they have stopped running, so this is counted in the body itself: the
+    //calls that reach PresentFrame, and on request the managed stack of one of
+    //them, which shows whether the call still came through the hook trampoline.
+    public static long VSyncCalls;
+    public static volatile bool CaptureNextStack;
+    public static string? CapturedStack;
+
     //The vblank is time, not a call. On hardware the interrupt fires every 16.7 ms
     //whether or not the game is ready for it: a loop blocked on a CD read misses
     //pictures, not vblanks. This port advanced _vcount once per VSync call instead,
@@ -70,6 +79,13 @@ public static class LibEtc
             //against that, so only the blocking timeline reports real hblanks.
             c.V0 = BlockingVSync ? Elapsed() : 0;
             return;
+        }
+
+        VSyncCalls++;
+        if (CaptureNextStack)
+        {
+            CaptureNextStack = false;
+            CapturedStack = Environment.StackTrace;
         }
 
         LastWaitMs = Interrupts.ClockMs;

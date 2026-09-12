@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Thirty-nine of the forty-three are load-bearing; `0002`, `0003` and `0015` are
+Forty of the forty-four are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -467,6 +467,17 @@ Four files in the directory have no entry below:
   backend only, native VRAM paths only. `GteDepth.AnisotropyLive` is read back from
   the one place that uploads the uniform. Off by default. **No recompile** — a plain
   uniform the next batch reads. See "Anisotropic filtering" in `docs/RENDERING.md`.
+
+- `0042-present-counters.patch` — `FramePacing` paces from hooks on `VSync` and
+  `DrawOTag`, so it cannot use those hooks to notice that they have stopped
+  running. Some boots present at exactly twice the asked-for rate for the whole
+  session, which is the host ceiling `FramePacing` hands `FrameClock` with nothing
+  of the port holding the picture. `LibEtc.VSyncCalls` and `LibGpu.AutoPresents`
+  count presents in the bodies themselves, and `LibEtc.CaptureNextStack` returns
+  the managed stack of one call, which shows whether it still came through
+  `HookManager.Invoke`. Read by `FramePacing`'s sentinel and its probe line.
+  **No recompile.** See "The smoothing is sometimes dead for a whole session" in
+  `docs/TODO.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
