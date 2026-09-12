@@ -437,11 +437,14 @@ useful than the question was.
    screen labels every word it draws, and the font-index string table decodes,
    so `EXPERIENCE` through `WATER MAGIC` are named by the game rather than
    guessed; see "The status screen names the rest of buf2" in
-   [GAME_INTERNALS.md](GAME_INTERNALS.md). Inventory, equipment and the entity
-   table are still unmapped, and the same route should reach them: the item and
-   spell names are all in that table too, from `0x80065B20` (`DAGGER`) to
-   `0x800663F0` (`LIGHT CRYSTAL`), so whichever routine indexes it with a slot
-   number is the inventory.
+   [GAME_INTERNALS.md](GAME_INTERNALS.md). **The inventory is mapped too, and the
+   route was exactly the one this note predicted**: `func_80019444` indexes that
+   same table with a slot number, and it turns out to be the only routine any
+   item page is built by — the inventory is a flat array of counts at
+   `0x8009B52C`, one byte per item id, and the id *is* the index into the names
+   at `0x80065B24`. `mods/kf2debug`'s Items tab is what came of it. Equipment and
+   the entity table are still unmapped. See "The inventory is one byte per item"
+   in [GAME_INTERNALS.md](GAME_INTERNALS.md).
 13. **Check the Attributes tab by eye.** `mods/kf2debug`'s character editor is
    written and compiles; nothing in it has been seen running. Three things a
    person has to confirm: that the status screen shows what the panel shows, that
@@ -558,3 +561,22 @@ useful than the question was.
    faithful, and it still reads as a crash" in [RUNTIME.md](RUNTIME.md). What is
    left is by eye: that the title screen that comes back is the real one and not a
    half-initialised one, since nothing clears RAM between the two.
+
+16. **Open the inventory screen with the Items tab's items in it.** The mechanism
+   is measured — `KF2_DEBUG_ITEMS_PROBE=2` gives one of all 99 named ids through
+   the game's own `func_80048178` and reads them all back — but **the game's own
+   menu has never been looked at with that inventory in it.** Three things a
+   person has to confirm: that the list draws all 98 new entries and scrolls (the
+   descriptor's count byte is a `u8`, so it can hold them, but no page in normal
+   play is anywhere near that long); that equipping and using one behaves, since
+   `func_800244CC` reads the equipment and not the counts; and that an item the
+   game never gives you in the area you are standing in does not upset the area
+   module's slot-6 hook, which `func_80048178` calls on every grant.
+
+   **The second half is the save.** `func_80049A88` packs the inventory with one
+   `0x70`-byte copy and `func_8004A040` unpacks the same `0x70`, so ids 112-119 —
+   `STAR GATE` through `ELF'S BOLT`, both ammunition types among them — are live
+   state the save does not round-trip. That is read off both routines statically
+   and has never been watched across a save and a load, which is one save, one
+   quit to title and one load away from being answered either way. See "The
+   inventory is one byte per item" in [GAME_INTERNALS.md](GAME_INTERNALS.md).

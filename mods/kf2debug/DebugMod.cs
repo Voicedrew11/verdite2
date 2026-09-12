@@ -12,7 +12,8 @@ namespace Kf2.Mods.Debug;
 
 /// <summary>
 /// Debug tools: noclip flight, invincibility, infinite MP, a speed multiplier,
-/// position bookmarks and area warp, with a live readout of the player state.
+/// position bookmarks, area warp and an inventory editor, with a live readout of
+/// the player state.
 ///
 /// Everything here is off until it is turned on, and every hook returns on a
 /// bool test plus one memory read when it is off -- the standard patches/Analog.cs and
@@ -21,9 +22,10 @@ namespace Kf2.Mods.Debug;
 /// The state this reads is not new. NOTES.md "Player state: found, and it was in
 /// stage 3 all along" and "The character's stats are buf2" between them give
 /// every address in GameState.cs; what this mod adds is a place to see them and
-/// a set of switches. That is also the point: inventory, equipment, magic and the
-/// entity table are still unmapped, and a live readout is the instrument for
-/// finding them.
+/// a set of switches. That is also the point: equipment, magic and the entity
+/// table are still unmapped, and a live readout is the instrument for finding
+/// them -- the inventory was found that way, and <see cref="Items"/> is what
+/// came of it.
 /// </summary>
 public sealed class DebugMod : IMod
 {
@@ -84,6 +86,7 @@ public sealed class DebugMod : IMod
         Hotkeys.Reset();
         Warp.Reset();
         Attributes.Reset();
+        Items.Reset();
 
         DebugPanel.Instance.IsOpen = false;
         _panelRegistered = false;
@@ -126,9 +129,9 @@ public sealed class DebugMod : IMod
     public void DrawSettings()
     {
         ImGui.TextWrapped("Noclip flight, invincibility, infinite MP, a speed multiplier, position "
-                        + "bookmarks, area warp and an editor for the character's attributes, plus "
-                        + "a live readout of the player state. Everything is off until you switch "
-                        + "it on.");
+                        + "bookmarks, area warp and editors for the character's attributes and the "
+                        + "inventory, plus a live readout of the player state. Everything is off "
+                        + "until you switch it on.");
         ImGui.Separator();
 
         if (ImGui.Button("Open the debug panel"))

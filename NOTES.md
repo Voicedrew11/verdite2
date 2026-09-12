@@ -275,8 +275,10 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - What in the renderer draws what
 - The frame's applied position delta is a triple of its own
 - Player state: found, and it was in stage 3 all along
+- The inventory is one byte per item, and the item id is the name-table index
 - Saving and loading
 - Debug tools
+- The Items tab gives through the game's own give, and the names are read live
 
 ### [PATCHES_AND_MODS.md](docs/PATCHES_AND_MODS.md)
 

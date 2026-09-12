@@ -65,6 +65,7 @@ internal sealed class DebugPanel : IPanel
         {
             if (ImGui.BeginTabItem("Cheats"))     { DrawCheats(mem);     ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("Attributes")) { DrawAttributes(mem); ImGui.EndTabItem(); }
+            if (ImGui.BeginTabItem("Items"))      { DrawItems(mem);      ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("Warp"))       { DrawWarp(mem);       ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("State"))      { DrawState(mem);      ImGui.EndTabItem(); }
             if (ImGui.BeginTabItem("Keys"))       { DrawKeys();          ImGui.EndTabItem(); }
@@ -290,6 +291,120 @@ internal sealed class DebugPanel : IPanel
         }
     }
 
+    // ---- items ----
+
+    string _itemSearch = "";
+    bool _itemsHeldOnly;
+
+    void DrawItems(IMemory mem)
+    {
+        var groups = Items.Groups(mem);
+
+        ImGui.TextWrapped("The inventory is one byte per item id -- the count you hold -- and the "
+                        + "id is the index into the game's own name table, so every name below is "
+                        + "read out of the running image rather than from a list kept here.");
+
+        ImGui.Text($"{Items.DistinctHeld(mem)} of {Items.Count} ids held");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Give one of each")) Items.QueueGiveAll(mem);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("One of every named id you do not already have, through the game's "
+                           + "own give routine. Queued for the end of the next player-stage.");
+        ImGui.SameLine();
+        if (ImGui.SmallButton("Clear all")) Items.ClearAll(mem);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Zeroes all 120 counts. This does not unequip what you are wearing -- "
+                           + "the equipment slots are a separate thing and are not mapped yet.");
+
+        ImGui.Separator();
+
+        ImGui.SetNextItemWidth(180);
+        ImGui.InputText("Search", ref _itemSearch, 32);
+        ImGui.SameLine();
+        ImGui.Checkbox("Held only", ref _itemsHeldOnly);
+
+        if (!string.IsNullOrEmpty(Items.Status))
+        {
+            ImGui.Separator();
+            ImGui.TextWrapped(Items.Status);
+        }
+
+        ImGui.Separator();
+
+        string needle = _itemSearch.Trim().ToUpperInvariant();
+        bool filtering = needle.Length != 0 || _itemsHeldOnly;
+
+        if (!ImGui.BeginChild("##itemlist", Vector2.Zero, ImGuiChildFlags.None))
+        {
+            ImGui.EndChild();
+            return;
+        }
+
+        foreach (var g in groups)
+        {
+            // With a filter on, a group with no surviving row should not draw a
+            // heading at all -- so the rows are collected before the header is,
+            // rather than the header opening onto nothing.
+            var shown = new System.Collections.Generic.List<int>();
+            for (int id = g.First; id <= g.Last; id++)
+            {
+                if (_itemsHeldOnly && Items.Held(mem, id) == 0) continue;
+                if (needle.Length != 0 && !Items.Name(mem, id).Contains(needle, StringComparison.Ordinal))
+                    continue;
+                shown.Add(id);
+            }
+            if (shown.Count == 0) continue;
+
+            // A search has already narrowed things; making the reader open each
+            // group again would be the same work twice.
+            if (filtering) ImGui.SetNextItemOpen(true, ImGuiCond.Always);
+            if (!ImGui.CollapsingHeader($"{g.Name}  ({g.First}-{g.Last})###grp{g.First}")) continue;
+
+            ImGui.Indent();
+
+            if (g.Last >= Items.SavedCount)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.72f, 0.25f, 1f));
+                ImGui.TextWrapped($"Ids {Items.SavedCount} and up sit past the {Items.SavedCount}-byte "
+                                + "copy the save routine packs the inventory with, so what the save "
+                                + "does with them is not known. Read off func_80049A88 statically; "
+                                + "never watched across a save and a load.");
+                ImGui.PopStyleColor();
+            }
+
+            foreach (int id in shown) DrawItemRow(mem, id);
+
+            ImGui.Unindent();
+        }
+
+        ImGui.EndChild();
+    }
+
+    void DrawItemRow(IMemory mem, int id)
+    {
+        int held = Items.Held(mem, id);
+
+        ImGui.PushID(id);
+
+        if (ImGui.SmallButton("+1")) Items.QueueGive(id);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("func_80048178 -- the game's own give, which is what a chest calls. "
+                           + "It refuses at 99.");
+
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(90);
+        if (ImGui.InputInt("##count", ref held)) Items.SetHeld(mem, id, held);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("The count byte itself. Zero is how the game says you do not hold it, "
+                           + "so this is also the way to drop something.");
+
+        ImGui.SameLine();
+        if (Items.Held(mem, id) != 0) ImGui.Text($"{id,3}  {Items.Name(mem, id)}");
+        else ImGui.TextDisabled($"{id,3}  {Items.Name(mem, id)}");
+
+        ImGui.PopID();
+    }
+
     // ---- warp ----
 
     void DrawWarp(IMemory mem)
@@ -424,8 +539,14 @@ internal sealed class DebugPanel : IPanel
         ImGui.Unindent();
 
         ImGui.Separator();
-        ImGui.TextDisabled("Inventory, equipment, magic and the entity table are still unmapped. "
-                         + "Watching this panel while doing a thing in-game is how they get found.");
+        ImGui.Text("Inventory");
+        ImGui.Indent();
+        ImGui.Text($"{Items.DistinctHeld(mem),5} of {Items.Count} ids held   (the Items tab)");
+        ImGui.Unindent();
+
+        ImGui.Separator();
+        ImGui.TextDisabled("Equipment, magic and the entity table are still unmapped. Watching "
+                         + "this panel while doing a thing in-game is how they get found.");
     }
 
     // ---- keys ----

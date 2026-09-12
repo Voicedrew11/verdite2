@@ -1075,6 +1075,112 @@ pass a gain of zero, and it levels exactly once by the game's own numbers. That 
 what the debug mod's "Level up" button does. Note the `< 100` guard — past level
 99 the level byte still increments and nothing else does.
 
+### The inventory is one byte per item, and the item id is the name-table index
+
+**The whole thing is `func_80019444`**, the routine every scrolling item page is
+built by, and it can be stated in full:
+
+```c
+int func_80019444(u8 *counts, u8 *rows, u8 *outCounts, u8 *outIds, int first, int last)
+{
+    n = 0;
+    for (i = first; i <= last; i++)
+        if (counts[i] != 0) {
+            memcpy(rows + n*0x18, (u8*)0x80065B24 + i*0x18, 0x18);  /* the name */
+            outCounts[n] = counts[i];
+            outIds[n]    = i;
+            n++;
+        }
+    return n;
+}
+```
+
+So **the inventory is not a list of slots**: it is a flat array of counts indexed
+by item id, holding something is a non-zero byte, and the list the menu shows is
+built fresh from it every time a page opens. `rows` is the `+0x24` buffer of the
+scrolling descriptor two sections up, which is why that descriptor needs no item
+data of its own.
+
+| what | where |
+|---|---|
+| the player's counts | `0x8009B52C`, 120 bytes, ids `0x00`-`0x77` |
+| item *i*'s name | `0x80065B24 + i * 0x18` |
+| a shop's stock | `0x80066844`, `0x80066A24`, `0x80066A9C` — the same shape, in `GAME.EXE`'s own data |
+
+**Three independent things fix the array's length at exactly 120.** The widest
+range any of the seven callers asks for is `0 .. 0x77`. `0x8009B5A4` —
+`0x8009B52C + 120` — is the next global anything in the image touches. And
+`0x8009B5A1`/`0x8009B5A2`, addressed individually rather than through an index,
+are ids 117 and 118, which decode out of the name table as `ARROW FOR THE BOW`
+and `ELF'S BOLT`: the two ammunition types, which are exactly the two an archery
+routine would reach by address. That last one is the check on the *alignment*
+rather than the length, and it is what says `0x80065B24` is item 0 and not a
+record either side of it.
+
+**The names are the font-index table** from "The status screen names the rest of
+buf2" above, so nothing here needs a string list of its own: `0x00` = `A`, `0x7F`
+= space, `0xFF` = terminator, 24-byte records. Counting every byte of all 133
+records, the only non-letters in the entire table are `0x31` `,`, `0x32` `'`,
+`0x38` `!` and `0x3A` `?` — so a decoder that renders anything else as hex will
+never have to.
+
+**An unused id holds a placeholder — the two bytes `00 FF`, the single letter
+`A` — and those placeholders are the category separators.** Twenty-one of the 120
+ids are placeholders, and the twelve runs between them are the game's own
+grouping:
+
+| ids | what | ids | what |
+|---|---|---|---|
+| 0-6 | swords and axes | 53-59 | accessories |
+| 9-17 | enchanted blades, bow, arbalest | 67-80 | maps, stones, potions |
+| 21-26 | helms | 82-97 | quest items and crystals |
+| 28-32 | armour | 99-109 | keys |
+| 34-39 | shields | 111-118 | gates, keys, ammunition |
+| 41-45 | gauntlets | | |
+| 47-51 | boots | | |
+
+**Two of those runs are confirmed by the game itself**, which is what makes the
+separator reading more than a pattern: one caller of `func_80019444` asks for
+exactly `0x35..0x3B` and another for exactly `0x43..0x77` — the accessories, and
+everything from `PIRATE'S MAP` on.
+
+**Adding one is `func_80048178` and removing one is `func_80048124`:**
+
+```c
+int func_80048178(int id)          /* give: the area modules' own item grant */
+{
+    if (inv[id] >= 99) { func_80033F08(0x12); return 1; }   /* the "cannot carry" chime */
+    inv[id]++;
+    (*(void(**)())(*(u32*)0x8017E068 + 0x18))();            /* the area module's slot 6 */
+    return 0;
+}
+
+int func_80048124(int id)          /* consume one */
+{
+    if (inv[id] == 0) return 1;
+    inv[id]--;  return 0;
+}
+```
+
+`fdat05`, `fdat11` and `fdat14` all call the give directly, which is a chest or
+an NPC handing something over; the consume is called from five of the modules and
+from `GAME.EXE`. Ninety-nine is the ceiling and it is the give's own.
+
+**The save carries 112 of the 120 bytes.** `func_80049A88` packs the inventory
+with a single `0x70`-byte copy from `0x8009B52C` and `func_8004A040` unpacks the
+same `0x70`, and the inventory is the only thing either routine reaches through
+that base — so ids 112-119, which is `STAR GATE` through `ELF'S BOLT` and
+includes both ammunition types, are live state the save does not round-trip.
+**Read statically off both routines and not watched in play**: what actually
+happens to an arrow count across a save and a load is a thing somebody has to do
+and look at.
+
+**Measured live**, `KF2_DEBUG_ITEMS_PROBE=1` with `KF2_AUTOSTART=2` in area 1:
+all 99 named ids decode as English in the twelve runs above, the runs fall
+exactly where the placeholders say, and slot 2 reads `0  x1  DAGGER` and nothing
+else — which is also what `func_8004905C`, the new-game setup, writes: `inv[0] =
+1` after clearing.
+
 ## Saving and loading
 
 Both halves of the memory card now work. Saving was confirmed first — three files
@@ -1551,3 +1657,41 @@ behaviour are read out of the executable and the code compiles; what a person
 still has to check is that the status screen shows the numbers the panel does,
 that "Level up" lands on the same level and maxima the game would have given, and
 that a held rating is actually felt in combat rather than merely displayed.
+
+### The Items tab gives through the game's own give, and the names are read live
+
+`mods/kf2debug/Items.cs`. The map it stands on is "The inventory is one byte per
+item" above; what is worth recording here is the three decisions in the tool.
+
+**The names are decoded out of the running image, not baked into the mod.** The
+name table is in `GAME.EXE`, which is resident for the whole session, so
+`Items.Name` reads `0x80065B24 + id * 0x18` through `IMemory` every time it draws
+a row. A copy kept in the mod would be a second source of truth that could drift
+from the first, and it would also be a list of FromSoftware's strings in a
+repository that deliberately ships no game data.
+
+**The categories are read off the table, not written down.** Every run of named
+ids between two `00 FF` placeholders is one group, computed once per load and
+cached. Only the twelve *labels* are the port's own words — and if the table ever
+yields a different number of runs, each group is named by its id range instead,
+so a changed table cannot produce a confidently mislabelled one.
+
+**"+1" runs `func_80048178` rather than incrementing the byte**, for the reason
+"Level up" calls `func_80024CAC`: the game's routine carries the 99 ceiling, the
+"cannot carry" chime and the call through the area module's dispatch slot 6,
+where an imitation would carry only the increment. It needs a `CpuContext`, so it
+is queued and run from the stage-3 post hook like everything else here, and the
+slot-6 pointer is range-checked before the call — a null there would be a jump to
+zero, and the direct write is what a missing hook falls back to.
+
+The count box beside it **is** a direct write, and it has to be: `func_80048124`
+consumes one at a time, so there is no routine that means "set this to zero".
+
+**Measured.** `KF2_DEBUG_ITEMS_PROBE=1` prints the whole table once, the first
+time an area is up; `=2` also queues one of everything and re-prints after the
+queue has run, which is the acceptance test for the give path. At
+`KF2_AUTOSTART=2` in area 1: `1 of 120 ids held` before, `gave 98 item(s)`,
+`99 of 120 ids held` after — 99 being exactly the count of named ids — with no
+exception and every name decoding. **What has not been looked at is the game's
+own inventory screen**: that the menu lists those 98 items, with those names, and
+that using or equipping one behaves, is a thing a person has to see.

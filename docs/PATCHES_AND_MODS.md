@@ -41,9 +41,10 @@ A mod is a folder (or zip) under `mods/` with a `mod.json` and C# sources,
 **compiled at run time by Roslyn** and hooked by address:
 
 ```
-mods/kf2debug/mod.json   + GameState.cs,     noclip, invincibility, warp and a live
-                           Noclip.cs,        state readout
-                           Cheats.cs, Warp.cs,
+mods/kf2debug/mod.json   + GameState.cs,     noclip, invincibility, warp, the
+                           Noclip.cs,        character and inventory editors,
+                           Cheats.cs, Warp.cs,   and a live state readout
+                           Attributes.cs, Items.cs,
                            Hotkeys.cs, DebugPanel.cs, DebugMod.cs
 ```
 
