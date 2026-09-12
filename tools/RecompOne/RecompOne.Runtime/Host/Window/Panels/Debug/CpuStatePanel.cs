@@ -39,7 +39,7 @@ internal sealed class CpuStatePanel : IPanel
             IsOpen = open;
             return;
         }
-
+        
         if (ImGui.BeginTabBar("##CpuTabs"))
         {
             if (ImGui.BeginTabItem("GPR"))
@@ -62,7 +62,7 @@ internal sealed class CpuStatePanel : IPanel
         IsOpen = open;
         ImGui.End();
     }
-
+    
     private void DrawGpr(CpuContext cpu)
     {
         if (!ImGui.BeginTable("gpr", 2,

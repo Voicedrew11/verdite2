@@ -153,7 +153,12 @@ public static class LibGpu
     {
         get
         {
-            if (_videoMode < 0) _videoMode = European() ? 1 : 0;
+            if (_videoMode < 0)
+            {
+                if (Runtime.Cd == null) return false;
+                _videoMode = European() ? 1 : 0;
+            }
+
             return _videoMode == 1;
         }
     }
@@ -242,6 +247,8 @@ public static class LibGpu
 
         GpuHle.NotifyDisplay(dispX, dispY, dispW, dispH);
 
+        FlipFrame(dispX, dispY);
+
         if (Event.HasAnyListeners<DispEnvEvent>())
         {
             var e = _dispEnvEvent;
@@ -274,6 +281,31 @@ public static class LibGpu
         x = short.Clamp(x, 0, VramShadow.Width - 1);
         y = short.Clamp(y, 0, VramShadow.Height - 1);
         return 0xE4000000u | (((uint)y & 0x3FF) << 10) | ((uint)x & 0x3FF);
+    }
+
+    private static int _flipX = -1, _flipY = -1;
+    private static double _autoMark;
+
+    //this is not the best method probably, but some games get stuck on this and i havent found a better way
+    private const double FlipGrace = 100.0;
+
+    private static void FlipFrame(int x, int y)
+    {
+        if (x == _flipX && y == _flipY) return;
+
+        _flipX = x;
+        _flipY = y;
+        AutoPresent();
+    }
+
+    private static void AutoPresent()
+    {
+        var now = Interrupts.ClockMs;
+        if (now - LibEtc.LastWaitMs < FlipGrace) return;
+        if (now - _autoMark < Host.FrameClock.FrameMs * 0.5) return;
+
+        _autoMark = now;
+        Runtime.PresentFrame();
     }
 
     private static uint _curCs = 0xE3000000u, _curCe = 0xE4000000u, _curOfs = 0xE5000000u;

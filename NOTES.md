@@ -314,7 +314,7 @@ Every `KF2_*` switch the port reads, in one list.
 
 ### [RECOMPONE_FORK.md](docs/RECOMPONE_FORK.md)
 
-How the vendored RecompOne checkout is kept, why it is not a patch stack, and what the merge to `0409bc2` decided.
+How the vendored RecompOne checkout is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided.
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 

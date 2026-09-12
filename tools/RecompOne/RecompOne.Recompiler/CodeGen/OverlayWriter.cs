@@ -46,6 +46,12 @@ public static class OverlayWriter
         }
 
         var images = overlayResults.Select(r => new ImageFunctions(r.Name, r.Functions, r.Instructions)).ToList();
+        // Upstream made this unconditional. Here it must stay behind the flag:
+        // open, game and end share one address range, so a jal from an fdat
+        // module is added as an entry point to all three -- splitting a real
+        // function in the two overlays the call cannot have meant. Measured, it
+        // takes the build from 2099 functions to 2370 and collides 0x80025D38
+        // across all three.
         if (config.PointerScan) FunctionPipeline.ScanCrossImage(images);
         FunctionPipeline.ScanEscapesToFixpoint(images);
 
@@ -243,12 +249,13 @@ public static class OverlayWriter
     private static void WriteAll(RecompOneConfig config, string outDir, string className, PsxExe mainExe,
         SystemCfg sysCfg, List<OverlayResult> overlayResults, List<MipsFunction> allFuncs)
     {
-        var overlayClass = SpreadClasses(className, overlayResults);
+        var overlayParts = SpreadClasses(className, overlayResults);
         var funcClass = new Dictionary<uint, string>();
 
         foreach (var result in overlayResults)
-        foreach (var func in result.Functions)
-            funcClass[func.Start] = overlayClass[result.Name];
+        foreach (var part in overlayParts[result.Name])
+        foreach (var func in part.Functions)
+            funcClass[func.Start] = part.Class;
 
         var uniqueAddrs = allFuncs.GroupBy(f => f.Start).Where(g => g.Count() == 1).Select(g => g.Key).ToHashSet();
         var knownFuncs = allFuncs.Where(f => uniqueAddrs.Contains(f.Start))
@@ -271,8 +278,9 @@ public static class OverlayWriter
         foreach (var result in overlayResults)
         {
             Console.WriteLine($"[Recompiler] emiting {result.Name}.cs ({result.Functions.Count} functions)");
-            EmitOverlayFile(result.Name, result.Functions, overlayClass[result.Name], knownFuncs, config.Debug, config.AddressComments,
-                config.DisasmComments, result.LbaStart, result.Base, result.Size, result.Instructions, outDir,
+            EmitOverlayFile(result.Name, overlayParts[result.Name], knownFuncs, config.Debug,
+                config.AddressComments, config.DisasmComments, result.LbaStart, result.Base, result.Size,
+                result.Instructions, outDir,
                 SymbolRelocator.Plan(result.Functions, config.Relocations, result.Name));
         }
 
@@ -289,20 +297,48 @@ public static class OverlayWriter
         return funcClass.TryGetValue(address, out var owner) ? owner : fallback;
     }
 
-    private static Dictionary<string, string> SpreadClasses(string className, List<OverlayResult> overlayResults)
+    private const int FunctionsPerClass = 30000; //can hold up to 65k but a lower value is better looking
+
+    //if it is too big it mus be slplit, CoreCLR cant handle classes over 65k functions
+    private static Dictionary<string, List<OverlayPart>> SpreadClasses(string className,
+        List<OverlayResult> overlayResults)
     {
-        var map = new Dictionary<string, string>();
+        var map = new Dictionary<string, List<OverlayPart>>();
 
         foreach (var result in overlayResults)
-            map[result.Name] = $"{className}_{SafeIdentifier(result.Name)}";
+        {
+            var baseName = $"{className}_{SafeIdentifier(result.Name)}";
+            var ordered = result.Functions.OrderBy(f => f.Start).ToList();
+            var parts = new List<OverlayPart>();
+
+            for (var i = 0; i < ordered.Count; i += FunctionsPerClass)
+                parts.Add(new OverlayPart(
+                    i == 0 ? baseName : $"{baseName}_{i / FunctionsPerClass}",
+                    ordered.GetRange(i, Math.Min(FunctionsPerClass, ordered.Count - i))));
+
+            if (parts.Count == 0) parts.Add(new OverlayPart(baseName, ordered));
+            if (parts.Count > 1)
+                Console.WriteLine($"[Recompiler] {result.Name} has {ordered.Count} functions, split across {parts.Count} classes");
+
+            map[result.Name] = parts;
+        }
 
         return map;
     }
 
-    private static void EmitOverlayFile(string overlayName, List<MipsFunction> funcs, string className,
-        Dictionary<uint, string> knownFuncs, bool debug, bool addressComments, bool disasmComments, int lbaStart,
-        uint ovlBase, uint ovlSize, MipsInstruction[] instrs, string outDir, Dictionary<uint, uint> relocations)
+    private sealed record OverlayPart(string Class, List<MipsFunction> Functions);
+
+    private static void EmitOverlayFile(string overlayName, List<OverlayPart> parts,
+        Dictionary<uint, string> knownFuncs, bool debug, bool addressComments,
+        bool disasmComments, int lbaStart, uint ovlBase, uint ovlSize, MipsInstruction[] instrs, string outDir,
+        Dictionary<uint, uint> relocations)
     {
+        var funcs = parts.SelectMany(p => p.Functions).ToList();
+        var partClass = new Dictionary<uint, string>();
+        foreach (var part in parts)
+        foreach (var func in part.Functions)
+            partClass[func.Start] = part.Class;
+
         var sb = new StringBuilder();
         sb.AppendLine("using RecompOne.Runtime.Context;");
         sb.AppendLine("using RecompOne.Runtime.Dispatch;");
@@ -310,33 +346,38 @@ public static class OverlayWriter
         sb.AppendLine();
         sb.AppendLine("namespace Recompiled;");
         sb.AppendLine();
-        sb.AppendLine($"public static partial class {className}");
-        sb.AppendLine("{");
-
-        foreach (var func in funcs.OrderBy(f => f.Start))
+        foreach (var part in parts)
         {
-            var labels = LabelManager.Collect(func);
-            var backEdges = LabelManager.CollectBackEdges(func);
-            var ctx = new FunctionContext
-            {
-                FuncStart = func.Start,
-                FuncEnd = func.End,
-                KnownFunctions = knownFuncs,
-                Labels = labels,
-                BackEdges = backEdges,
-                Debug = debug,
-                AddressComments = addressComments,
-                DisasmComments = disasmComments,
-                JumpTablesByJr = func.JumpTables.ToDictionary(j => j.JrVram),
-                RaReturnJrs = FunctionDetector.ComputeRaReturnJrs(func),
-                AllInstructions = instrs,
-                Relocations = relocations
-            };
-            sb.Append(FunctionEmitter.Emit(func, ctx));
-        }
+            sb.AppendLine($"public static partial class {part.Class}");
+            sb.AppendLine("{");
 
-        sb.AppendLine("}");
-        sb.AppendLine();
+            foreach (var func in part.Functions)
+            {
+                var labels = LabelManager.Collect(func);
+                var backEdges = LabelManager.CollectBackEdges(func);
+                var ctx = new FunctionContext
+                {
+                    FuncStart = func.Start,
+                    FuncEnd = func.End,
+                    KnownFunctions = knownFuncs,
+                    Labels = labels,
+                    BackEdges = backEdges,
+                    Debug = debug,
+                    AddressComments = addressComments,
+                    DisasmComments = disasmComments,
+                    JumpTablesByJr = func.JumpTables.ToDictionary(j => j.JrVram),
+                    RaReturnJrs = FunctionDetector.ComputeRaReturnJrs(func),
+                    LinkReturns = LabelManager.CollectLinkReturns(func),
+                    AllInstructions = instrs,
+                    Relocations = relocations
+                };
+                sb.Append(FunctionEmitter.Emit(func, ctx));
+            }
+
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+        
         sb.AppendLine($"public sealed class {DispatchTableName(overlayName)} : IOverlay");
         sb.AppendLine("{");
         sb.AppendLine($"    public string Name => \"{overlayName}\";");
@@ -347,7 +388,8 @@ public static class OverlayWriter
         sb.AppendLine("        new Dictionary<uint, Action<CpuContext, IMemory>>");
         sb.AppendLine("        {");
         foreach (var func in funcs.Where(f => !f.IsStub).OrderBy(f => f.Start))
-            sb.AppendLine($"            [0x{func.Start:X8}u] = {className}.{func.EmittedName},");
+            sb.AppendLine($"            [0x{func.Start:X8}u] = " +
+                          $"{Owner(partClass, func.Start, parts[0].Class)}.{func.EmittedName},");
         sb.AppendLine("        };");
         sb.AppendLine("}");
 

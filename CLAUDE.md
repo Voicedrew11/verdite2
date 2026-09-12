@@ -53,7 +53,7 @@ clone already has it and nothing needs cloning.
 ```bash
 bash scripts/setup_tools.sh          # build the vendored recompiler
 
-# recompile MIPS -> C# into generated/ (~2099 functions, ~163k lines)
+# recompile MIPS -> C# into generated/ (~2234 functions, ~182k lines)
 dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build -- config/kf2.json
 
 dotnet build KingsField2Recomp.csproj -c Release
@@ -411,7 +411,7 @@ removed for the same reason.
 repository like any other.** `patches/recompone/*.patch` are kept as the record of
 what the port changed and why, and the numbers (`0001`-`0041`) are how the source
 refers to each change, but they are **no longer replayed**. The merge base is
-`tools/RecompOne/UPSTREAM` (currently `0409bc2`); the fork's history is the
+`tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
 gitignored `tools/RecompOne.git/`, reached with
 `git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne <cmd>`.
 

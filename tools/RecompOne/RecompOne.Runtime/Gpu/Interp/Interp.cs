@@ -6,6 +6,8 @@ public static class Interp
 {
     public const string KeyFps = "display.fps";
     
+    public static bool Shown = true;
+    
     public const int Native = 0;
     
     public static readonly int[] Steps =

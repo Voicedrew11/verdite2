@@ -10,6 +10,8 @@ public static class MemoryMap
     public const uint ScratchpadBase = 0x1F800000;
     public const uint ScratchpadSize = 0x00000400;
 
+    public const uint ScratchpadWindow = 0x00001000;
+
     public const uint HwRegsBase = 0x1F801000;
     public const uint HwRegsSize = 0x00002000;
 

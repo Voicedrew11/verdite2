@@ -240,6 +240,11 @@ public sealed class GlCore : IGpuBackend
     const int FbSlackW = 64;
     const int FbSlackH = 32;
 
+    // Upstream caches this on the clip rect and GpuHle.ViewVersion, and
+    // invalidates it from the one eviction site it knows about. The port's
+    // GetOrCreateRt is not that site -- it also destroys a target when the
+    // aspect moves the margin, and PresentDisplay destroys idle ones -- so the
+    // cache would hand back a destroyed target. Left uncached.
     GlDisplayRt? Classify()
     {
         int clipX = _env.ClipX0, clipY = _env.ClipY0;

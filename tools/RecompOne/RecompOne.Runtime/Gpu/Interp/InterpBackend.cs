@@ -14,13 +14,16 @@ public sealed class InterpBackend : IGpuBackend
     private double _renderedMs;
     private int _rendered;
     private int _source;
+    private double _lastBeginMs;
+    private double _sourceMs;
+    private bool _resync;
     private readonly TransformInterp _transforms = new();
     
     private readonly Lock _gate = new();
     private readonly Stack<FrameGraph> _free = new();
     
     private FrameGraph _recording = new();
-    private FrameGraph? _ready;
+    private readonly Queue<FrameGraph> _ready = new();
     private FrameGraph _current = new();
     private FrameGraph _previous = new();
     
@@ -63,9 +66,12 @@ public sealed class InterpBackend : IGpuBackend
         var offsetX = (float)(Runtime.Gpu?.DrawOffsetX ?? 0);
         var offsetY = (float)(Runtime.Gpu?.DrawOffsetY ?? 0);
         
+        var slot = Group(in a, in b, in c);
+        Mix(slot, in f, in a, in b, in c);
+        
         _recording.Tris.Add(new TriRecord
         {
-            Transform = Group(in a, in b, in c),
+            Transform = slot,
             A = Detach(in a, offsetX, offsetY),
             B = Detach(in b, offsetX, offsetY),
             C = Detach(in c, offsetX, offsetY),
@@ -75,6 +81,29 @@ public sealed class InterpBackend : IGpuBackend
         });
         
         _recording.Add(GraphOp.Tri, _recording.Tris.Count - 1);
+    }
+    
+    private void Mix(int slot, in PrimFlags f, in HleVertex a, in HleVertex b, in HleVertex c)
+    {
+        if (slot <= 0) return;
+        
+        var held = _recording.Transforms[slot - 1];
+        var key = held.Key == 0u ? 2166136261u : held.Key;
+        key = (key ^ f.TPage) * 16777619u;
+        key = (key ^ f.Clut) * 16777619u;
+        key = (key ^ (f.Textured ? 1u : 0u)) * 16777619u;
+        held.Key = key;
+        held.Pages |= 1u << (int)(f.TPage & 0x1Fu);
+        
+        if (f.Textured)
+        {
+            held.U0 = MathF.Min(held.U0, MathF.Min(a.U, MathF.Min(b.U, c.U)));
+            held.U1 = MathF.Max(held.U1, MathF.Max(a.U, MathF.Max(b.U, c.U)));
+            held.V0 = MathF.Min(held.V0, MathF.Min(a.V, MathF.Min(b.V, c.V)));
+            held.V1 = MathF.Max(held.V1, MathF.Max(a.V, MathF.Max(b.V, c.V)));
+        }
+        
+        _recording.Transforms[slot - 1] = held;
     }
     
     private int Group(in HleVertex a, in HleVertex b, in HleVertex c)
@@ -105,7 +134,9 @@ public sealed class InterpBackend : IGpuBackend
             TX = translation[0], TY = translation[1], TZ = translation[2],
             H = view[0], OFX = view[1], OFY = view[2],
             Tris = 1,
-            Match = -1
+            Match = -1,
+            U0 = float.MaxValue, U1 = float.MinValue,
+            V0 = float.MaxValue, V1 = float.MinValue
         });
         
         _groups[serial] = index;
@@ -119,7 +150,6 @@ public sealed class InterpBackend : IGpuBackend
             _inner.DrawRect(in r, in f);
             return;
         }
-        
         _recording.Rects.Add(new RectRecord { Rect = r, Flags = f });
         _recording.Add(GraphOp.Rect, _recording.Rects.Count - 1);
     }
@@ -143,7 +173,6 @@ public sealed class InterpBackend : IGpuBackend
             _inner.FillRect(x, y, w, h, color15);
             return;
         }
-        
         _recording.Fills.Add(new FillRecord { X = x, Y = y, W = w, H = h, Color = color15 });
         _recording.Add(GraphOp.Fill, _recording.Fills.Count - 1);
     }
@@ -155,7 +184,6 @@ public sealed class InterpBackend : IGpuBackend
             _inner.CopyVram(sx, sy, dx, dy, w, h);
             return;
         }
-        
         _recording.Copies.Add(new CopyRecord { Sx = sx, Sy = sy, Dx = dx, Dy = dy, W = w, H = h });
         _recording.Add(GraphOp.CopyVram, _recording.Copies.Count - 1);
     }
@@ -167,7 +195,6 @@ public sealed class InterpBackend : IGpuBackend
             _inner.WriteVram(x, y, w, h, px);
             return;
         }
-        
         var offset = _recording.AddPixels(px);
         _recording.Writes.Add(new WriteRecord { X = x, Y = y, W = w, H = h, Offset = offset, Length = px.Length });
         _recording.Add(GraphOp.WriteVram, _recording.Writes.Count - 1);
@@ -196,6 +223,8 @@ public sealed class InterpBackend : IGpuBackend
         _inner.Present(in disp);
     }
     
+    private const double StallMs = 100.0;
+    
     public double PaceMs { get; private set; }
     
     public void Publish()
@@ -204,9 +233,7 @@ public sealed class InterpBackend : IGpuBackend
         
         lock (_gate)
         {
-            if (_ready != null) Recycle(_ready);
-            
-            _ready = _recording;
+            _ready.Enqueue(_recording);
             _recording = _free.Count > 0 ? _free.Pop() : new FrameGraph();
             _recording.Clear();
             _groups.Clear();
@@ -219,12 +246,23 @@ public sealed class InterpBackend : IGpuBackend
         
         lock (_gate)
         {
-            if (_ready == null) return false;
+            if (_ready.Count == 0) return false;
+            
+            while (_ready.Count > 1)
+            {
+                _resync = true;
+                
+                var skipped = _ready.Dequeue();
+                Replay(skipped, null, 1f);
+                
+                Recycle(_previous);
+                _previous = _current;
+                _current = skipped;
+            }
             
             Recycle(_previous);
             _previous = _current;
-            _current = _ready;
-            _ready = null;
+            _current = _ready.Dequeue();
         }
         
         return true;
@@ -242,9 +280,29 @@ public sealed class InterpBackend : IGpuBackend
         
         _source = VideoRate.Rate;
         
+        var now = _watch.Elapsed.TotalMilliseconds;
+        var gap = _lastBeginMs > 0.0 ? now - _lastBeginMs : 0.0;
+        _lastBeginMs = now;
+        
+        if (gap > StallMs) _resync = true;
+        else if (gap > 0.0) _sourceMs = _sourceMs > 0.0 ? _sourceMs * 0.75 + gap * 0.25 : gap;
+        
+        if (_resync)
+        {
+            _resync = false;
+            _clock.Reset();
+            _interpolating = false;
+            _budgetMs = 0.0;
+            PaceMs = 0.0;
+            _frameStartMs = now;
+            _rendered = 0;
+            _renderedMs = 0.0;
+            return 1;
+        }
+        
         var frames = _clock.Advance(_source, Interp.EffectiveTarget);
         
-        _budgetMs = _source > 0 ? 1000.0 / _source : 0.0;
+        _budgetMs = _sourceMs > 0.0 ? _sourceMs : _source > 0 ? 1000.0 / _source : 0.0;
         
         var target = Interp.EffectiveTarget;
         PaceMs = frames > 1 && target > 0 ? 1000.0 / target : 0.0;
@@ -260,7 +318,9 @@ public sealed class InterpBackend : IGpuBackend
             if (!_interpolating) return 1;
             
             _frames = frames;
+            Hle.GpuHle.Hold();
             Prepare();
+            
         }
         
         return frames;
@@ -300,6 +360,7 @@ public sealed class InterpBackend : IGpuBackend
     
     public void EndPresent()
     {
+        Hle.GpuHle.Release();
         Begin();
     }
     
@@ -310,6 +371,7 @@ public sealed class InterpBackend : IGpuBackend
         
         _active = wanted;
         _clock.Reset();
+        while (_ready.Count > 0) Recycle(_ready.Dequeue());
         _recording.Clear();
         _current.Clear();
         _previous.Clear();
@@ -334,6 +396,11 @@ public sealed class InterpBackend : IGpuBackend
         var pixels = CollectionsMarshal.AsSpan(graph.Pixels);
         var ops = CollectionsMarshal.AsSpan(graph.Ops);
         var slots = CollectionsMarshal.AsSpan(graph.Slots);
+        var envs = CollectionsMarshal.AsSpan(graph.Envs);
+        var rects = CollectionsMarshal.AsSpan(graph.Rects);
+        var fills = CollectionsMarshal.AsSpan(graph.Fills);
+        var copies = CollectionsMarshal.AsSpan(graph.Copies);
+        var writes = CollectionsMarshal.AsSpan(graph.Writes);
         
         for (var i = 0; i < ops.Length; i++)
         {
@@ -342,7 +409,7 @@ public sealed class InterpBackend : IGpuBackend
             switch (ops[i])
             {
                 case GraphOp.DrawEnv:
-                    _inner.SetDrawEnv(graph.Envs[slot]);
+                    _inner.SetDrawEnv(envs[slot]);
                     break;
                 
                 case GraphOp.Tri:
@@ -350,7 +417,7 @@ public sealed class InterpBackend : IGpuBackend
                     break;
                 case GraphOp.Rect:
                 {
-                    var rect = graph.Rects[slot];
+                    ref var rect = ref rects[slot];
                     _inner.DrawRect(in rect.Rect, in rect.Flags);
                     break;
                 }
@@ -362,19 +429,19 @@ public sealed class InterpBackend : IGpuBackend
                 }
                 case GraphOp.Fill:
                 {
-                    var fill = graph.Fills[slot];
+                    ref var fill = ref fills[slot];
                     _inner.FillRect(fill.X, fill.Y, fill.W, fill.H, fill.Color);
                     break;
                 }
                 case GraphOp.CopyVram:
                 {
-                    var copy = graph.Copies[slot];
+                    ref var copy = ref copies[slot];
                     _inner.CopyVram(copy.Sx, copy.Sy, copy.Dx, copy.Dy, copy.W, copy.H);
                     break;
                 }
                 case GraphOp.WriteVram:
                 {
-                    var write = graph.Writes[slot];
+                    ref var write = ref writes[slot];
                     _inner.WriteVram(write.X, write.Y, write.W, write.H, pixels.Slice(write.Offset, write.Length));
                     break;
                 }
@@ -392,15 +459,10 @@ public sealed class InterpBackend : IGpuBackend
             return;
         }
         
-        if (tri.Transform > 0)
+        if (tri.Transform > 0 &&  _transforms.Warp(tri.Transform, in tri.A, in tri.B, in tri.C, out var wa, out var wb, out var wc))
         {
-            if (_transforms.Warp(tri.Transform, in tri.A, out var wa) &&
-                _transforms.Warp(tri.Transform, in tri.B, out var wb) &&
-                _transforms.Warp(tri.Transform, in tri.C, out var wc))
-            {
-                Emit(in tri, in wa, in wb, in wc);
-                return;
-            }
+            Emit(in tri, in wa, in wb, in wc);
+            return;
         }
         
         Emit(in tri, in tri.A, in tri.B, in tri.C);

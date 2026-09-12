@@ -352,13 +352,20 @@ public static class HostWindow
         }
     }
     
-    public static void Compose(Gpu? gpu)
+    public static void Compose(Gpu? gpu, bool counts = true)
     {
         _gpu = gpu;
         if (_headless || _window == null) return;
         
-        _window.DoRender();
-        FrameClock.MarkPresent();
+        try
+        {
+            _window.DoRender();
+        }
+        catch (NotImplementedException) //doesnt fucking work
+        {
+        }
+        
+        if (counts) FrameClock.MarkPresent();
     }
     
     internal static void Pump()

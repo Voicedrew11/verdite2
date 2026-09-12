@@ -82,7 +82,7 @@ dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build 
   config/kf2.json
 ```
 
-2099 functions into `generated/` (~163k lines of C#).
+2234 functions into `generated/` (~182k lines of C#).
 
 ## Build and run
 

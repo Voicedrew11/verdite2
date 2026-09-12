@@ -17,6 +17,10 @@ public sealed class Timers
     private readonly double[] _resetT = new double[3];
     private readonly ushort[] _mode = new ushort[3];
     private readonly ushort[] _target = new ushort[3];
+    private readonly long[] _fired = new long[3];
+    private double _nextDue;
+
+    private const double IdleCheck = 0.25;
 
     public static bool InRange(uint phys)
     {
@@ -44,12 +48,22 @@ public sealed class Timers
         var t = (int)((phys - Base) / 0x10u);
         switch ((phys - Base) & 0xFu)
         {
-            case 0x0: _resetT[t] = _clock.Elapsed.TotalSeconds; break;
+            case 0x0:
+                _resetT[t] = _clock.Elapsed.TotalSeconds;
+                _fired[t] = 0;
+                _nextDue = 0.0;
+                break;
             case 0x4:
                 _mode[t] = (ushort)value;
                 _resetT[t] = _clock.Elapsed.TotalSeconds;
+                _fired[t] = 0;
+                _nextDue = 0.0;
                 break;
-            case 0x8: _target[t] = (ushort)value; break;
+            case 0x8:
+                _target[t] = (ushort)value;
+                _fired[t] = 0;
+                _nextDue = 0.0;
+                break;
         }
 
         return true;
@@ -59,7 +73,43 @@ public sealed class Timers
     {
         var elapsed = _clock.Elapsed.TotalSeconds - _resetT[t];
         var ticks = (long)(elapsed * Rate(t));
-        return (ushort)(ticks & 0xFFFF);
+        return (ushort)(ticks % Period(t));
+    }
+
+    private long Period(int t)
+    {
+        var target = _target[t];
+        return (_mode[t] & 0x08u) != 0 && target > 0 ? target + 1L : 0x10000L;
+    }
+
+    public void Poll(Action<int> raise)
+    {
+        var now = _clock.Elapsed.TotalSeconds;
+        if (now < _nextDue) return;
+
+        var due = double.MaxValue;
+
+        for (var t = 0; t < 3; t++)
+        {
+            var mode = _mode[t];
+            if ((mode & 0x30u) == 0) continue;
+
+            var period = Period(t) / Rate(t);
+            if (period <= 0.0) continue;
+
+            var repeat = (mode & 0x40u) != 0;
+            var laps = (long)((now - _resetT[t]) / period);
+
+            if (laps > _fired[t])
+            {
+                if (repeat || _fired[t] == 0) raise(4 + t);
+                _fired[t] = laps;
+            }
+
+            if (repeat) due = Math.Min(due, _resetT[t] + (_fired[t] + 1) * period);
+        }
+
+        _nextDue = due < double.MaxValue ? due : now + IdleCheck;
     }
 
     private double Rate(int t)

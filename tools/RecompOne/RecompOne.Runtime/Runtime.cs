@@ -20,6 +20,8 @@ public static class Runtime
     public static IMemory? Mem { get; private set; }
     public static Gpu? Gpu;
     public static Spu? Spu;
+    public static Mdec? Mdec;
+    public static Hardware.Timers? Timers;
     public static Cdrom.CdController? Cd;
 
     public static RunMode Mode { get; private set; } = RunMode.Retail;
@@ -227,7 +229,7 @@ public static class Runtime
         }
     }
 
-    private static volatile bool _emulationDone;
+    private static volatile bool _gameDone;
     private static readonly System.Diagnostics.Stopwatch _presentWatch = System.Diagnostics.Stopwatch.StartNew();
     private static double _nextPresentMs;
     
@@ -236,19 +238,19 @@ public static class Runtime
         Pgxp.PgxpGpu.Init();
         Host.GpuJobs.Claim();
         
-        var thread = new Thread(() => Emulate(boot))
+        var thread = new Thread(() => RunGame(boot))
         {
             IsBackground = true,
-            Name = "emulation"
+            Name = "game"
         };
         
         thread.Start();
         
-        while (!_emulationDone)
+        while (!_gameDone)
             PresentLoop();
     }
     
-    private static void Emulate(Action boot)
+    private static void RunGame(Action boot)
     {
         while (true)
             try
@@ -263,11 +265,23 @@ public static class Runtime
             }
             catch (Exception e)
             {
-                Console.Error.WriteLine($"[Runtime] emulation stopped: {e}");
+                Console.Error.WriteLine($"[Runtime] runtime has crashed: {e}");
                 break;
             }
         
-        _emulationDone = true;
+        _gameDone = true;
+    }
+    
+    private static double _idleMark;
+    
+    private static void IdleRedraw()
+    {
+        var now = FrameClock.Now;
+        if (now - _idleMark < FrameClock.FrameMs) return;
+        
+        _idleMark = now;
+        HostWindow.Compose(Gpu, false);
+        Host.GpuJobs.Drain();
     }
     
     private static void PresentLoop()
@@ -286,10 +300,12 @@ public static class Runtime
         
         if (interp == null || !interp.Acquire())
         {
+            IdleRedraw();
             Thread.Sleep(1);
             return;
         }
         
+        _idleMark = 0.0;
         HostWindow.AdvanceFrame();
         
         var frames = interp.BeginPresent();
@@ -305,15 +321,19 @@ public static class Runtime
             Host.GpuJobs.Drain();
         }
         
-        if (frames == 0) interp.Compose(0);
+        if (frames == 0)
+        {
+            interp.Compose(0);
+        }
         
         interp.EndPresent();
     }
     
-    //the display frames only read as smooth if they land evenly in time, so the
-    //schedule is held against the clock instead of leaving it to the swap
+    //the display frames only read as smooth if they land evenly in time, so the schedule is held against the clock instead of leaving it to the swap
     private static void Pace(double intervalMs)
     {
+        if (Interrupts.Turbo) return;
+
         var now = _presentWatch.Elapsed.TotalMilliseconds;
         
         if (intervalMs <= 0.0 || _nextPresentMs <= 0.0 || now - _nextPresentMs > 250.0)
@@ -351,6 +371,8 @@ public static class Runtime
         HostWindow.Present(Gpu);
 
         Audio.Attach(Spu);
+        FrameClock.MarkFrame();
+        // Upstream throttles in PresentLoop, which this port never enters.
         FrameClock.Throttle();
         Sdk.LibCd.Tick();
         if (Cpu != null && Mem != null) Sdk.LibMcrd.Tick(Cpu, Mem);

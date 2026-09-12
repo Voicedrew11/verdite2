@@ -8,6 +8,8 @@ namespace RecompOne.Runtime.Sdk;
 
 public static class LibEtc
 {
+    internal static double LastWaitMs = double.NegativeInfinity;
+    
     private static int _vcount;
     private static readonly VSyncEvent _vsyncEvent = new();
 
@@ -54,7 +56,7 @@ public static class LibEtc
     public static void VSync(CpuContext c, IMemory m)
     {
         var mode = (int)c.A0;
-        Log.Sdk($"VSync({mode})");
+        if (Log.VSyncOn) Log.Sdk($"VSync({mode})");
 
         if (mode < 0)
         {
@@ -70,6 +72,7 @@ public static class LibEtc
             return;
         }
 
+        LastWaitMs = Interrupts.ClockMs;
         //Upstream's frame interpolator feeds off this whichever timeline runs; it
         //is inert unless Interp is enabled.
         Interp.VideoRate.Push(mode == 0 ? 1 : mode);
@@ -163,11 +166,15 @@ public static class LibEtc
     private static void WaitVBlanks(CpuContext c, IMemory m, int count)
     {
         var target = _lastVSyncCount + count;
-        var floor = Interrupts.VBlankCount + 1;
-        if (target < floor) target = floor;
 
         while (Interrupts.VBlankCount < target)
         {
+            if (Interrupts.Turbo)
+            {
+                Interrupts.ForceVBlank(c, m);
+                continue;
+            }
+
             var remaining = Interrupts.MsToNextVBlank;
             if (remaining > SleepMarginMs)
             {

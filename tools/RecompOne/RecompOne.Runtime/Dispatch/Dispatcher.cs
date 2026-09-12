@@ -235,6 +235,17 @@ public static class Dispatcher
 
     private static readonly HashSet<uint> _reported = [];
 
+    private static bool IsReturnSite(IMemory m, uint addr)
+    {
+        if (addr < 0x80000008u || (addr & 3u) != 0) return false;
+
+        var w = m.ReadU32(addr - 8);
+        var op = w >> 26;
+        if (op == 3) return true;
+        if (op == 0 && (w & 0x3Fu) == 9) return true;
+        return op == 1 && ((w >> 16) & 0x1Fu) is 0x10 or 0x11;
+    }
+
     public static void Call(CpuContext c, IMemory m, uint addr)
     {
         if (BiosKernel.TryDispatch(c, m, addr)) return;
@@ -252,6 +263,8 @@ public static class Dispatcher
             return;
         }
         
+        if (IsReturnSite(m, addr)) return;
+
         if (!Tolerant) throw new InvalidOperationException($"unmapped call: 0x{addr:X8}");
 
         lock (_reported)

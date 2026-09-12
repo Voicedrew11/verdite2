@@ -4,6 +4,8 @@ namespace RecompOne.Runtime.Pgxp;
 
 public static class Pgxp
 {
+    public static bool Shown = true;
+    
     public const string KeyEnable = "pgxp.enable";
     public const string KeyCulling = "pgxp.culling";
     public const string KeyTextureCorrection = "pgxp.texture_correction";

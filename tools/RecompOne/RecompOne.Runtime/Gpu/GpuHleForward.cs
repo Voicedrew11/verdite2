@@ -105,7 +105,16 @@ public sealed partial class Gpu
     {
         int n = w * h;
         if (_readBuf.Length < n) _readBuf = new ushort[n];
-        GpuHle.Backend!.ReadVram(x, y, w, h, _readBuf);
+        var buf = _readBuf;
+
+        if (Host.GpuJobs.Claimed && !Host.GpuJobs.IsOwner)
+        {
+            Host.GpuJobs.Run(() => GpuHle.Backend!.ReadVram(x, y, w, h, buf));
+        }
+        else
+        {
+            GpuHle.Backend!.ReadVram(x, y, w, h, buf);
+        }
 
         for (int row = 0; row < h; row++)
         {

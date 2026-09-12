@@ -71,9 +71,11 @@ public static class Interrupts
         {
             case 1:
                 cpu.V0 = _irqEnabled ? 1u : 0u;
+                if (_irqEnabled) Log.Irq("EnterCriticalSection: irq turned off");
                 _irqEnabled = false;
                 break;
             case 2:
+                if (!_irqEnabled) Log.Irq("ExitCriticalSection: irq turned on");
                 _irqEnabled = true;
                 cpu.V0 = 0u;
                 DrainPending(cpu, mem);
@@ -115,24 +117,21 @@ public static class Interrupts
     {
         get
         {
-            var since = ClockMs - _vblankEpoch;
-            return VBlankMs - (since - Math.Floor(since / VBlankMs) * VBlankMs);
+            var left = Host.FrameClock.Due - Host.FrameClock.Now;
+            return left > 0.0 ? left : 0.0;
         }
     }
 
-    [MethodImpl(MethodImplOptions
-        .NoInlining)] //just making sure the stupid jit doenst fuck it up :D, it SHOULD be big enough now to not cause issues, but the previous one did
+    [MethodImpl(MethodImplOptions.NoInlining)] //just making sure the stupid jit doenst fuck it up :D, it SHOULD be big enough now to not cause issues, but the previous one did
     private static void PollSlow(CpuContext cpu, IMemory mem)
     {
         _countdown = PollInterval;
-        // Only upstream's blocking VSync timeline wants an autonomous vblank
-        // here. On the pin's timeline LibEtc.AdvanceVBlanks delivers IRQ 0 on
-        // its own wall-clock grid, and raising it here as well would deliver
-        // every vblank twice.
-        if (Sdk.LibEtc.BlockingVSync) TickVBlank();
+        TickVBlank();
+        Runtime.Timers?.Poll(RaiseTimer);
         if (_inHandler || _servicing || !_irqEnabled) return;
 
         var snap = cpu.Snapshot();
+        TakeExceptionStack(cpu);
         try
         {
             DrainPending(cpu, mem);
@@ -146,29 +145,48 @@ public static class Interrupts
         }
     }
 
-    private static double VBlankMs => Sdk.LibGpu.Pal ? 1000.0 / 50.0 : 1000.0 / 60.0;
-    private static readonly System.Diagnostics.Stopwatch _vblankClock = System.Diagnostics.Stopwatch.StartNew();
-    private static double _vblankEpoch;
-    private static int _delivered;
+    private const uint ExceptionStackTop = 0x0000E000u;
 
-    public static int VBlankCount => (int)((ClockMs - _vblankEpoch) / VBlankMs);
+    private static void TakeExceptionStack(CpuContext cpu)
+    {
+        cpu.SP = ExceptionStackTop;
+        cpu.FP = ExceptionStackTop;
+    }
 
-    public static double ClockMs => _vblankClock.Elapsed.TotalMilliseconds;
+    public static bool Turbo;
+
+    public static int VBlankCount => (int)Host.FrameClock.Count;
+
+    public static double ClockMs => Host.FrameClock.Now;
+
+    public static void ForceVBlank(CpuContext cpu, IMemory mem) //not ideal i believe
+    {
+        Host.FrameClock.Force();
+        Raise(0);
+        PollNow(cpu, mem);
+    }
 
     private static void TickVBlank()
     {
-        var now = VBlankCount;
-        var missed = now - _delivered;
-        if (missed <= 0) return;
-
-        _delivered = now;
-        Raise(0);
+        // The count must advance on both timelines -- VBlankCount is now this
+        // clock, and BiosB's card-event pump and LibGpu's flip grace both read
+        // it; freezing it stalls the memory card and so the save load. Only the
+        // IRQ is gated: on the port's timeline LibEtc.AdvanceVBlanks delivers
+        // IRQ 0 on its own wall-clock grid, and raising it here as well would
+        // deliver every vblank twice.
+        if (Host.FrameClock.Catch() > 0 && Sdk.LibEtc.BlockingVSync) Raise(0);
     }
 
     public static void ResyncVBlank()
     {
-        _vblankEpoch = ClockMs;
-        _delivered = 0;
+        Host.FrameClock.Resync();
+    }
+
+    private static void RaiseTimer(int irq)
+    {
+        if ((uint)irq >= _pending.Length) return;
+        _istat |= 1u << irq;
+        _pending[irq] = true;
     }
 
     public static void Raise(int irq)
@@ -305,9 +323,8 @@ public static class Interrupts
             Ack(irq);
             return;
         }
-
-        //takes a snap, apparently interrupt callbacks dont operate at the same context? could be wrong in mips3000, need to check furter TODO, seens to be accurate
         var snap = cpu.Snapshot();
+        TakeExceptionStack(cpu);
         // The in-interrupt flag lives at the base of the same derived structure,
         // so it is only known to be that when the structure is what located the
         // handler. Setting it from a table address would write 1 into an address
@@ -334,6 +351,7 @@ public static class Interrupts
     {
         var handled = false;
         var snap = cpu.Snapshot();
+        TakeExceptionStack(cpu);
         var prev = _servicing;
         _servicing = true;
         try

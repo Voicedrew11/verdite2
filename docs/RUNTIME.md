@@ -248,8 +248,13 @@ Worth keeping straight, because moving the wrong one speeds the music up:
 | constant | domain | moved by |
 |---|---|---|
 | `LibEtc.VBlankMs` | **guest.** The emulated vblank grid: the counter, the RCNT3 event, `VSyncEvent`, IRQ 0 — and through IRQ 0 the game's own `0x801B6CA8`, the sound sequencer and every clock the game keeps in frames. | nothing. Deliberately left at 60. |
-| `FrameClock.FrameMs` | **host.** How long `Runtime.PresentFrame` waits, applied per `VSync` *call*. | `patches/recompone/0025`, which turns it into a settable `FrameClock.TargetFps` (0 = off) exposed as `Runtime.TargetFps`, since `FrameClock` is `internal`. |
+| `FrameClock.FrameMs` | **guest since `d81dec8`.** Upstream made this the emulated vblank rate: `Interrupts.VBlankCount` is `FrameClock.Count`. Moving it now moves the grid. | nothing. |
+| `FrameClock.TargetFps` | **host.** How long `Runtime.PresentFrame` waits, applied per `VSync` *call*. All that is left of `patches/recompone/0025`, and a separate block at the foot of `FrameClock` with its own grid, since `FrameMs` above is no longer free to move. Exposed as `Runtime.TargetFps`, because `FrameClock` is `internal`. |
 | `FramePacing.VBlankMs` | **port.** The floor's own arithmetic. | gone — the floor is expressed in frames a second now. |
+
+Upstream throttles in `PresentLoop`, which this port never enters, so
+`Runtime.PresentFrame` calls `FrameClock.Throttle()` beside upstream's
+`MarkFrame()`.
 
 `FrameClock` cannot be a frame pacer whatever its target, because it throttles per
 `VSync` call and a rendered frame can carry more than one — in an area it carries
@@ -280,7 +285,13 @@ the panel's is capped by it, silently.
 Upstream grew its own wall-clock vblank grid after the pin this port was vendored
 from (`0409bc2`). `Interrupts` owns the grid — `VBlankCount`, `TickVBlank`,
 `MsToNextVBlank` — and `LibEtc.VSync` *blocks* in `WaitVBlanks` until the count
-reaches its target. That is what the hardware does, and it is also **a hard 60 Hz
+reaches its target. Since `d81dec8` the grid's counter and clock are
+`Host.FrameClock.Count` and `.Now`, advanced by `FrameClock.Catch()` — so
+`TickVBlank` must run on **both** timelines and only the `Raise(0)` inside it is
+gated. Gating the call instead froze `VBlankCount` at 0, and `BiosB`'s
+memory-card pump is keyed on that count: the card never pumped, the save never
+loaded, and the run sat in `GAME.EXE` at `hp 0` with no error and no CD read. See
+"The merge to `d81dec8`" in `docs/RECOMPONE_FORK.md`. That is what the hardware does, and it is also **a hard 60 Hz
 ceiling on every VSync call**, which is the one thing this port cannot have:
 `FramePacing` hands `FrameClock` a deliberately permissive rate and keeps its own
 deadline at `DrawOTag`, and `MenuPacing`, `LoadPacing` and `SpriteAnim` are each

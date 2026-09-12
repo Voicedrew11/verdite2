@@ -150,7 +150,7 @@ public static class PgxpCpu
         
         ret.X = (float)x;
         ret.Y = (float)y;
-        ret.Transform = 0;
+        ret.Transform = src.Transform;
         ret.Value = rtVal;
         
         _gpr[rt] = ret;
@@ -177,7 +177,7 @@ public static class PgxpCpu
         
         ret.X = (float)x;
         ret.Y = (float)y;
-        ret.Transform = 0;
+        ret.Transform = a.Transform != 0 ? a.Transform : b.Transform;
         ret.Value = rdVal;
         
         _gpr[rd] = ret;
@@ -204,7 +204,7 @@ public static class PgxpCpu
         
         ret.X = (float)x;
         ret.Y = (float)y;
-        ret.Transform = 0;
+        ret.Transform = a.Transform != 0 ? a.Transform : b.Transform;
         ret.Value = rdVal;
         
         _gpr[rd] = ret;
