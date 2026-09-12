@@ -338,6 +338,7 @@ internal static class GlShaders
         uniform vec4  uBlendOpaque = vec4(1.0, 1.0, 1.0, 0.0);
         uniform float uSetMask;
         uniform int   uCheckMask;
+        uniform int   uOpaqueDepth;
         uniform int   uScale;
         uniform vec2  uPosBias;
         uniform float uAniso;
@@ -406,6 +407,7 @@ internal static class GlShaders
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 
             if (texMode == 4) {
+                if (uOpaqueDepth != 0) discard;
                 FragColor = vec4(quant5(ivec3(vColor.rgb * 255.0 + 0.5)), uSetMask);
                 BlendColor = uBlend;
                 return;
@@ -413,7 +415,7 @@ internal static class GlShaders
 
             if (texMode == 5) {
                 vec4 img = texture(uExtTex, vUV);
-                if (img.a < 0.5) discard;
+                if (img.a < 0.5 || uOpaqueDepth != 0) discard;
                 ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * ivec3(vColor.rgb * 255.0 + 0.5)) >> 7;
                 FragColor = vec4(quant5(e8), uSetMask);
                 BlendColor = uBlend;
@@ -437,6 +439,7 @@ internal static class GlShaders
                 if (img.a < 0.5) discard;
                 ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * ivec3(vColor.rgb * 255.0 + 0.5)) >> 7;
                 float stp = img.a < 0.95 ? 1.0 : 0.0;
+                if (uOpaqueDepth != 0 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
                 BlendColor = stp > 0.5 ? uBlend : uBlendOpaque;
                 return;
@@ -521,12 +524,14 @@ internal static class GlShaders
                 if (texel.a < 0.5) discard;
                 ivec3 e8 = (ivec3(texel.rgb * 255.0 + 0.5) * ivec3(vColor.rgb * 255.0 + 0.5)) >> 7;
                 float stp = texel.a < 0.95 ? 1.0 : 0.0;
+                if (uOpaqueDepth != 0 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
                 BlendColor = stp > 0.5 ? uBlend : uBlendOpaque;
                 return;
             }
 
             if (texel.rgb == vec3(0.0) && texel.a < 0.5) discard;
+            if (uOpaqueDepth != 0 && texel.a >= 0.5) discard;
             ivec3 t8 = ivec3(texel.rgb * 31.0 + 0.5) << 3;
             ivec3 c8 = (t8 * ivec3(vColor.rgb * 255.0 + 0.5)) >> 7;
             FragColor = vec4(quant5(c8), max(texel.a, uSetMask));

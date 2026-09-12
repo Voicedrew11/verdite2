@@ -81,6 +81,7 @@ public sealed class GlCore : IGpuBackend
     int _uTexWindow, _uBlend, _uBlendOpaque, _uSetMask, _uCheckMask, _uPosBias, _uFbInv;
     int _uTrueColor;
     int _uAniso;
+    int _uOpaqueDepth;
     // The true-color flag the live display targets were built with. When it drifts
     // from GteDepth.TrueColor the targets carry the wrong pixel format, so they are
     // torn down at the next present and rebuilt (their content survives in VRAM).
@@ -129,6 +130,7 @@ public sealed class GlCore : IGpuBackend
         _uFbInv = _gl.GetUniformLocation(_progPrim, "uFbInv");
         _uTrueColor = _gl.GetUniformLocation(_progPrim, "uTrueColor");
         _uAniso = _gl.GetUniformLocation(_progPrim, "uAniso");
+        _uOpaqueDepth = _gl.GetUniformLocation(_progPrim, "uOpaqueDepth");
         _rtsTrueColor = GteDepth.TrueColor;
         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
@@ -1045,6 +1047,20 @@ public sealed class GlCore : IGpuBackend
                 _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
                 SetBlend(_kBlend switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, _kBlend == 0 ? 0.5f : 1f);
                 _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+            }
+
+            // Texels without the semi-transparency bit draw opaque, so they must hide what is behind them from the occlusion pass.
+            if (GteDepth.AmbientOcclusion && _uOpaqueDepth >= 0)
+            {
+                _gl.Disable(EnableCap.Blend);
+                _gl.ColorMask(false, false, false, false);
+                _gl.Enable(EnableCap.DepthTest);
+                _gl.DepthFunc(GteDepth.ZBuffer && _kZMode == 2 ? DepthFunction.Lequal : DepthFunction.Always);
+                _gl.DepthMask(true);
+                _gl.Uniform1(_uOpaqueDepth, 1);
+                _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+                _gl.Uniform1(_uOpaqueDepth, 0);
+                _gl.ColorMask(true, true, true, true);
             }
         }
 
