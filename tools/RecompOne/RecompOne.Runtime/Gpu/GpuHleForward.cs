@@ -51,7 +51,7 @@ public sealed partial class Gpu
         // attachment and so needs the same writes, and differs only in that
         // nothing is ever rejected by them (GlCore.Flush leaves the func at
         // GL_ALWAYS unless the Z-buffer is on as well).
-        bool z = GteDepth.DepthWanted && a.HasZ && b.HasZ && c.HasZ;
+        bool z = GteDepth.DepthWanted && GteDepth.OtSlot != 0 && a.HasZ && b.HasZ && c.HasZ;
 
         // **A depth-tested triangle gets a real clip W whether or not its texture
         // is being corrected**, and that is a fix rather than tidiness. `vDepth` is

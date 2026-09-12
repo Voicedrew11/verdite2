@@ -934,6 +934,18 @@ silhouette against the HUD draws no dark halo. Three things fall out of it at on
   stamping the far plane under them would switch the shading off for exactly the
   frames they cover.
 
+**Two surfaces broke the mask, both fixed by measurement.** The skybox is linked
+in ordering-table slot 0 and projects near, so it carried a depth and was shaded
+like a wall: `GteDepth.OtSlot` counts the empty tags a walk has passed, and a
+triangle in slot 0 recovers no depth. Measured, slot 0 holds the sky and nothing
+else (areas 0 and 2), and no world geometry sits below slot 1840 in any area; at
+one spot in area 0 the shaded share went 17.1% to 2.1% with area 1 unchanged.
+And a semi-transparent textured primitive only blends the texels with the STP bit
+set, so a surface drawn semi-transparent can be wholly opaque and still wrote no
+depth, leaving the room behind it for the pass to shade (a secret door showed
+through). Such batches now take a second, colour-masked draw that discards the
+blended texels and writes the rest. Neither picture has been looked at.
+
 ### Undoing the game's own projection, and the number that caught the error
 
 A depth texel is a view depth and nothing else; the pass needs a view *position*.

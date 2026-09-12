@@ -22,6 +22,7 @@ public static class LibGpu
         var otBase = GpuPrims.OtBase & Runtime.RamWordMask;
         var otEnd = otBase + (uint)GpuPrims.OtLength * 4u;
 
+        var slot = -1;
         for (var guard = 0; guard < 0x100000; guard++)
         {
             // Where in the table this primitive was linked, counted from the head —
@@ -35,6 +36,8 @@ public static class LibGpu
 
             var header = m.ReadU32(addr);
             var count = (int)(header >> 24);
+            if (count == 0) slot++;
+            GteDepth.OtSlot = slot;
 
             if (count > 0)
             {
@@ -64,6 +67,7 @@ public static class LibGpu
         // the far end, so otz = length - 1 - entry.
         if (GteDepth.OtEntry >= 0) GteDepth.OtLength = GteDepth.OtEntry + 1;
         GteDepth.OtEntry = -1;
+        GteDepth.OtSlot = -1;
         if (custom) GpuPrims.Clear();
     }
 
