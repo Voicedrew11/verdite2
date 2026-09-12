@@ -5,6 +5,7 @@ using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Memory;
 using RecompOne.Runtime.Modding;
+using RecompOne.Runtime.Sdk;
 
 namespace Kf2;
 
@@ -399,6 +400,31 @@ public static class FramePacing
     /// </summary>
     static bool _probe;
     static long _windowTicks;
+    static long _probeVsyncMark;
+
+    // ---- the sentinel ---------------------------------------------------------
+
+    /// <summary>
+    /// Presents a second, counted inside <c>LibEtc.VSync</c> rather than by any hook
+    /// here, against what this class's own hooks say happened -- because some boots
+    /// run the whole session at exactly twice the asked-for rate (240 asked, 480 on
+    /// the menu bar, title and areas alike, world speed normal), and 2T is precisely
+    /// <see cref="ApplyHostCeiling"/>'s ceiling: nothing of this class is holding the
+    /// picture. The title-menu loop has no wait of its own, one VSync a picture, so
+    /// it can only read 2T if <see cref="Floor"/> is not running there. Which of the
+    /// ways that can be true is not decidable from the source, and the boot is
+    /// intermittent, so this watches every session and speaks once when it happens.
+    /// Driven from <c>VSyncEvent</c>, which fires from inside <c>LibEtc.VSync</c>
+    /// whether or not a detour does. See "The smoothing is sometimes dead for a whole
+    /// session" in docs/TODO.md.
+    /// </summary>
+    static double _sentinelStartMs = -1.0;
+    static long _sVsyncMark, _sAutoMark;
+    static long _winVsyncPre, _winOtPost, _winBoundaries;
+    static long _winFloorCalls, _winFloorWaits, _winFallbackFresh, _winFallbackHeld, _winFallbackTicks;
+    static double _winFloorSleptMs;
+    static int _sentinelHigh;
+    static bool _sentinelSaid;
 
     // ---- the logic clock ------------------------------------------------------
 
@@ -505,6 +531,7 @@ public static class FramePacing
 
     static double _fallbackNextMs = -1.0, _fallbackHoldUntilMs = -1.0;
     static bool _fallbackTick, _fallbackSaid;
+    static long _fallbackVsyncMark = -1;
 
     /// <summary>
     /// How far the frame being drawn is past the last logic tick, in ticks, in
@@ -680,6 +707,9 @@ public static class FramePacing
         // session unpaced with the latch already set, so it was never tried again.
         // Attach only claims what it actually hooked, so a retry adds the rest
         // rather than a second copy of the lot.
+        // The sentinel listens on the vblank, not on any hook of its own; see _sentinelStartMs.
+        Event.AddListener<VSyncEvent>(_ => Sentinel());
+
         HookAttach.OnOverlayLoad("pacing", Attach,
                                  "See \"Any frame rate\" in docs/PATCHES_AND_MODS.md.");
     }
@@ -970,7 +1000,11 @@ public static class FramePacing
     /// Counts the game asking to present. The frame boundary is defined off this
     /// rather than off the vblank; see <see cref="AfterDrawOTag"/>.
     /// </summary>
-    public static void BeforeVSync(CpuContext c, IMemory m) => _vsyncCalls++;
+    public static void BeforeVSync(CpuContext c, IMemory m)
+    {
+        _vsyncCalls++;
+        _winVsyncPre++;
+    }
 
     /// <summary>
     /// The frame boundary: **the ordering table drawn after the game asked to
@@ -994,9 +1028,11 @@ public static class FramePacing
     /// </summary>
     public static void AfterDrawOTag(CpuContext c, IMemory m)
     {
+        _winOtPost++;
         if (_boundaryNeedsVSync && _vsyncCalls == 0) return;
         _vsyncCalls = 0;
         _frames++;
+        _winBoundaries++;
 
         double now = _clock.Elapsed.TotalMilliseconds;
         _lastBoundaryMs = now;
@@ -1006,6 +1042,9 @@ public static class FramePacing
         if (elapsed >= 1000.0)
         {
             Measured = _windowFrames * 1000.0 / elapsed;
+
+            long presents = LibEtc.VSyncCalls - _probeVsyncMark;
+            _probeVsyncMark = LibEtc.VSyncCalls;
 
             if (_probe)
                 // The three health words are the half of this line that reports a
@@ -1019,6 +1058,7 @@ public static class FramePacing
                 // the layer and the two patches to look at, in one string, without
                 // KF2_SMOOTH_PROBE having been switched on beforehand.
                 Console.WriteLine($"[KF2] pacing: {Measured:0.0} fps drawn of {Describe()}, " +
+                                  $"{presents * 1000.0 / elapsed:0.0} present(s)/s, " +
                                   $"{_windowTicks * 1000.0 / elapsed:0.0} tick(s)/s of {LogicHz:0.#} Hz, " +
                                   $"{(Extrapolating ? "smoothing can carry" : "nothing to carry at this rate")}; " +
                                   $"view {FrameSmoothing.TakeHealth()}, " +
@@ -1175,8 +1215,23 @@ public static class FramePacing
                 "see \"Any frame rate\" in docs/PATCHES_AND_MODS.md.");
         }
 
-        if (now < _fallbackHoldUntilMs) return _fallbackTick;
+        // Held only inside one main-loop iteration. The hold used to be the whole
+        // test, and an iteration shorter than it -- every one, once the port draws
+        // faster than 1000/3 -- reused the previous iteration's decision: no Floor,
+        // so two frames to one wait and the picture at the host ceiling (measured
+        // 483 presents a second at 240, 235 fresh decisions against 3144 held), and
+        // a tick decision run twice. A present in between is a new iteration; the
+        // counter is LibEtc's own (0042), so it does not depend on the hook whose
+        // loss put this class here.
+        if (now < _fallbackHoldUntilMs && LibEtc.VSyncCalls == _fallbackVsyncMark)
+        {
+            _winFallbackHeld++;
+            return _fallbackTick;
+        }
 
+        _fallbackVsyncMark = LibEtc.VSyncCalls;
+
+        _winFallbackFresh++;
         LatchPause();
 
         // Paused, with no boundary: hold the grid rather than let it run on, so
@@ -1199,6 +1254,7 @@ public static class FramePacing
         _fallbackTick = now >= _fallbackNextMs;
         if (_fallbackTick)
         {
+            _winFallbackTicks++;
             _fallbackNextMs += period;
             _logicCredit = 0.0;
         }
@@ -1225,6 +1281,107 @@ public static class FramePacing
     }
 
     /// <summary>
+    /// Once a second, from the vblank: are presents running well past the asked-for
+    /// rate? Two such seconds in a row print one report and the sentinel goes quiet
+    /// for the session. The first high second asks <c>LibEtc.VSync</c> for the stack
+    /// of its next call, so the report can show whether that call still came through
+    /// <c>HookManager.Invoke</c>. The floor of 90 keeps a disc wait's 60 Hz VSyncs
+    /// from reading as a fault at the low rates; the defect this is for sits at 2T.
+    /// </summary>
+    static void Sentinel()
+    {
+        double now = _clock.Elapsed.TotalMilliseconds;
+        if (_sentinelStartMs < 0.0) { ResetSentinel(now); return; }
+
+        double elapsed = now - _sentinelStartMs;
+        if (elapsed < 1000.0) return;
+
+        double k = 1000.0 / elapsed;
+        long vs = LibEtc.VSyncCalls - _sVsyncMark, auto = LibGpu.AutoPresents - _sAutoMark;
+        double presents = (vs + auto) * k;
+
+        if (!_sentinelSaid && Enabled && presents > Math.Max(1.5 * TargetFps, 90.0))
+        {
+            if (++_sentinelHigh == 1) LibEtc.CaptureNextStack = true;
+            else Report(now, k, vs, auto, presents);
+        }
+        else _sentinelHigh = 0;
+
+        // The probe line is printed from the boundary, so a session that has lost
+        // it says nothing at all through KF2_FPS_PROBE. This is the same line's
+        // other half, from the vblank: what the watchdog is doing in its place.
+        bool watchdog = _lastBoundaryMs >= 0.0 && now - _lastBoundaryMs > BoundaryDeadMs;
+        if (_probe && watchdog && _winFallbackFresh > 0)
+            Console.WriteLine($"[KF2] pacing: no boundary, {presents:0.0} present(s)/s of {Describe()}, " +
+                              $"{_winFallbackTicks * k:0.0} tick(s)/s of {LogicHz:0.#} Hz from the watchdog " +
+                              $"({_winFallbackFresh * k:0} fresh, {_winFallbackHeld * k:0} held decisions/s)");
+
+        ResetSentinel(now);
+    }
+
+    static void ResetSentinel(double now)
+    {
+        _sentinelStartMs = now;
+        _sVsyncMark = LibEtc.VSyncCalls;
+        _sAutoMark = LibGpu.AutoPresents;
+        _winVsyncPre = _winOtPost = _winBoundaries = 0;
+        _winFloorCalls = _winFloorWaits = _winFallbackFresh = _winFallbackHeld = _winFallbackTicks = 0;
+        _winFloorSleptMs = 0.0;
+    }
+
+    static void Report(double now, double k, long vs, long auto, double presents)
+    {
+        _sentinelSaid = true;
+
+        bool watchdog = _lastBoundaryMs < 0.0 || now - _lastBoundaryMs > BoundaryDeadMs;
+        double pre = _winVsyncPre * k, post = _winOtPost * k, bounds = _winBoundaries * k;
+        double calls = vs * k;
+
+        string verdict =
+            pre < 0.25 * calls
+                ? "VSync is being called but this class's VSync pre-hook is not running -- the detour is being bypassed"
+            : post < 0.25 * calls
+                ? "the VSync pre-hook runs but no DrawOTag post does -- that detour is being bypassed"
+            : watchdog && _winFallbackHeld > 0
+                ? "no boundary, and FallbackTick's hold is sharing one Floor between iterations"
+            : _winFloorCalls > 0 && _winFloorWaits == 0
+                ? "boundaries arrive and Floor is called, but never has to wait"
+                : "none of the known shapes -- read the counts";
+
+        var committed = string.Join(", ",
+            DrawOTag.Select(t => $"{t.Overlay} DrawOTag {Committed(t.Overlay, t.Addr)}")
+                    .Concat(VSyncThunk.Select(t => $"{t.Overlay} VSync {Committed(t.Overlay, t.Addr)}")));
+
+        Console.Error.WriteLine(
+            $"[KF2] pacing sentinel: {presents:0} present(s)/s against {Describe()} asked " +
+            $"({calls:0} VSync, {auto * k:0} auto)\n" +
+            $"    hooks fired: VSync pre {pre:0}/s, DrawOTag post {post:0}/s; boundaries {bounds:0}/s\n" +
+            $"    Floor: {_winFloorCalls * k:0}/s called, {_winFloorWaits * k:0}/s waited, " +
+            $"{_winFloorSleptMs * k:0.0} ms/s slept\n" +
+            $"    fallback: {_winFallbackFresh * k:0}/s fresh, {_winFallbackHeld * k:0}/s held, " +
+            $"watchdog {(watchdog ? "ACTIVE" : "idle")}\n" +
+            $"    TargetFps {TargetFps:0.#}, host ceiling {RecompOne.Runtime.Runtime.TargetFps:0.#}, " +
+            $"due-now {_due - now:0.00} ms, boundary needs VSync {_boundaryNeedsVSync}\n" +
+            $"    committed: {committed}\n" +
+            $"    reading: {verdict}\n" +
+            $"    one VSync call's stack:\n{LibEtc.CapturedStack ?? "    (not captured)"}\n" +
+            "    See \"The smoothing is sometimes dead for a whole session\" in docs/TODO.md.");
+    }
+
+    static string Committed(string overlay, uint addr)
+    {
+        try
+        {
+            var target = SymbolRegistry.Resolve(overlay, null, addr);
+            return target == null ? "unresolved" : HookAttach.Installed(target) ? "yes" : "NO";
+        }
+        catch (Exception e)
+        {
+            return $"? ({e.GetType().Name})";
+        }
+    }
+
+    /// <summary>
     /// Hold the frame boundary until <paramref name="min"/> ms have passed since
     /// the last one. The minimum is passed in rather than derived from
     /// <see cref="TargetFps"/> because a modal frame's is longer -- see
@@ -1239,8 +1396,11 @@ public static class FramePacing
         // cadence instead of running flat out to pay it off.
         if (_due < now - min) _due = now;
 
+        _winFloorCalls++;
         if (now < _due)
         {
+            _winFloorWaits++;
+            _winFloorSleptMs += _due - now;
             double sleepUntil = _due - SpinMs;
             if (now < sleepUntil)
             {

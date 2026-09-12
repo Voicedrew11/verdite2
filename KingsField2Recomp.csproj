@@ -8,6 +8,18 @@
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <AssemblyName>KingsField2</AssemblyName>
         <RootNamespace>KingsField2</RootNamespace>
+        <!--
+          QuickJit off: every method with no precompiled code is JIT-compiled once,
+          fully optimised, and never tiered up. Tier-up recompiles a method, and
+          MonoMod's detour does not reliably follow it to the new code, so a hook
+          that committed stops firing for the rest of the session, measured 1 boot
+          in 10 losing FramePacing's VSync or DrawOTag detour (6 in 10 with tier-up
+          forced early), and 0 in 10 with this off. Costs about 2 s to the first
+          area and a few seconds of first-run dips. Verdite2.Launcher.csproj runs the
+          game in its own process and must carry the same property. See "The
+          smoothing is sometimes dead for a whole session" in docs/TODO.md.
+        -->
+        <TieredCompilationQuickJit>false</TieredCompilationQuickJit>
     </PropertyGroup>
 
     <ItemGroup>

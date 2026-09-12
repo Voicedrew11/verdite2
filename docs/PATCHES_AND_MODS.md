@@ -803,6 +803,21 @@ deliberately removed**.
   quarter of a tick because the seven gated stages of one iteration have to agree
   with each other — half an iteration ticked is a state machine stepped against an
   entity table that was not.
+
+  **That hold doubled the frame rate, and it was the watchdog's one active defect.**
+  The hold was the whole test, so once an iteration took less than 3 ms — every one
+  above ~330 fps — the next iteration reused the previous decision: no `Floor`, two
+  frames to one wait, the picture at the host ceiling (measured 483 presents a second
+  at 240, 235 fresh decisions against 3144 held), and a tick decision run twice. A
+  decision is now held only until the next present, read off `LibEtc.VSyncCalls`
+  (`patches/recompone/0042`) so it does not depend on the hook whose loss put pacing
+  here. Measured with GAME.EXE's `VSync` hook removed: 240.0 presents and 19.7-20.7
+  ticks a second, 240 fresh against 1440 held. `KF2_FPS_PROBE=1` now prints a
+  `no boundary` line from the vblank while this runs, since its usual line comes
+  from the boundary that is missing. How the boundary was actually being lost —
+  the tiered JIT recompiling a hooked thunk under MonoMod's detour, fixed by
+  `TieredCompilationQuickJit=false` — is in docs/TODO.md; `FramePacing`'s sentinel
+  prints `[KF2] pacing sentinel:` with a `VSync` stack if a pacing hook is lost again.
 * **No `VSync` thunk is a coarser boundary, not the absence of one.**
   `_boundaryNeedsVSync` clears when none could be hooked, so every `DrawOTag` is
   charged as a frame. This game draws one ordering table per frame, so that is
@@ -901,19 +916,16 @@ the keyboard; and `view carrying` from the first window in which `KF2_SHELL`'s
 
 | where | fps drawn | ticks/s | why |
 |---|---|---|---|
-| logos and title (OPEN.EXE) | **15.0** | 15.0 | OPEN.EXE's own four-vblank wait, and `FramePacing` deliberately hooks only GAME.EXE's frame gate — so the title is **not** paced by `KF2_FPS` and reads 15.0 at 20, 60, 165 and 300 alike |
+| logos (OPEN.EXE) | **15.0** | 15.0 | disc-paced STR stream, so not moved by `KF2_FPS` |
+| title menu (OPEN.EXE) | **the asked rate** | same | no wait of its own; `Floor` alone paces it — 240.0 drawn, 240.0 presents a second at 240 |
 | the intro movie | **10.0** | 10.0 | disc-paced, `patches/recompone/0026` |
 | an area, attract demo or play | **165.0** | 20.0 | the render rate asked for, against `LogicHz` |
 
-The first row is the one worth knowing, because it is fixed by the emulated vblank
-grid — a wall clock — rather than by anything the port chooses: at the title,
-`KF2_FPS` changes nothing at all. So **a title screen running visibly faster or
-slower than the rest of the boot is a symptom with a short list of causes**, and
-this probe names which: a low `fps drawn of` says the saved rate did not load, a
-`nothing to carry` says the rate itself leaves nothing to interpolate, a
-`tick(s)/s` far above `LogicHz` in an area is the lost-boundary failure the section
-above describes, and any health word other than `carrying` or `idle` in an area
-says which patch is inert whatever its checkbox reads.
+**The title row was wrong for a long time, and it is the one worth knowing.** It used to read 15.0, "OPEN.EXE's own four-vblank wait" — but that is the logos' stream. The title menu's loop (`func_80011AE0`) has no wait of its own, one `VSync(0)` and one `DrawOTag` a picture, so it reads whatever `KF2_FPS` asks. A title menu at **twice** the asked rate is therefore not the game: it is `FramePacing.ApplyHostCeiling`'s `2×` ceiling with nothing of the port holding the picture, which is the boot the sentinel is for (see "The smoothing is sometimes dead for a whole session" in [TODO.md](TODO.md)).
+
+`present(s)/s` on the line is counted inside `LibEtc.VSync` (`patches/recompone/0042`), not by a hook, so it can disagree with `fps drawn`: legitimately in a fade, which `VSync`s without drawing (62-131 a second measured), and illegitimately when a pacing hook has stopped running. **The sentinel** reads the same counter from `VSyncEvent`, which fires whether or not a detour does; two seconds above `max(1.5×T, 90)` print one `[KF2] pacing sentinel:` block — hook fires, `Floor` calls and waits, `FallbackTick` fresh and held decisions, what is committed, a one-line reading, and the stack of one `VSync` call — once a session.
+
+Otherwise the probe names the cause: a low `fps drawn of` says the saved rate did not load, a `nothing to carry` says the rate itself leaves nothing to interpolate, a `tick(s)/s` far above `LogicHz` in an area is the lost-boundary failure the section above describes, and any health word other than `carrying` or `idle` in an area says which patch is inert whatever its checkbox reads.
 
 ### A registration is not a hook, and seven patches latched before doing the work
 
