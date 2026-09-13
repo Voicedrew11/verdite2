@@ -4,7 +4,7 @@ namespace RecompOne.Runtime;
 
 public sealed partial class Gpu
 {
-    static bool HleOn => GpuHle.Active && GpuHle.Backend is { Ready: true };
+    bool HleOn => !Detached && GpuHle.Active && GpuHle.Backend is { Ready: true };
 
     int CurTPage() => ((_texPageX / 64) & 0xf) | (((_texPageY / 256) & 1) << 4)
                     | ((_blendMode & 3) << 5) | ((_texDepth & 3) << 7);

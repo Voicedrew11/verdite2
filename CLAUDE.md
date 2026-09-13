@@ -160,6 +160,8 @@ what it is) live there, not here.
 | `LoadPacing` | loading screen's walking figure held to the vblank grid | on | PATCHES_AND_MODS, "The loading screen's walking figure" |
 | `SpriteAnim` | billboard cel animation held to the tick | on | PATCHES_AND_MODS, "The flames run at the render rate" |
 | `FullRateLogic` | `KF2_FPS_LOGIC=full`; comparison only, **not shippable** | off | PATCHES_AND_MODS, "Any frame rate" |
+| `FrameProfiler` | per-frame time by section: every hook, the present path, the waits (`0045`); Shift+P | records while its panel is open | DEVELOPMENT, "Profiling a frame" |
+| `FrameCapture`, `FrameViewerPanel` | capture one run of stage 13 and scrub it GP0 command by command on a detached software GPU: owner routine, send cost, fragments, GL batch submits and why, GPU time per batch and for AO, every runtime section, vertex-map work per routine (`0046`); Shift+F | idle until a capture; routines hooked from the first | DEVELOPMENT, "Watching a frame being built" |
 | `Perspective` | perspective-correct textures (`0009`, `0012`) | on | RENDERING, "Perspective correction" |
 | `Subpixel` | sub-pixel vertex positions (`0010`) | off | RENDERING, "Sub-pixel vertex positioning" |
 | `ZBuffer` | per-pixel occlusion from recovered depth (`0014`, `0036`); no window control | off | RENDERING, "Z-buffer" |

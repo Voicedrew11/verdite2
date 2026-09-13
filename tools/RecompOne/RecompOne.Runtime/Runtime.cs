@@ -358,6 +358,22 @@ public static class Runtime
             throw new HardResetSignal();
         }
 
+        //0045. The frame boundary is the end of this call, not a hook, so the
+        //profiler's frames do not depend on anything it is meant to be measuring.
+        var profile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Present);
+        try
+        {
+            PresentFrameCore();
+        }
+        finally
+        {
+            Diagnostics.Profiler.End(profile);
+            Diagnostics.Profiler.FrameMark();
+        }
+    }
+
+    private static void PresentFrameCore()
+    {
         Interp.Interp.Backend?.Publish();
 
         // The port presents from inside the game's own VSync, on one thread:
@@ -374,6 +390,7 @@ public static class Runtime
         FrameClock.MarkFrame();
         // Upstream throttles in PresentLoop, which this port never enters.
         FrameClock.Throttle();
+        var ticks = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Ticks);
         Sdk.LibCd.Tick();
         if (Cpu != null && Mem != null) Sdk.LibMcrd.Tick(Cpu, Mem);
         if (Mem != null)
@@ -381,6 +398,7 @@ public static class Runtime
             Bios.BiosB.RefreshPad(Mem);
             Sdk.LibPad.Refresh(Mem);
         } //is this correct?
+        Diagnostics.Profiler.End(ticks);
 
         // Only on upstream's blocking timeline. On the pin's, LibEtc.TickVBlank
         // delivers IRQ 0 on its own wall-clock grid and a present is not a

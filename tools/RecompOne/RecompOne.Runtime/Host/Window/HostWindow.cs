@@ -6,6 +6,7 @@ using Silk.NET.OpenGL;
 using Silk.NET.OpenGL.Extensions.ImGui;
 using Silk.NET.Windowing;
 using RecompOne.Runtime.Config;
+using RecompOne.Runtime.Diagnostics;
 using RecompOne.Runtime.Hardware;
 using RecompOne.Runtime.Host.Window;
 
@@ -282,6 +283,7 @@ public static class HostWindow
         // 0007. The pad is polled outside the frame loop, so a game that waits
         // on it without vsyncing does not read one frozen snapshot forever.
         _pumpedAt = _renderedAt = _pumpClock.Elapsed.TotalMilliseconds;
+        var events = Profiler.Begin(Profiler.HostEvents);
         try
         {
             _window.DoEvents();
@@ -311,7 +313,13 @@ public static class HostWindow
             ConfigManager.SaveView(PanelManager.Panels);
         }
 
+        Profiler.End(events);
+
+        // 0045. What OnRender does not claim for itself is Silk's own swap, which
+        // is where the thread waits on the driver.
+        var render = Profiler.Begin(Profiler.HostRender);
         _window.DoRender();
+        Profiler.End(render);
         FrameClock.MarkPresent();
     }
 
@@ -708,7 +716,9 @@ public static class HostWindow
     private static void OnRender(double dt)
     {
         var gl = _gl!;
+        var update = Profiler.Begin(Profiler.ImGuiUpdate);
         _imgui!.Update((float)dt);
+        Profiler.End(update);
 
         // 0018. Silk's ImGuiController computes io.DisplayFramebufferScale as
         // FramebufferSize / window size with both sides int, so the ratio
@@ -758,11 +768,13 @@ public static class HostWindow
             if (Hle.GpuHle.Active && _glBackend is { Ready: true } && gpu.DisplayEnabled)
             {
                 var wf = _window!.FramebufferSize;
+                var display = Profiler.Begin(Profiler.Display);
                 var (tex, tw, th, aspect) = _glBackend.PresentDisplay(
                     gpu.DisplayX, gpu.DisplayY,
                     gpu.DisplayWidth, gpu.DisplayHeight,
                     gpu.Display24Bit,
                     wf.X, wf.Y);
+                Profiler.End(display);
                 if (tex != 0) OutputPanel.SetTexture(tex, tw, th, aspect);
                 gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
                 gl.Viewport(0, 0, (uint)wf.X, (uint)wf.Y);
@@ -782,15 +794,19 @@ public static class HostWindow
             if (_ramReady) FlushRamTexture(gl);
         }
 
+        var panels = Profiler.Begin(Profiler.Panels);
         if (!ConfigManager.View.HideTopBar)
             MainMenuBar.Draw();
 
         DrawDockspace();
         PanelManager.DrawPanels();
         PopupManager.Draw();
+        Profiler.End(panels);
         gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         gl.Viewport(0, 0, (uint)fbDef.X, (uint)fbDef.Y);
+        var imgui = Profiler.Begin(Profiler.ImGuiRender);
         _imgui.Render();
+        Profiler.End(imgui);
     }
 
     private static void DrawDockspace()

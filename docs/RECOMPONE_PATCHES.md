@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Forty of the forty-four are load-bearing; `0002`, `0003` and `0015` are
+Forty of the forty-five are load-bearing; `0002`, `0003`, `0015` and `0046` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -25,6 +25,35 @@ Four files in the directory have no entry below:
   60 Hz grid rather than when the game asks; `KF2_VSYNC=block` is upstream's
   blocking timeline. See "The vblank fired when the game asked" in
   `docs/RUNTIME.md`.
+- `0045-frame-profiler.patch` — a diagnostic: `Diagnostics/Profiler.cs`, and
+  sections around `HookManager.Invoke` (the hooked body and each delegate apart),
+  `LibEtc.VSync`, `Runtime.PresentFrame`, the window's events, render and swap,
+  `GlCore.Flush`, `LibGpu.DrawOTag` and the two host waits. The frame boundary is
+  the end of `PresentFrame`. One bool per site while off. **No recompile.** See
+  "Profiling a frame" in `docs/DEVELOPMENT.md`.
+- `0046-frame-capture-trace.patch` — a diagnostic: `Hle/GpuTrace.cs`, an
+  `IGpuTrace` sink that receives every GP0 word with its source address, every GP1
+  write, the end of each command, and each `GlCore` batch submit with **why** it
+  happened (`FlushReason`: target, full, texture feedback, fill, copy, upload,
+  readback, present, or the first mismatched state `DesiredMatches` found). `Gpu`
+  gains `Detached` — a second instance that rasterizes in software into its own
+  VRAM and reaches nothing global (no backend, trace, prim event, vertex map, Z,
+  PGXP, texture tracker or `NotifyDisplay`) — plus `CopyStateFrom`, the draw-area
+  getters, and replay counters (`Coverage`, `Owner`, `Fragments`) that only a
+  detached instance fills. `GlCore.ReadVram` gets an overload that skips `0039`'s
+  snapshot, so reading the whole of VRAM back does not evict a menu's restore copy.
+  One null test per word while off; `HleOn` becomes an instance property.
+  **The port's own work is reported too**, because none of it is a GP0 command:
+  `Profiler.Trace` receives every section's enter and leave and records them with
+  the profiler off (`HookManager` takes the profiled path while it is set), and
+  four sections are new — the AO pass, the composite, `Writeback` and the vertex
+  attribute lookup in `DrawPolygon`. `IGpuTrace.Vertices` reports each polygon's
+  lookups and hits, and `IGpuTrace.Work` a `GL_TIME_ELAPSED` query around each
+  batch submit, the AO pass and the composite (`GlCore.GpuTimeNs` reads one back;
+  queries exist only while a sink is set). `GteVertexMap` gains never-reset
+  counters (`Stores`, `TraceScans`, `TraceBound`, `TracePublished`,
+  `TraceRepublished`) off the hot path. **No recompile.** See "Watching a frame
+  being built" in `docs/DEVELOPMENT.md`.
 
 - `0001-bios-load-return-1.patch` — BIOS `Load` must return 1, not the header
   pointer. Without it the boot stub spins in the loader forever.
@@ -85,7 +114,10 @@ Four files in the directory have no entry below:
   and `DrawPolygon` asks by the address `DrawOTag` read the word from — verifying the
   word before answering. No codegen change, so **this one needs no recompile**. The
   old table stays behind `KF2_PERSPECTIVE_FALLBACK` for comparison only. See
-  "Following the value through memory" in `docs/RENDERING.md`.
+  "Following the value through memory" in `docs/RENDERING.md`. A later edit put a
+  filter in front of the store-side ring scan and an inline presence-bit test in
+  `ReadU32`'s fast path, cutting the map's stage 13 cost by about 55% with identical
+  binding; see "What the map costs, and the filter in front of it" there.
 
 - `0013-settings-slot-in-section.patch` — `SettingsRegistry.Extend` only draws
   *after* a section's whole body, so a port option that belongs beside one of the

@@ -1,4 +1,5 @@
 using RecompOne.Runtime.Context;
+using RecompOne.Runtime.Diagnostics;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Hle;
 using RecompOne.Runtime.Memory;
@@ -11,6 +12,14 @@ public static class LibGpu
     private static readonly DispEnvEvent _dispEnvEvent = new();
 
     public static void DrawOTag(CpuContext c, IMemory m)
+    {
+        //0045.
+        var profile = Profiler.Begin(Profiler.DrawOTag);
+        DrawOTagCore(c, m);
+        Profiler.End(profile);
+    }
+
+    private static void DrawOTagCore(CpuContext c, IMemory m)
     {
         var gpu = Runtime.Gpu;
         if (gpu == null) return;

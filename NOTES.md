@@ -174,6 +174,8 @@ Build it, run it, and measure what it did.
 - Diagnostics
 - Compile a mod without launching the game
 - Getting pixels out without a screenshot
+- Profiling a frame
+- Watching a frame being built
 - What counts as verification
 
 ### [PACKAGING.md](docs/PACKAGING.md)

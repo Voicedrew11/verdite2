@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using RecompOne.Runtime.Context;
+using RecompOne.Runtime.Diagnostics;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Hardware;
 using RecompOne.Runtime.Memory;
@@ -93,6 +94,22 @@ public static class LibEtc
         //is inert unless Interp is enabled.
         Interp.VideoRate.Push(mode == 0 ? 1 : mode);
 
+        //0045. Only the presenting call is a section; the queries above return at
+        //once. Not a try/finally: PresentFrame's hard reset is thrown before it
+        //opens a section, and anything left open is closed by the next outer End.
+        var profile = Profiler.Begin(Profiler.VSync);
+        try
+        {
+            Present(c, m, mode);
+        }
+        finally
+        {
+            Profiler.End(profile);
+        }
+    }
+
+    private static void Present(CpuContext c, IMemory m, int mode)
+    {
         Runtime.PresentFrame();
 
         if (BlockingVSync)
@@ -116,7 +133,9 @@ public static class LibEtc
             return;
         }
 
+        var vblank = Profiler.Begin(Profiler.VBlank);
         AdvanceVBlanks(c, m);
+        Profiler.End(vblank);
         c.V0 = 0;
     }
 
@@ -180,6 +199,13 @@ public static class LibEtc
     private const double SleepMarginMs = 2.0;
 
     private static void WaitVBlanks(CpuContext c, IMemory m, int count)
+    {
+        var profile = Profiler.Begin(Profiler.VBlankWait);
+        WaitVBlanksCore(c, m, count);
+        Profiler.End(profile);
+    }
+
+    private static void WaitVBlanksCore(CpuContext c, IMemory m, int count)
     {
         var target = _lastVSyncCount + count;
 

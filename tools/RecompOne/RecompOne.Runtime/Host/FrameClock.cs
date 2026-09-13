@@ -136,6 +136,14 @@ internal static class FrameClock
 
     public static void Throttle()
     {
+        //0045.
+        var profile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Throttle);
+        ThrottleCore();
+        Diagnostics.Profiler.End(profile);
+    }
+
+    private static void ThrottleCore()
+    {
         var now = Now;
 
         var frameMs = CeilingMs;

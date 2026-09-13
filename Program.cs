@@ -219,6 +219,37 @@ Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_FPS_PROBE"));
 Kf2.FramePacing.Install();
 
+// The frame profiler: where each frame's time goes, by section. Every hooked
+// function is timed inside HookManager (its recompiled body and each patch's
+// delegate apart), the runtime times the present path, and the sleeps are sections
+// of their own so a capped frame reads as work plus waiting. Shift+P opens the panel,
+// and recording runs while it is open. See "Profiling a frame" in docs/DEVELOPMENT.md.
+//
+//     KF2_PROFILE=1             record from boot, a console summary every 5 s
+//     KF2_PROFILE=panel         record from boot and open the panel
+//     KF2_PROFILE_OUT=path.csv  every frame's sections; scripts/profile_report.py
+//     KF2_PROFILE_SPIKE=12      a console line per frame over 12 ms of work
+//     KF2_PROFILE_FUNCS=stages  time all thirteen main-loop stages, or name
+//                               functions: game:80040348+800342D8
+Kf2.FrameProfiler.Configure(Environment.GetEnvironmentVariable("KF2_PROFILE"),
+                            Environment.GetEnvironmentVariable("KF2_PROFILE_OUT"),
+                            Environment.GetEnvironmentVariable("KF2_PROFILE_SPIKE"),
+                            Environment.GetEnvironmentVariable("KF2_PROFILE_FUNCS"));
+Kf2.FrameProfiler.Install();
+
+// The frame viewer: capture one run of stage 13 and scrub it a GP0 command at a
+// time, replayed on a detached software GPU -- who emitted each primitive, what it
+// cost to send, the fragments it rasterized and the GL batch submits it forced.
+// Shift+F opens the panel. See "Watching a frame being built" in docs/DEVELOPMENT.md.
+//
+//     KF2_FRAMEVIEW=panel          open the panel at boot
+//     KF2_FRAMEVIEW_CAPTURE=20,40  capture at these seconds after boot, summary on the console
+//     KF2_FRAMEVIEW_OUT=dir        also write each capture's commands as CSV
+Kf2.FrameCapture.Configure(Environment.GetEnvironmentVariable("KF2_FRAMEVIEW"),
+                           Environment.GetEnvironmentVariable("KF2_FRAMEVIEW_CAPTURE"),
+                           Environment.GetEnvironmentVariable("KF2_FRAMEVIEW_OUT"));
+Kf2.FrameCapture.Install();
+
 // The one thing frame pacing cannot reach: the in-game menu is a modal sub-loop
 // inside stage 3 (func_80029CBC jal's func_80018E80, which blocks for the whole
 // session and renders its own frames), so no gated stage is being called while it

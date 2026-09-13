@@ -473,6 +473,32 @@ Measured after, in area 2 at 144 fps: `364896-383616 projected/s, 369648-388368
 caught/s, 465984-524100 copied/s, 93.0-93.7% hit`, inside the 92.2-97.1% band this
 mechanism was first measured at, and 144.0 fps at 20.0 ticks/s with it on.
 
+### What the map costs, and the filter in front of it
+
+The map is paid by every feature that turns on `GteDepth.Active` — perspective,
+sub-pixel, the Z-buffer and ambient occlusion alike — and it lands in **stage 13's
+self time**, because the renderer makes most of the frame's `lw`/`sw`. Measured with
+the frame profiler, slot 2 standing still, `KF2_FPS=1000`: stage 13 self 0.273 ms
+with the map off, 0.505 ms with AO on and 0.503 ms with perspective on — AO's own
+share of that was nothing (16 samples and 1 sample read the same), it was only
+switching the map on. A capped run hides the frame-rate side of this; measure
+uncapped.
+
+Two cuts, neither changing what binds:
+
+- **`NoteWrite` scans the 8-slot ring only when a match is possible.** Nearly every
+  store carries no published value. It returns early when the newest pending entry
+  is past `PendingMaxAge` (so all are), or when the value's bit is clear in a 64-bit
+  hash mask of published values — a superset, so a stale bit only costs a scan. The
+  mask empties once the whole ring has aged.
+- **The `ReadU32` fast path tests the presence bit inline** (`MaybeBound`) and calls
+  `NoteRead` only for a marked address.
+
+After: stage 13 self 0.374 ms (AO) and 0.376 ms (perspective), about 55% of the
+map's cost gone; 552 → 630 fps with AO on, 525 → 635 with perspective on; 0.281 ms
+and ~700 fps with the map off, unchanged within noise. The probe is identical —
+63.0% hit, 255 vertices projected and caught per frame, before and after.
+
 ## Z-buffer: the same depth, used as occlusion
 
 **Confirmed mechanism; picture checked and still wrong — a second cause is Open.**

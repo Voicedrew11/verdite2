@@ -104,6 +104,8 @@ public sealed class GlCore : IGpuBackend
     public unsafe void InitGl()
     {
         _vram.Init();
+        // 0046. Core since 3.3; the 2.1 context needs the extension.
+        _timerQueries = !_legacy || _gl.IsExtensionPresent("ARB_timer_query");
 
         string primVs = _legacy ? GlShaders.PrimVs120 : GlShaders.PrimVs;
         string primFs = _legacy ? GlShaders.PrimFs120 : GlShaders.PrimFs;
@@ -319,6 +321,13 @@ public sealed class GlCore : IGpuBackend
 
     void Writeback(GlDisplayRt rt)
     {
+        var profile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Writeback);
+        WritebackCore(rt);
+        Diagnostics.Profiler.End(profile);
+    }
+
+    void WritebackCore(GlDisplayRt rt)
+    {
         int s = GlVram.Scale;
         _gl.Disable(EnableCap.ScissorTest);
         _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, rt.Fbo);
@@ -368,9 +377,26 @@ public sealed class GlCore : IGpuBackend
         foreach (var rt in _rts)
             if (rt is { Dirty: true } && rt.Intersects(px, py, pw, 256))
             {
-                Flush();
+                Flush(FlushReason.TextureFeedback);
                 Writeback(rt);
             }
+    }
+
+    // 0046. Which state DesiredMatches found different; the first, when several are.
+    FlushReason Mismatch(bool transparent, int blend, int image, int zMode)
+    {
+        if (_kRepTex != _pendingRepTex || _kRepClut != _pendingRepClut
+            || (_pendingRepTex != 0 && (_kRepX != _pendingRepX || _kRepY != _pendingRepY
+                                        || _kRepW != _pendingRepW || _kRepH != _pendingRepH)))
+            return FlushReason.StateReplacement;
+        if (_kTransparent != transparent) return FlushReason.StateSemi;
+        if (_kBlend != blend) return FlushReason.StateBlend;
+        if (_kImage != image) return FlushReason.StateImage;
+        if (_kZMode != zMode) return FlushReason.StateDepthMode;
+        if (_kSetMask != (_env.SetMask ? 1 : 0) || _kCheckMask != (_env.CheckMask ? 1 : 0)) return FlushReason.StateMask;
+        if (_kClipX0 != _env.ClipX0 || _kClipY0 != _env.ClipY0 || _kClipX1 != _env.ClipX1 || _kClipY1 != _env.ClipY1)
+            return FlushReason.StateClip;
+        return FlushReason.StateTexWindow;
     }
 
     bool DesiredMatches(bool transparent, int blend, int image, int zMode)
@@ -393,8 +419,13 @@ public sealed class GlCore : IGpuBackend
         int blend = f.BlendMode;
         int image = f.UseImage ? f.Image : -1;
         var target = Classify();
-        if (_count > 0 && (target != _kTarget || !DesiredMatches(transparent, blend, image, zMode))) Flush();
-        if (_count + vertsNeeded > MaxVerts) Flush();
+        if (_count > 0)
+        {
+            if (target != _kTarget) Flush(FlushReason.Target);
+            else if (!DesiredMatches(transparent, blend, image, zMode))
+                Flush(GpuTrace.Sink != null ? Mismatch(transparent, blend, image, zMode) : FlushReason.Other);
+        }
+        if (_count + vertsNeeded > MaxVerts) Flush(FlushReason.Full);
         CheckTextureFeedback(f);
 
         _kTarget = target;
@@ -615,7 +646,7 @@ public sealed class GlCore : IGpuBackend
 
     public void FillRect(int x, int y, int w, int h, ushort color15)
     {
-        Flush();
+        Flush(FlushReason.Fill);
         _vram.Fill(x, y, w, h, color15);
         foreach (var rt in _rts)
         {
@@ -806,7 +837,7 @@ public sealed class GlCore : IGpuBackend
 
     public void CopyVram(int sx, int sy, int dx, int dy, int w, int h)
     {
-        Flush();
+        Flush(FlushReason.Copy);
         WritebackDirtyIntersecting(sx, sy, w, h);
         _vram.CopyRect(sx, sy, dx, dy, w, h);
         SyncRtsFromVram(dx, dy, w, h);
@@ -814,7 +845,7 @@ public sealed class GlCore : IGpuBackend
 
     public void WriteVram(int x, int y, int w, int h, ReadOnlySpan<ushort> px)
     {
-        Flush();
+        Flush(FlushReason.Upload);
         // A restore of a frame this backend read out at scale writes the scaled
         // copy instead of the 1x pixels the game is handing back; everything else
         // uploads as it always did.
@@ -823,12 +854,17 @@ public sealed class GlCore : IGpuBackend
         SnapProbe();
     }
 
-    public void ReadVram(int x, int y, int w, int h, Span<ushort> px)
+    public void ReadVram(int x, int y, int w, int h, Span<ushort> px) => ReadVram(x, y, w, h, px, true);
+
+    /// <summary>0046. <paramref name="snapshot"/> false reads without offering the
+    /// pixels to 0039's scaled restore copies, so a diagnostic read of the whole of
+    /// VRAM does not evict the copy a menu is being restored from.</summary>
+    public void ReadVram(int x, int y, int w, int h, Span<ushort> px, bool snapshot)
     {
-        Flush();
+        Flush(FlushReason.Readback);
         WritebackDirtyIntersecting(x, y, w, h);
         _vram.ReadRect(x, y, w, h, px);
-        SnapTake(x, y, w, h, px);
+        if (snapshot) SnapTake(x, y, w, h, px);
     }
 
     public int RegisterImage(ReadOnlySpan<byte> rgba, int width, int height)
@@ -848,9 +884,67 @@ public sealed class GlCore : IGpuBackend
         return _images.Count - 1;
     }
 
-    public void Flush()
+    public void Flush() => Flush(FlushReason.Other);
+
+    void Flush(FlushReason why)
     {
         if (_count == 0) return;
+
+        //0046.
+        var trace = GpuTrace.Sink;
+        trace?.Flush(why, _count);
+        //0045.
+        var profile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.GlFlush);
+        var query = BeginGpuTimer();
+        FlushCore();
+        EndGpuTimer(query, GpuWork.Batch, 0);
+        Diagnostics.Profiler.End(profile);
+        trace?.Flushed();
+    }
+
+    // 0046. GPU time for a frame capture: a GL_TIME_ELAPSED query around the work,
+    // read back frames later with GpuTimeNs. Nothing is queried unless a capture is
+    // tracing, and the queries never nest -- a flush, the AO pass and the composite
+    // run one after another.
+    bool _timerQueries;
+
+    uint BeginGpuTimer()
+    {
+        if (!_timerQueries || GpuTrace.Sink == null) return 0;
+        var q = _gl.GenQuery();
+        _gl.BeginQuery(QueryTarget.TimeElapsed, q);
+        return q;
+    }
+
+    void EndGpuTimer(uint query, GpuWork what, long start)
+    {
+        if (query != 0) _gl.EndQuery(QueryTarget.TimeElapsed);
+        if (GpuTrace.Sink is { } t)
+            t.Work(what, start, what == GpuWork.Batch ? 0 : System.Diagnostics.Stopwatch.GetTimestamp(), query);
+        else if (query != 0) _gl.DeleteQuery(query);
+    }
+
+    /// <summary>0046. A timer query's result in nanoseconds, deleting it; -1 while the
+    /// GPU has not finished it.</summary>
+    public long GpuTimeNs(uint query)
+    {
+        if (query == 0) return -1;
+        _gl.GetQueryObject(query, QueryObjectParameterName.ResultAvailable, out int ready);
+        if (ready == 0) return -1;
+        _gl.GetQueryObject(query, QueryObjectParameterName.Result, out long ns);
+        _gl.DeleteQuery(query);
+        return ns;
+    }
+
+    public void DeleteGpuTimer(uint query)
+    {
+        if (query != 0) _gl.DeleteQuery(query);
+    }
+
+    public bool TimerQueries => _timerQueries;
+
+    private void FlushCore()
+    {
 
         var rt = _kTarget;
         uint destTex;
@@ -1138,13 +1232,14 @@ public sealed class GlCore : IGpuBackend
     public unsafe (uint tex, int w, int h, float aspect) PresentDisplay(int dispX, int dispY, int w, int h, bool rgb24 = false, int outW = 0, int outH = 0)
     {
         if (!Ready || w <= 0 || h <= 0) return (0, 0, 0, GpuHle.OutputAspect);
+        long presentStart = System.Diagnostics.Stopwatch.GetTimestamp();
         // Flush before advancing the counter. The depth clear keys on
         // LastDrawFrame != _frame, so bumping the frame first makes this trailing
         // flush — the tail of the frame that is ending — look like the head of the
         // next one: it clears the depth buffer and stamps the new frame number, so
         // the next frame's real first draw skips its clear and inherits whatever
         // this last batch wrote.
-        Flush();
+        Flush(FlushReason.Present);
         _frame++;
 
         // True color was toggled: the live targets have the wrong pixel format.
@@ -1279,10 +1374,20 @@ public sealed class GlCore : IGpuBackend
         // does not exist until the last primitive has been drawn.
         bool aoOn = AoReady(src, rgb24);
         if (aoOn)
+        {
+            var aoProfile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Ao);
+            long aoStart = System.Diagnostics.Stopwatch.GetTimestamp();
+            var aoQuery = BeginGpuTimer();
             RunAo(src!, dispX - src!.X, dispY - src.Y, w1x, h1x, fbW, fbH);
+            EndGpuTimer(aoQuery, GpuWork.AmbientOcclusion, aoStart);
+            Diagnostics.Profiler.End(aoProfile);
+        }
         else if (GteDepth.AmbientOcclusion && !rgb24)
             GteDepth.AoNoTarget++;
 
+        var compProfile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Composite);
+        long compStart = System.Diagnostics.Stopwatch.GetTimestamp();
+        var compQuery = BeginGpuTimer();
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _presentFbo);
         _gl.Viewport(0, 0, (uint)fbW, (uint)fbH);
         _gl.Disable(EnableCap.DepthTest);
@@ -1323,8 +1428,11 @@ public sealed class GlCore : IGpuBackend
         _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
 
         uint outTex = ApplyPostFx(_presentTex, fbW, fbH);
+        EndGpuTimer(compQuery, GpuWork.Composite, compStart);
+        Diagnostics.Profiler.End(compProfile);
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        GpuTrace.Sink?.Work(GpuWork.Present, presentStart, System.Diagnostics.Stopwatch.GetTimestamp(), 0);
         return (outTex, fbW, fbH, aspect);
     }
     
