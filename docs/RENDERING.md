@@ -20,6 +20,7 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 | Dithering (removal) | **measured**, all three routes | **checked**, twice-drawn pair | off (no crosshatch) |
 | True color (24-bit) | **measured**, RGBA8 target + shader | the point of the switch | off (authentic 15-bit) |
 | Anisotropic filtering | **measured**, sparkle sd 51.2 -> 11.4 | **not checked** | off |
+| Per-pixel lighting | **measured**, every corner within 1 of the GTE, shader exact headless | **not checked** | off |
 
 That "mechanism measured / picture never checked" split is the rule the whole
 port is written to: a feature whose mechanism has counters behind it but whose
@@ -1109,6 +1110,132 @@ rather than sliders: they are all real knobs, and every one of them is the port'
 question to answer once someone has looked, not the player's to answer every time
 they open the pane. It is also deliberately not authentic — the console could not
 have drawn this — which is the same footing true color is on.
+
+## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
+
+**Mechanism measured; the picture has not been looked at. Off by default.** One
+checkbox under Video ▸ Enhancements (`kf2.perpixel.on`), `KF2_PERPIXEL=1` on the
+console. GL core backend only. The runtime half is `patches/recompone/0048`; the
+port half is `patches/PerPixelLighting.cs` and `patches/PolyAssemblerLight.cs`.
+
+A packet's vertex colour is not a free number. The GTE made it in two steps, and
+the GPU then interpolates the *result* across the polygon, which is right only
+where neither step bends inside it:
+
+1. **A lit colour.** A map tile takes one `NormalColorCol` per face, so its lit
+   colour is constant. A model face takes `NormalColorDpq` (flat, one normal) or
+   `NormalColorDpq3` (gouraud, a normal per corner): `RGBC * (BK + LCM * max(0, LLM
+   * N))`, clamped, and not yet saturated to 255.
+2. **The depth cue.** `DpqColor`'s weight `w` pulls the colour towards the far
+   colour: `colour * (1 - w / 4096)`, floored and clamped. The weight is `IR0` from
+   the vertex's own `RotTransPers`, clamped to `[0, 4096]` and then bent by the
+   game's own curve.
+
+**The depth cue is the whole of a map tile's shading, and it is the jolt.** Measured
+in play (a temporary probe, areas 1, 2, 3, 5 and 7): `H 200`, `DQB 20971520` (5120
+in IR0 units), `DQA -12800` or `-11600` by area, far colour 0, `BK 1920` or `1760`,
+and the three light columns `2662, 2662, 3328`. So `IR0` is 0 nearer than about
+8,000 units, saturates past about 40,000, and in between is `5120 - 3.125 * div`
+— affine in `1/z`, which is exact under screen-space interpolation. What is not
+affine is everything done to it after:
+
+- `func_8002E650` (the far tiles and the models): zero when `FogMode >= 32000`,
+  `max(IR0 - 800, 0) * 2` when bit `0x8000` is set, and otherwise `IR0` below 2800
+  and `3 * IR0 - 5600` above it — a knee, reaching black at 3232. `FogMode` read
+  14500 and 16000 in play, so the knee is what is drawn.
+- `func_8002E7CC` (the near tiles): the knee, or zero.
+- `func_800302E8` (anything the view-space clipper cut): `IR0 >> 1`, no knee.
+- The models: **one weight for the whole face** — the first corner's for a gouraud
+  face, the mean of the corners' for a flat one.
+
+A two-tile floor with one corner at `IR0` 2000 and the next past the knee is
+interpolated as a straight ramp between two colours the knee put in different
+places, and the clamps at 0 and black land wherever the corners happen to be — both
+of which move as the camera does. A creature's face steps whole as it walks.
+
+### What is recorded, and how the GPU finds it
+
+`PolyAssembler` records each packet's inputs as it builds it, into
+`GteLightMap`, keyed by the packet's address in the two primitive buffers
+(`0x800FC99C`, `0x32000` bytes). Per corner: the lit colour, or for a gouraud model
+face the three `LLM * N` dots before their clamp; and the raw depth cue, `MAC0 /
+4096` read straight after the transform's `RotTransPers`. Per packet: the curve,
+the light colour, and the command and first vertex words once the packet is
+finished. `DrawPolygon` looks the packet up by the address `DrawOTag` read the
+command word from and believes it only if both words still match. `BK` and `LCM`
+are uniforms, by generation; a directional batch flushes if the generation moves
+(`FlushReason.StateLight`), which is an area load.
+
+**Nothing in the recording writes guest memory or the GTE** — reads go straight to
+the RAM array, and the lighting products come from `Gte.LightProducts`/`LightDots`,
+which read `LLM`, `LCM` and `BK` without touching a register — so
+`KF2_POLYASM=verify` compares the same routine it always did: over areas 1, 2, 5, 6
+and 7 with the feature on, **0 RAM, 0 register and 0 GTE mismatches** in every
+routine.
+
+Three details that the counters found:
+
+- **A vertex-cache slot has to be the transform's own.** The tile assemblers bump
+  a serial before calling their transform, and a slot the transform stamped under
+  that serial is fresh. The models' cache is checked against RAM instead (the
+  screen word and the fog word), because `func_8002EA60` writes the same cache with
+  `RotTransPers` and a fog word of 0 — about 190 corners a frame in area 1, the
+  first person arm among them — and a stale raw value from an older mesh would put
+  a clamp in the wrong place. Such a face falls back to the fog words as they are
+  (`CurveWord`), which for `func_8002EA60`'s zeros is exact.
+- **The clipped emitter is recompiled, and does not need porting.** Its packets are
+  found after the call by the buffer cursor: packet `k` is records 0, `k + 1` and
+  `k + 2` of the output list, lit by `NormalColorCol` (recomputed from the normal)
+  and fogged at half each record's raw value, which `Survivors` stores beside the
+  record.
+- **A face that comes out the same interpolated is not recorded**: every corner
+  unfogged, or fogged to black. That is most of the near geometry in a small room,
+  and it keeps the light buffer out of batches that do not need it.
+
+### The shader
+
+`shade8()` in the core-profile `PrimFs` makes the colour again at each pixel, from
+the corner values interpolated `noperspective` (the raw depth cue is affine on
+screen, as the colour was): the lit colour or `RGBC * clamp(BK + LCM * max(0, dots)
+/ 4096) / 4096`, then the curve on `clamp(raw, 0, 4096)`, then `floor(lit * (1 - w /
+4096))` clamped to 255. With no record it returns the interpolated vertex colour,
+bit for bit as before. The dots are interpolated, not the normal, so this is the
+GTE's diffuse model evaluated per pixel — the terminator and the colour clamp land
+where they belong — rather than a renormalised Phong.
+
+The attributes are in **a vertex buffer of their own**, uploaded only for a batch
+that carries a record, with attributes 7-9 disabled otherwise (their generic value
+reads as no record). That is not tidiness: the first version widened `GlVertex`
+from 44 to 64 bytes, which took its `0x40000`-vertex buffer to exactly 16 MiB, and
+**that alone took area 1 from 861 fps to 265-305 with the feature switched off** —
+`GlCore.Flush` 0.04 ms to 2.7 ms a frame, and every GPU timer in a frame capture
+1.7x slower, the AO pass included. Reverting the shader and disabling the attributes
+changed nothing; restoring the stride did. Split: 856 against 861.
+
+### What is measured
+
+- **The formula against the GTE, in play.** `KF2_PERPIXEL_PROBE=2` evaluates the
+  shader's formula at every recorded corner of a gouraud packet and compares it with
+  the colour the GTE wrote there (a gouraud model face at its first corner's weight,
+  since that is what the GTE used). Areas 1, 2, 5, 6 and 7: 1,491,187 corners exact,
+  21,280 off by 1 (the GTE's fixed point against float), **none off by 2 or more**,
+  over the knee, the half curve, the fallback and the directional model light.
+- **The shader against the formula, headless.** `scripts/light_probe.c` drives the
+  real `PrimFs` over seven strips sweeping the lit colour, the dots and the raw
+  depth cue through every curve, untextured and true colour: **worst difference 0**
+  in all seven, 120-167 distinct colours across a 256-pixel strip where the curve
+  bends.
+- **Coverage.** 96-99.9% of polygons found their record before the uniform faces
+  were dropped (the rest are the HUD and sprites); the probe line now also counts
+  the dropped ones as drawn from their corner colours.
+- **Cost**, `KF2_FPS=1000`, one session per run with a temporary build cycling off /
+  recording only / on every second: area 1 standing +0.03 to +0.09 ms a frame, areas
+  2 and 7 +0.05 to +0.19 ms, about half of it recording and half the draw side.
+  At 144 fps it is 144.0 drawn at 20.0 ticks/s.
+
+**Nobody has looked at it.** Whether the tiles read as smoother rather than as
+different, and whether a creature lit per pixel still looks like itself, is the
+question. Leave everything else at its default while judging it.
 
 ## Dithering: one flag, and it lives in the draw environment
 

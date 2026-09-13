@@ -21,6 +21,7 @@ public enum FlushReason : byte
     StateMask,
     StateTexWindow,
     StateClip,
+    StateLight,
 }
 
 /// <summary>0046. Receives the live GPU's command stream and the backend's batch

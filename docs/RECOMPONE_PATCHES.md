@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Forty-one of the forty-six are load-bearing; `0002`, `0003`, `0015` and `0046` are
+Forty-two of the forty-seven are load-bearing; `0002`, `0003`, `0015` and `0046` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -528,6 +528,19 @@ Four files in the directory have no entry below:
   `Interrupts.SlowPolls`. `KF2_GTE_FAST=0` and `KF2_GTE_LIGHTCACHE=0` are the
   comparisons. **No recompile.** See "The GTE fast path" in
   `docs/PATCHES_AND_MODS.md`.
+
+- `0048-per-pixel-lighting.patch` — `Gpu/GteLightMap.cs`, a side table keyed by
+  packet address that the port fills with what each packet's colours were made from:
+  per corner a lit colour (or three light dots) and the raw depth cue, per packet the
+  curve, the light colour and the two words it is checked by. `DrawPolygon` looks it
+  up by the command word's source address and hands the values through `HleVertex`;
+  `GlCore` uploads them in a second vertex buffer, only for a batch that has them,
+  with `BK`/`LCM` as uniforms by generation (`FlushReason.StateLight`); `PrimFs`'s
+  `shade8()` evaluates the depth-cue curve and the diffuse light per pixel, and
+  returns the vertex colour unchanged with no record. `Gte.LightProducts` and
+  `Gte.LightDots` give the port a normal's lighting without touching a register.
+  GL core backend only. **No recompile.** See "Per-pixel lighting" in
+  `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

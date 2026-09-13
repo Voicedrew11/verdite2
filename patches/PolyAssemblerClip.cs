@@ -147,6 +147,7 @@ public static partial class PolyAssembler
     /// into its +0x18 (screen word) and +0x14 (depth cue), and return the count.</summary>
     static void Survivors(CpuContext c, PSMemory mem, uint n, uint list)
     {
+        bool lighting = GteLightMap.Active;
         for (int i = 0; i < (int)n; i++)
         {
             Interrupts.Poll(c, mem);
@@ -154,8 +155,10 @@ public static partial class PolyAssembler
             Gte.Write(0, mem.ReadU32(rec));
             Gte.Write(1, mem.ReadU32(rec + 4u));
             Gte.Rtps(12, false);
-            mem.WriteU32(rec + 0x18u, Gte.Read(14));
+            uint sxy = Gte.Read(14);
+            mem.WriteU32(rec + 0x18u, sxy);
             mem.WriteU32(rec + 0x14u, Gte.Read(8));
+            if (lighting) NoteRecord(mem, rec, sxy, Gte.Read(8));
         }
         c.V0 = n;
     }

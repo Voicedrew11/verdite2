@@ -90,6 +90,7 @@ public static partial class PolyAssembler
         uint face = faces + 0xCu + table;
 
         var fr = new Frame(mem);
+        if (fr.Lighting) fr.LightGen = GteLightMap.NoteConstants();
         for (; count != 0; count--)
         {
             Interrupts.Poll(c, mem);
@@ -136,6 +137,7 @@ public static partial class PolyAssembler
 
         W8(ref fr, pkt + 3u, 0x07);
         W8(ref fr, pkt + 7u, (byte)(TB.On ? 0x26u : cmd));
+        if (fr.Lighting) LightFlat(mem, pkt, LightWord(ref fr), normals + R16(ref fr, f + 0x0Cu), 3, p0, p1, p2, 0u);
 
         Insert(ref fr, ((short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u) + (short)R16(ref fr, p2 + 4u)) / 3, bias, pkt);
         return true;
@@ -170,6 +172,7 @@ public static partial class PolyAssembler
 
         W8(ref fr, pkt + 3u, 0x09);
         W8(ref fr, pkt + 7u, (byte)(TB.On ? 0x2Eu : cmd));
+        if (fr.Lighting) LightFlat(mem, pkt, LightWord(ref fr), normal, 4, p0, p1, p2, p3);
 
         Insert(ref fr, QuadDepth(ref fr, p0, p1, p2, p3), bias, pkt);
         return true;
@@ -200,6 +203,8 @@ public static partial class PolyAssembler
 
         W8(ref fr, pkt + 3u, 0x09);
         W8(ref fr, pkt + 7u, (byte)(TB.On ? 0x36u : cmd));
+        if (fr.Lighting)
+            LightGouraud(mem, pkt, LightWord(ref fr), fr.LightGen, 3, normals + n0, normals + n1, normals + n2, 0u, p0, p1, p2, 0u);
 
         Insert(ref fr, ((short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u) + (short)R16(ref fr, p2 + 4u)) / 3, bias, pkt);
         return true;
@@ -233,10 +238,17 @@ public static partial class PolyAssembler
 
         W8(ref fr, pkt + 3u, 0x0C);
         W8(ref fr, pkt + 7u, (byte)(TB.On ? 0x3Eu : cmd));
+        if (fr.Lighting)
+            LightGouraud(mem, pkt, LightWord(ref fr), fr.LightGen, 4, normals + n0, normals + n1, normals + n2,
+                         normals + R16(ref fr, f + 0x1Cu), p0, p1, p2, p3);
 
         Insert(ref fr, QuadDepth(ref fr, p0, p1, p2, p3), bias, pkt);
         return true;
     }
+
+    /// <summary>The light colour the face was lit with, without a load the vertex map sees.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static uint LightWord(ref Frame fr) => fr.Hoisted ? fr.Light : Peek32(fr.Mem, LightColour);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static int QuadDepth(ref Frame fr, uint p0, uint p1, uint p2, uint p3) =>

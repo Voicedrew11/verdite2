@@ -533,9 +533,12 @@ public static class Gte
     /// the flag bits they raised. MAC1-3 and IR1-3 are overwritten by every op's last
     /// stage, so nothing else of them is kept.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void LightStage(int vec, out int i1, out int i2, out int i3, ref uint f)
+    private static void LightStage(int vec, out int i1, out int i2, out int i3, ref uint f) =>
+        LightStage(V[vec * 3], V[vec * 3 + 1], V[vec * 3 + 2], out i1, out i2, out i3, ref f);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void LightStage(long vx, long vy, long vz, out int i1, out int i2, out int i3, ref uint f)
     {
-        long vx = V[vec * 3], vy = V[vec * 3 + 1], vz = V[vec * 3 + 2];
         var key = (ulong)(ushort)vx | ((ulong)(ushort)vy << 16) | ((ulong)(ushort)vz << 32);
         ref var e = ref _light[(int)((key * 0x9E3779B97F4A7C15UL) >> (64 - LightSlotBits))];
         if (LightCache && e.Gen == _lightGen && e.Key == key)
@@ -565,6 +568,22 @@ public static class Gte
         e.Ir1 = i1;
         e.Ir2 = i2;
         e.Ir3 = i3;
+    }
+
+    /// <summary>0048. IR1-3 a lighting op would reach for this normal under the current
+    /// LLM, LCM and BK, without touching any register. Per-pixel lighting reads it.</summary>
+    public static void LightProducts(short vx, short vy, short vz, out int i1, out int i2, out int i3)
+    {
+        uint f = 0;
+        LightStage(vx, vy, vz, out i1, out i2, out i3, ref f);
+    }
+
+    /// <summary>0048. LLM times the normal over 4096, before the clamp at zero.</summary>
+    public static void LightDots(short vx, short vy, short vz, out float a1, out float a2, out float a3)
+    {
+        a1 = ((long)LLM[0] * vx + (long)LLM[1] * vy + (long)LLM[2] * vz) / 4096f;
+        a2 = ((long)LLM[3] * vx + (long)LLM[4] * vy + (long)LLM[5] * vz) / 4096f;
+        a3 = ((long)LLM[6] * vx + (long)LLM[7] * vy + (long)LLM[8] * vz) / 4096f;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

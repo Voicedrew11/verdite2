@@ -11,6 +11,11 @@ public sealed class GlCore : IGpuBackend
     // this renderer ever saw before.
     struct GlVertex { public float X, Y; public float R, G, B; public float Clut, Texpage; public float U, V; public float W, Z; }
 
+    // 0048. GteLightMap's inputs, in a buffer of their own: widening GlVertex took
+    // its VBO to exactly 16 MiB, and that alone cost area 1 two thirds of its frame
+    // rate with the feature off. Uploaded only for a batch that carries them.
+    struct GlLight { public float Lx, Ly, Lz, Fog; public uint Light; }
+
     const int MaxVerts = 0x40000;
 
     readonly GL _gl;
@@ -60,6 +65,11 @@ public sealed class GlCore : IGpuBackend
 
     readonly GlVertex[] _verts = new GlVertex[MaxVerts];
     int _count;
+    readonly GlLight[] _lights = new GlLight[MaxVerts];
+    // Light slots written so far this batch; 0 means none, and the attributes stay off.
+    int _litFilled;
+    uint _vboLight;
+    bool _lightAttribs;
     float _drawMinX, _drawMinY, _drawMaxX, _drawMaxY;
 
     HleDrawEnv _env;
@@ -69,6 +79,9 @@ public sealed class GlCore : IGpuBackend
     int _kImage = -1;
     int _kBlend, _kSetMask, _kCheckMask;
     int _kZMode;
+    // 0048. The BK/LCM generation the batch's directional triangles were lit with; -1 none.
+    int _kLightGen = -1;
+    int _uLightBk, _uLcmR, _uLcmG, _uLcmB;
     // The last render target a depth-testing batch was drawn to, for the diagnostic
     // readback: it is the only unambiguous answer to "which depth buffer is this
     // frame's". Diagnostic only — nothing else reads it.
@@ -133,6 +146,11 @@ public sealed class GlCore : IGpuBackend
         _uTrueColor = _gl.GetUniformLocation(_progPrim, "uTrueColor");
         _uAniso = _gl.GetUniformLocation(_progPrim, "uAniso");
         _uOpaqueDepth = _gl.GetUniformLocation(_progPrim, "uOpaqueDepth");
+        _uLightBk = _gl.GetUniformLocation(_progPrim, "uLightBk");
+        _uLcmR = _gl.GetUniformLocation(_progPrim, "uLcmR");
+        _uLcmG = _gl.GetUniformLocation(_progPrim, "uLcmG");
+        _uLcmB = _gl.GetUniformLocation(_progPrim, "uLcmB");
+        GteLightMap.Supported = !_legacy && _uLightBk >= 0;
         _rtsTrueColor = GteDepth.TrueColor;
         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
@@ -213,6 +231,20 @@ public sealed class GlCore : IGpuBackend
         _gl.EnableVertexAttribArray(4); _gl.VertexAttribPointer(4, 2, VertexAttribPointerType.Float, false, stride, (void*)28);
         _gl.EnableVertexAttribArray(5); _gl.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, stride, (void*)36);
         _gl.EnableVertexAttribArray(6); _gl.VertexAttribPointer(6, 1, VertexAttribPointerType.Float, false, stride, (void*)40);
+        // 0048. Integer attributes need GL 3.0, and only the core shaders read these.
+        // Left disabled until a batch carries them, when the generic value (0) reads
+        // as "no record".
+        if (!_legacy)
+        {
+            _vboLight = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboLight);
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(MaxVerts * sizeof(GlLight)), null, BufferUsageARB.DynamicDraw);
+            uint ls = (uint)sizeof(GlLight);
+            _gl.VertexAttribPointer(7, 3, VertexAttribPointerType.Float, false, ls, (void*)0);
+            _gl.VertexAttribPointer(8, 1, VertexAttribPointerType.Float, false, ls, (void*)12);
+            _gl.VertexAttribIPointer(9, 1, VertexAttribIType.UnsignedInt, ls, (void*)16);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
+        }
 
         // fullscreen quad for present, real vbo since gl_VertexID without arrays does not draw on mesa for some reason?? or i did it wrong?
         _presentVao = _gl.GenVertexArray();
@@ -588,7 +620,20 @@ public sealed class GlCore : IGpuBackend
             zMode = f.SemiTrans ? 2 : 1;
         else if (GteDepth.AmbientOcclusion && !f.SemiTrans)
             zMode = 3;
+        // 0048. A directional triangle needs its batch's BK and LCM to be the ones
+        // it was lit with.
+        int lightGen = (a.Light & (GteLightMap.Directional << 24)) != 0 ? a.LightGen : -1;
+        if (lightGen >= 0 && _kLightGen >= 0 && lightGen != _kLightGen) Flush(FlushReason.StateLight);
         Begin(f, 3, zMode);
+        if (lightGen >= 0) _kLightGen = lightGen;
+        if (a.Light != 0 && _vboLight != 0)
+        {
+            if (_litFilled < _count) Array.Clear(_lights, _litFilled, _count - _litFilled);
+            _lights[_count] = new GlLight { Lx = a.Lx, Ly = a.Ly, Lz = a.Lz, Fog = a.Fog, Light = a.Light };
+            _lights[_count + 1] = new GlLight { Lx = b.Lx, Ly = b.Ly, Lz = b.Lz, Fog = b.Fog, Light = b.Light };
+            _lights[_count + 2] = new GlLight { Lx = c.Lx, Ly = c.Ly, Lz = c.Lz, Fog = c.Fog, Light = c.Light };
+            _litFilled = _count + 3;
+        }
         bool dith = DitherOf(f);
         _verts[_count++] = V(a, f, dith); _verts[_count++] = V(b, f, dith); _verts[_count++] = V(c, f, dith);
     }
@@ -1089,6 +1134,15 @@ public sealed class GlCore : IGpuBackend
         // anisotropy rebuilds nothing.
         GteDepth.AnisotropyLive = _uAniso >= 0;
         if (_uAniso >= 0) _gl.Uniform1(_uAniso, (float)GteDepth.Anisotropy);
+        if (_kLightGen >= 0 && _uLightBk >= 0)
+        {
+            int g = _kLightGen;
+            _gl.Uniform3(_uLightBk, (float)GteLightMap.Bk(g, 0), GteLightMap.Bk(g, 1), GteLightMap.Bk(g, 2));
+            _gl.Uniform3(_uLcmR, (float)GteLightMap.LcmAt(g, 0), GteLightMap.LcmAt(g, 1), GteLightMap.LcmAt(g, 2));
+            _gl.Uniform3(_uLcmG, (float)GteLightMap.LcmAt(g, 3), GteLightMap.LcmAt(g, 4), GteLightMap.LcmAt(g, 5));
+            _gl.Uniform3(_uLcmB, (float)GteLightMap.LcmAt(g, 6), GteLightMap.LcmAt(g, 7), GteLightMap.LcmAt(g, 8));
+            _kLightGen = -1;
+        }
         if (_legacy)
         {
             _gl.Uniform4(_uTexWindow, (float)_kTwAndX, _kTwAndY, _kTwOrX, _kTwOrY);
@@ -1108,6 +1162,18 @@ public sealed class GlCore : IGpuBackend
 
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
         _gl.BufferSubData<GlVertex>(BufferTargetARB.ArrayBuffer, 0, _verts.AsSpan(0, _count));
+        if (_litFilled > 0)
+        {
+            if (_litFilled < _count) Array.Clear(_lights, _litFilled, _count - _litFilled);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboLight);
+            _gl.BufferSubData<GlLight>(BufferTargetARB.ArrayBuffer, 0, _lights.AsSpan(0, _count));
+        }
+        if ((_litFilled > 0) != _lightAttribs)
+        {
+            _lightAttribs = _litFilled > 0;
+            for (uint i = 7; i <= 9; i++)
+                if (_lightAttribs) _gl.EnableVertexAttribArray(i); else _gl.DisableVertexAttribArray(i);
+        }
 
         if (_legacy)
         {
@@ -1170,6 +1236,7 @@ public sealed class GlCore : IGpuBackend
                 Assets.Textures.VramTracker.MarkGpuWrite(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
         }
         _count = 0;
+        _litFilled = 0;
     }
 
     void SetBlend(float src, float dst) => _gl.Uniform4(_uBlend, src, src, src, dst);
@@ -1700,6 +1767,7 @@ public sealed class GlCore : IGpuBackend
         foreach (var snap in _snaps) if (snap != null) SnapDestroy(snap);
         _vram.Dispose();
         if (_vbo != 0) _gl.DeleteBuffer(_vbo);
+        if (_vboLight != 0) _gl.DeleteBuffer(_vboLight);
         if (_presentVbo != 0) _gl.DeleteBuffer(_presentVbo);
         if (_aoTex != 0) _gl.DeleteTexture(_aoTex);
         if (_aoBlurTex != 0) _gl.DeleteTexture(_aoBlurTex);

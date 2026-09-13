@@ -665,6 +665,16 @@ Kf2.Anisotropic.Configure(Environment.GetEnvironmentVariable("KF2_ANISO"),
                           Environment.GetEnvironmentVariable("KF2_ANISO_PROBE"));
 Kf2.Anisotropic.Install();
 
+// Per-pixel lighting: the depth cue and the models' light evaluated per pixel from
+// what PolyAssembler recorded about each packet, instead of interpolated between
+// the corner colours. Off by default until the picture has been judged. GL core
+// backend only; the runtime half is patches/recompone/0048.
+//     KF2_PERPIXEL=1          on
+//     KF2_PERPIXEL_PROBE=1    packets recorded, polygons lit per pixel and not
+Kf2.PerPixelLighting.Configure(Environment.GetEnvironmentVariable("KF2_PERPIXEL"),
+                               Environment.GetEnvironmentVariable("KF2_PERPIXEL_PROBE"));
+Kf2.PerPixelLighting.Install();
+
 // The render scale survives a menu. A modal sub-loop -- the in-game menu, a shop,
 // an NPC's message box -- keeps the world behind it by reading the finished frame
 // out of VRAM once and blitting it back at the head of every iteration, and that
