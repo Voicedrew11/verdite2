@@ -21,6 +21,7 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 | True color (24-bit) | **measured**, RGBA8 target + shader | the point of the switch | off (authentic 15-bit) |
 | Anisotropic filtering | **measured**, sparkle sd 51.2 -> 11.4 | **not checked** | off |
 | Per-pixel lighting | **measured**, every corner within 1 of the GTE, shader exact headless | **not checked** | off |
+| Even fog | **measured**, clipped matches far tiles bin for bin; shared tile points within 3 | **not checked** since the blend | off |
 
 That "mechanism measured / picture never checked" split is the rule the whole
 port is written to: a feature whose mechanism has counters behind it but whose
@@ -1236,6 +1237,130 @@ changed nothing; restoring the stride did. Split: 856 against 861.
 **Nobody has looked at it.** Whether the tiles read as smoother rather than as
 different, and whether a creature lit per pixel still looks like itself, is the
 question. Leave everything else at its default while judging it.
+
+### A clipped tile is fogged at half, and that is the block on the floor
+
+Reported from play near save 3 (area 2): floor polygons "darker or brighter
+depending on distance from the camera", unchanged with AO off. Not the lit colour:
+every floor face in view shares one normal and one `NormalColorCol` result.
+
+**The cause is the emitter after the view-space clipper.** `func_800302E8` fogs
+each surviving record at **`IR0 >> 1`**, where both tile transforms (`func_8002E7CC`
+for the near tiles, `func_8002E650` for the far ones) fog at the knee, `IR0` below
+2800 and `3·IR0 − 5600` above it. So a tile the clipper cuts gets half its
+neighbours' fog.
+
+**Which neighbours** took a second probe to see. The near transform writes `otz`
+as 0xFFFF unless RotTransPers's flag is exactly 0x1000, which is IR0 clamped at 0.
+So **any near tile with a fogged corner fails the `z == -1` test and is clipped**,
+and no unclipped near corner carries fog at all. Its neighbours at a fogged
+distance are the far tiles, `func_8002FECC`. The first diagnosis's "unclipped"
+column was those far tiles.
+
+**Fixed as an enhancement, off by default** (`EvenFog`, `KF2_EVENFOG=1`, Video ▸
+Enhancements ▸ *Even fog*). After `func_800302E8` returns,
+`PolyAssembler.Clipped` rewrites each emitted `POLY_GT3`'s three corner colours from
+the lit colour and the near curve of each record's `IR0` (`+0x14`), or no fog when
+`FogMode >= 32000`. The arithmetic is DPCS's own, done in C# with no GTE register
+written; checked against `Gte.Dpcs` itself on every clipped corner, 0 of about 50k
+a window differed. A packet past the buffer's end is left alone, as
+`LightClipped` does. It only runs from the C# assembler, so it needs Fast geometry,
+and it stands down under `KF2_POLYASM=verify`: with `KF2_EVENFOG=1` verify reads 0
+RAM, register and GTE mismatches in every routine.
+
+Measured at save 3 during the autostart load, with the probe spinning the base
+yaw a full turn every ten seconds so every direction is sampled. Brightness is
+corner R over the face's lit R (x1000), then the fog weight. Only far tiles drawn
+under the same DQA are compared (below):
+
+| view Z | far tiles | clipped, the game's | clipped, with the fix |
+|---|---|---|---|
+| 8.0k | 987.3, 32 | 990.0, 16 | 986.5, 32 |
+| 8.2k | 958.1, 154 | 977.2, 76 | 958.6, 154 |
+| 8.6k | 902.5, 383 | 947.3, 193 | 900.5, 385 |
+| 9.2k | 826.9, 692 | 908.8, 346 | 826.5, 692 |
+| 9.5k | 792.8, 830 | 897.3, 414 | 795.5, 828 |
+
+Every 100-unit bin from 8.0k to 9.5k agrees within about 2 on that scale. Below
+8k both paths are unfogged. **Per-pixel lighting** records a refogged packet with
+the same curve as a tile (`CurveKnee`, or `CurveNone` in far mode), not `CurveHalf`.
+A face with every corner unfogged is no longer recorded, as a tile's is not.
+`KF2_PERPIXEL_PROBE=2` over the same run: 2.39M corners, **0 off by 2 or more**,
+and no `curve3` left.
+
+### Fog changes at a tile edge
+
+**Fog is not global: every map tile names its own light record.** In the same runs
+as above, some of `func_8002FECC`'s corners were drawn with DQA −10000 instead of
+−12800, and at the same view Z they were much darker (8.2k: 693, fog 1239).
+`func_80031950(half, &position, flags)` draws one half of one tile. It reads the
+half's byte `+4 & 0x3F` as an index into the `0x68`-stride records at
+`0x801930F0`. It loads that record's light matrix for the half's quarter turns
+(`+2 & 3`, 0x14 bytes each), its colour matrix at `+0x50` and back colour at `+0x62`.
+It passes the `+0x66` word to `func_8002DDDC`, which stores it as `FogMode` and calls
+`SetFogNear((word & 0x7FFF) >> 1, 200)`. So DQA is `-(word/2)·320/200` and DQB is
+always 1.25. Only then do the tile assemblers run. Near save 3, the room carries
+16000 (DQA −12800, fog from about 8k) and the corridor under the arch 12500 (DQA
+−10000, fog from about 6.25k). The step between them follows the tile grid.
+
+Reported from play with only the clipped fix in: "the area under the arch is
+noticeably darker than the surrounding area in an unnatural way". Removing the half
+fog had made it plainer, because the corridor's clipped tiles were no longer drawn
+lighter than authored.
+
+**Blended as the second half of `EvenFog`** (`KF2_EVENFOG_BLEND=0` keeps the hard
+edge). A pre and post hook on `func_80031950` hold the half being drawn, but only
+while one of its eight neighbours' records carries a different fog word, so most
+tiles pay one lookup. Inside that window, both tile transforms and the clipped
+refog compute each vertex's fog weight bilinearly between the four tile centres
+around it: the tile's own at its centre, half and half at an edge, a quarter each
+at a corner. A neighbour's weight is its own word's curve (near or far, as that
+transform picks) at its own IR0. That IR0 comes from the vertex's SZ3 through the
+GTE's own divide: `Gte.DepthQuotient` is `0049`, the depth-cue half of `Rtp`'s
+`Divide` with no flag raised, and the port applies the neighbour's DQA to it.
+Things the geometry forced:
+
+- **The mesh is centred on the tile and turned by the half's quarter turns**
+  (`func_80014B88`: turn 1 maps local `(x, z)` to map `(z, −x)`, 2 to `(−x, −z)`,
+  3 to `(−z, x)`). Its edge vertices sit at **±1034**, ten units past the tile's
+  own ±1024, so neighbouring meshes overlap. Both sides clamp at 1024 to get the
+  same half-and-half weight.
+- **An empty half (model ≥ 240) or off the map has no record, so it drops out** and
+  the remaining tiles share its weight. Treating it as "the drawing tile's own"
+  looked harmless and was not. Two tiles meeting at a corner beside the same empty
+  half gave it their two different words, and the corner still stepped by up to 278.
+- **Per-pixel lighting records a blended vertex as `CurveWord`**, the weight
+  itself, since no single curve describes a mix of four.
+
+Measured at save 3 during the autostart load, holding the view at eight headings
+for three seconds each. The probe matched world points that two different tiles
+both transform (edges clamped to ±1024, view Z within 2) and compared their fog
+weights:
+
+| | points compared | differ by 0-1 | 2-4 | 5-50 | 51+ | worst |
+|---|---|---|---|---|---|---|
+| hard edge (`KF2_EVENFOG_BLEND=0`) | 73.1k | 66.8k | 1.1k | 0 | 5.2k | 1482 |
+| blended, empty halves as own | 86.6k | 82.9k | 1.1k | 0 | 2.6k | 278 |
+| blended, empty halves dropped | 74.1k | 73.0k | 1.1k | 2 | **0** | 9 |
+
+What is left is one unit of SZ3: each tile rounds its own translation, so the same
+point projects a unit apart on two tiles. The recomputed IR0 under the tile's own
+word equalled the GTE's on every vertex checked (about 1.2M in one run), which is what
+confirms the DQA formula. `KF2_PERPIXEL_PROBE=2`: 2.16M corners, 0 off by 2.
+Verify with `KF2_EVENFOG=1`: 0 RAM, register and GTE mismatches in all seven
+routines. Uncapped at save 3's resting view: 327-328 fps off, 329-331 on. No
+record edge is in view there, so that only shows the idle cost is nothing.
+
+**Not blended: the light colour.** The same probe dumped both records. Room
+record #16 (fog 16000) and corridor #0 (12500) have identical light matrices and
+back colour (`0x78,0x78,0x78`). Their colour matrices differ: `0x0933`/`0x0B80`
+against `0x0CCB`/`0x0FFE`, the corridor's about 39% brighter. The tile assemblers
+light a whole face once, with the drawing tile's LCM, so blending it would turn a
+flat-lit face into a per-corner one. That was left for a look first.
+
+**Nobody has looked at it since the blend.** Whether one tile is a long enough fade,
+and whether the corridor's brighter light now reads as an edge of its own, is the
+question.
 
 ## Dithering: one flag, and it lives in the draw environment
 

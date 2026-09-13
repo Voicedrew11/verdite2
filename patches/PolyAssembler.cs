@@ -627,9 +627,12 @@ public static partial class PolyAssembler
         c.A1 = normals + normal;
         c.RA = 0x80030C38u;
         bool lighting = LightingOn();
-        uint before = lighting ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
+        // Verify compares against the recompiled assembler, which fogs at half.
+        bool refog = EvenFog.Enabled && _mode != Mode.Verify;
+        uint before = lighting || refog ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
         KingsField2.func_800302E8(c, mem);
-        if (lighting) LightClipped(mem, before, normals + normal);
+        if (refog) RefogClipped(mem, before, normals + normal);
+        if (lighting) LightClipped(mem, before, normals + normal, refog);
     }
 
 
@@ -891,8 +894,9 @@ public static partial class PolyAssembler
                 1 => Math.Max(p - 0x320, 0) << 1,
                 _ => p < 2800 ? p : ((p - 0xAF0) << 1) + p,
             };
+            bool blended = TileVertexFog(mem, src, fog, near: false, out fog);
             W16(ref fr, dst + 6u, (ushort)fog);
-            if (fr.Lighting) NoteCache(dst, sxy, fog, (uint)curve);
+            if (fr.Lighting) NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : (uint)curve, blended);
             src += 8u;
             dst += 8u;
         }
@@ -930,8 +934,10 @@ public static partial class PolyAssembler
             ushort otz = (ushort)((int)Gte.Read(19) >> 2);
             W16(ref fr, dst + 4u, flag == 0x1000u ? otz : (ushort)0xFFFF);
             int fog = far ? 0 : p < 2800 ? p : ((p - 0xAF0) << 1) + p;
+            bool blended = TileVertexFog(mem, src, fog, near: true, out fog);
             W16(ref fr, dst + 6u, (ushort)fog);
-            if (fr.Lighting) NoteCache(dst, sxy, fog, far ? GteLightMap.CurveNone : GteLightMap.CurveKnee);
+            if (fr.Lighting)
+                NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : far ? GteLightMap.CurveNone : GteLightMap.CurveKnee, blended);
             src += 8u;
             dst += 8u;
         }

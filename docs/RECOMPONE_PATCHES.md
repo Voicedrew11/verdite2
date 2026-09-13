@@ -542,6 +542,14 @@ Four files in the directory have no entry below:
   GL core backend only. **No recompile.** See "Per-pixel lighting" in
   `docs/RENDERING.md`.
 
+- `0049-gte-depth-quotient.patch` — `Gte.DepthQuotient(sz3)`, the `H/SZ3` divide
+  `Rtp` feeds its depth cue, split out of `Divide` with no flag raised and no
+  register touched. `Divide` now calls the same `Quotient`, so the op is unchanged.
+  `EvenFog` needs it to evaluate a neighbouring tile's DQA at a vertex without
+  running a GTE op. Checked: the port's IR0 from it matched the GTE's on about 1.2M
+  vertices. **No recompile.** See "Fog changes at a tile edge" in
+  `docs/RENDERING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

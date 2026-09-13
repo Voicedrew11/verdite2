@@ -366,6 +366,15 @@ public static class Gte
             return 0x1FFFF;
         }
 
+        return Quotient(h, sz3);
+    }
+
+    /// <summary>0049. H over SZ3 as Rtp divides it for the depth cue, with no flag
+    /// raised and no register touched.</summary>
+    public static uint DepthQuotient(uint sz3) => H >= sz3 * 2 ? 0x1FFFFu : Quotient(H, sz3);
+
+    private static uint Quotient(uint h, uint sz3)
+    {
         var z = Clz16(sz3);
         var n = (ulong)h << z;
         var d = (ulong)sz3 << z;

@@ -58,7 +58,7 @@ public static partial class PolyAssembler
 
     /// <summary>The transforms: MAC0 is the depth cue before its clamp.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static void NoteCache(uint dst, uint sxy, int fog, uint curve)
+    static void NoteCache(uint dst, uint sxy, int fog, uint curve, bool word = false)
     {
         uint i = (dst - VertexCache) >> 3;
         if (i >= CacheSlots) return;
@@ -67,7 +67,7 @@ public static partial class PolyAssembler
         e.Serial = _cacheSerial;
         e.Fog = (ushort)fog;
         e.Curve = (byte)curve;
-        e.Raw = (int)Gte.Read(24) / 4096f;
+        e.Raw = word ? fog : (int)Gte.Read(24) / 4096f;
     }
 
     /// <summary>A tile assembler's vertex: written by the transform it just called, or not at all.</summary>
@@ -282,22 +282,20 @@ public static partial class PolyAssembler
 
     /// <summary>
     /// After func_800302E8: the fan it emitted, packet k being records 0, k+1 and k+2,
-    /// lit by NormalColorCol and fogged at IR0 / 2. <paramref name="before"/> is the
-    /// buffer cursor before the call; a packet past the buffer's end was allocated and
-    /// never filled or linked, so it is left alone.
+    /// lit by NormalColorCol and fogged at IR0 / 2, or on the near curve when
+    /// <paramref name="refogged"/>. <paramref name="before"/> is the buffer cursor
+    /// before the call; a packet past the buffer's end was allocated and never filled
+    /// or linked, so it is left alone.
     /// </summary>
-    static void LightClipped(PSMemory mem, uint before, uint normal)
+    static void LightClipped(PSMemory mem, uint before, uint normal, bool refogged)
     {
-        uint desc = Peek32(mem, PrimDescriptor);
-        uint after = Peek32(mem, desc + 8u);
-        if (after <= before) return;
-        uint count = (after - before) / 0x28u;
-        if (after > Peek32(mem, desc + 4u)) count--;
+        uint count = ClippedCount(mem, before);
+        if (count == 0) return;
 
-        Gte.LightProducts(Peek16(mem, normal), Peek16(mem, normal + 2u), Peek16(mem, normal + 4u),
-                          out int i1, out int i2, out int i3);
-        uint light = Peek32(mem, LightColour);
-        float cr = Nccs(light & 0xFF, i1), cg = Nccs((light >> 8) & 0xFF, i2), cb = Nccs((light >> 16) & 0xFF, i3);
+        uint colour = ClippedColour(mem, normal);
+        float cr = colour & 0xFF, cg = (colour >> 8) & 0xFF, cb = (colour >> 16) & 0xFF;
+        bool far = (int)Peek32(mem, FogMode) >= 32000;
+        uint fogCurve = !refogged ? GteLightMap.CurveHalf : far ? GteLightMap.CurveNone : GteLightMap.CurveKnee;
 
         uint r0 = Peek32(mem, ClipOut);
         for (uint k = 0; k < count; k++)
@@ -308,16 +306,33 @@ public static partial class PolyAssembler
             r.L0x = r.L1x = r.L2x = cr;
             r.L0y = r.L1y = r.L2y = cg;
             r.L0z = r.L1z = r.L2z = cb;
-            uint curve = GteLightMap.CurveHalf;
-            if (!(RecordFog(mem, r0, out r.F0) & RecordFog(mem, ra, out r.F1) & RecordFog(mem, rb, out r.F2)))
+            uint curve = fogCurve;
+            bool blended = false;
+            if (refogged && _tile != 0)
             {
-                r.F0 = Peek32(mem, r0 + 0x14u) >> 1;
-                r.F1 = Peek32(mem, ra + 0x14u) >> 1;
-                r.F2 = Peek32(mem, rb + 0x14u) >> 1;
+                r.F0 = RecordFogWeight(mem, r0, far, out bool b0);
+                r.F1 = RecordFogWeight(mem, ra, far, out bool b1);
+                r.F2 = RecordFogWeight(mem, rb, far, out bool b2);
+                blended = b0 | b1 | b2;
+            }
+            if (blended) curve = GteLightMap.CurveWord;
+            else if (!(RecordFog(mem, r0, out r.F0) & RecordFog(mem, ra, out r.F1) & RecordFog(mem, rb, out r.F2)))
+            {
+                r.F0 = WordFog(mem, r0, refogged, far);
+                r.F1 = WordFog(mem, ra, refogged, far);
+                r.F2 = WordFog(mem, rb, refogged, far);
                 curve = GteLightMap.CurveWord;
             }
+            if (Uniform(ref r, curve, 3)) { r.Light = 0; continue; }
             Seal(mem, ref r, pkt, curve, 0);
         }
+    }
+
+    /// <summary>A record's fog weight as the emitter's DPCS saw it.</summary>
+    static float WordFog(PSMemory mem, uint rec, bool refogged, bool far)
+    {
+        uint p = Peek32(mem, rec + 0x14u);
+        return refogged ? NearFog((int)p, far) : p >> 1;
     }
 
     /// <summary>NormalColorCol's saturated colour byte from the light colour and IR.</summary>
