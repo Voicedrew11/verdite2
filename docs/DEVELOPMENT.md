@@ -285,6 +285,29 @@ entries (p99 772), so 8-36 µs a frame, plus about 0.05 ms for the CSV writer, w
 is itself a section (`profiler (its own reporting)`). The panel draws inside the
 frame it measures, under *menu bar + panels + popups*.
 
+**The panel was the largest section in the frame.** Area 1 at 144 fps, standing
+still: the whole interface costs about 70 µs with the panel closed (menu bar 8,
+dockspace 9, Output 2, popups 0, ImGui's new frame 12 and render 36), and the open
+panel added 0.62 ms to that, 38% of the frame's work. Timed by part, the table was
+0.467 ms, because every row was drawn, off-screen ones included, and six strings
+were formatted per row per frame; the graph was 0.114 ms, re-summing every bar's
+~170 sections by group. `Aggregate` was not the problem (4 µs average, 0.195 ms at
+most, every 250 ms). The table is clipped to its visible rows and its strings, the
+summary and the spike list are built when `Aggregate` runs; a frame's group totals
+are summed once, keyed by its index. Measured after: the panel 0.135 ms (table
+0.042, graph 0.051), work 1.63 → 1.12 ms against 1.02 closed, and 33 → 17 KB a
+frame allocated. The numbers now refresh with `Aggregate`, four times a second.
+
+**A swap that jumps to milliseconds is the compositor, not the port.** Native
+Wayland (KWin), VSync off, a 170 Hz monitor, `KF2_FPS=1000`: the swap is 0.16-0.23 ms
+and the port draws about 800 fps, but moving the window drops it into a second
+state, about 200 fps with half the swaps blocking 5-10 ms (3.8 ms average, p99
+frame 10.6 ms against 1.8), until it recovers. Two otherwise identical runs matched
+second for second until one flipped. The driver waits for the compositor to hand
+back a buffer, which it then does only at its own refresh. Nothing in the frame
+changed, so a swap spike in a profile is worth checking against what the desktop
+was doing before it is chased.
+
 **What it cannot see.** Only the game thread: the SPU mixer and the CD stream
 reader run on their own threads (a GC pause still stops them, and is counted). GPU
 time appears only where the CPU waits for it, which is the swap; there are no GL

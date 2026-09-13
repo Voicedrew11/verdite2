@@ -113,6 +113,7 @@ public sealed class ProfilerPanel : IPanel
         {
             Profiler.ClearHistory();
             _selected = -1;
+            _aggDirty = true;
         }
 
         ImGui.SameLine();
@@ -122,15 +123,15 @@ public sealed class ProfilerPanel : IPanel
                              "scripts/profile_report.py reads it.");
 
         ImGui.SetNextItemWidth(140);
-        ImGui.SliderFloat("Window", ref _windowSeconds, 0.5f, 12f, "%.1f s");
+        if (ImGui.SliderFloat("Window", ref _windowSeconds, 0.5f, 12f, "%.1f s")) _aggDirty = true;
         ImGui.SameLine();
         ImGui.SetNextItemWidth(140);
-        ImGui.SliderFloat("Spike", ref _spikeMs, 0f, 100f, _spikeMs <= 0 ? "auto" : "%.1f ms work");
+        if (ImGui.SliderFloat("Spike", ref _spikeMs, 0f, 100f, _spikeMs <= 0 ? "auto" : "%.1f ms work")) _aggDirty = true;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("A frame whose work (the frame less sleeps and the swap) passes this is listed as a " +
                              "spike. Auto is twice the window's median work plus 2 ms.");
         ImGui.SameLine();
-        ImGui.Checkbox("Show waits", ref _showWaits);
+        if (ImGui.Checkbox("Show waits", ref _showWaits)) _aggDirty = true;
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Stack the sleeps into the bars and list them in the table. Off, a capped frame " +
                              "shows only the time something ran.");
@@ -153,6 +154,7 @@ public sealed class ProfilerPanel : IPanel
     long _aggNewest = -1;
     double _aggAt;
     long _aggSelected = -2;
+    bool _aggDirty;
 
     Profiler.Frame? FindFrame(long index)
     {
@@ -165,8 +167,9 @@ public sealed class ProfilerPanel : IPanel
     {
         var newest = Profiler.GetFrame(0);
         var now = ImGui.GetTime();
-        if (_aggSelected == _selected && newest.Index == _aggNewest) return;
-        if (_aggSelected == _selected && now - _aggAt < 0.25) return;
+        if (!_aggDirty && _aggSelected == _selected && newest.Index == _aggNewest) return;
+        if (!_aggDirty && _aggSelected == _selected && now - _aggAt < 0.25) return;
+        _aggDirty = false;
         _aggAt = now;
         _aggNewest = newest.Index;
         _aggSelected = _selected;
@@ -229,6 +232,9 @@ public sealed class ProfilerPanel : IPanel
         for (var id = 0; id < Profiler.SectionCount; id++)
             if (_aggCalls[id] > 0 || _aggSelf[id] > 0) _rows.Add(id);
         SortRows();
+        BuildRows();
+        BuildSpikes();
+        BuildSummary();
         return;
 
         void Add(Profiler.Frame f)
@@ -259,27 +265,44 @@ public sealed class ProfilerPanel : IPanel
 
     // ---- the header -------------------------------------------------------------------
 
-    void DrawSummary()
+    // Built when the numbers change, not every frame the panel draws.
+    string _summaryFrame = "", _summaryWork = "", _summaryGc = "";
+    string? _summarySelected;
+
+    void BuildSummary()
     {
         var fps = _aggSeconds > 0 ? _aggFrames / _aggSeconds : 0;
-        ImGui.Text($"{fps:0.0} fps over {_aggFrames} frames   frame {_avgMs:0.00} ms avg, {_p50:0.00} median, " +
-                   $"{_p99:0.00} p99, {_maxMs:0.00} max");
-        ImGui.Text($"work {_avgWork:0.00} ms   swap {_avgGpu:0.00} ms   wait {_avgWait:0.00} ms");
+        _summaryFrame = $"{fps:0.0} fps over {_aggFrames} frames   frame {_avgMs:0.00} ms avg, {_p50:0.00} median, " +
+                        $"{_p99:0.00} p99, {_maxMs:0.00} max";
+        _summaryWork = $"work {_avgWork:0.00} ms   swap {_avgGpu:0.00} ms   wait {_avgWait:0.00} ms";
+        _summaryGc = $"  GC {_gcCount} collection(s), {_gcMs:0.0} ms paused   JIT {_jitMs:0.0} ms   " +
+                     $"{_allocKb:0.0} KB/frame allocated";
+        _summarySelected = _selected >= 0 && FindFrame(_selected) is { } f
+            ? $"Frame {f.Index}: {f.Ms:0.00} ms, work {f.WorkMs:0.00}, swap {f.GpuMs:0.00}, wait {f.WaitMs:0.00}" +
+              (f.GcPauseMs > 0 ? $", GC {f.GcPauseMs:0.00} ms" : "") +
+              (f.JitMs > 0.05 ? $", JIT {f.JitMs:0.00} ms / {f.JitMethods} methods" : "") +
+              $", {f.AllocBytes / 1024.0:0.0} KB"
+            : null;
+    }
+
+    void DrawSummary()
+    {
+        ImGui.TextUnformatted(_summaryFrame);
+        ImGui.TextUnformatted(_summaryWork);
         ImGui.SameLine();
-        ImGui.TextDisabled($"  GC {_gcCount} collection(s), {_gcMs:0.0} ms paused   JIT {_jitMs:0.0} ms   " +
-                           $"{_allocKb:0.0} KB/frame allocated");
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+        ImGui.TextUnformatted(_summaryGc);
+        ImGui.PopStyleColor();
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Over the window. GC pauses stop every thread, the audio mixer's included. " +
                              "Allocation is the game thread's own. JIT is methods compiled for the first time -- " +
                              "QuickJit is off, so first-hit code compiles fully optimised and can spike a frame.");
 
-        if (_selected >= 0 && FindFrame(_selected) is { } f)
+        if (_selected >= 0 && _summarySelected != null)
         {
-            ImGui.TextColored(new Vector4(1f, 0.85f, 0.35f, 1f),
-                $"Frame {f.Index}: {f.Ms:0.00} ms, work {f.WorkMs:0.00}, swap {f.GpuMs:0.00}, wait {f.WaitMs:0.00}" +
-                (f.GcPauseMs > 0 ? $", GC {f.GcPauseMs:0.00} ms" : "") +
-                (f.JitMs > 0.05 ? $", JIT {f.JitMs:0.00} ms / {f.JitMethods} methods" : "") +
-                $", {f.AllocBytes / 1024.0:0.0} KB");
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.85f, 0.35f, 1f));
+            ImGui.TextUnformatted(_summarySelected);
+            ImGui.PopStyleColor();
             ImGui.SameLine();
             if (ImGui.SmallButton("back to the window")) _selected = -1;
         }
@@ -287,7 +310,33 @@ public sealed class ProfilerPanel : IPanel
 
     // ---- the graph ----------------------------------------------------------------------
 
-    readonly long[] _stack = new long[5];
+    const int GroupCount = 5;
+    static readonly string[] Legend = [.. GroupNames.Select(n => "■ " + n)];
+
+    // Keyed by frame index, which never repeats, in a table the history's size.
+    readonly long[] _barIndex = NewBarIndex();
+    readonly long[] _barGroups = new long[Profiler.HistoryFrames * GroupCount];
+    double _targetMs = -1, _scaleTop = -1, _scaleSpike = -1;
+    string _targetText = "", _scaleText = "";
+
+    static long[] NewBarIndex()
+    {
+        var a = new long[Profiler.HistoryFrames];
+        Array.Fill(a, -1L);
+        return a;
+    }
+
+    ReadOnlySpan<long> GroupTicks(Profiler.Frame f)
+    {
+        var slot = (int)(f.Index % Profiler.HistoryFrames);
+        var groups = _barGroups.AsSpan(slot * GroupCount, GroupCount);
+        if (_barIndex[slot] == f.Index) return groups;
+
+        groups.Clear();
+        foreach (var s in f.Span) groups[(int)Profiler.Group(s.Id)] += s.Self;
+        _barIndex[slot] = f.Index;
+        return groups;
+    }
 
     void DrawGraph()
     {
@@ -321,14 +370,13 @@ public sealed class ProfilerPanel : IPanel
             var x1 = p0.X + width - i * barW;
             var x0 = x1 - barW + 1f;
 
-            Array.Clear(_stack);
-            foreach (var s in f.Span) _stack[(int)Profiler.Group(s.Id)] += s.Self;
+            var stack = GroupTicks(f);
 
             var y = p0.Y + height;
-            for (var g = 0; g < _stack.Length; g++)
+            for (var g = 0; g < stack.Length; g++)
             {
                 if (g == (int)ProfileGroup.Wait && !_showWaits) continue;
-                var h = (float)(_stack[g] * Profiler.TicksToMs * scale);
+                var h = (float)(stack[g] * Profiler.TicksToMs * scale);
                 if (h <= 0) continue;
                 var yTop = Math.Max(p0.Y, y - h);
                 dl.AddRectFilled(new Vector2(x0, yTop), new Vector2(x1, y), Colour((ProfileGroup)g));
@@ -344,8 +392,13 @@ public sealed class ProfilerPanel : IPanel
             if (mouse.X >= x0 - 0.5f && mouse.X < x1 + 0.5f && mouse.Y >= p0.Y && mouse.Y < p0.Y + height) hovered = i;
         }
 
-        Line(target, $"{FramePacing.TargetFps:0.#} fps");
-        if (Math.Abs(target - 1000.0 / 60) > 1) Line(1000.0 / 60, "60 fps");
+        if (target != _targetMs)
+        {
+            _targetMs = target;
+            _targetText = $"{target:0.0} ms  {FramePacing.TargetFps:0.#} fps";
+        }
+        Line(target, _targetText);
+        if (Math.Abs(target - 1000.0 / 60) > 1) Line(1000.0 / 60, "16.7 ms  60 fps");
 
         ImGui.InvisibleButton("##kf2profgraph", new Vector2(width, height));
         if (hovered >= 0 && ImGui.IsItemHovered())
@@ -369,19 +422,25 @@ public sealed class ProfilerPanel : IPanel
         for (var g = 0; g < GroupNames.Length; g++)
         {
             if (g > 0) ImGui.SameLine();
-            ImGui.TextColored(GroupTint((ProfileGroup)g), $"■ {GroupNames[g]}");
+            ImGui.TextColored(GroupTint((ProfileGroup)g), Legend[g]);
         }
         ImGui.SameLine();
-        ImGui.TextDisabled($"   scale {top:0.0} ms, newest on the right, red tick = spike (> {SpikeThreshold:0.0} ms work)");
+        var spike = Math.Round(SpikeThreshold, 1);
+        if (Math.Round(top, 1) != _scaleTop || spike != _scaleSpike)
+        {
+            (_scaleTop, _scaleSpike) = (Math.Round(top, 1), spike);
+            _scaleText = $"   scale {_scaleTop:0.0} ms, newest on the right, red tick = spike (> {spike:0.0} ms work)";
+        }
+        ImGui.TextDisabled(_scaleText);
         return;
 
-        void Line(double ms, string label)
+        void Line(double ms, string text)
         {
             if (ms <= 0 || ms > top) return;
             var y = p0.Y + height - (float)(ms * scale);
             var c = ImGui.GetColorU32(new Vector4(1, 1, 1, 0.35f));
             dl.AddLine(new Vector2(p0.X, y), new Vector2(p0.X + width, y), c);
-            dl.AddText(new Vector2(p0.X + 4, y - ImGui.GetTextLineHeight()), c, $"{ms:0.0} ms  {label}");
+            dl.AddText(new Vector2(p0.X + 4, y - ImGui.GetTextLineHeight()), c, text);
         }
     }
 
@@ -394,28 +453,45 @@ public sealed class ProfilerPanel : IPanel
 
     // ---- spikes -------------------------------------------------------------------------
 
-    void DrawSpikes()
+    int _spikeCount;
+    string _spikeHeader = "Spikes###kf2profspikes";
+    bool _spikesOpen;
+    readonly List<(long Index, string Label)> _spikes = new();
+
+    // The labels are only built while the list is open; opening it re-aggregates.
+    void BuildSpikes()
     {
         var threshold = SpikeThreshold;
-        var count = 0;
+        _spikeCount = 0;
+        _spikes.Clear();
         for (var i = 0; i < Profiler.HistoryCount; i++)
-            if (Profiler.GetFrame(i).WorkMs > threshold) count++;
-
-        if (!ImGui.CollapsingHeader($"Spikes ({count} in the history)###kf2profspikes")) return;
-
-        ImGui.BeginChild("##kf2profspikelist", new Vector2(0, Math.Min(160, 22 + count * ImGui.GetTextLineHeightWithSpacing())));
-        var shown = 0;
-        for (var i = 0; i < Profiler.HistoryCount && shown < 64; i++)
         {
             var f = Profiler.GetFrame(i);
             if (f.WorkMs <= threshold) continue;
-            shown++;
+            _spikeCount++;
+            if (!_spikesOpen || _spikes.Count >= 64) continue;
             var extra = (f.GcPauseMs > 0 ? $" GC {f.GcPauseMs:0.0}" : "") + (f.JitMs > 0.05 ? $" JIT {f.JitMs:0.0}" : "");
-            if (ImGui.Selectable($"frame {f.Index,7}  {f.WorkMs,6:0.00} ms work{extra}   {FrameProfiler.Top(f.Span, 3)}##s{f.Index}",
-                                 f.Index == _selected))
-                _selected = f.Index;
+            _spikes.Add((f.Index,
+                $"frame {f.Index,7}  {f.WorkMs,6:0.00} ms work{extra}   {FrameProfiler.Top(f.Span, 3)}##s{f.Index}"));
         }
-        if (count == 0) ImGui.TextDisabled("None over the threshold.");
+        _spikeHeader = $"Spikes ({_spikeCount} in the history)###kf2profspikes";
+    }
+
+    void DrawSpikes()
+    {
+        var open = ImGui.CollapsingHeader(_spikeHeader);
+        if (open != _spikesOpen)
+        {
+            _spikesOpen = open;
+            if (open) _aggDirty = true;
+        }
+        if (!open) return;
+
+        ImGui.BeginChild("##kf2profspikelist", new Vector2(0, Math.Min(160, 22 + _spikeCount * ImGui.GetTextLineHeightWithSpacing())));
+        foreach (var (index, label) in _spikes)
+            if (ImGui.Selectable(label, index == _selected))
+                _selected = index;
+        if (_spikeCount == 0) ImGui.TextDisabled("None over the threshold.");
         ImGui.EndChild();
     }
 
@@ -441,12 +517,46 @@ public sealed class ProfilerPanel : IPanel
         });
     }
 
+    readonly record struct Row(int Id, ProfileGroup Group, string Name, string Self, string Max, string Incl,
+                               string Calls, string Share);
+
+    readonly List<Row> _visible = new();
+    string _tableCaption = "";
+
+    void BuildRows()
+    {
+        var frames = _selected >= 0 ? 1.0 : Math.Max(1, _aggFrames);
+        var workTicks = 0L;
+        foreach (var id in _rows)
+            if (Profiler.Group(id) is not (ProfileGroup.Wait or ProfileGroup.Gpu)) workTicks += _aggSelf[id];
+
+        _visible.Clear();
+        foreach (var id in _rows)
+        {
+            var group = Profiler.Group(id);
+            if (!_showWaits && group == ProfileGroup.Wait) continue;
+            var name = Profiler.DisplayName(id);
+            if (_filter.Length > 0 && name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+            _visible.Add(new Row(id, group, name,
+                (_aggSelf[id] * Profiler.TicksToMs / frames).ToString("0.000", CultureInfo.InvariantCulture),
+                (_aggMax[id] * Profiler.TicksToMs).ToString("0.000", CultureInfo.InvariantCulture),
+                (_aggIncl[id] * Profiler.TicksToMs / frames).ToString("0.000", CultureInfo.InvariantCulture),
+                (_aggCalls[id] / frames).ToString(frames == 1 ? "0" : "0.0", CultureInfo.InvariantCulture),
+                group is not (ProfileGroup.Wait or ProfileGroup.Gpu) && workTicks > 0
+                    ? (100.0 * _aggSelf[id] / workTicks).ToString("0.0", CultureInfo.InvariantCulture) + "%"
+                    : ""));
+        }
+
+        _tableCaption = _selected >= 0 ? "one frame" : $"per frame, averaged over {_aggFrames} frames";
+    }
+
     unsafe void DrawTable()
     {
         ImGui.SetNextItemWidth(220);
-        ImGui.InputTextWithHint("##kf2proffilter", "filter sections", ref _filter, 128);
+        if (ImGui.InputTextWithHint("##kf2proffilter", "filter sections", ref _filter, 128)) BuildRows();
         ImGui.SameLine();
-        ImGui.TextDisabled(_selected >= 0 ? "one frame" : $"per frame, averaged over {_aggFrames} frames");
+        ImGui.TextDisabled(_tableCaption);
 
         const ImGuiTableFlags flags = ImGuiTableFlags.Sortable | ImGuiTableFlags.RowBg | ImGuiTableFlags.Borders |
                                       ImGuiTableFlags.ScrollY | ImGuiTableFlags.Resizable |
@@ -471,38 +581,34 @@ public sealed class ProfilerPanel : IPanel
             _sortAscending = specs.Specs.SortDirection == ImGuiSortDirection.Ascending;
             specs.SpecsDirty = false;
             SortRows();
+            BuildRows();
         }
 
-        var frames = _selected >= 0 ? 1.0 : Math.Max(1, _aggFrames);
-        var workTicks = 0L;
-        foreach (var id in _rows)
-            if (Profiler.Group(id) is not (ProfileGroup.Wait or ProfileGroup.Gpu)) workTicks += _aggSelf[id];
-
-        foreach (var id in _rows)
-        {
-            var group = Profiler.Group(id);
-            if (!_showWaits && group == ProfileGroup.Wait) continue;
-            var name = Profiler.DisplayName(id);
-            if (_filter.Length > 0 && name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
-
-            ImGui.TableNextRow();
-            ImGui.TableNextColumn();
-            ImGui.TextUnformatted(name);
-            if (ImGui.IsItemHovered() && Profiler.Label(id) != null) ImGui.SetTooltip(Profiler.Name(id));
-            ImGui.TableNextColumn();
-            ImGui.TextColored(GroupTint(group), GroupNames[(int)group]);
-            ImGui.TableNextColumn();
-            ImGui.Text((_aggSelf[id] * Profiler.TicksToMs / frames).ToString("0.000", CultureInfo.InvariantCulture));
-            ImGui.TableNextColumn();
-            ImGui.Text((_aggMax[id] * Profiler.TicksToMs).ToString("0.000", CultureInfo.InvariantCulture));
-            ImGui.TableNextColumn();
-            ImGui.Text((_aggIncl[id] * Profiler.TicksToMs / frames).ToString("0.000", CultureInfo.InvariantCulture));
-            ImGui.TableNextColumn();
-            ImGui.Text((_aggCalls[id] / frames).ToString(frames == 1 ? "0" : "0.0", CultureInfo.InvariantCulture));
-            ImGui.TableNextColumn();
-            if (group is not (ProfileGroup.Wait or ProfileGroup.Gpu) && workTicks > 0)
-                ImGui.Text($"{100.0 * _aggSelf[id] / workTicks:0.0}%");
-        }
+        var clipper = new ImGuiListClipperPtr(ImGuiNative.ImGuiListClipper_ImGuiListClipper());
+        clipper.Begin(_visible.Count);
+        while (clipper.Step())
+            for (var i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
+            {
+                var row = _visible[i];
+                ImGui.TableNextRow();
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Name);
+                if (ImGui.IsItemHovered() && Profiler.Label(row.Id) != null) ImGui.SetTooltip(Profiler.Name(row.Id));
+                ImGui.TableNextColumn();
+                ImGui.TextColored(GroupTint(row.Group), GroupNames[(int)row.Group]);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Self);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Max);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Incl);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Calls);
+                ImGui.TableNextColumn();
+                ImGui.TextUnformatted(row.Share);
+            }
+        clipper.End();
+        clipper.Destroy();
 
         ImGui.EndTable();
     }
