@@ -11,6 +11,7 @@ public sealed class AudioPage : IPatchPage
 
     static readonly string[] InterpLabels = ["Gaussian (original)", "Cubic", "Sinc"];
     static readonly string[] ReverbLabels = ["Original", "Enhanced"];
+    static readonly string[] PositionalLabels = ["Original", "Speakers", "Headphones"];
 
     public void Draw()
     {
@@ -33,5 +34,15 @@ public sealed class AudioPage : IPatchPage
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("The console's reverb, or a denser, smoother one sized from the same room settings.");
+
+        var positional = (int)PositionalAudio.Current;
+        if (ImGui.Combo("Positional audio", ref positional, PositionalLabels, PositionalLabels.Length))
+        {
+            PositionalAudio.Set((PositionalAudio.Mode)positional);
+            PatchSettings.Set(PositionalAudio.ModeKey, positional);
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Sound effects stay where they come from as you move and turn. Headphones adds front and back.");
     }
 }

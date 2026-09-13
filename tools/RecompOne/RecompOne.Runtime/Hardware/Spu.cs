@@ -29,6 +29,9 @@ public sealed class Spu
     {
         public long VoiceClamps, MixClamps, Frames, Ticks;
         public int ActiveVoicesPeak;
+
+        // Voices rendered from a position (SpuSpatialVoice), peak per mixed tick.
+        public int SpatialVoicesPeak;
     }
 
     public readonly Counters Stats = new();
@@ -161,6 +164,10 @@ public sealed class Spu
         public int VolCycL, VolCycR;
 
         public readonly short[] Buf = new short[History + 28];
+
+        // Counts key-ons, so a positional tag belongs to one note and not to the voice.
+        public int KonSerial;
+        public readonly SpuSpatialVoice Sp = new();
     }
 
     private readonly Voice[] _v = new Voice[24];
@@ -623,9 +630,54 @@ public sealed class Spu
 
     private uint _konPending, _koffPending;
 
+    /// <summary>Each voice's key-on count, for tagging a note that is being keyed on now.</summary>
+    public void CopyKeyOnSerials(int[] dst)
+    {
+        lock (_sync)
+        {
+            for (var i = 0; i < 24 && i < dst.Length; i++) dst[i] = _v[i].KonSerial;
+        }
+    }
+
+    /// <summary>
+    /// Render key-on <paramref name="serial"/> of <paramref name="voice"/> from a
+    /// position (see <see cref="SpuSpatialVoice"/>). Levels are per ear in the
+    /// game's 0..127 volume units, <paramref name="keyOnSum"/> is the left plus right
+    /// the game asked for at key-on, delays are in samples and the shelves are the
+    /// head-shadow gain at Nyquist (1 is flat). A new serial snaps to the targets
+    /// rather than gliding from the last note's. Serial -1 hands the voice back to
+    /// its registers.
+    /// </summary>
+    public void SetSpatial(int voice, int serial, float keyOnSum, float levelL, float levelR, float delayL,
+        float delayR, float shelfL, float shelfR, float rear)
+    {
+        if ((uint)voice >= 24) return;
+        lock (_sync)
+        {
+            var sp = _v[voice].Sp;
+            sp.KeyOnSum = keyOnSum;
+            sp.TgtL = levelL;
+            sp.TgtR = levelR;
+            sp.TgtDl = delayL;
+            sp.TgtDr = delayR;
+            sp.TgtAl = shelfL;
+            sp.TgtAr = shelfR;
+            sp.TgtRear = rear;
+            if (sp.Serial != serial)
+            {
+                sp.Serial = serial;
+                sp.Snap();
+                sp.ClearHistory();
+            }
+        }
+    }
+
     private void KeyOn(ushort mask, bool hi)
     {
         var bits = (uint)mask << (hi ? 16 : 0);
+        for (var i = 0; i < 24; i++)
+            if ((bits & (1u << i)) != 0)
+                _v[i].KonSerial++;
         _konPending |= bits;
         _koffPending &= ~bits;
         _endx &= ~bits;
@@ -657,6 +709,7 @@ public sealed class Spu
                 v.HasBlock = false;
                 v.EndX = false;
                 _endx &= ~bit;
+                if (v.Sp.Serial == v.KonSerial) v.Sp.ClearHistory();
             }
             else if ((_koffPending & bit) != 0)
             {
@@ -839,6 +892,7 @@ public sealed class Spu
         var prevOutx = 0;
         var interpolation = Interpolation;
         var active = 0;
+        var spatial = 0;
 
         for (var i = 0; i < 24; i++)
         {
@@ -898,8 +952,18 @@ public sealed class Spu
 
             prevOutx = amp;
 
-            var vl = (amp * v.CurVolL) >> 15;
-            var vr = (amp * v.CurVolR) >> 15;
+            int vl, vr;
+            if (v.Sp.Serial == v.KonSerial)
+            {
+                v.Sp.Render(amp, v.CurVolL, v.CurVolR, out vl, out vr);
+                spatial++;
+            }
+            else
+            {
+                vl = (amp * v.CurVolL) >> 15;
+                vr = (amp * v.CurVolR) >> 15;
+            }
+
             sumL += vl;
             sumR += vr;
             if ((eonMask & (1u << i)) != 0)
@@ -910,6 +974,7 @@ public sealed class Spu
         }
 
         if (active > Stats.ActiveVoicesPeak) Stats.ActiveVoicesPeak = active;
+        if (spatial > Stats.SpatialVoicesPeak) Stats.SpatialVoicesPeak = spatial;
         if (sumL is < -32768 or > 32767 || sumR is < -32768 or > 32767) Stats.VoiceClamps++;
         sumL = Math.Clamp(sumL, -32768, 32767);
         sumR = Math.Clamp(sumR, -32768, 32767);

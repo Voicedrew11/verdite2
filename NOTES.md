@@ -322,6 +322,7 @@ The SPU mixer, its reverb and interpolation, XA resampling and the host output.
 - Voice interpolation
 - XA resampling
 - The host output
+- Positional audio
 
 ### [ENV_VARS.md](docs/ENV_VARS.md)
 

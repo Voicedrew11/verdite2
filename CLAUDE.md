@@ -183,6 +183,7 @@ what it is) live there, not here.
 | `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |
 | `HitGuard` | fences the final-boss hit-path fault | on | TODO, "The crash on the final boss's last hit" |
 | `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | Gaussian, original reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |
+| `PositionalAudio` | 3D sound effects re-aimed every frame, for speakers or headphones (`0044`) | off | AUDIO, "Positional audio" |
 
 Features ship **off** when the mechanism is measured but the picture has never been
 judged by eye; say which of the two a change has when you write it up.
