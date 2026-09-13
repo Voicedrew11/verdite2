@@ -319,6 +319,7 @@ The SPU mixer, its reverb and interpolation, XA resampling and the host output.
 - Voice interpolation
 - XA resampling
 - The host output
+- Positional audio
 
 ### [ENV_VARS.md](docs/ENV_VARS.md)
 
@@ -330,7 +331,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0043`, one entry each.
+Every change the port made to RecompOne, `0001`-`0044`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

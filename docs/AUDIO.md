@@ -1,7 +1,7 @@
 # Audio
 
 The SPU mixer, its reverb and interpolation, XA resampling and the host output.
-Everything here is runtime code in the vendored tree (`patches/recompone/0043`):
+Everything here is runtime code in the vendored tree (`patches/recompone/0043`, `0044`):
 `Spu` is a hardware model, not a recompiled function, so `HookManager` cannot
 reach it. `patches/AudioQuality.cs` is the switch, `patches/AudioProbe.cs` the
 probe and dump, `patches/settings/AudioPage.cs` the two combos under Audio.
@@ -177,3 +177,77 @@ no evidence either way. The probe line now says `xa playing at <rate> Hz` or
   at worst with sinc and the hardware filters. The frame pacing is untouched:
   `KF2_FPS=144 KF2_FPS_PROBE=1` with sinc and hardware reverb reads 144.0 fps
   drawn at 19.9-20.0 ticks/s.
+
+## Positional audio
+
+`KF2_POSAUDIO` / *Positional audio*: `off` (the default, *Original*), `speakers`,
+`headphones`. `patches/PositionalAudio.cs` finds the voices and aims them;
+`Hardware/SpuSpatial.cs` (`0044`) renders them.
+
+**What the game does.** `func_80013D08(se | flags, &pos, vol, maxDist, fade,
+noteAdj)` is its 3D sound, reached through `func_80013FCC` (max `0x4800`, fade
+`0x6000`) and `func_80014000` from creature, door and spell code in `GAME.EXE`
+and the `fdat` modules. It measures the distance to the listener stage 9 stores
+at `0x80198584`, returns without a sound at `maxDist` or beyond, fades linearly
+to zero at `fade`, halves the result when `func_8002B6B4` puts the source on the
+other half of a stacked map, and pans by `rsin`/`rcos` of half the angle to the
+listener's yaw (`0x80198598`) over `0xD48` -- equal power, 0.852 per ear at centre.
+Two things about that pan are the whole motivation:
+
+- **It is folded.** The angle is reflected about the listener's side axis before
+  it is halved, so a sound behind is panned exactly as the same sound in front.
+- **It is computed once.** The volumes go into `SsUtKeyOn` and nothing revisits
+  them: turn while a sound plays and it stays where it started, walk away and it
+  stays as loud.
+
+The object ambients `func_800331B4` plays through `func_80014158` are a different
+path -- a box around an object record, loudest deep inside it, and mono -- and are
+deliberately not touched: an area sound has no single direction to give it.
+
+**Finding the voice.** A pre hook on `func_80013D08` keeps the source; a pre and a
+post on `SsUtKeyOn` (`0x8005520C`) inside it read the voice it returns and what
+the game asked for. `SsUtKeyOn` does not key the voice on itself -- measured,
+every one of the tags in two runs was *deferred* to the sequencer's next flush --
+so a voice is not the right thing to tag. `0044` counts key-ons per voice, and the
+tag names the key-on after the count read before the call, which is right for
+either timing. Anything else keying that voice on (the music, the next effect)
+moves the count past the tag, and the voice is its registers' again.
+
+**Aiming it.** Post stage 9, every live tag is re-aimed from that frame's
+listener: the game's own distance law (fade, volume, the halving decided at
+key-on), and a direction with 0 ahead and +90 degrees the side the game pans left.
+Measured against the game's own `L`/`R` on 26 tags in areas 1 and 2: the side
+agrees on every one (`L 86 R 41` against the port's `left +0.95`, `L 72 R 74`
+against `-0.06`). The game's pan is narrower than the geometry at a distance --
+that is the port reading wider, not a disagreement.
+
+**Rendering it.** The level stays the game's: the mixer scales every target by
+the voice registers' magnitude over the left-plus-right the game asked for at
+key-on, which carries the VAB's own program and tone volumes without the port
+knowing them. Then, per voice, per sample:
+
+- *Speakers* -- the game's equal-power law, unfolded and kept current. A source
+  behind is centred, as the game does, but with the rear low-pass below.
+- *Headphones* -- a spherical head (Brown and Duda, 1998): an interaural delay up
+  to 0.66 ms (29 samples) through a Catmull-Rom fractional delay, a first-order
+  head-shadow shelf per ear (+6 dB at Nyquist on the near ear, down to 0.1 behind
+  the far one), and a broadband level difference of +/-4.8 dB at the side at
+  constant power, so a centred sound is exactly the game's level.
+- *Both* -- a rear low-pass at 2.5 kHz blended in up to half for a source straight
+  behind, the front/back cue a spherical head cannot give on its own; and a
+  source closer than half a tile fades toward straight ahead, where the direction
+  stops meaning anything.
+
+Targets move once a frame and every one is smoothed over 15 ms, so a turn is not
+a zipper; a new tag snaps to its targets and clears the delay line.
+
+Measured in area 1 with sinc and enhanced reverb, `KF2_FPS=144`: 144.0 fps drawn
+at 19.9-20.0 ticks/s, `[present] wide 288`, 0 voice and mix clamps, 0 underruns,
+mixer 0.13-0.16 ms per 256 frames (0.11-0.14 in the sinc measurement above, a different room and no effects playing).
+Live spatial voices peaked at 11 in area 2.
+
+**Mechanism measured, never listened to** -- including whether the Brown-Duda
+constants suit this game's material, how wide *Speakers* should read against the
+game's own narrower pan, and the per-frame re-aim while turning, which no run
+here exercised (the shell cannot turn the player). Off by default until someone
+has heard it on headphones.

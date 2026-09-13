@@ -276,6 +276,27 @@ offsets stage 8 uses. It does not break the smoothing, whose position half is of
 by default and which nudges the globals stage 8 copies rather than the copy, but
 it does mean "one reader" is a claim about the angles alone.
 
+### Stage 9 is the sound listener, and the 3D sound it serves
+
+`func_800140AC(pos, angles)` copies the stage-8 camera into `0x80198584` (X, Y, Z,
+and a fourth word) and the angle block into `0x80198596` (pitch, then **yaw at
+`0x80198598`**), and calls `func_8002B6B4` on the position so the half of a
+stacked map it leaves at `0x801E9C8E` can be kept at `0x80198594`.
+
+`func_80013D08(se | 0x8000 flag, &pos, vol, maxDist, fade, noteAdj)` is the only
+thing that reads them: distance through `SquareRoot0` on `>> 3` components, no
+sound at `maxDist`, gain `(fade - dist) * 128 / fade * vol >> 7` (`>> 8` on the
+other half), refused below `0x14`, and a pan from `func_80015394` -- `atan2(-dx,
+dz)` in 4096ths -- against `yaw - 0x400`, reflected past `0x800` (front and back
+fold) and halved, then `L = gain * rsin / 0xD48`, `R = gain * rcos / 0xD48`,
+clamped to 127. `func_80013FCC` calls it with max `0x4800` and fade `0x6000`,
+`func_80014000` passes both through. It ends in `func_800142F4(se, L, R, noteAdj)`,
+the sound player: the `se` table at `0x801989D8` (10 bytes: VAB slot, program,
+tone, note adjust) and `SsUtKeyOn`, whose voice is kept in the 9-slot table at
+`0x801989B0` beside the `se`, where `func_800141E0` picks the slot a new sound takes (keying its old voice off through `func_80014034`).
+`func_80014158(se, vol)` is the same player centred. See "Positional audio" in
+[AUDIO.md](AUDIO.md).
+
 ### What in the renderer draws what
 
 Stage 13 fills the whole display list, but which of its callees draws the world,

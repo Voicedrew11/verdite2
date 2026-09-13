@@ -125,5 +125,7 @@ KF2_SPU_INTERP=sinc                      # voice interpolation: gauss (the conso
 KF2_REVERB=hardware                      # legacy (default), hardware (the console's resampling FIR), enhanced (FDN)
 KF2_AUDIO_PROBE=1                        # voices, clamps, mixer cost, underruns, levels, reverb preset, device rate
 KF2_AUDIO_DUMP=dir                       # the final mix and the reverb return as WAVs; scripts/audio_spectrum.py reads them
+KF2_POSAUDIO=headphones                  # sound effects aimed at their source while they play: off (default), speakers, headphones
+KF2_POSAUDIO_PROBE=1                     # tags a second, key-on timing, live tags, mixer peak; the first 24 tags against the game's own L/R
 ```
 

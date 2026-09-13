@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Forty-one of the forty-five are load-bearing; `0002`, `0003` and `0015` are
+Forty-two of the forty-six are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -493,6 +493,20 @@ Four files in the directory have no entry below:
   and mixer time, and `Spu.Mixed` hands the mix and the wet return to a listener.
   Defaults are the old behaviour: Gaussian, `Legacy`. **No recompile.** See
   `docs/AUDIO.md`.
+
+- `0044-spu-positional-voices.patch` — the SPU renders a voice from a position
+  when the port asks. The game pans a 3D sound once at key-on, folded front to
+  back, and a hook cannot change that after the fact without owning the voice:
+  `Voice` gains a key-on count (`KonSerial`, bumped per bit in `KeyOn`) and a
+  `SpuSpatialVoice`, and `Tick` renders a voice through it only while its tag
+  names the current key-on — so a voice reused by the music is its registers'
+  again with nothing to clear. `SpuSpatialVoice` is mono in, rear low-pass, a
+  fractional delay and a Brown-Duda head-shadow shelf per ear, a level per ear,
+  all smoothed per sample; levels are in the game's 0..127 units and scaled by
+  the registers' magnitude, so the VAB volumes carry. `CopyKeyOnSerials` and
+  `SetSpatial` are the whole interface, and `Stats.SpatialVoicesPeak` counts it.
+  `patches/PositionalAudio.cs` is the only caller. **No recompile.** See
+  "Positional audio" in `docs/AUDIO.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
