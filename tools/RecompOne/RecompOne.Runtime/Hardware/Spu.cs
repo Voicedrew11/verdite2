@@ -1,9 +1,38 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace RecompOne.Runtime;
 
+public enum SpuInterpolation
+{
+    Gaussian,
+    Cubic,
+    Sinc
+}
+
+public enum SpuReverbMode
+{
+    Legacy,
+    Hardware,
+    Enhanced
+}
+
 public sealed class Spu
 {
+    public static SpuInterpolation Interpolation { get; set; } = SpuInterpolation.Gaussian;
+    public static SpuReverbMode ReverbMode { get; set; } = SpuReverbMode.Legacy;
+
+    // The final mix and the reverb return, interleaved stereo, after each Mix call.
+    public static event Action<short[], short[], int>? Mixed;
+
+    public sealed class Counters
+    {
+        public long VoiceClamps, MixClamps, Frames, Ticks;
+        public int ActiveVoicesPeak;
+    }
+
+    public readonly Counters Stats = new();
+
     public const int RamSize = 512 * 1024;
     public readonly byte[] Ram = new byte[RamSize];
 
@@ -131,7 +160,7 @@ public sealed class Spu
         public short CurVolL, CurVolR;
         public int VolCycL, VolCycR;
 
-        public readonly short[] Buf = new short[31];
+        public readonly short[] Buf = new short[History + 28];
     }
 
     private readonly Voice[] _v = new Voice[24];
@@ -147,7 +176,27 @@ public sealed class Spu
     private bool _revRight;
     private int _revInL, _revInR, _revOutL, _revOutR;
 
-    private const int dAPF1 = 0,
+    private int _revVersion;
+    private int _revPath;
+    private int _wetL, _wetR;
+    private int _resamplePos;
+    private readonly short[] _downL = new short[128], _downR = new short[128];
+    private readonly short[] _upL = new short[64], _upR = new short[64];
+    private readonly SpuReverb _enhanced;
+
+    // psx-spx "Reverb Buffer Resampling": the non-zero taps of the 39-tap half-band FIR, without its 0x4000 centre.
+    private static readonly int[] HalfBand =
+    {
+        -0x0001, 0x0002, -0x000A, 0x0023, -0x0067, 0x010A, -0x0268, 0x0534, -0x0B90, 0x2806,
+        0x2806, -0x0B90, 0x0534, -0x0268, 0x010A, -0x0067, 0x0023, -0x000A, 0x0002, -0x0001
+    };
+
+    private const int History = SincKernel.Taps - 1;
+
+    // The 4-tap kernels read the newest four samples of the sinc's eight-sample window.
+    private const int GaussTap = History - 3;
+
+    internal const int dAPF1 = 0,
         dAPF2 = 1,
         vIIR = 2,
         vCOMB1 = 3,
@@ -279,6 +328,113 @@ public sealed class Spu
         _revCur = _revCur + 2 >= RamSize ? b : Math.Max(b, _revCur + 2);
     }
 
+    public string ReverbPreset
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return SpuReverb.Identify(_rev);
+            }
+        }
+    }
+
+    public string ReverbPath => _revPath switch { 0 => "legacy", 1 => "hardware", _ => "enhanced" };
+
+    private void ReverbTick()
+    {
+        var path = ReverbMode switch
+        {
+            SpuReverbMode.Legacy => 0,
+            SpuReverbMode.Hardware => 1,
+            _ => _enhanced.Handles(_revVersion) ? 2 : 1
+        };
+
+        if (path != _revPath)
+        {
+            // The hardware network reads its own past output back out of SPU RAM; a stale tail would replay.
+            if (_revPath == 2) ClearReverbWorkArea();
+            if (path == 2) _enhanced.Reset();
+            Array.Clear(_downL);
+            Array.Clear(_downR);
+            Array.Clear(_upL);
+            Array.Clear(_upR);
+            _revPath = path;
+        }
+
+        switch (path)
+        {
+            case 0:
+                _revRight = !_revRight;
+                if (_revRight) ReverbStep(_revInL, _revInR);
+                _wetL = _revOutL;
+                _wetR = _revOutR;
+                break;
+            case 1:
+                HardwareReverbTick();
+                break;
+            default:
+                var on = (_spucnt & 0x80) != 0;
+                _enhanced.Process(on ? RevMul(Clamp16(_revInL), R(vLIN)) : 0, on ? RevMul(Clamp16(_revInR), R(vRIN)) : 0,
+                    out _wetL, out _wetR);
+                break;
+        }
+    }
+
+    // Both rings are stored twice, the second copy offset by their length, so a window never wraps.
+    private void HardwareReverbTick()
+    {
+        var p = _resamplePos;
+        _downL[p] = _downL[p | 0x40] = (short)Clamp16(_revInL);
+        _downR[p] = _downR[p | 0x40] = (short)Clamp16(_revInR);
+
+        var u = p >> 1;
+        var window = (u - 19) & 0x1F;
+        if ((p & 1) != 0)
+        {
+            var start = (p - 38) & 0x3F;
+            ReverbStep(Downsample(_downL, start), Downsample(_downR, start));
+            _upL[u] = _upL[u | 0x20] = (short)_revOutL;
+            _upR[u] = _upR[u | 0x20] = (short)_revOutR;
+            _wetL = Upsample(_upL, window);
+            _wetR = Upsample(_upR, window);
+        }
+        else
+        {
+            // Between 22.05 kHz samples every tap but the centre lands on a zero, and the centre is the stored sample.
+            _wetL = _upL[window + 9];
+            _wetR = _upR[window + 9];
+        }
+
+        _resamplePos = (p + 1) & 0x3F;
+    }
+
+    private static int Downsample(short[] ring, int start)
+    {
+        var acc = 0x4000 * ring[start + 19];
+        for (var i = 0; i < 20; i++) acc += HalfBand[i] * ring[start + i * 2];
+        return Clamp16(acc >> 15);
+    }
+
+    private static int Upsample(short[] ring, int start)
+    {
+        var acc = 0;
+        for (var i = 0; i < 20; i++) acc += HalfBand[i] * ring[start + i];
+        return Clamp16(acc >> 14);
+    }
+
+    private void ClearReverbWorkArea()
+    {
+        var b = (int)RevBase;
+        if (b > 0 && b < RamSize) Array.Clear(Ram, b, RamSize - b);
+        _revOutL = _revOutR = 0;
+    }
+
+    private static int Clamp16(int v)
+    {
+        return Math.Clamp(v, -32768, 32767);
+    }
+
     private ushort _kon, _konHi;
     private ushort _koff, _koffHi;
     private ushort _pmon, _pmonHi;
@@ -315,6 +471,7 @@ public sealed class Spu
     public Spu()
     {
         for (var i = 0; i < 24; i++) _v[i] = new Voice();
+        _enhanced = new SpuReverb(_rev);
     }
 
     public ushort ReadReg16(uint phys)
@@ -454,7 +611,12 @@ public sealed class Spu
             case 0x1B4: _extVolL = val; break;
             case 0x1B6: _extVolR = val; break;
             default:
-                if (off >= 0x1C0 && off <= 0x1FE) _rev[(off - 0x1C0) >> 1] = val;
+                if (off >= 0x1C0 && off <= 0x1FE)
+                {
+                    _rev[(off - 0x1C0) >> 1] = val;
+                    _revVersion++;
+                }
+
                 break;
         }
     }
@@ -592,16 +754,21 @@ public sealed class Spu
     }
 
     private short[] _xaL = [], _xaR = [];
+    private short[] _wet = [];
 
     private const int MixChunk = 16;
 
     public void Mix(short[] dst, int frames)
     {
+        var started = Stopwatch.GetTimestamp();
         if (_xaL.Length < frames)
         {
             _xaL = new short[frames];
             _xaR = new short[frames];
         }
+
+        var tap = Mixed;
+        if (tap != null && _wet.Length < frames * 2) _wet = new short[frames * 2];
 
         var xaCount = XaAudio.NextBlock(_xaL, _xaR, frames);
 
@@ -634,17 +801,28 @@ public sealed class Spu
                         }
                     }
 
-                    _revRight = !_revRight;
-                    if (_revRight) ReverbStep(_revInL, _revInR);
-                    mixL += RevMul(_revOutL, (short)_reverbVolL);
-                    mixR += RevMul(_revOutR, (short)_reverbVolR);
+                    ReverbTick();
+                    var wetL = RevMul(_wetL, (short)_reverbVolL);
+                    var wetR = RevMul(_wetR, (short)_reverbVolR);
+                    mixL += wetL;
+                    mixR += wetR;
+                    if (mixL is < -32768 or > 32767 || mixR is < -32768 or > 32767) Stats.MixClamps++;
                     mixL = (Math.Clamp(mixL, -32768, 32767) * _mainCurL) >> 15;
                     mixR = (Math.Clamp(mixR, -32768, 32767) * _mainCurR) >> 15;
                     dst[n * 2] = (short)mixL;
                     dst[n * 2 + 1] = (short)mixR;
+                    if (tap != null)
+                    {
+                        _wet[n * 2] = (short)Clamp16(wetL);
+                        _wet[n * 2 + 1] = (short)Clamp16(wetR);
+                    }
                 }
             }
         }
+
+        Stats.Frames += frames;
+        Stats.Ticks += Stopwatch.GetTimestamp() - started;
+        tap?.Invoke(dst, _wet, frames);
     }
 
     private (short L, short R) Tick()
@@ -659,6 +837,8 @@ public sealed class Spu
         var nonMask = (uint)(_non | (_nonHi << 16));
         var pmonMask = (uint)(_pmon | (_pmonHi << 16));
         var prevOutx = 0;
+        var interpolation = Interpolation;
+        var active = 0;
 
         for (var i = 0; i < 24; i++)
         {
@@ -669,6 +849,7 @@ public sealed class Spu
                 continue;
             }
 
+            active++;
             TickAdsr(v);
             SweepTick(v.VolL, ref v.CurVolL, ref v.VolCycL);
             SweepTick(v.VolR, ref v.CurVolR, ref v.VolCycR);
@@ -680,6 +861,15 @@ public sealed class Spu
                 v.HasBlock = true;
             }
 
+            int step = v.Pitch;
+            if (i > 0 && (pmonMask & (1u << i)) != 0)
+            {
+                var factor = Math.Clamp(prevOutx, -0x8000, 0x7FFF) + 0x8000;
+                step = (((short)(ushort)step * factor) >> 15) & 0xFFFF;
+            }
+
+            if (step > 0x3FFF) step = 0x4000;
+
             int sample;
             if ((nonMask & (1u << i)) != 0)
             {
@@ -689,22 +879,15 @@ public sealed class Spu
             {
                 var idx = (int)(v.PitchCounter >> 12);
                 var fi = (int)((v.PitchCounter >> 4) & 0xFF);
-                sample = ((Gauss[0x0FF - fi] * v.Buf[idx]) >> 15)
-                         + ((Gauss[0x1FF - fi] * v.Buf[idx + 1]) >> 15)
-                         + ((Gauss[0x100 + fi] * v.Buf[idx + 2]) >> 15)
-                         + ((Gauss[0x000 + fi] * v.Buf[idx + 3]) >> 15);
+                sample = interpolation switch
+                {
+                    SpuInterpolation.Cubic => SincKernel.Cubic(v.Buf, idx + GaussTap, fi),
+                    SpuInterpolation.Sinc => SincKernel.Apply(v.Buf, idx, SincKernel.BandFor(step), fi),
+                    _ => Gaussian(v.Buf, idx + GaussTap, fi)
+                };
             }
 
             var amp = (sample * v.AdsrVol) >> 15;
-
-            int step = v.Pitch;
-            if (i > 0 && (pmonMask & (1u << i)) != 0)
-            {
-                var factor = Math.Clamp(prevOutx, -0x8000, 0x7FFF) + 0x8000;
-                step = (((short)(ushort)step * factor) >> 15) & 0xFFFF;
-            }
-
-            if (step > 0x3FFF) step = 0x4000;
 
             v.PitchCounter += (uint)step;
             if (v.PitchCounter >> 12 >= 28)
@@ -726,9 +909,19 @@ public sealed class Spu
             }
         }
 
+        if (active > Stats.ActiveVoicesPeak) Stats.ActiveVoicesPeak = active;
+        if (sumL is < -32768 or > 32767 || sumR is < -32768 or > 32767) Stats.VoiceClamps++;
         sumL = Math.Clamp(sumL, -32768, 32767);
         sumR = Math.Clamp(sumR, -32768, 32767);
         return ((short)sumL, (short)sumR);
+    }
+
+    private static int Gaussian(short[] b, int s, int fi)
+    {
+        return ((Gauss[0x0FF - fi] * b[s]) >> 15)
+               + ((Gauss[0x1FF - fi] * b[s + 1]) >> 15)
+               + ((Gauss[0x100 + fi] * b[s + 2]) >> 15)
+               + ((Gauss[0x000 + fi] * b[s + 3]) >> 15);
     }
 
     private static void SweepTick(ushort reg, ref short level, ref int cycleCount)
@@ -771,9 +964,7 @@ public sealed class Spu
 
     private void DecodeBlock(Voice v, int index)
     {
-        v.Buf[0] = v.Buf[28];
-        v.Buf[1] = v.Buf[29];
-        v.Buf[2] = v.Buf[30];
+        Array.Copy(v.Buf, 28, v.Buf, 0, History);
 
         var addr = v.CurAddr & (uint)(RamSize - 1);
         var hdr = Ram[addr];
@@ -787,7 +978,7 @@ public sealed class Spu
         var k0 = K0[filter];
         var k1 = K1[filter];
 
-        var pos = 3;
+        var pos = History;
         for (var i = 0; i < 14; i++)
         {
             var b = Ram[(addr + 2 + (uint)i) & (RamSize - 1)];
