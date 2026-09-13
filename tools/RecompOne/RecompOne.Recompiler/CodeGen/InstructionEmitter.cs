@@ -29,7 +29,7 @@ public static class InstructionEmitter
 
     private static string Hook(string call)
     {
-        return $" if (RecompOne.Runtime.Pgxp.Pgxp.CpuTracking) RecompOne.Runtime.Pgxp.PgxpCpu.{call};";
+        return $" if (RecompOne.Runtime.Pgxp.PgxpGate.Cpu && RecompOne.Runtime.Pgxp.Pgxp.CpuTracking) RecompOne.Runtime.Pgxp.PgxpCpu.{call};";
     }
 
     private static string Track1(string body, string call, int reg)
@@ -237,9 +237,9 @@ public static class InstructionEmitter
             43 => TrackMem($"mem.WriteU32(_a, {RT});", $"Sw({rt}, _a, {RT})", rs, imm, moved, reloc),
             46 => TrackMem($"mem.WriteWordRight(_a, {RT});", $"InvalidateMem(_a, {RT})", rs, imm, moved, reloc),
             50 =>
-                $"{{ var _a = {Addr(rs, imm, moved, reloc)}; var _lw = mem.ReadU32(_a); RecompOne.Runtime.Gte.Write({rt}, _lw); RecompOne.Runtime.Pgxp.PgxpCpu.Lwc2({rt}, _a, _lw); }}",
+                $"{{ var _a = {Addr(rs, imm, moved, reloc)}; var _lw = mem.ReadU32(_a); RecompOne.Runtime.Gte.Write({rt}, _lw);" + Hook($"Lwc2({rt}, _a, _lw)") + " }",
             58 =>
-                $"{{ var _a = {Addr(rs, imm, moved, reloc)}; var _sw = RecompOne.Runtime.Gte.Read({rt}); mem.WriteU32(_a, _sw); RecompOne.Runtime.Pgxp.PgxpCpu.Swc2({rt}, _a, _sw); }}",
+                $"{{ var _a = {Addr(rs, imm, moved, reloc)}; var _sw = RecompOne.Runtime.Gte.Read({rt}); mem.WriteU32(_a, _sw);" + Hook($"Swc2({rt}, _a, _sw)") + " }",
             _ => UnknownInstr(i, $"op=0x{op:X2}")
         };
     }

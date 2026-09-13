@@ -65,6 +65,16 @@ KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the 
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
 KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
 KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, capacity, overflows
+KF2_POLYASM=0                            # the recompiled polygon assembler instead of the C# one (on by default)
+KF2_POLYASM=verify                       # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
+KF2_POLYASM_REJECT=0                     # send every oversized polygon to the view-space clipper, including those it clips to nothing
+KF2_POLYASM_REJECT=replay                # a rejection also writes the clipper's scratch records and lists, which nothing reads
+KF2_POLYASM_UNCLIPPED=0                  # the recompiled func_8002FECC (the far map tiles' assembler) instead of the C# one
+KF2_POLYASM_TRANSFORM=0                  # the recompiled func_8002E650 and func_8002E7CC (the vertex transforms) instead of the C# ones
+KF2_POLYASM_LIT=0                        # the recompiled func_8002F214 and func_8002EAEC (the models' lit assembler) instead of the C# one
+KF2_POLYASM_CLIPPER=0                    # the recompiled Clip4FTP and Clip3FTP (the view-space clipper) instead of the C# ones
+KF2_GTE_FAST=0                           # the GTE's general path for the lighting, depth-cue, RotTrans and RotTransPers ops (0047)
+KF2_GTE_LIGHTCACHE=0                     # light every normal afresh instead of remembering its matrix products
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
 KF2_TRUECOLOR=1                        # 24-bit shaded output, no 15-bit banding (off by default; GL backend only)

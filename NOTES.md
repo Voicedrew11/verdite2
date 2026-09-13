@@ -299,6 +299,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - The command channel
 - `ending` exists because the last ten minutes of the game are otherwise untestable
 - The MCP layer
+- The polygon assembler in C#
 
 ### [INPUT.md](docs/INPUT.md)
 

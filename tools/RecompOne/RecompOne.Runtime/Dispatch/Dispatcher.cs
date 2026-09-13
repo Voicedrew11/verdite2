@@ -46,6 +46,8 @@ public static class Dispatcher
         _pending = overlay;
     }
 
+    public static bool HasPending => _pending != null;
+
     public static void NotifyWrite(uint phys)
     {
         var p = _pending;

@@ -40,6 +40,12 @@ public sealed class PSMemory : IMemory
 
     internal byte[] RamBuffer => _ram;
 
+    /// <summary>0047. True while a store of RAM through this class does nothing but
+    /// the store and <see cref="GteVertexMap"/>'s bookkeeping -- nothing frozen, no
+    /// logger, no overlay waiting on its header -- so a caller that keeps the vertex
+    /// map's calls may write 8- and 16-bit values into <see cref="Ram"/> directly.</summary>
+    public bool DirectRam => _frozenCount == 0 && !RamLogger.TrackReads && !RamLogger.TrackWrites && !Dispatcher.HasPending;
+
     //memory can be frozen for debuging reasons
     private readonly bool[] _frozen;
     private int _frozenCount;

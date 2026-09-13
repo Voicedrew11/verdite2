@@ -5,6 +5,10 @@ namespace RecompOne.Runtime.Pgxp;
 public static class Pgxp
 {
     public static bool Shown = true;
+
+    // Whether the emitted CPU hooks may ever run this session. Read once, into
+    // PgxpGate.Cpu, so it must be set before any recompiled code is compiled.
+    public static bool CpuHooksArmed = true;
     
     public const string KeyEnable = "pgxp.enable";
     public const string KeyCulling = "pgxp.culling";
@@ -39,7 +43,7 @@ public static class Pgxp
         TextureCorrection = view.GetBool(KeyTextureCorrection, true);
         VertexCache = view.GetBool(KeyVertexCache, true);
         CacheW = VertexCache && view.GetBool(KeyCacheW, true);
-        CpuTracking = Enabled && view.GetBool(KeyCpu, true);
+        CpuTracking = Enabled && view.GetBool(KeyCpu, true) && PgxpGate.Cpu;
         MemoryTracking = Enabled && view.GetBool(KeyMemory, true);
         Tolerance = view.GetFloat(KeyTolerance, DefaultTolerance);
         
@@ -50,4 +54,11 @@ public static class Pgxp
     {
         if (!_loaded) Load();
     }
+}
+
+// The emitted hooks test this before Pgxp.CpuTracking. A static readonly the JIT
+// sees initialised is a constant, so with it false every hook is dead code.
+public static class PgxpGate
+{
+    public static readonly bool Cpu = Pgxp.CpuHooksArmed;
 }

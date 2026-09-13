@@ -14,6 +14,7 @@ lives here — frame pacing and auto reload.
 | `SpriteAnim.cs` | steps the billboard sprites' cels once a world tick, so the flames burn at the console's speed | this file |
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
+| `PolyAssembler.cs`, `PolyAssemblerLit.cs` | `func_80030540`, the polygon assembler, `func_8002FECC`/`func_8002E650`, the far map tiles' assembler and its vertex transform, and `func_8002F214`/`func_8002EAEC`, the models' lit assembler, rewritten in C# as replace hooks | this file |
 | `AutoReload.cs` | reloads the last save on death | this file |
 | `Map.cs`, `MapMarkers.cs`, `MapRender.cs`, `MapPanel.cs`, `MapOverlay.cs`, `MapFog.cs` | the area's floor plan, what is standing in it, and the tiles you have seen | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
@@ -4471,3 +4472,435 @@ ranges quoted from `AgentServer`. The shell stays the validator: replies come
 back verbatim, an `ok:false` surfaces as a tool error, and a game that is not
 running costs every tool one connection error rather than a dead host session.
 
+
+## The polygon assembler in C#
+
+`patches/PolyAssembler.cs` replaces `func_80030540` — the routine that turns one
+projected mesh into `POLY_GT3`/`POLY_GT4` packets and links them into the ordering
+table, for the map tiles (`func_80031950`) and the models (`func_80032588`) alike —
+with a hand-written C# body behind a `Replace` hook. It is on by default;
+`KF2_POLYASM=0` is the recompiled routine and `KF2_POLYASM=verify` runs both.
+
+**Video ▸ Frame pacing ▸ Fast geometry** is the one control, saved as
+`kf2.fastgeometry.on` and on by default: it switches the assembler and every
+routine below it together with the GTE fast path, mid-session. The hooks are
+installed whatever `KF2_POLYASM` says so it can be turned on after booting with
+`=0`, and `KF2_POLYASM` or `KF2_GTE_FAST` set on the command line wins over the
+saved value for the run. It replaced a temporary Optimizations page that switched
+each routine on its own beside live call rates; the per-routine switches are the
+`KF2_POLYASM_*` and `KF2_GTE_*` variables now, and the frame profiler (Shift+P) is
+where the comparison is read.
+
+**What it keeps, and why.** Every `ReadU32` and `WriteU32` the recompiled routine
+makes on a vertex word, a packet or the ordering table is made in the same order,
+through `PSMemory`, because that is what `GteVertexMap` follows into the packet; a
+store straight into the RAM array would leave perspective correction, sub-pixel,
+the Z-buffer and AO with nothing bound. The libgte leaves it calls are inlined as
+the same `Gte` calls the recompiler emits for them (`NormalClip`, `NormalColorCol`,
+`DpqColor`, `AddPrim`); the vertex transform `func_8002E7CC`, both clippers
+(`Clip4FTP`, `Clip3FTP`) and the clipped-polygon emitter `func_800302E8` are
+called as recompiled code with the arguments and stack words the original sets, so
+any hook on them still fires. Two things are dropped: the saved-register block and
+the scratch words on its own stack (the lighting result is stored at `sp+0x50` and
+read straight back), which nothing reads after the call returns. PGXP's CPU
+tracking follows values through registers that locals do not have, so with
+`Pgxp.CpuTracking` on the hook calls the recompiled routine.
+
+**Verified byte for byte.** `KF2_POLYASM=verify` snapshots RAM and the CPU context,
+runs the recompiled routine, snapshots its result, restores, runs the C# one, and
+compares all of RAM except the `0x2000` bytes below the entry `SP` — the two
+frames' garbage — plus `S0`-`S7`, `FP`, `SP` and `RA`. The recompiled result is put
+back afterwards, so a mismatch can never reach the picture. Over the command-channel
+tour of all eight areas, standing and turning (see "Where stage 13's time goes" in
+[DEVELOPMENT.md](DEVELOPMENT.md)): **879,556 calls, 0 RAM and 0 register
+mismatches**. A second run over areas 2, 5 and 7 counted the rare paths: 543,964
+calls, 0 mismatches, 2,835,903 quads and 2,139,238 triangles sent to the clippers,
+869,560 clipped pieces emitted. The buffer-exhaustion return was never taken
+(`PrimBuffer.cs` has never seen it either), so that one path is checked by reading
+only. What the verify run does not compare is `GteVertexMap`'s own state, which both
+runs feed, so that was measured separately: `KF2_PERSPECTIVE_PROBE=1`, area 1 from
+slot 2 standing, `KF2_FPS=1000`, reads 63.0% hit with the patch off and on, and
+255.0 vertices projected, 402 copied and 638 looked up a frame both ways.
+
+**What it bought.** Areas 2, 5 and 7, `KF2_FPS=1000`, the same tour with each build,
+`func_80030540` inclusive per frame:
+
+| | recompiled | C# | |
+|---|---|---|---|
+| area 2 still | 0.947 ms | 0.813 ms | -14% |
+| area 2 turning | 0.735 | 0.616 | -16% |
+| area 5 still | 0.547 | 0.487 | -11% |
+| area 5 turning | 0.523 | 0.462 | -12% |
+| area 7 still | 0.671 | 0.603 | -10% |
+| area 7 turning | 0.658 | 0.598 | -9% |
+
+0.06-0.13 ms a frame, which the frame total cannot resolve: `st13 incl` and fps
+moved by more than that in both directions between the two runs, with sections this
+patch does not touch (`func_8002F214`, `func_80032588`) swinging 10-50%. The picture
+is identical by construction and has not been looked at.
+
+**Why so little: the routine was mostly its clippers.** The same tour with the four
+recompiled callees timed, C# body on, self ms a frame:
+
+| | area 7 still | area 7 turning | area 2 still | area 2 turning |
+|---|---|---|---|---|
+| the C# body itself | 0.119 | 0.106 | 0.155 | 0.120 |
+| `func_8002E7CC` vertex transform (one a call) | 0.076 | 0.070 | 0.071 | 0.059 |
+| `Clip4FTP` (calls a frame) | 0.421 (173) | 0.397 (173) | 0.019 (10) | 0.020 (9) |
+| `Clip3FTP` (calls a frame) | 0.013 (8) | 0.024 (10) | 0.499 (313) | 0.405 (246) |
+| `func_800302E8` clipped emitter (calls) | 0.041 (55) | 0.034 (46) | 0.045 (62) | 0.035 (47) |
+
+Two thirds of the routine is the view-space clipper (see "The second cull" in
+[WIDESCREEN.md](WIDESCREEN.md)), and **about three in four polygons sent to it come
+back with fewer than three vertices** — 181 clipper calls against 55 emitted in
+area 7, 323 against 62 in area 2. A face goes there when any vertex's cached `otz`
+word is `0xFFFF` or an edge is past the GPU's limits, so this is largely geometry
+around and behind the camera being clipped to nothing, one Sutherland–Hodgman pass
+and one `RotTransPers` per surviving vertex at a time. That makes the clipper the
+next target, and the cheap version is a trivial reject in front of it: a polygon
+whose vertices are all outside the same one of the six planes clips to no vertices,
+which is exactly the `< 3` the assembler already discards, so the packets and the
+ordering table come out the same. It is not byte-identical everywhere: the clipper
+also leaves its vertex records at `0x80192A18` and its last results in the GTE, so a
+verify for it has to exclude that scratch and argue the GTE is written again before
+it is next read.
+
+### Rejecting what the clipper clips to nothing
+
+`ClipFT` (`0x8005CE98`) runs six Sutherland–Hodgman passes over a list of 0x2C-byte
+records, in a fixed order: far (`Z < *0x8012E99C`), near (`Z >= *0x8017E07C`),
+`Y >= -ybound`, `Y <= ybound`, `X >= -xbound`, `X <= xbound`, with the bounds
+`(Z · *0x800FC98C) >> 12` and `(Z · *0x800FC97C) >> 12` computed per record by
+`Clip4FT`/`Clip3FT`. A pass emits an intersection only where consecutive vertices
+disagree, so **a pass whose vertices are all inside hands the same records to the
+next one untouched, and a pass whose vertices are all outside emits nothing** — and
+every later pass then sees a count of zero. The first pass that is not all-inside
+therefore sees the original vertices. If they are all outside it, the polygon clips
+to nothing, which is the `< 3` the assembler already throws away; if they are mixed,
+the real clipper runs.
+
+`PolyAssembler.Reject` decides that before calling `Clip4FTP`/`Clip3FTP`: `RotTrans`
+on each vertex through the same GTE call, in the clipper's own record order (`a0,
+a1, a3, a2` for a quad), the two bounds, and the six predicates with the game's
+signed compares. The GTE is left exactly where the clipper would have left it, and
+when the polygon is not rejected the clipper repeats the same transforms, so the
+GTE state after it is unchanged either way.
+
+**A rejection still makes the clipper's writes.** The record copies (the same
+`lwl`/`lwr` pairs), the UVs, the transformed position and both bounds per record,
+the record list at `0x80192A18`, and the output list of every all-inside pass before
+the rejecting one — with the same reads between them and the same
+`Interrupts.Poll` count. That keeps RAM byte-identical, so `KF2_POLYASM=verify` still
+demands zero mismatches with the rejection inside it, and keeps `GteVertexMap`'s view
+of those reads and stores the same. What it does not do is the calls, the frames and
+the register traffic. `KF2_POLYASM_REJECT=0` is the comparison.
+
+**Verified:** areas 1, 2, 5 and 7 standing and turning, 638,244 calls, **0 RAM and 0
+register mismatches**. Of 5,475,716 polygons too big for the GPU, 2,752,997 (50.3%)
+were rejected before the clipper, 2,722,719 still went to it, and 807,250 clipped
+pieces were emitted — so the reject catches 59% of what used to clip to nothing, and
+the rest is genuinely mixed.
+
+**What it bought: 2-12% of the routine, because the replayed writes are most of a
+clipper call.** `KF2_FPS=1000`, the same tour with `KF2_POLYASM_REJECT=0` and without,
+ms a frame. Area 7 standing is left out: the two runs did not draw the same scene
+(27 against 22 assembler calls a frame, 108 against 55 clipped pieces).
+
+| | area 7 turning | area 2 still | area 2 turning |
+|---|---|---|---|
+| `func_80030540` inclusive | 0.630 → 0.617 | 0.801 → 0.704 | 0.660 → 0.585 |
+| clipper calls a frame | 182 → 118 | 321 → 119 | 256 → 105 |
+| clipper time | 0.417 → 0.339 | 0.523 → 0.285 | 0.437 → 0.253 |
+| the C# body (now including the rejection) | 0.106 → 0.172 | 0.157 → 0.297 | 0.122 → 0.232 |
+| clipped pieces emitted (unchanged) | 45.9 / 43.3 | 62.0 / 62.0 | 46.9 / 46.7 |
+
+A clipper call costs about 1.6 µs; a rejection in C# about 0.7 µs, nearly all of it
+the record copies (each `lwl`/`lwr` is a read and a read-modify-write), the stores
+and the replayed reads that keep RAM identical. **The lean version is the obvious
+next step and a trade**: skipping the clipper's scratch — the records at
+`*0x8006E7B0` and the lists at `0x80192A18` — would cut a rejection to the four
+transforms and the compares, but RAM would then differ from the recompiled routine
+there, so the verify mode would have to exclude those ranges, and it would need a
+check first that nothing but the clipper reads them.
+
+Done since: that check came back clean and the lean version is now the default. See
+"The lean rejection" below; `KF2_POLYASM_REJECT=replay` is the version above.
+
+### The unclipped assembler and its transform
+
+`func_8002FECC` is `func_80030540` without a clipper. `func_80031950` sends it
+every map tile whose visibility cell lacks bit `0x80`, which is the flood's lit set
+and so the far bulk of the map (see "What the map walk's time is" in
+[DEVELOPMENT.md](DEVELOPMENT.md)). It calls `func_8002E650` to fill the vertex
+cache, then for each face: `NormalClip`, allocate, the same `POLY_GT4`/`POLY_GT3`
+packet `func_80030540` writes, and `AddPrim`. Both are in `PolyAssembler.cs` beside
+the assembler, as two more replace hooks under the same `KF2_POLYASM` switch, with
+`KF2_POLYASM_UNCLIPPED=0` and `KF2_POLYASM_TRANSFORM=0` to compare each on its own.
+
+**It differs from `func_80030540` in only three places**, so the packet fill is now
+shared (`FillQuad`, `FillTriangle`):
+
+- no size test and no clipper, so a polygon past the GPU's limits is sent as it is;
+- `NormalClip` loads the third vertex before the second (`Facing`), a read order
+  kept because a load of a bound vertex word republishes it to the vertex map;
+- the ordering-table slot is the average otz plus a fixed `0xF0`, and a slot of
+  `0x2000` or more is **dropped**, not clamped, after the packet has already been
+  allocated (`Place`).
+
+`func_8002E650` runs `RotTransPers` over the mesh into the cache at `0x8018EB94`:
+the screen word, otz as `SZ3 >> 2`, and a fog weight from `IR0` on one of three
+curves picked by the word at `0x80192EA8` — zero at `>= 32000`, `max(IR0 - 800, 0)
+* 2` when bit `0x8000` is set, else `IR0` below 2800 and `3 * IR0 - 0x15E0` above.
+`RotTransPers` stores `IR0` and the flag on the stack, and the routine reads `IR0`
+back only for the weight, so both stay in locals. That leaves out two stores a vertex
+from the vertex map's tick, which is what ages its pending values. The probe below
+shows it changes nothing. `func_80032588`, `func_80032400` and `func_800346CC` call
+the transform too, so the models and the arm get it as well.
+
+The C# assembler calls the transform through `KingsField2.func_8002E650`, so it
+goes through the detour: the profiler still sees it, and the verify mode checks each
+on its own. Each routine has its own verify buffers, because the transform is
+verified again inside both runs of the assembler.
+
+**Verified:** areas 1, 2, 5 and 7 standing and turning, `KF2_DEBUG_GODMODE=1` so
+area 7 does not kill the player: **150,074 calls of `func_8002FECC` and 327,015 of
+`func_8002E650`, 0 RAM and 0 register mismatches** (and 109,858 of
+`func_80030540` after the shared packet fill, 0 and 0). The buffer-exhaustion return
+was not taken. `KF2_PERSPECTIVE_PROBE=1` reads 95.1%, 96.4% and 92.7% hit at the
+same three points of the tour with both off and on, with the same vertices per frame.
+
+**What it bought.** The tour, `KF2_FPS=1000`, both off and then both on, ms a frame
+(calls of `func_8002FECC` a frame in brackets):
+
+| | `func_8002FECC` incl | `func_8002E650` | map walk (`func_80031C94` incl) | work | fps |
+|---|---|---|---|---|---|
+| area 2 still (67.7) | 0.555 → 0.380 | 0.157 → 0.090 | 1.428 → 1.218 | 2.791 → 2.524 | 344 → 378 |
+| area 2 turning (76) | 0.489 → 0.341 | 0.208 → 0.125 | 1.174 → 1.009 | 2.915 → 2.695 | 323 → 346 |
+| area 5 still (33.0) | 0.270 → 0.184 | 0.068 → 0.039 | 0.779 → 0.675 | 1.604 → 1.457 | 582 → 635 |
+| area 5 turning (58) | 0.302 → 0.202 | 0.138 → 0.081 | 0.922 → 0.802 | 2.198 → 2.041 | 430 → 457 |
+| area 7 still (89 / 86) | 0.320 → 0.206 | 0.231 → 0.133 | 1.396 → 1.239 | 3.967 → 3.692 | 245 → 262 |
+| area 7 turning (67) | 0.265 → 0.179 | 0.166 → 0.101 | 1.190 → 1.078 | 3.091 → 2.925 | 273 → 288 |
+
+**30-36% off the assembler including its transform, and 40-43% off the transform
+alone.** That is more than `func_80030540` gained, because nothing here is a
+clipper. It moved the map walk by 0.10-0.21 ms and the frame's work by about as
+much. Area 1 barely uses it (0 to 2 calls a frame). Area 7 standing drew slightly
+different scenes in the two runs (104 against 108 tile submits). The picture is
+identical by construction and has not been looked at.
+
+### The lit model assembler
+
+`func_8002F214` is 75-80% of the model submitter `func_80032588` wherever that is
+heavy (see "What the model submitter's time is" in [DEVELOPMENT.md](DEVELOPMENT.md)),
+and `func_8002EAEC` is the same routine forced semi-transparent. Both are in
+`patches/PolyAssemblerLit.cs`, a second half of the `PolyAssembler` class, as two
+more replace hooks under `KF2_POLYASM`, with `KF2_POLYASM_LIT=0` to compare.
+
+**It is `func_8002FECC`'s loop with lighting.** The same header, vertex cache,
+`Facing` load order, allocator and `Place`, so those are shared. What differs:
+
+- four TMD types, each its own packet: `0x24` `POLY_FT3`, `0x2C` `POLY_FT4`,
+  `0x34` `POLY_GT3`, `0x3C` `POLY_GT4`, with the mode byte as the code;
+- flat faces call `NormalColorDpq` at the mean fog weight (a quad sums it
+  `p0, p1, p3, p2`), gouraud faces `NormalColorDpq3` at the first vertex's weight
+  and a quad a second `NormalColorDpq` for its fourth normal. Both are inlined
+  (`Shade`, `Shade3`) and their stack arguments stay in locals;
+- a quad reads its fourth vertex index between the allocator's read of the buffer
+  pointer and its store, so it has its own `Allocate` overload;
+- the slot is the mean otz plus `a1`, and a mean `<= 0` is dropped before
+  `Place`'s range test;
+- `func_8002EAEC` writes `0x26`/`0x2E`/`0x36`/`0x3E` as the code and puts
+  `a2 << 5` into bits 5-6 of the word it copies from the face's `+0x6`.
+
+**Verified:** areas 1, 2, 3, 5 and 7 standing and turning, `KF2_POLYASM=verify`,
+`KF2_DEBUG_GODMODE=1`: **164,677 calls of `func_8002F214` and 13,809 of
+`func_8002EAEC`, 0 RAM and 0 register mismatches**, with every other routine in
+the class still at 0 and 0. Unlike the other assemblers, **the buffer-exhaustion
+return was taken** here, 1,195 times between the two, all in areas 2 and 7, and
+the recompiled routine took it the same way. Where the buffer runs out has not
+been looked into. `KF2_PERSPECTIVE_PROBE=1`, `warp 7` standing at 144 fps, five
+runs: an on and an off run that drew the same scene (the same creatures at the
+same distances by `nearby`) read 96.2-96.3% hit and 43-49k saturated a second
+each, second for second. The other three read 96.3-96.4% (off, 9-12k saturated),
+96.3% (on) and 95.6% (on, the creatures elsewhere). Saturation is counted in
+`Gte.Rtp`, which this code does not reach, so it follows the scene. 144.0 fps drawn
+at 20.0 ticks/s, `[present] wide 288`.
+
+**What it bought.** The scene at a warp point is not repeatable (creatures walk
+into and out of view), so this was measured in one session per area: a temporary
+build switched the hook between the two every 2 s on the profiler's clock, and
+frames were split by which half they started and ended in. `KF2_FPS=1000`,
+`func_8002F214` inclusive, ms a frame (µs a call):
+
+| | recompiled | C# | a call |
+|---|---|---|---|
+| area 2 still | 0.061 (4.1) | 0.045 (3.0) | -27% |
+| area 3 still | 0.086 (4.8) | 0.059 (3.3) | -31% |
+| area 5 still | 0.046 (3.1) | 0.034 (2.3) | -26% |
+| area 6 still | 0.457 (26.6) | 0.360 (20.8) | -22% |
+| area 7 still | 0.151 (8.8) | 0.115 (6.7) | -24% |
+| area 7 turning | 0.591 (31.5) | 0.409 (22.6) | -28% |
+
+**22-31% a call, less than `func_8002FECC`'s 30-36%**, because most of a lit face's
+cost is the GTE's lighting, which runs the same in both. Turning halves do not
+see the same view, so only area 7's, whose call counts matched, is listed. In
+area 7 turning, `func_80032588` came out 0.744 against 0.549 ms a frame. The
+picture is identical by construction and has not been looked at.
+
+### The lean rejection
+
+**Nothing reads the clipper's scratch before the clipper writes it again**, so a
+rejection no longer writes it. `ClipFT` fills each new record and each output-list
+slot before it reads them, the records it reads past the ones `Clip4FT`/`Clip3FT`
+just filled are the ones `ZClipFT` just made, and the only other reader of the lists
+at `0x80192A18` is the clipped-polygon emitter, which runs only after a real clip.
+A rejection now does the four transforms, the six plane tests (as one 6-bit
+inside-mask per vertex: the AND of the masks says which passes are all-inside, the
+lowest bit it lacks is the first pass that is not, and the OR says whether any vertex
+is inside that one) and the same `Interrupts.Poll` count, and nothing else.
+`KF2_POLYASM_REJECT=replay` puts the scratch
+writes back. `KF2_POLYASM=verify` copies the recompiled routine's records (four at
+most) and both lists into its own result before comparing, since those are exactly
+the bytes it no longer writes.
+
+### The near transform
+
+`func_8002E7CC` is the assembler's own vertex transform, and is `func_8002E650`'s
+shape with two differences: otz is written as `0xFFFF` unless `RotTransPers`'s flag
+is **exactly** `0x1000` (the depth cue saturated and nothing else), which is what
+sends a face near the camera to the clipper, and there are only two fog curves (zero
+at `FogMode >= 32000`, else `IR0` below 2800 and `3 * IR0 - 0x15E0` above). It is a
+fourth replace hook under `KF2_POLYASM_TRANSFORM`, which now covers both transforms.
+Like `func_8002E650` it keeps the depth cue and the flag in locals rather than on
+its stack, which leaves those stores out of the vertex map's store count.
+
+### The clipper in C#
+
+`Clip4FTP` and `Clip3FTP` are two more replace hooks, in `patches/PolyAssemblerClip.cs`
+(`KF2_POLYASM_CLIPPER=0` to compare): the record copies, `RotTrans` and both bounds
+(`Clip4FT`/`Clip3FT`), the six passes (`ClipFT`), the crossing records
+(`ZClipFT`, with `LoadAverageShort12` and `LoadAverageByte` inlined as the same
+`Gpf`/`Gpl` GTE calls), and `RotTransPers` on each survivor. Every load and store of
+RAM is the recompiled routine's, in its order, including the re-reads of
+`*0x8006E7B0` it makes before every copy; what is gone is each routine's register
+saves and the denominators and flags it keeps on its own stack. The two side-plane
+kinds find the crossing on different lines -- `(s * coord >> 12) + z` for the
+`-bound` planes and `z - (s * coord >> 12)` for the `+bound` ones, with `s` read from
+`0x800FC994` for Y and `0x800FC984` for X, not the bound scales -- and the far pass
+tests `Z < *0x8012E99C` while the near pass tests `Z >= *0x8017E07C`.
+
+### What a call no longer does per face
+
+Three things the assemblers did on every face that the vertex map never sees:
+
+- **16- and 8-bit loads and stores go straight into RAM.** `GteVertexMap` follows
+  whole words only, so while `PSMemory` would do nothing else with a narrow access
+  -- nothing frozen, no RAM logger, no overlay waiting on its header, which the
+  runtime now answers as `PSMemory.DirectRam` -- a face's indices, UVs, otz and fog
+  words and its packet's tpage, UV and code bytes skip the checked path. An address
+  below 2 MB is inside RAM whatever its size, so that is the only per-access test.
+- **Three words are read once a call instead of once a face**: the light colour
+  (`0x8006E604`), the ordering-table base (`0x8018E0A8`) and the primitive
+  descriptor (`0x8017E0A4`), plus the allocator's re-read of the pointer it has just
+  stored. A load of a word the vertex map has nothing bound to has no effect at all,
+  so each is skipped only while its presence bit is clear.
+- **The blend twin is its own code**: `func_8002EAEC`'s differences are a type
+  argument, so neither routine tests for them per face.
+
+Only an interrupt handler could change the first two answers mid-call, and handlers
+only run from `Interrupts.PollSlow`, so the runtime counts those (`SlowPolls`) and a
+call takes both answers again when the count moves, and after any recompiled callee.
+
+### The GTE fast path
+
+`patches/recompone/0047`. Every GTE op this game calls in these routines is the same
+form each time -- `NormalColorDpq`, `NormalColorDpq3` and `NormalColorCol` at `sf=12,
+lm=1`; `DpqColor`, `RotTrans` and `RotTransPers` at `sf=12, lm=0` -- and the
+runtime's general path takes `sf` and `lm` as arguments through `MatVec`, `SetMac`
+and `SatIR`, so every shift is variable, `SetMac` branches on which MAC it is, and
+every saturation stores the flag register through `Flag()`. `Gte.NcdsOp`, `NcdtOp`,
+`NccsOp`, `Dpcs`, `MvmvaOp` (the `RotTrans` form) and `Rtps` now take a fast path for
+that form, with the constants folded and the flags gathered in a local, for **every**
+caller including the recompiled game's own. `Rtp`'s bookkeeping after the divide
+(PGXP, the vertex map's depth and fraction, `GteDepth`) is one method both paths
+call. `KF2_GTE_FAST=0` is the general path.
+
+A lighting op is two matrix products and then a depth cue or a colour modulation, and
+the products depend only on the normal and on `LLM`, `BK` and `LCM`, so they are also
+**remembered per normal**: a 1,024-slot table keyed on the normal's three components
+and a generation that any write to control registers 8-20 bumps. A hit supplies
+`IR1`-`IR3` and the flag bits the products raised; everything after them runs as
+before, so the registers come out the same. `KF2_GTE_LIGHTCACHE=0` turns it off.
+
+**Verified two ways.** A differential test against the runtime DLL (not in the repo)
+runs each op from 300,000 random register states, both paths, including repeated
+normals, matrix writes between ops and saturating values, and compares every register
+and the projected-vertex slots after each op: **3,600,000 ops, 0 mismatches**. In the
+game, `KF2_POLYASM=verify` now also snapshots the GTE, restores it before the C# run
+and compares it after (a GTE mismatch is a third count beside RAM and registers). A
+single-op benchmark, ns an op, general / fast / fast with every normal cached:
+
+| op | general | fast | cached |
+|---|---|---|---|
+| `NcdsOp` | 60.8 | 17.0 | 10.2 |
+| `NcdtOp` | 178.9 | 65.6 | 30.9 |
+| `NccsOp` | 51.7 | 15.6 | 8.7 |
+| `Dpcs` | 23.6 | 7.6 | |
+| `MvmvaOp` (RotTrans) | 21.6 | 6.4 | |
+| `Rtps` | 27.6 | 17.7 | |
+
+### All of the above, verified and measured
+
+**Verified**, the tour over areas 1, 2, 3, 5, 6 and 7 standing and turning with
+`KF2_POLYASM=verify` and `KF2_DEBUG_GODMODE=1`, RAM, registers and the GTE, twice:
+before the clipper port, 112,838 calls of `func_80030540`, 225,672 of
+`func_8002E7CC`, 392,652 of `func_8002E650`, 179,270 of `func_8002FECC`, 167,685 of
+`func_8002F214` and 10,693 of `func_8002EAEC`, with 1,270,766 polygons rejected lean
+and 513 buffer exhaustions in the lit pair; after it, 305,615 calls of `Clip4FTP` and
+352,043 of `Clip3FTP` (70,947 clipped pieces emitted) with every other routine
+verified again. **0 RAM, 0 register and 0 GTE mismatches** in both.
+`KF2_PERSPECTIVE_PROBE=1`, area 1 standing, everything off (`KF2_POLYASM_CLIPPER=0
+KF2_POLYASM_TRANSFORM=0 KF2_POLYASM_REJECT=replay KF2_GTE_FAST=0
+KF2_GTE_LIGHTCACHE=0`) and everything on: 63.0% hit both ways, at 204-231k vertices
+projected a second. Areas 2 and 7 stayed within 90.5-96.6% both ways, but the scenes
+differed (area 7 saturated 27-48k vertices a second in one run and 36-225k in the
+other), so those are inside the band rather than a comparison.
+
+**Measured**, the same tour at `KF2_FPS=1000` with the ten routines timed, once on
+the build before any of this and once with all of it, ms a frame (µs a call). *Work*
+is the frame less `buffer swap + driver` and the throttle: the swap alone read
+0.87-2.2 ms a frame in the first run against 0.12-0.42 in the second, so frame totals
+and fps are not comparable between the two runs and neither is quoted.
+
+| | area 1 turning | area 2 still | area 5 turning | area 6 turning | area 7 still |
+|---|---|---|---|---|---|
+| `func_80030540` incl | 0.386 → 0.205 | 0.511 → 0.306 | 0.359 → 0.183 | 0.541 → 0.280 | 0.620 → 0.433 |
+| clipper (`Clip4FTP` + `Clip3FTP`) | 0.142 → 0.094 | 0.158 → 0.124 | 0.133 → 0.090 | 0.217 → 0.146 | 0.331 → 0.254 |
+| `func_8002E7CC` | 0.050 → 0.027 | 0.061 → 0.034 | 0.047 → 0.026 | 0.058 → 0.032 | 0.067 → 0.041 |
+| `func_8002F214` | 0.078 → 0.052 (5.3 → 3.5) | | 0.288 → 0.157 (15.5 → 9.2) | 0.287 → 0.180 (15.8 → 10.3) | 0.107 → 0.077 (6.2 → 4.7) |
+| `func_8002FECC` | | 0.210 → 0.160 | 0.228 → 0.176 | 0.124 → 0.093 | 0.202 → 0.170 |
+| map walk (`func_80031C94` incl) | 0.380 → 0.258 | 0.792 → 0.537 | 0.711 → 0.473 | 0.913 → 0.609 | 1.110 → 0.888 |
+| work | 1.218 → 0.909 | 1.651 → 1.364 | 1.839 → 1.332 | 2.017 → 1.511 | 2.111 → 1.790 |
+
+A clipper call went from 2.1 to 1.5 µs and a `func_80030540` call is 30-52% cheaper
+over every phase of the tour. Area 2's lit calls and areas 3 and 5 standing drew
+different model counts in the two runs (`func_80032588` 4 against 7 calls a frame in
+area 5), so they are left out.
+
+**The GTE fast path's own share**, measured in one session with a temporary build
+that switched `Gte.FastLighting` and `Gte.LightCache` together every 2 s on the
+profiler's clock (the two paths give the same registers, so switching mid-frame is
+safe), frames split by the half they started and ended in. Standing still, where the
+call counts matched:
+
+| | area 2 still | area 5 still | area 6 still | area 7 still |
+|---|---|---|---|---|
+| `func_80030540` incl | -13% | -13% | -11% | -12% |
+| `func_8002F214` | -41% | -22% | -18% | -17% |
+| `func_8002FECC` | -19% | -20% | -18% | -16% |
+| transforms | -16%, -18% | -17%, -15% | -16%, -15% | -16%, -10% |
+| clipper | -6% | -5% | -6% | -5% |
+| work | 1.963 → 1.715 ms | 0.910 → 0.850 | 2.801 → 2.570 | 1.622 → 1.555 |
+
+The picture is identical by construction -- every store the game's routines make is
+made, with the same value -- and has not been looked at.

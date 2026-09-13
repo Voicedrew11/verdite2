@@ -98,6 +98,10 @@ public static class Interrupts
     }
 
     private const int PollInterval = 2048;
+
+    /// <summary>0047. Counts the polls that could have run a handler, so a caller can
+    /// tell that nothing but its own code has touched memory since it last looked.</summary>
+    public static uint SlowPolls;
     private static int _countdown = PollInterval;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -126,6 +130,7 @@ public static class Interrupts
     private static void PollSlow(CpuContext cpu, IMemory mem)
     {
         _countdown = PollInterval;
+        SlowPolls++;
         TickVBlank();
         Runtime.Timers?.Poll(RaiseTimer);
         if (_inHandler || _servicing || !_irqEnabled) return;

@@ -311,11 +311,178 @@ was doing before it is chased.
 **What it cannot see.** Only the game thread: the SPU mixer and the CD stream
 reader run on their own threads (a GC pause still stops them, and is counted). GPU
 time appears only where the CPU waits for it, which is the swap; there are no GL
-timer queries. The CSV is about 700 KB a second at 144 fps, and a run killed
+timer queries. The CSV is about 700 KB a second at 144 fps and several MB a second uncapped, so a few multi-minute tours at `KF2_FPS=1000` fill the `/tmp` quota — and a full quota does not only stop the CSV: MonoMod writes its detours through a temporary file, so every hook fails to install with `Disk quota exceeded` and the pacing boots broken. Delete each CSV once it is read. A run killed
 from outside can leave a truncated last line, which the report script ignores.
 
 Mechanism measured, from the console and the CSV. The panel's layout has never
 been looked at by eye.
+
+### Where stage 13's time goes
+
+**Measure it on a tour, not on a wall.** Area 1 from slot 2 standing still is the
+cheapest scene there is. A scripted run over the command channel (`warp` to each
+area, 16 s standing, then eight `press Left 1400` for a full turn), `KF2_FPS=1000`,
+perspective on, stage 13 and 20 of its callees timed:
+
+| area | stage 13 incl, still (avg / p95 ms) | turning |
+|---|---|---|
+| 0 | 1.67 / 1.86 | 1.61 / 2.20 |
+| 1 | 1.18 / 1.32 | 1.59 / 2.07 |
+| 2 | 2.28 / 2.47 | 3.23 / 4.33 |
+| 3 | 1.12 / 1.24 | 1.65 / 2.74 |
+| 4 | 1.13 / 1.28 | 2.01 / 5.15 |
+| 5 | 3.30 / 3.66 | 2.28 / 3.91 |
+| 6 | 2.10 / 2.42 | 2.71 / 4.47 |
+| 7 | 3.11 / 3.48 | 3.45 / 4.98 |
+
+Inclusive includes `DrawOTag`, the present and the swap. What grows with the scene
+is the same four sections everywhere, self ms per frame:
+
+| | area 1 still | area 5 still | area 7 turning |
+|---|---|---|---|
+| `func_80030540` polygon list, models and tiles alike (13-27 calls) | 0.21 | 0.54 | 0.63 |
+| `func_80031C94` map tiles, with `func_80031B1C`/`func_80031950` untimed inside | 0.07 | 0.42 | 0.61 |
+| `func_8002F214` second polygon list (15-23 calls) | 0.05 | 0.77 | 0.57 |
+| `LibGpu.DrawOTag` packet walk | 0.09 | 0.38 | 0.37 |
+| `func_80032588` model submitter | 0.01 | 0.25 | 0.21 |
+| `GlCore.Flush` (submits a frame) | 0.04 (32) | 0.08 (34) | 0.11 (91) |
+| vertex attribute lookup (lookups a frame) | 0.01 (185) | 0.09 (1,622) | 0.08 (1,389) |
+
+The fixed costs stay put: `func_8002E064` 0.055, `func_8002D3A8` 0.047,
+`NoDither.BeforeDrawOTag` 0.05-0.07. Area 4 turning peaked at 130 submits a frame.
+None of the following has been acted on.
+
+- **The PGXP gates.** `0035` emits `if (Pgxp.CpuTracking)` beside every
+  instruction (71,796 in `game.cs`). With PGXP off the branch is never taken but
+  still costs (probably because the call on the untaken side stops the JIT reusing
+  the `c.X` fields it has already loaded; not verified). Stripped from
+  `generated/game.cs` for one run in area 1: stage 13's game code 0.577 -> 0.449 ms,
+  `func_80030540` 0.207 -> 0.161, `func_80031C94` 0.073 -> 0.044, with the control
+  sections within 1% (`DrawOTag` walk 0.090/0.089, `func_8002E064` 0.055/0.056).
+  That is an upper bound for gating on a `static readonly` the JIT can fold, which
+  keeps PGXP a boot-time switch; it forces a recompile. The libgte wrappers
+  (`NormalColorDpq`) also call `PgxpCpu.Lwc2`/`Swc2` with no gate at all (198
+  sites), which return straight away.
+  Done since: the emitted test is now `PgxpGate.Cpu && Pgxp.CpuTracking`, where
+  `PgxpGate.Cpu` is a `static readonly` fixed in `Kf2.Pgxp.Configure` (from
+  `KF2_PGXP` and `KF2_PGXP_CPU`) before any recompiled code is compiled, and the
+  Lwc2/Swc2 sites carry it too. Same area 1 run, 144 fps, old against new
+  `game.cs`: work 1.05 -> 0.91 ms a frame, renderer `func_800342D8` self 0.217 ->
+  0.177, `PolyAssembler.Replace` 0.170 -> 0.142, `func_8002D3A8` 0.047 -> 0.032;
+  controls flat (`DrawOTag` walk 0.091/0.088). With `KF2_PGXP=1` the probe reads
+  the same before and after (63.0% hit, 57,888 exact/s). PGXP's CPU tracking can
+  no longer be switched on mid-session, which nothing did.
+- **The three polygon routines are the scene-sized cost**, 1.2-2.0 ms together in
+  the heavy areas. `func_80030540` is shared: `func_80031950` calls it for the map
+  tiles and `func_80032588` for models. Their libgte calls are already inlined as
+  direct `Gte` calls with constant register numbers, so what is left is the
+  recompiled instruction stream itself: register fields on `CpuContext` and a
+  checked `PSMemory` access per load and store. A hand-written C# replacement of
+  `func_80030540` (a `Replace` hook, no recompile) is the largest single target; it
+  has to keep its stores going through `PSMemory` or the vertex map binds nothing.
+  Done since: "The polygon assembler in C#" in `PATCHES_AND_MODS.md` took it 9-16%,
+  and found two thirds of the routine was the view-space clipper it calls; its
+  transform and the clipper are C# too now, and the routine is 30-52% cheaper a call
+  than the recompiled one ("All of the above, verified and measured" there).
+- **The packet walk scales with the scene too**, 0.37 ms for 1,400 lookups' worth of
+  polygons. `DrawOTag` also visits all 8,192 ordering-table entries: it writes two
+  `GteDepth` statics and takes the vertex-map read test on every empty one.
+- **The fixed costs are about 0.17 ms.** `func_8002E064` clears the table
+  (`ClearOTagR`, `a1 = 0x2000`, a recompiled loop through libgpu's driver table):
+  0.055 ms, which a native clear would take to almost nothing.
+  `NoDither.BeforeDrawOTag` walks the whole table looking for E1 words that
+  "Dithering: one flag" in `RENDERING.md` measured this game never links in:
+  0.05-0.07 ms, which masking bit 9 in `Gpu.SetDrawMode` would replace, and would
+  cover route 3 as well.
+- **Batch submits** reach 91-130 a frame while turning; in area 1 29 of 32 were
+  semi-transparency toggles (see "Watching a frame being built").
+
+Outside stage 13, a `DOTNET_JitDisasmSummary=1` run shows five game functions
+compiled **MinOpts** for size, stages 2 (`func_80037C0C`) and 3 (`func_8002A550`)
+among them, and their hook copies too. They run on the 20 Hz tick, so they cost
+per tick rather than per frame.
+
+### What the map walk's time is
+
+`func_80031C94`'s own body is 0.012-0.013 ms a frame in every scene; everything
+under it is work it hands out. It walks all 576 cells and calls `func_80031B1C` on
+the ~195 nonzero ones, which calls `func_80031950` once per half whose model is
+`< 240`. That picks one of three assemblers by the cell's high bits:
+
+- no `0x80` (the flood's lit cells, the far bulk) — `func_8002FECC`, which has
+  **no clipper**: `func_8002E650` runs `RotTransPers` per vertex, then per face
+  `NormalClip`, `NormalColorCol`, a `DpqColor` per vertex and `AddPrim`;
+- `0x80` — `func_80030540` (`PolyAssembler`) directly;
+- `0xC0` (the 3x3 around the eye, `CullCone`'s discs) on a model of `< 16` faces —
+  `func_80030C94` first, which **splits every quad and triangle into four**
+  (nine midpoint vertices, `func_80017244` copying the records), then
+  `func_80030540` on the result.
+
+Measured, `KF2_FPS=1000`, the eight callees timed, ms a frame (profiler overhead
+of ~50 ns per call is inside these; B1C alone is ~10 µs of it):
+
+| | area 1 still | area 1 turning | area 2 still | area 2 turning | area 5 still | area 5 turning |
+|---|---|---|---|---|---|---|
+| `func_80031C94` inclusive | 0.254 | 0.418 | 1.416 | 1.107 | 0.791 | 0.984 |
+| `PolyAssembler` + `func_8002E7CC` (calls) | 0.21 (6.8) | 0.37 (11.1) | 0.67 (27.2) | 0.49 (23.0) | 0.41 (13.2) | 0.49 (16.3) |
+| `func_8002FECC` + `func_8002E650` (calls) | ~0 | 0.06 (6.1) | 0.55 (73.3) | 0.42 (66.8) | 0.27 (35.1) | 0.31 (60.9) |
+| `func_80030C94` subdivider (calls) | 0.060 (5.8) | 0.088 (8.7) | 0.068 (16.0) | 0.071 (13.0) | 0.052 (3.1) | 0.122 (7.9) |
+| walk: C94 + B1C + 950 + `func_80014B88` self | 0.041 | 0.050 | 0.124 | 0.117 | 0.083 | 0.108 |
+
+The `PolyAssembler` row counts the model submitter's calls too (about one a frame).
+Area 7 was not measured: `warp 7` killed the player and autoreload put the run back
+in area 1. Since then, `func_8002FECC` and `func_8002E650` are C#, 30-36% faster
+including the transform. See "The unclipped assembler and its transform" in
+`PATCHES_AND_MODS.md`.
+
+### What the model submitter's time is
+
+`func_80032588` is a dispatcher: rotation from the Euler triple (`func_80014FE0`),
+`ScaleMatrix`, `MulMatrix0`, the light colour and fog lerps, then the MO blender
+`func_80034DA8` or a rigid pointer, a transform (`func_8002E650`, or
+`func_8002E9B8` when no matrix is passed; never reached on the tour), and one of
+three assemblers by its seventh stack byte: `0xFF` (and `0x80`) `func_8002F214`,
+`0xFE` `func_80030540`, anything else `func_8002EAEC`. **Its own body is
+0.005-0.047 ms a frame at 4-23 calls**, so a C# copy of it alone buys almost nothing.
+
+The tour (`warp 0..7`, 10 s standing, a full turn, `KF2_FPS=1000`, the callees
+timed), ms a frame, calls in brackets:
+
+| | `80032588` incl | `8002F214` | `8002EAEC` | `80034DA8` incl | `8002E650` incl |
+|---|---|---|---|---|---|
+| area 3 turning | 0.40 (6) | 0.22 (19) | ~0 | 0.14 (18) | 0.09 (31) |
+| area 5 still | 1.15 (12) | 0.93 (23) | ~0 (3) | 0.11 (18) | 0.20 (107) |
+| area 6 turning | 0.43 (4) | 0.35 (18) | 0 | 0.06 (16) | 0.09 (47) |
+| area 7 still | 0.60 (5) | 0.48 (17) | 0.01 (2) | 0.08 (18) | 0.11 (89) |
+| area 7 turning | 0.74 (12) | 0.55 (18) | 0.01 (7) | 0.11 (20) | 0.12 (85) |
+
+`func_8002F214` is 75-80% of it wherever it is heavy. With nothing drawn by the
+submitter (areas 4 and 6 standing) it is 0.035 ms at 14 calls, which is the arm
+(`func_80032400`), `func_800346CC` and `func_80031D5C`. The transform row includes
+the map's calls. **The scene is not repeatable**: a second run standing at area 5's
+entry drew 1.2 submits a frame against 12, because what is in view walks, so an
+A/B has to be taken in one session.
+
+**`func_8002F214` is `func_8002FECC`'s loop with GTE lighting and no fixed bias.**
+The same mesh header (`func_8002E1BC`), vertex cache, `NormalClip` load order
+(`p0, p2, p1`), bump allocator and `AddPrim`; four TMD types rather than two
+(`0x24` FT3 `0x20` bytes, `0x2C` FT4 `0x28`, `0x34` GT3 `0x28`, `0x3C` GT4
+`0x34`), the code byte is the mode byte itself, flat faces take `NormalColorDpq`
+at the mean fog weight, gouraud faces `NormalColorDpq3` (plus one `NormalColorDpq`
+for a quad's fourth) at the first vertex's, the slot is the mean otz plus `a1`,
+and a mean of `<= 0` or a slot of `>= 0x2000` is dropped after allocation.
+`func_8002EAEC` is the same routine with the codes forced semi-transparent
+(`0x26`/`0x2E`/`0x36`/`0x3E`) and `a2 << 5` put into bits 5-6 of the word it
+copies from the face's `+0x6`.
+Area 7 turning with the libgte leaves timed: up to 1,950 `NormalClip` a frame
+(also counting `func_8002F918` and `func_800302E8`) and 690 lit faces, all of them
+this pair's, so about two thirds of what it tests is back-facing.
+
+Done since: both are C# (see "The lit model assembler" in `PATCHES_AND_MODS.md`),
+22-31% cheaper a call standing still, and the GTE fast path (`0047`) took another
+17-41% off them, since the lighting was most of what was left. The morph (`func_80034DA8`, its base-mesh
+copy and the `func_80034A74` delta decoder) is the next largest at 0.04-0.14 ms,
+and `AnimSmoothing` hooks inside it.
 
 ## Watching a frame being built
 

@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Forty of the forty-five are load-bearing; `0002`, `0003`, `0015` and `0046` are
+Forty-one of the forty-six are load-bearing; `0002`, `0003`, `0015` and `0046` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -362,6 +362,10 @@ Four files in the directory have no entry below:
   after the access, which hands the hook the wrong address for `lw $t0, 0($t0)`.
   Measured: 68,188 hook sites in `game.cs`, no change in generated line count
   (the hooks append to existing lines), build 15 s → 37 s.
+  Since amended: the branch was not free (area 1 frame work 1.05 ms against 0.91
+  without it), so the emitted test is `PgxpGate.Cpu && Pgxp.CpuTracking`, with
+  `PgxpGate.Cpu` a `static readonly` the JIT folds to `false` unless `KF2_PGXP=1`
+  armed it at boot. See "The PGXP gates" in `docs/DEVELOPMENT.md`.
 
 - `0036-pgxp-vertex-and-depth-source.patch` — where the two mechanisms meet.
   `DrawPolygon` asks PGXP when it is on and `GteVertexMap` when it is not, filling
@@ -510,6 +514,20 @@ Four files in the directory have no entry below:
   `HookManager.Invoke`. Read by `FramePacing`'s sentinel and its probe line.
   **No recompile.** See "The smoothing is sometimes dead for a whole session" in
   `docs/TODO.md`.
+
+- `0047-gte-fast-path.patch` — the GTE ops this game calls in its polygon
+  assemblers (`NcdsOp`, `NcdtOp`, `NccsOp` at `sf=12 lm=1`; `Dpcs`, `MvmvaOp`'s
+  RotTrans form and `Rtps` at `sf=12 lm=0`) take a path with the shift, the
+  saturation floor and the flag bits constant and the flags gathered in a local,
+  3-4x faster an op and bit-identical over 3.6M random-state ops; `Rtp`'s bookkeeping
+  after the divide is one method both paths call. A lighting op's two matrix
+  products are remembered per normal until a write to control registers 8-20.
+  `Gte.State`, `Save`, `Load` and `Diff` let `KF2_POLYASM=verify` restore and compare
+  the GTE. Three small public reads for the port: `PSMemory.DirectRam` (a narrow
+  store would do nothing but the store), `Dispatcher.HasPending` and
+  `Interrupts.SlowPolls`. `KF2_GTE_FAST=0` and `KF2_GTE_LIGHTCACHE=0` are the
+  comparisons. **No recompile.** See "The GTE fast path" in
+  `docs/PATCHES_AND_MODS.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

@@ -993,6 +993,26 @@ Kf2.CullGrid.Install();
 Kf2.PrimBuffer.Configure(Environment.GetEnvironmentVariable("KF2_PRIMBUF_PROBE"));
 Kf2.PrimBuffer.Install();
 
+// func_80030540, the polygon assembler that builds most of the world's packets, in
+// C#: the same reads and stores in the same order, with the registers in locals.
+// See "The polygon assembler in C#" in docs/PATCHES_AND_MODS.md.
+//
+//     KF2_POLYASM=0           the recompiled routine
+//     KF2_POLYASM=verify      run both on every call and compare RAM, registers and the GTE
+//     KF2_POLYASM_REJECT=0    send every oversized polygon to the clipper again
+//     KF2_POLYASM_REJECT=replay  a rejection also writes the clipper's scratch
+//     KF2_POLYASM_UNCLIPPED=0 func_8002FECC, the far map tiles' assembler, recompiled
+//     KF2_POLYASM_TRANSFORM=0 func_8002E650 and func_8002E7CC, the vertex transforms, recompiled
+//     KF2_POLYASM_LIT=0       func_8002F214 and func_8002EAEC, the models' lit assembler, recompiled
+//     KF2_POLYASM_CLIPPER=0   Clip4FTP and Clip3FTP, the view-space clipper, recompiled
+Kf2.PolyAssembler.Configure(Environment.GetEnvironmentVariable("KF2_POLYASM"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_REJECT"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_UNCLIPPED"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_TRANSFORM"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_LIT"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_CLIPPER"));
+Kf2.PolyAssembler.Install();
+
 // The game's other cull: a six-plane view-space clipper (func_8005CAC8) that only
 // the near floor and ceiling are big enough to reach, set to twice the screen
 // frustum as a guard band against the GPU's 1023-pixel limit. Twice the frustum is
