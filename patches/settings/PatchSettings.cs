@@ -197,6 +197,7 @@ public static class PatchSettings
         // depth buffer's picture has never been judged -- both are comparisons, so
         // they are KF2_PGXP* and KF2_ZBUFFER* on the console and nothing in Video.
         RegisterSlot("display.render_scale", new WidescreenPage());
+        Register("audio", new AudioPage());
         // Nothing registers against "input": the port draws that whole pane
         // itself (InputSection), and SettingsRegistry.Extend has no un-extend --
         // a page left here would draw a second time under the tab bar, outside

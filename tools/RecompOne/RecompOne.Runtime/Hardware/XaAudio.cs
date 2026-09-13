@@ -20,6 +20,7 @@ public static class XaAudio
 
     private static double _pos;
     private static short _s0L, _s0R, _s1L, _s1R;
+    private static readonly short[] _hL = new short[SincKernel.Taps], _hR = new short[SincKernel.Taps];
     private static int _underrun;
 
     public static void Reset()
@@ -31,6 +32,8 @@ public static class XaAudio
             _playing = false;
             _pos = 0;
             _s0L = _s0R = _s1L = _s1R = 0;
+            Array.Clear(_hL);
+            Array.Clear(_hR);
             _underrun = 0;
         }
     }
@@ -216,12 +219,31 @@ public static class XaAudio
                     _s1R = (short)(_s1R * 31 / 32);
                 }
 
+                Array.Copy(_hL, 1, _hL, 0, SincKernel.Taps - 1);
+                Array.Copy(_hR, 1, _hR, 0, SincKernel.Taps - 1);
+                _hL[SincKernel.Taps - 1] = _s1L;
+                _hR[SincKernel.Taps - 1] = _s1R;
                 _pos -= 1.0;
             }
 
             var f = _pos;
-            left = (short)(_s0L + (_s1L - _s0L) * f);
-            right = (short)(_s0R + (_s1R - _s0R) * f);
+            var phase = Math.Min((int)(f * SincKernel.Phases), SincKernel.Phases - 1);
+            switch (Spu.Interpolation)
+            {
+                case SpuInterpolation.Cubic:
+                    left = (short)SincKernel.Cubic(_hL, SincKernel.Taps - 4, phase);
+                    right = (short)SincKernel.Cubic(_hR, SincKernel.Taps - 4, phase);
+                    break;
+                case SpuInterpolation.Sinc:
+                    left = (short)SincKernel.Apply(_hL, 0, 0, phase);
+                    right = (short)SincKernel.Apply(_hR, 0, 0, phase);
+                    break;
+                default:
+                    left = (short)(_s0L + (_s1L - _s0L) * f);
+                    right = (short)(_s0R + (_s1R - _s0R) * f);
+                    break;
+            }
+
             _pos += (double)_srcRate / 44100.0;
             return true;
         }

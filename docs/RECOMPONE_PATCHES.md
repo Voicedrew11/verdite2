@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Forty of the forty-four are load-bearing; `0002`, `0003` and `0015` are
+Forty-one of the forty-five are load-bearing; `0002`, `0003` and `0015` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -478,6 +478,21 @@ Four files in the directory have no entry below:
   `HookManager.Invoke`. Read by `FramePacing`'s sentinel and its probe line.
   **No recompile.** See "The smoothing is sometimes dead for a whole session" in
   `docs/TODO.md`.
+
+- `0043-spu-audio-quality.patch` — the port's first change to sound. The reverb
+  network ran on every other raw sample and held its output, where the hardware
+  decimates and interpolates through a 39-tap half-band FIR; `Spu.ReverbMode`
+  `Hardware` adds both (measured: wet level unchanged, 24 dB less energy above
+  11 kHz, 37 dB less above 16 kHz). `Enhanced` swaps the network for an 8-line FDN
+  (`Hardware/SpuReverb.cs`) sized from the game's own reverb registers, keeping
+  every send and return level the game's. `Spu.Interpolation` adds Catmull-Rom and
+  a pitch-band-limited 8-tap sinc (`Hardware/SincKernel.cs`) beside the Gaussian,
+  which needed `Voice.Buf` widened to seven samples of history; `XaAudio` follows
+  the same setting. `Host/Audio.cs` asks OpenAL Soft for its best resampler and
+  counts underruns and stalls in `AudioStats`; `Spu.Stats` counts clamps, voices
+  and mixer time, and `Spu.Mixed` hands the mix and the wet return to a listener.
+  Defaults are the old behaviour: Gaussian, `Legacy`. **No recompile.** See
+  `docs/AUDIO.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

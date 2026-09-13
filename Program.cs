@@ -634,6 +634,17 @@ Kf2.Anisotropic.Configure(Environment.GetEnvironmentVariable("KF2_ANISO"),
                           Environment.GetEnvironmentVariable("KF2_ANISO_PROBE"));
 Kf2.Anisotropic.Install();
 
+// Voice interpolation and reverb (patches/recompone/0043); see docs/AUDIO.md.
+//
+//     KF2_SPU_INTERP=gauss|cubic|sinc      KF2_REVERB=legacy|hardware|enhanced
+//     KF2_AUDIO_PROBE=1                    KF2_AUDIO_DUMP=dir
+Kf2.AudioQuality.Configure(Environment.GetEnvironmentVariable("KF2_SPU_INTERP"),
+                           Environment.GetEnvironmentVariable("KF2_REVERB"));
+Kf2.AudioQuality.Install();
+Kf2.AudioProbe.Configure(Environment.GetEnvironmentVariable("KF2_AUDIO_PROBE"),
+                         Environment.GetEnvironmentVariable("KF2_AUDIO_DUMP"));
+Kf2.AudioProbe.Install();
+
 // The render scale survives a menu. A modal sub-loop -- the in-game menu, a shop,
 // an NPC's message box -- keeps the world behind it by reading the finished frame
 // out of VRAM once and blitting it back at the head of every iteration, and that

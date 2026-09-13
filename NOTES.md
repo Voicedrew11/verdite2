@@ -308,6 +308,18 @@ Pad, analog sticks, keyboard layout, mouse look and the menu pointer.
 - Mouse look
 - The menu pointer
 
+### [AUDIO.md](docs/AUDIO.md)
+
+The SPU mixer, its reverb and interpolation, XA resampling and the host output.
+
+- What the audio path is
+- Measuring it
+- The reverb skipped the console's half-band filter
+- An enhanced reverb sized from the game's registers
+- Voice interpolation
+- XA resampling
+- The host output
+
 ### [ENV_VARS.md](docs/ENV_VARS.md)
 
 Every `KF2_*` switch the port reads, in one list.
@@ -318,7 +330,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0042`, one entry each.
+Every change the port made to RecompOne, `0001`-`0043`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

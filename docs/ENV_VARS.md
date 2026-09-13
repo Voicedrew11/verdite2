@@ -121,5 +121,9 @@ KF2_MAP_FOG=1                            # fog of war: only the tiles you have s
 KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on; no longer a setting)
 KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, tiles refused, records, flushes
 KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 grid, the gate's verdict and its walls
+KF2_SPU_INTERP=sinc                      # voice interpolation: gauss (the console's, default), cubic, sinc; also XA
+KF2_REVERB=hardware                      # legacy (default), hardware (the console's resampling FIR), enhanced (FDN)
+KF2_AUDIO_PROBE=1                        # voices, clamps, mixer cost, underruns, levels, reverb preset, device rate
+KF2_AUDIO_DUMP=dir                       # the final mix and the reverb return as WAVs; scripts/audio_spectrum.py reads them
 ```
 
