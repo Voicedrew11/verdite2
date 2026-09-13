@@ -227,22 +227,22 @@
     },
     {
       "address": "0x80014CA0",
-      "name": "DecDCTin",
+      "name": "func_80014CA0",
       "size": 124
     },
     {
       "address": "0x80014D1C",
-      "name": "DecDCTout",
+      "name": "func_80014D1C",
       "size": 32
     },
     {
       "address": "0x80014D3C",
-      "name": "DecDCTinSync",
+      "name": "func_80014D3C",
       "size": 32
     },
     {
       "address": "0x80014D5C",
-      "name": "DecDCToutSync",
+      "name": "func_80014D5C",
       "size": 32
     },
     {
@@ -1457,7 +1457,7 @@
     },
     {
       "address": "0x8001E0F0",
-      "name": "DecDCToutCallback",
+      "name": "func_8001E0F0",
       "size": 36
     },
     {

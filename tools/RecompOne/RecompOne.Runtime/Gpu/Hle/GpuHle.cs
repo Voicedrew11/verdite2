@@ -42,8 +42,23 @@ public static class GpuHle
     }
 
     private static readonly DispRect[] _rects = new DispRect[2];
+    private static readonly DispRect[] _frozen = new DispRect[2];
     private static long _stamp;
     private static int _lastNotifiedX = -1, _lastNotifiedY = -1;
+    private static long _frozenVersion;
+    private static bool _holding;
+    
+    public static void Hold()
+    {
+        Array.Copy(_rects, _frozen, _rects.Length);
+        _frozenVersion = RectVersion;
+        _holding = true;
+    }
+    
+    public static void Release()
+    {
+        _holding = false;
+    }
 
     public static void NotifyDisplay(int x, int y, int w, int h)
     {
@@ -70,12 +85,14 @@ public static class GpuHle
     }
 
     public static long RectVersion { get; private set; }
+    
+    public static long ViewVersion => _holding ? _frozenVersion : RectVersion;
 
     public static int RectCount => _rects.Length;
 
     public static DispRect GetRect(int i)
     {
-        return _rects[i];
+        return _holding ? _frozen[i] : _rects[i];
     }
 
     public static int WideMargin(int w)

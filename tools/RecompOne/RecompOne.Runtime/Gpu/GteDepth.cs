@@ -576,6 +576,10 @@ public static class GteDepth
     /// Believing its SZ puts the sky in front of the world.</summary>
     public static int OtEntry = -1;
 
+    /// <summary>The ordering-table slot the walk is in, counted from the far end; -1 outside a walk.
+    /// Slot 0 holds the skybox, which projects near but must read as no surface.</summary>
+    public static int OtSlot = -1;
+
     /// <summary>How many entries the last completed walk had, so an entry can be
     /// read back as the OTZ the game linked at: <c>otz = OtLength - 1 - OtEntry</c>.
     /// Published one walk late, which is what makes it free.</summary>

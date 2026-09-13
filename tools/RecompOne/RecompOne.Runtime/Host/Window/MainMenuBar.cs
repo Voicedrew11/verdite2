@@ -45,6 +45,8 @@ public static class MainMenuBar
             .End()
             .Submenu("menu.debug.cpu")
             .Panel<CpuStatePanel>("panel.cpu_state")
+            .Separator()
+            .Custom(DrawTurbo)
             .End()
             .Submenu("menu.debug.memory")
             .Panel<RamMapPanel>("panel.ram_map")
@@ -68,6 +70,17 @@ public static class MainMenuBar
     {
         MenuRegistry.RightAligned = DrawFps;
         MenuRegistry.Draw();
+    }
+
+    private static void DrawTurbo()
+    {
+        var turbo = Interrupts.Turbo;
+
+        if (ImGuiNET.ImGui.MenuItem("Turbo", null, turbo))
+        {
+            Interrupts.Turbo = !turbo;
+            if (!Interrupts.Turbo) Interrupts.ResyncVBlank();
+        }
     }
 
     private static void DrawFps()

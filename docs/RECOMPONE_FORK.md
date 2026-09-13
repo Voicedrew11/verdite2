@@ -1,8 +1,9 @@
 # The RecompOne fork
 
 How `tools/RecompOne/` is kept, why it is vendored rather than patched, and what
-the merge to upstream `0409bc2` decided — the model for the next one. The
-individual changes the port carries are catalogued in `docs/RECOMPONE_PATCHES.md`.
+the two merges so far decided — `0409bc2` set the model and `d81dec8` followed
+it. The individual changes the port carries are catalogued in
+`docs/RECOMPONE_PATCHES.md`.
 
 **`tools/RecompOne/` is vendored: its sources are tracked here, so an edit made
 inside it is a change to this repository like any other.** It used to be a
@@ -22,7 +23,7 @@ a ~700-line patch carried for the life of the project — which is exactly what
 workflow every gift from upstream becomes permanent debt.**
 
   - `tools/RecompOne/UPSTREAM` — the upstream commit this tree was merged from,
-    and so the merge base for the next harvest. Currently `0409bc2`.
+    and so the merge base for the next harvest. Currently `d81dec8`.
   - `tools/RecompOne.git/` — the fork's own history: the 39 patches as commits,
     the merge, and the upstream remote. Gitignored and rebuilt on demand, so a
     fresh clone needs none of it to build or play. Reach it with
@@ -101,3 +102,66 @@ reaches out there and then nothing ever washes it off. No setting touches it
 because it is not a setting; only going back to 4:3 removes the margin that is
 accumulating. See "The margin's only clear is the game's own" in
 `docs/WIDESCREEN.md`.
+
+## The merge to `d81dec8`
+
+One upstream commit, 35 files, 1,582 insertions: a `jr ra` codegen fix, real
+`ChangeTh` threading in `BiosB`, hardware timers polled from `Interrupts`, a
+`LibPress` MDEC HLE, presentation decoupled from the interface, and `FrameClock`
+rewritten. Seven conflicts. The acceptance test passes on both timelines —
+`open → game → fdat02 → fdat05`, slot 2 at hp 46/86 in area 1, 144.0 fps drawn at
+20.0 ticks/s with `[present] wide 288, plain 0, vram fallback 0`, and 60.0 fps at
+19.7-20.0 ticks/s under `KF2_VSYNC=block`. The vertex map reads 91.6-94.7% hit
+while moving, and `scripts/check_gate.py` reports 0 violations.
+
+**The one that broke the game is `FrameClock`, and it broke it two rooms away
+from where it was edited.** Upstream repurposed the class: it used to be the
+*host* throttle and nothing else, and it is now the **guest vblank clock** —
+`Interrupts.VBlankCount` is `FrameClock.Count` and `Interrupts.ClockMs` is
+`FrameClock.Now`, both advanced only when `FrameClock.Catch()` is called from
+`TickVBlank`. The port gates `TickVBlank` off, because on its timeline
+`LibEtc.AdvanceVBlanks` delivers IRQ 0 on its own wall-clock grid and raising it
+here too would deliver every vblank twice. Gating the *call* therefore froze the
+*count* at 0 — and `BiosB`'s memory-card pump is `if (VBlankCount ==
+_cardEventFrame) return;`, so the card never pumped, the save never loaded, and
+the run sat in `GAME.EXE` at `hp 0`, `area 0`, `slot 0` forever with no error and
+no CD read. Only the IRQ is gated now; the count always advances. **The lesson is
+the general one: upstream moving a clock's ownership silently changes what a gate
+on it means.**
+
+**`FrameClock` therefore holds two clocks that must not touch.** `FrameMs` is the
+guest 60/50 Hz and is upstream's; the host ceiling — `TargetFps`, `Throttle`,
+`LastWaitMs`, all that is left of `0025` — is a separate block below it with its
+own grid. Upstream now throttles in `PresentLoop`, which this port never enters,
+so `Runtime.PresentFrame` calls `Throttle()` beside upstream's `MarkFrame()`.
+
+**Three upstream defaults were refused, each for the same reason: they are
+behaviour, not structure.**
+
+- **`ScanCrossImage` became unconditional.** `open`, `game` and `end` share one
+  address range, so a `jal` from an `fdat` module is added as an entry point to
+  *all three* — splitting a real function in the two overlays the call cannot
+  have meant. Measured: 2234 functions to 2370, and `0x80025D38` colliding across
+  all three, which renames it `func_80025D38_game` and breaks `AreaWarp` and
+  `AutoReload`. Kept behind `config.PointerScan`, where it was.
+- **`LibPress` binds names the funcmaps already carry.** Upstream added
+  `DecDCTin`, `DecDCTout`, `DecDCTinSync`, `DecDCToutSync` and `DecDCToutCallback`
+  to `SdkPatches`, and `merge_sdk_names.py` had merged those names into
+  `open`/`game`/`end` as legibility only — so the recompiler reported `applied 63
+  patches, 11 reimplementations` and the intro's MDEC path silently moved to an
+  HLE nobody has watched. The five names are back to `func_`, the count is `63, 0`
+  again, and they are in the script's `HLE_NAMES` fallback. Binding them is a
+  deliberate experiment for later, not a merge artifact.
+- **Upstream's `Classify` cache** keys on the clip rect and `GpuHle.ViewVersion`
+  and is invalidated from the one eviction site upstream has. The port's
+  `GetOrCreateRt` is not that site — it also destroys a target when the aspect
+  moves the margin, and `PresentDisplay` destroys idle ones — so the cache would
+  hand back a destroyed target. Left uncached, as the port's `GlCore` already was.
+
+**What was taken.** `GpuHle.Hold`/`Release` and `ViewVersion`; `TakeExceptionStack`
+on all three delivery paths; `Runtime.Timers?.Poll`; `_inDataCb` and the one-shot
+`_dataIntr` in `LibCd` (the `0005` graft keeps its `DiskError` guard and now sets
+both); `Log.VSyncOn`; `LibEtc.LastWaitMs`, which feeds upstream's new
+`LibGpu.AutoPresent` — a present forced from `PutDispEnv` when the display rect
+moves and the game has not `VSync`ed for 100 ms. That grace means it never fires
+in play, and the port measures exactly 144.0 fps with it in.

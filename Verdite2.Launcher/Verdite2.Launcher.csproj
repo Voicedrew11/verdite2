@@ -60,6 +60,15 @@
         <PublishSingleFile>false</PublishSingleFile>
 
         <!--
+          QuickJit off, and it must match KingsField2Recomp.csproj: the game runs in
+          this process, so this runtimeconfig is the one that decides. Tier-up
+          recompiles a hooked method and MonoMod's detour does not reliably follow,
+          which lost FramePacing's frame boundary for whole sessions (the title and
+          areas at twice the chosen rate). See that project's comment.
+        -->
+        <TieredCompilationQuickJit>false</TieredCompilationQuickJit>
+
+        <!--
           The recompiler is an Exe, and the SDK refuses an Exe-to-Exe reference
           across a self-contained boundary (NETSDK1150) because the referenced
           project's apphost would be built framework-dependent and shipped beside a

@@ -65,7 +65,14 @@ public static class FunctionDetector
         for (var i = 0; i < sorted.Count; i++)
         {
             var start = sorted[i];
-            var maxEnd = i + 1 < sorted.Count ? sorted[i + 1] : codeEnd;
+            var next = i + 1;
+            var maxEnd = next < sorted.Count ? sorted[next] : codeEnd;
+
+            while (next < sorted.Count && maxEnd - start < MergeLimit && BranchedInto(all, start, maxEnd))
+            {
+                next++;
+                maxEnd = next < sorted.Count ? sorted[next] : codeEnd;
+            }
 
             var si = InstrIndex(all, start);
             if (si < 0) continue;
@@ -138,6 +145,7 @@ public static class FunctionDetector
         while (frontier.Count > 0)
         {
             var targets = new SortedSet<uint>();
+            var splits = new SortedSet<uint>();
             foreach (var f in frontier)
             foreach (var instr in f.Instructions)
             {
@@ -145,8 +153,27 @@ public static class FunctionDetector
                 var t = instr.JumpTarget;
                 if (t < codeStart || t >= codeEnd) continue;
                 if (knownStarts.Contains(t)) continue;
-                if (allFuncs.Any(g => t > g.Start && t < g.End)) continue;
+
+                var host = allFuncs.FirstOrDefault(g => t > g.Start && t < g.End);
+                if (host != null)
+                {
+                    if (CanSplitAt(all, host, t)) splits.Add(t);
+                    continue;
+                }
+
                 targets.Add(t);
+            }
+
+            foreach (var addr in splits)
+            {
+                var host = allFuncs.FirstOrDefault(g => addr > g.Start && addr < g.End);
+                if (host == null) continue;
+                var hs = InstrIndex(all, host.Start);
+                var he = InstrIndex(all, addr);
+                if (hs < 0 || he <= hs) continue;
+                host.End = addr;
+                host.Instructions = all[hs..he];
+                targets.Add(addr);
             }
 
             if (targets.Count == 0) break;
@@ -473,7 +500,70 @@ public static class FunctionDetector
 
         return false;
     }
+    
+    private const uint MergeLimit = 0x2000;
 
+    private static bool CanSplitAt(MipsInstruction[] all, MipsFunction host, uint addr)
+    {
+        if (BranchedInto(all, host.Start, addr)) return false;
+
+        var idx = InstrIndex(all, addr);
+        var hs = InstrIndex(all, host.Start);
+        if (idx < 0 || hs < 0 || idx - 2 < hs) return false;
+        return EndsControlFlow(all[idx - 2]);
+    }
+
+    private static bool BranchedInto(MipsInstruction[] all, uint start, uint addr)
+    {
+        var from = InstrIndex(all, start);
+        var to = InstrIndex(all, addr);
+        if (from < 0 || to <= from || to > all.Length) return false;
+
+        var branched = false;
+        var linked = false;
+
+        for (var i = from; i < to; i++)
+        {
+            var instr = all[i];
+            if (!instr.HasDelaySlot) continue;
+
+            var op = instr.Word >> 26;
+            bool link;
+            uint target;
+
+            switch (op)
+            {
+                case 2:
+                    link = false;
+                    target = instr.JumpTarget;
+                    break;
+                case 3:
+                    link = true;
+                    target = instr.JumpTarget;
+                    break;
+                case 1:
+                    link = (uint)instr.Rt is 0x10 or 0x11;
+                    target = instr.BranchTarget;
+                    break;
+                case 4:
+                case 5:
+                case 6:
+                case 7:
+                    link = false;
+                    target = instr.BranchTarget;
+                    break;
+                default: continue;
+            }
+
+            if (target != addr) continue;
+
+            if (link) linked = true;
+            else branched = true;
+        }
+
+        return branched && linked;
+    }
+    
     //addiu $sp, $sp, -n, gcc pattern, it reservers space on stack when start of the function
     private static bool IsPrologue(MipsInstruction i)
     {
@@ -545,10 +635,10 @@ public static class FunctionDetector
     }
 
     //hard to explain, used to help find the correct end of the function, wich sometimes can be hard since you can have multiple return points ina  function, this TRIES to get the true end of it
-    private static int RefineEnd(MipsInstruction[] all, int startIdx, int maxEndIdx)
+    private static int RefineEnd(MipsInstruction[] all, int startIdx, int maxEndIdx, uint floor = 0)
     {
         maxEndIdx = Math.Clamp(maxEndIdx, startIdx + 1, all.Length);
-        var reach = all[startIdx].Vram;
+        var reach = Math.Max(all[startIdx].Vram, floor);
         for (var i = startIdx; i < maxEndIdx; i++)
         {
             var instr = all[i];
@@ -561,11 +651,70 @@ public static class FunctionDetector
             if (IsFunctionEnd(all, startIdx, i) && instr.Vram >= reach)
             {
                 var end = i + 2; // include the delay slot
-                return Math.Clamp(end, startIdx + 1, maxEndIdx);
+                if (!HasBlindJump(all, startIdx, end)) return Math.Clamp(end, startIdx + 1, maxEndIdx);
+
+                while (true)
+                {
+                    var tail = TailBranchingBack(all, startIdx, end, all.Length);
+                    if (tail <= end) break;
+                    end = tail;
+                }
+
+                return Math.Clamp(end, startIdx + 1, all.Length);
             }
         }
 
         return maxEndIdx;
+    }
+
+    public static void Extend(MipsInstruction[] all, MipsFunction func, uint floor, uint limit)
+    {
+        var startIdx = InstrIndex(all, func.Start);
+        if (startIdx < 0 || startIdx >= all.Length) return;
+
+        var maxEndIdx = Math.Clamp(InstrIndex(all, limit), startIdx + 1, all.Length);
+        var endIdx = Math.Clamp(RefineEnd(all, startIdx, maxEndIdx, floor), startIdx + 1, all.Length);
+        var end = all[endIdx - 1].Vram + 4;
+        if (end <= func.End) return;
+
+        func.End = end;
+        func.Instructions = all[startIdx..endIdx];
+    }
+
+    private static bool HasBlindJump(MipsInstruction[] all, int startIdx, int end)
+    {
+        for (var i = startIdx; i < end && i < all.Length; i++)
+        {
+            var instr = all[i];
+            if (!instr.IsJrRegister || instr.IsReturn || instr.Rs == 31) continue;
+            if (!IsFunctionEnd(all, startIdx, i)) return true;
+        }
+
+        return false;
+    }
+
+    private const uint TailWindow = 0x400;
+
+    private static int TailBranchingBack(MipsInstruction[] all, int startIdx, int end, int limit)
+    {
+        if (end <= startIdx || end > all.Length) return end;
+
+        var startVram = all[startIdx].Vram;
+        var bodyEnd = all[end - 1].Vram;
+        var last = end;
+
+        for (var i = end; i < limit; i++)
+        {
+            var instr = all[i];
+            if (instr.Vram > bodyEnd + TailWindow) break;
+            if (!instr.IsJump && (!instr.IsBranch || instr.IsRegisterJump)) continue;
+
+            var tgt = instr.IsJump ? instr.JumpTarget : instr.BranchTarget;
+            if (tgt < startVram || tgt > bodyEnd) continue;
+            last = i + 2;
+        }
+
+        return Math.Clamp(last, end, limit);
     }
 
     //helper for above

@@ -7,9 +7,12 @@ internal sealed class TransformInterp
     private const float Scale = 1f / 4096f;
     private const float MagnitudeThreshold = 10f;
     private const float ScreenTolerance = 8f;
-    private const float Teleport = 96f;
     private const float Reach = 1024f;
     private const int Doubts = 2;
+    private const float MaxTurn = 0.5f;
+    private const float OrdPenalty = 64f;
+    private const float KeyPenalty = 2048f;
+    private const float UvPenalty = 48f;
     
     private struct Pose
     {
@@ -25,10 +28,21 @@ internal sealed class TransformInterp
     private readonly List<Candidate> _candidates = [];
     private Pose[] _poses = [];
     private bool[] _taken = [];
+    private int[] _bestCur = [];
+    private int[] _bestPrev = [];
+    private float[] _scoreCur = [];
+    private float[] _scorePrev = [];
     
     public int Matched { get; private set; }
     
     public int Groups { get; private set; }
+    
+    
+    
+    
+    
+    
+    private readonly Dictionary<uint, int> _order = new();
     
     private readonly Dictionary<long, float> _depths = new();
     
@@ -56,40 +70,10 @@ internal sealed class TransformInterp
             Borrow(tri.Transform, ref tri.B);
             Borrow(tri.Transform, ref tri.C);
             
-            var known = 0f;
-            var count = 0;
-            
-            if (tri.A.Depth > 0f) { known += tri.A.Depth; count++; }
-            if (tri.B.Depth > 0f) { known += tri.B.Depth; count++; }
-            if (tri.C.Depth > 0f) { known += tri.C.Depth; count++; }
-            
-            if (count > 0)
-            {
-                var guess = known / count;
-                
-                Guess(tri.Transform, ref tri.A, guess);
-                Guess(tri.Transform, ref tri.B, guess);
-                Guess(tri.Transform, ref tri.C, guess);
-            }
-            
             current.Tris[i] = tri;
         }
     }
     
-    private void Guess(int group, ref HleVertex vertex, float depth)
-    {
-        if (vertex.Depth > 0f) return;
-        
-        var key = Corner(group, in vertex);
-        if (_depths.TryGetValue(key, out var held))
-        {
-            vertex.Depth = held;
-            return;
-        }
-        
-        _depths[key] = depth;
-        vertex.Depth = depth;
-    }
     private void Learn(int group, in HleVertex vertex)
     {
         if (vertex.Depth <= 0f) return;
@@ -146,60 +130,111 @@ internal sealed class TransformInterp
         Matched = 0;
         Groups = current.Transforms.Count;
         
+        Order(current);
+        Order(previous);
+        
         if (_taken.Length < previous.Transforms.Count) _taken = new bool[previous.Transforms.Count];
         Array.Clear(_taken, 0, previous.Transforms.Count);
         
         Assign(current, previous);
     }
     
+    private void Order(FrameGraph graph)
+    {
+        _order.Clear();
+        
+        for (var i = 0; i < graph.Transforms.Count; i++)
+        {
+            var group = graph.Transforms[i];
+            _order.TryGetValue(group.Key, out var seen);
+            group.Ord = seen;
+            _order[group.Key] = seen + 1;
+            graph.Transforms[i] = group;
+        }
+    }
+    
     private void Assign(FrameGraph current, FrameGraph previous)
     {
         _candidates.Clear();
         
-        for (var i = 0; i < current.Transforms.Count; i++)
-        for (var j = 0; j < previous.Transforms.Count; j++)
+        var here = current.Transforms.Count;
+        var there = previous.Transforms.Count;
+        
+        for (var i = 0; i < here; i++)
+        for (var j = 0; j < there; j++)
         {
             if (!Score(current.Transforms[i], previous.Transforms[j], out var score)) continue;
             _candidates.Add(new Candidate(i, j, score));
         }
         
-        _candidates.Sort(static (a, b) => a.Score.CompareTo(b.Score));
+        if (_bestCur.Length < here) { _bestCur = new int[here]; _scoreCur = new float[here]; }
+        if (_bestPrev.Length < there) { _bestPrev = new int[there]; _scorePrev = new float[there]; }
+        
+        for (var i = 0; i < here; i++) { _bestCur[i] = -1; _scoreCur[i] = float.MaxValue; }
+        for (var j = 0; j < there; j++) { _bestPrev[j] = -1; _scorePrev[j] = float.MaxValue; }
         
         foreach (var candidate in _candidates)
         {
-            var group = current.Transforms[candidate.Current];
-            if (group.Match >= 0 || _taken[candidate.Previous]) continue;
-            
-            var from = previous.Transforms[candidate.Previous];
-            
-            group.Match = candidate.Previous;
-            group.Vx = group.TX - from.TX;
-            group.Vy = group.TY - from.TY;
-            group.Vz = group.TZ - from.TZ;
-            
-            Project(ref group);
-            
-            if (group.Screened && from.Screened)
+            if (candidate.Score < _scoreCur[candidate.Current])
             {
-                group.Vsx = group.Sx - from.Sx;
-                group.Vsy = group.Sy - from.Sy;
+                _scoreCur[candidate.Current] = candidate.Score;
+                _bestCur[candidate.Current] = candidate.Previous;
             }
-            var steady = Continues(in group, in from);
-            var travel = Screen(in group);
             
-            group.Held = steady ? 0 : from.Held + 1;
-            group.Lerp = steady || (travel <= Teleport && group.Held < Doubts);
-            
-            
-            current.Transforms[candidate.Current] = group;
-            _taken[candidate.Previous] = true;
-            Matched++;
+            if (candidate.Score < _scorePrev[candidate.Previous])
+            {
+                _scorePrev[candidate.Previous] = candidate.Score;
+                _bestPrev[candidate.Previous] = candidate.Current;
+            }
         }
+        
+        for (var i = 0; i < here; i++)
+        {
+            var j = _bestCur[i];
+            if (j < 0 || _bestPrev[j] != i) continue;
+            
+            Accept(current, previous, i, j);
+        }
+
+    }
+    
+    private void Accept(FrameGraph current, FrameGraph previous, int index, int partner)
+    {
+        var group = current.Transforms[index];
+        var from = previous.Transforms[partner];
+        
+        group.Match = partner;
+        group.Vx = group.TX - from.TX;
+        group.Vy = group.TY - from.TY;
+        group.Vz = group.TZ - from.TZ;
+        
+        Project(ref group);
+        
+        if (group.Screened && from.Screened)
+        {
+            group.Vsx = group.Sx - from.Sx;
+            group.Vsy = group.Sy - from.Sy;
+        }
+        
+        var steady = Continues(in group, in from);
+        
+        group.Held = steady ? 0 : from.Held + 1;
+        group.Lerp = steady || group.Held < Doubts;
+        
+        current.Transforms[index] = group;
+        _taken[partner] = true;
+        Matched++;
     }
     
     private static bool Score(in TransformRecord current, in TransformRecord previous, out float score)
     {
         score = float.MaxValue;
+        
+        if ((current.Pages & previous.Pages) == 0u) return false;
+        
+        var few = Math.Min(current.Tris, previous.Tris);
+        var many = Math.Max(current.Tris, previous.Tris);
+        if (many > few * 2) return false;
         
         if (Determinant(in current) * Determinant(in previous) < 0f) return false;
         if (current.H != previous.H) return false;
@@ -208,13 +243,29 @@ internal sealed class TransformInterp
         var dy = current.TY - (previous.TY + previous.Vy);
         var dz = current.TZ - (previous.TZ + previous.Vz);
         
+        var distance = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+        if (distance > Reach) return false;
+        
         var orientation =
             Row(current.R0, current.R1, current.R2, previous.R0, previous.R1, previous.R2) +
             Row(current.R3, current.R4, current.R5, previous.R3, previous.R4, previous.R5) +
             Row(current.R6, current.R7, current.R8, previous.R6, previous.R7, previous.R8);
         
-        score = MathF.Sqrt(dx * dx + dy * dy + dz * dz) + orientation * 4096f;
+        if (orientation > MaxTurn) return false;
+        
+        score = distance + orientation * 4096f + MathF.Abs(current.Ord - previous.Ord) * OrdPenalty;
+        if (current.Key != previous.Key) score += KeyPenalty;
+        score += Uv(in current, in previous) * UvPenalty;
+        
         return true;
+    }
+    
+    private static float Uv(in TransformRecord current, in TransformRecord previous)
+    {
+        if (current.U0 > current.U1 || previous.U0 > previous.U1) return 0f;
+        
+        return MathF.Abs(current.U0 - previous.U0) + MathF.Abs(current.U1 - previous.U1) +
+               MathF.Abs(current.V0 - previous.V0) + MathF.Abs(current.V1 - previous.V1);
     }
     
     private static void Project(ref TransformRecord group)
@@ -235,13 +286,6 @@ internal sealed class TransformInterp
         var depth = MathF.Max(MathF.Abs(group.TZ), group.H);
         
         return depth <= 0f ? 0f : speed * group.H / depth;
-    }
-    
-    private static float Divergence(in TransformRecord current, in TransformRecord previous)
-    {
-        return Row(current.R0, current.R1, current.R2, previous.R0, previous.R1, previous.R2) +
-               Row(current.R3, current.R4, current.R5, previous.R3, previous.R4, previous.R5) +
-               Row(current.R6, current.R7, current.R8, previous.R6, previous.R7, previous.R8);
     }
     
     private static bool Continues(in TransformRecord current, in TransformRecord previous)
@@ -265,39 +309,20 @@ internal sealed class TransformInterp
     {
         if (_poses.Length < current.Transforms.Count) _poses = new Pose[current.Transforms.Count];
         
+        Span<float> blended = stackalloc float[9];
+        Span<float> inverse = stackalloc float[9];
+        
         for (var i = 0; i < current.Transforms.Count; i++)
         {
             _poses[i].Valid = false;
             
             var group = current.Transforms[i];
-            if (group.Match < 0)
-            {
-                continue;
-            }
-            
-            if (!group.Warpable)
-            {
-                continue;
-            }
-            
-            if (!group.Lerp)
-            {
-                continue;
-            }
+            if (group.Match < 0 || !group.Warpable || !group.Lerp) continue;
             
             var from = previous.Transforms[group.Match];
             
-            Span<float> blended = stackalloc float[9];
-            Span<float> inverse = stackalloc float[9];
-            if (!Blend(in from, in group, weight, blended))
-            {
-                continue;
-            }
-            
-            if (!Invert(in group, inverse))
-            {
-                continue;
-            }
+            if (!Blend(in from, in group, weight, blended)) continue;
+            if (!Invert(in group, inverse)) continue;
             
             ref var pose = ref _poses[i];
             
@@ -326,6 +351,12 @@ internal sealed class TransformInterp
         }
     }
     
+    public bool Ready(int group)
+    {
+        var index = group - 1;
+        return index >= 0 && index < _poses.Length && _poses[index].Valid;
+    }
+    
     public bool Warp(int group, in HleVertex vertex, out HleVertex result)
     {
         result = vertex;
@@ -333,9 +364,28 @@ internal sealed class TransformInterp
         var index = group - 1;
         if (index < 0 || index >= _poses.Length || !_poses[index].Valid) return false;
         
-        if (vertex.Depth <= 0f) return false;
+        return Place(ref _poses[index], in vertex, ref result);
+    }
+    
+    public bool Warp(int group, in HleVertex a, in HleVertex b, in HleVertex c,
+        out HleVertex wa, out HleVertex wb, out HleVertex wc)
+    {
+        wa = a;
+        wb = b;
+        wc = c;
         
-        ref var pose = ref _poses[index];
+        var index = group - 1;
+        if (index < 0 || index >= _poses.Length || !_poses[index].Valid) return false;
+        
+        ref var shared = ref _poses[index];
+        
+        return Place(ref shared, in a, ref wa) && Place(ref shared, in b, ref wb) &&
+               Place(ref shared, in c, ref wc);
+    }
+    
+    private static bool Place(ref Pose pose, in HleVertex vertex, ref HleVertex result)
+    {
+        if (vertex.Depth <= 0f) return false;
         
         var depth = vertex.Depth;
         var vx = (vertex.X - pose.OFX) * depth / pose.H;

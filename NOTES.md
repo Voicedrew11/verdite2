@@ -174,6 +174,8 @@ Build it, run it, and measure what it did.
 - Diagnostics
 - Compile a mod without launching the game
 - Getting pixels out without a screenshot
+- Profiling a frame
+- Watching a frame being built
 - What counts as verification
 
 ### [PACKAGING.md](docs/PACKAGING.md)
@@ -297,6 +299,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - The command channel
 - `ending` exists because the last ten minutes of the game are otherwise untestable
 - The MCP layer
+- The polygon assembler in C#
 
 ### [INPUT.md](docs/INPUT.md)
 
@@ -314,11 +317,11 @@ Every `KF2_*` switch the port reads, in one list.
 
 ### [RECOMPONE_FORK.md](docs/RECOMPONE_FORK.md)
 
-How the vendored RecompOne checkout is kept, why it is not a patch stack, and what the merge to `0409bc2` decided.
+How the vendored RecompOne checkout is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided.
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0041`, one entry each.
+Every change the port made to RecompOne, `0001`-`0042`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

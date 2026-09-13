@@ -28,14 +28,29 @@ public static class VideoRate
         Rate = 0;
     }
     
+    private const int Agreement = 6;
+    
     private static int Settled()
     {
-        var first = _factors[0];
-        if (first <= 0) return 0;
+        var best = 0;
+        var seen = 0;
         
-        foreach (var factor in _factors)
-            if (factor != first) return 0;
+        foreach (var candidate in _factors)
+        {
+            if (candidate <= 0) continue;
+            
+            var count = 0;
+            foreach (var factor in _factors)
+                if (factor == candidate) count++;
+            
+            if (count <= seen) continue;
+            
+            seen = count;
+            best = candidate;
+        }
         
-        return (Runtime.Gpu?.Pal == true ? 50 : 60) / first;
+        if (best <= 0 || seen < Agreement) return 0;
+        
+        return (Runtime.Gpu?.Pal == true ? 50 : 60) / best;
     }
 }

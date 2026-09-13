@@ -118,6 +118,7 @@ public static class LibCd
     private static readonly byte[] _pos = new byte[4];
     private static readonly byte[] _lastResult = new byte[8];
     private static int _lastIntr = Complete;
+    private static int _dataIntr;
 
     private static bool _cddaPlaying;
     private static bool _cddaAutoPause;
@@ -127,6 +128,7 @@ public static class LibCd
     private static uint _cbSync;
     private static uint _cbReady;
     private static uint _cbData;
+    private static uint _cbRead;
 
     private static bool _readActive;
     private static bool _xaActive;
@@ -152,7 +154,7 @@ public static class LibCd
     {
         CdResetState();
         Runtime.Spu?.CdInitVolume();
-        c.V0 = CdInitInternal() ? 0u : 1u;
+        c.V0 = CdInitInternal() ? 1u : 0u;
     }
 
     public static void CdReset(CpuContext c, IMemory m)
@@ -199,15 +201,21 @@ public static class LibCd
         PumpReady(1);
         // 0005. The emulated drive always has the next sector to hand, so report
         // it ready for a read with no read callback registered; the callback path
-        // is Tick()'s job.
+        // is Tick()'s job. The DiskError guard is what keeps a failed read from
+        // being reported ready on the very next poll.
         if (_readActive && _cbReady == 0 && _cbData == 0 && _lastIntr != DiskError)
         {
             _lastResult[0] = _status;
             for (var i = 1; i < _lastResult.Length; i++) _lastResult[i] = 0;
             _lastIntr = DataReady;
+            _dataIntr = DataReady;
         }
+
+        var intr = _dataIntr;
+        _dataIntr = 0;
+
         if (result != 0) WriteResult(m, result);
-        c.V0 = (uint)_lastIntr;
+        c.V0 = (uint)intr;
     }
 
     public static void CdRead(CpuContext c, IMemory m)
@@ -251,6 +259,28 @@ public static class LibCd
         _lastIntr = Complete;
         QueueEvent(EvSpCOMP);
         c.V0 = 1;
+        FireRead(c, m);
+    }
+
+    private static bool _inReadCb;
+
+    private static void FireRead(CpuContext c, IMemory m)
+    {
+        if (_inReadCb || _cbRead == 0) return;
+
+        _inReadCb = true;
+        var snap = c.Snapshot();
+        try
+        {
+            c.A0 = Complete;
+            c.A1 = PublishStatus(m);
+            Dispatcher.Call(c, m, _cbRead);
+        }
+        finally
+        {
+            c.Restore(snap);
+            _inReadCb = false;
+        }
     }
 
     internal static int CurrentLba
@@ -326,6 +356,7 @@ public static class LibCd
         if (!_cddaAutoPause) return;
 
         _lastIntr = DataEnd;
+        _dataIntr = DataEnd;
         Log.Sdk($"DataEnd being deliver");
         if (LibDs.Active)
         {
@@ -345,6 +376,7 @@ public static class LibCd
 
     internal static void Tick()
     {
+        _frameSectors = 0;
         TickCdda();
         if (LibDs.Active)
         {
@@ -365,6 +397,8 @@ public static class LibCd
 
         if (_xaActive && xaMode) return;
 
+        if (_inDataCb) return;
+
         // A ReadN with no data callback is the polled/event-driven path, which
         // upstream has no answer for.
         if (_readActive && _cbData == 0 && _cbReady == 0)
@@ -378,25 +412,38 @@ public static class LibCd
         var snap = c.Snapshot();
         if (_cbData != 0)
         {
-            while (_cbData != 0)
+            _inDataCb = true;
+            try
             {
-                _lastIntr = DataReady;
-                var lba = CurrentLba;
-                if (_cbReady != 0)
+                for (var i = 0; i < DataCbBurst && _cbData != 0; i++)
                 {
-                    c.A0 = DataReady;
-                    c.A1 = PublishHeader(m, lba);
-                    Dispatcher.Call(c, m, _cbReady);
-                }
+                    if (FrameBudgetSpent()) break;
+                    _lastIntr = DataReady;
+                    _dataIntr = DataReady;
+                    var lba = CurrentLba;
+                    _int1Lba = lba;
+                    FifoReload(lba);
+                    if (_cbReady != 0)
+                    {
+                        c.A0 = DataReady;
+                        c.A1 = PublishStatus(m);
+                        Dispatcher.Call(c, m, _cbReady);
+                    }
 
-                AdvancePos(1);
-                Dispatcher.LoadByLba(CurrentLba);
-                if (_cbData != 0)
-                {
-                    c.A0 = DataReady;
-                    c.A1 = PublishHeader(m, lba);
-                    Dispatcher.Call(c, m, _cbData);
+                    AdvancePos(1);
+                    Dispatcher.LoadByLba(CurrentLba);
+                    if (_cbData != 0)
+                    {
+                        c.A0 = DataReady;
+                        c.A1 = PublishStatus(m);
+                        Dispatcher.Call(c, m, _cbData);
+                    }
                 }
+            }
+            finally
+            {
+                _int1Lba = -1;
+                _inDataCb = false;
             }
         }
         else
@@ -547,13 +594,12 @@ public static class LibCd
 
         PumpSync();
         FeedDataRead();
-        PumpDataIrq();
-        PumpReady(1);
+        if (!PumpDataIrq()) PumpReady(1);
     }
 
     private static void FeedDataRead()
     {
-        if (!_readActive || (_mode & 0x40) != 0) return;
+        if (_inDataCb || !_readActive || (_mode & 0x40) != 0) return;
         if (_cbReady == 0 && _cbData == 0) return;
 
         lock (_dataIrqQueue)
@@ -563,6 +609,7 @@ public static class LibCd
 
         var lba = CurrentLba;
         if (lba < 0 || Runtime.Cd == null || lba >= Runtime.Cd.Fs.DataSectors) return;
+        if (FrameBudgetSpent()) return;
 
         QueueDataIrq(lba);
         AdvancePos(1);
@@ -602,34 +649,57 @@ public static class LibCd
         }
     }
 
-    private static bool _pumping;
+    private static bool _inDataCb;
 
+    private static int _frameSectors;
+
+    private const int DataCbBurst = 16;
+
+    public static int SectorsPerFrame { get; set; }
+
+    private static bool FrameBudgetSpent()
+    {
+        var cap = SectorsPerFrame;
+        if (cap <= 0) return false;
+        if (_frameSectors >= cap) return true;
+
+        _frameSectors++;
+        return false;
+    }
 
     private static void PumpReady(int maxSectors)
     {
-        if (_pumping || !_readActive || _cbReady == 0 || _cbData != 0) return;
+        if (_inDataCb || !_readActive || _cbReady == 0 || _cbData != 0) return;
         var c = Runtime.Cpu;
         var m = Runtime.Mem;
         if (c == null || m == null) return;
 
-        _pumping = true;
+        _inDataCb = true;
         var snap = c.Snapshot();
         try
         {
             for (var i = 0; i < maxSectors && _readActive && _cbReady != 0; i++)
             {
+                if (FrameBudgetSpent()) break;
+                var lba = CurrentLba;
+                _int1Lba = lba;
+                FifoReload(lba);
                 _lastIntr = DataReady;
+                _dataIntr = DataReady;
+                _cdDataPending = false;
                 c.A0 = DataReady;
-                c.A1 = PublishHeader(m, CurrentLba);
+                c.A1 = PublishStatus(m);
                 Dispatcher.Call(c, m, _cbReady);
                 AdvancePos(1);
                 Dispatcher.LoadByLba(CurrentLba);
+                if (!_cdDataPending) break;
             }
         }
         finally
         {
+            _int1Lba = -1;
             c.Restore(snap);
-            _pumping = false;
+            _inDataCb = false;
         }
     }
 
@@ -808,15 +878,26 @@ public static class LibCd
     }
 
     private static int _int1Lba = -1;
+    private static int _fifoLba = -1;
+    private static int _fifoOff;
+
+    private static void FifoReload(int lba)
+    {
+        _fifoLba = lba;
+        _fifoOff = 0;
+    }
+
     private static bool _cdDataPending;
 
-    private static void PumpDataIrq()
+    private static bool PumpDataIrq()
     {
-        if (_cbReady == 0) return;
+        if (_inDataCb || _cbReady == 0) return false;
         var c = Runtime.Cpu;
         var m = Runtime.Mem;
-        if (c == null || m == null) return;
+        if (c == null || m == null) return false;
 
+        var served = false;
+        _inDataCb = true;
         var snap = c.Snapshot();
         try
         {
@@ -830,17 +911,20 @@ public static class LibCd
                 }
 
                 _int1Lba = lba;
+                FifoReload(lba);
                 _lastIntr = DataReady;
+                _dataIntr = DataReady;
                 _cdDataPending = false;
+                served = true;
                 c.A0 = DataReady;
-                c.A1 = PublishHeader(m, lba);
+                c.A1 = PublishStatus(m);
                 Dispatcher.Call(c, m, _cbReady);
 
                 if (_cdDataPending && _cbData != 0)
                 {
                     _cdDataPending = false;
                     c.A0 = DataReady;
-                    c.A1 = PublishHeader(m, lba);
+                    c.A1 = PublishStatus(m);
                     Dispatcher.Call(c, m, _cbData);
                 }
             }
@@ -849,7 +933,10 @@ public static class LibCd
         {
             _int1Lba = -1;
             c.Restore(snap);
+            _inDataCb = false;
         }
+
+        return served;
     }
 
     private static readonly object _locGate = new();
@@ -914,12 +1001,16 @@ public static class LibCd
             data = Runtime.Cd!.ReadSectorData(lba, SectorSize(_mode));
         }
 
-        var bytes = Math.Min(data.Length, words * 4);
+        if (lba != _fifoLba) FifoReload(lba);
 
-        for (var j = 0; j < bytes; j++) m.WriteU8(madr + (uint)j, data[j]);
+        var bytes = Math.Min(data.Length - _fifoOff, words * 4);
+        if (bytes < 0) bytes = 0;
+
+        for (var j = 0; j < bytes; j++) m.WriteU8(madr + (uint)j, data[_fifoOff + j]);
+        _fifoOff += bytes;
 
         _cdDataPending = true;
-        if (_readActive && _cbReady == 0 && _cbData == 0)
+        if (!_inDataCb && _readActive && _cbReady == 0 && _cbData == 0)
         {
             AdvancePos(1);
             Dispatcher.LoadByLba(CurrentLba);
@@ -962,6 +1053,19 @@ public static class LibCd
         c.V0 = fp;
     }
 
+    public static void CdFlush(CpuContext c, IMemory m)
+    {
+        _lastIntr = Complete;
+        _dataIntr = 0;
+        _cdDataPending = false;
+        lock (_dataIrqQueue)
+        {
+            _dataIrqQueue.Clear();
+        }
+
+        c.V0 = 0u;
+    }
+
     public static void CdSyncCallback(CpuContext c, IMemory m)
     {
         c.V0 = _cbSync;
@@ -976,8 +1080,8 @@ public static class LibCd
 
     public static void CdReadCallback(CpuContext c, IMemory m)
     {
-        c.V0 = _cbData;
-        _cbData = c.A0;
+        c.V0 = _cbRead;
+        _cbRead = c.A0;
     }
 
     public static void CdDataCallback(CpuContext c, IMemory m)
@@ -1012,7 +1116,8 @@ public static class LibCd
 
     internal static void Detach()
     {
-        _cbSync = _cbReady = _cbData = 0;
+        _cbSync = _cbReady = _cbData = _cbRead = 0;
+        _inReadCb = false;
         _readActive = false;
         lock (_syncQueue)
         {
@@ -1047,7 +1152,8 @@ public static class LibCd
         _mode = 0;
         _com = 0;
         _lastIntr = Complete;
-        _cbSync = _cbReady = _cbData = 0;
+        _dataIntr = 0;
+        _cbSync = _cbReady = _cbData = _cbRead = 0;
         lock (_syncQueue)
         {
             _syncQueue.Clear();
@@ -1060,6 +1166,7 @@ public static class LibCd
 
         _readActive = false;
         _xaActive = false;
+        FifoReload(-1);
         _cddaMute = false;
         _filterFile = _filterChannel = 0;
         Array.Clear(_pos);
@@ -1098,6 +1205,12 @@ public static class LibCd
                     {
                         for (var i = 0; i < 4; i++) _pos[i] = m.ReadU8(param + (uint)i);
                     }
+
+                _readActive = false;
+                lock (_dataIrqQueue)
+                {
+                    _dataIrqQueue.Clear();
+                }
 
                 break;
             case Setmode:
@@ -1322,6 +1435,7 @@ public static class LibCd
     {
         QueueEvent(EvSpERROR);
         _lastIntr = DiskError;
+        _dataIntr = DiskError;
         _lastResult[0] = (byte)(_status | extraStat);
         _lastResult[1] = errByte;
         for (var i = 2; i < _lastResult.Length; i++) _lastResult[i] = 0;

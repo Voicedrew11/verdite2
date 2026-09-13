@@ -16,8 +16,52 @@ public sealed partial class Gpu
     private int _drawOffsetX, _drawOffsetY;
     
     public int DrawOffsetX => _drawOffsetX;
-    
+
     public int DrawOffsetY => _drawOffsetY;
+
+    public int DrawAreaLeft => _drawAreaLeft;
+    public int DrawAreaTop => _drawAreaTop;
+    public int DrawAreaRight => _drawAreaRight;
+    public int DrawAreaBottom => _drawAreaBottom;
+
+    // 0046. A detached GPU is a replay of a captured frame: it rasterizes in
+    // software into its own VRAM and reaches nothing global -- no backend, no
+    // trace, no prim event, no vertex map, no texture tracker.
+    public bool Detached { get; init; }
+
+    // Replay counters, null/zero on the live GPU. Coverage counts fragments per
+    // VRAM pixel (a transparent texel is still a fragment), Owner is the
+    // CoverTag of the last primitive that wrote the pixel.
+    public int[]? Coverage;
+    public int[]? Owner;
+    public int CoverTag;
+    public long Fragments;
+
+    void Frag(int x, int y)
+    {
+        Fragments++;
+        if (Coverage != null) Coverage[y * VramWidth + x]++;
+    }
+
+    /// <summary>0046. Take another GPU's registers and VRAM, with an empty FIFO.</summary>
+    public void CopyStateFrom(Gpu src)
+    {
+        src.Vram.AsSpan().CopyTo(Vram);
+        (_drawAreaLeft, _drawAreaTop, _drawAreaRight, _drawAreaBottom) =
+            (src._drawAreaLeft, src._drawAreaTop, src._drawAreaRight, src._drawAreaBottom);
+        (_drawOffsetX, _drawOffsetY) = (src._drawOffsetX, src._drawOffsetY);
+        (_texPageX, _texPageY, _texDepth, _blendMode) = (src._texPageX, src._texPageY, src._texDepth, src._blendMode);
+        (_dither, _texDisable) = (src._dither, src._texDisable);
+        (_texWinMaskX, _texWinMaskY, _texWinOffX, _texWinOffY) =
+            (src._texWinMaskX, src._texWinMaskY, src._texWinOffX, src._texWinOffY);
+        (_setMask, _checkMask) = (src._setMask, src._checkMask);
+        (_dispVramX, _dispVramY) = (src._dispVramX, src._dispVramY);
+        (_hRange1, _hRange2, _vRange1, _vRange2) = (src._hRange1, src._hRange2, src._vRange1, src._vRange2);
+        (_hres, _hres368, _vres480, _pal, _disp24, _interlace, _displayDisabled, _dmaDir) =
+            (src._hres, src._hres368, src._vres480, src._pal, src._disp24, src._interlace, src._displayDisabled, src._dmaDir);
+        ClearFifo();
+        _polyline = _loadImage = _readImage = false;
+    }
 
     private int _texPageX, _texPageY;
     private int _texDepth;
@@ -175,8 +219,16 @@ public sealed partial class Gpu
             _fifoSrc[i] = baseAddress == 0u ? 0u : baseAddress + (uint)i * 4u;
         _fifoCount = words.Length;
         _fifoBase = baseAddress;
+        var trace = Detached ? null : GpuTrace.Sink;
+        if (trace != null)
+            for (var i = 0; i < words.Length; i++)
+                trace.Word(words[i], _fifoSrc[i]);
         Execute();
-        if (!_loadImage) _fifoCount = 0;
+        if (!_loadImage)
+        {
+            _fifoCount = 0;
+            trace?.Executed();
+        }
     }
 
     public void WriteGp0(uint word)
@@ -189,6 +241,8 @@ public sealed partial class Gpu
     /// it was written to the register directly and has no address.</summary>
     public void WriteGp0(uint word, uint srcAddr)
     {
+        if (GpuTrace.Sink != null && !Detached) GpuTrace.Sink.Word(word, srcAddr);
+
         if (_loadImage)
         {
             StoreImageHalfword((ushort)word);
@@ -207,6 +261,7 @@ public sealed partial class Gpu
                 _polyline = false;
                 ExecutePolyline();
                 ClearFifo();
+                if (!Detached) GpuTrace.Sink?.Executed();
             }
             else
             {
@@ -233,7 +288,11 @@ public sealed partial class Gpu
         if (_fifoCount >= _need)
         {
             Execute();
-            if (!_loadImage) ClearFifo();
+            if (!_loadImage)
+            {
+                ClearFifo();
+                if (!Detached) GpuTrace.Sink?.Executed();
+            }
         }
     }
 
@@ -246,11 +305,12 @@ public sealed partial class Gpu
         // -- so tracing all of it is cheap and it is the only way to see whether
         // the game ever enabled the display (GP1(03)).
         if (Log.GpuOn) Log.Gpu($"GP1({op:X2}) 0x{p:X6}");
+        if (!Detached) GpuTrace.Sink?.Gp1(word);
         switch (op)
         {
             case >= 0x05 and <= 0x08:
                 WriteGp1Display(op, p);
-                GpuHle.NotifyDisplay(_dispVramX, _dispVramY, DisplayWidth, DisplayHeight);
+                if (!Detached) GpuHle.NotifyDisplay(_dispVramX, _dispVramY, DisplayWidth, DisplayHeight);
                 return;
             case 0x00: Reset(); break;
             case 0x01:

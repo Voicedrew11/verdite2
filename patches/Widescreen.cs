@@ -431,6 +431,7 @@ public static class Widescreen
         uint otEnd = otBase + (uint)GpuPrims.OtLength * 4u;
 
         addr = c.A0 & 0x1FFFFCu;
+        int slot = -1;
         for (int guard = 0; guard < 0x100000; guard++)
         {
             _fromEnd = entries - 1 - guard;
@@ -443,6 +444,8 @@ public static class Widescreen
 
             uint header = m.ReadU32(addr);
             uint count = header >> 24;
+            if (count == 0) slot++;
+            GteDepth.OtSlot = slot;
             for (uint i = 0; i < count; i++)
             {
                 // The address the word was read from, not just the word: that is
@@ -461,6 +464,7 @@ public static class Widescreen
         _fromEnd = -1;
         if (GteDepth.OtEntry >= 0) GteDepth.OtLength = GteDepth.OtEntry + 1;
         GteDepth.OtEntry = -1;
+        GteDepth.OtSlot = -1;
         if (custom) GpuPrims.Clear();
     }
 

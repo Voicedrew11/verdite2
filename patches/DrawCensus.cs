@@ -84,7 +84,7 @@ public static class DrawCensus
     /// What to attribute. Stage 13's own callees in the order it calls them, then
     /// the drawing callees of the world walk, so one run gives both levels.
     /// </summary>
-    static readonly (uint Addr, string What)[] Routines =
+    internal static readonly (uint Addr, string What)[] Routines =
     [
         (0x800342D8, "13  renderer"),
         (0x8002E22C, "    head a"),

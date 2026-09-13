@@ -8,6 +8,7 @@ public static class Log
     public static bool DmaOn = false;
     public static bool CdOn = false;
     public static bool SdkOn = false;
+    public static bool VSyncOn = false;
     public static bool MdecOn = false;
     public static bool IrqOn = false;
 

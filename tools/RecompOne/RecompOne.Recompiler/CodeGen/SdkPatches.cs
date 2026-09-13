@@ -12,11 +12,16 @@ public static class SdkPatches
             "CdSync", "CdReady", "CdRead", "CdReadSync", "CdGetSector",
             "CdDataSync", "CdSearchFile", "CdSyncCallback", "CdReadyCallback",
             "CdReadCallback", "CdDataCallback", "CdStatus", "CdMode",
-            "CdLastCom", "CdMix"
+            "CdLastCom", "CdMix", "CdFlush"
         }),
         ("libetc", "RecompOne.Runtime.Sdk.LibEtc", new[]
         {
             "VSync"
+        }),
+        ("libpress", "RecompOne.Runtime.Sdk.LibPress", new[]
+        {
+            "DecDCTin", "DecDCTout", "DecDCTinSync",
+            "DecDCToutSync", "DecDCToutCallback"
         }),
         ("libgpu", "RecompOne.Runtime.Sdk.LibGpu", new[]
         {
@@ -81,7 +86,7 @@ public static class SdkPatches
         }),
         ("libcd", "RecompOne.Runtime.Sdk.LibCd.CdGetSector", new[]
         {
-            "CD_getsector"
+            "CD_getsector", "CdGetSector2", "CD_getsector2"
         }),
         ("libapi", "RecompOne.Runtime.Sdk.LibApi.PatchCard", new[]
         {

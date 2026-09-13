@@ -118,6 +118,11 @@ public static class Pgxp
         _forcedCulling = Flag(culling);
         _forcedCpu = Flag(cpu);
         _forcedMemory = Flag(memory);
+
+        // Enabling PGXP is env-only, so the CPU hooks are decided here, before any
+        // recompiled code is compiled; read the gate now so it is fixed before then.
+        Rp.Pgxp.CpuHooksArmed = _forcedOn == true && _forcedCpu != false;
+        _ = Rp.PgxpGate.Cpu;
         _forcedCache = Flag(cache);
         _forcedCacheW = Flag(cacheW);
 

@@ -412,6 +412,15 @@ so it needs **no pin move** and no change to the recompiler this port builds
 against. `scripts/merge_sdk_names.py` writes what it found into
 `config/funcmaps/*.json`.
 
+**A name merged in as legibility can start binding later.** `bound_names()` reads
+the list out of the checkout for exactly that reason, but it only guards the
+*next* run: the merge to `d81dec8` added `libpress` to `SdkPatches`, and five
+`DecDCT*` names already sitting in `open`, `game` and `end` turned into `applied
+63 patches, **11** reimplementations` — the intro's MDEC path silently rerouted to
+an HLE nobody has watched. They are back to `func_`-named and in `HLE_NAMES`. So
+**read that counter after every merge**: `63, 0` is the invariant, and anything
+else is a rename that became a behaviour change.
+
 Run against `SLUS-00158` it named 347 of 515 functions in OPEN.EXE, 425 of 1103
 in GAME.EXE and 324 of 471 in END.EXE. Its function boundaries agree with this
 project's swept-and-merged maps almost exactly — 1,096 shared addresses, at most

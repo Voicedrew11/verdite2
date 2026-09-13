@@ -29,7 +29,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
 | `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0041` |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0042` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/GAME_INTERNALS.md` | the game's own addresses and routines |
@@ -53,7 +53,7 @@ clone already has it and nothing needs cloning.
 ```bash
 bash scripts/setup_tools.sh          # build the vendored recompiler
 
-# recompile MIPS -> C# into generated/ (~2099 functions, ~163k lines)
+# recompile MIPS -> C# into generated/ (~2234 functions, ~182k lines)
 dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build -- config/kf2.json
 
 dotnet build KingsField2Recomp.csproj -c Release
@@ -160,6 +160,9 @@ what it is) live there, not here.
 | `LoadPacing` | loading screen's walking figure held to the vblank grid | on | PATCHES_AND_MODS, "The loading screen's walking figure" |
 | `SpriteAnim` | billboard cel animation held to the tick | on | PATCHES_AND_MODS, "The flames run at the render rate" |
 | `FullRateLogic` | `KF2_FPS_LOGIC=full`; comparison only, **not shippable** | off | PATCHES_AND_MODS, "Any frame rate" |
+| `FrameProfiler` | per-frame time by section: every hook, the present path, the waits (`0045`); Shift+P | records while its panel is open | DEVELOPMENT, "Profiling a frame" |
+| `FrameCapture`, `FrameViewerPanel` | capture one run of stage 13 and scrub it GP0 command by command on a detached software GPU: owner routine, send cost, fragments, GL batch submits and why, GPU time per batch and for AO, every runtime section, vertex-map work per routine (`0046`); Shift+F | idle until a capture; routines hooked from the first | DEVELOPMENT, "Watching a frame being built" |
+| `PolyAssembler` | `func_80030540` in C# as a replace hook, rejecting polygons the view-space clipper would clip to nothing; also `func_8002FECC` (the far map tiles' unclipped assembler), the vertex transforms `func_8002E650`/`func_8002E7CC`, `func_8002F214`/`func_8002EAEC` (the models' lit assembler) and the clipper `Clip4FTP`/`Clip3FTP`; the GTE ops they call have a fast path in the runtime (`0047`); `KF2_POLYASM=verify` diffs each against the recompiled routine, GTE included; Video ▸ Fast geometry switches them all, with the GTE fast path | on | PATCHES_AND_MODS, "The polygon assembler in C#", "The lit model assembler", "The clipper in C#", "The GTE fast path" |
 | `Perspective` | perspective-correct textures (`0009`, `0012`) | on | RENDERING, "Perspective correction" |
 | `Subpixel` | sub-pixel vertex positions (`0010`) | off | RENDERING, "Sub-pixel vertex positioning" |
 | `ZBuffer` | per-pixel occlusion from recovered depth (`0014`, `0036`); no window control | off | RENDERING, "Z-buffer" |
@@ -409,9 +412,9 @@ removed for the same reason.
 
 **`tools/RecompOne/` is vendored: an edit inside it is a change to this
 repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0041`) are how the source
+what the port changed and why, and the numbers (`0001`-`0042`) are how the source
 refers to each change, but they are **no longer replayed**. The merge base is
-`tools/RecompOne/UPSTREAM` (currently `0409bc2`); the fork's history is the
+`tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
 gitignored `tools/RecompOne.git/`, reached with
 `git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne <cmd>`.
 
@@ -462,7 +465,13 @@ fail to load area modules on a differently mastered dump.
 - Packaging is `packaging/linux/build-appimage.sh` and
   `packaging/windows/build-windows.ps1`, neither of which needs the disc.
   **Trimming is off and must stay off** (MonoMod detours, Roslyn, `AutoStart`'s
-  reflection). `DiscCheck.Validate` fills `Runtime.DiscValidator` and refuses
+  reflection).
+- **QuickJit is off and must stay off, in both `KingsField2Recomp.csproj` and
+  `Verdite2.Launcher.csproj`** (`TieredCompilationQuickJit`). Tier-up recompiles a
+  hooked method and MonoMod's detour does not reliably follow, so a committed hook
+  stops firing for the session with `IsCommitted` still true — that was the boot
+  that ran at twice the chosen rate. `FramePacing`'s sentinel prints
+  `[KF2] pacing sentinel:` if a pacing hook is ever lost again. `DiscCheck.Validate` fills `Runtime.DiscValidator` and refuses
   `SLUS-00255` by name.
 
 See `docs/PACKAGING.md`.

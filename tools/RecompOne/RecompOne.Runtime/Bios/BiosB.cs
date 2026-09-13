@@ -16,13 +16,33 @@ public static class BiosB
     private const int MaxEvents = 64;
     private static readonly EvCB[] _evCBs = new EvCB[MaxEvents];
 
-    private struct TCB
+    private sealed class TCB
     {
         public bool Used;
+        public uint Pc;
+        public uint Sp;
+        public uint Gp;
+        public bool Live;
+        public int Caller = -1;
+        public CpuSnapshot Regs;
+        public readonly SemaphoreSlim Baton = new(0, 1);
     }
 
-    private const int MaxThreads = 4;
-    private static readonly TCB[] _tcbs = new TCB[MaxThreads];
+    private sealed class ThreadGone : Exception;
+
+    private const int MaxThreads = 8;
+    private static readonly TCB[] _tcbs = Build();
+
+    private static int _current;
+
+    private static TCB[] Build() //thrd imp
+    {
+        var all = new TCB[MaxThreads];
+        for (var i = 0; i < MaxThreads; i++) all[i] = new TCB();
+        all[0].Used = true;
+        all[0].Live = true;
+        return all;
+    }
 
     private static readonly uint[] _intChain = new uint[4];
 
@@ -46,6 +66,12 @@ public static class BiosB
     public const uint PadInitStub = ChangeClearPadEntry + 0x884u;
     public const uint PadStopStub = ChangeClearPadEntry + 0x894u;
 
+    public const uint PadOutputStub = ChangeClearPadEntry + 0x7A0u;
+
+    private const uint CapturedStartPad = 0x100u;
+    private const uint CapturedStopPad = 0x101u;
+    private const uint CapturedPadOutput = 0x102u;
+
     public static uint GetB0Table(IMemory m) //gen this
     {
         for (var n = 0; n < B0TableEntries; n++)
@@ -58,13 +84,19 @@ public static class BiosB
     {
         if (addr == PadInitStub)
         {
-            fn = 0x15u;
+            fn = CapturedStartPad;
             return true;
         }
 
         if (addr == PadStopStub)
         {
-            fn = 0x16u;
+            fn = CapturedStopPad;
+            return true;
+        }
+
+        if (addr == PadOutputStub)
+        {
+            fn = CapturedPadOutput;
             return true;
         }
         
@@ -94,7 +126,16 @@ public static class BiosB
     public static void Reset()
     {
         Array.Clear(_evCBs);
-        Array.Clear(_tcbs);
+        foreach (var tcb in _tcbs)
+        {
+            tcb.Used = false;
+            tcb.Live = false;
+            tcb.Caller = -1;
+        }
+
+        _tcbs[0].Used = true;
+        _tcbs[0].Live = true;
+        _current = 0;
         Array.Clear(_intChain);
         IntrEnvInInterruptAddr = 0u;
         _padBuf = 0u;
@@ -404,11 +445,22 @@ public static class BiosB
                 CloseTh(c.A0);
                 c.V0 = 1u;
                 break;
-            case 0x10: break;
+            case 0x10:
+                ChangeTh(c, m, c.A0);
+                break;
             case 0x11: break;
-            case 0x12: InitPad(m, c.A0, c.A1, c.A2, c.A3); break;
-            case 0x13: _padCardStarted = true; break;
-            case 0x14: _padCardStarted = false; break;
+            case 0x12:
+                InitPad(m, c.A0, c.A1, c.A2, c.A3);
+                c.V0 = 1u;
+                break;
+            case 0x13:
+                _padCardStarted = true;
+                c.V0 = 1u;
+                break;
+            case 0x14:
+                _padCardStarted = false;
+                c.V0 = 1u;
+                break;
             case 0x15: _padBuf = c.A1; break;
             case 0x16: PadRead(m); break;
             case 0x17: break;
@@ -490,6 +542,17 @@ public static class BiosB
             case 0x5B: c.V0 = 0u; break;
             case 0x5C: c.V0 = 1u; break;
             case 0x5D: c.V0 = 1u; break;
+            case CapturedStartPad:
+                _padCardStarted = true;
+                c.V0 = 1u;
+                break;
+            case CapturedStopPad:
+                _padCardStarted = false;
+                c.V0 = 1u;
+                break;
+            case CapturedPadOutput:
+                c.V0 = 0u;
+                break;
             default: break;
         }
     }
@@ -570,12 +633,14 @@ public static class BiosB
 
     private static uint OpenTh(uint pc, uint spFp, uint gp)
     {
-        for (var i = 0; i < MaxThreads; i++)
-            if (!_tcbs[i].Used)
-            {
-                _tcbs[i] = new TCB { Used = true };
-                return 0xFF000000u | (uint)i;
-            }
+        for (var i = 1; i < MaxThreads; i++)
+        {
+            if (_tcbs[i].Used) continue;
+
+            _tcbs[i] = new TCB { Used = true, Pc = pc, Sp = spFp, Gp = gp };
+            Log.Bios($"  OpenTh pc={pc:X8} sp={spFp:X8} gp={gp:X8} -> {i}");
+            return 0xFF000000u | (uint)i;
+        }
 
         return 0xFFFFFFFFu;
     }
@@ -583,7 +648,97 @@ public static class BiosB
     private static void CloseTh(uint handle)
     {
         var i = (int)(handle & 0xFFu);
-        if (i < MaxThreads) _tcbs[i] = default;
+        if (i <= 0 || i >= MaxThreads) return;
+
+        var tcb = _tcbs[i];
+        if (!tcb.Used) return;
+
+        Log.Bios($"  CloseTh handle={handle:X8} -> {i}");
+        tcb.Used = false;
+        if (i != _current && tcb.Live) tcb.Baton.Release();
+    }
+
+    private static void ChangeTh(CpuContext c, IMemory m, uint handle)
+    {
+        var to = (int)(handle & 0xFFu);
+        if (to >= MaxThreads || !_tcbs[to].Used)
+        {
+            c.V0 = 0u;
+            return;
+        }
+
+        var from = _current;
+        if (to == from)
+        {
+            c.V0 = 1u;
+            return;
+        }
+
+        var self = _tcbs[from];
+        var target = _tcbs[to];
+        self.Regs = c.Snapshot();
+
+        target.Caller = from;
+        _current = to;
+
+        if (!target.Live)
+        {
+            target.Live = true;
+            var slot = to;
+            new Thread(() => RunTh(slot, target), 1 << 20) { IsBackground = true, Name = $"psx-th{slot}" }.Start();
+        }
+        else
+        {
+            target.Baton.Release();
+        }
+
+        if (Gone(from, self)) throw new ThreadGone();
+
+        self.Baton.Wait();
+        if (Gone(from, self)) throw new ThreadGone();
+
+        c.Restore(self.Regs);
+        c.V0 = 1u;
+    }
+
+    private static bool Gone(int slot, TCB tcb)
+    {
+        return !ReferenceEquals(_tcbs[slot], tcb) || !tcb.Used;
+    }
+
+    private static void RunTh(int slot, TCB tcb)
+    {
+        var c = Runtime.Cpu;
+        var m = Runtime.Mem;
+        if (c == null || m == null) return;
+
+        c.Restore(default);
+        c.SP = tcb.Sp;
+        c.FP = tcb.Sp;
+        c.GP = tcb.Gp;
+        c.RA = 0u;
+
+        try
+        {
+            RecompOne.Runtime.Dispatch.Dispatcher.Call(c, m, tcb.Pc);
+        }
+        catch (ThreadGone)
+        {
+            return;
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"[Runtime] thread {slot} stopped: {e}");
+        }
+
+        if (Gone(slot, tcb)) return;
+
+        var back = tcb.Caller;
+        if (back < 0) back = 0;
+        tcb.Live = false;
+        tcb.Used = false;
+        _current = back;
+        _tcbs[back].Baton.Release();
     }
 
     public static void SysEnqIntRP(CpuContext c, IMemory m)

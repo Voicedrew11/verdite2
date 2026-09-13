@@ -27,6 +27,10 @@ internal struct TriRecord
 internal struct TransformRecord
 {
     public int Serial;
+    public uint Key;
+    public uint Pages;
+    public float U0, U1, V0, V1;
+    public int Ord;
     public short R0, R1, R2, R3, R4, R5, R6, R7, R8;
     public int TX, TY, TZ;
     public int H, OFX, OFY;

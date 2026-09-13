@@ -106,8 +106,11 @@ public sealed partial class Gpu
         // downstream. Untextured geometry reaches this block through that term
         // alone -- most of the architecture in this game is flat-shaded, so
         // leaving it at ZBuffer meant a depth buffer holding only the textures.
-        if ((GteDepth.Active || pgxp) && (tex || GteDepth.Subpixel || GteDepth.DepthWanted))
+        if (!Detached && (GteDepth.Active || pgxp) && (tex || GteDepth.Subpixel || GteDepth.DepthWanted))
         {
+            //0045/0046.
+            var lookup = Diagnostics.Profiler.Begin(Diagnostics.Profiler.VertexLookup);
+            int hits = 0;
             bool wantW = tex && (pgxp ? Pgxp.Pgxp.TextureCorrection : GteDepth.Enabled);
             bool wantZ = GteDepth.DepthWanted;
             bool wantSub = GteDepth.Subpixel;
@@ -131,11 +134,17 @@ public sealed partial class Gpu
                 }
             }
 
-            if (pgxp) ApplyPgxp(v, vwAt, n, wantW, wantZ, wantSub);
+            if (pgxp)
+            {
+                ApplyPgxp(v, vwAt, n, wantW, wantZ, wantSub);
+                for (int i = 0; i < n; i++)
+                    if (v[i].Precise) hits++;
+            }
             else
                 for (int i = 0; i < n; i++)
                 {
                     if (!GteVertexMap.TryGet(_fifoSrc[vwAt[i]], _fifo[vwAt[i]], out var a)) continue;
+                    hits++;
                     v[i].W = a.Z;
                     v[i].HasW = wantW && a.Z > 0f;
                     v[i].HasZ = wantZ && a.Z > 0f;
@@ -144,11 +153,13 @@ public sealed partial class Gpu
                     v[i].HasSub = wantSub;
                     v[i].Clamped = a.Clipped;
                 }
+            Diagnostics.Profiler.End(lookup);
+            Hle.GpuTrace.Sink?.Vertices(n, hits);
         }
 
         //dispatch the render event for prims
-        Hle.GpuHle.PortWidenedPrim = false;
-        if (Event.HasAnyListeners<RenderPrimEvent>())
+        if (!Detached) Hle.GpuHle.PortWidenedPrim = false;
+        if (!Detached && Event.HasAnyListeners<RenderPrimEvent>())
         {
             var e = _primEvent;
             e.Context = Runtime.Cpu!; e.Memory = Runtime.Mem!;
@@ -165,7 +176,7 @@ public sealed partial class Gpu
         // the one place both of them pass through, and it is taken after the prim
         // event so it reports where the polygon was actually drawn. Bbox is clamped
         // to the draw area: a surface is only occluding what it covers on screen.
-        if (GteDepth.TriCensus && GteDepth.ZBuffer)
+        if (!Detached && GteDepth.TriCensus && GteDepth.ZBuffer)
         {
             int x0 = int.MaxValue, y0 = int.MaxValue, x1 = int.MinValue, y1 = int.MinValue;
             float minZ = float.MaxValue, maxZ = 0f;
@@ -188,7 +199,7 @@ public sealed partial class Gpu
                                  v[0].R, v[0].G, v[0].B);
         }
 
-        MaybeClearDepth(v, n);
+        if (!Detached) MaybeClearDepth(v, n);
 
         if (HleOn)
         {
@@ -276,7 +287,7 @@ public sealed partial class Gpu
         // linear in screen space for a plane, so the pixel's view depth is the
         // reciprocal of the interpolated inverses — whether or not the texture
         // is also being divided.
-        bool useZ = GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
+        bool useZ = !Detached && GteDepth.ZBuffer && a.HasZ && b.HasZ && c.HasZ;
         float za = 0f, zb = 0f, zc = 0f;
         if (useZ)
         {
@@ -284,7 +295,7 @@ public sealed partial class Gpu
             EnsureZClear();
             za = 1f / a.W; zb = 1f / b.W; zc = 1f / c.W;
         }
-        else if (GteDepth.ZBuffer) GteDepth.ZSkipped++;
+        else if (GteDepth.ZBuffer && !Detached) GteDepth.ZSkipped++;
 
         // The steps are per pixel and the coordinates are per sixteenth, so a step
         // is one edge-function derivative times the width of a pixel.
@@ -303,6 +314,7 @@ public sealed partial class Gpu
             for (int x = minX; x <= maxX; x++, w0 += sx0, w1 += sx1, w2 += sx2)
             {
                 if (w0 + bias0 < 0 || w1 + bias1 < 0 || w2 + bias2 < 0) continue;
+                if (Detached) Frag(x, y);
 
                 int zi = 0;
                 float zpix = 0f;
@@ -391,8 +403,8 @@ public sealed partial class Gpu
         if (sz == 0) { uint wh = _fifo[idx]; w = (int)(wh & 0xFFFF); h = (int)((wh >> 16) & 0xFFFF); }
         else { w = h = sz == 1 ? 1 : sz == 2 ? 8 : 16; }
         //dispatch event
-        Hle.GpuHle.PortWidenedPrim = false;
-        if (Event.HasAnyListeners<RenderPrimEvent>())
+        if (!Detached) Hle.GpuHle.PortWidenedPrim = false;
+        if (!Detached && Event.HasAnyListeners<RenderPrimEvent>())
         {
             var e = _primEvent;
             e.Context = Runtime.Cpu!; e.Memory = Runtime.Mem!;
@@ -411,6 +423,7 @@ public sealed partial class Gpu
             {
                 int px = x + dx, py = y + dy;
                 if (px < _drawAreaLeft || px > _drawAreaRight || py < _drawAreaTop || py > _drawAreaBottom) continue;
+                if (Detached && (uint)px < VramWidth && (uint)py < VramHeight) Frag(px, py);
                 if (tex)
                 {
                     ushort texel = FetchTexel((u0 + dx) & 0xFF, (v0 + dy) & 0xFF, clut);
@@ -468,7 +481,7 @@ public sealed partial class Gpu
     {
         // Lines pass neither RenderPrimEvent dispatch, so nothing clears the
         // widescreen patch's widened-prim flag for them; clear it here.
-        Hle.GpuHle.PortWidenedPrim = false;
+        if (!Detached) Hle.GpuHle.PortWidenedPrim = false;
         x0 += _drawOffsetX; y0 += _drawOffsetY;
         x1 += _drawOffsetX; y1 += _drawOffsetY;
         if (HleOn) { HleLine(x0, y0, r0, g0, b0, x1, y1, r1, g1, b1, semi, gouraud); return; }
@@ -484,6 +497,7 @@ public sealed partial class Gpu
             int g = (int)(g0 + (g1 - g0) * t);
             int b = (int)(b0 + (b1 - b0) * t);
             if (x < _drawAreaLeft || x > _drawAreaRight || y < _drawAreaTop || y > _drawAreaBottom) continue;
+            if (Detached && (uint)x < VramWidth && (uint)y < VramHeight) Frag(x, y);
             Plot(x, y, r, g, b, semi, _dither);
         }
     }
@@ -546,6 +560,7 @@ public sealed partial class Gpu
         ushort outp = (ushort)(fr | (fg << 5) | (fb << 10));
         if (_setMask || maskBit) outp |= 0x8000;
         Vram[idx] = outp;
+        if (Owner != null) Owner[idx] = CoverTag;
         return true;
     }
 

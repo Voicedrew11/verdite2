@@ -219,6 +219,37 @@ Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_FPS_PROBE"));
 Kf2.FramePacing.Install();
 
+// The frame profiler: where each frame's time goes, by section. Every hooked
+// function is timed inside HookManager (its recompiled body and each patch's
+// delegate apart), the runtime times the present path, and the sleeps are sections
+// of their own so a capped frame reads as work plus waiting. Shift+P opens the panel,
+// and recording runs while it is open. See "Profiling a frame" in docs/DEVELOPMENT.md.
+//
+//     KF2_PROFILE=1             record from boot, a console summary every 5 s
+//     KF2_PROFILE=panel         record from boot and open the panel
+//     KF2_PROFILE_OUT=path.csv  every frame's sections; scripts/profile_report.py
+//     KF2_PROFILE_SPIKE=12      a console line per frame over 12 ms of work
+//     KF2_PROFILE_FUNCS=stages  time all thirteen main-loop stages, or name
+//                               functions: game:80040348+800342D8
+Kf2.FrameProfiler.Configure(Environment.GetEnvironmentVariable("KF2_PROFILE"),
+                            Environment.GetEnvironmentVariable("KF2_PROFILE_OUT"),
+                            Environment.GetEnvironmentVariable("KF2_PROFILE_SPIKE"),
+                            Environment.GetEnvironmentVariable("KF2_PROFILE_FUNCS"));
+Kf2.FrameProfiler.Install();
+
+// The frame viewer: capture one run of stage 13 and scrub it a GP0 command at a
+// time, replayed on a detached software GPU -- who emitted each primitive, what it
+// cost to send, the fragments it rasterized and the GL batch submits it forced.
+// Shift+F opens the panel. See "Watching a frame being built" in docs/DEVELOPMENT.md.
+//
+//     KF2_FRAMEVIEW=panel          open the panel at boot
+//     KF2_FRAMEVIEW_CAPTURE=20,40  capture at these seconds after boot, summary on the console
+//     KF2_FRAMEVIEW_OUT=dir        also write each capture's commands as CSV
+Kf2.FrameCapture.Configure(Environment.GetEnvironmentVariable("KF2_FRAMEVIEW"),
+                           Environment.GetEnvironmentVariable("KF2_FRAMEVIEW_CAPTURE"),
+                           Environment.GetEnvironmentVariable("KF2_FRAMEVIEW_OUT"));
+Kf2.FrameCapture.Install();
+
 // The one thing frame pacing cannot reach: the in-game menu is a modal sub-loop
 // inside stage 3 (func_80029CBC jal's func_80018E80, which blocks for the whole
 // session and renders its own frames), so no gated stage is being called while it
@@ -961,6 +992,26 @@ Kf2.CullGrid.Install();
 //     KF2_PRIMBUF_PROBE=1     peak usage, capacity and overflows, on the console
 Kf2.PrimBuffer.Configure(Environment.GetEnvironmentVariable("KF2_PRIMBUF_PROBE"));
 Kf2.PrimBuffer.Install();
+
+// func_80030540, the polygon assembler that builds most of the world's packets, in
+// C#: the same reads and stores in the same order, with the registers in locals.
+// See "The polygon assembler in C#" in docs/PATCHES_AND_MODS.md.
+//
+//     KF2_POLYASM=0           the recompiled routine
+//     KF2_POLYASM=verify      run both on every call and compare RAM, registers and the GTE
+//     KF2_POLYASM_REJECT=0    send every oversized polygon to the clipper again
+//     KF2_POLYASM_REJECT=replay  a rejection also writes the clipper's scratch
+//     KF2_POLYASM_UNCLIPPED=0 func_8002FECC, the far map tiles' assembler, recompiled
+//     KF2_POLYASM_TRANSFORM=0 func_8002E650 and func_8002E7CC, the vertex transforms, recompiled
+//     KF2_POLYASM_LIT=0       func_8002F214 and func_8002EAEC, the models' lit assembler, recompiled
+//     KF2_POLYASM_CLIPPER=0   Clip4FTP and Clip3FTP, the view-space clipper, recompiled
+Kf2.PolyAssembler.Configure(Environment.GetEnvironmentVariable("KF2_POLYASM"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_REJECT"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_UNCLIPPED"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_TRANSFORM"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_LIT"),
+                            Environment.GetEnvironmentVariable("KF2_POLYASM_CLIPPER"));
+Kf2.PolyAssembler.Install();
 
 // The game's other cull: a six-plane view-space clipper (func_8005CAC8) that only
 // the near floor and ceiling are big enough to reach, set to twice the screen

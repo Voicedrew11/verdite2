@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using RecompOne.Runtime.Memory;
 
 namespace RecompOne.Runtime;
@@ -109,6 +110,13 @@ public static class GteVertexMap
     static readonly Pending[] _pending = new Pending[PendingCount];
     static int _pendingHead;
 
+    // Lets NoteWrite skip the ring scan: nothing can match once the newest entry has
+    // aged out, or when no published value set this value's hash bit.
+    static uint _newestPendingTick;
+    static ulong _pendingValueBits;
+
+    static ulong ValueBit(uint value) => 1UL << (int)((value * 0x9E3779B1u) >> 26);
+
     static Entry[]? _map;
     static ulong[]? _mark;
     static uint _ramMask;
@@ -122,6 +130,14 @@ public static class GteVertexMap
     public static long Roots, Propagated, Hits, Misses;
 
     public static void ResetCounters() => Roots = Propagated = Hits = Misses = 0;
+
+    /// <summary>0046. Never reset, so a frame capture can difference them across a
+    /// call: coordinates the GTE offered, loads that offered a known word on, ring
+    /// scans past the filter, and stores that bound. <see cref="Stores"/> is every
+    /// store watched, and wraps.</summary>
+    public static long TracePublished, TraceRepublished, TraceScans, TraceBound;
+
+    public static uint Stores => _tick;
 
     /// <summary>Called when either half of the feature is switched on or off. The
     /// arrays are allocated on the first switch-on and then kept, since turning the
@@ -150,6 +166,11 @@ public static class GteVertexMap
 
     static bool Marked(int i) => (_mark![i >> 6] & (1UL << (i & 63))) != 0;
 
+    /// <summary>The presence bit alone, for the memory fast path to test before calling
+    /// <see cref="NoteRead"/>. Only meaningful while <see cref="Active"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool MaybeBound(uint phys) => Marked(Index(phys));
+
     static void Mark(int i) => _mark![i >> 6] |= 1UL << (i & 63);
 
     static void Unmark(int i) => _mark![i >> 6] &= ~(1UL << (i & 63));
@@ -157,8 +178,11 @@ public static class GteVertexMap
     /// <summary>Offer a value and the attributes that belong to it, for whichever
     /// store copies it next. Called from <c>Gte.Read</c> as a screen coordinate
     /// leaves the GTE, and from a load of a word this map already knows.</summary>
-    public static void Publish(uint value, float z, float fx, float fy, bool clipped) =>
+    public static void Publish(uint value, float z, float fx, float fy, bool clipped)
+    {
+        TracePublished++;
         Publish(value, z, fx, fy, clipped, true);
+    }
 
     static void Publish(uint value, float z, float fx, float fy, bool clipped, bool root)
     {
@@ -168,6 +192,8 @@ public static class GteVertexMap
             Matched = false, Root = root, Live = true,
         };
         _pendingHead = (_pendingHead + 1) % PendingCount;
+        _newestPendingTick = _tick;
+        _pendingValueBits |= ValueBit(value);
     }
 
     /// <summary>A guest word store. If it is carrying a value someone published, the
@@ -177,6 +203,15 @@ public static class GteVertexMap
     {
         _tick++;
 
+        if (_tick - _newestPendingTick > PendingMaxAge || (_pendingValueBits & ValueBit(value)) == 0)
+        {
+            if (_tick - _newestPendingTick > PendingMaxAge) _pendingValueBits = 0;
+            int stale = Index(phys);
+            if (Marked(stale)) Unmark(stale);
+            return;
+        }
+
+        TraceScans++;
         int found = -1;
         for (int k = 1; k <= PendingCount; k++)
         {
@@ -206,6 +241,7 @@ public static class GteVertexMap
             Value = value, Seq = _tick, Z = src.Z, Fx = src.Fx, Fy = src.Fy, Clipped = src.Clipped,
         };
         Mark(idx);
+        TraceBound++;
         if (src.Root) Roots++; else Propagated++;
     }
 
@@ -220,6 +256,7 @@ public static class GteVertexMap
         ref var e = ref _map![idx];
         if (e.Value != value || _tick - e.Seq > EntryMaxAge) return;
 
+        TraceRepublished++;
         Publish(value, e.Z, e.Fx, e.Fy, e.Clipped, false);
     }
 

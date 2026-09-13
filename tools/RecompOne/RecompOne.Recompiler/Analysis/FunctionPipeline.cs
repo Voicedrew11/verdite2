@@ -24,6 +24,7 @@ public static class FunctionPipeline
         if (options.PointerScan) ScanPointers(funcs, instrs, elfInfo.NoTypeSymbols, name);
 
         ScanEscapes(funcs, instrs, name);
+        GrowByJumpTables(funcs, instrs, elfInfo, name);
         AnalyzeJumpTables(funcs, elfInfo, name);
         ApplyStubsAndIgnored(funcs, options.Stubs, options.Ignored);
     }
@@ -159,6 +160,38 @@ public static class FunctionPipeline
         funcs.AddRange(found);
         Console.WriteLine($"[Recompiler] escape scan found {found.Count} entry point(s) in {name}");
         return true;
+    }
+
+    private const uint TableReach = 0x1000;
+
+    private static void GrowByJumpTables(List<MipsFunction> funcs, MipsInstruction[] instrs, FunctionInfo elfInfo,
+        string name)
+    {
+        if (instrs.Length == 0) return;
+
+        var codeEnd = instrs[^1].Vram + 4;
+        var grown = 0;
+
+        foreach (var func in funcs)
+        {
+            if (func.End >= codeEnd) continue;
+
+            var limit = Math.Min(func.End + TableReach, codeEnd);
+            var furthest = 0u;
+            foreach (var table in JumpTableAnalyzer.Analyze(func, elfInfo, limit))
+            foreach (var entry in table.Entries)
+                if (entry > furthest)
+                    furthest = entry;
+
+            if (furthest < func.End) continue;
+
+            var before = func.End;
+            FunctionDetector.Extend(instrs, func, furthest, limit);
+            if (func.End > before) grown++;
+        }
+
+        if (grown > 0)
+            Console.WriteLine($"[Recompiler] {name}: {grown} function(s) grew to cover thei jump tables");
     }
 
     private static void AnalyzeJumpTables(List<MipsFunction> funcs, FunctionInfo elfInfo, string name)

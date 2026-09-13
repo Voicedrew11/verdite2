@@ -26,7 +26,9 @@ import argparse, json, os, re, sys
 HLE_NAMES = set("""
 CdInit CdReset CdControl CdControlF CdControlB CdSync CdReady CdRead CdReadSync
 CdGetSector CdDataSync CdSearchFile CdSyncCallback CdReadyCallback CdReadCallback
-CdDataCallback CdStatus CdMode CdLastCom CdMix
+CdDataCallback CdStatus CdMode CdLastCom CdMix CdFlush
+CdGetSector2 CD_getsector2
+DecDCTin DecDCTout DecDCTinSync DecDCToutSync DecDCToutCallback
 VSync
 DrawOTag DrawSync PutDrawEnv PutDispEnv LoadImage StoreImage MoveImage ClearImage
 StSetRing StClearRing StUnSetRing StSetStream StSetMask StGetNext StFreeRing

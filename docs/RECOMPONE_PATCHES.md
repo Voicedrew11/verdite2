@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Thirty-nine of the forty-three are load-bearing; `0002`, `0003` and `0015` are
+Forty-one of the forty-six are load-bearing; `0002`, `0003`, `0015` and `0046` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -25,6 +25,35 @@ Four files in the directory have no entry below:
   60 Hz grid rather than when the game asks; `KF2_VSYNC=block` is upstream's
   blocking timeline. See "The vblank fired when the game asked" in
   `docs/RUNTIME.md`.
+- `0045-frame-profiler.patch` — a diagnostic: `Diagnostics/Profiler.cs`, and
+  sections around `HookManager.Invoke` (the hooked body and each delegate apart),
+  `LibEtc.VSync`, `Runtime.PresentFrame`, the window's events, render and swap,
+  `GlCore.Flush`, `LibGpu.DrawOTag` and the two host waits. The frame boundary is
+  the end of `PresentFrame`. One bool per site while off. **No recompile.** See
+  "Profiling a frame" in `docs/DEVELOPMENT.md`.
+- `0046-frame-capture-trace.patch` — a diagnostic: `Hle/GpuTrace.cs`, an
+  `IGpuTrace` sink that receives every GP0 word with its source address, every GP1
+  write, the end of each command, and each `GlCore` batch submit with **why** it
+  happened (`FlushReason`: target, full, texture feedback, fill, copy, upload,
+  readback, present, or the first mismatched state `DesiredMatches` found). `Gpu`
+  gains `Detached` — a second instance that rasterizes in software into its own
+  VRAM and reaches nothing global (no backend, trace, prim event, vertex map, Z,
+  PGXP, texture tracker or `NotifyDisplay`) — plus `CopyStateFrom`, the draw-area
+  getters, and replay counters (`Coverage`, `Owner`, `Fragments`) that only a
+  detached instance fills. `GlCore.ReadVram` gets an overload that skips `0039`'s
+  snapshot, so reading the whole of VRAM back does not evict a menu's restore copy.
+  One null test per word while off; `HleOn` becomes an instance property.
+  **The port's own work is reported too**, because none of it is a GP0 command:
+  `Profiler.Trace` receives every section's enter and leave and records them with
+  the profiler off (`HookManager` takes the profiled path while it is set), and
+  four sections are new — the AO pass, the composite, `Writeback` and the vertex
+  attribute lookup in `DrawPolygon`. `IGpuTrace.Vertices` reports each polygon's
+  lookups and hits, and `IGpuTrace.Work` a `GL_TIME_ELAPSED` query around each
+  batch submit, the AO pass and the composite (`GlCore.GpuTimeNs` reads one back;
+  queries exist only while a sink is set). `GteVertexMap` gains never-reset
+  counters (`Stores`, `TraceScans`, `TraceBound`, `TracePublished`,
+  `TraceRepublished`) off the hot path. **No recompile.** See "Watching a frame
+  being built" in `docs/DEVELOPMENT.md`.
 
 - `0001-bios-load-return-1.patch` — BIOS `Load` must return 1, not the header
   pointer. Without it the boot stub spins in the loader forever.
@@ -85,7 +114,10 @@ Four files in the directory have no entry below:
   and `DrawPolygon` asks by the address `DrawOTag` read the word from — verifying the
   word before answering. No codegen change, so **this one needs no recompile**. The
   old table stays behind `KF2_PERSPECTIVE_FALLBACK` for comparison only. See
-  "Following the value through memory" in `docs/RENDERING.md`.
+  "Following the value through memory" in `docs/RENDERING.md`. A later edit put a
+  filter in front of the store-side ring scan and an inline presence-bit test in
+  `ReadU32`'s fast path, cutting the map's stage 13 cost by about 55% with identical
+  binding; see "What the map costs, and the filter in front of it" there.
 
 - `0013-settings-slot-in-section.patch` — `SettingsRegistry.Extend` only draws
   *after* a section's whole body, so a port option that belongs beside one of the
@@ -330,6 +362,10 @@ Four files in the directory have no entry below:
   after the access, which hands the hook the wrong address for `lw $t0, 0($t0)`.
   Measured: 68,188 hook sites in `game.cs`, no change in generated line count
   (the hooks append to existing lines), build 15 s → 37 s.
+  Since amended: the branch was not free (area 1 frame work 1.05 ms against 0.91
+  without it), so the emitted test is `PgxpGate.Cpu && Pgxp.CpuTracking`, with
+  `PgxpGate.Cpu` a `static readonly` the JIT folds to `false` unless `KF2_PGXP=1`
+  armed it at boot. See "The PGXP gates" in `docs/DEVELOPMENT.md`.
 
 - `0036-pgxp-vertex-and-depth-source.patch` — where the two mechanisms meet.
   `DrawPolygon` asks PGXP when it is on and `GteVertexMap` when it is not, filling
@@ -467,6 +503,31 @@ Four files in the directory have no entry below:
   backend only, native VRAM paths only. `GteDepth.AnisotropyLive` is read back from
   the one place that uploads the uniform. Off by default. **No recompile** — a plain
   uniform the next batch reads. See "Anisotropic filtering" in `docs/RENDERING.md`.
+
+- `0042-present-counters.patch` — `FramePacing` paces from hooks on `VSync` and
+  `DrawOTag`, so it cannot use those hooks to notice that they have stopped
+  running. Some boots present at exactly twice the asked-for rate for the whole
+  session, which is the host ceiling `FramePacing` hands `FrameClock` with nothing
+  of the port holding the picture. `LibEtc.VSyncCalls` and `LibGpu.AutoPresents`
+  count presents in the bodies themselves, and `LibEtc.CaptureNextStack` returns
+  the managed stack of one call, which shows whether it still came through
+  `HookManager.Invoke`. Read by `FramePacing`'s sentinel and its probe line.
+  **No recompile.** See "The smoothing is sometimes dead for a whole session" in
+  `docs/TODO.md`.
+
+- `0047-gte-fast-path.patch` — the GTE ops this game calls in its polygon
+  assemblers (`NcdsOp`, `NcdtOp`, `NccsOp` at `sf=12 lm=1`; `Dpcs`, `MvmvaOp`'s
+  RotTrans form and `Rtps` at `sf=12 lm=0`) take a path with the shift, the
+  saturation floor and the flag bits constant and the flags gathered in a local,
+  3-4x faster an op and bit-identical over 3.6M random-state ops; `Rtp`'s bookkeeping
+  after the divide is one method both paths call. A lighting op's two matrix
+  products are remembered per normal until a write to control registers 8-20.
+  `Gte.State`, `Save`, `Load` and `Diff` let `KF2_POLYASM=verify` restore and compare
+  the GTE. Three small public reads for the port: `PSMemory.DirectRam` (a narrow
+  store would do nothing but the store), `Dispatcher.HasPending` and
+  `Interrupts.SlowPolls`. `KF2_GTE_FAST=0` and `KF2_GTE_LIGHTCACHE=0` are the
+  comparisons. **No recompile.** See "The GTE fast path" in
+  `docs/PATCHES_AND_MODS.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

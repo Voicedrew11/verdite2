@@ -1,4 +1,5 @@
 using RecompOne.Runtime.Context;
+using RecompOne.Runtime.Diagnostics;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Hle;
 using RecompOne.Runtime.Memory;
@@ -12,6 +13,14 @@ public static class LibGpu
 
     public static void DrawOTag(CpuContext c, IMemory m)
     {
+        //0045.
+        var profile = Profiler.Begin(Profiler.DrawOTag);
+        DrawOTagCore(c, m);
+        Profiler.End(profile);
+    }
+
+    private static void DrawOTagCore(CpuContext c, IMemory m)
+    {
         var gpu = Runtime.Gpu;
         if (gpu == null) return;
 
@@ -22,6 +31,7 @@ public static class LibGpu
         var otBase = GpuPrims.OtBase & Runtime.RamWordMask;
         var otEnd = otBase + (uint)GpuPrims.OtLength * 4u;
 
+        var slot = -1;
         for (var guard = 0; guard < 0x100000; guard++)
         {
             // Where in the table this primitive was linked, counted from the head —
@@ -35,6 +45,8 @@ public static class LibGpu
 
             var header = m.ReadU32(addr);
             var count = (int)(header >> 24);
+            if (count == 0) slot++;
+            GteDepth.OtSlot = slot;
 
             if (count > 0)
             {
@@ -64,6 +76,7 @@ public static class LibGpu
         // the far end, so otz = length - 1 - entry.
         if (GteDepth.OtEntry >= 0) GteDepth.OtLength = GteDepth.OtEntry + 1;
         GteDepth.OtEntry = -1;
+        GteDepth.OtSlot = -1;
         if (custom) GpuPrims.Clear();
     }
 
@@ -153,7 +166,12 @@ public static class LibGpu
     {
         get
         {
-            if (_videoMode < 0) _videoMode = European() ? 1 : 0;
+            if (_videoMode < 0)
+            {
+                if (Runtime.Cd == null) return false;
+                _videoMode = European() ? 1 : 0;
+            }
+
             return _videoMode == 1;
         }
     }
@@ -242,6 +260,8 @@ public static class LibGpu
 
         GpuHle.NotifyDisplay(dispX, dispY, dispW, dispH);
 
+        FlipFrame(dispX, dispY);
+
         if (Event.HasAnyListeners<DispEnvEvent>())
         {
             var e = _dispEnvEvent;
@@ -274,6 +294,35 @@ public static class LibGpu
         x = short.Clamp(x, 0, VramShadow.Width - 1);
         y = short.Clamp(y, 0, VramShadow.Height - 1);
         return 0xE4000000u | (((uint)y & 0x3FF) << 10) | ((uint)x & 0x3FF);
+    }
+
+    private static int _flipX = -1, _flipY = -1;
+    private static double _autoMark;
+
+    //0042. Presents forced from a display flip; see LibEtc.VSyncCalls.
+    public static long AutoPresents;
+
+    //this is not the best method probably, but some games get stuck on this and i havent found a better way
+    private const double FlipGrace = 100.0;
+
+    private static void FlipFrame(int x, int y)
+    {
+        if (x == _flipX && y == _flipY) return;
+
+        _flipX = x;
+        _flipY = y;
+        AutoPresent();
+    }
+
+    private static void AutoPresent()
+    {
+        var now = Interrupts.ClockMs;
+        if (now - LibEtc.LastWaitMs < FlipGrace) return;
+        if (now - _autoMark < Host.FrameClock.FrameMs * 0.5) return;
+
+        _autoMark = now;
+        AutoPresents++; //0042
+        Runtime.PresentFrame();
     }
 
     private static uint _curCs = 0xE3000000u, _curCe = 0xE4000000u, _curOfs = 0xE5000000u;

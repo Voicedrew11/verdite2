@@ -192,6 +192,7 @@ public static class PatchSettings
         Register("display", new ShadingPage());
         Register("display", new AmbientOcclusionPage());
         Register("display", new AnisotropicPage());
+        Register("display", new FastGeometryPage());
         // Nothing registers a PGXP or a geometry-precision page either. PGXP buys
         // no coverage in this game and costs a fifth of the frame rate, and the
         // depth buffer's picture has never been judged -- both are comparisons, so

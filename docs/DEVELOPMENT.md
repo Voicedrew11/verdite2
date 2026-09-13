@@ -82,7 +82,7 @@ dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build 
   config/kf2.json
 ```
 
-2099 functions into `generated/` (~163k lines of C#).
+2234 functions into `generated/` (~182k lines of C#).
 
 ## Build and run
 
@@ -217,6 +217,409 @@ stops sending frame callbacks and the port blocks in `SwapBuffers` forever with
 `VSync=False` in `interface.ini` to run it without a visible window, and read the
 caveat about the widened render target under "Widescreen" in
 [WIDESCREEN.md](WIDESCREEN.md) before trusting a headless picture measurement.
+
+## Profiling a frame
+
+`patches/FrameProfiler.cs`, `patches/ProfilerPanel.cs` and the runtime's
+`Diagnostics/Profiler.cs` (`patches/recompone/0045`) say where a frame's time
+went, by section, on the game thread. **Shift+P** opens the panel, and recording runs
+while it is open; `KF2_PROFILE=1` records from boot and prints a summary every
+five seconds, and `KF2_PROFILE_OUT=profile.csv` writes every frame for
+`scripts/profile_report.py`:
+
+```bash
+KF2_AUTOSTART=2 KF2_FPS=144 KF2_PROFILE=1 KF2_PROFILE_OUT=profile.csv \
+    dotnet run --project KingsField2Recomp.csproj -c Release -- disc/KingsField2.cue
+python3 scripts/profile_report.py profile.csv --skip 30      # drop boot and first-hit JIT
+```
+
+**What is a section without asking.** Every function `HookManager` has detoured is
+timed inside `Invoke`: the recompiled body as `func_XXXXXXXX@overlay` and every
+pre, post and replace delegate on its own, as `pre NoDither.BeforeDrawOTag` and so
+on. With the port's patches installed that already covers the gated stages, stage
+13, DrawOTag and VSync. The runtime adds `LibEtc.VSync`, `Runtime.PresentFrame`,
+the window's event pump, the picture compose (`GlCore.PresentDisplay`), the
+interface, `GlCore.Flush` and `LibGpu.DrawOTag`'s packet walk. Whatever nothing
+claims is **game code (no section)**. Known addresses carry a label — `stage 13:
+renderer (func_800342D8@game)` — from the stage table in `GAME_INTERNALS.md`.
+
+**Self and inclusive.** Self is what a section did itself, excluding the sections
+it called, so a frame's self times sum to its length (measured: 9,277 frames,
+largest disagreement 0.0015 ms, which is the CSV's rounding). Inclusive adds the
+children. Stage 13's inclusive time is nearly the whole frame, because DrawOTag,
+the frame cap and the present all happen inside it; its self time is the renderer.
+
+**Work, swap and wait are three different things.** Each section is in a group —
+game, hook, runtime, **swap** (the thread blocked on the driver in
+`SwapBuffers`) or **wait** (a sleep to a deadline: `FramePacing.Floor`,
+`MenuPacing`, `LoadPacing`, `FrameClock.Throttle`, `WaitVBlanks`). A frame capped
+at 144 fps is 6.94 ms whatever it did, so the figure to chase is **work**, the frame
+less its waits and its swap. The panel hides the waits unless *Show waits* is on.
+
+**The frame boundary is the end of `Runtime.PresentFrame`**, not a hook, so the
+profiler's frames do not depend on the hooks it is measuring. A section still open
+there — a hooked stage running a modal loop that presents its own frames, as the
+in-game menu does inside stage 3 — is split: the time so far goes to the frame that
+ended, and the rest to the next.
+
+**To see inside the game's own time, time more functions.** An empty pre-hook
+makes any recompiled function a section, and whatever it calls stops counting as
+unattributed: *Time the 13 stages* and *Time function* in the panel, or
+`KF2_PROFILE_FUNCS=stages` / `game:80040348+800342D8`. Each is a detour for the rest
+of the session, which is why none is installed unasked. Drill down by timing the
+callees of whatever is heaviest.
+
+**The spikes are the other half.** Each frame also carries the GC pause time,
+collections, the game thread's allocations and JIT time. The panel lists frames
+over a work threshold (twice the median plus 2 ms unless set) and a click reads one
+frame in the table; `KF2_PROFILE_SPIKE=12` prints them. First measurement, area 1
+standing still at 144 fps with the stages timed: work 1.17 ms of 6.94 (p99 2.0),
+swap 0.15 ms, and stage 13's own body the largest single cost at 0.49 ms. Every
+spike past the boot was **JIT** — QuickJit is off, so first-hit code compiles fully
+optimised — including a 9.0 ms stage 4 frame (8.8 ms of JIT in it) and a 5.5 ms
+`HitGuard.BeforeHit` (6.2 ms).
+
+**What it costs.** Off, one static bool test per site (3 ns per Begin/End pair,
+measured). On, 47 ns per pair; a frame in an area has a median of 170 section
+entries (p99 772), so 8-36 µs a frame, plus about 0.05 ms for the CSV writer, which
+is itself a section (`profiler (its own reporting)`). The panel draws inside the
+frame it measures, under *menu bar + panels + popups*.
+
+**The panel was the largest section in the frame.** Area 1 at 144 fps, standing
+still: the whole interface costs about 70 µs with the panel closed (menu bar 8,
+dockspace 9, Output 2, popups 0, ImGui's new frame 12 and render 36), and the open
+panel added 0.62 ms to that, 38% of the frame's work. Timed by part, the table was
+0.467 ms, because every row was drawn, off-screen ones included, and six strings
+were formatted per row per frame; the graph was 0.114 ms, re-summing every bar's
+~170 sections by group. `Aggregate` was not the problem (4 µs average, 0.195 ms at
+most, every 250 ms). The table is clipped to its visible rows and its strings, the
+summary and the spike list are built when `Aggregate` runs; a frame's group totals
+are summed once, keyed by its index. Measured after: the panel 0.135 ms (table
+0.042, graph 0.051), work 1.63 → 1.12 ms against 1.02 closed, and 33 → 17 KB a
+frame allocated. The numbers now refresh with `Aggregate`, four times a second.
+
+**A swap that jumps to milliseconds is the compositor, not the port.** Native
+Wayland (KWin), VSync off, a 170 Hz monitor, `KF2_FPS=1000`: the swap is 0.16-0.23 ms
+and the port draws about 800 fps, but moving the window drops it into a second
+state, about 200 fps with half the swaps blocking 5-10 ms (3.8 ms average, p99
+frame 10.6 ms against 1.8), until it recovers. Two otherwise identical runs matched
+second for second until one flipped. The driver waits for the compositor to hand
+back a buffer, which it then does only at its own refresh. Nothing in the frame
+changed, so a swap spike in a profile is worth checking against what the desktop
+was doing before it is chased.
+
+**What it cannot see.** Only the game thread: the SPU mixer and the CD stream
+reader run on their own threads (a GC pause still stops them, and is counted). GPU
+time appears only where the CPU waits for it, which is the swap; there are no GL
+timer queries. The CSV is about 700 KB a second at 144 fps and several MB a second uncapped, so a few multi-minute tours at `KF2_FPS=1000` fill the `/tmp` quota — and a full quota does not only stop the CSV: MonoMod writes its detours through a temporary file, so every hook fails to install with `Disk quota exceeded` and the pacing boots broken. Delete each CSV once it is read. A run killed
+from outside can leave a truncated last line, which the report script ignores.
+
+Mechanism measured, from the console and the CSV. The panel's layout has never
+been looked at by eye.
+
+### Where stage 13's time goes
+
+**Measure it on a tour, not on a wall.** Area 1 from slot 2 standing still is the
+cheapest scene there is. A scripted run over the command channel (`warp` to each
+area, 16 s standing, then eight `press Left 1400` for a full turn), `KF2_FPS=1000`,
+perspective on, stage 13 and 20 of its callees timed:
+
+| area | stage 13 incl, still (avg / p95 ms) | turning |
+|---|---|---|
+| 0 | 1.67 / 1.86 | 1.61 / 2.20 |
+| 1 | 1.18 / 1.32 | 1.59 / 2.07 |
+| 2 | 2.28 / 2.47 | 3.23 / 4.33 |
+| 3 | 1.12 / 1.24 | 1.65 / 2.74 |
+| 4 | 1.13 / 1.28 | 2.01 / 5.15 |
+| 5 | 3.30 / 3.66 | 2.28 / 3.91 |
+| 6 | 2.10 / 2.42 | 2.71 / 4.47 |
+| 7 | 3.11 / 3.48 | 3.45 / 4.98 |
+
+Inclusive includes `DrawOTag`, the present and the swap. What grows with the scene
+is the same four sections everywhere, self ms per frame:
+
+| | area 1 still | area 5 still | area 7 turning |
+|---|---|---|---|
+| `func_80030540` polygon list, models and tiles alike (13-27 calls) | 0.21 | 0.54 | 0.63 |
+| `func_80031C94` map tiles, with `func_80031B1C`/`func_80031950` untimed inside | 0.07 | 0.42 | 0.61 |
+| `func_8002F214` second polygon list (15-23 calls) | 0.05 | 0.77 | 0.57 |
+| `LibGpu.DrawOTag` packet walk | 0.09 | 0.38 | 0.37 |
+| `func_80032588` model submitter | 0.01 | 0.25 | 0.21 |
+| `GlCore.Flush` (submits a frame) | 0.04 (32) | 0.08 (34) | 0.11 (91) |
+| vertex attribute lookup (lookups a frame) | 0.01 (185) | 0.09 (1,622) | 0.08 (1,389) |
+
+The fixed costs stay put: `func_8002E064` 0.055, `func_8002D3A8` 0.047,
+`NoDither.BeforeDrawOTag` 0.05-0.07. Area 4 turning peaked at 130 submits a frame.
+None of the following has been acted on.
+
+- **The PGXP gates.** `0035` emits `if (Pgxp.CpuTracking)` beside every
+  instruction (71,796 in `game.cs`). With PGXP off the branch is never taken but
+  still costs (probably because the call on the untaken side stops the JIT reusing
+  the `c.X` fields it has already loaded; not verified). Stripped from
+  `generated/game.cs` for one run in area 1: stage 13's game code 0.577 -> 0.449 ms,
+  `func_80030540` 0.207 -> 0.161, `func_80031C94` 0.073 -> 0.044, with the control
+  sections within 1% (`DrawOTag` walk 0.090/0.089, `func_8002E064` 0.055/0.056).
+  That is an upper bound for gating on a `static readonly` the JIT can fold, which
+  keeps PGXP a boot-time switch; it forces a recompile. The libgte wrappers
+  (`NormalColorDpq`) also call `PgxpCpu.Lwc2`/`Swc2` with no gate at all (198
+  sites), which return straight away.
+  Done since: the emitted test is now `PgxpGate.Cpu && Pgxp.CpuTracking`, where
+  `PgxpGate.Cpu` is a `static readonly` fixed in `Kf2.Pgxp.Configure` (from
+  `KF2_PGXP` and `KF2_PGXP_CPU`) before any recompiled code is compiled, and the
+  Lwc2/Swc2 sites carry it too. Same area 1 run, 144 fps, old against new
+  `game.cs`: work 1.05 -> 0.91 ms a frame, renderer `func_800342D8` self 0.217 ->
+  0.177, `PolyAssembler.Replace` 0.170 -> 0.142, `func_8002D3A8` 0.047 -> 0.032;
+  controls flat (`DrawOTag` walk 0.091/0.088). With `KF2_PGXP=1` the probe reads
+  the same before and after (63.0% hit, 57,888 exact/s). PGXP's CPU tracking can
+  no longer be switched on mid-session, which nothing did.
+- **The three polygon routines are the scene-sized cost**, 1.2-2.0 ms together in
+  the heavy areas. `func_80030540` is shared: `func_80031950` calls it for the map
+  tiles and `func_80032588` for models. Their libgte calls are already inlined as
+  direct `Gte` calls with constant register numbers, so what is left is the
+  recompiled instruction stream itself: register fields on `CpuContext` and a
+  checked `PSMemory` access per load and store. A hand-written C# replacement of
+  `func_80030540` (a `Replace` hook, no recompile) is the largest single target; it
+  has to keep its stores going through `PSMemory` or the vertex map binds nothing.
+  Done since: "The polygon assembler in C#" in `PATCHES_AND_MODS.md` took it 9-16%,
+  and found two thirds of the routine was the view-space clipper it calls; its
+  transform and the clipper are C# too now, and the routine is 30-52% cheaper a call
+  than the recompiled one ("All of the above, verified and measured" there).
+- **The packet walk scales with the scene too**, 0.37 ms for 1,400 lookups' worth of
+  polygons. `DrawOTag` also visits all 8,192 ordering-table entries: it writes two
+  `GteDepth` statics and takes the vertex-map read test on every empty one.
+- **The fixed costs are about 0.17 ms.** `func_8002E064` clears the table
+  (`ClearOTagR`, `a1 = 0x2000`, a recompiled loop through libgpu's driver table):
+  0.055 ms, which a native clear would take to almost nothing.
+  `NoDither.BeforeDrawOTag` walks the whole table looking for E1 words that
+  "Dithering: one flag" in `RENDERING.md` measured this game never links in:
+  0.05-0.07 ms, which masking bit 9 in `Gpu.SetDrawMode` would replace, and would
+  cover route 3 as well.
+- **Batch submits** reach 91-130 a frame while turning; in area 1 29 of 32 were
+  semi-transparency toggles (see "Watching a frame being built").
+
+Outside stage 13, a `DOTNET_JitDisasmSummary=1` run shows five game functions
+compiled **MinOpts** for size, stages 2 (`func_80037C0C`) and 3 (`func_8002A550`)
+among them, and their hook copies too. They run on the 20 Hz tick, so they cost
+per tick rather than per frame.
+
+### What the map walk's time is
+
+`func_80031C94`'s own body is 0.012-0.013 ms a frame in every scene; everything
+under it is work it hands out. It walks all 576 cells and calls `func_80031B1C` on
+the ~195 nonzero ones, which calls `func_80031950` once per half whose model is
+`< 240`. That picks one of three assemblers by the cell's high bits:
+
+- no `0x80` (the flood's lit cells, the far bulk) — `func_8002FECC`, which has
+  **no clipper**: `func_8002E650` runs `RotTransPers` per vertex, then per face
+  `NormalClip`, `NormalColorCol`, a `DpqColor` per vertex and `AddPrim`;
+- `0x80` — `func_80030540` (`PolyAssembler`) directly;
+- `0xC0` (the 3x3 around the eye, `CullCone`'s discs) on a model of `< 16` faces —
+  `func_80030C94` first, which **splits every quad and triangle into four**
+  (nine midpoint vertices, `func_80017244` copying the records), then
+  `func_80030540` on the result.
+
+Measured, `KF2_FPS=1000`, the eight callees timed, ms a frame (profiler overhead
+of ~50 ns per call is inside these; B1C alone is ~10 µs of it):
+
+| | area 1 still | area 1 turning | area 2 still | area 2 turning | area 5 still | area 5 turning |
+|---|---|---|---|---|---|---|
+| `func_80031C94` inclusive | 0.254 | 0.418 | 1.416 | 1.107 | 0.791 | 0.984 |
+| `PolyAssembler` + `func_8002E7CC` (calls) | 0.21 (6.8) | 0.37 (11.1) | 0.67 (27.2) | 0.49 (23.0) | 0.41 (13.2) | 0.49 (16.3) |
+| `func_8002FECC` + `func_8002E650` (calls) | ~0 | 0.06 (6.1) | 0.55 (73.3) | 0.42 (66.8) | 0.27 (35.1) | 0.31 (60.9) |
+| `func_80030C94` subdivider (calls) | 0.060 (5.8) | 0.088 (8.7) | 0.068 (16.0) | 0.071 (13.0) | 0.052 (3.1) | 0.122 (7.9) |
+| walk: C94 + B1C + 950 + `func_80014B88` self | 0.041 | 0.050 | 0.124 | 0.117 | 0.083 | 0.108 |
+
+The `PolyAssembler` row counts the model submitter's calls too (about one a frame).
+Area 7 was not measured: `warp 7` killed the player and autoreload put the run back
+in area 1. Since then, `func_8002FECC` and `func_8002E650` are C#, 30-36% faster
+including the transform. See "The unclipped assembler and its transform" in
+`PATCHES_AND_MODS.md`.
+
+### What the model submitter's time is
+
+`func_80032588` is a dispatcher: rotation from the Euler triple (`func_80014FE0`),
+`ScaleMatrix`, `MulMatrix0`, the light colour and fog lerps, then the MO blender
+`func_80034DA8` or a rigid pointer, a transform (`func_8002E650`, or
+`func_8002E9B8` when no matrix is passed; never reached on the tour), and one of
+three assemblers by its seventh stack byte: `0xFF` (and `0x80`) `func_8002F214`,
+`0xFE` `func_80030540`, anything else `func_8002EAEC`. **Its own body is
+0.005-0.047 ms a frame at 4-23 calls**, so a C# copy of it alone buys almost nothing.
+
+The tour (`warp 0..7`, 10 s standing, a full turn, `KF2_FPS=1000`, the callees
+timed), ms a frame, calls in brackets:
+
+| | `80032588` incl | `8002F214` | `8002EAEC` | `80034DA8` incl | `8002E650` incl |
+|---|---|---|---|---|---|
+| area 3 turning | 0.40 (6) | 0.22 (19) | ~0 | 0.14 (18) | 0.09 (31) |
+| area 5 still | 1.15 (12) | 0.93 (23) | ~0 (3) | 0.11 (18) | 0.20 (107) |
+| area 6 turning | 0.43 (4) | 0.35 (18) | 0 | 0.06 (16) | 0.09 (47) |
+| area 7 still | 0.60 (5) | 0.48 (17) | 0.01 (2) | 0.08 (18) | 0.11 (89) |
+| area 7 turning | 0.74 (12) | 0.55 (18) | 0.01 (7) | 0.11 (20) | 0.12 (85) |
+
+`func_8002F214` is 75-80% of it wherever it is heavy. With nothing drawn by the
+submitter (areas 4 and 6 standing) it is 0.035 ms at 14 calls, which is the arm
+(`func_80032400`), `func_800346CC` and `func_80031D5C`. The transform row includes
+the map's calls. **The scene is not repeatable**: a second run standing at area 5's
+entry drew 1.2 submits a frame against 12, because what is in view walks, so an
+A/B has to be taken in one session.
+
+**`func_8002F214` is `func_8002FECC`'s loop with GTE lighting and no fixed bias.**
+The same mesh header (`func_8002E1BC`), vertex cache, `NormalClip` load order
+(`p0, p2, p1`), bump allocator and `AddPrim`; four TMD types rather than two
+(`0x24` FT3 `0x20` bytes, `0x2C` FT4 `0x28`, `0x34` GT3 `0x28`, `0x3C` GT4
+`0x34`), the code byte is the mode byte itself, flat faces take `NormalColorDpq`
+at the mean fog weight, gouraud faces `NormalColorDpq3` (plus one `NormalColorDpq`
+for a quad's fourth) at the first vertex's, the slot is the mean otz plus `a1`,
+and a mean of `<= 0` or a slot of `>= 0x2000` is dropped after allocation.
+`func_8002EAEC` is the same routine with the codes forced semi-transparent
+(`0x26`/`0x2E`/`0x36`/`0x3E`) and `a2 << 5` put into bits 5-6 of the word it
+copies from the face's `+0x6`.
+Area 7 turning with the libgte leaves timed: up to 1,950 `NormalClip` a frame
+(also counting `func_8002F918` and `func_800302E8`) and 690 lit faces, all of them
+this pair's, so about two thirds of what it tests is back-facing.
+
+Done since: both are C# (see "The lit model assembler" in `PATCHES_AND_MODS.md`),
+22-31% cheaper a call standing still, and the GTE fast path (`0047`) took another
+17-41% off them, since the lighting was most of what was left. The morph (`func_80034DA8`, its base-mesh
+copy and the `func_80034A74` delta decoder) is the next largest at 0.04-0.14 ms,
+and `AnimSmoothing` hooks inside it.
+
+## Watching a frame being built
+
+`patches/FrameCapture.cs`, `patches/FrameViewerPanel.cs` and the runtime's
+`Hle/GpuTrace.cs` (`patches/recompone/0046`) capture **one run of stage 13** whole
+and replay it a GP0 command at a time. The profiler says which section a frame's
+time went to; this says which *primitive*, which routine built it, and what it cost
+downstream. **Shift+F** opens the panel and *Capture next frame* arms it;
+`KF2_FRAMEVIEW_CAPTURE=20,40` captures at those seconds after boot and prints the
+summary, and `KF2_FRAMEVIEW_OUT=dir` writes each capture as three CSVs — commands,
+calls and runtime sections — once the GPU has answered:
+
+```bash
+KF2_AUTOSTART=2 KF2_FPS=144 KF2_FRAMEVIEW_CAPTURE=25,35 KF2_FRAMEVIEW_OUT=captures \
+    dotnet run --project KingsField2Recomp.csproj -c Release -- disc/KingsField2.cue
+```
+
+**What is recorded.** From stage 13's pre-hook to its post: every word written to
+GP0 with the guest address it was read from, every GP1 write, the end of every
+command, and every GL batch submit with its reason. The reason is the useful
+part: `GlCore.Begin` used to submit on *any* mismatch, and now says which state
+differed first — semi-transparency, blend, clip rectangle, texture window, mask,
+depth mode, replacement texture — or that it was a fill, an upload, a copy,
+texture feedback, a full buffer or the present. It also records enter and leave
+for DrawCensus's twenty-two routines plus `DrawOTag` and the `VSync` thunk, with
+the primitive arena's bump pointer at each. Anything else in GAME.EXE can be
+added from the panel (*Add routine*, 32 at most). The hooks go in at the first
+capture and stay for the session. That capture waits one frame so they compile
+outside it, and the per-word path is compiled up front for the same reason.
+
+**The starting picture is read back, not assumed.** The software VRAM holds every
+texture but not the frame when GL draws it, so capture begins with a readback of
+the whole of VRAM from `GlCore` (before the clock starts, and without offering it
+to `0039`'s restore copies). *Checker under the frame* replaces the view with a
+checkerboard instead, which is what shows a pixel this frame never covers.
+
+**Who built a primitive is where its packet lives.** Each call's arena bump is a
+byte range, and a packet belongs to the smallest range holding its header — the
+deeper call on a tie, since a callee that drew everything its caller did is the one
+that drew it. A command with no address (`PutDrawEnv`'s writes and its background
+rectangle) or outside every range is credited *by time*, to the innermost call
+running when it was sent, and says so.
+
+**The replay is a second `Gpu` with `Detached` set.** It rasterizes in software into
+its own VRAM and touches nothing global: no backend, trace, prim event, vertex map,
+Z-buffer, PGXP, texture tracker or `NotifyDisplay`. So the picture is the console's,
+at 1x, with none of the port's enhancements and no widescreen margin. Its counters
+give each command's **fragments** (every pixel rasterized inside the clip,
+transparent texels included, since the fragment shader runs for those too), a
+per-pixel overdraw count and the last command to write each pixel. Fragments are
+1x: at render scale N the GPU rasterizes N² of them. The view modes are the picture,
+overdraw, the GL batch that last wrote each pixel, and the routine that did. A
+selected routine dims everything else, outlines its primitives, and filters the
+command list. Hovering a pixel names its last writer, and a click scrubs to it.
+
+**Reading the times.** A command's *send* cost runs from its first word to its end:
+decode, vertex-map lookups, batching, and any submit it forced. The OT walk between
+packets is not in it. Routine times are hook to hook, so they include every hook on
+that routine, this tool's included. **`DrawOTag`'s inclusive time is mostly
+`FramePacing`'s frame cap**, which sleeps in a post on it; the row is named for
+that.
+
+### The port's own work in a capture
+
+**None of the port's rendering work is a GP0 command, so the first version of the
+viewer could not see any of it.** Perspective, sub-pixel and depth recovery run in
+the game's own `lw`/`sw` (the vertex map) and so hide inside every routine's self
+time; the AO pass and the composite run at present; and the shaders' cost is GPU
+time, which no CPU timestamp measures — it surfaces later, in the buffer swap. Four
+things now put it in the capture:
+
+- **Runtime sections.** While capturing, `Profiler.Trace` records every profiler
+  section's enter and leave whether or not the profiler is on: each hook's own
+  delegate, the recompiled body of every hooked function, `VSync` and the present it
+  makes, each `GlCore.Flush`, the AO pass, the composite, target writebacks, and the
+  vertex attribute lookup in `DrawPolygon`. They are a second lane under the
+  timeline (green runtime, amber hooks, red driver, grey waits) and a table with a
+  GPU column. A lookup is charged to the command it ran inside.
+- **GPU time.** A `GL_TIME_ELAPSED` query goes round each batch submit, the AO pass
+  and the composite, and is read back frames later. A batch's time is spread over
+  its primitives by 1x fragments, which is an estimate, and totalled per routine;
+  the *GPU cost* view paints each pixel by its last primitive's share per fragment.
+- **This frame's present.** The present inside stage 13 shows the *previous*
+  frame's picture (`VSync` comes before `DrawOTag`). After the frame the capture
+  keeps a tail on the trace until the next present, which is where this frame's
+  last batch is submitted and its AO pass runs; the summary's GPU line is that one.
+- **Vertex map work.** `GteVertexMap`'s never-reset counters are snapshot at every
+  routine enter and leave: stores watched, ring scans, words bound, coordinates the
+  GTE offered, loads carried on. Per command, vertices asked and recovered; the
+  *vertex recovery* view paints green (all), amber (some), red (none), blue (never
+  asked). The map's *time* cannot be counted per store without distorting it — the
+  store path is a few nanoseconds — so it is measured as a difference: set a
+  capture as the baseline, tick *Hold the vertex map off*, capture again, and read
+  the Δ self columns. That held frame draws affine with no depth.
+
+**Measured**, area 1 from slot 2, standing, 144 fps, AO on at 16 samples, render
+scale 6, true colour and sub-pixel on, two captures: **the AO pass is 1.68-2.21 ms
+of GPU against 0.010-0.023 ms of CPU** — the largest single cost in the frame, and
+the one nothing showed before. The frame's batches were 0.42-0.55 ms of GPU (the
+model submitter 0.17-0.22, the map tiles 0.09-0.12, the HUD 0.09-0.11), the
+composite 0.03. The vertex map watched 23,133-23,474 stores in stage 13, ran 1,610
+ring scans, bound 657 words from 255 GTE coordinates and 852 carried loads, and
+recovered 402 of 638 vertices (63.0%, the probe's figure) in 0.010-0.012 ms of
+lookup; the 236 misses are all the HUD's, which never passed through the GTE.
+Pacing held at 144.0 fps drawn, 20.0 ticks/s, `[present] wide 288`, with and
+without `KF2_PROFILE=1`. Tracing costs what the profiler costs, for the captured
+frame only. Mechanism measured from the console and the CSVs; the new lane, views
+and tables have not been looked at by eye, and the hold-off A/B has not been run.
+
+**First measurement**, area 1 from slot 2, standing, 144 fps, four captures over
+two boots. Stage 13 took 4.8-5.6 ms inclusive, 4.0-4.4 ms of it `DrawOTag`
+with the frame cap. **196 commands** (185 polygons = 268 triangles, one sprite,
+six env), sent in **0.09 ms** all told. Attribution: 185 of 185 addressed
+primitives, 100%: the map tiles (`func_80031C94`) 56, the model submitter
+(`func_80032588`) 63, the HUD 66. **177,149 fragments at 1x** over a 320x240 view,
+every pixel covered, overdraw 2.31 average and 7 at most. No pixel is written only
+once, because `present`'s background rectangle paints all 76,800 before
+anything else — 43% of the frame's fragments. The map tiles are another 76,969
+and the models 13,731. **31 GL batch submits, 29 of them semi-transparency toggles**
+(the model submitter forced 21 and the HUD 9) and 2 depth-mode changes. **On the
+frames the animated textures step** (`func_8002DC78`, a gated stage), ten uploads
+bring it to 226 commands and **1.07-1.10 ms** of sending. 0.76 ms of that is a
+single map-tile quad, the first primitive after them, whose submit was for a
+depth-mode change. Why that one submit is so slow is not diagnosed; see
+docs/TODO.md.
+
+**What it costs.** Off, a null test per GP0 word and per batch submit. After a
+capture, the analysis is one full replay: 5.4 ms, or 21 ms for a frame with
+uploads, on the game thread straight after the captured frame. Scrubbing backwards
+replays from the start, at the same cost. With the panel open after a capture and
+the routines hooked: the interface section 0.185 ms against 0.116 ms without,
+work 1.20 ms against 1.07, and 4-5 KB a frame allocated against 1.7. The pacing
+held at 144.0 fps drawn and 20.0 ticks/s throughout, with `[present] wide 288`.
+
+Mechanism measured, from the console and the CSVs. The panel's picture, overlays and
+layout have never been looked at by eye, and whether the replayed picture matches the
+game's is exactly the kind of thing only that can settle.
 
 ## What counts as verification
 

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using RecompOne.Runtime.Context;
+using RecompOne.Runtime.Diagnostics;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Hardware;
 using RecompOne.Runtime.Memory;
@@ -8,6 +9,8 @@ namespace RecompOne.Runtime.Sdk;
 
 public static class LibEtc
 {
+    internal static double LastWaitMs = double.NegativeInfinity;
+    
     private static int _vcount;
     private static readonly VSyncEvent _vsyncEvent = new();
 
@@ -26,6 +29,15 @@ public static class LibEtc
     /// KF2_VSYNC=block is the console switch.
     /// </summary>
     public static bool BlockingVSync;
+
+    //0042. Presents counted where they happen, not where a hook says they do. A
+    //port that paces from hooks on this function cannot use those hooks to notice
+    //that they have stopped running, so this is counted in the body itself: the
+    //calls that reach PresentFrame, and on request the managed stack of one of
+    //them, which shows whether the call still came through the hook trampoline.
+    public static long VSyncCalls;
+    public static volatile bool CaptureNextStack;
+    public static string? CapturedStack;
 
     //The vblank is time, not a call. On hardware the interrupt fires every 16.7 ms
     //whether or not the game is ready for it: a loop blocked on a CD read misses
@@ -54,7 +66,7 @@ public static class LibEtc
     public static void VSync(CpuContext c, IMemory m)
     {
         var mode = (int)c.A0;
-        Log.Sdk($"VSync({mode})");
+        if (Log.VSyncOn) Log.Sdk($"VSync({mode})");
 
         if (mode < 0)
         {
@@ -70,10 +82,34 @@ public static class LibEtc
             return;
         }
 
+        VSyncCalls++;
+        if (CaptureNextStack)
+        {
+            CaptureNextStack = false;
+            CapturedStack = Environment.StackTrace;
+        }
+
+        LastWaitMs = Interrupts.ClockMs;
         //Upstream's frame interpolator feeds off this whichever timeline runs; it
         //is inert unless Interp is enabled.
         Interp.VideoRate.Push(mode == 0 ? 1 : mode);
 
+        //0045. Only the presenting call is a section; the queries above return at
+        //once. Not a try/finally: PresentFrame's hard reset is thrown before it
+        //opens a section, and anything left open is closed by the next outer End.
+        var profile = Profiler.Begin(Profiler.VSync);
+        try
+        {
+            Present(c, m, mode);
+        }
+        finally
+        {
+            Profiler.End(profile);
+        }
+    }
+
+    private static void Present(CpuContext c, IMemory m, int mode)
+    {
         Runtime.PresentFrame();
 
         if (BlockingVSync)
@@ -97,7 +133,9 @@ public static class LibEtc
             return;
         }
 
+        var vblank = Profiler.Begin(Profiler.VBlank);
         AdvanceVBlanks(c, m);
+        Profiler.End(vblank);
         c.V0 = 0;
     }
 
@@ -162,12 +200,23 @@ public static class LibEtc
 
     private static void WaitVBlanks(CpuContext c, IMemory m, int count)
     {
+        var profile = Profiler.Begin(Profiler.VBlankWait);
+        WaitVBlanksCore(c, m, count);
+        Profiler.End(profile);
+    }
+
+    private static void WaitVBlanksCore(CpuContext c, IMemory m, int count)
+    {
         var target = _lastVSyncCount + count;
-        var floor = Interrupts.VBlankCount + 1;
-        if (target < floor) target = floor;
 
         while (Interrupts.VBlankCount < target)
         {
+            if (Interrupts.Turbo)
+            {
+                Interrupts.ForceVBlank(c, m);
+                continue;
+            }
+
             var remaining = Interrupts.MsToNextVBlank;
             if (remaining > SleepMarginMs)
             {

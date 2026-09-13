@@ -473,6 +473,32 @@ Measured after, in area 2 at 144 fps: `364896-383616 projected/s, 369648-388368
 caught/s, 465984-524100 copied/s, 93.0-93.7% hit`, inside the 92.2-97.1% band this
 mechanism was first measured at, and 144.0 fps at 20.0 ticks/s with it on.
 
+### What the map costs, and the filter in front of it
+
+The map is paid by every feature that turns on `GteDepth.Active` — perspective,
+sub-pixel, the Z-buffer and ambient occlusion alike — and it lands in **stage 13's
+self time**, because the renderer makes most of the frame's `lw`/`sw`. Measured with
+the frame profiler, slot 2 standing still, `KF2_FPS=1000`: stage 13 self 0.273 ms
+with the map off, 0.505 ms with AO on and 0.503 ms with perspective on — AO's own
+share of that was nothing (16 samples and 1 sample read the same), it was only
+switching the map on. A capped run hides the frame-rate side of this; measure
+uncapped.
+
+Two cuts, neither changing what binds:
+
+- **`NoteWrite` scans the 8-slot ring only when a match is possible.** Nearly every
+  store carries no published value. It returns early when the newest pending entry
+  is past `PendingMaxAge` (so all are), or when the value's bit is clear in a 64-bit
+  hash mask of published values — a superset, so a stale bit only costs a scan. The
+  mask empties once the whole ring has aged.
+- **The `ReadU32` fast path tests the presence bit inline** (`MaybeBound`) and calls
+  `NoteRead` only for a marked address.
+
+After: stage 13 self 0.374 ms (AO) and 0.376 ms (perspective), about 55% of the
+map's cost gone; 552 → 630 fps with AO on, 525 → 635 with perspective on; 0.281 ms
+and ~700 fps with the map off, unchanged within noise. The probe is identical —
+63.0% hit, 255 vertices projected and caught per frame, before and after.
+
 ## Z-buffer: the same depth, used as occlusion
 
 **Confirmed mechanism; picture checked and still wrong — a second cause is Open.**
@@ -933,6 +959,18 @@ silhouette against the HUD draws no dark halo. Three things fall out of it at on
   the wash on an area load are full-screen quads you see the world *through*, and
   stamping the far plane under them would switch the shading off for exactly the
   frames they cover.
+
+**Two surfaces broke the mask, both fixed by measurement.** The skybox is linked
+in ordering-table slot 0 and projects near, so it carried a depth and was shaded
+like a wall: `GteDepth.OtSlot` counts the empty tags a walk has passed, and a
+triangle in slot 0 recovers no depth. Measured, slot 0 holds the sky and nothing
+else (areas 0 and 2), and no world geometry sits below slot 1840 in any area; at
+one spot in area 0 the shaded share went 17.1% to 2.1% with area 1 unchanged.
+And a semi-transparent textured primitive only blends the texels with the STP bit
+set, so a surface drawn semi-transparent can be wholly opaque and still wrote no
+depth, leaving the room behind it for the pass to shade (a secret door showed
+through). Such batches now take a second, colour-masked draw that discards the
+blended texels and writes the rest. Neither picture has been looked at.
 
 ### Undoing the game's own projection, and the number that caught the error
 

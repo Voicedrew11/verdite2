@@ -10,7 +10,7 @@ namespace RecompOne.Runtime.Memory;
 public sealed class PSMemory : IMemory
 {
     private readonly byte[] _ram;
-    private readonly byte[] _scratchpad = new byte[MemoryMap.ScratchpadSize];
+    private readonly byte[] _scratchpad = new byte[MemoryMap.ScratchpadWindow];
     private readonly byte[] _hwregs = new byte[MemoryMap.HwRegsSize];
     private readonly byte[] _bios = new byte[MemoryMap.BiosSize];
 
@@ -39,6 +39,12 @@ public sealed class PSMemory : IMemory
     }
 
     internal byte[] RamBuffer => _ram;
+
+    /// <summary>0047. True while a store of RAM through this class does nothing but
+    /// the store and <see cref="GteVertexMap"/>'s bookkeeping -- nothing frozen, no
+    /// logger, no overlay waiting on its header -- so a caller that keeps the vertex
+    /// map's calls may write 8- and 16-bit values into <see cref="Ram"/> directly.</summary>
+    public bool DirectRam => _frozenCount == 0 && !RamLogger.TrackReads && !RamLogger.TrackWrites && !Dispatcher.HasPending;
 
     //memory can be frozen for debuging reasons
     private readonly bool[] _frozen;
@@ -70,6 +76,8 @@ public sealed class PSMemory : IMemory
         _dma = new Dma(this, _gpu, _spu, _mdec, () => Runtime.DispatchIrq(3));
         Runtime.Gpu = _gpu;
         Runtime.Spu = _spu;
+        Runtime.Mdec = _mdec;
+        Runtime.Timers = _timers;
         Bios.KromFont.InstallInto(_bios);
     }
 
@@ -122,8 +130,13 @@ public sealed class PSMemory : IMemory
         if (phys < MemoryMap.RamWindow)
             return _ram.AsSpan((int)(phys & _ramMask), size);
 
-        if (phys >= MemoryMap.ScratchpadBase && phys < MemoryMap.ScratchpadBase + MemoryMap.ScratchpadSize)
-            return _scratchpad.AsSpan((int)(phys - MemoryMap.ScratchpadBase), size);
+        if (phys >= MemoryMap.ScratchpadBase && phys < MemoryMap.ScratchpadBase + MemoryMap.ScratchpadWindow)
+        {
+            var off = (int)(phys - MemoryMap.ScratchpadBase);
+            if (off + size > MemoryMap.ScratchpadWindow)
+                throw new InvalidOperationException($"access crossing the end of the scratchpad: 0x{address:X8}");
+            return _scratchpad.AsSpan(off, size);
+        }
 
         if (phys >= MemoryMap.HwRegsBase && phys < MemoryMap.HwRegsBase + MemoryMap.HwRegsSize)
             return _hwregs.AsSpan((int)(phys - MemoryMap.HwRegsBase), size);
@@ -180,7 +193,7 @@ public sealed class PSMemory : IMemory
         if (phys < MemoryMap.RamWindow && off < (uint)_ram.Length && !RamLogger.TrackReads)
             return Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_ram), (nint)off);
 
-        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadSize)
+        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadWindow)
             return Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_scratchpad),
                 (nint)(phys - MemoryMap.ScratchpadBase));
 
@@ -196,7 +209,7 @@ public sealed class PSMemory : IMemory
             return Unsafe.ReadUnaligned<ushort>(
                 ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_ram), (nint)off));
 
-        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadSize - 1u)
+        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadWindow - 1u)
             return Unsafe.ReadUnaligned<ushort>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_scratchpad),
                 (nint)(phys - MemoryMap.ScratchpadBase)));
 
@@ -217,11 +230,11 @@ public sealed class PSMemory : IMemory
             // which is affine textures and whole-pixel wobble with the mechanism
             // still reporting itself on. Inert (one predictable branch) while
             // perspective correction and sub-pixel positioning are both off.
-            if (GteVertexMap.Active) GteVertexMap.NoteRead(phys, fastWord);
+            if (GteVertexMap.Active && GteVertexMap.MaybeBound(phys)) GteVertexMap.NoteRead(phys, fastWord);
             return fastWord;
         }
 
-        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadSize - 3u)
+        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadWindow - 3u)
             return Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_scratchpad),
                 (nint)(phys - MemoryMap.ScratchpadBase)));
 
@@ -240,7 +253,7 @@ public sealed class PSMemory : IMemory
             return;
         }
 
-        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadSize)
+        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadWindow)
         {
             Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_scratchpad), (nint)(phys - MemoryMap.ScratchpadBase)) =
                 value;
@@ -262,7 +275,7 @@ public sealed class PSMemory : IMemory
             return;
         }
 
-        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadSize - 1u)
+        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadWindow - 1u)
         {
             Unsafe.WriteUnaligned(
                 ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_scratchpad),
@@ -289,7 +302,7 @@ public sealed class PSMemory : IMemory
             return;
         }
 
-        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadSize - 3u)
+        if (phys - MemoryMap.ScratchpadBase < MemoryMap.ScratchpadWindow - 3u)
         {
             Unsafe.WriteUnaligned(
                 ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_scratchpad),

@@ -15,15 +15,19 @@ public static class JumpTableAnalyzer
         public bool ValidAddend;
         public bool ValidLoaded;
         public uint TableVram;
+        public bool ValidBody;
+        public int BodyDir;
+        public bool FromLoad;
 
         public void Invalidate()
         {
             this = default;
         }
     }
-
-    public static List<JumpTable> Analyze(MipsFunction func, FunctionInfo elf)
+    //also naughty dog gool jt is different
+    public static List<JumpTable> Analyze(MipsFunction func, FunctionInfo elf, uint end = 0)
     {
+        if (end <= func.Start) end = func.End;
         var regs = new RegState[32];
         var result = new List<JumpTable>();
 
@@ -40,7 +44,30 @@ public static class JumpTableAnalyzer
                     {
                         case 32:
                         case 33:
-                            if (rd != 0) Addu(regs, rs, rt, rd);
+                            if (rd != 0)
+                            {
+                                Addu(regs, rs, rt, rd);
+                                MarkBody(regs, rs, rt, rd, 1);
+                            }
+
+                            break;
+                        case 34:
+                        case 35:
+                            if (rd != 0)
+                            {
+                                if (IsSeat(regs[rs]) && !IsSeat(regs[rt]) && !regs[rt].ValidLui)
+                                {
+                                    regs[rd] = regs[rs];
+                                    regs[rd].ValidLoaded = false;
+                                    regs[rd].ValidBody = true;
+                                    regs[rd].BodyDir = -1;
+                                }
+                                else
+                                {
+                                    regs[rd].Invalidate();
+                                }
+                            }
+
                             break;
                         case 37:
                             if (rd != 0)
@@ -52,9 +79,15 @@ public static class JumpTableAnalyzer
 
                             break;
                         case 8:
-                            if (rs != 31 && regs[rs].ValidLoaded)
+                            if (rs != 31)
                             {
-                                var entries = ReadEntries(elf, regs[rs].TableVram, func);
+                                var entries = regs[rs].ValidLoaded
+                                    ? ReadEntries(elf, regs[rs].TableVram, func, end)
+                                    : regs[rs].ValidBody
+                                        ? BodyEntries(regs[rs], func, instr.Vram)
+                                        : regs[rs].FromLoad
+                                            ? BlindEntries(func, instr.Vram)
+                                            : [];
                                 if (entries.Length > 0)
                                     result.Add(new JumpTable { JrVram = instr.Vram, Entries = entries });
                             }
@@ -100,6 +133,7 @@ public static class JumpTableAnalyzer
                     {
                         var baseReg = regs[rs];
                         regs[rt].Invalidate();
+                        regs[rt].FromLoad = true;
                         if (rs != 29 && baseReg.ValidLui && (baseReg.ValidAddend || baseReg.ValidAddiu))
                         {
                             var imm = instr.ImmS;
@@ -164,13 +198,83 @@ public static class JumpTableAnalyzer
         }
     }
 
-    private static uint[] ReadEntries(FunctionInfo elf, uint tableVram, MipsFunction func)
+    private static bool IsSeat(in RegState reg)
+    {
+        return reg.ValidLui && reg.ValidAddiu;
+    }
+
+    private static void MarkBody(RegState[] regs, int rs, int rt, int rd, int dir)
+    {
+        var rsSeat = IsSeat(regs[rs]);
+        var rtSeat = IsSeat(regs[rt]);
+        if (rsSeat == rtSeat) return;
+
+        regs[rd] = rsSeat ? regs[rs] : regs[rt];
+        regs[rd].ValidLoaded = false;
+        regs[rd].ValidBody = true;
+        regs[rd].BodyDir = dir;
+    }
+
+    private const int MaxBodyEntries = 1024;
+
+    private static uint[] BodyEntries(in RegState reg, MipsFunction func, uint jrVram)
+    {
+        var seat = reg.PrevLui + (uint)reg.PrevAddiuLo;
+        if ((seat & 3) != 0 || seat < func.Start || seat >= func.End) return [];
+
+        uint lo, hi;
+        if (reg.BodyDir < 0)
+        {
+            lo = Math.Max(func.Start, jrVram + 8);
+            hi = seat;
+        }
+        else
+        {
+            lo = seat;
+            hi = func.End - 4;
+        }
+
+        if (hi < lo) return [];
+
+        var count = (hi - lo) / 4 + 1;
+        if (count > MaxBodyEntries) return [];
+
+        var entries = new uint[count];
+        for (var i = 0u; i < count; i++) entries[i] = lo + i * 4;
+        return entries;
+    }
+
+    private static uint[] BlindEntries(MipsFunction func, uint jrVram)
+    {
+        var instrs = func.Instructions;
+        var leaders = new SortedSet<uint>();
+
+        for (var i = 0; i < instrs.Length; i++)
+        {
+            if (i == 0 || (i >= 2 && instrs[i - 2].HasDelaySlot)) leaders.Add(instrs[i].Vram);
+
+            var instr = instrs[i];
+            if (!instr.HasDelaySlot) continue;
+
+            var op = instr.Word >> 26;
+            if (op is not (1 or 2 or 4 or 5 or 6 or 7)) continue;
+
+            var tgt = op == 2 ? instr.JumpTarget : instr.BranchTarget;
+            if (tgt >= func.Start && tgt < func.End) leaders.Add(tgt);
+        }
+
+        leaders.Remove(jrVram + 4);
+        if (leaders.Count > MaxBodyEntries) return [];
+        return leaders.ToArray();
+    }
+
+    private static uint[] ReadEntries(FunctionInfo elf, uint tableVram, MipsFunction func, uint end)
     {
         var entries = new List<uint>();
         var vram = tableVram;
         while (TryReadWord(elf, vram, out var word))
         {
-            if (word < func.Start || word >= func.End) break;
+            if (word < func.Start || word >= end) break;
             entries.Add(word);
             vram += 4;
         }

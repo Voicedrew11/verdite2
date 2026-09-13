@@ -4,7 +4,7 @@ namespace RecompOne.Runtime;
 
 public sealed partial class Gpu
 {
-    static bool HleOn => GpuHle.Active && GpuHle.Backend is { Ready: true };
+    bool HleOn => !Detached && GpuHle.Active && GpuHle.Backend is { Ready: true };
 
     int CurTPage() => ((_texPageX / 64) & 0xf) | (((_texPageY / 256) & 1) << 4)
                     | ((_blendMode & 3) << 5) | ((_texDepth & 3) << 7);
@@ -51,7 +51,7 @@ public sealed partial class Gpu
         // attachment and so needs the same writes, and differs only in that
         // nothing is ever rejected by them (GlCore.Flush leaves the func at
         // GL_ALWAYS unless the Z-buffer is on as well).
-        bool z = GteDepth.DepthWanted && a.HasZ && b.HasZ && c.HasZ;
+        bool z = GteDepth.DepthWanted && GteDepth.OtSlot != 0 && a.HasZ && b.HasZ && c.HasZ;
 
         // **A depth-tested triangle gets a real clip W whether or not its texture
         // is being corrected**, and that is a fix rather than tidiness. `vDepth` is
@@ -105,7 +105,16 @@ public sealed partial class Gpu
     {
         int n = w * h;
         if (_readBuf.Length < n) _readBuf = new ushort[n];
-        GpuHle.Backend!.ReadVram(x, y, w, h, _readBuf);
+        var buf = _readBuf;
+
+        if (Host.GpuJobs.Claimed && !Host.GpuJobs.IsOwner)
+        {
+            Host.GpuJobs.Run(() => GpuHle.Backend!.ReadVram(x, y, w, h, buf));
+        }
+        else
+        {
+            GpuHle.Backend!.ReadVram(x, y, w, h, buf);
+        }
 
         for (int row = 0; row < h; row++)
         {
