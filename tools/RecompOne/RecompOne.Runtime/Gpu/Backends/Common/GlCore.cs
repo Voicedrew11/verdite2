@@ -852,6 +852,15 @@ public sealed class GlCore : IGpuBackend
     {
         if (_count == 0) return;
 
+        //0045.
+        var profile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.GlFlush);
+        FlushCore();
+        Diagnostics.Profiler.End(profile);
+    }
+
+    private void FlushCore()
+    {
+
         var rt = _kTarget;
         uint destTex;
         if (rt == null)

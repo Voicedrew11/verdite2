@@ -370,6 +370,7 @@ public static class MenuPacing
 
         if (now < _due)
         {
+            int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(FrameProfiler.MenuWait);
             double sleepUntil = _due - SpinMs;
             if (now < sleepUntil)
             {
@@ -377,6 +378,7 @@ public static class MenuPacing
                 if (ms > 0) Thread.Sleep(ms);
             }
             while (_clock.Elapsed.TotalMilliseconds < _due) Thread.SpinWait(48);
+            RecompOne.Runtime.Diagnostics.Profiler.End(profile);
         }
     }
 

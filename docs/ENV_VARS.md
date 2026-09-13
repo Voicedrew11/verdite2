@@ -20,6 +20,10 @@ KF2_TICKRATE=30                        # ticks a second the world runs at (20, a
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_FPS_PROBE=1                        # a line a second: fps drawn, presents, ticks taken, what each smoother is doing; a `no boundary` line while the watchdog paces
+KF2_PROFILE=1                          # the frame profiler from boot, a console summary every 5 s; =panel also opens it (Shift+P toggles)
+KF2_PROFILE_OUT=profile.csv            # every frame's sections as CSV; scripts/profile_report.py reads it
+KF2_PROFILE_SPIKE=12                   # a console line for each frame over 12 ms of work, with its top sections
+KF2_PROFILE_FUNCS=stages               # time the thirteen main-loop stages, or name functions: game:80040348+800342D8
 KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
 KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
 KF2_LOOPPACING=0                       # loops that render their own frames back on the render rate (on by default)

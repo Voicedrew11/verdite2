@@ -25,6 +25,12 @@ Four files in the directory have no entry below:
   60 Hz grid rather than when the game asks; `KF2_VSYNC=block` is upstream's
   blocking timeline. See "The vblank fired when the game asked" in
   `docs/RUNTIME.md`.
+- `0045-frame-profiler.patch` — a diagnostic: `Diagnostics/Profiler.cs`, and
+  sections around `HookManager.Invoke` (the hooked body and each delegate apart),
+  `LibEtc.VSync`, `Runtime.PresentFrame`, the window's events, render and swap,
+  `GlCore.Flush`, `LibGpu.DrawOTag` and the two host waits. The frame boundary is
+  the end of `PresentFrame`. One bool per site while off. **No recompile.** See
+  "Profiling a frame" in `docs/DEVELOPMENT.md`.
 
 - `0001-bios-load-return-1.patch` — BIOS `Load` must return 1, not the header
   pointer. Without it the boot stub spins in the loader forever.

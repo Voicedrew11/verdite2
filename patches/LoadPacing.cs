@@ -380,6 +380,7 @@ public static class LoadPacing
 
         if (now >= _due) return;
 
+        int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(FrameProfiler.LoadWait);
         double sleepUntil = _due - SpinMs;
         if (now < sleepUntil)
         {
@@ -387,6 +388,7 @@ public static class LoadPacing
             if (ms > 0) Thread.Sleep(ms);
         }
         while (_clock.Elapsed.TotalMilliseconds < _due) Thread.SpinWait(48);
+        RecompOne.Runtime.Diagnostics.Profiler.End(profile);
     }
 
     /// <summary>Probe only: one step of the figure. Counted here rather than off

@@ -218,6 +218,82 @@ stops sending frame callbacks and the port blocks in `SwapBuffers` forever with
 caveat about the widened render target under "Widescreen" in
 [WIDESCREEN.md](WIDESCREEN.md) before trusting a headless picture measurement.
 
+## Profiling a frame
+
+`patches/FrameProfiler.cs`, `patches/ProfilerPanel.cs` and the runtime's
+`Diagnostics/Profiler.cs` (`patches/recompone/0045`) say where a frame's time
+went, by section, on the game thread. **Shift+P** opens the panel, and recording runs
+while it is open; `KF2_PROFILE=1` records from boot and prints a summary every
+five seconds, and `KF2_PROFILE_OUT=profile.csv` writes every frame for
+`scripts/profile_report.py`:
+
+```bash
+KF2_AUTOSTART=2 KF2_FPS=144 KF2_PROFILE=1 KF2_PROFILE_OUT=profile.csv \
+    dotnet run --project KingsField2Recomp.csproj -c Release -- disc/KingsField2.cue
+python3 scripts/profile_report.py profile.csv --skip 30      # drop boot and first-hit JIT
+```
+
+**What is a section without asking.** Every function `HookManager` has detoured is
+timed inside `Invoke`: the recompiled body as `func_XXXXXXXX@overlay` and every
+pre, post and replace delegate on its own, as `pre NoDither.BeforeDrawOTag` and so
+on. With the port's patches installed that already covers the gated stages, stage
+13, DrawOTag and VSync. The runtime adds `LibEtc.VSync`, `Runtime.PresentFrame`,
+the window's event pump, the picture compose (`GlCore.PresentDisplay`), the
+interface, `GlCore.Flush` and `LibGpu.DrawOTag`'s packet walk. Whatever nothing
+claims is **game code (no section)**. Known addresses carry a label — `stage 13:
+renderer (func_800342D8@game)` — from the stage table in `GAME_INTERNALS.md`.
+
+**Self and inclusive.** Self is what a section did itself, excluding the sections
+it called, so a frame's self times sum to its length (measured: 9,277 frames,
+largest disagreement 0.0015 ms, which is the CSV's rounding). Inclusive adds the
+children. Stage 13's inclusive time is nearly the whole frame, because DrawOTag,
+the frame cap and the present all happen inside it; its self time is the renderer.
+
+**Work, swap and wait are three different things.** Each section is in a group —
+game, hook, runtime, **swap** (the thread blocked on the driver in
+`SwapBuffers`) or **wait** (a sleep to a deadline: `FramePacing.Floor`,
+`MenuPacing`, `LoadPacing`, `FrameClock.Throttle`, `WaitVBlanks`). A frame capped
+at 144 fps is 6.94 ms whatever it did, so the figure to chase is **work**, the frame
+less its waits and its swap. The panel hides the waits unless *Show waits* is on.
+
+**The frame boundary is the end of `Runtime.PresentFrame`**, not a hook, so the
+profiler's frames do not depend on the hooks it is measuring. A section still open
+there — a hooked stage running a modal loop that presents its own frames, as the
+in-game menu does inside stage 3 — is split: the time so far goes to the frame that
+ended, and the rest to the next.
+
+**To see inside the game's own time, time more functions.** An empty pre-hook
+makes any recompiled function a section, and whatever it calls stops counting as
+unattributed: *Time the 13 stages* and *Time function* in the panel, or
+`KF2_PROFILE_FUNCS=stages` / `game:80040348+800342D8`. Each is a detour for the rest
+of the session, which is why none is installed unasked. Drill down by timing the
+callees of whatever is heaviest.
+
+**The spikes are the other half.** Each frame also carries the GC pause time,
+collections, the game thread's allocations and JIT time. The panel lists frames
+over a work threshold (twice the median plus 2 ms unless set) and a click reads one
+frame in the table; `KF2_PROFILE_SPIKE=12` prints them. First measurement, area 1
+standing still at 144 fps with the stages timed: work 1.17 ms of 6.94 (p99 2.0),
+swap 0.15 ms, and stage 13's own body the largest single cost at 0.49 ms. Every
+spike past the boot was **JIT** — QuickJit is off, so first-hit code compiles fully
+optimised — including a 9.0 ms stage 4 frame (8.8 ms of JIT in it) and a 5.5 ms
+`HitGuard.BeforeHit` (6.2 ms).
+
+**What it costs.** Off, one static bool test per site (3 ns per Begin/End pair,
+measured). On, 47 ns per pair; a frame in an area has a median of 170 section
+entries (p99 772), so 8-36 µs a frame, plus about 0.05 ms for the CSV writer, which
+is itself a section (`profiler (its own reporting)`). The panel draws inside the
+frame it measures, under *menu bar + panels + popups*.
+
+**What it cannot see.** Only the game thread: the SPU mixer and the CD stream
+reader run on their own threads (a GC pause still stops them, and is counted). GPU
+time appears only where the CPU waits for it, which is the swap; there are no GL
+timer queries. The CSV is about 700 KB a second at 144 fps, and a run killed
+from outside can leave a truncated last line, which the report script ignores.
+
+Mechanism measured, from the console and the CSV. The panel's layout has never
+been looked at by eye.
+
 ## What counts as verification
 
 There are no tests. Verification is empirical, and the useful distinction — kept

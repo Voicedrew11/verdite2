@@ -1,6 +1,7 @@
 using System.Reflection;
 using MonoMod.RuntimeDetour;
 using RecompOne.Runtime.Context;
+using RecompOne.Runtime.Diagnostics;
 using RecompOne.Runtime.Memory;
 
 namespace RecompOne.Runtime.Modding;
@@ -11,6 +12,7 @@ public static class HookManager
     {
         public ModInfo Mod = null!;
         public T Fn = default!;
+        public int Profile;
     }
 
     private sealed class FunctionHooks
@@ -20,6 +22,8 @@ public static class HookManager
         public Action<Action<CpuContext, IMemory>, CpuContext, IMemory>? Replace;
         public ModInfo? ReplaceOwner;
         public Hook? Hook;
+        public int Profile;
+        public int ReplaceProfile;
 
         public bool Empty => Pres.Length == 0 && Posts.Length == 0 && Replace == null;
     }
@@ -91,6 +95,7 @@ public static class HookManager
 
             hooks.Replace = replace;
             hooks.ReplaceOwner = mod;
+            hooks.ReplaceProfile = HookSection(impl, "replace");
         }
 
         return true;
@@ -121,7 +126,7 @@ public static class HookManager
         lock (_gate)
         {
             var hooks = Get(target);
-            hooks.Pres = [.. hooks.Pres, new Entry<Func<CpuContext, IMemory, bool>> { Mod = mod, Fn = pre }];
+            hooks.Pres = [.. hooks.Pres, new Entry<Func<CpuContext, IMemory, bool>> { Mod = mod, Fn = pre, Profile = HookSection(impl, "pre") }];
         }
 
         return true;
@@ -139,7 +144,7 @@ public static class HookManager
         lock (_gate)
         {
             var hooks = Get(target);
-            hooks.Posts = [.. hooks.Posts, new Entry<Action<CpuContext, IMemory>> { Mod = mod, Fn = post }];
+            hooks.Posts = [.. hooks.Posts, new Entry<Action<CpuContext, IMemory>> { Mod = mod, Fn = post, Profile = HookSection(impl, "post") }];
         }
 
         return true;
@@ -218,6 +223,12 @@ public static class HookManager
 
     private static void Invoke(FunctionHooks hooks, Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
     {
+        if (Profiler.Enabled)
+        {
+            InvokeProfiled(hooks, orig, c, m);
+            return;
+        }
+
         var pres = hooks.Pres;
         var posts = hooks.Posts;
         var replace = hooks.Replace;
@@ -236,10 +247,67 @@ public static class HookManager
             posts[i].Fn(c, m);
     }
 
+    //0045. The same calls as Invoke, each inside a profiler section: the hooked
+    //function as a whole (whose self time is the recompiled body), and every
+    //delegate on its own, named for the method that implements it. The finally is
+    //what keeps an exception thrown through a hook -- a hard reset unwinding the
+    //game -- from leaving sections open under the frame for good.
+    private static void InvokeProfiled(FunctionHooks hooks, Action<CpuContext, IMemory> orig, CpuContext c,
+                                       IMemory m)
+    {
+        var pres = hooks.Pres;
+        var posts = hooks.Posts;
+        var replace = hooks.Replace;
+
+        var fn = Profiler.Begin(hooks.Profile);
+        try
+        {
+            var skip = false;
+            for (var i = 0; i < pres.Length; i++)
+            {
+                var t = Profiler.Begin(pres[i].Profile);
+                if (!pres[i].Fn(c, m))
+                    skip = true;
+                Profiler.End(t);
+            }
+
+            if (!skip)
+            {
+                if (replace != null)
+                {
+                    var t = Profiler.Begin(hooks.ReplaceProfile);
+                    replace(orig, c, m);
+                    Profiler.End(t);
+                }
+                else orig(c, m);
+            }
+
+            for (var i = 0; i < posts.Length; i++)
+            {
+                var t = Profiler.Begin(posts[i].Profile);
+                posts[i].Fn(c, m);
+                Profiler.End(t);
+            }
+        }
+        finally
+        {
+            Profiler.End(fn);
+        }
+    }
+
+    private static int HookSection(MethodInfo impl, string kind)
+    {
+        return Profiler.Register($"{kind} {impl.DeclaringType?.Name}.{impl.Name}", ProfileGroup.Hook);
+    }
+
     private static FunctionHooks Get(MethodInfo target)
     {
         if (!_hooks.TryGetValue(target, out var hooks))
+        {
             _hooks[target] = hooks = new FunctionHooks();
+            hooks.Profile = Profiler.Register(Profiler.FunctionName(target), ProfileGroup.Game);
+        }
+
         return hooks;
     }
 
