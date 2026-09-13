@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using RecompOne.Runtime.Memory;
 
 namespace RecompOne.Runtime;
@@ -109,6 +110,13 @@ public static class GteVertexMap
     static readonly Pending[] _pending = new Pending[PendingCount];
     static int _pendingHead;
 
+    // Lets NoteWrite skip the ring scan: nothing can match once the newest entry has
+    // aged out, or when no published value set this value's hash bit.
+    static uint _newestPendingTick;
+    static ulong _pendingValueBits;
+
+    static ulong ValueBit(uint value) => 1UL << (int)((value * 0x9E3779B1u) >> 26);
+
     static Entry[]? _map;
     static ulong[]? _mark;
     static uint _ramMask;
@@ -150,6 +158,11 @@ public static class GteVertexMap
 
     static bool Marked(int i) => (_mark![i >> 6] & (1UL << (i & 63))) != 0;
 
+    /// <summary>The presence bit alone, for the memory fast path to test before calling
+    /// <see cref="NoteRead"/>. Only meaningful while <see cref="Active"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool MaybeBound(uint phys) => Marked(Index(phys));
+
     static void Mark(int i) => _mark![i >> 6] |= 1UL << (i & 63);
 
     static void Unmark(int i) => _mark![i >> 6] &= ~(1UL << (i & 63));
@@ -168,6 +181,8 @@ public static class GteVertexMap
             Matched = false, Root = root, Live = true,
         };
         _pendingHead = (_pendingHead + 1) % PendingCount;
+        _newestPendingTick = _tick;
+        _pendingValueBits |= ValueBit(value);
     }
 
     /// <summary>A guest word store. If it is carrying a value someone published, the
@@ -176,6 +191,14 @@ public static class GteVertexMap
     public static void NoteWrite(uint phys, uint value)
     {
         _tick++;
+
+        if (_tick - _newestPendingTick > PendingMaxAge || (_pendingValueBits & ValueBit(value)) == 0)
+        {
+            if (_tick - _newestPendingTick > PendingMaxAge) _pendingValueBits = 0;
+            int stale = Index(phys);
+            if (Marked(stale)) Unmark(stale);
+            return;
+        }
 
         int found = -1;
         for (int k = 1; k <= PendingCount; k++)

@@ -91,7 +91,10 @@ Four files in the directory have no entry below:
   and `DrawPolygon` asks by the address `DrawOTag` read the word from — verifying the
   word before answering. No codegen change, so **this one needs no recompile**. The
   old table stays behind `KF2_PERSPECTIVE_FALLBACK` for comparison only. See
-  "Following the value through memory" in `docs/RENDERING.md`.
+  "Following the value through memory" in `docs/RENDERING.md`. A later edit put a
+  filter in front of the store-side ring scan and an inline presence-bit test in
+  `ReadU32`'s fast path, cutting the map's stage 13 cost by about 55% with identical
+  binding; see "What the map costs, and the filter in front of it" there.
 
 - `0013-settings-slot-in-section.patch` — `SettingsRegistry.Extend` only draws
   *after* a section's whole body, so a port option that belongs beside one of the

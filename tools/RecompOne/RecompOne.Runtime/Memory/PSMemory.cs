@@ -224,7 +224,7 @@ public sealed class PSMemory : IMemory
             // which is affine textures and whole-pixel wobble with the mechanism
             // still reporting itself on. Inert (one predictable branch) while
             // perspective correction and sub-pixel positioning are both off.
-            if (GteVertexMap.Active) GteVertexMap.NoteRead(phys, fastWord);
+            if (GteVertexMap.Active && GteVertexMap.MaybeBound(phys)) GteVertexMap.NoteRead(phys, fastWord);
             return fastWord;
         }
 
