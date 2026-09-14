@@ -179,6 +179,12 @@ public static class GteDepth
     /// </summary>
     public static float DepthClearThreshold;
 
+    /// <summary>0051. How far behind the stored depth a fragment may be and still draw,
+    /// so two coplanar surfaces go to the later table entry instead of fighting: a
+    /// constant in SZ units, plus a multiple of the depth's change across one pixel
+    /// (GL only). Depths are still written unbiased.</summary>
+    public static float DepthBias = 1f, DepthSlope = 0.5f;
+
     /// <summary>How many times the threshold above has fired. A rate rather than a
     /// picture: several a frame means the threshold is too small and the buffer is
     /// being thrown away, none at all means it is doing nothing.</summary>
@@ -542,6 +548,9 @@ public static class GteDepth
     /// back, so <see cref="ZRejects"/> stays at zero there.</summary>
     public static long ZTris, ZSkipped, ZRejects;
 
+    /// <summary>0051. Opaque batches that wrote their true depth before their colour.</summary>
+    public static long ZPrepasses;
+
     public static void ResetZCounters()
     {
         ZTris = ZSkipped = ZRejects = ZClears = 0;
@@ -726,6 +735,11 @@ public static class GteDepth
     public static long OffsetCount;
 
     public static void ResetOffsets() { Offset = 0; OffsetMax = 0f; OffsetCount = 0; }
+
+    /// <summary>0052, under <see cref="Probe"/>: polygons with a fraction on every corner,
+    /// those under one square pixel, those with some corners lacking one, and those whose
+    /// fractional corners wind opposite to their whole-pixel ones.</summary>
+    public static long CensusPolys, CensusTiny, CensusMixed, CensusFlipped;
 
     // +1 so that 0 can mean "never written", which is what lets Collect stop early.
     static int KeyOf(int x, int y) => (((y & 0x7FF) << 11) | (x & 0x7FF)) + 1;

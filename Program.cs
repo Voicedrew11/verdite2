@@ -534,13 +534,15 @@ Kf2.Perspective.Install();
 //
 //     KF2_SUBPIXEL=1        on; 0 or unset leaves vertices on whole pixels
 //     KF2_SUBPIXEL_PROBE=1  report how far vertices are actually moving
+//     KF2_SUBPIXEL_CULL=0   cull on whole pixels, as the game does (fractional corners by default)
 //
 // Off by default where perspective correction is on -- not because it is riskier,
 // the same "a miss is the old behaviour" argument covers both, but because that one
 // was measured before it became a default and this one has not been. Its switch is
 // under Video with the others.
 Kf2.Subpixel.Configure(Environment.GetEnvironmentVariable("KF2_SUBPIXEL"),
-                       Environment.GetEnvironmentVariable("KF2_SUBPIXEL_PROBE"));
+                       Environment.GetEnvironmentVariable("KF2_SUBPIXEL_PROBE"),
+                       Environment.GetEnvironmentVariable("KF2_SUBPIXEL_CULL"));
 Kf2.Subpixel.Install();
 
 // Z-buffer. The GPU is handed polygons with no depth in them, so occlusion is
@@ -555,13 +557,18 @@ Kf2.Subpixel.Install();
 //     KF2_ZBUFFER_PROBE=2  also the frame's occlusion census: which large primitive
 //                          is standing in front of which, and how much of the
 //                          picture that costs
+//     KF2_ZBUFFER_SOURCE=map  depth from the address map instead of the assemblers
+//     KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  coplanar tolerance: SZ units, and pixels of slope
 //
 // Off by default where perspective correction is on -- the recovered number is
 // the same one, but the picture has not been checked by eye. Its switch is under
 // Video with the others.
 Kf2.ZBuffer.Configure(Environment.GetEnvironmentVariable("KF2_ZBUFFER"),
                       Environment.GetEnvironmentVariable("KF2_ZBUFFER_PROBE"),
-                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_THRESHOLD"));
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_THRESHOLD"),
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_SOURCE"),
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_BIAS"),
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_SLOPE"));
 Kf2.ZBuffer.Install();
 
 // Ambient occlusion -- contact shading in the corners, under the doorframes and

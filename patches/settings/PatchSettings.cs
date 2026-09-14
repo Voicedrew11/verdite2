@@ -194,6 +194,7 @@ public static class PatchSettings
         Register("display", new AnisotropicPage());
         Register("display", new PerPixelLightingPage());
         Register("display", new EvenFogPage());
+        Register("display", new ZBufferPage());
         Register("display", new FastGeometryPage());
         // Nothing registers a PGXP or a geometry-precision page either. PGXP buys
         // no coverage in this game and costs a fifth of the frame rate, and the

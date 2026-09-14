@@ -93,7 +93,8 @@ KF2_EVENFOG=1                          # even fog and lighting: clipped polygons
 KF2_EVENFOG_BLEND=0                    # no fog blend: the game's hard fog edge between records
 KF2_EVENLIGHT=0                        # no light blend: the game's hard colour matrix and back colour edge
 KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
-KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
+KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels; also polygons drawn back to front, and faces the fractional cull changed
+KF2_SUBPIXEL_CULL=0                    # cull the C# assemblers' faces on whole pixels again, as the game does (fractional corners by default under sub-pixel)
 KF2_PGXP=1                             # upstream's PGXP as the vertex source (off; the address map answers)
 KF2_PGXP_TEXTURE=0                     # its share of perspective correction off
 KF2_PGXP_CULLING=0                     # leave backface culling on truncated positions
@@ -103,10 +104,12 @@ KF2_PGXP_VERTEXCACHE=0                 # no screen-position fallback
 KF2_PGXP_CACHEW=0                      # let that fallback answer positions but not depths
 KF2_PGXP_TOLERANCE=2                   # how far a recovered position may sit from the packet's; -1 off
 KF2_PGXP_PROBE=1                       # its coverage, and where each answer came from
-KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off by default)
-KF2_ZBUFFER_THRESHOLD=300              # restart the depth buffer when the scene jumps forward (0, off)
+KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off by default; Video ▸ Enhancements)
+KF2_ZBUFFER_THRESHOLD=300              # restart the depth buffer when the scene jumps forward (0, off; no longer a setting)
 KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-tested
 KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map of the depth buffer
+KF2_ZBUFFER_SOURCE=map                 # depth from the address map, not the assemblers' packet records (0050)
+KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  # coplanar tolerance on the test: SZ units, and pixels of depth slope; 0 0 is exact (0051)
 KF2_AO=1                               # ambient occlusion (off by default; GL backend only)
 KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
 KF2_AO_BIAS=0.08 KF2_AO_SAMPLES=16 KF2_AO_MAXDEPTH=24000
@@ -128,7 +131,7 @@ KF2_AUTOSTART=2                          # boot straight into save slot 1..3, pa
 KF2_BOOTEXE=end                          # boot straight into OPEN.EXE, GAME.EXE or END.EXE
 KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the original does (a button exits by default)
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
-KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill
+KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill|goto
 KF2_UISCALE=1                            # force the interface scale, and save it
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
 KF2_MAP_MINIMAP=1                        # the corner minimap on (off; no longer a setting); N toggles it

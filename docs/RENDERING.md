@@ -291,6 +291,135 @@ pixels than a texture-mapping change that repaints every interior texel. The hon
 measurement is probably edges only, and a still frame is the wrong instrument for
 an artefact that is defined by motion. **Flip the default once that pair exists.**
 
+### Open: slits and grey texels with Sub-pixel on
+
+Reported from play, with Sub-pixel on, and gone with it off:
+
+- **A black slit** at a corridor's floor-wall junction and wall corner. Area 1, the
+  shell's `goto 10530 -12800 87420 4091` after save 2 has loaded. Ordinary gaps also
+  exist with Sub-pixel off; this one does not.
+- **Save 2's guidestone shimmers** while it stands still and the camera turns, and
+  **shows grey where its emblem should be gold**. With Sub-pixel off it wobbles, but
+  no gold is missing.
+
+None of the following fixed either, so all of it was removed rather than committed.
+The measurements are what is worth keeping.
+
+1. **A mixed polygon** (some corners with a fraction, some without). A counter
+   read 0.0% mixed.
+2. **A wrong fraction.** The branch recorded each corner's exact projection per packet,
+   from the SVECTOR and the GTE's matrix in double, and compared it with the address
+   map. Within 0.25 px on screen; off-screen corners up to about 1.5 px. **Placing
+   corners from those records instead changed nothing by eye.**
+3. **Welding** every fractional vertex on one whole pixel to one fraction per
+   frame. Nothing by eye. So was a switch keeping fractions for only tiles, clipped
+   fans or models; its result was confounded, because dropping one kind opens slits
+   where it meets the others.
+4. **The tile and model matrices are rounded before any vertex reaches them.**
+   `func_80031950` `RotTrans`es the tile's camera-relative position under the camera
+   matrix `0x80192E18`, so each tile's translation drops its low twelve bits. Its
+   rotation is the camera's turned by exact quarter turns (`func_80014B88`).
+   `func_80032588` does the same for a model's position less `0x80192E78`, and
+   `MulMatrix2` (`0x8005BFD4`) of the camera pointer (its seventh argument) with the
+   model's rotation truncates to 1/4096. Rebuilt in double from the same inputs, the
+   translation equalled the register on every corner once truncated (0 refused of
+   70k-114k a second). Measured on screen while turning, in the corridor and in save
+   2's room: **neighbouring tiles disagree about their shared edge by at most
+   0.07 px** (mean 0.01). Model centres moved at most 0.16 px, and model rotations
+   rounded by 0/4096, those models being turned in quarter turns. Not the cause.
+5. **The clipper's crossings are rounded by far more.** `ZClipFT` finds `t` from view
+   coordinates already rounded, to 12 bits, and truncates the blended SVECTOR. Against
+   the exact edge-plane intersection, over 550-780 crossings a second in the
+   corridor: 30-42% under 0.25 px, 35-41% under 0.5, 14-21% under 1, 3-4% under 4,
+   worst 12.9 px. A crossing sits on the view volume's side or near plane, so its
+   error moves the far end of a fan edge along the screen border. Placing crossings
+   exactly, with 4 and 5 together as the sub-pixel source, **changed neither report
+   by eye**. `KF2_POLYASM=verify` stayed clean, and the cost was not measurable
+   (850 fps uncapped either way).
+
+**So exact geometry is ruled out as the fix for both.** The lead is texture
+sampling: the prim shader reads one texel per pixel (`rawU`/`rawV` in `PrimFs`),
+and the guidestone's emblem lines are about a texel wide at about a texel a pixel.
+Whole-pixel corners hold the sampling grid still relative to the texture, so every
+texel lands on a pixel. Fractional corners slide the grid, so a thin gold line is
+skipped in favour of the grey beside it, differently each frame. The same slide at a
+polygon's edge could read a transparent or dark texel as a slit. **Not measured.**
+The check by eye: walk up to the guidestone until its texels are several pixels
+wide. Missing gold that stops close up and returns at medium distance is sampling.
+Anisotropic filtering does not help at about one texel a pixel, where it takes one
+tap. The candidate fix is a sharp texel filter: nearest texels, with only a pixel
+that straddles a texel boundary blending its two by coverage, in both prim shaders,
+under Sub-pixel only. DuckStation's clamping each primitive's UVs to its own range
+under PGXP is the other thing to try for the edge case.
+
+**What was kept**: the shell's `goto <x> <y> <z> [yaw]` ("The command channel" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)).
+
+### Welding, micro-dilation and supersampling, tried and removed
+
+Three things were built for the guidestone before its cause was found, measured,
+and taken out again:
+
+- **Radius welding**: every recovered vertex within 0.125 px of one already placed
+  that frame snapped onto it, before the fraction was added. Save 2 standing, 144 fps:
+  **0 of ~58k vertex references a second moved** at 0.125 px, because corners shared
+  by tiles and models are already bit-identical (item 4 above); ~15% at 0.5 px. Its
+  representative is whichever vertex the ordering table draws first, which moves.
+- **Micro-dilation**: each opaque triangle's edges pushed out 0.25 px, texture
+  coordinates kept on the corners. **By eye it brought the gold back**, very likely
+  by covering the holes the whole-pixel cull left (below). It also stretches every
+  solid polygon's texture and makes neighbours overlap.
+- **Supersampling**: display targets at the render scale times 2-4 a side,
+  box-filtered at present, VRAM at the render scale. Scale 6 at 2x2 made 5136x2880
+  targets, held 144.0 fps at 20.0 ticks/s, and **did not stop the shimmer by eye**. At
+  12 samples a game pixel a sub-pixel triangle is not all or nothing, so that ruled
+  out a sampling rate and left a per-frame decision.
+
+### The guidestone is 307 triangles, most of them a pixel or less
+
+Save 2's guidestone still shimmers while walking to and from it, with the gold back.
+A frame capture (Shift+F) standing in front of it: `func_80032588` submitted 307
+flat textured triangles and 57 quads, every triangle on its own ordering-table
+entry, and the replay drew **97 of the triangles at 0 pixels, 91 at 1 and 37 at 2**.
+The replay is 1x; at render scale 6 each is about 36 samples. Whichever sample
+lands inside such a triangle changes every frame as its fractions move, which is
+what supersampling is for; it did not help (above). The Z-buffer was also on in that
+session, and the emblem lying on or just in front of the stone would fight over
+depth at a rate that changes with distance. **Not separated by eye yet.**
+
+### A thin face was culled on whole pixels
+
+**The guidestone's shimmer is geometry that was never drawn.** Neither SSAA, the
+Z-buffer, dilation, lighting, fog nor smoothing touched it, and only Sub-pixel off
+did, so it was a per-frame decision rather than sampling. The decision is the
+backface cull: `Facing` and `Visible` (the C# models' and tiles' `NormalClip`) test
+`Gte.Nclip` on the cached **whole-pixel** screen words and keep a face only when
+`MAC0 > 0`. With whole-pixel corners that is consistent with what is drawn: a face
+whose corners collapse to a line or turn over draws nothing either way. With
+fractions it is not. A face a pixel wide collapses to a line on whole pixels at some
+distances and not others, is culled, and leaves a hole between neighbours drawn at
+their real corners, which is the stone behind showing through the gold; the reverse
+case is drawn back to front.
+
+`0052`: while sub-pixel is on (and not under `KF2_POLYASM=verify`), both tests take
+the cross product of the fractional corners, read with `GteVertexMap.Peek`, and fall
+back to the game's answer when a corner has no fraction or clamped. `Gte.Nclip`
+still runs, so the GTE is left as the game leaves it. `KF2_SUBPIXEL_CULL=0` is the
+comparison. The recompiled assemblers (Fast geometry off) still cull on whole pixels.
+
+Measured with `KF2_SUBPIXEL_PROBE=1`, save 2, 144 fps, scripted: facing away and
+still, the census counts ~1 polygon a frame whose fractional corners wind backwards
+(before and after). **Facing the guidestone and still, the whole-pixel test would
+have culled 23,040 faces a second that are front-facing at their fractional corners
+(160 a frame, against 144 a second the other way); walking near it, 16k-35k a
+second.** Without the change the census, which only sees what reaches the GPU, read
+140-570 polygons a second drawn back to front while walking near it and none of the
+faces that were missing. With it, polygons facing the guidestone rose from 75k to 98k
+a second and back-to-front ones fell to 0 standing still; 180-570 a second remain
+while walking, from corners the cull could not read. 144.0 fps at 20.0 ticks/s, no
+exceptions. **Looked at: the guidestone no longer shimmers.** That was with
+micro-dilation still in; the gold without it has not been looked at since.
+
 ## The table is not unique: remaining wobble and the "far away" pop
 
 The 90% hit rate was never "10% of vertices the two ends disagreed about". It was
@@ -503,7 +632,9 @@ and ~700 fps with the map off, unchanged within noise. The probe is identical �
 
 ## Z-buffer: the same depth, used as occlusion
 
-**Confirmed mechanism; picture checked and still wrong — a second cause is Open.**
+**Confirmed mechanism; picture checked and still wrong under the address map. Reopened
+on the assemblers' own depth, which has not been looked at** — see "The assemblers
+write the depth" at the end of this section.
 
 The GPU has no depth buffer. The game sorts every polygon into an ordering table
 by one number — the GTE's OTZ, the average of its vertices — and `DrawOTag` walks
@@ -564,7 +695,12 @@ that only ever half-works is worse than not offering it. The mechanism stays for
 diagnosis, driven from the console alone: `KF2_ZBUFFER=1` forces it on for the
 run and `KF2_ZBUFFER_PROBE=2` takes the census below. `patches/ZBuffer.cs` and
 `patches/recompone/0014` are unchanged; only `patches/settings/ZBufferPage.cs`
-and its registration are gone.
+and its registration are gone. That verdict was reached on the address map's depth,
+before the assemblers were in C#; "The assemblers write the depth" below is the
+reason to look again. **The switch is back** as `patches/settings/ZBufferPage.cs`
+under Video ▸ Enhancements, off by default, with two sliders for the coplanar
+tolerance's terms (`kf2.zbuffer.bias`, `kf2.zbuffer.slope`, 0-8 SZ and 0-4 px) and a
+button that restores 1 and 0.5. The env vars still win for the run.
 
 ### The clear landed at the tail of the frame, not the head
 
@@ -650,6 +786,120 @@ corners, and the map is a 32×16 minimum-per-cell reduction. Screen-linear
 interpolation of a view depth is wrong (it is 1/z that is linear in screen
 space), which biases a polygon's interior; whether that bias is large enough to
 lose a wall in front of the sky is the next thing to measure, not to assume.
+
+### The assemblers write the depth
+
+**Mechanism measured; the picture has not been looked at.**
+
+Closing this as unbridgeable rested on one assumption: that a depth buffer only
+ever sees GP0 packets, which is all DuckStation sees. It stopped being true when
+the map tiles, the models, their vertex transforms and the view-space clipper
+moved into C# (`PolyAssembler*.cs`). The port now *builds* nearly every packet
+that should occlude, so it knows two things the address map could only guess:
+every corner's depth, and which routine asked for the packet.
+
+`patches/recompone/0050` adds `GtePacketDepth`, a side table keyed by packet
+address in the same shape as `GteLightMap` (`0048`): four corner depths, checked
+against the command word and the first and last vertex words before they are
+believed. The assemblers fill it and `DrawPolygon` reads it. **While it is active
+the depth buffer takes a packet's record or nothing**; perspective correction and
+the sub-pixel fraction still come from the address map.
+
+- **The transforms** (`func_8002E650`, `func_8002E7CC`) note each cache slot's SZ3
+  beside the two cache words they wrote. An assembler takes a corner's depth only
+  while the slot still holds those exact words, so a slot something else rewrote
+  gives no depth rather than an old one.
+- **The tile assemblers** (`func_80030540`, `func_8002FECC`) and **the lit model
+  assembler** (`func_8002F214`, `func_8002EAEC`) record every packet they
+  finish. A packet with a corner at SZ 0 is not recorded.
+- **A clipped fan** (`func_800302E8`'s output, packet k being records 0, k+1 and
+  k+2) takes each record's view-space Z at `+0x10`. The clipper projects that same
+  number, and it is there whichever clipper ran. A packet whose vertex words are not
+  its records' screen words is not recorded, and is counted.
+- **Not recorded**: the HUD builder's icons (`InHud`, set by `PerPixelLighting`'s
+  hook) and the first-person arm (`InArm`, a pre/post on `func_80032400` in
+  `ZBuffer.cs`). Their addresses' old records are dropped so a stale one cannot
+  match. With no depth they keep painter's order, which is what they had on the
+  console.
+
+**The skybox needs no special case under this source.** It never passes through
+these assemblers, so it records nothing and draws first in painter's order, and
+every wall after it passes the test. `GteDepth.OtSlot != 0` is still applied. The
+same goes for anything else these routines do not draw — a miss is painter's
+order, as it always was.
+
+**Coplanar surfaces are the next section.** Reported from play at once: at the seam
+between two wall panels the two quads visibly fight.
+
+Measured in area 1 at slot 2's restore point, standing, 144 fps: 17,136 packet
+depths recorded a second and 17,136 polygons finding theirs, 23,616 triangles
+tested. The ~9,500 a second with no record are the HUD and the other 2D, and 0
+clipped packets were unmatched. The address map tested the same 23.6k from the same
+spot. It tested more only while the area was loading and the camera turning, and
+the extra triangles were all GT4s linked in the far end of the table, which is where
+the sky is. Frame rate unchanged, 144.0 fps drawn at 20.0 ticks/s.
+
+`KF2_ZBUFFER_SOURCE=map` is the comparison. The source needs Fast geometry: with
+the assemblers recompiled (Video ▸ Fast geometry off, `KF2_POLYASM=0`,
+`KF2_POLYASM_TRANSFORM=0`, or PGXP's CPU tracking forcing them back) nothing
+records, so `ZBuffer.SyncSource` falls back to the address map rather than to
+testing nothing. The source also feeds ambient occlusion, which shares the depth
+attachment, so the AO far-plane mask now covers everything that records nothing.
+The `KF2_ZBUFFER_PROBE=1` line reads `packet depths recorded/s, polygons found
+theirs/s, had none/s, clipped packets unmatched/s`.
+
+### Coplanar panels fought at the seam, and the tolerance that gives it back to the table
+
+**Mechanism measured; the picture has not been looked at.**
+
+Reported with a screenshot: in the seam between two wall panels, a strip where the
+two quads take turns pixel by pixel. They overlap there and lie in one plane, so the
+test is comparing two depths that should be equal. `GL_LEQUAL` gives the later table
+entry an exact tie, and an interpolated float never produces one, so it came down to
+noise. On the console the table decided it, because the later quad simply drew over.
+
+Two causes, and `0051` plus the port's half deal with both:
+
+- **The corners were whole SZ units.** RotTrans drops the low twelve bits of the
+  view Z, and two tile meshes under different translations round the same plane's
+  corners differently, tilting each panel's depth plane by up to half a unit.
+  `PolyAssembler.Unrounded` recomputes the view Z from the SVECTOR, the rotation's
+  third row and `TRZ`, `(TRZ·4096 + R3·V) / 4096` in double, for the transforms'
+  vertices and the clipper's records. A result more than 1.5 from the game's own Z
+  means the matrix moved since the projection, and the whole Z is kept instead.
+  Measured standing in area 1: 37,872 corners a second unrounded, **0 left whole**,
+  clipped fans included.
+- **The test had no tolerance.** That is what fixes it, because even exactly
+  coplanar surfaces interpolate differently across different triangles. A tested
+  fragment now compares a depth pulled towards the camera, by `GteDepth.DepthBias`
+  SZ units (1) plus `DepthSlope` (0.5) times the depth's change across a pixel
+  (`dFdx`/`dFdy`, so a grazing wall gets more). A surface within that distance of
+  what is stored draws, and the later table entry wins, as on the console.
+
+**The bias is on the test, never on the write.** If both surfaces wrote biased
+depths they would tie again. GL cannot test one value and write another, so an
+opaque tested batch is drawn twice. **The depth goes first**: true depth, colour
+masked, `GL_LEQUAL`, written. Colour follows with the bias and no depth write.
+Colour-first would have broken crossings *inside* one batch, which is most of a
+frame's tiles, since nothing would be written until the batch ended. Depth-first is
+a per-batch prepass, so a rock behind another in the same batch still fails against
+the nearer one's already-written depth. A semi-transparent batch tests with the bias
+and writes nothing, one pass. The AO opaque-texel pass writes, so it runs unbiased.
+The software rasterizer takes the constant only, and keeps the nearer depth when a
+fragment passes on the tolerance.
+
+The cost: 1,584 prepasses a second at 144 fps in area 1, about 11 batches a frame.
+Uncapped, 840-854 fps against 859-864 with `KF2_ZBUFFER_BIAS=0 KF2_ZBUFFER_SLOPE=0`,
+two runs each, about 1.5%.
+
+**The trade is the tolerance itself.** Anything genuinely behind by less than it
+draws over the nearer surface when it comes later in the table, so a crossing
+resolves up to about one world unit short of the true line. If the seams persist,
+raise the *Angled seam tolerance* slider (`KF2_ZBUFFER_SLOPE`) first. If crossings
+look shifted, lower *Seam tolerance* (`KF2_ZBUFFER_BIAS`).
+Whether these two panels are separate tiles' faces, as assumed, or share vertices was
+not established. If they share vertices, neither change should have been needed, and
+a seam still fighting at a generous tolerance means the cause is something else.
 
 ## PGXP: upstream's own recovery, and what taking it actually bought
 
@@ -757,6 +1007,20 @@ over inside one picture, which is worse than not having one — and the frame ra
 went from 144 to 34-76 fps with it, because each clear flushes the GL batch. The
 mechanism is kept because it is the right one for a game that needs it. This game
 does not.
+
+**Zero was the default and still was not what ran.** The threshold had a slider
+until `dfe73e2` took it out, and `ZBuffer.cs` went on reading
+`kf2.zbuffer.threshold` from the saved config, so a value set back then (783 here)
+stayed live with no control to show it. It was reported from play as **ambient
+occlusion intermittently failing with the Z-buffer on**, and that is how it looks:
+AO reads the same attachment, and a clear takes the frame's depth with it. Standing
+still after `warp 0`, `2`, `3` and `4` with `KF2_AO_PROBE=2 KF2_ZBUFFER_PROBE=1`, a
+forced 783 fired 143-19583 clears a second and the AO census read `0.0% of it
+carrying a surface` in almost every window. With the threshold off, the same spots read
+11.3%, 73.8%, 0.2% and 10.7%. It fires anywhere near geometry is drawn after far,
+which is why it came and went. Even one clear a frame (143/s at 144 fps) was
+enough to empty the census. The saved key is no longer read, and
+`KF2_ZBUFFER_THRESHOLD` is the only way to turn the clear on.
 
 ### Picking the tolerance
 

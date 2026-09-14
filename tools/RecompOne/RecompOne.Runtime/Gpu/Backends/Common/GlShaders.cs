@@ -352,6 +352,8 @@ internal static class GlShaders
         uniform float uSetMask;
         uniform int   uCheckMask;
         uniform int   uOpaqueDepth;
+        uniform float uDepthBias;
+        uniform float uDepthSlope;
         uniform int   uScale;
         uniform vec2  uPosBias;
         uniform float uAniso;
@@ -444,7 +446,9 @@ internal static class GlShaders
             // no recovered depth does not test and does not write -- so this
             // costs it nothing. Assigning this also turns off early-Z, so a
             // punch-through discard cannot occlude whatever is behind the hole.
-            gl_FragDepth = vDepth > 0.0 ? vDepth : 1.0;
+            // 0051. The tolerance is on the test only; GlCore draws the true depth first.
+            float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
+            gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
             ivec3 c8in = shade8();
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 
@@ -748,6 +752,8 @@ internal static class GlShaders
         uniform float uSemiTrans;
         uniform float uBlendMode;
         uniform float uAniso;
+        uniform float uDepthBias;
+        uniform float uDepthSlope;
 
         float u5(float f) { return floor(f * 31.0 + 0.5); }
 
@@ -811,7 +817,9 @@ internal static class GlShaders
         }
 
         void main() {
-            gl_FragDepth = vDepth > 0.0 ? vDepth : 1.0;
+            // 0051. The tolerance is on the test only; GlCore draws the true depth first.
+            float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
+            gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
             vec2 destUv = gl_FragCoord.xy / uDestSize;
             vec4 dstTexel = texture2D(uDest, destUv);
             if (uCheckMask > 0.5 && dstTexel.a >= 0.5) discard;

@@ -76,6 +76,7 @@ public static partial class PolyAssembler
     {
         Enabled = on;
         Gte.FastLighting = on;
+        ZBuffer.SyncSource();
     }
 
     public static bool UnclippedEnabled { get; set; } = true;
@@ -255,12 +256,16 @@ public static partial class PolyAssembler
         // generation they are lit with.
         public readonly bool Lighting;
         public int LightGen;
+        // The depth buffer wants packet depths, and this call's are recorded.
+        public readonly bool DepthTable, Depth;
 
         public Frame(PSMemory mem)
         {
             Mem = mem;
             Ram = ref Unsafe.AsRef(in MemoryMarshal.GetReference(mem.Ram));
             Lighting = LightingOn();
+            DepthTable = GtePacketDepth.Active;
+            Depth = DepthOn();
             Refresh();
         }
 
@@ -460,6 +465,7 @@ public static partial class PolyAssembler
         W8(ref fr, pkt + 3u, 0x0C);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x3Cu));
         if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c3, 4, p0, p1, p2, p3);
+        RecordDepth(ref fr, pkt, 0x2Cu, 4, p0, p1, p2, p3);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u)
              + (short)R16(ref fr, p3 + 4u) + (short)R16(ref fr, p2 + 4u);
@@ -531,6 +537,7 @@ public static partial class PolyAssembler
         W8(ref fr, pkt + 3u, 0x09);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x34u));
         if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c0, 3, p0, p1, p2, 0u);
+        RecordDepth(ref fr, pkt, 0x20u, 3, p0, p1, p2, 0u);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u) + (short)R16(ref fr, p2 + 4u);
     }
@@ -550,7 +557,8 @@ public static partial class PolyAssembler
         Gte.Write(14, w2);
         Gte.Write(13, w1);
         Gte.Nclip();
-        return (int)Gte.Read(24) > 0;
+        bool whole = (int)Gte.Read(24) > 0;
+        return Subpixel.Cull && GteDepth.Subpixel && _mode != Mode.Verify ? FacingFractional(whole, p0, w0, p1, w1, p2, w2) : whole;
     }
 
     /// <summary>The bump allocator. The game re-reads the descriptor and the pointer it
@@ -636,10 +644,12 @@ public static partial class PolyAssembler
         // Verify compares against the recompiled assembler, which fogs at half.
         bool refog = EvenFog.Enabled && _mode != Mode.Verify;
         bool rewrite = refog || _tileLight;
-        uint before = lighting || rewrite ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
+        bool depth = GtePacketDepth.Active;
+        uint before = lighting || rewrite || depth ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
         KingsField2.func_800302E8(c, mem);
         if (rewrite) RewriteClipped(mem, before, normals + normal, refog);
         if (lighting) LightClipped(mem, before, normals + normal, refog);
+        if (depth) DepthClipped(mem, before, DepthOn());
     }
 
 
@@ -850,7 +860,28 @@ public static partial class PolyAssembler
         Gte.Write(14, w2);
         Gte.Write(13, w1);
         Gte.Nclip();
-        return (int)Gte.Read(24) > 0;
+        bool whole = (int)Gte.Read(24) > 0;
+        return Subpixel.Cull && GteDepth.Subpixel && _mode != Mode.Verify ? FacingFractional(whole, p0, w0, p1, w1, p2, w2) : whole;
+    }
+
+    /// <summary>Faces culled and kept that the whole-pixel test got the other way round.</summary>
+    public static long CullKept, CullDropped;
+
+    /// <summary>0052. The face is drawn at its fractional corners, so it is culled at
+    /// them too; a corner without a fraction, or clamped, leaves the game's answer.
+    /// See "A thin face was culled on whole pixels" in docs/RENDERING.md.</summary>
+    static bool FacingFractional(bool whole, uint p0, uint w0, uint p1, uint w1, uint p2, uint w2)
+    {
+        if (!GteVertexMap.Peek(p0, w0, out var a0) || a0.Clipped
+            || !GteVertexMap.Peek(p1, w1, out var a1) || a1.Clipped
+            || !GteVertexMap.Peek(p2, w2, out var a2) || a2.Clipped)
+            return whole;
+        double x0 = (short)w0 + a0.Fx, y0 = (short)(w0 >> 16) + a0.Fy;
+        double x1 = (short)w1 + a1.Fx, y1 = (short)(w1 >> 16) + a1.Fy;
+        double x2 = (short)w2 + a2.Fx, y2 = (short)(w2 >> 16) + a2.Fy;
+        bool front = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0) > 0;
+        if (front != whole) { if (front) CullKept++; else CullDropped++; }
+        return front;
     }
 
     /// <summary>A fixed bias, and a slot out of range is dropped rather than clamped.
@@ -904,6 +935,7 @@ public static partial class PolyAssembler
             bool blended = TileVertexFog(mem, src, fog, near: false, out fog);
             W16(ref fr, dst + 6u, (ushort)fog);
             if (fr.Lighting) NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : (uint)curve, blended);
+            if (fr.DepthTable) NoteDepth(mem, dst, sxy, src);
             src += 8u;
             dst += 8u;
         }
@@ -945,6 +977,7 @@ public static partial class PolyAssembler
             W16(ref fr, dst + 6u, (ushort)fog);
             if (fr.Lighting)
                 NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : far ? GteLightMap.CurveNone : GteLightMap.CurveKnee, blended);
+            if (fr.DepthTable) NoteDepth(mem, dst, sxy, src);
             src += 8u;
             dst += 8u;
         }
