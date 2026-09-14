@@ -568,7 +568,10 @@ run and `KF2_ZBUFFER_PROBE=2` takes the census below. `patches/ZBuffer.cs` and
 `patches/recompone/0014` are unchanged; only `patches/settings/ZBufferPage.cs`
 and its registration are gone. That verdict was reached on the address map's depth,
 before the assemblers were in C#; "The assemblers write the depth" below is the
-reason to look again.
+reason to look again. **The switch is back** as `patches/settings/ZBufferPage.cs`
+under Video ▸ Enhancements, off by default, with two sliders for the coplanar
+tolerance's terms (`kf2.zbuffer.bias`, `kf2.zbuffer.slope`, 0-8 SZ and 0-4 px) and a
+button that restores 1 and 0.5. The env vars still win for the run.
 
 ### The clear landed at the tail of the frame, not the head
 
@@ -763,7 +766,8 @@ two runs each, about 1.5%.
 **The trade is the tolerance itself.** Anything genuinely behind by less than it
 draws over the nearer surface when it comes later in the table, so a crossing
 resolves up to about one world unit short of the true line. If the seams persist,
-raise `KF2_ZBUFFER_SLOPE` first. If crossings look shifted, lower `KF2_ZBUFFER_BIAS`.
+raise the *Angled seam tolerance* slider (`KF2_ZBUFFER_SLOPE`) first. If crossings
+look shifted, lower *Seam tolerance* (`KF2_ZBUFFER_BIAS`).
 Whether these two panels are separate tiles' faces, as assumed, or share vertices was
 not established. If they share vertices, neither change should have been needed, and
 a seam still fighting at a generous tolerance means the cause is something else.

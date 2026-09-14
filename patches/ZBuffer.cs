@@ -78,6 +78,10 @@ public static class ZBuffer
     /// <summary>Where the depth-clear threshold is kept between runs.</summary>
     public const string ThresholdKey = "kf2.zbuffer.threshold";
 
+    /// <summary>The coplanar tolerance's two terms, kept between runs (Video ▸ Enhancements).</summary>
+    public const string BiasKey = "kf2.zbuffer.bias", SlopeKey = "kf2.zbuffer.slope";
+    public const float DefaultBias = 1f, DefaultSlope = 0.5f;
+
     /// <summary>False leaves occlusion to the ordering table, as the console does.</summary>
     public static bool Enabled
     {
@@ -161,8 +165,8 @@ public static class ZBuffer
         _windowStart = Now;
         GtePacketDepth.SetRange(PrimBuffers, PrimBufferBytes);
         SyncSource();
-        GteDepth.DepthBias = _forcedBias ?? GteDepth.DepthBias;
-        GteDepth.DepthSlope = _forcedSlope ?? GteDepth.DepthSlope;
+        GteDepth.DepthBias = _forcedBias ?? DefaultBias;
+        GteDepth.DepthSlope = _forcedSlope ?? DefaultSlope;
 
         // Default is off: RuntimeReadyEvent is the first and only place the
         // setting is decided. ConfigManager only loads inside HostWindow.Initialize,
@@ -176,6 +180,8 @@ public static class ZBuffer
             GteDepth.DepthClearThreshold = _forcedThreshold ??
                 RecompOne.Runtime.Runtime.View.GetFloat(ThresholdKey, GteDepth.DepthClearThreshold);
             SyncSource();
+            GteDepth.DepthBias = _forcedBias ?? RecompOne.Runtime.Runtime.View.GetFloat(BiasKey, DefaultBias);
+            GteDepth.DepthSlope = _forcedSlope ?? RecompOne.Runtime.Runtime.View.GetFloat(SlopeKey, DefaultSlope);
             Console.WriteLine($"[KF2] zbuffer: {(Enabled ? "on" : "off (ordering table)")}" +
                               $", depth from {(!_packetSource ? "the address map" : GtePacketDepth.Enabled ? "the assemblers" : "the assemblers, which are off")}" +
                               $", tolerance {GteDepth.DepthBias:0.##} SZ + {GteDepth.DepthSlope:0.##} px of slope" +
