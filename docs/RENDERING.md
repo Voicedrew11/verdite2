@@ -1008,6 +1008,20 @@ went from 144 to 34-76 fps with it, because each clear flushes the GL batch. The
 mechanism is kept because it is the right one for a game that needs it. This game
 does not.
 
+**Zero was the default and still was not what ran.** The threshold had a slider
+until `dfe73e2` took it out, and `ZBuffer.cs` went on reading
+`kf2.zbuffer.threshold` from the saved config, so a value set back then (783 here)
+stayed live with no control to show it. It was reported from play as **ambient
+occlusion intermittently failing with the Z-buffer on**, and that is how it looks:
+AO reads the same attachment, and a clear takes the frame's depth with it. Standing
+still after `warp 0`, `2`, `3` and `4` with `KF2_AO_PROBE=2 KF2_ZBUFFER_PROBE=1`, a
+forced 783 fired 143-19583 clears a second and the AO census read `0.0% of it
+carrying a surface` in almost every window. With the threshold off, the same spots read
+11.3%, 73.8%, 0.2% and 10.7%. It fires anywhere near geometry is drawn after far,
+which is why it came and went. Even one clear a frame (143/s at 144 fps) was
+enough to empty the census. The saved key is no longer read, and
+`KF2_ZBUFFER_THRESHOLD` is the only way to turn the clear on.
+
 ### Picking the tolerance
 
 Same method, and the same answer shape. `KF2_PGXP_PROBE=1` buckets the

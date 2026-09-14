@@ -75,9 +75,6 @@ public static class ZBuffer
     /// <summary>Where the choice is kept between runs.</summary>
     public const string OnKey = "kf2.zbuffer.on";
 
-    /// <summary>Where the depth-clear threshold is kept between runs.</summary>
-    public const string ThresholdKey = "kf2.zbuffer.threshold";
-
     /// <summary>The coplanar tolerance's two terms, kept between runs (Video ▸ Enhancements).</summary>
     public const string BiasKey = "kf2.zbuffer.bias", SlopeKey = "kf2.zbuffer.slope";
     public const float DefaultBias = 1f, DefaultSlope = 0.5f;
@@ -177,8 +174,8 @@ public static class ZBuffer
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
-            GteDepth.DepthClearThreshold = _forcedThreshold ??
-                RecompOne.Runtime.Runtime.View.GetFloat(ThresholdKey, GteDepth.DepthClearThreshold);
+            // Env only: its slider is gone, so an old saved kf2.zbuffer.threshold is not read.
+            GteDepth.DepthClearThreshold = _forcedThreshold ?? 0f;
             SyncSource();
             GteDepth.DepthBias = _forcedBias ?? RecompOne.Runtime.Runtime.View.GetFloat(BiasKey, DefaultBias);
             GteDepth.DepthSlope = _forcedSlope ?? RecompOne.Runtime.Runtime.View.GetFloat(SlopeKey, DefaultSlope);
