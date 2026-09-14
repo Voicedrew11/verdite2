@@ -39,10 +39,14 @@ public static partial class PolyAssembler
     const int RecordSlots = 64;
     static readonly RecordLight[] _recordLight = new RecordLight[RecordSlots];
 
+    /// <summary>Set while the HUD builder runs, whose icons go through the lit assembler
+    /// too and are left to draw their own colours.</summary>
+    public static bool InHud;
+
     /// <summary>Per-pixel lighting is on and the far colour is black, which is the only
     /// far colour the shader draws. The game never sets another.</summary>
     static bool LightingOn() =>
-        GteLightMap.Active && Gte.ReadControl(21) == 0 && Gte.ReadControl(22) == 0 && Gte.ReadControl(23) == 0;
+        GteLightMap.Active && !InHud && Gte.ReadControl(21) == 0 && Gte.ReadControl(22) == 0 && Gte.ReadControl(23) == 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static uint Peek32(PSMemory mem, uint a)

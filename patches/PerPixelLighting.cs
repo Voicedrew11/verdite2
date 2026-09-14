@@ -101,6 +101,8 @@ public static class PerPixelLighting
                               (GteLightMap.Enabled && !GteLightMap.Supported ? " (not drawn: needs the core GL backend)" : ""));
         });
 
+        HookAttach.OnOverlayLoad("per-pixel lighting", AttachHud);
+
         bool attached = false;
         Event.AddListener<OverlayLoadedEvent>(_ =>
         {
@@ -108,6 +110,30 @@ public static class PerPixelLighting
             attached = Attach();
         });
     }
+
+    /// <summary>The HUD builder, which draws its icons through the lit model assembler.</summary>
+    const uint HudBuilder = 0x80031D5C;
+
+    static bool AttachHud()
+    {
+        SymbolRegistry.Build();
+        var target = SymbolRegistry.Resolve("game", null, HudBuilder);
+        if (target == null) return false;
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+        if (!_hudQueued)
+        {
+            HookManager.AddPre(_self, target, typeof(PerPixelLighting).GetMethod(nameof(BeforeHud), flags)!);
+            HookManager.AddPost(_self, target, typeof(PerPixelLighting).GetMethod(nameof(AfterHud), flags)!);
+            _hudQueued = true;
+        }
+        HookManager.Commit();
+        return HookAttach.Installed(target);
+    }
+
+    static bool _hudQueued;
+
+    public static void BeforeHud(CpuContext c, IMemory m) => PolyAssembler.InHud = true;
+    public static void AfterHud(CpuContext c, IMemory m) => PolyAssembler.InHud = false;
 
     public static void SetEnabled(bool on) => GteLightMap.Enabled = on;
 
