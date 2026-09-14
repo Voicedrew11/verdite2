@@ -26,6 +26,8 @@ public sealed partial class Gpu
         // whether the W that came with it is a real view depth rather than the
         // vertex cache's 1.0 stand-in.
         public float Px, Py; public bool Precise, PreciseW;
+        // 0048. What GteLightMap recorded for this vertex; Light 0 is none.
+        public float Lx, Ly, Lz, Fog; public uint Light; public int LightGen;
     }
 
     static readonly RenderPrimEvent _primEvent = new();
@@ -155,6 +157,21 @@ public sealed partial class Gpu
                 }
             Diagnostics.Profiler.End(lookup);
             Hle.GpuTrace.Sink?.Vertices(n, hits);
+        }
+
+        // 0048. The lighting inputs, by the packet's address. Only the GL backend
+        // draws them, so the software path never asks.
+        if (!Detached && HleOn && GteLightMap.Active)
+        {
+            ref readonly var lr = ref GteLightMap.Find(_fifoSrc[0], _fifo[0], _fifo[1], out bool lit);
+            if (lit)
+            {
+                v[0].Lx = lr.L0x; v[0].Ly = lr.L0y; v[0].Lz = lr.L0z; v[0].Fog = lr.F0;
+                v[1].Lx = lr.L1x; v[1].Ly = lr.L1y; v[1].Lz = lr.L1z; v[1].Fog = lr.F1;
+                v[2].Lx = lr.L2x; v[2].Ly = lr.L2y; v[2].Lz = lr.L2z; v[2].Fog = lr.F2;
+                v[3].Lx = lr.L3x; v[3].Ly = lr.L3y; v[3].Lz = lr.L3z; v[3].Fog = lr.F3;
+                for (int i = 0; i < n; i++) { v[i].Light = lr.Light; v[i].LightGen = lr.Gen; }
+            }
         }
 
         //dispatch the render event for prims

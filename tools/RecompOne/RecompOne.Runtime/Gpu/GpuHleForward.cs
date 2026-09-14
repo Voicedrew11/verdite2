@@ -30,6 +30,7 @@ public sealed partial class Gpu
         X = v.X + v.Fx, Y = v.Y + v.Fy,
         R = (byte)v.R, G = (byte)v.G, B = (byte)v.B, U = (short)v.U, V = (short)v.V,
         Z = v.W, HasGteZ = z, HasPersp = persp,
+        Lx = v.Lx, Ly = v.Ly, Lz = v.Lz, Fog = v.Fog, Light = v.Light, LightGen = v.LightGen,
     };
 
     PrimFlags PrimOf(bool tex, bool semi, bool raw, int clut, bool gouraud = false) => new()

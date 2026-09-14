@@ -20,6 +20,9 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 | Dithering (removal) | **measured**, all three routes | **checked**, twice-drawn pair | off (no crosshatch) |
 | True color (24-bit) | **measured**, RGBA8 target + shader | the point of the switch | off (authentic 15-bit) |
 | Anisotropic filtering | **measured**, sparkle sd 51.2 -> 11.4 | **not checked** | off |
+| Per-pixel lighting | **measured**, every corner within 1 of the GTE, shader exact headless | **not checked** | off |
+| Even fog | **measured**, clipped matches far tiles bin for bin; shared tile points within 3 | **checked**, "looks good" | off |
+| Even lighting | **measured**, own colour exact, shared tile points identical | **checked**, "looks good" | off |
 
 That "mechanism measured / picture never checked" split is the rule the whole
 port is written to: a feature whose mechanism has counters behind it but whose
@@ -1109,6 +1112,294 @@ rather than sliders: they are all real knobs, and every one of them is the port'
 question to answer once someone has looked, not the player's to answer every time
 they open the pane. It is also deliberately not authentic — the console could not
 have drawn this — which is the same footing true color is on.
+
+## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
+
+**Mechanism measured; the picture has not been looked at. Off by default.** One
+checkbox under Video ▸ Enhancements (`kf2.perpixel.on`), `KF2_PERPIXEL=1` on the
+console. GL core backend only. The runtime half is `patches/recompone/0048`; the
+port half is `patches/PerPixelLighting.cs` and `patches/PolyAssemblerLight.cs`.
+
+A packet's vertex colour is not a free number. The GTE made it in two steps, and
+the GPU then interpolates the *result* across the polygon, which is right only
+where neither step bends inside it:
+
+1. **A lit colour.** A map tile takes one `NormalColorCol` per face, so its lit
+   colour is constant. A model face takes `NormalColorDpq` (flat, one normal) or
+   `NormalColorDpq3` (gouraud, a normal per corner): `RGBC * (BK + LCM * max(0, LLM
+   * N))`, clamped, and not yet saturated to 255.
+2. **The depth cue.** `DpqColor`'s weight `w` pulls the colour towards the far
+   colour: `colour * (1 - w / 4096)`, floored and clamped. The weight is `IR0` from
+   the vertex's own `RotTransPers`, clamped to `[0, 4096]` and then bent by the
+   game's own curve.
+
+**The depth cue is the whole of a map tile's shading, and it is the jolt.** Measured
+in play (a temporary probe, areas 1, 2, 3, 5 and 7): `H 200`, `DQB 20971520` (5120
+in IR0 units), `DQA -12800` or `-11600` by area, far colour 0, `BK 1920` or `1760`,
+and the three light columns `2662, 2662, 3328`. So `IR0` is 0 nearer than about
+8,000 units, saturates past about 40,000, and in between is `5120 - 3.125 * div`
+— affine in `1/z`, which is exact under screen-space interpolation. What is not
+affine is everything done to it after:
+
+- `func_8002E650` (the far tiles and the models): zero when `FogMode >= 32000`,
+  `max(IR0 - 800, 0) * 2` when bit `0x8000` is set, and otherwise `IR0` below 2800
+  and `3 * IR0 - 5600` above it — a knee, reaching black at 3232. `FogMode` read
+  14500 and 16000 in play, so the knee is what is drawn.
+- `func_8002E7CC` (the near tiles): the knee, or zero.
+- `func_800302E8` (anything the view-space clipper cut): `IR0 >> 1`, no knee.
+- The models: **one weight for the whole face** — the first corner's for a gouraud
+  face, the mean of the corners' for a flat one.
+
+A two-tile floor with one corner at `IR0` 2000 and the next past the knee is
+interpolated as a straight ramp between two colours the knee put in different
+places, and the clamps at 0 and black land wherever the corners happen to be — both
+of which move as the camera does. A creature's face steps whole as it walks.
+
+### What is recorded, and how the GPU finds it
+
+`PolyAssembler` records each packet's inputs as it builds it, into
+`GteLightMap`, keyed by the packet's address in the two primitive buffers
+(`0x800FC99C`, `0x32000` bytes). Per corner: the lit colour, or for a gouraud model
+face the three `LLM * N` dots before their clamp; and the raw depth cue, `MAC0 /
+4096` read straight after the transform's `RotTransPers`. Per packet: the curve,
+the light colour, and the command and first vertex words once the packet is
+finished. `DrawPolygon` looks the packet up by the address `DrawOTag` read the
+command word from and believes it only if both words still match. `BK` and `LCM`
+are uniforms, by generation; a directional batch flushes if the generation moves
+(`FlushReason.StateLight`), which is an area load.
+
+**Nothing in the recording writes guest memory or the GTE** — reads go straight to
+the RAM array, and the lighting products come from `Gte.LightProducts`/`LightDots`,
+which read `LLM`, `LCM` and `BK` without touching a register — so
+`KF2_POLYASM=verify` compares the same routine it always did: over areas 1, 2, 5, 6
+and 7 with the feature on, **0 RAM, 0 register and 0 GTE mismatches** in every
+routine.
+
+Three details that the counters found:
+
+- **A vertex-cache slot has to be the transform's own.** The tile assemblers bump
+  a serial before calling their transform, and a slot the transform stamped under
+  that serial is fresh. The models' cache is checked against RAM instead (the
+  screen word and the fog word), because `func_8002EA60` writes the same cache with
+  `RotTransPers` and a fog word of 0 — about 190 corners a frame in area 1, the
+  first person arm among them — and a stale raw value from an older mesh would put
+  a clamp in the wrong place. Such a face falls back to the fog words as they are
+  (`CurveWord`), which for `func_8002EA60`'s zeros is exact.
+- **The clipped emitter is recompiled, and does not need porting.** Its packets are
+  found after the call by the buffer cursor: packet `k` is records 0, `k + 1` and
+  `k + 2` of the output list, lit by `NormalColorCol` (recomputed from the normal)
+  and fogged at half each record's raw value, which `Survivors` stores beside the
+  record.
+- **A face that comes out the same interpolated is not recorded**: every corner
+  unfogged, or fogged to black. That is most of the near geometry in a small room,
+  and it keeps the light buffer out of batches that do not need it.
+
+### The shader
+
+`shade8()` in the core-profile `PrimFs` makes the colour again at each pixel, from
+the corner values interpolated `noperspective` (the raw depth cue is affine on
+screen, as the colour was): the lit colour or `RGBC * clamp(BK + LCM * max(0, dots)
+/ 4096) / 4096`, then the curve on `clamp(raw, 0, 4096)`, then `floor(lit * (1 - w /
+4096))` clamped to 255. With no record it returns the interpolated vertex colour,
+bit for bit as before. The dots are interpolated, not the normal, so this is the
+GTE's diffuse model evaluated per pixel — the terminator and the colour clamp land
+where they belong — rather than a renormalised Phong.
+
+The attributes are in **a vertex buffer of their own**, uploaded only for a batch
+that carries a record, with attributes 7-9 disabled otherwise (their generic value
+reads as no record). That is not tidiness: the first version widened `GlVertex`
+from 44 to 64 bytes, which took its `0x40000`-vertex buffer to exactly 16 MiB, and
+**that alone took area 1 from 861 fps to 265-305 with the feature switched off** —
+`GlCore.Flush` 0.04 ms to 2.7 ms a frame, and every GPU timer in a frame capture
+1.7x slower, the AO pass included. Reverting the shader and disabling the attributes
+changed nothing; restoring the stride did. Split: 856 against 861.
+
+### What is measured
+
+- **The formula against the GTE, in play.** `KF2_PERPIXEL_PROBE=2` evaluates the
+  shader's formula at every recorded corner of a gouraud packet and compares it with
+  the colour the GTE wrote there (a gouraud model face at its first corner's weight,
+  since that is what the GTE used). Areas 1, 2, 5, 6 and 7: 1,491,187 corners exact,
+  21,280 off by 1 (the GTE's fixed point against float), **none off by 2 or more**,
+  over the knee, the half curve, the fallback and the directional model light.
+- **The shader against the formula, headless.** `scripts/light_probe.c` drives the
+  real `PrimFs` over seven strips sweeping the lit colour, the dots and the raw
+  depth cue through every curve, untextured and true colour: **worst difference 0**
+  in all seven, 120-167 distinct colours across a 256-pixel strip where the curve
+  bends.
+- **Coverage.** 96-99.9% of polygons found their record before the uniform faces
+  were dropped (the rest are the HUD and sprites); the probe line now also counts
+  the dropped ones as drawn from their corner colours.
+- **Cost**, `KF2_FPS=1000`, one session per run with a temporary build cycling off /
+  recording only / on every second: area 1 standing +0.03 to +0.09 ms a frame, areas
+  2 and 7 +0.05 to +0.19 ms, about half of it recording and half the draw side.
+  At 144 fps it is 144.0 drawn at 20.0 ticks/s.
+
+**Nobody has looked at it.** Whether the tiles read as smoother rather than as
+different, and whether a creature lit per pixel still looks like itself, is the
+question. Leave everything else at its default while judging it.
+
+### A clipped tile is fogged at half, and that is the block on the floor
+
+Reported from play near save 3 (area 2): floor polygons "darker or brighter
+depending on distance from the camera", unchanged with AO off. Not the lit colour:
+every floor face in view shares one normal and one `NormalColorCol` result.
+
+**The cause is the emitter after the view-space clipper.** `func_800302E8` fogs
+each surviving record at **`IR0 >> 1`**, where both tile transforms (`func_8002E7CC`
+for the near tiles, `func_8002E650` for the far ones) fog at the knee, `IR0` below
+2800 and `3·IR0 − 5600` above it. So a tile the clipper cuts gets half its
+neighbours' fog.
+
+**Which neighbours** took a second probe to see. The near transform writes `otz`
+as 0xFFFF unless RotTransPers's flag is exactly 0x1000, which is IR0 clamped at 0.
+So **any near tile with a fogged corner fails the `z == -1` test and is clipped**,
+and no unclipped near corner carries fog at all. Its neighbours at a fogged
+distance are the far tiles, `func_8002FECC`. The first diagnosis's "unclipped"
+column was those far tiles.
+
+**Fixed as an enhancement, off by default** (`EvenFog`, `KF2_EVENFOG=1`, Video ▸
+Enhancements ▸ *Even fog*). After `func_800302E8` returns,
+`PolyAssembler.Clipped` rewrites each emitted `POLY_GT3`'s three corner colours from
+the lit colour and the near curve of each record's `IR0` (`+0x14`), or no fog when
+`FogMode >= 32000`. The arithmetic is DPCS's own, done in C# with no GTE register
+written; checked against `Gte.Dpcs` itself on every clipped corner, 0 of about 50k
+a window differed. A packet past the buffer's end is left alone, as
+`LightClipped` does. It only runs from the C# assembler, so it needs Fast geometry,
+and it stands down under `KF2_POLYASM=verify`: with `KF2_EVENFOG=1` verify reads 0
+RAM, register and GTE mismatches in every routine.
+
+Measured at save 3 during the autostart load, with the probe spinning the base
+yaw a full turn every ten seconds so every direction is sampled. Brightness is
+corner R over the face's lit R (x1000), then the fog weight. Only far tiles drawn
+under the same DQA are compared (below):
+
+| view Z | far tiles | clipped, the game's | clipped, with the fix |
+|---|---|---|---|
+| 8.0k | 987.3, 32 | 990.0, 16 | 986.5, 32 |
+| 8.2k | 958.1, 154 | 977.2, 76 | 958.6, 154 |
+| 8.6k | 902.5, 383 | 947.3, 193 | 900.5, 385 |
+| 9.2k | 826.9, 692 | 908.8, 346 | 826.5, 692 |
+| 9.5k | 792.8, 830 | 897.3, 414 | 795.5, 828 |
+
+Every 100-unit bin from 8.0k to 9.5k agrees within about 2 on that scale. Below
+8k both paths are unfogged. **Per-pixel lighting** records a refogged packet with
+the same curve as a tile (`CurveKnee`, or `CurveNone` in far mode), not `CurveHalf`.
+A face with every corner unfogged is no longer recorded, as a tile's is not.
+`KF2_PERPIXEL_PROBE=2` over the same run: 2.39M corners, **0 off by 2 or more**,
+and no `curve3` left.
+
+### Fog changes at a tile edge
+
+**Fog is not global: every map tile names its own light record.** In the same runs
+as above, some of `func_8002FECC`'s corners were drawn with DQA −10000 instead of
+−12800, and at the same view Z they were much darker (8.2k: 693, fog 1239).
+`func_80031950(half, &position, flags)` draws one half of one tile. It reads the
+half's byte `+4 & 0x3F` as an index into the `0x68`-stride records at
+`0x801930F0`. It loads that record's light matrix for the half's quarter turns
+(`+2 & 3`, 0x14 bytes each), its colour matrix at `+0x50` and back colour at `+0x62`.
+It passes the `+0x66` word to `func_8002DDDC`, which stores it as `FogMode` and calls
+`SetFogNear((word & 0x7FFF) >> 1, 200)`. So DQA is `-(word/2)·320/200` and DQB is
+always 1.25. Only then do the tile assemblers run. Near save 3, the room carries
+16000 (DQA −12800, fog from about 8k) and the corridor under the arch 12500 (DQA
+−10000, fog from about 6.25k). The step between them follows the tile grid.
+
+Reported from play with only the clipped fix in: "the area under the arch is
+noticeably darker than the surrounding area in an unnatural way". Removing the half
+fog had made it plainer, because the corridor's clipped tiles were no longer drawn
+lighter than authored.
+
+**Blended as the second half of `EvenFog`** (`KF2_EVENFOG_BLEND=0` keeps the hard
+edge). A pre and post hook on `func_80031950` hold the half being drawn, but only
+while one of its eight neighbours' records carries a different fog word, so most
+tiles pay one lookup. Inside that window, both tile transforms and the clipped
+refog compute each vertex's fog weight bilinearly between the four tile centres
+around it: the tile's own at its centre, half and half at an edge, a quarter each
+at a corner. A neighbour's weight is its own word's curve (near or far, as that
+transform picks) at its own IR0. That IR0 comes from the vertex's SZ3 through the
+GTE's own divide: `Gte.DepthQuotient` is `0049`, the depth-cue half of `Rtp`'s
+`Divide` with no flag raised, and the port applies the neighbour's DQA to it.
+Things the geometry forced:
+
+- **The mesh is centred on the tile and turned by the half's quarter turns**
+  (`func_80014B88`: turn 1 maps local `(x, z)` to map `(z, −x)`, 2 to `(−x, −z)`,
+  3 to `(−z, x)`). Its edge vertices sit at **±1034**, ten units past the tile's
+  own ±1024, so neighbouring meshes overlap. Both sides clamp at 1024 to get the
+  same half-and-half weight.
+- **An empty half (model ≥ 240) or off the map has no record, so it drops out** and
+  the remaining tiles share its weight. Treating it as "the drawing tile's own"
+  looked harmless and was not. Two tiles meeting at a corner beside the same empty
+  half gave it their two different words, and the corner still stepped by up to 278.
+- **Per-pixel lighting records a blended vertex as `CurveWord`**, the weight
+  itself, since no single curve describes a mix of four.
+
+Measured at save 3 during the autostart load, holding the view at eight headings
+for three seconds each. The probe matched world points that two different tiles
+both transform (edges clamped to ±1024, view Z within 2) and compared their fog
+weights:
+
+| | points compared | differ by 0-1 | 2-4 | 5-50 | 51+ | worst |
+|---|---|---|---|---|---|---|
+| hard edge (`KF2_EVENFOG_BLEND=0`) | 73.1k | 66.8k | 1.1k | 0 | 5.2k | 1482 |
+| blended, empty halves as own | 86.6k | 82.9k | 1.1k | 0 | 2.6k | 278 |
+| blended, empty halves dropped | 74.1k | 73.0k | 1.1k | 2 | **0** | 9 |
+
+What is left is one unit of SZ3: each tile rounds its own translation, so the same
+point projects a unit apart on two tiles. The recomputed IR0 under the tile's own
+word equalled the GTE's on every vertex checked (about 1.2M in one run), which is what
+confirms the DQA formula. `KF2_PERPIXEL_PROBE=2`: 2.16M corners, 0 off by 2.
+Verify with `KF2_EVENFOG=1`: 0 RAM, register and GTE mismatches in all seven
+routines. Uncapped at save 3's resting view: 327-328 fps off, 329-331 on. No
+record edge is in view there, so that only shows the idle cost is nothing.
+
+Looked at after the blend: "looks good".
+
+### The light colour changes at the same edge
+
+The same probe dumped both records. Room record #16 (fog 16000) and corridor #0
+(12500) have identical light matrices and back colour (`0x78,0x78,0x78`). Their
+colour matrices differ: `0x0933`/`0x0B80` against `0x0CCB`/`0x0FFE`, the
+corridor's about 39% brighter. The tile assemblers light a whole face once, with the
+drawing tile's record, so the light steps at the tile edge just as the fog did.
+
+**The game blends lighting itself, for objects.** `func_80032588` takes two records
+and a weight. It mixes their colour matrices with `func_80015930` into a stack matrix
+for `SetColorMatrix`, and their fog word and each back-colour byte with
+`func_800158C8`, which is `a + ((b − a)·t >> 12)`. It does not mix the light
+matrix: it multiplies one record's by the object's rotation. So a blend across tile
+edges follows the game's own recipe rather than inventing one.
+
+**Blended as `KF2_EVENLIGHT=1`** (Video ▸ Enhancements ▸ *Even lighting*, off by
+default), a separate switch from *Even fog* and usable without it. The same
+`func_80031950` window marks a tile whose neighbours' colour matrix or back colour
+differ (`+0x50` to `+0x64`). Then each face corner is lit with the four records'
+colour matrix and back colour (`byte << 4`, as `SetBackColor` loads it) mixed on
+the same bilinear weights and empty-half rule as the fog. The tile's own light
+matrix is used for its quarter turns, followed by NormalColorCol's arithmetic
+(`LightStage`, then `(RGB·IR << 4) >> 12 >> 4`) with no register touched. Such a
+face gets a colour per corner instead of one. The fill writes each corner's colour
+before its depth cue. The clipped path lights each record by its interpolated local
+position and rewrites the packet: fogged on the tiles' curve under *Even fog*, at
+the emitter's own `IR0 >> 1` without it. Per-pixel lighting records the per-corner
+colours.
+
+Measured at save 3 over the same eight-heading sweep, with both switches on and
+with *Even lighting* alone:
+
+- recomputing a corner with only the tile's own record matched the GTE's colour on
+  every corner checked (about 150k a window, 0 differ), which is what confirms the
+  matrix layouts and the arithmetic;
+- world points two tiles share with the same world normal: up to 28k a window,
+  **0** differ by 2 or more in any channel, worst 0;
+- about 73% of the corners on marked tiles came out blended at yaw 0 and 512;
+- `KF2_PERPIXEL_PROBE=2`: 1.9M corners, 0 off by 2;
+- verify with both on: 0 RAM, register and GTE mismatches in all seven routines, and
+  nothing blended.
+
+Its cost was not measured with an edge in view.
+
+Looked at, both switches on, at the arch near save 3: "looks good". Both still ship
+off, as enhancements of the game's own behaviour.
 
 ## Dithering: one flag, and it lives in the draw environment
 

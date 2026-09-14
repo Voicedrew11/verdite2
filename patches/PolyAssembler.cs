@@ -251,11 +251,16 @@ public static partial class PolyAssembler
         public readonly ref byte Ram;
         public uint Lim, Epoch, Light, Ot, Desc;
         public bool Hoisted;
+        // Per-pixel lighting wants this call's packets recorded, and the BK/LCM
+        // generation they are lit with.
+        public readonly bool Lighting;
+        public int LightGen;
 
         public Frame(PSMemory mem)
         {
             Mem = mem;
             Ram = ref Unsafe.AsRef(in MemoryMarshal.GetReference(mem.Ram));
+            Lighting = LightingOn();
             Refresh();
         }
 
@@ -347,6 +352,7 @@ public static partial class PolyAssembler
         uint verts = mem.ReadU32(VertexBase);
         c.S0 = mesh; c.S2 = header; c.S7 = verts;
         c.RA = 0x800305DCu;
+        _cacheSerial++;
         KingsField2.func_8002E7CC(c, mem);
 
         uint face = mem.ReadU32(header + 0x10u) + 0xCu;
@@ -442,14 +448,18 @@ public static partial class PolyAssembler
         W16(ref fr, pkt + 0x24u, R16(ref fr, f + 8u));
         W16(ref fr, pkt + 0x30u, R16(ref fr, f + 0xCu));
 
-        uint colour = Light(ref fr, normals + R16(ref fr, f + 0x10u));
-        Fog(ref fr, colour, p0, pkt + 0x04u);
-        Fog(ref fr, colour, p1, pkt + 0x10u);
-        Fog(ref fr, colour, p2, pkt + 0x1Cu);
-        Fog(ref fr, colour, p3, pkt + 0x28u);
+        uint normal = normals + R16(ref fr, f + 0x10u);
+        uint colour = Light(ref fr, normal);
+        uint c0 = colour, c1 = colour, c2 = colour, c3 = colour;
+        if (_tileLight) TileColours(mem, normal, colour, 4, p0, p1, p2, p3, out c0, out c1, out c2, out c3);
+        Fog(ref fr, c0, p0, pkt + 0x04u);
+        Fog(ref fr, c1, p1, pkt + 0x10u);
+        Fog(ref fr, c2, p2, pkt + 0x1Cu);
+        Fog(ref fr, c3, p3, pkt + 0x28u);
 
         W8(ref fr, pkt + 3u, 0x0C);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x3Cu));
+        if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c3, 4, p0, p1, p2, p3);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u)
              + (short)R16(ref fr, p3 + 4u) + (short)R16(ref fr, p2 + 4u);
@@ -510,13 +520,17 @@ public static partial class PolyAssembler
         W16(ref fr, pkt + 0x18u, R16(ref fr, f + 4u));
         W16(ref fr, pkt + 0x24u, R16(ref fr, f + 8u));
 
-        uint colour = Light(ref fr, normals + R16(ref fr, f + 0x0Cu));
-        Fog(ref fr, colour, p0, pkt + 0x04u);
-        Fog(ref fr, colour, p1, pkt + 0x10u);
-        Fog(ref fr, colour, p2, pkt + 0x1Cu);
+        uint normal = normals + R16(ref fr, f + 0x0Cu);
+        uint colour = Light(ref fr, normal);
+        uint c0 = colour, c1 = colour, c2 = colour;
+        if (_tileLight) TileColours(mem, normal, colour, 3, p0, p1, p2, 0u, out c0, out c1, out c2, out _);
+        Fog(ref fr, c0, p0, pkt + 0x04u);
+        Fog(ref fr, c1, p1, pkt + 0x10u);
+        Fog(ref fr, c2, p2, pkt + 0x1Cu);
 
         W8(ref fr, pkt + 3u, 0x09);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x34u));
+        if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c0, 3, p0, p1, p2, 0u);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u) + (short)R16(ref fr, p2 + 4u);
     }
@@ -618,7 +632,14 @@ public static partial class PolyAssembler
         mem.WriteU32(sp + 0x10u, (word >> 24) & 2u);
         c.A1 = normals + normal;
         c.RA = 0x80030C38u;
+        bool lighting = LightingOn();
+        // Verify compares against the recompiled assembler, which fogs at half.
+        bool refog = EvenFog.Enabled && _mode != Mode.Verify;
+        bool rewrite = refog || _tileLight;
+        uint before = lighting || rewrite ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
         KingsField2.func_800302E8(c, mem);
+        if (rewrite) RewriteClipped(mem, before, normals + normal, refog);
+        if (lighting) LightClipped(mem, before, normals + normal, refog);
     }
 
 
@@ -776,6 +797,7 @@ public static partial class PolyAssembler
         uint normals = mem.ReadU32(header + 8u) + 0xCu + mem.ReadU32(ModelTable);
         c.S0 = header; c.S2 = ModelTable;
         c.RA = 0x8002FF28u;
+        _cacheSerial++;
         KingsField2.func_8002E650(c, mem);
 
         uint count = mem.ReadU32(header + 0x14u);
@@ -869,7 +891,8 @@ public static partial class PolyAssembler
             Gte.Write(0, mem.ReadU32(src));
             Gte.Write(1, mem.ReadU32(src + 4u));
             Gte.Rtps(12, false);
-            mem.WriteU32(dst, Gte.Read(14));
+            uint sxy = Gte.Read(14);
+            mem.WriteU32(dst, sxy);
             int p = (int)Gte.Read(8);
             W16(ref fr, dst + 4u, (ushort)((int)Gte.Read(19) >> 2));
             int fog = curve switch
@@ -878,7 +901,9 @@ public static partial class PolyAssembler
                 1 => Math.Max(p - 0x320, 0) << 1,
                 _ => p < 2800 ? p : ((p - 0xAF0) << 1) + p,
             };
+            bool blended = TileVertexFog(mem, src, fog, near: false, out fog);
             W16(ref fr, dst + 6u, (ushort)fog);
+            if (fr.Lighting) NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : (uint)curve, blended);
             src += 8u;
             dst += 8u;
         }
@@ -909,12 +934,17 @@ public static partial class PolyAssembler
             Gte.Write(0, mem.ReadU32(src));
             Gte.Write(1, mem.ReadU32(src + 4u));
             Gte.Rtps(12, false);
-            mem.WriteU32(dst, Gte.Read(14));
+            uint sxy = Gte.Read(14);
+            mem.WriteU32(dst, sxy);
             int p = (int)Gte.Read(8);
             uint flag = Gte.ReadControl(31);
             ushort otz = (ushort)((int)Gte.Read(19) >> 2);
             W16(ref fr, dst + 4u, flag == 0x1000u ? otz : (ushort)0xFFFF);
-            W16(ref fr, dst + 6u, far ? (ushort)0 : (ushort)(p < 2800 ? p : ((p - 0xAF0) << 1) + p));
+            int fog = far ? 0 : p < 2800 ? p : ((p - 0xAF0) << 1) + p;
+            bool blended = TileVertexFog(mem, src, fog, near: true, out fog);
+            W16(ref fr, dst + 6u, (ushort)fog);
+            if (fr.Lighting)
+                NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : far ? GteLightMap.CurveNone : GteLightMap.CurveKnee, blended);
             src += 8u;
             dst += 8u;
         }

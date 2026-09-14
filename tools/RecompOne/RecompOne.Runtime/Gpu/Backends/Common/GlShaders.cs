@@ -257,6 +257,9 @@ internal static class GlShaders
         layout(location = 4) in vec2  inUV;
         layout(location = 5) in float inW;
         layout(location = 6) in float inZ;
+        layout(location = 7) in vec3  inLit;
+        layout(location = 8) in float inFog;
+        layout(location = 9) in uint  inLight;
 
         // vUV is the one thing that wants correcting: handing gl_Position a real W
         // makes the rasterizer interpolate it in 1/W, which is exactly the
@@ -271,6 +274,10 @@ internal static class GlShaders
         flat out int   texMode;
         flat out int   vDither;
         flat out int   vRepClut;
+        // 0048. Both are affine across the polygon on screen, as the colour was.
+        noperspective out vec3 vLit;
+        noperspective out float vFog;
+        flat out uint vLight;
 
         uniform vec2 uVertexOffset;
         uniform vec2 uPosBias;
@@ -292,6 +299,9 @@ internal static class GlShaders
             int inTexpage = int(inTexpageF + 0.5);
 
             vColor = vec4(inColorF, 0.0) / 255.0;
+            vLit = inLit;
+            vFog = inFog;
+            vLight = inLight;
             vDither = (inTexpage >> 10) & 1;
             vRepClut = (inTexpage >> 12) & 1;
 
@@ -322,6 +332,9 @@ internal static class GlShaders
         flat in int   texMode;
         flat in int   vDither;
         flat in int   vRepClut;
+        noperspective in vec3 vLit;
+        noperspective in float vFog;
+        flat in uint vLight;
 
         layout(location = 0, index = 0) out vec4 FragColor;
         layout(location = 0, index = 1) out vec4 BlendColor;
@@ -342,6 +355,10 @@ internal static class GlShaders
         uniform int   uScale;
         uniform vec2  uPosBias;
         uniform float uAniso;
+        uniform vec3  uLightBk;
+        uniform vec3  uLcmR;
+        uniform vec3  uLcmG;
+        uniform vec3  uLcmB;
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -379,6 +396,30 @@ internal static class GlShaders
             return fetch(ivec2(pageBase.x + uv.x, pageBase.y + uv.y));
         }
 
+        // 0048. The vertex colour, made again at this pixel from what made it: a lit
+        // colour, or a light colour and the three light dots, then the depth cue's
+        // weight from the raw MAC0 through the game's own clamp and curve. Floor,
+        // because the GTE truncates.
+        ivec3 shade8() {
+            if (vLight == 0u) return ivec3(vColor.rgb * 255.0 + 0.5);
+            uint mode = vLight >> 24;
+            vec3 lit = vLit;
+            if ((mode & 0x80u) != 0u) {
+                vec3 rgbc = vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u));
+                vec3 a = clamp(vLit, 0.0, 32767.0);
+                vec3 ir = clamp(uLightBk + vec3(dot(uLcmR, a), dot(uLcmG, a), dot(uLcmB, a)) / 4096.0, 0.0, 32767.0);
+                lit = rgbc * ir / 4096.0;
+            }
+            uint curve = mode & 7u;
+            float ir0 = clamp(vFog, 0.0, 4096.0);
+            float w = curve == 1u ? max(ir0 - 800.0, 0.0) * 2.0
+                    : curve == 2u ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0)
+                    : curve == 3u ? ir0 * 0.5
+                    : curve == 4u ? vFog
+                    : 0.0;
+            return ivec3(clamp(floor(lit * (1.0 - w / 4096.0)), 0.0, 255.0));
+        }
+
         uniform float uTrueColor;
         vec3 quant5(ivec3 c8) {
             // True color: keep all eight bits, so the smooth shaded gradient is not
@@ -404,11 +445,12 @@ internal static class GlShaders
             // costs it nothing. Assigning this also turns off early-Z, so a
             // punch-through discard cannot occlude whatever is behind the hole.
             gl_FragDepth = vDepth > 0.0 ? vDepth : 1.0;
+            ivec3 c8in = shade8();
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 
             if (texMode == 4) {
                 if (uOpaqueDepth != 0) discard;
-                FragColor = vec4(quant5(ivec3(vColor.rgb * 255.0 + 0.5)), uSetMask);
+                FragColor = vec4(quant5(c8in), uSetMask);
                 BlendColor = uBlend;
                 return;
             }
@@ -416,7 +458,7 @@ internal static class GlShaders
             if (texMode == 5) {
                 vec4 img = texture(uExtTex, vUV);
                 if (img.a < 0.5 || uOpaqueDepth != 0) discard;
-                ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * ivec3(vColor.rgb * 255.0 + 0.5)) >> 7;
+                ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7;
                 FragColor = vec4(quant5(e8), uSetMask);
                 BlendColor = uBlend;
                 return;
@@ -437,7 +479,7 @@ internal static class GlShaders
                 vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
                 vec4 img = texture(uRepTex, t);
                 if (img.a < 0.5) discard;
-                ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * ivec3(vColor.rgb * 255.0 + 0.5)) >> 7;
+                ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7;
                 float stp = img.a < 0.95 ? 1.0 : 0.0;
                 if (uOpaqueDepth != 0 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
@@ -522,7 +564,7 @@ internal static class GlShaders
 
             if (vRepClut != 0 && texMode != 2) {
                 if (texel.a < 0.5) discard;
-                ivec3 e8 = (ivec3(texel.rgb * 255.0 + 0.5) * ivec3(vColor.rgb * 255.0 + 0.5)) >> 7;
+                ivec3 e8 = (ivec3(texel.rgb * 255.0 + 0.5) * c8in) >> 7;
                 float stp = texel.a < 0.95 ? 1.0 : 0.0;
                 if (uOpaqueDepth != 0 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
@@ -533,7 +575,7 @@ internal static class GlShaders
             if (texel.rgb == vec3(0.0) && texel.a < 0.5) discard;
             if (uOpaqueDepth != 0 && texel.a >= 0.5) discard;
             ivec3 t8 = ivec3(texel.rgb * 31.0 + 0.5) << 3;
-            ivec3 c8 = (t8 * ivec3(vColor.rgb * 255.0 + 0.5)) >> 7;
+            ivec3 c8 = (t8 * c8in) >> 7;
             FragColor = vec4(quant5(c8), max(texel.a, uSetMask));
             BlendColor = texel.a >= 0.5 ? uBlend : uBlendOpaque;
         }
@@ -862,6 +904,7 @@ internal static class GlShaders
     static readonly (uint Index, string Name)[] PrimAttribs =
     [
         (0, "inPos"), (1, "inColorF"), (2, "inClutF"), (3, "inTexpageF"), (4, "inUV"), (5, "inW"), (6, "inZ"),
+        (7, "inLit"), (8, "inFog"), (9, "inLight"),
     ];
 
     public static uint BuildPrim(GL gl, string vsSrc, string fsSrc, string name)

@@ -16,6 +16,10 @@ public struct HleVertex
     // source, Depth/Transform for PGXP's.
     public float Depth;
     public int Transform;
+    // 0048. GteLightMap's inputs; Light 0 draws the vertex colour as before.
+    public float Lx, Ly, Lz, Fog;
+    public uint Light;
+    public int LightGen;
 }
 
 public struct PrimFlags
