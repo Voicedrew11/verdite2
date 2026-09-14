@@ -119,9 +119,15 @@ public static class ZBuffer
     /// <c>map</c> for the address map's.</summary>
     static bool _packetSource = true;
 
-    public static void Configure(string? on, string? probe, string? threshold = null, string? source = null)
+    /// <summary>KF2_ZBUFFER_BIAS and KF2_ZBUFFER_SLOPE: the coplanar tolerance.</summary>
+    static float? _forcedBias, _forcedSlope;
+
+    public static void Configure(string? on, string? probe, string? threshold = null, string? source = null,
+                                 string? bias = null, string? slope = null)
     {
         _packetSource = source?.Trim().ToLowerInvariant() != "map";
+        _forcedBias = ParseFloat(bias);
+        _forcedSlope = ParseFloat(slope);
 
         if (!string.IsNullOrWhiteSpace(on))
             _forced = !on.Equals("0", StringComparison.Ordinal);
@@ -155,6 +161,8 @@ public static class ZBuffer
         _windowStart = Now;
         GtePacketDepth.SetRange(PrimBuffers, PrimBufferBytes);
         SyncSource();
+        GteDepth.DepthBias = _forcedBias ?? GteDepth.DepthBias;
+        GteDepth.DepthSlope = _forcedSlope ?? GteDepth.DepthSlope;
 
         // Default is off: RuntimeReadyEvent is the first and only place the
         // setting is decided. ConfigManager only loads inside HostWindow.Initialize,
@@ -170,6 +178,7 @@ public static class ZBuffer
             SyncSource();
             Console.WriteLine($"[KF2] zbuffer: {(Enabled ? "on" : "off (ordering table)")}" +
                               $", depth from {(!_packetSource ? "the address map" : GtePacketDepth.Enabled ? "the assemblers" : "the assemblers, which are off")}" +
+                              $", tolerance {GteDepth.DepthBias:0.##} SZ + {GteDepth.DepthSlope:0.##} px of slope" +
                               $", clear threshold {(GteDepth.DepthClearThreshold <= 0f ? "off" : GteDepth.DepthClearThreshold.ToString("0"))}");
         });
 
@@ -183,6 +192,10 @@ public static class ZBuffer
             Attach();
         });
     }
+
+    static float? ParseFloat(string? s) =>
+        float.TryParse(s, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float f)
+            ? Math.Max(f, 0f) : null;
 
     static bool _armQueued;
 
@@ -260,7 +273,11 @@ public static class ZBuffer
             long hits = GtePacketDepth.Hits, misses = GtePacketDepth.Misses;
             Console.WriteLine($"[KF2] zbuffer: {GtePacketDepth.Recorded / window:F0} packet depths recorded/s, " +
                               $"{hits / window:F0} polygons found theirs/s, {misses / window:F0} had none/s " +
-                              $"({ZPct(hits, hits + misses)}), {PolyAssembler.DepthClipMismatches / window:F0} clipped packets unmatched/s");
+                              $"({ZPct(hits, hits + misses)}), {PolyAssembler.DepthClipMismatches / window:F0} clipped packets unmatched/s, " +
+                              $"{GteDepth.ZPrepasses / window:F0} depth prepasses/s, " +
+                              $"corners unrounded {PolyAssembler.DepthUnrounded / window:F0}/s, left whole {PolyAssembler.DepthWhole / window:F0}/s");
+            GteDepth.ZPrepasses = 0;
+            PolyAssembler.DepthUnrounded = PolyAssembler.DepthWhole = 0;
             GtePacketDepth.ResetCounters();
             PolyAssembler.DepthClipMismatches = 0;
         }

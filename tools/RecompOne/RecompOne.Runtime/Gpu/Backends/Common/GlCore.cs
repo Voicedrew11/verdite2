@@ -94,7 +94,7 @@ public sealed class GlCore : IGpuBackend
     int _uTexWindow, _uBlend, _uBlendOpaque, _uSetMask, _uCheckMask, _uPosBias, _uFbInv;
     int _uTrueColor;
     int _uAniso;
-    int _uOpaqueDepth;
+    int _uOpaqueDepth, _uDepthBias, _uDepthSlope;
     // The true-color flag the live display targets were built with. When it drifts
     // from GteDepth.TrueColor the targets carry the wrong pixel format, so they are
     // torn down at the next present and rebuilt (their content survives in VRAM).
@@ -146,6 +146,8 @@ public sealed class GlCore : IGpuBackend
         _uTrueColor = _gl.GetUniformLocation(_progPrim, "uTrueColor");
         _uAniso = _gl.GetUniformLocation(_progPrim, "uAniso");
         _uOpaqueDepth = _gl.GetUniformLocation(_progPrim, "uOpaqueDepth");
+        _uDepthBias = _gl.GetUniformLocation(_progPrim, "uDepthBias");
+        _uDepthSlope = _gl.GetUniformLocation(_progPrim, "uDepthSlope");
         _uLightBk = _gl.GetUniformLocation(_progPrim, "uLightBk");
         _uLcmR = _gl.GetUniformLocation(_progPrim, "uLcmR");
         _uLcmG = _gl.GetUniformLocation(_progPrim, "uLcmG");
@@ -1175,6 +1177,25 @@ public sealed class GlCore : IGpuBackend
                 if (_lightAttribs) _gl.EnableVertexAttribArray(i); else _gl.DisableVertexAttribArray(i);
         }
 
+        // 0051. A tested batch draws against a depth pulled towards the camera, so a
+        // coplanar overlap goes to the later table entry. An opaque one first writes
+        // its true depths with colour off, which keeps crossings inside the batch
+        // resolved, then draws colour without writing.
+        bool zBias = GteDepth.ZBuffer && (_kZMode == 1 || _kZMode == 2)
+                  && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
+        SetDepthBias(zBias);
+        if (zBias && _kZMode == 1)
+        {
+            SetDepthBias(false);
+            _gl.Disable(EnableCap.Blend);
+            _gl.ColorMask(false, false, false, false);
+            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+            _gl.ColorMask(true, true, true, true);
+            _gl.DepthMask(false);
+            SetDepthBias(true);
+            GteDepth.ZPrepasses++;
+        }
+
         if (_legacy)
         {
             _gl.Disable(EnableCap.Blend);
@@ -1218,6 +1239,7 @@ public sealed class GlCore : IGpuBackend
                 _gl.DepthFunc(GteDepth.ZBuffer && _kZMode == 2 ? DepthFunction.Lequal : DepthFunction.Always);
                 _gl.DepthMask(true);
                 _gl.Uniform1(_uOpaqueDepth, 1);
+                SetDepthBias(false);
                 _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
                 _gl.Uniform1(_uOpaqueDepth, 0);
                 _gl.ColorMask(true, true, true, true);
@@ -1240,6 +1262,12 @@ public sealed class GlCore : IGpuBackend
     }
 
     void SetBlend(float src, float dst) => _gl.Uniform4(_uBlend, src, src, src, dst);
+
+    void SetDepthBias(bool on)
+    {
+        if (_uDepthBias >= 0) _gl.Uniform1(_uDepthBias, on ? GteDepth.DepthBias / 65536f : 0f);
+        if (_uDepthSlope >= 0) _gl.Uniform1(_uDepthSlope, on ? GteDepth.DepthSlope : 0f);
+    }
 
     void SetScaleUniform(uint prog)
     {

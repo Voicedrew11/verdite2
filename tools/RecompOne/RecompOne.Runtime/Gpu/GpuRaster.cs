@@ -354,7 +354,8 @@ public sealed partial class Gpu
                     if (inv <= 0f) continue;
                     zpix = 1f / inv;
                     zi = y * VramWidth + x;
-                    if (zpix > _zbuf![zi]) { GteDepth.ZRejects++; continue; }
+                    // 0051. Within the tolerance the later table entry wins.
+                    if (zpix - GteDepth.DepthBias > _zbuf![zi]) { GteDepth.ZRejects++; continue; }
                 }
 
                 int r, g, bl;
@@ -394,7 +395,7 @@ public sealed partial class Gpu
                 // so a hole in the texture does not occlude whatever is behind it.
                 // Semi-transparent tests against Z but does not write it, so two
                 // overlapping additives still blend in table order.
-                if (wrote && useZ && !semi) _zbuf![zi] = zpix;
+                if (wrote && useZ && !semi && zpix < _zbuf![zi]) _zbuf[zi] = zpix;
             }
         }
     }

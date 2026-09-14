@@ -559,6 +559,17 @@ Four files in the directory have no entry below:
   sub-pixel fraction still come from the address map. **No recompile.** See "The
   assemblers write the depth" in `docs/RENDERING.md`.
 
+- `0051-coplanar-depth-tolerance.patch` — a tested fragment compares a depth pulled
+  towards the camera by `GteDepth.DepthBias` SZ units plus `DepthSlope` times its
+  per-pixel slope (`uDepthBias`, `uDepthSlope` in both prim shaders), so two
+  coplanar surfaces go to the later table entry instead of fighting. The bias is
+  never written: `GlCore.Flush` draws an opaque tested batch's true depth first with
+  colour masked, then its colour with the bias and no depth write
+  (`GteDepth.ZPrepasses`). The software rasterizer tests with the constant and keeps
+  the nearer depth. At zero bias and slope the shader output is bit-identical to
+  before. **No recompile.** See "Coplanar panels fought at the seam" in
+  `docs/RENDERING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

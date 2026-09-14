@@ -179,6 +179,12 @@ public static class GteDepth
     /// </summary>
     public static float DepthClearThreshold;
 
+    /// <summary>0051. How far behind the stored depth a fragment may be and still draw,
+    /// so two coplanar surfaces go to the later table entry instead of fighting: a
+    /// constant in SZ units, plus a multiple of the depth's change across one pixel
+    /// (GL only). Depths are still written unbiased.</summary>
+    public static float DepthBias = 1f, DepthSlope = 0.5f;
+
     /// <summary>How many times the threshold above has fired. A rate rather than a
     /// picture: several a frame means the threshold is too small and the buffer is
     /// being thrown away, none at all means it is doing nothing.</summary>
@@ -541,6 +547,9 @@ public static class GteDepth
     /// test. The hardware path cannot count pixels without reading the buffer
     /// back, so <see cref="ZRejects"/> stays at zero there.</summary>
     public static long ZTris, ZSkipped, ZRejects;
+
+    /// <summary>0051. Opaque batches that wrote their true depth before their colour.</summary>
+    public static long ZPrepasses;
 
     public static void ResetZCounters()
     {

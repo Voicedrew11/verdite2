@@ -27,18 +27,42 @@ public static partial class PolyAssembler
     /// <summary>Clipped fans whose packet did not carry its records' screen words.</summary>
     public static long DepthClipMismatches;
 
+    /// <summary>Corners kept unrounded, and corners left at the game's whole Z.</summary>
+    public static long DepthUnrounded, DepthWhole;
+
     static bool DepthOn() => GtePacketDepth.Active && !InHud && !InArm;
 
-    /// <summary>The transforms, after both cache words are written.</summary>
+    /// <summary>The transforms, after both cache words are written; <paramref name="src"/>
+    /// is the SVECTOR RotTransPers just projected.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static void NoteDepth(PSMemory mem, uint dst, uint sxy)
+    static void NoteDepth(PSMemory mem, uint dst, uint sxy, uint src)
     {
         uint i = (dst - VertexCache) >> 3;
         if (i >= CacheSlots) return;
         ref var e = ref _cacheDepth[i];
         e.W0 = sxy;
         e.W1 = Peek32(mem, dst + 4u);
-        e.Z = (int)Gte.Read(19);
+        e.Z = Unrounded(mem, src, (int)Gte.Read(19));
+    }
+
+    /// <summary>
+    /// The view Z of an SVECTOR under the GTE's current rotation and translation, before
+    /// RotTrans drops its low twelve bits. Two panels in one plane under different tile
+    /// translations round their corners differently, and that is enough to make them
+    /// fight. <paramref name="whole"/> is the rounded Z the game computed; anything more
+    /// than a unit and a half from it means the matrix has moved, and it is kept instead.
+    /// </summary>
+    static float Unrounded(PSMemory mem, uint v, int whole)
+    {
+        if (whole <= 0) return 0f;
+        uint w0 = Peek32(mem, v), w1 = Peek32(mem, v + 4u);
+        uint c3 = Gte.ReadControl(3);
+        long m = (long)(short)c3 * (short)w0 + (long)(short)(c3 >> 16) * (short)(w0 >> 16)
+               + (long)(short)Gte.ReadControl(4) * (short)w1;
+        float z = (float)((int)Gte.ReadControl(7) + m / 4096.0);
+        if (MathF.Abs(z - whole) <= 1.5f) { DepthUnrounded++; return z; }
+        DepthWhole++;
+        return whole;
     }
 
     /// <summary>A cached vertex's depth, if the cache still holds what our transform wrote.</summary>
@@ -86,7 +110,7 @@ public static partial class PolyAssembler
 
     /// <summary>After func_800302E8 and anything that rewrote its colours: packet k is
     /// records 0, k+1 and k+2, each at its view-space Z (+0x10), which is the SZ3 the
-    /// clipper projected it with.</summary>
+    /// clipper projected it with, unrounded from the record's SVECTOR.</summary>
     static void DepthClipped(PSMemory mem, uint before, bool record)
     {
         uint count = ClippedCount(mem, before);
@@ -106,9 +130,9 @@ public static partial class PolyAssembler
                 r.Cmd = 0;
                 continue;
             }
-            r.Z0 = (int)Peek32(mem, r0 + 0x10u);
-            r.Z1 = (int)Peek32(mem, ra + 0x10u);
-            r.Z2 = (int)Peek32(mem, rb + 0x10u);
+            r.Z0 = Unrounded(mem, r0, (int)Peek32(mem, r0 + 0x10u));
+            r.Z1 = Unrounded(mem, ra, (int)Peek32(mem, ra + 0x10u));
+            r.Z2 = Unrounded(mem, rb, (int)Peek32(mem, rb + 0x10u));
             if (r.Z0 <= 0f || r.Z1 <= 0f || r.Z2 <= 0f) { r.Cmd = 0; continue; }
             SealDepth(mem, ref r, pkt, 0x20u);
         }

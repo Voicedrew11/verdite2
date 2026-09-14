@@ -913,7 +913,7 @@ public static partial class PolyAssembler
             bool blended = TileVertexFog(mem, src, fog, near: false, out fog);
             W16(ref fr, dst + 6u, (ushort)fog);
             if (fr.Lighting) NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : (uint)curve, blended);
-            if (fr.DepthTable) NoteDepth(mem, dst, sxy);
+            if (fr.DepthTable) NoteDepth(mem, dst, sxy, src);
             src += 8u;
             dst += 8u;
         }
@@ -955,7 +955,7 @@ public static partial class PolyAssembler
             W16(ref fr, dst + 6u, (ushort)fog);
             if (fr.Lighting)
                 NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : far ? GteLightMap.CurveNone : GteLightMap.CurveKnee, blended);
-            if (fr.DepthTable) NoteDepth(mem, dst, sxy);
+            if (fr.DepthTable) NoteDepth(mem, dst, sxy, src);
             src += 8u;
             dst += 8u;
         }

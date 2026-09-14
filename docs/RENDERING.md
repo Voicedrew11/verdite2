@@ -696,9 +696,8 @@ every wall after it passes the test. `GteDepth.OtSlot != 0` is still applied. Th
 same goes for anything else these routines do not draw — a miss is painter's
 order, as it always was.
 
-**What stays open is the coplanar decal.** Two surfaces at equal depth still rely
-on `GL_LEQUAL` giving the later table entry the tie; a small per-routine bias is
-the next step if the picture shows it.
+**Coplanar surfaces are the next section.** Reported from play at once: at the seam
+between two wall panels the two quads visibly fight.
 
 Measured in area 1 at slot 2's restore point, standing, 144 fps: 17,136 packet
 depths recorded a second and 17,136 polygons finding theirs, 23,616 triangles
@@ -716,6 +715,58 @@ testing nothing. The source also feeds ambient occlusion, which shares the depth
 attachment, so the AO far-plane mask now covers everything that records nothing.
 The `KF2_ZBUFFER_PROBE=1` line reads `packet depths recorded/s, polygons found
 theirs/s, had none/s, clipped packets unmatched/s`.
+
+### Coplanar panels fought at the seam, and the tolerance that gives it back to the table
+
+**Mechanism measured; the picture has not been looked at.**
+
+Reported with a screenshot: in the seam between two wall panels, a strip where the
+two quads take turns pixel by pixel. They overlap there and lie in one plane, so the
+test is comparing two depths that should be equal. `GL_LEQUAL` gives the later table
+entry an exact tie, and an interpolated float never produces one, so it came down to
+noise. On the console the table decided it, because the later quad simply drew over.
+
+Two causes, and `0051` plus the port's half deal with both:
+
+- **The corners were whole SZ units.** RotTrans drops the low twelve bits of the
+  view Z, and two tile meshes under different translations round the same plane's
+  corners differently, tilting each panel's depth plane by up to half a unit.
+  `PolyAssembler.Unrounded` recomputes the view Z from the SVECTOR, the rotation's
+  third row and `TRZ`, `(TRZ·4096 + R3·V) / 4096` in double, for the transforms'
+  vertices and the clipper's records. A result more than 1.5 from the game's own Z
+  means the matrix moved since the projection, and the whole Z is kept instead.
+  Measured standing in area 1: 37,872 corners a second unrounded, **0 left whole**,
+  clipped fans included.
+- **The test had no tolerance.** That is what fixes it, because even exactly
+  coplanar surfaces interpolate differently across different triangles. A tested
+  fragment now compares a depth pulled towards the camera, by `GteDepth.DepthBias`
+  SZ units (1) plus `DepthSlope` (0.5) times the depth's change across a pixel
+  (`dFdx`/`dFdy`, so a grazing wall gets more). A surface within that distance of
+  what is stored draws, and the later table entry wins, as on the console.
+
+**The bias is on the test, never on the write.** If both surfaces wrote biased
+depths they would tie again. GL cannot test one value and write another, so an
+opaque tested batch is drawn twice. **The depth goes first**: true depth, colour
+masked, `GL_LEQUAL`, written. Colour follows with the bias and no depth write.
+Colour-first would have broken crossings *inside* one batch, which is most of a
+frame's tiles, since nothing would be written until the batch ended. Depth-first is
+a per-batch prepass, so a rock behind another in the same batch still fails against
+the nearer one's already-written depth. A semi-transparent batch tests with the bias
+and writes nothing, one pass. The AO opaque-texel pass writes, so it runs unbiased.
+The software rasterizer takes the constant only, and keeps the nearer depth when a
+fragment passes on the tolerance.
+
+The cost: 1,584 prepasses a second at 144 fps in area 1, about 11 batches a frame.
+Uncapped, 840-854 fps against 859-864 with `KF2_ZBUFFER_BIAS=0 KF2_ZBUFFER_SLOPE=0`,
+two runs each, about 1.5%.
+
+**The trade is the tolerance itself.** Anything genuinely behind by less than it
+draws over the nearer surface when it comes later in the table, so a crossing
+resolves up to about one world unit short of the true line. If the seams persist,
+raise `KF2_ZBUFFER_SLOPE` first. If crossings look shifted, lower `KF2_ZBUFFER_BIAS`.
+Whether these two panels are separate tiles' faces, as assumed, or share vertices was
+not established. If they share vertices, neither change should have been needed, and
+a seam still fighting at a generous tolerance means the cause is something else.
 
 ## PGXP: upstream's own recovery, and what taking it actually bought
 

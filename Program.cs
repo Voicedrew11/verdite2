@@ -556,6 +556,7 @@ Kf2.Subpixel.Install();
 //                          is standing in front of which, and how much of the
 //                          picture that costs
 //     KF2_ZBUFFER_SOURCE=map  depth from the address map instead of the assemblers
+//     KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  coplanar tolerance: SZ units, and pixels of slope
 //
 // Off by default where perspective correction is on -- the recovered number is
 // the same one, but the picture has not been checked by eye. Its switch is under
@@ -563,7 +564,9 @@ Kf2.Subpixel.Install();
 Kf2.ZBuffer.Configure(Environment.GetEnvironmentVariable("KF2_ZBUFFER"),
                       Environment.GetEnvironmentVariable("KF2_ZBUFFER_PROBE"),
                       Environment.GetEnvironmentVariable("KF2_ZBUFFER_THRESHOLD"),
-                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_SOURCE"));
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_SOURCE"),
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_BIAS"),
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_SLOPE"));
 Kf2.ZBuffer.Install();
 
 // Ambient occlusion -- contact shading in the corners, under the doorframes and
