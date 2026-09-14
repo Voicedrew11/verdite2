@@ -570,6 +570,13 @@ Four files in the directory have no entry below:
   before. **No recompile.** See "Coplanar panels fought at the seam" in
   `docs/RENDERING.md`.
 
+- `0052-vertex-map-peek.patch` — `GteVertexMap.Peek`, `TryGet` without the hit and
+  miss counters, so `PolyAssembler`'s backface cull can read a cached vertex's
+  fraction without moving the perspective probe's hit rate. The census behind
+  `KF2_SUBPIXEL_PROBE` (`GpuRaster.SubCensus`, `GteDepth.Census*`) arrived with it.
+  **No recompile.** See "A thin face was culled on whole pixels" in
+  `docs/RENDERING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

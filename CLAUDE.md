@@ -135,7 +135,7 @@ Start the game from the same shell you run that in, or the diagnostic socket in
 - **`KF2_SHELL=1`** — one request per line on TCP 127.0.0.1:27900, one
   single-line JSON response back: `state`, `nearby`, `load <slot>`,
   `warp <area>`, `press <button> [ms]`, `kill`, `ending [boss|kill]`,
-  `map [on|off|toggle]`. The `kf2` MCP server in `mcp/` exposes the same channel.
+  `map [on|off|toggle]`, `goto <x> <y> <z> [yaw]`. The `kf2` MCP server in `mcp/` exposes the same channel.
   `ending kill` is the form that reproduces the final-boss crash; reaching it
   needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the player on the way in.
   `press` reaches Cross but not the in-game menu's Up/Down.
@@ -164,7 +164,7 @@ what it is) live there, not here.
 | `FrameCapture`, `FrameViewerPanel` | capture one run of stage 13 and scrub it GP0 command by command on a detached software GPU: owner routine, send cost, fragments, GL batch submits and why, GPU time per batch and for AO, every runtime section, vertex-map work per routine (`0046`); Shift+F | idle until a capture; routines hooked from the first | DEVELOPMENT, "Watching a frame being built" |
 | `PolyAssembler` | `func_80030540` in C# as a replace hook, rejecting polygons the view-space clipper would clip to nothing; also `func_8002FECC` (the far map tiles' unclipped assembler), the vertex transforms `func_8002E650`/`func_8002E7CC`, `func_8002F214`/`func_8002EAEC` (the models' lit assembler) and the clipper `Clip4FTP`/`Clip3FTP`; the GTE ops they call have a fast path in the runtime (`0047`); `KF2_POLYASM=verify` diffs each against the recompiled routine, GTE included; Video ▸ Fast geometry switches them all, with the GTE fast path | on | PATCHES_AND_MODS, "The polygon assembler in C#", "The lit model assembler", "The clipper in C#", "The GTE fast path" |
 | `Perspective` | perspective-correct textures (`0009`, `0012`) | on | RENDERING, "Perspective correction" |
-| `Subpixel` | sub-pixel vertex positions (`0010`) | off | RENDERING, "Sub-pixel vertex positioning" |
+| `Subpixel` | sub-pixel vertex positions (`0010`); under it, the C# assemblers' backface cull is taken at the fractional corners (`0052`, `KF2_SUBPIXEL_CULL=0` to compare) | off | RENDERING, "Sub-pixel vertex positioning", "A thin face was culled on whole pixels" |
 | `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); Video ▸ Enhancements, with two tolerance sliders | off | RENDERING, "Z-buffer", "The assemblers write the depth" |
 | `Pgxp` | upstream's PGXP as the vertex source (`0034`-`0036`); env only | off | RENDERING, "PGXP has no control in the window" |
 | `AmbientOcclusion` | SSAO from painter's-order depth (`0040`) | off | RENDERING, "Ambient occlusion" |

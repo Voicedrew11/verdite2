@@ -105,8 +105,13 @@ public static class Subpixel
         Description = "Recovers the fraction of a pixel the GTE truncates, so vertices stop snapping.",
     };
 
-    public static void Configure(string? on, string? probe)
+    /// <summary>0052, KF2_SUBPIXEL_CULL=0 to compare: cull the C# assemblers' faces at
+    /// their fractional corners while sub-pixel is on.</summary>
+    public static bool Cull = true;
+
+    public static void Configure(string? on, string? probe, string? cull = null)
     {
+        if (cull?.Trim() == "0") Cull = false;
         if (!string.IsNullOrWhiteSpace(on))
             _forced = !on.Equals("0", StringComparison.Ordinal);
 
@@ -188,6 +193,12 @@ public static class Subpixel
         Console.WriteLine($"[KF2] subpixel: {n / window:F0} vertices/s carrying a fraction, " +
                           $"mean offset {mean:F3} px, max {GteDepth.OffsetMax:F3} px, " +
                           $"over {_frames / window:F0} frames/s");
+        Console.WriteLine($"[KF2] subpixel: {GteDepth.CensusPolys / window:F0} polys/s with every corner fractional " +
+                          $"({GteDepth.CensusTiny / window:F0} under 1 px^2), {GteDepth.CensusMixed / window:F0} mixed, " +
+                          $"{GteDepth.CensusFlipped / window:F0}/s drawn back to front; cull {(Cull ? "fractional" : "whole pixels")}, " +
+                          $"whole pixels would have culled {PolyAssembler.CullKept / window:F0}/s kept and kept {PolyAssembler.CullDropped / window:F0}/s dropped");
+        GteDepth.CensusPolys = GteDepth.CensusTiny = GteDepth.CensusMixed = GteDepth.CensusFlipped = 0;
+        PolyAssembler.CullKept = PolyAssembler.CullDropped = 0;
 
         GteDepth.ResetOffsets();
         _frames = 0;

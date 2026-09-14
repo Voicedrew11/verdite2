@@ -157,6 +157,7 @@ public sealed partial class Gpu
                 }
             Diagnostics.Profiler.End(lookup);
             Hle.GpuTrace.Sink?.Vertices(n, hits);
+            if (wantSub && GteDepth.Probe) SubCensus(v, n, quad);
         }
 
         // 0050. The depth buffer takes the assembler's record or nothing; W and the
@@ -243,6 +244,32 @@ public sealed partial class Gpu
         }
     }
     
+    // 0052. The game culls on whole pixels (NCLIP > 0 on the first three corners); count
+    // the polygons whose fractional corners wind the other way, and those with corners
+    // both with and without a fraction.
+    static void SubCensus(ReadOnlySpan<Vert> v, int n, bool quad)
+    {
+        int subs = 0;
+        for (int i = 0; i < n; i++) if (v[i].HasSub) subs++;
+        if (subs == 0) return;
+        if (subs != n) { GteDepth.CensusMixed++; return; }
+
+        GteDepth.CensusPolys++;
+        double cf = CrossF(v[0], v[1], v[2]);
+        if (Math.Abs(cf) < 2.0) GteDepth.CensusTiny++;
+        if (Cross(v[0], v[1], v[2]) > 0 && cf <= 0) GteDepth.CensusFlipped++;
+        if (quad && Cross(v[1], v[2], v[3]) < 0 && CrossF(v[1], v[2], v[3]) >= 0) GteDepth.CensusFlipped++;
+    }
+
+    static long Cross(in Vert a, in Vert b, in Vert c) =>
+        (long)(b.X - a.X) * (c.Y - a.Y) - (long)(b.Y - a.Y) * (c.X - a.X);
+
+    static double CrossF(in Vert a, in Vert b, in Vert c)
+    {
+        double ax = a.X + a.Fx, ay = a.Y + a.Fy;
+        return (b.X + b.Fx - ax) * (c.Y + c.Fy - ay) - (b.Y + b.Fy - ay) * (c.X + c.Fx - ax);
+    }
+
     // A vertex that recovered its sub-pixel position needs a finer grid than whole
     // pixels to sit on, so RasterTriangle works in 1/16ths of one whenever any
     // vertex of the triangle has a fraction to contribute -- and at shift zero,

@@ -534,13 +534,15 @@ Kf2.Perspective.Install();
 //
 //     KF2_SUBPIXEL=1        on; 0 or unset leaves vertices on whole pixels
 //     KF2_SUBPIXEL_PROBE=1  report how far vertices are actually moving
+//     KF2_SUBPIXEL_CULL=0   cull on whole pixels, as the game does (fractional corners by default)
 //
 // Off by default where perspective correction is on -- not because it is riskier,
 // the same "a miss is the old behaviour" argument covers both, but because that one
 // was measured before it became a default and this one has not been. Its switch is
 // under Video with the others.
 Kf2.Subpixel.Configure(Environment.GetEnvironmentVariable("KF2_SUBPIXEL"),
-                       Environment.GetEnvironmentVariable("KF2_SUBPIXEL_PROBE"));
+                       Environment.GetEnvironmentVariable("KF2_SUBPIXEL_PROBE"),
+                       Environment.GetEnvironmentVariable("KF2_SUBPIXEL_CULL"));
 Kf2.Subpixel.Install();
 
 // Z-buffer. The GPU is handed polygons with no depth in them, so occlusion is

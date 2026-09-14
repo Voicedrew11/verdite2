@@ -260,6 +260,20 @@ public static class GteVertexMap
         Publish(value, e.Z, e.Fx, e.Fy, e.Clipped, false);
     }
 
+    /// <summary>0052. <see cref="TryGet"/> without the hit and miss counters, for the
+    /// port's cull to ask about a word it has not stored anywhere yet.</summary>
+    public static bool Peek(uint phys, uint word, out Attr a)
+    {
+        a = default;
+        if (!Active || phys == 0) return false;
+        int idx = Index(phys);
+        if (!Marked(idx)) return false;
+        ref var e = ref _map![idx];
+        if (e.Value != word || _tick - e.Seq > EntryMaxAge) return false;
+        a.Z = e.Z; a.Fx = e.Fx; a.Fy = e.Fy; a.Clipped = e.Clipped;
+        return true;
+    }
+
     /// <summary>The attributes of the vertex whose coordinate the GPU just read out of
     /// <paramref name="phys"/>. <paramref name="word"/> is the word it read, and it
     /// has to match the one the attributes were recorded for — that is what makes a

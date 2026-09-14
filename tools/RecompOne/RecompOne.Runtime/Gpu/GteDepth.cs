@@ -736,6 +736,11 @@ public static class GteDepth
 
     public static void ResetOffsets() { Offset = 0; OffsetMax = 0f; OffsetCount = 0; }
 
+    /// <summary>0052, under <see cref="Probe"/>: polygons with a fraction on every corner,
+    /// those under one square pixel, those with some corners lacking one, and those whose
+    /// fractional corners wind opposite to their whole-pixel ones.</summary>
+    public static long CensusPolys, CensusTiny, CensusMixed, CensusFlipped;
+
     // +1 so that 0 can mean "never written", which is what lets Collect stop early.
     static int KeyOf(int x, int y) => (((y & 0x7FF) << 11) | (x & 0x7FF)) + 1;
 

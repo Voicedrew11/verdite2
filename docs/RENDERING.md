@@ -291,6 +291,135 @@ pixels than a texture-mapping change that repaints every interior texel. The hon
 measurement is probably edges only, and a still frame is the wrong instrument for
 an artefact that is defined by motion. **Flip the default once that pair exists.**
 
+### Open: slits and grey texels with Sub-pixel on
+
+Reported from play, with Sub-pixel on, and gone with it off:
+
+- **A black slit** at a corridor's floor-wall junction and wall corner. Area 1, the
+  shell's `goto 10530 -12800 87420 4091` after save 2 has loaded. Ordinary gaps also
+  exist with Sub-pixel off; this one does not.
+- **Save 2's guidestone shimmers** while it stands still and the camera turns, and
+  **shows grey where its emblem should be gold**. With Sub-pixel off it wobbles, but
+  no gold is missing.
+
+None of the following fixed either, so all of it was removed rather than committed.
+The measurements are what is worth keeping.
+
+1. **A mixed polygon** (some corners with a fraction, some without). A counter
+   read 0.0% mixed.
+2. **A wrong fraction.** The branch recorded each corner's exact projection per packet,
+   from the SVECTOR and the GTE's matrix in double, and compared it with the address
+   map. Within 0.25 px on screen; off-screen corners up to about 1.5 px. **Placing
+   corners from those records instead changed nothing by eye.**
+3. **Welding** every fractional vertex on one whole pixel to one fraction per
+   frame. Nothing by eye. So was a switch keeping fractions for only tiles, clipped
+   fans or models; its result was confounded, because dropping one kind opens slits
+   where it meets the others.
+4. **The tile and model matrices are rounded before any vertex reaches them.**
+   `func_80031950` `RotTrans`es the tile's camera-relative position under the camera
+   matrix `0x80192E18`, so each tile's translation drops its low twelve bits. Its
+   rotation is the camera's turned by exact quarter turns (`func_80014B88`).
+   `func_80032588` does the same for a model's position less `0x80192E78`, and
+   `MulMatrix2` (`0x8005BFD4`) of the camera pointer (its seventh argument) with the
+   model's rotation truncates to 1/4096. Rebuilt in double from the same inputs, the
+   translation equalled the register on every corner once truncated (0 refused of
+   70k-114k a second). Measured on screen while turning, in the corridor and in save
+   2's room: **neighbouring tiles disagree about their shared edge by at most
+   0.07 px** (mean 0.01). Model centres moved at most 0.16 px, and model rotations
+   rounded by 0/4096, those models being turned in quarter turns. Not the cause.
+5. **The clipper's crossings are rounded by far more.** `ZClipFT` finds `t` from view
+   coordinates already rounded, to 12 bits, and truncates the blended SVECTOR. Against
+   the exact edge-plane intersection, over 550-780 crossings a second in the
+   corridor: 30-42% under 0.25 px, 35-41% under 0.5, 14-21% under 1, 3-4% under 4,
+   worst 12.9 px. A crossing sits on the view volume's side or near plane, so its
+   error moves the far end of a fan edge along the screen border. Placing crossings
+   exactly, with 4 and 5 together as the sub-pixel source, **changed neither report
+   by eye**. `KF2_POLYASM=verify` stayed clean, and the cost was not measurable
+   (850 fps uncapped either way).
+
+**So exact geometry is ruled out as the fix for both.** The lead is texture
+sampling: the prim shader reads one texel per pixel (`rawU`/`rawV` in `PrimFs`),
+and the guidestone's emblem lines are about a texel wide at about a texel a pixel.
+Whole-pixel corners hold the sampling grid still relative to the texture, so every
+texel lands on a pixel. Fractional corners slide the grid, so a thin gold line is
+skipped in favour of the grey beside it, differently each frame. The same slide at a
+polygon's edge could read a transparent or dark texel as a slit. **Not measured.**
+The check by eye: walk up to the guidestone until its texels are several pixels
+wide. Missing gold that stops close up and returns at medium distance is sampling.
+Anisotropic filtering does not help at about one texel a pixel, where it takes one
+tap. The candidate fix is a sharp texel filter: nearest texels, with only a pixel
+that straddles a texel boundary blending its two by coverage, in both prim shaders,
+under Sub-pixel only. DuckStation's clamping each primitive's UVs to its own range
+under PGXP is the other thing to try for the edge case.
+
+**What was kept**: the shell's `goto <x> <y> <z> [yaw]` ("The command channel" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)).
+
+### Welding, micro-dilation and supersampling, tried and removed
+
+Three things were built for the guidestone before its cause was found, measured,
+and taken out again:
+
+- **Radius welding**: every recovered vertex within 0.125 px of one already placed
+  that frame snapped onto it, before the fraction was added. Save 2 standing, 144 fps:
+  **0 of ~58k vertex references a second moved** at 0.125 px, because corners shared
+  by tiles and models are already bit-identical (item 4 above); ~15% at 0.5 px. Its
+  representative is whichever vertex the ordering table draws first, which moves.
+- **Micro-dilation**: each opaque triangle's edges pushed out 0.25 px, texture
+  coordinates kept on the corners. **By eye it brought the gold back**, very likely
+  by covering the holes the whole-pixel cull left (below). It also stretches every
+  solid polygon's texture and makes neighbours overlap.
+- **Supersampling**: display targets at the render scale times 2-4 a side,
+  box-filtered at present, VRAM at the render scale. Scale 6 at 2x2 made 5136x2880
+  targets, held 144.0 fps at 20.0 ticks/s, and **did not stop the shimmer by eye**. At
+  12 samples a game pixel a sub-pixel triangle is not all or nothing, so that ruled
+  out a sampling rate and left a per-frame decision.
+
+### The guidestone is 307 triangles, most of them a pixel or less
+
+Save 2's guidestone still shimmers while walking to and from it, with the gold back.
+A frame capture (Shift+F) standing in front of it: `func_80032588` submitted 307
+flat textured triangles and 57 quads, every triangle on its own ordering-table
+entry, and the replay drew **97 of the triangles at 0 pixels, 91 at 1 and 37 at 2**.
+The replay is 1x; at render scale 6 each is about 36 samples. Whichever sample
+lands inside such a triangle changes every frame as its fractions move, which is
+what supersampling is for; it did not help (above). The Z-buffer was also on in that
+session, and the emblem lying on or just in front of the stone would fight over
+depth at a rate that changes with distance. **Not separated by eye yet.**
+
+### A thin face was culled on whole pixels
+
+**The guidestone's shimmer is geometry that was never drawn.** Neither SSAA, the
+Z-buffer, dilation, lighting, fog nor smoothing touched it, and only Sub-pixel off
+did, so it was a per-frame decision rather than sampling. The decision is the
+backface cull: `Facing` and `Visible` (the C# models' and tiles' `NormalClip`) test
+`Gte.Nclip` on the cached **whole-pixel** screen words and keep a face only when
+`MAC0 > 0`. With whole-pixel corners that is consistent with what is drawn: a face
+whose corners collapse to a line or turn over draws nothing either way. With
+fractions it is not. A face a pixel wide collapses to a line on whole pixels at some
+distances and not others, is culled, and leaves a hole between neighbours drawn at
+their real corners, which is the stone behind showing through the gold; the reverse
+case is drawn back to front.
+
+`0052`: while sub-pixel is on (and not under `KF2_POLYASM=verify`), both tests take
+the cross product of the fractional corners, read with `GteVertexMap.Peek`, and fall
+back to the game's answer when a corner has no fraction or clamped. `Gte.Nclip`
+still runs, so the GTE is left as the game leaves it. `KF2_SUBPIXEL_CULL=0` is the
+comparison. The recompiled assemblers (Fast geometry off) still cull on whole pixels.
+
+Measured with `KF2_SUBPIXEL_PROBE=1`, save 2, 144 fps, scripted: facing away and
+still, the census counts ~1 polygon a frame whose fractional corners wind backwards
+(before and after). **Facing the guidestone and still, the whole-pixel test would
+have culled 23,040 faces a second that are front-facing at their fractional corners
+(160 a frame, against 144 a second the other way); walking near it, 16k-35k a
+second.** Without the change the census, which only sees what reaches the GPU, read
+140-570 polygons a second drawn back to front while walking near it and none of the
+faces that were missing. With it, polygons facing the guidestone rose from 75k to 98k
+a second and back-to-front ones fell to 0 standing still; 180-570 a second remain
+while walking, from corners the cull could not read. 144.0 fps at 20.0 ticks/s, no
+exceptions. **Looked at: the guidestone no longer shimmers.** That was with
+micro-dilation still in; the gold without it has not been looked at since.
+
 ## The table is not unique: remaining wobble and the "far away" pop
 
 The 90% hit rate was never "10% of vertices the two ends disagreed about". It was
