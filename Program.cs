@@ -675,12 +675,13 @@ Kf2.PerPixelLighting.Configure(Environment.GetEnvironmentVariable("KF2_PERPIXEL"
                                Environment.GetEnvironmentVariable("KF2_PERPIXEL_PROBE"));
 Kf2.PerPixelLighting.Install();
 
-// Even fog: clipped map tiles fogged on the tiles' curve instead of the emitter's
-// half (func_800302E8), and fog blended across the tile edges where one light
-// record's fog meets another's. Off by default: both steps are the game's own.
+// Even fog and lighting: clipped map tiles fogged on the tiles' curve instead of
+// the emitter's half (func_800302E8), and fog and light colour blended across the
+// tile edges where one light record meets another. Off by default: the steps are
+// the game's own.
 //     KF2_EVENFOG=1           on
-//     KF2_EVENFOG_BLEND=0     the clipped fix only
-//     KF2_EVENLIGHT=1         also blend the records' light colour across those edges
+//     KF2_EVENFOG_BLEND=0     no fog blend
+//     KF2_EVENLIGHT=0         no light blend
 Kf2.EvenFog.Configure(Environment.GetEnvironmentVariable("KF2_EVENFOG"),
                       Environment.GetEnvironmentVariable("KF2_EVENFOG_BLEND"),
                       Environment.GetEnvironmentVariable("KF2_EVENLIGHT"));

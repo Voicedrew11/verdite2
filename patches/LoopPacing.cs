@@ -306,6 +306,11 @@ public static class LoopPacing
     /// </summary>
     static bool _gameExe;
 
+    /// <summary>Whether OPEN.EXE is loaded. Its title menu has no wait of its own,
+    /// so it is held to <see cref="InterfaceHz"/> like GAME.EXE's menus. See "The
+    /// title menu is an interface frame" in docs/PATCHES_AND_MODS.md.</summary>
+    static bool _openExe;
+
     /// <summary>Set by <see cref="WorldDrawn"/> -- stage 13 reached its own frame
     /// gate, so this frame is a picture of the world rather than of the
     /// interface.</summary>
@@ -432,6 +437,7 @@ public static class LoopPacing
             // `true` through the whole of the next boot's title.
             if (e.Name is "game") _gameExe = true;
             else if (e.Name is "open" or "end" or "main") _gameExe = false;
+            if (e.Name is "open" or "game" or "end" or "main") _openExe = e.Name is "open";
         });
 
         HookAttach.OnOverlayLoad("loop pacing", Attach);
@@ -859,6 +865,10 @@ public static class LoopPacing
         double min = enabled && targetFps > 0.0 ? 1000.0 / targetFps : 0.0;
 
         if (_probe) Count(mainLoop, world);
+
+        // The title draws only interface; the logos and the intro movie are
+        // disc-paced below this and do not notice it.
+        if (_openExe && Enabled) return Math.Max(min, 1000.0 / InterfaceHz);
 
         // Not a modal frame, switched off, or the comparison mode that deliberately
         // runs everything at the render rate.

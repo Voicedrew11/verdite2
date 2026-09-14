@@ -918,11 +918,11 @@ the keyboard; and `view carrying` from the first window in which `KF2_SHELL`'s
 | where | fps drawn | ticks/s | why |
 |---|---|---|---|
 | logos (OPEN.EXE) | **15.0** | 15.0 | disc-paced STR stream, so not moved by `KF2_FPS` |
-| title menu (OPEN.EXE) | **the asked rate** | same | no wait of its own; `Floor` alone paces it — 240.0 drawn, 240.0 presents a second at 240 |
+| title menu (OPEN.EXE) | **60.0**, or the asked rate below it | same | no wait of its own; `LoopPacing` holds it to `InterfaceHz` — see "The title menu is an interface frame" |
 | the intro movie | **10.0** | 10.0 | disc-paced, `patches/recompone/0026` |
 | an area, attract demo or play | **165.0** | 20.0 | the render rate asked for, against `LogicHz` |
 
-**The title row was wrong for a long time, and it is the one worth knowing.** It used to read 15.0, "OPEN.EXE's own four-vblank wait" — but that is the logos' stream. The title menu's loop (`func_80011AE0`) has no wait of its own, one `VSync(0)` and one `DrawOTag` a picture, so it reads whatever `KF2_FPS` asks. A title menu at **twice** the asked rate is therefore not the game: it is `FramePacing.ApplyHostCeiling`'s `2×` ceiling with nothing of the port holding the picture, which is the boot the sentinel is for (see "The smoothing is sometimes dead for a whole session" in [TODO.md](TODO.md)).
+**The title row was wrong for a long time, and it is the one worth knowing.** It used to read 15.0, "OPEN.EXE's own four-vblank wait" — but that is the logos' stream. The title menu's loop (`func_80011AE0`) has no wait of its own, one `VSync(0)` and one `DrawOTag` a picture, so it read whatever `KF2_FPS` asked until it was capped at 60 like the menus. A title menu at **twice** the asked rate is therefore not the game: it is `FramePacing.ApplyHostCeiling`'s `2×` ceiling with nothing of the port holding the picture, which is the boot the sentinel is for (see "The smoothing is sometimes dead for a whole session" in [TODO.md](TODO.md)).
 
 `present(s)/s` on the line is counted inside `LibEtc.VSync` (`patches/recompone/0042`), not by a hook, so it can disagree with `fps drawn`: legitimately in a fade, which `VSync`s without drawing (62-131 a second measured), and illegitimately when a pacing hook has stopped running. **The sentinel** reads the same counter from `VSyncEvent`, which fires whether or not a detour does; two seconds above `max(1.5×T, 90)` print one `[KF2] pacing sentinel:` block — hook fires, `Floor` calls and waits, `FallbackTick` fresh and held decisions, what is committed, a one-line reading, and the stack of one `VSync` call — once a session.
 
@@ -2473,6 +2473,21 @@ reported 15 (the intro movie, disc-paced) rising to a flat **60.0** modal
 interface frames a second once the title was reached, and END.EXE 10.0; after,
 neither overlay reports a modal frame at all. GAME.EXE's own save-select menu
 still reads 49.7-60 modal interface, which is the class doing its job.
+
+### The title menu is an interface frame
+
+The fix above stood OPEN.EXE down entirely, so the title menu — which has no wait
+of its own — drew at whatever `KF2_FPS` asked, and uncapped meant flat out. It
+draws nothing but interface, so it is now held to `InterfaceHz` the same as
+GAME.EXE's menus: `FrameMinMs` returns `max(1000/T, 1000/60)` while OPEN.EXE is
+the loaded executable (`_openExe`, from `OverlayLoadedEvent`), before any of the
+modal classification, which still does not apply there. The logos' STR stream and
+the intro movie are disc-paced at 15 and 10 and are below the cap. END.EXE is
+unchanged. `KF2_LOOPPACING=0` is the comparison.
+
+Measured at `KF2_FPS=144`: the logos 15.0, the title **60.0 drawn, 60.0 presents
+a second**, and after `fdat05` 144.0 drawn at 19.9-20.0 ticks a second. The
+render rate below 60 is untouched, since the longer deadline wins.
 
 **The interface is the other case, and it is paced rather than filled.** A modal
 loop that draws no world — the menu — has nothing for the smoothing patches to

@@ -592,5 +592,6 @@ useful than the question was.
    matrix is about 39% brighter), and `KF2_EVENLIGHT=1` (*Even lighting*) blends
    that the way `func_80032588` already blends records for objects. Measured: own
    colour exact, shared points identical, per-pixel check 0 off by 2, verify 0
-   mismatches. Judged: "looks good". Both ship off, being enhancements.
+   mismatches. Judged: "looks good". Both ship off, being enhancements, and are now
+   one *Even fog and lighting* checkbox (`KF2_EVENLIGHT=0` drops the light part).
    See "The light colour changes at the same edge" in [RENDERING.md](RENDERING.md).

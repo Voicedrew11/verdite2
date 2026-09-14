@@ -21,8 +21,7 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 | True color (24-bit) | **measured**, RGBA8 target + shader | the point of the switch | off (authentic 15-bit) |
 | Anisotropic filtering | **measured**, sparkle sd 51.2 -> 11.4 | **not checked** | off |
 | Per-pixel lighting | **measured**, every corner within 1 of the GTE, shader exact headless | **not checked** | off |
-| Even fog | **measured**, clipped matches far tiles bin for bin; shared tile points within 3 | **checked**, "looks good" | off |
-| Even lighting | **measured**, own colour exact, shared tile points identical | **checked**, "looks good" | off |
+| Even fog and lighting | **measured**, clipped matches far tiles bin for bin; shared tile points within 3 (fog), identical (light) | **checked**, "looks good" | off |
 
 That "mechanism measured / picture never checked" split is the rule the whole
 port is written to: a feature whose mechanism has counters behind it but whose
@@ -1259,7 +1258,7 @@ distance are the far tiles, `func_8002FECC`. The first diagnosis's "unclipped"
 column was those far tiles.
 
 **Fixed as an enhancement, off by default** (`EvenFog`, `KF2_EVENFOG=1`, Video ▸
-Enhancements ▸ *Even fog*). After `func_800302E8` returns,
+Enhancements ▸ *Even fog and lighting*). After `func_800302E8` returns,
 `PolyAssembler.Clipped` rewrites each emitted `POLY_GT3`'s three corner colours from
 the lit colour and the near curve of each record's `IR0` (`+0x14`), or no fog when
 `FogMode >= 32000`. The arithmetic is DPCS's own, done in C# with no GTE register
@@ -1369,8 +1368,12 @@ for `SetColorMatrix`, and their fog word and each back-colour byte with
 matrix: it multiplies one record's by the object's rotation. So a blend across tile
 edges follows the game's own recipe rather than inventing one.
 
-**Blended as `KF2_EVENLIGHT=1`** (Video ▸ Enhancements ▸ *Even lighting*, off by
-default), a separate switch from *Even fog* and usable without it. The same
+**Blended as the third part of `EvenFog`** (Video ▸ Enhancements ▸ *Even fog and
+lighting*, off by default; `KF2_EVENLIGHT=0` keeps the hard light edge). It was a
+separate *Even lighting* checkbox at first; the two fix the same step for fog and
+for light, share the hook and the Fast geometry requirement, and neither reads
+right without the other, so they are one control, and the dimmed checkbox says
+Fast geometry is needed. The same
 `func_80031950` window marks a tile whose neighbours' colour matrix or back colour
 differ (`+0x50` to `+0x64`). Then each face corner is lit with the four records'
 colour matrix and back colour (`byte << 4`, as `SetBackColor` loads it) mixed on
@@ -1379,12 +1382,12 @@ matrix is used for its quarter turns, followed by NormalColorCol's arithmetic
 (`LightStage`, then `(RGB·IR << 4) >> 12 >> 4`) with no register touched. Such a
 face gets a colour per corner instead of one. The fill writes each corner's colour
 before its depth cue. The clipped path lights each record by its interpolated local
-position and rewrites the packet: fogged on the tiles' curve under *Even fog*, at
-the emitter's own `IR0 >> 1` without it. Per-pixel lighting records the per-corner
-colours.
+position and rewrites the packet, fogged on the tiles' curve. (Its branch at the
+emitter's own `IR0 >> 1`, light without the fog fix, is no longer reachable from a
+switch.) Per-pixel lighting records the per-corner colours.
 
 Measured at save 3 over the same eight-heading sweep, with both switches on and
-with *Even lighting* alone:
+with the light blend alone:
 
 - recomputing a corner with only the tile's own record matched the GTE's colour on
   every corner checked (about 150k a window, 0 differ), which is what confirms the
