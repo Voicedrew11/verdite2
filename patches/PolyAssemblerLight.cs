@@ -212,14 +212,16 @@ public static partial class PolyAssembler
         return (int)Math.Clamp(MathF.Floor(lit * (1f - w / 4096f)), 0f, 255f);
     }
 
-    /// <summary>A map tile: one lit colour for the face, fogged per vertex.</summary>
-    static void LightTile(PSMemory mem, uint pkt, uint colour, int n, uint p0, uint p1, uint p2, uint p3)
+    /// <summary>A map tile: a lit colour per corner (one for the face unless its light
+    /// is blended), fogged per vertex.</summary>
+    static void LightTile(PSMemory mem, uint pkt, uint c0, uint c1, uint c2, uint c3, int n,
+                          uint p0, uint p1, uint p2, uint p3)
     {
         ref var r = ref GteLightMap.Slot(pkt);
-        float cr = colour & 0xFF, cg = (colour >> 8) & 0xFF, cb = (colour >> 16) & 0xFF;
-        r.L0x = r.L1x = r.L2x = r.L3x = cr;
-        r.L0y = r.L1y = r.L2y = r.L3y = cg;
-        r.L0z = r.L1z = r.L2z = r.L3z = cb;
+        Corner(c0, out r.L0x, out r.L0y, out r.L0z);
+        Corner(c1, out r.L1x, out r.L1y, out r.L1z);
+        Corner(c2, out r.L2x, out r.L2y, out r.L2z);
+        Corner(c3, out r.L3x, out r.L3y, out r.L3z);
         uint curve = TileFogs(mem, ref r, n, p0, p1, p2, p3);
         if (Uniform(ref r, curve, n)) { r.Light = 0; return; }
         Seal(mem, ref r, pkt, curve, 0);
@@ -293,7 +295,6 @@ public static partial class PolyAssembler
         if (count == 0) return;
 
         uint colour = ClippedColour(mem, normal);
-        float cr = colour & 0xFF, cg = (colour >> 8) & 0xFF, cb = (colour >> 16) & 0xFF;
         bool far = (int)Peek32(mem, FogMode) >= 32000;
         uint fogCurve = !refogged ? GteLightMap.CurveHalf : far ? GteLightMap.CurveNone : GteLightMap.CurveKnee;
 
@@ -303,12 +304,12 @@ public static partial class PolyAssembler
             uint pkt = before + k * 0x28u;
             uint ra = Peek32(mem, ClipOut + 4u * (k + 1)), rb = Peek32(mem, ClipOut + 4u * (k + 2));
             ref var r = ref GteLightMap.Slot(pkt);
-            r.L0x = r.L1x = r.L2x = cr;
-            r.L0y = r.L1y = r.L2y = cg;
-            r.L0z = r.L1z = r.L2z = cb;
+            Corner(RecordColour(mem, r0, normal, colour), out r.L0x, out r.L0y, out r.L0z);
+            Corner(RecordColour(mem, ra, normal, colour), out r.L1x, out r.L1y, out r.L1z);
+            Corner(RecordColour(mem, rb, normal, colour), out r.L2x, out r.L2y, out r.L2z);
             uint curve = fogCurve;
             bool blended = false;
-            if (refogged && _tile != 0)
+            if (refogged && _tileFog)
             {
                 r.F0 = RecordFogWeight(mem, r0, far, out bool b0);
                 r.F1 = RecordFogWeight(mem, ra, far, out bool b1);
@@ -326,6 +327,13 @@ public static partial class PolyAssembler
             if (Uniform(ref r, curve, 3)) { r.Light = 0; continue; }
             Seal(mem, ref r, pkt, curve, 0);
         }
+    }
+
+    static void Corner(uint colour, out float r, out float g, out float b)
+    {
+        r = colour & 0xFF;
+        g = (colour >> 8) & 0xFF;
+        b = (colour >> 16) & 0xFF;
     }
 
     /// <summary>A record's fog weight as the emitter's DPCS saw it.</summary>

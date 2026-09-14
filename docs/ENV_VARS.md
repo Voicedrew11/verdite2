@@ -91,6 +91,7 @@ KF2_PERPIXEL_PROBE=1                   # packets recorded, polygons lit per pixe
 KF2_PERPIXEL_PROBE=2                   # also the shader's formula at every recorded corner against the GTE's colour
 KF2_EVENFOG=1                          # even fog: clipped polygons on the tiles' curve, fog blended across light-record edges (off by default; needs Fast geometry)
 KF2_EVENFOG_BLEND=0                    # the clipped fix only, the game's hard fog edge between records
+KF2_EVENLIGHT=1                        # blend the light records' colour matrix and back colour across tile edges (off by default; needs Fast geometry)
 KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
 KF2_PGXP=1                             # upstream's PGXP as the vertex source (off; the address map answers)

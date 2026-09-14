@@ -4,7 +4,8 @@ using RecompOne.Runtime.Host.Window;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The even-fog switch, under Video ▸ Enhancements after per-pixel lighting.
+/// The even-fog and even-lighting switches, under Video ▸ Enhancements after
+/// per-pixel lighting.
 /// </summary>
 public sealed class EvenFogPage : IPatchPage
 {
@@ -19,6 +20,16 @@ public sealed class EvenFogPage : IPatchPage
           "en": "Even fog",
           "pt-BR": "Neblina uniforme",
           "es-419": "Niebla uniforme"
+        },
+        "kf2.evenlight.label": {
+          "en": "Even lighting",
+          "pt-BR": "Iluminação uniforme",
+          "es-419": "Iluminación uniforme"
+        },
+        "kf2.evenlight.tooltip": {
+          "en": "Areas of a map carry their own light colour, and the original switches it at the edge of a floor tile. This fades it in over a tile, as the game already does for creatures and objects. Needs Fast geometry.",
+          "pt-BR": "As áreas de um mapa têm sua própria cor de luz, e o original a troca na borda de um bloco do piso. Isto faz a transição ao longo de um bloco, como o jogo já faz para criaturas e objetos. Requer Geometria rápida.",
+          "es-419": "Las áreas de un mapa tienen su propio color de luz, y el original lo cambia en el borde de un bloque del piso. Esto hace la transición a lo largo de un bloque, como el juego ya hace con criaturas y objetos. Requiere Geometría rápida."
         },
         "kf2.evenfog.tooltip": {
           "en": "Removes two steps in the original's fog: floor and wall tiles it has to clip get half the fog of their neighbours, and fog strength changes abruptly from one tile to the next where an area's lighting changes. This fogs clipped tiles like their neighbours and fades the change in over a tile. Needs Fast geometry.",
@@ -42,5 +53,15 @@ public sealed class EvenFogPage : IPatchPage
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(Localization.T("kf2.evenfog.tooltip"));
+
+        bool light = EvenFog.Light;
+        if (ImGui.Checkbox(Localization.T("kf2.evenlight.label"), ref light))
+        {
+            EvenFog.Light = light;
+            PatchSettings.Set(EvenFog.LightKey, light);
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(Localization.T("kf2.evenlight.tooltip"));
     }
 }

@@ -583,17 +583,14 @@ useful than the question was.
    quit to title and one load away from being answered either way. See "The
    inventory is one byte per item" in [GAME_INTERNALS.md](GAME_INTERNALS.md).
 
-17. **Look at the floor near save 3 with Even fog.** Reported from play (area 2,
-   `fdat08`): floor tiles read as blocks that go "darker or brighter depending on
-   distance from the camera". Two steps, both the game's own, both now removed behind
-   `KF2_EVENFOG=1` (Video ▸ Enhancements ▸ *Even fog*, off by default). The emitter
-   after the clipper fogged at `IR0 >> 1`. Fog strength belongs to each tile's light
-   record, so the corridor under the arch (12500) meets the room (16000) at a tile
-   edge. Looked at once with only the first fix in: "smoother, but still wrong", the
-   corridor darker "in an unnatural way". The blend is in now. Measured, a world
-   point two tiles share differs by at most 3 in fog weight, against 1482 before;
-   per-pixel check 0 off by 2; verify 0 mismatches. **Not looked at since the
-   blend.** Still to judge: whether the fade reads right over one tile, and whether
-   the corridor's **light colour** now shows as an edge. Its colour matrix is about
-   39% brighter than the room's and is not blended. See "Fog changes at a tile edge"
-   in [RENDERING.md](RENDERING.md).
+17. ~~**Look at the doorway near save 3 with Even lighting.**~~ **Closed.** Reported from play
+   (area 2, `fdat08`): floor tiles read as blocks that go "darker or brighter
+   depending on distance from the camera". Two steps in the game's own fog are gone
+   behind `KF2_EVENFOG=1` (Video ▸ Enhancements ▸ *Even fog*): the clipper's half fog,
+   and the fog strength changing at the tile edge between light records. Judged:
+   "looks good". The same edge also switches the light colour (the corridor's colour
+   matrix is about 39% brighter), and `KF2_EVENLIGHT=1` (*Even lighting*) blends
+   that the way `func_80032588` already blends records for objects. Measured: own
+   colour exact, shared points identical, per-pixel check 0 off by 2, verify 0
+   mismatches. Judged: "looks good". Both ship off, being enhancements.
+   See "The light colour changes at the same edge" in [RENDERING.md](RENDERING.md).

@@ -21,7 +21,8 @@ Aspect ratio, the HUD and the culls are in [WIDESCREEN.md](WIDESCREEN.md).
 | True color (24-bit) | **measured**, RGBA8 target + shader | the point of the switch | off (authentic 15-bit) |
 | Anisotropic filtering | **measured**, sparkle sd 51.2 -> 11.4 | **not checked** | off |
 | Per-pixel lighting | **measured**, every corner within 1 of the GTE, shader exact headless | **not checked** | off |
-| Even fog | **measured**, clipped matches far tiles bin for bin; shared tile points within 3 | **not checked** since the blend | off |
+| Even fog | **measured**, clipped matches far tiles bin for bin; shared tile points within 3 | **checked**, "looks good" | off |
+| Even lighting | **measured**, own colour exact, shared tile points identical | **checked**, "looks good" | off |
 
 That "mechanism measured / picture never checked" split is the rule the whole
 port is written to: a feature whose mechanism has counters behind it but whose
@@ -1351,16 +1352,54 @@ Verify with `KF2_EVENFOG=1`: 0 RAM, register and GTE mismatches in all seven
 routines. Uncapped at save 3's resting view: 327-328 fps off, 329-331 on. No
 record edge is in view there, so that only shows the idle cost is nothing.
 
-**Not blended: the light colour.** The same probe dumped both records. Room
-record #16 (fog 16000) and corridor #0 (12500) have identical light matrices and
-back colour (`0x78,0x78,0x78`). Their colour matrices differ: `0x0933`/`0x0B80`
-against `0x0CCB`/`0x0FFE`, the corridor's about 39% brighter. The tile assemblers
-light a whole face once, with the drawing tile's LCM, so blending it would turn a
-flat-lit face into a per-corner one. That was left for a look first.
+Looked at after the blend: "looks good".
 
-**Nobody has looked at it since the blend.** Whether one tile is a long enough fade,
-and whether the corridor's brighter light now reads as an edge of its own, is the
-question.
+### The light colour changes at the same edge
+
+The same probe dumped both records. Room record #16 (fog 16000) and corridor #0
+(12500) have identical light matrices and back colour (`0x78,0x78,0x78`). Their
+colour matrices differ: `0x0933`/`0x0B80` against `0x0CCB`/`0x0FFE`, the
+corridor's about 39% brighter. The tile assemblers light a whole face once, with the
+drawing tile's record, so the light steps at the tile edge just as the fog did.
+
+**The game blends lighting itself, for objects.** `func_80032588` takes two records
+and a weight. It mixes their colour matrices with `func_80015930` into a stack matrix
+for `SetColorMatrix`, and their fog word and each back-colour byte with
+`func_800158C8`, which is `a + ((b − a)·t >> 12)`. It does not mix the light
+matrix: it multiplies one record's by the object's rotation. So a blend across tile
+edges follows the game's own recipe rather than inventing one.
+
+**Blended as `KF2_EVENLIGHT=1`** (Video ▸ Enhancements ▸ *Even lighting*, off by
+default), a separate switch from *Even fog* and usable without it. The same
+`func_80031950` window marks a tile whose neighbours' colour matrix or back colour
+differ (`+0x50` to `+0x64`). Then each face corner is lit with the four records'
+colour matrix and back colour (`byte << 4`, as `SetBackColor` loads it) mixed on
+the same bilinear weights and empty-half rule as the fog. The tile's own light
+matrix is used for its quarter turns, followed by NormalColorCol's arithmetic
+(`LightStage`, then `(RGB·IR << 4) >> 12 >> 4`) with no register touched. Such a
+face gets a colour per corner instead of one. The fill writes each corner's colour
+before its depth cue. The clipped path lights each record by its interpolated local
+position and rewrites the packet: fogged on the tiles' curve under *Even fog*, at
+the emitter's own `IR0 >> 1` without it. Per-pixel lighting records the per-corner
+colours.
+
+Measured at save 3 over the same eight-heading sweep, with both switches on and
+with *Even lighting* alone:
+
+- recomputing a corner with only the tile's own record matched the GTE's colour on
+  every corner checked (about 150k a window, 0 differ), which is what confirms the
+  matrix layouts and the arithmetic;
+- world points two tiles share with the same world normal: up to 28k a window,
+  **0** differ by 2 or more in any channel, worst 0;
+- about 73% of the corners on marked tiles came out blended at yaw 0 and 512;
+- `KF2_PERPIXEL_PROBE=2`: 1.9M corners, 0 off by 2;
+- verify with both on: 0 RAM, register and GTE mismatches in all seven routines, and
+  nothing blended.
+
+Its cost was not measured with an edge in view.
+
+Looked at, both switches on, at the arch near save 3: "looks good". Both still ship
+off, as enhancements of the game's own behaviour.
 
 ## Dithering: one flag, and it lives in the draw environment
 

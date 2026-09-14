@@ -680,8 +680,10 @@ Kf2.PerPixelLighting.Install();
 // record's fog meets another's. Off by default: both steps are the game's own.
 //     KF2_EVENFOG=1           on
 //     KF2_EVENFOG_BLEND=0     the clipped fix only
+//     KF2_EVENLIGHT=1         also blend the records' light colour across those edges
 Kf2.EvenFog.Configure(Environment.GetEnvironmentVariable("KF2_EVENFOG"),
-                      Environment.GetEnvironmentVariable("KF2_EVENFOG_BLEND"));
+                      Environment.GetEnvironmentVariable("KF2_EVENFOG_BLEND"),
+                      Environment.GetEnvironmentVariable("KF2_EVENLIGHT"));
 Kf2.EvenFog.Install();
 
 // The render scale survives a menu. A modal sub-loop -- the in-game menu, a shop,

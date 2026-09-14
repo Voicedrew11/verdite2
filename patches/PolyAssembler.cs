@@ -448,15 +448,18 @@ public static partial class PolyAssembler
         W16(ref fr, pkt + 0x24u, R16(ref fr, f + 8u));
         W16(ref fr, pkt + 0x30u, R16(ref fr, f + 0xCu));
 
-        uint colour = Light(ref fr, normals + R16(ref fr, f + 0x10u));
-        Fog(ref fr, colour, p0, pkt + 0x04u);
-        Fog(ref fr, colour, p1, pkt + 0x10u);
-        Fog(ref fr, colour, p2, pkt + 0x1Cu);
-        Fog(ref fr, colour, p3, pkt + 0x28u);
+        uint normal = normals + R16(ref fr, f + 0x10u);
+        uint colour = Light(ref fr, normal);
+        uint c0 = colour, c1 = colour, c2 = colour, c3 = colour;
+        if (_tileLight) TileColours(mem, normal, colour, 4, p0, p1, p2, p3, out c0, out c1, out c2, out c3);
+        Fog(ref fr, c0, p0, pkt + 0x04u);
+        Fog(ref fr, c1, p1, pkt + 0x10u);
+        Fog(ref fr, c2, p2, pkt + 0x1Cu);
+        Fog(ref fr, c3, p3, pkt + 0x28u);
 
         W8(ref fr, pkt + 3u, 0x0C);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x3Cu));
-        if (fr.Lighting) LightTile(mem, pkt, colour, 4, p0, p1, p2, p3);
+        if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c3, 4, p0, p1, p2, p3);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u)
              + (short)R16(ref fr, p3 + 4u) + (short)R16(ref fr, p2 + 4u);
@@ -517,14 +520,17 @@ public static partial class PolyAssembler
         W16(ref fr, pkt + 0x18u, R16(ref fr, f + 4u));
         W16(ref fr, pkt + 0x24u, R16(ref fr, f + 8u));
 
-        uint colour = Light(ref fr, normals + R16(ref fr, f + 0x0Cu));
-        Fog(ref fr, colour, p0, pkt + 0x04u);
-        Fog(ref fr, colour, p1, pkt + 0x10u);
-        Fog(ref fr, colour, p2, pkt + 0x1Cu);
+        uint normal = normals + R16(ref fr, f + 0x0Cu);
+        uint colour = Light(ref fr, normal);
+        uint c0 = colour, c1 = colour, c2 = colour;
+        if (_tileLight) TileColours(mem, normal, colour, 3, p0, p1, p2, 0u, out c0, out c1, out c2, out _);
+        Fog(ref fr, c0, p0, pkt + 0x04u);
+        Fog(ref fr, c1, p1, pkt + 0x10u);
+        Fog(ref fr, c2, p2, pkt + 0x1Cu);
 
         W8(ref fr, pkt + 3u, 0x09);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x34u));
-        if (fr.Lighting) LightTile(mem, pkt, colour, 3, p0, p1, p2, 0u);
+        if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c0, 3, p0, p1, p2, 0u);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u) + (short)R16(ref fr, p2 + 4u);
     }
@@ -629,9 +635,10 @@ public static partial class PolyAssembler
         bool lighting = LightingOn();
         // Verify compares against the recompiled assembler, which fogs at half.
         bool refog = EvenFog.Enabled && _mode != Mode.Verify;
-        uint before = lighting || refog ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
+        bool rewrite = refog || _tileLight;
+        uint before = lighting || rewrite ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
         KingsField2.func_800302E8(c, mem);
-        if (refog) RefogClipped(mem, before, normals + normal);
+        if (rewrite) RewriteClipped(mem, before, normals + normal, refog);
         if (lighting) LightClipped(mem, before, normals + normal, refog);
     }
 
