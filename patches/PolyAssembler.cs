@@ -76,6 +76,7 @@ public static partial class PolyAssembler
     {
         Enabled = on;
         Gte.FastLighting = on;
+        ZBuffer.SyncSource();
     }
 
     public static bool UnclippedEnabled { get; set; } = true;
@@ -255,12 +256,16 @@ public static partial class PolyAssembler
         // generation they are lit with.
         public readonly bool Lighting;
         public int LightGen;
+        // The depth buffer wants packet depths, and this call's are recorded.
+        public readonly bool DepthTable, Depth;
 
         public Frame(PSMemory mem)
         {
             Mem = mem;
             Ram = ref Unsafe.AsRef(in MemoryMarshal.GetReference(mem.Ram));
             Lighting = LightingOn();
+            DepthTable = GtePacketDepth.Active;
+            Depth = DepthOn();
             Refresh();
         }
 
@@ -460,6 +465,7 @@ public static partial class PolyAssembler
         W8(ref fr, pkt + 3u, 0x0C);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x3Cu));
         if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c3, 4, p0, p1, p2, p3);
+        RecordDepth(ref fr, pkt, 0x2Cu, 4, p0, p1, p2, p3);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u)
              + (short)R16(ref fr, p3 + 4u) + (short)R16(ref fr, p2 + 4u);
@@ -531,6 +537,7 @@ public static partial class PolyAssembler
         W8(ref fr, pkt + 3u, 0x09);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x34u));
         if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c0, 3, p0, p1, p2, 0u);
+        RecordDepth(ref fr, pkt, 0x20u, 3, p0, p1, p2, 0u);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u) + (short)R16(ref fr, p2 + 4u);
     }
@@ -636,10 +643,12 @@ public static partial class PolyAssembler
         // Verify compares against the recompiled assembler, which fogs at half.
         bool refog = EvenFog.Enabled && _mode != Mode.Verify;
         bool rewrite = refog || _tileLight;
-        uint before = lighting || rewrite ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
+        bool depth = GtePacketDepth.Active;
+        uint before = lighting || rewrite || depth ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
         KingsField2.func_800302E8(c, mem);
         if (rewrite) RewriteClipped(mem, before, normals + normal, refog);
         if (lighting) LightClipped(mem, before, normals + normal, refog);
+        if (depth) DepthClipped(mem, before, DepthOn());
     }
 
 
@@ -904,6 +913,7 @@ public static partial class PolyAssembler
             bool blended = TileVertexFog(mem, src, fog, near: false, out fog);
             W16(ref fr, dst + 6u, (ushort)fog);
             if (fr.Lighting) NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : (uint)curve, blended);
+            if (fr.DepthTable) NoteDepth(mem, dst, sxy);
             src += 8u;
             dst += 8u;
         }
@@ -945,6 +955,7 @@ public static partial class PolyAssembler
             W16(ref fr, dst + 6u, (ushort)fog);
             if (fr.Lighting)
                 NoteCache(dst, sxy, fog, blended ? GteLightMap.CurveWord : far ? GteLightMap.CurveNone : GteLightMap.CurveKnee, blended);
+            if (fr.DepthTable) NoteDepth(mem, dst, sxy);
             src += 8u;
             dst += 8u;
         }

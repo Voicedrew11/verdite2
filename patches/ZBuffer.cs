@@ -115,8 +115,14 @@ public static class ZBuffer
     /// Zero or less is one buffer for the whole frame.</summary>
     static float? _forcedThreshold;
 
-    public static void Configure(string? on, string? probe, string? threshold = null)
+    /// <summary>KF2_ZBUFFER_SOURCE: the depth the assemblers record (the default), or
+    /// <c>map</c> for the address map's.</summary>
+    static bool _packetSource = true;
+
+    public static void Configure(string? on, string? probe, string? threshold = null, string? source = null)
     {
+        _packetSource = source?.Trim().ToLowerInvariant() != "map";
+
         if (!string.IsNullOrWhiteSpace(on))
             _forced = !on.Equals("0", StringComparison.Ordinal);
 
@@ -133,9 +139,22 @@ public static class ZBuffer
         }
     }
 
+    /// <summary>The two primitive buffers, back to back (see PrimBuffer.cs).</summary>
+    const uint PrimBuffers = 0x800FC99C;
+    const uint PrimBufferBytes = 2 * 0x19000;
+
+    /// <summary>The first-person arm, which keeps painter's order.</summary>
+    const uint ArmDraw = 0x80032400;
+
+    /// <summary>The packet source needs the C# assemblers to write it.</summary>
+    public static void SyncSource() =>
+        GtePacketDepth.Enabled = _packetSource && PolyAssembler.Enabled && PolyAssembler.TransformEnabled;
+
     public static void Install()
     {
         _windowStart = Now;
+        GtePacketDepth.SetRange(PrimBuffers, PrimBufferBytes);
+        SyncSource();
 
         // Default is off: RuntimeReadyEvent is the first and only place the
         // setting is decided. ConfigManager only loads inside HostWindow.Initialize,
@@ -148,9 +167,13 @@ public static class ZBuffer
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
             GteDepth.DepthClearThreshold = _forcedThreshold ??
                 RecompOne.Runtime.Runtime.View.GetFloat(ThresholdKey, GteDepth.DepthClearThreshold);
+            SyncSource();
             Console.WriteLine($"[KF2] zbuffer: {(Enabled ? "on" : "off (ordering table)")}" +
+                              $", depth from {(!_packetSource ? "the address map" : GtePacketDepth.Enabled ? "the assemblers" : "the assemblers, which are off")}" +
                               $", clear threshold {(GteDepth.DepthClearThreshold <= 0f ? "off" : GteDepth.DepthClearThreshold.ToString("0"))}");
         });
+
+        HookAttach.OnOverlayLoad("zbuffer arm", AttachArm);
 
         bool attached = false;
         Event.AddListener<OverlayLoadedEvent>(_ =>
@@ -160,6 +183,27 @@ public static class ZBuffer
             Attach();
         });
     }
+
+    static bool _armQueued;
+
+    static bool AttachArm()
+    {
+        SymbolRegistry.Build();
+        var target = SymbolRegistry.Resolve("game", null, ArmDraw);
+        if (target == null) return false;
+        if (!_armQueued)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+            HookManager.AddPre(_self, target, typeof(ZBuffer).GetMethod(nameof(BeforeArm), flags)!);
+            HookManager.AddPost(_self, target, typeof(ZBuffer).GetMethod(nameof(AfterArm), flags)!);
+            _armQueued = true;
+        }
+        HookManager.Commit();
+        return HookAttach.Installed(target);
+    }
+
+    public static void BeforeArm(CpuContext c, IMemory m) => PolyAssembler.InArm = true;
+    public static void AfterArm(CpuContext c, IMemory m) => PolyAssembler.InArm = false;
 
     /// <summary>Change the setting at run time. The next triangle starts or stops
     /// testing; a frame drawn during the change is at worst partly sorted, which
@@ -210,6 +254,16 @@ public static class ZBuffer
                           $"{(total == 0 ? "" : $", {(100.0 * tested / total):F1}% of submitted")}" +
                           $"{(rejected == 0 ? "" : $", {rejected / window:F0} px rejected/s")}, " +
                           $"over {_frames / window:F0} frames/s");
+
+        if (GtePacketDepth.Active)
+        {
+            long hits = GtePacketDepth.Hits, misses = GtePacketDepth.Misses;
+            Console.WriteLine($"[KF2] zbuffer: {GtePacketDepth.Recorded / window:F0} packet depths recorded/s, " +
+                              $"{hits / window:F0} polygons found theirs/s, {misses / window:F0} had none/s " +
+                              $"({ZPct(hits, hits + misses)}), {PolyAssembler.DepthClipMismatches / window:F0} clipped packets unmatched/s");
+            GtePacketDepth.ResetCounters();
+            PolyAssembler.DepthClipMismatches = 0;
+        }
 
         // The depth-clear census. The threshold is only worth a nonzero value if
         // this game has two populations of forward step — ordinary sorting inside

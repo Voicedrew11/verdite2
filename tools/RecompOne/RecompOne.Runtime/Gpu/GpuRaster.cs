@@ -159,6 +159,19 @@ public sealed partial class Gpu
             Hle.GpuTrace.Sink?.Vertices(n, hits);
         }
 
+        // 0050. The depth buffer takes the assembler's record or nothing; W and the
+        // fraction above are left to the address map.
+        if (!Detached && GtePacketDepth.Active)
+        {
+            for (int i = 0; i < n; i++) v[i].HasZ = false;
+            ref readonly var dr = ref GtePacketDepth.Find(_fifoSrc[0], _fifo[0], _fifo[vwAt[0]], _fifo[vwAt[n - 1]], out bool has);
+            if (has && dr.Z0 > 0f && dr.Z1 > 0f && dr.Z2 > 0f && (n == 3 || dr.Z3 > 0f))
+            {
+                v[0].W = dr.Z0; v[1].W = dr.Z1; v[2].W = dr.Z2; v[3].W = dr.Z3;
+                for (int i = 0; i < n; i++) v[i].HasZ = true;
+            }
+        }
+
         // 0048. The lighting inputs, by the packet's address. Only the GL backend
         // draws them, so the software path never asks.
         if (!Detached && HleOn && GteLightMap.Active)

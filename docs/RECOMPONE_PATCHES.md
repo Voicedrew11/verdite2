@@ -550,6 +550,15 @@ Four files in the directory have no entry below:
   vertices. **No recompile.** See "Fog changes at a tile edge" in
   `docs/RENDERING.md`.
 
+- `0050-packet-depth.patch` — `Gpu/GtePacketDepth.cs`, a side table keyed by packet
+  address that the port fills with each packet's four corner depths, checked by the
+  command word and the first and last vertex words. While the port turns it on and a
+  depth consumer is on, `DrawPolygon` gives a polygon a depth from its record or
+  none, so the depth buffer holds only what the C# assemblers recorded (map tiles,
+  clipped fans, models) and everything else keeps painter's order. W and the
+  sub-pixel fraction still come from the address map. **No recompile.** See "The
+  assemblers write the depth" in `docs/RENDERING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

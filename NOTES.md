@@ -81,6 +81,9 @@ is off by default until its picture has been measured the way the textures were
 recovered depth** — per-pixel occlusion instead of the ordering table — and is off
 by default for the same reason (see "Z-buffer"); the cause that had it looking
 unfixable was found, and it was the clip W rather than the depth (see "PGXP").
+Its depth now comes from the C# assemblers' own packet records, so the skybox and
+the HUD keep painter's order by construction; that picture has not been looked at
+(see "The assemblers write the depth").
 **Ambient occlusion runs on that same depth**, and the point of it is where the
 G-buffer comes from: there is no depth prepass to be had here — the geometry
 arrives incrementally through GP0 and nothing knows the frame is finished until it

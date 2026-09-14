@@ -503,7 +503,9 @@ and ~700 fps with the map off, unchanged within noise. The probe is identical �
 
 ## Z-buffer: the same depth, used as occlusion
 
-**Confirmed mechanism; picture checked and still wrong — a second cause is Open.**
+**Confirmed mechanism; picture checked and still wrong under the address map. Reopened
+on the assemblers' own depth, which has not been looked at** — see "The assemblers
+write the depth" at the end of this section.
 
 The GPU has no depth buffer. The game sorts every polygon into an ordering table
 by one number — the GTE's OTZ, the average of its vertices — and `DrawOTag` walks
@@ -564,7 +566,9 @@ that only ever half-works is worse than not offering it. The mechanism stays for
 diagnosis, driven from the console alone: `KF2_ZBUFFER=1` forces it on for the
 run and `KF2_ZBUFFER_PROBE=2` takes the census below. `patches/ZBuffer.cs` and
 `patches/recompone/0014` are unchanged; only `patches/settings/ZBufferPage.cs`
-and its registration are gone.
+and its registration are gone. That verdict was reached on the address map's depth,
+before the assemblers were in C#; "The assemblers write the depth" below is the
+reason to look again.
 
 ### The clear landed at the tail of the frame, not the head
 
@@ -650,6 +654,68 @@ corners, and the map is a 32×16 minimum-per-cell reduction. Screen-linear
 interpolation of a view depth is wrong (it is 1/z that is linear in screen
 space), which biases a polygon's interior; whether that bias is large enough to
 lose a wall in front of the sky is the next thing to measure, not to assume.
+
+### The assemblers write the depth
+
+**Mechanism measured; the picture has not been looked at.**
+
+Closing this as unbridgeable rested on one assumption: that a depth buffer only
+ever sees GP0 packets, which is all DuckStation sees. It stopped being true when
+the map tiles, the models, their vertex transforms and the view-space clipper
+moved into C# (`PolyAssembler*.cs`). The port now *builds* nearly every packet
+that should occlude, so it knows two things the address map could only guess:
+every corner's depth, and which routine asked for the packet.
+
+`patches/recompone/0050` adds `GtePacketDepth`, a side table keyed by packet
+address in the same shape as `GteLightMap` (`0048`): four corner depths, checked
+against the command word and the first and last vertex words before they are
+believed. The assemblers fill it and `DrawPolygon` reads it. **While it is active
+the depth buffer takes a packet's record or nothing**; perspective correction and
+the sub-pixel fraction still come from the address map.
+
+- **The transforms** (`func_8002E650`, `func_8002E7CC`) note each cache slot's SZ3
+  beside the two cache words they wrote. An assembler takes a corner's depth only
+  while the slot still holds those exact words, so a slot something else rewrote
+  gives no depth rather than an old one.
+- **The tile assemblers** (`func_80030540`, `func_8002FECC`) and **the lit model
+  assembler** (`func_8002F214`, `func_8002EAEC`) record every packet they
+  finish. A packet with a corner at SZ 0 is not recorded.
+- **A clipped fan** (`func_800302E8`'s output, packet k being records 0, k+1 and
+  k+2) takes each record's view-space Z at `+0x10`. The clipper projects that same
+  number, and it is there whichever clipper ran. A packet whose vertex words are not
+  its records' screen words is not recorded, and is counted.
+- **Not recorded**: the HUD builder's icons (`InHud`, set by `PerPixelLighting`'s
+  hook) and the first-person arm (`InArm`, a pre/post on `func_80032400` in
+  `ZBuffer.cs`). Their addresses' old records are dropped so a stale one cannot
+  match. With no depth they keep painter's order, which is what they had on the
+  console.
+
+**The skybox needs no special case under this source.** It never passes through
+these assemblers, so it records nothing and draws first in painter's order, and
+every wall after it passes the test. `GteDepth.OtSlot != 0` is still applied. The
+same goes for anything else these routines do not draw — a miss is painter's
+order, as it always was.
+
+**What stays open is the coplanar decal.** Two surfaces at equal depth still rely
+on `GL_LEQUAL` giving the later table entry the tie; a small per-routine bias is
+the next step if the picture shows it.
+
+Measured in area 1 at slot 2's restore point, standing, 144 fps: 17,136 packet
+depths recorded a second and 17,136 polygons finding theirs, 23,616 triangles
+tested. The ~9,500 a second with no record are the HUD and the other 2D, and 0
+clipped packets were unmatched. The address map tested the same 23.6k from the same
+spot. It tested more only while the area was loading and the camera turning, and
+the extra triangles were all GT4s linked in the far end of the table, which is where
+the sky is. Frame rate unchanged, 144.0 fps drawn at 20.0 ticks/s.
+
+`KF2_ZBUFFER_SOURCE=map` is the comparison. The source needs Fast geometry: with
+the assemblers recompiled (Video ▸ Fast geometry off, `KF2_POLYASM=0`,
+`KF2_POLYASM_TRANSFORM=0`, or PGXP's CPU tracking forcing them back) nothing
+records, so `ZBuffer.SyncSource` falls back to the address map rather than to
+testing nothing. The source also feeds ambient occlusion, which shares the depth
+attachment, so the AO far-plane mask now covers everything that records nothing.
+The `KF2_ZBUFFER_PROBE=1` line reads `packet depths recorded/s, polygons found
+theirs/s, had none/s, clipped packets unmatched/s`.
 
 ## PGXP: upstream's own recovery, and what taking it actually bought
 
