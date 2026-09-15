@@ -3329,17 +3329,26 @@ stored as the SDL index in `kf2.map.pad.button`. `Device` is deliberately not
 filtered — it is SDL's joystick *instance id*, not a player number, so any pad
 opens the map.
 
-**It fits the area rather than following the player, until the area will not fit
-legibly.** `Map.Copy` gained the occupied box per half (`Map.Extents`), computed
-in the same pass as the height range and printed by the probe, and the view is
-scaled to that box and centred on it — so nothing moves as you walk except the
-dot, and a route can be read off a stable picture. That was expected to be a
-fraction of the grid and **measured as the whole of it**: areas 0 and 1 both run
-`x 0..79, z 0..79` on both halves. Fitting the extent is therefore fitting the
-80x80 grid, which in a small window is a few pixels a tile, so below a floor of 6
-logical px a tile the fit is abandoned and the map centres on the player's
-**tile** instead — the same quantisation the dot has, so the picture steps a
-square at a time rather than sliding under you.
+**It fits the area rather than following the player.** `Map.Copy` gained the
+occupied box per half (`Map.Extents`), computed in the same pass as the height
+range and printed by the probe, and the view is scaled to that box and centred
+on it — so nothing moves as you walk except the dot, and a route can be read
+off a stable picture. That was expected to be a fraction of the grid and
+**measured as the whole of it**: areas 0 and 1 both run `x 0..79, z 0..79` on
+both halves. Fitting the extent is therefore fitting the 80x80 grid.
+
+**A 900p window used to show less of the maze than a 1440p one, and the floor
+on the scale is why.** A tile below 6 logical px, multiplied by `Theme.Scale`,
+abandoned the fit and centred on the player's **tile** — the same quantisation
+the dot has — so the picture stepped a square at a time rather than sliding.
+That is a readability bargain, and it is the wrong one for a map. At a 1.5
+interface scale a 4:3 900p picture has about 8 px a tile to fit the grid and
+the floor asked for 9, so the view cropped to the rooms around the player;
+the same scale on a 1440p picture still fitted. Reported from play as less
+map visible at 900p than at 1440p. The floor is gone: the occupied extent is
+always in view, tiles shrink with the window, and the ceiling of 22 logical
+px a tile is kept so a one-room area does not fill the screen. **Never judged
+by eye**: whether a few pixels a tile at 900p still reads as a plan.
 
 #### "Full screen" is the game picture, not the window
 
@@ -3617,9 +3626,10 @@ visibility flood or the "see through" `docs/WIDESCREEN.md` calls it; and whether
 the minimap's size, corner, range, shape and opacity are usable in play — the
 scalloped edge of the circle and the readability of a faded map over a dark area
 in particular. On the full-screen map: whether the fitted scale is readable in a
-large area, whether the scrim is dark enough to read tiles over a bright scene,
-and whether a whole-area view is what a player wants rather than one centred on
-themselves. On the dot: whether it reads at minimap size, and whether losing the
+large area at a 900p window (a few pixels a tile, which is now how the whole
+maze stays on the board), whether the scrim is dark enough to read tiles over a
+bright scene, and whether a whole-area view is what a player wants rather than
+one centred on themselves. On the dot: whether it reads at minimap size, and whether losing the
 heading costs more than the honesty buys — and, on the native cross, whether a
 quarter turn is coarse enough to keep that bargain and fine enough to be worth
 having, and whether the blade reads as the pointing end at a minimap's scale. **On the native style, everything**:
