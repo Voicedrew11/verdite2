@@ -25,6 +25,9 @@ AppVersion={#AppVersion}
 AppPublisher=Voicedrew11
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
+; Verdite2.exe at the install root is the stub; the self-contained runtime
+; lives in bin\. Shortcuts still point at the stub so the player never has
+; to open that folder.
 UninstallDisplayIcon={app}\Verdite2.exe
 OutputDir=..\..\dist
 OutputBaseFilename=Verdite2-{#AppVersion}-win-x64-setup

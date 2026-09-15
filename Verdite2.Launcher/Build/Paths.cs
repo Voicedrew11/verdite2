@@ -17,13 +17,19 @@ namespace Verdite2.Launcher.Build;
 /// </summary>
 static class Paths
 {
-    /// <summary>Beside the executable: read-only, and the only thing shipped.</summary>
-    public static string Install { get; } = AppContext.BaseDirectory;
+    /// <summary>
+    /// The shipped tree: read-only, and the only thing shipped. On Linux (and
+    /// a developer run) this is the directory the executable sits in. On the
+    /// Windows package the runtime lives in bin/ next to the real apphost, so
+    /// this is the parent -- content/ stays beside the stub the player launches
+    /// rather than mixed in with a hundred DLLs.
+    /// </summary>
+    public static string Install { get; } = ResolveInstall();
 
-    public static string Content { get; } = Path.Combine(AppContext.BaseDirectory, "content");
-    public static string ContentConfig { get; } = Path.Combine(AppContext.BaseDirectory, "content", "config");
-    public static string ContentSrc { get; } = Path.Combine(AppContext.BaseDirectory, "content", "src");
-    public static string ContentMods { get; } = Path.Combine(AppContext.BaseDirectory, "content", "mods");
+    public static string Content { get; } = Path.Combine(Install, "content");
+    public static string ContentConfig { get; } = Path.Combine(Install, "content", "config");
+    public static string ContentSrc { get; } = Path.Combine(Install, "content", "src");
+    public static string ContentMods { get; } = Path.Combine(Install, "content", "mods");
 
     /// <summary>
     /// Per-user, writable, and stable across updates:
@@ -38,6 +44,25 @@ static class Paths
     public static string Builds => Path.Combine(Data, "builds");
 
     public static string BuildLog => Path.Combine(Data, "build.log");
+
+    static string ResolveInstall()
+    {
+        var dir = Path.GetFullPath(AppContext.BaseDirectory)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (Directory.Exists(Path.Combine(dir, "content")))
+            return dir;
+
+        // Windows package: we were started as bin\Verdite2.exe, payload is one
+        // directory up. TrimEnd above is load-bearing -- BaseDirectory usually
+        // carries a trailing slash, and GetDirectoryName of a slash-terminated
+        // path is the path itself, not the parent.
+        var parent = Path.GetDirectoryName(dir);
+        if (!string.IsNullOrEmpty(parent) && Directory.Exists(Path.Combine(parent, "content")))
+            return parent;
+
+        return dir;
+    }
 
     static string ResolveData()
     {

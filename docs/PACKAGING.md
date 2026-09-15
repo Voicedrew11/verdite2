@@ -60,6 +60,23 @@ Beside the executable, `content/`:
 Plus `RecompOne.Runtime.dll`, `recompone.dll`, Roslyn and the self-contained .NET
 runtime. About 109 MB laid out, 41 MB as an AppImage.
 
+On Windows those DLLs live in `bin/`, not next to the thing the player
+double-clicks. A self-contained apphost will not start unless its managed
+assembly and `hostfxr` sit beside it, so the published tree goes in `bin/` and
+`packaging/windows/Stub/` is a few-KB .NET Framework 4.8 executable at the
+install root that launches `bin\Verdite2.exe`. Shortcuts, Inno's icon and
+`UninstallDisplayIcon` all point at the stub. `Paths.Install` looks one
+directory up when `content/` is not next to the apphost, which is how a
+developer run and the AppImage (payload still beside the executable) keep
+working. The zip and the install directory look like:
+
+```
+Verdite2.exe    the stub
+bin/            the self-contained runtime and the real apphost
+content/        config, sources, shipped mods
+licenses/
+```
+
 **And the licences the artifact is obliged to carry**, which until the interface
 font arrived it did not have: `patches/recompone/0033` embeds Noto Sans in
 `RecompOne.Runtime.dll`, and SIL OFL 1.1 requires the licence to travel with the
