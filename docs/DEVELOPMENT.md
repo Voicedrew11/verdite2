@@ -97,8 +97,10 @@ the first argument or the runtime will prompt for a disc.
 **csproj gotcha:** the RecompOne checkout is nested inside this project
 directory, so the SDK's default item globs would compile RecompOne's own sources
 and its `obj/` AssemblyInfo files (CS0579 duplicate-attribute errors). Hence the
-`<Compile Remove="tools/**" />`. Conversely, `generated/` and `patches/` need *no*
-explicit include — adding one causes NETSDK1022.
+`<Compile Remove="tools/**" />`. The same trap is `mcp/`, `Verdite2.Launcher/`,
+and `packaging/windows/Stub/` (a net48 project whose `obj/` appears the moment
+anyone has built the Windows package). Conversely, `generated/` and `patches/`
+need *no* explicit include — adding one causes NETSDK1022.
 
 
 ## Diagnostics

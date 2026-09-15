@@ -99,4 +99,18 @@
         <None Remove="dist/**" />
     </ItemGroup>
 
+    <!--
+      packaging/windows/Stub/ is a nested net48 project. Building it (the Windows
+      package script does) leaves AssemblyInfo.cs under its obj/, and the default
+      glob compiles that into this assembly — CS0579, the same trap tools/**,
+      mcp/** and Verdite2.Launcher/** are removed for. Its Program.cs would also
+      become a second Main. The rest of packaging/ is scripts and icons, so the
+      remove is the whole tree.
+    -->
+    <ItemGroup>
+        <Compile Remove="packaging/**" />
+        <EmbeddedResource Remove="packaging/**" />
+        <None Remove="packaging/**" />
+    </ItemGroup>
+
 </Project>

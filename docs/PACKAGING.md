@@ -65,10 +65,12 @@ double-clicks. A self-contained apphost will not start unless its managed
 assembly and `hostfxr` sit beside it, so the published tree goes in `bin/` and
 `packaging/windows/Stub/` is a few-KB .NET Framework 4.8 executable at the
 install root that launches `bin\Verdite2.exe`. Shortcuts, Inno's icon and
-`UninstallDisplayIcon` all point at the stub. `Paths.Install` looks one
-directory up when `content/` is not next to the apphost, which is how a
-developer run and the AppImage (payload still beside the executable) keep
-working. The zip and the install directory look like:
+`UninstallDisplayIcon` all point at the stub. The stub is a nested project, so
+building it leaves `obj/` AssemblyInfo under the game project's tree;
+`KingsField2Recomp.csproj` removes `packaging/**` for the same CS0579 reason it
+removes `tools/**`. `Paths.Install` looks one directory up when `content/` is
+not next to the apphost, which is how a developer run and the AppImage (payload
+still beside the executable) keep working. The zip and the install directory look like:
 
 ```
 Verdite2.exe    the stub
