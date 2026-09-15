@@ -67,7 +67,13 @@ def ico(sizes):
 
 if __name__ == "__main__":
     import os
+    import sys
     here = os.path.dirname(os.path.abspath(__file__))
-    open(os.path.join(here, "verdite2.png"), "wb").write(png(render(256)))
-    open(os.path.join(here, "verdite2.ico"), "wb").write(ico([16, 32, 48, 256]))
+    png_path = os.path.join(here, "verdite2.png")
+    ico_path = os.path.join(here, "verdite2.ico")
+    if "--force" not in sys.argv and (os.path.exists(png_path) or os.path.exists(ico_path)):
+        print("refusing to overwrite the shipping icon; pass --force to write the old placeholder")
+        sys.exit(1)
+    open(png_path, "wb").write(png(render(256)))
+    open(ico_path, "wb").write(ico([16, 32, 48, 256]))
     print("wrote verdite2.png and verdite2.ico")

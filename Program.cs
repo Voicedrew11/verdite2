@@ -1088,6 +1088,17 @@ Kf2.Settings.PatchSettings.Install();
 //     KF2_CRASHDUMP=0     say nothing; let the exception print on its own
 Kf2.CrashDump.Configure(Environment.GetEnvironmentVariable("KF2_CRASHDUMP"));
 
+foreach (var icon in new[]
+{
+    Path.Combine("packaging", "shared", "verdite2.png"),
+    Path.Combine(AppContext.BaseDirectory, "verdite2.png"),
+})
+{
+    if (!File.Exists(icon)) continue;
+    RecompOne.Runtime.Runtime.SetIcon(File.ReadAllBytes(icon));
+    break;
+}
+
 var memory = new PSMemory();
 try
 {
