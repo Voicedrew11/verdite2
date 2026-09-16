@@ -11,7 +11,7 @@ namespace Kf2;
 /// Carries creature (and morphing-object) pose between logic ticks by driving
 /// the MO clip clock, not by rewriting vertices after the fact.
 ///
-///     KF2_SMOOTH_ANIM=1         on, in the default mode; off by default
+///     KF2_SMOOTH_ANIM=0         off; on by default with the rest of the smoothing tick
 ///     KF2_SMOOTH_ANIM=timeline  interpolate on the clip's own timeline (default)
 ///     KF2_SMOOTH_ANIM=weight    the old bounded comparison mode
 ///     KF2_SMOOTH_ANIM=time      the old unbounded comparison mode
@@ -462,8 +462,9 @@ public static class AnimSmoothing
     public const string OnKey = "kf2.smoothing.anim";
     public const string ModeKey = "kf2.smoothing.anim.mode";
 
-    /// <summary>Drive the MO clip clock between ticks. **Off by default.**</summary>
-    public static bool Enabled { get; private set; }
+    /// <summary>Drive the MO clip clock between ticks. **On by default**, with
+    /// the rest of the smoothing tick.</summary>
+    public static bool Enabled { get; private set; } = true;
 
     /// <summary>
     /// How much of the clock to drive.

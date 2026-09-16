@@ -30,21 +30,25 @@ namespace Kf2;
 /// that rectangle as well as of the interface scale, since the picture is the
 /// smaller of the two and a fixed margin at a large scale would eat the map.
 ///
-/// **It fits the area rather than following the player, until the area will not
-/// fit legibly** — which is the difference between a map and a minimap. The view
-/// is scaled to the occupied extent of the drawn half (<c>Map.Extents</c>,
-/// computed with the four-a-second grid copy) and centred on that box, so nothing
-/// moves as you walk except the dot and the picture is stable enough to read a
-/// route off. A view that slid under the player would be the minimap again, only
-/// larger.
+/// **It fits the area rather than following the player** — which is the
+/// difference between a map and a minimap. The view is scaled to the occupied
+/// extent of the drawn half (<c>Map.Extents</c>, computed with the four-a-second
+/// grid copy) and centred on that box, so nothing moves as you walk except the
+/// dot and the picture is stable enough to read a route off. A view that slid
+/// under the player would be the minimap again, only larger.
 ///
-/// **The floor on the scale is why that is only "until".** The extent was
+/// **The whole extent is always in view, at every window size.** The extent was
 /// expected to be a fraction of the 80x80 grid and measured as the whole of it:
 /// areas 0 and 1 both run x 0..79, z 0..79 on both halves, so fitting the extent
-/// is fitting the grid, and in a small window that is a few pixels a tile. Below
-/// <see cref="MinCell"/> the fit is abandoned and the map is centred on the
-/// player's **tile** instead — the same quantisation the dot has, so the picture
-/// steps a square at a time rather than sliding.
+/// is fitting the grid. A floor of 6 logical px a tile used to abandon that fit
+/// and centre on the player once a tile dropped below it, scaled by
+/// <c>Theme.Scale</c> — so a 900p window at a 1.5 interface scale (8 px a tile
+/// to fit, 9 px asked) cropped to the rooms around the player while a 1440p
+/// window of the same scale still showed the area. The floor was the
+/// readability bargain and it is the wrong one for a map: the same maze has to
+/// be on the board at both sizes. Tiles shrink with the window instead; the
+/// ceiling on a tile is kept, so a one-room area does not fill the screen with
+/// four enormous squares.
 ///
 /// **It takes no input.** The window carries <c>NoInputs</c>, so the mouse still
 /// reaches the game and the ImGui menus behind it, and there is nothing on it to
@@ -61,10 +65,11 @@ namespace Kf2;
 /// <c>ConfigManager.ApplyViewToPanels</c> has run, so a saved open state is never
 /// applied and the map cannot come up over the boot logo.
 ///
-/// **Never judged by eye**: whether the fitted scale is readable in a large area,
-/// whether the scrim is dark enough to read the tiles over a bright scene, and
-/// whether the whole-area view is what a player wants over a view centred on
-/// themselves.
+/// **Never judged by eye**: whether the fitted scale is readable in a large area
+/// at a 900p window (a few pixels a tile, which is the cost of keeping the
+/// whole maze on the board), whether the scrim is dark enough to read the tiles
+/// over a bright scene, and whether the whole-area view is what a player wants
+/// over a view centred on themselves.
 /// </summary>
 public sealed class MapFullscreen : IFloatingPanel
 {
@@ -103,11 +108,12 @@ public sealed class MapFullscreen : IFloatingPanel
 
     static float Scrim => Map.Style == Map.StyleNative ? ScrimNative : ScrimBlueprint;
 
-    /// <summary>Pixels a tile, before the interface scale. The lower bound is
-    /// where the fit gives up and the view centres on the player instead; the
-    /// upper stops a one-room area from filling the screen with four enormous
-    /// squares.</summary>
-    const float MinCell = 6f, MaxCell = 22f;
+    /// <summary>Pixels a tile, before the interface scale. The upper bound
+    /// stops a one-room area from filling the screen with four enormous
+    /// squares. There is no lower bound: a floor is what used to hide half the
+    /// maze in a small window, and a 1 px clamp is only so a tile still exists
+    /// if the content rectangle ever collapses under the chrome.</summary>
+    const float MaxCell = 22f;
 
     public void Draw()
     {
@@ -189,9 +195,8 @@ public sealed class MapFullscreen : IFloatingPanel
         ImGui.PopStyleVar();
     }
 
-    /// <summary>The area, scaled to fit the content rectangle — or, where that
-    /// would be too fine to read, at the floor scale and centred on the player's
-    /// tile. See the class comment.</summary>
+    /// <summary>The area, scaled to fit the content rectangle. See the class
+    /// comment.</summary>
     void DrawArea(ImDrawListPtr dl, Vector2 c0, Vector2 c1)
     {
         int half = Map.HalfOffset;
@@ -206,10 +211,10 @@ public sealed class MapFullscreen : IFloatingPanel
         // One tile of air round the plan, so the outermost wall is not flush with
         // the edge of the screen.
         float wide = x1 - x0 + 3, tall = z1 - z0 + 3;
-        float lo = MinCell * Theme.Scale, hi = MaxCell * Theme.Scale;
+        float hi = MaxCell * Theme.Scale;
 
         float fit = MathF.Min((c1.X - c0.X) / wide, (c1.Y - c0.Y) / tall);
-        float cell = Math.Clamp(fit, lo, hi);
+        float cell = Math.Clamp(fit, 1f, hi);
 
         var centre = new Vector2((c0.X + c1.X) * 0.5f, (c0.Y + c1.Y) * 0.5f);
 
@@ -219,27 +224,16 @@ public sealed class MapFullscreen : IFloatingPanel
         // centre of tiles Z0..Z1 is therefore row Span - (Z0 + Z1 + 1) / 2, not
         // (Z0 + Z1) / 2 — getting that wrong mirrors the map, which is the defect
         // this patch was corrected for once already.
-        float xc, rc;
-        if (fit >= lo)
-        {
-            xc = (x0 + x1 + 1) * 0.5f;
-            rc = Map.Span - (z0 + z1 + 1) * 0.5f;
-        }
-        else
-        {
-            // The area will not fit at a legible scale, so the player is the
-            // centre — on their tile rather than their position, so the map steps
-            // a square at a time like the dot on it does.
-            xc = Map.TileOf(Map.PlayerX) + 0.5f;
-            rc = Map.RowOf(Map.TileOf(Map.PlayerZ)) + 0.5f;
-        }
+        float xc = (x0 + x1 + 1) * 0.5f;
+        float rc = Map.Span - (z0 + z1 + 1) * 0.5f;
 
         var origin = new Vector2(centre.X - xc * cell, centre.Y - rc * cell);
 
-        // What can land in the content rectangle, taken from the origin rather
-        // than from the extent: the two agree while the whole area fits and do not
-        // once the view is centred on the player, and drawing 6,400 tiles to fill
-        // a window that holds a few hundred is the thing this avoids.
+        // What can land in the content rectangle. The origin is the extent's, so
+        // this agrees with the occupied box while the fit is below the ceiling
+        // and is a subset of it when a one-room area hits MaxCell; drawing 6,400
+        // tiles to fill a window that holds a few hundred is the thing this
+        // avoids.
         int wx0 = (int)MathF.Floor((c0.X - origin.X) / cell);
         int wr0 = (int)MathF.Floor((c0.Y - origin.Y) / cell);
         int wx1 = (int)MathF.Ceiling((c1.X - origin.X) / cell);

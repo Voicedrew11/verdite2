@@ -7,8 +7,7 @@ screen-space effects that were authored 320 wide, and the culls the extra pictur
 runs into.
 
 **Status.** Mechanism measured (a quarter of every frame in an area is already
-being thrown away at the screen edge); **picture never checked by eye**, which is
-why the aspect defaults to 4:3 while its two sub-options default to on. One cull
+being thrown away at the screen edge); **16:9 is the default.** One cull
 is **still unexplained** — see "There is a third cull" at the end.
 
 Picture-quality work (perspective correction, sub-pixel positions, Z-buffer,
@@ -324,17 +323,12 @@ the first `OverlayLoadedEvent`, and `OnLoad`'s config read became a
 (`kf2.widescreen.aspect`), so a player who had the mod on keeps the picture they
 had; the three sub-option keys are no longer read at all (see below).
 
-**Where it differs from the four conversions before it: the switch stays off.**
+**Where it differs from the four conversions before it: the default is 16:9.**
 Those flipped their default *on*, each with the same argument — a mod that can be
-absent, whose absence is a defect the port should have dealt with. That argument
-does not hold here. The census says a quarter of every frame in an area is there
-to recover, but the two things that can go wrong at the sides are exactly the ones
-a primitive counter cannot see (a 2D screen the game draws 320 wide; per-object
-culling against the game's own 4:3 frustum), and **the picture has still never been
-checked by eye**. That is the sub-pixel test, not the dither test, and it gives the
-same answer: mechanism measured, picture not, so the default is 4:3 —
-`WideAspect = 0`, which is the untouched path — and the presets are one click away
-under Video. The census left the settings page with it and stayed on the console
+absent, whose absence is a defect the port should have dealt with. Widescreen
+stayed at 4:3 while the picture was unjudged. It ships 16:9 now:
+`WideAspect = 16/9`, and 4:3 is still `WideAspect = 0`, the untouched path. The
+census left the settings page with it and stayed on the console
 under `KF2_WIDESCREEN_PROBE=1`, as the dither counters did.
 
 **The page is one combo, drawn directly under the render scale** —

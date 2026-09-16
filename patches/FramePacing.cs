@@ -222,11 +222,15 @@ public static class FramePacing
     /// back to 30 mid-session finds it where the game left it.</summary>
     const uint VBlankCredit = 0x801B6CA8;
 
-    /// <summary>Frames a second the port aims for. 0 is uncapped -- no pacing at
-    /// all, which draws as fast as the host can. It no longer runs the *game* fast:
-    /// the logic clock holds the world to <see cref="LogicHz"/> in every
-    /// configuration, uncapped included.</summary>
-    public static double TargetFps { get; private set; } = LogicHz;
+    /// <summary>Frames a second a first run draws at. The world stays at
+    /// <see cref="LogicHz"/>; this is the picture only. 0 is uncapped -- no
+    /// pacing at all, which draws as fast as the host can. It no longer runs the
+    /// *game* fast: the logic clock holds the world to <see cref="LogicHz"/> in
+    /// every configuration, uncapped included.</summary>
+    public const double DefaultFps = 60;
+
+    /// <summary>Frames a second the port aims for.</summary>
+    public static double TargetFps { get; private set; } = DefaultFps;
 
     /// <summary>False only when uncapped.</summary>
     public static bool Enabled => TargetFps > 0.0;
@@ -685,12 +689,10 @@ public static class FramePacing
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             // Order matters: the tick rate is read first, because SetTargetFps
-            // resets the accumulator and the default render rate is the tick rate.
-            // The tick rate is no longer read from the config: it is 20 unless
-            // KF2_TICKRATE says otherwise, and Configure has already applied that.
-            // SetTargetFps still runs first-ish for the same reason it always did
-            // -- it resets the accumulator, and the default render rate is the
-            // tick rate.
+            // resets the accumulator. The tick rate is no longer read from the
+            // config: it is 20 unless KF2_TICKRATE says otherwise, and Configure
+            // has already applied that. The render rate defaults to DefaultFps,
+            // not the tick rate, so a first run draws three pictures per tick.
             if (!_fromEnv) SetTargetFps(SavedRate());
             else ApplyHostCeiling();
         });

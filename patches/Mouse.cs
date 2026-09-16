@@ -110,19 +110,11 @@ public static class Mouse
     public const string CaptureKeyKey = "kf2.mouse.capturekey";
 
     /// <summary>
-    /// Off by default, and the one thing here that is a judgement rather than a
-    /// measurement.
-    ///
-    /// Every other control the port turns on by default answers something that is
-    /// broken without it — a stick wired to the D-pad turns instead of walking.
-    /// Nothing is broken about playing this with the keyboard, and mouse look on
-    /// by default would mean a pointer that disappears into the game the first
-    /// time a player presses the wrong key. It is also the "picture never
-    /// checked" rule applied to feel: the angle asked for and the angle the game
-    /// applied have been measured against each other and agree, and the
-    /// sensitivity that suits a hand has not been judged by anyone.
+    /// On by default. Capture is still Escape, so a pointer does not disappear
+    /// into the game until the player asks; once they do, look and the mouse
+    /// buttons are already wired.
     /// </summary>
-    public static bool Enabled;
+    public static bool Enabled = true;
 
     public static float TurnSens = 1.0f;
     public static float LookSens = 1.0f;

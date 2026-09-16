@@ -43,6 +43,9 @@ try
     Runtime.Initialize($"Verdite2 {Ver.Number}");
     Localization.Merge(BuildProgressPopup.Strings);
 
+    var icon = Path.Combine(AppContext.BaseDirectory, "verdite2.png");
+    if (File.Exists(icon)) Runtime.SetIcon(File.ReadAllBytes(icon));
+
     // The runtime's own picker: it opens a native file dialog, refuses anything
     // DiscValidator rejects, saves the accepted path, and pumps the window while
     // it waits. A player who has already chosen passes straight through.

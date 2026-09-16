@@ -65,24 +65,15 @@ namespace Kf2;
 /// own links of it need no addresses of their own. See "The screen-space effects
 /// are 320 wide too" in NOTES.md.
 ///
-/// ## Why a patch, and why it is still off by default
+/// ## Why a patch, and why 16:9 is the default
 ///
 /// It is a patch for the reason the dither switch is one: an aspect ratio is a
 /// picture the port should be able to offer without a package having to load, and
 /// a player looking for it will look in Video, not in a Mods popup. That is an
-/// argument about *where the switch lives*, and it is the whole argument — it
-/// says nothing about which way the switch should point.
-///
-/// Which way it points is the sub-pixel argument rather than the dither one: the
-/// mechanism has been measured and the picture has not. The census says a quarter
-/// of the frame is there to recover; what has never been checked by eye is the two
-/// places it can go wrong — a full-screen rectangle the game draws itself is 320
-/// wide and leaves the sides showing the previous frame, and per-object culling
-/// still uses the game's own 4:3 frustum, so an object can pop at an edge the
-/// margin would have shown it in. Neither is visible to a primitive counter. So
-/// the default aspect is 4:3, which is <c>WideAspect = 0</c> and the untouched
-/// path, and the presets are one click away in the combo Video draws below the
-/// render scale. See "Widescreen" in NOTES.md.
+/// argument about *where the switch lives*. The default is 16:9: the census said
+/// a quarter of the frame was there to recover, and that is now the picture a
+/// first run presents. 4:3 remains the off setting, which is <c>WideAspect = 0</c>
+/// and the untouched path. See "Widescreen" in NOTES.md.
 ///
 /// ## Anchoring the HUD
 ///
@@ -154,6 +145,9 @@ public static class Widescreen
     /// <summary>The game's own aspect, and the one that means "off".</summary>
     public const float FourThree = 4f / 3f;
 
+    /// <summary>The aspect a first run presents at.</summary>
+    public const float SixteenNine = 16f / 9f;
+
     /// <summary>As wide as an aspect is allowed to get. Past 3:1 the margin is
     /// wider than the screen and the frame is mostly things the game never meant
     /// to draw.</summary>
@@ -165,12 +159,12 @@ public static class Widescreen
     [
         ("4:3 (off)", FourThree),
         ("16:10",     16f / 10f),
-        ("16:9",      16f / 9f),
+        ("16:9",      SixteenNine),
         ("21:9",      64f / 27f),
     ];
 
-    /// <summary>The target aspect. 4:3 is off, and off is the default.</summary>
-    public static float Aspect { get; private set; } = FourThree;
+    /// <summary>The target aspect. 4:3 is off; 16:9 is the default.</summary>
+    public static float Aspect { get; private set; } = SixteenNine;
 
     /// <summary>Move the HP/MP panel and the equipment icons out to the new edges.
     /// **Off, and no longer a setting** (<c>KF2_WIDESCREEN_HUD=1</c> is the
@@ -294,7 +288,7 @@ public static class Widescreen
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Aspect = _forced ?? RecompOne.Runtime.Runtime.View.GetFloat(AspectKey, FourThree);
+            Aspect = _forced ?? RecompOne.Runtime.Runtime.View.GetFloat(AspectKey, SixteenNine);
 
             // Neither of these reads the saved config any more, deliberately: a
             // player who ticked one off before it stopped being a tick would

@@ -12,7 +12,7 @@ namespace Kf2;
 /// where a pillar meets the floor, from the same recovered view depth perspective
 /// correction and the Z-buffer already use.
 ///
-///     KF2_AO=1              on; 0 or unset leaves the picture flat
+///     KF2_AO=0              off; unset is on (the shipped default)
 ///     KF2_AO_RADIUS=512     how far a surface reaches to shade its neighbour,
 ///                           in the game's own world units (a floor tile is 2048)
 ///     KF2_AO_STRENGTH=0.8   how dark a fully occluded pixel goes, 0..1
@@ -59,9 +59,9 @@ namespace Kf2;
 /// modal loop stores and restores — so a menu cannot bake it in and re-shade it
 /// every iteration.
 ///
-/// **Off by default, for the sub-pixel reason.** Every claim above is a mechanism
-/// with a counter behind it, and the picture has not been judged by eye. It is also
-/// deliberately not authentic: the console could not have drawn this. Its switch is
+/// **On by default.** Every claim above is a mechanism with a counter behind it;
+/// the picture has been judged for shipping. It is also deliberately not authentic:
+/// the console could not have drawn this. Its switch is
 /// under Video ▸ Enhancements with the others, and the tuning is on the console —
 /// a radius and a strength are the port's question to answer, not the player's.
 ///
@@ -128,16 +128,16 @@ public static class AmbientOcclusion
     {
         _windowStart = Now;
 
-        // The default is off, so like Subpixel there is nothing to decide before
-        // the config file is read. ConfigManager only loads inside
-        // HostWindow.Initialize, which is after Program.cs -- reading the saved
-        // key here would read an empty config and write it back over the real one.
-        Enabled = _forced ?? false;
+        // RuntimeReadyEvent is the first and only place the saved setting is
+        // decided. ConfigManager only loads inside HostWindow.Initialize, which
+        // is after Program.cs -- reading the saved key here would read an empty
+        // config and write it back over the real one.
+        Enabled = _forced ?? true;
         GteDepth.AoProbe = _toConsole;
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             Console.WriteLine($"[KF2] ambient occlusion: {(Enabled ? "on" : "off")}" +
                               (Enabled ? $", radius {GteDepth.AoRadius:F0}, strength {GteDepth.AoStrength:F2}, " +
                                          $"{GteDepth.AoSamples} samples" : ""));

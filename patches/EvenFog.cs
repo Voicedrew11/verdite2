@@ -17,7 +17,7 @@ namespace Kf2;
 /// - the records' colour matrix and back colour are blended the same way, as the
 ///   game does for objects.
 ///
-///     KF2_EVENFOG=1         on (the saved setting otherwise; off by default)
+///     KF2_EVENFOG=0         off (on by default; needs Fast geometry)
 ///     KF2_EVENFOG_BLEND=0   no fog blend: the game's hard fog edge between records
 ///     KF2_EVENLIGHT=0       no light blend: the game's hard light edge
 ///
@@ -56,11 +56,11 @@ public static class EvenFog
 
     public static void Install()
     {
-        Enabled = _forced ?? false;
+        Enabled = _forced ?? true;
         // The saved key is only readable once the runtime is up (see AmbientOcclusion).
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             Console.WriteLine(!Enabled ? "[KF2] even fog and lighting: off"
                 : $"[KF2] even fog and lighting: on{(Blend ? "" : ", no fog blend")}{(_lightPart ? "" : ", no light blend")}");
         });

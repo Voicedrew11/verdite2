@@ -53,8 +53,8 @@ namespace Kf2.Settings;
 /// express.
 ///
 /// **The smoothing tick shares this heading**, directly under the slider. It is
-/// greyed out whenever the rate is not above the world's tick — which is the
-/// shipped default — and the control that decides that is this one, so the two
+/// greyed out whenever the rate is not above the world's tick, so at the shipped
+/// 60 fps it is live. The control that decides that is this one, so the two
 /// belong together rather than a group apart. See <see cref="FrameSmoothingPage"/>.
 /// </summary>
 public sealed class FramePacingPage : IPatchPage

@@ -9,9 +9,8 @@ namespace Kf2.Settings;
 /// It sat in Enhancements with the picture switches, and that was the wrong
 /// group: this is not a choice about how faithful the picture is, it is a
 /// consequence of the rate. It does nothing at or below the world's tick rate and
-/// so draws greyed at the shipped default, and the control that explains the grey
-/// is the combo above it — a dead tick met before its cause is a defect, met
-/// under its cause it is a note.
+/// so draws greyed there — the shipped picture is 60 fps, so out of the box the
+/// tick is live — and the control that explains the grey is the slider above it.
 ///
 /// There were four checkboxes and two combos here, one per patch, and that was
 /// the implementation's shape rather than the player's: nobody wants the camera

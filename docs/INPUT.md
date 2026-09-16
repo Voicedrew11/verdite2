@@ -507,8 +507,9 @@ it for this pair specifically: `0x8006E590` reads `0x1000`, which is
 ## Mouse look
 
 `patches/Mouse.cs` steers with the mouse, and presses pad buttons with its
-buttons. It is **off by default** and its knobs are under Input, below the stick
-ones.
+buttons. It is **on by default** and its knobs are under Input, below the stick
+ones. Capture is still Escape, so the pointer does not disappear into the game
+until the player asks.
 
 **The look half is not a hook.** A mouse and a stick are two ways of asking for
 the same thing — the per-frame turn and pitch step — and `Analog.BeforeLook`
@@ -770,9 +771,9 @@ exactly the sort of thing a counter cannot answer. The mouse buttons have not
 been pressed at a door or a monster: the injection is one `&=` on a word the
 BIOS is about to hand over, but nobody has watched a swing come out of it.
 
-It stays **off by default** anyway, and for a reason the measurements do not
-touch: a pointer that disappears into the game unasked is worse than one switch
-to find.
+It is **on by default**. Capture is still Escape: a pointer that would
+disappear into the game unasked is worse than one key to find, so look does
+nothing until that key is pressed.
 
 
 ## The menu pointer

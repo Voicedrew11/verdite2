@@ -63,9 +63,9 @@ public sealed class MousePage : IPatchPage
 
         ImGui.Spacing();
         // Outside the disabled block on purpose: this one needs no capture and so
-        // no mouse look. A player who leaves the pointer a pointer -- which is the
-        // default -- can still use it in the menus, and burying the switch under a
-        // feature it does not depend on would hide that.
+        // no mouse look. A player who leaves mouse look off still has a pointer
+        // in the menus, and burying the switch under a feature it does not depend
+        // on would hide that.
         Check("Menu pointer", MenuMouse.OnKey, ref MenuMouse.Enabled,
               "Point at an item in the in-game menu and the game's own cursor moves to it; " +
               "left click confirms, right click backs out. It takes the cursor only once the " +

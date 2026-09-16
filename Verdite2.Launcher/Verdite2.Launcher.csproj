@@ -92,8 +92,7 @@
 
         <!--
           Windows reads the icon out of the executable itself, so it has to be set
-          here rather than by the packaging. Placeholder art; see
-          packaging/shared/README.md.
+          here rather than by the packaging. See packaging/shared/README.md.
         -->
         <ApplicationIcon>../packaging/shared/verdite2.ico</ApplicationIcon>
     </PropertyGroup>
@@ -127,6 +126,7 @@
         <Content Include="../patches/**/*.cs" LinkBase="content/src/patches" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="../mods/**/*" Exclude="../mods/.cache/**" LinkBase="content/mods" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="../packaging/shared/verdite2.png" Link="verdite2.png" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 
     <!--

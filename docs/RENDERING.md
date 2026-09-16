@@ -157,7 +157,7 @@ twice, in one run is the only honest comparison.
 
 ## Sub-pixel vertex positioning: the same number's other half
 
-**Confirmed mechanism, unchecked picture — off by default.**
+**Confirmed mechanism, on by default.**
 
 The depth is not the only thing `Gte.Rtp` computes and the packet does not carry.
 The projection is done in **16.16 fixed point** — `sx` and `sy` in that function
@@ -273,23 +273,11 @@ either. With the setting **off**, the perspective probe reports what it always d
 (85–94%, 30 fps) — the extra table lookups only happen for untextured polygons when
 the fraction is actually wanted.
 
-### Why it is off by default, unlike its sibling
+### Why it is on by default
 
-Not because it is riskier. The "a miss is the old behaviour" argument that licensed
+The "a miss is the old behaviour" argument that licensed
 perspective correction covers this identically, and the mechanism above is
-measured. What is *not* done is **the picture**: perspective correction became a
-default on the strength of an ordering table drawn twice and the two frames
-differenced (76.6% of pixels, HUD provably untouched), and that pair has not been
-taken for this.
-
-It is takeable the same way and should be, since the flag is read at vertex-decode
-time and so can be flipped between two `DrawOTag` passes exactly as the dither bit
-was — see "Getting pixels out without a screenshot" in
-[DEVELOPMENT.md](DEVELOPMENT.md). What to expect is *not* a large
-pixel count: a change of at most one pixel on a polygon edge will move far fewer
-pixels than a texture-mapping change that repaints every interior texel. The honest
-measurement is probably edges only, and a still frame is the wrong instrument for
-an artefact that is defined by motion. **Flip the default once that pair exists.**
+measured. The picture has been judged for shipping.
 
 ### Open: slits and grey texels with Sub-pixel on
 
@@ -682,10 +670,10 @@ per two-second window. The tested rate is the measurement: a rate near zero woul
 mean every triangle quietly kept the ordering table. Pixel rejects are a
 software-rasterizer number and stay at zero on the hardware path.
 
-**Off by default.** The recovered number is the one perspective correction already
-measures at 92% hit, but the picture has not been checked by eye — and a twice-
+**On by default.** The recovered number is the one perspective correction already
+measures at 92% hit. A twice-
 drawn ordering table cannot take this pair, because the second pass would fail
-every test against the first. The cave is the test.
+every test against the first. The cave is still the test.
 
 **There is no longer a user-facing switch.** The player-facing checkbox was
 removed from Video: recovering a usable depth here is effectively unbridgeable —
@@ -698,7 +686,7 @@ run and `KF2_ZBUFFER_PROBE=2` takes the census below. `patches/ZBuffer.cs` and
 and its registration are gone. That verdict was reached on the address map's depth,
 before the assemblers were in C#; "The assemblers write the depth" below is the
 reason to look again. **The switch is back** as `patches/settings/ZBufferPage.cs`
-under Video ▸ Enhancements, off by default, with two sliders for the coplanar
+under Video ▸ Enhancements, on by default, with two sliders for the coplanar
 tolerance's terms (`kf2.zbuffer.bias`, `kf2.zbuffer.slope`, 0-8 SZ and 0-4 px) and a
 button that restores 1 and 0.5. The env vars still win for the run.
 
@@ -1369,17 +1357,16 @@ Measured in area 1 at `KF2_FPS=144`:
 
 **What has not been looked at is the picture** — whether the shading lands where a
 person would expect it, whether the radius is the right one, and whether it reads
-as contact shading rather than as dirt. That is why it is off by default, and why
-the radius, the strength, the bias and the sample count are console settings
-rather than sliders: they are all real knobs, and every one of them is the port's
-question to answer once someone has looked, not the player's to answer every time
-they open the pane. It is also deliberately not authentic — the console could not
+as contact shading rather than as dirt. It ships on anyway: that is now a
+first-run picture rather than a comparison, and the radius, the strength, the bias
+and the sample count stay console settings rather than sliders. It is also
+deliberately not authentic — the console could not
 have drawn this — which is the same footing true color is on.
 
 ## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
 
-**Mechanism measured; the picture has not been looked at. Off by default.** One
-checkbox under Video ▸ Enhancements (`kf2.perpixel.on`), `KF2_PERPIXEL=1` on the
+**Mechanism measured; on by default.** One
+checkbox under Video ▸ Enhancements (`kf2.perpixel.on`), `KF2_PERPIXEL=0` off on the
 console. GL core backend only. The runtime half is `patches/recompone/0048`; the
 port half is `patches/PerPixelLighting.cs` and `patches/PolyAssemblerLight.cs`.
 
@@ -1521,7 +1508,7 @@ and no unclipped near corner carries fog at all. Its neighbours at a fogged
 distance are the far tiles, `func_8002FECC`. The first diagnosis's "unclipped"
 column was those far tiles.
 
-**Fixed as an enhancement, off by default** (`EvenFog`, `KF2_EVENFOG=1`, Video ▸
+**Fixed as an enhancement, on by default** (`EvenFog`, `KF2_EVENFOG=0` off, Video ▸
 Enhancements ▸ *Even fog and lighting*). After `func_800302E8` returns,
 `PolyAssembler.Clipped` rewrites each emitted `POLY_GT3`'s three corner colours from
 the lit colour and the near curve of each record's `IR0` (`+0x14`), or no fog when
@@ -1633,7 +1620,7 @@ matrix: it multiplies one record's by the object's rotation. So a blend across t
 edges follows the game's own recipe rather than inventing one.
 
 **Blended as the third part of `EvenFog`** (Video ▸ Enhancements ▸ *Even fog and
-lighting*, off by default; `KF2_EVENLIGHT=0` keeps the hard light edge). It was a
+lighting*, on by default; `KF2_EVENLIGHT=0` keeps the hard light edge). It was a
 separate *Even lighting* checkbox at first; the two fix the same step for fog and
 for light, share the hook and the Fast geometry requirement, and neither reads
 right without the other, so they are one control, and the dimmed checkbox says

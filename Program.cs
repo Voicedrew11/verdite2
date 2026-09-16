@@ -183,10 +183,25 @@ Kf2.UiScale.Install();
 Kf2.KeyLayout.Configure();
 Kf2.KeyLayout.Install();
 
+// Host chrome a first run would otherwise inherit from RecompOne: windowed, no
+// FPS overlay, a dark-grey theme, master volume at half. The picture settings
+// the port ships live in the patches' own fallbacks; these four are the
+// runtime's, so they are filled here the way KeyLayout fills the keymap --
+// Defaults runs after ConfigManager.Load and only writes a key that is missing,
+// so an existing config keeps what it had. MasterVolume is on Game, which Load
+// deserialises over this when settings.json exists and saves it when it does not.
+RecompOne.Runtime.Config.ConfigManager.Game.MasterVolume = 1f;
+RecompOne.Runtime.Runtime.Defaults(v =>
+{
+    v.Default("ShowFps", true);
+    v.Default("Fullscreen", true);
+    v.Default("Background", "#000000");
+});
+
 // Frame pacing. The game's speed is its frame rate, so the rate the port draws at
 // and the rate the game's own clock runs at are two different numbers here:
 //
-//     KF2_FPS=20                  frames a second to draw (default); any number,
+//     KF2_FPS=60                  frames a second to draw (default); any number,
 //                                 or off for no pacing at all
 //     KF2_TICKRATE=20             ticks a second the world runs at (default); 30
 //                                 is the rate the game's own code asks for
@@ -1087,6 +1102,17 @@ Kf2.Settings.PatchSettings.Install();
 //
 //     KF2_CRASHDUMP=0     say nothing; let the exception print on its own
 Kf2.CrashDump.Configure(Environment.GetEnvironmentVariable("KF2_CRASHDUMP"));
+
+foreach (var icon in new[]
+{
+    Path.Combine("packaging", "shared", "verdite2.png"),
+    Path.Combine(AppContext.BaseDirectory, "verdite2.png"),
+})
+{
+    if (!File.Exists(icon)) continue;
+    RecompOne.Runtime.Runtime.SetIcon(File.ReadAllBytes(icon));
+    break;
+}
 
 var memory = new PSMemory();
 try

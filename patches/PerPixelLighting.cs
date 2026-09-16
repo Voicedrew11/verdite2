@@ -12,7 +12,7 @@ namespace Kf2;
 /// from what the GTE made them from, instead of interpolated between the colours it
 /// produced at the corners.
 ///
-///     KF2_PERPIXEL=1        on (the saved setting otherwise; off by default)
+///     KF2_PERPIXEL=0        off (on by default; GL core only)
 ///     KF2_PERPIXEL_PROBE=1  packets recorded, and polygons lit per pixel or drawn from
 ///                           their corner colours, every two seconds
 ///     KF2_PERPIXEL_PROBE=2  also the shader's formula at every recorded corner against
@@ -91,12 +91,12 @@ public static class PerPixelLighting
     {
         GteLightMap.SetRange(PrimBuffers, PrimBufferBytes);
         // The saved key is only readable once the runtime is up (see AmbientOcclusion).
-        GteLightMap.Enabled = _forced ?? false;
+        GteLightMap.Enabled = _forced ?? true;
         _windowStart = Now;
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            GteLightMap.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            GteLightMap.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             Console.WriteLine($"[KF2] per-pixel lighting: {(GteLightMap.Enabled ? "on" : "off")}" +
                               (GteLightMap.Enabled && !GteLightMap.Supported ? " (not drawn: needs the core GL backend)" : ""));
         });
