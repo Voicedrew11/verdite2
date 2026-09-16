@@ -709,6 +709,26 @@ Kf2.EvenFog.Configure(Environment.GetEnvironmentVariable("KF2_EVENFOG"),
                       Environment.GetEnvironmentVariable("KF2_EVENLIGHT"));
 Kf2.EvenFog.Install();
 
+// Voice interpolation and reverb (patches/recompone/0043); see docs/AUDIO.md.
+//
+//     KF2_SPU_INTERP=gauss|cubic|sinc      KF2_REVERB=legacy|hardware|enhanced
+//     KF2_AUDIO_PROBE=1                    KF2_AUDIO_DUMP=dir
+Kf2.AudioQuality.Configure(Environment.GetEnvironmentVariable("KF2_SPU_INTERP"),
+                           Environment.GetEnvironmentVariable("KF2_REVERB"));
+Kf2.AudioQuality.Install();
+Kf2.AudioProbe.Configure(Environment.GetEnvironmentVariable("KF2_AUDIO_PROBE"),
+                         Environment.GetEnvironmentVariable("KF2_AUDIO_DUMP"));
+Kf2.AudioProbe.Install();
+
+// Positional sound effects: the game pans a 3D sound once at key-on, folded front
+// to back; this keeps each one aimed at its source while it plays, and renders it
+// for speakers or headphones (SpuSpatialVoice). See "Positional audio" in docs/AUDIO.md.
+//
+//     KF2_POSAUDIO=off|speakers|headphones  KF2_POSAUDIO_PROBE=1
+Kf2.PositionalAudio.Configure(Environment.GetEnvironmentVariable("KF2_POSAUDIO"),
+                              Environment.GetEnvironmentVariable("KF2_POSAUDIO_PROBE"));
+Kf2.PositionalAudio.Install();
+
 // The render scale survives a menu. A modal sub-loop -- the in-game menu, a shop,
 // an NPC's message box -- keeps the world behind it by reading the finished frame
 // out of VRAM once and blitting it back at the head of every iteration, and that

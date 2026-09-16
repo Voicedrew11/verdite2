@@ -1,8 +1,16 @@
+using System.Runtime.InteropServices;
 using Silk.NET.OpenAL;
 using ALDevice = Silk.NET.OpenAL.Device;
 using ALCtx = Silk.NET.OpenAL.Context;
 
 namespace RecompOne.Runtime.Host;
+
+public static class AudioStats
+{
+    public static long Underruns, Stalls;
+    public static int DeviceRate;
+    public static string Resampler = "default";
+}
 
 internal static unsafe class Audio
 {
@@ -42,6 +50,8 @@ internal static unsafe class Audio
 
             _source = _al.GenSource();
             _al.SetSourceProperty(_source, SourceFloat.Gain, _masterVolume);
+            ReadDeviceRate();
+            ChooseResampler();
             fixed (uint* ptr = _buffers)
             {
                 _al.GenBuffers(NumBuffers, ptr);
@@ -87,6 +97,42 @@ internal static unsafe class Audio
             _al.SetSourceProperty(_source, SourceFloat.Gain, _masterVolume);
     }
 
+    private const int AlcFrequency = 0x1007;
+    private const int AlNumResamplersSoft = 0x1210;
+    private const int AlSourceResamplerSoft = 0x1212;
+    private const int AlResamplerNameSoft = 0x1213;
+
+    private static void ReadDeviceRate()
+    {
+        var rate = 0;
+        _alc!.GetContextProperty(_device, (GetContextInteger)AlcFrequency, 1, &rate);
+        AudioStats.DeviceRate = rate;
+    }
+
+    // AL_SOFT_source_resampler lists its resamplers in rising quality, so the last one is the best on offer.
+    private static void ChooseResampler()
+    {
+        if (!_al!.IsExtensionPresent("AL_SOFT_source_resampler")) return;
+        var count = _al.GetStateProperty((StateInteger)AlNumResamplersSoft);
+        if (count <= 0) return;
+        _al.SetSourceProperty(_source, (SourceInteger)AlSourceResamplerSoft, count - 1);
+        AudioStats.Resampler = ResamplerName(count - 1) ?? $"#{count - 1}";
+    }
+
+    // Silk binds no alGetStringiSOFT; only the copy of OpenAL holding our context answers, the others return null.
+    private static string? ResamplerName(int index)
+    {
+        foreach (var name in new[] { "libopenal.so", "libopenal.so.1", "soft_oal.dll", "openal32.dll", "libopenal.dylib" })
+        {
+            if (!NativeLibrary.TryLoad(name, typeof(AL).Assembly, null, out var lib)) continue;
+            if (!NativeLibrary.TryGetExport(lib, "alGetStringiSOFT", out var fn)) continue;
+            var text = Marshal.PtrToStringUTF8((IntPtr)((delegate* unmanaged<int, int, byte*>)fn)(AlResamplerNameSoft, index));
+            if (text != null) return text;
+        }
+
+        return null;
+    }
+
     private static readonly int BufferMs = Math.Max(1, FramesPerBuffer * 1000 / 44100);
 
     private static void MixerLoop()
@@ -102,6 +148,7 @@ internal static unsafe class Audio
     private static void FillBuffers(Spu spu)
     {
         _al!.GetSourceProperty(_source, GetSourceInteger.BuffersProcessed, out var processed);
+        if (processed >= NumBuffers) AudioStats.Underruns++;
         while (processed > 0)
         {
             uint buf = 0;
@@ -116,7 +163,10 @@ internal static unsafe class Audio
 
         _al.GetSourceProperty(_source, GetSourceInteger.SourceState, out var state);
         if (state != (int)SourceState.Playing)
+        {
+            AudioStats.Stalls++;
             _al.SourcePlay(_source);
+        }
     }
 
     public static void Shutdown()
