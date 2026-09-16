@@ -29,7 +29,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
 | `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0053` |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0055` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -130,6 +130,7 @@ Start the game from the same shell you run that in, or the diagnostic socket in
   menus take no input by the usual routes, and `KF2_AUTOPAD` only arms once an area
   has loaded). This drives the pad through `PAD_dr`: Start, Cross into a New Game
   in `fdat02`, then loads the slot over it through `AutoReload.LoadSlot`.
+  `KF2_AUTOSTART=new` stops in that New Game, which faces scrolling water.
 - **`KF2_AGENT=1`** prints `{"overlay":…,"inGame":…,"hp":…,"area":…,"slot":…}` on
   each overlay change and about once a second; `inGame:false` is how a program
   tells "stuck at the title" from "in an area" without a screenshot.
@@ -417,7 +418,7 @@ removed for the same reason.
 
 **`tools/RecompOne/` is vendored: an edit inside it is a change to this
 repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0053`) are how the source
+what the port changed and why, and the numbers (`0001`-`0055`) are how the source
 refers to each change, but they are **no longer replayed**. The merge base is
 `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
 gitignored `tools/RecompOne.git/`, reached with

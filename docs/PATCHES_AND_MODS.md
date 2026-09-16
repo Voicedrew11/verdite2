@@ -1233,9 +1233,9 @@ below.
 **The water still steps at the tick.** The rate per second is right, and a 60
 or 144 fps window still shows water jumping a texel every 50 ms, because VRAM
 only changes on a tick. Re-uploading at the render rate would run the integer
-scroll *faster*, not smoother, and the frame viewer already measured the
-tick-rate upload as 0.76 ms on the next primitive. Offsetting the packet's 8-bit
-V is not enough either: both rasterizers snap UV to a whole texel, so a
+scroll *faster*, not smoother, and the frame viewer measured the tick-rate
+upload as 0.76 ms on the next primitive before `0054` stopped the scaled blit.
+Offsetting the packet's 8-bit V is not enough either: both rasterizers snap UV to a whole texel, so a
 fractional leftover rounds away. `patches/FluidSmoothing.cs` publishes the dest
 RECT and leftover phase (`(1 - LogicPhase) × delta` added to V, the same clock
 the view is drawn at) to the prim shaders (`0053`), which blend the two wrap-rows
@@ -1243,6 +1243,10 @@ the upload itself wraps between. Matching is on the dest RECT, so every assemble
 covered and Fast geometry is not required. GL only; the software rasterizer
 keeps the last upload. On with the rest of the smoothing tick;
 `KF2_SMOOTH_FLUID=0` is the comparison. **The picture has not been looked at.**
+Its cost is not measurable: facing the water in `fdat02`, work 3.09-3.13 ms on
+against 3.00-3.12 off, and the same GPU time. What water on screen did cost was
+the batch submits its semi-transparency forces, see "Water on screen cost 5 ms a
+frame" in `docs/DEVELOPMENT.md`.
 
 * **The jitter accumulator at `0x8006E608`** is in stage 13's *own body*
   (`func_800342D8`), not in a callee, so no hook can reach it — `HookManager` only
@@ -4287,7 +4291,7 @@ whether the Input page reads right with a map binding on it.
 
 ## Auto start and the agent beacon
 
-`patches/AutoStart.cs` (`KF2_AUTOSTART=<1..3>`) and `patches/AgentBeacon.cs`
+`patches/AutoStart.cs` (`KF2_AUTOSTART=<1..3>`, or `new` to stay in the New Game) and `patches/AgentBeacon.cs`
 (`KF2_AGENT=1`) are the pair that lets an automated tester **get into the game and
 know it got there**. Both are patches driven by an environment variable, not mod
 features, for the `KF2_AUTOPAD` reason: a mod is off by default and silent when

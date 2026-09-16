@@ -899,7 +899,8 @@ Kf2.MapFog.Install();
 // off the table, so an agent left at the title waits on nothing:
 //
 //     KF2_AUTOSTART=2   load slot 1..3 through the game's own loader at boot,
-//                       skipping the title and Continue menus (off unless set)
+//                       skipping the title and Continue menus (off unless set);
+//                       =new stops in the New Game instead
 //     KF2_AGENT=1       emit [KF2-AGENT] stdout lines -- an overlay transition on
 //                       each load and a JSON state snapshot ~1/s, whose inGame
 //                       field is how a program tells "stuck at title" from "in an

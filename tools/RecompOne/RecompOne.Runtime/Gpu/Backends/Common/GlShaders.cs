@@ -374,7 +374,9 @@ internal static class GlShaders
              3, -1,  2, -2 );
 
         int u5(float f) { return int(floor(f * 31.0 + 0.5)); }
-        vec4 fetch(ivec2 c) { return texelFetch(uVram, (c & ivec2(1023, 511)) * uScale, 0); }
+        // 0054. Sample VRAM is 1x. Multiplying by uScale fetched the scaled atlas
+        // the uploads were blitting into, which is what stalled Flush.
+        vec4 fetch(ivec2 c) { return texelFetch(uVram, c & ivec2(1023, 511), 0); }
         int fetch16(ivec2 c) {
             vec4 p = fetch(c);
             return u5(p.r) | (u5(p.g) << 5) | (u5(p.b) << 10) | (int(ceil(p.a)) << 15);
@@ -799,7 +801,8 @@ internal static class GlShaders
 
         vec4 fetch(vec2 c) {
             vec2 w = vec2(mod(c.x, 1024.0), mod(c.y, 512.0));
-            return texture2D(uVram, (w * uScale + 0.5) / uVramSize);
+            // 0054. Sample VRAM is 1x; see the core-profile fetch.
+            return texture2D(uVram, (w + 0.5) / uVramSize);
         }
 
         float fetch16(vec2 c) {

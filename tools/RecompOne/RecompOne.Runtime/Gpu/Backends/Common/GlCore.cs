@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Silk.NET.OpenGL;
 
@@ -69,6 +70,10 @@ public sealed class GlCore : IGpuBackend
     // Light slots written so far this batch; 0 means none, and the attributes stay off.
     int _litFilled;
     uint _vboLight;
+    // Where the next batch's vertices go in _vbo and _vboLight. Appending keeps an
+    // upload off the range the previous batch's draw may still be reading, which
+    // the driver would otherwise wait for; the buffers are orphaned on wrap.
+    int _vboCursor;
     bool _lightAttribs;
     float _drawMinX, _drawMinY, _drawMaxX, _drawMaxY;
 
@@ -97,6 +102,11 @@ public sealed class GlCore : IGpuBackend
     int _uFluidN;
     readonly int[] _uFluidRect = new int[8];
     readonly int[] _uFluidOff = new int[8];
+    // What the prim program holds already: a uniform keeps its value across batches,
+    // and re-sending these was a GL call per slot per batch.
+    int _fluidSentN = -1;
+    readonly GteDepth.FluidRec[] _fluidSent = new GteDepth.FluidRec[GteDepth.FluidSlots];
+    int _uPrimScale, _primScaleSent = -1;
     int _uOpaqueDepth, _uDepthBias, _uDepthSlope;
     // The true-color flag the live display targets were built with. When it drifts
     // from GteDepth.TrueColor the targets carry the wrong pixel format, so they are
@@ -154,6 +164,8 @@ public sealed class GlCore : IGpuBackend
             _uFluidRect[i] = _gl.GetUniformLocation(_progPrim, $"uFluidRect[{i}]");
             _uFluidOff[i] = _gl.GetUniformLocation(_progPrim, $"uFluidOff[{i}]");
         }
+        _fluidSentN = -1;
+        Array.Clear(_fluidSent);
         _uOpaqueDepth = _gl.GetUniformLocation(_progPrim, "uOpaqueDepth");
         _uDepthBias = _gl.GetUniformLocation(_progPrim, "uDepthBias");
         _uDepthSlope = _gl.GetUniformLocation(_progPrim, "uDepthSlope");
@@ -172,8 +184,10 @@ public sealed class GlCore : IGpuBackend
         _gl.Uniform1(_gl.GetUniformLocation(_progPrim, "uExtTex"), 2);
         _gl.Uniform1(_gl.GetUniformLocation(_progPrim, "uRepTex"), 3);
         _gl.Uniform1(_gl.GetUniformLocation(_progPrim, "uRepClut"), 4);
-        SetScaleUniform(_progPrim);
-        if (_uVramSize >= 0) _gl.Uniform2(_uVramSize, (float)GlVram.Width, GlVram.Height);
+        _uPrimScale = _gl.GetUniformLocation(_progPrim, "uScale");
+        SetScaleUniform(_progPrim, GlVram.Scale);
+        _primScaleSent = GlVram.Scale;
+        if (_uVramSize >= 0) _gl.Uniform2(_uVramSize, (float)VramShadow.Width, VramShadow.Height);
 
         _uPresentOrigin = _gl.GetUniformLocation(_progPresent, "uOrigin");
         _uPresentSize = _gl.GetUniformLocation(_progPresent, "uSize");
@@ -358,7 +372,7 @@ public sealed class GlCore : IGpuBackend
         var fresh = new GlDisplayRt { X = fbX, Y = fbY, W = fbW, H = fbH, Margin = GpuHle.WideMargin(fbW), Stamp = ++_rtStamp, LastDrawFrame = _frame };
         fresh.Create(_gl);
         _rts[slot] = fresh;
-        SyncRtFromVram(fresh, fbX, fbY, fbW, fbH);
+        SyncRtFromVram(fresh, fbX, fbY, fbW, fbH, fromSample: true);
         return fresh;
     }
 
@@ -379,35 +393,44 @@ public sealed class GlCore : IGpuBackend
             rt.X * s, rt.Y * s, (rt.X + rt.W) * s, (rt.Y + rt.H) * s,
             ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        _vram.Publish(rt.X, rt.Y, rt.W, rt.H);
         rt.Dirty = false;
         Assets.Textures.VramTracker.MarkGpuWrite(rt.X, rt.Y, rt.W, rt.H);
     }
 
-    void SyncRtFromVram(GlDisplayRt rt, int rx, int ry, int rw, int rh)
+    void SyncRtFromVram(GlDisplayRt rt, int rx, int ry, int rw, int rh, bool fromSample)
     {
         int x0 = Math.Max(rx, rt.X), y0 = Math.Max(ry, rt.Y);
         int x1 = Math.Min(rx + rw, rt.X + rt.W), y1 = Math.Min(ry + rh, rt.Y + rt.H);
         if (x0 >= x1 || y0 >= y1) return;
         int s = GlVram.Scale;
+        int dx0 = (x0 - rt.X + rt.Margin) * s, dy0 = (y0 - rt.Y) * s;
+        int dx1 = (x1 - rt.X + rt.Margin) * s, dy1 = (y1 - rt.Y) * s;
+        if (fromSample)
+        {
+            _vram.BlitSample(x0, y0, x1 - x0, y1 - y0, rt.Fbo, rt.TexW, rt.TexH,
+                dx0, dy0, dx1 - dx0, dy1 - dy0);
+            return;
+        }
         _gl.Disable(EnableCap.ScissorTest);
         _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _vram.Fbo);
         _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, rt.Fbo);
         _gl.BlitFramebuffer(x0 * s, y0 * s, x1 * s, y1 * s,
-            (x0 - rt.X + rt.Margin) * s, (y0 - rt.Y) * s, (x1 - rt.X + rt.Margin) * s, (y1 - rt.Y) * s,
+            dx0, dy0, dx1, dy1,
             ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
+    void SyncRtsFromVram(int x, int y, int w, int h, bool fromSample = true)
+    {
+        foreach (var rt in _rts)
+            if (rt != null && rt.Intersects(x, y, w, h)) SyncRtFromVram(rt, x, y, w, h, fromSample);
     }
 
     void WritebackDirtyIntersecting(int x, int y, int w, int h)
     {
         foreach (var rt in _rts)
             if (rt is { Dirty: true } && rt.Intersects(x, y, w, h)) Writeback(rt);
-    }
-
-    void SyncRtsFromVram(int x, int y, int w, int h)
-    {
-        foreach (var rt in _rts)
-            if (rt != null && rt.Intersects(x, y, w, h)) SyncRtFromVram(rt, x, y, w, h);
     }
 
     void CheckTextureFeedback(in PrimFlags f)
@@ -714,7 +737,7 @@ public sealed class GlCore : IGpuBackend
                 rt.LastDrawFrame = _frame;
                 if (rt.Margin > 0) rt.MarginContentFlip = GpuHle.DisplayFlip;
             }
-            else SyncRtFromVram(rt, x, y, w, h);
+            else SyncRtFromVram(rt, x, y, w, h, fromSample: true);
         }
     }
 
@@ -905,8 +928,14 @@ public sealed class GlCore : IGpuBackend
         // A restore of a frame this backend read out at scale writes the scaled
         // copy instead of the 1x pixels the game is handing back; everything else
         // uploads as it always did.
-        if (!SnapRestore(x, y, w, h, px)) _vram.WriteRect(x, y, w, h, px);
-        SyncRtsFromVram(x, y, w, h);
+        bool restored = SnapRestore(x, y, w, h, px);
+        if (restored) _vram.Publish(x, y, w, h);
+        else
+        {
+            _vram.WriteRect(x, y, w, h, px);
+            if (_rts[0] == null && _rts[1] == null) _vram.Promote(x, y, w, h);
+        }
+        SyncRtsFromVram(x, y, w, h, fromSample: !restored);
         SnapProbe();
     }
 
@@ -1004,22 +1033,30 @@ public sealed class GlCore : IGpuBackend
 
         var rt = _kTarget;
         uint destTex;
+        uint vramTex;
         if (rt == null)
         {
-            _vram.BindDraw();
-            destTex = _vram.Texture;
+            // 0054. A draw with no display target used to land in the scaled atlas
+            // and then Publish that AABB down onto 1x sample VRAM. Uploads no longer
+            // reach the atlas, so that copy erased the texture pages -- fetch
+            // returned 0, paletted fragments discarded, objects sampled leftover
+            // framebuffer texels. Draw into 1x and sample a copy of it.
+            vramTex = _vram.BeginSampleRead();
+            _vram.BindSampleDraw();
+            destTex = _vram.SampleTexture;
         }
         else
         {
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, rt.Fbo);
             _gl.Viewport(0, 0, (uint)rt.TexW, (uint)rt.TexH);
             destTex = rt.Tex;
+            vramTex = _vram.SampleTexture;
         }
-        int destW = rt == null ? GlVram.Width : rt.TexW;
-        int destH = rt == null ? GlVram.Height : rt.TexH;
+        int destW = rt == null ? VramShadow.Width : rt.TexW;
+        int destH = rt == null ? VramShadow.Height : rt.TexH;
 
         GpuGlAccess.Gl = _gl;
-        GpuGlAccess.TargetFbo = rt == null ? _vram.Fbo : rt.Fbo;
+        GpuGlAccess.TargetFbo = rt == null ? _vram.SampleFbo : rt.Fbo;
         GpuGlAccess.TargetWidth = destW;
         GpuGlAccess.TargetHeight = destH;
         GpuGlAccess.TargetOriginX = rt == null ? 0 : rt.X;
@@ -1028,7 +1065,7 @@ public sealed class GlCore : IGpuBackend
 
         _gl.Disable(EnableCap.CullFace);
         _gl.Enable(EnableCap.ScissorTest);
-        int s = GlVram.Scale;
+        int s = rt == null ? 1 : GlVram.Scale;
 
         // Depth test is per-batch: opaque 3D writes, semi-transparent 3D tests
         // without writing, 2D (and everything while the setting is off) keeps
@@ -1103,13 +1140,26 @@ public sealed class GlCore : IGpuBackend
         int readY = Math.Max(0, ry0 * s);
         int readW = Math.Max(0, (rx1 - rx0 + 1) * s);
         int readH = Math.Max(0, (ry1 - ry0 + 1) * s);
-        destTex = _vram.BeginDestRead(destTex, destW, destH, readX, readY, readW, readH);
+        // Dest is sampled only for the mask bit, and on the 2.1 path for blend.
+        // Copying or barrier-ing it on every batch was waiting on the scaled
+        // atlas after a texture upload -- the 0.7 ms Flush. A draw into 1x VRAM
+        // already isolated its sample source, so dest can reuse that copy.
+        bool sampleDest = _kCheckMask != 0 || (_legacy && _kTransparent) || (_kTransparent && _kBlend == 2);
+        if (sampleDest)
+            destTex = rt == null ? vramTex : _vram.BeginDestRead(destTex, destW, destH, readX, readY, readW, readH);
+        else
+            destTex = vramTex;
         RebindTarget(rt);
 
         _gl.UseProgram(_progPrim);
+        if (s != _primScaleSent)
+        {
+            if (_uPrimScale >= 0) _gl.Uniform1(_uPrimScale, _legacy ? (float)s : s);
+            _primScaleSent = s;
+        }
         _gl.BindVertexArray(_vao);
         _gl.ActiveTexture(TextureUnit.Texture0);
-        _gl.BindTexture(TextureTarget.Texture2D, _vram.Texture);
+        _gl.BindTexture(TextureTarget.Texture2D, vramTex);
         _gl.ActiveTexture(TextureUnit.Texture1);
         _gl.BindTexture(TextureTarget.Texture2D, destTex);
         if (_kImage >= 0 && _kImage < _images.Count)
@@ -1146,16 +1196,19 @@ public sealed class GlCore : IGpuBackend
         GteDepth.AnisotropyLive = _uAniso >= 0;
         if (_uAniso >= 0) _gl.Uniform1(_uAniso, (float)GteDepth.Anisotropy);
         GteDepth.FluidLive = _uFluidN >= 0;
-        if (_uFluidN >= 0) _gl.Uniform1(_uFluidN, (float)GteDepth.FluidN);
-        if (GteDepth.FluidN > 0)
+        if (_uFluidN >= 0 && GteDepth.FluidN != _fluidSentN)
         {
-            int n = GteDepth.FluidN;
-            for (int i = 0; i < n; i++)
-            {
-                ref var slot = ref GteDepth.Fluid[i];
+            _gl.Uniform1(_uFluidN, (float)GteDepth.FluidN);
+            _fluidSentN = GteDepth.FluidN;
+        }
+        for (int i = 0; i < GteDepth.FluidN; i++)
+        {
+            ref var slot = ref GteDepth.Fluid[i];
+            ref var sent = ref _fluidSent[i];
+            if (slot.X != sent.X || slot.Y != sent.Y || slot.W != sent.W || slot.H != sent.H)
                 if (_uFluidRect[i] >= 0) _gl.Uniform4(_uFluidRect[i], slot.X, slot.Y, slot.W, slot.H);
-                if (_uFluidOff[i] >= 0) _gl.Uniform1(_uFluidOff[i], slot.Off);
-            }
+            if (slot.Off != sent.Off && _uFluidOff[i] >= 0) _gl.Uniform1(_uFluidOff[i], slot.Off);
+            sent = slot;
         }
         if (_kLightGen >= 0 && _uLightBk >= 0)
         {
@@ -1183,13 +1236,21 @@ public sealed class GlCore : IGpuBackend
             _gl.Uniform4(_uBlendOpaque, 1f, 1f, 1f, 0f);
         }
 
+        if (_vboCursor + _count > MaxVerts)
+        {
+            Orphan(_vbo, MaxVerts * Unsafe.SizeOf<GlVertex>());
+            if (_vboLight != 0) Orphan(_vboLight, MaxVerts * Unsafe.SizeOf<GlLight>());
+            _vboCursor = 0;
+        }
+        int first = _vboCursor;
+        _vboCursor += _count;
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
-        _gl.BufferSubData<GlVertex>(BufferTargetARB.ArrayBuffer, 0, _verts.AsSpan(0, _count));
+        _gl.BufferSubData<GlVertex>(BufferTargetARB.ArrayBuffer, first * Unsafe.SizeOf<GlVertex>(), _verts.AsSpan(0, _count));
         if (_litFilled > 0)
         {
             if (_litFilled < _count) Array.Clear(_lights, _litFilled, _count - _litFilled);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboLight);
-            _gl.BufferSubData<GlLight>(BufferTargetARB.ArrayBuffer, 0, _lights.AsSpan(0, _count));
+            _gl.BufferSubData<GlLight>(BufferTargetARB.ArrayBuffer, first * Unsafe.SizeOf<GlLight>(), _lights.AsSpan(0, _count));
         }
         if ((_litFilled > 0) != _lightAttribs)
         {
@@ -1210,7 +1271,7 @@ public sealed class GlCore : IGpuBackend
             SetDepthBias(false);
             _gl.Disable(EnableCap.Blend);
             _gl.ColorMask(false, false, false, false);
-            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+            _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
             _gl.ColorMask(true, true, true, true);
             _gl.DepthMask(false);
             SetDepthBias(true);
@@ -1220,12 +1281,12 @@ public sealed class GlCore : IGpuBackend
         if (_legacy)
         {
             _gl.Disable(EnableCap.Blend);
-            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+            _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
         }
         else if (!_kTransparent)
         {
             _gl.Disable(EnableCap.Blend);
-            _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+            _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
         }
         else
         {
@@ -1235,20 +1296,20 @@ public sealed class GlCore : IGpuBackend
             {
                 _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
                 SetBlend(0f, 1f);
-                _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+                _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
 
                 _vram.BeginDestRead(destTex, destW, destH, readX, readY, readW, readH);
                 RebindTarget(rt);
                 _gl.BlendEquationSeparate(BlendEquationModeEXT.FuncReverseSubtract, BlendEquationModeEXT.FuncAdd);
                 SetBlend(1f, 1f);
                 _gl.Uniform4(_uBlendOpaque, 0f, 0f, 0f, 1f);
-                _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+                _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
             }
             else
             {
                 _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
                 SetBlend(_kBlend switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, _kBlend == 0 ? 0.5f : 1f);
-                _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+                _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
             }
 
             // Texels without the semi-transparency bit draw opaque, so they must hide what is behind them from the occlusion pass.
@@ -1261,7 +1322,7 @@ public sealed class GlCore : IGpuBackend
                 _gl.DepthMask(true);
                 _gl.Uniform1(_uOpaqueDepth, 1);
                 SetDepthBias(false);
-                _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)_count);
+                _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
                 _gl.Uniform1(_uOpaqueDepth, 0);
                 _gl.ColorMask(true, true, true, true);
             }
@@ -1276,10 +1337,20 @@ public sealed class GlCore : IGpuBackend
             int x1 = Math.Min(_kClipX1, (int)Math.Ceiling(_drawMaxX));
             int y1 = Math.Min(_kClipY1, (int)Math.Ceiling(_drawMaxY));
             if (x1 >= x0 && y1 >= y0)
+            {
                 Assets.Textures.VramTracker.MarkGpuWrite(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+                _vram.CommitDraw(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+                _vram.Promote(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+            }
         }
         _count = 0;
         _litFilled = 0;
+    }
+
+    unsafe void Orphan(uint buffer, int bytes)
+    {
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, buffer);
+        _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)bytes, null, BufferUsageARB.DynamicDraw);
     }
 
     void SetBlend(float src, float dst) => _gl.Uniform4(_uBlend, src, src, src, dst);
@@ -1290,12 +1361,14 @@ public sealed class GlCore : IGpuBackend
         if (_uDepthSlope >= 0) _gl.Uniform1(_uDepthSlope, on ? GteDepth.DepthSlope : 0f);
     }
 
-    void SetScaleUniform(uint prog)
+    void SetScaleUniform(uint prog) => SetScaleUniform(prog, GlVram.Scale);
+
+    void SetScaleUniform(uint prog, int scale)
     {
         int loc = _gl.GetUniformLocation(prog, "uScale");
         if (loc < 0) return;
-        if (_legacy) _gl.Uniform1(loc, (float)GlVram.Scale);
-        else _gl.Uniform1(loc, GlVram.Scale);
+        if (_legacy) _gl.Uniform1(loc, (float)scale);
+        else _gl.Uniform1(loc, scale);
     }
 
     /// <summary>Read the finished frame's depth attachment back and hand it to
@@ -1320,11 +1393,7 @@ public sealed class GlCore : IGpuBackend
 
     void RebindTarget(GlDisplayRt? rt)
     {
-        if (rt == null)
-        {
-            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _vram.Fbo);
-            _gl.Viewport(0, 0, (uint)GlVram.Width, (uint)GlVram.Height);
-        }
+        if (rt == null) _vram.BindSampleDraw();
         else
         {
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, rt.Fbo);

@@ -32,8 +32,9 @@ namespace Kf2;
 /// ## Why the shader, and why not another VRAM upload
 ///
 /// Re-uploading at the render rate would run the integer scroll faster, not
-/// smoother, and the frame viewer already measured the tick-rate upload as
-/// 0.76 ms on the next primitive. Offsetting the packet's 8-bit V is also not
+/// smoother, and the frame viewer measured the tick-rate upload as 0.76 ms on
+/// the next primitive before <c>0054</c> stopped blitting each upload into the
+/// scaled atlas. Offsetting the packet's 8-bit V is also not
 /// enough: the rasterizer snaps UV to a whole texel, so a fractional shift
 /// rounds away. The C# assemblers already hand the GPU float UVs, and both prim
 /// shaders sample through <c>decode()</c> after the CLUT -- the same place

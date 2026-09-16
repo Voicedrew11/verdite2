@@ -13,6 +13,7 @@ namespace Kf2;
 /// lands in an area without a person driving the title and start menus:
 ///
 ///     KF2_AUTOSTART=2    load slot 1..3 at boot (off unless set)
+///     KF2_AUTOSTART=new  stop in the New Game, fdat02 (it has the scrolling water)
 ///
 /// It exists because those menus are the wall every agent hits: with no input the
 /// port never leaves OPEN.EXE's title, and scripted input could not get past it
@@ -63,6 +64,9 @@ public static class AutoStart
     /// <summary>1..3 to load that slot at boot; 0 (the default) is off.</summary>
     public static int Slot { get; private set; }
 
+    /// <summary>Stay in the New Game instead of loading a slot over it.</summary>
+    public static bool NewGame { get; private set; }
+
     /// <summary>What the boot sequence did, for the log.</summary>
     public static string Status { get; private set; } = "off";
 
@@ -91,6 +95,7 @@ public static class AutoStart
     public static void Configure(string? slot)
     {
         if (string.IsNullOrWhiteSpace(slot)) return;
+        if (slot.Trim().Equals("new", StringComparison.OrdinalIgnoreCase)) { NewGame = true; return; }
         if (!int.TryParse(slot.Trim(), System.Globalization.NumberStyles.Integer,
                           System.Globalization.CultureInfo.InvariantCulture, out int which))
             throw new ArgumentException($"KF2_AUTOSTART: cannot read '{slot}'");
@@ -99,7 +104,7 @@ public static class AutoStart
 
     public static void Install()
     {
-        if (Slot == 0) return;
+        if (Slot == 0 && !NewGame) return;
 
         Event.AddListener<OverlayLoadedEvent>(e =>
         {
@@ -134,7 +139,8 @@ public static class AutoStart
         });
 
         new Thread(Drive) { IsBackground = true, Name = "kf2-autostart" }.Start();
-        Console.WriteLine($"[KF2] autostart: booting into slot {Slot}");
+        Console.WriteLine(NewGame ? "[KF2] autostart: booting into a New Game"
+                                  : $"[KF2] autostart: booting into slot {Slot}");
     }
 
     /// <summary>
@@ -195,6 +201,12 @@ public static class AutoStart
         if (++_ticks < SettleFrames) return;
 
         _fired = true;
+        if (NewGame)
+        {
+            Status = "in a New Game";
+            Console.WriteLine($"[KF2] autostart: {Status}");
+            return;
+        }
         uint result = AutoReload.LoadSlot(c, m, (byte)Slot, out uint area);
 
         if (result == 0)

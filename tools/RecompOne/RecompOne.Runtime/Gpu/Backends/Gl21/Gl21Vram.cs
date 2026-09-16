@@ -7,7 +7,8 @@ public sealed class Gl21Vram : IGlVram
 {
     private readonly GL _gl;
     private uint _tex, _fbo;
-    private uint _stageTex;
+    private uint _stageTex, _stageFbo;
+    private uint _sampleTex, _sampleWriteFbo;
     private uint _destVramTex, _destVramFbo;
     private uint _destRtTex, _destRtFbo;
     private int _destRtW, _destRtH;
@@ -21,6 +22,8 @@ public sealed class Gl21Vram : IGlVram
 
     public uint Texture => _tex;
     public uint Fbo => _fbo;
+    public uint SampleTexture => _sampleTex;
+    public uint SampleFbo => _stageFbo;
 
     public Gl21Vram(GL gl)
     {
@@ -32,6 +35,9 @@ public sealed class Gl21Vram : IGlVram
         _tex = CreateTex(GlVram.Width, GlVram.Height);
         _fbo = CreateFbo(_tex);
         _stageTex = CreateTex(VramShadow.Width, VramShadow.Height);
+        _stageFbo = CreateFbo(_stageTex);
+        _sampleTex = CreateTex(VramShadow.Width, VramShadow.Height);
+        _sampleWriteFbo = _gl.GenFramebuffer();
         _destVramTex = CreateTex(GlVram.Width, GlVram.Height);
         _destVramFbo = CreateFbo(_destVramTex);
         _scratchTex = CreateTex(GlVram.Width, GlVram.Height);
@@ -106,6 +112,34 @@ public sealed class Gl21Vram : IGlVram
     {
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
         _gl.Viewport(0, 0, (uint)GlVram.Width, (uint)GlVram.Height);
+    }
+
+    public void BindSampleDraw()
+    {
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _stageFbo);
+        _gl.Viewport(0, 0, (uint)VramShadow.Width, (uint)VramShadow.Height);
+    }
+
+    public uint BeginSampleRead()
+    {
+        BlitScaled(_sampleTex, VramShadow.Width, VramShadow.Height, _stageFbo,
+            VramShadow.Width, VramShadow.Height,
+            0, 0, VramShadow.Width, VramShadow.Height,
+            0, 0, VramShadow.Width, VramShadow.Height);
+        return _sampleTex;
+    }
+
+    public void CommitDraw(int x, int y, int w, int h)
+    {
+        if (w <= 0 || h <= 0) return;
+        // CopyTexSubImage2D reads the GPU 1x FBO into sample VRAM without
+        // attaching sample as a colour target — attaching it was the remaining
+        // Flush stall (BlitScaled would then restore _fbo and the detach would
+        // strip the scaled atlas instead).
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _stageFbo);
+        _gl.BindTexture(TextureTarget.Texture2D, _sampleTex);
+        _gl.CopyTexSubImage2D(TextureTarget.Texture2D, 0, x, y, x, y, (uint)w, (uint)h);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
     }
 
     private unsafe void BlitQuad(uint srcTex, int srcW, int srcH, uint dstFbo, int dstW, int dstH, int sx, int sy,
@@ -184,16 +218,38 @@ public sealed class Gl21Vram : IGlVram
 
     public void WriteRect(int x, int y, int w, int h, ReadOnlySpan<ushort> px)
     {
+        // 0054. Sample texture is never an FBO attachment -- see Gl45Vram.WriteRect.
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         _gl.ActiveTexture(TextureUnit.Texture7);
-        _gl.BindTexture(TextureTarget.Texture2D, _stageTex);
+        _gl.BindTexture(TextureTarget.Texture2D, _sampleTex);
         _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
         _gl.TexSubImage2D(TextureTarget.Texture2D, 0, x, y, (uint)w, (uint)h,
             PixelFormat.Rgba, PixelType.UnsignedShort1555Rev, px);
         _gl.ActiveTexture(TextureUnit.Texture0);
+    }
 
+    public void Promote(int x, int y, int w, int h)
+    {
+        if (w <= 0 || h <= 0) return;
         var s = GlVram.Scale;
-        BlitScaled(_stageTex, VramShadow.Width, VramShadow.Height, _fbo, GlVram.Width, GlVram.Height,
+        BlitScaled(_sampleTex, VramShadow.Width, VramShadow.Height, _fbo, GlVram.Width, GlVram.Height,
             x, y, w, h, x * s, y * s, w * s, h * s);
+    }
+
+    public void Publish(int x, int y, int w, int h)
+    {
+        if (w <= 0 || h <= 0) return;
+        var s = GlVram.Scale;
+        BlitScaled(_tex, GlVram.Width, GlVram.Height, _stageFbo, VramShadow.Width, VramShadow.Height,
+            x * s, y * s, w * s, h * s, x, y, w, h);
+        CommitDraw(x, y, w, h);
+    }
+
+    public void BlitSample(int sx, int sy, int sw, int sh, uint dstFbo, int dstW, int dstH, int dx, int dy, int dw, int dh)
+    {
+        if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+        BlitScaled(_sampleTex, VramShadow.Width, VramShadow.Height, dstFbo, dstW, dstH,
+            sx, sy, sw, sh, dx, dy, dw, dh);
     }
 
     private unsafe void BlitScaled(uint srcTex, int srcW, int srcH, uint dstFbo, int dstW, int dstH,
@@ -235,17 +291,34 @@ public sealed class Gl21Vram : IGlVram
         float r = (color15 & 0x1F) / 31f, g = ((color15 >> 5) & 0x1F) / 31f, b = ((color15 >> 10) & 0x1F) / 31f;
         var a = (color15 & 0x8000) != 0 ? 1f : 0f;
         var s = GlVram.Scale;
-        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
         _gl.Enable(EnableCap.ScissorTest);
-        _gl.Scissor(x * s, y * s, (uint)Math.Max(0, w * s), (uint)Math.Max(0, h * s));
         _gl.ClearColor(r, g, b, a);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        _gl.Scissor(x * s, y * s, (uint)Math.Max(0, w * s), (uint)Math.Max(0, h * s));
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _stageFbo);
+        _gl.Viewport(0, 0, (uint)VramShadow.Width, (uint)VramShadow.Height);
+        _gl.Scissor(x, y, (uint)Math.Max(0, w), (uint)Math.Max(0, h));
         _gl.Clear(ClearBufferMask.ColorBufferBit);
         _gl.Disable(EnableCap.ScissorTest);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        _gl.Viewport(0, 0, (uint)GlVram.Width, (uint)GlVram.Height);
+        CommitDraw(x, y, w, h);
     }
 
     public void CopyRect(int sx, int sy, int dx, int dy, int w, int h)
     {
         var s = GlVram.Scale;
+        BlitScaled(_sampleTex, VramShadow.Width, VramShadow.Height, _scratchFbo, VramShadow.Width, VramShadow.Height,
+            sx, sy, w, h, 0, 0, w, h);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _scratchFbo);
+        _gl.BindTexture(TextureTarget.Texture2D, _sampleTex);
+        _gl.CopyTexSubImage2D(TextureTarget.Texture2D, 0, dx, dy, 0, 0, (uint)w, (uint)h);
+
+        BlitScaled(_stageTex, VramShadow.Width, VramShadow.Height, _scratchFbo, VramShadow.Width, VramShadow.Height,
+            sx, sy, w, h, 0, 0, w, h);
+        BlitScaled(_scratchTex, GlVram.Width, GlVram.Height, _stageFbo, VramShadow.Width, VramShadow.Height,
+            0, 0, w, h, dx, dy, w, h);
         BlitQuad(_tex, GlVram.Width, GlVram.Height, _scratchFbo, GlVram.Width, GlVram.Height,
             sx * s, sy * s, sx * s, sy * s, w * s, h * s);
         BlitQuad(_scratchTex, GlVram.Width, GlVram.Height, _fbo, GlVram.Width, GlVram.Height,
@@ -257,37 +330,44 @@ public sealed class Gl21Vram : IGlVram
     {
         if (w <= 0 || h <= 0) return;
 
-        var s = GlVram.Scale;
-        var rowBytes = w * s * 4;
+        var rowBytes = w * 4;
         if (_readBuf.Length < rowBytes) _readBuf = new byte[rowBytes];
 
-        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _sampleWriteFbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, _sampleTex, 0);
         _gl.Disable(EnableCap.ScissorTest);
         _gl.PixelStore(PixelStoreParameter.PackAlignment, 1);
 
         for (var row = 0; row < h; row++)
         {
-            _gl.ReadPixels(x * s, (y + row) * s, (uint)(w * s), 1, PixelFormat.Rgba, PixelType.UnsignedByte,
+            _gl.ReadPixels(x, y + row, (uint)w, 1, PixelFormat.Rgba, PixelType.UnsignedByte,
                 _readBuf.AsSpan(0, rowBytes));
 
             for (var col = 0; col < w; col++)
             {
-                var o = col * s * 4;
+                var o = col * 4;
                 int r5 = _readBuf[o] >> 3, g5 = _readBuf[o + 1] >> 3, b5 = _readBuf[o + 2] >> 3;
                 var a = _readBuf[o + 3] >= 128 ? 1 : 0;
                 dst[row * w + col] = (ushort)(r5 | (g5 << 5) | (b5 << 10) | (a << 15));
             }
         }
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, 0, 0);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
     }
 
     public void Dispose()
     {
         if (_fbo != 0) _gl.DeleteFramebuffer(_fbo);
+        if (_stageFbo != 0) _gl.DeleteFramebuffer(_stageFbo);
+        if (_sampleWriteFbo != 0) _gl.DeleteFramebuffer(_sampleWriteFbo);
         if (_destVramFbo != 0) _gl.DeleteFramebuffer(_destVramFbo);
         if (_destRtFbo != 0) _gl.DeleteFramebuffer(_destRtFbo);
         if (_scratchFbo != 0) _gl.DeleteFramebuffer(_scratchFbo);
         if (_tex != 0) _gl.DeleteTexture(_tex);
         if (_stageTex != 0) _gl.DeleteTexture(_stageTex);
+        if (_sampleTex != 0) _gl.DeleteTexture(_sampleTex);
         if (_destVramTex != 0) _gl.DeleteTexture(_destVramTex);
         if (_destRtTex != 0) _gl.DeleteTexture(_destRtTex);
         if (_scratchTex != 0) _gl.DeleteTexture(_scratchTex);
