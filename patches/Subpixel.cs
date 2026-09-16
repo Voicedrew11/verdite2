@@ -11,7 +11,7 @@ namespace Kf2;
 /// Sub-pixel vertex positioning — the fix for the wobbling, shimmering geometry
 /// that is the other half of what makes a PlayStation picture recognisable.
 ///
-///     KF2_SUBPIXEL=1             on; 0 or unset leaves it off
+///     KF2_SUBPIXEL=0             off; unset is on (the shipped default)
 ///     KF2_SUBPIXEL_PROBE=1       report how far vertices are actually moving
 ///
 /// The GTE projects a vertex to 16.16 fixed point and then keeps only the whole
@@ -51,14 +51,10 @@ namespace Kf2;
 /// nothing was recovered runs at shift zero, which is the arithmetic it always did,
 /// to the bit.
 ///
-/// **Off by default**, unlike its sibling, and the reason is what has been measured
-/// rather than any extra risk — the same "a miss is the old behaviour" argument
-/// covers both. The mechanism is confirmed: 47k vertices a second recover a
+/// **On by default.** The mechanism is confirmed: 47k vertices a second recover a
 /// fraction at a 90% hit rate, those fractions are spread evenly across the pixel
-/// they were truncated from, and the frame rate does not move. What has *not* been
-/// done is the picture: perspective correction became a default on the strength of
-/// an ordering table drawn twice and the two frames differenced, and that pair has
-/// not been taken for this. See "Sub-pixel vertex positioning" in NOTES.md.
+/// they were truncated from, and the frame rate does not move. A miss is still the
+/// old whole-pixel behaviour. See "Sub-pixel vertex positioning" in NOTES.md.
 ///
 /// As with perspective correction this patch is only the switch and the report; the
 /// work is in the runtime (<c>patches/recompone/0010</c> and <c>0012</c>), because where a vertex
@@ -123,17 +119,16 @@ public static class Subpixel
     {
         _windowStart = Now;
 
-        // Unlike Perspective there is nothing to set up before the config file is
-        // read, because the default is off: RuntimeReadyEvent is the first and only
-        // place the setting is decided. ConfigManager only loads inside
-        // HostWindow.Initialize, which is after Program.cs, so reading it here would
-        // read an empty config and write it back over the real one.
-        Enabled = _forced ?? false;
+        // RuntimeReadyEvent is the first and only place the saved setting is
+        // decided. ConfigManager only loads inside HostWindow.Initialize, which
+        // is after Program.cs, so reading it here would read an empty config and
+        // write it back over the real one.
+        Enabled = _forced ?? true;
         GteDepth.Probe = _toConsole;
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             Console.WriteLine($"[KF2] subpixel: {(Enabled ? "on" : "off (whole pixels)")}");
         });
 

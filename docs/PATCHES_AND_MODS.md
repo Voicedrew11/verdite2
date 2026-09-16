@@ -214,8 +214,8 @@ a page between two of them draws the heading twice.
 because the frame rate is the option a player came to Video for and the fidelity
 switches are the port's extras, and *Smooth motion between game ticks* moved out
 of Enhancements to sit directly under the frame-rate slider — it is greyed out
-whenever the rate is not above the world's tick, which is the shipped default, and
-the control that decides that is the one immediately above it. A dead tick met
+whenever the rate is not above the world's tick, so at the shipped 60 fps it is
+live, and the control that decides that is the one immediately above it. A dead tick met
 before its cause reads as a bug; met under its cause it reads as a note.
 
 **A page could not get *inside* a runtime section, and now it can.** `Extend`
@@ -366,12 +366,9 @@ states that mean something:
 | `None` | `true` | `false` |
 | `Smooth (24-bit)` | `true` | `true` |
 
-Note the polarity: `NoDither.Enabled` true means the crosshatch is *off*. `None`
-is the port's shipped default (`kf2.nodither.on` defaults to `true`,
-`kf2.truecolor.on` to `false`), so **no saved config changes meaning and nobody's
-picture moves** — which is what made a combo the right answer here rather than the
-single checkbox the pair looks like. A checkbox would have had to drop one of the
-three states, and the one it would have dropped is the default.
+Note the polarity: `NoDither.Enabled` true means the crosshatch is *off*. `Smooth`
+is the port's shipped default (`kf2.nodither.on` and `kf2.truecolor.on` both
+default to `true`).
 
 Both patches keep their key and their environment variable — `KF2_NODITHER`,
 `KF2_TRUECOLOR` — so merging the control strands no config and takes no
@@ -487,9 +484,9 @@ them apart.
 **The tick sits under the frame rate rather than in Enhancements**, sharing the
 `Frame pacing` heading with it. Everything else under Enhancements is a choice
 about how faithful the picture is to the hardware; this one is a consequence of
-the rate, and it is *inert* at or below the world's 20 Hz tick — which is the
-shipped default, so out of the box the control a player meets is greyed. Its
-explanation is the combo directly above it.
+the rate, and it is *inert* at or below the world's 20 Hz tick — at the shipped
+60 fps the control a player meets is live. Its
+explanation is the slider directly above it.
 
 Three things about how it is wired:
 
@@ -516,14 +513,14 @@ stage 13's own callees read the player position triple *after*
 first-person arm, and `func_800331B4`, the world and object walks — so on a
 non-tick frame those shear against the architecture by however far the carry
 moved the eye, worst just before a tick lands. That is why it used to be its own
-switch, off by default. It is inside the one tick now because a player asked for
-one tick; dropping it back out is deleting the `SetPosition` pair in `Apply`.
+switch, off by default. It is inside the one tick now, and ships on with it;
+dropping it back out is deleting the `SetPosition` pair in `Apply`.
 Closing it properly means carrying those two readers too, inside the stage
 `ObjectSmoothing` already brackets — `docs/TODO.md`.
 
-**Never looked at by eye:** the merged tick has not been played. The parts had
+**The merged tick is the shipped picture.** The parts had
 each been judged separately and the position half had been judged *and rejected*
-for the shear above, so the combination is a picture nobody has seen.
+for the shear above; it ships inside the tick anyway.
 
 ## Frame pacing: the port is pinned to the fastest band
 
@@ -668,7 +665,7 @@ restarts instead of running flat out to catch up.
 Three env vars, all read in `Program.cs`:
 
 ```bash
-KF2_FPS=20          # 20 fps, the default; any number, or off for no floor
+KF2_FPS=20          # 60 fps is the default; 20 is the world's tick and a position on the slider
 KF2_TICKRATE=20     # ticks a second the world runs at; 20 is it, and 30 is the comparison
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78   # what is ticked
 ```
@@ -1272,13 +1269,12 @@ the tick rate anyway, so that is a delay of the *display*, not of the response.
   it, and no snap back. A step past 1024 units on an axis is a warp rather than a
   walk and is left alone, the way `ObjectSmoothing` guards a placement.
 
-**Both default to off** — a house rule, not a doubt about the mechanism. The
-boundary bug that once pinned `LogicPhase` to 0 (a counted boundary was a whole tick
+**Both default to on** — the shipped picture is 60 fps against a 20 Hz world.
+The boundary bug that once pinned `LogicPhase` to 0 (a counted boundary was a whole tick
 wide, so the credit went `0 → 1 → tick → 0` and never sat between) is long fixed;
 the probe now reads e.g. `241/241 frames carried, mean phase 0.50 tick, yaw 17.7 u`
 at 120 fps. The picture was checked by eye after the switch to interpolation and
-reported *"incredible"*; the default stays off until that judgement is settled for
-shipping.
+reported *"incredible"*, and that is now the first-run picture.
 
 #### Four things review found in it
 
@@ -1337,8 +1333,9 @@ carried and the origin those two place their geometry against is not: on a non-t
 frame the arm, the torches and the creatures shear against the architecture by
 exactly the distance the carry moved the eye, worst just before a tick lands. That
 is the constant-offset failure `ObjectSmoothing` was written to avoid, in a
-different place. It is why the position is a separate switch and off by default;
-closing it means carrying those two readers too, inside the stage
+different place. It is why the position used to be a separate switch and off by
+default; it now ships inside the one smoothing tick. Closing it means carrying
+those two readers too, inside the stage
 `ObjectSmoothing` already brackets. The comment now says so instead of asserting a
 guarantee the code does not have.
 
@@ -2101,8 +2098,8 @@ rounding, and because the two questions it has to answer are its own: is the swi
 a morph clip at all (`rigid 0`), and is its time moving (`step 300`). An idle second
 reads `arm no swing`, which is deliberately not the same answer as `rigid`.
 
-It rides `KF2_SMOOTH_ANIM` and the one Video ▸ Enhancements smoothing tick
-— same mechanism, same predicate, same switch — and so is **off by default** with
+It rides `KF2_SMOOTH_ANIM` and the one Video smoothing tick
+— same mechanism, same predicate, same switch — and so is **on by default** with
 the rest.
 
 ### The menu's cursor repeat is outside the gate by construction
@@ -2824,13 +2821,11 @@ Sampling the game thread in an area put 161 of 200 samples in the pacing sleep, 
 in `Present` and six in game code — about a millisecond of MIPS against thirty-two
 of waiting. Drawing more often costs nothing this port has not already got.
 
-**The default is 20 fps and a 20 Hz world**, 1:1, which is the console's own
-arrangement. What no counter answers: whether 20 fps is an acceptable shipped
-default or whether the picture should be drawn faster than the world runs (checked
-by eye once the smoothing interpolated, and reported *"incredible"* at a high rate),
-and whether the full-rate mode feels better than a smoothed 20 despite its broken
-timers. The interpolated camera no longer swims, lags into a bounce, or jitters
-against a wall — that was the extrapolation, now replaced.
+**The default is 60 fps and a 20 Hz world**, three pictures per tick. 20 remains
+the world's clock, which is the console's own arrangement. The interpolated camera
+no longer swims, lags into a bounce, or jitters
+against a wall — that was the extrapolation, now replaced — and smoothing ships
+with the 60 fps picture.
 
 The counters that *are* answerable. The 65-tick death clock at `0x8019951A` is the
 measurement, since stage 3 bumps it once per logic tick — its slope against wall
@@ -3647,15 +3642,15 @@ exactly that reason.
 
 `patches/MapFog.cs`, and the seam it fills is the one the map shipped with.
 
-    KF2_MAP_FOG=1         fog on for the run (off by default)
+    KF2_MAP_FOG=0         fog off for the run (on by default)
     KF2_MAP_FOG_LOS=0     the line-of-sight gate off (on by default)
     KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, refused, records, flushes
     KF2_MAP_FOG_PROBE=2   also the raw 24x24 grid, the gate's verdict and its walls
 
 The map used to reveal the whole area. It now draws only the tiles the player has
 seen, remembered **per save slot** and kept between sessions in a file beside the
-memory card. Off by default, for the sub-pixel reason: the mechanism below is
-measured and the picture has not been judged.
+memory card. On by default: the mechanism below is
+measured and the picture has been judged for shipping.
 
 **No new reverse engineering was needed and none was done.** `func_8002D3A8`
 rebuilds the 24x24 grid at `0x80192EAC` at the head of every frame — the 4:3
@@ -3849,9 +3844,9 @@ cost — **144.0 fps drawn and 20.0 ticks/s** at `KF2_FPS=144` with the minimap 
 which is what the map measured before fog existed.
 
 **Not looked at by eye, and the user's to judge:** whether the revealed shape
-matches where they walked, whether the in-view wash reads or distracts, whether the
-whole-tile reveal is noticeable on a map that draws one half at a time, and whether
-fog belongs on by default. The settings page has *Forget this area* and *Reveal
+matches where they walked, whether the in-view wash reads or distracts, and whether
+the whole-tile reveal is noticeable on a map that draws one half at a time. The
+settings page has *Forget this area* and *Reveal
 this area* for exactly that comparison.
 
 ### What is *in* the area: the marker layer

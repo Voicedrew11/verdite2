@@ -87,7 +87,7 @@ The switches used most; the full list is `docs/ENV_VARS.md`, imported here.
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
-KF2_FPS=120                            # 20 (default), any number, or off
+KF2_FPS=120                            # 60 (default), any number, or off
 KF2_FPS_PROBE=1                        # a line a second: fps drawn, ticks taken, what each smoother is doing
 KF2_TICKRATE=30                        # the world's tick rate (20, and not a setting); a comparison only
 KF2_PRESENT_PROBE=1                    # proves frames reach the screen; prints nothing if they do not
@@ -153,8 +153,8 @@ what it is) live there, not here.
 
 | patch | what | default | doc, section |
 |---|---|---|---|
-| `FramePacing` | skips the game's frame gate `func_80017880`, paces frames itself, runs the gated stages on a 20 Hz world clock | 20 fps drawn, 20 ticks/s | PATCHES_AND_MODS, "Any frame rate" |
-| `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing` | carry the camera, the four world tables and MO pose between ticks | off; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing" |
+| `FramePacing` | skips the game's frame gate `func_80017880`, paces frames itself, runs the gated stages on a 20 Hz world clock | 60 fps drawn, 20 ticks/s | PATCHES_AND_MODS, "Any frame rate" |
+| `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing` | carry the camera, the four world tables and MO pose between ticks | on; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing" |
 | `LoopPacing` | modal loops (fades, cutscenes, item/spell animations) run once per tick, gaps filled with stage-13 redraws | on | PATCHES_AND_MODS, "Loops that render their own frames" |
 | `MenuPacing` | menu cursor repeat and blink held to the 60 Hz grid | on | PATCHES_AND_MODS, "The menu's cursor repeat" |
 | `LoadPacing` | loading screen's walking figure held to the vblank grid | on | PATCHES_AND_MODS, "The loading screen's walking figure" |
@@ -164,19 +164,19 @@ what it is) live there, not here.
 | `FrameCapture`, `FrameViewerPanel` | capture one run of stage 13 and scrub it GP0 command by command on a detached software GPU: owner routine, send cost, fragments, GL batch submits and why, GPU time per batch and for AO, every runtime section, vertex-map work per routine (`0046`); Shift+F | idle until a capture; routines hooked from the first | DEVELOPMENT, "Watching a frame being built" |
 | `PolyAssembler` | `func_80030540` in C# as a replace hook, rejecting polygons the view-space clipper would clip to nothing; also `func_8002FECC` (the far map tiles' unclipped assembler), the vertex transforms `func_8002E650`/`func_8002E7CC`, `func_8002F214`/`func_8002EAEC` (the models' lit assembler) and the clipper `Clip4FTP`/`Clip3FTP`; the GTE ops they call have a fast path in the runtime (`0047`); `KF2_POLYASM=verify` diffs each against the recompiled routine, GTE included; Video ▸ Fast geometry switches them all, with the GTE fast path | on | PATCHES_AND_MODS, "The polygon assembler in C#", "The lit model assembler", "The clipper in C#", "The GTE fast path" |
 | `Perspective` | perspective-correct textures (`0009`, `0012`) | on | RENDERING, "Perspective correction" |
-| `Subpixel` | sub-pixel vertex positions (`0010`); under it, the C# assemblers' backface cull is taken at the fractional corners (`0052`, `KF2_SUBPIXEL_CULL=0` to compare) | off | RENDERING, "Sub-pixel vertex positioning", "A thin face was culled on whole pixels" |
-| `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); Video ▸ Enhancements, with two tolerance sliders | off | RENDERING, "Z-buffer", "The assemblers write the depth" |
+| `Subpixel` | sub-pixel vertex positions (`0010`); under it, the C# assemblers' backface cull is taken at the fractional corners (`0052`, `KF2_SUBPIXEL_CULL=0` to compare) | on | RENDERING, "Sub-pixel vertex positioning", "A thin face was culled on whole pixels" |
+| `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); Video ▸ Enhancements, with two tolerance sliders | on | RENDERING, "Z-buffer", "The assemblers write the depth" |
 | `Pgxp` | upstream's PGXP as the vertex source (`0034`-`0036`); env only | off | RENDERING, "PGXP has no control in the window" |
-| `AmbientOcclusion` | SSAO from painter's-order depth (`0040`) | off | RENDERING, "Ambient occlusion" |
+| `AmbientOcclusion` | SSAO from painter's-order depth (`0040`) | on | RENDERING, "Ambient occlusion" |
 | `Anisotropic` | post-CLUT footprint supersampling (`0041`) | off | RENDERING, "Anisotropic filtering" |
-| `PerPixelLighting` | the depth cue and the models' light evaluated per pixel from what `PolyAssembler` recorded per packet (`0048`) | off | RENDERING, "Per-pixel lighting" |
-| `EvenFog` | clipped map tiles refogged on the tiles' curve instead of `func_800302E8`'s `IR0 >> 1`, and each tile vertex's fog blended between the light records of the tiles around it (hooks `func_80031950`; `0049`); and the records' colour matrix and back colour the same way; one *Even fog and lighting* checkbox, dimmed without Fast geometry (`KF2_EVENFOG_BLEND=0`, `KF2_EVENLIGHT=0` drop a part); stands down under verify | off | RENDERING, "A clipped tile is fogged at half, and that is the block on the floor", "Fog changes at a tile edge" |
-| `NoDither`, `TrueColor` | one *Shading* combo: Dither / None / Smooth (24-bit, `0021`) | None | PATCHES_AND_MODS, "Two shading checkboxes were one question asked twice" |
-| `Widescreen`, `CullCone` | aspect ratio; widened view cone and screen tints follow it | 4:3 | WIDESCREEN, "Widescreen", "The cull the margin runs into" |
+| `PerPixelLighting` | the depth cue and the models' light evaluated per pixel from what `PolyAssembler` recorded per packet (`0048`) | on | RENDERING, "Per-pixel lighting" |
+| `EvenFog` | clipped map tiles refogged on the tiles' curve instead of `func_800302E8`'s `IR0 >> 1`, and each tile vertex's fog blended between the light records of the tiles around it (hooks `func_80031950`; `0049`); and the records' colour matrix and back colour the same way; one *Even fog and lighting* checkbox, dimmed without Fast geometry (`KF2_EVENFOG_BLEND=0`, `KF2_EVENLIGHT=0` drop a part); stands down under verify | on | RENDERING, "A clipped tile is fogged at half, and that is the block on the floor", "Fog changes at a tile edge" |
+| `NoDither`, `TrueColor` | one *Shading* combo: Dither / None / Smooth (24-bit, `0021`) | Smooth | PATCHES_AND_MODS, "Two shading checkboxes were one question asked twice" |
+| `Widescreen`, `CullCone` | aspect ratio; widened view cone and screen tints follow it | 16:9 | WIDESCREEN, "Widescreen", "The cull the margin runs into" |
 | `AutoReload` | reload the last save on death, fixed 2 s delay | on | PATCHES_AND_MODS, "Auto reload" |
-| `Map*` | full-screen map (touchpad / `M`), minimap (`N`), fog of war, markers; full map pauses the world | map on; fog, minimap, markers off | PATCHES_AND_MODS, "A dynamic map", "What the Map page is down to" |
+| `Map*` | full-screen map (touchpad / `M`), minimap (`N`), fog of war, markers; full map pauses the world | map on; fog on; minimap, markers off | PATCHES_AND_MODS, "A dynamic map", "What the Map page is down to" |
 | `Analog` | twin-stick control | on | INPUT, "Analog twin-stick control" |
-| `Mouse` | mouse look, spent inside `Analog.BeforeLook` | off | INPUT, "Mouse look" |
+| `Mouse` | mouse look, spent inside `Analog.BeforeLook` | on | INPUT, "Mouse look" |
 | `MenuMouse` | point-and-click in the in-game menus | on | INPUT, "The menu pointer" |
 | `KeyLayout` | the port's WASD layout | on | INPUT, "The keyboard layout" |
 | `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |

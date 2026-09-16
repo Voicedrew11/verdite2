@@ -129,16 +129,14 @@ useful than the question was.
    swing's 94 frames carried at 144 fps, world clock untouched. See "The player's
    arm is the same bug after all" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
-   **What is still left is the part no counter answers**, and it is the user's: is
-   20 actually right, is a 20 fps default acceptable or should the picture be drawn
-   faster than the world runs, and does the full-rate mode feel better than a
-   smoothed 20 despite its broken timers? The smoothing was checked by eye at a high
+   **What is still left is the part no counter answers**, and it is the user's: does
+   the full-rate mode feel better than a smoothed 60 despite its broken timers?
+   The smoothing was checked by eye at a high
    rate and reported *"incredible"* once it **interpolated** — `FrameSmoothing` and
    `ObjectSmoothing` both extrapolated at first, which bounced the camera back to
    the tick position whenever a turn eased off or motion met a wall; they now draw
-   `lerp(prev, cur, phase)`, which cannot overshoot. Smoothing still defaults to
-   **off** (position and objects included) as a house rule until that judgement is
-   settled for shipping, not because it has never run. **Stage 2 is done** — it turned out to be
+   `lerp(prev, cur, phase)`, which cannot overshoot. Smoothing and 60 fps now
+   **ship**. **Stage 2 is done** — it turned out to be
    gateable after all (its only edge to the renderer is the transition fade
    `func_80037B5C`, an extra render rather than the frame's own), so doors, the
    drawbridge, the minecart and the crystals now step at the tick rate. What is
@@ -403,12 +401,9 @@ useful than the question was.
    `ImGuiController.SetPerFrameImGuiData` that `patches/recompone/0018` works
    around, which breaks every fractionally scaled display and belongs in
    `dotnet/Silk.NET`.
-9. **Take the twice-drawn pair for sub-pixel vertex positioning, and flip its
-   default if it holds up.** The mechanism is measured — 47k vertices a second
-   recovered, offsets uniform across the pixel, no frame-rate cost — but the
-   picture is not, and that is the only thing keeping it off by default while its
-   sibling is on. `GteDepth.Subpixel` is read at vertex-decode time, so it can be
-   flipped between two `DrawOTag` passes exactly as the dither bit was. Expect a
+9. **Walk a wall with sub-pixel on.** The default is now on. The mechanism is
+   measured — 47k vertices a second recovered, offsets uniform across the pixel,
+   no frame-rate cost. `GteDepth.Subpixel` is read at vertex-decode time. Expect a
    much smaller pixel count than the dither or the textures got: this moves
    polygon edges, not interiors, and the artefact is really about motion, so a
    still pair may undersell it. See "Sub-pixel vertex positioning" in

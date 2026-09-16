@@ -76,22 +76,19 @@ perspective-correct** — the depth the GPU never receives is recovered from the
 and matched back by screen position, which changes 76.6% of a frame's pixels (see
 "Perspective correction"). The same table now also recovers the **sub-pixel
 position** the GTE truncates, so vertices need not snap to whole pixels; that one
-is off by default until its picture has been measured the way the textures were
-(see "Sub-pixel vertex positioning"). **A Z-buffer is available from the same
-recovered depth** — per-pixel occlusion instead of the ordering table — and is off
-by default for the same reason (see "Z-buffer"); the cause that had it looking
+ships on (see "Sub-pixel vertex positioning"). **A Z-buffer is available from the same
+recovered depth** — per-pixel occlusion instead of the ordering table — and ships
+on (see "Z-buffer"); the cause that had it looking
 unfixable was found, and it was the clip W rather than the depth (see "PGXP").
 Its depth now comes from the C# assemblers' own packet records, so the skybox and
-the HUD keep painter's order by construction; that picture has not been looked at
-(see "The assemblers write the depth").
+the HUD keep painter's order by construction (see "The assemblers write the depth").
 **Ambient occlusion runs on that same depth**, and the point of it is where the
 G-buffer comes from: there is no depth prepass to be had here — the geometry
 arrives incrementally through GP0 and nothing knows the frame is finished until it
 is — but `DrawOTag` walks the ordering table back to front, so a depth *write* with
 the test left at `GL_ALWAYS` ends the frame holding the nearest visible surface at
 every pixel. Everything with no recovered depth writes the far plane instead, which
-is the HUD mask for free (see "Ambient occlusion"). Off by default: the mechanism is
-measured and the picture has not been looked at.
+is the HUD mask for free (see "Ambient occlusion"). On by default.
 **Upstream's own PGXP is backported and is the second source of that depth**,
 measured as the same coverage for a fifth of the frame rate in this game, and
 kept for what it decides exactly rather than by luck of the copy — but it is
@@ -124,7 +121,8 @@ port skips the game's own frame gate at every rate — it decides both together 
 knows one answer for both, 30 — paces the picture itself, holds the world to a
 fixed timestep and carries the camera between ticks, so the picture can run at 60,
 120 or 165 while the world keeps a console's timing. **The render rate defaults to
-20 too**, 1:1 with the tick, which is the console's own arrangement. The literal 2
+60**, three pictures per tick; 20 is still the world's clock and what every
+rate in this port is measured against. The literal 2
 in that gate is a *ceiling* rather than a target — it forbids a frame faster than
 30 and asks nothing of a slower one — and the console missed that deadline under
 load and landed in the three-vblank band, so since the game's speed is its frame
@@ -136,12 +134,11 @@ movies and holds "The End", and **any button then returns to the title** —
 holding it forever is what the original does, and on a window that is
 indistinguishable from a crash. See "The ending screen" in `docs/RUNTIME.md`.
 
-**Widescreen, sub-pixel positioning, the Z-buffer and every frame rate above the
-tick rate all ship switched off for the same reason** — mechanism measured, picture never
-checked by eye. Mouse look is
-off for a different one: its path *is* measured end to end, but a pointer that
-disappears into the game unasked is worse than one switch to find. What is open
-and undiagnosed is in `docs/TODO.md`.
+**A first run is 16:9, sub-pixel, the Z-buffer, 24-bit shading, even fog, per-pixel
+lighting, ambient occlusion, smoothed 60 fps, map fog, and mouse look.** Those
+were the picture-never-checked switches; they ship on now that the picture has
+been judged. Anisotropic filtering is still off. `KF2_*` is the comparison for
+any of them. What is open and undiagnosed is in `docs/TODO.md`.
 
 ## Layout
 

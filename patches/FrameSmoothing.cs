@@ -11,14 +11,13 @@ namespace Kf2;
 /// Carries the view between logic ticks, so that a picture drawn more often than
 /// the world advances actually looks like it.
 ///
-///     KF2_SMOOTH=1        on; without it the camera moves at the tick rate only
-///     KF2_SMOOTH_POS=1    interpolate the position too, not just the angles
+///     KF2_SMOOTH=0        off; the camera then moves at the tick rate only
+///     KF2_SMOOTH_POS=0    leave the position at the tick, carry the angles
 ///     KF2_SMOOTH_PROBE=1  what is being carried, per second
 ///
-/// Both are settings, under Video beside the frame rate. **Both default to off**:
-/// until FramePacing's frame boundary was fixed this never ran at any rate --
-/// LogicPhase was pinned to 0 and the probe read `0 of N frames carried (phase
-/// idle)` -- so the picture it makes has never been seen.
+/// Both are settings, under Video beside the frame rate. **Both default to on**:
+/// the shipped picture is 60 fps against a 20 Hz world, and without this that is
+/// a faster picture of a camera not moving.
 ///
 /// This is the other half of <see cref="FramePacing"/> rather than an option
 /// beside it. Above the tick rate the port ticks the game's own stages on their
@@ -124,20 +123,15 @@ public static class FrameSmoothing
     public const string OnKey  = "kf2.smoothing.on";
     public const string PosKey = "kf2.smoothing.pos";
 
-    /// <summary>Carry the view angles between ticks. **Off by default**, though
-    /// without it a rate above the tick rate buys a faster picture of a camera not
-    /// moving. It was on until the frame boundary in <see cref="FramePacing"/> was
-    /// fixed, and until then it never ran at all -- LogicPhase was pinned to 0 and
-    /// the probe read `0 of 240 frames carried (phase idle)` at every rate. So its
-    /// picture has still never been looked at, which is the sub-pixel reason for a
-    /// default of off.</summary>
-    public static bool Enabled { get; private set; }
+    /// <summary>Carry the view angles between ticks. **On by default**: the
+    /// shipped picture is 60 fps against a 20 Hz world, and without this that is
+    /// a faster picture of a camera not moving.</summary>
+    public static bool Enabled { get; private set; } = true;
 
-    /// <summary>Carry the position too. Off by default; the mechanism is measured
-    /// and the picture is not -- and unlike the angles it is not isolated to stage
-    /// 8, since two of stage 13's callees read the same triple afterwards. See the
-    /// class summary.</summary>
-    public static bool Position { get; private set; }
+    /// <summary>Carry the position too. On with the rest of the smoothing tick;
+    /// unlike the angles it is not isolated to stage 8, since two of stage 13's
+    /// callees read the same triple afterwards. See the class summary.</summary>
+    public static bool Position { get; private set; } = true;
 
     static bool _onFromEnv, _posFromEnv;
 

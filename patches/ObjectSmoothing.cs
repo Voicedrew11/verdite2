@@ -11,7 +11,7 @@ namespace Kf2;
 /// Carries everything in the world that moves between logic ticks, the way
 /// <see cref="FrameSmoothing"/> carries the view.
 ///
-///     KF2_SMOOTH_OBJECTS=1       on; off by default
+///     KF2_SMOOTH_OBJECTS=0       off; on by default with the rest of the smoothing tick
 ///     KF2_SMOOTH_OBJECTS_PROBE=1 how much is being carried, per second
 ///
 /// It is a setting under Video, beside the two frame-smoothing checkboxes.
@@ -385,10 +385,10 @@ public static class ObjectSmoothing
     public const string OnKey = "kf2.smoothing.objects";
     public const string GuardKey = "kf2.smoothing.objects.guard";
 
-    /// <summary>Carry positions and facings between ticks. **Off by default**, the
-    /// house rule for a mechanism that has been measured and whose picture has
-    /// not.</summary>
-    public static bool Enabled { get; private set; }
+    /// <summary>Carry positions and facings between ticks. **On by default**, with
+    /// the rest of the smoothing tick: a 60 fps picture against a 20 Hz world
+    /// otherwise steps creatures three times slower than the camera turns.</summary>
+    public static bool Enabled { get; private set; } = true;
 
     static bool _onFromEnv;
     static bool _guardFromEnv;

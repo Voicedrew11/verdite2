@@ -19,8 +19,8 @@ namespace Kf2.Settings;
 ///
 /// <list type="table">
 /// <item><term>Dither (original)</term><description>the crosshatch, 15-bit — what the hardware did</description></item>
-/// <item><term>None</term><description>neither; the bands show raw. The port's shipped default</description></item>
-/// <item><term>Smooth (24-bit)</term><description>eight bits and no crosshatch</description></item>
+/// <item><term>None</term><description>neither; the bands show raw</description></item>
+/// <item><term>Smooth (24-bit)</term><description>eight bits and no crosshatch. The port's shipped default</description></item>
 /// </list>
 ///
 /// Both patches keep their own key (<c>kf2.nodither.on</c>,

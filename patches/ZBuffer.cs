@@ -11,7 +11,7 @@ namespace Kf2;
 /// A Z-buffer — per-pixel occlusion from the view depth the GTE already computed,
 /// instead of the console's painter's algorithm.
 ///
-///     KF2_ZBUFFER=1             on; 0 or unset leaves the ordering table in charge
+///     KF2_ZBUFFER=0             off; unset is on (the shipped default)
 ///     KF2_ZBUFFER_PROBE=1       report how many triangles actually depth-tested
 ///
 /// The PlayStation GPU has no depth buffer. The game sorts every polygon into an
@@ -49,13 +49,8 @@ namespace Kf2;
 /// never tested, the clip W is unchanged, and a vertex with no depth still
 /// writes <c>vec4(p, 0, 1)</c>.
 ///
-/// <b>No user-facing switch, off by default.</b> The player-facing checkbox that
-/// once sat under Video was removed: recovering a usable depth here is effectively
-/// unbridgeable — DuckStation's mature PGXP depth buffer, given the same
-/// per-polygon OTZ averages this game submits, cannot produce a clean picture
-/// either. The mechanism is kept for diagnosis, driven from the console alone via
-/// <c>KF2_ZBUFFER=1</c> and <c>KF2_ZBUFFER_PROBE</c>; the cave flicker in
-/// "Following the value through memory" is the thing to look at. See "Z-buffer"
+/// <b>On by default</b>, under Video ▸ Enhancements, with sliders for the two
+/// coplanar-tolerance terms. A miss is still painter's order. See "Z-buffer"
 /// in NOTES.md.
 ///
 /// This patch is only the console switch and the report;
@@ -165,15 +160,15 @@ public static class ZBuffer
         GteDepth.DepthBias = _forcedBias ?? DefaultBias;
         GteDepth.DepthSlope = _forcedSlope ?? DefaultSlope;
 
-        // Default is off: RuntimeReadyEvent is the first and only place the
-        // setting is decided. ConfigManager only loads inside HostWindow.Initialize,
-        // which is after Program.cs, so reading it here would read an empty config
-        // and write it back over the real one.
-        Enabled = _forced ?? false;
+        // RuntimeReadyEvent is the first and only place the saved setting is
+        // decided. ConfigManager only loads inside HostWindow.Initialize, which
+        // is after Program.cs, so reading it here would read an empty config and
+        // write it back over the real one.
+        Enabled = _forced ?? true;
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             // Env only: its slider is gone, so an old saved kf2.zbuffer.threshold is not read.
             GteDepth.DepthClearThreshold = _forcedThreshold ?? 0f;
             SyncSource();

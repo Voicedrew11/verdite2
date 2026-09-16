@@ -108,11 +108,11 @@ namespace Kf2;
 ///
 /// The mechanism is measured; the picture is the user's to judge. Whether the
 /// revealed shape matches where they walked, whether the brightened in-view cone
-/// reads or distracts, whether fog belongs on by default, and whether revealing a
+/// reads or distracts, and whether revealing a
 /// whole tile — both stacked floor halves at once, since the visibility grid has
 /// no notion of the halves — is noticeable on a map that draws one half at a time.
 ///
-///     KF2_MAP_FOG=1          fog on for the run (kf2.map.fog; off by default)
+///     KF2_MAP_FOG=0          fog off for the run (kf2.map.fog; on by default)
 ///     KF2_MAP_FOG_PROBE=1    a line a second: revealed, seen, lit, rejected, flushes
 /// </summary>
 public static class MapFog
@@ -235,7 +235,7 @@ public static class MapFog
 
     public static void Install()
     {
-        Enabled = _forced ?? false;
+        Enabled = _forced ?? true;
         _los    = _forcedLos ?? true;
 
         // ConfigManager.Load runs inside HostWindow.Initialize, which is after
@@ -243,7 +243,7 @@ public static class MapFog
         // be read here. An env var beats the saved value for the run.
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             _path = PathFor();
             Load();
             Console.WriteLine($"[KF2] map fog: {(Enabled ? "on" : "off")}, " +

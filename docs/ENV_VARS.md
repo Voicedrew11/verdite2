@@ -15,7 +15,7 @@ the game polls `PAD_dr` hundreds of thousands of times a second.
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
-KF2_FPS=120                            # 20 (default), any number, or off; see "Any frame rate"
+KF2_FPS=120                            # 60 (default), any number, or off; see "Any frame rate"
 KF2_TICKRATE=30                        # ticks a second the world runs at (20, and no longer a setting)
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
@@ -41,12 +41,12 @@ KF2_SPRITEANIM_PROBE=1                 # cel changes a second, live slots, and h
 KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
 KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
 KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
-KF2_SMOOTH=1 KF2_SMOOTH_POS=1          # carry the view between ticks (off by default); carry position too
+KF2_SMOOTH=0 KF2_SMOOTH_POS=0          # leave the view at the tick (on by default); leave position too
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
-KF2_SMOOTH_OBJECTS=1                   # carry enemies, doors and everything else that moves (off by default)
+KF2_SMOOTH_OBJECTS=0                   # leave enemies, doors and everything else at the tick (on by default)
 KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
 KF2_SMOOTH_OBJECTS_GUARD=continuous    # strict|sticky|continuous: what counts as a placement (creatures)
-KF2_SMOOTH_ANIM=1                      # carry MO pose between ticks (off by default)
+KF2_SMOOTH_ANIM=0                      # leave MO pose at the tick (on by default)
 KF2_SMOOTH_ANIM=time                   # lerp the clip time between the two ticks (the default mode)
 KF2_SMOOTH_ANIM=timeline               # comparison: interpolate on the clip's own timeline
 KF2_SMOOTH_ANIM=weight                 # comparison: the blend weight only, inside the game's segment
@@ -56,7 +56,7 @@ KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exce
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_TEXPROBE=1                         # textured vs flat prims a second, and a per-page VRAM census, into texprobe.log
-KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
+KF2_WIDESCREEN=4:3 KF2_WIDESCREEN_PROBE=1  # aspect (16:9 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide (stretched by default)
 KF2_WIDESCREEN_HUD=1                     # anchor the HP/MP panel and icons to the new edges (off; no longer a setting)
@@ -77,7 +77,7 @@ KF2_GTE_FAST=0                           # the GTE's general path for the lighti
 KF2_GTE_LIGHTCACHE=0                     # light every normal afresh instead of remembering its matrix products
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
 KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
-KF2_TRUECOLOR=1                        # 24-bit shaded output, no 15-bit banding (off by default; GL backend only)
+KF2_TRUECOLOR=0                        # 15-bit shaded output (24-bit is the default; GL backend only)
 KF2_VRAMSNAP=0                         # a menu restores the frozen frame at 1x again (the scaled copy is kept by default)
 KF2_VRAMSNAP_PROBE=1                   # frame restores served from that copy, against uploads that missed
 KF2_VSYNC=block                        # upstream's blocking vblank timeline instead of the port's grid (caps the picture at 60)
@@ -86,13 +86,13 @@ KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
 KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
 KF2_ANISO=8                            # anisotropic filtering: taps along the footprint's long axis (1, off)
 KF2_ANISO_PROBE=1                      # the level, and whether the uniform reaches the shader
-KF2_PERPIXEL=1                         # per-pixel lighting: the depth cue and model light per pixel (off by default; GL core only)
+KF2_PERPIXEL=0                         # corner colours instead of per-pixel lighting (on by default; GL core only)
 KF2_PERPIXEL_PROBE=1                   # packets recorded, polygons lit per pixel and not
 KF2_PERPIXEL_PROBE=2                   # also the shader's formula at every recorded corner against the GTE's colour
-KF2_EVENFOG=1                          # even fog and lighting: clipped polygons on the tiles' curve, fog and light blended across light-record edges (off by default; needs Fast geometry)
+KF2_EVENFOG=0                          # the game's fog and light edges (even fog and lighting is on by default; needs Fast geometry)
 KF2_EVENFOG_BLEND=0                    # no fog blend: the game's hard fog edge between records
 KF2_EVENLIGHT=0                        # no light blend: the game's hard colour matrix and back colour edge
-KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
+KF2_SUBPIXEL=0                         # whole-pixel vertex positions (sub-pixel is on by default)
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels; also polygons drawn back to front, and faces the fractional cull changed
 KF2_SUBPIXEL_CULL=0                    # cull the C# assemblers' faces on whole pixels again, as the game does (fractional corners by default under sub-pixel)
 KF2_PGXP=1                             # upstream's PGXP as the vertex source (off; the address map answers)
@@ -104,13 +104,13 @@ KF2_PGXP_VERTEXCACHE=0                 # no screen-position fallback
 KF2_PGXP_CACHEW=0                      # let that fallback answer positions but not depths
 KF2_PGXP_TOLERANCE=2                   # how far a recovered position may sit from the packet's; -1 off
 KF2_PGXP_PROBE=1                       # its coverage, and where each answer came from
-KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off by default; Video ▸ Enhancements)
+KF2_ZBUFFER=0                          # painter's order (the Z-buffer is on by default; Video ▸ Enhancements)
 KF2_ZBUFFER_THRESHOLD=300              # restart the depth buffer when the scene jumps forward (0, off; no longer a setting)
 KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-tested
 KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map of the depth buffer
 KF2_ZBUFFER_SOURCE=map                 # depth from the address map, not the assemblers' packet records (0050)
 KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  # coplanar tolerance on the test: SZ units, and pixels of depth slope; 0 0 is exact (0051)
-KF2_AO=1                               # ambient occlusion (off by default; GL backend only)
+KF2_AO=0                               # ambient occlusion off (on by default; GL backend only)
 KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
 KF2_AO_BIAS=0.08 KF2_AO_SAMPLES=16 KF2_AO_MAXDEPTH=24000
 KF2_AO_PROBE=1                         # coverage, the projection read off the GTE, passes run
@@ -119,7 +119,7 @@ KF2_ANALOG=0                             # twin-stick control off (it is on by d
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
 KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
-KF2_MOUSE=1                              # mouse look (off by default; Escape captures the pointer)
+KF2_MOUSE=0                              # mouse look off (it is on by default; Escape captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=Escape                     # the key that captures and releases
@@ -143,7 +143,7 @@ KF2_MAP_PAUSE=0                          # leave the world running while the ful
 KF2_MAP_FLOOR=lower                      # pin a stacked half instead of following the player (no longer a setting)
 KF2_MAP_ARROW=1                          # the player as an arrow with a heading, not a dot (no longer a setting)
 KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, its occupied extent and a marker census, and open both maps
-KF2_MAP_FOG=1                            # fog of war: only the tiles you have seen (off by default)
+KF2_MAP_FOG=0                            # fog of war off: the whole floor plan (on by default)
 KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on; no longer a setting)
 KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, tiles refused, records, flushes
 KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 grid, the gate's verdict and its walls
