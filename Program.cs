@@ -405,6 +405,21 @@ Kf2.AnimSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM"
                             Environment.GetEnvironmentVariable("KF2_SMOOTH_ANIM_PROBE"));
 Kf2.AnimSmoothing.Install();
 
+// The fourth of the same problem: the camera glides and the creatures walk, but
+// the water, a slime's skin and the other scrolling textures still jump a texel
+// every tick. func_8002DC78 re-uploads a vertically wrapped copy into VRAM, and
+// the stage gate already holds that to 20 Hz -- the rate per second is right,
+// the picture of it is not. A fractional UV offset rounds away (the rasterizer
+// snaps to a whole texel), so this publishes the dest rects and leftover phase
+// to the prim shaders, which blend the two wrap-rows the integer upload sits
+// between. GL only; Fast geometry is not required.
+//
+//     KF2_SMOOTH_FLUID=0        leave them on the tick -- comparison only
+//     KF2_SMOOTH_FLUID_PROBE=1  live slots, dest rects, leftover shift
+Kf2.FluidSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH_FLUID"),
+                             Environment.GetEnvironmentVariable("KF2_SMOOTH_FLUID_PROBE"));
+Kf2.FluidSmoothing.Install();
+
 // The menu is not the only loop of that shape, and naming them one at a time is
 // how the list was being found. A *modal loop* -- a function that takes the main
 // loop over and presents its own frames -- is entered from a gated stage, so the

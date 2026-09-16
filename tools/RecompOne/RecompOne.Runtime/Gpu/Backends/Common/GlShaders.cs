@@ -361,6 +361,11 @@ internal static class GlShaders
         uniform vec3  uLcmR;
         uniform vec3  uLcmG;
         uniform vec3  uLcmB;
+        // 0053. Scrolling textures: dest RECT in VRAM and a leftover V shift, so
+        // water blends between the integer phases func_8002DC78 uploaded.
+        uniform vec4  uFluidRect[8];
+        uniform float uFluidOff[8];
+        uniform float uFluidN;
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -396,6 +401,37 @@ internal static class GlShaders
                     : fetch(ivec2(clutBase.x + idx, clutBase.y));
             }
             return fetch(ivec2(pageBase.x + uv.x, pageBase.y + uv.y));
+        }
+
+        // 0053. The integer upload sits at this tick's phase. Shift V by the leftover
+        // and blend the two wrap-rows, inside the dest rect the upload itself wraps.
+        // uFluidN of 0 returns the centre sample unchanged, so a frame with nothing
+        // scrolling is bit-identical to before.
+        vec4 decodeFluid(ivec2 raw) {
+            vec4 a = decode(raw);
+            if (uFluidN < 0.5) return a;
+            float div = texMode == 0 ? 4.0 : texMode == 1 ? 2.0 : 1.0;
+            float vx = float(pageBase.x) + float(raw.x) / div;
+            float vy = float(pageBase.y) + float(raw.y);
+            for (int i = 0; i < 8; ++i) {
+                if (float(i) >= uFluidN) continue;
+                vec4 r = uFluidRect[i];
+                if (vx < r.x || vx >= r.x + r.z || vy < r.y || vy >= r.y + r.w) continue;
+                float origin = r.y - float(pageBase.y);
+                float h = r.w;
+                if (h < 1.0) continue;
+                float local = float(raw.y) - origin + uFluidOff[i];
+                local = local - h * floor(local / h);
+                int v0 = int(floor(local));
+                float fy = fract(local);
+                int y0 = int(origin + 0.5) + v0;
+                if (fy < 0.001) return y0 == raw.y ? a : decode(ivec2(raw.x, y0));
+                int y1 = int(origin + 0.5) + int(mod(float(v0 + 1), h));
+                vec4 c0 = y0 == raw.y ? a : decode(ivec2(raw.x, y0));
+                vec4 c1 = decode(ivec2(raw.x, y1));
+                return vec4(mix(c0.rgb, c1.rgb, fy), c0.a);
+            }
+            return a;
         }
 
         // 0048. The vertex colour, made again at this pixel from what made it: a lit
@@ -491,7 +527,7 @@ internal static class GlShaders
                 return;
             }
 
-            vec4 texel = decode(ivec2(rawU, rawV));
+            vec4 texel = decodeFluid(ivec2(rawU, rawV));
 
             // Anisotropic filtering. The footprint is a square looked at square-on
             // and a long thin sliver on a floor running away to the horizon, and
@@ -545,7 +581,7 @@ internal static class GlShaders
                     for (int i = 0; i < 16; ++i) {
                         if (i >= taps) break;
                         vec2 t = vUV + stride * (float(i) + 0.5 - 0.5 * float(taps));
-                        vec4 c = decode(ivec2(
+                        vec4 c = decodeFluid(ivec2(
                             dUVdx.x < 0.0 ? int(ceil(t.x - 0.0001)) : int(floor(t.x + 0.0001)),
                             dUVdy.y < 0.0 ? int(ceil(t.y - 0.0001)) : int(floor(t.y + 0.0001))));
                         // A transparent texel is stored as black with the STP bit
@@ -754,6 +790,10 @@ internal static class GlShaders
         uniform float uAniso;
         uniform float uDepthBias;
         uniform float uDepthSlope;
+        // 0053. Same leftover V shift as the core-profile shader.
+        uniform vec4  uFluidRect[8];
+        uniform float uFluidOff[8];
+        uniform float uFluidN;
 
         float u5(float f) { return floor(f * 31.0 + 0.5); }
 
@@ -790,6 +830,33 @@ internal static class GlShaders
                     : fetch(vec2(vClutBase.x + idx, vClutBase.y));
             }
             return fetch(vec2(vPageBase.x + uv.x, vPageBase.y + uv.y));
+        }
+
+        // 0053. Same leftover V blend as the core-profile shader; types differ.
+        vec4 decodeFluid(vec2 raw) {
+            vec4 a = decode(raw);
+            if (uFluidN < 0.5) return a;
+            float div = vTexMode < 0.5 ? 4.0 : (vTexMode < 1.5 ? 2.0 : 1.0);
+            float vx = vPageBase.x + raw.x / div;
+            float vy = vPageBase.y + raw.y;
+            for (int i = 0; i < 8; ++i) {
+                if (float(i) >= uFluidN) continue;
+                vec4 r = uFluidRect[i];
+                if (vx < r.x || vx >= r.x + r.z || vy < r.y || vy >= r.y + r.w) continue;
+                float origin = r.y - vPageBase.y;
+                float h = r.w;
+                if (h < 1.0) continue;
+                float local = raw.y - origin + uFluidOff[i];
+                local = local - h * floor(local / h);
+                float y0 = origin + floor(local);
+                float fy = fract(local);
+                if (fy < 0.001) return abs(y0 - raw.y) < 0.001 ? a : decode(vec2(raw.x, y0));
+                float y1 = origin + mod(floor(local) + 1.0, h);
+                vec4 c0 = abs(y0 - raw.y) < 0.001 ? a : decode(vec2(raw.x, y0));
+                vec4 c1 = decode(vec2(raw.x, y1));
+                return vec4(mix(c0.rgb, c1.rgb, fy), c0.a);
+            }
+            return a;
         }
 
         uniform float uTrueColor;
@@ -856,7 +923,7 @@ internal static class GlShaders
                     stp = img.a < 0.95 ? 1.0 : 0.0;
                     mask = max(stp, uSetMask);
                 } else {
-                    vec4 texel = decode(vec2(rawU, rawV));
+                    vec4 texel = decodeFluid(vec2(rawU, rawV));
 
                     // Anisotropic filtering -- see the core-profile shader for what
                     // the footprint is, why the taps are one texel apart rather
@@ -876,7 +943,7 @@ internal static class GlShaders
                             for (int i = 0; i < 16; ++i) {
                                 if (float(i) >= taps) break;
                                 vec2 t = vUV + stride * (float(i) + 0.5 - 0.5 * taps);
-                                vec4 c = decode(vec2(
+                                vec4 c = decodeFluid(vec2(
                                     dUVdx.x < 0.0 ? ceil(t.x - 0.0001) : floor(t.x + 0.0001),
                                     dUVdy.y < 0.0 ? ceil(t.y - 0.0001) : floor(t.y + 0.0001)));
                                 float w = (c.r == 0.0 && c.g == 0.0 && c.b == 0.0 && c.a < 0.5)

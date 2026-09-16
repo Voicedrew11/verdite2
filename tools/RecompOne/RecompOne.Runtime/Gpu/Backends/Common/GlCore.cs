@@ -94,6 +94,9 @@ public sealed class GlCore : IGpuBackend
     int _uTexWindow, _uBlend, _uBlendOpaque, _uSetMask, _uCheckMask, _uPosBias, _uFbInv;
     int _uTrueColor;
     int _uAniso;
+    int _uFluidN;
+    readonly int[] _uFluidRect = new int[8];
+    readonly int[] _uFluidOff = new int[8];
     int _uOpaqueDepth, _uDepthBias, _uDepthSlope;
     // The true-color flag the live display targets were built with. When it drifts
     // from GteDepth.TrueColor the targets carry the wrong pixel format, so they are
@@ -145,6 +148,12 @@ public sealed class GlCore : IGpuBackend
         _uFbInv = _gl.GetUniformLocation(_progPrim, "uFbInv");
         _uTrueColor = _gl.GetUniformLocation(_progPrim, "uTrueColor");
         _uAniso = _gl.GetUniformLocation(_progPrim, "uAniso");
+        _uFluidN = _gl.GetUniformLocation(_progPrim, "uFluidN");
+        for (int i = 0; i < 8; i++)
+        {
+            _uFluidRect[i] = _gl.GetUniformLocation(_progPrim, $"uFluidRect[{i}]");
+            _uFluidOff[i] = _gl.GetUniformLocation(_progPrim, $"uFluidOff[{i}]");
+        }
         _uOpaqueDepth = _gl.GetUniformLocation(_progPrim, "uOpaqueDepth");
         _uDepthBias = _gl.GetUniformLocation(_progPrim, "uDepthBias");
         _uDepthSlope = _gl.GetUniformLocation(_progPrim, "uDepthSlope");
@@ -1136,6 +1145,18 @@ public sealed class GlCore : IGpuBackend
         // anisotropy rebuilds nothing.
         GteDepth.AnisotropyLive = _uAniso >= 0;
         if (_uAniso >= 0) _gl.Uniform1(_uAniso, (float)GteDepth.Anisotropy);
+        GteDepth.FluidLive = _uFluidN >= 0;
+        if (_uFluidN >= 0) _gl.Uniform1(_uFluidN, (float)GteDepth.FluidN);
+        if (GteDepth.FluidN > 0)
+        {
+            int n = GteDepth.FluidN;
+            for (int i = 0; i < n; i++)
+            {
+                ref var slot = ref GteDepth.Fluid[i];
+                if (_uFluidRect[i] >= 0) _gl.Uniform4(_uFluidRect[i], slot.X, slot.Y, slot.W, slot.H);
+                if (_uFluidOff[i] >= 0) _gl.Uniform1(_uFluidOff[i], slot.Off);
+            }
+        }
         if (_kLightGen >= 0 && _uLightBk >= 0)
         {
             int g = _kLightGen;

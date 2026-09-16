@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Forty-four of the forty-nine are load-bearing; `0002`, `0003`, `0015` and `0046` are
+Forty-five of the fifty are load-bearing; `0002`, `0003`, `0015` and `0046` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -605,6 +605,14 @@ Four files in the directory have no entry below:
   `KF2_SUBPIXEL_PROBE` (`GpuRaster.SubCensus`, `GteDepth.Census*`) arrived with it.
   **No recompile.** See "A thin face was culled on whole pixels" in
   `docs/RENDERING.md`.
+
+- `0053-fluid-scroll.patch` — both prim shaders gain `decodeFluid()`: matching a
+  fragment's VRAM coordinate against up to eight dest RECTs, shifting V by a
+  leftover phase and blending the two wrap-rows, so a scrolling texture (water,
+  slime skins) moves between the integer uploads `func_8002DC78` left in VRAM.
+  `uFluidN` of 0 is the centre sample unchanged. `GteDepth.Fluid*` holds the rects
+  and offsets; `GlCore` uploads them per batch. GL only. **No recompile.** See
+  "The water still steps at the tick" in `docs/PATCHES_AND_MODS.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

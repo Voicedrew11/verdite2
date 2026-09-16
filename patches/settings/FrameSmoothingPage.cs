@@ -18,13 +18,14 @@ namespace Kf2.Settings;
 /// (<see cref="AnimSmoothing.Mode"/>, <see cref="ObjectSmoothing.Guard"/>) are
 /// comparison controls for judging a picture rather than preferences to hold.
 /// Four of the ten controls in Enhancements were this one idea spelled out in
-/// parts. So the page is one tick that writes all four patches' state and all
-/// four of their keys, and the parts stay separable from the console --
+/// parts. So the page is one tick that writes all five patches' state and all
+/// five of their keys, and the parts stay separable from the console --
 /// <c>KF2_SMOOTH</c>, <c>KF2_SMOOTH_POS</c>, <c>KF2_SMOOTH_OBJECTS</c>,
-/// <c>KF2_SMOOTH_ANIM</c>, plus <c>KF2_SMOOTH_OBJECTS_GUARD</c> and the
-/// <c>KF2_SMOOTH_ANIM</c> modes -- which is where a comparison belongs.
+/// <c>KF2_SMOOTH_ANIM</c>, <c>KF2_SMOOTH_FLUID</c>, plus
+/// <c>KF2_SMOOTH_OBJECTS_GUARD</c> and the <c>KF2_SMOOTH_ANIM</c> modes -- which
+/// is where a comparison belongs.
 ///
-/// The tick reads <see cref="FrameSmoothing.Enabled"/> and writes all four, so a
+/// The tick reads <see cref="FrameSmoothing.Enabled"/> and writes all five, so a
 /// config or an environment variable that turns one part on alone still does
 /// that until the box is clicked, and clicking it harmonises them. The view is
 /// the master because it is the part that cannot sensibly be off while the rest
@@ -72,12 +73,13 @@ public sealed class FrameSmoothingPage : IPatchPage
     }
 
     /// <summary>
-    /// All four patches and all four keys, from the one tick. Each patch's own
+    /// All five patches and all five keys, from the one tick. Each patch's own
     /// <c>SetEnabled</c> may refuse -- <see cref="FrameSmoothing"/> and
     /// <see cref="ObjectSmoothing"/> need their hook pair, <see cref="AnimSmoothing"/>
-    /// needs its clock sited -- so the key is written from what the patch ended up
-    /// with rather than from what was asked for, and a part that could not attach
-    /// does not come back claiming it had.
+    /// needs its clock sited, <see cref="FluidSmoothing"/> its DrawOTag pre -- so
+    /// the key is written from what the patch ended up with rather than from what
+    /// was asked for, and a part that could not attach does not come back claiming
+    /// it had.
     /// </summary>
     static void Apply(bool on)
     {
@@ -92,5 +94,8 @@ public sealed class FrameSmoothingPage : IPatchPage
 
         AnimSmoothing.SetEnabled(on);
         PatchSettings.Set(AnimSmoothing.OnKey, AnimSmoothing.Enabled);
+
+        FluidSmoothing.SetEnabled(on);
+        PatchSettings.Set(FluidSmoothing.OnKey, FluidSmoothing.Enabled);
     }
 }

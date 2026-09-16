@@ -12,7 +12,7 @@ lives here — frame pacing and auto reload.
 | `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
 | `LoadPacing.cs` | makes a `VSync(0)` inside a disc wait cost a vblank again, so the loading screen's figure walks at the console's rate | this file |
 | `SpriteAnim.cs` | steps the billboard sprites' cels once a world tick, so the flames burn at the console's speed | this file |
-| `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs` | carry the view, everything that moves, and MO clip time, between ticks | this file |
+| `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs`, `FluidSmoothing.cs` | carry the view, everything that moves, MO clip time, and the scrolling textures, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `PolyAssembler.cs`, `PolyAssemblerLit.cs` | `func_80030540`, the polygon assembler, `func_8002FECC`/`func_8002E650`, the far map tiles' assembler and its vertex transform, and `func_8002F214`/`func_8002EAEC`, the models' lit assembler, rewritten in C# as replace hooks | this file |
 | `AutoReload.cs` | reloads the last save on death | this file |
@@ -475,11 +475,11 @@ a question to put to somebody playing.
 
 So `patches/settings/FrameSmoothingPage.cs` is **one tick**: *Smooth motion
 between game ticks*, which writes `FrameSmoothing`, `FrameSmoothing.Position`,
-`ObjectSmoothing` and `AnimSmoothing` together, and writes all four of their
-`interface.ini` keys, so a restart restores what was clicked. The parts stay
-reachable from the console — `KF2_SMOOTH`, `KF2_SMOOTH_POS`,
-`KF2_SMOOTH_OBJECTS`, `KF2_SMOOTH_ANIM` — and that is now the only way to set
-them apart.
+`ObjectSmoothing`, `AnimSmoothing` and `FluidSmoothing` together, and writes all
+five of their `interface.ini` keys, so a restart restores what was clicked. The
+parts stay reachable from the console — `KF2_SMOOTH`, `KF2_SMOOTH_POS`,
+`KF2_SMOOTH_OBJECTS`, `KF2_SMOOTH_ANIM`, `KF2_SMOOTH_FLUID` — and that is now
+the only way to set them apart.
 
 **The tick sits under the frame rate rather than in Enhancements**, sharing the
 `Frame pacing` heading with it. Everything else under Enhancements is a choice
@@ -490,17 +490,17 @@ explanation is the slider directly above it.
 
 Three things about how it is wired:
 
-* **The displayed state is `FrameSmoothing.Enabled`**, not an AND of the four.
+* **The displayed state is `FrameSmoothing.Enabled`**, not an AND of the five.
   A config or an environment variable that turns one part on alone keeps doing
   that until the box is clicked, and clicking it harmonises them. The view is
   the master because it is the part that cannot sensibly be off while the rest
   are on: everything else is carried *against* the camera.
 * **Each key is written from what the patch ended up with, not from what was
-  asked for.** All three `SetEnabled` calls can refuse — `FrameSmoothing` and
+  asked for.** All four `SetEnabled` calls can refuse — `FrameSmoothing` and
   `ObjectSmoothing` need their hook pair (`_paired`), `AnimSmoothing` needs its
-  clock sited (`_sited`) — so writing the requested value would persist a claim
-  that a part had attached when it had not, and it would come back next session
-  still claiming it.
+  clock sited (`_sited`), `FluidSmoothing` its DrawOTag pre (`_hooked`) — so
+  writing the requested value would persist a claim that a part had attached
+  when it had not, and it would come back next session still claiming it.
 * **The two combos came out with the checkboxes they belonged to.** Both are
   comparison controls rather than preferences: their own write-ups say so, and
   say the losers go once the picture is judged. `KF2_SMOOTH_OBJECTS_GUARD` and
@@ -1214,7 +1214,7 @@ picture wants `KF2_SMOOTH_OBJECTS=1`, are both eye questions.
 water at the start, the main-hall fire and the creatures' scrolling skins are one
 system: **eight slots at `0x80192D58`** (stride `0x18`), each holding a scroll
 phase at `rec+0x4`, a per-slot advance rate at `rec+0x3`, a wrap at `rec+0xC`, and
-a source-texture pointer at `rec+0xE`. `func_8002DC78` walks all eight every call —
+a source-texture pointer at `rec+0x10`. `func_8002DC78` walks all eight every call —
 it advances each phase, then re-uploads the scrolled region of the source texture
 to VRAM through `func_80060624` (a `LoadImage`-style GPU transfer). It is called
 once, straight from **stage 13** (the renderer, `func_800342D8`, at `0x800346..`),
@@ -1226,8 +1226,24 @@ faster the higher the frame rate). Its whole subtree is the VRAM upload — no
 test as the fade stepper `func_80033FBC` and is added to `FramePacing.DefaultGate`
 alongside it. On a non-tick frame it is skipped: the phase holds and VRAM keeps the
 last tick's frame, so the texture animates at the tick rate whatever the port
-draws (measured `rec+0x4` back to **17 % of frames at 120 fps**, i.e. 20 Hz). No
-setting and no new patch — it is one more address in the gate.
+draws (measured `rec+0x4` back to **17 % of frames at 120 fps**, i.e. 20 Hz). The
+rate is one more address in the gate; the picture of it is `FluidSmoothing`,
+below.
+
+**The water still steps at the tick.** The rate per second is right, and a 60
+or 144 fps window still shows water jumping a texel every 50 ms, because VRAM
+only changes on a tick. Re-uploading at the render rate would run the integer
+scroll *faster*, not smoother, and the frame viewer already measured the
+tick-rate upload as 0.76 ms on the next primitive. Offsetting the packet's 8-bit
+V is not enough either: both rasterizers snap UV to a whole texel, so a
+fractional leftover rounds away. `patches/FluidSmoothing.cs` publishes the dest
+RECT and leftover phase (`(1 - LogicPhase) × delta` added to V, the same clock
+the view is drawn at) to the prim shaders (`0053`), which blend the two wrap-rows
+the upload itself wraps between. Matching is on the dest RECT, so every assembler is
+covered and Fast geometry is not required. GL only; the software rasterizer
+keeps the last upload. On with the rest of the smoothing tick;
+`KF2_SMOOTH_FLUID=0` is the comparison. **The picture has not been looked at.**
+
 * **The jitter accumulator at `0x8006E608`** is in stage 13's *own body*
   (`func_800342D8`), not in a callee, so no hook can reach it — `HookManager` only
   detours whole functions and stage 13 must draw. It sums `func_80015374()` and
@@ -2698,7 +2714,8 @@ system and one clock word, and the guess in the second sentence is exactly right
 **These are not the animated textures.** Those are the eight scrolling slots at
 `0x80192D58` that `func_8002DC78` re-uploads to VRAM, and the stage gate has held
 them at the tick rate since they were found (see the sixth gated function, above).
-The flames are **billboard sprites** — table 4 of the four the renderer walks:
+The *picture* of those slots is `FluidSmoothing` — VRAM still changes 20 times a
+second, and the shaders blend the leftover. The flames are **billboard sprites** — table 4 of the four the renderer walks:
 `0x80195174`, 128 records of `0x18`, free when the `u16` at `+0x0` is `0xFFFF`.
 
 `func_80035550` fills the table from the area's own `0x10`-byte definitions when

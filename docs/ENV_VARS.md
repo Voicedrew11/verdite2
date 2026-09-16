@@ -51,6 +51,8 @@ KF2_SMOOTH_ANIM=time                   # lerp the clip time between the two tick
 KF2_SMOOTH_ANIM=timeline               # comparison: interpolate on the clip's own timeline
 KF2_SMOOTH_ANIM=weight                 # comparison: the blend weight only, inside the game's segment
 KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the verdict census, carries
+KF2_SMOOTH_FLUID=0                     # leave scrolling textures (water, slime skins) on the tick (on by default)
+KF2_SMOOTH_FLUID_PROBE=1               # live slots, dest rects, leftover V shift, whether the uniform is bound
 KF2_HITGUARD=0                         # let the hit path's reaction lookup fault (it is fenced by default; docs/TODO.md #14)
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
