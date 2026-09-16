@@ -470,6 +470,30 @@ public static class GteDepth
     /// </summary>
     public static bool AnisotropyLive;
 
+    /// <summary>
+    /// 0053. Scrolling textures — water, slime skins, the main-hall fire — that
+    /// <c>func_8002DC78</c> re-uploads at the world tick. Each live slot is a VRAM
+    /// dest rect plus a leftover V shift in texels, so the fragment shader can
+    /// blend the two wrap-rows the integer upload sits between. <see cref="FluidN"/>
+    /// of 0 is off and is the console's own stepped picture; the shader takes that
+    /// path by construction. GL backend only; the software rasterizer always
+    /// samples the last upload. Safe to change at run time — plain uniforms the
+    /// next batch reads.
+    /// </summary>
+    public const int FluidSlots = 8;
+
+    public struct FluidRec
+    {
+        public float X, Y, W, H, Off;
+    }
+
+    public static int FluidN;
+    public static readonly FluidRec[] Fluid = new FluidRec[FluidSlots];
+
+    /// <summary>True once the GL backend has found <c>uFluidN</c> on the prim
+    /// program and is uploading it. Same job as <see cref="AnisotropyLive"/>.</summary>
+    public static bool FluidLive;
+
     const int Bits = 14;
     const int Size = 1 << Bits;
     const int Mask = Size - 1;

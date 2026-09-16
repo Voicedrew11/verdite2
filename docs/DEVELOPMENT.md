@@ -608,8 +608,49 @@ and the models 13,731. **31 GL batch submits, 29 of them semi-transparency toggl
 frames the animated textures step** (`func_8002DC78`, a gated stage), ten uploads
 bring it to 226 commands and **1.07-1.10 ms** of sending. 0.76 ms of that is a
 single map-tile quad, the first primitive after them, whose submit was for a
-depth-mode change. Why that one submit is so slow is not diagnosed; see
-docs/TODO.md.
+depth-mode change.
+
+**Closed (`0054`).** The send was not the quad. `WriteRect` blitted each upload
+from 1× staging VRAM into the scaled atlas (6144×3072 at render scale 6), which
+made that atlas an FBO colour attachment; the next `Flush` bound it as `uVram`
+and the driver waited for the blits. The prim shader now samples a 1× texture
+(`IGlVram.SampleTexture`); `LoadImage` is `TexSubImage2D` only. The first version
+then `Publish`ed each draw-with-no-display-target AABB from the atlas onto that
+1× texture. Uploads no longer reach the atlas, so the copy erased the texture
+pages: paletted fragments discarded (index 0), objects sampled leftover
+framebuffer texels. Those draws now land in 1× and `Promote` up, so the present
+fallback still sees them and the uploads survive. Dest copies / `TextureBarrier`
+also no longer run on batches that do not sample dest.
+
+Stopping the scaled blit was not enough: the 1× texture was still `SampleFbo`'s
+colour attachment, so the ten `TexSubImage2D`s were still render-target writes
+and `GlCore.Flush` still waited — reported 0.6 ms after the atlas blit was gone.
+Sample VRAM is now a texture that is never a draw attachment; GPU writes land on
+a second 1× framebuffer and `CommitDraw` copies the AABB back
+(`CopyImageSubData` / `CopyTexSubImage2D`). `Flush` still needs looking at in
+the profiler; the picture after the split has not.
+
+The 29 semi-transparency batch splits are a separate cost and still open.
+
+**Water on screen cost 5 ms a frame, and it was the vertex upload (`0055`).**
+`KF2_AUTOSTART=new` stands in `fdat02` facing the water. Semi-transparent water
+triangles sit depth-sorted among the opaque tiles, so nearly every one splits a
+batch: **687 submits a frame** against 31 in area 1. Measured at `KF2_FPS=1000`,
+scale 6: work 6.4 ms and `GlCore.Flush` 3.6 ms facing the water, against 1.3 and
+0.1 turned away from it (`goto` with a yaw). `FluidSmoothing` was not it: 6.42-6.46
+ms on, 6.38-6.39 off, and the frame viewer's GPU time for the batches 3.78 against
+3.79 ms. Timers inside `FlushCore`, per frame: `BufferSubData` **2.55 ms**, the
+program and `uScale` 0.26, textures and uniforms 0.25, the draws 0.17. Each batch
+rewrote offset 0 of the vertex buffer the previous batch's draw was still queued
+against, and radeonsi waited — about 3.7 µs a submit. Each batch now appends at a
+cursor and the buffers are orphaned when it wraps: 2.55 → 0.07 ms. `uScale` was
+looked up by name every batch (and that was most of the 76 KB a frame allocated),
+and the fluid uniforms were re-sent every batch; both are sent on change now.
+After: `Flush` 0.50 ms, work 3.1 ms, 153 → 310 fps; fluid on 3.09-3.13 against off
+3.00-3.12; area 1 at 0.67 ms, 910 fps. The depth map (`KF2_ZBUFFER_PROBE=2`) and
+the occlusion readback (`KF2_AO_PROBE=2`) at that view are identical before and
+after, and the run reads 144.0 fps drawn at 20.0 ticks/s, `[present] wide`. The
+687 splits themselves remain.
 
 **What it costs.** Off, a null test per GP0 word and per batch submit. After a
 capture, the analysis is one full replay: 5.4 ms, or 21 ms for a frame with

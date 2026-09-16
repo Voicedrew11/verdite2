@@ -29,7 +29,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
 | `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0052` |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0055` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -130,6 +130,7 @@ Start the game from the same shell you run that in, or the diagnostic socket in
   menus take no input by the usual routes, and `KF2_AUTOPAD` only arms once an area
   has loaded). This drives the pad through `PAD_dr`: Start, Cross into a New Game
   in `fdat02`, then loads the slot over it through `AutoReload.LoadSlot`.
+  `KF2_AUTOSTART=new` stops in that New Game, which faces scrolling water.
 - **`KF2_AGENT=1`** prints `{"overlay":…,"inGame":…,"hp":…,"area":…,"slot":…}` on
   each overlay change and about once a second; `inGame:false` is how a program
   tells "stuck at the title" from "in an area" without a screenshot.
@@ -155,7 +156,7 @@ what it is) live there, not here.
 | patch | what | default | doc, section |
 |---|---|---|---|
 | `FramePacing` | skips the game's frame gate `func_80017880`, paces frames itself, runs the gated stages on a 20 Hz world clock | 60 fps drawn, 20 ticks/s | PATCHES_AND_MODS, "Any frame rate" |
-| `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing` | carry the camera, the four world tables and MO pose between ticks | on; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing" |
+| `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing`, `FluidSmoothing` | carry the camera, the four world tables, MO pose and the scrolling textures between ticks | on; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing" |
 | `LoopPacing` | modal loops (fades, cutscenes, item/spell animations) run once per tick, gaps filled with stage-13 redraws | on | PATCHES_AND_MODS, "Loops that render their own frames" |
 | `MenuPacing` | menu cursor repeat and blink held to the 60 Hz grid | on | PATCHES_AND_MODS, "The menu's cursor repeat" |
 | `LoadPacing` | loading screen's walking figure held to the vblank grid | on | PATCHES_AND_MODS, "The loading screen's walking figure" |
@@ -417,7 +418,7 @@ removed for the same reason.
 
 **`tools/RecompOne/` is vendored: an edit inside it is a change to this
 repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0052`) are how the source
+what the port changed and why, and the numbers (`0001`-`0055`) are how the source
 refers to each change, but they are **no longer replayed**. The merge base is
 `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
 gitignored `tools/RecompOne.git/`, reached with

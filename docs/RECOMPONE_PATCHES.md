@@ -7,7 +7,7 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
-Forty-four of the forty-nine are load-bearing; `0002`, `0003`, `0015` and `0046` are
+Forty-six of the fifty-one are load-bearing; `0002`, `0003`, `0015` and `0046` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -605,6 +605,40 @@ Four files in the directory have no entry below:
   `KF2_SUBPIXEL_PROBE` (`GpuRaster.SubCensus`, `GteDepth.Census*`) arrived with it.
   **No recompile.** See "A thin face was culled on whole pixels" in
   `docs/RENDERING.md`.
+
+- `0053-fluid-scroll.patch` — both prim shaders gain `decodeFluid()`: matching a
+  fragment's VRAM coordinate against up to eight dest RECTs, shifting V by a
+  leftover phase and blending the two wrap-rows, so a scrolling texture (water,
+  slime skins) moves between the integer uploads `func_8002DC78` left in VRAM.
+  `uFluidN` of 0 is the centre sample unchanged. `GteDepth.Fluid*` holds the rects
+  and offsets; `GlCore` uploads them per batch. GL only. **No recompile.** See
+  "The water still steps at the tick" in `docs/PATCHES_AND_MODS.md`.
+
+- `0054-vram-sample-1x.patch` — the prim shader samples a 1× VRAM texture, and
+  `WriteRect` (`LoadImage`) stops blitting each upload up to the scaled atlas.
+  That blit wrote the atlas as an FBO colour attachment; the next `GlCore.Flush`
+  sampled it and the driver waited — 0.76 ms on the first polygon after
+  `func_8002DC78`'s ten uploads, against 0.2–5 µs for every other send. A draw
+  with no display target used to land in the atlas and then `Publish` its AABB
+  onto 1×, which erased the uploads (the atlas no longer holds them); those
+  draws now land in 1× and `Promote` up. Writeback of a display target still
+  `Publish`es. Dest copies / `TextureBarrier` run only when the batch actually
+  samples dest (the mask bit, the 2.1 blend path, or blend mode 2). The 1×
+  texture is also never a draw attachment: GPU writes go to a second 1×
+  framebuffer and `CommitDraw` copies the AABB back, because leaving sample
+  VRAM on `SampleFbo` made the `TexSubImage2D`s render-target writes and left
+  `Flush` at 0.6 ms after the atlas blit was gone. GL only. **No recompile.**
+  See "Watching a frame being built" in `docs/DEVELOPMENT.md`.
+
+- `0055-append-batch-vertices.patch` — `GlCore.FlushCore` uploaded every batch's
+  vertices to offset 0 of `_vbo` (and `_vboLight`), the range the previous batch's
+  draw was still queued against, so the driver waited on each upload: 2.55 ms a
+  frame over the 687 batches of a view of `fdat02`'s water. Batches now append at
+  `_vboCursor` and draw from there, and both buffers are orphaned when it wraps.
+  `uScale`'s location is cached rather than looked up by name per batch, and the
+  fluid uniforms (`0053`) are sent only when they change. The picture is the same
+  by the depth map and the occlusion readback. **No recompile.** See "Water on
+  screen cost 5 ms a frame" in `docs/DEVELOPMENT.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

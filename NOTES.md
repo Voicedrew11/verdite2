@@ -291,6 +291,8 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Patch settings: a patch's knobs go in the runtime's own sections
 - Frame pacing: the port is pinned to the fastest band
 - Any frame rate: three gates, one logic clock, and a smoothed view
+- One switch for all of the smoothing
+- The water still steps at the tick
 - Auto reload
 - A dynamic map
 - Five map controls that were not choices
@@ -334,7 +336,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0052`, one entry each.
+Every change the port made to RecompOne, `0001`-`0055`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

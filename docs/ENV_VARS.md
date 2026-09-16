@@ -51,6 +51,8 @@ KF2_SMOOTH_ANIM=time                   # lerp the clip time between the two tick
 KF2_SMOOTH_ANIM=timeline               # comparison: interpolate on the clip's own timeline
 KF2_SMOOTH_ANIM=weight                 # comparison: the blend weight only, inside the game's segment
 KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the verdict census, carries
+KF2_SMOOTH_FLUID=0                     # leave scrolling textures (water, slime skins) on the tick (on by default)
+KF2_SMOOTH_FLUID_PROBE=1               # live slots, dest rects, leftover V shift, whether the uniform is bound
 KF2_HITGUARD=0                         # let the hit path's reaction lookup fault (it is fenced by default; docs/TODO.md #14)
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
@@ -128,6 +130,7 @@ KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, 
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
 KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
+KF2_AUTOSTART=new                        # the same, but stay in the New Game (fdat02, which has scrolling water)
 KF2_BOOTEXE=end                          # boot straight into OPEN.EXE, GAME.EXE or END.EXE
 KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the original does (a button exits by default)
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot

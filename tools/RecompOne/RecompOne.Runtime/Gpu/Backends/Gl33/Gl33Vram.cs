@@ -7,7 +7,9 @@ public sealed class Gl33Vram : IGlVram
 {
     private readonly GL _gl;
     private uint _tex, _fbo;
-    private uint _stageTex, _stageFbo;
+    private uint _gpuTex, _gpuFbo;
+    private uint _sampleTex;
+    private uint _readFbo;
     private uint _scratchFbo;
     private uint _destVramTex, _destVramFbo;
     private uint _destRtTex, _destRtFbo;
@@ -15,6 +17,8 @@ public sealed class Gl33Vram : IGlVram
 
     public uint Texture => _tex;
     public uint Fbo => _fbo;
+    public uint SampleTexture => _sampleTex;
+    public uint SampleFbo => _gpuFbo;
 
     public Gl33Vram(GL gl)
     {
@@ -25,8 +29,10 @@ public sealed class Gl33Vram : IGlVram
     {
         _tex = CreateTex(GlVram.Width, GlVram.Height);
         _fbo = CreateFbo(_tex);
-        _stageTex = CreateTex(VramShadow.Width, VramShadow.Height);
-        _stageFbo = CreateFbo(_stageTex);
+        _gpuTex = CreateTex(VramShadow.Width, VramShadow.Height);
+        _gpuFbo = CreateFbo(_gpuTex);
+        _sampleTex = CreateTex(VramShadow.Width, VramShadow.Height);
+        _readFbo = _gl.GenFramebuffer();
         _destVramTex = CreateTex(GlVram.Width, GlVram.Height);
         _destVramFbo = CreateFbo(_destVramTex);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
@@ -60,6 +66,27 @@ public sealed class Gl33Vram : IGlVram
     {
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
         _gl.Viewport(0, 0, (uint)GlVram.Width, (uint)GlVram.Height);
+    }
+
+    public void BindSampleDraw()
+    {
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _gpuFbo);
+        _gl.Viewport(0, 0, (uint)VramShadow.Width, (uint)VramShadow.Height);
+    }
+
+    public uint BeginSampleRead()
+    {
+        Copy1x(_sampleTex, true, _gpuFbo, 0, 0, VramShadow.Width, VramShadow.Height, 0, 0);
+        return _sampleTex;
+    }
+
+    public void CommitDraw(int x, int y, int w, int h)
+    {
+        if (w <= 0 || h <= 0) return;
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _gpuFbo);
+        _gl.BindTexture(TextureTarget.Texture2D, _sampleTex);
+        _gl.CopyTexSubImage2D(TextureTarget.Texture2D, 0, x, y, x, y, (uint)w, (uint)h);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
     }
 
     public uint BeginDestRead(uint targetTex, int targetW, int targetH, int x, int y, int w, int h)
@@ -121,38 +148,78 @@ public sealed class Gl33Vram : IGlVram
 
     public void WriteRect(int x, int y, int w, int h, ReadOnlySpan<ushort> px)
     {
+        // 0054. Sample texture is never an FBO attachment -- see Gl45Vram.WriteRect.
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-        _gl.BindTexture(TextureTarget.Texture2D, _stageTex);
+        _gl.BindTexture(TextureTarget.Texture2D, _sampleTex);
         _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
         _gl.TexSubImage2D(TextureTarget.Texture2D, 0, x, y, (uint)w, (uint)h,
             PixelFormat.Rgba, PixelType.UnsignedShort1555Rev, px);
+    }
 
+    public void Promote(int x, int y, int w, int h)
+    {
+        if (w <= 0 || h <= 0) return;
+        int s = GlVram.Scale;
+        BlitFromSample(x, y, w, h, _fbo, x * s, y * s, w * s, h * s);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+    }
+
+    public void Publish(int x, int y, int w, int h)
+    {
+        if (w <= 0 || h <= 0) return;
+        int s = GlVram.Scale;
         _gl.Disable(EnableCap.ScissorTest);
-        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _stageFbo);
-        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _fbo);
-        _gl.BlitFramebuffer(x, y, x + w, y + h, x * GlVram.Scale, y * GlVram.Scale, (x + w) * GlVram.Scale,
-            (y + h) * GlVram.Scale,
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _fbo);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _gpuFbo);
+        _gl.BlitFramebuffer(x * s, y * s, (x + w) * s, (y + h) * s, x, y, x + w, y + h,
             ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        CommitDraw(x, y, w, h);
+    }
+
+    public void BlitSample(int sx, int sy, int sw, int sh, uint dstFbo, int dstW, int dstH, int dx, int dy, int dw, int dh)
+    {
+        if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+        BlitFromSample(sx, sy, sw, sh, dstFbo, dx, dy, dw, dh);
+        _ = dstW;
+        _ = dstH;
     }
 
     public void Fill(int x, int y, int w, int h, ushort color15)
     {
         float r = (color15 & 0x1F) / 31f, g = ((color15 >> 5) & 0x1F) / 31f, b = ((color15 >> 10) & 0x1F) / 31f;
         var a = (color15 & 0x8000) != 0 ? 1f : 0f;
-        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
         _gl.Enable(EnableCap.ScissorTest);
+        _gl.ClearColor(r, g, b, a);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
         _gl.Scissor(x * GlVram.Scale, y * GlVram.Scale, (uint)Math.Max(0, w * GlVram.Scale),
             (uint)Math.Max(0, h * GlVram.Scale));
-        _gl.ClearColor(r, g, b, a);
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _gpuFbo);
+        _gl.Viewport(0, 0, (uint)VramShadow.Width, (uint)VramShadow.Height);
+        _gl.Scissor(x, y, (uint)Math.Max(0, w), (uint)Math.Max(0, h));
         _gl.Clear(ClearBufferMask.ColorBufferBit);
         _gl.Disable(EnableCap.ScissorTest);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+        _gl.Viewport(0, 0, (uint)GlVram.Width, (uint)GlVram.Height);
+        CommitDraw(x, y, w, h);
     }
 
     public void CopyRect(int sx, int sy, int dx, int dy, int w, int h)
     {
         var s = GlVram.Scale;
         _gl.Disable(EnableCap.ScissorTest);
+        Copy1x(_sampleTex, true, _destVramFbo, sx, sy, w, h, 0, 0);
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _destVramFbo);
+        _gl.BindTexture(TextureTarget.Texture2D, _sampleTex);
+        _gl.CopyTexSubImage2D(TextureTarget.Texture2D, 0, dx, dy, 0, 0, (uint)w, (uint)h);
+
+        Copy1x(_gpuTex, false, _destVramFbo, sx, sy, w, h, 0, 0);
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _destVramFbo);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _gpuFbo);
+        _gl.BlitFramebuffer(0, 0, w, h, dx, dy, dx + w, dy + h,
+            ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+
         _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _fbo);
         _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _destVramFbo);
         _gl.BlitFramebuffer(sx * s, sy * s, (sx + w) * s, (sy + h) * s, sx * s, sy * s, (sx + w) * s, (sy + h) * s,
@@ -167,28 +234,66 @@ public sealed class Gl33Vram : IGlVram
 
     public void ReadRect(int x, int y, int w, int h, Span<ushort> dst)
     {
-        var s = GlVram.Scale;
         _gl.Disable(EnableCap.ScissorTest);
-        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _fbo);
-        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, _stageFbo);
-        _gl.BlitFramebuffer(x * s, y * s, (x + w) * s, (y + h) * s, x, y, x + w, y + h, ClearBufferMask.ColorBufferBit,
-            BlitFramebufferFilter.Nearest);
-
-        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _stageFbo);
+        BindSampleRead();
         _gl.PixelStore(PixelStoreParameter.PackAlignment, 2);
         _gl.ReadPixels(x, y, (uint)w, (uint)h, PixelFormat.Rgba, PixelType.UnsignedShort1555Rev, dst);
+        UnbindSampleRead();
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _fbo);
+    }
+
+    private void BindSampleRead()
+    {
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _readFbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, _sampleTex, 0);
+    }
+
+    private void UnbindSampleRead()
+    {
+        _gl.FramebufferTexture2D(FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0,
+            TextureTarget.Texture2D, 0, 0);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+    }
+
+    private void BlitFromSample(int sx, int sy, int sw, int sh, uint dstFbo, int dx, int dy, int dw, int dh)
+    {
+        _gl.Disable(EnableCap.ScissorTest);
+        BindSampleRead();
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, dstFbo);
+        _gl.BlitFramebuffer(sx, sy, sx + sw, sy + sh, dx, dy, dx + dw, dy + dh,
+            ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+        UnbindSampleRead();
+    }
+
+    // srcIsSample: read from sample (temp attach) or from gpu FBO.
+    private void Copy1x(uint srcTex, bool srcIsSample, uint dstFbo, int sx, int sy, int w, int h, int dx, int dy)
+    {
+        if (w <= 0 || h <= 0) return;
+        _gl.Disable(EnableCap.ScissorTest);
+        if (srcIsSample) BindSampleRead();
+        else
+        {
+            _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, srcTex == _gpuTex ? _gpuFbo : _fbo);
+        }
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, dstFbo);
+        _gl.BlitFramebuffer(sx, sy, sx + w, sy + h, dx, dy, dx + w, dy + h,
+            ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+        if (srcIsSample) UnbindSampleRead();
+        else _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
     }
 
     public void Dispose()
     {
         if (_fbo != 0) _gl.DeleteFramebuffer(_fbo);
-        if (_stageFbo != 0) _gl.DeleteFramebuffer(_stageFbo);
+        if (_gpuFbo != 0) _gl.DeleteFramebuffer(_gpuFbo);
+        if (_readFbo != 0) _gl.DeleteFramebuffer(_readFbo);
         if (_scratchFbo != 0) _gl.DeleteFramebuffer(_scratchFbo);
         if (_destVramFbo != 0) _gl.DeleteFramebuffer(_destVramFbo);
         if (_destRtFbo != 0) _gl.DeleteFramebuffer(_destRtFbo);
         if (_tex != 0) _gl.DeleteTexture(_tex);
-        if (_stageTex != 0) _gl.DeleteTexture(_stageTex);
+        if (_gpuTex != 0) _gl.DeleteTexture(_gpuTex);
+        if (_sampleTex != 0) _gl.DeleteTexture(_sampleTex);
         if (_destVramTex != 0) _gl.DeleteTexture(_destVramTex);
         if (_destRtTex != 0) _gl.DeleteTexture(_destRtTex);
     }
