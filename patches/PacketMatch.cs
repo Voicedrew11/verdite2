@@ -297,7 +297,7 @@ public static class PacketMatch
         // two submitters never do -- but the subtraction would be meaningless if
         // they did, so it is dropped rather than guessed at.
         if (a.Cur == 0 || a.Desc != f.Desc || a.Cur <= f.Entry) return;
-        _spans.Add(new Span { Lo = f.Entry & 0x1FFFFCu, Hi = a.Cur & 0x1FFFFCu, Kind = f.Kind, Id = f.Id });
+        _spans.Add(new Span { Lo = f.Entry & RecompOne.Runtime.Runtime.RamWordMask, Hi = a.Cur & RecompOne.Runtime.Runtime.RamWordMask, Kind = f.Kind, Id = f.Id });
     }
 
     // ------------------------------------------------------------------- walk
@@ -365,7 +365,8 @@ public static class PacketMatch
         _prims.Clear();
         _spans.Sort(ByAddress);
 
-        uint addr = head & 0x1FFFFCu;
+        uint mask = RecompOne.Runtime.Runtime.RamWordMask;
+        uint addr = head & mask;
         for (int guard = 0; guard < 0x100000; guard++)
         {
             uint header = m.ReadU32(addr);
@@ -374,7 +375,7 @@ public static class PacketMatch
 
             uint next = header & 0xFFFFFFu;
             if (next == 0xFFFFFFu || (next & 0x800000u) != 0) break;
-            addr = next & 0x1FFFFCu;
+            addr = next & mask;
         }
 
         // The ordering table is sorted by depth, so the walk does not visit

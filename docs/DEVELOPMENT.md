@@ -495,7 +495,9 @@ time went to; this says which *primitive*, which routine built it, and what it c
 downstream. **Shift+F** opens the panel and *Capture next frame* arms it;
 `KF2_FRAMEVIEW_CAPTURE=20,40` captures at those seconds after boot and prints the
 summary, and `KF2_FRAMEVIEW_OUT=dir` writes each capture as three CSVs — commands,
-calls and runtime sections — once the GPU has answered:
+calls and runtime sections — once the GPU has answered. The commands CSV ends in
+`verts`, each primitive's screen vertices with the draw offset applied, which is
+what matches a row to something in a screenshot:
 
 ```bash
 KF2_AUTOSTART=2 KF2_FPS=144 KF2_FRAMEVIEW_CAPTURE=25,35 KF2_FRAMEVIEW_OUT=captures \

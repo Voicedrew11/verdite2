@@ -50,6 +50,7 @@ public static class AgentBeacon
     const uint Area        = 0x8017E060;   // u8
     const uint CurrentSlot = 0x8006E5D4;   // u8
     const uint Yaw         = 0x80199506;   // s16, composed view; 0x1000 to a turn
+    const uint Pitch       = 0x8019950C;   // s16; increasing looks down
     const uint PosX        = 0x801994EC;   // s32
     const uint PosY        = 0x801994F0;   // s32
     const uint PosZ        = 0x801994F4;   // s32
@@ -117,6 +118,6 @@ public static class AgentBeacon
             $"\"level\":{m.ReadU8(Level)},\"exp\":{m.ReadU32(Exp)}," +
             $"\"area\":{m.ReadU8(Area)},\"slot\":{m.ReadU8(CurrentSlot)}," +
             $"\"deathFrames\":{m.ReadU16(DeathFrames)}," +
-            $"\"pos\":[{x},{y},{z}],\"yaw\":{(short)m.ReadU16(Yaw)}}}";
+            $"\"pos\":[{x},{y},{z}],\"yaw\":{(short)m.ReadU16(Yaw)},\"pitch\":{(short)m.ReadU16(Pitch)}}}";
     }
 }

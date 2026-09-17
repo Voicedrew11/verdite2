@@ -14,6 +14,8 @@ namespace Kf2;
 ///     KF2_WIDESCREEN_CULL=0       leave the cone at its 4:3 shape
 ///     KF2_WIDESCREEN_CULL=1.5     force a widening factor instead of the aspect's
 ///     KF2_WIDESCREEN_CULL_PROBE=1 the cone's shape and what the grid clipped
+///     KF2_WIDESCREEN_CULL_PROBE=3 also rebuild the stock grid each frame and count
+///                                 the tiles it draws that the widened one does not
 ///
 /// ## What the cull actually is
 ///
@@ -45,10 +47,13 @@ namespace Kf2;
 /// <c>160/H</c> for <c>H ≈ 220</c> — the screen's own half-width, plus a tile of
 /// slack at the near end. It is the 4:3 frustum, drawn on the floor.
 ///
-/// Widening it is therefore four numbers: scale indices 1, 2, 4 and 5 by the same
-/// ratio the margin widens the picture by (428/320 at 16:9), and the trapezoid
-/// opens to the new screen edges. Nothing else moves — the depth stays, the
-/// forward push stays, the projection was never involved.
+/// Widening it means scaling the left and right of each end by the ratio the
+/// margin widens the picture by (428/320 at 16:9). That is **not** done in the
+/// table: a wider trapezoid rasterises its near edge onto different cells, and
+/// the stock cells it misses were tiles that vanished in the middle of the
+/// picture. The game builds its own stock cone, and <see cref="AfterFill"/> adds
+/// the widened one on top, so the widened grid holds the stock one by
+/// construction.
 ///
 /// ## Why that needs the fill fixed as well
 ///
@@ -67,11 +72,10 @@ namespace Kf2;
 /// tiles vanishes rather than merely being clipped. Widening the table on its own
 /// trades pop-in at the edges for chunks of the world blinking out.
 ///
-/// So this also carries <see cref="AfterFill"/>: a post-hook on the fill that
-/// re-rasterises the four recorded edges with the game's own Bresenham, takes each
-/// row's true span, clamps it to the grid and fills that. It runs only when a
-/// corner actually fell outside — at 4:3 the cone fits, nothing is recorded as
-/// clipped, and the hook returns having read four integers.
+/// So <see cref="AfterFill"/> never relies on the game's fill for the widened
+/// shape: it traces the widened edges with the game's own Bresenham, takes each
+/// row's true span, clamps it to the grid and ORs that in. At 4:3 it returns at
+/// once.
 ///
 /// ## What it cannot buy
 ///
@@ -85,7 +89,8 @@ namespace Kf2;
 /// wide aspect stay clipped. <c>KF2_WIDESCREEN_CULL_PROBE=1</c> reports how many
 /// rows that cost in the window it just measured.
 ///
-/// See "The view cone is a 24×24 tile grid" in NOTES.md.
+/// See "The cull the margin runs into" and "A widened cone dropped stock tiles"
+/// in docs/WIDESCREEN.md.
 /// </summary>
 public static class CullCone
 {
@@ -94,9 +99,8 @@ public static class CullCone
     /// into the four corners of the view trapezoid.</summary>
     public const uint Table = 0x80068760;
 
-    /// <summary>What the game ships. Read back before anything is written, so a
-    /// mismatch means the address is wrong and this patch stays out of the way
-    /// rather than corrupting the renderer's idea of what is visible.</summary>
+    /// <summary>What the game ships. Read back before widening, so a mismatch means
+    /// the address is wrong and this patch stays out of the way.</summary>
     static readonly short[] Stock =
     [
          1280,     0,   // 0  forward push of the 24x24 window
@@ -112,6 +116,11 @@ public static class CullCone
     /// The two depths and the forward push are left alone — the cone gets wider,
     /// not longer, and the push is where the occlusion flood starts.</summary>
     static readonly int[] LateralPairs = [1, 2, 4, 5];
+
+    /// <summary>A table value as the widened cone would have it, for
+    /// <see cref="CullGrid"/>'s own build, which does not run the fill hook.</summary>
+    internal static short Widen(int pair, short v) =>
+        Array.IndexOf(LateralPairs, pair) >= 0 ? Scale(v) : v;
 
     /// <summary>func_8002CD0C, one Bresenham edge of the trapezoid into the grid.
     /// Called four times a frame, from func_8002D3A8 and nowhere else.</summary>
@@ -174,6 +183,14 @@ public static class CullCone
     // KF2_WIDESCREEN_CULL_PROBE=2: the post-occlusion census, by ring.
     static bool _rings;
 
+    // KF2_WIDESCREEN_CULL_PROBE=3: the stock build run again beside the widened one.
+    static bool _superset;
+    static bool _stockPass;
+    static readonly byte[] _wideGrid = new byte[Span * Span];
+    static readonly CpuContext _stockCtx = new();
+    static long _supersetFrames, _supersetLostFrames, _supersetLost;
+    static readonly List<string> _supersetSamples = new();
+
     // KF2_CULL_RESCUE_RADIUS: the Chebyshev radius, in tiles, of the disc around
     // the camera tile that the rescue force-lights after every build. Default 3
     // because the ring census showed rings 0-3 saturated in correct-state play —
@@ -193,19 +210,22 @@ public static class CullCone
     static readonly long[] _ring = new long[12];
     static long _ringFrames;
 
-    // Set once the table has been read back and matched against Stock. Nothing is
-    // written before that, and nothing is written at all if it did not match.
+    // Set once the table has been read back and matched against Stock; nothing is
+    // widened if it did not match.
     static bool _verified;
     static bool _refused;
 
     // Whether GAME.EXE is the overlay currently mapped over 0x80011000. The table
-    // is in its data, and OPEN.EXE and END.EXE link at the same base, so writing
-    // while either of those is up would be writing into some unrelated function.
+    // is in its data, and OPEN.EXE and END.EXE link at the same base.
     static bool _resident;
 
-    // The four edges of the trapezoid as the game handed them to func_8002CD0C,
-    // in grid coordinates, newest frame only.
+    // The four edges of the stock trapezoid as the game handed them to
+    // func_8002CD0C, in world units (1/4096 tile), newest frame only. The build
+    // draws far-left→far-right, →near-right, →near-left, →far-left.
     static readonly int[] _ex0 = new int[4], _ez0 = new int[4], _ex1 = new int[4], _ez1 = new int[4];
+
+    // The widened corners, in grid cells: far-left, far-right, near-right, near-left.
+    static readonly int[] _cx = new int[4], _cz = new int[4];
     static int _edges;
     static byte _mark;
 
@@ -253,6 +273,7 @@ public static class CullCone
             // walls close off before it reaches the edge does not care how big the
             // window is.
             _rings = probe.Equals("2", StringComparison.Ordinal);
+            _superset = probe.Equals("3", StringComparison.Ordinal);
         }
 
         if (!string.IsNullOrWhiteSpace(rescue) &&
@@ -281,8 +302,7 @@ public static class CullCone
         bool attached = false;
         Event.AddListener<OverlayLoadedEvent>(e =>
         {
-            // GAME.EXE is where the table lives, and a load restores it from the
-            // disc image, so the widening is written again every time it arrives.
+            // GAME.EXE is where the table lives; a load of it is verified again.
             // The area overlays sit elsewhere in RAM and leave it alone.
             if (e.Name is "game" or "open" or "end")
             {
@@ -320,12 +340,6 @@ public static class CullCone
         if (!_verified && !Verify(m)) return;
 
         Factor = want;
-        for (int i = 0; i < Stock.Length; i += 2)
-        {
-            bool lateral = Array.IndexOf(LateralPairs, i / 2) >= 0;
-            Write(m, i, lateral ? Scale(Stock[i]) : Stock[i]);
-            Write(m, i + 1, lateral ? Scale(Stock[i + 1]) : Stock[i + 1]);
-        }
 
         if (_measure)
             Console.WriteLine($"[KF2] cull cone: x{Factor:0.###}, " +
@@ -339,10 +353,7 @@ public static class CullCone
         return (short)Math.Clamp(scaled, short.MinValue, short.MaxValue);
     }
 
-    static void Write(IMemory m, int index, short value) =>
-        m.WriteU16(Table + (uint)index * 2u, (ushort)value);
-
-    // Read the table back before touching it. It is a static const in GAME.EXE's
+    // Read the table back before widening. It is a static const in GAME.EXE's
     // data, so it is the shipped values or the address is wrong; there is no third
     // case worth guessing at.
     static bool Verify(IMemory m)
@@ -351,11 +362,6 @@ public static class CullCone
         {
             short got = (short)m.ReadU16(Table + (uint)i * 2u);
             if (got == Stock[i]) continue;
-
-            // Already widened by a previous Apply for this overlay load: the words
-            // we wrote are the ones we would write again, so that is not a
-            // mismatch, it is the second call.
-            if (Factor != 1f && got == Scale(Stock[i])) continue;
 
             _refused = true;
             Console.Error.WriteLine(
@@ -416,56 +422,56 @@ public static class CullCone
     /// </summary>
     public static void BeforeLine(CpuContext c, IMemory m)
     {
+        if (_stockPass) return;
         int i = _edges & 3;
-        _ex0[i] = GridX(m, m.ReadU32(c.A0));
-        _ez0[i] = GridZ(m, m.ReadU32(c.A0 + 4u));
-        _ex1[i] = GridX(m, m.ReadU32(c.A1));
-        _ez1[i] = GridZ(m, m.ReadU32(c.A1 + 4u));
+        _ex0[i] = (int)m.ReadU32(c.A0);
+        _ez0[i] = (int)m.ReadU32(c.A0 + 4u);
+        _ex1[i] = (int)m.ReadU32(c.A1);
+        _ez1[i] = (int)m.ReadU32(c.A1 + 4u);
         _mark = (byte)c.A2;
         _edges++;
     }
 
-    // func_8002CD0C's own arithmetic: a logical shift of the world coordinate,
-    // plus the offset read as a u16, and the sum taken 16 bits wide. Sign-extending
-    // that is the signed grid index, off the grid included.
-    static int GridX(IMemory m, uint world) => (short)((world >> 12) + m.ReadU16(OffsetX));
-
-    static int GridZ(IMemory m, uint world) => (short)((world >> 12) + m.ReadU16(OffsetZ));
+    // func_8002CD0C's arithmetic — world >> 12, plus the offset read as a u16,
+    // taken 16 bits wide — with the shift arithmetic, since a widened corner can
+    // sit left of the map's origin where the game's own never do.
+    static int Cell(int world, ushort offset) => (short)((world >> 12) + offset);
 
     /// <summary>
-    /// Fill the rows the game's own fill could not. It scans each row in from both
-    /// sides looking for the outline and fills between the two runs it finds, so a
-    /// row whose outline left the grid on one side gets no fill at all. This
-    /// re-walks the four recorded edges with the same Bresenham the game uses,
-    /// takes each row's real span, clamps it and writes the marker over it.
-    ///
-    /// Runs after the fill and before the occlusion pass, which is where the game's
-    /// own fill sits, so the recovered tiles are shadowed by walls like every other
-    /// tile. Returns immediately unless a corner actually fell off the grid.
+    /// OR the widened trapezoid into the stock fill. The corners are the game's
+    /// own, pushed out from the middle of each end by <see cref="Factor"/>; the
+    /// edges are traced with the game's Bresenham and each row's span is clamped
+    /// to the grid, so a corner off the grid costs nothing but the cells out
+    /// there. Runs after the fill and before the occlusion pass, where the game's
+    /// own fill sits, so the added tiles are shadowed by walls like every other.
     /// </summary>
     public static void AfterFill(CpuContext c, IMemory m)
     {
+        if (_stockPass) return;
         int edges = _edges;
         _edges = 0;
         _frames++;
 
-        if (edges != 4) { Report(m); return; }
+        if (edges != 4 || Factor <= 1f || _refused || !_resident) { Report(m); return; }
+
+        // Edge 0 runs far-left to far-right, edge 2 near-right to near-left.
+        ushort ox = m.ReadU16(OffsetX), oz = m.ReadU16(OffsetZ);
+        Widened(0, _ex0[0], _ez0[0], _ex1[0], _ez1[0], ox, oz);
+        Widened(2, _ex0[2], _ez0[2], _ex1[2], _ez1[2], ox, oz);
 
         bool clipped = false;
-        for (int e = 0; e < 4 && !clipped; e++)
-            clipped = Outside(_ex0[e], _ez0[e]) || Outside(_ex1[e], _ez1[e]);
-
-        if (!clipped) { Report(m); return; }
-        _clippedFrames++;
+        for (int k = 0; k < 4 && !clipped; k++) clipped = Outside(_cx[k], _cz[k]);
+        if (clipped) _clippedFrames++;
 
         for (int y = 0; y < Span; y++) { _rowLo[y] = int.MaxValue; _rowHi[y] = int.MinValue; }
-        for (int e = 0; e < 4; e++) Trace(_ex0[e], _ez0[e], _ex1[e], _ez1[e]);
+        for (int k = 0; k < 4; k++)
+        {
+            int n = (k + 1) & 3;
+            Trace(_cx[k], _cz[k], _cx[n], _cz[n]);
+        }
 
         for (int y = 0; y < Span; y++)
         {
-            if (_rowLo[y] > _rowHi[y]) continue;
-            if (_rowLo[y] >= 0 && _rowHi[y] < Span) continue;   // the game filled this one
-
             int lo = Math.Max(_rowLo[y], 0), hi = Math.Min(_rowHi[y], Span - 1);
             if (lo > hi) continue;
 
@@ -484,6 +490,16 @@ public static class CullCone
         Report(m);
     }
 
+    // One end of the trapezoid, scaled about its own middle, into _cx/_cz[k, k+1].
+    static void Widened(int k, int x0, int z0, int x1, int z1, ushort ox, ushort oz)
+    {
+        float mx = (x0 + x1) * 0.5f, mz = (z0 + z1) * 0.5f;
+        _cx[k] = Cell((int)MathF.Floor(mx + (x0 - mx) * Factor), ox);
+        _cz[k] = Cell((int)MathF.Floor(mz + (z0 - mz) * Factor), oz);
+        _cx[k + 1] = Cell((int)MathF.Floor(mx + (x1 - mx) * Factor), ox);
+        _cz[k + 1] = Cell((int)MathF.Floor(mz + (z1 - mz) * Factor), oz);
+    }
+
     static bool Outside(int x, int z) => (uint)x >= Span || (uint)z >= Span;
 
     /// <summary>
@@ -500,7 +516,9 @@ public static class CullCone
     /// </summary>
     public static void AfterBuild(CpuContext c, IMemory m)
     {
+        if (_stockPass) return;
         RescueNearCamera(m);
+        if (_superset && Factor > 1f && _resident && !_refused) Superset(c, m);
 
         if (!_rings) return;
         _ringFrames++;
@@ -512,6 +530,40 @@ public static class CullCone
                 _ring[Math.Min(r, _ring.Length - 1)]++;
             }
     }
+    /// <summary>
+    /// Run the build again with the widening held off, and count the cells the
+    /// stock grid draws (<c>byte &amp; 3</c>) that the widened grid does not. Any
+    /// is a tile the widening took out of the picture. The widened grid is put
+    /// back afterwards, so the frame draws what it would have.
+    /// </summary>
+    static void Superset(CpuContext c, IMemory m)
+    {
+        for (uint i = 0; i < _wideGrid.Length; i++) _wideGrid[i] = m.ReadU8(Grid + i);
+        _stockPass = true;
+        try
+        {
+            _stockCtx.SP = c.SP;
+            _stockCtx.RA = c.RA;
+            Recompiled.KingsField2_game.func_8002D3A8(_stockCtx, m);
+        }
+        finally { _stockPass = false; }
+
+        int lost = 0;
+        for (uint i = 0; i < _wideGrid.Length; i++)
+        {
+            byte stock = m.ReadU8(Grid + i);
+            if ((stock & 3 & ~_wideGrid[i]) == 0) continue;
+            lost++;
+            if (_supersetSamples.Count < 8)
+                _supersetSamples.Add($"({i % Span},{i / Span} {stock:X2}/{_wideGrid[i]:X2})");
+        }
+        for (uint i = 0; i < _wideGrid.Length; i++) m.WriteU8(Grid + i, _wideGrid[i]);
+
+        _supersetFrames++;
+        _supersetLost += lost;
+        if (lost > 0) _supersetLostFrames++;
+    }
+
     /// <summary>Radius and activity of the rescue, shared with the 32×32
     /// pipeline in <see cref="CullGrid"/> so both grids treat the same cells the
     /// same way.</summary>
@@ -634,8 +686,17 @@ public static class CullCone
 
         Console.WriteLine($"[cullcone] x{Factor:0.###}: {(_frames > 0 ? _lit / (double)_frames : 0):0.0} " +
                           $"of {Span * Span} tiles lit, {_clippedFrames}/{_frames} frames reached the " +
-                          $"grid edge, {_recovered} tiles recovered over {_clippedRows} rows the " +
-                          $"game's own fill dropped, {_rescued} cells rescued around the camera");
+                          $"grid edge, {_recovered} tiles added over {_clippedRows} rows, " +
+                          $"{_rescued} cells rescued around the camera");
+
+        if (_superset && _supersetFrames > 0)
+        {
+            Console.WriteLine($"[cullcone] stock tiles missing from the widened grid: {_supersetLost} over " +
+                              $"{_supersetLostFrames}/{_supersetFrames} frames" +
+                              (_supersetSamples.Count > 0 ? $"; (x,z stock/wide) {string.Join(" ", _supersetSamples)}" : ""));
+            _supersetFrames = _supersetLostFrames = _supersetLost = 0;
+            _supersetSamples.Clear();
+        }
 
         if (_rings && _ringFrames > 0)
         {

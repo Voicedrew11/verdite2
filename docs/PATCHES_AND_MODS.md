@@ -4387,7 +4387,7 @@ nearby [radius=8192]  live records of the world tables within radius units of th
 ending [boss|kill]    hand the game over to END.EXE; "boss" runs the post-final-
                       boss sequence first, "kill" replays the killing blow itself
 map [on|off|toggle]   open or close the full-screen map, which pauses the world
-goto <x> <y> <z> [yaw]  put the player at a position in the current area, after
+goto <x> <y> <z> [yaw [pitch]]  put the player at a position in the current area, after
                       stage 3; yaw is the base heading, 0x1000 a turn. Sent before
                       an autostarted save has loaded, the load puts them back
 ```

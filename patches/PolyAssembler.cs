@@ -233,9 +233,9 @@ public static partial class PolyAssembler
 
     // ---- What a call may skip ----------------------------------------------
 
-    /// <summary>A 16-bit access below this physical address is inside RAM whatever
-    /// its size (never less than 2 MB), so it can go straight to the array.</summary>
-    const uint DirectLimit = MemoryMap.RetailRamSize - 1u;
+    /// <summary>A 16-bit access below this physical address is inside RAM, so it can
+    /// go straight to the array.</summary>
+    static uint DirectLimit => RecompOne.Runtime.Runtime.RamSize - 1u;
 
     /// <summary>
     /// A 16- or 8-bit load or store never reaches GteVertexMap, so while PSMemory

@@ -409,7 +409,8 @@ public static class Widescreen
         // recognised by its shape, not by where in the table it sits.
         if (!((AnchorHud && On) || _listWide) || gpu == null) { orig(c, m); return; }
 
-        uint addr = c.A0 & 0x1FFFFCu;
+        uint mask = RecompOne.Runtime.Runtime.RamWordMask;
+        uint addr = c.A0 & mask;
         int entries = 0;
         for (int guard = 0; guard < 0x100000; guard++)
         {
@@ -417,14 +418,14 @@ public static class Widescreen
             entries++;
             uint next = header & 0xFFFFFFu;
             if (next == 0xFFFFFFu || (next & 0x800000u) != 0) break;
-            addr = next & 0x1FFFFCu;
+            addr = next & mask;
         }
 
         bool custom = GpuPrims.Any && GpuPrims.OtLength > 0;
-        uint otBase = GpuPrims.OtBase & 0x1FFFFCu;
+        uint otBase = GpuPrims.OtBase & mask;
         uint otEnd = otBase + (uint)GpuPrims.OtLength * 4u;
 
-        addr = c.A0 & 0x1FFFFCu;
+        addr = c.A0 & mask;
         int slot = -1;
         for (int guard = 0; guard < 0x100000; guard++)
         {
@@ -452,7 +453,7 @@ public static class Widescreen
 
             uint next = header & 0xFFFFFFu;
             if (next == 0xFFFFFFu || (next & 0x800000u) != 0) break;
-            addr = next & 0x1FFFFCu;
+            addr = next & mask;
         }
 
         _fromEnd = -1;

@@ -640,6 +640,15 @@ Four files in the directory have no entry below:
   by the depth map and the occlusion readback. **No recompile.** See "Water on
   screen cost 5 ms a frame" in `docs/DEVELOPMENT.md`.
 
+- `0056-ram-size-above-2mb.patch` — the port gives the guest 4 MB so the game's
+  primitive buffers can move above 2 MB. `GteVertexMap` sized its tables from the
+  run mode (2 MB retail), so an address above that would alias onto the low 2 MB;
+  it sizes from `Runtime.RamSize` now, and `PSMemory`'s constructor reallocates
+  them when a patch switched the map on before the RAM was made. `RamProbe`
+  counts accesses above 2 MB per 64 KiB page in the seven RAM fast paths, behind a
+  `static readonly` the JIT folds away unless `KF2_RAM_PROBE=1`. **No recompile.**
+  See "The primitive buffer ran out" in `docs/WIDESCREEN.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

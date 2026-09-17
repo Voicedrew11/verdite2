@@ -66,7 +66,11 @@ KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3
 KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the aspect's
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
 KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
+KF2_WIDESCREEN_CULL_PROBE=3              # also rebuild the stock grid each frame: stock tiles missing from the widened one (must be 0)
+KF2_PRIMBUF=1                            # the game's primitive buffers where it put them (moved above 2 MB, 4x as large, by default; =N for N x)
 KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, capacity, overflows
+KF2_RAMSIZE=8                            # guest RAM in MB, at least what the buffers need (4 by default, 2 with KF2_PRIMBUF=1)
+KF2_RAM_PROBE=1                          # with the probe line, guest accesses above 2 MB per 64 KiB page, in the buffers and elsewhere
 KF2_POLYASM=0                            # the recompiled polygon assembler instead of the C# one (on by default)
 KF2_POLYASM=verify                       # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
 KF2_POLYASM_REJECT=0                     # send every oversized polygon to the view-space clipper, including those it clips to nothing

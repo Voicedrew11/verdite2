@@ -244,7 +244,8 @@ public static class NoDither
         _saved.Clear();
         if (!Enabled) { Report(); return; }
 
-        uint addr = c.A0 & 0x1FFFFCu;
+        uint mask = RecompOne.Runtime.Runtime.RamWordMask;
+        uint addr = c.A0 & mask;
         for (int guard = 0; guard < 0x100000; guard++)
         {
             uint header = m.ReadU32(addr);
@@ -252,7 +253,7 @@ public static class NoDither
 
             uint next = header & 0xFFFFFFu;
             if (next == 0xFFFFFFu || (next & 0x800000u) != 0) break;
-            addr = next & 0x1FFFFCu;
+            addr = next & mask;
         }
 
         Report();

@@ -103,7 +103,7 @@ public static class AgentServer
         "nearby [radius=8192] - live records of the world tables within radius units",
         "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
         "map [on|off|toggle] - the full-screen map, which pauses the world unless KF2_MAP_PAUSE=0",
-        "goto <x> <y> <z> [yaw] - put the player at a position in this area, and face yaw (0x1000 a turn)",
+        "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -591,15 +591,17 @@ public static class AgentServer
     static string DoGoto(string args)
     {
         var a = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (a.Length is < 3 or > 4 || !int.TryParse(a[0], out int x) || !int.TryParse(a[1], out int y)
-            || !int.TryParse(a[2], out int z) || (a.Length == 4 && !int.TryParse(a[3], out _)))
-            return Err("usage: goto <x> <y> <z> [yaw]");
+        if (a.Length is < 3 or > 5 || !int.TryParse(a[0], out int x) || !int.TryParse(a[1], out int y)
+            || !int.TryParse(a[2], out int z) || (a.Length >= 4 && !int.TryParse(a[3], out _))
+            || (a.Length == 5 && !int.TryParse(a[4], out _)))
+            return Err("usage: goto <x> <y> <z> [yaw [pitch]]");
         var m = RecompOne.Runtime.Runtime.Mem;
         if (m == null) return Err("not running");
         m.WriteU32(PlayerPosX, (uint)x);
         m.WriteU32(PlayerPosY, (uint)y);
         m.WriteU32(PlayerPosZ, (uint)z);
-        if (a.Length == 4) m.WriteU16(BaseYaw, (ushort)(int.Parse(a[3]) & 0xFFF));
+        if (a.Length >= 4) m.WriteU16(BaseYaw, (ushort)(int.Parse(a[3]) & 0xFFF));
+        if (a.Length == 5) m.WriteU16(Analog.Pitch, (ushort)int.Parse(a[4]));
         return "{\"ok\":true,\"cmd\":\"goto\",\"pos\":[" + x + "," + y + "," + z + "]}";
     }
 
