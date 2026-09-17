@@ -260,6 +260,8 @@ Aspect ratio, the HUD and screen-space effects authored 320 wide, and the three 
 - Widescreen became a patch, and the default stayed 4:3
 - Three checkboxes that were not choices
 - The cull the margin runs into: a 24×24 tile grid, and a trapezoid drawn on it
+- A widened cone dropped stock tiles, in the middle of the picture
+- The primitive buffer ran out
 - The second cull: a view-space clipper, and it is set to twice the screen
 - Is the 24-tile window worth lifting? Measured: binding, and barely
 - There is a third cull and it is none of the obvious ones
@@ -336,7 +338,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0055`, one entry each.
+Every change the port made to RecompOne, `0001`-`0056`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

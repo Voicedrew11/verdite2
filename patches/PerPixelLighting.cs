@@ -38,10 +38,6 @@ public static class PerPixelLighting
         ("open", 0x80016078), ("game", 0x80060818), ("end", 0x80013D80),
     ];
 
-    /// <summary>The two primitive buffers, back to back (see PrimBuffer.cs).</summary>
-    const uint PrimBuffers = 0x800FC99C;
-    const uint PrimBufferBytes = 2 * 0x19000;
-
     public const string OnKey = "kf2.perpixel.on";
 
     public static bool Enabled => GteLightMap.Enabled;
@@ -89,7 +85,6 @@ public static class PerPixelLighting
 
     public static void Install()
     {
-        GteLightMap.SetRange(PrimBuffers, PrimBufferBytes);
         // The saved key is only readable once the runtime is up (see AmbientOcclusion).
         GteLightMap.Enabled = _forced ?? true;
         _windowStart = Now;

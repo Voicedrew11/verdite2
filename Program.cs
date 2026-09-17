@@ -1063,13 +1063,16 @@ Kf2.CullGrid.Configure(Environment.GetEnvironmentVariable("KF2_CULLGRID"),
                        Environment.GetEnvironmentVariable("KF2_CULLGRID_COMPARE"));
 Kf2.CullGrid.Install();
 
-// How close the frame's primitive buffer comes to running out. The game hands out
-// 0x19000 bytes a frame -- 1969 POLY_GT4 packets -- and func_80030540 abandons the
-// rest of the call when the bump passes the end, so a busier frame silently loses
-// whatever it had not drawn yet. Widening the cull cone spends that budget, which
-// makes this the thing to check when geometry goes missing in a wide picture:
+// The frame's primitive buffers. The game hands out 0x19000 bytes a frame -- 1969
+// POLY_GT4 packets -- and its assemblers abandon the rest of the frame when the bump
+// passes the end, which a widened cull cone reaches. The port moves them above 2 MB
+// and enlarges them; the RAM is sized for that before PSMemory is made below. See
+// "The primitive buffer ran out" in docs/WIDESCREEN.md.
 //
+//     KF2_PRIMBUF=4           size as a multiple of the game's; 1 leaves them where they were
 //     KF2_PRIMBUF_PROBE=1     peak usage, capacity and overflows, on the console
+//     KF2_RAMSIZE=4           guest RAM in MB, at least what the buffers need
+//     KF2_RAM_PROBE=1         with the probe, accesses above 2 MB per 64 KiB page
 Kf2.PrimBuffer.Configure(Environment.GetEnvironmentVariable("KF2_PRIMBUF_PROBE"));
 Kf2.PrimBuffer.Install();
 
@@ -1150,7 +1153,7 @@ foreach (var icon in new[]
     break;
 }
 
-var memory = new PSMemory();
+var memory = new PSMemory(Kf2.PrimBuffer.RamSize);
 try
 {
     Entry.Run(memory, args.Length > 0 ? args[0] : null);

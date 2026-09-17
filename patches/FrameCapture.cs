@@ -212,7 +212,6 @@ public static class FrameCapture
     }
 
     const uint ActiveDescriptor = 0x8017E0A4;
-    const uint RamMask = 0x1FFFFF;
 
     struct Ev
     {
@@ -890,7 +889,7 @@ public sealed class Capture
             if (e.Desc != 0)
             {
                 var lo = desc != e.Desc || e.Cur < cur ? e.Start : cur;
-                (call.RangeLo, call.RangeHi) = (lo & 0x1FFFFF, e.Cur & 0x1FFFFF);
+                (call.RangeLo, call.RangeHi) = (lo & (RecompOne.Runtime.Runtime.RamSize - 1u), e.Cur & (RecompOne.Runtime.Runtime.RamSize - 1u));
             }
             calls[idx] = call;
         }
@@ -915,7 +914,7 @@ public sealed class Capture
         {
             ref var c = ref cap.Cmds[i];
             Decode(ref c, cap.Words[c.First], cap.Gp1[c.First]);
-            c.Src &= 0x1FFFFF;
+            c.Src &= (RecompOne.Runtime.Runtime.RamSize - 1u);
 
             // By time: the deepest call open when the command was sent.
             for (var k = 0; k < cap.Calls.Length; k++)
@@ -1513,7 +1512,8 @@ public sealed class Capture
     {
         using var w = new StreamWriter(path, false, new UTF8Encoding(false));
         w.WriteLine("index,t_ms,cost_us,kind,op,owner,by_time,ran_in,ot_entry,ot_slot,src,frags,batch,submits,reason,clip," +
-                    "verts_asked,verts_hit,lookup_us,gpu_us");
+                    "verts_asked,verts_hit,lookup_us,gpu_us,verts");
+        Span<(int X, int Y)> v = stackalloc (int, int)[16];
         for (var i = 0; i < Cmds.Length; i++)
         {
             var c = Cmds[i];
@@ -1524,7 +1524,8 @@ public sealed class Capture
                 c.OtEntry, c.OtSlot, $"{c.Src:X6}", c.Frags, c.Batch, c.Flushes,
                 c.Flushes > 0 ? Quote(ReasonLabel(c.Reason)) : "",
                 $"{c.ClipL}:{c.ClipT}:{c.ClipR}:{c.ClipB}",
-                c.VtxAsked, c.VtxHits, F(c.LookupTicks * TicksToMs * 1000, "0.0"), c.HasGpu ? F(c.GpuNs / 1e3, "0.0") : ""));
+                c.VtxAsked, c.VtxHits, F(c.LookupTicks * TicksToMs * 1000, "0.0"), c.HasGpu ? F(c.GpuNs / 1e3, "0.0") : "",
+                string.Join(' ', v[..Vertices(i, v)].ToArray().Select(p => $"{p.X}:{p.Y}"))));
         }
     }
 

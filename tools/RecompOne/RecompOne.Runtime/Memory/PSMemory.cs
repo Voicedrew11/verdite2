@@ -26,6 +26,7 @@ public sealed class PSMemory : IMemory
     public bool TryWords(uint address, int count, out ReadOnlySpan<uint> words)
     {
         var phys = MemoryMap.ToPhysical(address);
+        if (RamProbe.On) RamProbe.Note(phys);
         var off = phys & _ramMask;
 
         if (phys >= MemoryMap.RamWindow || (off & 3u) != 0 || off + (uint)count * 4u > (uint)_ram.Length)
@@ -65,6 +66,7 @@ public sealed class PSMemory : IMemory
         _frozen = new bool[size];
 
         Runtime.RamSize = size;
+        GteVertexMap.RamSizeChanged();
 
         // PGXP shadows one PgxpValue per RAM word, so it has to be sized from the
         // same array the guest sees -- which is a ctor argument rather than a
@@ -189,6 +191,7 @@ public sealed class PSMemory : IMemory
     public byte ReadU8(uint address)
     {
         var phys = MemoryMap.ToPhysical(address);
+        if (RamProbe.On) RamProbe.Note(phys);
         var off = phys & _ramMask;
         if (phys < MemoryMap.RamWindow && off < (uint)_ram.Length && !RamLogger.TrackReads)
             return Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_ram), (nint)off);
@@ -204,6 +207,7 @@ public sealed class PSMemory : IMemory
     public ushort ReadU16(uint address)
     {
         var phys = MemoryMap.ToPhysical(address);
+        if (RamProbe.On) RamProbe.Note(phys);
         var off = phys & _ramMask;
         if (phys < MemoryMap.RamWindow && off + 2u <= (uint)_ram.Length && !RamLogger.TrackReads)
             return Unsafe.ReadUnaligned<ushort>(
@@ -220,6 +224,7 @@ public sealed class PSMemory : IMemory
     public uint ReadU32(uint address)
     {
         var phys = MemoryMap.ToPhysical(address);
+        if (RamProbe.On) RamProbe.Note(phys);
         var off = phys & _ramMask;
         if (phys < MemoryMap.RamWindow && off + 4u <= (uint)_ram.Length && !RamLogger.TrackReads)
         {
@@ -245,6 +250,7 @@ public sealed class PSMemory : IMemory
     public void WriteU8(uint address, byte value)
     {
         var phys = MemoryMap.ToPhysical(address);
+        if (RamProbe.On) RamProbe.Note(phys);
         var off = phys & _ramMask;
         if (_frozenCount == 0 && phys < MemoryMap.RamWindow && off < (uint)_ram.Length && !RamLogger.TrackWrites)
         {
@@ -267,6 +273,7 @@ public sealed class PSMemory : IMemory
     public void WriteU16(uint address, ushort value)
     {
         var phys = MemoryMap.ToPhysical(address);
+        if (RamProbe.On) RamProbe.Note(phys);
         var off = phys & _ramMask;
         if (_frozenCount == 0 && phys < MemoryMap.RamWindow && off + 2u <= (uint)_ram.Length && !RamLogger.TrackWrites)
         {
@@ -290,6 +297,7 @@ public sealed class PSMemory : IMemory
     public void WriteU32(uint address, uint value)
     {
         var phys = MemoryMap.ToPhysical(address);
+        if (RamProbe.On) RamProbe.Note(phys);
         var off = phys & _ramMask;
         if (_frozenCount == 0 && phys < MemoryMap.RamWindow && off + 4u <= (uint)_ram.Length && !RamLogger.TrackWrites)
         {

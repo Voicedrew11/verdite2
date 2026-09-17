@@ -146,10 +146,7 @@ public static class GteVertexMap
     {
         if (on && _map == null)
         {
-            uint ram = Runtime.Mode == RunMode.Devkit ? MemoryMap.DevkitRamSize : MemoryMap.RetailRamSize;
-            _ramMask = ram - 1;
-            _map = new Entry[ram >> 2];
-            _mark = new ulong[(ram >> 2) / 64];
+            Allocate();
         }
         // Switching off stops the stores being watched, so every address the game
         // wrote in the meantime is still marked and still holds what it meant
@@ -160,6 +157,21 @@ public static class GteVertexMap
             Array.Clear(_mark);
         }
         Active = on && _map != null;
+    }
+
+    // Sized from the guest's RAM, which PSMemory may construct after a patch has
+    // already switched the map on.
+    static void Allocate()
+    {
+        uint ram = Runtime.RamSize;
+        _ramMask = ram - 1;
+        _map = new Entry[ram >> 2];
+        _mark = new ulong[(ram >> 2) / 64];
+    }
+
+    internal static void RamSizeChanged()
+    {
+        if (_map != null && (uint)_map.Length != Runtime.RamSize >> 2) Allocate();
     }
 
     static int Index(uint phys) => (int)((phys & _ramMask) >> 2);

@@ -45,8 +45,8 @@ namespace Kf2;
 /// the nine routines we do not touch are never reached.
 ///
 /// The port is a faithful transcription of the generated build, cell for cell:
-/// the same seven-pair lerp of the LIVE cone table (which <see cref="CullCone"/>
-/// has already widened), the same rotation by the game's own fixed-point trig
+/// the same seven-pair lerp of the cone table (widened here by
+/// <see cref="CullCone.Widen"/>), the same rotation by the game's own fixed-point trig
 /// (invoked, not reimplemented), the same four Bresenham edges, the same
 /// two-sided scanline fill, the same ring-marching occlusion flood out of the
 /// window middle, the same force-lit 3×3 at the middle — at stride 32, window
@@ -99,7 +99,7 @@ public static class CullGrid
     const uint Legacy = 0x80192EAC;
 
     /// <summary>The eye's world tile, the flood's origin, left by the build's
-    /// caller; and the cone table, read live (CullCone widens it in place).</summary>
+    /// caller; and the cone table, which stays the stock one.</summary>
     const uint EyeTileX = 0x80192E90;
     const uint EyeTileZ = 0x80192E94;
 
@@ -246,6 +246,7 @@ public static class CullGrid
         try
         {
             c.SP -= 0x70;
+            c_.SP = c.SP;
             Build(m, shadow: false);
         }
         finally
@@ -255,7 +256,12 @@ public static class CullGrid
         }
     }
 
-    static void BuildShadow(CpuContext c, IMemory m) => Build(m, shadow: true);
+    static void BuildShadow(CpuContext c, IMemory m)
+    {
+        // rsin/rcos push a frame; the scratch context needs a stack.
+        c_.SP = c.SP - 0x40;
+        Build(m, shadow: true);
+    }
 
     // ------------------------------------------------------------------
     // The build. A cell-for-cell port of func_8002D3A8 at stride 32; the
@@ -277,14 +283,14 @@ public static class CullGrid
         }
 
         // The seven (level, pitched) pairs, lerped by 0x1000 - rcos(pitch) — the
-        // live table, which CullCone has already widened.
+        // stock table, widened here: CullCone widens the fill, not the table.
         c_.A0 = (uint)(short)m.ReadU16(PitchAddr);
         KingsField2.rcos(c_, m);
         int t = 0x1000 - (int)c_.V0;
         for (int i = 0; i < 7; i++)
         {
-            short lo = (short)m.ReadU16(CullCone.Table + (uint)i * 4u);
-            short hi = (short)m.ReadU16(CullCone.Table + (uint)i * 4u + 2u);
+            short lo = CullCone.Widen(i, (short)m.ReadU16(CullCone.Table + (uint)i * 4u));
+            short hi = CullCone.Widen(i, (short)m.ReadU16(CullCone.Table + (uint)i * 4u + 2u));
             _lerp[i] = (short)(((hi - lo) * t >> 12) + lo);
         }
 

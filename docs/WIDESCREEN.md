@@ -463,20 +463,21 @@ boundary, the two scans meet, and **the row is not filled at all** — a whole r
 of tiles vanishes rather than being clipped. Widening the table on its own would
 trade pop-in at the edges for chunks of the world blinking out.
 
-So `patches/CullCone.cs` is the two halves together: the table scaled by
-`(320 + 2·margin) / 320`, and a **post-hook on the fill** that re-walks the four
-edges a pre-hook on `func_8002CD0C` recorded — with the game's own Bresenham, the
-same major-axis choice and the same halved error term — takes each row's true span,
-clamps it to the grid and writes the marker over it. It runs after the fill and
-before the occlusion flood, exactly where the game's own fill sits, so recovered
-tiles are shadowed by walls like every other tile. It returns immediately unless a
-corner actually fell outside, so 4:3 is bit-identical: the cone fits, nothing is
-recorded as clipped, and the hook has read four integers.
+So `patches/CullCone.cs` does not rely on the game's fill for the widened shape.
+**It no longer writes the table either** — see "A widened cone dropped stock
+tiles" below for why. A pre-hook on `func_8002CD0C` records the four corners the
+game drew from its own stock table; a **post-hook on the fill** pushes each end's
+two corners out from that end's middle by `(320 + 2·margin) / 320`, traces the
+four widened edges with the game's own Bresenham (the same major-axis choice and
+the same halved error term), takes each row's span, clamps it to the grid and ORs
+the marker over it. It runs after the fill and before the occlusion flood, exactly
+where the game's own fill sits, so the added tiles are shadowed by walls like
+every other tile. At 4:3 the factor is 1 and the hook returns at once, so 4:3 is
+bit-identical.
 
-The table is read back and matched against the shipped values before anything is
-written, and a mismatch refuses the patch rather than corrupting the renderer's
-idea of what is visible. It is only written while GAME.EXE is the resident overlay
-— OPEN.EXE and END.EXE link at the same base — and rewritten on every load of it.
+The table is still read back and matched against the shipped values, and a
+mismatch refuses the widening rather than misreading the corners. The hooks are
+GAME.EXE's only — OPEN.EXE and END.EXE link at the same base.
 
 **What it cannot buy, and what that is worth.** The window is 24 tiles and stays
 24 tiles, which caps the cone at about 9.5 tiles from the centre in the worst yaw
@@ -500,6 +501,140 @@ to be pointed at, which the widescreen census's primitive count does. (The primi
 count moves the same way — about a quarter more submitted per window with the cone
 widened — but the attract demo does not run in lockstep between sessions, so it is
 the weaker of the two numbers.)
+
+## A widened cone dropped stock tiles, in the middle of the picture
+
+**Fixed and measured, but it was not what the report was about.** The report
+was the primitive buffer running out (next section); this defect is real and was
+found on the way there.
+
+Reported from play at 16:9, area 0: a platform beside a wooden stair, and
+sometimes other geometry, vanished from some standing spots and was partly there
+from others. Never at 4:3. The cone was the first suspect because it is the one
+thing the aspect changes. The platform was present in a frame capture's command
+list, though, so it was submitted, which a tile cull cannot explain; the fix
+below did not bring it back, and the buffer did.
+
+**The trapezoid is widened, but its rasterised cells were not a superset of the
+stock ones.** The cone used to be widened in the table, so the game drew a longer
+near edge. The near edge sits half a tile behind the camera and runs almost along
+a row, so where its Bresenham line steps from one row to the next depends on its
+length. At the reported spot (`goto 124152 -20992 133347 4035`) the two fills,
+dumped straight after `func_8002CF0C` and before the flood:
+
+    stock z17: 00 00 00 00 21 21 21 21 21 21 21 21 21 21 21 21 21 00 ...
+    stock z18: 00 00 00 21 21 21 21 21 00 00 00 ...
+    wide  z17: 00 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 21 ...
+    wide  z18: 21 21 21 21 21 21 00 00 00 00 00 ...
+
+The widened line climbs into row 17 two columns sooner, so cells (6,18) and
+(7,18) are in the stock cone and in neither widened row. Nothing ever lights
+them: the flood skips a zero cell, and neither the old clipped-row fill nor the
+rescue discs (which only OR `0xC0`, never the draw bits) reaches them. Which cells
+drop moves with every change of yaw and position, and it is not only the near
+edge: the sweep below lost cells along the sides of the trapezoid too. The
+platform's own tile was never among them.
+
+**The oracle is the game's own build, run twice.** `KF2_WIDESCREEN_CULL_PROBE=3`
+runs `func_8002D3A8` a second time from the post-hook with the widening held
+off, counts the cells whose `byte & 3` the stock grid draws and the widened one
+does not, and puts the widened grid back. At 4:3 it has to read zero, and it
+does. With the widened table, at the reported spot, it read **2 cells lost on
+every frame**, and sweeping the yaw there lost cells at almost every heading, up
+to 346 per report window.
+
+(`patches/CullGrid.cs`'s C# port of the build could not serve as the oracle. At a
+factor of exactly 1 it disagreed with the game's own build by about 120 cells a
+frame, marker bits left set that the real flood clears, so its
+cell-for-cell claim does not hold. Its shadow mode also crashed on arrival,
+because `rsin`/`rcos` push a stack frame and its scratch context had no stack
+pointer; that is fixed, the transcription is not.)
+
+**So the stock cone is always built, and the widening is added on top.** The
+table stays as shipped; `AfterFill` scales each end's two corners about that
+end's middle and ORs the widened trapezoid in, so the grid contains the stock
+grid by construction rather than by luck of rasterisation. Scaling about each
+end's middle rather than the view axis moves an end by an asymmetric 32/256 of a
+tile at most, which the cull does not care about. Measured after, at 144 fps:
+**0 stock cells missing** over a full yaw sweep at the reported spot and at the
+landing spot of every area from 0 to 7 (50 report windows), 170-178 tiles lit
+against 169-175 before, 144.0 fps drawn at 20.0 ticks/s. Pitch was level
+throughout, since the command channel cannot set it.
+
+## The primitive buffer ran out
+
+**Fixed; the mechanism is measured, the picture is the reporter's to confirm.**
+
+The platform report above, again. **`KF2_PRIMBUF_PROBE=1` in the reporter's own
+session read `peak 102724/102400 bytes (100.3%)` with 329 of 330 frames running
+out**, in the windows where the platform was missing. The earlier "ruled out"
+(the table below) measured other views; this one is 16:9 or 21:9, 49° down,
+after a long session. A fresh boot teleported to the same pose rendered it, which
+is session history: more objects alive, more of the budget already spent.
+
+`func_8002DF80` lays out two `0x19000`-byte buffers back to back from
+`0x800FC99C`, descriptors `{start, end, current}` at `0x8017E08C` and
+`0x8017E098`, and stage 13's head `func_8002E064` swaps and rewinds them. Every
+assembler bumps `current` and returns when it passes `end`, and nothing rolls the
+bump back, so the rest of the frame fails too. Stage 13 draws the HUD, then the
+map tiles, then the world walks, so the objects and the far end of the walks go
+first. Widening the cone lights more tiles, and 49° down opens it further.
+
+**The fix is more buffer, not less drawing.** The buffers end at `0x8012E99C`,
+the clipper's near-plane word, so there is no room inside 2 MB. The guest gets
+4 MB of RAM instead (`PSMemory(ramSize)`, which the CHD backport already
+carried), and `patches/PrimBuffer.cs` writes the layout at `0x80200000` with each
+buffer 4× the game's (`0x64000`, 7876 quads). OT links are 24 bits, so the walk
+reaches them.
+
+- **Where the layout is written.** Everything else derives from `start` of the
+  first descriptor. `func_80022754` (a menu) saves both descriptors, shrinks both
+  buffers to `0x6400`, keeps the frozen frame at `start + 0xC800` (320×240×2
+  bytes, which is exactly why the stock buffers end where they do), and
+  `func_800228C8` restores the saved ones. `func_80035B48` shrinks the same way
+  and, on return, rebuilds the full stock-size layout from `start`. So the patch
+  writes its layout wherever it finds a full-size layout (a post on
+  `func_8002DF80`, a pre on `func_8002E064`) and leaves a shrunk one alone. The
+  frozen frame then lands at `0x8020C800`-`0x80232000`. `0x8017E088` holds a
+  separate pointer to `0x800FC99C`, which `func_80035B48` loads a file into; it
+  now overlaps nothing.
+- **What assumed 2 MB.** `GteVertexMap` sized its tables from the run mode, so
+  addresses above 2 MB would have aliased onto the low 2 MB; it sizes from
+  `Runtime.RamSize` now and reallocates when `PSMemory` is made after a patch
+  has already switched it on (`0056`). The OT walks in `Widescreen`, `NoDither`
+  and `PacketMatch` masked with `0x1FFFFC` and use `Runtime.RamWordMask`.
+  `PolyAssembler`'s direct-RAM limit and `FrameCapture`'s address masks follow
+  the RAM size. The packet depth and lighting records are keyed by a range, which
+  `PrimBuffer.PublishRange` sets from wherever the buffers are.
+- **Whether the game uses the mirror.** With 2 MB, an address in 2-8 MB mirrors
+  the low 2 MB; with 4 MB it does not. `KF2_RAM_PROBE=1` counts every access
+  above 2 MB in `PSMemory`'s accessors, per 64 KiB page, behind a
+  `static readonly` gate. At 4 MB with the buffers **not** moved
+  (`KF2_PRIMBUF=1 KF2_RAMSIZE=4`), boot through `fdat05`: **0 accesses** over 32
+  windows. With them moved: all of them inside the buffers, 0 elsewhere.
+
+Measured at 144 fps, slot 2, then `warp 0` and `goto 125058 -20992 150411 2454
+562`, 21:9 with the cone pinned at 2.5 so that the stock buffer overflows on a
+fresh boot:
+
+| | stock (`KF2_PRIMBUF=1`) | moved (default) |
+|---|---|---|
+| peak | 102608 / 102400 (100.2%) | 108528 / 409600 (26.5%), 2087 packets |
+| frames that ran out | 288 of 288 | 0 of 288 |
+| perspective hit | 96.9% | 97.0% |
+| pacing | 144.0 fps, 20.0 ticks/s | 144.0 fps, 19.9-20.0 ticks/s |
+
+The moved buffer carried 118 packets more than the stock one can hold. In area 1
+at the save's pose, both modes give identical packet depth, per-pixel lighting,
+Z-buffer and perspective counters, and `[present] wide 288`. `KF2_POLYASM=verify`
+at the spot: 0 RAM, register and GTE mismatches over 308 windows. The record
+tables grow with the range: about 16 MB for lighting and 6 MB for depth, and the
+vertex map and PGXP shadow double.
+
+**Not measured: the menu path.** The command channel cannot open the in-game
+menu, so the shrink, the frozen frame at `0x8020C800` and the restore have only
+been read, not run. The first thing to check by eye is opening and closing the
+menu and a shop. `KF2_PRIMBUF=1` is the comparison.
 
 ## The second cull: a view-space clipper, and it is set to twice the screen
 
@@ -608,7 +743,7 @@ widening is **on whenever an aspect is chosen**, and the saved key it used to re
 cull is still 4:3 shows the margin filling in and emptying as you turn, which is a
 worse picture than no widescreen at all — it is the other half of choosing an
 aspect, not a preference beside it. It costs nothing at 4:3, where the factor is 1
-and the table is written back as its own values. `KF2_WIDESCREEN_CULL=0` is the
+and the fill hook returns at once. `KF2_WIDESCREEN_CULL=0` is the
 comparison and `KF2_WIDESCREEN_CULL=1.5` pins a factor against the aspect's own.
 See "Three checkboxes that were not choices".
 
@@ -624,13 +759,14 @@ eliminated, each with a number rather than an argument:
 |---|---|---|
 | the tile cone above | **ruled out** | `KF2_WIDESCREEN_CULL=2.5` pins it far wider than any aspect asks for and the corners still drop |
 | the view-space clipper | **ruled out** | it cuts at `200 × 1.6 = 320` px either side of centre; 21:9 reaches 284. `SetGeomScreen` is called with `0xC8` at all three sites, so `H = 200` throughout and the guard band really is 2× |
-| the primitive buffer | **ruled out** | peak 1108 of 1969 packets through the attract demo at a 2.5× cone, and **~25% spinning the camera at full speed in a real area** — four times the headroom, zero overflows |
+| the primitive buffer | **ruled out here, and wrong** | peak 1108 of 1969 packets through the attract demo at a 2.5× cone, and ~25% spinning the camera in a real area. A later session reached 100.3% with nearly every frame running out; see "The primitive buffer ran out" |
 
 That last one deserved the check it got: `func_8002DF80` hands out `0x19000` bytes
 a frame from `0x800FC99C` and `0x8011599C`, `func_80030540` bumps a descriptor at
 `0x8017E0A4` per polygon, and when the bump passes `end` it **returns, abandoning
 the rest of the call** — a frame that runs out silently loses whatever it had not
-drawn yet, which is the right shape for "occasionally". It simply never runs out.
+drawn yet, which is the right shape for "occasionally". It did not run out in
+these runs, and did in a longer session at a steeper pitch.
 `patches/PrimBuffer.cs` / `KF2_PRIMBUF_PROBE=1` is that measurement, kept because
 it is the cheapest way to re-ask the question after anything that submits more
 geometry.

@@ -141,10 +141,6 @@ public static class ZBuffer
         }
     }
 
-    /// <summary>The two primitive buffers, back to back (see PrimBuffer.cs).</summary>
-    const uint PrimBuffers = 0x800FC99C;
-    const uint PrimBufferBytes = 2 * 0x19000;
-
     /// <summary>The first-person arm, which keeps painter's order.</summary>
     const uint ArmDraw = 0x80032400;
 
@@ -155,7 +151,6 @@ public static class ZBuffer
     public static void Install()
     {
         _windowStart = Now;
-        GtePacketDepth.SetRange(PrimBuffers, PrimBufferBytes);
         SyncSource();
         GteDepth.DepthBias = _forcedBias ?? DefaultBias;
         GteDepth.DepthSlope = _forcedSlope ?? DefaultSlope;
