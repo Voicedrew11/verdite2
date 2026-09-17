@@ -79,6 +79,11 @@ KF2_POLYASM_UNCLIPPED=0                  # the recompiled func_8002FECC (the far
 KF2_POLYASM_TRANSFORM=0                  # the recompiled func_8002E650 and func_8002E7CC (the vertex transforms) instead of the C# ones
 KF2_POLYASM_LIT=0                        # the recompiled func_8002F214 and func_8002EAEC (the models' lit assembler) instead of the C# one
 KF2_POLYASM_CLIPPER=0                    # the recompiled Clip4FTP and Clip3FTP (the view-space clipper) instead of the C# ones
+KF2_TILEWALK=0                           # the recompiled map-tile walk instead of the C# one (on by default)
+KF2_TILEWALK=verify                      # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
+KF2_TILEWALK_CELL=0                      # the recompiled func_80031B1C (one cell's two stacked halves) instead of the C# one
+KF2_TILEWALK_TILE=0                      # the recompiled func_80031950 (one half, set up and assembled) instead of the C# one
+KF2_TILEWALK_PROBE=1                     # cells on the map, cells with a flag, halves drawn, and which assembler drew them
 KF2_GTE_FAST=0                           # the GTE's general path for the lighting, depth-cue, RotTrans and RotTransPers ops (0047)
 KF2_GTE_LIGHTCACHE=0                     # light every normal afresh instead of remembering its matrix products
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts

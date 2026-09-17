@@ -4948,3 +4948,88 @@ call counts matched:
 
 The picture is identical by construction -- every store the game's routines make is
 made, with the same value -- and has not been looked at.
+
+### The map tile walk in C#
+
+**Mechanism measured against the recompiled routine on every call; the picture has
+not been looked at, and does not need to be — every store the game's routines make
+is made, with the same value.**
+
+`patches/TileWalk.cs` takes the three routines between `CullGrid` and
+`PolyAssembler`: `func_80031C94` (the 24x24 cell sweep), `func_80031B1C` (one cell's
+two stacked halves) and `func_80031950` (one half, set up and handed to an
+assembler). `KF2_TILEWALK=0` is the comparison and `KF2_TILEWALK=verify` the proof;
+`KF2_TILEWALK_CELL=0` and `KF2_TILEWALK_TILE=0` take one routine back on its own.
+
+**Why this one, when its own body is 0.041-0.124 ms a frame.** It is not a
+performance change and must not be argued as one — the numbers below say so
+plainly. It is the routine at which the port learns *which tile, at what world
+position, is drawn by which assembler*, and it was the last recompiled step in a
+path that is C# at both ends: `CullGrid` already replaces `func_8002D3A8` and writes
+the 24x24 grid back to `0x80192EAC`, which is the array this walk reads, and
+`PolyAssembler` already owns two of the three assemblers it dispatches to. That is
+the same move `0050` made when the assemblers began recording each packet's depth:
+what closed "unbridgeable" was not a better rasterizer but **knowing which routine
+asked**, and no consumer of GP0 can recover that. Everything a screen-space
+technique wants next — shadow maps, probe lighting, anything that draws the world
+twice — needs a scene, and this walk is where the world's geometry is enumerated.
+
+**What the three routines are.** The grid is 24x24 bytes at `0x80192EAC`, its origin
+tile the two words at `0x80192EA0`/`0x80192EA4`. A row whose world Z is off the
+80x80 map is skipped whole and so is a column whose X is; a cell with a non-zero
+byte goes to `func_80031B1C`. The map is 80x80 tiles of 10 bytes at `0x801C8484`:
+`+0`/`+1` the lower half's model and height, `+5`/`+6` the upper's, and a half is
+drawn only while its model byte is **below 240** and its bit in the cell byte
+(bit 0 lower, bit 1 upper) is set. The position is built in the caller's own frame
+as three shorts — `(tile << 11) - camera + 0x400` on X and Z, `(-height << 7) -
+camera` on Y — and **that pointer is what `func_80031950` receives**, which is why
+the C# keeps the original's stack arithmetic exactly: `EvenFog` and `PacketMatch`
+both read it off `a1`. `func_80031950` then loads the view matrix, rotates by the
+record's low two bits, takes the light and colour matrices from the area's 104-byte
+record at `0x801930F0 + (byte4 & 0x3F) * 104`, and picks the assembler on the cell
+byte: no `0x80` is `func_8002FECC`, `0x80` is `func_80030540`, and `0xC0` on a mesh
+of fewer than 16 faces goes through `func_80030C94`'s subdivider first.
+
+**Verified.** `KF2_TILEWALK=verify` runs both versions on every call from the same
+registers, RAM and GTE state, compares all three, and lets the recompiled result
+stand so a mismatch cannot reach the picture. The stack window is 0x4000 rather than
+PolyAssembler's 0x2000, because `func_80031950` alone takes 0x1050 of frame for the
+subdivider's scratch. Measured in `fdat02`, each routine on its own and then all
+three together:
+
+| routine | calls verified | RAM | registers | GTE |
+|---|---|---|---|---|
+| `func_80031C94` | 6,900 | 0 | 0 | 0 |
+| `func_80031B1C` | 178,673 | 0 | 0 | 0 |
+| `func_80031950` | 68,041 | 0 | 0 | 0 |
+
+**What it cost, which is nearly nothing, and that was the prediction.** The frame
+profiler, `fdat02`, the median of 2,500 steady-state frames, with `KF2_TILEWALK=0`
+and then on. The call counts are identical either way (1 walk, 192 cells, 145
+halves a frame), which is what says the two runs drew the same scene:
+
+| | recompiled | C# | |
+|---|---|---|---|
+| `func_80031C94` inclusive | 2.734 ms | 2.721 ms | -0.5% |
+| the walk's own body | 0.0258 | 0.0244 | -5.4% |
+| the cell routine's own body | 0.0550 | 0.0514 | -6.5% |
+| the tile routine's own body | 0.6147 | 0.5993 | -2.5% |
+
+Each routine is a few percent cheaper and the walk as a whole is 0.013 ms a frame
+cheaper, which is inside the noise of anything but a profiler. **The tile routine
+barely moved because almost none of it is now C#**: its body is ten recompiled
+libgte calls per half — `SetRotMatrix`, `SetTransMatrix`, `RotTrans`,
+`func_80014B88`, the two matrices again, `SetLightMatrix`, `SetColorMatrix`,
+`func_8002DDDC`, `SetBackColor` — about 1,450 recompiled calls a frame that this
+change did not touch. Inlining them as direct `Gte` calls, the way `PolyAssembler`
+inlines `NormalClip` and `DpqColor`, is the follow-up and is where the time is.
+
+**Two things the port kept on purpose.** The two `Interrupts.Poll` calls at the
+recompiled loop heads are still there — 576 iterations is long enough to starve an
+IRQ without them — and the guest-stack prologue and epilogue are the original's
+byte for byte, so the pointer `func_80031950` hands its hooks is unchanged.
+
+`KF2_TILEWALK_PROBE=1` is the semantic tap made visible: `576 cell(s) on the map,
+192 with a flag; 17,284 half/halves a second: 14,066 unclipped, 358 plain, 2,861
+subdivided, 0 past the model limit`. The 192 is the "~195 nonzero cells" the
+profiling note in `docs/DEVELOPMENT.md` arrived at from the other direction.

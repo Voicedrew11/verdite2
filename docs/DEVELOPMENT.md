@@ -437,6 +437,13 @@ in area 1. Since then, `func_8002FECC` and `func_8002E650` are C#, 30-36% faster
 including the transform. See "The unclipped assembler and its transform" in
 `PATCHES_AND_MODS.md`.
 
+Done since: the walk itself is C# too — `func_80031C94`, `func_80031B1C` and
+`func_80031950` (`patches/TileWalk.cs`), verified against the recompiled routines
+over 253,614 calls with 0 RAM, register or GTE mismatches. It bought 0.013 ms a
+frame, which is the point: it was taken for the **scene** it enumerates, not for the
+time, and the measured 192 flagged cells a frame is this section's "~195 nonzero"
+read off the other side. See "The map tile walk in C#" in `PATCHES_AND_MODS.md`.
+
 ### What the model submitter's time is
 
 `func_80032588` is a dispatcher: rotation from the Euler triple (`func_80014FE0`),
