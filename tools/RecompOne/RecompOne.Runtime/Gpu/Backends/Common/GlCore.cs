@@ -21,6 +21,7 @@ public sealed class GlCore : IGpuBackend
 
     readonly GL _gl;
     readonly IGlVram _vram;
+    readonly VramCheck? _check = VramCheck.On ? new() : null;
     readonly List<uint> _images = [];
     readonly GlDisplayRt?[] _rts = new GlDisplayRt?[2];
     long _rtStamp;
@@ -394,6 +395,7 @@ public sealed class GlCore : IGpuBackend
             ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         _vram.Publish(rt.X, rt.Y, rt.W, rt.H);
+        _check?.Check(_vram, "writeback", rt.X, rt.Y, rt.W, rt.H, true);
         rt.Dirty = false;
         Assets.Textures.VramTracker.MarkGpuWrite(rt.X, rt.Y, rt.W, rt.H);
     }
@@ -727,6 +729,7 @@ public sealed class GlCore : IGpuBackend
     {
         Flush(FlushReason.Fill);
         _vram.Fill(x, y, w, h, color15);
+        if (_check != null) { _check.Fill(x, y, w, h, color15); _check.Check(_vram, "fill", x, y, w, h, false); }
         foreach (var rt in _rts)
         {
             if (rt == null || !rt.Intersects(x, y, w, h)) continue;
@@ -791,6 +794,7 @@ public sealed class GlCore : IGpuBackend
     static double _snapWindow;
     int _lastVerdict = int.MinValue;
     static int _snapMissW, _snapMissH;
+    static int _snapRefused, _snapRefusedW, _snapRefusedH;
 
     // Below this a readback is a sprite or a small tile rather than a frame, and
     // a snapshot of it would evict the one that matters.
@@ -802,8 +806,10 @@ public sealed class GlCore : IGpuBackend
         double now = Environment.TickCount64 / 1000.0;
         if (now - _snapWindow < 2.0) return;
         Console.WriteLine($"[vramsnap] restored {_snapHit}, uploaded 1x {_snapMiss}" +
-                          (_snapMiss > 0 ? $", widest miss {_snapMissW}x{_snapMissH}" : ""));
+                          (_snapMiss > 0 ? $", widest miss {_snapMissW}x{_snapMissH}" : "") +
+                          (_snapRefused > 0 ? $", {_snapRefused} readback(s) outside a display target not copied, widest {_snapRefusedW}x{_snapRefusedH}" : ""));
         _snapMissW = _snapMissH = 0;
+        _snapRefused = _snapRefusedW = _snapRefusedH = 0;
         _snapHit = _snapMiss = 0;
         _snapWindow = now;
     }
@@ -817,6 +823,21 @@ public sealed class GlCore : IGpuBackend
         // already undefined; do not carry one into a copy that could be restored
         // somewhere else entirely.
         if (x < 0 || y < 0 || x + w > VramShadow.Width || y + h > VramShadow.Height) return;
+
+        // The scaled copy has to come from somewhere that holds these pixels now.
+        // Since 0054 an upload reaches 1x sample VRAM and any target it touches, but
+        // not the scaled atlas, so outside a display target the atlas is stale and a
+        // restore from it wrote old texels over the textures (a shop's walls). A
+        // display target is kept current by draws and uploads alike.
+        GlDisplayRt? src = null;
+        foreach (var rt in _rts)
+            if (rt != null && x >= rt.X && y >= rt.Y && x + w <= rt.X + rt.W && y + h <= rt.Y + rt.H) { src = rt; break; }
+        if (src == null)
+        {
+            _snapRefused++;
+            if ((long)w * h > (long)_snapRefusedW * _snapRefusedH) { _snapRefusedW = w; _snapRefusedH = h; }
+            return;
+        }
 
         int s = GlVram.Scale;
         int slot = -1;
@@ -857,9 +878,10 @@ public sealed class GlCore : IGpuBackend
         snap.Stamp = ++_snapStamp;
 
         _gl.Disable(EnableCap.ScissorTest);
-        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _vram.Fbo);
+        int sx = (x - src.X + src.Margin) * s, sy = (y - src.Y) * s;
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, src.Fbo);
         _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, snap.Fbo);
-        _gl.BlitFramebuffer(x * s, y * s, (x + w) * s, (y + h) * s,
+        _gl.BlitFramebuffer(sx, sy, sx + w * s, sy + h * s,
             0, 0, w * s, h * s, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
     }
@@ -919,6 +941,7 @@ public sealed class GlCore : IGpuBackend
         Flush(FlushReason.Copy);
         WritebackDirtyIntersecting(sx, sy, w, h);
         _vram.CopyRect(sx, sy, dx, dy, w, h);
+        if (_check != null) { _check.Copy(sx, sy, dx, dy, w, h); _check.Check(_vram, "copy", dx, dy, w, h, false); }
         SyncRtsFromVram(dx, dy, w, h);
     }
 
@@ -935,6 +958,7 @@ public sealed class GlCore : IGpuBackend
             _vram.WriteRect(x, y, w, h, px);
             if (_rts[0] == null && _rts[1] == null) _vram.Promote(x, y, w, h);
         }
+        if (_check != null) { _check.Upload(x, y, w, h, px); _check.Check(_vram, restored ? "restore" : "upload", x, y, w, h, false); }
         SyncRtsFromVram(x, y, w, h, fromSample: !restored);
         SnapProbe();
     }
@@ -1341,6 +1365,7 @@ public sealed class GlCore : IGpuBackend
                 Assets.Textures.VramTracker.MarkGpuWrite(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
                 _vram.CommitDraw(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
                 _vram.Promote(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+                _check?.Check(_vram, "draw", x0, y0, x1 - x0 + 1, y1 - y0 + 1, true);
             }
         }
         _count = 0;
