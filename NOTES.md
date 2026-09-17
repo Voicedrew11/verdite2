@@ -247,6 +247,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - True color: the other answer to 15-bit banding
 - Anisotropic filtering: a pixel covers an area, and the console read a point
 - The render scale did not survive a menu
+- A shop overwrote the textures with the atlas's old texels
 - The display list cannot name a face: why packet-level smoothing failed
 - "No textures on the other machine": splitting the three layers
 
@@ -338,7 +339,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0056`, one entry each.
+Every change the port made to RecompOne, `0001`-`0057`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

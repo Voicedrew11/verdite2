@@ -649,6 +649,14 @@ Four files in the directory have no entry below:
   `static readonly` the JIT folds away unless `KF2_RAM_PROBE=1`. **No recompile.**
   See "The primitive buffer ran out" in `docs/WIDESCREEN.md`.
 
+- `0057-snapshot-from-display-target.patch` — `0039` took a readback's scaled
+  copy from the atlas, which `0054` stopped keeping current, so a restore of a
+  texture-space readback wrote old texels over the textures (a shop). The copy is
+  now taken only from a display target that covers the rectangle; any other
+  readback uploads at 1x. Also `VramCheck` (`KF2_VRAMCHECK=1`), a CPU mirror of
+  VRAM checked after every VRAM operation. **No recompile.** See "A shop
+  overwrote the textures with the atlas's old texels" in `docs/RENDERING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

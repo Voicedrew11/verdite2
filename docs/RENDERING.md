@@ -2138,6 +2138,42 @@ the world behind it.
 The mechanism is `patches/recompone/0039`. GL backend only: the software
 rasterizer has a 1x VRAM and nothing to preserve.
 
+## A shop overwrote the textures with the atlas's old texels
+
+**Fixed; confirmed by eye in the shop.** Reported from play: after opening and
+closing a shop, the room's walls and ceiling showed flat colour with scattered
+old texels. `KF2_VRAMSNAP=0` cured it; the primitive buffer move
+(`KF2_PRIMBUF=1`) and water-texture smoothing (`KF2_SMOOTH_FLUID=0`) did not.
+
+**`0039` took its scaled copy from the atlas, and `0054` stopped keeping the atlas
+current.** A readback of 64×64 or more copied the region out of the scaled atlas,
+keyed by the 1x bytes. `0054` sends an upload to 1x sample VRAM and to any display
+target it touches, but no longer to the atlas, so outside a display target the
+atlas holds whatever was last promoted there. When the shop uploaded a region
+byte-identical to an earlier readback of texture space, the restore blitted those
+old texels into the atlas and `Publish` copied them down into the 1x textures. The
+menu's own frame restore was unaffected, because it reads the display area and a
+writeback keeps that part of the atlas current.
+
+**The copy is taken only when a display target covers the whole rectangle, and
+from that target**, which draws and uploads both keep current. Any other readback
+gets no copy, so its upload takes the 1x path; texture space is 1x anyway.
+`KF2_VRAMSNAP_PROBE=1` counts those as `readback(s) outside a display target not
+copied`. Measured after: the in-game menu still restores from the scaled copy,
+116-120 restores a window, first restore `0 of 76800 pixels differ`.
+
+**Why the VRAM check missed it.** `KF2_VRAMCHECK=1` mirrors every upload, copy and
+fill on the CPU and compares 1x sample VRAM after each VRAM operation, naming the
+one that changed pixels it should not have. The first version adopted a restore's
+rectangle as the GPU's own, which is exactly where this wrote. It now checks
+restores against the bytes the game uploaded.
+
+**Open: a menu restore differs from its upload by 2525 pixels.** With the check
+on, every restore of the in-game menu after the first leaves 2525 pixels in
+`(0,0)-(319,233)` that differ from what the game uploaded (the first restore
+verifies at 0). It is inside the display area, so it cannot touch textures, but
+the restored frame is not exactly the game's. Not looked at.
+
 ## The display list cannot name a face: why packet-level smoothing failed
 
 The port smooths between logic ticks by carrying *tables* — the camera in
