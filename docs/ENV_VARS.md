@@ -84,6 +84,11 @@ KF2_TILEWALK=verify                      # run both on every call and compare RA
 KF2_TILEWALK_CELL=0                      # the recompiled func_80031B1C (one cell's two stacked halves) instead of the C# one
 KF2_TILEWALK_TILE=0                      # the recompiled func_80031950 (one half, set up and assembled) instead of the C# one
 KF2_TILEWALK_PROBE=1                     # cells on the map, cells with a flag, halves drawn, and which assembler drew them
+KF2_MODELWALK=0                          # the recompiled object and creature walk instead of the C# one (on by default)
+KF2_MODELWALK=verify                     # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
+KF2_MODELWALK_WALK=0                     # the recompiled func_800331B4 (the four table walks) instead of the C# one
+KF2_MODELWALK_SUBMIT=0                   # the recompiled func_80032588 (one model, set up and assembled) instead of the C# one
+KF2_MODELWALK_PROBE=1                    # live slots per table, models submitted, by table and by assembler, and ambient key-ons
 KF2_GTE_FAST=0                           # the GTE's general path for the lighting, depth-cue, RotTrans and RotTransPers ops (0047)
 KF2_GTE_LIGHTCACHE=0                     # light every normal afresh instead of remembering its matrix products
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts

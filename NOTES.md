@@ -306,6 +306,8 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - The MCP layer
 - The polygon assembler in C#
 - The map tile walk in C#
+- The object and creature walk in C#
+- A verify pass replays, it does not re-run
 
 ### [INPUT.md](docs/INPUT.md)
 

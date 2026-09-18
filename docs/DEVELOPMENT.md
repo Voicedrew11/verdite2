@@ -493,6 +493,15 @@ Done since: both are C# (see "The lit model assembler" in `PATCHES_AND_MODS.md`)
 copy and the `func_80034A74` delta decoder) is the next largest at 0.04-0.14 ms,
 and `AnimSmoothing` hooks inside it.
 
+Done since, again: `func_80032588` itself is C# too, with its caller
+`func_800331B4` (`patches/ModelWalk.cs`), verified against the recompiled routines
+over 81,106 submits with 0 RAM, register or GTE mismatches. It bought **three
+microseconds a frame** — the prediction in this section's "a C# copy of it alone
+buys almost nothing" was right — and was taken for the scene it enumerates. The
+morph is still the next largest thing here, and it is now the largest recompiled
+thing left inside a C# submit. See "The object and creature walk in C#" in
+`PATCHES_AND_MODS.md`.
+
 ## Watching a frame being built
 
 `patches/FrameCapture.cs`, `patches/FrameViewerPanel.cs` and the runtime's
