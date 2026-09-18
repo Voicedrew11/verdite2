@@ -55,7 +55,18 @@ public sealed class GlCore : IGpuBackend
     int _uAoOrigin, _uAoSize, _uAoTexSize, _uAoTexel, _uAoProjH, _uAoCentre;
     int _uAoRadius, _uAoStrength, _uAoBias, _uAoMaxDepth, _uAoSamples;
     int _uAoBOrigin, _uAoBSize, _uAoBTexSize, _uAoBTexel, _uAoBEdge;
+    int _uAoNormalOn, _uAoNormalCompare;
+    // 0059. The floor-plan term.
+    int _uAoWorldOn, _uAoViewR, _uAoCam, _uAoWorldStrength, _uAoWorldRadius, _uAoTileUnits, _uAoSpan, _uAoWallHeight;
+    uint _aoHeightTex;
+    int _aoHeightGen = -1;
     int _uPresentAoOn;
+
+    // 0058. The normal buffer the occlusion pass reads: the frame's own geometry,
+    // redrawn into the target's own coordinates once the frame is finished.
+    uint _progNormal, _nrmVao, _nrmVbo;
+    int _nrmVboVerts;
+    int _uNrmPosBias, _uNrmFbInv, _uNrmProjH, _uNrmCentre, _uNrmScale;
 
     uint _postProg, _postFbo, _postTex;
     int _postW, _postH, _postVersion = -1;
@@ -220,8 +231,22 @@ public sealed class GlCore : IGpuBackend
                 _uAoBias = _gl.GetUniformLocation(_progAo, "uBias");
                 _uAoMaxDepth = _gl.GetUniformLocation(_progAo, "uMaxDepth");
                 _uAoSamples = _gl.GetUniformLocation(_progAo, "uSamples");
+                _uAoNormalOn = _gl.GetUniformLocation(_progAo, "uNormalOn");
+                _uAoNormalCompare = _gl.GetUniformLocation(_progAo, "uNormalCompare");
+                _uAoWorldOn = _gl.GetUniformLocation(_progAo, "uWorldOn");
+                _uAoViewR = _gl.GetUniformLocation(_progAo, "uViewR");
+                _uAoCam = _gl.GetUniformLocation(_progAo, "uCam");
+                _uAoWorldStrength = _gl.GetUniformLocation(_progAo, "uWorldStrength");
+                _uAoWorldRadius = _gl.GetUniformLocation(_progAo, "uWorldRadius");
+                _uAoTileUnits = _gl.GetUniformLocation(_progAo, "uTileUnits");
+                _uAoSpan = _gl.GetUniformLocation(_progAo, "uSpan");
+                _uAoWallHeight = _gl.GetUniformLocation(_progAo, "uWallHeight");
                 _gl.UseProgram(_progAo);
                 _gl.Uniform1(_gl.GetUniformLocation(_progAo, "uDepth"), 0);
+                _gl.Uniform1(_gl.GetUniformLocation(_progAo, "uNormal"), 1);
+                _gl.Uniform1(_gl.GetUniformLocation(_progAo, "uHeight"), 2);
+                if (_uAoNormalOn >= 0) _gl.Uniform1(_uAoNormalOn, 0f);
+                if (_uAoWorldOn >= 0) _gl.Uniform1(_uAoWorldOn, 0f);
             }
             if (_progAoBlur != 0)
             {
@@ -233,6 +258,30 @@ public sealed class GlCore : IGpuBackend
                 _gl.UseProgram(_progAoBlur);
                 _gl.Uniform1(_gl.GetUniformLocation(_progAoBlur, "uAo"), 0);
                 _gl.Uniform1(_gl.GetUniformLocation(_progAoBlur, "uDepth"), 1);
+            }
+
+            // 0058. The normal buffer's own program and vertex array. It shares
+            // nothing with the prim VAO: three floats and a position, drawn once a
+            // frame from a list the port kept.
+            _progNormal = GlShaders.Build(_gl, GlShaders.NormalVs, GlShaders.NormalFs, "aonormal",
+                [(0, "inPos"), (1, "inZ")]);
+            if (_progNormal != 0)
+            {
+                _uNrmPosBias = _gl.GetUniformLocation(_progNormal, "uPosBias");
+                _uNrmFbInv = _gl.GetUniformLocation(_progNormal, "uFbInv");
+                _uNrmProjH = _gl.GetUniformLocation(_progNormal, "uProjH");
+                _uNrmCentre = _gl.GetUniformLocation(_progNormal, "uCentre");
+                _uNrmScale = _gl.GetUniformLocation(_progNormal, "uScale");
+
+                _nrmVao = _gl.GenVertexArray();
+                _nrmVbo = _gl.GenBuffer();
+                _gl.BindVertexArray(_nrmVao);
+                _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _nrmVbo);
+                uint ns = (uint)sizeof(AoGeometry.V);
+                _gl.EnableVertexAttribArray(0); _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, ns, (void*)0);
+                _gl.EnableVertexAttribArray(1); _gl.VertexAttribPointer(1, 1, VertexAttribPointerType.Float, false, ns, (void*)8);
+                _gl.BindVertexArray(0);
+                _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
             }
         }
 
@@ -661,6 +710,15 @@ public sealed class GlCore : IGpuBackend
         int lightGen = (a.Light & (GteLightMap.Directional << 24)) != 0 ? a.LightGen : -1;
         if (lightGen >= 0 && _kLightGen >= 0 && lightGen != _kLightGen) Flush(FlushReason.StateLight);
         Begin(f, 3, zMode);
+        // 0058. Keep the triangle for the normal buffer. zMode 1 is exactly the
+        // geometry that writes depth and is opaque, which is the geometry the
+        // occlusion pass shades; the order it is kept in is the order it is drawn
+        // in, and that is what makes the redraw agree with painter's order.
+        if (zMode == 1 && _kTarget != null && AoGeometry.Active)
+        {
+            _kTarget.Geo.Frame(_frame, GteDepth.Generation);
+            _kTarget.Geo.Add(GeoVert(a), GeoVert(b), GeoVert(c));
+        }
         if (lightGen >= 0) _kLightGen = lightGen;
         if (a.Light != 0 && _vboLight != 0)
         {
@@ -673,6 +731,10 @@ public sealed class GlCore : IGpuBackend
         bool dith = DitherOf(f);
         _verts[_count++] = V(a, f, dith); _verts[_count++] = V(b, f, dith); _verts[_count++] = V(c, f, dith);
     }
+
+    /// <summary>0058. A vertex as the normal pass wants it: the position the colour
+    /// pass is about to draw, and the view depth the plane is reconstructed from.</summary>
+    static AoGeometry.V GeoVert(in HleVertex v) => new() { X = v.X, Y = v.Y, Z = v.Z };
 
     /// <summary>The zMode a primitive with no recovered depth takes: 3 (stamp the
     /// far plane) while the occlusion pass is on and the primitive is opaque, 0 --
@@ -1764,6 +1826,13 @@ public sealed class GlCore : IGpuBackend
         EnsureAoSize(fbW, fbH);
         if (_aoTex == 0 || _aoBlurTex == 0) return;
 
+        // 0058. The frame's own geometry, drawn again as normals before the pass
+        // that reads them. It has to happen here rather than with the colour: the
+        // prim shader's second output is a dual-source blend factor, and a program
+        // with one of those may not render to more than one draw buffer, so there
+        // is no MRT to hang a G-buffer off.
+        bool normals = RenderNormals(src);
+
         // The GTE's projection centre, as a fraction of the display area, so the
         // shader needs no pixel arithmetic of its own.
         //
@@ -1812,6 +1881,35 @@ public sealed class GlCore : IGpuBackend
         if (_uAoBias >= 0) _gl.Uniform1(_uAoBias, GteDepth.AoBias);
         if (_uAoMaxDepth >= 0) _gl.Uniform1(_uAoMaxDepth, GteDepth.AoMaxDepth);
         if (_uAoSamples >= 0) _gl.Uniform1(_uAoSamples, Math.Clamp(GteDepth.AoSamples, 1, 64));
+        if (_uAoNormalOn >= 0) _gl.Uniform1(_uAoNormalOn, normals ? 1f : 0f);
+        // Only the frame the census reads back pays for the second reconstruction.
+        if (_uAoNormalCompare >= 0)
+            _gl.Uniform1(_uAoNormalCompare, normals && GteDepth.WantAoMap ? 1f : 0f);
+        if (normals)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture1);
+            _gl.BindTexture(TextureTarget.Texture2D, src.Normal);
+        }
+
+        // 0059. The floor plan, and the transform back into it.
+        bool world = GteDepth.AoWorld && GteDepth.AoWorldReady && UploadHeightfield();
+        if (world) GteDepth.AoWorldFrames++;
+        else if (GteDepth.AoWorld) GteDepth.AoWorldUnready++;
+        if (_uAoWorldOn >= 0) _gl.Uniform1(_uAoWorldOn, world ? 1f : 0f);
+        if (world)
+        {
+            // Uploaded untransposed on purpose: GLSL reads it column-major, which
+            // is the inverse of the row-major world-to-view matrix the game keeps.
+            if (_uAoViewR >= 0) _gl.UniformMatrix3(_uAoViewR, 1, false, GteDepth.AoViewR);
+            if (_uAoCam >= 0) _gl.Uniform3(_uAoCam, GteDepth.AoCamX, GteDepth.AoCamY, GteDepth.AoCamZ);
+            if (_uAoWorldStrength >= 0) _gl.Uniform1(_uAoWorldStrength, Math.Clamp(GteDepth.AoWorldStrength, 0f, 1f));
+            if (_uAoWorldRadius >= 0) _gl.Uniform1(_uAoWorldRadius, Math.Max(1f, GteDepth.AoWorldRadius));
+            if (_uAoTileUnits >= 0) _gl.Uniform1(_uAoTileUnits, (float)GteDepth.AoTileUnits);
+            if (_uAoSpan >= 0) _gl.Uniform1(_uAoSpan, (float)GteDepth.AoHeightSpan);
+            if (_uAoWallHeight >= 0) _gl.Uniform1(_uAoWallHeight, GteDepth.AoWallHeight);
+            _gl.ActiveTexture(TextureUnit.Texture2);
+            _gl.BindTexture(TextureTarget.Texture2D, _aoHeightTex);
+        }
         _gl.ActiveTexture(TextureUnit.Texture0);
         _gl.BindTexture(TextureTarget.Texture2D, src.Depth);
         _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
@@ -1840,14 +1938,129 @@ public sealed class GlCore : IGpuBackend
         if (GteDepth.WantAoMap) CaptureAoMap(fbW, fbH);
     }
 
+    /// <summary>
+    /// 0058. The frame's depth-carrying triangles, drawn again into the target's own
+    /// normal buffer.
+    ///
+    /// No depth test and no depth write: the list is in submission order, so the
+    /// last normal written at a pixel belongs to the last triangle drawn there,
+    /// which under painter's order is the surface whose depth the occlusion pass is
+    /// about to read. Agreeing with the depth buffer is therefore a property of the
+    /// order rather than of a test that could disagree with it.
+    ///
+    /// The one place it can be wrong is a textured polygon that discarded a texel:
+    /// it wrote no depth there and does write a normal. That costs a wrong normal on
+    /// the see-through parts of a grate, never a wrong depth, and the pass's own
+    /// fallback is what those pixels used to get.
+    /// </summary>
+    unsafe bool RenderNormals(GlDisplayRt src)
+    {
+        if (!GteDepth.AoNormals || _progNormal == 0 || src.Geo.Count == 0) return false;
+        EnsureNormalTarget(src);
+        if (src.Normal == 0) return false;
+
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, src.NormalFbo);
+        _gl.Viewport(0, 0, (uint)src.TexW, (uint)src.TexH);
+        _gl.Disable(EnableCap.DepthTest);
+        _gl.Disable(EnableCap.Blend);
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.Disable(EnableCap.CullFace);
+        _gl.DepthMask(false);
+        _gl.ColorMask(true, true, true, true);
+        // Alpha 0 is "no normal here", which is the pass's own reconstruction.
+        _gl.ClearColor(0f, 0f, 0f, 0f);
+        _gl.Clear(ClearBufferMask.ColorBufferBit);
+
+        _gl.UseProgram(_progNormal);
+        // The same transform the colour pass used on this target, so a triangle
+        // lands on the pixels it landed on there.
+        if (_uNrmPosBias >= 0) _gl.Uniform2(_uNrmPosBias, (float)(src.Margin - src.X), (float)(-src.Y));
+        if (_uNrmFbInv >= 0) _gl.Uniform2(_uNrmFbInv, 2f / src.Wide1x, 2f / src.H);
+        if (_uNrmProjH >= 0) _gl.Uniform1(_uNrmProjH, Math.Max(1f, GteDepth.ProjH));
+        // The GTE's centre, in the target's own 1x pixels: its column 0 sits a
+        // margin to the left of the game's.
+        if (_uNrmCentre >= 0) _gl.Uniform2(_uNrmCentre, GteDepth.ProjCx + src.Margin, GteDepth.ProjCy);
+        if (_uNrmScale >= 0) _gl.Uniform1(_uNrmScale, (float)GlVram.Scale);
+
+        var verts = src.Geo.Verts;
+        _gl.BindVertexArray(_nrmVao);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _nrmVbo);
+        if (verts.Length > _nrmVboVerts)
+        {
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(verts.Length * sizeof(AoGeometry.V)), null,
+                           BufferUsageARB.DynamicDraw);
+            _nrmVboVerts = verts.Length;
+        }
+        _gl.BufferSubData<AoGeometry.V>(BufferTargetARB.ArrayBuffer, 0, verts);
+        _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)verts.Length);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        AoGeometry.Passes++;
+        return true;
+    }
+
+    /// <summary>0059. The area's floor plan as an 80x80 two-channel texture, uploaded
+    /// only when the port has refilled it.</summary>
+    unsafe bool UploadHeightfield()
+    {
+        var h = GteDepth.AoHeight;
+        if (h == null) return false;
+        if (_aoHeightTex != 0 && _aoHeightGen == GteDepth.AoHeightGen) return true;
+
+        if (_aoHeightTex == 0)
+        {
+            _aoHeightTex = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, _aoHeightTex);
+            // Nearest: a tile is a step, and an interpolated step is a ramp that is
+            // not in the room.
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        }
+        else
+            _gl.BindTexture(TextureTarget.Texture2D, _aoHeightTex);
+
+        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+        fixed (byte* p = h)
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8,
+                           (uint)GteDepth.AoHeightSpan, (uint)GteDepth.AoHeightSpan, 0,
+                           PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        _gl.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+        _aoHeightGen = GteDepth.AoHeightGen;
+        return true;
+    }
+
+    unsafe void EnsureNormalTarget(GlDisplayRt rt)
+    {
+        if (rt.Normal != 0 && rt.NormalW == rt.TexW && rt.NormalH == rt.TexH) return;
+        if (rt.Normal == 0)
+        {
+            rt.Normal = _gl.GenTexture();
+            rt.NormalFbo = _gl.GenFramebuffer();
+        }
+        _gl.BindTexture(TextureTarget.Texture2D, rt.Normal);
+        // Nearest: this is a G-buffer, and a filtered normal between two surfaces
+        // is a direction neither of them faces.
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+        _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)rt.TexW, (uint)rt.TexH, 0,
+                       PixelFormat.Rgba, PixelType.UnsignedByte, null);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, rt.NormalFbo);
+        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+                                 TextureTarget.Texture2D, rt.Normal, 0);
+        rt.NormalW = rt.TexW; rt.NormalH = rt.TexH;
+    }
+
     unsafe void CaptureAoMap(int w, int h)
     {
         if (w <= 0 || h <= 0) return;
-        var buf = new byte[(long)w * h * 2];
+        var buf = new byte[(long)w * h * 4];
         _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _aoBlurFbo);
         _gl.PixelStore(PixelStoreParameter.PackAlignment, 1);
         fixed (byte* p = buf)
-            _gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.RG, PixelType.UnsignedByte, p);
+            _gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.Rgba, PixelType.UnsignedByte, p);
         _gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         GteDepth.SetAoMap(buf, w, h);
@@ -1870,10 +2083,12 @@ public sealed class GlCore : IGpuBackend
         void Resize(uint tex, uint fbo)
         {
             _gl.BindTexture(TextureTarget.Texture2D, tex);
-            // RG8: red is the occlusion the present multiplies by, green is the
-            // "there was a surface here" mask the census reads. See AoFs.
-            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.RG8, (uint)w, (uint)h, 0,
-                PixelFormat.RG, PixelType.UnsignedByte, null);
+            // Red is the occlusion the present multiplies by; green is the "there
+            // was a surface here" mask, blue whether the normal came from the
+            // geometry, and alpha how far the old depth-difference normal was from
+            // it. The last three are the census's and are never drawn. See AoFs.
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, null);
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
             _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
                 TextureTarget.Texture2D, tex, 0);
@@ -1909,6 +2124,9 @@ public sealed class GlCore : IGpuBackend
         foreach (var rt in _rts) rt?.Destroy(_gl);
         foreach (var snap in _snaps) if (snap != null) SnapDestroy(snap);
         _vram.Dispose();
+        if (_aoHeightTex != 0) _gl.DeleteTexture(_aoHeightTex);
+        if (_nrmVbo != 0) _gl.DeleteBuffer(_nrmVbo);
+        if (_nrmVao != 0) _gl.DeleteVertexArray(_nrmVao);
         if (_vbo != 0) _gl.DeleteBuffer(_vbo);
         if (_vboLight != 0) _gl.DeleteBuffer(_vboLight);
         if (_presentVbo != 0) _gl.DeleteBuffer(_presentVbo);

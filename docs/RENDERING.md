@@ -1283,6 +1283,230 @@ bit-identical to a build without it.
 GL backend only. The software rasterizer keeps its own float-per-pixel depth and
 has no full-screen pass to run this in.
 
+### The normal was the guess, and the port stopped having to guess (`0058`)
+
+**Mechanism measured; on by default.** `KF2_AO_NORMALS=0` is the comparison.
+
+Everything above is about the *depth*, and the depth was never the weak part. The
+**normal** was. A screen-space pass has to have one at every pixel, and the only
+thing the pass had to make one out of was the depth buffer itself — four
+neighbouring texels, two differences, a cross product:
+
+```glsl
+vec3 n = cross(nearer(p, r, l), nearer(p, b, u));   // AoFs, before 0058
+```
+
+That is wrong in two ways at once and both of them show as *dirt* rather than as
+contact shading. It straddles every silhouette, which is what the `nearer()` pick
+exists to paper over — a pixel on the edge of a doorframe has two surfaces in its
+four neighbours and no way to tell which one it belongs to. And on a flat wall it
+is differencing a quantised depth against itself, so a surface with one true
+normal gets a slightly different one at every pixel. King's Field is made of large
+flat polygons, which is the case that suffers most.
+
+**The geometry is a thing the port holds now.** `PolyAssembler` builds the
+polygons, `TileWalk` enumerates the map's cells and `ModelWalk` enumerates the
+creatures, objects, effects and billboards — so "the geometry arrives incrementally
+through GP0 and nothing holds it", which is the sentence the whole of this section
+rests on, has stopped being true of the world. `AoGeometry` keeps each
+depth-carrying triangle as it is submitted, and after the frame is finished
+`GlCore.RenderNormals` draws the list again into a normal buffer on the target.
+A normal is then the polygon's own plane: exact, constant across the face, and
+incapable of straddling anything.
+
+**Three things decided the shape of it.**
+
+- **It cannot be an MRT off the colour pass.** The obvious implementation is a
+  second output on the prim shader. `PrimFs` already has one — `layout(location =
+  0, index = 1) out vec4 BlendColor`, the dual-source factor the console's blend
+  modes need — and a program with a dual-source output may not render to more than
+  one draw buffer at all. So the normal has to be its own draw, which is only
+  affordable because the port has the triangle list to draw.
+- **Order is the correctness argument, not a depth test.** The list is kept in
+  submission order and redrawn with **no depth test and no depth write**, so the
+  last normal written at a pixel belongs to the last triangle drawn there — which
+  is the same rule that put the depth there. A test would be a second opinion, and
+  a second opinion is a way to disagree.
+- **The list is per render target, not per frame.** With two display buffers the
+  target being presented was drawn a frame ago, which is exactly why the depth
+  attachment lives on the target; the geometry lives there for the same reason and
+  is dropped on the same condition the depth is cleared on. Hanging it off the
+  frame would have shaded each frame with the *other* buffer's geometry, which is
+  the same class of error as the projection centre being a screen out (above) and
+  would have read as plausible shading in the wrong places.
+
+The pass keeps its old reconstruction as the fallback, per texel: the normal
+buffer's **alpha** says whether this pixel was reached, and a pixel it missed —
+a polygon the port did not assemble, a semi-transparent surface's opaque texels —
+gets exactly what it got before. So this is additive in the way everything else
+here is.
+
+**What it measures.** `KF2_AO_PROBE=1` gains a line for the buffer itself, and the
+census gains a third channel, because every number the pass already printed stays
+identical if the normal buffer is empty — the fallback produces a completely
+healthy-looking frame. Measured in area 1 at 144 fps, slot 2:
+
+```
+[KF2] ao: normals geometry, 18309 tris/s kept, 142.4 normal passes/s
+[KF2] ao: darkest 0.69, mean 0.983, 17.8% of the picture shaded,
+          98.7% of it carrying a surface, 100.0% of that lit from a geometry normal
+```
+
+against `KF2_AO_NORMALS=0` on the same view:
+
+```
+[KF2] ao: normals depth, 0 tris/s kept, 0.0 normal passes/s
+[KF2] ao: darkest 0.67, mean 0.983, 18.0% of the picture shaded,
+          98.7% of it carrying a surface, 0.0% of that lit from a geometry normal
+```
+
+- **Every shaded surface got a real normal.** 100.0% of the covered picture, which
+  is what it should be — the geometry that writes depth *is* the geometry the port
+  assembles, and the two coverages are the same set.
+- **It costs nothing measurable.** 144.0 fps drawn at 20.0 ticks/s either way, one
+  extra draw of ~18k triangles a second. The frame's geometry is already resident;
+  this redraws it with a three-line fragment shader and no texturing.
+- **The picture moved, and only slightly, which is the expected amount.** The same
+  surfaces are shaded to within two tenths of a percent, and the darkest pixel goes
+  0.67 to 0.69. That is the signature of *the same occlusion with better normals*
+  rather than of a different effect: a wrong normal on a flat wall mostly
+  self-cancels over a 16-sample spiral, and where it does not is the silhouettes,
+  which are a small share of the pixels and the whole of the visible artefact.
+**And then the census was asked how much the normals actually moved, which is the
+question that should have been asked first.** The pass computes the old
+depth-differenced normal as well on the frame it reads back (only on that frame)
+and reports the angle between the two:
+
+```
+[KF2] ao: old normal off by 0.4 deg mean, 0.3% over 30 deg, worst 90 deg
+```
+
+Measured over 55 census frames across six areas and four headings each, the mean
+disagreement is **0.0-0.8 degrees** and the share of surfaces more than 30 degrees
+out is **under 1%**. One view read 3.6 degrees and is not a counter-example: it had
+`0.2% of it carrying a surface`, so the mean was taken over a handful of pixels in
+one corner, which is what a tiny denominator does.
+
+**So this change is correct and very nearly invisible, and saying so is the point
+of having the counter.** The disagreement is confined to silhouette pixels — a
+doorframe's edge, a pillar against a far corridor, a creature's outline — because
+away from an edge the four depth taps sit on the same flat plane and the old answer
+was already that plane's. King's Field is made of large flat surfaces, so those
+edges are well under one percent of the picture. The honest claim for `0058` is that
+it removes a whole class of error for nothing, and makes a tighter bias possible,
+not that it is a visible upgrade on its own. The visible one is `0059` below.
+
+- **Never looked at by eye:** whether that sub-1% of pixels — the edges — reads
+  cleaner. The numbers now say how little of the picture is in question.
+
+### Occluders the camera cannot see (`0059`)
+
+**Mechanism measured; off by default.** `KF2_AO_WORLD=1` turns it on.
+
+A screen-space pass can only be occluded by what is on screen. Stand in a corner
+facing one wall and the wall *behind* the camera contributes nothing, so the corner
+is only as dark as the part of it in shot — and the shading changes as the view
+turns, which reads as the effect being unstable rather than as the room being dark.
+No radius and no sample count fixes it; it is what a depth buffer *is*.
+
+The port is not limited to the picture. `TileWalk` enumerates the map's cells and
+the game keeps the whole area as an 80×80 tile grid at `0x801C8484`, so the geometry
+that is not on screen is available. The pass marches that grid in world space, where
+being off screen means nothing.
+
+**The transform is exact, and that is the part that could have been a guess.**
+`func_80031950` loads a view matrix from `0x80192E18`, and `TileWalk.Place` shows
+what the game feeds it: `(tx << 11) - CamWorldX`, a position *already relative to
+the camera* in world axes. So that matrix is the camera's rotation alone — no
+translation, no per-object rotation composed in — and inverting it turns a view
+position straight back into a world one. Nothing has to be assumed about how the
+game composes pitch, yaw and roll. It is uploaded untransposed on purpose: GLSL
+reads a `mat3` column-major, so the row-major world-to-view matrix arrives already
+inverted.
+
+Checked before it was used, because a wrong transform here shades the wrong room
+and still looks like shading: the third row of a world-to-view rotation is the
+camera's own forward axis, and it measured `0.786, 0.040, -0.615`, length `0.999`,
+putting a point 2048 units ahead in tile 36,35 from the camera's own 35,36.
+
+**What a wall is in that grid took three tries, and each wrong answer measured as
+exactly nothing.** The census is what caught all three — `17.8% of the picture
+shaded` never moved by a digit.
+
+1. **A step in the floor heights.** The obvious reading, and wrong: the floor either
+   side of a wall is the *same height*, so the march found a horizon nowhere.
+2. **`+4 & 0x80`, the bit `CullGrid` floods visibility against.** Plausible — a tile
+   that stops sight should stop light — and it exists, 279 of them in area 1. But
+   **0 of them within three tiles of the camera**, so it marks something else.
+3. **A tile with no floor at all.** Right. The grid's tiles are drawn when their
+   model byte is under 240, and the row north of the player read `-1/-1`: nowhere to
+   stand, which is what the edge of a room *is* here. With undrawn tiles treated as
+   solid rock standing their own height, the term finally had something to occlude
+   with.
+
+A fourth error was in the encoding rather than in the reading, and is worth keeping
+because it is a general one: **a height byte of 0 is a real floor**, so using 0 as
+"no tile" emptied the grid under the player's feet. Being drawn is its own bit now.
+
+The reading that confirmed the whole chain: the player's raw Y is `-14848` and the
+tile they stand on has an upper-half floor at `14848` — the game's own
+`(0 - height) << 7`, matching exactly — with the camera 1600 above it.
+
+**Measured**, area 1 at 144 fps, one fixed view:
+
+```
+                     shaded   darkest
+screen space only     17.8%      0.69
+with the floor plan   34.4%      0.64
+```
+
+and the picture's left third, which the screen-space pass correctly found nothing
+for — it is one flat wall, and a flat plane occludes itself nowhere — is now shaded
+by the room around it, which is the whole claim. 144.0 fps drawn at 20.0 ticks/s
+with it on, `[present] wide 288`.
+
+**Three ways it can step the whole picture at once, and a step is seen as the
+screen flashing.** Every input to the term is shared by every pixel, so anything
+that moves between one frame and the next moves all of them together — which is why
+each of these is guarded rather than left to be noticed:
+
+- **A transform read that is not the camera's.** The matrix belongs to the tile
+  walk, so a frame that draws no map tiles can read it stale or zeroed, and the
+  composed camera position can splice a stale `u16` onto the player's high bits as
+  a position a world away. A read whose rows are not unit vectors, or whose camera
+  is more than two tiles from the player, is refused and **the last good transform
+  stands**; switching the term off for a frame and on again for the next is the
+  thing being avoided. `stale reads/s` counts them.
+- **A floor plan caught mid-rewrite.** The grid is re-read on a clock while the
+  game is rewriting tile records — a door, a lift, a whole area loading — and a
+  tile that is missing reads as *solid rock*, so a half-written grid darkens
+  everything until the next read puts it back: one step down and one step up a few
+  tenths of a second apart. Nothing can tell a half-written grid from a real change
+  by looking at it, but a half-written one does not survive a second read, so **a
+  change is held until two reads agree**. A door costs two read periods to appear,
+  well inside how long a door takes to open. `changed` and `held` are the rates.
+- **Every pixel marching in lockstep.** This one was the port's own doing: the
+  march used the *same* eight directions at the *same* three distances for every
+  pixel, so the moment the camera crossed a tile boundary every pixel changed its
+  answer together and the whole picture stepped — about once per tile walked. The
+  directions and the ring radii now carry the pixel's own 4x4 interleaved offset,
+  the one the screen-space spiral already uses, so the crossings are spread across
+  the 4x4 cell and the blur that follows averages them into a gradient. Measured
+  identical where it should be: same view, 34.4% shaded, darkest 0.64, 144.0 fps.
+
+**Now looked at by eye, and the verdict is the reason it ships off.** It does what
+it claims — a cave read as lit by its own room rather than by what was in shot —
+but at the default strength of 0.6 some rooms come out much too dark: a cave with
+a low ceiling is surrounded on every side by blocking tiles, so nearly every march
+direction finds a horizon and the whole floor sinks towards the term's floor
+instead of only its corners. The screen-space pass cannot do that, because a
+direction that leaves the screen contributes nothing to it. Not diagnosed further:
+the likely candidates are the flat `AoWorldStrength` (no falloff with how much of
+the hemisphere is blocked), the ring radii being tile-sized so a small room is
+entirely inside the first ring, and undrawn tiles standing as rock of unbounded
+height rather than to the ceiling. Until that is settled it stays off, and the
+default strength is not a number anyone should read as chosen.
+
 ### What is measured, and what is not
 
 `KF2_AO_PROBE=1` reports the coverage, the projection recovered from the GTE, the

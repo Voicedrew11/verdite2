@@ -89,6 +89,15 @@ internal static class GlShaders
         out vec4 oColor;
 
         uniform sampler2D uDepth;
+        // 0058. The frame's geometry, redrawn as normals. uNormalOn is 0 when the
+        // pass is off or nothing was collected, and a texel's alpha says whether
+        // this particular pixel was reached.
+        uniform sampler2D uNormal;
+        uniform float uNormalOn;
+        // Set only on the frame the census reads back: compute the old
+        // depth-difference normal as well and report how far apart the two are, so
+        // "the geometry's normal is better" is a reading rather than a claim.
+        uniform float uNormalCompare;
         // The display area inside the render target, and the target's size, both
         // in the game's own 1x pixels -- the same three numbers the present shader
         // is given, so the two passes address the same rectangle.
@@ -110,11 +119,30 @@ internal static class GlShaders
         uniform float uMaxDepth;
         uniform int   uSamples;
 
+        // 0059. The area's floor plan, and the transform that reaches it. uViewR is
+        // the game's own world-to-view rotation uploaded untransposed, which GLSL
+        // reads column-major and so hands back already inverted: uViewR * v takes a
+        // view vector to a world one. The game's Y is negative upwards, so
+        // everything below works in "up" = -y.
+        uniform float     uWorldOn;
+        uniform sampler2D uHeight;
+        uniform mat3      uViewR;
+        uniform vec3      uCam;
+        uniform float     uWorldStrength;
+        uniform float     uWorldRadius;
+        uniform float     uTileUnits;
+        uniform float     uSpan;
+        uniform float     uWallHeight;
+
         const float FAR = 65536.0;
         const float GOLDEN = 2.39996323;
 
         float depthAt(vec2 uv) {
             return texture(uDepth, (uOrigin + clamp(uv, 0.0, 1.0) * uSize) / uTexSize).r;
+        }
+
+        vec4 normalAt(vec2 uv) {
+            return texture(uNormal, (uOrigin + clamp(uv, 0.0, 1.0) * uSize) / uTexSize);
         }
 
         // The view position of the point this pass's uv names, given its depth.
@@ -132,21 +160,81 @@ internal static class GlShaders
             return abs(a.z - p.z) < abs(b.z - p.z) ? a - p : p - b;
         }
 
-        void main() {
-            // Red is the occlusion factor the present multiplies by. Green says
-            // whether there was a surface here at all -- it is not used to draw
-            // anything, it is what lets the census tell "the mask refused this
-            // pixel" from "the pass looked and found nothing to shade it with",
-            // which are the two ways a blank patch happens and are not the same
-            // bug. See KF2_AO_PROBE=2.
-            float d = depthAt(vUv);
-            // Nothing wrote here (2D, or a triangle with no recovered depth), or
-            // the fog has the picture: unoccluded, and the present multiplies by 1.
-            if (d >= 1.0 || d <= 0.0) { oColor = vec4(1.0, 0.0, 0.0, 1.0); return; }
+        // A tile: its two floors as heights above the world's zero, and whether it
+        // stops sight. Zero in a floor channel is no tile there.
+        // x and y are the two halves' floor heights, z the flag byte: bit 0 the
+        // lower half is drawn, bit 1 the upper is, bit 2 the tile stops sight. A
+        // height of zero is a real floor, which is why being drawn is its own bit.
+        vec3 tileAt(vec2 wxz) {
+            vec2 tile = floor(wxz / uTileUnits);
+            if (tile.x < 0.0 || tile.y < 0.0 || tile.x >= uSpan || tile.y >= uSpan) return vec3(0.0, 0.0, 0.0);
+            vec3 t = texture(uHeight, (tile + 0.5) / uSpan).rgb;
+            return vec3(t.r * (255.0 * 128.0), t.g * (255.0 * 128.0), floor(t.b * 255.0 + 0.5));
+        }
 
-            vec3 p = viewAt(vUv, d);
-            if (p.z > uMaxDepth) { oColor = vec4(1.0, 0.0, 0.0, 1.0); return; }
+        // How much of this surface's sky the room takes, marched over the floor plan
+        // in world space -- so a wall behind the camera occludes exactly as one in
+        // front of it does, which is the whole point and is the one thing a
+        // screen-space pass cannot be made to do.
+        // `rot` is the pixel's own 4x4 interleaved angle, the same one the
+        // screen-space spiral uses. Without it every pixel marches the *same* eight
+        // directions at the *same* three distances, so the moment the camera crosses
+        // a tile boundary every pixel changes its answer together and the whole
+        // picture steps -- seen as the screen briefly darkening as you walk. With
+        // it the crossings are spread over the 4x4 cell and the blur that follows
+        // averages them, so the same change arrives as a gradient.
+        float worldOcclusion(vec3 pv, vec3 nv, float rot) {
+            vec3 w = uCam + uViewR * pv;
+            vec3 nw = uViewR * nv;
+            vec3 nUp = vec3(nw.x, -nw.y, nw.z);
+            float pu = -w.y;
 
+            // A half-step offset from the same pattern, so the three ring radii are
+            // not the same three for every pixel either.
+            float jitter = fract(rot * (8.0 / 6.28318531)) - 0.5;
+
+            float occ = 0.0;
+            for (int k = 0; k < 8; k++) {
+                float a = rot + (float(k) + 0.5) * (6.28318531 / 8.0);
+                vec2 dir = vec2(cos(a), sin(a));
+
+                // The highest thing this direction puts against the sky, as a
+                // slope. A step in the floor is one; a tile that stops sight is a
+                // wall standing on its own floor, which is what a corridor is made
+                // of and what the heights alone never show.
+                float best = 0.0;
+                for (int j = 1; j <= 3; j++) {
+                    float t = uWorldRadius * (float(j) + jitter) / 3.0;
+                    vec3 f = tileAt(w.xz + dir * t);
+                    int flags = int(f.z);
+                    // A drawn floor is a step: where it stands above this surface it
+                    // is what a wall is made of.
+                    if ((flags & 1) != 0) best = max(best, (f.x - pu) / t);
+                    if ((flags & 2) != 0) best = max(best, (f.y - pu) / t);
+                    // A tile with no floor at all is solid rock -- there is nowhere
+                    // to stand there, which is what the edge of a room is in this
+                    // grid. It stands its own height above whatever is being shaded.
+                    if ((flags & 3) == 0 || (flags & 4) != 0)
+                        best = max(best, uWallHeight / t);
+                }
+                if (best <= 0.0) continue;
+
+                // Weighted by how much of this surface actually faces the horizon
+                // it found, and averaged over every direction rather than over the
+                // occluding ones -- a floor faces no horizontal direction at all,
+                // so weighting on the flat direction would leave every floor in the
+                // game unshaded.
+                vec3 hdir = normalize(vec3(dir.x, best, dir.y));
+                occ += max(0.0, dot(nUp, hdir)) * (best / sqrt(1.0 + best * best));
+            }
+            return occ / 8.0;
+        }
+
+        // The old answer: a normal differenced out of four neighbouring depth
+        // texels. It straddles a silhouette wherever two surfaces meet and carries
+        // the depth's quantisation everywhere else, which is why the geometry's own
+        // plane replaced it -- and why it is worth measuring how far apart they are.
+        vec3 depthNormal(vec3 p) {
             vec2 sx = vec2(uTexel.x, 0.0), sy = vec2(0.0, uTexel.y);
             float dl = depthAt(vUv - sx), dr = depthAt(vUv + sx);
             float du = depthAt(vUv - sy), dd = depthAt(vUv + sy);
@@ -158,11 +246,55 @@ internal static class GlShaders
             vec3 b = dd > 0.0 && dd < 1.0 ? viewAt(vUv + sy, dd) : p;
 
             vec3 n = cross(nearer(p, r, l), nearer(p, b, u));
-            if (dot(n, n) < 1e-12) { oColor = vec4(1.0, 1.0, 0.0, 1.0); return; }
+            if (dot(n, n) < 1e-12) return vec3(0.0);
             n = normalize(n);
             // The camera is at the origin looking down +Z, so a surface facing it
             // has a negative dot with its own position.
-            if (dot(n, p) > 0.0) n = -n;
+            return dot(n, p) > 0.0 ? -n : n;
+        }
+
+        void main() {
+            // Red is the occlusion factor the present multiplies by. Green says
+            // whether there was a surface here at all -- it is not used to draw
+            // anything, it is what lets the census tell "the mask refused this
+            // pixel" from "the pass looked and found nothing to shade it with",
+            // which are the two ways a blank patch happens and are not the same
+            // bug. See KF2_AO_PROBE=2.
+            float d = depthAt(vUv);
+            // Nothing wrote here (2D, or a triangle with no recovered depth), or
+            // the fog has the picture: unoccluded, and the present multiplies by 1.
+            if (d >= 1.0 || d <= 0.0) { oColor = vec4(1.0, 0.0, 0.0, 0.0); return; }
+
+            vec3 p = viewAt(vUv, d);
+            if (p.z > uMaxDepth) { oColor = vec4(1.0, 0.0, 0.0, 0.0); return; }
+
+            // 0058. The polygon's own plane, where the frame's geometry reached
+            // this pixel. It is exact and constant across a face, where the
+            // reconstruction below straddles every silhouette and carries the
+            // depth buffer's quantisation into every flat wall.
+            vec3 n;
+            float geo = 0.0;
+            if (uNormalOn > 0.5) {
+                vec4 nb = normalAt(vUv);
+                if (nb.a > 0.5) {
+                    n = normalize(nb.xyz * 2.0 - 1.0);
+                    geo = 1.0;
+                }
+            }
+
+            // How far the two answers are apart, in right angles, on the census
+            // frame only. Zero where there is nothing to compare.
+            float disagree = 0.0;
+
+            if (geo < 0.5 || uNormalCompare > 0.5) {
+                vec3 nd = depthNormal(p);
+                if (geo < 0.5) {
+                    if (dot(nd, nd) < 1e-12) { oColor = vec4(1.0, 1.0, 0.0, 0.0); return; }
+                    n = nd;
+                } else if (dot(nd, nd) > 1e-12) {
+                    disagree = acos(clamp(dot(n, nd), -1.0, 1.0)) / 1.57079633;
+                }
+            }
 
             // The world radius as it projects at this depth, in uv. Clamped at the
             // near end because a sphere a hand's width across fills the screen when
@@ -199,7 +331,10 @@ internal static class GlShaders
             }
 
             float ao = 1.0 - uStrength * (occ / float(uSamples));
-            oColor = vec4(clamp(ao, 0.0, 1.0), 1.0, 0.0, 1.0);
+            // 0059. The room the surface is in, on top of the picture it is in.
+            if (uWorldOn > 0.5)
+                ao *= 1.0 - uWorldStrength * clamp(worldOcclusion(p, n, a0), 0.0, 1.0);
+            oColor = vec4(clamp(ao, 0.0, 1.0), 1.0, geo, clamp(disagree, 0.0, 1.0));
         }
         """;
 
@@ -231,7 +366,7 @@ internal static class GlShaders
 
         void main() {
             float d = depthAt(vUv);
-            if (d >= 1.0 || d <= 0.0) { oColor = vec4(1.0, 0.0, 0.0, 1.0); return; }
+            if (d >= 1.0 || d <= 0.0) { oColor = vec4(1.0, 0.0, 0.0, 0.0); return; }
 
             float sum = 0.0, wsum = 0.0;
             for (int y = -2; y <= 1; y++) {
@@ -244,7 +379,84 @@ internal static class GlShaders
                     wsum += 1.0;
                 }
             }
-            oColor = vec4(wsum > 0.0 ? sum / wsum : texture(uAo, vUv).r, 1.0, 0.0, 1.0);
+            // Blue is carried through from the centre tap rather than blurred: it
+            // is the census's "this pixel's normal came from the geometry", which
+            // is a fact about one pixel and not a quantity to average.
+            oColor = vec4(wsum > 0.0 ? sum / wsum : texture(uAo, vUv).r, 1.0,
+                          texture(uAo, vUv).b, texture(uAo, vUv).a);
+        }
+        """;
+
+    /// <summary>
+    /// 0058. The frame's own geometry, redrawn into a normal buffer after the frame
+    /// is finished. The colour pass cannot write this itself: its fragment shader
+    /// has a dual-source output (index 1) for the console's blend modes, and a
+    /// program with one of those may not render to more than one draw buffer, so
+    /// there is no MRT to hang a G-buffer off. Drawing the triangles again is what
+    /// the port can do now that it assembles and enumerates them
+    /// (<see cref="AoGeometry"/>).
+    ///
+    /// Position is <c>PrimVs</c>'s arithmetic to the letter, so a triangle lands on
+    /// the same pixels. W is the view depth rather than the colour pass's 1 for an
+    /// untextured polygon: nothing here has to match that pass's interpolation, and
+    /// a perspective-correct depth is what makes the reconstructed surface the
+    /// polygon's actual plane instead of a curve through its corners.
+    /// </summary>
+    public const string NormalVs = """
+        #version 330 core
+        layout(location = 0) in vec2  inPos;
+        layout(location = 1) in float inZ;
+
+        uniform vec2 uPosBias;
+        uniform vec2 uFbInv;
+
+        out float vDepth;
+
+        void main() {
+            vec2 p = (inPos + uPosBias) * uFbInv - 1.0;
+            float w = max(inZ, 1.0);
+            gl_Position = vec4(p * w, 0.0, w);
+            vDepth = inZ * (1.0/65536.0);
+        }
+        """;
+
+    /// <summary>
+    /// 0058. One polygon's plane, as a normal. The view position is reconstructed
+    /// exactly as the occlusion pass reconstructs it — the same H and the same
+    /// centre, read off the GTE — and the normal is the cross product of its two
+    /// screen derivatives, which across a plane is constant and exact. That is the
+    /// whole difference from the pass's own reconstruction: this one is taken
+    /// *inside* one primitive, so it can never straddle a silhouette or average two
+    /// surfaces, and it does not have the depth buffer's quantisation in it.
+    ///
+    /// Alpha is the "there is a normal here" bit the pass tests, so a pixel this
+    /// never reached falls back to the old cross product rather than to a wrong
+    /// normal.
+    /// </summary>
+    public const string NormalFs = """
+        #version 330 core
+        in float vDepth;
+        out vec4 oColor;
+
+        uniform float uProjH;
+        // The projection centre and the render scale, in the target's own pixels:
+        // gl_FragCoord / uScale is where this fragment is in the game's.
+        uniform vec2  uCentre;
+        uniform float uScale;
+
+        void main() {
+            float z = vDepth * 65536.0;
+            if (z <= 0.0) { oColor = vec4(0.0); return; }
+            vec2 s = gl_FragCoord.xy / uScale;
+            vec3 p = vec3((s - uCentre) * (z / uProjH), z);
+            vec3 n = cross(dFdx(p), dFdy(p));
+            // A polygon edge-on to the camera, or one degenerate after projection:
+            // no plane to report, and alpha 0 leaves the pass its own answer.
+            if (dot(n, n) < 1e-12) { oColor = vec4(0.0); return; }
+            n = normalize(n);
+            // The camera is at the origin looking down +Z.
+            if (dot(n, p) > 0.0) n = -n;
+            oColor = vec4(n * 0.5 + 0.5, 1.0);
         }
         """;
 

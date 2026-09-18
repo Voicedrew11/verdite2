@@ -276,6 +276,67 @@ public static class GteDepth
     /// texel and produce nothing but noise.</summary>
     public static float AoMaxDepth = 24000f;
 
+    // ---- 0059: occluders the camera cannot see --------------------------------
+
+    /// <summary>0059. Occlude against the area's own floor plan as well as against
+    /// the picture. A screen-space pass can only be occluded by what is on screen,
+    /// so standing in a corner facing one wall, the wall behind the camera
+    /// contributes nothing and the shading changes as the view turns. The port reads
+    /// the game's 80x80 tile grid, so the geometry that is not on screen is
+    /// available to it. Off by default: it is a look nobody has seen.</summary>
+    public static bool AoWorld;
+
+    /// <summary>How dark the world term goes, and how far it reaches in world units
+    /// (a floor tile is 2048).</summary>
+    public static float AoWorldStrength = 0.6f, AoWorldRadius = 3072f;
+
+    /// <summary>The camera's rotation as the game loaded it (world to view, the
+    /// GTE's 4096 scale removed) and its world position. Published by the port from
+    /// the view matrix the tile walk loads, which is the camera's own: the game hands
+    /// the GTE positions already relative to the camera, so this matrix carries no
+    /// translation and no per-object rotation.</summary>
+    public static readonly float[] AoViewR = new float[9];
+    public static float AoCamX, AoCamY, AoCamZ;
+
+    /// <summary>Whether the two above have been filled since the last area load.</summary>
+    public static bool AoWorldReady;
+
+    /// <summary>The area's floor plan: 80x80 tiles, four bytes each -- the lower
+    /// half's height byte, the upper's, whether the tile stops sight, and padding.
+    /// Height is up in units of 128, as the game's own <c>(0 - height) &lt;&lt; 7</c>
+    /// makes it. The generation is bumped when the port refills it, which is what
+    /// makes the backend re-upload.</summary>
+    public static byte[]? AoHeight;
+    public static int AoHeightGen;
+
+    /// <summary>The grid's span and a tile's world size, so nothing has to agree with
+    /// the port about them by coincidence.</summary>
+    public const int AoHeightSpan = 80, AoTileUnits = 2048;
+
+    /// <summary>World-term pixels shaded, and frames the term could not run for want
+    /// of a transform or a grid.</summary>
+    public static long AoWorldFrames, AoWorldUnready;
+
+    /// <summary>Transform reads the port refused as not the camera's, holding the
+    /// previous one instead. A rate near the frame rate means the term is being fed
+    /// a matrix that is mostly stale and the reading needs another look.</summary>
+    public static long AoWorldStale;
+
+    /// <summary>Tiles in the last grid read that stop sight. Zero is a grid that
+    /// cannot occlude anything and the term will measure as doing nothing.</summary>
+    public static int AoHeightBlockers;
+
+    /// <summary>How tall a blocking tile is taken to be, in world units above its
+    /// own floor. A tile is 2048 across.</summary>
+    public static float AoWallHeight = 2048f;
+
+    /// <summary>0058. Take the pass's normals from the frame's own geometry, redrawn
+    /// into a normal buffer once the frame is finished (<see cref="AoGeometry"/>),
+    /// instead of differencing four depth texels. A pixel the normal buffer did not
+    /// reach falls back to the depth cross product, so this is additive: turning it
+    /// off is the picture exactly as it was.</summary>
+    public static bool AoNormals = true;
+
     /// <summary>The projection the GTE is actually using, published from
     /// <c>Gte.Rtp</c>: the projection distance H and the screen-space centre
     /// OFX/OFY the divide is offset by. The pass has to undo the game's own
@@ -356,32 +417,70 @@ public static class GteDepth
     /// than when 100% does.</summary>
     public static float AoMin = 1f, AoMean = 1f, AoShadedPct, AoCoveragePct;
 
-    /// <summary>Two bytes a pixel: red the occlusion factor, green the mask.</summary>
+    /// <summary>0058. The share of the surfaces the pass shaded whose normal came
+    /// from the geometry rather than from the depth cross product. It is the one
+    /// number that says whether the normal buffer reached the picture: everything
+    /// else reads the same with an empty one, because the fallback is the old
+    /// mechanism and produces a perfectly plausible frame.</summary>
+    public static float AoGeoNormalPct;
+
+    /// <summary>0058. How far the old depth-difference normal was from the
+    /// geometry's, over the surfaces that have both: the mean in degrees, the share
+    /// more than 30 degrees out, and the worst. This is what says whether the change
+    /// is worth anything *here* -- a view of one flat wall square-on agrees to a
+    /// degree, and a doorway full of edges does not.</summary>
+    public static float AoNormalMeanDeg, AoNormalBadPct, AoNormalMaxDeg;
+
+    /// <summary>The same disagreement, by cell, so the map says *where* to look.</summary>
+    public static float[]? AoNormalMap;
+
+    /// <summary>Four bytes a pixel: red the occlusion factor, green the mask, blue
+    /// whether the normal came from the geometry, alpha how far the old
+    /// depth-difference normal was from it, in right angles.</summary>
     public static void SetAoMap(ReadOnlySpan<byte> ao, int w, int h)
     {
         var map = AoMap ??= new float[AoMapCols * AoMapRows];
         var cov = AoCoverage ??= new float[AoMapCols * AoMapRows];
+        var nrm = AoNormalMap ??= new float[AoMapCols * AoMapRows];
         Array.Fill(map, 1f);
         Array.Fill(cov, 0f);
-        AoMin = 1f; AoMean = 1f; AoShadedPct = 0f; AoCoveragePct = 0f;
+        Array.Fill(nrm, 0f);
+        AoNormalMeanDeg = AoNormalBadPct = AoNormalMaxDeg = 0f;
+        AoMin = 1f; AoMean = 1f; AoShadedPct = 0f; AoCoveragePct = 0f; AoGeoNormalPct = 0f;
         WantAoMap = false;
         if (w <= 0 || h <= 0) return;
 
         Span<int> cellN = stackalloc int[AoMapCols * AoMapRows];
         Span<int> cellHit = stackalloc int[AoMapCols * AoMapRows];
         Span<float> cellSum = stackalloc float[AoMapCols * AoMapRows];
-        double sum = 0;
-        long shaded = 0, covered = 0, n = 0;
+        Span<int> cellNrmN = stackalloc int[AoMapCols * AoMapRows];
+        Span<float> cellNrmSum = stackalloc float[AoMapCols * AoMapRows];
+        double sum = 0, nrmSum = 0;
+        long shaded = 0, covered = 0, geoNormal = 0, nrmN = 0, nrmBad = 0, n = 0;
 
         for (int y = 0; y < h; y++)
         {
             // The readback is bottom-up, the picture is top-down.
             int row = (h - 1 - y) * AoMapRows / h;
-            int rowBase = y * w * 2;
+            int rowBase = y * w * 4;
             for (int x = 0; x < w; x++)
             {
-                float v = ao[rowBase + x * 2] * (1f / 255f);
-                bool surface = ao[rowBase + x * 2 + 1] >= 128;
+                float v = ao[rowBase + x * 4] * (1f / 255f);
+                bool surface = ao[rowBase + x * 4 + 1] >= 128;
+                bool geo = surface && ao[rowBase + x * 4 + 2] >= 128;
+                if (geo) geoNormal++;
+                int cellOf = row * AoMapCols + x * AoMapCols / w;
+                if (geo)
+                {
+                    // Alpha is the angle over 90 degrees.
+                    float deg = ao[rowBase + x * 4 + 3] * (90f / 255f);
+                    nrmSum += deg;
+                    nrmN++;
+                    if (deg > 30f) nrmBad++;
+                    if (deg > AoNormalMaxDeg) AoNormalMaxDeg = deg;
+                    cellNrmSum[cellOf] += deg;
+                    cellNrmN[cellOf]++;
+                }
                 sum += v;
                 n++;
                 // A pixel is "shaded" once it is more than one 8-bit step from
@@ -398,12 +497,21 @@ public static class GteDepth
         }
 
         for (int i = 0; i < map.Length; i++)
+        {
             if (cellN[i] > 0) { map[i] = cellSum[i] / cellN[i]; cov[i] = (float)cellHit[i] / cellN[i]; }
+            if (cellNrmN[i] > 0) nrm[i] = cellNrmSum[i] / cellNrmN[i];
+        }
+        if (nrmN > 0)
+        {
+            AoNormalMeanDeg = (float)(nrmSum / nrmN);
+            AoNormalBadPct = 100f * nrmBad / nrmN;
+        }
         if (n > 0)
         {
             AoMean = (float)(sum / n);
             AoShadedPct = 100f * shaded / n;
             AoCoveragePct = 100f * covered / n;
+            AoGeoNormalPct = covered > 0 ? 100f * geoNormal / covered : 0f;
         }
     }
 

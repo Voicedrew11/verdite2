@@ -130,6 +130,10 @@ KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  # coplanar tolerance on the test: SZ u
 KF2_AO=0                               # ambient occlusion off (on by default; GL backend only)
 KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
 KF2_AO_BIAS=0.08 KF2_AO_SAMPLES=16 KF2_AO_MAXDEPTH=24000
+KF2_AO_NORMALS=0                       # normals from the depth buffer again, not from the frame's geometry (0058)
+KF2_AO_WORLD=1                         # also occlude against the area's own tile grid, so geometry off screen counts (0059; off)
+KF2_AO_WORLD_STRENGTH=0.6 KF2_AO_WORLD_RADIUS=3072   # how dark that term goes, and how far it reaches
+KF2_AO_WORLD_PROBE=1                   # the transform, the grid, and whether either is missing; =2 the camera's own tile
 KF2_AO_PROBE=1                         # coverage, the projection read off the GTE, passes run
 KF2_AO_PROBE=2                         # also read the occlusion back: how dark, how much, and where
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)

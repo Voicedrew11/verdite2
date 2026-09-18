@@ -20,6 +20,8 @@ namespace Kf2;
 ///                           shading itself out of its own depth quantisation
 ///     KF2_AO_SAMPLES=16     samples per pixel in the occlusion pass
 ///     KF2_AO_MAXDEPTH=24000 beyond this view depth the pass returns unoccluded
+///     KF2_AO_NORMALS=0      take the pass's normals from the depth buffer again,
+///                           as it did before the port kept the frame's geometry
 ///     KF2_AO_PROBE=1        the coverage, the projection it recovered, and the
 ///                           passes it actually ran
 ///     KF2_AO_PROBE=2        also read the occlusion texture back and census it:
@@ -52,6 +54,16 @@ namespace Kf2;
 /// transparent primitives write nothing at all, so a death fade or a damage flash
 /// — which you see the world *through* — does not erase the world's depth
 /// underneath it and does not make the shading blink off for the frames it covers.
+///
+/// **The normal is no longer a guess** (<c>0058</c>). It used to be a cross product
+/// of four neighbouring depth texels, which straddles every silhouette and carries
+/// the depth's quantisation into every flat wall — and this game is large flat
+/// walls. The port assembles its own polygons and enumerates its own scene now, so
+/// <c>AoGeometry</c> keeps the frame's depth-carrying triangles and the runtime
+/// draws them again into a normal buffer once the frame is finished: a normal is
+/// the polygon's own plane, exact and constant across the face. A pixel the buffer
+/// did not reach keeps the old reconstruction, so it is additive.
+/// <c>KF2_AO_NORMALS=0</c> is the comparison.
 ///
 /// The pass runs at present, between the finished render target and the blit to
 /// the window, and writes only its own texture. Nothing the game can read back
@@ -108,8 +120,16 @@ public static class AmbientOcclusion
     };
 
     public static void Configure(string? on, string? radius, string? strength,
-                                 string? bias, string? samples, string? maxDepth, string? probe)
+                                 string? bias, string? samples, string? maxDepth, string? probe,
+                                 string? normals = null)
     {
+        if (!string.IsNullOrWhiteSpace(normals))
+        {
+            bool want = !normals.Equals("0", StringComparison.Ordinal);
+            GteDepth.AoNormals = want;
+            AoGeometry.Enabled = want;
+        }
+
         if (!string.IsNullOrWhiteSpace(on))
             _forced = !on.Equals("0", StringComparison.Ordinal);
 
@@ -210,6 +230,15 @@ public static class AmbientOcclusion
                           $"{GteDepth.AoPasses / window:F1} passes/s, {GteDepth.AoNoTarget / window:F1} no target/s, " +
                           $"over {_frames / window:F0} frames/s");
 
+        // 0058. The normal buffer, as a rate rather than as a setting: a pass that
+        // collected nothing and a pass whose geometry never reached the screen both
+        // read as the old cross product, and both look entirely healthy above.
+        Console.WriteLine($"[KF2] ao: normals {(GteDepth.AoNormals ? "geometry" : "depth")}, " +
+                          $"{AoGeometry.Triangles / window:F0} tris/s kept, " +
+                          $"{AoGeometry.Passes / window:F1} normal passes/s" +
+                          (AoGeometry.Dropped > 0 ? $", {AoGeometry.Dropped / window:F0} dropped/s" : ""));
+        AoGeometry.ResetCounters();
+
         if (_census) Census();
 
         GteDepth.ResetZCounters();
@@ -241,8 +270,17 @@ public static class AmbientOcclusion
         {
             Console.WriteLine($"[KF2] ao: darkest {GteDepth.AoMin:F2}, mean {GteDepth.AoMean:F3}, " +
                               $"{GteDepth.AoShadedPct:F1}% of the picture shaded, " +
-                              $"{GteDepth.AoCoveragePct:F1}% of it carrying a surface");
-            Console.WriteLine("[KF2] ao:  occlusion (9 = faint, 0 = black)      surface (# full, + partial, . none)");
+                              $"{GteDepth.AoCoveragePct:F1}% of it carrying a surface, " +
+                              $"{GteDepth.AoGeoNormalPct:F1}% of that lit from a geometry normal");
+            // 0058. What the change to geometry normals was actually worth in this
+            // view, and where. A view of one flat wall square-on agrees to within a
+            // degree and the change buys nothing you could see; a doorway full of
+            // edges disagrees by tens of degrees along every one of them, and that
+            // is where to stand to judge it.
+            Console.WriteLine($"[KF2] ao: old normal off by {GteDepth.AoNormalMeanDeg:F1} deg mean, " +
+                              $"{GteDepth.AoNormalBadPct:F1}% over 30 deg, worst {GteDepth.AoNormalMaxDeg:F0} deg");
+            Console.WriteLine("[KF2] ao:  occlusion (9 = faint, 0 = black)      " +
+                              "surface (# + .)                    old normal (. <5 deg, 1-9 = 10 each)");
             var cov = GteDepth.AoCoverage;
             for (int r = 0; r < GteDepth.AoMapRows; r++)
             {
@@ -269,6 +307,19 @@ public static class AmbientOcclusion
                     {
                         float f = cov[r * GteDepth.AoMapCols + c];
                         row.Append(f >= 0.99f ? '#' : f > 0.01f ? '+' : '.');
+                    }
+                }
+
+                // 0058, beside it: how far the old normal was out in the same cells,
+                // which is the map that answers "where would I see the difference".
+                var nrm = GteDepth.AoNormalMap;
+                if (nrm is not null)
+                {
+                    row.Append("   ");
+                    for (int c = 0; c < GteDepth.AoMapCols; c++)
+                    {
+                        float d = nrm[r * GteDepth.AoMapCols + c];
+                        row.Append(d < 5f ? '.' : " 123456789"[Math.Clamp((int)(d / 10f) + 1, 1, 9)]);
                     }
                 }
                 Console.WriteLine(row.ToString());

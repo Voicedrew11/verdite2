@@ -14,6 +14,13 @@ public sealed class GlDisplayRt
     // draws to this target, and ReadPixels off the FBO (the KF2_ZBUFFER_PROBE=2
     // census) reads it exactly as before.
     public uint Depth;
+    // 0058. The occlusion pass's normals, and the geometry they are drawn from.
+    // Both belong to the target rather than to the frame, for the same reason the
+    // depth does: with two display buffers the target being presented was drawn a
+    // frame ago. Created on demand, so a run with the pass off allocates neither.
+    public uint Normal, NormalFbo;
+    public int NormalW, NormalH;
+    public readonly AoGeometry Geo = new();
     public bool Dirty;
     public long Stamp;
     public long LastDrawFrame;
@@ -103,6 +110,8 @@ public sealed class GlDisplayRt
         if (Fbo != 0) gl.DeleteFramebuffer(Fbo);
         if (Tex != 0) gl.DeleteTexture(Tex);
         if (Depth != 0) gl.DeleteTexture(Depth);
-        Fbo = Tex = Depth = 0;
+        if (NormalFbo != 0) gl.DeleteFramebuffer(NormalFbo);
+        if (Normal != 0) gl.DeleteTexture(Normal);
+        Fbo = Tex = Depth = Normal = NormalFbo = 0;
     }
 }

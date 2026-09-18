@@ -657,6 +657,40 @@ Four files in the directory have no entry below:
   VRAM checked after every VRAM operation. **No recompile.** See "A shop
   overwrote the textures with the atlas's old texels" in `docs/RENDERING.md`.
 
+- `0058-ao-geometry-normals.patch` — the occlusion pass's normals come from the
+  frame's own geometry instead of from four depth texels. `Gpu/AoGeometry.cs` keeps
+  each depth-carrying triangle as `GlCore.DrawTri` submits it, per display target
+  (the presented target was drawn a frame ago, which is why the depth attachment
+  lives there too); `GlCore.RenderNormals` draws the list again after the frame,
+  with no depth test and no depth write, so **order** is what makes it agree with
+  the depth buffer rather than a test that could disagree. `NormalVs`/`NormalFs` are
+  `PrimVs`'s position arithmetic to the letter with the view depth as W, and the
+  plane's normal is the cross product of the reconstructed view position's two
+  screen derivatives — taken *inside* one primitive, so it can never straddle a
+  silhouette. It cannot be an MRT off the colour pass: `PrimFs` has a dual-source
+  output for the console's blend modes and such a program may not render to more
+  than one draw buffer. A pixel the buffer did not reach keeps the old
+  reconstruction, by alpha, so it is additive; the AO texture gains a blue channel
+  saying which of the two answered, because every other number reads the same with
+  an empty buffer. `KF2_AO_NORMALS=0` is the comparison. Measured in area 1 at 144
+  fps: 18,309 tris/s kept, 142.4 normal passes/s, 100.0% of the covered picture lit
+  from a geometry normal, 144.0 fps drawn at 20.0 ticks/s either way. **No
+  recompile.** See "The normal was the guess" in `docs/RENDERING.md`.
+
+- `0059-world-space-occlusion.patch` — the occlusion pass also marches the area's own
+  80x80 tile grid, so a wall behind the camera occludes as one in front of it does,
+  which is the thing a screen-space pass structurally cannot do. `GteDepth` carries
+  the camera's rotation and world position and the grid as a texture; `GlCore`
+  uploads it when the port's generation moves and hands the pass the matrix
+  **untransposed**, because GLSL reads a `mat3` column-major and that is the inverse
+  the pass wants. `AoFs.worldOcclusion` takes eight directions by three steps,
+  weighted by how much of the surface faces the horizon it found and averaged over
+  every direction, so floors darken near walls rather than not at all. The port half
+  is `patches/AoWorld.cs`. Off by default. Measured in area 1 at 144 fps: the shaded
+  share of one view 17.8% -> 34.4%, darkest 0.69 -> 0.64, 144.0 fps drawn at 20.0
+  ticks/s. **No recompile.** See "Occluders the camera cannot see" in
+  `docs/RENDERING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

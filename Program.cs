@@ -639,8 +639,14 @@ Kf2.AmbientOcclusion.Configure(Environment.GetEnvironmentVariable("KF2_AO"),
                                Environment.GetEnvironmentVariable("KF2_AO_BIAS"),
                                Environment.GetEnvironmentVariable("KF2_AO_SAMPLES"),
                                Environment.GetEnvironmentVariable("KF2_AO_MAXDEPTH"),
-                               Environment.GetEnvironmentVariable("KF2_AO_PROBE"));
+                               Environment.GetEnvironmentVariable("KF2_AO_PROBE"),
+                               Environment.GetEnvironmentVariable("KF2_AO_NORMALS"));
 Kf2.AmbientOcclusion.Install();
+Kf2.AoWorld.Configure(Environment.GetEnvironmentVariable("KF2_AO_WORLD"),
+                      Environment.GetEnvironmentVariable("KF2_AO_WORLD_STRENGTH"),
+                      Environment.GetEnvironmentVariable("KF2_AO_WORLD_RADIUS"),
+                      Environment.GetEnvironmentVariable("KF2_AO_WORLD_PROBE"));
+Kf2.AoWorld.Install();
 
 // PGXP -- upstream RecompOne's own vertex tracking, backported as
 // patches/recompone/0034-0036, and the second mechanism the port has for the one
