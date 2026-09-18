@@ -1096,6 +1096,43 @@ Kf2.PolyAssembler.Configure(Environment.GetEnvironmentVariable("KF2_POLYASM"),
                             Environment.GetEnvironmentVariable("KF2_POLYASM_CLIPPER"));
 Kf2.PolyAssembler.Install();
 
+// The map-tile walk in C#: func_80031C94 (the 24x24 cell sweep), func_80031B1C
+// (one cell's two stacked halves) and func_80031950 (one half, set up and handed to
+// an assembler). Not a performance change -- the walk's own body is 0.041-0.124 ms a
+// frame -- but the point at which the port learns which tile, at what world
+// position, is drawn by which assembler. CullGrid already writes the grid it reads
+// and PolyAssembler already owns two of its three consumers.
+//
+//     KF2_TILEWALK=0        all three recompiled
+//     KF2_TILEWALK=verify   run both on every call and compare RAM, registers, GTE
+//     KF2_TILEWALK_CELL=0   func_80031B1C recompiled
+//     KF2_TILEWALK_TILE=0   func_80031950 recompiled
+//     KF2_TILEWALK_PROBE=1  cells walked, halves drawn, by assembler
+Kf2.TileWalk.Configure(Environment.GetEnvironmentVariable("KF2_TILEWALK"),
+                       Environment.GetEnvironmentVariable("KF2_TILEWALK_CELL"),
+                       Environment.GetEnvironmentVariable("KF2_TILEWALK_TILE"),
+                       Environment.GetEnvironmentVariable("KF2_TILEWALK_PROBE"));
+Kf2.TileWalk.Install();
+
+// The object and creature walk in C#: func_800331B4 (the creature, object, effect
+// and billboard tables) and func_80032588 (the model submitter it dispatches to).
+// TileWalk taught the port the static world; this is everything that moves. Not a
+// performance change -- the submitter's own body is 0.005-0.047 ms a frame -- but
+// the point at which the port learns which creature, at what world position, in
+// which pose, is drawn by which assembler. PolyAssembler already owns all three
+// assemblers it dispatches to, and ObjectSmoothing already carries its two tables.
+//
+//     KF2_MODELWALK=0        both recompiled
+//     KF2_MODELWALK=verify   run both on every call and compare RAM, registers, GTE
+//     KF2_MODELWALK_WALK=0   func_800331B4 recompiled, the submitter still C#
+//     KF2_MODELWALK_SUBMIT=0 func_80032588 recompiled, the walk still C#
+//     KF2_MODELWALK_PROBE=1  what each of the four tables submitted
+Kf2.ModelWalk.Configure(Environment.GetEnvironmentVariable("KF2_MODELWALK"),
+                        Environment.GetEnvironmentVariable("KF2_MODELWALK_WALK"),
+                        Environment.GetEnvironmentVariable("KF2_MODELWALK_SUBMIT"),
+                        Environment.GetEnvironmentVariable("KF2_MODELWALK_PROBE"));
+Kf2.ModelWalk.Install();
+
 // The game's other cull: a six-plane view-space clipper (func_8005CAC8) that only
 // the near floor and ceiling are big enough to reach, set to twice the screen
 // frustum as a guard band against the GPU's 1023-pixel limit. Twice the frustum is

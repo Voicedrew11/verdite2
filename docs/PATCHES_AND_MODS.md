@@ -4948,3 +4948,224 @@ call counts matched:
 
 The picture is identical by construction -- every store the game's routines make is
 made, with the same value -- and has not been looked at.
+
+### The map tile walk in C#
+
+**Mechanism measured against the recompiled routine on every call; the picture has
+not been looked at, and does not need to be — every store the game's routines make
+is made, with the same value.**
+
+`patches/TileWalk.cs` takes the three routines between `CullGrid` and
+`PolyAssembler`: `func_80031C94` (the 24x24 cell sweep), `func_80031B1C` (one cell's
+two stacked halves) and `func_80031950` (one half, set up and handed to an
+assembler). `KF2_TILEWALK=0` is the comparison and `KF2_TILEWALK=verify` the proof;
+`KF2_TILEWALK_CELL=0` and `KF2_TILEWALK_TILE=0` take one routine back on its own.
+
+**Why this one, when its own body is 0.041-0.124 ms a frame.** It is not a
+performance change and must not be argued as one — the numbers below say so
+plainly. It is the routine at which the port learns *which tile, at what world
+position, is drawn by which assembler*, and it was the last recompiled step in a
+path that is C# at both ends: `CullGrid` already replaces `func_8002D3A8` and writes
+the 24x24 grid back to `0x80192EAC`, which is the array this walk reads, and
+`PolyAssembler` already owns two of the three assemblers it dispatches to. That is
+the same move `0050` made when the assemblers began recording each packet's depth:
+what closed "unbridgeable" was not a better rasterizer but **knowing which routine
+asked**, and no consumer of GP0 can recover that. Everything a screen-space
+technique wants next — shadow maps, probe lighting, anything that draws the world
+twice — needs a scene, and this walk is where the world's geometry is enumerated.
+
+**What the three routines are.** The grid is 24x24 bytes at `0x80192EAC`, its origin
+tile the two words at `0x80192EA0`/`0x80192EA4`. A row whose world Z is off the
+80x80 map is skipped whole and so is a column whose X is; a cell with a non-zero
+byte goes to `func_80031B1C`. The map is 80x80 tiles of 10 bytes at `0x801C8484`:
+`+0`/`+1` the lower half's model and height, `+5`/`+6` the upper's, and a half is
+drawn only while its model byte is **below 240** and its bit in the cell byte
+(bit 0 lower, bit 1 upper) is set. The position is built in the caller's own frame
+as three shorts — `(tile << 11) - camera + 0x400` on X and Z, `(-height << 7) -
+camera` on Y — and **that pointer is what `func_80031950` receives**, which is why
+the C# keeps the original's stack arithmetic exactly: `EvenFog` and `PacketMatch`
+both read it off `a1`. `func_80031950` then loads the view matrix, rotates by the
+record's low two bits, takes the light and colour matrices from the area's 104-byte
+record at `0x801930F0 + (byte4 & 0x3F) * 104`, and picks the assembler on the cell
+byte: no `0x80` is `func_8002FECC`, `0x80` is `func_80030540`, and `0xC0` on a mesh
+of fewer than 16 faces goes through `func_80030C94`'s subdivider first.
+
+**Verified.** `KF2_TILEWALK=verify` runs both versions on every call from the same
+registers, RAM and GTE state, compares all three, and lets the recompiled result
+stand so a mismatch cannot reach the picture. The stack window is 0x4000 rather than
+PolyAssembler's 0x2000, because `func_80031950` alone takes 0x1050 of frame for the
+subdivider's scratch. Measured in `fdat02`, each routine on its own and then all
+three together:
+
+| routine | calls verified | RAM | registers | GTE |
+|---|---|---|---|---|
+| `func_80031C94` | 6,900 | 0 | 0 | 0 |
+| `func_80031B1C` | 178,673 | 0 | 0 | 0 |
+| `func_80031950` | 68,041 | 0 | 0 | 0 |
+
+**What it cost, which is nearly nothing, and that was the prediction.** The frame
+profiler, `fdat02`, the median of 2,500 steady-state frames, with `KF2_TILEWALK=0`
+and then on. The call counts are identical either way (1 walk, 192 cells, 145
+halves a frame), which is what says the two runs drew the same scene:
+
+| | recompiled | C# | |
+|---|---|---|---|
+| `func_80031C94` inclusive | 2.734 ms | 2.721 ms | -0.5% |
+| the walk's own body | 0.0258 | 0.0244 | -5.4% |
+| the cell routine's own body | 0.0550 | 0.0514 | -6.5% |
+| the tile routine's own body | 0.6147 | 0.5993 | -2.5% |
+
+Each routine is a few percent cheaper and the walk as a whole is 0.013 ms a frame
+cheaper, which is inside the noise of anything but a profiler. **The tile routine
+barely moved because almost none of it is now C#**: its body is ten recompiled
+libgte calls per half — `SetRotMatrix`, `SetTransMatrix`, `RotTrans`,
+`func_80014B88`, the two matrices again, `SetLightMatrix`, `SetColorMatrix`,
+`func_8002DDDC`, `SetBackColor` — about 1,450 recompiled calls a frame that this
+change did not touch. Inlining them as direct `Gte` calls, the way `PolyAssembler`
+inlines `NormalClip` and `DpqColor`, is the follow-up and is where the time is.
+
+**Two things the port kept on purpose.** The two `Interrupts.Poll` calls at the
+recompiled loop heads are still there — 576 iterations is long enough to starve an
+IRQ without them — and the guest-stack prologue and epilogue are the original's
+byte for byte, so the pointer `func_80031950` hands its hooks is unchanged.
+
+`KF2_TILEWALK_PROBE=1` is the semantic tap made visible: `576 cell(s) on the map,
+192 with a flag; 17,284 half/halves a second: 14,066 unclipped, 358 plain, 2,861
+subdivided, 0 past the model limit`. The 192 is the "~195 nonzero cells" the
+profiling note in `docs/DEVELOPMENT.md` arrived at from the other direction.
+
+### The object and creature walk in C#
+
+**Mechanism measured against the recompiled routine on every call; the picture has
+not been looked at, and does not need to be — every store the game's routines make
+is made, with the same value.**
+
+`patches/ModelWalk.cs` takes the pair either side of the model submit:
+`func_800331B4` (the four table walks) and `func_80032588` (one model, set up and
+handed to an assembler). `KF2_MODELWALK=0` is the comparison and
+`KF2_MODELWALK=verify` the proof; `KF2_MODELWALK_WALK=0` and
+`KF2_MODELWALK_SUBMIT=0` take one routine back on its own.
+
+**Why this one.** `TileWalk` taught the port the static world; this is everything
+that *moves*. It is not a performance change and must not be argued as one — the
+numbers below say so. It is the point at which the port learns *which creature, at
+what world position, in which pose, drawn by which assembler*, and like the tile
+walk it was the last recompiled step in a path that is C# at both ends:
+`PolyAssembler` already owns all three assemblers it dispatches to, and
+`ObjectSmoothing` already carries two of the four tables it reads. `ModelWalk.Scene`
+publishes the result — a `ModelDraw` per submit, carrying the kind, the slot, the
+record address, the model id, the world position, the assembler and the light
+record — which is the thing no consumer of GP0 can recover and which every
+screen-space technique that draws the world twice needs.
+
+**The four tables**, in the order the walk takes them, every stride and count read
+straight out of the routine:
+
+| table | base | records | stride | live when |
+|---|---|---|---|---|
+| creatures | `0x8016C544` | 200 | `0x7C` | `u8[+0x9] == 1` |
+| objects | `0x80177714` | 396 | `0x44` | `u16[+0x6] != 0xFF` |
+| effects | `0x8019CC6C` | 128 | `0x48` | `u8[+0x0] != 0xFF` |
+| billboards | `0x80195174` | 128 | `0x18` | `u16[+0x0] != 0xFFFF` |
+
+Between the first and second table, and again after the second, the walk spends two
+scratch bitmaps in its own frame — texture pages wanted at `sp+0x58`, CLUTs at
+`sp+0x198` — on `func_8003309C` and `func_80032FAC`. **A record that was considered
+marks those bitmaps whether or not it drew**, which is why the creature loop's
+bookkeeping sits outside its own draw test.
+
+**What `func_80032588` does with a matrix of zero is the interesting half.** With a
+matrix it projects the position through `RotTrans` and lights the model from *its
+own* map tile; with no matrix it takes the position raw — already where it will be
+drawn — and lights it from the *camera's* tile, offset by the half selector at
+`0x8019953C`. That is the mechanical meaning of "welded to the screen". A second
+light record blends the colour matrix, the depth cue, the light matrix and the back
+colour against the first on the caller's weight, and each of the four opts out on
+its own sentinel (`-1` for the matrices and the cue, `0xFF` for the back colour), so
+a record can carry only the parts it wants to change. The assembler is the eleventh
+stack argument: `0xFF` (and `0x80`, which also suppresses the depth bias) is
+`func_8002F214`, `0xFE` is `func_80030540`, anything else is `func_8002EAEC` with
+that byte as its third argument.
+
+**Verified.** `KF2_MODELWALK=verify` runs both versions on every call from the same
+registers, RAM and GTE state, compares all three, and lets the recompiled result
+stand so a mismatch cannot reach the picture. Measured over `fdat05` plus areas 0,
+2, 3, 5 and 6, with all four tables and all three assemblers exercised (billboards
+submitting at 50-116 a second, the semi-transparent assembler at up to 288):
+
+| routine | calls verified | RAM | registers | GTE |
+|---|---|---|---|---|
+| `func_800331B4`, alone | 12,287 | 1 | 0 | 0 |
+| `func_80032588`, alone | 24,590 | 0 | 0 | 0 |
+| both together | 16,915 / 81,106 | 2 / 0 | 0 | 0 |
+
+**The RAM column is not zero, and what is in it is the more useful finding.** Every
+one of those three mismatches is an *ambient sound*, and there were exactly as many
+mismatches as there were key-ons — one, one and two. See "A verify pass replays,
+it does not re-run" below.
+
+**What it cost, which is nothing.** The frame profiler, area 1 standing still at the
+autostart position, the median of about 57,000 frames, with `KF2_MODELWALK=0` and
+then on. Self time, so the callees are excluded:
+
+| | recompiled | C# | |
+|---|---|---|---|
+| the walk's own body | 0.0204 ms | 0.0174 ms | -15% |
+| the submitter's own body | 0.0060 | 0.0060 | — |
+
+Three microseconds a frame, which is what "not a performance change" looks like.
+The submitter did not move at all, for the same reason the tile routine barely did:
+almost none of its body is now C#. What is left is the recompiled libgte and the
+MO blender — `func_80014FE0`, `ScaleMatrix`, `MulMatrix0`, `MulMatrix2`, the two
+matrices twice, `SetColorMatrix`, `SetLightMatrix`, `func_8002DDDC`, `SetBackColor`,
+`func_80015930`, `func_800158C8` and `func_80034DA8` — and the blender is the
+0.04-0.14 ms a frame that `docs/DEVELOPMENT.md` names as the next largest thing in
+the renderer.
+
+`KF2_MODELWALK_PROBE=1` is the semantic tap made visible, the live slots this frame
+and everything after them a rate: `this frame 21 creature, 342 object, 11 effect, 31
+sprite slot(s) live, 2 model(s) submitted; a second: 288 creature, 720 object, 44
+effect, 0 sprite; 1052 lit, 0 flat, 0 semi-transparent`. **The live counts are there
+because a zero submit rate has two causes** — nothing in the table, or nothing the
+visibility query would pass — and the billboard row was read as the first when it
+was the second: 31 records live in area 1 and not one of them submitted from where
+the camera stood, through a full sweep of the yaw.
+
+### A verify pass replays, it does not re-run
+
+**`verify` rolls back guest RAM, the CPU registers and the GTE, and nothing else.**
+A routine whose subtree holds state anywhere outside those three is therefore being
+*replayed*, and its second run legitimately differs. `TileWalk` never met this —
+nothing under the tile walk holds port-side state, and the GP0 writes it makes land
+outside the compared RAM — and `ModelWalk` met it twice, once in each direction.
+
+**The SPU, through libsnd.** An object of kind `0x1F` is an ambient sound source: it
+draws nothing, and when its retrigger interval comes due it plays through
+`func_80014158` → `SsUtKeyOn`, which is recompiled MIPS that picks a voice by
+reading the SPU. The SPU is the runtime's, not the guest's, so the first run leaves
+a voice busy and the second run's allocator picks a different one — a 4-byte
+difference in libsnd's voice table in `GAME.EXE`'s data, around `0x80073DE0`. Two
+things make the attribution airtight rather than plausible: **the number of
+mismatching calls equalled the number of key-ons exactly**, run after run, and
+**skipping the key-on in the C# path grew that same call's difference from 4 bytes
+to 65** — the whole libsnd record — which says all 65 of those bytes are
+`SsUtKeyOn`'s and that only the voice index among them ever disagreed. This one is
+left in place: the sound is real, it is played once either way, and the probe prints
+the running key-on total next to the verify report so a lone mismatch is
+attributable rather than mysterious.
+
+**The port's own patches, through `AnimSmoothing`.** This was 15,990 mismatches of
+85,643 submits, 15 bytes of posed mesh differing by one unit, and it only appeared
+after warping — a creature actually mid-clip and in view. `AnimSmoothing` hooks
+`func_80034DA8`, which is *inside* `func_80032588`, and it interpolates the MO clip
+time from its own per-slot state rather than from guest RAM, so the second run is
+handed a clock the first run already advanced. Measured: **0 of 51,525 with
+`KF2_SMOOTH_ANIM=0`**, over the same route. `AnimSmoothing` now stands down while
+`ModelWalk.Verifying` — the same move `PolyAssembler` makes on `EvenFog` — so the
+verify is clean without the caller having to know.
+
+**The general shape, which is worth carrying to the next one of these.** Before
+trusting a `verify` count, ask what is under the routine that a RAM, register and
+GTE rollback cannot reach: the SPU, the GPU, the disc, and **the port's own patches
+hooked into the subtree**. The last is the easy one to miss, because it is code this
+repository wrote and it looks like part of the game from the caller's side.

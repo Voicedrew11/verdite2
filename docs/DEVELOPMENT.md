@@ -437,6 +437,13 @@ in area 1. Since then, `func_8002FECC` and `func_8002E650` are C#, 30-36% faster
 including the transform. See "The unclipped assembler and its transform" in
 `PATCHES_AND_MODS.md`.
 
+Done since: the walk itself is C# too — `func_80031C94`, `func_80031B1C` and
+`func_80031950` (`patches/TileWalk.cs`), verified against the recompiled routines
+over 253,614 calls with 0 RAM, register or GTE mismatches. It bought 0.013 ms a
+frame, which is the point: it was taken for the **scene** it enumerates, not for the
+time, and the measured 192 flagged cells a frame is this section's "~195 nonzero"
+read off the other side. See "The map tile walk in C#" in `PATCHES_AND_MODS.md`.
+
 ### What the model submitter's time is
 
 `func_80032588` is a dispatcher: rotation from the Euler triple (`func_80014FE0`),
@@ -485,6 +492,15 @@ Done since: both are C# (see "The lit model assembler" in `PATCHES_AND_MODS.md`)
 17-41% off them, since the lighting was most of what was left. The morph (`func_80034DA8`, its base-mesh
 copy and the `func_80034A74` delta decoder) is the next largest at 0.04-0.14 ms,
 and `AnimSmoothing` hooks inside it.
+
+Done since, again: `func_80032588` itself is C# too, with its caller
+`func_800331B4` (`patches/ModelWalk.cs`), verified against the recompiled routines
+over 81,106 submits with 0 RAM, register or GTE mismatches. It bought **three
+microseconds a frame** — the prediction in this section's "a C# copy of it alone
+buys almost nothing" was right — and was taken for the scene it enumerates. The
+morph is still the next largest thing here, and it is now the largest recompiled
+thing left inside a C# submit. See "The object and creature walk in C#" in
+`PATCHES_AND_MODS.md`.
 
 ## Watching a frame being built
 

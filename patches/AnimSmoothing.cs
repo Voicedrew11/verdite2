@@ -466,6 +466,18 @@ public static class AnimSmoothing
     /// the rest of the smoothing tick.</summary>
     public static bool Enabled { get; private set; } = true;
 
+    /// <summary>Is the clock allowed to be driven right now? It is not while
+    /// <see cref="ModelWalk"/> is verifying, because this patch is *inside*
+    /// `func_80032588` — it hooks <see cref="MoApply"/> — and it interpolates from
+    /// its own per-slot state rather than from guest RAM. A verify pass runs the
+    /// submit twice from the same RAM, registers and GTE, but it cannot roll this
+    /// back, so the second run is handed a clip time the first run advanced and
+    /// poses the mesh one unit differently. Measured: 15,990 of 85,643 submits
+    /// mismatched with this on and **0 of 51,525 with it off**, over the same
+    /// route. Same shape as `PolyAssembler` standing <see cref="EvenFog"/> down.
+    /// </summary>
+    static bool Driving => Enabled && !ModelWalk.Verifying;
+
     /// <summary>
     /// How much of the clock to drive.
     ///
@@ -773,7 +785,7 @@ public static class AnimSmoothing
             if (_probe) Census(slot);
         }
 
-        if (!Enabled || !FramePacing.Gating || !slot.HasPrev) return;
+        if (!Driving || !FramePacing.Gating || !slot.HasPrev) return;
 
         // The root this pose hangs off is stepping at the tick rate, because
         // ObjectSmoothing judged its step a placement and left it where the game
