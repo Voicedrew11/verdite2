@@ -1302,11 +1302,29 @@ like a wall: `GteDepth.OtSlot` counts the empty tags a walk has passed, and a
 triangle in slot 0 recovers no depth. Measured, slot 0 holds the sky and nothing
 else (areas 0 and 2), and no world geometry sits below slot 1840 in any area; at
 one spot in area 0 the shaded share went 17.1% to 2.1% with area 1 unchanged.
-And a semi-transparent textured primitive only blends the texels with the STP bit
-set, so a surface drawn semi-transparent can be wholly opaque and still wrote no
-depth, leaving the room behind it for the pass to shade (a secret door showed
-through). Such batches now take a second, colour-masked draw that discards the
-blended texels and writes the rest. Neither picture has been looked at.
+And a semi-transparent primitive wrote no depth at all, leaving the room behind it
+for the pass to shade — **a secret door showed through**. Such batches now take a
+second, colour-masked draw that writes the depth the colour draw did not.
+
+**That draw was first written to keep only the texels the console does not blend**,
+on the reasoning that a surface drawn semi-transparent can still be wholly opaque:
+a textured primitive blends only the texels with the STP bit set. The secret door
+in area 2's save-3 room is not one of those. Every texel of it carries the bit, so
+every fragment of it was discarded and the door went back to showing the room
+behind it — the same report, a second time, and the mechanism that was supposed to
+have fixed it doing nothing at all. **A blended wall is still the surface the
+player is looking at**, so the draw keeps every texel now, and what stops it from
+erasing a death fade or the HUD is not the STP bit but `_kZMode == 2`: geometry
+carrying a recovered depth. A fade, a flash and the HUD carry none, take no such
+draw, and leave the depth under them alone, which is measured — the census's
+surface map holds the same HUD pattern before and after.
+
+Measured, standing where save 3 starts: the door's pixels went from a normal and a
+depth belonging to two different surfaces (the whole door reading "the normal is
+nearer than the depth") to none, and the picture's geometry-normal share from 89.9%
+to 100.0%. Turning 180° away from the door cleared the mismatch either way, which
+is what says the surface is that object and not the weapon in hand. Neither picture
+has been looked at.
 
 ### Undoing the game's own projection, and the number that caught the error
 
@@ -1418,10 +1436,18 @@ incapable of straddling anything.
   would have read as plausible shading in the wrong places.
 
 The pass keeps its old reconstruction as the fallback, per texel: the normal
-buffer's **alpha** says whether this pixel was reached, and a pixel it missed —
-a polygon the port did not assemble, a semi-transparent surface's opaque texels —
-gets exactly what it got before. So this is additive in the way everything else
-here is.
+buffer's **alpha** is the depth the triangle was drawn at, and the pass takes the
+normal only where that is this pixel's own depth to within a fiftieth. A pixel the
+redraw never reached — a polygon the port did not assemble — and a pixel it reached
+with a surface the depth buffer does not hold — a transparent hole in a texture,
+which the normal pass has no texture to punch — get exactly what they got before.
+So this is additive in the way everything else here is.
+
+**The check is what makes the buffer safe to fill with more than opaque geometry.**
+It was added with the secret door above: a blended wall's triangles go into the
+list too now, and the two buffers disagreeing is then a *fact about a pixel* rather
+than something that has to be prevented by keeping the list narrow. The alpha went
+from a flag to a depth for that, and the buffer from `RGBA8` to `RGBA16F`.
 
 **What it measures.** `KF2_AO_PROBE=1` gains a line for the buffer itself, and the
 census gains a third channel, because every number the pass already printed stays

@@ -743,11 +743,11 @@ public sealed class GlCore : IGpuBackend
         int lightGen = (a.Light & (GteLightMap.Directional << 24)) != 0 ? a.LightGen : -1;
         if (lightGen >= 0 && _kLightGen >= 0 && lightGen != _kLightGen) Flush(FlushReason.StateLight);
         Begin(f, 3, zMode);
-        // 0058. Keep the triangle for the normal buffer. zMode 1 is exactly the
-        // geometry that writes depth and is opaque, which is the geometry the
-        // occlusion pass shades; the order it is kept in is the order it is drawn
-        // in, and that is what makes the redraw agree with painter's order.
-        if (zMode == 1 && _kTarget != null && AoGeometry.Active)
+        // 0058. Keep the triangle for the normal buffer, in the order it is drawn,
+        // which is what makes the redraw agree with painter's order. zMode 2 too:
+        // it writes depth as well (a secret door is a blended wall), and the pass
+        // drops a normal whose depth is not the buffer's.
+        if ((zMode == 1 || zMode == 2) && _kTarget != null && AoGeometry.Active)
         {
             _kTarget.Geo.Frame(_frame, GteDepth.Generation);
             _kTarget.Geo.Add(GeoVert(a), GeoVert(b), GeoVert(c));
@@ -1503,8 +1503,13 @@ public sealed class GlCore : IGpuBackend
                 _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
             }
 
-            // Texels without the semi-transparency bit draw opaque, so they must hide what is behind them from the occlusion pass.
-            if (GteDepth.AmbientOcclusion && _uOpaqueDepth >= 0)
+            // A semi-transparent surface of the world is still the surface the
+            // player is looking at, so it must hide what is behind it from the
+            // occlusion pass -- a secret door is a blended wall, and without this
+            // the pass shades its pixels with the room standing behind it. zMode 2
+            // only: that is geometry carrying a recovered depth, where a fade, a
+            // flash and the HUD carry none and must leave the depth alone.
+            if (GteDepth.AmbientOcclusion && _kZMode == 2 && _uOpaqueDepth >= 0)
             {
                 _gl.Disable(EnableCap.Blend);
                 _gl.ColorMask(false, false, false, false);
@@ -2151,8 +2156,9 @@ public sealed class GlCore : IGpuBackend
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
-        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)rt.TexW, (uint)rt.TexH, 0,
-                       PixelFormat.Rgba, PixelType.UnsignedByte, null);
+        // Float: alpha carries the view depth the pass checks the normal against.
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba16f, (uint)rt.TexW, (uint)rt.TexH, 0,
+                       PixelFormat.Rgba, PixelType.Float, null);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, rt.NormalFbo);
         _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
                                  TextureTarget.Texture2D, rt.Normal, 0);
