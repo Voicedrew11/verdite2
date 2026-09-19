@@ -2312,6 +2312,49 @@ fade (`func_80037B5C`), the cutscene and message-box loops (`func_80047000`,
 (`func_800474D0`) — is what stopped being enumerated by hand. See "Loops that
 render their own frames" below.
 
+### The tints strobed between ticks
+
+**Mechanism measured; the picture has not been judged by eye.** Reported from play
+as flashing on death. The death fade and the damage flash are one request block at
+`0x80192D45` (mode, R, G, B; "The screen-space effects are 320 wide too" in
+[WIDESCREEN.md](WIDESCREEN.md)), read by `func_8003214C` in stage 13 every frame.
+**Stage 1, `func_8002C944`, resets it at the head of every main-loop iteration** —
+mode `0xFF`, and the second wash at `0x80192D49`..`0x80192D4F` zeroed — and the
+stages that ask for a tint are 2 and 3, both gated to the tick. So above the tick
+rate the tint was drawn on the tick's frame and cleared on each frame after it.
+Stage 1 was on the list of ungated stages nobody had checked (`check_gate.py
+--stages`, `docs/TODO.md`).
+
+The modal fade `func_80037B5C` does not strobe, because it sets the tint and calls
+stage 13 itself with no stage 1 in between; only a tint asked for from the main
+loop does. With auto reload on, the death fade's `32..64` arm is held at 31, so
+what a player saw strobe was mostly the hit flash and anything else the gated
+stages tint.
+
+Measured at 144 fps, `KF2_AUTORELOAD=0`, a simulated death: 32 of 231 frames in
+the fade carried the tint (one frame per tick), against 231 of 231 with the hold.
+144.0 fps drawn at 20.0 ticks/s either way.
+
+**Stage 1 is not gated whole**, because it also copies 80 records from
+`0x800679A0` into `0x801930F0` and clears the load flag at `0x801930EC`, which
+stage 10 (ungated) reads; holding that flag across the frames between ticks would
+run stage 10's per-record work several times a tick. So `patches/TintHold.cs`
+replaces stage 1 with a C# copy of it that does the copy and the clear every
+frame, as before, and the tint reset only when the gated stages will run — the
+reset is moved onto the tick with them rather than undone afterwards.
+`FramePacing.StagesWillRun` answers that question with no side effect: the same
+decision `BeforeStage` returns on the live boundary. With the boundary lost the
+decision is made only inside `FallbackTick`, so it answers true and the routine
+behaves as the game's own, strobe included, in a state that already announces
+itself. A pause holds the tint too. PGXP's CPU tracking falls back to the
+recompiled routine.
+
+`KF2_TINTHOLD=verify` runs both on every call, with the reset on in ours, and
+compares all of RAM and the registers the routine leaves; the recompiled result
+stands. Measured over boot, the slot load, a death and the respawn: 16 windows of
+288 calls, 0 RAM and 0 register mismatches. `KF2_TINTHOLD=0` is the recompiled
+routine, strobe and all.
+
 ### Loops that render their own frames
 
 **The generalisation of the two fixes above, and the reason the list stopped

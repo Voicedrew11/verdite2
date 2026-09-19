@@ -558,6 +558,24 @@ public static class FramePacing
     public static bool TickedThisFrame => !Paused && (!Gating || _tickThisFrame);
 
     /// <summary>
+    /// Whether the gated stages will run in this main-loop iteration: what
+    /// <see cref="BeforeStage"/> returns, asked with no side effect, for an ungated
+    /// stage that runs before them. With the boundary lost the answer is only made
+    /// inside <see cref="FallbackTick"/>, so this says true there -- the game's own
+    /// every-frame behaviour, in a state that already announces itself.
+    /// </summary>
+    public static bool StagesWillRun
+    {
+        get
+        {
+            if (!Gating) return !Paused;
+            bool live = _lastBoundaryMs >= 0.0 &&
+                        _clock.Elapsed.TotalMilliseconds - _lastBoundaryMs <= BoundaryDeadMs;
+            return !live || (_tickThisFrame && !Paused);
+        }
+    }
+
+    /// <summary>
     /// How many frame boundaries have been reached. Not a rate and not a clock --
     /// an *identity*, so a patch that must act once a frame can tell a second call
     /// inside one frame from the first call of the next. <see cref="SpriteAnim"/>

@@ -202,7 +202,7 @@ useful than the question was.
      or a cutscene, which the shell cannot reach.
    * **Four ungated stages that submit nothing at all** and so are free under the
      existing rule, but hold globals nobody has looked at: stage 1 `func_8002C944`
-     (8), stage 9 `func_800140AC` (8, the 3D sound listener), stage 11
+     (8; its tint reset now runs on the tick, `TintHold` -- "The tints strobed between ticks"), stage 9 `func_800140AC` (8, the 3D sound listener), stage 11
      `func_80016FC8` (1), stage 12 `func_80014534` (14). `check_gate.py --stages`
      lists them as candidates. Measure before gating — the point of doing them
      separately is that a regression stays attributable to one cause.
