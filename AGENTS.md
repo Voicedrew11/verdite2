@@ -1,6 +1,6 @@
-# AGENTS.md
+# CLAUDE.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -17,7 +17,7 @@ address in the disc image, map it to the runtime's HLE implementation, re-run th
 recompiler, run the game, read the logs.
 
 **`NOTES.md` is the index, and `docs/` is the working log.** `NOTES.md` carries
-what the project is and where it stands, plus a map of the nine documents under
+what the project is and where it stands, plus a map of the documents under
 `docs/` and the exact section titles in each. Read the index before starting
 anything, then the one or two documents your task touches — they are split by what
 you would be doing when you need them:
@@ -25,40 +25,46 @@ you would be doing when you need them:
 | file | when |
 |---|---|
 | `docs/DEVELOPMENT.md` | build, run, diagnose, measure |
+| `docs/ENV_VARS.md` | every `KF2_*` switch, in one list |
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
+| `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0057` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
+| `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
 | `docs/GAME_INTERNALS.md` | the game's own addresses and routines |
-| `docs/PATCHES_AND_MODS.md` | hooking, settings UI, frame pacing, auto reload |
-| `docs/INPUT.md` | pad, sticks, keyboard, mouse |
+| `docs/PATCHES_AND_MODS.md` | hooking, settings UI, frame pacing, smoothing, the map |
+| `docs/INPUT.md` | pad, sticks, keyboard, mouse, the menu pointer |
 | `docs/PACKAGING.md` | the redistributable: the launcher, the first-run build, CI |
 | `docs/TODO.md` | next steps and open, undiagnosed questions |
 
 Update the right document when you learn something — that is where findings
-belong, not in commit messages. Source comments still say `See "X" in NOTES.md`,
-and **the text they name is not in `NOTES.md` any more** — the titles are
-unchanged, so the index resolves X to a document, but it is a hop rather than a
-direct hit. Grep `docs/` for the title, not `NOTES.md`.
+belong, not in commit messages, and not in this file. Source comments still say
+`See "X" in NOTES.md`, and **the text they name is not in `NOTES.md` any more** —
+the titles are unchanged, so the index resolves X to a document, but it is a hop
+rather than a direct hit. Grep `docs/` for the title, not `NOTES.md`.
 
 ## Build and run
 
-Nothing here builds without the disc (gitignored, `disc/KingsField2.cue`) and
-without `tools/RecompOne` (a gitignored checkout, not a submodule).
+Nothing here builds without the disc (gitignored, `disc/KingsField2.cue`).
+`tools/RecompOne` is **vendored** — its sources are tracked here, so a fresh
+clone already has it and nothing needs cloning.
 
 ```bash
-bash scripts/setup_tools.sh          # clone RecompOne, apply patches/recompone/*, build recompiler
+bash scripts/setup_tools.sh          # build the vendored recompiler
 
-# recompile MIPS -> C# into generated/ (~2099 functions, ~163k lines)
+# recompile MIPS -> C# into generated/ (~2234 functions, ~182k lines)
 dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build -- config/kf2.json
 
 dotnet build KingsField2Recomp.csproj -c Release
 dotnet run --project KingsField2Recomp.csproj -- disc/KingsField2.cue
 ```
 
-`setup_tools.sh` is idempotent and is also how you re-apply the local patches
-after pulling upstream. The cue path is needed at *play* time as well as at
-recompile time.
+`setup_tools.sh` builds; `--sync-upstream` starts the next three-way merge from
+upstream, and `--signatures` fetches the 15.7 MB PSY-Q bank (gitignored, read
+only by the standalone `--autoconfigure`). The cue path is needed at *play* time
+as well as at recompile time.
 
 There are no tests. Verification is empirical: run the game with log channels on
 and check the trace against what the SDK sequence should look like (see the
@@ -74,218 +80,34 @@ that way.
 
 ### Diagnostics
 
+The switches used most; the full list is `docs/ENV_VARS.md`, imported here.
+
+@docs/ENV_VARS.md
+
 ```bash
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
-KF2_FPS=60                             # 30 (default), 60, or off; see "Frame pacing"
-KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
-KF2_MENUPACING=0                       # menu cursor repeat and blink back on the frame clock (on by default)
-KF2_MENUPACING_PROBE=1                 # what each repeat cost, and the blink's step rate
-KF2_WIDESCREEN=16:9 KF2_WIDESCREEN_PROBE=1  # aspect (4:3 by default), and the margin census
-KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
-KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide
-KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3 shape
-KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the aspect's
-KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
-KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
-KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, capacity, overflows
-KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
-KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GPUSTAT bit 9
-KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
-KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
-KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
-KF2_SUBPIXEL=1                         # sub-pixel vertex positions (off by default)
-KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels
-KF2_ZBUFFER=1                          # per-pixel occlusion from GTE depth (off by default)
-KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-tested
-KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map of the depth buffer
-KF2_ANALOG=0                             # twin-stick control off (it is on by default)
-KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
-KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
-KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
-KF2_MOUSE=1                              # mouse look (off by default; Escape captures the pointer)
-KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
-KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
-KF2_MOUSE_KEY=Escape                     # the key that captures and releases
-KF2_AUTORELOAD=1 KF2_AUTORELOAD_DELAY=2.0 KF2_AUTORELOAD_SLOT=0  # reload the last save on death
-KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
-KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
-KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill
-KF2_UISCALE=1                            # force the interface scale, and save it
+KF2_FPS=120                            # 60 (default), any number, or off
+KF2_FPS_PROBE=1                        # a line a second: fps drawn, ticks taken, what each smoother is doing
+KF2_TICKRATE=30                        # the world's tick rate (20, and not a setting); a comparison only
+KF2_PRESENT_PROBE=1                    # proves frames reach the screen; prints nothing if they do not
+KF2_AUTOSTART=2                        # boot straight into save slot 1..3, past the title menus
+KF2_AGENT=1                            # [KF2-AGENT] state lines on stdout
+KF2_SHELL=1                            # TCP 127.0.0.1:27900 command channel
+KF2_BOOTEXE=end                        # boot straight into OPEN.EXE, GAME.EXE or END.EXE
 ```
 
-Patch settings live in `patches/settings/`. A patch registers an `IPatchPage`
-against one of the runtime's own settings sections —
-`PatchSettings.Register("display", new FramePacingPage())` — and is drawn inside
-it, so the frame rate and the dither switch sit in System ▸ Settings ▸ Video
-beside vsync rather than in a panel of their own. That is where a mod's
-`DrawSettings` body goes when the mod becomes a patch. Pages that give the same
-`Title` share one heading, so single checkboxes group under "Enhancements"
-instead of each getting a rule of its own. That section is the runtime's
-`display` — still that id everywhere in code; the port renames only its *label*,
-through `Localization.Merge`, which needs no patch to the checkout. See "Patch
-settings" in `docs/PATCHES_AND_MODS.md`.
+Prefer the mods under `mods/` (**enable them in the game's Mods panel** — mods
+default to off and load silently when disabled) to `KF2_LOG=sdk`, which is
+gigabytes a minute. `KF2_LOG=bios` is very expensive during play — the game polls
+`PAD_dr` hundreds of thousands of times a second.
 
-**`gameplay` is the one section the port adds itself**, for patches that change
-how the *game* behaves rather than how the machine does — auto reload is not a
-video option and not an input option. `ISettingsSection` is public and
-`SettingsRegistry.Register` takes any implementation, so it needs no patch to the
-checkout either; `patches/settings/GameplaySection.cs` is an empty shell and
-everything in the pane is a page registered against `"gameplay"`. A new key has to
-supply all three of the runtime's languages, unlike an override of an existing
-one.
-
-Frame pacing is load-bearing: without it the port runs faster than the game can on
-hardware, so it lives in `patches/` and is always on. Dithering is a patch for a
-different reason — it is a picture the port should be able to offer without a
-package having to load — and defaults to *off* (no crosshatch). **Perspective
-correction is a patch for that same reason and is on by default**, beside it under
-Video. Unlike the others its work is not in `patches/` at all: a texture
-coordinate is decided far below anything `HookManager` can reach, so the mechanism
-is `patches/recompone/0009` and `0012` (`GteVertexMap`, the rasterizer and the prim
-shaders) and `patches/Perspective.cs` is only the switch and the probe. The depth is
-tied to its vertex by **the address the screen coordinate is stored at**, followed
-through the game's own copy into the primitive packet — not by the screen position,
-which several vertices share and which `0009`-`0011` could only guess between.
-**Sub-pixel vertex positioning is the other half of the same recovered number** and
-is shaped the same way — mechanism in `patches/recompone/0010` and `0012`, switch and probe in
-`patches/Subpixel.cs`, checkbox under Video — but defaults to *off*, because the
-mechanism has been measured and the picture has not. **The Z-buffer is the same
-depth used as occlusion** rather than as a texture denominator: the GPU has none,
-so intersecting surfaces take turns in front of each other on the ordering table,
-and `patches/recompone/0014` tests the recovered SZ per pixel instead. Off by
-default for the sub-pixel reason; its switch sits with the others under Video.
-See "Sub-pixel vertex positioning" and "Z-buffer" in `docs/RENDERING.md`. Auto reload is a
-patch for the same kind of reason: a death costing four screens of menu is
-something a player expects the port itself to have dealt with, so it is on by
-default and its knobs are under Gameplay. Analog twin-stick control is the same
-test applied to the pad — without it a modern controller's left stick is wired to
-the D-pad and *turns* rather than walking — so it is on by default too, and its
-knobs are under Input, below the button-binding table. It costs nothing when a
-stick is centred: both hooks return before touching memory, so keyboard and D-pad
-play are identical to having it off. **Mouse look is the other half of that
-patch rather than a patch beside it** (`patches/Mouse.cs`): a mouse and a stick
-both ask for the same per-frame turn and pitch step, so the mouse's number is
-spent inside `Analog.BeforeLook` and one routine writes the velocity word. Its
-buttons take the other route entirely — `PadReadEvent`, so they are pressed *as
-pad buttons* at the moment the game reads the pad, which needs no address, follows
-the game's own control-config screen and works in its menus. It is **off by
-default**, though not for the sub-pixel reason: the path *is* measured end to end
-— the angle asked for and the angle the game applied agree within a few percent
-over four windows of real play — but a pointer that disappears into the game
-unasked is worse than one switch to find. What no counter can answer is the feel
-(0.15°/px) and whether the pitch runs the right way round. See "Mouse look" in
-`docs/INPUT.md`.
-
-**The port ships its own keyboard layout** (`patches/KeyLayout.cs`), because
-RecompOne's defaults are a console's spelled on a keyboard — face buttons on
-Z X A S, D-pad on the arrows — and this game walks *and turns* on the D-pad, so
-the arrows alone are a tank control. W/S walk, A/D strafe (the game strafes on
-L1/R1), the arrows still walk and turn, Space attacks, F uses, Q casts, Tab opens
-the menu, and pitch is the mouse's alone. **Changing a runtime default needs no patch to the checkout**:
-`ConfigManager.Game.Keys` is settable and `Configure()` runs *before*
-`ConfigManager.Load`, which saves the in-memory object when there is no
-`settings.json` — so it is a default rather than an override. An existing config
-is migrated once, only if every binding in it is still stock, and the fact is
-recorded in `interface.ini` (`kf2.keys.layout`). Up and Down carry a **second**
-key each — the arrows — which the runtime's one-string-per-button schema cannot
-hold, so they are ORed in at `PAD_dr` like the mouse buttons; without them the
-in-game menu would scroll on W and S. Changing the layout *after* it has shipped
-costs one piece of bookkeeping — bump `Version` and record the old layout in
-`Superseded`, or an existing config reads as customised and is never corrected;
-that is how v1's swapped attack/use was fixed. See "The keyboard layout" in
-`docs/INPUT.md`.
-
-**Widescreen is a patch for the dither reason** — an aspect ratio is a picture the port should be able to offer without a
-package having to load, and Video is where a player looks for it — but it is the
-one patch that defaults to *doing nothing*, for the sub-pixel reason: the picture
-has never been checked by eye. (Its two sub-options are on by default, since they
-only do anything once an aspect has been chosen; the tint stretch is on because
-the picture without it *was* checked and was wrong.) The measurement tools are the mods that are left
-under `mods/` — **enable them in the game's Mods panel**, since mods default to
-off and load silently when disabled. Prefer them to `KF2_LOG=sdk`, which is
-gigabytes a minute.
-
-Widescreen is `Display.WideAspect` and nothing else: the runtime renders a margin
-either side of the display buffer and presents it, the projection is untouched, so
-the sides show geometry the game submitted and the GPU used to clip — a quarter of
-its primitives in an area. The HUD is anchored at its **source**, not from the
-primitive stream: `func_80031D5C` walks its fourteen entries at `0x80067774`, and
-its pre/post hooks rewrite the projected XY words in the primitive-buffer interval
-it just allocated, before it returns. `DrawOTag` is not asked to recognise those
-packets — a rendezvous at playback is what made the panel flash in the margin.
-The in-game menu never rebuilds the HUD and never walks those packets either
-(it ClearOTags); leftover picture in the extra columns is pixels in the last two
-display targets, and each menu `DrawOTag` fills those columns so the list sits
-on pillarboxes rather than last frame's HUD. Rules keyed on how a primitive
-*looks* were tried twice and failed twice: the CLUT
-column moved half the world sideways, and "the last 128 OT entries inside the two
-measured boxes" tore the in-game menu apart, because a menu is screen space in
-front of the world too. `DrawOTag` remains a replacement only for the
-**screen-space tints** — the death fade, the damage flash, the wash on an area
-load — which the game draws as one 320-wide quad and which therefore covered only
-the middle of a wide picture. All of them come out of one drawer
-(`func_8003220C` fills a request block, `func_8003214C` submits
-`func_80031EE8(0,0,320,240)`). A pre-hook on the generic quad builder identifies
-the tint by `func_8003214C`'s return address, records the just-about-to-be-allocated
-packet, and the replacement consumes that source marker before snapping it out to
-the margin. The menu's black input overlay can have the same packet format but
-reaches the builder from another call site, so it is never stretched. Opaque
-full-screen pictures (titles, menus) are left at their authored width on purpose.
-See "Widescreen" in `docs/WIDESCREEN.md`.
-
-**The cull the margin runs into is `patches/CullCone.cs`**, and it is the other
-half of widescreen rather than an option beside it. The game gates every object
-and every geometry block on a **24×24 byte grid of tile visibility** at
-`0x80192EAC`, rebuilt each frame by `func_8002D3A8` as a top-down trapezoid — the
-4:3 frustum flattened onto the map — whose corners are seven `s16` pairs in
-GAME.EXE's data at `0x80068760`. Widening the picture without widening that leaves
-the sides showing only what the game happened to overdraw. Two things about it are
-load-bearing: the 24×24 window fits the shipped cone *exactly* (`0/60 frames reach
-the grid edge` at stock, measured), and the game's scanline fill
-(`func_8002CF0C`) scans in from both sides, so a row whose edge left the grid gets
-**no fill at all** — widening the table alone loses whole ranks of tiles. Hence the
-post-hook that re-rasterises the recorded edges and fills what the game dropped.
-The 24-tile window is stride and bounds baked into nine routines, so growing it is
-a reimplementation of the visibility system whose only correctness check is a
-person looking at the screen; `KF2_WIDESCREEN_CULL_PROBE=2` measured what that
-would buy and the answer was **3.5% of lit tiles, at the far corners** — binding,
-barely, and not worth it. See "The cull the margin runs into" in
-`docs/WIDESCREEN.md`.
-
-**The attract demo is a free live session**: leave the port at the title and it
-walks itself into an area about a minute later, with a character, an HP bar and
-(eventually) a death. That is how in-game behaviour gets tested without a human
-driving the menus — `AutoReload.Simulate()` kills on demand from there, and the
-death clock at `0x8019951A` can be pinned to hold any frame of the death sequence
-still.
-
-**Getting an agent into the game — and driving it once there: `KF2_AUTOSTART`,
-`KF2_AGENT`, `KF2_SHELL`.** An agent left
-at the title waits forever — the boot menus take no input by the usual routes
-(`KF2_AUTOPAD` only arms once an area has loaded, the very thing that has not
-happened), and the screen must not be scraped. `KF2_AUTOSTART=<1..3>` drives the
-pad itself through `PAD_dr`: Start through the intro, Cross to start a New Game
-into `fdat02`, then loads the chosen slot over it through `AutoReload.LoadSlot`,
-landing in the save's own area in a few seconds. `KF2_AGENT=1` prints a
-machine-readable `[KF2-AGENT]` line on each overlay change and about once a second
-(`{"overlay":…,"inGame":…,"hp":…,"area":…,"slot":…}`) — `inGame:false` is how a
-program tells "stuck at the title" from "in an area" without a screenshot. See
-"Auto start and the agent beacon" in `docs/PATCHES_AND_MODS.md`.
-
-**`KF2_SHELL=1` is the acting half**: while the session runs, a line protocol on
-TCP 127.0.0.1:27900 (`state`, `nearby`, `load <slot>`, `warp <area>`,
-`press <button> [ms]`, `kill`; one request per line, one single-line JSON
-response back) steers the game
-the beacon is only watching. See "The command channel" in
-`docs/PATCHES_AND_MODS.md`.
-
-`KF2_AUTOPAD` reproduces an input-triggered bug without a human at the keyboard;
-its clock starts when the first area module loads, which is the only point in the
-boot sequence that reliably means "in game". `KF2_LOG=bios` is very expensive
-during play — the game polls `PAD_dr` hundreds of thousands of times a second,
-which is gigabytes of log per minute.
+`Program.cs` is hand-owned (RecompOne would otherwise generate one into
+`generated/`); add new env-var-driven diagnostics there, and add them to
+`docs/ENV_VARS.md`. The docs mention `KF2_TRACECALL` — that was an ad-hoc local
+edit to the dispatcher and is *not* in any committed patch; re-add it by hand if
+you need indirect-call tracing.
 
 **For a hang, take the managed stack of the live process instead of adding
 logging.** Recompiled functions carry their MIPS address in their name, so the
@@ -298,10 +120,128 @@ trace names the routine directly:
 Start the game from the same shell you run that in, or the diagnostic socket in
 `TMPDIR` will not be found.
 
-`Program.cs` is hand-owned (RecompOne would otherwise generate one into
-`generated/`); add new env-var-driven diagnostics there. Note the docs mention
-`KF2_TRACECALL` — that was an ad-hoc local edit to the dispatcher and is *not* in
-any committed patch; re-add it by hand if you need indirect-call tracing.
+### Driving the game without a human
+
+- **The attract demo is a free live session**: leave the port at the title and it
+  walks itself into an area about a minute later, with a character, an HP bar and
+  (eventually) a death. `AutoReload.Simulate()` kills on demand from there, and the
+  death clock at `0x8019951A` can be pinned to hold any frame of the death sequence.
+- **`KF2_AUTOSTART=<1..3>`** — an agent left at the title waits forever (the boot
+  menus take no input by the usual routes, and `KF2_AUTOPAD` only arms once an area
+  has loaded). This drives the pad through `PAD_dr`: Start, Cross into a New Game
+  in `fdat02`, then loads the slot over it through `AutoReload.LoadSlot`.
+  `KF2_AUTOSTART=new` stops in that New Game, which faces scrolling water.
+- **`KF2_AGENT=1`** prints `{"overlay":…,"inGame":…,"hp":…,"area":…,"slot":…}` on
+  each overlay change and about once a second; `inGame:false` is how a program
+  tells "stuck at the title" from "in an area" without a screenshot.
+- **`KF2_SHELL=1`** — one request per line on TCP 127.0.0.1:27900, one
+  single-line JSON response back: `state`, `nearby`, `load <slot>`,
+  `warp <area>`, `press <button> [ms]`, `kill`, `ending [boss|kill]`,
+  `map [on|off|toggle]`, `goto <x> <y> <z> [yaw [pitch]]`. The `kf2` MCP server in `mcp/` exposes the same channel.
+  `ending kill` is the form that reproduces the final-boss crash; reaching it
+  needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the player on the way in.
+  `press` reaches Cross but not the in-game menu's Up/Down.
+- **`KF2_AUTOPAD`**'s clock starts when the first area module loads, the only
+  point in the boot sequence that reliably means "in game".
+
+See "Auto start and the agent beacon" and "The command channel" in
+`docs/PATCHES_AND_MODS.md`.
+
+## The port's own patches
+
+Everything under `patches/*.cs` attaches at run time through `HookManager`; each
+has a write-up, and the specifics (addresses, measurements, why each default is
+what it is) live there, not here.
+
+| patch | what | default | doc, section |
+|---|---|---|---|
+| `FramePacing` | skips the game's frame gate `func_80017880`, paces frames itself, runs the gated stages on a 20 Hz world clock | 60 fps drawn, 20 ticks/s | PATCHES_AND_MODS, "Any frame rate" |
+| `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing`, `FluidSmoothing` | carry the camera, the four world tables, MO pose and the scrolling textures between ticks | on; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing" |
+| `LoopPacing` | modal loops (fades, cutscenes, item/spell animations) run once per tick, gaps filled with stage-13 redraws | on | PATCHES_AND_MODS, "Loops that render their own frames" |
+| `MenuPacing` | menu cursor repeat and blink held to the 60 Hz grid | on | PATCHES_AND_MODS, "The menu's cursor repeat" |
+| `LoadPacing` | loading screen's walking figure held to the vblank grid | on | PATCHES_AND_MODS, "The loading screen's walking figure" |
+| `SpriteAnim` | billboard cel animation held to the tick | on | PATCHES_AND_MODS, "The flames run at the render rate" |
+| `FullRateLogic` | `KF2_FPS_LOGIC=full`; comparison only, **not shippable** | off | PATCHES_AND_MODS, "Any frame rate" |
+| `FrameProfiler` | per-frame time by section: every hook, the present path, the waits (`0045`); Shift+P | records while its panel is open | DEVELOPMENT, "Profiling a frame" |
+| `FrameCapture`, `FrameViewerPanel` | capture one run of stage 13 and scrub it GP0 command by command on a detached software GPU: owner routine, send cost, fragments, GL batch submits and why, GPU time per batch and for AO, every runtime section, vertex-map work per routine (`0046`); Shift+F | idle until a capture; routines hooked from the first | DEVELOPMENT, "Watching a frame being built" |
+| `PolyAssembler` | `func_80030540` in C# as a replace hook, rejecting polygons the view-space clipper would clip to nothing; also `func_8002FECC` (the far map tiles' unclipped assembler), the vertex transforms `func_8002E650`/`func_8002E7CC`, `func_8002F214`/`func_8002EAEC` (the models' lit assembler) and the clipper `Clip4FTP`/`Clip3FTP`; the GTE ops they call have a fast path in the runtime (`0047`); `KF2_POLYASM=verify` diffs each against the recompiled routine, GTE included; Video ▸ Fast geometry switches them all, with the GTE fast path | on | PATCHES_AND_MODS, "The polygon assembler in C#", "The lit model assembler", "The clipper in C#", "The GTE fast path" |
+| `TileWalk` | the map tile walk in C#: `func_80031C94` (the 24×24 cell sweep), `func_80031B1C` (a cell's two halves) and `func_80031950` (a half, set up and assembled). Taken for the scene it enumerates, not for time (0.013 ms a frame); `KF2_TILEWALK=verify` diffs each against the recompiled routine | on | PATCHES_AND_MODS, "The map tile walk in C#" |
+| `ModelWalk` | the object and creature walk in C#: `func_800331B4` (the creature, object, effect and billboard tables) and `func_80032588` (the model submitter). Taken for the scene it enumerates, not for time (3 us a frame); `ModelWalk.Scene` publishes each submit's record, model, position and assembler; `KF2_MODELWALK=verify` diffs both against the recompiled routines | on | PATCHES_AND_MODS, "The object and creature walk in C#" |
+| `Perspective` | perspective-correct textures (`0009`, `0012`) | on | RENDERING, "Perspective correction" |
+| `Subpixel` | sub-pixel vertex positions (`0010`); under it, the C# assemblers' backface cull is taken at the fractional corners (`0052`, `KF2_SUBPIXEL_CULL=0` to compare) | on | RENDERING, "Sub-pixel vertex positioning", "A thin face was culled on whole pixels" |
+| `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); Video ▸ Enhancements, with two tolerance sliders | on | RENDERING, "Z-buffer", "The assemblers write the depth" |
+| `Pgxp` | upstream's PGXP as the vertex source (`0034`-`0036`); env only | off | RENDERING, "PGXP has no control in the window" |
+| `AmbientOcclusion` | SSAO from painter's-order depth (`0040`), normals from the frame's own geometry redrawn into a G-buffer (`0058`); optional world-space term marching the area's tile grid, so off-screen geometry occludes (`0059`, off) | on | RENDERING, "Ambient occlusion", "The normal was the guess", "Occluders the camera cannot see" |
+| `Anisotropic` | post-CLUT footprint supersampling (`0041`) | off | RENDERING, "Anisotropic filtering" |
+| `PerPixelLighting` | the depth cue and the models' light evaluated per pixel from what `PolyAssembler` recorded per packet (`0048`) | on | RENDERING, "Per-pixel lighting" |
+| `EvenFog` | clipped map tiles refogged on the tiles' curve instead of `func_800302E8`'s `IR0 >> 1`, and each tile vertex's fog blended between the light records of the tiles around it (hooks `func_80031950`; `0049`); and the records' colour matrix and back colour the same way; one *Even fog and lighting* checkbox, dimmed without Fast geometry (`KF2_EVENFOG_BLEND=0`, `KF2_EVENLIGHT=0` drop a part); stands down under verify | on | RENDERING, "A clipped tile is fogged at half, and that is the block on the floor", "Fog changes at a tile edge" |
+| `NoDither`, `TrueColor` | one *Shading* combo: Dither / None / Smooth (24-bit, `0021`) | Smooth | PATCHES_AND_MODS, "Two shading checkboxes were one question asked twice" |
+| `Widescreen`, `CullCone` | aspect ratio; widened view cone and screen tints follow it | 16:9 | WIDESCREEN, "Widescreen", "The cull the margin runs into" |
+| `PrimBuffer` | the frame's primitive buffers moved above 2 MB into 4 MB of guest RAM, 4× as large, so a wide view no longer runs out and drops geometry (`0056`); `KF2_PRIMBUF=1` is the comparison, `KF2_PRIMBUF_PROBE=1` the measurement | on | WIDESCREEN, "The primitive buffer ran out" |
+| `AutoReload` | reload the last save on death, fixed 2 s delay | on | PATCHES_AND_MODS, "Auto reload" |
+| `Map*` | full-screen map (touchpad / `M`), minimap (`N`), fog of war, markers; full map pauses the world | map on; fog on; minimap, markers off | PATCHES_AND_MODS, "A dynamic map", "What the Map page is down to" |
+| `Analog` | twin-stick control | on | INPUT, "Analog twin-stick control" |
+| `Mouse` | mouse look, spent inside `Analog.BeforeLook` | on | INPUT, "Mouse look" |
+| `MenuMouse` | point-and-click in the in-game menus | on | INPUT, "The menu pointer" |
+| `KeyLayout` | the port's WASD layout | on | INPUT, "The keyboard layout" |
+| `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |
+| `HitGuard` | fences the final-boss hit-path fault | on | TODO, "The crash on the final boss's last hit" |
+| `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | Gaussian, original reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |
+| `PositionalAudio` | 3D sound effects re-aimed every frame, for speakers or headphones (`0044`) | off | AUDIO, "Positional audio" |
+
+Features ship **off** when the mechanism is measured but the picture has never been
+judged by eye; say which of the two a change has when you write it up.
+
+### Rules that bite when you change a patch
+
+- **Attach through `patches/HookAttach.cs`, and read back what committed.**
+  `AddPre`/`AddPost` only queue a delegate; the detour is made later in
+  `HookManager.Commit`, which fails per function without throwing (`0027`), so
+  counting `Add*` returns claims what was *queued*. Use `HookManager.IsCommitted`
+  (`0028`), retry until it holds, and never latch `attached = true` before
+  `Attach()` — an exception thrown inside an `OverlayLoadedEvent` listener is
+  swallowed by `Event.Dispatch` into one stderr line. See "A registration is not
+  a hook" in `docs/PATCHES_AND_MODS.md`.
+- **The frame boundary is a single point of failure and it fails open.** It is a
+  `DrawOTag` that follows a `VSync` call; `_tickThisFrame` starts `true`, so a lost
+  boundary uncaps the picture *and* runs the whole world at the render rate,
+  silently. The stage gate's 500 ms watchdog (`FallbackTick`) is what saves it; a
+  hold keyed on the frame (like `SpriteAnim`) fails *closed* and needs the same
+  watchdog. Check any pacing change with `KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps
+  drawn at 20.0 ticks/s.
+- **A gated stage must not draw** (`scripts/check_gate.py`; its `KNOWN` holds the
+  two recorded exceptions). Something stepped inside a drawing function's own body
+  cannot be gated and needs a hold/restore pair instead.
+- **A tick is a frame identity, not a flag**: use `FramePacing.FirstWalkOfTick`,
+  not `TickedThisFrame`, when something must happen once per tick inside stage 13.
+- **`Widescreen` owns the one `Replace` of `DrawOTag`**, so every other `DrawOTag`
+  hook must be a pre or a post, and a replacement must pass the source address to
+  `WriteGp0` or perspective correction silently turns off.
+- **`LoopPacing` is installed last in `Program.cs`** — its post on stage 13 must run
+  after the smoothers'.
+- **A liveness test is the renderer's, not the owning stage's**: an object is drawn
+  when `u16[+0x6] != 0xFF`, a creature when `u8[+0x9] == 1`.
+- **Settings**: a page registers against a runtime section with
+  `PatchSettings.Register("display", ...)` (or `RegisterSlot`, `0013`); pages
+  sharing a `Title` share a heading and need adjacent `IPatchPage.Order`s or the
+  heading is drawn twice. `Extend` has **no un-extend**, so nothing may register
+  against `"input"` — `patches/settings/InputSection.cs` owns that pane outright
+  and `Register` refuses the id. `gameplay` is the port's own section
+  (`GameplaySection.cs`); **a new localisation key must supply all three of the
+  runtime's languages** (en, pt-BR, es-419), and **a new sidebar entry must not
+  collide with an existing one in any of them** (`Controles` already exists in two).
+  See "Patch settings" in `docs/PATCHES_AND_MODS.md` and "The Input pane is the
+  port's" in `docs/INPUT.md`.
+- **A control that stops being a setting stops reading its saved key**, so nobody
+  is stranded by a value with no control to show it; the env var is the
+  comparison.
+- **Changing the shipped keyboard layout** means bumping `KeyLayout.Version` and
+  recording the old layout in `Superseded`, or an existing config reads as
+  customised and is never corrected.
+- **Anything the runtime refreshes only at `VSync` is invisible to a game that
+  stops calling `VSync`**, and **a handler that never runs loses only the work
+  inside it** — both failure modes are silent. See "Two general shapes worth
+  keeping" in `docs/RUNTIME.md`.
 
 ### Regenerating function maps
 
@@ -358,9 +298,22 @@ mcp/                     stdio MCP server exposing the KF2_SHELL command channel
 Verdite2.Launcher/       the SHIPPED executable; builds with no disc, and makes the
                          game at first run from the player's own image. See docs/PACKAGING.md
 packaging/               AppImage and Windows packaging, plus placeholder icons
-patches/recompone/*.patch  local fixes to the RecompOne checkout itself
+patches/recompone/*.patch  the record of the port's changes to the vendored RecompOne
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
-scripts/*.py             disc inspection and address-hunting tooling
+scripts/*.py             disc inspection, address-hunting, and the rate tooling:
+                         merge_sdk_names (write the PSY-Q names a signature
+                         match found into config/funcmaps/, refusing the ones
+                         SdkPatches would bind -- see "Merging the SDK names" in
+                         docs/RECOMPILATION.md),
+                         shader_probe.c (run a real prim fragment shader
+                         headless over a known texture and read the pixels back:
+                         the only thing here that can say a shader change moved a
+                         pixel, since the port is CPU-bound and frame rate cannot),
+                         rate_census (which words move at the render rate),
+                         find_writers (which code moves them), rate_matrix (did
+                         the fix work), check_gate (does the gate obey its rule).
+                         kf2run/callgraph/kf2model are their shared halves.
+                         See "Finding the rate defects" in docs/DEVELOPMENT.md
 Program.cs               hand-owned entry point; calls Entry.Run(PSMemory, cuePath)
 ```
 
@@ -368,7 +321,7 @@ The disc holds a 4 KiB boot stub (`SLUS_001.58`, named by SYSTEM.CNF) plus three
 real executables — `OPEN.EXE` (title/intro), `GAME.EXE`, `END.EXE` — which **all
 load at `0x80011000`** and are mutually exclusive. They are declared as
 **overlays** in `config/kf2.json`. Left alone the recompiler would only find the
-2 KiB stub.
+2 KiB stub. Per-area logic is more MIPS loaded at run time: the `fdat` modules.
 
 Because the three overlays share an address range, *every* address-based config
 entry must name its overlay explicitly. Prefer a named overlay over `"*"`.
@@ -386,10 +339,20 @@ mapped by address in `patches[]`:
 ```
 
 63 such patches exist today (`libetc`, `libcd`, four `libgpu` entry points, six
-`libcdstream`, libapi's `DMACallback`). `libpad` is the notable gap. Only map a
-function the runtime actually implements — check
-`tools/RecompOne/RecompOne.Runtime/sdk/Lib*.cs` first; unmapped library routines
-run fine as recompiled MIPS because `PSMemory` traps their register writes.
+`libcdstream`, libapi's `DMACallback`). `libpad` is the notable gap — and a
+signature match confirms it is not a gap at all: the game links no `libpad`, which
+is consistent with it reading `PAD_dr` through `BiosB` instead.
+
+**997 non-binding functions now carry their real PSY-Q names** (`rsin`, `rcos`,
+`SsSetMVol`, `RotTransPers`...), from upstream's signature bank via
+`scripts/merge_sdk_names.py`. That is legibility only: the script **refuses every
+name `SdkPatches` binds**, reading that list out of the patched checkout rather
+than copying it, so all 63 entries above still do the binding and the recompiler
+still reports `applied 63 patches, 0 reimplementations`. See "Merging the SDK
+names" in `docs/RECOMPILATION.md`. Only map a function the runtime actually
+implements — check `tools/RecompOne/RecompOne.Runtime/sdk/Lib*.cs` first; unmapped
+library routines run fine as recompiled MIPS because `PSMemory` traps their
+register writes.
 
 `mode` is `"replace"`, `"pre"` or `"post"`. **Use config patches for `replace`
 only** — binding an SDK entry point, which has to happen before any mod could
@@ -398,8 +361,14 @@ detours a recompiled function by address at run time, so a hook needs neither a
 config entry nor a recompile. See "Mods" in `docs/PATCHES_AND_MODS.md`; `patches/FramePacing.cs`
 is the in-project example and `mods/` holds the loadable ones.
 
-Watch the namespace — generated code is `Recompiled.KingsField2`, a *class* named
-after the project, which shadows any namespace called `KingsField2`.
+**Generated code is one class per overlay** — `Recompiled.KingsField2_game`,
+`_open`, `_end`, `_fdat`, `_main` — because CoreCLR caps a class at 65535 methods.
+Code that calls a recompiled function directly carries a one-line
+`using KingsField2 = Recompiled.KingsField2_game;` alias (sixteen call sites, in
+`patches/AreaWarp.cs`, `AutoReload.cs`, `CullGrid.cs`, `MenuMouse.cs` and
+`mods/kf2debug/Noclip.cs`, `Attributes.cs`), so do not also name a namespace
+`KingsField2`. A direct call is *not* the same call as `Dispatcher.Call`, which
+goes through `HookManager`.
 
 ### Identifying an address: the techniques that work
 
@@ -445,312 +414,76 @@ goes through `Psx/Parser.cs`, which strips the header itself.
 `generated/` and `patches/` are picked up by the SDK's default globs — adding an
 explicit `Compile Include` causes NETSDK1022. `tools/**` must stay explicitly
 removed, or the build compiles RecompOne's own sources and its `obj/`
-AssemblyInfo files (CS0579).
+AssemblyInfo files (CS0579); `mods/**`, `mcp/**` and `Verdite2.Launcher/` are
+removed for the same reason.
 
 ## The RecompOne checkout
 
-`tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
-clone**. Changes to the recompiler or runtime must be captured as a patch in
-`patches/recompone/` (numbered, applied in order by `setup_tools.sh`). Twenty-nine of
-the thirty-three are load-bearing; `0002`, `0003` and `0015` are diagnostics,
-`0013` is a settings-placement hook, and `0014b` only restores four comment lines
-whose presence patch `0015`'s context assumes. (This count had drifted to
-twenty-five while the stack grew; it is a count of files, and the glob's sort is
-the apply order.)
+**`tools/RecompOne/` is vendored: an edit inside it is a change to this
+repository like any other.** `patches/recompone/*.patch` are kept as the record of
+what the port changed and why, and the numbers (`0001`-`0057`) are how the source
+refers to each change, but they are **no longer replayed**. The merge base is
+`tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
+gitignored `tools/RecompOne.git/`, reached with
+`git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne <cmd>`.
 
-`setup_tools.sh` **peels the stack off newest-first before applying it
-oldest-first**, rather than asking each patch on its own whether it is already
-applied. A per-patch reverse-check breaks the moment one patch edits lines another
-added — `0010`, `0011`, `0012` and `0014` all edit the `GteDepth.cs` that `0009` creates — and the
-symptom is `0009` being reported as "FAILED TO APPLY (upstream likely changed)" on
-the second run of a script that is supposed to be idempotent. Undoing in the
-opposite order to applying has no such problem. A patch that will not reverse stops
-the peeling rather than being forced, so a fresh clone peels nothing and an
-uncaptured edit inside the checkout is left where it is.
+- **Three changes force a recompile**: `0004`, `0035` and `0037`. Everything else
+  is runtime-only.
+- **The acceptance test for a merge** is `open → game → fdat02 → fdat05`, slot 2
+  restored at hp 46/86 in area 1, 144.0 fps drawn at 20.0 ticks/s, every hook
+  attached — **paired with `KF2_PRESENT_PROBE=1`**, because every number in that
+  run was once still true with a completely black window. The last merge also
+  silently broke the vertex map (`KF2_PERSPECTIVE_PROBE=1` reading `0 caught/s`)
+  and the widescreen margin's clear; check both.
 
-- `0001-bios-load-return-1.patch` — BIOS `Load` must return 1, not the header
-  pointer. Without it the boot stub spins in the loader forever.
-- `0004-libapi-dma-callbacks.patch` — adds `Sdk.LibApi` so DMA-completion
-  callbacks run at all. A static recompilation has no exception path, so PSY-Q's
-  IRQ-3 handler never runs and every DMA callback silently dies. Nothing errors;
-  the work the game does *inside* the callback just disappears. Keep this in mind
-  whenever something completes but produces no visible effect.
-- `0005-libcd-interrupt-driven-reads.patch` — the polled read path and CD-ROM
-  kernel events; without it the game hangs on the loading screen.
-- `0006-irq-callback-table.patch` — the runtime otherwise derives the PSY-Q
-  interrupt-callback table from the `HookEntryInt` argument, which for this game
-  lands in game data and eventually calls a data word. `Program.cs` supplies the
-  real per-overlay address; the patch also makes the derived path refuse a
-  handler that is not a known function.
-- `0007-pad-poll-outside-frame-loop.patch` — host input used to be polled only
-  inside `PresentFrame`, so a game busy-waiting on the pad without vsyncing read
-  a frozen snapshot forever. King's Field's screen transitions all begin with
-  such a wait; this is what hung the in-game menu.
-- `0008-unload-overlapping-overlays.patch` — `HandleRegionOverwrites` only
-  dropped an overlay fully contained in the new one. `END.EXE` is smaller than
-  `GAME.EXE` at the same base, so GAME's functions past `0x8003A000` stayed
-  mapped after the ending loaded. Any overlap is now an overwrite.
+**Nothing goes upstream. Not a pull request, and not an issue either.** Upstream
+rejects AI-authored pull requests outright, and this project does not file
+issues against it: a defect found here is recorded in `docs/` and fixed in the
+vendored tree, which is the whole point of vendoring it. If the user wants
+something reported upstream they will write it themselves.
 
-- `0009-perspective-correct-textures.patch` — the GPU is handed polygons with no
-  depth in them, so it can only interpolate U and V linearly and every texture
-  swims. The depth still exists one step earlier: `Gte.Rtp` produces the screen
-  position and the view depth in the same call, and that screen position is
-  bit-for-bit what reaches the GP0 packet. `GteDepth` keys a small table on it, so
-  the two halves are reunited without following a register or a store. A miss is
-  the old affine behaviour, which is what makes it safe on by default. See
-  "Perspective correction" in `docs/RENDERING.md`.
-
-- `0010-subpixel-vertex-positions.patch` — the GTE projects to 16.16 and then keeps
-  only the whole part, so a vertex drifting slowly holds still and then jumps a
-  pixel and its polygon twitches. The fraction is the low sixteen bits of the same
-  expression `0009` takes the depth from, so `GteDepth` carries both and serves them
-  independently. The hardware backend needed nothing — its vertex position was
-  always a float — and the software rasterizer now works in sixteenths of a pixel
-  for any triangle that recovered a fraction, which scales its edge functions and
-  its area by 256 and changes no ratio taken from them. See "Sub-pixel vertex
-  positioning" in `docs/RENDERING.md`.
-
-- `0011-gte-depth-collisions.patch` — screen position is not a unique key, and
-  dropping saturated vertices made every large nearby polygon fall back to affine
-  (the texture looking as if the camera jumped). The table keeps several samples
-  per pixel, records the clamp for depth only, and picks per primitive; a leftover
-  far Z is refused rather than applied. Positions stay on the packet — moving a
-  clamped vertex to its true projection opened holes. See "The table is not unique"
-  in `docs/RENDERING.md`.
-
-- `0012-exact-gte-vertex-map.patch` — screen position was never an identity, so
-  `0011`'s picking between samples was scoring a collision rather than avoiding one,
-  and a wrong W throws a texture across the screen. `GteVertexMap` keys on the
-  **address** the coordinate is stored at instead: a `swc2` publishes the depth and
-  the fraction, a store binds them to its destination, a load of a bound address
-  republishes them so they follow the game's whole-word `lw`/`sw` into the packet,
-  and `DrawPolygon` asks by the address `DrawOTag` read the word from — verifying the
-  word before answering. No codegen change, so **this one needs no recompile**. The
-  old table stays behind `KF2_PERSPECTIVE_FALLBACK` for comparison only. See
-  "Following the value through memory" in `docs/RENDERING.md`.
-
-- `0013-settings-slot-in-section.patch` — `SettingsRegistry.Extend` only draws
-  *after* a section's whole body, so a port option that belongs beside one of the
-  runtime's own controls could only ever land in a block underneath the lot. This
-  adds `SettingsRegistry.DrawSlot(slotId)` and one call to it in the display
-  section, after the render scale, which is where the widescreen aspect goes.
-  Register with `PatchSettings.RegisterSlot`, not `Register`. UI only — **no
-  recompile**.
-
-- `0014-gte-zbuffer.patch` — a depth buffer from the same recovered SZ3
-  perspective correction already follows through memory. The GPU has none, so
-  intersecting surfaces take turns in front of each other on the ordering table;
-  both rasterizers now test the recovered view depth per pixel. Window depth is
-  a fragment value, not clip-space Z, so OpenGL does not far-clip the already-
-  projected triangle. A miss is painter's order, so the HUD is untouched. Off
-  by default. See "Z-buffer" in `docs/RENDERING.md`. **No recompile** — the lookup is
-  the one `0012` already does.
-
-- `0015-zbuffer-occlusion-census.patch` — diagnostic behind `KF2_ZBUFFER_PROBE=2`.
-  Every polygon's bbox, depth range, table position and flags for the window, the
-  `DrawOTag` walk position (`GteDepth.OtEntry`, counted from the far end — so
-  `Widescreen`'s replacement of `DrawOTag` has to publish it too), and a 32×16 map
-  read back from the depth attachment. It reads the RT the depth batches went to,
-  not the presented one (last frame's, under double buffering) and not the most
-  recently drawn (a fill stamps `LastDrawFrame` too, so that can be a buffer just
-  cleared). **No recompile.**
-
-- `0016-zbuffer-clear-at-frame-head.patch` — `PresentDisplay` incremented `_frame`
-  before its trailing `Flush`, so the depth clear (keyed on `LastDrawFrame !=
-  _frame`) fired on the tail of the *outgoing* frame and was then skipped at the
-  head of the next one, which inherited the last batch's depths. Nothing rescues
-  it — `isbg=0` here, so no game-side fill reaches `FillRtFull`. Swapping the two
-  statements took the depth-map readback from 67-of-91 empty to 11-of-11
-  populated. Real and measured, but **it did not cure the sky showing through
-  nearby walls** — a second cause remains. **No recompile.** See "The clear
-  landed at the tail of the frame" in `docs/RENDERING.md`.
-
-- `0018-imgui-fractional-framebuffer-scale.patch` — Silk's `ImGuiController`
-  computes `io.DisplayFramebufferScale` by dividing two `int`s, so a compositor
-  running a display at a *fractional* scale (KDE's 1.15) truncates to 1 and
-  `RenderImDrawData` sizes its GL viewport and every scissor from the logical
-  window instead of the framebuffer — the whole interface lands in the bottom-left
-  corner, with dead margins top and right. Recomputed as a float between
-  `Update()` and `Render()`, which is the only window where it is read: layout is
-  already fixed and still logical, so **input is untouched**. An integer scale
-  divides exactly, which is why a 1:1 monitor never shows it. Its sibling defect
-  is ours and unfixed — `QueryDpiScale()` reads the *primary* monitor's content
-  scale once at startup, and GLFW's Wayland path returns the integer `wl_output`
-  scale, so a 1.15 monitor reports 2.0 and the chrome is oversized on both
-  screens. **No recompile.** See "The interface only fits a monitor whose scale is
-  a whole number" in `docs/RUNTIME.md`.
-
-- `0017-mouse-capture-and-motion.patch` — `InputManager` owns the `IMouse` and is
-  `internal`, so a port could not reach the cursor at all. Adds `MouseCaptured`
-  (`CursorMode.Raw`, or `Disabled` where raw is unsupported — both make GLFW
-  report an unbounded virtual position, which is what turns successive positions
-  into motion), `TakeMouseMotion` and `IsMouseButtonDown`, forwarded from
-  `HostWindow` beside the `IsKeyDown` that already plays that role for the
-  keyboard, and gives the cursor back in `Shutdown`. Everything else about mouse
-  look is `patches/Mouse.cs`. **No recompile.** See "Mouse look" in
-  `docs/INPUT.md`.
-
-- `0019-popups-cannot-leave-the-window.patch` — every popup is centred and pinned
-  with `SetNextWindowPos`, which is the flag that suppresses ImGui's own clamp
-  into the viewport, and its size (`Size * Theme.Scale`) is capped against
-  nothing, with `NoResize`, `NoMove` and `NoScrollWithMouse` closing the ways
-  back. The 780x500 settings popup therefore outgrows a 1280x720 window at a
-  `Theme.Scale` of 1.44 and takes the UI-scale field — the one control that would
-  undo it — off-screen with it, permanently, since the value is saved. Reachable
-  from the slider alone (0.5-3), and reached at `UiScale` 1 on the monitor whose
-  `DpiScale` misreads as 2.0. The size is now clamped to the viewport, so an
-  oversized scale costs scrolling instead of the controls, and `Debug > Reset
-  view` re-applies `FontGlobalScale` and `Theme` instead of leaving giant text
-  behind small windows. **No recompile.** See "The scale can put the settings out
-  of reach" in `docs/RUNTIME.md`; `patches/UiScale.cs` (`KF2_UISCALE`) is the
-  port's own way back for a config already past that point.
-
-- `0020-theme-apply-compounds-the-style.patch` — `Theme.Apply` ends in
-  `ScaleAllSizes`, which multiplies *every* size field, but only resets some of
-  them first, so each accent, background or scale change multiplies the rest
-  again: measured, `WindowMinSize` 32 -> 44 -> 88 -> 528 -> 1056 over five calls.
-  ImGui floors every non-child, non-`AlwaysAutoResize` window at `WindowMinSize`
-  **after** applying a size constraint, so that overrides `0019`'s clamp and the
-  popup grows off the bottom of the screen — a 1264x704 clamp measured coming out
-  1264x1056 on a 1280x720 viewport. `Apply` now restores the style ImGui built
-  before re-theming, which stays correct whatever upstream adds to
-  `ScaleAllSizes`. Latent since long before `0019`; changing the *accent*
-  compounds it too. **No recompile.** See "The scale can put the settings out of
-  reach" in `docs/RUNTIME.md`.
-- `0021-vblank-wall-clock.patch` — the vblank advanced once per HLE `VSync` call, so
-  every game clock hung on it ran at the rendered frame rate: the title screen's music
-  played half speed because the CD-bound title loop issues one VSync call per ~15 fps
-  picture. The vblank now advances on a wall-clock 60 Hz grid and missed vblanks are
-  delivered as a burst at the next call; IRQ 0 moved with it, out of `PresentFrame`.
-  **No recompile.** See "The vblank fired when the game asked" in `docs/RUNTIME.md`.
-- `0022-present-stale-wide-target.patch` — `PresentDisplay` presented through the
-  widened render target only if it was drawn into within the last 4 *presented*
-  frames; with `VSync=False` (or any monitor faster than ~5× the game's 30 fps)
-  both targets aged out between game frames and the picture fell back to the
-  plain VRAM texture at 4:3 — the margins flashing black all session. The gate
-  is gone: writeback keeps VRAM's middle columns identical to the targets every
-  present, so a containing target is never staler than the fallback. See the
-  trap paragraph in `docs/WIDESCREEN.md`; `KF2_PRESENT_PROBE=1` counts the
-  picks. **No recompile.**
-- `0023-splash-margin-idle.patch` — a wide render target may serve a present only
-  while the scene is producing margin content (a primitive past the game's own
-  edge, or a fill covering the target). STR playback draws one ordering table and
-  MDECs the other, so only one flip buffer had a target and the present flapped
-  between 16:9 and the 4:3 fallback -- the boot splash breathing horizontally.
-  Idle-margin targets are demoted to the VRAM fallback, which presents at authored
-  width. See "The present gate" in `docs/WIDESCREEN.md` (0024 replaces this
-  idle window with a per-target latch). **No recompile.**
-- `0024-margin-content-latch.patch` — replaces 0023's two-flip idle window with a
-  per-target latch: one display flip delivering 32 game vertices past the game's
-  own draw edge (or a fill covering the target) latches it for the overlay
-  session, and an overlay load clears every latch. Menus, dialogs, shops and
-  signs keep the wide picture instead of collapsing to the 320-wide 4:3 fallback
-  the moment the world render stops -- which is what 0023's decaying stamp did,
-  since such scenes produce no margin content at all. Splash and title still
-  present at authored width: their oversized clear rects cross the edge two
-  vertices a flip, under the threshold, and primitives the widescreen patch
-  itself widened never count (`GpuHle.PortWidenedPrim`). **No recompile.** See
-  "The present gate" in `docs/WIDESCREEN.md`.
-
-- `0030-expose-host-pump.patch` — the shipped launcher has to build the game
-  before there is a game to run, and that blocks for seconds; a window that stops
-  pumping for seconds is one the desktop offers to force-quit. `HostWindow.Pump`
-  already does exactly the right thing and is `internal`, and `WaitForValidDisc`
-  already runs that loop but only ever for its own condition. Exposed as
-  `Runtime.Pump`. Everything else the progress UI needs was public already —
-  `Popup` is abstract-public and `PopupManager.Register` takes any implementation
-  — so `Verdite2.Launcher/BuildProgressPopup.cs` is not a patch. UI only, **no
-  recompile**. See "The one patch this needed" in `docs/PACKAGING.md`.
-
-- `0031-output-panel-fills-its-dock-node.patch` — the picture is the point of the
-  Output panel, so it gets none of the chrome every other panel wants. The themed
-  `WindowPadding` (12,10) and the 1px `WindowBorderSize` are read by `Begin` when
-  it computes the inner rect, so a docked, tab-bar-less Output panel filling the
-  dockspace still letterboxed the game behind a band of window background on all
-  four sides — scaled by `Theme.Scale`, so widest exactly where the DPI is misread
-  highest. Both are pushed around `Begin` only and popped straight after it, so
-  the toasts drawn below still lay themselves out on the real style and no other
-  panel is affected. UI only — **no recompile**. See "The picture is inset
-  inside its own panel" in `docs/RUNTIME.md`.
-
-`0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
-generally: **anything the runtime refreshes only at `VSync` is invisible to a
-game that stops calling `VSync`**, and that failure mode is always silent.
-`END.EXE` ends in `while(1);` with no `VSync`; on hardware the last frame stays
-on the CRT, here the window dies. See "The ending screen" in `docs/RUNTIME.md`.
-
-Upstream **rejects AI-authored pull requests outright**. Recompiler fixes go
-upstream as issues, never as PRs, unless the user writes the patch themselves.
+@docs/RECOMPONE_FORK.md
+@docs/RECOMPONE_PATCHES.md
 
 ## Shipping it
 
-**The port cannot ship a playable binary, and that is the whole shape of the
-release.** `generated/` is a translation of FromSoftware's code and its compiled
-form is no less derived, so the assembly that plays the game has to be built on
-the machine of somebody who owns the disc. What *is* distributable is every
-**input** to that build: `config/`'s addresses are metadata about the code rather
-than the code, `patches/**` and `Program.cs` are original MIT work, and RecompOne
-is MIT. So the release ships the inputs and makes the output at first run.
+**The port cannot ship a playable binary.** `generated/` is a translation of
+FromSoftware's code, so the assembly that plays the game has to be built on the
+machine of somebody who owns the disc. The release ships every **input** —
+`config/`, `patches/**`, `Program.cs`, the vendored RecompOne — and makes the
+output at first run. That is also a correctness win: the generated dispatch tables
+bake **absolute LBAs from one mastering**, so a prebuilt binary would silently
+fail to load area modules on a differently mastered dump.
 
-That is also a correctness win rather than only a legal one: the generated
-dispatch tables bake **absolute LBAs from one mastering** (`fdat02.cs` reads
-`LbaStart => 457`) and `Dispatcher` arms an overlay swap on a CD read hitting that
-exact sector, so a prebuilt binary would silently fail to load area modules on a
-differently mastered dump. A per-user recompile reads those LBAs off the player's
-own image.
+- **`Verdite2.Launcher/` is the shipped executable and compiles neither
+  `generated/` nor `patches/`** — it carries them as payload under `content/` and
+  compiles them at first run. Anything added there must keep that property;
+  `.github/workflows/ci.yml` asserts it on every push, because it is invisible
+  locally where `generated/` exists.
+- **The recompiled output and the port's sources compile in ONE Roslyn pass**
+  (`GameCompile`). Its reference set comes from `TRUSTED_PLATFORM_ASSEMBLIES`, not
+  loaded assemblies, and it supplies `GlobalUsings.g.cs` itself, since
+  `ImplicitUsings` is an SDK feature.
+- **`GameCompile`'s options and `KingsField2Recomp.csproj`'s properties are two
+  statements of one thing and must stay in step** — a difference is a bug that
+  exists only in the release. Check the packaged binary with
+  `KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 20.0 ticks/s.
+- **The version is one line in `VERSION`**; everything else reads it, and
+  `release.yml` asserts the tag equals `v$(cat VERSION)`. `bash scripts/release.sh
+  0.2.0` bumps, commits and tags, and deliberately does not push.
+- Packaging is `packaging/linux/build-appimage.sh` and
+  `packaging/windows/build-windows.ps1`, neither of which needs the disc.
+  **Trimming is off and must stay off** (MonoMod detours, Roslyn, `AutoStart`'s
+  reflection).
+- **QuickJit is off and must stay off, in both `KingsField2Recomp.csproj` and
+  `Verdite2.Launcher.csproj`** (`TieredCompilationQuickJit`). Tier-up recompiles a
+  hooked method and MonoMod's detour does not reliably follow, so a committed hook
+  stops firing for the session with `IsCommitted` still true — that was the boot
+  that ran at twice the chosen rate. `FramePacing`'s sentinel prints
+  `[KF2] pacing sentinel:` if a pacing hook is ever lost again. `DiscCheck.Validate` fills `Runtime.DiscValidator` and refuses
+  `SLUS-00255` by name.
 
-**`Verdite2.Launcher/` is the shipped executable and `KingsField2Recomp.csproj` is
-unchanged.** They are opposites on purpose: the game project compiles `generated/`
-and `patches/` through the SDK's default globs and so needs the disc, which is what
-keeps developer iteration incremental; the launcher compiles **neither** — it
-carries them as payload under `content/` and compiles them at first run. That is
-what lets CI build a release at all, and `.github/workflows/ci.yml` asserts it on
-every push, because it is easy to break by accident and invisible locally where
-`generated/` exists. Anything added to `Verdite2.Launcher/` must keep that
-property; the game csproj has a `Compile Remove` for the directory, the same
-CS0579 trap `tools/**`, `mods/**` and `mcp/**` are removed for.
-
-First run is: chdir into the data directory, register the disc validator, ask for
-a disc, build if this one has not been built, hand over. **The chdir is the whole
-packaging fix for file locations** — the runtime addresses `settings.json`,
-`interface.ini`, `carda.sav`, `carda.fog` and `mods/.cache` with bare relative
-paths, so they all follow it and none of them needed a patch
-(`%LOCALAPPDATA%\Verdite2`, `~/.local/share/verdite2`, `VERDITE2_DATA` to
-override). **`Runtime.DiscValidator` has existed since the runtime was written and
-nothing ever filled it**, so until now any file at all was accepted;
-`DiscCheck.Validate` fills it and names `SLUS-00255` explicitly, that being the
-game most people will reach for and one that would otherwise build. The recompiler
-runs **in process** through `Assembly.EntryPoint` — its `Program.cs` is top-level
-statements, so its entry point is an ordinary invocable method, and a self-contained
-publish has no `dotnet` to launch a second process with. Measured: **12.7 s** from
-launching the AppImage to a running game, of which the recompile is 0.85 s.
-
-**The recompiled output and the port's own sources are compiled in ONE Roslyn
-pass**, because the port reaches into the recompiled code directly — `Program.cs`
-calls `Recompiled.Entry.Run` and `AutoReload`, `AreaWarp` and `CullGrid` make
-fifteen static calls to `Recompiled.KingsField2.func_XXXXXXXX`. Splitting them
-would mean an interface boundary for each, or routing through `Dispatcher.Call`,
-which goes through `HookManager` and so is *not the same call*. Two things about
-that pass were nearly wrong and are worth carrying: **the reference set must come
-from `TRUSTED_PLATFORM_ASSEMBLIES`, not from loaded assemblies** — the first
-version copied `ModCompiler`, which is right for a *mod* (it compiles against what
-the game has, and by then the game has loaded it) and wrong here, because the
-launcher has loaded almost nothing; it failed on `AgentServer.cs` with six errors
-about `System.Net.Sockets` purely because the launcher never opens a socket. And
-**`ImplicitUsings` is an SDK feature, not a compiler one**, so `GameCompile`
-supplies `GlobalUsings.g.cs` itself or the port's 22k lines lose `System` and
-`System.Linq` in hundreds of places that read as the port being broken.
-**`GameCompile`'s options and `KingsField2Recomp.csproj`'s properties are two
-statements of one thing and must stay in step** — a difference between them is a
-bug that exists only in the release, and losing the frame boundary that way is not
-a crash but the whole game running fast, silently. The check is `KF2_FPS=144
-KF2_FPS_PROBE=1` on the packaged binary: measured 144.0 fps drawn at 20.0 ticks/s.
-
-Packaging is `packaging/linux/build-appimage.sh` and
-`packaging/windows/build-windows.ps1`, neither of which needs the disc; trimming is
-off and must stay off (MonoMod detours, Roslyn, `AutoStart`'s reflection). The
-icons under `packaging/shared/` are **placeholders**. Not packaged: macOS and
-Flatpak. **`.chd` is supported**, as of `0037`. See `docs/PACKAGING.md`.
+See `docs/PACKAGING.md`.
 
 ## Repository conventions
 
