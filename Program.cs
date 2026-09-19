@@ -1100,6 +1100,9 @@ Kf2.PolyAssembler.Configure(Environment.GetEnvironmentVariable("KF2_POLYASM"),
                             Environment.GetEnvironmentVariable("KF2_POLYASM_TRANSFORM"),
                             Environment.GetEnvironmentVariable("KF2_POLYASM_LIT"),
                             Environment.GetEnvironmentVariable("KF2_POLYASM_CLIPPER"));
+// KF2_POLYASM_FACING=0 culls a polygon on its first three corners again, as the game
+// does; see "A floor quarter missing at a short edge" in docs/RENDERING.md.
+Kf2.PolyAssembler.WholeFacing = Environment.GetEnvironmentVariable("KF2_POLYASM_FACING")?.Trim() != "0";
 Kf2.PolyAssembler.Install();
 
 // The map-tile walk in C#: func_80031C94 (the 24x24 cell sweep), func_80031B1C

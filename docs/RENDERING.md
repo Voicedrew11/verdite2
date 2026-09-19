@@ -408,6 +408,58 @@ while walking, from corners the cull could not read. 144.0 fps at 20.0 ticks/s, 
 exceptions. **Looked at: the guidestone no longer shimmers.** That was with
 micro-dilation still in; the gold without it has not been looked at since.
 
+### A floor quarter missing at a short edge
+
+**The black triangle at a wall's foot is a quarter of a subdivided floor quad that
+the game culled on three of its corners.** Reported from play with a frame capture
+(`KF2_FRAMEVIEW_OUT`): rasterising the capture's own `verts` gives a hole at
+`(118,106) (148,105) (132,109)`, so the gap is geometry never sent, not a crack
+between sent polygons. Its neighbours are three clipped fans, each two packets from
+one 4-corner polygon, and they are three of the four quarters `func_80030C94` makes
+of one floor quad.
+
+The subdivider splits a quad `(V0, V1, V2, V3)` (drawn as the loop `0, 1, 3, 2`)
+into four, with new vertices at the midpoints of the four edges and of the diagonal
+`V0-V3`, which stands in for the centre. Read from the recompiled routine, the
+quarters are `(V0, M01, M02, M03)`, `(M01, V1, M03, M13)`, `(M02, M03, V2, M23)` and
+`(M03, M13, M23, V3)`, all wound the parent's way; the partition has no hole. The
+missing one is the last. Both culls in the pipeline look at only three corners:
+
+- `func_800302E8`, the clipped-polygon emitter, runs `NormalClip` on the clipper's
+  first three records and drops the whole polygon when it is not positive. For the
+  last quarter those are `M03, M13, V3`.
+- `Visible` and `Facing` (the assemblers' own cull) test a quad's first triangle,
+  `0, 1, 2`, and drop the quad with it.
+
+**When the parent's edge `V1-V3` is short on screen, `M13` and `V3` are a pixel or
+two apart**, the corner `M03, M13, V3` is almost a straight line, and on whole pixels
+it reads zero or negative while the quarter plainly faces the camera. Which way it
+rounds changes with the angle and the distance, which is the "certain angles and
+distances" of the report. This is the game's own cull and the hardware does it too;
+the port only makes it visible at a higher resolution.
+
+The fix culls on the whole polygon. `FaceFan` (`patches/PolyAssemblerClip.cs`)
+runs before `func_800302E8`: when the first corner does not face and the polygon's
+shoelace area does, it rotates `ClipOut` to start at the corner that faces most, so
+the emitter's own test passes and its fan covers the same convex polygon. The fog,
+light and depth rewrites read the list after the call, so they follow the rotation.
+`QuadFaces` keeps an unclipped quad the first triangle culled when `(0,1,2)` plus
+`(1,3,2)` is positive. Neither runs under `KF2_POLYASM=verify` (0 mismatches over
+every routine after the change); `KF2_POLYASM_FACING=0` is the comparison, and the
+recompiled assemblers (Fast geometry off) still cull on three corners.
+
+Measured with `KF2_TILEWALK_PROBE=1`, area 1 at 144 fps, sweeping the shell's `goto`
+over a 5×5 grid of positions a tile apart around save 2, eight headings each: up to
+**49 clipped polygons a second** (a third of a frame's worth) that the first corner
+would have culled while facing, and up to **162 unclipped quads a second** culled on
+their first triangle while the quad faced — 80-100% of those with the first triangle
+a sliver (`-first × 8 ≤ second`), so the same defect rather than twisted quads.
+144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`, no exceptions. **Looked
+at: the reported gap is gone.** Worth checking against the two open reports above
+it that also describe gaps at a floor-wall junction: "Ordinary gaps also exist with
+Sub-pixel off", and the corners that drop at the sides of a wide picture
+(`docs/TODO.md`).
+
 ## The table is not unique: remaining wobble and the "far away" pop
 
 The 90% hit rate was never "10% of vertices the two ends disagreed about". It was

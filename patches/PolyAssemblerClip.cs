@@ -392,3 +392,83 @@ public static partial class PolyAssembler
         mem.WriteU32(rec + 0x28u, (uint)(Lo(zy, ky) >> 12));
     }
 }
+
+// ---- Culling on the whole polygon ---------------------------------------------
+
+public static partial class PolyAssembler
+{
+    /// <summary>KF2_POLYASM_FACING=0 culls on the first three corners, as the game does.</summary>
+    public static bool WholeFacing { get; set; } = true;
+
+    /// <summary>Clipped polygons and quads the first three corners would have culled
+    /// while the whole polygon faces the camera; kept unless KF2_POLYASM_FACING=0.
+    /// Never reset.</summary>
+    public static long FansTurned, QuadsKept;
+
+    /// <summary>func_800302E8 culls a clipped polygon on NormalClip of its first three
+    /// corners, and both assemblers cull a quad on its first triangle. A subdivided
+    /// quad of a parent with one short edge starts on an almost straight corner, which
+    /// reads as facing away while the polygon faces the camera: a gap in the floor.
+    /// When the whole polygon faces, start the list at the corner that faces most; the
+    /// fan still covers the same convex polygon. See "A floor quarter missing at a
+    /// short edge" in docs/RENDERING.md.</summary>
+    static void FaceFan(PSMemory mem, uint n)
+    {
+        if (n > 10u) return;
+        Span<uint> rec = stackalloc uint[10];
+        Span<int> x = stackalloc int[10], y = stackalloc int[10];
+        int count = (int)n;
+        for (int i = 0; i < count; i++)
+        {
+            rec[i] = Peek32(mem, ClipOut + 4u * (uint)i);
+            uint w = Peek32(mem, rec[i] + 0x18u);
+            x[i] = (short)w;
+            y[i] = (short)(w >> 16);
+        }
+        if (Corner(x, y, count, 0) > 0) return;
+
+        long area = 0;
+        for (int i = 0; i < count; i++)
+        {
+            int j = i + 1 == count ? 0 : i + 1;
+            area += (long)x[i] * y[j] - (long)x[j] * y[i];
+        }
+        if (area <= 0) return;
+
+        int best = 0;
+        long most = 0;
+        for (int k = 1; k < count; k++)
+        {
+            long v = Corner(x, y, count, k);
+            if (v > most) { most = v; best = k; }
+        }
+        if (best == 0) return;
+
+        FansTurned++;
+        if (!WholeFacing) return;
+        for (int i = 0; i < count; i++)
+            mem.WriteU32(ClipOut + 4u * (uint)i, rec[(i + best) % count]);
+    }
+
+    /// <summary>NormalClip of corners k, k+1, k+2.</summary>
+    static long Corner(Span<int> x, Span<int> y, int n, int k)
+    {
+        int a = k, b = (k + 1) % n, d = (k + 2) % n;
+        return (long)(x[b] - x[a]) * (y[d] - y[a]) - (long)(x[d] - x[a]) * (y[b] - y[a]);
+    }
+
+    /// <summary>A quad the first triangle culled: keep it when its second triangle
+    /// (1, 3, 2) outweighs the first, which is the whole quad facing.</summary>
+    static bool QuadFaces(PSMemory mem, uint p0, uint p1, uint p2, uint p3)
+    {
+        if (_mode == Mode.Verify) return false;
+        uint w0 = Peek32(mem, p0), w1 = Peek32(mem, p1), w2 = Peek32(mem, p2), w3 = Peek32(mem, p3);
+        if (Nc(w0, w1, w2) + Nc(w1, w3, w2) <= 0) return false;
+        QuadsKept++;
+        return WholeFacing;
+    }
+
+    static long Nc(uint a, uint b, uint d)
+        => (long)((short)b - (short)a) * ((short)(d >> 16) - (short)(a >> 16))
+         - (long)((short)d - (short)a) * ((short)(b >> 16) - (short)(a >> 16));
+}

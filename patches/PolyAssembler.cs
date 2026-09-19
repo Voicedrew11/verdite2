@@ -430,7 +430,7 @@ public static partial class PolyAssembler
             return true;
         }
 
-        if (!Visible(fr.Mem, p0, p1, p2)) return true;
+        if (!Visible(fr.Mem, p0, p1, p2) && !QuadFaces(fr.Mem, p0, p1, p2, p3)) return true;
         if (!Allocate(ref fr, 0x34u, out uint pkt)) { _exhausted++; return false; }
 
         Link(ref fr, (uint)(FillQuad(ref fr, pkt, f, cmd, normals, p0, p1, p2, p3) >> 2) + bias, pkt);
@@ -640,6 +640,7 @@ public static partial class PolyAssembler
         mem.WriteU32(sp + 0x10u, (word >> 24) & 2u);
         c.A1 = normals + normal;
         c.RA = 0x80030C38u;
+        if (_mode != Mode.Verify) FaceFan(mem, n);
         bool lighting = LightingOn();
         // Verify compares against the recompiled assembler, which fogs at half.
         bool refog = EvenFog.Enabled && _mode != Mode.Verify;
@@ -839,7 +840,7 @@ public static partial class PolyAssembler
                 uint p0 = VertexCache + R16(ref fr, face + 0x12u);
                 uint p2 = VertexCache + R16(ref fr, face + 0x16u);
                 uint p1 = VertexCache + R16(ref fr, face + 0x14u);
-                if (Facing(mem, p0, p1, p2))
+                if (Facing(mem, p0, p1, p2) || QuadFaces(mem, p0, p1, p2, VertexCache + R16(ref fr, face + 0x18u)))
                 {
                     if (!Allocate(ref fr, 0x34u, out uint pkt)) { _unclippedExhausted++; return; }
                     uint p3 = VertexCache + R16(ref fr, face + 0x18u);
