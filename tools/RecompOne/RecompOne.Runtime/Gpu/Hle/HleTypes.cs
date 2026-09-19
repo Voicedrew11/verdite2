@@ -20,6 +20,10 @@ public struct HleVertex
     public float Lx, Ly, Lz, Fog;
     public uint Light;
     public int LightGen;
+    // 0060. The texture rectangle (u0 | v0 << 8 | u1 << 16 | v1 << 24, inclusive);
+    // 0 with HasTexRect clear is none.
+    public uint TexRect;
+    public bool HasTexRect;
 }
 
 public struct PrimFlags

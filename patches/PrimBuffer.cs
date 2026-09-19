@@ -105,7 +105,7 @@ public static class PrimBuffer
         if (RamProbe.On) _measure = true;
     }
 
-    /// <summary>The range the packet depth and lighting records cover: wherever the
+    /// <summary>The range the packet depth, lighting and texture-rect records cover: wherever the
     /// buffers are.</summary>
     public static void PublishRange()
     {
@@ -113,6 +113,7 @@ public static class PrimBuffer
         uint bytes = 2u * (_relocated ? Bytes : StockBytes);
         GtePacketDepth.SetRange(lo, bytes);
         GteLightMap.SetRange(lo, bytes);
+        GteTexRect.SetRange(lo, bytes);
     }
 
     public static void Install()

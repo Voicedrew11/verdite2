@@ -704,8 +704,11 @@ Kf2.TrueColor.Install();
 // per-texel job, and the kernel that calls it per tap); a paletted texel is a CLUT
 // index, so no filter can run before the lookup and none of this can be sampler
 // state. Its switch is under Video with the others.
+// KF2_MIPMAPS=1 adds mipmaps under it (0060): each minified texture decoded
+// through its CLUT into an atlas with its own mip chain.
 Kf2.Anisotropic.Configure(Environment.GetEnvironmentVariable("KF2_ANISO"),
-                          Environment.GetEnvironmentVariable("KF2_ANISO_PROBE"));
+                          Environment.GetEnvironmentVariable("KF2_ANISO_PROBE"),
+                          Environment.GetEnvironmentVariable("KF2_MIPMAPS"));
 Kf2.Anisotropic.Install();
 
 // Per-pixel lighting: the depth cue and the models' light evaluated per pixel from

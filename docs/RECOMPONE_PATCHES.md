@@ -691,6 +691,23 @@ Four files in the directory have no entry below:
   ticks/s. **No recompile.** See "Occluders the camera cannot see" in
   `docs/RENDERING.md`.
 
+- `0060-texture-rect-and-mip-atlas.patch` — every texture filter tap is held inside
+  the polygon's texture rectangle, and mipmaps are built where a texture is
+  decoded. `HleVertex.TexRect`: the bounding box of the polygon's UVs, or for a
+  clipped fan the face's, from `Gpu/GteTexRect.cs` — a side table by packet
+  address the port fills after `func_800302E8`. `GlCore` uploads it with an atlas
+  entry in a third vertex buffer (location 10, only for a batch that has them);
+  `Backends/Common/GlTexCache.cs` is a 2048x2048 RGBA8 atlas with levels 0-8, a
+  buddy allocator of power-of-two blocks, a decode pass through the CLUT and a 2x2
+  box per level, run at the start of the batch that asked and invalidated by
+  `VramTracker` (which gains `Clock`). `PrimFs` clamps the plain kernel's taps to
+  the rectangle and adds `mipFootprint`: `n` taps over the whole long axis, each
+  trilinear, with level 0 the exact texel. `GteDepth.Mipmaps`, `MipmapsLive`, the
+  `Mip*` counters. The committed kernel leaked up to 99/255 of a red border into
+  pixels inside the rectangle; this leaks 0. GL core only. **No recompile.** See
+  "The taps still left the texture at its edge" and "Mipmaps where the texture is
+  decoded" in `docs/RENDERING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

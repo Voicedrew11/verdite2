@@ -561,7 +561,8 @@ public static class GteDepth
     /// many samples along the long axis instead and averages them, which is the
     /// only mip-free way to do it — the VRAM sheet cannot carry a mip chain, since
     /// one page's lower level would average in its neighbours and a CLUT's would
-    /// average in the palette beside it.
+    /// average in the palette beside it. <see cref="Mipmaps"/> builds one where the
+    /// texture is decoded instead.
     ///
     /// Clamped to 1..16 by <c>Kf2.Anisotropic</c>. GL backend only; the software
     /// rasterizer is always a single sample. Safe to change at run time — it is a
@@ -577,6 +578,26 @@ public static class GteDepth
     /// setting that cannot reach the shader should say so rather than be believed.
     /// </summary>
     public static bool AnisotropyLive;
+
+    /// <summary>
+    /// 0060. Mipmaps: each texture a polygon is minified on is decoded through its
+    /// CLUT into an atlas with a mip chain of its own, and the prim shader samples
+    /// that at the footprint's level, with <see cref="Anisotropy"/> taps along the
+    /// long axis. A texture cannot be mipmapped where it lives -- VRAM is one sheet
+    /// of pages, CLUTs and indices -- so it is mipmapped where it is decoded.
+    /// GL core backend only.
+    /// </summary>
+    public static bool Mipmaps;
+
+    /// <summary>True once the GL backend has built the atlas and found <c>uMipOn</c>.</summary>
+    public static bool MipmapsLive;
+
+    /// <summary>Atlas entries live, decoded (first or again), evicted, and polygons
+    /// that asked and found no room. Never reset.</summary>
+    public static long MipEntries, MipDecodes, MipEvictions, MipFull;
+
+    /// <summary>Decode batches still to read back and print (KF2_ANISO_PROBE=2).</summary>
+    public static int MipVerify;
 
     /// <summary>
     /// 0053. Scrolling textures — water, slime skins, the main-hall fire — that

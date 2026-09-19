@@ -28,6 +28,8 @@ public sealed partial class Gpu
         public float Px, Py; public bool Precise, PreciseW;
         // 0048. What GteLightMap recorded for this vertex; Light 0 is none.
         public float Lx, Ly, Lz, Fog; public uint Light; public int LightGen;
+        // 0060. The polygon's texture rectangle, the same for every corner.
+        public uint TexRect; public bool HasTexRect;
     }
 
     static readonly RenderPrimEvent _primEvent = new();
@@ -186,6 +188,23 @@ public sealed partial class Gpu
                 v[3].Lx = lr.L3x; v[3].Ly = lr.L3y; v[3].Lz = lr.L3z; v[3].Fog = lr.F3;
                 for (int i = 0; i < n; i++) { v[i].Light = lr.Light; v[i].LightGen = lr.Gen; }
             }
+        }
+
+        // 0060. The texture rectangle the filters stay inside: the port's record for a
+        // clipped fan, whose own UVs are only part of its face's, else the polygon's.
+        if (tex && !Detached && HleOn && GteTexRect.Active)
+        {
+            if (!GteTexRect.Find(_fifoSrc[0], _fifo[0], _fifo[vwAt[0]], _fifo[vwAt[n - 1]], out uint rect))
+            {
+                int u0 = 255, v0 = 255, u1 = 0, v1 = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    u0 = Math.Min(u0, v[i].U); u1 = Math.Max(u1, v[i].U);
+                    v0 = Math.Min(v0, v[i].V); v1 = Math.Max(v1, v[i].V);
+                }
+                rect = (uint)u0 | (uint)v0 << 8 | (uint)u1 << 16 | (uint)v1 << 24;
+            }
+            for (int i = 0; i < n; i++) { v[i].TexRect = rect; v[i].HasTexRect = true; }
         }
 
         //dispatch the render event for prims

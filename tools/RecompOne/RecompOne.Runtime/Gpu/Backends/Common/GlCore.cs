@@ -17,6 +17,10 @@ public sealed class GlCore : IGpuBackend
     // rate with the feature off. Uploaded only for a batch that carries them.
     struct GlLight { public float Lx, Ly, Lz, Fog; public uint Light; }
 
+    // 0060. The texture rectangle and the atlas entry, in a buffer of their own for
+    // the same reason; uploaded only for a batch that carries them.
+    struct GlTex { public uint Rect, Entry; }
+
     const int MaxVerts = 0x40000;
 
     readonly GL _gl;
@@ -82,6 +86,16 @@ public sealed class GlCore : IGpuBackend
     // Light slots written so far this batch; 0 means none, and the attributes stay off.
     int _litFilled;
     uint _vboLight;
+    readonly GlTex[] _texs = new GlTex[MaxVerts];
+    int _texFilled;
+    uint _vboTex;
+    bool _texAttribs;
+    GlTexCache? _mip;
+    int _uMipOn;
+    // The last lookup, since a quad asks twice.
+    uint _mipLastRect, _mipLastEntry;
+    int _mipLastTPage = -1, _mipLastClut, _mipLastClock;
+    long _mipLastFrame = -1;
     // Where the next batch's vertices go in _vbo and _vboLight. Appending keeps an
     // upload off the range the previous batch's draw may still be reading, which
     // the driver would otherwise wait for; the buffers are orphaned on wrap.
@@ -170,6 +184,7 @@ public sealed class GlCore : IGpuBackend
         _uFbInv = _gl.GetUniformLocation(_progPrim, "uFbInv");
         _uTrueColor = _gl.GetUniformLocation(_progPrim, "uTrueColor");
         _uAniso = _gl.GetUniformLocation(_progPrim, "uAniso");
+        _uMipOn = _gl.GetUniformLocation(_progPrim, "uMipOn");
         _uFluidN = _gl.GetUniformLocation(_progPrim, "uFluidN");
         for (int i = 0; i < 8; i++)
         {
@@ -196,6 +211,8 @@ public sealed class GlCore : IGpuBackend
         _gl.Uniform1(_gl.GetUniformLocation(_progPrim, "uExtTex"), 2);
         _gl.Uniform1(_gl.GetUniformLocation(_progPrim, "uRepTex"), 3);
         _gl.Uniform1(_gl.GetUniformLocation(_progPrim, "uRepClut"), 4);
+        int uMip = _gl.GetUniformLocation(_progPrim, "uMip");
+        if (uMip >= 0) _gl.Uniform1(uMip, 5);
         _uPrimScale = _gl.GetUniformLocation(_progPrim, "uScale");
         SetScaleUniform(_progPrim, GlVram.Scale);
         _primScaleSent = GlVram.Scale;
@@ -318,6 +335,13 @@ public sealed class GlCore : IGpuBackend
             _gl.VertexAttribPointer(7, 3, VertexAttribPointerType.Float, false, ls, (void*)0);
             _gl.VertexAttribPointer(8, 1, VertexAttribPointerType.Float, false, ls, (void*)12);
             _gl.VertexAttribIPointer(9, 1, VertexAttribIType.UnsignedInt, ls, (void*)16);
+
+            // 0060. Disabled until a batch carries them; the generic 0 is "none".
+            _vboTex = _gl.GenBuffer();
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboTex);
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(MaxVerts * sizeof(GlTex)), null, BufferUsageARB.DynamicDraw);
+            _gl.VertexAttribIPointer(10, 2, VertexAttribIType.UnsignedInt, (uint)sizeof(GlTex), (void*)0);
+            _gl.VertexAttribI4(10, 0u, 0u, 0u, 0u);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
         }
 
@@ -343,6 +367,15 @@ public sealed class GlCore : IGpuBackend
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 
         _kClipX1 = 1023; _kClipY1 = 511;
+
+        // 0060. A failure leaves the mip path off and nothing else.
+        if (!_legacy && _uMipOn >= 0)
+        {
+            _mip = new GlTexCache(_gl);
+            _mip.Init();
+            if (!_mip.Ready) _mip = null;
+        }
+        GteDepth.MipmapsLive = _mip != null;
         Ready = true;
     }
 
@@ -728,8 +761,58 @@ public sealed class GlCore : IGpuBackend
             _lights[_count + 2] = new GlLight { Lx = c.Lx, Ly = c.Ly, Lz = c.Lz, Fog = c.Fog, Light = c.Light };
             _litFilled = _count + 3;
         }
+        if (a.HasTexRect && _vboTex != 0 && f.Textured && !f.UseImage)
+        {
+            if (_texFilled < _count) Array.Clear(_texs, _texFilled, _count - _texFilled);
+            var t = new GlTex { Rect = a.TexRect, Entry = 0x80000000u | MipEntry(a, b, c, f) };
+            _texs[_count] = t; _texs[_count + 1] = t; _texs[_count + 2] = t;
+            _texFilled = _count + 3;
+        }
         bool dith = DitherOf(f);
         _verts[_count++] = V(a, f, dith); _verts[_count++] = V(b, f, dith); _verts[_count++] = V(c, f, dith);
+    }
+
+    /// <summary>0060. The atlas entry for a textured triangle, or 0: none for a
+    /// replacement texture, a texture window, a scrolling texture (its fraction is
+    /// the shader's), or a polygon large enough on screen that it is magnified.</summary>
+    uint MipEntry(in HleVertex a, in HleVertex b, in HleVertex c, in PrimFlags f)
+    {
+        if (!GteDepth.Mipmaps || _mip == null || _pendingRepTex != 0 || _pendingRepClut != 0
+            || _env.TwMaskX != 0 || _env.TwMaskY != 0)
+            return 0;
+        uint rect = a.TexRect;
+        int u0 = (int)(rect & 0xFF), v0 = (int)((rect >> 8) & 0xFF);
+        int w = (int)((rect >> 16) & 0xFF) - u0 + 1, h = (int)(rect >> 24) - v0 + 1;
+        // Texels against the pixels of the quad this is half of, at the render scale.
+        float area = Math.Abs((b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X));
+        int s = GlVram.Scale;
+        if ((float)w * h * 32f < area * s * s) return 0;
+
+        int clock = Assets.Textures.VramTracker.Clock;
+        if (rect == _mipLastRect && f.TPage == _mipLastTPage && f.Clut == _mipLastClut
+            && _frame == _mipLastFrame && clock == _mipLastClock)
+            return _mipLastEntry;
+
+        uint entry = FluidOverlap(f.TPage, u0, v0, w, h) ? 0u : _mip.Lookup(f.TPage, f.Clut, rect, _frame);
+        _mipLastRect = rect; _mipLastTPage = f.TPage; _mipLastClut = f.Clut;
+        _mipLastFrame = _frame; _mipLastClock = Assets.Textures.VramTracker.Clock;
+        _mipLastEntry = entry;
+        return entry;
+    }
+
+    static bool FluidOverlap(int tpage, int u0, int v0, int w, int h)
+    {
+        if (GteDepth.FluidN == 0) return false;
+        int mode = (tpage >> 7) & 3;
+        int div = mode == 0 ? 4 : mode == 1 ? 2 : 1;
+        float x0 = (tpage & 0xF) * 64 + u0 / div, x1 = (tpage & 0xF) * 64 + (u0 + w - 1) / div + 1;
+        float y0 = ((tpage >> 4) & 1) * 256 + v0, y1 = y0 + h;
+        for (int i = 0; i < GteDepth.FluidN; i++)
+        {
+            ref var r = ref GteDepth.Fluid[i];
+            if (x0 < r.X + r.W && x1 > r.X && y0 < r.Y + r.H && y1 > r.Y) return true;
+        }
+        return false;
     }
 
     /// <summary>0058. A vertex as the normal pass wants it: the position the colour
@@ -1116,6 +1199,9 @@ public sealed class GlCore : IGpuBackend
 
     private void FlushCore()
     {
+        // 0060. Decode what this batch's polygons asked the atlas for, from VRAM as
+        // they saw it: anything that changes VRAM flushes before it does.
+        if (_mip != null && _mip.HasPending) _mip.Process(_vram.SampleTexture);
 
         var rt = _kTarget;
         uint destTex;
@@ -1281,6 +1367,13 @@ public sealed class GlCore : IGpuBackend
         // anisotropy rebuilds nothing.
         GteDepth.AnisotropyLive = _uAniso >= 0;
         if (_uAniso >= 0) _gl.Uniform1(_uAniso, (float)GteDepth.Anisotropy);
+        if (_uMipOn >= 0) _gl.Uniform1(_uMipOn, GteDepth.Mipmaps && _mip != null ? 1f : 0f);
+        if (_mip != null && _texFilled > 0)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture5);
+            _gl.BindTexture(TextureTarget.Texture2D, _mip.Texture);
+            _gl.ActiveTexture(TextureUnit.Texture0);
+        }
         GteDepth.FluidLive = _uFluidN >= 0;
         if (_uFluidN >= 0 && GteDepth.FluidN != _fluidSentN)
         {
@@ -1326,6 +1419,7 @@ public sealed class GlCore : IGpuBackend
         {
             Orphan(_vbo, MaxVerts * Unsafe.SizeOf<GlVertex>());
             if (_vboLight != 0) Orphan(_vboLight, MaxVerts * Unsafe.SizeOf<GlLight>());
+            if (_vboTex != 0) Orphan(_vboTex, MaxVerts * Unsafe.SizeOf<GlTex>());
             _vboCursor = 0;
         }
         int first = _vboCursor;
@@ -1343,6 +1437,17 @@ public sealed class GlCore : IGpuBackend
             _lightAttribs = _litFilled > 0;
             for (uint i = 7; i <= 9; i++)
                 if (_lightAttribs) _gl.EnableVertexAttribArray(i); else _gl.DisableVertexAttribArray(i);
+        }
+        if (_texFilled > 0)
+        {
+            if (_texFilled < _count) Array.Clear(_texs, _texFilled, _count - _texFilled);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboTex);
+            _gl.BufferSubData<GlTex>(BufferTargetARB.ArrayBuffer, first * Unsafe.SizeOf<GlTex>(), _texs.AsSpan(0, _count));
+        }
+        if ((_texFilled > 0) != _texAttribs)
+        {
+            _texAttribs = _texFilled > 0;
+            if (_texAttribs) _gl.EnableVertexAttribArray(10); else _gl.DisableVertexAttribArray(10);
         }
 
         // 0051. A tested batch draws against a depth pulled towards the camera, so a
@@ -1432,6 +1537,7 @@ public sealed class GlCore : IGpuBackend
         }
         _count = 0;
         _litFilled = 0;
+        _texFilled = 0;
     }
 
     unsafe void Orphan(uint buffer, int bytes)
@@ -2129,6 +2235,8 @@ public sealed class GlCore : IGpuBackend
         if (_nrmVao != 0) _gl.DeleteVertexArray(_nrmVao);
         if (_vbo != 0) _gl.DeleteBuffer(_vbo);
         if (_vboLight != 0) _gl.DeleteBuffer(_vboLight);
+        if (_vboTex != 0) _gl.DeleteBuffer(_vboTex);
+        _mip?.Dispose();
         if (_presentVbo != 0) _gl.DeleteBuffer(_presentVbo);
         if (_aoTex != 0) _gl.DeleteTexture(_aoTex);
         if (_aoBlurTex != 0) _gl.DeleteTexture(_aoBlurTex);

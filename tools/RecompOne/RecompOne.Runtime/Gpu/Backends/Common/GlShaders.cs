@@ -472,6 +472,8 @@ internal static class GlShaders
         layout(location = 7) in vec3  inLit;
         layout(location = 8) in float inFog;
         layout(location = 9) in uint  inLight;
+        // 0060. The texture rectangle, and the atlas entry with its flags.
+        layout(location = 10) in uvec2 inTex;
 
         // vUV is the one thing that wants correcting: handing gl_Position a real W
         // makes the rasterizer interpolate it in 1/W, which is exactly the
@@ -490,6 +492,7 @@ internal static class GlShaders
         noperspective out vec3 vLit;
         noperspective out float vFog;
         flat out uint vLight;
+        flat out uvec2 vTex;
 
         uniform vec2 uVertexOffset;
         uniform vec2 uPosBias;
@@ -514,6 +517,7 @@ internal static class GlShaders
             vLit = inLit;
             vFog = inFog;
             vLight = inLight;
+            vTex = inTex;
             vDither = (inTexpage >> 10) & 1;
             vRepClut = (inTexpage >> 12) & 1;
 
@@ -547,6 +551,7 @@ internal static class GlShaders
         noperspective in vec3 vLit;
         noperspective in float vFog;
         flat in uint vLight;
+        flat in uvec2 vTex;
 
         layout(location = 0, index = 0) out vec4 FragColor;
         layout(location = 0, index = 1) out vec4 BlendColor;
@@ -569,6 +574,9 @@ internal static class GlShaders
         uniform int   uScale;
         uniform vec2  uPosBias;
         uniform float uAniso;
+        // 0060. The decoded texture atlas and its switch.
+        uniform sampler2D uMip;
+        uniform float uMipOn;
         uniform vec3  uLightBk;
         uniform vec3  uLcmR;
         uniform vec3  uLcmG;
@@ -646,6 +654,46 @@ internal static class GlShaders
                 return vec4(mix(c0.rgb, c1.rgb, fy), c0.a);
             }
             return a;
+        }
+
+        // The console's truncation: towards the texel the gradient enters from.
+        ivec2 truncUV(vec2 t, bool negU, bool negV) {
+            return ivec2(negU ? int(ceil(t.x - 0.0001)) : int(floor(t.x + 0.0001)),
+                         negV ? int(ceil(t.y - 0.0001)) : int(floor(t.y + 0.0001)));
+        }
+
+        // 0060. One level of the decoded texture, bilinear, at a level-0 texel
+        // position inside the rectangle. Held half a level texel in from the edge,
+        // so the bilinear taps never leave the block.
+        vec4 mipAt(vec2 local, float level, vec2 ext, vec2 block) {
+            float sz = exp2(level);
+            vec2 lo = vec2(0.5 * sz);
+            vec2 p = clamp(local, lo, max(ext - lo, lo));
+            return textureLod(uMip, (block + p) / 2048.0, level);
+        }
+
+        // n taps across the whole long axis, each trilinear at lod, premultiplied by
+        // solidity. Level 0 is the exact texel, so the filter meets the console's
+        // point sample where the footprint shrinks to one texel.
+        vec4 mipFootprint(vec2 axis, float n, float lod, ivec2 rMin, ivec2 rMax, vec2 block, bool negU, bool negV) {
+            vec2 ext = vec2(rMax - rMin + 1);
+            float k0 = floor(lod), f = lod - k0;
+            vec4 acc = vec4(0.0);
+            for (int i = 0; i < 16; ++i) {
+                if (float(i) >= n) break;
+                vec2 t = vUV + axis * ((float(i) + 0.5) / n - 0.5);
+                vec2 local = t - vec2(rMin);
+                vec4 a;
+                if (k0 < 0.5) {
+                    vec4 c = decode(clamp(truncUV(t, negU, negV), rMin, rMax));
+                    a = (c.rgb == vec3(0.0) && c.a < 0.5) ? vec4(0.0) : vec4(c.rgb, 1.0);
+                } else {
+                    a = mipAt(local, k0, ext, block);
+                }
+                vec4 b = f > 0.0 ? mipAt(local, k0 + 1.0, ext, block) : a;
+                acc += mix(a, b, f);
+            }
+            return acc / n;
         }
 
         // 0048. The vertex colour, made again at this pixel from what made it: a lit
@@ -743,76 +791,52 @@ internal static class GlShaders
 
             vec4 texel = decodeFluid(ivec2(rawU, rawV));
 
-            // Anisotropic filtering. The footprint is a square looked at square-on
-            // and a long thin sliver on a floor running away to the horizon, and
-            // one point sample of a sliver is what makes such a floor crawl and
-            // sparkle as the camera moves. Sample along the sliver's long axis
-            // instead and average. Each tap truncates the way the hardware did, so
-            // the short axis stays exactly as hard as the console left it and only
-            // the axis that was being undersampled is averaged.
-            //
-            // **The taps are one texel apart, and the span is what is capped.**
-            // Spreading the taps across the whole axis instead -- which is what
-            // this first did -- is a fair estimator of the footprint's mean, and
-            // it is still wrong here, because of what lies at the far end of a
-            // long footprint. A derivative is in unclamped texture-space units,
-            // so a distant floor reads tens or hundreds of texels per pixel while
-            // its texture is 64 wide: past that the taps wrap, by the texture
-            // window or by the page, into whatever else shares the 256x256 sheet
-            // -- and in the 4- and 8-bit modes a tap that lands on another
-            // texture's *indices* is read through this primitive's CLUT, which is
-            // an arbitrary colour with no relation to either texture. That is the
-            // white speckle on a receding floor and the neighbouring sprite
-            // arriving at a billboard's edge. So the kernel covers min(len,
-            // uAniso) texels centred on the pixel: every tap stays on the texture
-            // the pixel is actually on, and the cost is that past uAniso texels of
-            // footprint it filters a *part* of the footprint rather than
-            // estimating the whole of it, degrading toward nearest rather than
-            // toward a full box filter. There is no mip chain and there cannot be
-            // one, so that is the honest limit of a fixed tap budget.
-            //
-            // This needs no test for "is this 3D": a HUD sprite, a menu box or a
-            // font glyph is drawn at or near 1:1 and axis-aligned, so both
-            // derivatives are about one texel, the axis spans one texel, taps
-            // comes out 1 and the fragment takes the line above unchanged.
-            // A transparent centre texel is a pixel the console did not draw, and
-            // the filter must not make it one that is: deciding the silhouette by
-            // how many taps came back solid grows the sprite outward by up to half
-            // a footprint, which on an atlas page is the neighbouring sprite
-            // arriving at this one's edge.
-            if (uAniso > 1.5 && vRepClut == 0
+            // Anisotropic filtering and mipmaps. See "Anisotropic filtering" in
+            // docs/RENDERING.md. The centre tap above is the console's texel and
+            // decides the silhouette and the semi-transparency bit; the filters only
+            // replace its colour, and every tap stays inside the polygon's texture
+            // rectangle (0060), since past it is other art read through this CLUT.
+            if ((uAniso > 1.5 || uMipOn > 0.5) && vRepClut == 0
                     && !(texel.rgb == vec3(0.0) && texel.a < 0.5)) {
-                vec2 axis = dot(dUVdx, dUVdx) >= dot(dUVdy, dUVdy) ? dUVdx : dUVdy;
-                float len = length(axis);
-                int taps = int(min(ceil(len), uAniso));
-                // `len > 0.0` is false for a NaN, which is what a degenerate
-                // triangle at the horizon hands dFdx; such a fragment takes the
-                // single sample rather than reading from wherever int(NaN) lands.
-                if (taps > 1 && len > 0.0) {
-                    vec2 stride = axis / len;
-                    vec3 sum = vec3(0.0);
-                    float solid = 0.0;
-                    for (int i = 0; i < 16; ++i) {
-                        if (i >= taps) break;
-                        vec2 t = vUV + stride * (float(i) + 0.5 - 0.5 * float(taps));
-                        vec4 c = decodeFluid(ivec2(
-                            dUVdx.x < 0.0 ? int(ceil(t.x - 0.0001)) : int(floor(t.x + 0.0001)),
-                            dUVdy.y < 0.0 ? int(ceil(t.y - 0.0001)) : int(floor(t.y + 0.0001))));
-                        // A transparent texel is stored as black with the STP bit
-                        // clear, so averaging it in as a colour draws a dark fringe
-                        // round every grate, torch and bush in the game. Weigh it
-                        // zero and renormalise by what survived.
-                        float w = (c.rgb == vec3(0.0) && c.a < 0.5) ? 0.0 : 1.0;
-                        sum += c.rgb * w;
-                        solid += w;
+                bool hasRect = (vTex.y & 0x80000000u) != 0u;
+                ivec2 rMin = hasRect ? ivec2(int(vTex.x & 255u), int((vTex.x >> 8) & 255u)) : ivec2(0);
+                ivec2 rMax = hasRect ? ivec2(int((vTex.x >> 16) & 255u), int(vTex.x >> 24)) : ivec2(255);
+                float lx = length(dUVdx), ly = length(dUVdy);
+                vec2 axis = lx >= ly ? dUVdx : dUVdy;
+                float major = max(lx, ly), minor = min(lx, ly);
+                bool done = false;
+                // `major > 0.0` is false for the NaN a degenerate triangle hands dFdx.
+                if (major > 0.0 && uMipOn > 0.5 && (vTex.y & 0x40000000u) != 0u) {
+                    float n = clamp(ceil(major / max(minor, 1e-4)), 1.0, max(uAniso, 1.0));
+                    float maxLod = float((vTex.y >> 16) & 15u);
+                    float lod = min(log2(max(major / n, minor)), maxLod);
+                    if (lod > 0.0) {
+                        vec4 acc = mipFootprint(axis, n, lod, rMin, rMax,
+                            vec2(float(vTex.y & 255u), float((vTex.y >> 8) & 255u)) * 8.0,
+                            dUVdx.x < 0.0, dUVdy.y < 0.0);
+                        if (acc.a > 0.0) texel = vec4(acc.rgb / acc.a, texel.a);
+                        done = true;
                     }
-                    // The silhouette is the centre tap's, tested above, so it is
-                    // exactly where truncation put it. The semi-transparency bit
-                    // selects a blend equation rather than being a colour, so it
-                    // too is taken whole from the centre tap and never averaged.
-                    // An even tap count puts no tap at the centre, so every one of
-                    // them can still come back transparent.
-                    if (solid > 0.0) texel = vec4(sum / solid, texel.a);
+                }
+                // One texel apart, up to uAniso of them: without a mip level under
+                // it a tap is a point sample, so the span is what is capped.
+                if (!done && uAniso > 1.5) {
+                    int taps = int(min(ceil(major), uAniso));
+                    if (taps > 1 && major > 0.0) {
+                        vec2 stride = axis / major;
+                        vec3 sum = vec3(0.0);
+                        float solid = 0.0;
+                        for (int i = 0; i < 16; ++i) {
+                            if (i >= taps) break;
+                            vec2 t = vUV + stride * (float(i) + 0.5 - 0.5 * float(taps));
+                            vec4 c = decodeFluid(clamp(truncUV(t, dUVdx.x < 0.0, dUVdy.y < 0.0), rMin, rMax));
+                            // A transparent texel is black: weigh it out.
+                            float w = (c.rgb == vec3(0.0) && c.a < 0.5) ? 0.0 : 1.0;
+                            sum += c.rgb * w;
+                            solid += w;
+                        }
+                        if (solid > 0.0) texel = vec4(sum / solid, texel.a);
+                    }
                 }
             }
 
@@ -828,7 +852,8 @@ internal static class GlShaders
 
             if (texel.rgb == vec3(0.0) && texel.a < 0.5) discard;
             if (uOpaqueDepth != 0 && texel.a >= 0.5) discard;
-            ivec3 t8 = ivec3(texel.rgb * 31.0 + 0.5) << 3;
+            // 248 = 31 << 3: exact for a texel, and keeps a filtered colour's fraction.
+            ivec3 t8 = ivec3(texel.rgb * 248.0 + 0.5);
             ivec3 c8 = (t8 * c8in) >> 7;
             FragColor = vec4(quant5(c8), max(texel.a, uSetMask));
             BlendColor = texel.a >= 0.5 ? uBlend : uBlendOpaque;
@@ -1191,10 +1216,73 @@ internal static class GlShaders
         }
         """;
 
+    // 0060. The texture atlas's two passes: decode a texture rectangle through its
+    // CLUT into its block, and build one level of a block from the level above.
+    public const string MipVs = """
+        #version 330 core
+        layout(location = 0) in vec2  aPos;
+        layout(location = 1) in ivec4 aRect;
+        layout(location = 2) in ivec4 aSrc;
+        layout(location = 3) in ivec4 aInfo;
+        flat out ivec4 vRect;
+        flat out ivec4 vSrc;
+        flat out ivec4 vInfo;
+        void main() {
+            gl_Position = vec4(aPos, 0.0, 1.0);
+            vRect = aRect; vSrc = aSrc; vInfo = aInfo;
+        }
+        """;
+
+    public const string MipDecodeFs = """
+        #version 330 core
+        flat in ivec4 vRect;   // u0, v0, w, h
+        flat in ivec4 vSrc;    // page x, page y, clut x, clut y
+        flat in ivec4 vInfo;   // mode, block x, block y
+        uniform sampler2D uVram;
+        out vec4 oColor;
+
+        int u5(float f) { return int(floor(f * 31.0 + 0.5)); }
+        vec4 fetch(ivec2 c) { return texelFetch(uVram, c & ivec2(1023, 511), 0); }
+        int fetch16(ivec2 c) {
+            vec4 p = fetch(c);
+            return u5(p.r) | (u5(p.g) << 5) | (u5(p.b) << 10) | (int(ceil(p.a)) << 15);
+        }
+
+        void main() {
+            // Past the rectangle the block repeats its edge.
+            ivec2 local = clamp(ivec2(gl_FragCoord.xy) - vInfo.yz, ivec2(0), vRect.zw - 1);
+            ivec2 uv = (vRect.xy + local) & ivec2(0xff);
+            vec4 c;
+            if (vInfo.x == 0) {
+                int s = fetch16(ivec2(vSrc.x + (uv.x >> 2), vSrc.y + uv.y));
+                c = fetch(ivec2(vSrc.z + ((s >> ((uv.x & 3) << 2)) & 0xf), vSrc.w));
+            } else if (vInfo.x == 1) {
+                int s = fetch16(ivec2(vSrc.x + (uv.x >> 1), vSrc.y + uv.y));
+                c = fetch(ivec2(vSrc.z + ((s >> ((uv.x & 1) << 3)) & 0xff), vSrc.w));
+            } else {
+                c = fetch(ivec2(vSrc.x + uv.x, vSrc.y + uv.y));
+            }
+            // Premultiplied by solidity; a transparent texel is already black.
+            oColor = (c.rgb == vec3(0.0) && c.a < 0.5) ? vec4(0.0) : vec4(c.rgb, 1.0);
+        }
+        """;
+
+    // The level above is the texture's base level while this runs, so it is lod 0.
+    public const string MipDownFs = """
+        #version 330 core
+        uniform sampler2D uAtlas;
+        out vec4 oColor;
+        void main() {
+            ivec2 p = ivec2(gl_FragCoord.xy) * 2;
+            oColor = 0.25 * (texelFetch(uAtlas, p, 0) + texelFetch(uAtlas, p + ivec2(1, 0), 0)
+                           + texelFetch(uAtlas, p + ivec2(0, 1), 0) + texelFetch(uAtlas, p + ivec2(1, 1), 0));
+        }
+        """;
+
     static readonly (uint Index, string Name)[] PrimAttribs =
     [
         (0, "inPos"), (1, "inColorF"), (2, "inClutF"), (3, "inTexpageF"), (4, "inUV"), (5, "inW"), (6, "inZ"),
-        (7, "inLit"), (8, "inFog"), (9, "inLight"),
+        (7, "inLit"), (8, "inFog"), (9, "inLight"), (10, "inTex"),
     ];
 
     public static uint BuildPrim(GL gl, string vsSrc, string fsSrc, string name)
