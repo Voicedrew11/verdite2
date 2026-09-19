@@ -234,6 +234,16 @@ Kf2.FramePacing.Configure(Environment.GetEnvironmentVariable("KF2_FPS"),
                           Environment.GetEnvironmentVariable("KF2_FPS_PROBE"));
 Kf2.FramePacing.Install();
 
+// Stage 1 clears the screen tint every frame and the stages that set it are gated,
+// so above the tick rate the death fade and the damage flash strobed. Stage 1 is
+// in C# now and resets the tint only on a frame the world ticks. See "The tints
+// strobed between ticks".
+//
+//     KF2_TINTHOLD=0        the recompiled routine: the strobe back -- comparison only
+//     KF2_TINTHOLD=verify   run both and compare RAM and registers
+Kf2.TintHold.Configure(Environment.GetEnvironmentVariable("KF2_TINTHOLD"));
+Kf2.TintHold.Install();
+
 // The frame profiler: where each frame's time goes, by section. Every hooked
 // function is timed inside HookManager (its recompiled body and each patch's
 // delegate apart), the runtime times the present path, and the sleeps are sections

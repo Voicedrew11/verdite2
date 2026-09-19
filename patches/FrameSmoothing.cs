@@ -90,6 +90,9 @@ namespace Kf2;
 ///   between two positions that already slid along it, with no overshoot into it. A
 ///   step past <see cref="TeleportUnits"/> on an axis is a warp rather than a walk
 ///   and is left alone, the way <see cref="ObjectSmoothing"/> guards a placement.
+/// * **The head bob and the landing offset** at `0x80199548`/`0x8019954C`, which
+///   stage 8 adds to the eye height. Nothing after stage 8 reads them, so they
+///   are isolated like the angles.
 ///
 /// Both agree on time with <see cref="ObjectSmoothing"/>, which interpolates too:
 /// both draw the world at `t - 1 + frac`, so nothing slides against anything else
@@ -112,6 +115,10 @@ public static class FrameSmoothing
     const uint PosX = 0x801994EC;            // u32
     const uint PosY = 0x801994F0;
     const uint PosZ = 0x801994F4;
+
+    // Stage 8 adds these to the camera Y; only it reads them on the render side.
+    const uint Bob = 0x80199548;             // s16, func_80028560's head bob
+    const uint Landing = 0x8019954C;         // s16, the landing offset
 
     /// <summary>Units on one axis between two ticks past which the position is a
     /// warp rather than a walk, and is left where the game put it -- lerping across
@@ -140,6 +147,7 @@ public static class FrameSmoothing
     // produced the tick before; the frame is drawn at lerp(prev, cur, phase).
     static ushort _prevYaw, _curYaw, _prevPitch, _curPitch;
     static int _prevX, _curX, _prevY, _curY, _prevZ, _curZ;
+    static short _prevBob, _curBob, _prevLand, _curLand;
 
     // False until a first sample exists, then until a second does. Carrying needs
     // both prev and cur to be real, exactly as ObjectSmoothing's `_live` does.
@@ -150,6 +158,7 @@ public static class FrameSmoothing
     static bool _applied;
     static ushort _pitch, _yaw;
     static uint _x, _y, _z;
+    static ushort _bob, _land;
 
     // ---- the probe ------------------------------------------------------------
 
@@ -176,6 +185,7 @@ public static class FrameSmoothing
     /// </summary>
     static long _carries;
     static double _yawSum, _pitchSum, _posSum, _fracSum;
+    static long _bobFrames, _bobOffTick;
 
     static readonly ModInfo _self = new()
     {
@@ -304,12 +314,15 @@ public static class FrameSmoothing
         {
             _prevYaw = _curYaw; _prevPitch = _curPitch;
             _prevX = _curX; _prevY = _curY; _prevZ = _curZ;
+            _prevBob = _curBob; _prevLand = _curLand;
 
             _curYaw = m.ReadU16(ComposedYaw);
             _curPitch = m.ReadU16(ComposedPitch);
             _curX = (int)m.ReadU32(PosX);
             _curY = (int)m.ReadU32(PosY);
             _curZ = (int)m.ReadU32(PosZ);
+            _curBob = (short)m.ReadU16(Bob);
+            _curLand = (short)m.ReadU16(Landing);
 
             _carriable = _primed;   // both prev and cur are real only after two samples
             _primed = true;
@@ -333,7 +346,10 @@ public static class FrameSmoothing
                        Math.Abs(dz) <= TeleportUnits &&
                        (dx != 0 || dy != 0 || dz != 0);
 
-        if (yawD == 0 && pitchD == 0 && !posLive)
+        int bobD = _curBob - _prevBob, landD = _curLand - _prevLand;
+        bool eyeLive = bobD != 0 || landD != 0;
+
+        if (yawD == 0 && pitchD == 0 && !posLive && !eyeLive)
         {
             if (_probe) { _skipped++; _skipStill++; }
             return;
@@ -344,6 +360,8 @@ public static class FrameSmoothing
         _x = m.ReadU32(PosX);
         _y = m.ReadU32(PosY);
         _z = m.ReadU32(PosZ);
+        _bob = m.ReadU16(Bob);
+        _land = m.ReadU16(Landing);
         _applied = true;
         _carries++;
 
@@ -370,6 +388,15 @@ public static class FrameSmoothing
             m.WriteU32(PosZ, (uint)(_prevZ + (int)Math.Round(dz * frac)));
         }
 
+        // The bob is a stepped |sin| sampled per tick; carried like the angles,
+        // since nothing after stage 8 reads it. See "The head bob" in
+        // docs/PATCHES_AND_MODS.md.
+        if (eyeLive)
+        {
+            m.WriteU16(Bob, (ushort)(short)(_prevBob + (int)Math.Round(bobD * frac)));
+            m.WriteU16(Landing, (ushort)(short)(_prevLand + (int)Math.Round(landD * frac)));
+        }
+
         if (_probe)
         {
             _carried++;
@@ -377,6 +404,11 @@ public static class FrameSmoothing
             _pitchSum += Math.Abs(pitchStep);
             if (posLive) _posSum += Math.Abs(dx * frac) + Math.Abs(dz * frac);
             _fracSum += frac;
+            if (eyeLive)
+            {
+                _bobFrames++;
+                if (Math.Round(bobD * frac) != 0 && Math.Round(bobD * frac) != bobD) _bobOffTick++;
+            }
         }
     }
 
@@ -394,6 +426,8 @@ public static class FrameSmoothing
             m.WriteU32(PosX, _x);
             m.WriteU32(PosY, _y);
             m.WriteU32(PosZ, _z);
+            m.WriteU16(Bob, _bob);
+            m.WriteU16(Landing, _land);
             _applied = false;
         }
 
@@ -480,9 +514,11 @@ public static class FrameSmoothing
             Console.WriteLine($"[KF2] smoothing: {_carried}/{total} frames carried, " +
                               $"mean phase {_fracSum / _carried:0.00} tick, " +
                               $"yaw {_yawSum / _carried:0.0} u, pitch {_pitchSum / _carried:0.0} u, " +
-                              $"pos {_posSum / _carried:0.0} u");
+                              $"pos {_posSum / _carried:0.0} u, " +
+                              $"bob carried on {_bobFrames} ({_bobOffTick} between the ticks' values)");
 
         _carried = _skipped = _skipStill = _skipOff = _skipUnprimed = 0;
         _yawSum = _pitchSum = _posSum = _fracSum = 0.0;
+        _bobFrames = _bobOffTick = 0;
     }
 }
