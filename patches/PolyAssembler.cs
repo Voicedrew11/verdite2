@@ -142,8 +142,9 @@ public static partial class PolyAssembler
         var litBlend = SymbolRegistry.Resolve("game", null, LitBlend);
         var clip4 = SymbolRegistry.Resolve("game", null, Clip4);
         var clip3 = SymbolRegistry.Resolve("game", null, Clip3);
+        var nclip = SymbolRegistry.Resolve("game", null, NormalClipAddress);
         if (assembler == null || unclipped == null || transform == null || near == null || lit == null || litBlend == null
-            || clip4 == null || clip3 == null)
+            || clip4 == null || clip3 == null || nclip == null)
             return false;
 
         if (!Queue(ref _queued, assembler, nameof(Replace))) return false;
@@ -154,11 +155,12 @@ public static partial class PolyAssembler
         if (!Queue(ref _queuedLitBlend, litBlend, nameof(ReplaceLitBlend))) return false;
         if (!Queue(ref _queuedClip4, clip4, nameof(ReplaceClip4))) return false;
         if (!Queue(ref _queuedClip3, clip3, nameof(ReplaceClip3))) return false;
+        if (!Queue(ref _queuedNormalClip, nclip, nameof(ReplaceNormalClip))) return false;
 
         HookManager.Commit();
         bool ok = HookAttach.Installed(assembler) && HookAttach.Installed(unclipped) && HookAttach.Installed(transform)
                && HookAttach.Installed(near) && HookAttach.Installed(lit) && HookAttach.Installed(litBlend)
-               && HookAttach.Installed(clip4) && HookAttach.Installed(clip3);
+               && HookAttach.Installed(clip4) && HookAttach.Installed(clip3) && HookAttach.Installed(nclip);
         string State(bool on) => !on ? "off" : _mode.ToString().ToLowerInvariant();
         Console.WriteLine(!ok
             ? "[KF2] polyasm: not installed"
@@ -430,7 +432,7 @@ public static partial class PolyAssembler
             return true;
         }
 
-        if (!Visible(fr.Mem, p0, p1, p2)) return true;
+        if (!QuadFaces(fr.Mem, Visible(fr.Mem, p0, p1, p2), p0, p1, p2, p3)) return true;
         if (!Allocate(ref fr, 0x34u, out uint pkt)) { _exhausted++; return false; }
 
         Link(ref fr, (uint)(FillQuad(ref fr, pkt, f, cmd, normals, p0, p1, p2, p3) >> 2) + bias, pkt);
@@ -640,13 +642,15 @@ public static partial class PolyAssembler
         mem.WriteU32(sp + 0x10u, (word >> 24) & 2u);
         c.A1 = normals + normal;
         c.RA = 0x80030C38u;
+        _clipFacing = _mode == Mode.Verify ? 0 : ClippedFacing(mem, n);
         bool lighting = LightingOn();
         // Verify compares against the recompiled assembler, which fogs at half.
         bool refog = EvenFog.Enabled && _mode != Mode.Verify;
         bool rewrite = refog || _tileLight;
         bool depth = GtePacketDepth.Active;
         uint before = lighting || rewrite || depth ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
-        KingsField2.func_800302E8(c, mem);
+        try { KingsField2.func_800302E8(c, mem); }
+        finally { _clipFacing = 0; }
         if (rewrite) RewriteClipped(mem, before, normals + normal, refog);
         if (lighting) LightClipped(mem, before, normals + normal, refog);
         if (depth) DepthClipped(mem, before, DepthOn());
@@ -839,7 +843,7 @@ public static partial class PolyAssembler
                 uint p0 = VertexCache + R16(ref fr, face + 0x12u);
                 uint p2 = VertexCache + R16(ref fr, face + 0x16u);
                 uint p1 = VertexCache + R16(ref fr, face + 0x14u);
-                if (Facing(mem, p0, p1, p2))
+                if (QuadFaces(mem, Facing(mem, p0, p1, p2), p0, p1, p2, VertexCache + R16(ref fr, face + 0x18u)))
                 {
                     if (!Allocate(ref fr, 0x34u, out uint pkt)) { _unclippedExhausted++; return; }
                     uint p3 = VertexCache + R16(ref fr, face + 0x18u);

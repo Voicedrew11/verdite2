@@ -392,3 +392,111 @@ public static partial class PolyAssembler
         mem.WriteU32(rec + 0x28u, (uint)(Lo(zy, ky) >> 12));
     }
 }
+
+// ---- Culling on the whole polygon ---------------------------------------------
+
+public static partial class PolyAssembler
+{
+    const uint NormalClipAddress = 0x8005DC6C;
+
+    static bool _queuedNormalClip;
+
+    /// <summary>KF2_POLYASM_FACING=0 culls on the first three corners, as the game does.</summary>
+    public static bool WholeFacing { get; set; } = true;
+
+    /// <summary>Clipped polygons and quads whose facing on the whole polygon differs
+    /// from the game's first three corners; decided the whole polygon's way unless
+    /// KF2_POLYASM_FACING=0. Never reset.</summary>
+    public static long ClippedChanged, QuadsChanged;
+
+    /// <summary>What func_800302E8's NormalClip answers while it runs: 1 facing, -1
+    /// not, 0 the GTE's own answer.</summary>
+    static int _clipFacing;
+
+    /// <summary>NormalClip, with the answer <see cref="Clipped"/> decided for the
+    /// emitter. The GTE still runs, so it is left as the game leaves it.</summary>
+    static void ReplaceNormalClip(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
+    {
+        orig(c, m);
+        int f = _clipFacing;
+        if (f == 0) return;
+        _clipFacing = 0;
+        c.V0 = f > 0 ? 1u : 0u;
+    }
+
+    /// <summary>func_800302E8 culls a clipped polygon on NormalClip of its first three
+    /// corners, on whole pixels. A subdivided quad of a parent with one short edge
+    /// starts on an almost straight corner, and a wall seen edge-on is strips a pixel
+    /// wide that collapse to a line on whole pixels; both read as facing away while
+    /// they face the camera. Decide on the whole polygon's area instead, at the
+    /// fractional corners when sub-pixel is on (0052). See "A floor quarter missing
+    /// at a short edge" and "An edge-on wall lost its strips" in docs/RENDERING.md.</summary>
+    static int ClippedFacing(PSMemory mem, uint n)
+    {
+        if (n > 10u) return 0;
+        int count = (int)n;
+        Span<double> x = stackalloc double[10], y = stackalloc double[10];
+        Span<uint> w = stackalloc uint[10];
+        bool frac = Subpixel.Cull && GteDepth.Subpixel;
+        for (int i = 0; i < count; i++)
+        {
+            uint at = Peek32(mem, ClipOut + 4u * (uint)i) + 0x18u;
+            w[i] = Peek32(mem, at);
+            x[i] = (short)w[i];
+            y[i] = (short)(w[i] >> 16);
+            if (frac && GteVertexMap.Peek(at, w[i], out var a) && !a.Clipped) { x[i] += a.Fx; y[i] += a.Fy; }
+            else frac = false;
+        }
+        if (!frac)
+            for (int i = 0; i < count; i++) { x[i] = (short)w[i]; y[i] = (short)(w[i] >> 16); }
+
+        bool facing = Area(x, y, count) > 0;
+        bool game = Nc(w[0], w[1], w[2]) > 0;
+        if (facing == game) return 0;
+        ClippedChanged++;
+        return !WholeFacing ? 0 : facing ? 1 : -1;
+    }
+
+    /// <summary>Twice the signed area, NormalClip's sign.</summary>
+    static double Area(Span<double> x, Span<double> y, int n)
+    {
+        double area = 0;
+        for (int i = 0; i < n; i++)
+        {
+            int j = i + 1 == n ? 0 : i + 1;
+            area += x[i] * y[j] - x[j] * y[i];
+        }
+        return area;
+    }
+
+    /// <summary>A quad's facing on the loop 0, 1, 3, 2 rather than on its first
+    /// triangle, which is <paramref name="first"/> (already taken, so the GTE is
+    /// left as the game leaves it).</summary>
+    static bool QuadFaces(PSMemory mem, bool first, uint p0, uint p1, uint p2, uint p3)
+    {
+        if (_mode == Mode.Verify) return first;
+        Span<uint> p = [p0, p1, p3, p2];
+        Span<uint> w = stackalloc uint[4];
+        Span<double> x = stackalloc double[4], y = stackalloc double[4];
+        bool frac = Subpixel.Cull && GteDepth.Subpixel;
+        for (int i = 0; i < 4; i++)
+        {
+            w[i] = Peek32(mem, p[i]);
+            x[i] = (short)w[i];
+            y[i] = (short)(w[i] >> 16);
+            if (frac && GteVertexMap.Peek(p[i], w[i], out var a) && !a.Clipped) { x[i] += a.Fx; y[i] += a.Fy; }
+            else frac = false;
+        }
+        if (!frac)
+            for (int i = 0; i < 4; i++) { x[i] = (short)w[i]; y[i] = (short)(w[i] >> 16); }
+
+        bool facing = Area(x, y, 4) > 0;
+        if (facing == first) return first;
+        QuadsChanged++;
+        return WholeFacing ? facing : first;
+    }
+
+    static long Nc(uint a, uint b, uint d)
+        => (long)((short)b - (short)a) * ((short)(d >> 16) - (short)(a >> 16))
+         - (long)((short)d - (short)a) * ((short)(b >> 16) - (short)(a >> 16));
+}

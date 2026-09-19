@@ -89,6 +89,7 @@ public static class TileWalk
     public static bool Verifying => _mode == Mode.Verify;
 
     static bool _probe;
+    static long _fansAt, _quadsAt;
 
     /// <summary>Running totals; never reset.</summary>
     public static long WalkCalls, CellCalls, TileCalls;
@@ -455,7 +456,11 @@ public static class TileWalk
         Console.WriteLine($"[tilewalk] this frame {_cellsWalked} cell(s) on the map, {_cellsDrawn} with a flag; " +
                           $"{_halves / span:F0} half/halves a second: {_unclipped / span:F0} unclipped, " +
                           $"{_plain / span:F0} plain, {_subdivided / span:F0} subdivided, " +
-                          $"{_skipped / span:F0} past the model limit");
+                          $"{_skipped / span:F0} past the model limit; " +
+                          $"facing on the whole polygon changed {(PolyAssembler.ClippedChanged - _fansAt) / span:F1} clipped " +
+                          $"and {(PolyAssembler.QuadsChanged - _quadsAt) / span:F1} unclipped quad(s) a second");
+        _fansAt = PolyAssembler.ClippedChanged;
+        _quadsAt = PolyAssembler.QuadsChanged;
         _halves = _unclipped = _plain = _subdivided = _skipped = 0;
     }
 
