@@ -159,6 +159,8 @@ what it is) live there, not here.
 | `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing`, `FluidSmoothing` | carry the camera, the four world tables, MO pose and the scrolling textures between ticks | on; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing" |
 | `LoopPacing` | modal loops (fades, cutscenes, item/spell animations) run once per tick, gaps filled with stage-13 redraws | on | PATCHES_AND_MODS, "Loops that render their own frames" |
 | `MenuPacing` | menu cursor repeat and blink held to the 60 Hz grid | on | PATCHES_AND_MODS, "The menu's cursor repeat" |
+| `MenuWorld` | replaces the menu presenter `func_800226A8` and the message fade `func_800356F4`: the world is redrawn live behind menus, shops, signs and dialogue (full width, AO, Z) instead of the frozen 320-wide copy | on | PATCHES_AND_MODS, "Menus draw the world live", "Messages draw the world live" |
+| `MessageText` | sign and dialogue text decoded from the message TIM in RAM (`patches/MessageGlyphs.cs`, built by `scripts/msg_glyphs.py`) and drawn as text on an opaque box; the TIM's palette is zeroed so the game's text quads draw nothing | off | PATCHES_AND_MODS, "Drawing message text" |
 | `LoadPacing` | loading screen's walking figure held to the vblank grid | on | PATCHES_AND_MODS, "The loading screen's walking figure" |
 | `SpriteAnim` | billboard cel animation held to the tick | on | PATCHES_AND_MODS, "The flames run at the render rate" |
 | `FullRateLogic` | `KF2_FPS_LOGIC=full`; comparison only, **not shippable** | off | PATCHES_AND_MODS, "Any frame rate" |

@@ -116,6 +116,16 @@ public static class PrimBuffer
         GteTexRect.SetRange(lo, bytes);
     }
 
+    /// <summary>The second of the relocated buffers, which nothing else writes while a
+    /// menu has shrunk the layout into the first; false when the buffers were not
+    /// moved.</summary>
+    public static bool TrySecondBuffer(out uint lo, out uint hi)
+    {
+        lo = Base + Bytes;
+        hi = Base + 2u * Bytes;
+        return _relocated;
+    }
+
     public static void Install()
     {
         _windowStart = Now;

@@ -287,6 +287,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - Saving and loading
 - Debug tools
 - The Items tab gives through the game's own give, and the names are read live
+- Full-screen messages are pictures, and the world behind them is a 1x copy
 
 ### [PATCHES_AND_MODS.md](docs/PATCHES_AND_MODS.md)
 
@@ -299,6 +300,9 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Any frame rate: three gates, one logic clock, and a smoothed view
 - One switch for all of the smoothing
 - The water still steps at the tick
+- Menus draw the world live
+- Messages draw the world live
+- Drawing message text
 - Auto reload
 - A dynamic map
 - Five map controls that were not choices
