@@ -653,6 +653,7 @@ func_80029EE0        base angles += delta vector A, then zero A
 | `0x801994EC` / `F0` / `F4` | u32 ×3 | position X / height Y / Z — the triple the collision queries (`func_8002C330`, `func_8002C700`) take with radius `0x320`. Read as **signed**: a normal Y is negative. Written by `func_80028080` (X/Z), `func_80028560` (Y) and `func_80028B0C`; nothing after stage 3 writes it — see "Debug tools" |
 | `0x8019950C` / `0E` / `10` | s16 ×3 | base view angles: pitch / **yaw** / roll |
 | `0x8019951C` / `1E` / `20` | s16 ×3 | delta vector A — zeroed each frame, folded into the base by `func_80029EE0` |
+| `0x80199548` / `4A` | s16, u16 | the head bob (0-96, `0.75 * abs(rsin(phase) >> 5)`) and its phase, advanced by the speed at `0x80199542`, in `func_80028560`; zeroed while the options toggle at `0x801994E0` is off. See "The head bob" in `PATCHES_AND_MODS.md` |
 | `0x80199514` / `16` / `18` | s16 ×3 | delta vector B |
 | `0x80199524` / `26` / `28` | s16 ×3 | delta vector C |
 | `0x80199504` / `06` / `08` | s16 ×3 | composed view = base + A + B + C, what the renderer reads |

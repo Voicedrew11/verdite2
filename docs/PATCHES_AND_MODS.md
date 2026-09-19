@@ -1361,6 +1361,38 @@ those two readers too, inside the stage
 `ObjectSmoothing` already brackets. The comment now says so instead of asserting a
 guarantee the code does not have.
 
+#### The head bob
+
+**Mechanism measured; the picture has not been judged by eye.** Stage 8 builds the
+eye height as `Y + s16 0x80199548 + s16 0x8019954C - 0x640`, and until this the
+carry took the angles and `Y` but not the two offsets, so with everything else
+moving at the render rate the bob stepped at 20 Hz. Reported from play as "jarring".
+
+The bob is written on the tick by `func_80028560`: a phase at `0x8019954A` advances
+by the step at `0x80199542` (the horizontal speed, `SquareRoot0` of the velocity in
+`func_800290D4`; 200 walking), wrapped to 12 bits, and the bob is
+`0.75 * |rsin(phase) >> 5|`, **0 to 96 units** — a rectified sine, so the view
+bounces off a sharp V at each footfall by design. It is updated only while the byte
+at `0x801994E4` (a landing state `func_80028560` sets to `0x10`/`0x40`) is zero, and
+forced to 0 while **`0x801994E0` is zero — the last of the six toggles on the game's
+own options screen** (`func_8001BB7C`; `func_80025CCC` defaults all six to 1). Test
+save 2 has it off, which is why an agent run shows no bob at all. Stopping does not
+snap the view: the step ramps down over seven ticks and the phase freezes, leaving
+the bob wherever it stood.
+
+Nothing on the render side reads either word after stage 8 — the other readers
+(`func_80023ECC`, `func_80026EA4`, `func_800271D0`, `func_8002A550`) are all under
+the tick stages — so they are carried inside the same pre/post pair as the angles,
+with the same isolation, and restored in `After`. A plain lerp is right: the value
+itself never wraps (the phase does, and is not touched).
+
+Measured with the option forced on, walking in area 1 at 144 fps: the bob runs
+0-96 in steps of up to ~30 units a tick, `KF2_SMOOTH_PROBE=1` reads `bob carried on
+287 (247 between the ticks' values)`, and pacing holds at 144.0 fps drawn and 20.0
+ticks/s. The landing offset was never non-zero on that run and is carried on trust.
+Whether the V at the bottom still reads as harsh once it is no longer stepping is
+the question left for the eye.
+
 ### The camera is not the only thing that moves
 
 Reported after the tick rate became a setting, playing at 60 fps against the 20 Hz
