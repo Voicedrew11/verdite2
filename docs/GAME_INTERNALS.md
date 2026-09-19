@@ -1716,3 +1716,65 @@ queue has run, which is the acceptance test for the give path. At
 exception and every name decoding. **What has not been looked at is the game's
 own inventory screen**: that the menu lists those 98 items, with those names, and
 that using or equipping one behaves, is a thing a person has to see.
+
+## Full-screen messages are pictures, and the world behind them is a 1x copy
+
+Signs and NPC dialogue do not go through the font drawer `func_80021FCC` at all.
+Each message is a **4-bit 256×256 TIM on the disc**, and one routine shows it from
+load to close. Read statically; the picture was confirmed from play (full-screen
+messages render at 1x and stay 4:3), the rest has not been run.
+
+| routine | what |
+|---|---|
+| `func_80035B48(file, entry)` | the whole message: load, show, wait for a button, close, restore VRAM |
+| `func_800183A0(file, entry, dst)` | reads one entry of a disc file into `*0x8017E088` (`0x800FC99C`); files are 12-byte records at `0x801B6F48`, each with a `u16` offset table |
+| `func_80035684(buf)` | `OpenTIM`/`ReadTIM` over the buffer, `LoadImage` (`0x80060624`) for each image and CLUT |
+| `func_800356F4(bright, step)` | the open/close fade: four `POLY_FT4`s a frame until `bright` leaves 1..0x77, then `DrawSync` and `func_8002E0FC` |
+
+Callers and what they pass: `func_80047000` and `func_80043388` (file 3, and file
+6 from `0x168`), `func_80047000` and `func_800474D0` (file 6 from `0xF0` and from
+`0x1FE`), `func_800489FC` (file 6 from `0x78`). `func_80047000` is the message-box
+loop the area modules call.
+
+**The file numbers are archives, and every message is on the disc as an ordinary
+TIM.** `func_80015DD4` registers seven archives through `func_800185A0` from a
+string table at `0x80011000`, twelve bytes a name: 0 `COM\MO.T`, 3 `COM\TALK.T`,
+4 `COM\VAB.T`, 5 `COM\FDAT.T`, 2 `COM\RTIM.T`, 1 `COM\RTMD.T`, 6 `COM\ITEM.T`.
+Both message archives have `FDAT.T`'s layout (`u16` count, `u16` start sectors),
+and an entry is one 4-bit TIM or nothing:
+
+| archive | entries | TIMs | what |
+|---|---|---|---|
+| `CD/COM/TALK.T` | 755 | 379, all 256×256 | NPC dialogue |
+| `CD/COM/ITEM.T` | 548 | 276 at 256×256, 24 at 200×200, plus 103 TMD models (`0x41`) | item and monster descriptions, place-name cards, the item preview models |
+
+Nothing is loaded ahead of time: `func_80035B48` reads its one entry off the disc
+each time a message opens, and puts VRAM back when it closes. The text is white or
+yellow in one fixed-width bitmap font on black, so it can be read out of the disc
+image without running the game. Which ranges are signs is not yet known.
+
+Before the fade, `func_80035B48` `StoreImage`s (`0x80060660`) the texture space it
+is about to use and `MoveImage`s (`0x8006069C`) the current draw buffer's clip rect
+to (320, 0). `func_800356F4`'s quads are then:
+
+| quad | source | screen | colour, blend |
+|---|---|---|---|
+| 1 | 16-bit page at x 320 | 0..192 × 0..240 | `0x80 - bright/2`, opaque |
+| 2 | 16-bit page at x 512 | 192..320 × 0..240 | the same |
+| 3 | 4-bit page (960, 256), CLUT (576, 511), UV 0..255 | (32, 10)..(287, 265) | `bright`, subtractive |
+| 4 | the same image | the same | `bright`, additive |
+
+So quads 1-2 are the world, dimmed, and 3-4 are the text: the subtractive pass
+darkens a box behind it and the additive pass lights the letters.
+
+**Why the message is 1x and 4:3.** Quads 1-2 sample a copy in texture space, which
+is 1x since `0054`, and `0039`'s scaled copy covers `StoreImage`/`LoadImage`, not
+`MoveImage`. VRAM holds only the game's 320 columns, the quads cover exactly
+x 0..320, and stage 13 does not run inside `func_800356F4`, so nothing draws the
+widescreen margin. The text itself is a 1:1 16-colour bitmap, so no scale sharpens it.
+
+**What a fix has to touch.** The backdrop: drop quads 1-2 and dim the live wide
+target, or redraw with stage 13 as `LoopPacing` does. The text: a replacement per
+(file, entry), drawn where quads 3-4 go. Nothing in the runtime draws a port
+texture into the GL frame; the map draws through ImGui over `OutputView`, which only
+blends by alpha, so a replacement there would be pre-composited.

@@ -283,6 +283,29 @@ Kf2.MenuPacing.Configure(Environment.GetEnvironmentVariable("KF2_MENUPACING"),
                          Environment.GetEnvironmentVariable("KF2_MENUPACING_PROBE"));
 Kf2.MenuPacing.Install();
 
+// A menu -- the in-game menu, a shop, the save list -- pastes a stored 320x240 copy
+// of the frozen frame behind itself every frame, so the widescreen margin is never
+// drawn and nothing that needs depth (AO, the Z-buffer) reaches it. MenuWorld
+// replaces the menu's presenter and draws the world live, into an ordering table
+// of its own chained in front of the menu's; nothing that advances the world runs.
+//
+//     KF2_MENUWORLD=0         the game's frozen copy -- comparison only
+//     KF2_MENUWORLD_PROBE=1   world passes a second, primitive bytes, overflows
+Kf2.MenuWorld.Configure(Environment.GetEnvironmentVariable("KF2_MENUWORLD"),
+                        Environment.GetEnvironmentVariable("KF2_MENUWORLD_PROBE"));
+Kf2.MenuWorld.Install();
+
+// Sign and dialogue text drawn as text on an opaque box, decoded from the message's
+// own picture in RAM against a glyph table built by scripts/msg_glyphs.py. Off.
+//
+//     KF2_MESSAGETEXT=1         on
+//     KF2_MESSAGETEXT_PROBE=1   each message's key and decoded text
+//     KF2_MESSAGETEXT_TEST=3:0  open these messages from the main loop (KF2_AUTOPAD dismisses)
+Kf2.MessageText.Configure(Environment.GetEnvironmentVariable("KF2_MESSAGETEXT"),
+                          Environment.GetEnvironmentVariable("KF2_MESSAGETEXT_PROBE"),
+                          Environment.GetEnvironmentVariable("KF2_MESSAGETEXT_TEST"));
+Kf2.MessageText.Install();
+
 // The loading screen's walking figure is the same bug in a third place, and the
 // shared cause is that the game counts time in VSync(0) calls while a VSync(0)
 // call here is no longer a vblank. A disc read is a blocking wait rather than a

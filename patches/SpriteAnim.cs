@@ -129,6 +129,10 @@ public static class SpriteAnim
 
     public static bool Enabled { get; private set; } = true;
 
+    /// <summary>Set while <see cref="MenuWorld"/> redraws a frozen world behind a
+    /// menu: the walk runs, the cels do not move.</summary>
+    public static bool Hold;
+
     static bool _probe;
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
@@ -246,7 +250,9 @@ public static class SpriteAnim
 
         _onFallback = _framesAtMs >= 0.0 && now - _framesAtMs > BoundaryDeadMs;
 
-        if (!Enabled)
+        if (Hold)
+            _step = false;
+        else if (!Enabled)
             _step = true;
         else if (_onFallback)
             _step = FallbackStep(now);

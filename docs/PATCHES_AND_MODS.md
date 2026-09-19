@@ -11,6 +11,8 @@ lives here — frame pacing and auto reload.
 | `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
 | `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
 | `LoadPacing.cs` | makes a `VSync(0)` inside a disc wait cost a vblank again, so the loading screen's figure walks at the console's rate | this file |
+| `MenuWorld.cs` | draws the world live behind a menu or a shop instead of the frozen 320-wide copy | this file |
+| `MessageText.cs`, `MessageGlyphs.cs` | draws sign and dialogue text as text on an opaque box, decoded from the message's own picture (experimental, off) | this file |
 | `SpriteAnim.cs` | steps the billboard sprites' cels once a world tick, so the flames burn at the console's speed | this file |
 | `FrameSmoothing.cs`, `ObjectSmoothing.cs`, `AnimSmoothing.cs`, `FluidSmoothing.cs` | carry the view, everything that moves, MO clip time, and the scrolling textures, between ticks | this file |
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
@@ -2891,6 +2893,177 @@ now reporting **two** histograms: vblanks per frame (how long the frame took) an
 different numbers, and conflating them is what made the first pass at frame pacing
 read as circular.
 
+
+## Menus draw the world live
+
+**Mechanism measured; the picture has not been looked at by eye, and a shop has
+not been reached by the shell at all** — the measurements are the in-game menu,
+which shares every routine below.
+
+Reported from play: in a shop, the widescreen margin flashes black, and the
+picture behind the shop has none of the enhancements (AO and the rest).
+
+Every menu in `GAME.EXE` — the in-game menu `func_80018E80`, the shops
+(`func_8001D544`, `func_8001DD34`, `func_8001DF5C`, `func_8001E2F0`), the save list
+`func_8001C624`, `func_8001BE60` — runs on one framework:
+
+| routine | what |
+|---|---|
+| `func_80022754` | enter: saves both primitive descriptors (to `0x8006EB24`/`0x8006EB30`), shrinks them to `0x6400` bytes each at `start`, and `StoreImage`s the displayed frame to `start + 0xC800` |
+| `func_80022530` | frame head: flips `0x8017E084`, points `0x8017E0A4` and the OT pointer `0x8018E0A8` at that buffer's, `ClearOTagR(ot, 0x2000)` — the same two OTs stage 13 uses |
+| `func_800226A8` | presenter: `DrawSync`, `VSync`, `PutDrawEnv`, `PutDispEnv`, **`LoadImage` of the stored frame**, `DrawOTag` |
+| `func_800228C8` | leave: puts the descriptors back |
+
+The presenter is stage 13's own presenter `func_8002E0FC` plus that one
+`LoadImage`, and the `LoadImage` is the whole of both reports. It is 320×240 and
+carries no depth: the margin exists only in the render target ("The margin's only
+clear is the game's own" in [WIDESCREEN.md](WIDESCREEN.md)) and nothing draws it,
+and AO, the Z-buffer and per-pixel lighting all need geometry the paste does not
+have.
+
+**`patches/MenuWorld.cs` replaces the presenter and redraws the world every menu
+frame.** Stage 13's drawing half — `func_8002E22C(0, 0)` (the stored view),
+`func_8002D3A8`, `func_80032400`, `func_80031D5C`, `func_80033E78`,
+`func_80031C94`, `func_800331B4` and the four tints — runs into an ordering table
+of its own; that table's terminator is written to point at the head of the menu's
+table, and one `DrawOTag` walks both, so the world is under everything the menu
+draws, the HUD included, exactly as the paste was. What is not called is what
+advances the world or presents: stage 13's head `func_8002E064` (its three frame
+counters are zeroed by hand), the tickers `func_8002DC78` and `func_80033FBC`, the
+inline jitter accumulator, `func_8002E0FC`, the frame gate and `func_8003549C`.
+Two holds cover what the walk steps by itself: `SpriteAnim.Hold` keeps the cels,
+and a pre on `func_80014158`/`func_80013D08` keeps the ambient sources silent.
+
+Where it writes, and why nothing else is disturbed:
+
+- **The table and its descriptor go in the frozen frame's store**, `start + 0xC800`,
+  which nothing reads once the paste is gone. The primitives go into
+  `PrimBuffer`'s second buffer (`0x80264000`), or the saved world `desc1` when the
+  buffers are not relocated; either way inside the range the packet records cover,
+  which is what gives the pass its depth. The layout is checked at entry and a
+  session that does not fit keeps the game's presenter untouched.
+- **The world's GTE, `0x8018E19C` (the current model bank) and `0x8018EAA0` are
+  put back to what the last stage 13 left**, and the menu's restored after. A shop's
+  item preview (`func_80022CAC` → `func_8002E5E8(3, …)`, drawn by `func_8002156C`
+  through `func_800346CC`) leaves bank 3 current and sets its own matrices; the HUD
+  reads the bank before the tile walk selects bank 0.
+- A session is decided once at `func_80022754` and ended at `func_800228C8`, at the
+  main loop's stage 9, or at any overlay load.
+
+Measured, in-game menu, area 1, 16:9, `KF2_FPS=144`, against `KF2_MENUWORLD=0`:
+
+| | frozen copy | live world |
+|---|---|---|
+| primitives reaching the margin | 0.0% | 10.7% |
+| triangles carrying a depth, a second | 0 | 9,840 (164 a frame, the main loop's count at the same spot) |
+| menu frames / ticks a second | 60.0 / 20.0 | 60.0 / 20.0 |
+| present | wide | wide |
+
+5.3 KB of the 400 KB buffer at peak, no overflow, 60 passes a second. The menu
+opens and closes repeatedly with a session each time. **Not checked**: a shop, the
+save list, and whether the backdrop looks right — that it matches the frame before
+the menu opened, that the sides are filled, and that nothing in it moves.
+
+### Messages draw the world live
+
+A sign or an NPC line is the same shape with its own loop. `func_80035B48` shrinks the
+buffers the same way, `StoreImage`s the texture space it is about to use to
+`start + 0xC800` (0x25800 bytes, put back when it closes) and `MoveImage`s the frame to
+(320, 0); `func_800356F4(brightness, step)` then steps a fade a frame at a time —
+stage 13's head `func_8002E064`, four `POLY_FT4`s (the moved frame in two halves at
+colour `0x80 - b/2`, then the message picture subtractive in bucket 1 and additive in
+bucket 0), `DrawSync`, stage 13's presenter `func_8002E0FC` — until the brightness
+leaves 1..0x77, or until a button after all were up. It returns -1 or -2 when the fade
+ran out and the brightness when a press cut it short, and `func_80035B48` reads that.
+
+`MenuWorld.MessageFade` replaces it, loop and return value to the letter, with the
+world pass in place of the two halves of the moved frame. Its table and descriptor go
+after the VRAM save, at `start + 0x32000`, and its primitives in `PrimBuffer`'s second
+buffer, so it needs the relocated buffers; with `KF2_PRIMBUF=1` a message keeps the
+game's loop. For the one `func_8002E0FC` call a step, the OT pointer names the pass's
+table, whose terminator leads into the message's.
+
+Two things the game's loop could leave alone and a live world cannot:
+
+- **The `MoveImage` lands on world texture pages.** The RECT at `0x8006E610` is
+  (320, 0) 320×240, texture space the area's walls sample, and `func_80035B48` only
+  puts it back (`LoadImage` from `*0x8017E09C`, `start + 0xC800`) at close. The game
+  never drew the world while it was there; the pass does, and every wall came out as
+  the frame copy read as 4- and 8-bit texels. `MessageFade` loads the saved rect
+  back before its first step, since nothing it draws samples the copy; the game's
+  own restore at close repeats it harmlessly.
+- **Between the fades the game draws nothing.** Once the fade-in runs out,
+  `func_80035B48` spins on `PadRead` until a button, with no `VSync` and no draw, so
+  the wide target went idle and the present fell back to the 1x VRAM frame a few
+  seconds in — the message "resolving to 4:3". `MessageFade` waits there itself,
+  drawing the world at the last brightness, and returns `0x50`, the value the
+  caller's own wait sets on the press, so the fade-out starts where it would have.
+  A press that cuts the fade-in short returns its brightness as before.
+
+Measured after both, `(3, 0)`: 768 frames held live until Cross, 60 passes/s,
+`[present] wide ~175, vram fallback 0` every 2 s throughout, then the 7-frame
+fade-out and close. Reported from play before the fix: garbled wall textures behind
+every dialogue and a drop to 4:3 after a few seconds; after it, confirmed from play.
+
+The dim cannot stay a colour on the frame, because nothing is pasted any more:
+
+- **A message `MessageText` has decoded** draws no quads at all. The overlay lays black
+  at `(b/2)/0x80` over the whole picture and then its box and text — exactly the paste's
+  `0x80 - b/2`, and over the margin too.
+- **Any other** (the place-name cards) keeps the game's two text quads, over a black
+  `POLY_F4` at 50% once the brightness is half up. The console has no multiply, so 50%
+  (mode 0 against black) stands in for the 58% the paste reaches.
+
+Measured, 16:9, `KF2_FPS=144`, `KF2_MESSAGETEXT_TEST=6:120,3:0`: both fade in over ten
+frames of the live world, 18.3% of primitives reaching the margin and about 160
+depth-carrying triangles a frame, the same as the frame before; the card kept the
+game's picture and `(3, 0)` was drawn by the overlay; each stays up until the button,
+as with the game's loop (`KF2_MENUWORLD=0` for the comparison). **Not looked at.**
+
+## Drawing message text
+
+**An experiment, off by default (`KF2_MESSAGETEXT=1`). The mechanism is measured; the
+picture has not been looked at.**
+
+A sign or an NPC line is a 4-bit TIM in `TALK.T` or `ITEM.T` ("Full-screen messages
+are pictures" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), so the text can be no
+sharper than 256×256 at 16 colours. `patches/MessageText.cs` reads the text back out
+of that picture and draws it itself:
+
+1. **Decode.** A pre on `func_80035684` — the TIM is in RAM and not yet uploaded, and
+   `func_80035B48`'s pre has recorded `(file, entry)` — cuts the image into 8×14 cells
+   from x = 4, lines on a 14-pixel grid whose phase is 3 or 10 (the text is centred on
+   odd and even line counts), thresholds each cell at half the brightest ink colour,
+   and looks up the FNV-1a hash of its 14 row bytes in `patches/MessageGlyphs.cs`. One
+   unknown cell and the message is left to the game.
+2. **Hide.** On a full decode the TIM's palette is zeroed in RAM. Colour `0x0000` is
+   transparent to a textured primitive, so `func_800356F4`'s two text quads draw
+   nothing and nothing in the game's code had to be replaced.
+3. **Draw.** An ImGui panel over the game picture draws an opaque box over the text's
+   rows and each line at its own cell position, in the interface font at 12.5 game
+   pixels, in the line's brightest palette colour. Opacity follows `func_800356F4`'s
+   brightness, which it keeps in `s2` and which a pre on stage 13's presenter
+   `func_8002E0FC` reads while the fade runs.
+
+**The glyph table carries no text.** `scripts/msg_glyphs.py` builds it from the disc:
+it cuts every image the same way, reads each with tesseract, lines each OCR line up
+against the line's non-empty cells when the counts agree, and takes the majority vote
+per cell. OCR errors are outvoted — the single image tesseract read as `equi pment` and
+`ie.` decodes as `equipment` and `die.` Measured: 111 glyphs; 551 of the 585 images
+on the grid decode completely; the other 94 of the 679 are a second, bolder font, the
+centred place-name cards and box drawing, and stay pictures. `--dump DIR` writes the
+decoded text for proofreading, and is not to be committed.
+
+`KF2_MESSAGETEXT_TEST=3:0,6:360` opens those messages through `func_80035B48` from
+the main loop's stage 9, ten seconds in, with `KF2_AUTOPAD` to dismiss them — the
+command channel cannot reach an NPC. Measured, 16:9 at 144 fps: `(3, 0)`, `(6, 360)`
+and `(6, 240)` decoded to the same text as the offline dump, `(6, 120)` (a place-name
+card) was left to the game, and the panel drew 126 frames of `(3, 0)` at full opacity.
+
+**Not looked at**: whether the text sits where the picture's did, whether the font
+size and box read well, and whether the fade matches. Behind it is the live world
+when `MenuWorld` is on ("Messages draw the world live"), and the dim is then this
+panel's; with it off, the game's 1x `MoveImage` copy.
 
 ## Auto reload
 
