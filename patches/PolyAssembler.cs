@@ -426,7 +426,7 @@ public static partial class PolyAssembler
             _quadClips++;
             ClipperCalls++;
             KingsField2.Clip4FTP(c, mem);
-            Clipped(c, mem, sp, f, word, bias, normals, mem.ReadU16(f + 0x10u));
+            Clipped(c, mem, sp, f, word, bias, normals, mem.ReadU16(f + 0x10u), 4);
             // Recompiled code ran; take nothing it could have moved on trust.
             fr.Refresh();
             return true;
@@ -502,7 +502,7 @@ public static partial class PolyAssembler
             _triClips++;
             ClipperCalls++;
             KingsField2.Clip3FTP(c, mem);
-            Clipped(c, mem, sp, f, word, bias, normals, mem.ReadU16(f + 0x0Cu));
+            Clipped(c, mem, sp, f, word, bias, normals, mem.ReadU16(f + 0x0Cu), 3);
             // Recompiled code ran; take nothing it could have moved on trust.
             fr.Refresh();
             return true;
@@ -629,7 +629,7 @@ public static partial class PolyAssembler
     }
 
     /// <summary>After a clipper: hand what survived to func_800302E8.</summary>
-    static void Clipped(CpuContext c, PSMemory mem, uint sp, uint f, uint word, uint bias, uint normals, uint normal)
+    static void Clipped(CpuContext c, PSMemory mem, uint sp, uint f, uint word, uint bias, uint normals, uint normal, int corners)
     {
         uint n = c.V0;
         if ((int)n < 3) return;
@@ -648,12 +648,14 @@ public static partial class PolyAssembler
         bool refog = EvenFog.Enabled && _mode != Mode.Verify;
         bool rewrite = refog || _tileLight;
         bool depth = GtePacketDepth.Active;
-        uint before = lighting || rewrite || depth ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
+        bool texRect = GteTexRect.Active;
+        uint before = lighting || rewrite || depth || texRect ? Peek32(mem, Peek32(mem, PrimDescriptor) + 8u) : 0u;
         try { KingsField2.func_800302E8(c, mem); }
         finally { _clipFacing = 0; }
         if (rewrite) RewriteClipped(mem, before, normals + normal, refog);
         if (lighting) LightClipped(mem, before, normals + normal, refog);
         if (depth) DepthClipped(mem, before, DepthOn());
+        if (texRect) TexRectClipped(mem, before, f, corners);
     }
 
 

@@ -9,7 +9,11 @@ namespace Kf2;
 ///
 ///     KF2_ANISO=8              taps along the footprint's long axis; 1 or off is
 ///                              the console's own single sample
-///     KF2_ANISO_PROBE=1        report the level, and whether it reaches the shader
+///     KF2_ANISO_PROBE=1        report the level, and whether it reaches the shader;
+///                              with mipmaps, the atlas every five seconds
+///     KF2_ANISO_PROBE=2        also read four decoded textures back out of the atlas
+///     KF2_MIPMAPS=1            mipmaps: minified textures decoded into an atlas with
+///                              a mip chain each (0060); 0 off
 ///
 /// **What the artefact is.** A screen pixel does not cover a point of a texture,
 /// it covers an area, and the shape of that area is the parallelogram spanned by
@@ -45,8 +49,9 @@ namespace Kf2;
 /// Both prim shaders,
 /// core profile and GLSL 120.
 ///
-/// **There is no mip chain and there cannot be one**, for the first reason above,
-/// so this is supersampling rather than the mipmapped anisotropy a modern GPU
+/// **There is no mip chain in VRAM**, for the first reason above; <c>0060</c>
+/// builds one where a texture is decoded (<see cref="Mipmaps"/>). Without it this is
+/// supersampling rather than the mipmapped anisotropy a modern GPU
 /// does: the taps run along the axis the footprint is longest on, **one texel
 /// apart**, <c>min(ceil(len), level)</c> of them, centred on the pixel.
 ///
@@ -112,6 +117,9 @@ namespace Kf2;
 /// result to five bits unless true color is also on and the two have never been
 /// seen together.
 ///
+/// **Every tap is held inside the polygon's texture rectangle** (<c>0060</c>): the
+/// one-texel spacing still let a pixel near a tile's edge read the art beside it.
+///
 /// GL backend only; the software rasterizer is always a single sample. See
 /// "Anisotropic filtering" in docs/RENDERING.md.
 /// </summary>
@@ -119,6 +127,19 @@ public static class Anisotropic
 {
     /// <summary>Where the choice is kept between runs.</summary>
     public const string LevelKey = "kf2.aniso.level";
+
+    public const string MipKey = "kf2.mipmaps.on";
+
+    /// <summary>0060. Mipmaps, off by default: the mechanism is measured and the
+    /// picture has not been looked at.</summary>
+    public static bool Mipmaps
+    {
+        get => GteDepth.Mipmaps;
+        set => GteDepth.Mipmaps = value;
+    }
+
+    static bool? _forcedMip;
+    static readonly System.Diagnostics.Stopwatch _probeClock = new();
 
     /// <summary>The most taps the kernel may take along the footprint's long axis.
     /// The shader's own loop is bounded at this, so raising it needs the shader
@@ -155,8 +176,11 @@ public static class Anisotropic
 
     static int Clamp(int v) => v < 1 ? 1 : v > Max ? Max : v;
 
-    public static void Configure(string? level, string? probe)
+    public static void Configure(string? level, string? probe, string? mip)
     {
+        if (!string.IsNullOrWhiteSpace(mip))
+            _forcedMip = mip.Trim() is not ("0" or "off");
+
         if (!string.IsNullOrWhiteSpace(level))
         {
             // "0" and "off" both mean the console's single sample, so the switch
@@ -170,6 +194,7 @@ public static class Anisotropic
 
         if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
             _toConsole = true;
+        if (probe?.Trim() == "2") GteDepth.MipVerify = 4;
     }
 
     public static void Install()
@@ -179,11 +204,14 @@ public static class Anisotropic
         // which is after Program.cs, so reading it here would read an empty config
         // and write it back over the real one.
         Level = _forced ?? 1;
+        Mipmaps = _forcedMip ?? false;
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             Level = _forced ?? RecompOne.Runtime.Runtime.View.GetInt(LevelKey, 1);
-            Console.WriteLine($"[KF2] aniso: {(Enabled ? $"on, up to {Level} taps" : "off (one sample)")}");
+            Mipmaps = _forcedMip ?? RecompOne.Runtime.Runtime.View.GetBool(MipKey, false);
+            Console.WriteLine($"[KF2] aniso: {(Enabled ? $"on, up to {Level} taps" : "off (one sample)")}, " +
+                              $"mipmaps {(Mipmaps ? "on" : "off")}");
         });
 
         if (!_toConsole) return;
@@ -194,7 +222,18 @@ public static class Anisotropic
         // point of the flag.
         Event.AddListener<VSyncEvent>(_ =>
         {
-            if (_reported) return;
+            if (_reported)
+            {
+                if (!_probeClock.IsRunning) _probeClock.Start();
+                if (_probeClock.ElapsedMilliseconds < 5000) return;
+                _probeClock.Restart();
+                if (Mipmaps || Enabled)
+                    Console.WriteLine($"[KF2] mip: {(GteDepth.MipmapsLive ? "atlas built" : "NO ATLAS")}, " +
+                                      $"{GteDepth.MipEntries} entries, {GteDepth.MipDecodes} decodes, " +
+                                      $"{GteDepth.MipEvictions} evicted, {GteDepth.MipFull} refused; " +
+                                      $"fan rects {GteTexRect.Recorded} recorded, {GteTexRect.Hits} taken");
+                return;
+            }
 
             // Report as soon as a batch has actually uploaded it, and otherwise
             // only once enough frames have gone by that no batch is the answer --
@@ -213,4 +252,6 @@ public static class Anisotropic
     /// <summary>Change the level at run time. Nothing is rebuilt — it is a plain
     /// uniform the next batch reads.</summary>
     public static void SetLevel(int level) => Level = level;
+
+    public static void SetMipmaps(bool on) => Mipmaps = on;
 }

@@ -29,7 +29,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
 | `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0057` |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0060` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -172,7 +172,7 @@ what it is) live there, not here.
 | `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); Video ▸ Enhancements, with two tolerance sliders | on | RENDERING, "Z-buffer", "The assemblers write the depth" |
 | `Pgxp` | upstream's PGXP as the vertex source (`0034`-`0036`); env only | off | RENDERING, "PGXP has no control in the window" |
 | `AmbientOcclusion` | SSAO from painter's-order depth (`0040`), normals from the frame's own geometry redrawn into a G-buffer (`0058`); optional world-space term marching the area's tile grid, so off-screen geometry occludes (`0059`, off) | on | RENDERING, "Ambient occlusion", "The normal was the guess", "Occluders the camera cannot see" |
-| `Anisotropic` | post-CLUT footprint supersampling (`0041`) | off | RENDERING, "Anisotropic filtering" |
+| `Anisotropic` | post-CLUT footprint supersampling (`0041`), every tap held inside the polygon's texture rectangle; *Mipmaps*: minified textures decoded into an atlas with a mip chain each (`0060`, `KF2_MIPMAPS`) | off | RENDERING, "Anisotropic filtering", "Mipmaps where the texture is decoded" |
 | `PerPixelLighting` | the depth cue and the models' light evaluated per pixel from what `PolyAssembler` recorded per packet (`0048`) | on | RENDERING, "Per-pixel lighting" |
 | `EvenFog` | clipped map tiles refogged on the tiles' curve instead of `func_800302E8`'s `IR0 >> 1`, and each tile vertex's fog blended between the light records of the tiles around it (hooks `func_80031950`; `0049`); and the records' colour matrix and back colour the same way; one *Even fog and lighting* checkbox, dimmed without Fast geometry (`KF2_EVENFOG_BLEND=0`, `KF2_EVENLIGHT=0` drop a part); stands down under verify | on | RENDERING, "A clipped tile is fogged at half, and that is the block on the floor", "Fog changes at a tile edge" |
 | `NoDither`, `TrueColor` | one *Shading* combo: Dither / None / Smooth (24-bit, `0021`) | Smooth | PATCHES_AND_MODS, "Two shading checkboxes were one question asked twice" |
@@ -421,7 +421,7 @@ removed for the same reason.
 
 **`tools/RecompOne/` is vendored: an edit inside it is a change to this
 repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0057`) are how the source
+what the port changed and why, and the numbers (`0001`-`0060`) are how the source
 refers to each change, but they are **no longer replayed**. The merge base is
 `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
 gitignored `tools/RecompOne.git/`, reached with

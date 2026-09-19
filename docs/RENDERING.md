@@ -2082,7 +2082,8 @@ checkboxes were one question asked twice" in `docs/PATCHES_AND_MODS.md`.
 
 ## Anisotropic filtering: a pixel covers an area, and the console read a point
 
-**Confirmed mechanism; picture never checked by eye.**
+**Confirmed mechanism; picture never checked by eye since the taps were held
+inside the texture and mipmaps added (`0060`, below).**
 
 This is the *minification* half of the story perspective correction tells about
 interpolation. A screen pixel does not cover a point of a texture, it covers an
@@ -2124,6 +2125,10 @@ calls it once per tap. The single-sample path calls the same function, so with
 the filter off the fragment is the one the port drew before, to the bit.
 
 ### There is no mip chain, and there cannot be one
+
+*In VRAM.* `0060` builds one where the texture is decoded instead — see "Mipmaps
+where the texture is decoded" below. What follows is still how the kernel works
+wherever no atlas entry answers.
 
 A modern GPU does anisotropy as *N bilinear taps at a LOD chosen from the minor
 axis*, and the LOD is what stops the major axis needing a tap per texel. The
@@ -2376,6 +2381,121 @@ whether the white speckle and the billboard's edge are gone, and how the average
 reads against the 15-bit quantisation, since `quant5` still crushes the filtered
 result to five bits unless true color is also on and the two have never been seen
 together.
+
+### The taps still left the texture at its edge
+
+Reported from play after the one-texel spacing: *mipmaps and anisotropic filtering
+do not work, and there are artefacts on the floor at an oblique angle.* The spacing
+fixed the reach in the middle of a texture and left it at the edge. The kernel
+reaches `±taps/2` texels from the pixel's own, so a pixel within eight texels of a
+floor tile's edge at 16x still read the art beside the tile in its page, through
+this polygon's CLUT.
+
+`scripts/shader_probe.c` measures it directly now. `LEAK=1` paints every texel
+outside the polygon's rectangle pure red and keeps the grey noise inside, `UC`
+puts the sweep's pixels at the rectangle's edge, and only pixels whose own texel is
+inside are counted, so any red at all is a tap that left:
+
+| footprint | shader | 1 tap | 4 taps | 16 taps |
+|---|---|---|---|---|
+| 4 texels, `UC=65` | before | 0 | **66** | **66** |
+| 4 texels | after | 0 | 0 | 0 |
+| 16 texels, `UC=90` | before | 0 | 0 | **99** |
+| 16 texels | after, and with mipmaps | 0 | 0 | 0 |
+| 64 texels, `UC=98` | before | 0 | 0 | **99** |
+| 64 texels | after, and with mipmaps | 0 | 0 | 0 |
+
+(red picked up, 0-255, rectangle u 64..127.) A leak of 99 is a pixel two fifths of
+the way to an unrelated colour — the speckle.
+
+**Every tap is clamped to the polygon's texture rectangle now** (`0060`): `u0..u1`,
+`v0..v1`, inclusive, handed to the shader as a flat per-vertex attribute. It is the
+bounding box of the polygon's own UVs, which is exact for a whole face — except for
+a clipped fan, which carries only the part of its face's UVs that survived the
+clip. For those the port records the face's rectangle by packet address
+(`GteTexRect`, filled by `PolyAssembler.TexRectClipped` after `func_800302E8`,
+checked by the command word and the first and last vertex words like the depth
+records), and the GPU takes the record over the fan's own bounds. So a fan filters,
+and keys the atlas below, exactly as its unclipped neighbours do; without the record
+its taps would clamp at the clip seam and it would make an atlas entry of its own
+for every fragment of a face. Measured in area 1: about 1,600 fan packets recorded a
+second, all but a handful found by the GPU.
+
+The centre tap is not clamped: it is the console's texel and stays where
+truncation put it. A model triangle's rectangle is its own UV bounds, which may
+include skin around it; that is the same texture, so it is a softer edge, not
+another texture's colour.
+
+### Mipmaps where the texture is decoded
+
+A mip chain cannot live in VRAM, for the two reasons at the top of this section,
+and it does not need to: it can live where the texture is **decoded**. `0060`'s
+`GlTexCache` keeps a 2048x2048 RGBA8 atlas with levels 0-8. A textured polygon
+minified on screen asks it for its texture — keyed on page, mode, CLUT and texel
+rectangle — and a miss decodes that rectangle through its CLUT into a block of its
+own and builds the block's levels by a 2x2 box.
+
+- **A block is a power of two, on a boundary of its own size** (a buddy allocator,
+  8 to 256 texels), so every level of it is aligned too, a 2x2 box never reads
+  another block, and a bilinear tap held half a level texel inside the block never
+  reads one either. Past the texture's own width the block repeats its edge.
+- **Premultiplied by solidity.** A transparent texel is black and weighs nothing;
+  the shader divides the sum of the taps by their total weight, which is the level
+  0 rule of the plain kernel carried down the chain.
+- **Decodes run at the start of the batch that asked**, reading the same 1x VRAM
+  the prim shader reads. Anything that changes VRAM flushes the open batch first,
+  so a decode sees VRAM exactly as the polygons that asked for it did. An entry is
+  decoded again when `VramTracker`'s generation over its texels or its CLUT moves
+  (`VramTracker.Clock` skips the check while nothing has been written). Eviction
+  takes the oldest entries not drawn this frame or last.
+- **What asks.** A polygon whose texel area is less than 1/32 of its screen area
+  at the render scale is magnified, and so is never mipped and makes no entry.
+  Neither does a replacement texture, a texture-window primitive, a sprite (always
+  1:1) or a texture under a `0053` fluid rectangle (its sub-tick scroll lives in
+  the shader, not in the atlas). They all keep the plain kernel, clamped to the
+  rectangle.
+
+The shader takes the footprint's two axes, `n = min(ceil(major/minor), uAniso)`
+taps along the long one, and `lod = log2(max(major/n, minor))`. At `lod <= 0` a tap
+covers no more than a texel and the plain kernel runs, one texel apart, which is
+exact there. Above it, `n` taps are spread across the **whole** long axis, each one
+trilinear between `floor(lod)` and the level above — correct here, unlike the first
+version of the plain kernel, because each tap is now a prefiltered sample covering
+the gap to the next. **Level 0 of that blend is the exact console texel**, not the
+atlas's bilinear one, so the picture is continuous where the footprint shrinks to a
+texel and mipmapping starts. At `uAniso` 1 it is ordinary isotropic trilinear.
+
+The filtered colour also stops being rounded to five bits before the modulate:
+`texel * 248` is exactly `n << 3` for a texel read straight out of VRAM, so the
+unfiltered picture is bit-identical, and a filtered one keeps its fraction until
+`quant5` (true colour keeps it outright).
+
+**Measured.**
+
+- The atlas's contents, not just its existence: `KF2_ANISO_PROBE=2` reads four
+  decoded entries back. In area 1 every one held real colours (64-196 colour runs
+  in a block) at 23-66% solid, and its last level matched the mean of its level 0
+  to within one step on every channel — 128.0,120.9,83.0 against 128,121,82.
+- The probe with `MIP=1` builds the same atlas on the CPU. At a 64-texel footprint
+  the plain kernel at 16 taps can only average 16 of the 64 texels (sd 10.2); the
+  mip path averages all of them and the spread is below one 5-bit step (sd 0.0).
+  At a footprint of 16 taps or fewer the two are the same kernel, as the `lod`
+  rule says they should be.
+- Area 1, slot 2: 504 entries, decoded once each, none evicted, none refused;
+  144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`. Uncapped at a 2000 fps
+  ceiling, off 750-757 fps; 16x without mipmaps 717-722; 16x with mipmaps
+  720-722. The filters cost about 0.06 ms a frame, and that is the rectangle, not
+  the atlas.
+
+**Off by default**, as the plain kernel always was: the mechanism is measured and
+the picture has not been looked at. What wants looking at is a long floor at a low
+angle with `Texture filtering` 16x and `Mipmaps` on — whether it stops crawling,
+whether the white speckle and the billboard's edge are gone, whether the distance
+is soft rather than muddy — and the same with anisotropic off, which is isotropic
+trilinear and should look blurrier along the floor.
+
+**GL core backend only.** The GLSL 120 path has neither the rectangle nor the
+atlas and runs the plain kernel as it was.
 
 ## The render scale did not survive a menu
 

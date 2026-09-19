@@ -47,6 +47,18 @@ public sealed class AnisotropicPage : IPatchPage
                              "texture on floors and walls seen at a glancing angle, by " +
                              "sampling the whole area a pixel covers instead of one point " +
                              "of it. Costs nothing where a surface faces the camera.");
+
+        bool mip = Anisotropic.Mipmaps;
+        if (ImGui.Checkbox("Mipmaps", ref mip))
+        {
+            Anisotropic.SetMipmaps(mip);
+            PatchSettings.Set(Anisotropic.MipKey, mip);
+        }
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Distant textures drawn from smaller, pre-averaged copies of " +
+                             "themselves, so a floor far away is steady rather than " +
+                             "noise. Works with the filtering above.");
     }
 
     /// <summary>The level the patch is actually at, folded onto the five entries.

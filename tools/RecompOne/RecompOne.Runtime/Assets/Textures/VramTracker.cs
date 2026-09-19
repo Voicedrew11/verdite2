@@ -11,6 +11,10 @@ public static class VramTracker
     private static readonly bool[] _gpuDirty = new bool[Cols * Rows];
     private static int _clock;
 
+    /// <summary>0060. Moves on every mark, so a caller can skip re-reading
+    /// generations while nothing has been written.</summary>
+    public static int Clock => _clock;
+
     public static void Reset()
     {
         Array.Clear(_gen);

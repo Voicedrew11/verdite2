@@ -113,8 +113,11 @@ cannot check this feature at all** (861.6 fps against 860.7, the port being
 CPU-bound at ~860, so "costs nothing" and "never runs" read the same), so
 `scripts/shader_probe.c` runs the real fragment shader headless and measures the
 spread between neighbouring pixels — that spread being the sparkle — which
-collapses from sd 51.2 to 11.4 across the levels. Off by default, the picture not
-looked at (see "Anisotropic filtering").
+collapses from sd 51.2 to 11.4 across the levels. Every tap is now held inside the
+polygon's texture rectangle — the edge was still reading the neighbouring art, the
+floor speckle — and **mipmaps** are built where a texture is decoded, in an atlas
+of its own, since VRAM cannot hold them (`0060`). Both off by default, the picture
+not looked at (see "Anisotropic filtering").
 
 **The frame rate is a free number and the world's tick rate is a fixed 20.** The
 port skips the game's own frame gate at every rate — it decides both together and
@@ -342,7 +345,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0057`, one entry each.
+Every change the port made to RecompOne, `0001`-`0060`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

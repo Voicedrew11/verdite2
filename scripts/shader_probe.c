@@ -4,6 +4,13 @@
 //     gcc -O0 -o /tmp/shader_probe scripts/shader_probe.c -lEGL -lGL -lm
 //     FOOT=16 /tmp/shader_probe PrimFs.frag 1 2 4 8 16
 //
+// 0060. MIP=1 builds the texture atlas the way GlTexCache does (decode, 2x2 box)
+// and turns the mip path on. RECT=u0,u1 is the polygon's texture rectangle along U
+// (V is 0..15). UC=u centres the sweep there instead of starting it at 0, and then
+// only pixels whose own texel is inside the rectangle are counted. LEAK=1 paints
+// every texel outside the rectangle pure red, and reports the most red any counted
+// pixel picked up: anything above 0 is a tap that left the rectangle.
+//
 // Extract the shader with the snippet in "Anisotropic filtering" in
 // docs/RENDERING.md; FOOT is the footprint in texels per output pixel along U.
 //
@@ -87,10 +94,14 @@ static const char *TESTVS_T =
 "noperspective out vec4 vColor; out vec2 vUV; out float vDepth;\n"
 "flat out ivec2 clutBase; flat out ivec2 pageBase; flat out int texMode;\n"
 "flat out int vDither; flat out int vRepClut;\n"
+"noperspective out vec3 vLit; noperspective out float vFog; flat out uint vLight;\n"
+"flat out uvec2 vTex; uniform uvec2 uTex; uniform float uCentre;\n"
+"const float foot = FOOTV;\n"
 "void main(){\n"
 "  gl_Position = vec4(aPos,0.0,1.0);\n"
 "  float px = (aPos.x*0.5+0.5)*64.0;\n"
-"  vUV = vec2(px*FOOTV, 8.0);\n"
+"  vUV = vec2(uCentre < 0.0 ? px*foot : uCentre + (px-32.0)*foot, 8.0);\n"
+"  vLit = vec3(0.0); vFog = 0.0; vLight = 0u; vTex = uTex;\n"
 "  vColor = vec4(vec3(128.0/255.0),1.0);\n"  // neutral through the >>7 modulate
 "  vDepth = 0.0; clutBase = ivec2(0); pageBase = ivec2(0);\n"
 "  texMode = 2; vDither = 0; vRepClut = 0;\n"
@@ -125,13 +136,18 @@ int main(int argc,char**argv){
  glGetProgramiv_(p,GL_LINK_STATUS,&ok); if(!ok){glGetProgramInfoLog_(p,8192,&ln,log);printf("LINK:%s\n",log);return 2;}
  glUseProgram_(p);
 
- // VRAM sheet: one-texel vertical stripes, white / mid-grey. Neither is rgb==0,
- // so both are solid and the coverage rule leaves them alone.
+ // VRAM sheet: noise, every texel solid.
+ int leak=getenv("LEAK")&&atoi(getenv("LEAK")), mip=getenv("MIP")&&atoi(getenv("MIP"));
+ int ru0=0,ru1=255; if(getenv("RECT")) sscanf(getenv("RECT"),"%d,%d",&ru0,&ru1);
+ float uc=getenv("UC")?(float)atof(getenv("UC")):-1.f;
  unsigned char *vram=malloc(1024*512*4);
  for(int y=0;y<512;y++)for(int x=0;x<1024;x++){
    unsigned int h=(unsigned)x*2654435761u ^ (unsigned)y*40503u; h^=h>>13; h*=1274126177u; h^=h>>16;
-   unsigned char c=(unsigned char)(64+(h%192)); unsigned char*t=vram+((size_t)y*1024+x)*4;
-   t[0]=t[1]=t[2]=c; t[3]=0; }
+   unsigned char c=(unsigned char)(64+(h%192));
+   c=(unsigned char)(((c>>3)*255+15)/31);   // five bits, as VRAM holds it
+   unsigned char*t=vram+((size_t)y*1024+x)*4;
+   t[0]=t[1]=t[2]=c; t[3]=0;
+   if(leak && ((x&255)<ru0 || (x&255)>ru1)) { t[0]=255; t[1]=t[2]=0; } }
  GLuint tex; glGenTextures(1,&tex);
  glActiveTexture_(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D,tex);
  glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1024,512,0,GL_RGBA,GL_UNSIGNED_BYTE,vram);
@@ -152,6 +168,38 @@ int main(int argc,char**argv){
  if((l=glGetUniformLocation_(p,"uBlend"))>=0) glUniform4f_(l,1,1,1,0);
  if((l=glGetUniformLocation_(p,"uRepClutCount"))>=0) glUniform1f_(l,16.f);
  if((l=glGetUniformLocation_(p,"uRepRect"))>=0) glUniform4f_(l,0,0,1,1);
+ if((l=glGetUniformLocation_(p,"uCentre"))>=0) glUniform1f_(l,uc);
+
+ // 0060. The rectangle, and an atlas entry at block (0,0) holding it.
+ int w=ru1-ru0+1, lg=3; while((1<<lg)<(w>16?w:16)) lg++;
+ unsigned int rect=(unsigned)ru0|0u<<8|(unsigned)ru1<<16|15u<<24;
+ unsigned int entry=0x80000000u|(mip?(0x40000000u|(unsigned)lg<<16):0u);
+ GLint uTexL=glGetUniformLocation_(p,"uTex");
+ if(uTexL>=0){ typedef void(*U2)(GLint,GLuint,GLuint); ((U2)eglGetProcAddress("glUniform2ui"))(uTexL,rect,entry); }
+ if((l=glGetUniformLocation_(p,"uMipOn"))>=0) glUniform1f_(l,mip?1.f:0.f);
+ if(mip){
+   int bs=1<<lg; float *lv=malloc(sizeof(float)*4*bs*bs);
+   for(int y=0;y<bs;y++)for(int x=0;x<bs;x++){
+     int cx=x<w?x:w-1, cy=y<16?y:15; unsigned char*t=vram+((size_t)cy*1024+ru0+cx)*4;
+     float*o=lv+4*(y*bs+x); int solid=t[0]|t[1]|t[2]|t[3];
+     o[0]=solid?t[0]/255.f:0; o[1]=solid?t[1]/255.f:0; o[2]=solid?t[2]/255.f:0; o[3]=solid?1.f:0.f; }
+   GLuint at; glGenTextures(1,&at); glActiveTexture_(GL_TEXTURE0+5); glBindTexture(GL_TEXTURE_2D,at);
+   for(int k=0;k<=8;k++) glTexImage2D(GL_TEXTURE_2D,k,GL_RGBA8,2048>>k,2048>>k,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
+   glTexParameteri(GL_TEXTURE_2D,0x813C,0); glTexParameteri(GL_TEXTURE_2D,0x813D,8);
+   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_NEAREST);
+   glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
+   unsigned char *b8=malloc(4*bs*bs);
+   for(int k=0,sz=bs;k<=lg;k++,sz>>=1){
+     for(int i=0;i<4*sz*sz;i++){float v=lv[i]*255.f+0.5f; b8[i]=(unsigned char)(v>255?255:v);}
+     glTexSubImage2D(GL_TEXTURE_2D,k,0,0,sz,sz,GL_RGBA,GL_UNSIGNED_BYTE,b8);
+     if(sz==1) break;
+     int h2=sz/2; for(int y=0;y<h2;y++)for(int x=0;x<h2;x++)for(int c=0;c<4;c++)
+       lv[4*(y*h2+x)+c]=0.25f*(lv[4*((2*y)*sz+2*x)+c]+lv[4*((2*y)*sz+2*x+1)+c]
+                             +lv[4*((2*y+1)*sz+2*x)+c]+lv[4*((2*y+1)*sz+2*x+1)+c]);
+   }
+   if((l=glGetUniformLocation_(p,"uMip"))>=0) glUniform1i_(l,5);
+   glActiveTexture_(GL_TEXTURE0);
+ }
  GLint uAniso=glGetUniformLocation_(p,"uAniso");
  if(uAniso<0){printf("uAniso NOT PRESENT\n");return 1;}
 
@@ -179,10 +227,16 @@ int main(int argc,char**argv){
    glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
    glDrawArrays(GL_TRIANGLES,0,3);
    glReadPixels(0,0,VW,4,GL_RGBA,GL_UNSIGNED_BYTE,px);
-   int lo=255,hi=0; double sum=0,sq=0; int n=VW-16;
-   for(int x=8;x<VW-8;x++){int c=px[(2*VW+x)*4]; if(c<lo)lo=c; if(c>hi)hi=c; sum+=c; sq+=(double)c*c;}
+   int lo=255,hi=0,red=0; double sum=0,sq=0; int n=0;
+   for(int x=8;x<VW-8;x++){
+     // With UC, only the pixels whose own texel is inside the rectangle count.
+     if(uc>=0.f){ float u=uc+(x+0.5f-32.f)*(float)foot; if(u<ru0||u>=ru1+1) continue; }
+     int rg=px[(2*VW+x)*4]-px[(2*VW+x)*4+1]; if(rg>red) red=rg;
+     int c=px[(2*VW+x)*4+1]; if(c<lo)lo=c; if(c>hi)hi=c; sum+=c; sq+=(double)c*c; n++;}
+   if(n==0){printf("uAniso=%-3d  no pixel inside the rectangle\n",a); continue;}
    double mean=sum/n, sd=sqrt(sq/n-mean*mean);
-   printf("uAniso=%-3d  min %3d  max %3d  mean %6.2f  spread(sd) %6.2f  range %3d\n",
-          a,lo,hi,mean,sd,hi-lo);
+   printf("uAniso=%-3d  min %3d  max %3d  mean %6.2f  spread(sd) %6.2f  range %3d%s",
+          a,lo,hi,mean,sd,hi-lo,leak?"":"\n");
+   if(leak) printf("  leaked red %3d over %d pixels\n",red,n);
  }
  return 0;}
