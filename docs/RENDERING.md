@@ -438,15 +438,10 @@ rounds changes with the angle and the distance, which is the "certain angles and
 distances" of the report. This is the game's own cull and the hardware does it too;
 the port only makes it visible at a higher resolution.
 
-The fix culls on the whole polygon. `FaceFan` (`patches/PolyAssemblerClip.cs`)
-runs before `func_800302E8`: when the first corner does not face and the polygon's
-shoelace area does, it rotates `ClipOut` to start at the corner that faces most, so
-the emitter's own test passes and its fan covers the same convex polygon. The fog,
-light and depth rewrites read the list after the call, so they follow the rotation.
-`QuadFaces` keeps an unclipped quad the first triangle culled when `(0,1,2)` plus
-`(1,3,2)` is positive. Neither runs under `KF2_POLYASM=verify` (0 mismatches over
-every routine after the change); `KF2_POLYASM_FACING=0` is the comparison, and the
-recompiled assemblers (Fast geometry off) still cull on three corners.
+The first fix rotated `ClipOut` so the emitter's own test started at a corner that
+faced, and kept an unclipped quad whose two triangles together faced, both on whole
+pixels. It is superseded by the next section, which decides on the same area at
+the fractional corners; the measurement below is from that first version.
 
 Measured with `KF2_TILEWALK_PROBE=1`, area 1 at 144 fps, sweeping the shell's `goto`
 over a 5×5 grid of positions a tile apart around save 2, eight headings each: up to
@@ -459,6 +454,41 @@ at: the reported gap is gone.** Worth checking against the two open reports abov
 it that also describe gaps at a floor-wall junction: "Ordinary gaps also exist with
 Sub-pixel off", and the corners that drop at the sides of a wide picture
 (`docs/TODO.md`).
+
+### An edge-on wall lost its strips
+
+**A dark vertical slit down the edge of a wall seen almost edge-on.** Reported from
+play with a capture; rasterising the capture's `verts` on whole pixels finds no hole,
+which is itself the clue. The wall's side face at that angle is a column of polygons
+about a pixel wide — `138:122 137:104 137:104` — many of them a line on whole pixels
+and a sliver at their drawn, fractional corners. The capture lists what was *sent*,
+so the missing strips are not in it: they were culled before the GPU saw them.
+
+`0052` moved the assemblers' own cull to the fractional corners, but only the cull
+in `Visible`/`Facing`. **A clipped polygon is decided by `func_800302E8`, which runs
+`NormalClip` on the first three records' whole-pixel screen words**, and the
+previous section's fix worked on whole pixels too — no rotation can make a polygon
+that is a line on whole pixels pass. So the port now makes the decision itself:
+`ClippedFacing` (`patches/PolyAssemblerClip.cs`) takes the polygon's signed area at
+the fractional corners (`GteVertexMap.Peek` on each record's `+0x18`, falling back to
+whole pixels unless every corner has a fraction and none clamped), and a replace
+hook on `NormalClip` (`0x8005DC6C`) hands the emitter that answer for the one call it
+makes. The GTE still runs, so it is left as the game leaves it, and every other
+caller gets the GTE's own answer. The decision goes both ways: a polygon whose
+fractional corners wind backwards is dropped even when whole pixels would keep it,
+which is `0052`'s rule. `QuadFaces` takes an unclipped quad's area the same way, on
+the loop `0, 1, 3, 2`. `KF2_POLYASM_FACING=0` is the comparison; neither runs under
+`KF2_POLYASM=verify`.
+
+Measured with `KF2_TILEWALK_PROBE=1` over the same sweep as above (5×5 positions
+around save 2, eight headings, 144 fps): the whole polygon's facing differed from
+the emitter's first three whole-pixel corners for up to **80 clipped polygons a
+second**, in 29 of 38 two-second windows; unclipped quads differed from `0052`'s
+fractional first triangle for up to 26 a second. `KF2_POLYASM=verify`: 0 RAM,
+register and GTE mismatches over every routine. Uncapped (`KF2_FPS=1000`, standing at
+save 2) 889-897 fps against 887-901 with `KF2_POLYASM_FACING=0`, so the hook costs
+nothing measurable. 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`, no
+exceptions. **Looked at: the slit is gone, and the floor gap stays fixed.**
 
 ## The table is not unique: remaining wobble and the "far away" pop
 
