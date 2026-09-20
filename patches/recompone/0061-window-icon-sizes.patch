@@ -1,0 +1,92 @@
+diff --git a/RecompOne.Runtime/Host/Window/HostWindow.cs b/RecompOne.Runtime/Host/Window/HostWindow.cs
+index c45999f..ebeaf1d 100644
+--- a/RecompOne.Runtime/Host/Window/HostWindow.cs
++++ b/RecompOne.Runtime/Host/Window/HostWindow.cs
+@@ -165,7 +165,7 @@ public static class HostWindow
+         Title = title;
+     }
+ 
+-    private static Silk.NET.Core.RawImage? _pendingIcon;
++    private static Silk.NET.Core.RawImage[]? _pendingIcons;
+ 
+     public static void SetIcon(byte[] data)
+     {
+@@ -194,14 +194,35 @@ public static class HostWindow
+             return;
+         }
+ 
+-        var image = new Silk.NET.Core.RawImage(width, height, rgba);
+-        _pendingIcon = image;
+-        Apply(image);
++        SetIcons([(rgba, width, height)]);
++    }
++
++    /// <summary>
++    /// Several sizes of one icon. GLFW picks the nearest to what the desktop asks
++    /// for, so a pixel-art icon supplied at its exact multiples is never resampled.
++    /// </summary>
++    public static void SetIcons(IReadOnlyList<(byte[] Rgba, int Width, int Height)> images)
++    {
++        var list = new List<Silk.NET.Core.RawImage>(images.Count);
++        foreach (var (rgba, w, h) in images)
++        {
++            if (w <= 0 || h <= 0 || rgba.Length < w * h * 4)
++            {
++                Console.Error.WriteLine("[Host] icon pixel buffer does not match its size");
++                continue;
++            }
++
++            list.Add(new Silk.NET.Core.RawImage(w, h, rgba));
++        }
++
++        if (list.Count == 0) return;
++        _pendingIcons = list.ToArray();
++        Apply(_pendingIcons);
+     }
+ 
+     public static void ClearIcon()
+     {
+-        _pendingIcon = null;
++        _pendingIcons = null;
+         if (_window == null) return;
+         try
+         {
+@@ -213,12 +234,11 @@ public static class HostWindow
+         }
+     }
+ 
+-    private static void Apply(Silk.NET.Core.RawImage image)
++    private static void Apply(Silk.NET.Core.RawImage[] icons)
+     {
+         if (_window == null) return;
+         try
+         {
+-            var icons = new[] { image };
+             _window.SetWindowIcon(icons);
+         }
+         catch (Exception e)
+@@ -555,7 +575,7 @@ public static class HostWindow
+         var input = _window!.CreateInput();
+         InputManager.Initialize(input);
+ 
+-        if (_pendingIcon is { } icon) Apply(icon);
++        if (_pendingIcons is { } icons) Apply(icons);
+ 
+         _gl = GL.GetApi(_window);
+         _gl.ClearColor(0.08f, 0.08f, 0.08f, 1f);
+diff --git a/RecompOne.Runtime/Runtime.cs b/RecompOne.Runtime/Runtime.cs
+index 0c5f2e4..d360f99 100644
+--- a/RecompOne.Runtime/Runtime.cs
++++ b/RecompOne.Runtime/Runtime.cs
+@@ -162,6 +162,11 @@ public static class Runtime
+         HostWindow.SetIcon(rgba, width, height);
+     }
+ 
++    public static void SetIcons(IReadOnlyList<(byte[] Rgba, int Width, int Height)> images)
++    {
++        HostWindow.SetIcons(images);
++    }
++
+     public static void ClearIcon()
+     {
+         HostWindow.ClearIcon();

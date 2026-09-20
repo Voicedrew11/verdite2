@@ -712,6 +712,16 @@ Four files in the directory have no entry below:
   "The taps still left the texture at its edge" and "Mipmaps where the texture is
   decoded" in `docs/RENDERING.md`.
 
+- `0061-window-icon-sizes.patch` — `HostWindow.SetWindowIcon` was handed exactly one
+  image, so a desktop asking for 32 or 48 pixels got a window manager's resampling
+  of whatever size it was given. `SetIcons` takes several and `_pendingIcon`
+  becomes `_pendingIcons`, applied together at `OnLoad` as before; the single-image
+  `SetIcon` is now one call into it, so nothing else changed. What wants it is
+  `patches/CardIcon.cs`, which reads the game's own 16×16 memory-card icon off the
+  disc and supplies it at 16, 32, 48, 64, 128 and 256 — every one a whole multiple,
+  so pixel art is never filtered. UI only — **no recompile**. See "The icon comes
+  off the disc" in `docs/PACKAGING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

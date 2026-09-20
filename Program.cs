@@ -1235,6 +1235,13 @@ foreach (var icon in new[]
     break;
 }
 
+// And over it, the game's own memory-card icon off the player's disc, which the
+// release cannot carry. The orb above is the fallback.
+//
+//     KF2_ICON=orb      keep the shipped mark
+//     KF2_ICON=off      no icon at all
+Kf2.CardIcon.Install(args.Length > 0 ? args[0] : null);
+
 var memory = new PSMemory(Kf2.PrimBuffer.RamSize);
 try
 {

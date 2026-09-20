@@ -255,6 +255,49 @@ time, `ModCompiler` hands Roslyn the loaded assemblies, and
 verdite orb). The PNG is 256×256; the ICO holds 16/32/48/256. See
 `packaging/shared/README.md`.
 
+## The icon comes off the disc
+
+The window wears the game's **own memory-card icon** — the teal helm with the two
+red gems that a King's Field save shows in the PlayStation's card browser — read
+out of the player's image at boot by `patches/CardIcon.cs`. The orb stays the
+shipped mark and is the fallback: `Program.cs` sets it from the PNG first, and
+this replaces it only when a disc answers. That division is not a preference. The
+artifact is built in CI with no disc, so anything baked into `verdite2.ico`, the
+AppImage or the `.desktop` file has to be the port's own work; the game's art can
+only ever appear on a machine that already has the disc, which is the same line
+`generated/` is on.
+
+**Where it is.** 16×16 at 4bpp with a 16-entry BGR555 CLUT, in `CD/COM/FDAT.T` at
+file offset `0x14D210` — the CLUT, then at `0x14D240` the three animation frames
+stored **a row at a time**, frame 0's row *y*, then frame 1's, then frame 2's,
+which is the order a loop filling all three of a card header's frames reads them
+in. Reconstructed that way it is byte-identical to the icon in a `carda.sav`
+this port wrote, all three frames, which is what proves the layout. Index 0 is
+the background; the card header zeroes that entry (the archive's copy has a dark
+teal there), so it is the icon's transparency.
+
+**How it is found, and why not by offset alone.** The same sixteen colours are in
+`GAME.EXE` at `0x800675B4`, beside the `BASLUS-00158` filename and title
+templates the save routine builds a header from — so the palette is the
+*signature* rather than a constant this repo has to carry: `CardIcon` reads it
+out of `GAME.EXE`, checks it against the fixed offset in `FDAT.T`, and only scans
+the archive if that fails. Nothing of the disc is in the port's source, and a
+differently mastered dump is a scan rather than a miss. The pixels are in
+`FDAT.T` only; `GAME.EXE` has the palette and not the picture.
+
+**The sizes are exact multiples.** 16, 32, 48, 64, 128 and 256, each a
+nearest-neighbour scale of the same 16 pixels, handed to GLFW together
+(`patches/recompone/0061`, which is what made `SetWindowIcon` take more than
+one). A desktop asking for any of those gets pixel art it does not resample;
+before that, one image meant the window manager smoothing a 16×16 up or a 256×256
+down, which is exactly what makes this kind of icon look like a photograph of
+itself.
+
+`KF2_ICON=orb` keeps the shipped mark, `KF2_ICON=off` clears it, `KF2_ICON=1` or
+`=2` picks another of the three frames (they differ by a one-pixel bob).
+
+**Never looked at by eye:** the icon at the sizes a taskbar actually draws it.
+
 ## The one patch this needed
 
 `patches/recompone/0030-expose-host-pump.patch` makes `HostWindow.Pump` public as

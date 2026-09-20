@@ -165,7 +165,7 @@ public static class HostWindow
         Title = title;
     }
 
-    private static Silk.NET.Core.RawImage? _pendingIcon;
+    private static Silk.NET.Core.RawImage[]? _pendingIcons;
 
     public static void SetIcon(byte[] data)
     {
@@ -194,14 +194,35 @@ public static class HostWindow
             return;
         }
 
-        var image = new Silk.NET.Core.RawImage(width, height, rgba);
-        _pendingIcon = image;
-        Apply(image);
+        SetIcons([(rgba, width, height)]);
+    }
+
+    /// <summary>
+    /// Several sizes of one icon. GLFW picks the nearest to what the desktop asks
+    /// for, so a pixel-art icon supplied at its exact multiples is never resampled.
+    /// </summary>
+    public static void SetIcons(IReadOnlyList<(byte[] Rgba, int Width, int Height)> images)
+    {
+        var list = new List<Silk.NET.Core.RawImage>(images.Count);
+        foreach (var (rgba, w, h) in images)
+        {
+            if (w <= 0 || h <= 0 || rgba.Length < w * h * 4)
+            {
+                Console.Error.WriteLine("[Host] icon pixel buffer does not match its size");
+                continue;
+            }
+
+            list.Add(new Silk.NET.Core.RawImage(w, h, rgba));
+        }
+
+        if (list.Count == 0) return;
+        _pendingIcons = list.ToArray();
+        Apply(_pendingIcons);
     }
 
     public static void ClearIcon()
     {
-        _pendingIcon = null;
+        _pendingIcons = null;
         if (_window == null) return;
         try
         {
@@ -213,12 +234,11 @@ public static class HostWindow
         }
     }
 
-    private static void Apply(Silk.NET.Core.RawImage image)
+    private static void Apply(Silk.NET.Core.RawImage[] icons)
     {
         if (_window == null) return;
         try
         {
-            var icons = new[] { image };
             _window.SetWindowIcon(icons);
         }
         catch (Exception e)
@@ -555,7 +575,7 @@ public static class HostWindow
         var input = _window!.CreateInput();
         InputManager.Initialize(input);
 
-        if (_pendingIcon is { } icon) Apply(icon);
+        if (_pendingIcons is { } icons) Apply(icons);
 
         _gl = GL.GetApi(_window);
         _gl.ClearColor(0.08f, 0.08f, 0.08f, 1f);

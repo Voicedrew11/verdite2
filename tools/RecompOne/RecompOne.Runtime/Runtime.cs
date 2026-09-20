@@ -162,6 +162,11 @@ public static class Runtime
         HostWindow.SetIcon(rgba, width, height);
     }
 
+    public static void SetIcons(IReadOnlyList<(byte[] Rgba, int Width, int Height)> images)
+    {
+        HostWindow.SetIcons(images);
+    }
+
     public static void ClearIcon()
     {
         HostWindow.ClearIcon();
