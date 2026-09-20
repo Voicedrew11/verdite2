@@ -564,6 +564,70 @@ it is up to 2× faster because it never bands down, and for one frame in eight i
 runs at 60 fps — twice the NTSC ceiling, which is faster than the game can go on
 any console.**
 
+### Walking between areas stuttered, and it was the smoothers re-priming
+
+Reported from play as a hitch when *walking* between two areas and not when
+teleporting. It is neither a stall nor a black screen, and the measurements that
+say so are worth keeping because three plausible causes died on them: across
+three crossings the picture held **165.0 fps drawn at 20.0 ticks/s**, with no
+stalled frames, no frame-time gap (121 ms per 20 frames right through the load),
+the display never masked off and at most a single black frame. The disc wait is
+not even entered — no `KF2_LOADPACING_PROBE` line appears for a crossing — so
+`LoadPacing` pacing it to 60 Hz, which is what a "hitch on a load" would be, is
+not this.
+
+What it is: **the smoothers stop carrying for two world ticks at every area
+load**, so the picture steps twice at 20 Hz in the middle of a 165 fps stream
+while the player is mid-stride. `patches/BlackProbe.cs` measured it per drawn
+frame, as a run of frames the view was not interpolated into:
+
+```
+[black] fdat08 carry  -45 ms: . . . . . . . . . U U U U U U U U U U U
+[black] fdat08 carry  +76 ms: U U U U C C C C C C C C C C C C C C C C
+[black] fdat08: ... view unprimed on 15 frame(s), longest run 15 (~85 ms)
+```
+
+Both smoothers listened for `OverlayLoadedEvent` and cleared their pair —
+`_primed = false` — because after a load the previous sample describes the old
+area: the player has been teleported across the map, and a slot's previous tenant
+is a different object. Carrying across that would sweep the camera through the
+world and walk a creature in from a grave. The cost is that interpolation then
+needs **two** fresh ticks, one for a sample and one for a pair, and those two
+intervals render the raw tick value.
+
+**Rebasing costs neither.** The load happens inside stage 2 or 3, both of which
+are gated, so it always lands on a tick frame — and stage 8, where the camera pair
+is rolled, runs later in that same frame, with the globals already holding what
+the load left behind. So instead of clearing the pair, copy the fresh sample over
+its own previous one: `prev = cur`. That interval then carries between two copies
+of the post-load state, which is static and is exactly what an unprimed frame
+would have drawn anyway, and the **next** tick already has a valid pair instead of
+having to build one. `ObjectSmoothing.Sample` does the same per slot, and its
+`Live` test is satisfied on the rebase tick rather than the one after it, so
+nothing is swept in from a recycled slot's previous tenant either.
+
+Measured on the same crossing: **15 frames / 85 ms → 6 frames / 33 ms**, and the
+33 ms that remain are frames drawn *during* the blocking load, between the
+overlay-loaded event and the next tick, where there is no fresh sample to rebase
+onto and holding is the only correct answer. 144.0 fps drawn at 20.0 ticks/s,
+`[present] wide 288, plain 0, vram fallback 0`, every hook attached, both before
+and after.
+
+**What this does not fix, and the reason it cannot be fixed by interpolating.**
+The one interval that spans the teleport has no motion to interpolate: the
+position either side of it is two different places in the world, and the only
+thing that could fill it is an *extrapolation* from the player's own walk speed
+(`0x80199558`) and heading. That is a guess about motion rather than a
+measurement of it, and it is a feel judgement rather than a correctness one, so
+it is not done here.
+
+`FrameSmoothing.Frames`, `Carries` and `LastVerdict` are public so a probe can ask
+per frame whether the view was carried and why not; `KF2_SMOOTH_PROBE=1` still
+reports the same thing per second. `AnimSmoothing`'s listener is deliberately
+untouched — it clears cached clip lengths because the banks are re-linked by a
+load, so a cached length is a read of someone else's memory, which is a
+correctness reset and not a priming one.
+
 ### The reference band is 3 vblanks, not 2
 
 **This overturns what the rest of this section originally concluded**, which was

@@ -427,6 +427,9 @@ public static class ObjectSmoothing
     /// tables are rebuilt and the last area's positions are meaningless.</summary>
     static bool _primed;
 
+    // Set by an area load, spent at the next tick's Sample. See the listener.
+    static bool _rebase;
+
     /// <summary>The frame identity the tables were last sampled on. See
     /// <see cref="FramePacing.FirstWalkOfTick"/>.</summary>
     static long _lastFrame = -1;
@@ -501,7 +504,13 @@ public static class ObjectSmoothing
         // An area swap rebuilds the table, so the previous sample describes objects
         // that no longer exist. Overlay loads cover both the executable swaps and
         // the fdat area modules, which is exactly the set that invalidates it.
-        Event.AddListener<OverlayLoadedEvent>(_ => _primed = false);
+        //
+        // Invalidating costs two ticks before anything is carried again, and those
+        // are the two ticks the player is walking through the doorway. Rebasing
+        // costs none: the next tick copies each slot's fresh sample over its own
+        // previous one, so nothing is swept in from the grave of whatever held the
+        // slot in the old area, and every slot is live immediately.
+        Event.AddListener<OverlayLoadedEvent>(_ => _rebase = true);
 
         HookAttach.OnOverlayLoad("objects", Attach);
     }
@@ -880,12 +889,30 @@ public static class ObjectSmoothing
                 // which is also what makes the first sample after an area load safe
                 // -- and what keeps a recycled slot from being walked in from its
                 // previous tenant's grave.
-                t.Live[i] = _primed && !t.WasFree[i];
+                if (_rebase)
+                {
+                    // The slot's previous sample belongs to the old area. Rebase it
+                    // onto this one: prev == cur is static, which is what an
+                    // unprimed slot would have drawn anyway, and it leaves a valid
+                    // pair for the next tick.
+                    t.Prev[b] = t.Cur[b];
+                    t.Prev[b + 1] = t.Cur[b + 1];
+                    t.Prev[b + 2] = t.Cur[b + 2];
+                    t.PrevRot[b] = t.CurRot[b];
+                    t.PrevRot[b + 1] = t.CurRot[b + 1];
+                    t.PrevRot[b + 2] = t.CurRot[b + 2];
+                    t.Gliding[i] = false;
+                    t.MovedLast[i] = false;
+                    t.Carry[i] = false;
+                }
+
+                t.Live[i] = (_primed || _rebase) && !t.WasFree[i];
                 t.WasFree[i] = false;
             }
         }
 
         _primed = true;
+        _rebase = false;
     }
 
     /// <summary>Shortest signed step from one angle to another, in

@@ -153,6 +153,9 @@ public static class FrameSmoothing
     // both prev and cur to be real, exactly as ObjectSmoothing's `_live` does.
     static bool _primed, _carriable;
 
+    // Set by an area load, spent at the next tick's roll-forward. See Before.
+    static bool _rebase;
+
     // What the pre-hook overwrote, and whether it overwrote anything. Restored by
     // the post-hook; there is exactly one call in flight at a time, on one thread.
     static bool _applied;
@@ -166,6 +169,20 @@ public static class FrameSmoothing
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt;
     static long _carried, _skipped;
+
+    /// <summary>Frames entered and frames actually carried, counted whether or not
+    /// the probe is on, so another patch can ask per frame whether this one
+    /// smoothed it. <see cref="BlackProbe"/> reads the pair.</summary>
+    public static long Frames { get; private set; }
+
+    public static long Carries { get; private set; }
+
+    /// <summary>Why the last frame was or was not carried: 0 off or not
+    /// extrapolating, 1 unprimed (no two ticks to carry between yet), 2 nothing
+    /// moved, 3 carried. A patch watching a transition needs the reason, because
+    /// "declined, nothing moved" and "declined, unprimed" look identical from
+    /// outside and only one of them is a stutter.</summary>
+    public static int LastVerdict { get; private set; }
 
     // Why a frame was skipped, each reason in its own bucket. One number for all
     // of them cannot say the thing the probe exists to say: "nothing moving" reads
@@ -214,7 +231,12 @@ public static class FrameSmoothing
         // An area or executable swap rebuilds the player state, so the previous
         // sample describes a position and heading that no longer mean anything;
         // start priming again rather than lerp across the discontinuity.
-        Event.AddListener<OverlayLoadedEvent>(_ => { _primed = false; _carriable = false; });
+        // An area load teleports the player, so the pair either side of it
+        // straddles the jump and must not be carried. Clearing the pair is the
+        // obvious answer and it costs two ticks of stepped camera -- measured 15
+        // frames, ~85 ms at 165 fps. Rebasing costs none: see the handling of
+        // _rebase in Before.
+        Event.AddListener<OverlayLoadedEvent>(_ => _rebase = true);
 
         HookAttach.OnOverlayLoad("smoothing", Attach);
     }
@@ -297,6 +319,8 @@ public static class FrameSmoothing
     public static void Before(CpuContext c, IMemory m)
     {
         _applied = false;
+        Frames++;
+        LastVerdict = 0;
         if (!Enabled) { if (_probe) { _skipped++; _skipOff++; } return; }
 
         // Extrapolating, not Gating: Gating is true at the tick rate too, where
@@ -326,13 +350,33 @@ public static class FrameSmoothing
 
             _carriable = _primed;   // both prev and cur are real only after two samples
             _primed = true;
+
+            // The area load landed in this tick -- stages 2 and 3 are where it
+            // happens and both are gated, so it always does -- and `cur` was just
+            // read back from the globals the load left behind. Rebasing `prev`
+            // onto it makes the pair straddle nothing: this interval carries
+            // between two copies of the post-load state, which is static and is
+            // what an unprimed frame would have drawn anyway, and the NEXT tick
+            // already has a valid pair instead of having to build one.
+            if (_rebase)
+            {
+                _prevYaw = _curYaw; _prevPitch = _curPitch;
+                _prevX = _curX; _prevY = _curY; _prevZ = _curZ;
+                _prevBob = _curBob; _prevLand = _curLand;
+                _carriable = true;
+                _rebase = false;
+            }
         }
+
+        // A load between ticks: there is no fresh sample to rebase onto yet, so
+        // hold rather than carry a pair the load has already invalidated.
+        if (_rebase) { LastVerdict = 1; if (_probe) { _skipped++; _skipUnprimed++; } return; }
 
         // Not gated on a small phase: interpolation must overwrite the live globals
         // even at frac ~= 0, because on a tick frame they hold `cur` (the new tick)
         // and the frame is meant to draw `prev`. Skipping there would leave the new
         // value on screen and put a snap back the other way.
-        if (!_carriable) { if (_probe) { _skipped++; _skipUnprimed++; } return; }
+        if (!_carriable) { LastVerdict = 1; if (_probe) { _skipped++; _skipUnprimed++; } return; }
 
         double frac = FramePacing.LogicPhase;
 
@@ -351,6 +395,7 @@ public static class FrameSmoothing
 
         if (yawD == 0 && pitchD == 0 && !posLive && !eyeLive)
         {
+            LastVerdict = 2;
             if (_probe) { _skipped++; _skipStill++; }
             return;
         }
@@ -396,6 +441,9 @@ public static class FrameSmoothing
             m.WriteU16(Bob, (ushort)(short)(_prevBob + (int)Math.Round(bobD * frac)));
             m.WriteU16(Landing, (ushort)(short)(_prevLand + (int)Math.Round(landD * frac)));
         }
+
+        Carries++;
+        LastVerdict = 3;
 
         if (_probe)
         {
