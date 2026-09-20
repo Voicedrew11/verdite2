@@ -168,6 +168,7 @@ KF2_UISCALE=1                            # force the interface scale, and save i
 KF2_ICON=orb                             # the shipped verdite mark as the window icon (the game's memory-card icon, off the disc, by default)
 KF2_ICON=off                             # no window icon at all
 KF2_ICON=1                               # which of the card icon's three frames (0)
+KF2_ICON_INSTALL=0                       # do not write the icon into the desktop's icon theme (Linux; it is what a Wayland compositor reads)
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
 KF2_MAP_MINIMAP=1                        # the corner minimap on (off; no longer a setting); N toggles it
 KF2_MAP_MARKERS=1                        # creatures, objects, effects and sprites on (off; no longer a setting)

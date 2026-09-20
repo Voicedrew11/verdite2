@@ -296,7 +296,53 @@ itself.
 `KF2_ICON=orb` keeps the shipped mark, `KF2_ICON=off` clears it, `KF2_ICON=1` or
 `=2` picks another of the three frames (they differ by a one-pixel bob).
 
-**Never looked at by eye:** the icon at the sizes a taskbar actually draws it.
+## Wayland takes the icon from the desktop entry
+
+**A window icon set the ordinary way is invisible on Wayland, and silently so.**
+`glfwSetWindowIcon` is a documented no-op there — the string
+`Wayland: The platform does not support setting the window icon` is in the GLFW
+Silk bundles — and nothing is thrown, logged or returned. There is a protocol for
+it now (`xdg_toplevel_icon_manager_v1`, which KWin advertises), but GLFW neither
+speaks it nor exposes the `xdg_toplevel` a caller would need to, so that door is
+shut from inside the process.
+
+What a compositor does instead is match the toplevel's **app id** to a desktop
+entry and read that entry's `Icon=`. So the icon is a *file lookup*, not pixels
+on the wire, and two things have to be true.
+
+**The window has to say what it is.** Measured with `WAYLAND_DEBUG=1`, GLFW sent
+`set_title("KingsField2")` and **no `set_app_id` at all** — the default is the
+empty string. KWin therefore had nothing to match, and no icon could have appeared
+whatever the port did: not the card icon, and not the orb the AppImage installs
+either, which is a packaging bug that was invisible for as long as nobody looked.
+`patches/recompone/0061` hints `GLFW_WAYLAND_APP_ID` (and the X11 class beside it)
+from `Runtime.AppId`, which `Program.cs` and the launcher both set to `verdite2`
+before the window is made. After: `xdg_toplevel#45.set_app_id("verdite2")`.
+
+**And something has to be there to match.** `patches/DesktopEntry.cs` writes the
+six sizes to `$XDG_DATA_HOME/icons/hicolor/NxN/apps/verdite2.png`. The theme is
+the right home for them rather than one big PNG in the data directory, for two
+reasons: the lookup picks the exact size the desktop asks for, so 32 and 48 px are
+the real pixels rather than a toolkit's downscale of 256; and `XDG_DATA_HOME`
+outranks `/usr/share`, so an installed build's own `Icon=verdite2` resolves to
+these without the packager's entry being touched. An entry is written — to
+`$XDG_DATA_HOME/applications/verdite2.desktop` — **only when none exists in any
+XDG data directory**, which is the source-tree case; an installed or
+appimaged-integrated build already has one. `Exec` prefers `$APPIMAGE` over
+`Environment.ProcessPath`, because an AppImage's apphost lives in a mount point
+that stops existing when it exits. A file already byte-identical is not rewritten,
+so an ordinary boot touches nothing. `KF2_ICON_INSTALL=0` writes none of it.
+
+**This is how every AppImage does it, too** — it is just usually somebody else
+doing the writing. An AppImage carries its `.desktop` and its hicolor icons
+*inside* the image, where the desktop cannot see them; `appimaged` or
+AppImageLauncher is what copies them into `~/.local/share` on integration.
+
+A compositor may cache what it has; a new entry generally needs `kbuildsycoca6`
+on Plasma, or a relog.
+
+**Never looked at by eye:** the icon at the sizes a taskbar actually draws it, on
+either platform.
 
 ## The one patch this needed
 

@@ -1224,6 +1224,11 @@ Kf2.Settings.PatchSettings.Install();
 //     KF2_CRASHDUMP=0     say nothing; let the exception print on its own
 Kf2.CrashDump.Configure(Environment.GetEnvironmentVariable("KF2_CRASHDUMP"));
 
+// What the window calls itself to the desktop. On Wayland this is the whole of
+// how a compositor finds the icon -- see "Wayland takes the icon from the desktop
+// entry" in docs/PACKAGING.md -- and it has to be set before the window is made.
+RecompOne.Runtime.Runtime.AppId = "verdite2";
+
 foreach (var icon in new[]
 {
     Path.Combine("packaging", "shared", "verdite2.png"),

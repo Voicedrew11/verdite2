@@ -40,6 +40,9 @@ try
 
     Runtime.DiscValidator = DiscCheck.Validate;
 
+    // Before the window is made: on Wayland the app id is how the compositor
+    // finds this entry, and so the icon.
+    Runtime.AppId = "verdite2";
     Runtime.Initialize($"Verdite2 {Ver.Number}");
     Localization.Merge(BuildProgressPopup.Strings);
 

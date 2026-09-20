@@ -712,15 +712,23 @@ Four files in the directory have no entry below:
   "The taps still left the texture at its edge" and "Mipmaps where the texture is
   decoded" in `docs/RENDERING.md`.
 
-- `0061-window-icon-sizes.patch` — `HostWindow.SetWindowIcon` was handed exactly one
-  image, so a desktop asking for 32 or 48 pixels got a window manager's resampling
-  of whatever size it was given. `SetIcons` takes several and `_pendingIcon`
-  becomes `_pendingIcons`, applied together at `OnLoad` as before; the single-image
-  `SetIcon` is now one call into it, so nothing else changed. What wants it is
-  `patches/CardIcon.cs`, which reads the game's own 16×16 memory-card icon off the
-  disc and supplies it at 16, 32, 48, 64, 128 and 256 — every one a whole multiple,
-  so pixel art is never filtered. UI only — **no recompile**. See "The icon comes
-  off the disc" in `docs/PACKAGING.md`.
+- `0061-window-icon-sizes-and-app-id.patch` — two things one icon needs.
+  `SetWindowIcon` was handed exactly one image, so a desktop asking for 32 or 48
+  pixels got a window manager's resampling of whatever size it was given;
+  `SetIcons` takes several and `_pendingIcon` becomes `_pendingIcons`, applied at
+  `OnLoad` as before, with the single-image `SetIcon` now one call into it. And
+  **GLFW was telling the compositor nothing about what this window is**: measured
+  with `WAYLAND_DEBUG=1`, the toplevel sent `set_title` and **no `set_app_id` at
+  all**, so on Wayland — where `glfwSetWindowIcon` is a documented no-op, the
+  string `Wayland: The platform does not support setting the window icon` being in
+  the binary — KWin had nothing to match a desktop entry against and could not have
+  shown an icon whatever the port did, the shipped AppImage's own included.
+  `HostWindow.AppId` (`Runtime.AppId`, set before `Initialize`) is hinted at window
+  creation as `GLFW_WAYLAND_APP_ID` — the raw `0x00026001`, because Silk 2.22 has
+  no name for a GLFW 3.4 hint — and as the X11 class and instance name beside it.
+  Measured after: `xdg_toplevel#45.set_app_id("verdite2")` on the wire. What wants
+  both is `patches/CardIcon.cs` and `patches/DesktopEntry.cs`. UI only — **no
+  recompile**. See "The icon comes off the disc" in `docs/PACKAGING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

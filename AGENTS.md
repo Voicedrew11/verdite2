@@ -187,7 +187,7 @@ what it is) live there, not here.
 | `Mouse` | mouse look, spent inside `Analog.BeforeLook` | on | INPUT, "Mouse look" |
 | `MenuMouse` | point-and-click in the in-game menus | on | INPUT, "The menu pointer" |
 | `KeyLayout` | the port's WASD layout | on | INPUT, "The keyboard layout" |
-| `CardIcon` | the window icon is the game's own memory-card icon, read off the player's disc at boot; the shipped orb is the fallback (`0061`) | on | PACKAGING, "The icon comes off the disc" |
+| `CardIcon`, `DesktopEntry` | the window icon is the game's own memory-card icon, read off the player's disc at boot; the shipped orb is the fallback. On Linux the same pixels go into the icon theme under the app id, which is the only way a Wayland compositor can show one (`0061`) | on | PACKAGING, "The icon comes off the disc", "Wayland takes the icon from the desktop entry" |
 | `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |
 | `HitGuard` | fences the final-boss hit-path fault | on | TODO, "The crash on the final boss's last hit" |
 | `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | Gaussian, original reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |

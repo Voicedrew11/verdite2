@@ -108,6 +108,33 @@ public static class HostWindow
         };
     }
 
+    /// <summary>
+    /// What the window calls itself to the desktop, which is how a compositor
+    /// finds its desktop entry -- and so its icon -- on Wayland.
+    /// </summary>
+    public static string AppId = "recompone";
+
+    /// <summary>
+    /// GLFW leaves the Wayland app id and the X11 class empty, so a compositor has
+    /// nothing to match a desktop entry against. Silk 2.22 has no name for the
+    /// Wayland hint, which is GLFW 3.4's <c>GLFW_WAYLAND_APP_ID</c> (0x00026001).
+    /// </summary>
+    private static void HintAppId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return;
+        try
+        {
+            var glfw = Silk.NET.GLFW.Glfw.GetApi();
+            glfw.WindowHintString(0x00026001, id);
+            glfw.WindowHintString((int)Silk.NET.GLFW.WindowHintString.X11ClassName, id);
+            glfw.WindowHintString((int)Silk.NET.GLFW.WindowHintString.X11InstanceName, id);
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"[Host] app id: {e.Message}");
+        }
+    }
+
     public static void Initialize(string title)
     {
         ConfigManager.Load();
@@ -136,6 +163,7 @@ public static class HostWindow
                 _window.Load += OnLoad;
                 _window.Render += OnRender;
                 _window.Closing += OnClosing;
+                HintAppId(AppId);
                 _window.Initialize();
                 Console.WriteLine($"[Host] gl context {api.Version.MajorVersion}.{api.Version.MinorVersion} {api.Profile}");
                 return;

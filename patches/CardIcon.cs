@@ -8,12 +8,18 @@ namespace Kf2;
 ///     KF2_ICON=orb      the shipped verdite mark instead
 ///     KF2_ICON=off      no icon at all
 ///     KF2_ICON=1        a frame of the card icon's three (0 by default)
+///     KF2_ICON_INSTALL=0   do not write the icon into the desktop's icon theme
 ///
 /// 16x16 at 4bpp, scaled by whole multiples with no filter, so the desktop is
 /// handed a size it can use without resampling pixel art. Nothing is shipped:
 /// the bytes come from the player's own image at boot, and a disc that does not
-/// answer leaves whatever Program.cs already set. See "The icon comes off the
-/// disc" in docs/PACKAGING.md.
+/// answer leaves whatever Program.cs already set.
+///
+/// A Wayland compositor does not take an icon from a window -- GLFW says so in
+/// as many words -- so on Linux the same pixels are also written into the icon
+/// theme under the app id, which is what a compositor looks up. See "The icon
+/// comes off the disc" and "Wayland takes the icon from the desktop entry" in
+/// docs/PACKAGING.md.
 /// </summary>
 public static class CardIcon
 {
@@ -53,10 +59,11 @@ public static class CardIcon
             }
 
             var argb = Decode(clut, pixels, frame);
-            var images = new List<(byte[], int, int)>(Sizes.Length);
+            var images = new List<(byte[] Rgba, int W, int H)>(Sizes.Length);
             foreach (int n in Sizes) images.Add((Scale(argb, n / Side), n, n));
             RecompOne.Runtime.Runtime.SetIcons(images);
             Console.WriteLine("[KF2] icon: the game's memory-card icon, off the disc");
+            DesktopEntry.Publish(images);
         }
         catch (Exception e)
         {

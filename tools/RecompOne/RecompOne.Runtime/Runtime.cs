@@ -162,6 +162,17 @@ public static class Runtime
         HostWindow.SetIcon(rgba, width, height);
     }
 
+    /// <summary>
+    /// What the window calls itself to the desktop. On Wayland it is the whole of
+    /// how a compositor finds the window's desktop entry, and so its icon; set it
+    /// before <see cref="Initialize"/>.
+    /// </summary>
+    public static string AppId
+    {
+        get => HostWindow.AppId;
+        set => HostWindow.AppId = value;
+    }
+
     public static void SetIcons(IReadOnlyList<(byte[] Rgba, int Width, int Height)> images)
     {
         HostWindow.SetIcons(images);
