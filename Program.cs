@@ -1215,6 +1215,19 @@ Kf2.BootExe.Install();
 // plays rather than how the machine behaves.
 Kf2.Settings.PatchSettings.Install();
 
+// Compile the recompiled code ahead of the game running it. QuickJit is off (a
+// tier-up loses a MonoMod detour), so every function is compiled by the full JIT
+// on its first call -- which for an area change is 234 methods inside one frame,
+// measured at 297.87 ms of work of which 292.37 ms was the JIT. This warms the
+// lot on a background thread while the title is up. Installed last, so the
+// patches' own attach listeners have run before the first method is prepared.
+//
+//     KF2_PREJIT=0        leave every method to its first call -- the comparison
+//     KF2_PREJIT_PROBE=1  a line per overlay as it is warmed
+Kf2.Prejit.Configure(Environment.GetEnvironmentVariable("KF2_PREJIT"),
+                     Environment.GetEnvironmentVariable("KF2_PREJIT_PROBE"));
+Kf2.Prejit.Install();
+
 // What the game's state was when an unhandled exception left the recompiled code.
 // For docs/TODO.md #14, which is reproducible at 165 fps but *only with no hook on
 // the faulting path* -- so a diagnostic that has to be present to see it is no use
