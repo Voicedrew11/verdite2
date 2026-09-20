@@ -50,6 +50,7 @@ KF2_SPRITEANIM_PROBE=1                 # cel changes a second, live slots, and h
 KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
 KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
 KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
+KF2_BLACKPROBE=1                       # what the picture held every drawn frame around an area load: luminance, black runs, and whether the view was carried
 KF2_SMOOTH=0 KF2_SMOOTH_POS=0          # leave the view at the tick (on by default); leave position too
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
 KF2_SMOOTH_OBJECTS=0                   # leave enemies, doors and everything else at the tick (on by default)

@@ -1228,6 +1228,12 @@ Kf2.Prejit.Configure(Environment.GetEnvironmentVariable("KF2_PREJIT"),
                      Environment.GetEnvironmentVariable("KF2_PREJIT_PROBE"));
 Kf2.Prejit.Install();
 
+// What the picture held across an area change, vblank by vblank.
+//
+//     KF2_BLACKPROBE=1    sample the display area and dump the window around a load
+Kf2.BlackProbe.Configure(Environment.GetEnvironmentVariable("KF2_BLACKPROBE"));
+Kf2.BlackProbe.Install();
+
 // What the game's state was when an unhandled exception left the recompiled code.
 // For docs/TODO.md #14, which is reproducible at 165 fps but *only with no hook on
 // the faulting path* -- so a diagnostic that has to be present to see it is no use
