@@ -621,6 +621,37 @@ thing that could fill it is an *extrapolation* from the player's own walk speed
 measurement of it, and it is a feel judgement rather than a correctness one, so
 it is not done here.
 
+**The darkness that remains is the game's own fade, and the probe now says so in
+its own column.** Play reported, after the rebase, "a moment of darkness or at
+least not the correct frame" still at a crossing, and luminance alone cannot tell
+a frame the game *painted* black from a frame that drew nothing. So
+`patches/BlackProbe.cs` records two more things per drawn frame: the screen tint
+the game asked for — `func_8003220C`'s request block at `0x80192D45`, `-` for
+none — and a fingerprint of the sampled pixels, printed as `.` new pixels, `=` the
+previous frame again, `2` the one before that (a flip to a buffer nothing finished
+drawing) and `*` an older picture coming back. Measured over a crossing at 165 fps,
+walking into it mid-stride:
+
+```
+[black] fdat05 frame   -186 ms: -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -.
+[black] fdat05 frame     -3 ms: -. f. f* f= f= f= f= f= f= f= f= e= e= e= e= e= e= e= e= e=
+[black] fdat05 frame    417 ms: b= b= b= b= a= a= a= a= a= a= a= a= a= 9= 9= 9= 9= 9= 9= 9=
+[black] fdat05: 0 black frame(s) the game asked no tint for, longest run 0
+```
+
+The tint goes to `f` at the crossing and walks back down — `func_80037B5C(0x82,
+0x1000, 0, -0x80)`, 32 steps of a quadratic tint held to the world tick, which is
+**1650 ms** measured under `KF2_LOOPPACING=pace` and the same 1609 ms filled with
+redraws by default. The disc read is under ~100 ms and is not what is on screen.
+**Zero black frames in the window were untinted**, so nothing in it is an empty
+frame; `[present]` stays `wide 3xx, plain 0, vram fallback 0` across every load,
+the display is never masked off, and no short flash is reported. What the `=`
+column shows is that the redraws between fade steps are byte-identical to the step
+they follow, which is what a frozen world under a constant tint should produce.
+That is the whole of the reachable evidence: the crossing is dark because the game
+fades, and the fade is 1.65 s because a modal loop runs at the 20 Hz reference.
+**Whether that reads as too long by eye is a play judgement and is open.**
+
 `FrameSmoothing.Frames`, `Carries` and `LastVerdict` are public so a probe can ask
 per frame whether the view was carried and why not; `KF2_SMOOTH_PROBE=1` still
 reports the same thing per second. `AnimSmoothing`'s listener is deliberately

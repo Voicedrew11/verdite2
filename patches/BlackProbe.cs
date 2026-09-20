@@ -20,6 +20,14 @@ namespace Kf2;
 /// of the backend's VRAM the way `TexProbe` does, averaged as 5-bit luminance and
 /// scaled to 0..255. Diagnostic only, off by default, and it costs a readback a
 /// vblank while it is on.
+///
+/// Luminance alone cannot say *why* a frame is dark, so the dump's `frame` block
+/// carries two more characters per frame: the screen tint the game asked for
+/// (`func_8003220C`'s request block, `-` for none) and what the picture did with
+/// it (`.` new pixels, `=` the previous frame again, `2` the one before that --
+/// a flip to a buffer nothing finished drawing -- `*` an older picture back). A
+/// black frame with a tint is the transition fade working; a black frame with
+/// none is a frame that drew nothing.
 /// </summary>
 public static class BlackProbe
 {
@@ -39,6 +47,8 @@ public static class BlackProbe
     static readonly int[] _vz = new int[Samples];
     static readonly int[] _yaw = new int[Samples];
     static readonly int[] _carry = new int[Samples];
+    static readonly uint[] _sig = new uint[Samples];
+    static readonly int[] _tint = new int[Samples];
     static int _head, _count;
     static long _lastPresents;
 
@@ -123,8 +133,8 @@ public static class BlackProbe
         _row ??= new ushort[320];
         int x = gpu.DisplayX, y = gpu.DisplayY;
 
-        int shown = Rows(be, x, y);
-        int other = Rows(be, x, y == 0 ? 240 : 0);
+        int shown = Rows(be, x, y, out uint sig);
+        int other = Rows(be, x, y == 0 ? 240 : 0, out _);
         if (shown < 0) return;
 
         // Presents since the last sample: a black picture that is still being
@@ -139,7 +149,7 @@ public static class BlackProbe
         // what the rows above read -- so it is recorded as its own state rather
         // than inferred from a luminance that stays lit right through it.
         int lum = gpu.DisplayEnabled ? shown : -1;
-        Store(Now, lum, y, delta);
+        Store(Now, lum, y, delta, sig);
         StoreView();
 
         // Report a short flash where it happens. A run this brief never reaches
@@ -178,24 +188,42 @@ public static class BlackProbe
     }
 
     /// <summary>Mean 5-bit luminance of three rows of one display buffer, 0..255,
-    /// or -1 if the read failed.</summary>
-    static int Rows(IGpuBackend be, int x, int y)
+    /// or -1 if the read failed. `sig` fingerprints the same pixels: two frames
+    /// with one signature held the same picture, which is how a repeat is told
+    /// from a redraw that happens to be equally bright.</summary>
+    static int Rows(IGpuBackend be, int x, int y, out uint sig)
     {
         long sum = 0;
         int n = 0;
+        uint h = 2166136261u;
         foreach (int dy in stackalloc[] { 60, 120, 180 })
         {
             try { be.ReadVram(x, y + dy, 320, 1, _row!); }
-            catch { return -1; }
+            catch { sig = 0; return -1; }
 
             for (int i = 0; i < 320; i++)
             {
                 ushort p = _row![i];
                 sum += (p & 0x1F) + ((p >> 5) & 0x1F) + ((p >> 10) & 0x1F);
                 n += 3;
+                h = (h ^ p) * 16777619u;
             }
         }
+        sig = h;
         return n == 0 ? -1 : (int)(sum * 255 / (n * 31L));
+    }
+
+    // The screen-tint request block func_8003220C leaves for stage 13 to submit:
+    // mode, then r, g, b. Mode 0xFF is "no tint", written by stage 1 (TintHold).
+    // A black frame with a tint is the game's own fade; a black frame without one
+    // is a frame that drew nothing, and only this tells the two apart.
+    const uint TintMode = 0x80192D45, TintRed = 0x80192D46;
+
+    static int Tint()
+    {
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (m == null) return -1;
+        return m.ReadU8(TintMode) == 0xFF ? -1 : m.ReadU8(TintRed);
     }
 
     // The view this frame was actually drawn with. FrameSmoothing writes the
@@ -222,12 +250,14 @@ public static class BlackProbe
         _lastFrames = f;
     }
 
-    static void Store(double t, int lum, int y, int presents)
+    static void Store(double t, int lum, int y, int presents, uint sig)
     {
         _t[_head] = t;
         _lum[_head] = lum;
         _y[_head] = y;
         _pres[_head] = presents;
+        _sig[_head] = sig;
+        _tint[_head] = Tint();
         _head = (_head + 1) % Samples;
         if (_count < Samples) _count++;
     }
@@ -251,6 +281,11 @@ public static class BlackProbe
         double stillStart = 0, worstStillMs = 0;
         int prevX = int.MinValue, prevZ = 0, prevYaw = 0;
         var moves = new StringBuilder();
+        var frames = new StringBuilder();
+        var seen = new Dictionary<uint, int>();
+        int held = 0, flip = 0, stale = 0, blind = 0, blindRun = 0, worstBlind = 0;
+        uint prevSig = 0, prev2Sig = 0;
+        int sigs = 0;
 
         for (int k = 0; k < _count; k++)
         {
@@ -283,6 +318,33 @@ public static class BlackProbe
             else darkRun = 0;
 
             if (_pres[i] == 0) stalled++;
+
+            // What the game asked for, and what the picture did with it. A black
+            // frame the game tinted black is its own transition fade; a black one
+            // it did not is a frame that drew nothing, and that is the difference
+            // between "the crossing is dark" and "the crossing shows a wrong
+            // frame". Beside it, whether this frame's pixels are new, the previous
+            // frame's again, or a picture from further back coming round a second
+            // time -- which is what a flip to a buffer nothing finished drawing
+            // looks like from here.
+            if (frames.Length > 0 && (col - 1) % 20 == 0) frames.Append('\n');
+            if ((col - 1) % 20 == 0) frames.Append($"[black] {name} frame {rel,+6:0} ms:");
+            char asked = _tint[i] < 0 ? '-' : "0123456789abcdef"[Math.Min(_tint[i] >> 4, 15)];
+            char drew = '.';
+            if (sigs > 0 && _sig[i] == prevSig) { drew = '='; held++; }
+            else if (sigs > 1 && _sig[i] == prev2Sig) { drew = '2'; flip++; }
+            else if (seen.ContainsKey(_sig[i])) { drew = '*'; stale++; }
+            seen[_sig[i]] = col;
+            prev2Sig = prevSig; prevSig = _sig[i]; sigs++;
+            frames.Append(' ').Append(asked).Append(drew);
+
+            if (_lum[i] == 0 && _tint[i] < 0)
+            {
+                blind++;
+                blindRun++;
+                worstBlind = Math.Max(worstBlind, blindRun);
+            }
+            else blindRun = 0;
 
             // Did the view move at all this frame? At 165 fps with the smoothing
             // carrying, every frame moves; a run of identical frames is the world
@@ -318,7 +380,11 @@ public static class BlackProbe
         }
 
         Console.WriteLine(sb.ToString());
+        if (frames.Length > 0) Console.WriteLine(frames.ToString());
         if (moves.Length > 0) Console.WriteLine(moves.ToString());
+        Console.WriteLine($"[black] {name}: {blind} black frame(s) the game asked no tint for, " +
+                          $"longest run {worstBlind}; {held} frame(s) repeated the one before, " +
+                          $"{flip} repeated the one before that, {stale} brought an older picture back");
         Console.WriteLine($"[black] {name}: {col} sample(s), {dark} fully black, " +
                           $"longest black run {worstRun} frame(s) (~{worstMs:0} ms), " +
                           $"{presInDark} present(s) while black, " +
