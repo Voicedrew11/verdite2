@@ -670,7 +670,11 @@ Four files in the directory have no entry below:
   silhouette. It cannot be an MRT off the colour pass: `PrimFs` has a dual-source
   output for the console's blend modes and such a program may not render to more
   than one draw buffer. A pixel the buffer did not reach keeps the old
-  reconstruction, by alpha, so it is additive; the AO texture gains a blue channel
+  reconstruction: alpha is the depth the triangle was drawn at (`RGBA16F`), and the
+  pass takes the normal only where that is the depth buffer's, so a surface the
+  depth buffer does not hold — a transparent hole, or a blended wall's own
+  triangles, which are kept in the list too — falls back rather than lighting the
+  pixel wrongly. It is additive; the AO texture gains a blue channel
   saying which of the two answered, because every other number reads the same with
   an empty buffer. `KF2_AO_NORMALS=0` is the comparison. Measured in area 1 at 144
   fps: 18,309 tris/s kept, 142.4 normal passes/s, 100.0% of the covered picture lit
