@@ -24,6 +24,8 @@ public struct HleVertex
     // 0 with HasTexRect clear is none.
     public uint TexRect;
     public bool HasTexRect;
+    // GtePacketDepth.Rec.Solid: blended, and still a surface the occlusion pass sees.
+    public bool Solid;
 }
 
 public struct PrimFlags

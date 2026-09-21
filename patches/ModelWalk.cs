@@ -134,6 +134,9 @@ public static class ModelWalk
     static ModelDraw[] _scene = new ModelDraw[64];
     static int _sceneCount, _lastCount;
     static ModelKind _kind;
+
+    /// <summary>The table the model being submitted came from.</summary>
+    public static ModelKind SubmitKind => _kind;
     static int _slot;
     static uint _record;
 

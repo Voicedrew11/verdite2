@@ -24,6 +24,15 @@ public static partial class PolyAssembler
     /// <summary>Set while the first-person arm draws.</summary>
     public static bool InArm;
 
+    /// <summary>Set while func_80032588 submits a model. A blended packet of an
+    /// object-table model is solid (<c>GtePacketDepth.Rec.Solid</c>): the secret
+    /// door is one, the torch flames are sprite-table models and are not.</summary>
+    public static bool InModel;
+
+    /// <summary>Blended model packets by the table they came from (ModelKind);
+    /// only the object table's are solid.</summary>
+    public static readonly long[] BlendedByKind = new long[4];
+
     /// <summary>Clipped fans whose packet did not carry its records' screen words.</summary>
     public static long DepthClipMismatches;
 
@@ -105,6 +114,14 @@ public static partial class PolyAssembler
         r.Cmd = Peek32(mem, pkt + 4u);
         r.Xy0 = Peek32(mem, pkt + 8u);
         r.XyLast = Peek32(mem, pkt + last);
+        // Bit 25 of the command word: semi-transparent.
+        r.Solid = false;
+        if (InModel && (r.Cmd & (1u << 25)) != 0)
+        {
+            var kind = ModelWalk.SubmitKind;
+            BlendedByKind[(int)kind]++;
+            r.Solid = kind == ModelKind.Object;
+        }
         GtePacketDepth.Recorded++;
     }
 

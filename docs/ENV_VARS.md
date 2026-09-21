@@ -147,6 +147,7 @@ KF2_AO=0                               # ambient occlusion off (on by default; G
 KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
 KF2_AO_BIAS=0.08 KF2_AO_SAMPLES=16 KF2_AO_MAXDEPTH=24000
 KF2_AO_NORMALS=0                       # normals from the depth buffer again, not from the frame's geometry (0058)
+KF2_AO_SOLID=0                         # a blended object-table model (the secret door) writes no depth for the pass again
 KF2_AO_WORLD=1                         # also occlude against the area's own tile grid, so geometry off screen counts (0059; off)
 KF2_AO_WORLD_STRENGTH=0.6 KF2_AO_WORLD_RADIUS=3072   # how dark that term goes, and how far it reaches
 KF2_AO_WORLD_PROBE=1                   # the transform, the grid, and whether either is missing; =2 the camera's own tile
