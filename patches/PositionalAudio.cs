@@ -123,10 +123,10 @@ public static class PositionalAudio
 
     public static void Install()
     {
-        Current = _env ?? Mode.Off;
+        Current = _env ?? Mode.Headphones;
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Set(_env ?? (Mode)Math.Clamp(RecompOne.Runtime.Runtime.View.GetInt(ModeKey, 0), 0, 2));
+            Set(_env ?? (Mode)Math.Clamp(RecompOne.Runtime.Runtime.View.GetInt(ModeKey, 2), 0, 2));
             Console.WriteLine($"[KF2] positional audio: {Current}");
         });
 

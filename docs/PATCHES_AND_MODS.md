@@ -3465,8 +3465,9 @@ as with the game's loop (`KF2_MENUWORLD=0` for the comparison). **Not looked at.
 
 ## Drawing message text
 
-**An experiment, off by default (`KF2_MESSAGETEXT=1`). The mechanism is measured; the
-picture has not been looked at.**
+**An experiment, on by default since v0.3.0 (`KF2_MESSAGETEXT=0` turns it off; there
+is no control in the window). The mechanism is measured; the picture has not been
+looked at.**
 
 A sign or an NPC line is a 4-bit TIM in `TALK.T` or `ITEM.T` ("Full-screen messages
 are pictures" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), so the text can be no

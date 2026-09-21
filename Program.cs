@@ -306,9 +306,9 @@ Kf2.MenuWorld.Configure(Environment.GetEnvironmentVariable("KF2_MENUWORLD"),
 Kf2.MenuWorld.Install();
 
 // Sign and dialogue text drawn as text on an opaque box, decoded from the message's
-// own picture in RAM against a glyph table built by scripts/msg_glyphs.py. Off.
+// own picture in RAM against a glyph table built by scripts/msg_glyphs.py. On.
 //
-//     KF2_MESSAGETEXT=1         on
+//     KF2_MESSAGETEXT=0         off
 //     KF2_MESSAGETEXT_PROBE=1   each message's key and decoded text
 //     KF2_MESSAGETEXT_TEST=3:0  open these messages from the main loop (KF2_AUTOPAD dismisses)
 Kf2.MessageText.Configure(Environment.GetEnvironmentVariable("KF2_MESSAGETEXT"),

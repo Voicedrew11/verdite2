@@ -2456,6 +2456,9 @@ another texture's colour.
 
 ### Mipmaps where the texture is decoded
 
+**On by default since v0.3.0** (`KF2_MIPMAPS=0` to compare), chosen before the
+picture was judged by eye; the filtering level stays off.
+
 A mip chain cannot live in VRAM, for the two reasons at the top of this section,
 and it does not need to: it can live where the texture is **decoded**. `0060`'s
 `GlTexCache` keeps a 2048x2048 RGBA8 atlas with levels 0-8. A textured polygon

@@ -50,15 +50,15 @@ public static class AudioQuality
 
     public static void Install()
     {
-        Spu.Interpolation = _interp ?? SpuInterpolation.Gaussian;
-        Spu.ReverbMode = _reverb ?? OriginalReverb;
+        Spu.Interpolation = _interp ?? SpuInterpolation.Sinc;
+        Spu.ReverbMode = _reverb ?? SpuReverbMode.Enhanced;
 
         // The saved choice can only be read once ConfigManager has loaded, which is after Program.cs.
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             var view = RecompOne.Runtime.Runtime.View;
-            Spu.Interpolation = _interp ?? (SpuInterpolation)Math.Clamp(view.GetInt(InterpKey, 0), 0, 2);
-            Spu.ReverbMode = _reverb ?? (view.GetInt(ReverbKey, 0) == 1 ? SpuReverbMode.Enhanced : OriginalReverb);
+            Spu.Interpolation = _interp ?? (SpuInterpolation)Math.Clamp(view.GetInt(InterpKey, 2), 0, 2);
+            Spu.ReverbMode = _reverb ?? (view.GetInt(ReverbKey, 1) == 1 ? SpuReverbMode.Enhanced : OriginalReverb);
             Console.WriteLine($"[KF2] audio: interpolation {Spu.Interpolation}, reverb {Spu.ReverbMode}");
         });
     }

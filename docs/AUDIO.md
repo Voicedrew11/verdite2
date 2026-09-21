@@ -71,6 +71,7 @@ the legacy mix was reverb artefact, not the music.
 settings page's *Original* means `legacy` (`AudioQuality.OriginalReverb`), until
 someone has compared the two by ear; flipping that constant is the whole change,
 and no saved config needs migrating because the page saves its own index.
+*Enhanced* is the default since v0.3.0 — by choice, still not by ear.
 
 Switching path clears the ring state, and leaving the enhanced path clears the
 reverb work area in SPU RAM, since the hardware network reads its own past
@@ -114,12 +115,11 @@ question and it is not one a counter answers.
 
 ## Voice interpolation
 
-`KF2_SPU_INTERP` / *Interpolation*: `gauss` (the console's 4-tap Gaussian, the
-default), `cubic` (Catmull-Rom on the same four samples) and `sinc` (8 taps, 256
-phases, Kaiser β 5).
+`KF2_SPU_INTERP` / *Interpolation*: `gauss` (the console's 4-tap Gaussian), `cubic` (Catmull-Rom on the same four samples) and `sinc` (8 taps, 256
+phases, Kaiser β 5); `sinc` is the default since v0.3.0.
 
 The Gaussian is a steep low-pass — composers mastered for it, which is why it
-stays the default. The sinc needed two things the 4-tap kernels do not:
+was the default until v0.3.0, when sinc was chosen without a listening test. The sinc needed two things the 4-tap kernels do not:
 
 - **Four more samples of history.** `Voice.Buf` is 7 history + 28 now, and the
   Gaussian and cubic read its newest four, so their output is unchanged. The sinc
@@ -249,5 +249,5 @@ Live spatial voices peaked at 11 in area 2.
 **Mechanism measured, never listened to** -- including whether the Brown-Duda
 constants suit this game's material, how wide *Speakers* should read against the
 game's own narrower pan, and the per-frame re-aim while turning, which no run
-here exercised (the shell cannot turn the player). Off by default until someone
-has heard it on headphones.
+here exercised (the shell cannot turn the player). *Headphones* is the default
+since v0.3.0 — chosen before anyone has heard it on headphones.

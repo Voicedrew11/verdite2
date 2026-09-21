@@ -160,7 +160,7 @@ what it is) live there, not here.
 | `LoopPacing` | modal loops (fades, cutscenes, item/spell animations) run once per tick, gaps filled with stage-13 redraws | on | PATCHES_AND_MODS, "Loops that render their own frames" |
 | `MenuPacing` | menu cursor repeat and blink held to the 60 Hz grid | on | PATCHES_AND_MODS, "The menu's cursor repeat" |
 | `MenuWorld` | replaces the menu presenter `func_800226A8` and the message fade `func_800356F4`: the world is redrawn live behind menus, shops, signs and dialogue (full width, AO, Z) instead of the frozen 320-wide copy | on | PATCHES_AND_MODS, "Menus draw the world live", "Messages draw the world live" |
-| `MessageText` | sign and dialogue text decoded from the message TIM in RAM (`patches/MessageGlyphs.cs`, built by `scripts/msg_glyphs.py`) and drawn as text on an opaque box; the TIM's palette is zeroed so the game's text quads draw nothing | off | PATCHES_AND_MODS, "Drawing message text" |
+| `MessageText` | sign and dialogue text decoded from the message TIM in RAM (`patches/MessageGlyphs.cs`, built by `scripts/msg_glyphs.py`) and drawn as text on an opaque box; the TIM's palette is zeroed so the game's text quads draw nothing | on (experimental) | PATCHES_AND_MODS, "Drawing message text" |
 | `LoadPacing` | loading screen's walking figure held to the vblank grid | on | PATCHES_AND_MODS, "The loading screen's walking figure" |
 | `SpriteAnim` | billboard cel animation held to the tick | on | PATCHES_AND_MODS, "The flames run at the render rate" |
 | `TintHold` | stage 1 `func_8002C944` in C#: it clears the screen tint every frame while the stages that set it are gated, so the reset now runs only on a tick and the death fade and damage flash stop strobing; `KF2_TINTHOLD=verify` diffs it against the recompiled routine | on | PATCHES_AND_MODS, "The tints strobed between ticks" |
@@ -176,7 +176,7 @@ what it is) live there, not here.
 | `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); Video ▸ Enhancements, with two tolerance sliders | on | RENDERING, "Z-buffer", "The assemblers write the depth" |
 | `Pgxp` | upstream's PGXP as the vertex source (`0034`-`0036`); env only | off | RENDERING, "PGXP has no control in the window" |
 | `AmbientOcclusion` | SSAO from painter's-order depth (`0040`), normals from the frame's own geometry redrawn into a G-buffer (`0058`); optional world-space term marching the area's tile grid, so off-screen geometry occludes (`0059`, off) | on | RENDERING, "Ambient occlusion", "The normal was the guess", "Occluders the camera cannot see" |
-| `Anisotropic` | post-CLUT footprint supersampling (`0041`), every tap held inside the polygon's texture rectangle; *Mipmaps*: minified textures decoded into an atlas with a mip chain each (`0060`, `KF2_MIPMAPS`) | off | RENDERING, "Anisotropic filtering", "Mipmaps where the texture is decoded" |
+| `Anisotropic` | post-CLUT footprint supersampling (`0041`), every tap held inside the polygon's texture rectangle; *Mipmaps*: minified textures decoded into an atlas with a mip chain each (`0060`, `KF2_MIPMAPS`) | filtering off, mipmaps on | RENDERING, "Anisotropic filtering", "Mipmaps where the texture is decoded" |
 | `PerPixelLighting` | the depth cue and the models' light evaluated per pixel from what `PolyAssembler` recorded per packet (`0048`) | on | RENDERING, "Per-pixel lighting" |
 | `EvenFog` | clipped map tiles refogged on the tiles' curve instead of `func_800302E8`'s `IR0 >> 1`, and each tile vertex's fog blended between the light records of the tiles around it (hooks `func_80031950`; `0049`); and the records' colour matrix and back colour the same way; one *Even fog and lighting* checkbox, dimmed without Fast geometry (`KF2_EVENFOG_BLEND=0`, `KF2_EVENLIGHT=0` drop a part); stands down under verify | on | RENDERING, "A clipped tile is fogged at half, and that is the block on the floor", "Fog changes at a tile edge" |
 | `NoDither`, `TrueColor` | one *Shading* combo: Dither / None / Smooth (24-bit, `0021`) | Smooth | PATCHES_AND_MODS, "Two shading checkboxes were one question asked twice" |
@@ -191,8 +191,8 @@ what it is) live there, not here.
 | `CardIcon`, `DesktopEntry` | the window icon is the game's own memory-card icon, read off the player's disc at boot; the shipped orb is the fallback. On Linux the same pixels go into the icon theme under the app id, which is the only way a Wayland compositor can show one (`0061`) | on | PACKAGING, "The icon comes off the disc", "Wayland takes the icon from the desktop entry" |
 | `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |
 | `HitGuard` | fences the final-boss hit-path fault | on | TODO, "The crash on the final boss's last hit" |
-| `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | Gaussian, original reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |
-| `PositionalAudio` | 3D sound effects re-aimed every frame, for speakers or headphones (`0044`) | off | AUDIO, "Positional audio" |
+| `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | sinc, enhanced reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |
+| `PositionalAudio` | 3D sound effects re-aimed every frame, for speakers or headphones (`0044`) | headphones | AUDIO, "Positional audio" |
 
 Features ship **off** when the mechanism is measured but the picture has never been
 judged by eye; say which of the two a change has when you write it up.

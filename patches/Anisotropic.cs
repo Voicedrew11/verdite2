@@ -130,8 +130,8 @@ public static class Anisotropic
 
     public const string MipKey = "kf2.mipmaps.on";
 
-    /// <summary>0060. Mipmaps, off by default: the mechanism is measured and the
-    /// picture has not been looked at.</summary>
+    /// <summary>0060. Mipmaps, on by default. The mechanism is measured; the
+    /// picture has not been judged by eye.</summary>
     public static bool Mipmaps
     {
         get => GteDepth.Mipmaps;
@@ -199,17 +199,17 @@ public static class Anisotropic
 
     public static void Install()
     {
-        // Default is off. RuntimeReadyEvent is the first and only place the saved
+        // Filtering defaults off, mipmaps on. RuntimeReadyEvent is the first and only place the saved
         // setting is read: ConfigManager only loads inside HostWindow.Initialize,
         // which is after Program.cs, so reading it here would read an empty config
         // and write it back over the real one.
         Level = _forced ?? 1;
-        Mipmaps = _forcedMip ?? false;
+        Mipmaps = _forcedMip ?? true;
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             Level = _forced ?? RecompOne.Runtime.Runtime.View.GetInt(LevelKey, 1);
-            Mipmaps = _forcedMip ?? RecompOne.Runtime.Runtime.View.GetBool(MipKey, false);
+            Mipmaps = _forcedMip ?? RecompOne.Runtime.Runtime.View.GetBool(MipKey, true);
             Console.WriteLine($"[KF2] aniso: {(Enabled ? $"on, up to {Level} taps" : "off (one sample)")}, " +
                               $"mipmaps {(Mipmaps ? "on" : "off")}");
         });

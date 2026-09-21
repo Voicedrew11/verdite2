@@ -12,9 +12,9 @@ namespace Kf2;
 
 /// <summary>
 /// Draw sign and dialogue text as text, on an opaque box, instead of the game's 1:1
-/// 16-colour picture of it. An experiment: off by default.
+/// 16-colour picture of it. An experiment, on by default.
 ///
-///     KF2_MESSAGETEXT=1         on
+///     KF2_MESSAGETEXT=0         off
 ///     KF2_MESSAGETEXT_PROBE=1   each message's key and decoded text, or why it was left alone
 ///     KF2_MESSAGETEXT_TEST=3:0,6:360   open these messages from the main loop, 10 s in
 ///                               and then one a stage-9 call after each closes (KF2_AUTOPAD
@@ -45,7 +45,7 @@ public sealed class MessageText : IFloatingPanel
     static readonly int[] Phases = [3, 10];
     const int FullBright = 0x6C;   // the last brightness the fade presents
 
-    public static bool Enabled { get; private set; }
+    public static bool Enabled { get; private set; } = true;
     static bool _probe, _hooked, _queued;
 
     static bool _inMessage, _inFade;
