@@ -386,9 +386,10 @@ Kf2.RateCensus.Install();
 // and the picture -- so the extrapolation lives for one function call and reaches
 // nothing else.
 //
-//     KF2_SMOOTH=1        on; off by default, so the view steps at the logic rate
-//     KF2_SMOOTH_POS=1    carry the position too (off by default)
+//     KF2_SMOOTH=0        off; on by default, or the view steps at the logic rate
+//     KF2_SMOOTH_POS=0    leave the position at the tick (carried by default)
 //     KF2_SMOOTH_PROBE=1  what is being carried, per second
+//     KF2_SMOOTH_PROBE=2  also trace every frame for 400 ms after an area load
 Kf2.FrameSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_POS"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_PROBE"));
@@ -1228,10 +1229,22 @@ Kf2.Prejit.Configure(Environment.GetEnvironmentVariable("KF2_PREJIT"),
                      Environment.GetEnvironmentVariable("KF2_PREJIT_PROBE"));
 Kf2.Prejit.Install();
 
-// What the picture held across an area change, vblank by vblank.
+// What each drawn frame's ordering table actually got, across an area crossing.
+// Luminance cannot answer this -- a door into an unlit corridor is dark whether or
+// not the frame is right -- so this counts the map and the models instead.
 //
-//     KF2_BLACKPROBE=1    sample the display area and dump the window around a load
-Kf2.BlackProbe.Configure(Environment.GetEnvironmentVariable("KF2_BLACKPROBE"));
+//     KF2_CROSSPROBE=1    a per-frame dump of tiles and models around every fdat load
+Kf2.CrossProbe.Configure(Environment.GetEnvironmentVariable("KF2_CROSSPROBE"));
+Kf2.CrossProbe.Install();
+
+// What the picture held across an area change, drawn frame by drawn frame,
+// and where the renderer's camera was against the player.
+//
+//     KF2_BLACKPROBE=1        sample the display area and dump the window around a load
+//     KF2_BLACKPROBE_OUT=dir  also write the display rect around the load as PNGs
+//                             (default scratch/blackprobe; 0 skips the pictures)
+Kf2.BlackProbe.Configure(Environment.GetEnvironmentVariable("KF2_BLACKPROBE"),
+                         Environment.GetEnvironmentVariable("KF2_BLACKPROBE_OUT"));
 Kf2.BlackProbe.Install();
 
 // What the game's state was when an unhandled exception left the recompiled code.
