@@ -3376,6 +3376,20 @@ Where it writes, and why nothing else is disturbed:
   item preview (`func_80022CAC` → `func_8002E5E8(3, …)`, drawn by `func_8002156C`
   through `func_800346CC`) leaves bank 3 current and sets its own matrices; the HUD
   reads the bank before the tile walk selects bank 0.
+- **The pass puts the world's background clear back.** `func_80022754` turns
+  `isbg` (and `dfe`) off on both draw environments (`0x8018E0AC`, `+0x5C`), since
+  its paste covers the whole frame every menu frame. With the paste gone nothing
+  cleared the buffer: wherever the world leaves the background showing, the
+  semi-transparent fog blended over whatever the buffer held two frames earlier —
+  the menu — so the fog brightened towards white a frame at a time and the menu's
+  panels showed through it. Reported from play in area 1 at `12276 -12800 54750`,
+  unchanged by every setting. Stage 13 leaves `isbg 1, rgb 0,0,0` there; the
+  renderer's post records the word at `+0x18` of each environment, and the
+  presenter and `MessageFade`'s step put it on around their `PutDrawEnv` and take
+  the menu's back after. Measured: both environments read `isbg 0` at the menu's
+  enter before; after, `PutDrawEnv … isbg=1` on every menu frame (60 passes/s),
+  and messages still fade and hold as before.
+  **The picture after has not been looked at.**
 - A session is decided once at `func_80022754` and ended at `func_800228C8`, at the
   main loop's stage 9, or at any overlay load.
 
