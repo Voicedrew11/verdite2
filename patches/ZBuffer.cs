@@ -144,6 +144,11 @@ public static class ZBuffer
     /// <summary>The first-person arm, which keeps painter's order.</summary>
     const uint ArmDraw = 0x80032400;
 
+    /// <summary>The model submitter: a blended packet built inside it is a solid
+    /// surface for the occlusion pass (the secret door), where the blended map
+    /// tiles (water) and the billboards (flames) are not.</summary>
+    const uint ModelSubmit = 0x80032588;
+
     /// <summary>The packet source needs the C# assemblers to write it.</summary>
     public static void SyncSource() =>
         GtePacketDepth.Enabled = _packetSource && PolyAssembler.Enabled && PolyAssembler.TransformEnabled;
@@ -176,6 +181,8 @@ public static class ZBuffer
         });
 
         HookAttach.OnOverlayLoad("zbuffer arm", AttachArm);
+        if (Environment.GetEnvironmentVariable("KF2_AO_SOLID") != "0")
+            HookAttach.OnOverlayLoad("zbuffer models", AttachModel);
 
         bool attached = false;
         Event.AddListener<OverlayLoadedEvent>(_ =>
@@ -207,6 +214,27 @@ public static class ZBuffer
         HookManager.Commit();
         return HookAttach.Installed(target);
     }
+
+    static bool _modelQueued;
+
+    static bool AttachModel()
+    {
+        SymbolRegistry.Build();
+        var target = SymbolRegistry.Resolve("game", null, ModelSubmit);
+        if (target == null) return false;
+        if (!_modelQueued)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+            HookManager.AddPre(_self, target, typeof(ZBuffer).GetMethod(nameof(BeforeModel), flags)!);
+            HookManager.AddPost(_self, target, typeof(ZBuffer).GetMethod(nameof(AfterModel), flags)!);
+            _modelQueued = true;
+        }
+        HookManager.Commit();
+        return HookAttach.Installed(target);
+    }
+
+    public static void BeforeModel(CpuContext c, IMemory m) => PolyAssembler.InModel = true;
+    public static void AfterModel(CpuContext c, IMemory m) => PolyAssembler.InModel = false;
 
     public static void BeforeArm(CpuContext c, IMemory m) => PolyAssembler.InArm = true;
     public static void AfterArm(CpuContext c, IMemory m) => PolyAssembler.InArm = false;
@@ -268,9 +296,13 @@ public static class ZBuffer
                               $"{hits / window:F0} polygons found theirs/s, {misses / window:F0} had none/s " +
                               $"({ZPct(hits, hits + misses)}), {PolyAssembler.DepthClipMismatches / window:F0} clipped packets unmatched/s, " +
                               $"{GteDepth.ZPrepasses / window:F0} depth prepasses/s, " +
+                              $"blended model packets/s: object {PolyAssembler.BlendedByKind[1] / window:F0} (solid), " +
+                              $"creature {PolyAssembler.BlendedByKind[0] / window:F0}, effect {PolyAssembler.BlendedByKind[2] / window:F0}, " +
+                              $"sprite {PolyAssembler.BlendedByKind[3] / window:F0}, " +
                               $"corners unrounded {PolyAssembler.DepthUnrounded / window:F0}/s, left whole {PolyAssembler.DepthWhole / window:F0}/s");
             GteDepth.ZPrepasses = 0;
             PolyAssembler.DepthUnrounded = PolyAssembler.DepthWhole = 0;
+            Array.Clear(PolyAssembler.BlendedByKind);
             GtePacketDepth.ResetCounters();
             PolyAssembler.DepthClipMismatches = 0;
         }

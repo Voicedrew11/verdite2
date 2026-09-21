@@ -94,6 +94,16 @@ public static class TileWalk
     /// <summary>Running totals; never reset.</summary>
     public static long WalkCalls, CellCalls, TileCalls;
 
+    /// <summary>Cells the last completed walk walked and drew. Valid until the next
+    /// walk starts, so a consumer reads it from a post on `func_80031C94` or from
+    /// anywhere inside stage 13 after it. <see cref="CrossProbe"/> is the reader:
+    /// a frame that drew none of them has no map in its ordering table, which is
+    /// nameable in a dark room where luminance is not.</summary>
+    public static long CellsWalked => _cellsWalked;
+
+    /// <inheritdoc cref="CellsWalked"/>
+    public static long CellsDrawn => _cellsDrawn;
+
     // What the last walk saw, which is the whole point of the routine being here.
     static long _cellsWalked, _cellsDrawn, _halves, _unclipped, _plain, _subdivided, _skipped;
     static double _probeAt;

@@ -30,6 +30,7 @@ public sealed partial class Gpu
         public float Lx, Ly, Lz, Fog; public uint Light; public int LightGen;
         // 0060. The polygon's texture rectangle, the same for every corner.
         public uint TexRect; public bool HasTexRect;
+        public bool Solid;
     }
 
     static readonly RenderPrimEvent _primEvent = new();
@@ -171,7 +172,7 @@ public sealed partial class Gpu
             if (has && dr.Z0 > 0f && dr.Z1 > 0f && dr.Z2 > 0f && (n == 3 || dr.Z3 > 0f))
             {
                 v[0].W = dr.Z0; v[1].W = dr.Z1; v[2].W = dr.Z2; v[3].W = dr.Z3;
-                for (int i = 0; i < n; i++) v[i].HasZ = true;
+                for (int i = 0; i < n; i++) { v[i].HasZ = true; v[i].Solid = dr.Solid; }
             }
         }
 

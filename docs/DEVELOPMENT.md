@@ -502,6 +502,93 @@ morph is still the next largest thing here, and it is now the largest recompiled
 thing left inside a C# submit. See "The object and creature walk in C#" in
 `PATCHES_AND_MODS.md`.
 
+## The first frame of an area was the JIT
+
+Reported from play as a **hitch when walking between two areas**, and explicitly
+not when teleporting. `KF2_PROFILE_SPIKE=30` names it in one line: first entry to
+`fdat02`, **frame 358, 297.87 ms of work of which 292.37 ms was the JIT, over 234
+methods** — the assemblers, the model walk and stage 13, all compiling. It is not
+one frame either. The same boot gives **frame 580 at 179.95 ms** (stages 4, 3 and
+2, 66 methods), **frame 1362 at 102.28 ms** (stage 5, the session's first
+projectile, 12 methods), and a tail of 40-50 ms frames for as long as the area
+keeps reaching code the session has not run.
+
+**`TieredCompilationQuickJit` is off and must stay off** — a tier-up recompiles a
+hooked method and MonoMod's detour does not follow — so there is no cheap tier
+here: every recompiled function is compiled by the *full optimizing* JIT the
+first time it is called, on the thread that called it. Measured at about 1.2 ms a
+method.
+
+**The control says it is the compile and not the disc.** The same walk transition
+into a module the session has already run — area 1 to area 0 with `fdat02` warm —
+costs **15 ms**, a max frame of 25.93 ms and `JIT 6.06 ms/s`. An emulated CD read
+comes out of the host's page cache in microseconds; a load has no seek.
+
+**Why walking and not teleporting.** The full-load path (`func_80024154`, which a
+save load and `patches/AreaWarp.cs` use) runs the loading screen that
+`patches/LoadPacing.cs` paces to 60 Hz — measured `84 step(s) in 1816.3 ms over
+105 blocking VSync call(s)` — so the JIT lands inside something that already looks
+like a load, and the player arrives standing still. A boundary crossing is stage
+2's own object state machine: an object record with state `0xE0` at `rec+0x4`
+(table `0x80177714`, stride `0x44`), handler `0x80038DC8`, predicate
+`func_80037810` testing the player's tile against the object's own tile plus the
+extents at `rec+0x38`/`+0x39` and Y within `[-0xC80, +0x800]`, then `0x800162DC`
+with the target area at `rec+0x3A`. That path reaches neither wait `LoadPacing`
+hooks, so **the loading figure never steps** and the freeze is naked, mid-stride.
+(Stepping a `goto` onto such an object's own position is how a session reproduces
+a walk transition without navigating to a door.)
+
+`patches/Prejit.cs` compiles it all ahead of time on a background thread instead,
+armed at the first `OverlayLoadedEvent` — the first moment the dispatcher's
+registry is populated, and four or five seconds before the first area, where
+preparing the incoming module from *its* own load event would be racing the
+frames it is meant to protect. `RuntimeHelpers.PrepareMethod` compiles a body
+without calling it, and the set is already enumerable: `IOverlay.Functions` holds
+a delegate per recompiled function and `Delegate.Method` is the method the JIT
+would otherwise compile later.
+
+**The area modules are not the bulk, and that is worth knowing before optimising
+the wrong thing**: `fdat02` declares ten functions, `fdat14` nineteen — the nine
+of them together are 0.3 s. The cost is `game` (1035 methods, 2.3 s), the port's
+own patches (1933, 0.7 s) and the runtime (3111, 0.5 s), which is why the pass
+warms all three; a replace hook spends its own time in the GTE fast path,
+`GteVertexMap` and `GlCore`, and those compile on first call like everything
+else. Ordered area modules, patches, runtime, `game`, then `open` and `end`,
+because the pass is racing the player.
+
+Measured at 144 fps, `KF2_AUTOSTART=2`, boot through `fdat02` to `fdat05` and then
+a walk transition into `fdat08` (never run this session):
+
+| | `KF2_PREJIT=0` | on |
+|---|---|---|
+| first frame of the first area | 313.44 ms, JIT 300.35 (234 methods) | 31.0-35.2 ms |
+| the frames after it | 185.56, 109.21, 45.79, 44.73 ms | none over 30 |
+| walk into a cold `fdat08` | max frame 26.12 ms, JIT 7.51 ms/s | max frame 8.14 ms, JIT 1.83 ms/s |
+| settled | JIT 0.61-34.86 ms/s | JIT 0.12-0.36 ms/s |
+| boot to in-area | 15.96 s | 12.25-12.27 s |
+| peak RSS | 429.9 MB | 461.4 MB |
+
+Boot is *faster* with the pass in, because the thread compiles ahead of the game
+thread's need rather than against it. The warm-up itself is 7201 methods in about
+5.0 s of background CPU at `ThreadPriority.Lowest`, and it costs 31 MB of code.
+
+**What is left is all boot.** Eight to thirteen spikes remain in a run and every
+one of them is a frame before the pass has reached that code — `open` and the
+early `game` paths, under the intro and the title, which already look like
+loading. One more survives at the first area and is **not** the JIT: a ~110 ms
+frame of `game code (no section)` with `JIT 0` inside the autostart's own load
+(`frame 343, 104.41 ms` with the pass off, `frame 362, 111.59 ms` with it on).
+That is the game's blocking load path and it is the same either way. The
+acceptance run is unchanged either way: 144.0 fps drawn at 20.0 ticks/s,
+`[present] wide 288, plain 0, vram fallback 0`, the vertex map reading the same
+hit rate, every hook attached and `boundary 3/3 DrawOTag + 3/3 VSync`.
+
+**A method `HookManager` has already committed is left alone** (186 of them),
+because MonoMod prepares its target when it installs the detour: there is nothing
+to gain, and one less thing to be doing concurrently with a detour being written.
+A method that will not prepare is counted and skipped — it is a method that
+compiles on its first call, which is where it started.
+
 ## Watching a frame being built
 
 `patches/FrameCapture.cs`, `patches/FrameViewerPanel.cs` and the runtime's

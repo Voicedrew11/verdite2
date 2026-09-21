@@ -274,13 +274,9 @@ internal static class GlShaders
             // depth buffer's quantisation into every flat wall.
             vec3 n;
             float geo = 0.0;
-            // Alpha is the depth the normal pass drew at; a normal whose depth is
-            // not this pixel's belongs to a surface the depth buffer does not hold
-            // -- a texture's transparent hole, drawn into the normal buffer whole --
-            // and must not light this one.
             if (uNormalOn > 0.5) {
                 vec4 nb = normalAt(vUv);
-                if (nb.a > 0.0 && abs(nb.a - d) <= 0.020 * d) {
+                if (nb.a > 0.5) {
                     n = normalize(nb.xyz * 2.0 - 1.0);
                     geo = 1.0;
                 }
@@ -433,10 +429,9 @@ internal static class GlShaders
     /// *inside* one primitive, so it can never straddle a silhouette or average two
     /// surfaces, and it does not have the depth buffer's quantisation in it.
     ///
-    /// Alpha is the depth drawn here, 0 for none: the pass takes the normal only
-    /// where that matches its own depth, so a pixel this never reached, or reached
-    /// with a surface the depth buffer does not hold, falls back to the old cross
-    /// product rather than to a wrong normal.
+    /// Alpha is the "there is a normal here" bit the pass tests, so a pixel this
+    /// never reached falls back to the old cross product rather than to a wrong
+    /// normal.
     /// </summary>
     public const string NormalFs = """
         #version 330 core
@@ -461,7 +456,7 @@ internal static class GlShaders
             n = normalize(n);
             // The camera is at the origin looking down +Z.
             if (dot(n, p) > 0.0) n = -n;
-            oColor = vec4(n * 0.5 + 0.5, vDepth);
+            oColor = vec4(n * 0.5 + 0.5, 1.0);
         }
         """;
 
@@ -573,10 +568,8 @@ internal static class GlShaders
         uniform vec4  uBlendOpaque = vec4(1.0, 1.0, 1.0, 0.0);
         uniform float uSetMask;
         uniform int   uCheckMask;
-        // The depth-only draw a semi-transparent 3D batch takes for the occlusion
-        // pass: every texel of it is the surface the player sees, whether or not
-        // the console blends it. GlCore runs it for geometry with a recovered
-        // depth only, so a fade or a flash still writes nothing.
+        // The occlusion pass's depth-only draw: 1 keeps the texels the console does
+        // not blend, 2 (a solid packet) every texel.
         uniform int   uOpaqueDepth;
         uniform float uDepthBias;
         uniform float uDepthSlope;
@@ -760,7 +753,7 @@ internal static class GlShaders
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 
             if (texMode == 4) {
-                if (uOpaqueDepth != 0) discard;
+                if (uOpaqueDepth == 1) discard;
                 FragColor = vec4(quant5(c8in), uSetMask);
                 BlendColor = uBlend;
                 return;
@@ -768,7 +761,7 @@ internal static class GlShaders
 
             if (texMode == 5) {
                 vec4 img = texture(uExtTex, vUV);
-                if (img.a < 0.5 || uOpaqueDepth != 0) discard;
+                if (img.a < 0.5 || uOpaqueDepth == 1) discard;
                 ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7;
                 FragColor = vec4(quant5(e8), uSetMask);
                 BlendColor = uBlend;
@@ -792,6 +785,7 @@ internal static class GlShaders
                 if (img.a < 0.5) discard;
                 ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7;
                 float stp = img.a < 0.95 ? 1.0 : 0.0;
+                if (uOpaqueDepth == 1 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
                 BlendColor = stp > 0.5 ? uBlend : uBlendOpaque;
                 return;
@@ -852,12 +846,14 @@ internal static class GlShaders
                 if (texel.a < 0.5) discard;
                 ivec3 e8 = (ivec3(texel.rgb * 255.0 + 0.5) * c8in) >> 7;
                 float stp = texel.a < 0.95 ? 1.0 : 0.0;
+                if (uOpaqueDepth == 1 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
                 BlendColor = stp > 0.5 ? uBlend : uBlendOpaque;
                 return;
             }
 
             if (texel.rgb == vec3(0.0) && texel.a < 0.5) discard;
+            if (uOpaqueDepth == 1 && texel.a >= 0.5) discard;
             // 248 = 31 << 3: exact for a texel, and keeps a filtered colour's fraction.
             ivec3 t8 = ivec3(texel.rgb * 248.0 + 0.5);
             ivec3 c8 = (t8 * c8in) >> 7;

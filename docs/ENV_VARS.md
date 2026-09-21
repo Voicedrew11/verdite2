@@ -24,6 +24,8 @@ KF2_PROFILE=1                          # the frame profiler from boot, a console
 KF2_PROFILE_OUT=profile.csv            # every frame's sections as CSV; scripts/profile_report.py reads it
 KF2_PROFILE_SPIKE=12                   # a console line for each frame over 12 ms of work, with its top sections
 KF2_PROFILE_FUNCS=stages               # time the thirteen main-loop stages, or name functions: game:80040348+800342D8
+KF2_PREJIT=0                           # compile each method on its first call again (it is warmed on a background thread by default)
+KF2_PREJIT_PROBE=1                     # a line per overlay as it is warmed, and what each cost
 KF2_FRAMEVIEW=panel                    # open the frame viewer at boot (Shift+F toggles it)
 KF2_FRAMEVIEW_CAPTURE=20,40            # capture stage 13 at these seconds after boot; a summary on the console
 KF2_FRAMEVIEW_OUT=dir                  # also write each capture's commands and calls as CSV there
@@ -48,8 +50,12 @@ KF2_SPRITEANIM_PROBE=1                 # cel changes a second, live slots, and h
 KF2_RATECENSUS=1                       # rank memory by whether it moves at the render rate
 KF2_RATECENSUS_RANGE=80060000:801C0000 # the window to watch (this is the default)
 KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
+KF2_BLACKPROBE=1                       # what the picture held every drawn frame around an area load: luminance, black runs, the tint the game asked for, whether the frame's pixels were new, and whether the view was carried; camgap and camstep rows: how far the renderer's camera sat from the true position, and how far it moved per present
+KF2_BLACKPROBE_OUT=dir                 # also write the display rect (~12 frames before the load and 250 ms after) as PNGs; default scratch/blackprobe; 0 skips the pictures
 KF2_SMOOTH=0 KF2_SMOOTH_POS=0          # leave the view at the tick (on by default); leave position too
 KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
+KF2_SMOOTH_PROBE=2                     # also every frame for 400 ms after an area load: the verdict, the pair, and what was written
+KF2_CROSSPROBE=1                       # per presented frame across an area crossing: tiles, models, the view, the area, and whether the renderer built it; =2 adds the raw cell counts
 KF2_SMOOTH_OBJECTS=0                   # leave enemies, doors and everything else at the tick (on by default)
 KF2_SMOOTH_OBJECTS_PROBE=1             # how much is being carried, per second
 KF2_SMOOTH_OBJECTS_GUARD=continuous    # strict|sticky|continuous: what counts as a placement (creatures)
@@ -141,6 +147,7 @@ KF2_AO=0                               # ambient occlusion off (on by default; G
 KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
 KF2_AO_BIAS=0.08 KF2_AO_SAMPLES=16 KF2_AO_MAXDEPTH=24000
 KF2_AO_NORMALS=0                       # normals from the depth buffer again, not from the frame's geometry (0058)
+KF2_AO_SOLID=0                         # a blended object-table model (the secret door) writes no depth for the pass again
 KF2_AO_WORLD=1                         # also occlude against the area's own tile grid, so geometry off screen counts (0059; off)
 KF2_AO_WORLD_STRENGTH=0.6 KF2_AO_WORLD_RADIUS=3072   # how dark that term goes, and how far it reaches
 KF2_AO_WORLD_PROBE=1                   # the transform, the grid, and whether either is missing; =2 the camera's own tile

@@ -732,10 +732,12 @@ public sealed class GlCore : IGpuBackend
         // any triangle the vertex map missed read as "no surface" rather than as
         // the geometry standing behind them. Semi-transparent stays at 0 there,
         // because a death fade or a damage flash is something you see the world
-        // *through* and must not erase its depth.
+        // *through* and must not erase its depth. 4 = 2 on a packet the port
+        // called solid (a blended model, the secret door): the occlusion pass
+        // sees all of it.
         int zMode = 0;
         if (a.HasGteZ && b.HasGteZ && c.HasGteZ)
-            zMode = f.SemiTrans ? 2 : 1;
+            zMode = !f.SemiTrans ? 1 : a.Solid && GteDepth.AmbientOcclusion ? 4 : 2;
         else if (GteDepth.AmbientOcclusion && !f.SemiTrans)
             zMode = 3;
         // 0048. A directional triangle needs its batch's BK and LCM to be the ones
@@ -743,11 +745,11 @@ public sealed class GlCore : IGpuBackend
         int lightGen = (a.Light & (GteLightMap.Directional << 24)) != 0 ? a.LightGen : -1;
         if (lightGen >= 0 && _kLightGen >= 0 && lightGen != _kLightGen) Flush(FlushReason.StateLight);
         Begin(f, 3, zMode);
-        // 0058. Keep the triangle for the normal buffer, in the order it is drawn,
-        // which is what makes the redraw agree with painter's order. zMode 2 too:
-        // it writes depth as well (a secret door is a blended wall), and the pass
-        // drops a normal whose depth is not the buffer's.
-        if ((zMode == 1 || zMode == 2) && _kTarget != null && AoGeometry.Active)
+        // 0058. Keep the triangle for the normal buffer. zMode 1 is exactly the
+        // geometry that writes depth and is opaque, which is the geometry the
+        // occlusion pass shades; the order it is kept in is the order it is drawn
+        // in, and that is what makes the redraw agree with painter's order.
+        if ((zMode == 1 || zMode == 4) && _kTarget != null && AoGeometry.Active)
         {
             _kTarget.Geo.Frame(_frame, GteDepth.Generation);
             _kTarget.Geo.Add(GeoVert(a), GeoVert(b), GeoVert(c));
@@ -1454,7 +1456,7 @@ public sealed class GlCore : IGpuBackend
         // coplanar overlap goes to the later table entry. An opaque one first writes
         // its true depths with colour off, which keeps crossings inside the batch
         // resolved, then draws colour without writing.
-        bool zBias = GteDepth.ZBuffer && (_kZMode == 1 || _kZMode == 2)
+        bool zBias = GteDepth.ZBuffer && (_kZMode == 1 || _kZMode == 2 || _kZMode == 4)
                   && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
         SetDepthBias(zBias);
         if (zBias && _kZMode == 1)
@@ -1503,20 +1505,16 @@ public sealed class GlCore : IGpuBackend
                 _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
             }
 
-            // A semi-transparent surface of the world is still the surface the
-            // player is looking at, so it must hide what is behind it from the
-            // occlusion pass -- a secret door is a blended wall, and without this
-            // the pass shades its pixels with the room standing behind it. zMode 2
-            // only: that is geometry carrying a recovered depth, where a fade, a
-            // flash and the HUD carry none and must leave the depth alone.
-            if (GteDepth.AmbientOcclusion && _kZMode == 2 && _uOpaqueDepth >= 0)
+            // Texels without the semi-transparency bit draw opaque, so they must hide what is behind them from the occlusion pass.
+            // A solid packet (zMode 4) hides it with every texel.
+            if (GteDepth.AmbientOcclusion && _uOpaqueDepth >= 0)
             {
                 _gl.Disable(EnableCap.Blend);
                 _gl.ColorMask(false, false, false, false);
                 _gl.Enable(EnableCap.DepthTest);
-                _gl.DepthFunc(GteDepth.ZBuffer && _kZMode == 2 ? DepthFunction.Lequal : DepthFunction.Always);
+                _gl.DepthFunc(GteDepth.ZBuffer && (_kZMode == 2 || _kZMode == 4) ? DepthFunction.Lequal : DepthFunction.Always);
                 _gl.DepthMask(true);
-                _gl.Uniform1(_uOpaqueDepth, 1);
+                _gl.Uniform1(_uOpaqueDepth, _kZMode == 4 ? 2 : 1);
                 SetDepthBias(false);
                 _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)_count);
                 _gl.Uniform1(_uOpaqueDepth, 0);
@@ -2156,9 +2154,8 @@ public sealed class GlCore : IGpuBackend
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
-        // Float: alpha carries the view depth the pass checks the normal against.
-        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba16f, (uint)rt.TexW, (uint)rt.TexH, 0,
-                       PixelFormat.Rgba, PixelType.Float, null);
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)rt.TexW, (uint)rt.TexH, 0,
+                       PixelFormat.Rgba, PixelType.UnsignedByte, null);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, rt.NormalFbo);
         _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
                                  TextureTarget.Texture2D, rt.Normal, 0);

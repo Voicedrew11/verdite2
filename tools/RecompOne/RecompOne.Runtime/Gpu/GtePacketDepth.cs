@@ -24,6 +24,9 @@ public static class GtePacketDepth
     {
         public uint Cmd, Xy0, XyLast;
         public float Z0, Z1, Z2, Z3;
+        // A blended packet that is still a solid surface: it writes its depth for
+        // the occlusion pass. The port sets it for models (a secret door).
+        public bool Solid;
     }
 
     /// <summary>The port's switch.</summary>

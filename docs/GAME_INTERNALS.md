@@ -272,9 +272,14 @@ has run and after `FrameSmoothing.After` has put the un-nudged values back:
 `func_80032400` reads `0x801994EC` and `0x801994F4`, and `func_800331B4` — the
 world and object walks — reads all three. Found by listing every function in the
 emitted C# that loads through the `0x801A0000 - 0x6B14/0x6B10/0x6B0C` base and
-offsets stage 8 uses. It does not break the smoothing, whose position half is off
-by default and which nudges the globals stage 8 copies rather than the copy, but
-it does mean "one reader" is a claim about the angles alone.
+offsets stage 8 uses. So "one reader" is a claim about the angles alone: the
+position half of the smoothing is **on** by default (`FrameSmoothing.Position`
+starts `true`), and on a carried frame the walks place their geometry against the
+true position while the camera looks from the carried one — a fraction of a tick
+apart. That is **not** the area crossing's black frame: restoring the position
+after stage 13 instead of after stage 8, so the walks and the camera agree, left
+the flash on 2 of 2 walked crossings ("What the crossing frame actually is" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)).
 
 ### Stage 9 is the sound listener, and the 3D sound it serves
 

@@ -564,6 +564,360 @@ it is up to 2× faster because it never bands down, and for one frame in eight i
 runs at 60 fps — twice the NTSC ceiling, which is faster than the game can go on
 any console.**
 
+### Walking between areas stuttered, and it was the smoothers re-priming
+
+Reported from play as a hitch when *walking* between two areas and not when
+teleporting. It is neither a stall nor a black screen, and the measurements that
+say so are worth keeping because three plausible causes died on them: across
+three crossings the picture held **165.0 fps drawn at 20.0 ticks/s**, with no
+stalled frames, no frame-time gap (121 ms per 20 frames right through the load),
+the display never masked off and at most a single black frame. The disc wait is
+not even entered — no `KF2_LOADPACING_PROBE` line appears for a crossing — so
+`LoadPacing` pacing it to 60 Hz, which is what a "hitch on a load" would be, is
+not this.
+
+What it is: **the smoothers stop carrying for two world ticks at every area
+load**, so the picture steps twice at 20 Hz in the middle of a 165 fps stream
+while the player is mid-stride. `patches/BlackProbe.cs` measured it per drawn
+frame, as a run of frames the view was not interpolated into:
+
+```
+[black] fdat08 carry  -45 ms: . . . . . . . . . U U U U U U U U U U U
+[black] fdat08 carry  +76 ms: U U U U C C C C C C C C C C C C C C C C
+[black] fdat08: ... view unprimed on 15 frame(s), longest run 15 (~85 ms)
+```
+
+Both smoothers listened for `OverlayLoadedEvent` and cleared their pair —
+`_primed = false` — because after a load the previous sample describes the old
+area: the player has been teleported across the map, and a slot's previous tenant
+is a different object. Carrying across that would sweep the camera through the
+world and walk a creature in from a grave. The cost is that interpolation then
+needs **two** fresh ticks, one for a sample and one for a pair, and those two
+intervals render the raw tick value.
+
+**Rebasing costs neither.** The load happens inside stage 2 or 3, both of which
+are gated, so it always lands on a tick frame — and stage 8, where the camera pair
+is rolled, runs later in that same frame, with the globals already holding what
+the load left behind. So instead of clearing the pair, copy the fresh sample over
+its own previous one: `prev = cur`. That interval then carries between two copies
+of the post-load state, which is static and is exactly what an unprimed frame
+would have drawn anyway, and the **next** tick already has a valid pair instead of
+having to build one. `ObjectSmoothing.Sample` does the same per slot, and its
+`Live` test is satisfied on the rebase tick rather than the one after it, so
+nothing is swept in from a recycled slot's previous tenant either.
+
+Measured on the same crossing: **15 frames / 85 ms → 6 frames / 33 ms**, and the
+33 ms that remain are frames drawn *during* the blocking load, between the
+overlay-loaded event and the next tick, where there is no fresh sample to rebase
+onto and holding is the only correct answer. 144.0 fps drawn at 20.0 ticks/s,
+`[present] wide 288, plain 0, vram fallback 0`, every hook attached, both before
+and after.
+
+**What this does not fix, and the reason it cannot be fixed by interpolating.**
+The one interval that spans the teleport has no motion to interpolate: the
+position either side of it is two different places in the world, and the only
+thing that could fill it is an *extrapolation* from the player's own walk speed
+(`0x80199558`) and heading. That is a guess about motion rather than a
+measurement of it, and it is a feel judgement rather than a correctness one, so
+it is not done here.
+
+**The darkness that remains is the game's own fade, and the probe now says so in
+its own column.** Play reported, after the rebase, "a moment of darkness or at
+least not the correct frame" still at a crossing, and luminance alone cannot tell
+a frame the game *painted* black from a frame that drew nothing. So
+`patches/BlackProbe.cs` records two more things per drawn frame: the screen tint
+the game asked for — `func_8003220C`'s request block at `0x80192D45`, `-` for
+none — and a fingerprint of the sampled pixels, printed as `.` new pixels, `=` the
+previous frame again, `2` the one before that (a flip to a buffer nothing finished
+drawing) and `*` an older picture coming back. Measured over a crossing at 165 fps,
+walking into it mid-stride:
+
+```
+[black] fdat05 frame   -186 ms: -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -. -.
+[black] fdat05 frame     -3 ms: -. f. f* f= f= f= f= f= f= f= f= e= e= e= e= e= e= e= e= e=
+[black] fdat05 frame    417 ms: b= b= b= b= a= a= a= a= a= a= a= a= a= 9= 9= 9= 9= 9= 9= 9=
+[black] fdat05: 0 black frame(s) the game asked no tint for, longest run 0
+```
+
+The tint goes to `f` at the crossing and walks back down — `func_80037B5C(0x82,
+0x1000, 0, -0x80)`, 32 steps of a quadratic tint held to the world tick, which is
+**1650 ms** measured under `KF2_LOOPPACING=pace` and the same 1609 ms filled with
+redraws by default. The disc read is under ~100 ms and is not what is on screen.
+**Zero black frames in the window were untinted**, so nothing in it is an empty
+frame; `[present]` stays `wide 3xx, plain 0, vram fallback 0` across every load,
+the display is never masked off, and no short flash is reported. What the `=`
+column shows is that the redraws between fade steps are byte-identical to the step
+they follow, which is what a frozen world under a constant tint should produce.
+That is the whole of the reachable evidence from counters: the crossing is dark
+because the game fades, and the fade is 1.65 s because a modal loop runs at the
+20 Hz reference. **Whether that reads as too long by eye is a play judgement and
+is open.** It is also not the remaining report. Play still sees "a moment of
+darkness or at least not the correct frame" at a walking crossing, and that
+survives `KF2_LOOPPACING=0` and every smoother off, and it is **invisible at
+`KF2_FPS=20`**. At 20 fps the port presents every 50 ms instead of every 6 ms, so
+a one-or-two-frame artifact is simply never presented — treat "clean at 20" as
+*the artifact is short* (~6–20 ms), not as already fixed.
+
+The `frame` block cannot say a frame is *wrong*, only dark or repeated, so the
+probe now writes the pictures. `KF2_BLACKPROBE=1` keeps the last 12 full display
+rects in a ring and, on an `fdat` load (or a dark stretch long enough to mark
+itself), the 250 ms after it as well, and writes them as PNGs under
+`scratch/blackprobe/<overlay>-<timestamp>/` with an `index.txt` that carries the
+same tint/fingerprint/carry columns as the console dump. `KF2_BLACKPROBE_OUT=dir`
+overrides the folder, `=0` skips the pictures. The read is the same
+`ReadVram` path, of the display rect after the target has been written back, and
+it skips 0039's restore copies — a diagnostic that sampled every frame *with* the
+default snapshot would evict the copy a menu is restored from, and would itself
+be a candidate for the wrong frame.
+
+**Captured on a walking crossing.** `fdat05 → fdat02` at ~144 fps, mid-stride
+(`warp` is `func_80024154` and is not this path):
+
+```
+[black] flash: 1 frame(s), ~7 ms, buffer y0, other buffer 47, 1 present(s) during, back to 47
+[black] fdat02: 1 black frame(s) the game asked no tint for, longest run 1
+```
+
+The PNG is `scratch/blackprobe/fdat02-20260920-151646/13_+013ms_000_-..png`:
+**HP/MP and the compass on a black world**, 13 ms after the overlay load,
+display `y=0`, no tint, fingerprint `.` (new pixels, not a stale flip). The
+frame before (`12_+006ms`, `y=240`) and the frame after (`14_+020ms`, `y=240`)
+are the previous room, other-buffer luminance 47. `[present]` stayed
+`vram fallback 0`. The three-row luminance of 0 is the world rows at 60/120/180;
+the HUD sits above them, which is why a counter called it black and the picture
+is not an empty framebuffer.
+
+The other direction of the same walk (`fdat02 → fdat05`) did **not** flash:
+frame 13 there is a real corridor at lum 56. So it is not every crossing, and it
+is not the 1.65 s fade (this path never asked for a tint). Stage 13 submits sky,
+HUD, then tiles, then models; this OT had the HUD and not the world.
+`PutDrawEnv` has `isbg=0`, so a missing tile walk would have left the previous
+picture under the HUD — something filled the back buffer first, then the HUD
+drew, then this was presented. Invisible at `KF2_FPS=20` because that DrawOTag
+is one 7 ms present.
+
+### What the crossing frame actually is
+
+Everything below is measured this session, at `KF2_FPS=144`, walking area 1 into
+area 0. **Two fixes were shipped at this defect before any instrument could see
+it, and both were aimed at the wrong layer**; the point of this section is that
+the negative results are the useful part.
+
+**The repro everything was tested against does not reproduce it.** A `goto` onto
+the boundary object drops the player on the trigger from a standstill. Measured
+over that crossing: 375 frames across a ±2.6 s window, all at 144 fps with no
+gap, **0** frames drew no map, **0** drew a half-built one, no frame drawn from a
+stale camera, and no black frame at all. Every hypothesis in this document's
+history was tested against that, which is why each of them looked plausible and
+none of them held.
+
+**Walking in reproduces it, deterministically, on every crossing.**
+`scripts/`-driven: stand short of the boundary, solve for the yaw that faces it
+(hold `Up` briefly from a known yaw, read the displacement, rotate), then hold
+`Up` through it. Every walked crossing so far:
+
+```
+[black] flash: 1 frame(s), ~7 ms, buffer y240, other buffer 46, 1 present(s) during, back to 46
+[black] fdat02: 1 black frame(s) the game asked no tint for, longest run 1
+```
+
+One fully black frame, ~7 ms, no tint requested, **new** pixels rather than a
+repeat, with the picture at luminance 46 either side of it.
+
+**The frame that goes black is a frame that was fully built.** `KF2_BLACKPROBE=1`
+now carries two more columns per present — whether the renderer ran for it, and
+the cells the tile walk submitted — so the bad frame is read off one table
+instead of correlated between two probes. Its row, column 15:
+
+```
+[black] fdat02    -84 ms: |  46 |  47 | ... |  46 |   0 |  46 |  46 |
+[black] fdat02 frame  ... : -. -. ... -. -. -.
+[black] fdat02 built  ... : R199 R199 ... R175 R175 R175
+[black] fdat02 carry  ... : C C ... C U U
+```
+
+luminance **0**, tint **`-`** (the game asked for none), drew **`.`** (new
+pixels), built **`R175`** (the renderer ran and the tile walk submitted 175
+cells), carry **`U`**. A complete ordering table went in and a black picture came
+out. That rules out the entire "the frame lost its world" family, which is what
+both shipped fixes attacked.
+
+**Four things it is not**, each with the counter that says so:
+
+| ruled out | how |
+|---|---|
+| the ordering table lost its map | `KF2_CROSSPROBE=1`: 0 frames drew no map, 0 drew a half-built one, over 573 presents |
+| the area module swapped mid-table | real — 8 of 8 crossings — but holding the CD pump across the renderer moved it to **0 of 8 and the black frame did not change** |
+| a flip to a buffer nothing drew | a since-removed `KF2_FLIPPROBE` kept a bit per display buffer, cleared by `PutDrawEnv`'s `isbg` and set by the `DrawOTag` that follows: **no event anywhere near the crossing**, and 0 of 573 presents were ones the renderer did not build |
+| the port's rendering stack | with `KF2_POLYASM`, `KF2_TILEWALK`, `KF2_MODELWALK`, `KF2_ZBUFFER`, `KF2_AO`, `KF2_PERPIXEL`, `KF2_EVENFOG`, `KF2_SUBPIXEL` and `KF2_PERSPECTIVE` all `0`, the flash is still there |
+
+**Three traps in the instruments, all of which produced a confident wrong answer
+before being caught.**
+
+- **Luminance cannot see it.** `BlackProbe` asks whether a frame is *dark*, and
+  the door opens into an unlit room. Both arms of an A/B reported the same seven
+  or eight one-frame `[black] flash` lines at luminance 3 on both buffers — that
+  is the room, not the defect, and it hid the real single black frame for two
+  whole investigations.
+- **A cell count needs a per-area baseline.** Comparing each frame against the
+  *window's* peak called **285 of 371** frames half-built, when every one of them
+  was right: area 1 steadily draws ~200 cells and area 0 draws 71 at one door and
+  ~180 at another. The peak is taken per area byte now.
+- **Sampling in the renderer's post cannot see a present it did not build**, and
+  `DrawOTag` fires more than once a frame — 143 of 214 presents in one window were
+  not renderer output. A probe that wants to describe *what was shown* posts on
+  `DrawOTag` and records whether the renderer ran, which is what the `built`
+  column is.
+
+**It is `FrameSmoothing`, and specifically the position carry.** Bisected by
+switch, two walked crossings each:
+
+| | flashes |
+|---|---|
+| default | **1 per crossing** |
+| every rendering enhancement off | 1 per crossing |
+| `KF2_TINTHOLD=0` | 1 per crossing |
+| `KF2_SMOOTH=0 KF2_SMOOTH_OBJECTS=0 KF2_SMOOTH_ANIM=0` | **0** |
+| `KF2_SMOOTH=0` alone | **0** |
+| `KF2_SMOOTH_POS=0` alone | **0** |
+
+So the camera smoother's *position* interpolation is necessary for the artifact,
+and the angles are not. Note that `KF2_SMOOTH_POS` is documented as off by
+default and is **on** in a saved config, so the shipped behaviour is the one that
+flashes.
+
+**Two structural fixes were proposed against that and both are falsified**, which
+is why the next one should be measured before it is believed:
+
+- **Guarding the angles across a teleport.** The position carry has had a
+  `TeleportUnits` guard from the start and the angles never did, so the crossing
+  frame is drawn from the new area's position with a yaw part-way between two
+  rooms' facings. That is a real asymmetry and the guard fires four times a
+  crossing — **and the black frame is unchanged**. Reverted.
+- **The rebase claiming a pair it does not have.** `_rebase` sets `prev = cur`
+  and then `_carriable = true`, which is one sample wearing two hats, so carrying
+  resumes immediately after a load. Setting `_carriable = false` there so the next
+  tick builds a real pair — **black frame unchanged**. Reverted.
+
+**What the trace says, and it is the thing to start from.** `KF2_SMOOTH_PROBE=2`
+prints this class's decision and its writes for 400 ms after an overlay load. At
+a crossing it reads:
+
+```
+verdict 3 tick 0 frac 0.21 applied 1 ... pos (161001,94856) prev (161001,94886) cur (161001,94743)
+verdict 1 tick 0 frac 0.48 applied 0 ... pos (153587,91371) prev (153587,91371) cur (153587,91371)
+```
+
+Two things in there are worth more than any theory so far. **A crossing makes two
+placements, not one** — the module loads and the player lands at ~(161001,94900),
+and only then is moved to (153587,91371) — and **the frame that goes black is the
+second one, on which this class carried nothing at all** (`applied 0`). So the
+damage is not done by the write on that frame; it is done by something a carried
+frame leaves behind, or by the second placement landing on a frame the carry has
+already influenced. That is where the next attempt should look, and it should
+look at the trace before proposing a mechanism.
+
+**A third hypothesis is falsified: the walks and the camera disagreeing.** Stage
+8 reads the carried position, but `func_800331B4` (the world and object walks) and
+`func_80032400` (the arm) read the triple after `After` has put the true one back
+("Stage 8 is the render camera" in [GAME_INTERNALS.md](GAME_INTERNALS.md)); at a
+crossing the two could sit in different areas. Tested by moving the restore from
+stage 8's post to a post on the renderer `func_800342D8`, so everything in stage
+13 saw the carried position: **1 black frame on each of 2 walked crossings**,
+~6-7 ms, luminance 46 either side, the same as without it. The player still
+landed at (153587, 91371) both times, which a restore that never ran would not
+have allowed. Reverted. That fits the trace above: the black frame is one on
+which nothing was carried, so there was no disagreement on it to remove.
+
+**Found: the smoother lerped the old room over the new position.** The instrument
+that named it is a `camgap` row in `KF2_BLACKPROBE=1`: for every present, the
+camera the renderer actually used (`func_8002E22C`'s copy at `0x80192E78`/`E80`,
+read as the renderer returns) against the true position, and whether stage 8 ran.
+Every frame of a walk reads a gap of 0-143 units, the carry's own sawtooth; the
+black frame reads **133,008**, camera (28557, 69513) in the old area and the
+player at (161560, 96020) in the new one, with stage 8 having run. With
+`KF2_SMOOTH_POS=0` the gap is 0 on every frame. An ordered log of stage 8's
+pre and post, the renderer's entry and exit, and the load then gave the sequence:
+
+1. The game writes the new position **before** `OverlayLoadedEvent` fires; the
+   event lands a frame later, mid-renderer, which is the mid-table swap already
+   recorded above.
+2. So on that frame `_rebase` is not set yet, and the pair is two old-area samples,
+   (28582, 69539) to (28440, 69396), 142 units apart, which the teleport guard
+   passes. The guard compares the pair with itself, never with what is in memory.
+3. `Before` writes the lerp over the new position, stage 8 copies it into the
+   camera, `After` puts the new position back, and the walks draw the new area
+   around the player while the camera looks from 133,000 units away. Black.
+
+The earlier conclusion that the black frame was one "on which this class carried
+nothing" was the trace line one frame late: the `verdict 1 ... applied 0` line is
+the frame *after*, once the event has set `_rebase`.
+
+**The fix is the check the guard was missing.** Off a tick the live view must
+still be `cur`, since the game only moves the player on a tick; if the position
+or an angle differs, the game placed the player between ticks, and the pair is
+rebased onto the live values instead of carried (`FrameSmoothing.Moved`,
+since shifted rather than rebased — below —
+`OffTickMoves`). Measured over two walked crossings: **0 black frames** against 1
+per crossing, no `camgap` over 1,024 anywhere, and the guard fired 5 times in the
+session, each at a `goto`, a `warp` or a crossing. Ordinary walking still
+carries the position (71.8 u a carried frame). Confirmed from play: the flash is
+gone.
+
+**Rebasing onto the placement lurched the view forward, twice.** The smoother
+draws up to a tick behind the game, and `prev = cur = live` drops that lag in one
+frame and then holds still until the next tick. The late `_rebase` then did it
+again at that next tick. Reported from play as "jumping forward on the
+transition"; a `camstep` row in `KF2_BLACKPROBE=1` (the camera's move per present,
+with a placement's offset taken out) read, across the crossing:
+
+```
+20 20 20 … 20  136  0 0 0 0 0  143  0 0 0 0 0 0 0  21 19 20 …
+```
+
+A crossing's placement is a pure offset — (133120, 26624), whole 2048-unit tiles
+— so the pair is now **shifted** by it rather than reset: `prev` and `cur` both
+move by `live - cur`, and the view carries straight through. A placement that
+lands on a tick instead puts `prev` one walk step (the last tick's) behind `cur`.
+`_rebase` is gone; the event only opens the trace window. Measured, two walked
+crossings: `20 20 22 21 18 24 21 17 | 20 21 19 20` through the crossing, no black
+frame. Confirmed from play: the crossing is smooth.
+
+What is left is the game's. About 200 ms after the crossing the camera moves at
+35-40 a present for one tick: the tick's step is (127, 270) against (142, 143)
+either side, the doorway's collision sliding the player along the wall. With the
+smoothing off it is the same distance in one 20 Hz step. **The "second
+placement" above is not part of the crossing**: (153587, 91371) is where the
+harness's `warp` back found the player, and the trace window it opened was read
+as the crossing's.
+
+### A dropped DrawOTag presents the background clear
+
+The first attempt at the crossing frame held the *symptom*: a pre on `DrawOTag`
+returned false when the ordering table had been built across an `fdat` swap, on
+the premise that `PutDrawEnv` has `isbg=0`, so the draw buffer still held the
+previous room and skipping the submit would present that room again.
+
+**It made every crossing worse, and the premise is the reason.** Measured, 16
+crossings each way at 144 fps: with the drop on, 16 of 16 crossings dropped a
+`DrawOTag` and 16 of 16 presented a **fully black** frame — HUD and all, which is
+worse than the artifact it was hiding; with it off, 0 and 0. The port does not
+leave that buffer alone: `PutDrawEnv` is logged issuing both a 320-wide `isbg=0`
+env and a 640-wide `isbg=1` one, and the widened `isbg` rectangle is the *only*
+thing that paints the widescreen margin every frame (`0022`–`0024`, "The margin's
+only clear is the game's own" in [WIDESCREEN.md](WIDESCREEN.md)). Skipping the
+submit therefore presents a freshly cleared buffer, not a kept picture.
+
+The general shape is worth keeping: **a hold that keeps a frame has to know what
+put the pixels there**, and in this port that is not always the game.
+
+`FrameSmoothing.Frames`, `Carries` and `LastVerdict` are public so a probe can ask
+per frame whether the view was carried and why not; `KF2_SMOOTH_PROBE=1` still
+reports the same thing per second. `AnimSmoothing`'s listener is deliberately
+untouched — it clears cached clip lengths because the banks are re-linked by a
+load, so a cached length is a read of someone else's memory, which is a
+correctness reset and not a priming one.
+
 ### The reference band is 3 vblanks, not 2
 
 **This overturns what the rest of this section originally concluded**, which was
@@ -3022,6 +3376,20 @@ Where it writes, and why nothing else is disturbed:
   item preview (`func_80022CAC` → `func_8002E5E8(3, …)`, drawn by `func_8002156C`
   through `func_800346CC`) leaves bank 3 current and sets its own matrices; the HUD
   reads the bank before the tile walk selects bank 0.
+- **The pass puts the world's background clear back.** `func_80022754` turns
+  `isbg` (and `dfe`) off on both draw environments (`0x8018E0AC`, `+0x5C`), since
+  its paste covers the whole frame every menu frame. With the paste gone nothing
+  cleared the buffer: wherever the world leaves the background showing, the
+  semi-transparent fog blended over whatever the buffer held two frames earlier —
+  the menu — so the fog brightened towards white a frame at a time and the menu's
+  panels showed through it. Reported from play in area 1 at `12276 -12800 54750`,
+  unchanged by every setting. Stage 13 leaves `isbg 1, rgb 0,0,0` there; the
+  renderer's post records the word at `+0x18` of each environment, and the
+  presenter and `MessageFade`'s step put it on around their `PutDrawEnv` and take
+  the menu's back after. Measured: both environments read `isbg 0` at the menu's
+  enter before; after, `PutDrawEnv … isbg=1` on every menu frame (60 passes/s),
+  and messages still fade and hold as before.
+  **The picture after has not been looked at.**
 - A session is decided once at `func_80022754` and ended at `func_800228C8`, at the
   main loop's stage 9, or at any overlay load.
 

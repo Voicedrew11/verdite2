@@ -60,7 +60,7 @@ namespace Kf2;
 /// and the creatures shear against the architecture by exactly the distance the
 /// carry moved the eye, worst just before a tick lands. That is knowingly
 /// inconsistent rather than fixed -- it is why the position half is a separate
-/// switch and is off by default, and closing it means carrying those two readers
+/// switch (on by default), and closing it means carrying those two readers
 /// too, inside the stage <see cref="ObjectSmoothing"/> already brackets.
 ///
 /// ## Interpolate, not extrapolate
@@ -153,6 +153,7 @@ public static class FrameSmoothing
     // both prev and cur to be real, exactly as ObjectSmoothing's `_live` does.
     static bool _primed, _carriable;
 
+
     // What the pre-hook overwrote, and whether it overwrote anything. Restored by
     // the post-hook; there is exactly one call in flight at a time, on one thread.
     static bool _applied;
@@ -167,6 +168,20 @@ public static class FrameSmoothing
     static double _reportedAt;
     static long _carried, _skipped;
 
+    /// <summary>Frames entered and frames actually carried, counted whether or not
+    /// the probe is on, so another patch can ask per frame whether this one
+    /// smoothed it. <see cref="BlackProbe"/> reads the pair.</summary>
+    public static long Frames { get; private set; }
+
+    public static long Carries { get; private set; }
+
+    /// <summary>Why the last frame was or was not carried: 0 off or not
+    /// extrapolating, 1 unprimed (no two ticks to carry between yet), 2 nothing
+    /// moved, 3 carried. A patch watching a transition needs the reason, because
+    /// "declined, nothing moved" and "declined, unprimed" look identical from
+    /// outside and only one of them is a stutter.</summary>
+    public static int LastVerdict { get; private set; }
+
     // Why a frame was skipped, each reason in its own bucket. One number for all
     // of them cannot say the thing the probe exists to say: "nothing moving" reads
     // very differently from "the logic clock is broken", and both read differently
@@ -175,6 +190,13 @@ public static class FrameSmoothing
     // doc says this probe once diagnosed -- a boundary that never delivers a tick,
     // leaving _carriable false forever -- made Report print nothing whatever.
     static long _skipStill, _skipOff, _skipUnprimed;
+
+    // KF2_SMOOTH_PROBE=2: every frame for 400 ms after an overlay load, what this
+    // class decided and what it wrote. The event lands a frame after the game has
+    // placed the player, so the frame that matters is the line before the load.
+    static bool _trace;
+    static double _traceUntil;
+    const double TraceMs = 400.0;
 
     /// <summary>
     /// Frames carried since <see cref="TakeHealth"/> last asked. Counted whether
@@ -199,7 +221,8 @@ public static class FrameSmoothing
     {
         if (!string.IsNullOrWhiteSpace(on)) { Enabled = on != "0"; _onFromEnv = true; }
         if (!string.IsNullOrWhiteSpace(position)) { Position = position != "0"; _posFromEnv = true; }
-        _probe = probe == "1";
+        _probe = probe is "1" or "2";
+        _trace = probe == "2";
     }
 
     public static void Install()
@@ -211,10 +234,12 @@ public static class FrameSmoothing
             if (!_posFromEnv) Position = view.GetBool(PosKey, Position);
         });
 
-        // An area or executable swap rebuilds the player state, so the previous
-        // sample describes a position and heading that no longer mean anything;
-        // start priming again rather than lerp across the discontinuity.
-        Event.AddListener<OverlayLoadedEvent>(_ => { _primed = false; _carriable = false; });
+        // A load is not what moves the player -- the placement is, and Before
+        // sees that directly. The event only opens the trace window.
+        Event.AddListener<OverlayLoadedEvent>(_ =>
+        {
+            if (_trace) _traceUntil = Environment.TickCount64 + TraceMs;
+        });
 
         HookAttach.OnOverlayLoad("smoothing", Attach);
     }
@@ -297,6 +322,8 @@ public static class FrameSmoothing
     public static void Before(CpuContext c, IMemory m)
     {
         _applied = false;
+        Frames++;
+        LastVerdict = 0;
         if (!Enabled) { if (_probe) { _skipped++; _skipOff++; } return; }
 
         // Extrapolating, not Gating: Gating is true at the tick rate too, where
@@ -312,6 +339,7 @@ public static class FrameSmoothing
         // runs before stage 8, so on a tick frame these already hold the new tick.
         if (FramePacing.TickedThisFrame)
         {
+            int stepX = _curX - _prevX, stepY = _curY - _prevY, stepZ = _curZ - _prevZ;
             _prevYaw = _curYaw; _prevPitch = _curPitch;
             _prevX = _curX; _prevY = _curY; _prevZ = _curZ;
             _prevBob = _curBob; _prevLand = _curLand;
@@ -326,13 +354,41 @@ public static class FrameSmoothing
 
             _carriable = _primed;   // both prev and cur are real only after two samples
             _primed = true;
+
+            // A placement landed in this tick: the pair straddles it. Put `prev`
+            // a walk step behind `cur`, the last tick's step, so the view keeps
+            // its tick of lag and its speed instead of dropping both. Resetting
+            // prev = cur here lurched the view forward and then held it a tick.
+            if (Math.Abs(_curX - _prevX) > TeleportUnits || Math.Abs(_curY - _prevY) > TeleportUnits ||
+                Math.Abs(_curZ - _prevZ) > TeleportUnits)
+            {
+                _prevX = _curX - stepX; _prevY = _curY - stepY; _prevZ = _curZ - stepZ;
+                OffTickMoves++;
+            }
+        }
+
+        // Off a tick the live view must still be `cur`; if the game moved it, it
+        // placed the player. Carrying the old pair over it drew the new area from
+        // the old camera (the crossing's black frame); resetting the pair onto it
+        // dropped the tick of lag at once (a lurch forward). Shift the whole pair
+        // by the placement instead, so the view carries straight through it. See
+        // "What the crossing frame actually is" in docs/PATCHES_AND_MODS.md.
+        else if (_primed && Moved(m))
+        {
+            int x = (int)m.ReadU32(PosX), y = (int)m.ReadU32(PosY), z = (int)m.ReadU32(PosZ);
+            ushort yaw = m.ReadU16(ComposedYaw), pitch = m.ReadU16(ComposedPitch);
+            _prevX += x - _curX; _prevY += y - _curY; _prevZ += z - _curZ;
+            _prevYaw = (ushort)(_prevYaw + (yaw - _curYaw));
+            _prevPitch = (ushort)(_prevPitch + (pitch - _curPitch));
+            _curX = x; _curY = y; _curZ = z; _curYaw = yaw; _curPitch = pitch;
+            OffTickMoves++;
         }
 
         // Not gated on a small phase: interpolation must overwrite the live globals
         // even at frac ~= 0, because on a tick frame they hold `cur` (the new tick)
         // and the frame is meant to draw `prev`. Skipping there would leave the new
         // value on screen and put a snap back the other way.
-        if (!_carriable) { if (_probe) { _skipped++; _skipUnprimed++; } return; }
+        if (!_carriable) { LastVerdict = 1; if (_probe) { _skipped++; _skipUnprimed++; } return; }
 
         double frac = FramePacing.LogicPhase;
 
@@ -340,6 +396,7 @@ public static class FrameSmoothing
         int pitchD = S12(_curPitch) - S12(_prevPitch);
 
         int dx = _curX - _prevX, dy = _curY - _prevY, dz = _curZ - _prevZ;
+
         bool posLive = Position &&
                        Math.Abs(dx) <= TeleportUnits &&
                        Math.Abs(dy) <= TeleportUnits &&
@@ -351,6 +408,7 @@ public static class FrameSmoothing
 
         if (yawD == 0 && pitchD == 0 && !posLive && !eyeLive)
         {
+            LastVerdict = 2;
             if (_probe) { _skipped++; _skipStill++; }
             return;
         }
@@ -397,6 +455,9 @@ public static class FrameSmoothing
             m.WriteU16(Landing, (ushort)(short)(_prevLand + (int)Math.Round(landD * frac)));
         }
 
+        Carries++;
+        LastVerdict = 3;
+
         if (_probe)
         {
             _carried++;
@@ -419,6 +480,17 @@ public static class FrameSmoothing
     /// </summary>
     public static void After(CpuContext c, IMemory m)
     {
+        if (_trace && Environment.TickCount64 < _traceUntil)
+            Console.WriteLine($"[smooth] verdict {LastVerdict} " +
+                              $"tick {(FramePacing.TickedThisFrame ? 1 : 0)} " +
+                              $"frac {FramePacing.LogicPhase:0.00} " +
+                              $"applied {(_applied ? 1 : 0)} " +
+                              $"yaw prev {_prevYaw:X4} cur {_curYaw:X4} " +
+                              $"live {m.ReadU16(ComposedYaw):X4} " +
+                              $"pitch live {m.ReadU16(ComposedPitch):X4} " +
+                              $"pos ({(int)m.ReadU32(PosX)},{(int)m.ReadU32(PosZ)}) " +
+                              $"prev ({_prevX},{_prevZ}) cur ({_curX},{_curZ}) offtick {OffTickMoves}");
+
         if (_applied)
         {
             m.WriteU16(ComposedPitch, _pitch);
@@ -433,6 +505,15 @@ public static class FrameSmoothing
 
         if (_probe) Report();
     }
+
+    /// <summary>Placements the pair was shifted across: the game moved the view
+    /// between ticks, or a tick's step was a teleport.</summary>
+    public static long OffTickMoves { get; private set; }
+
+    static bool Moved(IMemory m) =>
+        (int)m.ReadU32(PosX) != _curX || (int)m.ReadU32(PosY) != _curY ||
+        (int)m.ReadU32(PosZ) != _curZ || m.ReadU16(ComposedYaw) != _curYaw ||
+        m.ReadU16(ComposedPitch) != _curPitch;
 
     /// <summary>Read a 12-bit angle as signed, in [-2048, 2047]. Pitch is a small
     /// signed angle (±0x2BC) stored this way; yaw uses the whole range.</summary>

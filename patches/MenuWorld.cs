@@ -86,6 +86,12 @@ public static class MenuWorld
     static readonly Gte.State _worldGte = new(), _menuGte = new();
     static uint _worldBank, _worldMesh;
 
+    // The draw environments' clear (isbg and its colour, DRAWENV +0x18), as stage 13
+    // leaves it. A menu turns it off since its paste covers the frame; without the
+    // paste the world pass needs it back, or the fog blends over the last menu frame.
+    const uint EnvClear = 0x18;
+    static readonly uint[] _worldClear = new uint[2];
+
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _windowMs;
     static int _passes, _overflows, _refused;
@@ -176,6 +182,24 @@ public static class MenuWorld
         Gte.Save(_worldGte);
         _worldBank = m.ReadU32(CurrentBank);
         _worldMesh = m.ReadU32(CurrentMesh);
+        for (uint i = 0; i < 2; i++)
+            _worldClear[i] = m.ReadU32(DrawEnvs + i * DrawEnvStride + EnvClear);
+    }
+
+    /// <summary>Put the world's clear on both draw environments; returns what was there.</summary>
+    static (uint, uint) WorldClear(IMemory m)
+    {
+        uint e0 = DrawEnvs + EnvClear, e1 = e0 + DrawEnvStride;
+        var was = (m.ReadU32(e0), m.ReadU32(e1));
+        m.WriteU32(e0, _worldClear[0]);
+        m.WriteU32(e1, _worldClear[1]);
+        return was;
+    }
+
+    static void RestoreClear(IMemory m, (uint, uint) was)
+    {
+        m.WriteU32(DrawEnvs + EnvClear, was.Item1);
+        m.WriteU32(DrawEnvs + DrawEnvStride + EnvClear, was.Item2);
     }
 
     public static void AfterEnter(CpuContext c, IMemory m)
@@ -327,7 +351,9 @@ public static class MenuWorld
         KingsField2.func_800605A4(c, mem);                      // DrawSync(0)
         mem.WriteU32(OtPointer, head - (OtEntries - 1u) * 4u);
         c.S2 = (uint)b;                                          // MessageText reads it here
+        var clear = WorldClear(mem);
         KingsField2.func_8002E0FC(c, mem);                      // stage 13's presenter
+        RestoreClear(mem, clear);
         mem.WriteU32(OtPointer, ot);
         if (_probe) Report();
     }
@@ -431,8 +457,10 @@ public static class MenuWorld
         KingsField2.func_8005FCC8(c, mem);          // VSync(0)
 
         uint idx = mem.ReadU8(BufferIndex);
+        var clear = WorldClear(mem);
         c.A0 = DrawEnvs + idx * DrawEnvStride;
-        KingsField2.func_80060870(c, mem);          // PutDrawEnv
+        KingsField2.func_80060870(c, mem);          // PutDrawEnv, with the world's clear
+        RestoreClear(mem, clear);
         c.A0 = DispEnvs + idx * DispEnvStride;
         KingsField2.func_80060990(c, mem);          // PutDispEnv
 
