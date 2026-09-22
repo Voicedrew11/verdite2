@@ -145,7 +145,7 @@ KF2_ZBUFFER_SOURCE=map                 # depth from the address map, not the ass
 KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  # coplanar tolerance on the test: SZ units, and pixels of depth slope; 0 0 is exact (0051)
 KF2_AO=0                               # ambient occlusion off (on by default; GL backend only)
 KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
-KF2_AO_QUALITY=low                     # low (1x, 8 samples), medium (2x), high (the render scale, the default)
+KF2_AO_QUALITY=low                     # low (1x, 8 samples), medium (2x, the default), high (the render scale)
 KF2_AO_BIAS=0.08 KF2_AO_SAMPLES=16 KF2_AO_MAXDEPTH=24000
 KF2_AO_NORMALS=0                       # normals from the depth buffer again, not from the frame's geometry (0058)
 KF2_AO_SOLID=0                         # a blended object-table model (the secret door) writes no depth for the pass again

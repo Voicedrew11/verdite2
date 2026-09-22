@@ -1739,8 +1739,8 @@ pass's scale in multiples of the game's pixels, and the sample count:
 
 | quality | resolution | samples |
 |---|---|---|
-| High (default) | the render scale, as before | 16 |
-| Medium | at most 2x | 16 |
+| High | the render scale, as before | 16 |
+| Medium (default) | at most 2x | 16 |
 | Low | at most 1x | 8 |
 
 The pass, the blur and the normal buffer all run at the capped size. The blur's

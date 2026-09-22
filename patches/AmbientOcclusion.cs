@@ -20,7 +20,7 @@ namespace Kf2;
 ///                           shading itself out of its own depth quantisation
 ///     KF2_AO_SAMPLES=16     samples per pixel in the occlusion pass; pins it
 ///                           over the quality setting
-///     KF2_AO_QUALITY=low    low, medium or high (the default): see Quality
+///     KF2_AO_QUALITY=low    low, medium (the default) or high: see Quality
 ///     KF2_AO_MAXDEPTH=24000 beyond this view depth the pass returns unoccluded
 ///     KF2_AO_NORMALS=0      take the pass's normals from the depth buffer again,
 ///                           as it did before the port kept the frame's geometry
@@ -96,14 +96,14 @@ public static class AmbientOcclusion
     public const string OnKey = "kf2.ao.on";
     public const string QualityKey = "kf2.ao.quality";
 
-    /// <summary>What the pass costs. High runs at the render scale with 16 samples,
-    /// which is the picture that was judged; Medium caps the pass, its blur and the
+    /// <summary>What the pass costs; Medium is the default. High runs at the render
+    /// scale with 16 samples, which is the picture that was judged; Medium caps the pass, its blur and the
     /// normal buffer at 2x the game's pixels; Low at 1x with 8 samples. The pass is
     /// memory-bound, so its cost follows the pixel count: an integrated GPU is what
     /// the lower two are for. See "What the pass costs" in docs/RENDERING.md.</summary>
     public enum Quality { Low, Medium, High }
 
-    public static Quality CurrentQuality { get; private set; } = Quality.High;
+    public static Quality CurrentQuality { get; private set; } = Quality.Medium;
 
     static Quality? _forcedQuality;
     static bool _samplesPinned;
@@ -193,7 +193,7 @@ public static class AmbientOcclusion
         {
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             SetQuality(_forcedQuality ?? (Quality)Math.Clamp(
-                RecompOne.Runtime.Runtime.View.GetInt(QualityKey, (int)Quality.High), 0, 2));
+                RecompOne.Runtime.Runtime.View.GetInt(QualityKey, (int)Quality.Medium), 0, 2));
             Console.WriteLine($"[KF2] ambient occlusion: {(Enabled ? "on" : "off")}" +
                               (Enabled ? $", {CurrentQuality.ToString().ToLowerInvariant()} quality, " +
                                          $"radius {GteDepth.AoRadius:F0}, strength {GteDepth.AoStrength:F2}, " +
