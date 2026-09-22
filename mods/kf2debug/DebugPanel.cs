@@ -171,6 +171,15 @@ internal sealed class DebugPanel : IPanel
         bool mp = Cheats.InfiniteMp;
         if (ImGui.Checkbox("Infinite MP", ref mp)) Cheats.InfiniteMp = mp;
 
+        bool calm = Cheats.Peaceful;
+        if (ImGui.Checkbox("Enemies ignore you", ref calm)) Cheats.Peaceful = calm;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Tells the creature AI's behaviour picker that you are across the "
+                           + "map, so every creature keeps choosing whatever it does when nobody "
+                           + "is near. They still appear, animate, block you and take damage -- "
+                           + "only the choice to come after you is gone. One already mid-swing "
+                           + "can still finish it.");
+
         ImGui.Separator();
 
         bool speed = Cheats.SpeedEnabled;
@@ -188,7 +197,7 @@ internal sealed class DebugPanel : IPanel
 
         ImGui.Separator();
         ImGui.TextDisabled($"hits blocked {Cheats.BlockedHits}, deaths refused {Cheats.BlockedDeaths}, "
-                         + $"HP restores {Cheats.RestoredHp}");
+                         + $"HP restores {Cheats.RestoredHp}, AI picks faked {Cheats.IgnoredPicks}");
     }
 
     // ---- attributes ----

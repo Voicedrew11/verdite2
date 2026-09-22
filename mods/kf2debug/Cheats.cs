@@ -52,12 +52,46 @@ namespace Kf2.Mods.Debug;
 /// value, but eleven separate routines heal the player -- items, spells, rest,
 /// the level-up refill, three area scripts -- and a frozen word drops all of
 /// them silently, which would look like a bug in the game.
+///
+/// ---- enemies ignoring you is one register ----
+///
+/// A creature's behaviour is picked by a rule table, and the only thing the
+/// picker is told about the player is **how far away they are**. Stage 4 runs
+/// one creature in four per frame through `func_8003A3FC`, which is five
+/// instructions of arithmetic and two calls:
+///
+///     dx = rec[+0x2C] - playerX          (the entity's copied position)
+///     dz = rec[+0x34] - playerZ
+///     a0 = func_800154E4(dx, dz)         the horizontal distance
+///          func_8003A300(a0)             pick a behaviour for that distance
+///
+/// `func_8003A300` walks the sixteen rule pointers at `desc+0x38`, scores each
+/// one against that distance with `func_80039E40`, and installs the winner. The
+/// scorer's range fields are `u16`s at `rule+0x10` and `rule+0x12`, compared as
+/// `(int)range < (int)dist`, so **any distance above 65535 fails every ranged
+/// rule** and what is left is whatever the creature does when the player is
+/// across the map. That is not an invented idle state: it is the game's own
+/// far-away behaviour, chosen by the game's own scorer.
+///
+/// So the switch is a pre-hook on `func_8003A300` that overwrites `a0`. Nothing
+/// else is touched -- creatures still activate, animate, draw, collide and take
+/// damage, because none of that goes through the picker.
+///
+/// **What it deliberately does not do.** `func_8003A574` (the activation state
+/// machine at `rec+0x9`) is left alone, and it must be: the renderer's first
+/// loop draws a creature only when that byte is 1, so forcing it back to 0 --
+/// which is what feeding the AI a decoy player position would have done, since
+/// the acquire test `func_80015620` is on the same path -- would make enemies
+/// *vanish* rather than ignore you. Whether a creature already mid-swing still
+/// lands the hit, and whether one picks a far-away behaviour that happens to
+/// face you anyway, are matters for the eye and have not been judged.
 /// </summary>
 internal static class Cheats
 {
     internal static bool Invincible;
     internal static bool InfiniteMp;
     internal static bool SpeedEnabled;
+    internal static bool Peaceful;
 
     // 1.0 is the game's own speed. The scale clamps to at least 1 unit, because
     // patches/Analog.cs treats a rate word of zero or less as "not controllable" and
@@ -68,6 +102,7 @@ internal static class Cheats
     internal static long BlockedHits;
     internal static long BlockedDeaths;
     internal static long RestoredHp;
+    internal static long IgnoredPicks;
 
     // ---- the three HP routines ----
 
@@ -111,6 +146,33 @@ internal static class Cheats
             c.A0 = 0u;
             BlockedHits++;
         }
+    }
+
+    // ---- enemies ignoring you ----
+
+    // The distance handed to the behaviour picker while this is on. The scorer
+    // compares against u16 range fields, so anything past 65535 fails every
+    // ranged rule; this is twice that, and still a distance the map itself could
+    // produce (80 tiles of 2048 is 163840 across), so nothing sees a number the
+    // game could not have given it.
+    const uint FarAway = 0x20000;
+
+    /// <summary>
+    /// The behaviour picker, told the player is across the map.
+    ///
+    /// `a0` is the horizontal distance to the player and is the picker's only
+    /// input about them, so overwriting it is the whole cheat. The original
+    /// still runs: the creature picks, and keeps picking, whatever it does when
+    /// nobody is near.
+    /// </summary>
+    [PreHook("game", Address = 0x8003A300)]
+    static void BeforeBehaviourPick(CpuContext c, IMemory m)
+    {
+        if (!Peaceful) return;
+        if (!GameState.IsInGame(m)) return;
+
+        c.A0 = FarAway;
+        IgnoredPicks++;
     }
 
     // ---- the death latch ----
@@ -217,5 +279,6 @@ internal static class Cheats
         Invincible = false;
         InfiniteMp = false;
         SpeedEnabled = false;
+        Peaceful = false;
     }
 }

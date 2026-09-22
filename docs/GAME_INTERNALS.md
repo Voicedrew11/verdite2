@@ -1385,8 +1385,8 @@ screen" in [RUNTIME.md](RUNTIME.md).
 
 ## Debug tools
 
-`mods/kf2debug` is noclip flight, invincibility, infinite MP, a speed multiplier,
-position bookmarks and area warp, behind a dockable panel and a set of hotkeys.
+`mods/kf2debug` is noclip flight, invincibility, infinite MP, enemies that ignore
+you, a speed multiplier, position bookmarks and area warp, behind a dockable panel and a set of hotkeys.
 Most of it is a front end for addresses already in "Player state" and "The
 character's stats are buf2" — but building it turned up seven things those sections
 did not have, and one correction.
@@ -1728,6 +1728,53 @@ for the duration of the load, so the first snap cannot OOB. Empty tiles in the
 new map can still trip the below-floor latch; `func_80029E5C` clears it, the same
 way autoreload does when it arrives from state `0x11`.
 
+
+### The creature AI is a rule table scored on one number
+
+Stage 4's loop is three decisions per slot, and reading them end to end is what
+made "enemies ignore the player" a one-register change rather than a project.
+
+| call | what it is |
+|---|---|
+| `func_8003B9EC(rec)` | sets the current-entity globals — record at `0x801758F0`, its descriptor (`0x80172624 + type*120`) at `0x801758EC`, its type at `0x80175900` |
+| `func_8003A574` | the **activation** state machine, `rec+0x9`: 0 unaware, 1 active, 2 a third state |
+| `func_8003A3FC` | the **think**, run for one creature in four (`counter & 3`) and only while `rec+0x9 == 1` |
+| `func_8003DEBC` | the per-frame motion, run every frame |
+
+At the tail of each slot the loop also writes `rec+0x42` — `ratan2(playerX -
+entX, playerZ - entZ)` through `func_80015394`, the angle from the creature to
+the player, recomputed every frame whether or not the creature is thinking.
+
+**Activation is a box test, not a raycast.** `func_8003A574` calls
+`func_80015620(pos, x, y, z, radius, yLow, yHigh)` with the player's own
+coordinates, and that routine is a plain axis-aligned reject followed by a
+distance: it returns `-1` when the point is outside the box and the distance
+when it is inside. The radius is `(desc+0xA + 1) << 11` to acquire and
+`(desc+0xB) << 11` to hold — a leash, re-tested every frame, which drops the
+creature back to 0 the moment the player leaves it.
+
+**`rec+0x9` is also what the renderer draws on** (`u8[+0x9] == 1`, the first
+loop of `func_800331B4`), so activation and visibility are the same byte. That
+is the trap in this area: the obvious "enemies ignore you" implementations —
+feeding stage 4 a decoy player position, or refusing `func_80015620` — go
+through the acquire test and so make creatures **disappear** instead.
+
+**The think is where the player actually enters, and it enters as one scalar.**
+`func_8003A3FC` is five instructions and two calls: the horizontal distance to
+the player out of `func_800154E4`, handed straight to `func_8003A300`. That one
+walks the sixteen rule pointers at `desc+0x38`, scores each against the distance
+with `func_80039E40`, and installs the winner through `func_80039E08`. The
+scorer's own distance gates are `u16`s at `rule+0x10` and `rule+0x12`, compared
+`(int)range < (int)dist`, so **a distance above 65535 fails every ranged rule**
+and the creature settles on whatever it does with nobody near.
+
+So `mods/kf2debug`'s `Enemies ignore you` is a pre-hook on `func_8003A300` that
+overwrites `a0` with `0x20000` and lets the original run. It is not an invented
+idle state — it is the game's own far-away behaviour, chosen by the game's own
+scorer — and activation, animation, drawing, collision and damage are all
+untouched because none of them consult the picker. The same rule table is the
+one `func_8003A448` walks for hit reactions, which is the walk
+`patches/HitGuard.cs` fences.
 
 ### Editing the character: the split is the design
 
