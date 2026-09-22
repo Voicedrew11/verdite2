@@ -296,13 +296,14 @@ public static class ZBuffer
                               $"{hits / window:F0} polygons found theirs/s, {misses / window:F0} had none/s " +
                               $"({ZPct(hits, hits + misses)}), {PolyAssembler.DepthClipMismatches / window:F0} clipped packets unmatched/s, " +
                               $"{GteDepth.ZPrepasses / window:F0} depth prepasses/s, " +
-                              $"blended model packets/s: object {PolyAssembler.BlendedByKind[1] / window:F0} (solid), " +
+                              $"blended model packets/s: object {PolyAssembler.BlendedByKind[1] / window:F0} ({PolyAssembler.SolidPackets / window:F0} solid), " +
                               $"creature {PolyAssembler.BlendedByKind[0] / window:F0}, effect {PolyAssembler.BlendedByKind[2] / window:F0}, " +
                               $"sprite {PolyAssembler.BlendedByKind[3] / window:F0}, " +
                               $"corners unrounded {PolyAssembler.DepthUnrounded / window:F0}/s, left whole {PolyAssembler.DepthWhole / window:F0}/s");
             GteDepth.ZPrepasses = 0;
             PolyAssembler.DepthUnrounded = PolyAssembler.DepthWhole = 0;
             Array.Clear(PolyAssembler.BlendedByKind);
+            PolyAssembler.SolidPackets = 0;
             GtePacketDepth.ResetCounters();
             PolyAssembler.DepthClipMismatches = 0;
         }

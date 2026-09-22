@@ -24,14 +24,16 @@ public static partial class PolyAssembler
     /// <summary>Set while the first-person arm draws.</summary>
     public static bool InArm;
 
-    /// <summary>Set while func_80032588 submits a model. A blended packet of an
-    /// object-table model is solid (<c>GtePacketDepth.Rec.Solid</c>): the secret
-    /// door is one, the torch flames are sprite-table models and are not.</summary>
+    /// <summary>Set while func_80032588 submits a model. A blended packet of a door
+    /// is solid (<c>GtePacketDepth.Rec.Solid</c>, <c>ModelWalk.SolidKind</c>); every
+    /// other blended model, the water and the glows included, is not.</summary>
     public static bool InModel;
 
-    /// <summary>Blended model packets by the table they came from (ModelKind);
-    /// only the object table's are solid.</summary>
+    /// <summary>Blended model packets by the table they came from (ModelKind).</summary>
     public static readonly long[] BlendedByKind = new long[4];
+
+    /// <summary>Blended packets recorded as solid.</summary>
+    public static long SolidPackets;
 
     /// <summary>Clipped fans whose packet did not carry its records' screen words.</summary>
     public static long DepthClipMismatches;
@@ -120,7 +122,9 @@ public static partial class PolyAssembler
         {
             var kind = ModelWalk.SubmitKind;
             BlendedByKind[(int)kind]++;
-            r.Solid = kind == ModelKind.Object;
+            r.Solid = kind == ModelKind.Object
+                   && ModelWalk.SolidKind(ModelWalk.ObjectKind(mem, ModelWalk.SubmitRecord));
+            if (r.Solid) SolidPackets++;
         }
         GtePacketDepth.Recorded++;
     }

@@ -140,6 +140,18 @@ public static class ModelWalk
     static int _slot;
     static uint _record;
 
+    /// <summary>The table record of the model being submitted.</summary>
+    public static uint SubmitRecord => _record;
+
+    /// <summary>An object's kind: the first byte of its definition. It matches the
+    /// record's type byte (`+4`) for every object sampled except the secret door,
+    /// whose type reads `0xFF`.</summary>
+    public static byte ObjectKind(PSMemory mem, uint rec) => mem.ReadU8(ObjectDefs + mem.ReadU16(rec + 0x6u) * 24u);
+
+    /// <summary>The kinds whose blended models are solid: the doors (`0x02`, models
+    /// 130 and 205) and the secret door (`0x0E`, model 230).</summary>
+    public static bool SolidKind(byte kind) => kind is 0x02 or 0x0E;
+
     /// <summary>Is the C# walk the thing calling the submitter? The kind, the slot
     /// and the record are the walk's half of a scene entry, so with the walk still
     /// recompiled — `KF2_MODELWALK_SUBMIT` alone, or the recompiled half of a

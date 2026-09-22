@@ -1329,12 +1329,35 @@ non-STP rule above.
 
 Measured at save 3's start, `KF2_AO_PROBE=2`: 25.2% of the picture shaded and the
 occlusion map within one step in two cells of the `c16d477` build; 0.2% with
-`KF2_AO_SOLID=0`, which is the comparison. The water flags nothing, and area 1 at
+`KF2_AO_SOLID=0`, which is the comparison. Area 1's water flags nothing, and area 1 at
 `37890, -12800, 54670` flags only sprite packets, which stay unsolid. 144.0 fps
 drawn at 20.0 ticks/s there and at the door. The flag needs the C# assemblers and
 `ModelWalk`'s walk (both on by default); without them the door shows through
 again. **Confirmed by eye: the door hides the room behind it, the flames have no
 square halo, and the shore is whole at the waterline.**
+
+**The object table was too wide a key, and area 0's water showed it.** Reported
+from play: in the flooded cave (area 0, `158821, -11520, 149415`) the walls could
+be seen through where they met the water. The near water there is not map tiles
+but two object-table models (kind `5F`, model 204; kind `A0`, model 185), so every
+blended packet of it was solid and wrote its surface's depth; an opaque wall
+triangle drawn after it in the table (the frame viewer showed one at slot 7474
+after water at 7223-7378) failed the test wherever it sat below the waterline,
+leaving the water blended over whatever had been drawn before. `KF2_AO_SOLID=0`
+cured it by eye. A sweep of every object in areas 0-7 found about thirty models
+the old rule called solid, additive glows (`abr 1`, `abr 3`) among them; the door
+is model 230 in areas 2 and 4, and its definition's first byte (`0x80175914 +
+model * 24`) is `0E`. That byte equals the record's type byte at `+4` for every
+object sampled except the door, whose type reads `FF`, so it is the object's
+kind. Keying on `0E` alone made the ordinary doors see-through (reported by eye
+at `65634, -19968, 7173` in area 2): they are kind `02`, models 130 and 205, and
+they blend too. Solid is now kinds `02` and `0E` (`ModelWalk.SolidKind`).
+Measured: at the water, 0 of about 2,000 blended object packets a second solid;
+facing the area 2 door, 960 of 960; 144 fps drawn at 20.0 ticks/s. The probe line
+reads `object N (M solid)`. **Confirmed by eye: the cave's waterline is whole and the area 2
+door hides what is behind it.** The list is kept by hand; the principled key is
+whether an object blocks the player, which the movement code already decides
+(see "Solid should mean blocks the player" in `docs/TODO.md`).
 
 ### Undoing the game's own projection, and the number that caught the error
 
