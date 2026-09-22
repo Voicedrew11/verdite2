@@ -3465,9 +3465,12 @@ as with the game's loop (`KF2_MENUWORLD=0` for the comparison). **Not looked at.
 
 ## Drawing message text
 
-**An experiment, on by default since v0.3.0 (`KF2_MESSAGETEXT=0` turns it off; there
-is no control in the window). The mechanism is measured; the picture has not been
-looked at.**
+**An experiment, off by default (`KF2_MESSAGETEXT=1`; there is no control in the
+window). It shipped on after v0.3.0 and was judged by eye in play and turned back
+off:** only the ~81% of messages that decode completely are replaced, so play mixes
+the game's own lettering with interface-font text on an opaque modern box from one
+sign to the next, and the replacement does not look like the game. See "Judged" at
+the end of this section.
 
 A sign or an NPC line is a 4-bit TIM in `TALK.T` or `ITEM.T` ("Full-screen messages
 are pictures" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), so the text can be no
@@ -3504,8 +3507,11 @@ command channel cannot reach an NPC. Measured, 16:9 at 144 fps: `(3, 0)`, `(6, 3
 and `(6, 240)` decoded to the same text as the offline dump, `(6, 120)` (a place-name
 card) was left to the game, and the panel drew 126 frames of `(3, 0)` at full opacity.
 
-**Not looked at**: whether the text sits where the picture's did, whether the font
-size and box read well, and whether the fade matches. Behind it is the live world
+**Judged** (2026-09-22, from play): the replaced messages read as an Arial-like font
+on a very modern box and are not wanted, and the mix with the undecoded ones (which
+stay the game's picture) is worse than either alone. Anything that comes back here
+would have to draw in the game's own glyphs, and at that point it adds nothing the
+TIM does not already show. Placement and the fade were never judged. Behind it is the live world
 when `MenuWorld` is on ("Messages draw the world live"), and the dim is then this
 panel's; with it off, the game's 1x `MoveImage` copy.
 
