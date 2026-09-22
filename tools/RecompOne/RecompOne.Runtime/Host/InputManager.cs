@@ -201,6 +201,15 @@ internal static unsafe class InputManager
         return null;
     }
 
+    /// <summary>One binding held down right now, in the same encoding
+    /// <see cref="GetFirstPressedPadButton"/> returns -- so triggers and stick
+    /// directions answer here too.</summary>
+    public static bool IsPadButtonDown(int button, int pad = 0)
+    {
+        var ctrl = pad == 0 ? _pad0 : _pad1;
+        return _sdl != null && ctrl != null && Pressed(ctrl, button);
+    }
+
     private static bool IsStickBinding(int b)
     {
         return b is >= LeftStickLeft and <= RightStickDown;

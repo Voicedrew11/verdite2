@@ -16,6 +16,14 @@ namespace Kf2.Mods.Debug;
 /// <summary>
 /// Noclip flight: fly through walls, with the body coming along.
 ///
+/// Forward is where the *camera* points, pitch included, so looking down and
+/// pushing forward descends; the speed is units a second against real elapsed
+/// time, because the hook below runs on the world tick when the frame gate is
+/// paced and at the render rate when it is not. Input comes from two places at
+/// once -- the left stick, and the pad word's own direction bits, which the
+/// keyboard fills through the player's own bindings -- so a keyboard, a pad and
+/// a rebind all reach it without a second table.
+///
 /// The obvious implementation is to skip the collision queries -- func_8002C330
 /// and func_8002C700 both take the player's position triple with radius 0x320,
 /// and a [PreHook] returning false would stop them answering. That is wrong.
@@ -109,13 +117,63 @@ internal static class Noclip
 
     internal static bool Enabled;
 
-    // Units per frame at full deflection. The game's own walk speed is 0xC8
-    // (200), so the default is a little over four times walking -- fast enough
-    // to cross an area without being impossible to place.
-    internal static float Speed = 900f;
+    // Units per *second* at full deflection, spent against real elapsed time
+    // rather than per call. The hook is stage 3, which runs on the world's 20 Hz
+    // tick when the frame gate is paced and at the render rate when it is not,
+    // so a per-call step is a different speed on every machine and every
+    // setting; a rate is the same flight everywhere.
+    internal static float Speed = 7000f;
     internal static float FastMultiplier = 4f;
 
+    // Wall clock between two flight frames. Clamped, because the gap across an
+    // area load or a paused panel is seconds long and would fire the flight
+    // across the map in one step.
+    const double MaxStep = 0.1;
+    static long _lastTicks;
+
     internal static bool InvertStrafe;
+
+    // ---- the cinematic camera ----
+    //
+    // Flight and look both go through a first-order lag instead of landing on
+    // the input: the flight carries a velocity that eases toward what the stick
+    // is asking for, and the view is a smoothed copy of the angle the game just
+    // integrated. Both time constants are seconds to about 63% of the target,
+    // which is the same shape patches/FrameSmoothing.cs uses, and both are spent
+    // against real elapsed time so the feel does not change with the frame rate.
+    static bool _cinematic;
+    internal static bool Cinematic
+    {
+        get => _cinematic;
+        // The look filter tracks the angle the game wrote last frame, so
+        // switching it on mid-flight has to re-seed from where the view is now
+        // or the first frame turns the whole way from a stale angle.
+        set
+        {
+            if (value == _cinematic) return;
+            _cinematic = value;
+            _lookPrimed = false;
+            // A flythrough being filmed must not have anything fading in over
+            // the picture: the hotkey toasts go quiet in Hotkeys.Notify, and
+            // the pointer-capture glyph here. (Precedent for a mod driving a
+            // host type: Warp calls Kf2.AreaWarp.)
+            Kf2.MouseIndicator.Suppressed = value;
+        }
+    }
+
+    internal static float MoveSmoothing = 0.35f;
+    internal static float LookSmoothing = 0.25f;
+
+    // The flight's velocity, units a second, eased toward the input.
+    static double _vx, _vy, _vz;
+
+    // The look filter. The target accumulates the deltas the game's own turn
+    // code applied -- reading the angle back would read what we wrote, so the
+    // input has to be recovered as a difference -- and the smoothed value is
+    // what gets written to both the base and the composed triple.
+    static bool _lookPrimed;
+    static double _targetYaw, _targetPitch, _smoothYaw, _smoothPitch;
+    static int _prevYaw, _prevPitch;
 
     // Which way "up" is on the height axis. Both spawn points in GAME.EXE put
     // the player at a negative Y (the resurrection warp at 0x8002AFBC uses
@@ -165,6 +223,10 @@ internal static class Noclip
     {
         var (x, y, z) = GameState.Position(m);
         _x = x; _y = y; _z = z;
+
+        // A teleport must not arrive carrying the drift it left with.
+        _vx = _vy = _vz = 0;
+        _lookPrimed = false;
     }
 
     /// <summary>
@@ -209,6 +271,7 @@ internal static class Noclip
     static void Enter(IMemory m)
     {
         _wasEnabled = true;
+        _lastTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         _entryPosition = GameState.Position(m);
         Sync(m);
         Console.WriteLine($"[kf2debug] noclip on at {Format(_entryPosition)}");
@@ -228,29 +291,74 @@ internal static class Noclip
 
     static void Fly(CpuContext c, IMemory m)
     {
-        int yaw = GameState.ReadS16(m, GameState.Yaw);
+        double dt = Elapsed();
 
-        // Left stick walks and strafes, matching patches/Analog.cs's layout so the two
-        // read the same way. The D-pad is bound to the left stick by the
-        // runtime's default mapping, so the keyboard drives this too.
+        // Before the angles are read, so the flight follows the camera that is
+        // actually on screen rather than the one the input asked for.
+        if (_cinematic) SmoothLook(m, dt);
+
+        // The *composed* view angles, not the base pair: that triple is what the
+        // renderer reads, so it is literally where the camera points, and flight
+        // follows the picture rather than the state behind it. 12-bit reads --
+        // an s16 read misinterprets a negative pitch, and while sin/cos would
+        // not care (they are 2PI-periodic), nothing should depend on that.
+        int yaw   = GameState.ReadAngle12(m, GameState.ViewYaw);
+        int pitch = GameState.ReadAngle12(m, GameState.ViewPitch);
+
+        // Two sources, summed and clamped, so a pad and a keyboard both drive
+        // this and neither has to be configured: the left stick, and the pad
+        // word's own direction bits -- which the keyboard fills through the
+        // player's bindings (W/S on Up/Down, A/D on L1/R1 in the shipped
+        // layout), so this follows a rebind for free.
         var (sx, sy) = Shape(Controller.LeftX, Controller.LeftY);
+        var (dfwd, dstrafe) = Digital();
 
-        float forward = -sy;                                  // stick up == forward
-        float strafe  = InvertStrafe ? -sx : sx;
+        float forward = Math.Clamp(-sy + dfwd, -1f, 1f);      // stick up == forward
+        float strafe  = Math.Clamp(sx + dstrafe, -1f, 1f);
+        if (InvertStrafe) strafe = -strafe;
         float vertical = Hotkeys.FlyVertical();               // +1 up, -1 down
 
+        // The velocity the input is asking for, units a second -- zero when
+        // nothing is held, which is what the cinematic filter coasts down to.
+        double tvx = 0, tvy = 0, tvz = 0;
         if (forward != 0f || strafe != 0f || vertical != 0f)
         {
-            float speed = Speed * (Hotkeys.FlyFast() ? FastMultiplier : 1f);
+            double rate = Speed * (Hotkeys.FlyFast() ? FastMultiplier : 1f);
 
-            // The game's own heading vector, from func_80028080.
+            // The game's own heading vector, from func_80028080, with the camera's
+            // pitch folded into forward: looking down and pushing forward
+            // descends, which is what every other noclip does. Strafe stays level
+            // -- pitch does not roll the flight -- and the up/down keys stay world
+            // up, so there is always a way to climb while looking level.
             float fwdAngle    = GameState.AngleToRadians(yaw);
             float strafeAngle = GameState.AngleToRadians(yaw - 0x400);
+            float pitchRad    = GameState.AngleToRadians(pitch);
+            float level = MathF.Cos(pitchRad);   // the horizontal share of forward
+            float dive  = MathF.Sin(pitchRad);   // and the vertical one
 
-            _x += (-MathF.Sin(fwdAngle) * forward + -MathF.Sin(strafeAngle) * strafe) * speed;
-            _z += ( MathF.Cos(fwdAngle) * forward +  MathF.Cos(strafeAngle) * strafe) * speed;
-            _y += vertical * speed * (InvertVertical ? 1f : -1f);
+            // The Y delta one unit of "up" is worth. Y grows downwards in this
+            // game's world space, hence the negative -- the same convention
+            // InvertVertical exists to let a player overrule, which is why the
+            // camera's own descent is hung off the same sign rather than a
+            // second guess.
+            float up = InvertVertical ? 1f : -1f;
+
+            tvx = (-MathF.Sin(fwdAngle) * forward * level + -MathF.Sin(strafeAngle) * strafe) * rate;
+            tvz = ( MathF.Cos(fwdAngle) * forward * level +  MathF.Cos(strafeAngle) * strafe) * rate;
+            tvy = (vertical * up - forward * dive * up) * rate;
         }
+
+        // Instantly at the input unless the cinematic camera is on, in which
+        // case the velocity eases toward it and the flight keeps its glide for
+        // a moment after the stick is let go.
+        double k = _cinematic ? Lag(MoveSmoothing, dt) : 1.0;
+        _vx += (tvx - _vx) * k;
+        _vy += (tvy - _vy) * k;
+        _vz += (tvz - _vz) * k;
+
+        _x += _vx * dt;
+        _y += _vy * dt;
+        _z += _vz * dt;
 
         // Our position is the answer, whatever the walk and the floor clamp
         // decided during the stage that just ran.
@@ -262,6 +370,92 @@ internal static class Noclip
         // otherwise charge fall damage the moment flight ends.
         GameState.StopMotion(m);
         m.WriteU16(GameState.FallVel, 0);
+    }
+
+    /// <summary>
+    /// A first-order lag's blend factor for this step: the share of the way to
+    /// the target a value moves in <paramref name="dt"/> seconds, given a time
+    /// constant of <paramref name="tau"/>. Framed as an exponential rather than
+    /// a fixed fraction so the filter is the same at any frame rate.
+    /// </summary>
+    static double Lag(double tau, double dt) =>
+        tau <= 1e-4 ? 1.0 : 1.0 - Math.Exp(-dt / tau);
+
+    /// <summary>
+    /// The camera, trailing the input.
+    ///
+    /// The angles cannot simply be lerped in place: stage 3 has already added
+    /// this frame's turn velocity to the base angle, so reading it back reads
+    /// what *we* wrote last frame plus the new delta. The filter therefore
+    /// recovers the input as a difference from its own last write, accumulates
+    /// it into an unsmoothed target, and writes the smoothed value -- so the
+    /// view lags but never loses ground, however long the turn is held.
+    ///
+    /// Both the base pair and the composed triple are written, the composed one
+    /// keeping whatever offset stage 3 put between them (the deltaA/B/C the
+    /// renderer's angle is built from), so nothing else the game does to the
+    /// view is thrown away.
+    /// </summary>
+    static void SmoothLook(IMemory m, double dt)
+    {
+        // 12-bit reads, not s16: the game stores both angles masked
+        // (func_80028DB8 folds pitch through `& 0xFFF`), so ReadS16 misreads
+        // every negative pitch as +3396..+4095 -- the filter then chases a
+        // phantom full-circle delta and the camera flips upside down.
+        int baseYaw   = GameState.ReadAngle12(m, GameState.Yaw);
+        int basePitch = GameState.ReadAngle12(m, GameState.Pitch);
+        int yawOffset   = GameState.ReadAngle12(m, GameState.ViewYaw)   - baseYaw;
+        int pitchOffset = GameState.ReadAngle12(m, GameState.ViewPitch) - basePitch;
+
+        if (!_lookPrimed)
+        {
+            _targetYaw = _smoothYaw = baseYaw;
+            _targetPitch = _smoothPitch = basePitch;
+            _prevYaw = baseYaw;
+            _prevPitch = basePitch;
+            _lookPrimed = true;
+            return;
+        }
+
+        // Shortest arc, because yaw is masked to 12 bits and a turn past zero
+        // reads as a delta of almost a full circle the other way.
+        int dYaw = (baseYaw - _prevYaw) & GameState.AngleMask;
+        if (dYaw > GameState.AngleFull / 2) dYaw -= GameState.AngleFull;
+
+        _targetYaw += dYaw;
+
+        // Clamped, because the game's own base is. The look routine holds base
+        // pitch inside +-PitchLimit, so while it sits at the limit the deltas
+        // keep arriving and an unclamped target runs away past it -- then the
+        // smoothed value overshoots on release. The bound is a no-op in steady
+        // state (the target tracks a base that never leaves the range) and a
+        // guard against exactly that runaway.
+        _targetPitch = Math.Clamp(_targetPitch + (basePitch - _prevPitch),
+                                  -GameState.PitchLimit, GameState.PitchLimit);
+
+        double k = Lag(LookSmoothing, dt);
+        _smoothYaw   += (_targetYaw - _smoothYaw) * k;
+        _smoothPitch += (_targetPitch - _smoothPitch) * k;
+
+        // Keep the pair from drifting out of a double's exact-integer range
+        // over a long session, without moving the angle between them.
+        if (_targetYaw > GameState.AngleFull * 64 || _targetYaw < -GameState.AngleFull * 64)
+        {
+            double turns = Math.Truncate(_targetYaw / GameState.AngleFull) * GameState.AngleFull;
+            _targetYaw -= turns;
+            _smoothYaw -= turns;
+        }
+
+        int yaw   = ((int)Math.Round(_smoothYaw)) & GameState.AngleMask;
+        int pitch = (int)Math.Round(_smoothPitch);
+
+        GameState.WriteAngle12(m, GameState.Yaw, yaw);
+        GameState.WriteAngle12(m, GameState.Pitch, pitch);
+        GameState.WriteAngle12(m, GameState.ViewYaw, yaw + yawOffset);
+        GameState.WriteAngle12(m, GameState.ViewPitch, pitch + pitchOffset);
+
+        _prevYaw = yaw;
+        _prevPitch = pitch;
     }
 
     /// <summary>
@@ -316,6 +510,38 @@ internal static class Noclip
         if (mem != null) Sync(mem);
     }
 
+    /// <summary>Seconds since the last flight frame, clamped.</summary>
+    static double Elapsed()
+    {
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        double dt = (now - _lastTicks) / (double)System.Diagnostics.Stopwatch.Frequency;
+        _lastTicks = now;
+        return dt <= 0 ? 0 : Math.Min(dt, MaxStep);
+    }
+
+    /// <summary>
+    /// Forward and strafe off the pad word, which is active LOW and carries the
+    /// keyboard's bindings as well as a pad's buttons -- so one read covers both
+    /// devices and follows whatever the player has bound.
+    ///
+    /// The shoulders are the exception: on a pad they fly up and down
+    /// (<see cref="Hotkeys.FlyVertical"/>), so their strafe is dropped while the
+    /// pad itself is holding them. A keyboard's A and D reach the same bits and
+    /// keep strafing.
+    /// </summary>
+    static (float Forward, float Strafe) Digital()
+    {
+        ushort pad = Controller.State;
+        bool Held(ushort bit) => (pad & bit) == 0;
+
+        float f = 0f, s = 0f;
+        if (Held(Controller.Up)) f += 1f;
+        if (Held(Controller.Down)) f -= 1f;
+        if (Held(Controller.R1) && !Hotkeys.PadDown(Hotkeys.PadRShoulder)) s += 1f;
+        if (Held(Controller.L1) && !Hotkeys.PadDown(Hotkeys.PadLShoulder)) s -= 1f;
+        return (f, s);
+    }
+
     /// <summary>
     /// One stick as a radial-deadzoned, curved vector. Same shape as
     /// patches/Analog.cs -- the bytes are the runtime's 0..255 with 0x80
@@ -343,5 +569,10 @@ internal static class Noclip
     {
         Enabled = false;
         _wasEnabled = false;
+        _vx = _vy = _vz = 0;
+        _lookPrimed = false;
+        // The host outlives the mod: unloading mid-filming must not leave its
+        // capture glyph muted for the rest of the session.
+        Kf2.MouseIndicator.Suppressed = false;
     }
 }

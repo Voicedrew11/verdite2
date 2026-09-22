@@ -524,6 +524,12 @@ public static class HostWindow
     /// interpret the answer.</summary>
     public static int? GetFirstPressedPadButton(int pad = 0) => InputManager.GetFirstPressedPadButton(pad);
 
+    /// <summary>One named pad button, in the same encoding, held down right now.
+    /// <see cref="GetFirstPressedPadButton"/> answers only about the lowest
+    /// index held, so a button high in the enum -- the DualSense mute key is
+    /// SDL's Misc1, 15 -- is invisible to it while anything else is down.</summary>
+    public static bool IsPadButtonDown(int button, int pad = 0) => InputManager.IsPadButtonDown(button, pad);
+
     // The mouse, for a port that wants to steer with it. InputManager owns the
     // IMouse and is internal, so these are the way out of the assembly -- the
     // same role IsKeyDown already plays for the keyboard.

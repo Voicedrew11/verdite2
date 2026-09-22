@@ -139,8 +139,8 @@ internal static class GameState
     internal const int AngleMask = 0xFFF;
     internal const int AngleFull = 0x1000;
 
-    // The pitch limit the game holds itself to. Not enforced on our writes, but
-    // worth having: a pitch outside it is a view the game never produces.
+    // The pitch limit the game holds itself to, enforced on the cinematic
+    // camera's writes as well: see the look filter in Noclip.cs.
     internal const int PitchLimit = 0x2BC;
 
     // ---- typed reads ----
@@ -150,6 +150,25 @@ internal static class GameState
 
     internal static void WriteS32(IMemory m, uint a, int v) => m.WriteU32(a, (uint)v);
     internal static void WriteS16(IMemory m, uint a, int v) => m.WriteU16(a, (ushort)(short)v);
+
+    /// <summary>
+    /// Read a view angle as 12-bit signed, in [-2048, 2047].
+    ///
+    /// Both words are stored masked to 12 bits -- the look routine func_80028DB8
+    /// folds `(pitch + vel) &amp; 0xFFF` and clamps on the circle through
+    /// func_80015364 -- so a plain s16 read misreads every negative pitch:
+    /// looking up a touch stores 0x0F9C, which is -100 on the circle but +3996
+    /// as an s16. Yaw stays inside 0..0xFFF and never has bit 15 set, which is
+    /// why reading it either way agrees.
+    /// </summary>
+    internal static int ReadAngle12(IMemory m, uint a)
+    {
+        int v = m.ReadU16(a) & AngleMask;
+        return v >= AngleFull / 2 ? v - AngleFull : v;
+    }
+
+    /// <summary>Write a view angle the way the game stores it: masked to 12 bits.</summary>
+    internal static void WriteAngle12(IMemory m, uint a, int v) => m.WriteU16(a, (ushort)(v & AngleMask));
 
     internal static (int X, int Y, int Z) Position(IMemory m) =>
         (ReadS32(m, PosX), ReadS32(m, PosY), ReadS32(m, PosZ));

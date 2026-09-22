@@ -696,6 +696,11 @@ player who moves the mouse and gets nothing is asking "is this on?", not "which
 key is it?", and the cut mouse answers exactly that. The key is still named on the
 console line at boot and in the settings page.
 
+**Filming silences it.** The debug mod's cinematic camera suppresses the glyph
+outright while it is on (`MouseIndicator.Suppressed`, both ends gated so nothing
+queues underneath and switching on mid-fade hides it at once), since a flythrough
+being filmed must not have announcements fading in over the picture.
+
 **Never judged by eye**: whether the top right is where the eye is, whether 1.75 s
 total is long enough to notice and short enough not to nag, and whether the cut
 reads as "released" over a bright scene.
@@ -728,6 +733,20 @@ table is what wanted it: `InputManager.IsPadConnected` and
 so unlike the mouse nothing had to be added there — only the two forwards from
 `HostWindow`, beside `IsKeyDown` and the mouse block. Two lines against `0017`'s
 sixty. UI only, so no recompile.
+
+`0062` is the third of the same shape, and it exists because
+`GetFirstPressedPadButton` answers the wrong question for a *bound* key: it
+sweeps the enum from zero and returns the first button held, which is what a
+binding table's "press a button" prompt wants and is useless to anything asking
+about one particular button. The one this port wanted is the highest index a pad
+has — SDL's `Misc1`, 15, which is the DualSense's mute key and an Xbox Series
+pad's share button, the one button on a modern pad that no PlayStation layout
+claims — so anything else held masks it. `InputManager.IsPadButtonDown(button,
+pad)` asks about one binding in the same encoding the rest of that class uses, so
+the triggers (100/101) and the stick directions (102–109) answer through it too,
+and `HostWindow` forwards it. `mods/kf2debug` is the only caller: the mute key
+toggles noclip, so a player on a pad never reaches for F3. Input only, so no
+recompile.
 
 ### What is measured, and what is not
 

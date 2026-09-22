@@ -733,6 +733,17 @@ Four files in the directory have no entry below:
   both is `patches/CardIcon.cs` and `patches/DesktopEntry.cs`. UI only — **no
   recompile**. See "The icon comes off the disc" in `docs/PACKAGING.md`.
 
+- `0062-one-named-pad-button.patch` — `GetFirstPressedPadButton` sweeps the enum
+  from zero and returns the lowest index held, which is what a binding table's
+  "press a button" prompt wants and useless to anything asking about one
+  particular button: SDL's `Misc1` (15) — the DualSense's mute key, an Xbox
+  Series pad's share button, the one button a modern pad has that no PlayStation
+  layout claims — is masked by anything else down. `InputManager.IsPadButtonDown`
+  asks about one binding in the same encoding, so the triggers (100/101) and the
+  stick directions (102-109) answer through it too, and `HostWindow` forwards it.
+  `mods/kf2debug` is the caller: the mute key toggles noclip. Input only — **no
+  recompile**. See "What the runtime had to grow" in `docs/INPUT.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

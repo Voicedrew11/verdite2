@@ -1616,6 +1616,93 @@ authoritative position, since the floor clamp rewrites `Y` every frame and
 integrating from memory would leave you hovering a step above the ground instead
 of climbing.
 
+### Flight is camera-relative, and it is a rate
+
+Two things about the flight itself were wrong for the same underlying reason:
+both were written against the *call* rather than against the world.
+
+**The speed was units per call**, and the call is a `[PostHook]` on stage 3 —
+which `patches/FramePacing.cs` gates to the world's 20 Hz tick when the frame
+gate holds and lets run at the render rate when it does not. So the same slider
+was one flight at 60 fps, a different one at 144, and a different one again the
+moment a boundary was lost. It is units per **second** now, spent against
+`Stopwatch` elapsed time and clamped to 100 ms a step, because the gap across an
+area load or a paused panel is seconds long and would fire the flight across the
+map in one frame. 100 units/s is the default; walking is 200 units a tick, about
+4,000 a second, so the slider reaches well past it.
+
+**Forward followed the base yaw and nothing else**, so a flight could only ever
+be level and the height had to be flown separately. It follows the *composed*
+view triple now (`0x80199504`–`0x80199508`), which is what the renderer reads and
+so is literally where the camera points, and the pitch is folded into forward:
+`cos(pitch)` of the step goes into the heading, `sin(pitch)` into `Y`. Strafe
+stays level and the up/down keys stay world-up, so there is still a way to climb
+while looking level. The `Y` sign is hung off the same `InvertVertical` toggle
+the up/down keys use rather than a second guess — the +Y-is-down convention is
+still a convention here, not a proof.
+
+**The input was the left stick only.** The mod's comment claimed the D-pad was
+bound to the stick by the runtime's default mapping, and it is not:
+`InputManager` fills `Controller.LeftX/LeftY` from SDL axes alone, and the
+keyboard reaches only the `Controller.State` bitmask. So noclip did nothing at
+all on a keyboard. Flight now sums the stick with that bitmask's own direction
+bits — `Up`/`Down` for forward, `L1`/`R1` for strafe, which is where the shipped
+WASD layout puts W/S and A/D — so a keyboard, a pad and any rebinding all reach
+it with no second table. The pad's shoulders fly up and down instead of
+strafing, read straight off the pad through `0062`'s `IsPadButtonDown` so that
+one bit cannot mean two things at once; the mute key toggles the flight.
+
+### The cinematic camera has to recover the turn as a difference
+
+`Cinematic camera`, in the Cheats tab under the noclip checkbox, puts a
+first-order lag on both halves of the flight: the velocity eases toward what the
+stick is asking for instead of being it, and the view trails where the player is
+looking. Two time constants in seconds, `Move smoothing` and `Look smoothing`,
+both spent against `Stopwatch` elapsed time the same way the speed is, so the
+feel does not move with the frame rate.
+
+The movement half is ordinary — a velocity the input pulls on, integrated into
+the flight's own position, which was already authoritative. **The look half is
+the part with a trap in it.** The obvious implementation, lerping the angle
+words toward the input, does not work: stage 3 has already added this frame's
+turn velocity to the base angle by the time the mod's `[PostHook]` runs, so
+reading the angle back reads *what the mod wrote last frame* plus the new delta,
+and a filter written against it converges on its own output and the camera
+slowly stops turning altogether.
+
+So the input is recovered as a **difference** from the mod's own last write. The
+filter keeps an unsmoothed target angle, adds `base - lastWritten` to it each
+frame (shortest arc, since yaw is masked to 12 bits and a turn past zero reads
+as almost a full circle the other way), and writes the smoothed value. The turn
+therefore arrives *late* rather than *short*, however long it is held — which is
+the property that makes it usable, since anything that loses ground against a
+held stick is unflyable.
+
+Both the base pair and the composed triple are written, the composed one keeping
+whatever offset stage 3 had put between them, so nothing else the game does to
+the view is discarded.
+
+**The pitch word is a 12-bit circular angle, and the filter must read it as
+one.** `func_80028DB8` folds `(pitch + vel) & 0xFFF` and clamps on the circle
+through `func_80015364` (`((pitch - limit) & 0xFFF) < 2049`), so looking up a
+touch stores `0x0F9C` — which is −100 on the circle but +3996 as an `s16`. The
+first version of this filter read it with `ReadS16`, so every upward look fed
+the target a phantom +4096 delta; the target clamp caught it at `+PitchLimit`
+and play reported that as the view lurching downward for no input. Removing
+the clamp instead turned the same misread into a full-circle slew — the camera
+flipping upside down. The filter reads both angles with `GameState.ReadAngle12`
+(the same `S12` shape `patches/FrameSmoothing.cs` uses) and writes them back
+masked, and the target clamp stays: the game's own base is held inside
+`±PitchLimit`, so the bound is a no-op in steady state and stops the target
+running away past a limit the base cannot follow while it sits at it.
+
+While it is on, the hotkey toasts (`Hotkeys.Notify`) and the pointer-capture
+glyph (`MouseIndicator.Suppressed`, driven from the `Cinematic` setter) stay
+silent, so a filmed flythrough has nothing fading in over the picture.
+
+Off by default, and it stays a debug-mod option rather than a port setting: the
+mechanism is measured, the picture is a matter of taste and has not been judged.
+
 ### Area warp cannot run from the panel
 
 The first build called `func_80024154` from the Warp button. That is

@@ -82,10 +82,13 @@ internal sealed class DebugPanel : IPanel
         bool noclip = Noclip.Enabled;
         if (ImGui.Checkbox("Noclip flight", ref noclip)) Noclip.Enabled = noclip;
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Fly through walls, with the body coming along. The left stick or "
-                           + "D-pad moves, Space and Left Ctrl go up and down, Left Shift is fast. "
-                           + "Collision is not disabled -- the position is written after the "
-                           + "game's own movement, so enemies and items keep theirs.");
+            ImGui.SetTooltip("Fly through walls, with the body coming along. Forward goes where "
+                           + "the camera is looking, pitch included. Your own walk keys or the "
+                           + "left stick move; Space and Left Ctrl -- or the pad's R1 and L1 -- "
+                           + "go up and down; Left Shift or L3 is fast. F3 toggles it, as does a "
+                           + "DualSense's mute key. Collision is not disabled -- the position is "
+                           + "written after the game's own movement, so enemies and items keep "
+                           + "theirs.");
 
         if (Noclip.Enabled)
         {
@@ -110,9 +113,11 @@ internal sealed class DebugPanel : IPanel
                 ImGui.SetTooltip("Back to where noclip was switched on -- the undo for a flight "
                                + "that went too far.");
 
-            ImGui.SliderFloat("Speed", ref Noclip.Speed, 100f, 4000f, "%.0f units/frame");
+            ImGui.SliderFloat("Speed", ref Noclip.Speed, 20f, 8000f, "%.0f units/s");
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("The game's own walk speed is 200 units a frame.");
+                ImGui.SetTooltip("Units a second, spent against real elapsed time -- so the "
+                               + "flight is the same speed whatever the frame rate. Walking is "
+                               + "200 units a tick, about 4,000 a second.");
             ImGui.SliderFloat("Fast multiplier", ref Noclip.FastMultiplier, 1f, 10f, "x%.1f");
 
             bool invY = Noclip.InvertVertical;
@@ -121,6 +126,29 @@ internal sealed class DebugPanel : IPanel
                 ImGui.SetTooltip("Which way \"up\" is on the height axis is a convention this port "
                                + "has not proven -- both known spawn points sit at a negative Y. "
                                + "Flip this if Space takes you into the floor.");
+
+            bool cine = Noclip.Cinematic;
+            if (ImGui.Checkbox("Cinematic camera", ref cine)) Noclip.Cinematic = cine;
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip("Ease the flight and the turn instead of landing on the input: "
+                               + "the velocity builds up and coasts down, and the view trails "
+                               + "where you are looking. For filming a flythrough, not for "
+                               + "getting somewhere. The hotkey toasts and the mouse-capture "
+                               + "glyph stay silent while it is on.");
+
+            if (Noclip.Cinematic)
+            {
+                ImGui.Indent();
+                ImGui.SliderFloat("Move smoothing", ref Noclip.MoveSmoothing, 0.05f, 2f, "%.2f s");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Seconds to about two thirds of the speed you asked for, and "
+                                   + "the same again coasting back down.");
+                ImGui.SliderFloat("Look smoothing", ref Noclip.LookSmoothing, 0.05f, 2f, "%.2f s");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("How far the camera trails the stick or the mouse. The turn "
+                                   + "never loses ground -- it arrives late, not short.");
+                ImGui.Unindent();
+            }
 
             bool invS = Noclip.InvertStrafe;
             if (ImGui.Checkbox("Invert strafe", ref invS)) Noclip.InvertStrafe = invS;
@@ -567,6 +595,17 @@ internal sealed class DebugPanel : IPanel
             Row("F8", "back to where noclip was switched on");
             Row("Space / Left Ctrl", "fly up / down");
             Row("Left Shift", "fly fast (hold)");
+            ImGui.EndTable();
+        }
+
+        ImGui.Separator();
+        ImGui.TextDisabled("On a pad");
+        if (ImGui.BeginTable("##padkeys", 2, ImGuiTableFlags.SizingStretchProp))
+        {
+            Row("Mute / Share", "toggle noclip");
+            Row("Left stick", "fly forward and strafe");
+            Row("R1 / L1", "fly up / down");
+            Row("L3", "fly fast (hold)");
             ImGui.EndTable();
         }
 

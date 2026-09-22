@@ -61,12 +61,21 @@ public sealed class MouseIndicator : IFloatingPanel
     static long _shown = long.MinValue;
     static bool _captured;
 
+    /// <summary>
+    /// Silence the glyph outright. The debug mod's cinematic camera sets this
+    /// while it is on: a flythrough being filmed must not have capture
+    /// announcements fading in over the picture. Both ends are gated -- Show so
+    /// nothing queues underneath, Draw so switching on mid-fade hides it at once.
+    /// </summary>
+    public static bool Suppressed { get; set; }
+
     /// <summary>Announce the state. Called from <see cref="Mouse.SetCaptured"/>
     /// and from the once-a-session hint in <see cref="Mouse.TakeLook"/>; a repeat
     /// restarts the fade, so mashing the capture key keeps it visible rather than
     /// stacking anything up.</summary>
     public static void Show(bool captured)
     {
+        if (Suppressed) return;
         _captured = captured;
         _shown = Environment.TickCount64;
     }
@@ -117,6 +126,7 @@ public sealed class MouseIndicator : IFloatingPanel
 
     public void Draw()
     {
+        if (Suppressed) return;
         float a = Alpha();
         if (a <= 0.001f) return;
 

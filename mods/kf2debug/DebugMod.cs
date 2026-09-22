@@ -46,7 +46,7 @@ public sealed class DebugMod : IMod
     {
         var view = RecompOne.Runtime.Runtime.View;
 
-        Noclip.Speed          = view.GetFloat(NoclipSpeedKey, 900f);
+        Noclip.Speed          = view.GetFloat(NoclipSpeedKey, 7000f);
         Noclip.FastMultiplier = view.GetFloat(NoclipFastKey, 4f);
         Noclip.InvertVertical = view.GetBool(InvertYKey, false);
         Noclip.InvertStrafe   = view.GetBool(InvertSKey, false);
@@ -146,7 +146,7 @@ public sealed class DebugMod : IMod
         ImGui.TextWrapped("Settings that persist live here; the switches live in the panel, since "
                         + "they are things you flip while playing.");
 
-        if (ImGui.SliderFloat("Noclip speed", ref Noclip.Speed, 100f, 4000f, "%.0f"))
+        if (ImGui.SliderFloat("Noclip speed", ref Noclip.Speed, 20f, 8000f, "%.0f"))
             Persist(NoclipSpeedKey, Noclip.Speed);
         if (ImGui.SliderFloat("Noclip fast multiplier", ref Noclip.FastMultiplier, 1f, 10f, "x%.1f"))
             Persist(NoclipFastKey, Noclip.FastMultiplier);
