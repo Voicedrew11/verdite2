@@ -674,7 +674,8 @@ Kf2.AmbientOcclusion.Configure(Environment.GetEnvironmentVariable("KF2_AO"),
                                Environment.GetEnvironmentVariable("KF2_AO_SAMPLES"),
                                Environment.GetEnvironmentVariable("KF2_AO_MAXDEPTH"),
                                Environment.GetEnvironmentVariable("KF2_AO_PROBE"),
-                               Environment.GetEnvironmentVariable("KF2_AO_NORMALS"));
+                               Environment.GetEnvironmentVariable("KF2_AO_NORMALS"),
+                               Environment.GetEnvironmentVariable("KF2_AO_QUALITY"));
 Kf2.AmbientOcclusion.Install();
 Kf2.AoWorld.Configure(Environment.GetEnvironmentVariable("KF2_AO_WORLD"),
                       Environment.GetEnvironmentVariable("KF2_AO_WORLD_STRENGTH"),

@@ -3,17 +3,16 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The ambient-occlusion switch, under Video ▸ Enhancements with perspective
+/// The ambient-occlusion setting, under Video ▸ Enhancements with perspective
 /// correction, sub-pixel positioning and the shading combo — each one a choice
 /// about how faithful the picture should be to the hardware.
 ///
-/// **One checkbox and nothing else.** The radius, the strength, the bias and the
-/// sample count are all real knobs and all of them are the port's question to
-/// answer rather than the player's: "how far does a wall reach to shade the floor,
-/// in the game's world units" is not a thing anyone can be asked. They live on the
-/// console under <c>KF2_AO_RADIUS</c> and friends, with the measurement that would
-/// justify moving one, exactly as the map's five controls that were not choices
-/// came off the Gameplay page.
+/// **One slider with fixed positions: Off, Low, Medium, High.** Off and a quality are one question, as
+/// the shading combo's were. Off writes the old <c>kf2.ao.on</c> key, so a config
+/// saved with the checkbox reads the same; a quality turns it on and saves both.
+/// Quality is a cost a player can judge on their own machine; the radius, the
+/// strength and the bias are the port's question to answer rather than the
+/// player's, and live on the console under <c>KF2_AO_RADIUS</c> and friends.
 /// </summary>
 public sealed class AmbientOcclusionPage : IPatchPage
 {
@@ -21,16 +20,25 @@ public sealed class AmbientOcclusionPage : IPatchPage
     public string Title => "Enhancements";
     public int Order => 23;
 
+    static readonly string[] Labels = ["Off", "Low", "Medium", "High"];
+
     public void Draw()
     {
-        bool on = AmbientOcclusion.Enabled;
-        if (ImGui.Checkbox("Ambient occlusion", ref on))
+        int index = AmbientOcclusion.Enabled ? (int)AmbientOcclusion.CurrentQuality + 1 : 0;
+        if (ImGui.SliderInt("SSAO", ref index, 0, Labels.Length - 1, Labels[index],
+                            ImGuiSliderFlags.AlwaysClamp | ImGuiSliderFlags.NoInput))
         {
+            bool on = index > 0;
             AmbientOcclusion.SetEnabled(on);
             PatchSettings.Set(AmbientOcclusion.OnKey, on);
+            if (on)
+            {
+                AmbientOcclusion.SetQuality((AmbientOcclusion.Quality)(index - 1));
+                PatchSettings.Set(AmbientOcclusion.QualityKey, index - 1);
+            }
         }
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Shades the corners and the places surfaces meet.");
+            ImGui.SetTooltip("Shades corners. Lower is cheaper.");
     }
 }

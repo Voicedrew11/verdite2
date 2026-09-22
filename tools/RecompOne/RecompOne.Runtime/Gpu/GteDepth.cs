@@ -270,6 +270,11 @@ public static class GteDepth
     /// this buys smoothness rather than the absence of a visible grid.</summary>
     public static int AoSamples = 16;
 
+    /// <summary>The occlusion pass's resolution in multiples of the game's own
+    /// pixels, capped at the render scale; 0 is the render scale. The pass, its blur
+    /// and the normal buffer all run at it, and the present upsamples.</summary>
+    public static int AoResolution;
+
     /// <summary>Beyond this view depth the pass returns unoccluded. The game's own
     /// fog has taken the picture by then, and the projected radius of a world-unit
     /// sphere has fallen under a pixel, so the samples would all land in the same

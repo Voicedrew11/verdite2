@@ -56,6 +56,7 @@ public sealed class GlCore : IGpuBackend
     uint _progAo, _progAoBlur;
     uint _aoFbo, _aoTex, _aoBlurFbo, _aoBlurTex;
     int _aoW, _aoH;
+    bool _aoFull;
     int _uAoOrigin, _uAoSize, _uAoTexSize, _uAoTexel, _uAoProjH, _uAoCentre;
     int _uAoRadius, _uAoStrength, _uAoBias, _uAoMaxDepth, _uAoSamples;
     int _uAoBOrigin, _uAoBSize, _uAoBTexSize, _uAoBTexel, _uAoBEdge;
@@ -1921,8 +1922,9 @@ public sealed class GlCore : IGpuBackend
 
     /// <summary>
     /// The two occlusion passes: the finished frame's depth attachment in, a
-    /// blurred occlusion factor in <see cref="_aoBlurTex"/> out, at exactly the
-    /// present framebuffer's size so the present can index it with its own uv.
+    /// blurred occlusion factor in <see cref="_aoBlurTex"/> out, at
+    /// <see cref="AoScale"/> times the display area; the present reads it by its own
+    /// uv, filtered, so any size lines up.
     ///
     /// <paramref name="ox"/>/<paramref name="oy"/> and
     /// <paramref name="sw"/>/<paramref name="sh"/> are the display area inside the
@@ -1932,7 +1934,9 @@ public sealed class GlCore : IGpuBackend
     /// </summary>
     unsafe void RunAo(GlDisplayRt src, float ox, float oy, int sw, int sh, int fbW, int fbH)
     {
-        EnsureAoSize(fbW, fbH);
+        int aoScale = AoScale;
+        int aoW = sw * aoScale, aoH = sh * aoScale;
+        EnsureAoSize(aoW, aoH);
         if (_aoTex == 0 || _aoBlurTex == 0) return;
 
         // 0058. The frame's own geometry, drawn again as normals before the pass
@@ -1940,7 +1944,7 @@ public sealed class GlCore : IGpuBackend
         // prim shader's second output is a dual-source blend factor, and a program
         // with one of those may not render to more than one draw buffer, so there
         // is no MRT to hang a G-buffer off.
-        bool normals = RenderNormals(src);
+        bool normals = RenderNormals(src, aoScale);
 
         // The GTE's projection centre, as a fraction of the display area, so the
         // shader needs no pixel arithmetic of its own.
@@ -1977,7 +1981,7 @@ public sealed class GlCore : IGpuBackend
         _gl.BindVertexArray(_presentVao);
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _aoFbo);
-        _gl.Viewport(0, 0, (uint)fbW, (uint)fbH);
+        _gl.Viewport(0, 0, (uint)aoW, (uint)aoH);
         _gl.UseProgram(_progAo);
         if (_uAoOrigin >= 0) _gl.Uniform2(_uAoOrigin, ox, oy);
         if (_uAoSize >= 0) _gl.Uniform2(_uAoSize, (float)sw, sh);
@@ -2024,12 +2028,13 @@ public sealed class GlCore : IGpuBackend
         _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _aoBlurFbo);
-        _gl.Viewport(0, 0, (uint)fbW, (uint)fbH);
+        _gl.Viewport(0, 0, (uint)aoW, (uint)aoH);
         _gl.UseProgram(_progAoBlur);
         if (_uAoBOrigin >= 0) _gl.Uniform2(_uAoBOrigin, ox, oy);
         if (_uAoBSize >= 0) _gl.Uniform2(_uAoBSize, (float)sw, sh);
         if (_uAoBTexSize >= 0) _gl.Uniform2(_uAoBTexSize, (float)src.Wide1x, src.H);
-        if (_uAoBTexel >= 0) _gl.Uniform2(_uAoBTexel, tx, ty);
+        // One occlusion texel, so the 4x4 box still spans the 4x4 rotation.
+        if (_uAoBTexel >= 0) _gl.Uniform2(_uAoBTexel, 1f / Math.Max(1, aoW), 1f / Math.Max(1, aoH));
         // A twentieth of the depth: wide enough that a wall's own slope never
         // splits the kernel, tight enough that a doorway's edge does.
         if (_uAoBEdge >= 0) _gl.Uniform1(_uAoBEdge, 0.05f);
@@ -2044,7 +2049,7 @@ public sealed class GlCore : IGpuBackend
 
         // The census, on request and for one frame: the only reading that can tell
         // a pass that shaded something from a pass that ran and returned white.
-        if (GteDepth.WantAoMap) CaptureAoMap(fbW, fbH);
+        if (GteDepth.WantAoMap) CaptureAoMap(aoW, aoH);
     }
 
     /// <summary>
@@ -2062,14 +2067,14 @@ public sealed class GlCore : IGpuBackend
     /// the see-through parts of a grate, never a wrong depth, and the pass's own
     /// fallback is what those pixels used to get.
     /// </summary>
-    unsafe bool RenderNormals(GlDisplayRt src)
+    unsafe bool RenderNormals(GlDisplayRt src, int scale)
     {
         if (!GteDepth.AoNormals || _progNormal == 0 || src.Geo.Count == 0) return false;
-        EnsureNormalTarget(src);
+        EnsureNormalTarget(src, scale);
         if (src.Normal == 0) return false;
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, src.NormalFbo);
-        _gl.Viewport(0, 0, (uint)src.TexW, (uint)src.TexH);
+        _gl.Viewport(0, 0, (uint)src.NormalW, (uint)src.NormalH);
         _gl.Disable(EnableCap.DepthTest);
         _gl.Disable(EnableCap.Blend);
         _gl.Disable(EnableCap.ScissorTest);
@@ -2089,7 +2094,7 @@ public sealed class GlCore : IGpuBackend
         // The GTE's centre, in the target's own 1x pixels: its column 0 sits a
         // margin to the left of the game's.
         if (_uNrmCentre >= 0) _gl.Uniform2(_uNrmCentre, GteDepth.ProjCx + src.Margin, GteDepth.ProjCy);
-        if (_uNrmScale >= 0) _gl.Uniform1(_uNrmScale, (float)GlVram.Scale);
+        if (_uNrmScale >= 0) _gl.Uniform1(_uNrmScale, (float)scale);
 
         var verts = src.Geo.Verts;
         _gl.BindVertexArray(_nrmVao);
@@ -2139,9 +2144,10 @@ public sealed class GlCore : IGpuBackend
         return true;
     }
 
-    unsafe void EnsureNormalTarget(GlDisplayRt rt)
+    unsafe void EnsureNormalTarget(GlDisplayRt rt, int scale)
     {
-        if (rt.Normal != 0 && rt.NormalW == rt.TexW && rt.NormalH == rt.TexH) return;
+        int w = rt.Wide1x * scale, h = rt.H * scale;
+        if (rt.Normal != 0 && rt.NormalW == w && rt.NormalH == h) return;
         if (rt.Normal == 0)
         {
             rt.Normal = _gl.GenTexture();
@@ -2154,12 +2160,12 @@ public sealed class GlCore : IGpuBackend
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
-        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)rt.TexW, (uint)rt.TexH, 0,
+        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
                        PixelFormat.Rgba, PixelType.UnsignedByte, null);
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, rt.NormalFbo);
         _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
                                  TextureTarget.Texture2D, rt.Normal, 0);
-        rt.NormalW = rt.TexW; rt.NormalH = rt.TexH;
+        rt.NormalW = w; rt.NormalH = h;
     }
 
     unsafe void CaptureAoMap(int w, int h)
@@ -2175,9 +2181,16 @@ public sealed class GlCore : IGpuBackend
         GteDepth.SetAoMap(buf, w, h);
     }
 
+    /// <summary>The occlusion pass's scale: the render scale, capped by
+    /// <see cref="GteDepth.AoResolution"/>.</summary>
+    static int AoScale => GteDepth.AoResolution <= 0 ? GlVram.Scale : Math.Clamp(GteDepth.AoResolution, 1, GlVram.Scale);
+
     unsafe void EnsureAoSize(int w, int h)
     {
-        if (w == _aoW && h == _aoH && _aoTex != 0) return;
+        // Only red is drawn; the other three are the census's, so without the probe
+        // the textures are one channel and the blur reads a quarter of the bytes.
+        bool full = GteDepth.AoProbe;
+        if (w == _aoW && h == _aoH && _aoTex != 0 && full == _aoFull) return;
         if (_aoTex == 0)
         {
             _aoTex = MakeAoTexture();
@@ -2187,7 +2200,7 @@ public sealed class GlCore : IGpuBackend
         }
         Resize(_aoTex, _aoFbo);
         Resize(_aoBlurTex, _aoBlurFbo);
-        _aoW = w; _aoH = h;
+        _aoW = w; _aoH = h; _aoFull = full;
 
         void Resize(uint tex, uint fbo)
         {
@@ -2196,8 +2209,8 @@ public sealed class GlCore : IGpuBackend
             // was a surface here" mask, blue whether the normal came from the
             // geometry, and alpha how far the old depth-difference normal was from
             // it. The last three are the census's and are never drawn. See AoFs.
-            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
-                PixelFormat.Rgba, PixelType.UnsignedByte, null);
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, full ? InternalFormat.Rgba8 : InternalFormat.R8, (uint)w, (uint)h, 0,
+                full ? PixelFormat.Rgba : PixelFormat.Red, PixelType.UnsignedByte, null);
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
             _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
                 TextureTarget.Texture2D, tex, 0);

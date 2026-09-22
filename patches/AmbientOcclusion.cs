@@ -18,7 +18,9 @@ namespace Kf2;
 ///     KF2_AO_STRENGTH=0.8   how dark a fully occluded pixel goes, 0..1
 ///     KF2_AO_BIAS=0.08      the angular bias that keeps a flat wall from
 ///                           shading itself out of its own depth quantisation
-///     KF2_AO_SAMPLES=16     samples per pixel in the occlusion pass
+///     KF2_AO_SAMPLES=16     samples per pixel in the occlusion pass; pins it
+///                           over the quality setting
+///     KF2_AO_QUALITY=low    low, medium or high (the default): see Quality
 ///     KF2_AO_MAXDEPTH=24000 beyond this view depth the pass returns unoccluded
 ///     KF2_AO_NORMALS=0      take the pass's normals from the depth buffer again,
 ///                           as it did before the port kept the frame's geometry
@@ -92,6 +94,26 @@ public static class AmbientOcclusion
 
     /// <summary>Where the choice is kept between runs.</summary>
     public const string OnKey = "kf2.ao.on";
+    public const string QualityKey = "kf2.ao.quality";
+
+    /// <summary>What the pass costs. High runs at the render scale with 16 samples,
+    /// which is the picture that was judged; Medium caps the pass, its blur and the
+    /// normal buffer at 2x the game's pixels; Low at 1x with 8 samples. The pass is
+    /// memory-bound, so its cost follows the pixel count: an integrated GPU is what
+    /// the lower two are for. See "What the pass costs" in docs/RENDERING.md.</summary>
+    public enum Quality { Low, Medium, High }
+
+    public static Quality CurrentQuality { get; private set; } = Quality.High;
+
+    static Quality? _forcedQuality;
+    static bool _samplesPinned;
+
+    public static void SetQuality(Quality q)
+    {
+        CurrentQuality = q;
+        GteDepth.AoResolution = q switch { Quality.Low => 1, Quality.Medium => 2, _ => 0 };
+        if (!_samplesPinned) GteDepth.AoSamples = q == Quality.Low ? 8 : 16;
+    }
 
     /// <summary>False leaves the picture exactly as it was: no depth is written
     /// for the pass, no primitive changes zMode, and the present multiplies by
@@ -121,8 +143,16 @@ public static class AmbientOcclusion
 
     public static void Configure(string? on, string? radius, string? strength,
                                  string? bias, string? samples, string? maxDepth, string? probe,
-                                 string? normals = null)
+                                 string? normals = null, string? quality = null)
     {
+        _forcedQuality = quality?.Trim().ToLowerInvariant() switch
+        {
+            "low" => Quality.Low,
+            "medium" => Quality.Medium,
+            "high" => Quality.High,
+            _ => null,
+        };
+
         if (!string.IsNullOrWhiteSpace(normals))
         {
             bool want = !normals.Equals("0", StringComparison.Ordinal);
@@ -136,7 +166,11 @@ public static class AmbientOcclusion
         if (float.TryParse(radius, out float r) && r > 0f) GteDepth.AoRadius = r;
         if (float.TryParse(strength, out float st) && st >= 0f) GteDepth.AoStrength = Math.Clamp(st, 0f, 1f);
         if (float.TryParse(bias, out float b) && b >= 0f) GteDepth.AoBias = Math.Clamp(b, 0f, 0.9f);
-        if (int.TryParse(samples, out int n) && n > 0) GteDepth.AoSamples = Math.Clamp(n, 1, 64);
+        if (int.TryParse(samples, out int n) && n > 0)
+        {
+            GteDepth.AoSamples = Math.Clamp(n, 1, 64);
+            _samplesPinned = true;
+        }
         if (float.TryParse(maxDepth, out float md) && md > 0f) GteDepth.AoMaxDepth = md;
 
         if (!string.IsNullOrWhiteSpace(probe) && !probe.Equals("0", StringComparison.Ordinal))
@@ -158,9 +192,13 @@ public static class AmbientOcclusion
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
+            SetQuality(_forcedQuality ?? (Quality)Math.Clamp(
+                RecompOne.Runtime.Runtime.View.GetInt(QualityKey, (int)Quality.High), 0, 2));
             Console.WriteLine($"[KF2] ambient occlusion: {(Enabled ? "on" : "off")}" +
-                              (Enabled ? $", radius {GteDepth.AoRadius:F0}, strength {GteDepth.AoStrength:F2}, " +
-                                         $"{GteDepth.AoSamples} samples" : ""));
+                              (Enabled ? $", {CurrentQuality.ToString().ToLowerInvariant()} quality, " +
+                                         $"radius {GteDepth.AoRadius:F0}, strength {GteDepth.AoStrength:F2}, " +
+                                         $"{GteDepth.AoSamples} samples, " +
+                                         (GteDepth.AoResolution == 0 ? "at the render scale" : $"at most {GteDepth.AoResolution}x") : ""));
         });
 
         bool attached = false;

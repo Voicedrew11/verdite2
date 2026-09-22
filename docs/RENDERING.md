@@ -1720,6 +1720,49 @@ and the sample count stay console settings rather than sliders. It is also
 deliberately not authentic — the console could not
 have drawn this — which is the same footing true color is on.
 
+### What the pass costs, and the quality setting
+
+**Mechanism measured; Medium and Low have not been looked at.**
+
+Reported from an integrated GPU: about 14 ms a frame for the pass. The pass ran at
+the present framebuffer's size, the render scale times the display area, so at
+scale 4-6 it shaded 16-36 pixels per game pixel, and its 4x4 blur covered a single
+game pixel. Each pixel reads 16 depth texels and the blur 16 more plus 16
+occlusion texels, so the cost is memory traffic and follows the pixel count; an
+integrated GPU shares system memory and pays for it most.
+
+The *SSAO* slider under Video ▸ Enhancements (Off, Low, Medium,
+High) replaced the checkbox. Off writes the old `kf2.ao.on` key, so a saved
+config reads the same. A quality (`kf2.ao.quality`,
+`KF2_AO_QUALITY=low|medium|high`) sets `GteDepth.AoResolution`, a cap on the
+pass's scale in multiples of the game's pixels, and the sample count:
+
+| quality | resolution | samples |
+|---|---|---|
+| High (default) | the render scale, as before | 16 |
+| Medium | at most 2x | 16 |
+| Low | at most 1x | 8 |
+
+The pass, the blur and the normal buffer all run at the capped size. The blur's
+step is one occlusion texel, so the 4x4 box still spans the 4x4 rotation it
+cancels. The normal buffer stays Nearest, since a filtered normal is a direction
+neither surface faces. The present was already reading the blurred texture by
+its own uv through a linear filter, so it upsamples with no change. Without the
+probe the two occlusion textures are R8, not RGBA8: only red is drawn, and the
+other three channels are the census's. `KF2_AO_SAMPLES` still pins the count over
+the setting.
+
+Measured on the development machine at the water in area 0, uncapped, two frame
+captures each: the AO step (normals, pass and blur) took 0.58-0.82 ms of GPU at
+High, 0.14-0.22 at Medium and 0.06-0.08 at Low. `KF2_AO_PROBE=2` read the same
+shading at all three: 52.4 / 52.7 / 53.3% of the picture shaded, mean 0.976,
+darkest 0.68 / 0.72 / 0.74. Low with the probe off (R8) held 144.0 fps drawn at
+19.9 ticks/s with `[present] wide 277`. Two things were considered and turned
+down. Running the pass every second present would leave the shading a present
+behind a camera the smoothing moves every present, which shows when the camera
+turns. Shader micro-optimisations do little for a pass that is bound on memory
+fetches. The integrated GPU itself has not been measured.
+
 ## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
 
 **Mechanism measured; on by default.** One
@@ -2481,6 +2524,17 @@ another texture's colour.
 
 **On by default since v0.3.0** (`KF2_MIPMAPS=0` to compare), chosen before the
 picture was judged by eye; the filtering level stays off.
+
+**One slider since, and 16x by default.** *Texture filtering* is a slider with
+fixed positions, Off / Trilinear / 2x / 4x / 8x / 16x, and the *Mipmaps* checkbox
+is gone. Every position past Off turns mipmaps on. The fourth combination the two
+controls allowed, filtering without mipmaps, was never better: the same cost
+(717-722 fps against 720-722 below) and a kernel that cannot average a footprint
+past 16 texels. It is left to `KF2_MIPMAPS=0`. A saved level above 1 now implies
+mipmaps whatever the saved `kf2.mipmaps.on` says; Off saves both keys off. A first
+run starts at 16x. Measured: `[KF2] aniso: on, up to 16 taps, mipmaps on`, the
+uniform bound and the atlas built (500 entries, none evicted). **16x as the default
+has not been judged by eye.**
 
 A mip chain cannot live in VRAM, for the two reasons at the top of this section,
 and it does not need to: it can live where the texture is **decoded**. `0060`'s

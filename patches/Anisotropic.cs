@@ -199,17 +199,19 @@ public static class Anisotropic
 
     public static void Install()
     {
-        // Filtering defaults off, mipmaps on. RuntimeReadyEvent is the first and only place the saved
+        // 16x with mipmaps by default. Any filtering implies mipmaps: without them
+        // the kernel costs the same and cannot average a footprint past 16 texels,
+        // so that pairing is left to KF2_MIPMAPS=0. RuntimeReadyEvent is the first and only place the saved
         // setting is read: ConfigManager only loads inside HostWindow.Initialize,
         // which is after Program.cs, so reading it here would read an empty config
         // and write it back over the real one.
-        Level = _forced ?? 1;
+        Level = _forced ?? Max;
         Mipmaps = _forcedMip ?? true;
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Level = _forced ?? RecompOne.Runtime.Runtime.View.GetInt(LevelKey, 1);
-            Mipmaps = _forcedMip ?? RecompOne.Runtime.Runtime.View.GetBool(MipKey, true);
+            Level = _forced ?? RecompOne.Runtime.Runtime.View.GetInt(LevelKey, Max);
+            Mipmaps = _forcedMip ?? (Enabled || RecompOne.Runtime.Runtime.View.GetBool(MipKey, true));
             Console.WriteLine($"[KF2] aniso: {(Enabled ? $"on, up to {Level} taps" : "off (one sample)")}, " +
                               $"mipmaps {(Mipmaps ? "on" : "off")}");
         });

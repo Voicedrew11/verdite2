@@ -3,8 +3,8 @@ using ImGuiNET;
 namespace Kf2.Settings;
 
 /// <summary>
-/// How the shaded gradient is drawn, under Video ▸ Enhancements — **one combo
-/// where there were two checkboxes**.
+/// How the shaded gradient is drawn, under Video ▸ Enhancements — **one slider
+/// with fixed positions where there were two checkboxes** (it was a combo first).
 ///
 /// The dither switch and the true-color switch are the two answers to one
 /// question. The console renders into 15-bit VRAM, so a fog gradient steps into
@@ -53,11 +53,12 @@ public sealed class ShadingPage : IPatchPage
     {
         int index = Index();
 
-        if (ImGui.Combo("Shading", ref index, Labels, Labels.Length)) Apply(index);
+        if (ImGui.SliderInt("Shading", ref index, 0, Labels.Length - 1, Labels[index],
+                            ImGuiSliderFlags.AlwaysClamp | ImGuiSliderFlags.NoInput))
+            Apply(index);
 
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("How the shaded gradient is drawn: the console's crosshatch, " +
-                             "plain 15-bit, or smooth.");
+            ImGui.SetTooltip("Crosshatch, plain or smooth gradients.");
     }
 
     /// <summary>The state the two patches are actually in, folded onto the three

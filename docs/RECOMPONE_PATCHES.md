@@ -473,7 +473,10 @@ Four files in the directory have no entry below:
   32x16 map. Off by default, for the sub-pixel reason and because it is
   deliberately not authentic; one checkbox under Video ▸ Enhancements and the
   tuning on the console. GL backend only. **No recompile.** See "Ambient
-  occlusion" in `docs/RENDERING.md`.
+  occlusion" in `docs/RENDERING.md`. Since amended: `GteDepth.AoResolution` caps
+  the pass, the blur and the normal buffer at a multiple of the game's pixels, and
+  the two occlusion textures are R8 unless the probe is on; see "What the pass
+  costs" there.
 
 - `0041-anisotropic-filtering.patch` — a screen pixel covers an *area* of the
   texture, and the shape of it is the parallelogram spanned by the two screen

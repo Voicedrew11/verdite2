@@ -186,7 +186,7 @@ body moves across unchanged. `NoDitherPage` is the first one that arrived that
 way — `mods/nodither`'s checkbox, in Video under the frame rate, with the mod's
 `_on` field now `NoDither.Enabled` and its `Runtime.View` calls now
 `PatchSettings.Set`. (That page no longer exists as a file: it is one entry of
-`ShadingPage`'s combo now — see "Two shading checkboxes were one question asked
+`ShadingPage`'s slider now — see "Two shading checkboxes were one question asked
 twice" — but the conversion is what the paragraph is about and is unchanged.) Its explanatory paragraphs did *not* come across: a mod's
 panel is a place to explain itself, a settings section is a list of switches, so
 the prose became a hover tooltip and the counters stayed on the console.
@@ -359,8 +359,10 @@ hides it with a 4x4 crosshatch, true color removes it by keeping eight bits (see
 three meanings, and the fourth — dither on *and* 24-bit — is a smooth gradient
 with a crosshatch laid over it, which is nobody's answer to anything.
 
-So `patches/settings/ShadingPage.cs` is one combo, `Shading`, with the three
-states that mean something:
+So `patches/settings/ShadingPage.cs` is one control, `Shading`, with the three
+states that mean something. It was a combo; it is now a slider with fixed
+positions, the shape of the frame-rate slider, as *Texture filtering* and *SSAO*
+are:
 
 | entry | `NoDither.Enabled` | `TrueColor.Enabled` |
 |---|---|---|
