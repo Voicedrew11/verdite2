@@ -2710,7 +2710,7 @@ the restored frame is not exactly the game's. Not looked at.
 
 ## The first intro movie never reached the screen
 
-**Fixed (`0063`); the mechanism is measured, and the picture still needs a look by eye.** Reported
+**Fixed (`0054`, amended); the mechanism is measured, and the picture still needs a look by eye.** Reported
 from play: the ASCII Entertainment logo at boot is black, but its jingle plays and
 the FromSoftware logo after it shows. The three boot movies are `OP0.S`
 (ASCII), `OP1.S` (FromSoftware) and `OP2.S` (the intro). All three decode and upload

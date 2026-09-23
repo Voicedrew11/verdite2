@@ -7,6 +7,12 @@ change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
 complete one.
 
+**A new number is for a new mechanism.** A correction to an existing patch's own
+logic amends that patch instead: a "Since amended:" paragraph in its entry, the
+amendment's diff appended to its `.patch` file, and the source comments keep its
+number. `0016` and `0057` predate this and keep their numbers, since the source
+refers to them.
+
 Forty-six of the fifty-one are load-bearing; `0002`, `0003`, `0015` and `0046` are
 diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
@@ -635,7 +641,18 @@ Four files in the directory have no entry below:
   framebuffer and `CommitDraw` copies the AABB back, because leaving sample
   VRAM on `SampleFbo` made the `TexSubImage2D`s render-target writes and left
   `Flush` at 0.6 ms after the atlas blit was gone. GL only. **No recompile.**
-  See "Watching a frame being built" in `docs/DEVELOPMENT.md`.
+  See "Watching a frame being built" in `docs/DEVELOPMENT.md`. Since amended:
+  an upload was promoted from 1× to the scaled framebuffer only when **no display
+  target existed at all**, but that framebuffer is what the present reads
+  whenever no target *serves* the display — none covers it, or the margin latch
+  refuses the one that does. Boot's first `isbg` clear leaves a 640x240 target at
+  `(0,240)` that nothing draws into again, so for the ~300 presents it lives every
+  MDEC frame of `OP0.S` (the ASCII Entertainment logo) missed the screen: the
+  jingle played over black, at 16:9 and at 4:3. `WriteVram` now promotes any
+  upload no serving target contains (`ServedByTarget`), and the present's latch
+  test is the same `MarginRefused`. The amendment is the second diff in the
+  patch file. See "The first intro movie never reached the screen" in
+  `docs/RENDERING.md`.
 
 - `0055-append-batch-vertices.patch` — `GlCore.FlushCore` uploaded every batch's
   vertices to offset 0 of `_vbo` (and `_vboLight`), the range the previous batch's
@@ -743,19 +760,6 @@ Four files in the directory have no entry below:
   stick directions (102-109) answer through it too, and `HostWindow` forwards it.
   `mods/kf2debug` is the caller: the mute key toggles noclip. Input only — **no
   recompile**. See "What the runtime had to grow" in `docs/INPUT.md`.
-
-- `0063-upload-reaches-the-present-fallback.patch` — `0054` promoted an upload
-  from 1x sample VRAM to the scaled framebuffer only when **no display target
-  existed at all**, but that scaled framebuffer is what the present reads whenever no target
-  *serves* the display: none covers it, or the margin latch refuses the one that
-  does. Boot's first `isbg` clear makes a 640x240 target at `(0,240)` that nothing
-  draws into again, so for the ~300 presents it lives, every MDEC frame of
-  `OP0.S` (the ASCII Entertainment logo) went to 1x VRAM and the target and never
-  reached the screen. The movie's sound played, and the screen was black at 16:9 and at 4:3.
-  `WriteVram` now promotes any upload that no serving target contains
-  (`ServedByTarget`), and the present's latch test is the same
-  `MarginRefused`. **No recompile.** See "The first intro movie never reached
-  the screen" in `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

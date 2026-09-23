@@ -1104,10 +1104,10 @@ public sealed class GlCore : IGpuBackend
         else
         {
             _vram.WriteRect(x, y, w, h, px);
-            // 0063. The present reads the scaled framebuffer wherever no target
-            // serves the display, so an upload no target will present goes there
-            // too. "No target at all" was not that: one idle target from the boot
-            // clear kept every MDEC frame of the first intro movie off the screen.
+            // 0054, amended. The present reads the scaled framebuffer wherever no
+            // target serves the display, so an upload no target will present goes
+            // there too. "No target at all" was not that: one idle target from the
+            // boot clear kept every MDEC frame of the first intro movie off the screen.
             if (!ServedByTarget(x, y, w, h)) _vram.Promote(x, y, w, h);
         }
         if (_check != null) { _check.Upload(x, y, w, h, px); _check.Check(_vram, restored ? "restore" : "upload", x, y, w, h, false); }
@@ -1115,9 +1115,10 @@ public sealed class GlCore : IGpuBackend
         SnapProbe();
     }
 
-    /// <summary>0063. Whether a live display target contains the rectangle and
-    /// the present would take it, which is where an upload is carried by
-    /// <see cref="SyncRtsFromVram"/> rather than by the scaled framebuffer.</summary>
+    /// <summary>0054, amended. Whether a live display target contains the
+    /// rectangle and the present would take it, which is where an upload is
+    /// carried by <see cref="SyncRtsFromVram"/> rather than by the scaled
+    /// framebuffer.</summary>
     bool ServedByTarget(int x, int y, int w, int h)
     {
         foreach (var rt in _rts)
