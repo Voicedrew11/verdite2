@@ -1072,6 +1072,47 @@ schema, and a `.chd` goes in the same slot.
 Nothing here is a picture, so there is nothing new to look at by eye: a CHD is the
 same disc.
 
+## Minimising froze the game on Wayland
+
+With VSync on, minimising the window stopped everything: no presents, no ticks, no
+probe lines, until the window came back. Measured with KWin minimising and
+restoring the window by script, `KF2_FPS=144 KF2_FPS_PROBE=1`, on a 120 Hz monitor
+(AMD, Mesa 25.3): **no probe line for the 13 s it was minimised**, then a
+second reading 7.9 fps and 1.4 ticks. The native stack of the game thread while it
+was hidden is `eglSwapBuffers` → `dri2_wl_swap_buffers_with_damage` →
+`wl_display_dispatch_queue`: a swap at interval 1 waits for the compositor's frame
+callback, and a compositor sends none to a surface nobody can see. The port
+presents from inside the game's own `VSync`, so that one wait holds the world, the
+disc and the sound as well as the picture.
+
+**Asking for interval 0 did not fix it, which is how the second defect showed.**
+`ApplySwapInterval` asked for -1 (adaptive) and logged `swap interval: -1
+(adaptive)`, but the swap still waited for a frame callback at 0. Silk's own
+`VSync` — set from `WindowOptions` at creation and again from `SetVSync` — puts
+interval 1 back over it. So the log had been wrong on every platform: the game ran
+at interval 1, never adaptive. (Measured on the old code: 119.9 fps drawn at
+`KF2_FPS=144` with VSync on, which is what interval 1 on a 120 Hz monitor looks
+like, and not the "-1 clamps to 0, so no vsync" an outside review predicted for
+EGL.) With Silk's VSync held false, interval 0 on Wayland does not wait.
+
+`0064` makes `ApplySwapInterval` the only thing that sets the interval. Off
+Wayland, VSync on is interval 1, which is what had been running all along; adaptive
+was never actually shipped, and it tears on a late frame, so it was not brought
+in. On Wayland the swap stays at 0 — a Wayland compositor never tears, so the swap
+was only ever adding the wait — and `FrameClock.WaitRefresh` holds one present per
+monitor refresh on the CPU, on its own grid, before the swap. Measured after, same
+setup: **120.0 fps drawn and 19.8-20.8 ticks a second throughout the 13 s
+minimised**; 119.9-120.0 fps with the window shown; VSync off still 144.0 at
+20.0 ticks, `[present] wide 288`; `swap interval: 0 (Wayland: vsync held on the
+CPU at 120 hz)` in the log.
+
+The mechanism is measured; the picture is not. A CPU grid is not locked to the
+compositor's refresh the way a blocking swap is, so it can drift against it and
+drop or repeat a frame at the beat — the same thing the port's own default pacing
+(VSync off, a CPU deadline) already does. Whether that is visible at 120 Hz has
+not been looked at. X11 and Windows are unchanged in effect (interval 1) and were
+not run.
+
 ## Two general shapes worth keeping
 
 `0007`, `0008` and `patches/EndingHold.cs` are the pattern to keep in mind:

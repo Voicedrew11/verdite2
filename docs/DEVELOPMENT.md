@@ -136,6 +136,26 @@ something to say about *how* to use them:
   sequence still. See "Auto reload" in
   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
+### The GL backend reported nothing
+
+Nothing in the GL backend read an error back — no `glGetError`, no
+`CheckFramebufferStatus`, no `KHR_debug` callback — so a driver that refuses a
+framebuffer or a call leaves that pass empty, and the first anyone hears of it is a
+picture on somebody else's machine. **`KF2_GLDEBUG=1`** (`0065`) asks for a debug
+context and prints every error, warning and performance message the driver sends,
+on stderr as `[GL] <severity> <type> <source> #<id>: <text>`; a message repeated
+every frame prints three times and then at 10, 100, 1000 with its count. `=2` adds
+notifications and the managed stack of each first report, which names the call
+site, since the callback is synchronous. A context without `KHR_debug` (below 4.3
+and without the extension) polls `glGetError` once a present instead, which names
+the error but not the call. Off, nothing is installed. This is the first thing to
+ask for with a report from another GPU.
+
+Its first run found a real one: `GL_INVALID_OPERATION in glUniform1("uScale"@18 is
+int, not float)`, which was `0055`'s cached upload (see "Water on screen cost 5 ms
+a frame"). After the fix, `=1` and `=2` report nothing at all over an autostart
+into area 1 on radeonsi.
+
 ### For a hang, take the managed stack of the live process
 
 A recompiled function keeps its
@@ -755,7 +775,11 @@ After: `Flush` 0.50 ms, work 3.1 ms, 153 → 310 fps; fluid on 3.09-3.13 against
 3.00-3.12; area 1 at 0.67 ms, 910 fps. The depth map (`KF2_ZBUFFER_PROBE=2`) and
 the occlusion readback (`KF2_AO_PROBE=2`) at that view are identical before and
 after, and the run reads 144.0 fps drawn at 20.0 ticks/s, `[present] wide`. The
-687 splits themselves remain.
+687 splits themselves remain. **The cached `uScale` upload was refused by the
+driver for as long as it existed**: `_legacy ? (float)s : s` is a `float` in C#
+whichever branch runs, and the core shader declares `int uScale`, so every update
+failed and the value set at init stood. Only the dither grid reads it on the core
+path; `KF2_GLDEBUG=1` named it (see "The GL backend reported nothing").
 
 **What it costs.** Off, a null test per GP0 word and per batch submit. After a
 capture, the analysis is one full replay: 5.4 ms, or 21 ms for a frame with

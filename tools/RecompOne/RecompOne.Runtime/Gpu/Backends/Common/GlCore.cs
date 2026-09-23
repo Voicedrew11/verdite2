@@ -1348,7 +1348,13 @@ public sealed class GlCore : IGpuBackend
         _gl.UseProgram(_progPrim);
         if (s != _primScaleSent)
         {
-            if (_uPrimScale >= 0) _gl.Uniform1(_uPrimScale, _legacy ? (float)s : s);
+            // 0055, amended. `_legacy ? (float)s : s` is a float either way, which
+            // the core shader's int uScale refuses.
+            if (_uPrimScale >= 0)
+            {
+                if (_legacy) _gl.Uniform1(_uPrimScale, (float)s);
+                else _gl.Uniform1(_uPrimScale, s);
+            }
             _primScaleSent = s;
         }
         _gl.BindVertexArray(_vao);

@@ -175,6 +175,8 @@ Build it, run it, and measure what it did.
 - Recompile
 - Build and run
 - Diagnostics
+- The GL backend reported nothing
+- For a hang, take the managed stack of the live process
 - Compile a mod without launching the game
 - Getting pixels out without a screenshot
 - Profiling a frame
@@ -231,6 +233,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 - The picture is inset inside its own panel
 - The interface's font
 - CHD disc images
+- Minimising froze the game on Wayland
 - Two general shapes worth keeping
 - Upstream contribution policy
 
@@ -350,7 +353,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0062`, one entry each.
+Every change the port made to RecompOne, `0001`-`0065`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

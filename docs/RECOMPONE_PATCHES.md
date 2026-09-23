@@ -13,8 +13,9 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Forty-six of the fifty-one are load-bearing; `0002`, `0003`, `0015` and `0046` are
-diagnostics and `0013` is a settings-placement hook. **Three force a recompile** —
+Forty-seven of the fifty-three are load-bearing; `0002`, `0003`, `0015`, `0046` and
+`0065` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
+it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
 embeds, which is now simply a tracked file in the vendored tree.
@@ -662,7 +663,14 @@ Four files in the directory have no entry below:
   `uScale`'s location is cached rather than looked up by name per batch, and the
   fluid uniforms (`0053`) are sent only when they change. The picture is the same
   by the depth map and the occlusion readback. **No recompile.** See "Water on
-  screen cost 5 ms a frame" in `docs/DEVELOPMENT.md`.
+  screen cost 5 ms a frame" in `docs/DEVELOPMENT.md`. Since amended: the cached
+  upload was `Uniform1(loc, _legacy ? (float)s : s)`, and C# gives that conditional
+  the type `float` whichever branch is taken, so the core shader's `int uScale`
+  refused every update with `GL_INVALID_OPERATION` and kept the value set at init.
+  Its only reader on the core path is the dither grid, so a render-scale change or a
+  1x draw put the *Dither* shading's pattern at the wrong size; *Smooth*, the
+  default, skips it. Found by `0065` on its first run. The amendment is the second
+  diff in the patch file.
 
 - `0056-ram-size-above-2mb.patch` — the port gives the guest 4 MB so the game's
   primitive buffers can move above 2 MB. `GteVertexMap` sized its tables from the
@@ -760,6 +768,29 @@ Four files in the directory have no entry below:
   stick directions (102-109) answer through it too, and `HostWindow` forwards it.
   `mods/kf2debug` is the caller: the mute key toggles noclip. Input only — **no
   recompile**. See "What the runtime had to grow" in `docs/INPUT.md`.
+
+- `0064-swap-interval-and-wayland-vsync.patch` — the VSync setting asked GLFW for
+  interval -1 (adaptive), but Silk's own `WindowOptions.VSync` / `IWindow.VSync`
+  put interval 1 back over it, so 1 is what ran. On Wayland a swap on a hidden
+  surface waits in `eglSwapBuffers` until the window is shown again, and the game
+  presents from inside its own `VSync`, so **minimising the window stopped the
+  whole game**. Silk's VSync is now always false and `ApplySwapInterval` owns the
+  interval: 1 with VSync on, except on Wayland (`glfwGetPlatform`, which Silk 2.22
+  does not bind), where the swap stays at 0 — the compositor never tears — and
+  `FrameClock.WaitRefresh` holds one present per monitor refresh on the CPU
+  (`Profiler.VSyncWait`). `FrameClock.VSync` now means "the swap blocks". **No
+  recompile.** See "Minimising froze the game on Wayland" in `docs/RUNTIME.md`.
+
+- `0065-gl-debug-output.patch` — nothing in the GL backend read an error back, so a
+  driver that refused a framebuffer or a call left that pass empty with no line
+  anywhere. `Host/Window/GlDebug.cs`: `KF2_GLDEBUG=1` adds `ContextFlags.Debug` to
+  every context asked for and installs a synchronous `KHR_debug` callback (GL 4.3
+  or the extension); a context without one polls `glGetError` once a present
+  instead. A message repeated every frame prints three times and then at each
+  power of ten, with its count; `=2` adds notifications and the managed stack of
+  each first report. Off, nothing is installed. The `Present` hunk carrying
+  `GlDebug.Poll` is in `0064`'s file, where it shares a hunk with the refresh wait.
+  **No recompile.** See "The GL backend reported nothing" in `docs/DEVELOPMENT.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

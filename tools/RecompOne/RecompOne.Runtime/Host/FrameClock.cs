@@ -190,4 +190,33 @@ internal static class FrameClock
 
         LastWaitMs = wait;
     }
+
+    //0064. VSync on Wayland, where the swap is left at interval 0 so a hidden
+    //window cannot block the game: one present per refresh, on its own grid.
+    private static double _nextRefreshMs;
+
+    public static void WaitRefresh(int hz)
+    {
+        var periodMs = 1000.0 / (hz > 0 ? hz : 60);
+        var now = Now;
+
+        _nextRefreshMs += periodMs;
+        var wait = _nextRefreshMs - now;
+        if (wait <= 0)
+        {
+            //A late frame is not paid back with a burst.
+            if (wait < -periodMs) _nextRefreshMs = now;
+            return;
+        }
+
+        var sleepUntil = _nextRefreshMs - SpinMs;
+        if (now < sleepUntil)
+        {
+            var ms = (int)(sleepUntil - now);
+            if (ms > 0) Thread.Sleep(ms);
+        }
+
+        while (Now < _nextRefreshMs)
+            Thread.SpinWait(48);
+    }
 }

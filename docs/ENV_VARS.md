@@ -110,6 +110,7 @@ KF2_NODITHER_PROBE=1                   # where the dither bit comes from, and GP
 KF2_TRUECOLOR=0                        # 15-bit shaded output (24-bit is the default; GL backend only)
 KF2_VRAMSNAP=0                         # a menu restores the frozen frame at 1x again (the scaled copy is kept by default)
 KF2_VRAMSNAP_PROBE=1                   # frame restores served from that copy, against uploads that missed, and readbacks outside a display target not copied
+KF2_GLDEBUG=1                          # a debug GL context, and every error or warning the driver reports on stderr (0065); =2 adds notifications and each first report's stack
 KF2_VRAMCHECK=1                        # mirror every VRAM upload, copy and fill on the CPU and name the operation that changes texels it should not (slow)
 KF2_VSYNC=block                        # upstream's blocking vblank timeline instead of the port's grid (caps the picture at 60)
 KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)

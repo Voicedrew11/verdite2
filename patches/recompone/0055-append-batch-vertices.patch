@@ -183,3 +183,22 @@ diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/t
      void SetBlend(float src, float dst) => _gl.Uniform4(_uBlend, src, src, src, dst);
  
      void SetDepthBias(bool on)
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index 04b2a8e..0943251 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -1348,7 +1348,13 @@ public sealed class GlCore : IGpuBackend
+         _gl.UseProgram(_progPrim);
+         if (s != _primScaleSent)
+         {
+-            if (_uPrimScale >= 0) _gl.Uniform1(_uPrimScale, _legacy ? (float)s : s);
++            // 0055, amended. `_legacy ? (float)s : s` is a float either way, which
++            // the core shader's int uScale refuses.
++            if (_uPrimScale >= 0)
++            {
++                if (_legacy) _gl.Uniform1(_uPrimScale, (float)s);
++                else _gl.Uniform1(_uPrimScale, s);
++            }
+             _primScaleSent = s;
+         }
+         _gl.BindVertexArray(_vao);

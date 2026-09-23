@@ -88,16 +88,16 @@ public static class HostWindow
         if (OperatingSystem.IsMacOS())
             return
             [
-                new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.ForwardCompatible,
+                new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, GlDebug.Flags(ContextFlags.ForwardCompatible),
                     new APIVersion(4, 1))
             ];
 
         var requested = Hle.GpuBackendFactory.Parse(ConfigManager.View.GpuBackend);
-        var core45 = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.Default,
+        var core45 = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, GlDebug.Flags(ContextFlags.Default),
             new APIVersion(4, 5));
-        var core33 = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, ContextFlags.Default,
+        var core33 = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Core, GlDebug.Flags(ContextFlags.Default),
             new APIVersion(3, 3));
-        var compat21 = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Compatability, ContextFlags.Default,
+        var compat21 = new GraphicsAPI(ContextAPI.OpenGL, ContextProfile.Compatability, GlDebug.Flags(ContextFlags.Default),
             new APIVersion(2, 1));
 
         return requested switch
@@ -149,7 +149,8 @@ public static class HostWindow
                 {
                     Size = new Vector2D<int>(1280, 720),
                     Title = title,
-                    VSync = ConfigManager.View.VSync,
+                    // 0064. ApplySwapInterval owns the interval; Silk's puts 1 back over it.
+                    VSync = false,
                     UpdatesPerSecond = 0,
                     FramesPerSecond = 0,
                     WindowState = ConfigManager.View.Fullscreen ? WindowState.Fullscreen : WindowState.Normal,
@@ -363,11 +364,20 @@ public static class HostWindow
 
         Profiler.End(events);
 
+        // 0064. VSync on Wayland is held here, since the swap there does not wait.
+        if (_cpuVSync)
+        {
+            var wait = Profiler.Begin(Profiler.VSyncWait);
+            FrameClock.WaitRefresh(Interp.Interp.RefreshRate);
+            Profiler.End(wait);
+        }
+
         // 0045. What OnRender does not claim for itself is Silk's own swap, which
         // is where the thread waits on the driver.
         var render = Profiler.Begin(Profiler.HostRender);
         _window.DoRender();
         Profiler.End(render);
+        GlDebug.Poll(_gl);
         FrameClock.MarkPresent();
     }
 
@@ -612,6 +622,7 @@ public static class HostWindow
         if (_pendingIcons is { } icons) Apply(icons);
 
         _gl = GL.GetApi(_window);
+        GlDebug.Install(_gl);
         _gl.ClearColor(0.08f, 0.08f, 0.08f, 1f);
 
         var fb = _window!.FramebufferSize;
@@ -698,8 +709,6 @@ public static class HostWindow
 
     public static void SetVSync(bool on)
     {
-        if (_window != null) _window.VSync = on;
-        FrameClock.VSync = on;
         Interp.Interp.VSync = on;
         ApplySwapInterval();
         FrameClock.Resync();
@@ -726,19 +735,49 @@ public static class HostWindow
             Console.WriteLine($"[Host] monitor refresh: {refresh} hz");
         }
         
-        var interval = Interp.Interp.VSync ? -1 : 0;
-        if (!SetSwapInterval(interval)) interval = SetSwapInterval(1) ? 1 : 0;
-        
+        // 0064. Silk's own VSync set interval 1 over the -1 (adaptive) asked for
+        // here, so 1 is what ran, and it stays 1 off Wayland. On Wayland a swap on
+        // a hidden window waits until it is shown, and the game presents from
+        // inside its own VSync, so minimising stopped everything. The compositor
+        // never tears, so the swap stays at 0 there and the refresh is held on the
+        // CPU instead.
+        var vsync = Interp.Interp.VSync;
+        var wayland = IsWayland();
+        var interval = vsync && !wayland ? 1 : 0;
+        _cpuVSync = vsync && wayland;
+        FrameClock.VSync = vsync && !wayland;
+        SetSwapInterval(interval);
+
         Console.WriteLine($"[Host] swap interval: {interval}" +
-                          (interval == -1 ? " (adaptive)" : ""));
+                          (_cpuVSync ? $" (Wayland: vsync held on the CPU at {RefreshHz()} hz)" : ""));
     }
-    
-    private static bool SetSwapInterval(int interval)
+
+    private static bool _cpuVSync;
+
+    private static int RefreshHz() => Interp.Interp.RefreshRate > 0 ? Interp.Interp.RefreshRate : 60;
+
+    private static void SetSwapInterval(int interval)
     {
         try
         {
             Silk.NET.GLFW.Glfw.GetApi().SwapInterval(interval);
-            return true;
+        }
+        catch (Exception e)
+        {
+            Console.Error.WriteLine($"[Host] swap interval {interval}: {e.Message}");
+        }
+    }
+
+    // GLFW 3.4's glfwGetPlatform, which Silk 2.22 does not bind.
+    private const int GlfwPlatformWayland = 0x00060003;
+
+    private static unsafe bool IsWayland()
+    {
+        try
+        {
+            var glfw = Silk.NET.GLFW.Glfw.GetApi();
+            if (!glfw.Context.TryGetProcAddress("glfwGetPlatform", out var fn) || fn == 0) return false;
+            return ((delegate* unmanaged<int>)fn)() == GlfwPlatformWayland;
         }
         catch
         {
