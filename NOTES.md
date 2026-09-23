@@ -251,6 +251,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Anisotropic filtering: a pixel covers an area, and the console read a point
 - The render scale did not survive a menu
 - A shop overwrote the textures with the atlas's old texels
+- The first intro movie never reached the screen
 - The display list cannot name a face: why packet-level smoothing failed
 - "No textures on the other machine": splitting the three layers
 

@@ -2708,6 +2708,45 @@ on, every restore of the in-game menu after the first leaves 2525 pixels in
 verifies at 0). It is inside the display area, so it cannot touch textures, but
 the restored frame is not exactly the game's. Not looked at.
 
+## The first intro movie never reached the screen
+
+**Fixed (`0063`); the mechanism is measured, and the picture still needs a look by eye.** Reported
+from play: the ASCII Entertainment logo at boot is black, but its jingle plays and
+the FromSoftware logo after it shows. The three boot movies are `OP0.S`
+(ASCII), `OP1.S` (FromSoftware) and `OP2.S` (the intro). All three decode and upload
+the same way, 15-bit, 320x240, twenty 16-pixel slices per frame, flipping
+between `(0,0)` and `(0,240)`. The logs cannot tell them apart.
+
+**The pixels were in VRAM and not on the screen.** Reading the display rect
+back from 1x VRAM after each `DrawOTag` found the ASCII frames there, blue
+content fading to full white, up to 35% of the picture lit. Reading back the
+present's own output found `mean 0, max 0` for the whole movie, at 16:9 and at
+4:3.
+
+**`0054` sends an upload to the scaled framebuffer only when no display target
+exists.** That framebuffer is the present's fallback, and the rule treats "there
+is a target" as if it meant "a target will present this". Boot's first
+`PutDrawEnv` (`isbg=1`, 640x240 at `(0,240)`) creates one target that nothing
+draws into again. `KF2_PRESENT_PROBE=2` shows the two buffers failing for two
+different reasons:
+
+- A frame shown from `(0,0)` is `no target covers the display`.
+- A frame shown from `(0,240)` is `margin latch refused` (`latch -1000`, idle
+  counting up).
+
+Both fall back to a framebuffer that never received a slice. The target is
+destroyed after 300 idle presents, which falls right at the switch to `OP1.S`, so
+uploads promote again and the second logo shows.
+
+**An upload is now promoted unless a target that the present will take contains
+it** (`ServedByTarget`). The present's own latch test is the same
+`MarginRefused`, so the two cannot disagree. Measured after: the presented ASCII
+frames read `mean 8-48, max 126-255` where they read 0, and FromSoftware reads what
+it did before. Uploads outside every target now promote too, in texture space
+during play. In `fdat02` facing the water at `KF2_FPS=1000` that cost nothing:
+270 fps against 265, `GlCore.Flush` 0.565 ms against 0.569. The acceptance run is
+unchanged (144.0 fps drawn at 20.0 ticks/s, `wide 288, vram fallback 0`).
+
 ## The display list cannot name a face: why packet-level smoothing failed
 
 The port smooths between logic ticks by carrying *tables* — the camera in

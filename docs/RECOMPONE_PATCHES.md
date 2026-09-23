@@ -744,6 +744,19 @@ Four files in the directory have no entry below:
   `mods/kf2debug` is the caller: the mute key toggles noclip. Input only — **no
   recompile**. See "What the runtime had to grow" in `docs/INPUT.md`.
 
+- `0063-upload-reaches-the-present-fallback.patch` — `0054` promoted an upload
+  from 1x sample VRAM to the scaled framebuffer only when **no display target
+  existed at all**, but that scaled framebuffer is what the present reads whenever no target
+  *serves* the display: none covers it, or the margin latch refuses the one that
+  does. Boot's first `isbg` clear makes a 640x240 target at `(0,240)` that nothing
+  draws into again, so for the ~300 presents it lives, every MDEC frame of
+  `OP0.S` (the ASCII Entertainment logo) went to 1x VRAM and the target and never
+  reached the screen. The movie's sound played, and the screen was black at 16:9 and at 4:3.
+  `WriteVram` now promotes any upload that no serving target contains
+  (`ServedByTarget`), and the present's latch test is the same
+  `MarginRefused`. **No recompile.** See "The first intro movie never reached
+  the screen" in `docs/RENDERING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

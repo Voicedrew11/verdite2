@@ -1104,12 +1104,30 @@ public sealed class GlCore : IGpuBackend
         else
         {
             _vram.WriteRect(x, y, w, h, px);
-            if (_rts[0] == null && _rts[1] == null) _vram.Promote(x, y, w, h);
+            // 0063. The present reads the scaled framebuffer wherever no target
+            // serves the display, so an upload no target will present goes there
+            // too. "No target at all" was not that: one idle target from the boot
+            // clear kept every MDEC frame of the first intro movie off the screen.
+            if (!ServedByTarget(x, y, w, h)) _vram.Promote(x, y, w, h);
         }
         if (_check != null) { _check.Upload(x, y, w, h, px); _check.Check(_vram, restored ? "restore" : "upload", x, y, w, h, false); }
         SyncRtsFromVram(x, y, w, h, fromSample: !restored);
         SnapProbe();
     }
+
+    /// <summary>0063. Whether a live display target contains the rectangle and
+    /// the present would take it, which is where an upload is carried by
+    /// <see cref="SyncRtsFromVram"/> rather than by the scaled framebuffer.</summary>
+    bool ServedByTarget(int x, int y, int w, int h)
+    {
+        foreach (var rt in _rts)
+            if (rt != null && !MarginRefused(rt)
+                && x >= rt.X && y >= rt.Y && x + w <= rt.X + rt.W && y + h <= rt.Y + rt.H)
+                return true;
+        return false;
+    }
+
+    static bool MarginRefused(GlDisplayRt rt) => rt is { Margin: > 0, MarginContentFlip: < 0 };
 
     public void ReadVram(int x, int y, int w, int h, Span<ushort> px) => ReadVram(x, y, w, h, px, true);
 
@@ -1678,7 +1696,7 @@ public sealed class GlCore : IGpuBackend
         // that never latched margin content; a target that did keeps serving, which
         // is what keeps the in-game menu, dialogs, shops and signs wide instead of
         // collapsing to the 320-wide 4:3 fallback the moment the world render stops.
-        bool latchRefused = src is { Margin: > 0 } && src.MarginContentFlip < 0;
+        bool latchRefused = src != null && MarginRefused(src);
         if (latchRefused)
             src = null;
         // KF2_PRESENT_PROBE=2: the census cannot say *why* a present dropped to the
