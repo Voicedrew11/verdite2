@@ -31,6 +31,10 @@ public sealed partial class Gpu
         // 0060. The polygon's texture rectangle, the same for every corner.
         public uint TexRect; public bool HasTexRect;
         public bool Solid;
+        public byte Material;
+        // 0067. The vertex map or PGXP answered: the GTE projected this vertex, so
+        // the polygon is part of the 3D scene, whether or not it carries a depth.
+        public bool Projected;
     }
 
     static readonly RenderPrimEvent _primEvent = new();
@@ -143,13 +147,14 @@ public sealed partial class Gpu
             {
                 ApplyPgxp(v, vwAt, n, wantW, wantZ, wantSub);
                 for (int i = 0; i < n; i++)
-                    if (v[i].Precise) hits++;
+                    if (v[i].Precise) { hits++; v[i].Projected = true; }
             }
             else
                 for (int i = 0; i < n; i++)
                 {
                     if (!GteVertexMap.TryGet(_fifoSrc[vwAt[i]], _fifo[vwAt[i]], out var a)) continue;
                     hits++;
+                    v[i].Projected = true;
                     v[i].W = a.Z;
                     v[i].HasW = wantW && a.Z > 0f;
                     v[i].HasZ = wantZ && a.Z > 0f;
@@ -172,7 +177,7 @@ public sealed partial class Gpu
             if (has && dr.Z0 > 0f && dr.Z1 > 0f && dr.Z2 > 0f && (n == 3 || dr.Z3 > 0f))
             {
                 v[0].W = dr.Z0; v[1].W = dr.Z1; v[2].W = dr.Z2; v[3].W = dr.Z3;
-                for (int i = 0; i < n; i++) { v[i].HasZ = true; v[i].Solid = dr.Solid; }
+                for (int i = 0; i < n; i++) { v[i].HasZ = true; v[i].Solid = dr.Solid; v[i].Material = dr.Material; }
             }
         }
 

@@ -35,13 +35,17 @@ public sealed class AoGeometry
     public struct V
     {
         public float X, Y, Z;
+        // 0067. The surface's material (SurfaceMaterial); every opaque triangle is
+        // at least Opaque, and a translucent one is kept only when it has one.
+        public float M;
     }
 
     /// <summary>The port's switch.</summary>
     public static bool Enabled = true;
 
-    /// <summary>Collecting costs nothing when nothing will read it.</summary>
-    public static bool Active => Enabled && GteDepth.AmbientOcclusion;
+    /// <summary>Collecting costs nothing when nothing will read it. The reflection
+    /// pass reads the surface buffer whatever the occlusion pass's normals are set to.</summary>
+    public static bool Active => (Enabled && GteDepth.AmbientOcclusion) || GteDepth.Reflections;
 
     /// <summary>Triangles kept, triangles refused for want of room, and the normal
     /// passes actually drawn. Never reset except by the probe.</summary>

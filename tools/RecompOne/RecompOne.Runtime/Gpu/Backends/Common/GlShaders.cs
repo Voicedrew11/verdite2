@@ -26,6 +26,10 @@ internal static class GlShaders
         // multiply is skipped, not multiplied by one, so a build with the pass
         // switched off cannot round a colour by a least significant bit.
         uniform float uAoOn;
+        // 0067. The reflection, premultiplied by its own weight, over the same
+        // rectangle; skipped rather than blended with zero when it is off.
+        uniform sampler2D uSsr;
+        uniform float uSsrOn;
         out vec4 oColor;
         void main() {
             vec2 t = (uOrigin + vUv * uSize) / uTexSize;
@@ -34,6 +38,10 @@ internal static class GlShaders
             // size, so it is indexed by the present's own uv and needs no
             // geometry of its own.
             if (uAoOn > 0.5) c *= texture(uAo, vUv).r;
+            if (uSsrOn > 0.5) {
+                vec4 r = texture(uSsr, vUv);
+                c = c * (1.0 - r.a) + r.rgb;
+            }
             oColor = vec4(c, 1.0);
         }
         """;
@@ -276,8 +284,11 @@ internal static class GlShaders
             float geo = 0.0;
             if (uNormalOn > 0.5) {
                 vec4 nb = normalAt(vUv);
-                if (nb.a > 0.5) {
-                    n = normalize(nb.xyz * 2.0 - 1.0);
+                vec3 nv = nb.xyz * 2.0 - 1.0;
+                // 0067. An edge-on polygon writes a zero vector rather than
+                // clearing the texel, since the buffer is blended now.
+                if (nb.a > 0.5 && dot(nv, nv) > 0.25) {
+                    n = normalize(nv);
                     geo = 1.0;
                 }
             }
@@ -406,17 +417,20 @@ internal static class GlShaders
         #version 330 core
         layout(location = 0) in vec2  inPos;
         layout(location = 1) in float inZ;
+        layout(location = 2) in float inM;
 
         uniform vec2 uPosBias;
         uniform vec2 uFbInv;
 
         out float vDepth;
+        flat out float vM;
 
         void main() {
             vec2 p = (inPos + uPosBias) * uFbInv - 1.0;
             float w = max(inZ, 1.0);
             gl_Position = vec4(p * w, 0.0, w);
             vDepth = inZ * (1.0/65536.0);
+            vM = inM;
         }
         """;
 
@@ -436,7 +450,15 @@ internal static class GlShaders
     public const string NormalFs = """
         #version 330 core
         in float vDepth;
-        out vec4 oColor;
+        flat in float vM;
+        // 0067. Two outputs. The first is the occlusion pass's normal buffer and
+        // is blended (ONE, ONE_MINUS_SRC_ALPHA), so a translucent surface writes
+        // alpha 0 and leaves the opaque surface under it -- whose depth is the one
+        // the occlusion pass reads. The second is the surface buffer, which is
+        // not blended: the last surface drawn at a pixel, water included, with its
+        // normal, its depth and its material (SurfaceMaterial).
+        layout(location = 0) out vec4 oColor;
+        layout(location = 1) out vec4 oSurface;
 
         uniform float uProjH;
         // The projection centre and the render scale, in the target's own pixels:
@@ -444,19 +466,307 @@ internal static class GlShaders
         uniform vec2  uCentre;
         uniform float uScale;
 
+        // Octahedral: a unit normal in two numbers, exact enough in half floats.
+        vec2 octEncode(vec3 n) {
+            n /= abs(n.x) + abs(n.y) + abs(n.z);
+            vec2 e = n.xy;
+            if (n.z < 0.0)
+                e = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+            return e;
+        }
+
         void main() {
             float z = vDepth * 65536.0;
-            if (z <= 0.0) { oColor = vec4(0.0); return; }
+            bool opaque = vM < 1.5;
+            // 0067. The HUD and anything else 2D: no normal and no depth, only the
+            // fact that it covers what is under it.
+            if (vM > 2.5 && vM < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, vM); return; }
+            if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
             vec2 s = gl_FragCoord.xy / uScale;
             vec3 p = vec3((s - uCentre) * (z / uProjH), z);
             vec3 n = cross(dFdx(p), dFdy(p));
             // A polygon edge-on to the camera, or one degenerate after projection:
-            // no plane to report, and alpha 0 leaves the pass its own answer.
-            if (dot(n, n) < 1e-12) { oColor = vec4(0.0); return; }
+            // no plane to report. The zero vector leaves the occlusion pass its own
+            // answer, and material None leaves this pixel out of the reflections.
+            if (dot(n, n) < 1e-12) {
+                oColor = opaque ? vec4(0.5, 0.5, 0.5, 1.0) : vec4(0.0);
+                oSurface = vec4(0.0);
+                return;
+            }
             n = normalize(n);
             // The camera is at the origin looking down +Z.
             if (dot(n, p) > 0.0) n = -n;
-            oColor = vec4(n * 0.5 + 0.5, 1.0);
+            oColor = opaque ? vec4(n * 0.5 + 0.5, 1.0) : vec4(0.0);
+            oSurface = vec4(octEncode(n), vDepth, vM);
+        }
+        """;
+
+    /// <summary>
+    /// 0067. Screen-space reflections. For each pixel whose surface reflects, the
+    /// view ray is reflected about the surface's own plane (the surface buffer's
+    /// normal, from the polygon rather than from the depth) and marched through
+    /// the finished frame's depth buffer, projected with the GTE's own H and
+    /// centre. Where it passes behind a depth it has hit that surface, and the
+    /// colour there is the reflection.
+    ///
+    /// The ray starts on the water, not under it: the depth buffer at a water pixel
+    /// is the floor of the pool, because the water is translucent and wrote none,
+    /// and the surface buffer is where the water's own depth is kept. That same
+    /// fact keeps the ray from hitting the pool floor -- the ray leaves upwards,
+    /// and every depth below it is further away than it is.
+    ///
+    /// Output is premultiplied (colour times weight, weight), so the linear
+    /// filtering the present samples it with does not bleed colour off an edge.
+    /// </summary>
+    public const string SsrFs = """
+        #version 330 core
+        in vec2 vUv;
+        layout(location = 0) out vec4 oColor;
+        // The probe's: alpha 1/255 no hit, 2/255 a surface, 3/255 the sky, 4/255 a
+        // surface under the HUD, refused, 5/255 the planar texture, on every
+        // reflective pixel; plus 8/255 when the ray passed behind something on the
+        // way, and 16/255 on a planar pixel whose march found a surface too, with
+        // green and blue the two colours' differences (see uCompare). Written to
+        // nothing unless the probe attached it.
+        layout(location = 1) out vec4 oInfo;
+
+        uniform sampler2D uDepth;
+        uniform sampler2D uSurface;
+        uniform sampler2D uColor;
+        // The same rectangle and projection the occlusion pass is given.
+        uniform vec2  uOrigin;
+        uniform vec2  uSize;
+        uniform vec2  uTexSize;
+        uniform float uProjH;
+        uniform vec2  uCentre;
+        uniform float uMaxDist;
+        uniform float uThickness;
+        uniform float uSky;
+        uniform int   uSteps;
+        // SurfaceMaterial's table, by id.
+        uniform float uReflect[8];
+        uniform float uF0[8];
+        // The game's depth cue, off the GTE: IR0 = (DQA * H/SZ + DQB) / 4096, and
+        // which of its curves turns that into a darkening (GteLightMap's numbering).
+        uniform float uDqa;
+        uniform float uDqb;
+        uniform int   uFogCurve;
+        // 0068. The scene drawn from the camera mirrored in the water, at this
+        // target's own size, and its depth, which is what says a texel was drawn.
+        // The plane is this frame's, in this view: dot(xyz, p) + w is a surface's
+        // height above the water in world units (negative is above, Y being down).
+        uniform sampler2D uPlanar;
+        uniform sampler2D uPlanarDepth;
+        uniform int   uPlanarOn;
+        uniform vec4  uPlanarPlane;
+        uniform float uPlanarTol;
+        uniform float uRipple;
+        // The probe's check on the mirror: march a planar pixel as well, and where
+        // both found a surface, write how far apart their brightness is, against
+        // the planar texture read unmirrored as the control.
+        uniform int   uCompare;
+
+        const float FAR = 65536.0;
+        const float OVERLAY = 3.0;
+
+        // How much of a colour survives the fog at view depth z: the per-pixel
+        // lighting shader's curve (shade8), evaluated at the GTE's own quotient.
+        float fogKeep(float z) {
+            if (uFogCurve == 0) return 1.0;
+            float q = min(uProjH * 65536.0 / max(z, 1.0), 131071.0);
+            float ir0 = clamp((uDqa * q + uDqb) / 4096.0, 0.0, 4096.0);
+            float w = uFogCurve == 1 ? max(ir0 - 800.0, 0.0) * 2.0
+                    : uFogCurve == 2 ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0)
+                    : uFogCurve == 3 ? ir0 * 0.5
+                    : ir0;
+            return clamp(1.0 - w / 4096.0, 0.0, 1.0);
+        }
+
+        vec2 tc(vec2 uv) { return (uOrigin + uv * uSize) / uTexSize; }
+        float depthAt(vec2 uv) { return texture(uDepth, tc(uv)).r; }
+        bool overlayAt(vec2 uv) { return abs(texture(uSurface, tc(uv)).a - OVERLAY) < 0.5; }
+        vec3 viewAt(vec2 uv, float z) { return vec3((uv - uCentre) * uSize * (z / uProjH), z); }
+        vec2 project(vec3 q) { return uCentre + q.xy * (uProjH / q.z) / uSize; }
+
+        vec3 octDecode(vec2 e) {
+            vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+            if (n.z < 0.0)
+                n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+            return normalize(n);
+        }
+
+        float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+        // 0068. The planar reflection at this pixel, when the surface lies on the
+        // mirrored plane and something above the water was drawn where it looks:
+        // the mirrored image of display row y is row 2*centre - y. The water's own
+        // brightness gradient bends the lookup, so the reflection moves with the
+        // scrolling texture rather than lying on it like glass. The colour was
+        // fogged by the mirrored camera, whose distance to it is the length of the
+        // path through the mirror, so it needs no correction here.
+        bool planarAt(vec3 p, out vec3 c) {
+            c = vec3(0.0);
+            if (uPlanarOn == 0) return false;
+            if (abs(dot(uPlanarPlane.xyz, p) + uPlanarPlane.w) > uPlanarTol) return false;
+            vec2 muv = vec2(vUv.x, 2.0 * uCentre.y - vUv.y);
+            if (uRipple > 0.0) {
+                vec2 px = 1.0 / uSize;
+                float l0 = luma(texture(uColor, tc(vUv)).rgb);
+                float lx = luma(texture(uColor, tc(vUv + vec2(px.x, 0.0))).rgb);
+                float ly = luma(texture(uColor, tc(vUv + vec2(0.0, px.y))).rgb);
+                muv += vec2(lx - l0, ly - l0) * uRipple * px;
+            }
+            muv = clamp(muv, vec2(0.0), vec2(1.0));
+            vec3 pc = texture(uPlanar, tc(muv)).rgb;
+            // Nothing drawn: the capture cleared to black with the far plane, and an
+            // opaque surface writes a depth whatever its colour.
+            if (texture(uPlanarDepth, tc(muv)).r >= 1.0 && max(pc.r, max(pc.g, pc.b)) <= 0.0) return false;
+            c = pc;
+            return true;
+        }
+
+        // Fades a reflection out as its source nears the picture's edge, where the
+        // march loses the surface it would have hit a few pixels further on.
+        float edgeFade(vec2 uv) {
+            vec2 e = smoothstep(vec2(0.0), vec2(0.06), uv) * smoothstep(vec2(0.0), vec2(0.06), 1.0 - uv);
+            return e.x * e.y;
+        }
+
+        void main() {
+            oColor = vec4(0.0);
+            oInfo = vec4(0.0);
+            vec4 s = texture(uSurface, tc(vUv));
+            int m = int(s.a + 0.5);
+            // Red is the material here, for the probe's map.
+            oInfo = vec4(float(clamp(m, 0, 7)) / 255.0, depthAt(vUv) >= 1.0 ? 1.0 / 255.0 : 0.0, 0.0, 0.0);
+            if (m <= 0 || m >= 8) return;
+            float refl = uReflect[m];
+            if (refl <= 0.0) return;
+            oInfo.a = 1.0 / 255.0;
+
+            float zs = s.b * FAR;
+            if (zs <= 1.0) return;
+            // With the Z-buffer on, visibility is the depth test's and not the
+            // order's, so a surface redrawn last may still be behind the opaque
+            // one the picture shows. The picture is the authority.
+            float d = depthAt(vUv);
+            if (d > 0.0 && d < 1.0 && d * FAR < zs * 0.99 - 8.0) return;
+
+            vec3 p = viewAt(vUv, zs);
+            vec3 n = octDecode(s.rg);
+            vec3 v = normalize(p);
+            vec3 r = reflect(v, n);
+            float cosv = clamp(dot(-v, n), 0.0, 1.0);
+            float f0 = uF0[m];
+            // Schlick, running from F0 looking straight down to the material's
+            // reflectivity at a grazing angle.
+            float w = f0 + (max(refl, f0) - f0) * pow(1.0 - cosv, 5.0);
+
+            vec3 pc;
+            bool planarHit = planarAt(p, pc);
+            if (planarHit && uCompare == 0) {
+                oInfo.a += 4.0 / 255.0;
+                w = clamp(w, 0.0, 1.0);
+                oColor = vec4(pc * w, w);
+                return;
+            }
+
+            // The same 4x4 interleaved pattern the occlusion pass uses, as a start
+            // offset along the ray, so step banding becomes a fine grain.
+            ivec2 px = ivec2(gl_FragCoord.xy) & 3;
+            float jitter = (float((px.y << 2) | px.x) + 0.5) / 16.0;
+
+            float n1 = float(max(uSteps, 1));
+            float tPrev = 0.0;
+            bool hit = false, passed = false;
+            vec2 huv = vec2(0.0), bgUv = vec2(-1.0);
+            float ht = 0.0;
+            for (int i = 0; i < 128; i++) {
+                if (i >= uSteps) break;
+                float x = (float(i) + jitter) / n1;
+                float t = uMaxDist * x * x + 4.0;
+                vec3 q = p + r * t;
+                if (q.z < 8.0) break;
+                vec2 uv = project(q);
+                if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) break;
+                float sd = depthAt(uv);
+                // A background pixel is only the sky if nothing 2D was drawn over it.
+                if (sd >= 1.0 || sd <= 0.0) { if (!overlayAt(uv)) bgUv = uv; tPrev = t; continue; }
+                float dz = q.z - sd * FAR;
+                if (dz > 0.0 && dz < uThickness + (t - tPrev) * abs(r.z)) {
+                    // Halve back to where the ray crossed the surface.
+                    float lo = tPrev, hi = t;
+                    for (int k = 0; k < 5; k++) {
+                        float mid = 0.5 * (lo + hi);
+                        vec3 qm = p + r * mid;
+                        float md = depthAt(project(qm));
+                        if (md > 0.0 && md < 1.0 && qm.z > md * FAR) hi = mid; else lo = mid;
+                    }
+                    // The step's own run lets a coarse step land well behind a
+                    // surface, which is also what a ray passing *behind* a thin
+                    // object does -- the gem floating over the pool, whose
+                    // reflection then trailed down the water. Where the ray crossed
+                    // a real surface it is at that surface once halved back; where
+                    // it passed behind one, the halving stops at the silhouette
+                    // with the ray still far behind. Only the first is a hit.
+                    vec3 qh = p + r * hi;
+                    vec2 uh = project(qh);
+                    float hd = depthAt(uh);
+                    if (hd > 0.0 && hd < 1.0 && qh.z - hd * FAR < uThickness) {
+                        ht = hi;
+                        huv = uh;
+                        hit = true;
+                        break;
+                    }
+                    passed = true;
+                }
+                tPrev = t;
+            }
+            if (planarHit) {
+                oInfo.a += 4.0 / 255.0;
+                if (hit && !overlayAt(huv) && edgeFade(huv) > 0.99) {
+                    vec3 sc = texture(uColor, tc(huv)).rgb;
+                    float zHit = viewAt(huv, depthAt(huv) * FAR).z;
+                    float zImage = p.z * (length(p) + ht) / length(p);
+                    sc *= clamp(fogKeep(zImage) / max(fogKeep(zHit), 1e-3), 0.0, 1.0);
+                    oInfo.b = abs(luma(pc) - luma(sc));
+                    oInfo.g = abs(luma(texture(uPlanar, tc(vUv)).rgb) - luma(sc));
+                    oInfo.a += 16.0 / 255.0;
+                }
+                w = clamp(w, 0.0, 1.0);
+                oColor = vec4(pc * w, w);
+                return;
+            }
+            if (passed) oInfo.a += 8.0 / 255.0;
+
+            vec3 c;
+            // A surface under the HUD is hidden by it: its colour there is the HUD's.
+            if (hit && overlayAt(huv)) { oInfo.a += 3.0 / 255.0; return; }
+            if (hit) {
+                w *= edgeFade(huv) * (1.0 - smoothstep(0.7, 1.0, ht / uMaxDist));
+                c = texture(uColor, tc(huv)).rgb;
+                // The colour there was fogged for its own distance, and the light
+                // reaching the water has come further: out to the water and back up
+                // to the surface. Its image stands that much further down the mirrored
+                // view ray, so it is fogged at that depth. The game's fog is a
+                // darkening, so a surface lost in it reflects black -- which is what
+                // the void past the draw distance reflects too, so nothing pops at
+                // the fog's edge.
+                float zHit = viewAt(huv, depthAt(huv) * FAR).z;
+                float zImage = p.z * (length(p) + ht) / length(p);
+                float keep = clamp(fogKeep(zImage) / max(fogKeep(zHit), 1e-3), 0.0, 1.0);
+                c *= keep;
+                oInfo.b = keep;
+                oInfo.a += 1.0 / 255.0;
+            } else if (bgUv.x >= 0.0 && uSky > 0.0) {
+                w *= uSky * edgeFade(bgUv);
+                c = texture(uColor, tc(bgUv)).rgb;
+                oInfo.a += 2.0 / 255.0;
+            } else {
+                return;
+            }
+            w = clamp(w, 0.0, 1.0);
+            oColor = vec4(c * w, w);
         }
         """;
 
@@ -588,6 +898,14 @@ internal static class GlShaders
         uniform vec4  uFluidRect[8];
         uniform float uFluidOff[8];
         uniform float uFluidN;
+        // 0068. Drawing a planar reflection: the water's plane in the mirrored
+        // camera's view space, kept where dot(xyz, p) + w >= 0, and the projection
+        // to take a fragment back to that space with (the GTE's centre, in the
+        // target's own pixels, and H).
+        uniform int   uClipOn;
+        uniform vec4  uClipPlane;
+        uniform vec2  uClipCentre;
+        uniform float uClipH;
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -749,6 +1067,11 @@ internal static class GlShaders
             // 0051. The tolerance is on the test only; GlCore draws the true depth first.
             float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
             gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
+            if (uClipOn != 0 && vDepth > 0.0) {
+                float cz = vDepth * 65536.0;
+                vec3 cp = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (cz / uClipH), cz);
+                if (dot(uClipPlane.xyz, cp) + uClipPlane.w < 0.0) discard;
+            }
             ivec3 c8in = shade8();
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 

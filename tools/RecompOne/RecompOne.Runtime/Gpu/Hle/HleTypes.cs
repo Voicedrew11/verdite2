@@ -26,6 +26,11 @@ public struct HleVertex
     public bool HasTexRect;
     // GtePacketDepth.Rec.Solid: blended, and still a surface the occlusion pass sees.
     public bool Solid;
+    // 0067. GtePacketDepth.Rec.Material: the port's word on what the surface is.
+    public byte Material;
+    // 0067. The GTE projected this vertex (the vertex map or PGXP answered for it).
+    // A polygon with no projected corner is 2D: the HUD, text, a menu.
+    public bool Projected;
 }
 
 public struct PrimFlags

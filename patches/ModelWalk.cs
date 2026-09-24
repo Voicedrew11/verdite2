@@ -143,6 +143,19 @@ public static class ModelWalk
     /// <summary>The table record of the model being submitted.</summary>
     public static uint SubmitRecord => _record;
 
+    /// <summary>The slot the model being submitted came from.</summary>
+    public static int SubmitSlot => _slot;
+
+    /// <summary>Name the model about to be submitted from outside the walk, as the
+    /// walk names it before each of its own calls: <see cref="PlanarWalk"/> replays
+    /// the walk's submits, and the packet records read the kind and record.</summary>
+    public static void SetSubmit(ModelKind kind, int slot, uint record)
+    {
+        _kind = kind;
+        _slot = slot;
+        _record = record;
+    }
+
     /// <summary>An object's kind: the first byte of its definition. It matches the
     /// record's type byte (`+4`) for every object sampled except the secret door,
     /// whose type reads `0xFF`.</summary>

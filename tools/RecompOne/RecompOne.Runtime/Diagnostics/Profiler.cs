@@ -156,6 +156,8 @@ public static class Profiler
     public static readonly int Composite = Register("GlCore present blit + post-fx", ProfileGroup.Runtime);
     public static readonly int Writeback = Register("GlCore.Writeback (target to VRAM)", ProfileGroup.Runtime);
     public static readonly int VertexLookup = Register("vertex attribute lookup (perspective, sub-pixel, depth)", ProfileGroup.Runtime);
+    public static readonly int Surfaces = Register("GlCore surface buffer (normals, materials)", ProfileGroup.Runtime);
+    public static readonly int Ssr = Register("GlCore screen-space reflection pass", ProfileGroup.Runtime);
 
     // ---- the open stack, and this frame's accumulators --------------------------
 

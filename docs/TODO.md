@@ -598,3 +598,37 @@ useful than the question was.
    mismatches. Judged: "looks good". Both ship off, being enhancements, and are now
    one *Even fog and lighting* checkbox (`KF2_EVENLIGHT=0` drops the light part).
    See "The light colour changes at the same edge" in [RENDERING.md](RENDERING.md).
+18. **Look at the water reflections, then decide what comes next on the surface
+   buffer.** `KF2_SSR=1` (or Video ▸ Enhancements ▸ *Water reflections*) with
+   `KF2_AUTOSTART=new`, facing the water in `fdat02`. The mechanism is measured and
+   the picture has been seen once, and the two things reported (the HUD reflected,
+   pop-in past the fog) are fixed by mechanism and not yet looked at again. Still to
+   judge: strength, F0, the edge fade, and how a flat mirror sits on the scrolling
+   water. Not yet measured: the main-hall fire (it
+   should be refused as additive; the probe counts refusals by blend) and blended
+   slime skins, which would reflect if they average. After that, in order of
+   payoff: a ripple on the water's normal, driven by the fluid slot's own phase so
+   it moves with the scroll; a blur by hit distance for rougher surfaces; and a
+   material from the port (`GtePacketDepth.Rec.Material`, set in `SealDepth`) for
+   anything that is not a fluid slot. **The surface buffer is the G-buffer that
+   dynamic lighting and authored lighting will read**: a normal and a depth that
+   are the polygon's own, and a material per pixel. What it lacks for lighting is
+   an unlit albedo, since the colour target already has the game's baked vertex
+   light in it; per-pixel lighting (`0048`) records what that light was made of
+   per packet, which is where to start. See "Screen-space reflections" in
+   [RENDERING.md](RENDERING.md).
+19. **Look at the planar reflections.** `KF2_SSR=1 KF2_PLANAR=1` (or *Planar
+   reflections* under *Water reflections*), `KF2_AUTOSTART=new`, facing the pool.
+   The mechanism is measured, and the mirror is sampled in the right place (3.5
+   against 24.2 unmirrored); the picture has never been looked at. To judge: the
+   ripple (`KF2_PLANAR_RIPPLE`), the seam where an empty mirrored texel falls back
+   to the march's sky, the pool's rim at the 8-unit clip bias, creatures and
+   billboards in the water, and a moving camera. Open, in order of payoff: the GPU
+   time of the mirrored draw (the frame viewer skips it; a timer query around the
+   capture would give it); the skybox, which neither walk draws, and whose routine
+   would have to be run again too; the object kind `0xF0`; a second plane for a
+   second pool at another height; and the walk's 1.1 ms, most of which is the
+   pool's own floor and walls being assembled under the water only to be
+   discarded per fragment. A tile half whose whole model lies below the plane
+   could be skipped in the mirrored walk. See "Planar reflections" in
+   [RENDERING.md](RENDERING.md).
