@@ -210,6 +210,7 @@ public static class Reflections
         Console.WriteLine($"[KF2] reflections: last readback {ScreenReflections.ReflectivePct:F1}% of the picture reflective, " +
                           $"{ScreenReflections.HitPct:F1}% of that hit a surface, {ScreenReflections.SkyPct:F1}% took the sky, " +
                           $"{ScreenReflections.OverlayPct:F1}% hit under the HUD and were refused, " +
+                          $"{ScreenReflections.PassedPct:F1}% passed behind something on the way, " +
                           $"mean weight {ScreenReflections.MeanWeight:F3}; sky taken {ScreenReflections.SkyColour}, " +
                           $"hits {ScreenReflections.HitLuma:F0} bright after the path fog kept {ScreenReflections.HitKeep:F2} " +
                           $"({ScreenReflections.HitFoggedPct:F1}% more than halved)");

@@ -1881,6 +1881,25 @@ hits the path fog more than halved went 0.7% / 3.5% / 8.7% / 58% across four
 yaws, and the longer march found more surfaces: 54.2% of reflective pixels against
 51.1%, and 88.5% against 80.9%. `KF2_SSR_FOGCURVE=0` is the comparison.
 
+### A floating object trailed down the water
+
+Reported from play, with a picture: the gem floating over a pool reflected, and
+beneath its reflection a long streak ran down the water towards the camera. A ray
+from nearer water passes *behind* the gem. The hit test accepted any sample behind
+a depth by less than the thickness plus the step's own run in Z, and the
+quadratic spacing makes that run about 1,350 units on the far steps, so passing
+behind counted as hitting.
+
+A candidate is still halved back to where the "behind" test flips, but the ray has
+to be at the surface there: within `KF2_SSR_THICKNESS` (256) of the depth. Where
+it crossed a real surface, halving lands on it. Where it passed behind a thin
+object, halving stops at the silhouette with the ray still far behind, and the
+march goes on. The readback counts rays that passed behind something (bit 8 of its
+code). At the `fdat02` spawn that was 0.7-0.8% of reflective pixels at two yaws and
+0 at the others. Hits moved 54.2 -> 53.5% and 20.7 -> 19.9%, and were unchanged at
+the other two yaws, so the walls still reflect. **The gem's room was not measured.**
+Nothing floats at that spawn, and whether the streak is gone is for the eye.
+
 ### What a surface is made of
 
 `SurfaceMaterial` is a small id per pixel (`None` 0, `Opaque` 1, `Water` 2; eight

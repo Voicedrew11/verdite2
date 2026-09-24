@@ -83,7 +83,7 @@ public static class ScreenReflections
     /// <summary>The last readback: the share of the picture that reflects, the share
     /// of those that found a surface, the share that took the sky, and the mean
     /// weight blended over a reflective pixel.</summary>
-    public static float ReflectivePct, HitPct, SkyPct, OverlayPct, MeanWeight;
+    public static float ReflectivePct, HitPct, SkyPct, OverlayPct, PassedPct, MeanWeight;
 
     public static void ResetCounters() => Passes = NoTarget = 0;
 
@@ -92,14 +92,16 @@ public static class ScreenReflections
     /// found, so a miss is still counted.</summary>
     public static void SetMap(byte[] rgba, byte[] info, int w, int h)
     {
-        long n = (long)w * h, refl = 0, hit = 0, sky = 0, under = 0;
+        long n = (long)w * h, refl = 0, hit = 0, sky = 0, under = 0, passed = 0;
         double wsum = 0, skyR = 0, skyG = 0, skyB = 0, hitL = 0, keepSum = 0;
         long fogged = 0;
         for (long i = 0; i < n; i++)
         {
-            byte k = info[i * 4 + 3];
+            int k = info[i * 4 + 3];
             if (k == 0) continue;
             refl++;
+            if ((k & 8) != 0) passed++;
+            k &= 7;
             if (k == 2)
             {
                 hit++;
@@ -122,6 +124,7 @@ public static class ScreenReflections
         HitPct = refl == 0 ? 0f : 100f * hit / refl;
         SkyPct = refl == 0 ? 0f : 100f * sky / refl;
         OverlayPct = refl == 0 ? 0f : 100f * under / refl;
+        PassedPct = refl == 0 ? 0f : 100f * passed / refl;
         SkyColour = sky == 0 ? "none" : $"{skyR / sky * 255:F0},{skyG / sky * 255:F0},{skyB / sky * 255:F0}";
         HitLuma = hit == 0 ? 0f : (float)(hitL / hit * 255);
         HitKeep = hit == 0 ? 1f : (float)(keepSum / hit);

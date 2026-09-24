@@ -868,6 +868,13 @@ Four files in the directory have no entry below:
   (the vertex map or PGXP answered) tells 2D from the scene; 2D triangles and
   sprites are kept as material `Overlay`, which the pass refuses as a sky sample or
   a hit, so the HUD is not reflected.
+  Since amended: a floating object's reflection trailed down the water below it.
+  The hit test accepted a sample behind a depth by less than the thickness plus the
+  step's own run, which reaches about 1,350 units on the far steps, so a ray passing
+  *behind* the gem over a pool counted as hitting it. A candidate is now halved back
+  to its crossing and kept only if the ray is within the thickness of the surface
+  there; otherwise the march goes on. The amendment is the second diff in the patch
+  file.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass

@@ -523,7 +523,8 @@ internal static class GlShaders
         in vec2 vUv;
         layout(location = 0) out vec4 oColor;
         // The probe's: alpha 1/255 no hit, 2/255 a surface, 3/255 the sky, 4/255 a
-        // surface under the HUD, refused, on every reflective pixel. Written to nothing unless the probe attached it.
+        // surface under the HUD, refused, on every reflective pixel; plus 8/255 when
+        // the ray passed behind something on the way. Written to nothing unless the probe attached it.
         layout(location = 1) out vec4 oInfo;
 
         uniform sampler2D uDepth;
@@ -621,7 +622,7 @@ internal static class GlShaders
 
             float n1 = float(max(uSteps, 1));
             float tPrev = 0.0;
-            bool hit = false;
+            bool hit = false, passed = false;
             vec2 huv = vec2(0.0), bgUv = vec2(-1.0);
             float ht = 0.0;
             for (int i = 0; i < 128; i++) {
@@ -645,17 +646,31 @@ internal static class GlShaders
                         float md = depthAt(project(qm));
                         if (md > 0.0 && md < 1.0 && qm.z > md * FAR) hi = mid; else lo = mid;
                     }
-                    ht = hi;
-                    huv = project(p + r * hi);
-                    hit = true;
-                    break;
+                    // The step's own run lets a coarse step land well behind a
+                    // surface, which is also what a ray passing *behind* a thin
+                    // object does -- the gem floating over the pool, whose
+                    // reflection then trailed down the water. Where the ray crossed
+                    // a real surface it is at that surface once halved back; where
+                    // it passed behind one, the halving stops at the silhouette
+                    // with the ray still far behind. Only the first is a hit.
+                    vec3 qh = p + r * hi;
+                    vec2 uh = project(qh);
+                    float hd = depthAt(uh);
+                    if (hd > 0.0 && hd < 1.0 && qh.z - hd * FAR < uThickness) {
+                        ht = hi;
+                        huv = uh;
+                        hit = true;
+                        break;
+                    }
+                    passed = true;
                 }
                 tPrev = t;
             }
+            if (passed) oInfo.a += 8.0 / 255.0;
 
             vec3 c;
             // A surface under the HUD is hidden by it: its colour there is the HUD's.
-            if (hit && overlayAt(huv)) { oInfo.a = 4.0 / 255.0; return; }
+            if (hit && overlayAt(huv)) { oInfo.a += 3.0 / 255.0; return; }
             if (hit) {
                 w *= edgeFade(huv) * (1.0 - smoothstep(0.7, 1.0, ht / uMaxDist));
                 c = texture(uColor, tc(huv)).rgb;
@@ -671,11 +686,11 @@ internal static class GlShaders
                 float keep = clamp(fogKeep(zImage) / max(fogKeep(zHit), 1e-3), 0.0, 1.0);
                 c *= keep;
                 oInfo.b = keep;
-                oInfo.a = 2.0 / 255.0;
+                oInfo.a += 1.0 / 255.0;
             } else if (bgUv.x >= 0.0 && uSky > 0.0) {
                 w *= uSky * edgeFade(bgUv);
                 c = texture(uColor, tc(bgUv)).rgb;
-                oInfo.a = 3.0 / 255.0;
+                oInfo.a += 2.0 / 255.0;
             } else {
                 return;
             }
