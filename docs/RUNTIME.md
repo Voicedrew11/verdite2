@@ -1113,6 +1113,91 @@ drop or repeat a frame at the beat — the same thing the port's own default pac
 not been looked at. X11 and Windows are unchanged in effect (interval 1) and were
 not run.
 
+**That last sentence was wrong, and the next section is why.**
+
+## VSync on Windows
+
+Reported from Windows (AMD Radeon integrated graphics, 60 Hz, fullscreen): with
+VSync on, "buffer swap + driver" dominated the profiler and the frame times were
+awful; with it off, the picture tore. Three things stacked, and each hid the
+next. Every number below is from `KF2_AUTOSTART=2 KF2_FPS_PROBE=1 KF2_PROFILE=1`
+standing in area 1, fullscreen 1920x1200, the default settings otherwise.
+
+**VSync on at boot was interval 0.** `0064` holds Silk's `VSync` false so that
+`ApplySwapInterval` owns the interval, and sets 1 from `OnLoad`. But Silk applies
+its `VSync` lazily, inside the first `DoRender` after the property is set, so its
+`false` landed after `OnLoad` and before the first frame. Read back with
+`wglGetSwapIntervalEXT`: 1 straight after the port set it, 0 at the first present
+and every present after, with `swap interval: 1` in the log. A boot with VSync on
+drew **112 fps on a 60 Hz monitor** — so the tearing with VSync "on" was VSync off,
+and only toggling the setting in play, which calls `SwapInterval` again after the
+first frame, ever produced interval 1. The same held on X11. Silk is now told the
+interval the port chose (`0064`, amended), and it reads back 1.
+
+**With interval 1 real, every frame swapped twice.** `0007`'s pad poll draws and
+swaps from inside a pad read when the game seems stuck outside its frame loop,
+which it judged by 16 ms since the *start* of the last `Present`. With the swap
+waiting for a 60 Hz refresh, every frame is at least that long, so almost every
+pad read drew a second frame and paid a second blocking swap: **21-37 fps, 22 ms a
+frame in the swap**, and 16 ms of it charged to whatever read the pad (stage 3,
+and "CD, card and pad ticks"). That is the report. The poll now draws only when
+the game has not presented for 250 ms, measured from where `Present` ended. After:
+work back to 6.5 ms a frame.
+
+**The driver's VSync itself was unreliable, so Windows no longer uses it.** With
+both fixes in, interval 1 still fell into stretches of **30-55 fps** with 17-24 ms
+in the swap, in runs of 40 s alternating with good ones, and the frame intervals
+spread continuously from 16 to 40 ms rather than snapping to whole refreshes. It
+was first read as heat, since the bad runs followed builds; it is not — **VSync off
+at 60 fps in the same minute held 60.0 at 17.9 ms p99**, with the GPU as idle
+between frames as VSync would leave it. Whatever the driver does at interval 1 is
+the cause, and it is not ours to fix. Its swap blocks until the flip it queues:
+waiting for the vblank and *then* swapping at interval 1 locks at exactly 30.0,
+one refresh in the wait and one in the swap, every run.
+
+**So `0066` keeps the interval at 0 and waits for the blank itself** — composes
+and flushes the frame, waits on the kernel's own vblank event for the monitor the
+window is on (`D3DKMTWaitForVerticalBlankEvent`, `Host/Window/VBlankWait.cs`,
+reopened when the window moves) and then swaps. Four runs alternated with the
+interval at 60 fps: **99-100% of frame intervals within a millisecond of 16.7 ms,
+p99 16.9-20.2 ms**, against 93-97% for the interval in its good stretches; at
+`KF2_FPS=240`, 60.0 and 99%. The wait shows in the profiler as "VSync wait", not as
+the swap. A failed wait falls back to the interval rather than running uncapped.
+Minimised for 12 s, windowed, it held 59-60 fps at 20 ticks, since the monitor keeps
+blanking whether the window is shown or not.
+
+**In GLFW's fullscreen it tore, seen in play.** That mode bypasses the compositor,
+and at interval 0 the flip is not held to the blank. So the wait is only taken where
+the compositor presents the window — windowed, and a new **Borderless** display
+mode, a borderless window the size of the monitor (Video ▸ Display mode: Windowed,
+Fullscreen, Borderless; `Borderless` beside `Fullscreen` in the view config, so F11
+and the menu bar still toggle "covers the screen"). Fullscreen keeps the interval.
+Alternating Borderless against Fullscreen at 60 fps: Borderless **98% and 100%**
+within the millisecond (the first run at 52-59 fps with its game code at 10 ms
+rather than 8.6, and 33 ms frames in both); Fullscreen **0%, locked at 30.0 for
+the whole run, then 96%**. Whether Borderless is really composed on this driver —
+that is, whether it tears — has to be looked at; no counter here says. Game code
+reads 1.5-2 ms higher in Borderless in both pairs, not chased.
+
+`FramePacing`'s own 60 fps floor stays in series with the wait. Standing it down
+whenever VSync already holds the frame to the refresh was tried and measured,
+alternating: 92% and 99% within the millisecond without the floor, 100% and 99%
+with it. Nothing to show for it, so it was not kept.
+
+**Everywhere else VSync is the interval, with the swap deferred** — Fullscreen on
+Windows, X11, and Windows when the vblank cannot be opened. The frame's GPU work
+is about 11-13 ms on this machine (the frame viewer: 10.7 ms of it the map tiles
+with 16x filtering, the occlusion pass 1.0-1.2 ms), which fits in 16.7 ms only when
+the GPU can work on one frame while the CPU builds the next. The occlusion pass and
+the composite are issued at present, and a blocking swap holds the game's thread
+until the GPU has finished them and the flip has happened. So on the interval path
+`0066` issues the swap at the start of the *next* present. Measured on Windows in
+Fullscreen at
+interval 1 with SSAO on High, to put the GPU at its limit, alternating: **60.0 fps
+deferred, 56.0 immediate, in both rounds**. `KF2_SWAP=immediate` is the
+comparison, and the cost is one refresh of latency. It is the path X11 takes now,
+where it has not been run.
+
 ## Two general shapes worth keeping
 
 `0007`, `0008` and `patches/EndingHold.cs` are the pattern to keep in mind:

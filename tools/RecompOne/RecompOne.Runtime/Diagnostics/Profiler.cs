@@ -149,7 +149,7 @@ public static class Profiler
     public static readonly int GlFlush = Register("GlCore.Flush (GL batch submit)", ProfileGroup.Runtime);
     public static readonly int DrawOTag = Register("LibGpu.DrawOTag (packet walk)", ProfileGroup.Runtime);
     public static readonly int Throttle = Register("FrameClock.Throttle (host ceiling)", ProfileGroup.Wait);
-    public static readonly int VSyncWait = Register("FrameClock.WaitRefresh (Wayland vsync on the CPU)", ProfileGroup.Wait);
+    public static readonly int VSyncWait = Register("VSync wait (Wayland: the CPU grid; Windows: the display's vblank)", ProfileGroup.Wait);
     public static readonly int Ticks = Register("CD, card and pad ticks", ProfileGroup.Runtime);
     public static readonly int Self = Register("profiler (its own reporting)", ProfileGroup.Runtime);
     public static readonly int Ao = Register("GlCore ambient occlusion pass", ProfileGroup.Runtime);
