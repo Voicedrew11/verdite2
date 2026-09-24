@@ -113,7 +113,9 @@ KF2_VRAMSNAP_PROBE=1                   # frame restores served from that copy, a
 KF2_GLDEBUG=1                          # a debug GL context, and every error or warning the driver reports on stderr (0065); =2 adds notifications and each first report's stack
 KF2_VRAMCHECK=1                        # mirror every VRAM upload, copy and fill on the CPU and name the operation that changes texels it should not (slow)
 KF2_VSYNC=block                        # upstream's blocking vblank timeline instead of the port's grid (caps the picture at 60)
-KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
+KF2_SWAP=interval                      # with VSync on, windowed or Borderless on Windows: the driver's swap interval, swapped at the next present, not the display's own vblank (0066)
+KF2_SWAP=immediate                     # with VSync on, the driver's swap interval, each frame swapped where it was composed
+KF2_SWAP=vblank                        # with VSync on, the display's own vblank in Fullscreen too (it tears there)KF2_PERSPECTIVE=0                      # affine textures again (correction is on by default)
 KF2_PERSPECTIVE_PROBE=1                # the GTE vertex map's hit rate
 KF2_PERSPECTIVE_FALLBACK=1             # also guess by screen position on a miss (the old mechanism)
 KF2_ANISO=8                            # anisotropic filtering: taps along the footprint's long axis (16 by default; 1, off)

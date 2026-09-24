@@ -107,6 +107,16 @@ public class ViewConfig
         set => SetBool("Fullscreen", value);
     }
 
+    /// <summary>How <see cref="Fullscreen"/> covers the screen: a borderless window
+    /// the size of the monitor rather than GLFW's fullscreen mode. Kept beside it,
+    /// not instead of it, so F11 and the menu bar still toggle "covers the
+    /// screen" and an existing config reads as it did.</summary>
+    public bool Borderless
+    {
+        get => GetBool("Borderless");
+        set => SetBool("Borderless", value);
+    }
+
     public int RenderScale
     {
         get
