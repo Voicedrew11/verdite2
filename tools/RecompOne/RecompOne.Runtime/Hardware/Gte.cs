@@ -771,8 +771,11 @@ public static class Gte
             // this divide to get a view position back out of a depth texel, and H
             // and the OFX/OFY centre are that projection rather than a guess at it.
             // OFX/OFY are 16.16 here, as SX/SY are before the shift.
-            if (GteDepth.AmbientOcclusion)
+            if (GteDepth.SurfacesWanted)
+            {
                 GteDepth.NoteProjection(H, OFX * (1f / 65536f), OFY * (1f / 65536f));
+                GteDepth.NoteDepthCue(DQA, DQB);
+            }
             if (GteDepth.PositionFallback)
                 GteDepth.Record(nx, ny, sz, sx * (1f / 65536f), sy * (1f / 65536f), clipped);
         }

@@ -1443,7 +1443,7 @@ creatures, objects, effects and billboards — so "the geometry arrives incremen
 through GP0 and nothing holds it", which is the sentence the whole of this section
 rests on, has stopped being true of the world. `AoGeometry` keeps each
 depth-carrying triangle as it is submitted, and after the frame is finished
-`GlCore.RenderNormals` draws the list again into a normal buffer on the target.
+`GlCore.RenderNormals` (`RenderSurfaces` since `0067`) draws the list again into a normal buffer on the target.
 A normal is then the polygon's own plane: exact, constant across the face, and
 incapable of straddling anything.
 
@@ -1762,6 +1762,192 @@ down. Running the pass every second present would leave the shading a present
 behind a camera the smoothing moves every present, which shows when the camera
 turns. Shader micro-optimisations do little for a pass that is bound on memory
 fetches. The integrated GPU itself has not been measured.
+
+## Screen-space reflections: the water is the one surface the depth buffer does not have
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(`KF2_SSR=1`, or Video ▸ Enhancements ▸ *Water reflections*). The runtime half is
+`0067`; the port half is `patches/Reflections.cs`.
+
+The pass is the occlusion pass's shape: at present, between the finished target and
+the blit, reading the target's depth attachment with the GTE's own H and centre, and
+writing only its own texture, which the present composites (premultiplied, after the
+occlusion multiply). For each pixel whose material reflects, the view ray is
+reflected about the surface's plane and marched through the depth buffer — 32 steps
+out to the depth where the game's fog turns black (see below), spaced quadratically
+so the near field is fine,
+started a fraction of a step along by the same 4x4 interleaved pattern the occlusion
+pass rotates by. A step that lands behind a depth by less than a thickness (256
+units plus the step's own run in Z) has hit; five halvings find the crossing, and
+the colour there is the reflection, fogged for the length of the path it took (see
+below). The weight is Schlick's, from `F0` looking straight down to the material's
+reflectivity at a grazing angle, faded at the picture's edge and at the end of the
+march.
+
+### Why a surface buffer, and not the depth buffer
+
+**The game draws water semi-transparent**, sorted among the opaque tiles (see
+"Water on screen cost 5 ms a frame" in `docs/DEVELOPMENT.md`). A blended triangle
+writes no depth, so at a water pixel the depth attachment holds the floor of the
+pool and the normal buffer (`0058`) holds that floor's normal. A reflection pass
+reading those would reflect off the pool floor.
+
+So the normal pass grew a second attachment. `AoGeometry` now keeps a material per
+triangle, and with reflections on it also keeps a blended triangle that has a
+material. `NormalFs` writes two outputs:
+
+- **The normal buffer, blended** (`ONE, ONE_MINUS_SRC_ALPHA`): an opaque triangle
+  writes alpha 1 and replaces, a translucent one writes alpha 0 and leaves the
+  opaque surface under it. The occlusion pass therefore still sees the surface
+  whose depth it reads. An edge-on opaque polygon used to write zero to clear the
+  texel; it now writes a zero *vector* with alpha 1, and `AoFs` treats a vector
+  shorter than half as no normal.
+- **The surface buffer, not blended** (RGBA16F): the last surface drawn at each
+  pixel, water included — an octahedral normal, the view depth over 65536 and the
+  material id. Order is the correctness argument, as it is for the normals.
+
+With the Z-buffer on, visibility is the depth test's and not the order's, so the
+pass also refuses a surface-buffer depth that is behind the picture's own depth by
+more than 1% — the picture is the authority.
+
+**The ray cannot hit the pool floor**, for the same reason: it leaves the water
+upwards, and every depth under the water is further along the view ray than the
+ray is. A ray that lands on another water pixel is above that pixel's floor too, so
+water never reflects water.
+
+**A miss takes the background it crossed.** Anything opaque with no depth record
+stamps the far plane (`zMode 3`). A ray that finds nothing takes the colour of the
+last far-plane pixel it crossed that is not under the HUD (`KF2_SSR_SKY`, 1 by
+default). In `fdat02` that background is not a skybox. It is the void past the
+draw distance: the colour the fallback took averaged 0,0,3 to 0,0,5.
+
+### The HUD was reflected, because it is at the top and it stamps the far plane
+
+Reported from play: the HUD showed in the water. King's Field's HUD is at the
+**top** of the picture, and that is where water's reflected rays go: they climb the
+screen. The HUD is opaque 2D, so it stamps the far plane exactly as the void does,
+and the first version took it as sky. A hit could also land where the HUD covered a
+surface and take the HUD's colour.
+
+The fix is to put the HUD into the surface buffer. Each vertex now carries a
+**`Projected`** bit (`HleVertex.Projected`): set when the vertex map or PGXP
+answered for it, which means the GTE projected it. A polygon with no projected
+corner is 2D, and so is every sprite (`DrawRect`). With reflections on, those are
+kept in the surface list, in draw order, as material **`Overlay`**. They write
+nothing to the normal buffer and only their material to the surface buffer. The pass
+refuses an overlay pixel as a sky sample and refuses a hit under one. A 2D
+primitive covering at least 90% of the target in both directions is a fade or a
+damage flash the world is seen through, so it is not an overlay. Otherwise
+reflections would blink out for every flash.
+
+`KF2_SSR_PROBE=1` now prints a 48x16 material map of the readback (`.` opaque, `~`
+water, `H` overlay, `*` far plane with nothing on it). In `fdat02` it shows the
+HUD as two `H` blocks at the top, one on the left over the opaque wall and one on
+the right inside the `*` void: exactly the samples the fallback had been taking.
+Rays refused under the HUD: 0.0-0.4% of reflective pixels, depending on the yaw.
+**Not covered:** a HUD piece the GTE projects (a 3D compass or item model) reads
+as scene, and the first-person arm stamps the far plane without being 2D. Neither
+has been seen in a reflection, but nothing would stop either.
+
+### Reflections popped in, because the path is longer than the direct distance
+
+Also reported from play: pop-in in the reflection, of things the fog should have
+hidden. The colour at a hit was fogged for the hit's own distance from the camera.
+The reflected light has come further: out to the water and back up to the
+surface. So a wall two tiles from a pool that is six tiles away reflected at
+two-tile brightness when it is eight tiles down the mirrored ray. Anything near
+the draw distance that pops in on screen as black therefore popped in visibly in
+the water.
+
+The game's fog is a **darkening**, not a blend to a colour: `shade8` in the prim
+shader multiplies by `1 - w / 4096`, where `w` is one of four curves of the GTE depth
+cue `IR0 = (DQA * H/SZ + DQB) >> 12`. `Gte.Rtp` now publishes DQA and DQB beside H
+(`GteDepth.NoteDepthCue`). The pass evaluates the same curve at the image's depth,
+`p.z * (|p| + t) / |p|`, and at the hit's own depth, and scales the hit's colour by
+the ratio. That is exact for one curve, since the colour already carries the second
+factor. It darkens and does **not** fade the weight, so a surface lost in the fog
+reflects black, which is what the void past the draw distance reflects. The two
+cannot pop against each other. The curve is per light record in the game and the
+pass uses one: the knee (`KF2_SSR_FOGCURVE=2`), which is the near map tiles'.
+
+The march stopped at 8 tiles, where `fdat02`'s fog still leaves 36% of a colour, so
+a wall crossing the march's end could still flip. `KF2_SSR_DISTANCE` now defaults
+to **the depth where the curve reaches black** (`ScreenReflections.March`), 21,695
+units in `fdat02` (DQA -12800, DQB 20971520, H 200: black at about 10.6 tiles).
+Past the end of the march everything would have reflected black anyway.
+
+Measured, turning in place at the `fdat02` spawn (`goto` with a yaw): the share of
+hits the path fog more than halved went 0.7% / 3.5% / 8.7% / 58% across four
+yaws, and the longer march found more surfaces: 54.2% of reflective pixels against
+51.1%, and 88.5% against 80.9%. `KF2_SSR_FOGCURVE=0` is the comparison.
+
+### What a surface is made of
+
+`SurfaceMaterial` is a small id per pixel (`None` 0, `Opaque` 1, `Water` 2; eight
+slots) and a table of what each id means (`Reflectivity`, `F0`). It is the surface
+buffer's alpha rather than something reflection-shaped, because **it is what
+lighting will need too**: a deferred light pass wants a normal, a position and a
+material at each pixel, and the first two are already exact here. Two sources, in
+order:
+
+1. **The packet.** `GtePacketDepth.Rec.Material`, carried to `HleVertex.Material`
+   beside `Solid`. The port sets it where it seals a depth record, the one place
+   that knows which routine, model or tile built the packet. Nothing sets it yet;
+   it is where an authored material belongs.
+2. **The texture.** A triangle whose texels fall in a VRAM rectangle the port has
+   published takes that rectangle's material. That is how water is found. The game
+   keeps its scrolling textures in eight slots at `0x80192D58`, each re-uploaded
+   every tick into a fixed dest rect (see "The water still steps at the tick" in
+   `docs/PATCHES_AND_MODS.md`). `Reflections` publishes every live slot as water on
+   each `DrawOTag`, whether or not the fluid smoothing is on, because the smoothing
+   publishes nothing at or below the tick rate.
+
+The same slots hold the main-hall fire and the creatures' skins, so a slot rect is
+**translucent-only**: it applies only to a semi-transparent polygon in an averaging
+blend (modes 0 and 3). An opaque skin and an additive fire are refused, and the
+probe counts refusals by blend mode. **The fire has not been measured**; the census
+below is `fdat02`'s water alone. The slime skins, if any are blended at mode 0,
+would reflect.
+
+### What is measured
+
+`KF2_SSR_PROBE=1` prints a line every two seconds: passes, presents with no target,
+the published rects, water triangles against all blended depth-carrying triangles,
+refusals by blend, and a readback of what each reflective pixel found. The probe
+build attaches a second target to the pass and writes a code into it per reflective
+pixel (no hit, surface, sky). **The readback is the only number that separates "the
+pass ran" from "the pass reflected something"**: every other number reads the same
+if the shader returns nothing.
+
+`KF2_AUTOSTART=new` stands in `fdat02` facing the water:
+
+- 5 water rects; 67,800-75,500 water triangles/s, which was **every** blended
+  depth-carrying triangle in view; 0 refused by blend.
+- 36.3% of the picture reflective; 51.2% of those hit a surface and 46.7% took the
+  sky; mean weight 0.18 (strength 0.6, F0 0.12).
+- 144.0 fps drawn at 19.9-20.0 ticks/s, `[present] wide 287-288`, no GL errors
+  under `KF2_GLDEBUG=1`.
+- **The occlusion census is identical with reflections on and off** (darkest 0.76,
+  mean 0.994, 9.9% shaded, 71.6% surface, 100.0% geometry normals). That is the
+  measurement behind the blended normal buffer: 490k triangles/s kept with water
+  against 366k without, and the normals the occlusion pass reads did not move.
+- GPU, from frame captures at render scale 5: the reflection pass 0.028-0.044 ms at
+  2x (the default `KF2_SSR_RESOLUTION`) and 0.092-0.146 ms at the render scale;
+  after the HUD and fog fixes and the longer march, 0.042-0.052 and 0.104-0.137. The
+  occlusion step, which now also draws the surface attachment, read 0.367-0.369 ms
+  against 0.346 without it. Uncapped, the frame went from 261-264 fps to 254-261.
+- AO off, reflections on: the surface buffer is drawn by the reflection pass
+  instead, and the readback is the same.
+- Slot 2 (`KF2_AUTOSTART=2`): `fdat05`, hp 46/86 in area 1, 144.0 fps at 20.0
+  ticks/s, `[present] wide 288`, the vertex map binding. The five rects are live
+  there too, but no water was in view: 0 water triangles, 0.0% reflective.
+
+**What still has to be judged by eye**: whether the reflections read as water or as
+a smear; the strength and F0; the edge fade; whether any HUD is still reflected
+(after the fix above); whether the pop-in is gone; how a flat mirror looks on this game's scrolling water (there is no
+ripple yet); and how the reflection holds up while the camera moves. It is
+screen-space, so anything off the screen or behind something else cannot be
+reflected, and the reflection fades as its source nears the edge.
 
 ## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
 

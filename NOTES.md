@@ -239,7 +239,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 
 ### [RENDERING.md](docs/RENDERING.md)
 
-Recovering the depth and the sub-pixel fraction the GP0 packet threw away: perspective correction, sub-pixel positions, Z-buffer, ambient occlusion, anisotropic filtering, dither, true color.
+Recovering the depth and the sub-pixel fraction the GP0 packet threw away: perspective correction, sub-pixel positions, Z-buffer, ambient occlusion, reflections, anisotropic filtering, dither, true color.
 
 - Perspective correction: the depth is one step upstream, and the screen position is the key
 - Sub-pixel vertex positioning: the same number's other half
@@ -248,6 +248,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Z-buffer: the same depth, used as occlusion
 - PGXP: upstream's own recovery, and what taking it actually bought
 - Ambient occlusion: painter's order is the G-buffer
+- Screen-space reflections: the water is the one surface the depth buffer does not have
 - PGXP has no control in the window
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding
@@ -353,7 +354,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0066`, one entry each.
+Every change the port made to RecompOne, `0001`-`0067`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

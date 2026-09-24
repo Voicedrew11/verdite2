@@ -97,7 +97,7 @@ public static class GteDepth
     // accounting, and this table, which answers only when PositionFallback asks it
     // to so that the two mechanisms can be compared in one build.
 
-    static bool _enabled, _subpixel, _zbuffer, _ao;
+    static bool _enabled, _subpixel, _zbuffer, _ao, _ssr;
 
     /// <summary>
     /// While false the depth is not served, so both renderers interpolate affinely
@@ -240,7 +240,28 @@ public static class GteDepth
     /// is done with them — one rejects fragments, the other reads the finished
     /// buffer back in a full-screen pass — so the write is shared and the test is
     /// not.</summary>
-    public static bool DepthWanted => _zbuffer || _ao;
+    public static bool DepthWanted => _zbuffer || _ao || _ssr;
+
+    /// <summary>0067. Screen-space reflections, the second reader of the finished
+    /// frame's depth and the first reader of its surface buffer. See
+    /// <see cref="ScreenReflections"/>.</summary>
+    public static bool Reflections
+    {
+        get => _ssr;
+        set
+        {
+            if (_ssr == value) return;
+            _ssr = value;
+            Generation++;
+            GteVertexMap.SetActive(Active);
+        }
+    }
+
+    /// <summary>0067. Whether a pass wants the frame's surfaces: the far-plane mask
+    /// under the HUD, the projection read off the GTE, and the geometry kept for
+    /// the surface buffer. Ambient occlusion was the only such pass, and every site
+    /// that asked for it by name meant this.</summary>
+    public static bool SurfacesWanted => _ao || _ssr;
 
     /// <summary>How far a sample may sit from the shaded point and still occlude
     /// it, in GTE view-depth units, which are the game's own world units — a floor
@@ -528,6 +549,13 @@ public static class GteDepth
         if (h > 0f) { ProjH = h; ProjCx = cx; ProjCy = cy; ProjSeen++; }
     }
 
+    /// <summary>0067. The depth cue the last projection was made with, DQA and DQB
+    /// as the GTE holds them: <c>IR0 = (DQA * H/SZ + DQB) >> 12</c>. The reflection
+    /// pass fogs a reflected ray's longer path on the same curve.</summary>
+    public static int ProjDqa, ProjDqb;
+
+    public static void NoteDepthCue(int dqa, int dqb) { ProjDqa = dqa; ProjDqb = dqb; }
+
     /// <summary>
     /// True color (24-bit). While false the GL backend renders into an RGB5A1
     /// display target and the fragment shader crushes every shaded pixel to five
@@ -544,7 +572,7 @@ public static class GteDepth
 
     /// <summary>Nothing is recorded and every lookup misses while every consumer
     /// is off, which is what makes this cost nothing when none of them is wanted.</summary>
-    public static bool Active => _enabled || _subpixel || _zbuffer || _ao;
+    public static bool Active => _enabled || _subpixel || _zbuffer || _ao || _ssr;
 
     /// <summary>Consult the screen-position table below for vertices the exact map
     /// could not answer for. Off by default — it is the guess this was all built to

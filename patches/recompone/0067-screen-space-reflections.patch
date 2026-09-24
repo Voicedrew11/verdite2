@@ -1,0 +1,1318 @@
+diff --git a/tools/RecompOne/RecompOne.Runtime/Diagnostics/Profiler.cs b/tools/RecompOne/RecompOne.Runtime/Diagnostics/Profiler.cs
+index 6aba76f..0a889c5 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Diagnostics/Profiler.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Diagnostics/Profiler.cs
+@@ -156,6 +156,8 @@ public static class Profiler
+     public static readonly int Composite = Register("GlCore present blit + post-fx", ProfileGroup.Runtime);
+     public static readonly int Writeback = Register("GlCore.Writeback (target to VRAM)", ProfileGroup.Runtime);
+     public static readonly int VertexLookup = Register("vertex attribute lookup (perspective, sub-pixel, depth)", ProfileGroup.Runtime);
++    public static readonly int Surfaces = Register("GlCore surface buffer (normals, materials)", ProfileGroup.Runtime);
++    public static readonly int Ssr = Register("GlCore screen-space reflection pass", ProfileGroup.Runtime);
+ 
+     // ---- the open stack, and this frame's accumulators --------------------------
+ 
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
+index 857272d..5f73623 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
+@@ -35,13 +35,17 @@ public sealed class AoGeometry
+     public struct V
+     {
+         public float X, Y, Z;
++        // 0067. The surface's material (SurfaceMaterial); every opaque triangle is
++        // at least Opaque, and a translucent one is kept only when it has one.
++        public float M;
+     }
+ 
+     /// <summary>The port's switch.</summary>
+     public static bool Enabled = true;
+ 
+-    /// <summary>Collecting costs nothing when nothing will read it.</summary>
+-    public static bool Active => Enabled && GteDepth.AmbientOcclusion;
++    /// <summary>Collecting costs nothing when nothing will read it. The reflection
++    /// pass reads the surface buffer whatever the occlusion pass's normals are set to.</summary>
++    public static bool Active => (Enabled && GteDepth.AmbientOcclusion) || GteDepth.Reflections;
+ 
+     /// <summary>Triangles kept, triangles refused for want of room, and the normal
+     /// passes actually drawn. Never reset except by the probe.</summary>
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index 0943251..c67ec1a 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -73,6 +73,16 @@ public sealed class GlCore : IGpuBackend
+     int _nrmVboVerts;
+     int _uNrmPosBias, _uNrmFbInv, _uNrmProjH, _uNrmCentre, _uNrmScale;
+ 
++    // 0067. Screen-space reflections: one full-screen pass at present, reading the
++    // target's colour, depth and surface buffer into its own premultiplied texture.
++    uint _progSsr, _ssrFbo, _ssrTex, _ssrInfoTex;
++    int _ssrW, _ssrH;
++    bool _ssrInfo;
++    int _uSsrOrigin, _uSsrSize, _uSsrTexSize, _uSsrProjH, _uSsrCentre;
++    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrReflect, _uSsrF0;
++    int _uSsrDqa, _uSsrDqb, _uSsrFogCurve;
++    int _uPresentSsrOn;
++
+     uint _postProg, _postFbo, _postTex;
+     int _postW, _postH, _postVersion = -1;
+     int _uPostTexSize, _uPostOutputSize, _uPostTime, _uPostFrame;
+@@ -228,6 +238,10 @@ public sealed class GlCore : IGpuBackend
+         int uPresentAo = _gl.GetUniformLocation(_progPresent, "uAo");
+         if (uPresentAo >= 0) _gl.Uniform1(uPresentAo, 1);
+         if (_uPresentAoOn >= 0) _gl.Uniform1(_uPresentAoOn, 0f);
++        _uPresentSsrOn = _gl.GetUniformLocation(_progPresent, "uSsrOn");
++        int uPresentSsr = _gl.GetUniformLocation(_progPresent, "uSsr");
++        if (uPresentSsr >= 0) _gl.Uniform1(uPresentSsr, 2);
++        if (_uPresentSsrOn >= 0) _gl.Uniform1(_uPresentSsrOn, 0f);
+ 
+         // Ambient occlusion. A failure here disables the pass and nothing else --
+         // the backend is perfectly usable without it, so it is deliberately not
+@@ -282,7 +296,7 @@ public sealed class GlCore : IGpuBackend
+             // nothing with the prim VAO: three floats and a position, drawn once a
+             // frame from a list the port kept.
+             _progNormal = GlShaders.Build(_gl, GlShaders.NormalVs, GlShaders.NormalFs, "aonormal",
+-                [(0, "inPos"), (1, "inZ")]);
++                [(0, "inPos"), (1, "inZ"), (2, "inM")]);
+             if (_progNormal != 0)
+             {
+                 _uNrmPosBias = _gl.GetUniformLocation(_progNormal, "uPosBias");
+@@ -298,9 +312,34 @@ public sealed class GlCore : IGpuBackend
+                 uint ns = (uint)sizeof(AoGeometry.V);
+                 _gl.EnableVertexAttribArray(0); _gl.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, ns, (void*)0);
+                 _gl.EnableVertexAttribArray(1); _gl.VertexAttribPointer(1, 1, VertexAttribPointerType.Float, false, ns, (void*)8);
++                _gl.EnableVertexAttribArray(2); _gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, ns, (void*)12);
+                 _gl.BindVertexArray(0);
+                 _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+             }
++
++            // 0067.
++            _progSsr = GlShaders.BuildFullscreen(_gl, fullVs, GlShaders.SsrFs, "ssr");
++            if (_progSsr != 0)
++            {
++                _uSsrOrigin = _gl.GetUniformLocation(_progSsr, "uOrigin");
++                _uSsrSize = _gl.GetUniformLocation(_progSsr, "uSize");
++                _uSsrTexSize = _gl.GetUniformLocation(_progSsr, "uTexSize");
++                _uSsrProjH = _gl.GetUniformLocation(_progSsr, "uProjH");
++                _uSsrCentre = _gl.GetUniformLocation(_progSsr, "uCentre");
++                _uSsrMaxDist = _gl.GetUniformLocation(_progSsr, "uMaxDist");
++                _uSsrThickness = _gl.GetUniformLocation(_progSsr, "uThickness");
++                _uSsrSky = _gl.GetUniformLocation(_progSsr, "uSky");
++                _uSsrSteps = _gl.GetUniformLocation(_progSsr, "uSteps");
++                _uSsrReflect = _gl.GetUniformLocation(_progSsr, "uReflect[0]");
++                _uSsrF0 = _gl.GetUniformLocation(_progSsr, "uF0[0]");
++                _uSsrDqa = _gl.GetUniformLocation(_progSsr, "uDqa");
++                _uSsrDqb = _gl.GetUniformLocation(_progSsr, "uDqb");
++                _uSsrFogCurve = _gl.GetUniformLocation(_progSsr, "uFogCurve");
++                _gl.UseProgram(_progSsr);
++                _gl.Uniform1(_gl.GetUniformLocation(_progSsr, "uDepth"), 0);
++                _gl.Uniform1(_gl.GetUniformLocation(_progSsr, "uSurface"), 1);
++                _gl.Uniform1(_gl.GetUniformLocation(_progSsr, "uColor"), 2);
++            }
+         }
+ 
+         _uPresent24Origin = _gl.GetUniformLocation(_progPresent24, "uOrigin");
+@@ -738,8 +777,8 @@ public sealed class GlCore : IGpuBackend
+         // sees all of it.
+         int zMode = 0;
+         if (a.HasGteZ && b.HasGteZ && c.HasGteZ)
+-            zMode = !f.SemiTrans ? 1 : a.Solid && GteDepth.AmbientOcclusion ? 4 : 2;
+-        else if (GteDepth.AmbientOcclusion && !f.SemiTrans)
++            zMode = !f.SemiTrans ? 1 : a.Solid && GteDepth.SurfacesWanted ? 4 : 2;
++        else if (GteDepth.SurfacesWanted && !f.SemiTrans)
+             zMode = 3;
+         // 0048. A directional triangle needs its batch's BK and LCM to be the ones
+         // it was lit with.
+@@ -750,10 +789,33 @@ public sealed class GlCore : IGpuBackend
+         // geometry that writes depth and is opaque, which is the geometry the
+         // occlusion pass shades; the order it is kept in is the order it is drawn
+         // in, and that is what makes the redraw agree with painter's order.
+-        if ((zMode == 1 || zMode == 4) && _kTarget != null && AoGeometry.Active)
+-        {
+-            _kTarget.Geo.Frame(_frame, GteDepth.Generation);
+-            _kTarget.Geo.Add(GeoVert(a), GeoVert(b), GeoVert(c));
++        // 0067. With reflections on, a triangle also carries its material, and a
++        // blended one is kept when it has one -- water, which writes no depth and
++        // so reaches the surface buffer and nothing else.
++        // A 2D primitive (no corner the GTE projected) is kept too, as Overlay, so
++        // the reflection pass can tell the HUD from the scene under it.
++        if (_kTarget != null && AoGeometry.Active)
++        {
++            byte m = SurfaceMaterial.None;
++            if (zMode == 1 || zMode == 4 || zMode == 2)
++            {
++                m = zMode == 2 ? SurfaceMaterial.None : SurfaceMaterial.Opaque;
++                if (GteDepth.Reflections)
++                    m = SurfaceMaterial.Classify(a.Material, f.Textured && !f.UseImage, f.SemiTrans && zMode == 2,
++                        f.BlendMode, f.TPage,
++                        (int)Math.Min(a.U, Math.Min(b.U, c.U)), (int)Math.Min(a.V, Math.Min(b.V, c.V)),
++                        (int)Math.Max(a.U, Math.Max(b.U, c.U)), (int)Math.Max(a.V, Math.Max(b.V, c.V)));
++            }
++            else if (GteDepth.Reflections && !a.Projected && !b.Projected && !c.Projected
++                     && !CoversTarget(Math.Min(a.X, Math.Min(b.X, c.X)), Math.Min(a.Y, Math.Min(b.Y, c.Y)),
++                                      Math.Max(a.X, Math.Max(b.X, c.X)), Math.Max(a.Y, Math.Max(b.Y, c.Y))))
++                m = SurfaceMaterial.Overlay;
++            if (m == SurfaceMaterial.Overlay) SurfaceMaterial.Overlays++;
++            if (m != SurfaceMaterial.None)
++            {
++                _kTarget.Geo.Frame(_frame, GteDepth.Generation);
++                _kTarget.Geo.Add(GeoVert(a, m), GeoVert(b, m), GeoVert(c, m));
++            }
+         }
+         if (lightGen >= 0) _kLightGen = lightGen;
+         if (a.Light != 0 && _vboLight != 0)
+@@ -820,12 +882,18 @@ public sealed class GlCore : IGpuBackend
+ 
+     /// <summary>0058. A vertex as the normal pass wants it: the position the colour
+     /// pass is about to draw, and the view depth the plane is reconstructed from.</summary>
+-    static AoGeometry.V GeoVert(in HleVertex v) => new() { X = v.X, Y = v.Y, Z = v.Z };
++    static AoGeometry.V GeoVert(in HleVertex v, float m) =>
++        new() { X = v.X, Y = v.Y, Z = m == SurfaceMaterial.Overlay ? 0f : v.Z, M = m };
++
++    /// <summary>0067. A 2D primitive over most of the target is a fade or a flash
++    /// the world is seen through, not a piece of the HUD; it is not an overlay.</summary>
++    bool CoversTarget(float x0, float y0, float x1, float y1) =>
++        _kTarget != null && x1 - x0 >= _kTarget.W * 0.9f && y1 - y0 >= _kTarget.H * 0.9f;
+ 
+     /// <summary>The zMode a primitive with no recovered depth takes: 3 (stamp the
+     /// far plane) while the occlusion pass is on and the primitive is opaque, 0 --
+     /// which is what everything did before this existed -- otherwise.</summary>
+-    static int FarMask(in PrimFlags f) => GteDepth.AmbientOcclusion && !f.SemiTrans ? 3 : 0;
++    static int FarMask(in PrimFlags f) => GteDepth.SurfacesWanted && !f.SemiTrans ? 3 : 0;
+ 
+     public void DrawRect(in HleRect r, in PrimFlags f)
+     {
+@@ -840,6 +908,16 @@ public sealed class GlCore : IGpuBackend
+         var d = new HleVertex { X = r.X + r.W, Y = r.Y + r.H, R = r.R, G = r.G, B = r.B, U = (short)(r.U + r.W), V = (short)(r.V + r.H) };
+         _verts[_count++] = V(a, f, false); _verts[_count++] = V(b, f, false); _verts[_count++] = V(c, f, false);
+         _verts[_count++] = V(b, f, false); _verts[_count++] = V(d, f, false); _verts[_count++] = V(c, f, false);
++        // 0067. A sprite is 2D: the HUD's, as far as the reflection pass is concerned.
++        if (GteDepth.Reflections && _kTarget != null && AoGeometry.Active
++            && !CoversTarget(r.X, r.Y, r.X + r.W, r.Y + r.H))
++        {
++            float m = SurfaceMaterial.Overlay;
++            SurfaceMaterial.Overlays += 2;
++            _kTarget.Geo.Frame(_frame, GteDepth.Generation);
++            _kTarget.Geo.Add(GeoVert(a, m), GeoVert(b, m), GeoVert(c, m));
++            _kTarget.Geo.Add(GeoVert(b, m), GeoVert(d, m), GeoVert(c, m));
++        }
+     }
+ 
+     public void DrawLine(in HleVertex a, in HleVertex b, in PrimFlags f)
+@@ -1533,7 +1611,7 @@ public sealed class GlCore : IGpuBackend
+ 
+             // Texels without the semi-transparency bit draw opaque, so they must hide what is behind them from the occlusion pass.
+             // A solid packet (zMode 4) hides it with every texel.
+-            if (GteDepth.AmbientOcclusion && _uOpaqueDepth >= 0)
++            if (GteDepth.SurfacesWanted && _uOpaqueDepth >= 0)
+             {
+                 _gl.Disable(EnableCap.Blend);
+                 _gl.ColorMask(false, false, false, false);
+@@ -1780,17 +1858,38 @@ public sealed class GlCore : IGpuBackend
+         // the pass needs the *whole* frame's depth, and painter's order means that
+         // does not exist until the last primitive has been drawn.
+         bool aoOn = AoReady(src, rgb24);
++        bool ssrOn = SsrReady(src, rgb24);
++        // 0058, 0067. The frame's geometry is redrawn once into the normal and
++        // surface buffers both passes read, timed with whichever pass runs first --
++        // the occlusion pass's, when it runs, as it always was.
++        bool surfaces = false;
++        int gScale = Math.Max(aoOn ? AoScale : 1, ssrOn ? SsrScale : 1);
+         if (aoOn)
+         {
+             var aoProfile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Ao);
+             long aoStart = System.Diagnostics.Stopwatch.GetTimestamp();
+             var aoQuery = BeginGpuTimer();
+-            RunAo(src!, dispX - src!.X, dispY - src.Y, w1x, h1x, fbW, fbH);
++            surfaces = DrawSurfaces(src!, gScale);
++            RunAo(src!, dispX - src!.X, dispY - src.Y, w1x, h1x, fbW, fbH, surfaces && GteDepth.AoNormals);
+             EndGpuTimer(aoQuery, GpuWork.AmbientOcclusion, aoStart);
+             Diagnostics.Profiler.End(aoProfile);
+         }
+         else if (GteDepth.AmbientOcclusion && !rgb24)
+             GteDepth.AoNoTarget++;
++        if (ssrOn)
++        {
++            var ssrProfile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Ssr);
++            long ssrStart = System.Diagnostics.Stopwatch.GetTimestamp();
++            var ssrQuery = BeginGpuTimer();
++            if (!aoOn) surfaces = DrawSurfaces(src!, gScale);
++            // A surface buffer that was not drawn this present holds another frame's.
++            ssrOn = surfaces && src!.Surface != 0;
++            if (ssrOn) RunSsr(src!, dispX - src!.X, dispY - src.Y, w1x, h1x);
++            EndGpuTimer(ssrQuery, GpuWork.Reflections, ssrStart);
++            Diagnostics.Profiler.End(ssrProfile);
++        }
++        else if (GteDepth.Reflections && !rgb24)
++            ScreenReflections.NoTarget++;
+ 
+         var compProfile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Composite);
+         long compStart = System.Diagnostics.Stopwatch.GetTimestamp();
+@@ -1813,6 +1912,15 @@ public sealed class GlCore : IGpuBackend
+                 _gl.BindTexture(TextureTarget.Texture2D, _aoBlurTex);
+             }
+         }
++        if (!rgb24 && _uPresentSsrOn >= 0)
++        {
++            _gl.Uniform1(_uPresentSsrOn, ssrOn ? 1f : 0f);
++            if (ssrOn)
++            {
++                _gl.ActiveTexture(TextureUnit.Texture2);
++                _gl.BindTexture(TextureTarget.Texture2D, _ssrTex);
++            }
++        }
+         _gl.ActiveTexture(TextureUnit.Texture0);
+         _gl.BindTexture(TextureTarget.Texture2D, src?.Tex ?? _vram.Texture);
+         if (rgb24)
+@@ -1957,20 +2065,13 @@ public sealed class GlCore : IGpuBackend
+     /// margin included — so both passes address one rectangle and cannot drift
+     /// apart.
+     /// </summary>
+-    unsafe void RunAo(GlDisplayRt src, float ox, float oy, int sw, int sh, int fbW, int fbH)
++    unsafe void RunAo(GlDisplayRt src, float ox, float oy, int sw, int sh, int fbW, int fbH, bool normals)
+     {
+         int aoScale = AoScale;
+         int aoW = sw * aoScale, aoH = sh * aoScale;
+         EnsureAoSize(aoW, aoH);
+         if (_aoTex == 0 || _aoBlurTex == 0) return;
+ 
+-        // 0058. The frame's own geometry, drawn again as normals before the pass
+-        // that reads them. It has to happen here rather than with the colour: the
+-        // prim shader's second output is a dual-source blend factor, and a program
+-        // with one of those may not render to more than one draw buffer, so there
+-        // is no MRT to hang a G-buffer off.
+-        bool normals = RenderNormals(src, aoScale);
+-
+         // The GTE's projection centre, as a fraction of the display area, so the
+         // shader needs no pixel arithmetic of its own.
+         //
+@@ -2092,23 +2193,33 @@ public sealed class GlCore : IGpuBackend
+     /// the see-through parts of a grate, never a wrong depth, and the pass's own
+     /// fallback is what those pixels used to get.
+     /// </summary>
+-    unsafe bool RenderNormals(GlDisplayRt src, int scale)
++    ///
++    /// 0067. It is drawn once for both passes and it is the surface buffer too: a
++    /// second attachment holding the last surface drawn at each pixel, water
++    /// included. The normal attachment is blended so that a translucent surface
++    /// leaves the opaque one under it, whose depth is the one the occlusion pass
++    /// reads; see NormalFs.
++    unsafe bool RenderSurfaces(GlDisplayRt src, int scale)
+     {
+-        if (!GteDepth.AoNormals || _progNormal == 0 || src.Geo.Count == 0) return false;
++        if ((!GteDepth.AoNormals && !GteDepth.Reflections) || _progNormal == 0 || src.Geo.Count == 0) return false;
+         EnsureNormalTarget(src, scale);
+         if (src.Normal == 0) return false;
+ 
+         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, src.NormalFbo);
+         _gl.Viewport(0, 0, (uint)src.NormalW, (uint)src.NormalH);
+         _gl.Disable(EnableCap.DepthTest);
+-        _gl.Disable(EnableCap.Blend);
+         _gl.Disable(EnableCap.ScissorTest);
+         _gl.Disable(EnableCap.CullFace);
+         _gl.DepthMask(false);
+         _gl.ColorMask(true, true, true, true);
+-        // Alpha 0 is "no normal here", which is the pass's own reconstruction.
++        // Alpha 0 is "no normal here", which is the pass's own reconstruction, and
++        // material 0 is "no surface".
+         _gl.ClearColor(0f, 0f, 0f, 0f);
+         _gl.Clear(ClearBufferMask.ColorBufferBit);
++        _gl.Enable(EnableCap.Blend, 0);
++        if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
++        _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
++        _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+ 
+         _gl.UseProgram(_progNormal);
+         // The same transform the colour pass used on this target, so a triangle
+@@ -2133,10 +2244,134 @@ public sealed class GlCore : IGpuBackend
+         _gl.BufferSubData<AoGeometry.V>(BufferTargetARB.ArrayBuffer, 0, verts);
+         _gl.DrawArrays(PrimitiveType.Triangles, 0, (uint)verts.Length);
+         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
++        _gl.Disable(EnableCap.Blend);
+         AoGeometry.Passes++;
+         return true;
+     }
+ 
++    /// <summary>0067. Whether a reflection pass can run: the setting, the program,
++    /// and a render target with a depth attachment, as for the occlusion pass.</summary>
++    bool DrawSurfaces(GlDisplayRt src, int scale)
++    {
++        var profile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.Surfaces);
++        bool drawn = RenderSurfaces(src, scale);
++        Diagnostics.Profiler.End(profile);
++        return drawn;
++    }
++
++    bool SsrReady(GlDisplayRt? src, bool rgb24) =>
++        GteDepth.Reflections && !rgb24 && !_legacy && _progSsr != 0 && _progNormal != 0
++        && src is { Depth: not 0 };
++
++    /// <summary>0067. The reflection pass's scale: the render scale, capped by
++    /// <see cref="ScreenReflections.Resolution"/>.</summary>
++    static int SsrScale => ScreenReflections.Resolution <= 0 ? GlVram.Scale
++        : Math.Clamp(ScreenReflections.Resolution, 1, GlVram.Scale);
++
++    /// <summary>
++    /// 0067. The reflection pass: the target's depth, surface buffer and colour in,
++    /// a premultiplied reflection over the display area out, which the present
++    /// composites. The rectangle and the projection are the occlusion pass's, so
++    /// the two cannot drift apart.
++    /// </summary>
++    unsafe void RunSsr(GlDisplayRt src, float ox, float oy, int sw, int sh)
++    {
++        int sc = SsrScale;
++        int w = sw * sc, h = sh * sc;
++        EnsureSsrSize(w, h);
++        if (_ssrTex == 0) return;
++
++        // The GTE's centre as a fraction of the display area; see RunAo.
++        float cx = (GteDepth.ProjCx + src.Margin - ox) / Math.Max(1, sw);
++        float cy = (GteDepth.ProjCy - oy) / Math.Max(1, sh);
++
++        _gl.Disable(EnableCap.DepthTest);
++        _gl.Disable(EnableCap.Blend);
++        _gl.Disable(EnableCap.ScissorTest);
++        _gl.Disable(EnableCap.CullFace);
++        _gl.DepthMask(false);
++        _gl.BindVertexArray(_presentVao);
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _ssrFbo);
++        _gl.Viewport(0, 0, (uint)w, (uint)h);
++        _gl.UseProgram(_progSsr);
++        if (_uSsrOrigin >= 0) _gl.Uniform2(_uSsrOrigin, ox, oy);
++        if (_uSsrSize >= 0) _gl.Uniform2(_uSsrSize, (float)sw, sh);
++        if (_uSsrTexSize >= 0) _gl.Uniform2(_uSsrTexSize, (float)src.Wide1x, src.H);
++        if (_uSsrProjH >= 0) _gl.Uniform1(_uSsrProjH, Math.Max(1f, GteDepth.ProjH));
++        if (_uSsrCentre >= 0) _gl.Uniform2(_uSsrCentre, cx, cy);
++        if (_uSsrMaxDist >= 0) _gl.Uniform1(_uSsrMaxDist, Math.Max(64f, ScreenReflections.March()));
++        if (_uSsrThickness >= 0) _gl.Uniform1(_uSsrThickness, Math.Max(1f, ScreenReflections.Thickness));
++        if (_uSsrSky >= 0) _gl.Uniform1(_uSsrSky, Math.Clamp(ScreenReflections.Sky, 0f, 1f));
++        if (_uSsrSteps >= 0) _gl.Uniform1(_uSsrSteps, Math.Clamp(ScreenReflections.Steps, 1, 128));
++        if (_uSsrDqa >= 0) _gl.Uniform1(_uSsrDqa, (float)GteDepth.ProjDqa);
++        if (_uSsrDqb >= 0) _gl.Uniform1(_uSsrDqb, (float)GteDepth.ProjDqb);
++        if (_uSsrFogCurve >= 0) _gl.Uniform1(_uSsrFogCurve, ScreenReflections.FogCurve);
++        fixed (float* r = SurfaceMaterial.Reflectivity)
++            if (_uSsrReflect >= 0) _gl.Uniform1(_uSsrReflect, SurfaceMaterial.Count, r);
++        fixed (float* f0 = SurfaceMaterial.F0)
++            if (_uSsrF0 >= 0) _gl.Uniform1(_uSsrF0, SurfaceMaterial.Count, f0);
++        _gl.ActiveTexture(TextureUnit.Texture2);
++        _gl.BindTexture(TextureTarget.Texture2D, src.Tex);
++        _gl.ActiveTexture(TextureUnit.Texture1);
++        _gl.BindTexture(TextureTarget.Texture2D, src.Surface);
++        _gl.ActiveTexture(TextureUnit.Texture0);
++        _gl.BindTexture(TextureTarget.Texture2D, src.Depth);
++        _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
++        ScreenReflections.Passes++;
++
++        if (ScreenReflections.WantMap && _ssrInfo) CaptureSsrMap(w, h);
++    }
++
++    unsafe void EnsureSsrSize(int w, int h)
++    {
++        bool info = ScreenReflections.Probe;
++        if (w == _ssrW && h == _ssrH && _ssrTex != 0 && info == _ssrInfo) return;
++        if (_ssrTex == 0)
++        {
++            _ssrTex = MakeAoTexture();
++            _ssrFbo = _gl.GenFramebuffer();
++        }
++        _gl.BindTexture(TextureTarget.Texture2D, _ssrTex);
++        _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
++            PixelFormat.Rgba, PixelType.UnsignedByte, null);
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _ssrFbo);
++        _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
++            TextureTarget.Texture2D, _ssrTex, 0);
++        // The probe's second attachment: what each reflective pixel found.
++        if (info)
++        {
++            if (_ssrInfoTex == 0) _ssrInfoTex = MakeAoTexture();
++            _gl.BindTexture(TextureTarget.Texture2D, _ssrInfoTex);
++            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
++                PixelFormat.Rgba, PixelType.UnsignedByte, null);
++            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment1,
++                TextureTarget.Texture2D, _ssrInfoTex, 0);
++            _gl.DrawBuffers([DrawBufferMode.ColorAttachment0, DrawBufferMode.ColorAttachment1]);
++        }
++        else
++            _gl.DrawBuffers([DrawBufferMode.ColorAttachment0]);
++        _ssrW = w; _ssrH = h; _ssrInfo = info;
++    }
++
++    unsafe void CaptureSsrMap(int w, int h)
++    {
++        if (w <= 0 || h <= 0) return;
++        var rgba = new byte[(long)w * h * 4];
++        var info = new byte[(long)w * h * 4];
++        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, _ssrFbo);
++        _gl.PixelStore(PixelStoreParameter.PackAlignment, 1);
++        _gl.ReadBuffer(ReadBufferMode.ColorAttachment0);
++        fixed (byte* p = rgba)
++            _gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.Rgba, PixelType.UnsignedByte, p);
++        _gl.ReadBuffer(ReadBufferMode.ColorAttachment1);
++        fixed (byte* p = info)
++            _gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.Rgba, PixelType.UnsignedByte, p);
++        _gl.ReadBuffer(ReadBufferMode.ColorAttachment0);
++        _gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
++        ScreenReflections.SetMap(rgba, info, w, h);
++    }
++
+     /// <summary>0059. The area's floor plan as an 80x80 two-channel texture, uploaded
+     /// only when the port has refilled it.</summary>
+     unsafe bool UploadHeightfield()
+@@ -2172,7 +2407,8 @@ public sealed class GlCore : IGpuBackend
+     unsafe void EnsureNormalTarget(GlDisplayRt rt, int scale)
+     {
+         int w = rt.Wide1x * scale, h = rt.H * scale;
+-        if (rt.Normal != 0 && rt.NormalW == w && rt.NormalH == h) return;
++        bool surface = GteDepth.Reflections;
++        if (rt.Normal != 0 && rt.NormalW == w && rt.NormalH == h && (rt.Surface != 0) == surface) return;
+         if (rt.Normal == 0)
+         {
+             rt.Normal = _gl.GenTexture();
+@@ -2190,6 +2426,34 @@ public sealed class GlCore : IGpuBackend
+         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, rt.NormalFbo);
+         _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+                                  TextureTarget.Texture2D, rt.Normal, 0);
++
++        // 0067. Half floats: an octahedral normal, the depth over 65536 and a small
++        // material id all survive them exactly enough, at half RGBA32F's bytes.
++        if (surface)
++        {
++            if (rt.Surface == 0) rt.Surface = _gl.GenTexture();
++            _gl.BindTexture(TextureTarget.Texture2D, rt.Surface);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
++            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba16f, (uint)w, (uint)h, 0,
++                           PixelFormat.Rgba, PixelType.HalfFloat, null);
++            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment1,
++                                     TextureTarget.Texture2D, rt.Surface, 0);
++            _gl.DrawBuffers([DrawBufferMode.ColorAttachment0, DrawBufferMode.ColorAttachment1]);
++        }
++        else
++        {
++            if (rt.Surface != 0)
++            {
++                _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment1,
++                                         TextureTarget.Texture2D, 0, 0);
++                _gl.DeleteTexture(rt.Surface);
++                rt.Surface = 0;
++            }
++            _gl.DrawBuffers([DrawBufferMode.ColorAttachment0]);
++        }
+         rt.NormalW = w; rt.NormalH = h;
+     }
+ 
+@@ -2283,6 +2547,10 @@ public sealed class GlCore : IGpuBackend
+         if (_aoBlurTex != 0) _gl.DeleteTexture(_aoBlurTex);
+         if (_aoFbo != 0) _gl.DeleteFramebuffer(_aoFbo);
+         if (_aoBlurFbo != 0) _gl.DeleteFramebuffer(_aoBlurFbo);
++        if (_ssrTex != 0) _gl.DeleteTexture(_ssrTex);
++        if (_ssrInfoTex != 0) _gl.DeleteTexture(_ssrInfoTex);
++        if (_ssrFbo != 0) _gl.DeleteFramebuffer(_ssrFbo);
++        if (_progSsr != 0) _gl.DeleteProgram(_progSsr);
+         if (_vao != 0) _gl.DeleteVertexArray(_vao);
+         if (_presentVao != 0) _gl.DeleteVertexArray(_presentVao);
+         if (_progPrim != 0) _gl.DeleteProgram(_progPrim);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlDisplayRt.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlDisplayRt.cs
+index 798acaf..87c85fd 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlDisplayRt.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlDisplayRt.cs
+@@ -20,6 +20,10 @@ public sealed class GlDisplayRt
+     // frame ago. Created on demand, so a run with the pass off allocates neither.
+     public uint Normal, NormalFbo;
+     public int NormalW, NormalH;
++    // 0067. The surface buffer, beside the normals in the same framebuffer: the
++    // last surface drawn at each pixel, translucent water included, as an
++    // octahedral normal, a depth and a material. Only while reflections are on.
++    public uint Surface;
+     public readonly AoGeometry Geo = new();
+     public bool Dirty;
+     public long Stamp;
+@@ -112,6 +116,7 @@ public sealed class GlDisplayRt
+         if (Depth != 0) gl.DeleteTexture(Depth);
+         if (NormalFbo != 0) gl.DeleteFramebuffer(NormalFbo);
+         if (Normal != 0) gl.DeleteTexture(Normal);
+-        Fbo = Tex = Depth = Normal = NormalFbo = 0;
++        if (Surface != 0) gl.DeleteTexture(Surface);
++        Fbo = Tex = Depth = Normal = NormalFbo = Surface = 0;
+     }
+ }
+\ No newline at end of file
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 5b65635..722e40d 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -26,6 +26,10 @@ internal static class GlShaders
+         // multiply is skipped, not multiplied by one, so a build with the pass
+         // switched off cannot round a colour by a least significant bit.
+         uniform float uAoOn;
++        // 0067. The reflection, premultiplied by its own weight, over the same
++        // rectangle; skipped rather than blended with zero when it is off.
++        uniform sampler2D uSsr;
++        uniform float uSsrOn;
+         out vec4 oColor;
+         void main() {
+             vec2 t = (uOrigin + vUv * uSize) / uTexSize;
+@@ -34,6 +38,10 @@ internal static class GlShaders
+             // size, so it is indexed by the present's own uv and needs no
+             // geometry of its own.
+             if (uAoOn > 0.5) c *= texture(uAo, vUv).r;
++            if (uSsrOn > 0.5) {
++                vec4 r = texture(uSsr, vUv);
++                c = c * (1.0 - r.a) + r.rgb;
++            }
+             oColor = vec4(c, 1.0);
+         }
+         """;
+@@ -276,8 +284,11 @@ internal static class GlShaders
+             float geo = 0.0;
+             if (uNormalOn > 0.5) {
+                 vec4 nb = normalAt(vUv);
+-                if (nb.a > 0.5) {
+-                    n = normalize(nb.xyz * 2.0 - 1.0);
++                vec3 nv = nb.xyz * 2.0 - 1.0;
++                // 0067. An edge-on polygon writes a zero vector rather than
++                // clearing the texel, since the buffer is blended now.
++                if (nb.a > 0.5 && dot(nv, nv) > 0.25) {
++                    n = normalize(nv);
+                     geo = 1.0;
+                 }
+             }
+@@ -406,17 +417,20 @@ internal static class GlShaders
+         #version 330 core
+         layout(location = 0) in vec2  inPos;
+         layout(location = 1) in float inZ;
++        layout(location = 2) in float inM;
+ 
+         uniform vec2 uPosBias;
+         uniform vec2 uFbInv;
+ 
+         out float vDepth;
++        flat out float vM;
+ 
+         void main() {
+             vec2 p = (inPos + uPosBias) * uFbInv - 1.0;
+             float w = max(inZ, 1.0);
+             gl_Position = vec4(p * w, 0.0, w);
+             vDepth = inZ * (1.0/65536.0);
++            vM = inM;
+         }
+         """;
+ 
+@@ -436,7 +450,15 @@ internal static class GlShaders
+     public const string NormalFs = """
+         #version 330 core
+         in float vDepth;
+-        out vec4 oColor;
++        flat in float vM;
++        // 0067. Two outputs. The first is the occlusion pass's normal buffer and
++        // is blended (ONE, ONE_MINUS_SRC_ALPHA), so a translucent surface writes
++        // alpha 0 and leaves the opaque surface under it -- whose depth is the one
++        // the occlusion pass reads. The second is the surface buffer, which is
++        // not blended: the last surface drawn at a pixel, water included, with its
++        // normal, its depth and its material (SurfaceMaterial).
++        layout(location = 0) out vec4 oColor;
++        layout(location = 1) out vec4 oSurface;
+ 
+         uniform float uProjH;
+         // The projection centre and the render scale, in the target's own pixels:
+@@ -444,19 +466,221 @@ internal static class GlShaders
+         uniform vec2  uCentre;
+         uniform float uScale;
+ 
++        // Octahedral: a unit normal in two numbers, exact enough in half floats.
++        vec2 octEncode(vec3 n) {
++            n /= abs(n.x) + abs(n.y) + abs(n.z);
++            vec2 e = n.xy;
++            if (n.z < 0.0)
++                e = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
++            return e;
++        }
++
+         void main() {
+             float z = vDepth * 65536.0;
+-            if (z <= 0.0) { oColor = vec4(0.0); return; }
++            bool opaque = vM < 1.5;
++            // 0067. The HUD and anything else 2D: no normal and no depth, only the
++            // fact that it covers what is under it.
++            if (vM > 2.5 && vM < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, vM); return; }
++            if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
+             vec2 s = gl_FragCoord.xy / uScale;
+             vec3 p = vec3((s - uCentre) * (z / uProjH), z);
+             vec3 n = cross(dFdx(p), dFdy(p));
+             // A polygon edge-on to the camera, or one degenerate after projection:
+-            // no plane to report, and alpha 0 leaves the pass its own answer.
+-            if (dot(n, n) < 1e-12) { oColor = vec4(0.0); return; }
++            // no plane to report. The zero vector leaves the occlusion pass its own
++            // answer, and material None leaves this pixel out of the reflections.
++            if (dot(n, n) < 1e-12) {
++                oColor = opaque ? vec4(0.5, 0.5, 0.5, 1.0) : vec4(0.0);
++                oSurface = vec4(0.0);
++                return;
++            }
+             n = normalize(n);
+             // The camera is at the origin looking down +Z.
+             if (dot(n, p) > 0.0) n = -n;
+-            oColor = vec4(n * 0.5 + 0.5, 1.0);
++            oColor = opaque ? vec4(n * 0.5 + 0.5, 1.0) : vec4(0.0);
++            oSurface = vec4(octEncode(n), vDepth, vM);
++        }
++        """;
++
++    /// <summary>
++    /// 0067. Screen-space reflections. For each pixel whose surface reflects, the
++    /// view ray is reflected about the surface's own plane (the surface buffer's
++    /// normal, from the polygon rather than from the depth) and marched through
++    /// the finished frame's depth buffer, projected with the GTE's own H and
++    /// centre. Where it passes behind a depth it has hit that surface, and the
++    /// colour there is the reflection.
++    ///
++    /// The ray starts on the water, not under it: the depth buffer at a water pixel
++    /// is the floor of the pool, because the water is translucent and wrote none,
++    /// and the surface buffer is where the water's own depth is kept. That same
++    /// fact keeps the ray from hitting the pool floor -- the ray leaves upwards,
++    /// and every depth below it is further away than it is.
++    ///
++    /// Output is premultiplied (colour times weight, weight), so the linear
++    /// filtering the present samples it with does not bleed colour off an edge.
++    /// </summary>
++    public const string SsrFs = """
++        #version 330 core
++        in vec2 vUv;
++        layout(location = 0) out vec4 oColor;
++        // The probe's: alpha 1/255 no hit, 2/255 a surface, 3/255 the sky, 4/255 a
++        // surface under the HUD, refused, on every reflective pixel. Written to nothing unless the probe attached it.
++        layout(location = 1) out vec4 oInfo;
++
++        uniform sampler2D uDepth;
++        uniform sampler2D uSurface;
++        uniform sampler2D uColor;
++        // The same rectangle and projection the occlusion pass is given.
++        uniform vec2  uOrigin;
++        uniform vec2  uSize;
++        uniform vec2  uTexSize;
++        uniform float uProjH;
++        uniform vec2  uCentre;
++        uniform float uMaxDist;
++        uniform float uThickness;
++        uniform float uSky;
++        uniform int   uSteps;
++        // SurfaceMaterial's table, by id.
++        uniform float uReflect[8];
++        uniform float uF0[8];
++        // The game's depth cue, off the GTE: IR0 = (DQA * H/SZ + DQB) / 4096, and
++        // which of its curves turns that into a darkening (GteLightMap's numbering).
++        uniform float uDqa;
++        uniform float uDqb;
++        uniform int   uFogCurve;
++
++        const float FAR = 65536.0;
++        const float OVERLAY = 3.0;
++
++        // How much of a colour survives the fog at view depth z: the per-pixel
++        // lighting shader's curve (shade8), evaluated at the GTE's own quotient.
++        float fogKeep(float z) {
++            if (uFogCurve == 0) return 1.0;
++            float q = min(uProjH * 65536.0 / max(z, 1.0), 131071.0);
++            float ir0 = clamp((uDqa * q + uDqb) / 4096.0, 0.0, 4096.0);
++            float w = uFogCurve == 1 ? max(ir0 - 800.0, 0.0) * 2.0
++                    : uFogCurve == 2 ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0)
++                    : uFogCurve == 3 ? ir0 * 0.5
++                    : ir0;
++            return clamp(1.0 - w / 4096.0, 0.0, 1.0);
++        }
++
++        vec2 tc(vec2 uv) { return (uOrigin + uv * uSize) / uTexSize; }
++        float depthAt(vec2 uv) { return texture(uDepth, tc(uv)).r; }
++        bool overlayAt(vec2 uv) { return abs(texture(uSurface, tc(uv)).a - OVERLAY) < 0.5; }
++        vec3 viewAt(vec2 uv, float z) { return vec3((uv - uCentre) * uSize * (z / uProjH), z); }
++        vec2 project(vec3 q) { return uCentre + q.xy * (uProjH / q.z) / uSize; }
++
++        vec3 octDecode(vec2 e) {
++            vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
++            if (n.z < 0.0)
++                n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
++            return normalize(n);
++        }
++
++        // Fades a reflection out as its source nears the picture's edge, where the
++        // march loses the surface it would have hit a few pixels further on.
++        float edgeFade(vec2 uv) {
++            vec2 e = smoothstep(vec2(0.0), vec2(0.06), uv) * smoothstep(vec2(0.0), vec2(0.06), 1.0 - uv);
++            return e.x * e.y;
++        }
++
++        void main() {
++            oColor = vec4(0.0);
++            oInfo = vec4(0.0);
++            vec4 s = texture(uSurface, tc(vUv));
++            int m = int(s.a + 0.5);
++            // Red is the material here, for the probe's map.
++            oInfo = vec4(float(clamp(m, 0, 7)) / 255.0, depthAt(vUv) >= 1.0 ? 1.0 / 255.0 : 0.0, 0.0, 0.0);
++            if (m <= 0 || m >= 8) return;
++            float refl = uReflect[m];
++            if (refl <= 0.0) return;
++            oInfo.a = 1.0 / 255.0;
++
++            float zs = s.b * FAR;
++            if (zs <= 1.0) return;
++            // With the Z-buffer on, visibility is the depth test's and not the
++            // order's, so a surface redrawn last may still be behind the opaque
++            // one the picture shows. The picture is the authority.
++            float d = depthAt(vUv);
++            if (d > 0.0 && d < 1.0 && d * FAR < zs * 0.99 - 8.0) return;
++
++            vec3 p = viewAt(vUv, zs);
++            vec3 n = octDecode(s.rg);
++            vec3 v = normalize(p);
++            vec3 r = reflect(v, n);
++            float cosv = clamp(dot(-v, n), 0.0, 1.0);
++            float f0 = uF0[m];
++            // Schlick, running from F0 looking straight down to the material's
++            // reflectivity at a grazing angle.
++            float w = f0 + (max(refl, f0) - f0) * pow(1.0 - cosv, 5.0);
++
++            // The same 4x4 interleaved pattern the occlusion pass uses, as a start
++            // offset along the ray, so step banding becomes a fine grain.
++            ivec2 px = ivec2(gl_FragCoord.xy) & 3;
++            float jitter = (float((px.y << 2) | px.x) + 0.5) / 16.0;
++
++            float n1 = float(max(uSteps, 1));
++            float tPrev = 0.0;
++            bool hit = false;
++            vec2 huv = vec2(0.0), bgUv = vec2(-1.0);
++            float ht = 0.0;
++            for (int i = 0; i < 128; i++) {
++                if (i >= uSteps) break;
++                float x = (float(i) + jitter) / n1;
++                float t = uMaxDist * x * x + 4.0;
++                vec3 q = p + r * t;
++                if (q.z < 8.0) break;
++                vec2 uv = project(q);
++                if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) break;
++                float sd = depthAt(uv);
++                // A background pixel is only the sky if nothing 2D was drawn over it.
++                if (sd >= 1.0 || sd <= 0.0) { if (!overlayAt(uv)) bgUv = uv; tPrev = t; continue; }
++                float dz = q.z - sd * FAR;
++                if (dz > 0.0 && dz < uThickness + (t - tPrev) * abs(r.z)) {
++                    // Halve back to where the ray crossed the surface.
++                    float lo = tPrev, hi = t;
++                    for (int k = 0; k < 5; k++) {
++                        float mid = 0.5 * (lo + hi);
++                        vec3 qm = p + r * mid;
++                        float md = depthAt(project(qm));
++                        if (md > 0.0 && md < 1.0 && qm.z > md * FAR) hi = mid; else lo = mid;
++                    }
++                    ht = hi;
++                    huv = project(p + r * hi);
++                    hit = true;
++                    break;
++                }
++                tPrev = t;
++            }
++
++            vec3 c;
++            // A surface under the HUD is hidden by it: its colour there is the HUD's.
++            if (hit && overlayAt(huv)) { oInfo.a = 4.0 / 255.0; return; }
++            if (hit) {
++                w *= edgeFade(huv) * (1.0 - smoothstep(0.7, 1.0, ht / uMaxDist));
++                c = texture(uColor, tc(huv)).rgb;
++                // The colour there was fogged for its own distance, and the light
++                // reaching the water has come further: out to the water and back up
++                // to the surface. Its image stands that much further down the mirrored
++                // view ray, so it is fogged at that depth. The game's fog is a
++                // darkening, so a surface lost in it reflects black -- which is what
++                // the void past the draw distance reflects too, so nothing pops at
++                // the fog's edge.
++                float zHit = viewAt(huv, depthAt(huv) * FAR).z;
++                float zImage = p.z * (length(p) + ht) / length(p);
++                float keep = clamp(fogKeep(zImage) / max(fogKeep(zHit), 1e-3), 0.0, 1.0);
++                c *= keep;
++                oInfo.b = keep;
++                oInfo.a = 2.0 / 255.0;
++            } else if (bgUv.x >= 0.0 && uSky > 0.0) {
++                w *= uSky * edgeFade(bgUv);
++                c = texture(uColor, tc(bgUv)).rgb;
++                oInfo.a = 3.0 / 255.0;
++            } else {
++                return;
++            }
++            w = clamp(w, 0.0, 1.0);
++            oColor = vec4(c * w, w);
+         }
+         """;
+ 
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuHleForward.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuHleForward.cs
+index 2c17208..1c06ac0 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuHleForward.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuHleForward.cs
+@@ -31,7 +31,7 @@ public sealed partial class Gpu
+         R = (byte)v.R, G = (byte)v.G, B = (byte)v.B, U = (short)v.U, V = (short)v.V,
+         Z = v.W, HasGteZ = z, HasPersp = persp,
+         Lx = v.Lx, Ly = v.Ly, Lz = v.Lz, Fog = v.Fog, Light = v.Light, LightGen = v.LightGen,
+-        TexRect = v.TexRect, HasTexRect = v.HasTexRect, Solid = v.Solid,
++        TexRect = v.TexRect, HasTexRect = v.HasTexRect, Solid = v.Solid, Material = v.Material, Projected = v.Projected,
+     };
+ 
+     PrimFlags PrimOf(bool tex, bool semi, bool raw, int clut, bool gouraud = false) => new()
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
+index 47a974f..ac884bd 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
+@@ -31,6 +31,10 @@ public sealed partial class Gpu
+         // 0060. The polygon's texture rectangle, the same for every corner.
+         public uint TexRect; public bool HasTexRect;
+         public bool Solid;
++        public byte Material;
++        // 0067. The vertex map or PGXP answered: the GTE projected this vertex, so
++        // the polygon is part of the 3D scene, whether or not it carries a depth.
++        public bool Projected;
+     }
+ 
+     static readonly RenderPrimEvent _primEvent = new();
+@@ -143,13 +147,14 @@ public sealed partial class Gpu
+             {
+                 ApplyPgxp(v, vwAt, n, wantW, wantZ, wantSub);
+                 for (int i = 0; i < n; i++)
+-                    if (v[i].Precise) hits++;
++                    if (v[i].Precise) { hits++; v[i].Projected = true; }
+             }
+             else
+                 for (int i = 0; i < n; i++)
+                 {
+                     if (!GteVertexMap.TryGet(_fifoSrc[vwAt[i]], _fifo[vwAt[i]], out var a)) continue;
+                     hits++;
++                    v[i].Projected = true;
+                     v[i].W = a.Z;
+                     v[i].HasW = wantW && a.Z > 0f;
+                     v[i].HasZ = wantZ && a.Z > 0f;
+@@ -172,7 +177,7 @@ public sealed partial class Gpu
+             if (has && dr.Z0 > 0f && dr.Z1 > 0f && dr.Z2 > 0f && (n == 3 || dr.Z3 > 0f))
+             {
+                 v[0].W = dr.Z0; v[1].W = dr.Z1; v[2].W = dr.Z2; v[3].W = dr.Z3;
+-                for (int i = 0; i < n; i++) { v[i].HasZ = true; v[i].Solid = dr.Solid; }
++                for (int i = 0; i < n; i++) { v[i].HasZ = true; v[i].Solid = dr.Solid; v[i].Material = dr.Material; }
+             }
+         }
+ 
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GteDepth.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GteDepth.cs
+index e1f547f..3968b23 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GteDepth.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GteDepth.cs
+@@ -97,7 +97,7 @@ public static class GteDepth
+     // accounting, and this table, which answers only when PositionFallback asks it
+     // to so that the two mechanisms can be compared in one build.
+ 
+-    static bool _enabled, _subpixel, _zbuffer, _ao;
++    static bool _enabled, _subpixel, _zbuffer, _ao, _ssr;
+ 
+     /// <summary>
+     /// While false the depth is not served, so both renderers interpolate affinely
+@@ -240,7 +240,28 @@ public static class GteDepth
+     /// is done with them — one rejects fragments, the other reads the finished
+     /// buffer back in a full-screen pass — so the write is shared and the test is
+     /// not.</summary>
+-    public static bool DepthWanted => _zbuffer || _ao;
++    public static bool DepthWanted => _zbuffer || _ao || _ssr;
++
++    /// <summary>0067. Screen-space reflections, the second reader of the finished
++    /// frame's depth and the first reader of its surface buffer. See
++    /// <see cref="ScreenReflections"/>.</summary>
++    public static bool Reflections
++    {
++        get => _ssr;
++        set
++        {
++            if (_ssr == value) return;
++            _ssr = value;
++            Generation++;
++            GteVertexMap.SetActive(Active);
++        }
++    }
++
++    /// <summary>0067. Whether a pass wants the frame's surfaces: the far-plane mask
++    /// under the HUD, the projection read off the GTE, and the geometry kept for
++    /// the surface buffer. Ambient occlusion was the only such pass, and every site
++    /// that asked for it by name meant this.</summary>
++    public static bool SurfacesWanted => _ao || _ssr;
+ 
+     /// <summary>How far a sample may sit from the shaded point and still occlude
+     /// it, in GTE view-depth units, which are the game's own world units — a floor
+@@ -528,6 +549,13 @@ public static class GteDepth
+         if (h > 0f) { ProjH = h; ProjCx = cx; ProjCy = cy; ProjSeen++; }
+     }
+ 
++    /// <summary>0067. The depth cue the last projection was made with, DQA and DQB
++    /// as the GTE holds them: <c>IR0 = (DQA * H/SZ + DQB) >> 12</c>. The reflection
++    /// pass fogs a reflected ray's longer path on the same curve.</summary>
++    public static int ProjDqa, ProjDqb;
++
++    public static void NoteDepthCue(int dqa, int dqb) { ProjDqa = dqa; ProjDqb = dqb; }
++
+     /// <summary>
+     /// True color (24-bit). While false the GL backend renders into an RGB5A1
+     /// display target and the fragment shader crushes every shaded pixel to five
+@@ -544,7 +572,7 @@ public static class GteDepth
+ 
+     /// <summary>Nothing is recorded and every lookup misses while every consumer
+     /// is off, which is what makes this cost nothing when none of them is wanted.</summary>
+-    public static bool Active => _enabled || _subpixel || _zbuffer || _ao;
++    public static bool Active => _enabled || _subpixel || _zbuffer || _ao || _ssr;
+ 
+     /// <summary>Consult the screen-position table below for vertices the exact map
+     /// could not answer for. Off by default — it is the guess this was all built to
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GtePacketDepth.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GtePacketDepth.cs
+index fd616fe..d2c324b 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GtePacketDepth.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GtePacketDepth.cs
+@@ -27,6 +27,9 @@ public static class GtePacketDepth
+         // A blended packet that is still a solid surface: it writes its depth for
+         // the occlusion pass. The port sets it for models (a secret door).
+         public bool Solid;
++        // 0067. The surface's material (SurfaceMaterial), when the port that built
++        // the packet knows it; None leaves the choice to the texture.
++        public byte Material;
+     }
+ 
+     /// <summary>The port's switch.</summary>
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/GpuTrace.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/GpuTrace.cs
+index f3837d5..3db87d0 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/GpuTrace.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/GpuTrace.cs
+@@ -55,6 +55,8 @@ public enum GpuWork : byte
+     /// <summary>The whole of <c>GlCore.PresentDisplay</c>; CPU only, and the last
+     /// call a present makes.</summary>
+     Present,
++    /// <summary>0067. The surface buffer and the reflection pass.</summary>
++    Reflections,
+ }
+ 
+ public static class GpuTrace
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+index f3f69fd..5fa60ca 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+@@ -26,6 +26,11 @@ public struct HleVertex
+     public bool HasTexRect;
+     // GtePacketDepth.Rec.Solid: blended, and still a surface the occlusion pass sees.
+     public bool Solid;
++    // 0067. GtePacketDepth.Rec.Material: the port's word on what the surface is.
++    public byte Material;
++    // 0067. The GTE projected this vertex (the vertex map or PGXP answered for it).
++    // A polygon with no projected corner is 2D: the HUD, text, a menu.
++    public bool Projected;
+ }
+ 
+ public struct PrimFlags
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/ScreenReflections.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/ScreenReflections.cs
+new file mode 100644
+index 0000000..371f094
+--- /dev/null
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/ScreenReflections.cs
+@@ -0,0 +1,170 @@
++namespace RecompOne.Runtime;
++
++/// <summary>
++/// 0067. Screen-space reflections: the settings the pass reads, and its counters.
++///
++/// <para>The pass runs at present beside the occlusion pass and reads what that one
++/// reads — the finished frame's depth, recovered from the GTE — plus the surface
++/// buffer (normal, depth and material per pixel, <c>GlCore.RenderSurfaces</c>) and
++/// the finished colour. For every pixel whose material reflects, it reflects the view
++/// ray about the surface's own plane and marches it through the depth buffer; the
++/// colour where it lands is blended over the surface by a Fresnel term. Nothing is
++/// written back: like the occlusion, the reflection lives in its own texture and the
++/// present composites it, so VRAM, the display buffers and a menu's restored frame
++/// never carry it.</para>
++///
++/// <para>Water is the reason it has to be a surface buffer and not the depth buffer.
++/// The game draws water semi-transparent, so it writes no depth and the depth under a
++/// pool is the pool's floor; the surface buffer holds the water's own plane, drawn in
++/// the same painter's order as everything else.</para>
++/// </summary>
++public static class ScreenReflections
++{
++    public static bool Enabled
++    {
++        get => GteDepth.Reflections;
++        set => GteDepth.Reflections = value;
++    }
++
++    /// <summary>How far a ray is marched, in the game's world units (a floor tile is
++    /// 2048); 0 marches to where the game's fog turns a colour black, so whatever
++    /// lies past the march's end would have reflected black anyway.</summary>
++    public static float MaxDistance;
++
++    /// <summary>The march used for this frame: <see cref="MaxDistance"/>, or the
++    /// depth the fog is black at on <see cref="FogCurve"/>, capped at 16 tiles.</summary>
++    public static float March()
++    {
++        if (MaxDistance > 0f) return MaxDistance;
++        float z = FogBlackDepth();
++        return float.IsFinite(z) ? Math.Clamp(z, 4096f, 32768f) : 16384f;
++    }
++
++    /// <summary>The view depth at which the depth cue leaves nothing of a colour, or
++    /// infinity when this curve never gets there.</summary>
++    public static float FogBlackDepth()
++    {
++        float ir0 = FogCurve switch { 1 => 2848f, 2 => 3232f, 4 => 4096f, _ => float.NaN };
++        if (float.IsNaN(ir0) || GteDepth.ProjDqa >= 0) return float.PositiveInfinity;
++        // IR0 = (DQA * q + DQB) / 4096 with q = H * 65536 / z.
++        double q = (ir0 * 4096.0 - GteDepth.ProjDqb) / GteDepth.ProjDqa;
++        return q <= 0 ? float.PositiveInfinity : (float)(GteDepth.ProjH * 65536.0 / q);
++    }
++
++    /// <summary>Steps along the ray; the spacing grows with distance, so the near
++    /// field is sampled finely.</summary>
++    public static int Steps = 32;
++
++    /// <summary>How far behind the depth buffer a ray may be and still have hit it,
++    /// in world units, on top of the step's own length.</summary>
++    public static float Thickness = 256f;
++
++    /// <summary>A ray that finds nothing takes the colour of the last background
++    /// pixel it crossed (the skybox, which writes no depth) at this weight, 0..1.</summary>
++    public static float Sky = 1f;
++
++    /// <summary>Which of the game's depth-cue curves fogs a reflection's longer
++    /// path (GteLightMap's numbering: 0 none, 1 offset, 2 knee, 3 half, 4 the word
++    /// itself). The map tiles near the camera are on the knee; the curve is per
++    /// record in the game, and one curve is the approximation.</summary>
++    public static int FogCurve = 2;
++
++    /// <summary>The pass's resolution: a multiple of the game's pixels, capped at the
++    /// render scale; 0 is the render scale.</summary>
++    public static int Resolution = 2;
++
++    /// <summary>The probe's switch; <see cref="WantMap"/> asks for one readback.</summary>
++    public static bool Probe;
++    public static bool WantMap;
++
++    /// <summary>Passes run, presents that could not run one, and surface passes drawn.</summary>
++    public static long Passes, NoTarget;
++
++    /// <summary>The last readback: the share of the picture that reflects, the share
++    /// of those that found a surface, the share that took the sky, and the mean
++    /// weight blended over a reflective pixel.</summary>
++    public static float ReflectivePct, HitPct, SkyPct, OverlayPct, MeanWeight;
++
++    public static void ResetCounters() => Passes = NoTarget = 0;
++
++    /// <summary>The readback's census, from RGBA8 texels: alpha is the weight, and
++    /// the probe build writes 1/255 into a reflective pixel's alpha whatever it
++    /// found, so a miss is still counted.</summary>
++    public static void SetMap(byte[] rgba, byte[] info, int w, int h)
++    {
++        long n = (long)w * h, refl = 0, hit = 0, sky = 0, under = 0;
++        double wsum = 0, skyR = 0, skyG = 0, skyB = 0, hitL = 0, keepSum = 0;
++        long fogged = 0;
++        for (long i = 0; i < n; i++)
++        {
++            byte k = info[i * 4 + 3];
++            if (k == 0) continue;
++            refl++;
++            if (k == 2)
++            {
++                hit++;
++                float a = Math.Max(rgba[i * 4 + 3], (byte)1);
++                hitL += (rgba[i * 4] + rgba[i * 4 + 1] + rgba[i * 4 + 2]) / (3f * a);
++                keepSum += info[i * 4 + 2] / 255.0;
++                if (info[i * 4 + 2] < 128) fogged++;
++            }
++            else if (k == 3)
++            {
++                sky++;
++                // Premultiplied: divide the weight back out for the colour taken.
++                float a = Math.Max(rgba[i * 4 + 3], (byte)1);
++                skyR += rgba[i * 4] / a; skyG += rgba[i * 4 + 1] / a; skyB += rgba[i * 4 + 2] / a;
++            }
++            else if (k == 4) under++;
++            wsum += rgba[i * 4 + 3] / 255.0;
++        }
++        ReflectivePct = n == 0 ? 0f : 100f * refl / n;
++        HitPct = refl == 0 ? 0f : 100f * hit / refl;
++        SkyPct = refl == 0 ? 0f : 100f * sky / refl;
++        OverlayPct = refl == 0 ? 0f : 100f * under / refl;
++        SkyColour = sky == 0 ? "none" : $"{skyR / sky * 255:F0},{skyG / sky * 255:F0},{skyB / sky * 255:F0}";
++        HitLuma = hit == 0 ? 0f : (float)(hitL / hit * 255);
++        HitKeep = hit == 0 ? 1f : (float)(keepSum / hit);
++        HitFoggedPct = hit == 0 ? 0f : 100f * fogged / hit;
++        MeanWeight = refl == 0 ? 0f : (float)(wsum / refl);
++        // A 48x16 map: the material in each cell (the most common one), and
++        // whether the depth there is the far plane.
++        var sb = new System.Text.StringBuilder();
++        const int cols = 48, rows = 16;
++        // Row 0 of the texture is the top of the picture.
++        for (int r = 0; r < rows; r++)
++        {
++            sb.Append("[KF2] reflections:  ");
++            for (int c = 0; c < cols; c++)
++            {
++                Span<int> votes = stackalloc int[9];
++                for (int y = r * h / rows; y < (r + 1) * h / rows; y += 2)
++                    for (int x = c * w / cols; x < (c + 1) * w / cols; x += 2)
++                    {
++                        long i = ((long)y * w + x) * 4;
++                        int m = Math.Min((int)info[i], 7);
++                        votes[m == 0 && info[i + 1] != 0 ? 8 : m]++;
++                    }
++                int best = 0;
++                for (int k = 1; k < 9; k++) if (votes[k] > votes[best]) best = k;
++                sb.Append(best switch { 0 => ' ', 1 => '.', 2 => '~', 3 => 'H', 8 => '*', _ => '?' });
++            }
++            sb.Append('\n');
++        }
++        Map = sb.ToString();
++        WantMap = false;
++    }
++
++    /// <summary>The last readback's map: '.' opaque, '~' water, 'H' 2D overlay,
++    /// '*' far plane with no surface (the sky), ' ' nothing.</summary>
++    public static string? Map;
++
++    /// <summary>The mean colour the sky fallback took, and the mean brightness of
++    /// what a hit took, both 0..255.</summary>
++    public static string SkyColour = "none";
++    public static float HitLuma;
++
++    /// <summary>What the path fog left of a hit's colour, on average, and the share
++    /// of hits it more than halved.</summary>
++    public static float HitKeep = 1f, HitFoggedPct;
++}
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+new file mode 100644
+index 0000000..807467e
+--- /dev/null
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+@@ -0,0 +1,112 @@
++namespace RecompOne.Runtime;
++
++/// <summary>
++/// 0067. What a surface is made of, as far as a pass after the frame needs to know.
++///
++/// <para>The console had no such idea: a polygon is a colour, a texture and a blend
++/// mode. A pass that runs on the finished frame — reflections now, lighting later —
++/// needs one more fact per pixel, and it is kept in the alpha of the surface buffer
++/// beside the normal and the depth (<c>GlCore.RenderSurfaces</c>). The id is small
++/// on purpose; what an id *means* is the table below, which a port fills.</para>
++///
++/// <para>Two sources, in order. A packet the port built may carry its material in
++/// its depth record (<see cref="GtePacketDepth.Rec.Material"/>) — that is where an
++/// authored material belongs, since only the port knows which routine drew which
++/// model or tile. Failing that, a textured polygon whose texels come from a VRAM
++/// rectangle the port has published (<see cref="Rects"/>) takes that rectangle's
++/// material; that is how water is found, because the game re-uploads its water into
++/// fixed dest rects every tick (the same slots 0053 smooths).</para>
++/// </summary>
++public static class SurfaceMaterial
++{
++    /// <summary>Nothing drew a surface here.</summary>
++    public const byte None = 0;
++    /// <summary>Any opaque, depth-carrying polygon without a material of its own.</summary>
++    public const byte Opaque = 1;
++    /// <summary>A still or scrolling water surface.</summary>
++    public const byte Water = 2;
++    /// <summary>Drawn in 2D over the scene -- the HUD, text, a menu. Nothing
++    /// reflects it, and a ray that lands under it has found nothing it can use.</summary>
++    public const byte Overlay = 3;
++
++    /// <summary>The table's size, and one past the largest id a pass will read.</summary>
++    public const int Count = 8;
++
++    /// <summary>How much of the scene a material reflects at most, 0..1; 0 is not
++    /// reflective, and the pass skips the pixel after one texture read.</summary>
++    public static readonly float[] Reflectivity = new float[Count];
++
++    /// <summary>Schlick's F0: the share reflected looking straight down at it. The
++    /// share rises to <see cref="Reflectivity"/> at a grazing angle.</summary>
++    public static readonly float[] F0 = new float[Count];
++
++    /// <summary>A VRAM rectangle whose texels are one material.</summary>
++    public struct TexRect
++    {
++        public int X, Y, W, H;
++        public byte Material;
++        /// <summary>Only a semi-transparent polygon, in an averaging blend, takes
++        /// it: the same slots also hold the main-hall fire (additive) and the
++        /// creatures' skins.</summary>
++        public bool TranslucentOnly;
++    }
++
++    public const int RectSlots = 16;
++    public static readonly TexRect[] Rects = new TexRect[RectSlots];
++    public static int RectN;
++
++    /// <summary>Triangles given a material other than Opaque, by where it came
++    /// from. Reset by the probe.</summary>
++    public static long FromPacket, FromRect;
++    public static readonly long[] ByMaterial = new long[Count];
++
++    /// <summary>Blended, depth-carrying triangles looked at; those whose texture
++    /// was in a translucent-only rect and whose blend refused it (the fire), by
++    /// blend mode.</summary>
++    public static long Blended;
++
++    /// <summary>2D triangles kept as <see cref="Overlay"/>.</summary>
++    public static long Overlays;
++    public static readonly long[] RefusedByBlend = new long[4];
++
++    public static void ResetCounters()
++    {
++        FromPacket = FromRect = Blended = Overlays = 0;
++        Array.Clear(ByMaterial);
++        Array.Clear(RefusedByBlend);
++    }
++
++    /// <summary>The material of a triangle: the packet's, then a published
++    /// rectangle's, then <see cref="Opaque"/> for an opaque one and
++    /// <see cref="None"/> for a blended one.</summary>
++    public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage,
++                                int u0, int v0, int u1, int v1)
++    {
++        if (packet != None) { FromPacket++; ByMaterial[packet & (Count - 1)]++; return packet; }
++        if (semi) Blended++;
++        if (textured && RectN > 0)
++        {
++            // The texel columns the UVs reach, in VRAM halfwords: a 4-bit texel is a
++            // quarter of one and an 8-bit texel a half.
++            int mode = (tpage >> 7) & 3;
++            int div = mode == 0 ? 4 : mode == 1 ? 2 : 1;
++            int x0 = (tpage & 0xF) * 64 + u0 / div, x1 = (tpage & 0xF) * 64 + u1 / div + 1;
++            int y0 = ((tpage >> 4) & 1) * 256 + v0, y1 = ((tpage >> 4) & 1) * 256 + v1 + 1;
++            bool averaging = semi && (blend == 0 || blend == 3);
++            for (int i = 0; i < RectN; i++)
++            {
++                ref var r = ref Rects[i];
++                if (x0 >= r.X + r.W || x1 <= r.X || y0 >= r.Y + r.H || y1 <= r.Y) continue;
++                if (r.TranslucentOnly && !averaging)
++                {
++                    if (semi) RefusedByBlend[blend & 3]++;
++                    continue;
++                }
++                FromRect++;
++                ByMaterial[r.Material & (Count - 1)]++;
++                return r.Material;
++            }
++        }
++        return semi ? None : Opaque;
++    }
++}
+diff --git a/tools/RecompOne/RecompOne.Runtime/Hardware/Gte.cs b/tools/RecompOne/RecompOne.Runtime/Hardware/Gte.cs
+index 7c9e2d0..be41527 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Hardware/Gte.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Hardware/Gte.cs
+@@ -771,8 +771,11 @@ public static class Gte
+             // this divide to get a view position back out of a depth texel, and H
+             // and the OFX/OFY centre are that projection rather than a guess at it.
+             // OFX/OFY are 16.16 here, as SX/SY are before the shift.
+-            if (GteDepth.AmbientOcclusion)
++            if (GteDepth.SurfacesWanted)
++            {
+                 GteDepth.NoteProjection(H, OFX * (1f / 65536f), OFY * (1f / 65536f));
++                GteDepth.NoteDepthCue(DQA, DQB);
++            }
+             if (GteDepth.PositionFallback)
+                 GteDepth.Record(nx, ny, sz, sx * (1f / 65536f), sy * (1f / 65536f), clipped);
+         }

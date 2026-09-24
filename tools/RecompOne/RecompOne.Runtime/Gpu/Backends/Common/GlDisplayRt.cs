@@ -20,6 +20,10 @@ public sealed class GlDisplayRt
     // frame ago. Created on demand, so a run with the pass off allocates neither.
     public uint Normal, NormalFbo;
     public int NormalW, NormalH;
+    // 0067. The surface buffer, beside the normals in the same framebuffer: the
+    // last surface drawn at each pixel, translucent water included, as an
+    // octahedral normal, a depth and a material. Only while reflections are on.
+    public uint Surface;
     public readonly AoGeometry Geo = new();
     public bool Dirty;
     public long Stamp;
@@ -112,6 +116,7 @@ public sealed class GlDisplayRt
         if (Depth != 0) gl.DeleteTexture(Depth);
         if (NormalFbo != 0) gl.DeleteFramebuffer(NormalFbo);
         if (Normal != 0) gl.DeleteTexture(Normal);
-        Fbo = Tex = Depth = Normal = NormalFbo = 0;
+        if (Surface != 0) gl.DeleteTexture(Surface);
+        Fbo = Tex = Depth = Normal = NormalFbo = Surface = 0;
     }
 }

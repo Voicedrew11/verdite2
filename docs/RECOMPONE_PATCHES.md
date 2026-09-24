@@ -13,7 +13,7 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Forty-eight of the fifty-four are load-bearing; `0002`, `0003`, `0015`, `0046` and
+Forty-nine of the fifty-five are load-bearing; `0002`, `0003`, `0015`, `0046` and
 `0065` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
@@ -701,7 +701,7 @@ Four files in the directory have no entry below:
   frame's own geometry instead of from four depth texels. `Gpu/AoGeometry.cs` keeps
   each depth-carrying triangle as `GlCore.DrawTri` submits it, per display target
   (the presented target was drawn a frame ago, which is why the depth attachment
-  lives there too); `GlCore.RenderNormals` draws the list again after the frame,
+  lives there too); `GlCore.RenderNormals` (`RenderSurfaces` since `0067`) draws the list again after the frame,
   with no depth test and no depth write, so **order** is what makes it agree with
   the depth buffer rather than a test that could disagree. `NormalVs`/`NormalFs` are
   `PrimVs`'s position arithmetic to the letter with the view depth as W, and the
@@ -841,6 +841,39 @@ Four files in the directory have no entry below:
   the current video mode of that monitor, plus one row: a window exactly the
   monitor's size was promoted off the compositor and tore. The third diff in the
   patch file.
+
+- `0067-screen-space-reflections.patch` — water reflects what is on screen above
+  it, and the surface buffer and material id lighting will need. A blended triangle
+  writes no depth, so at a water pixel the depth and `0058`'s normals are the pool's
+  floor. `AoGeometry.V` gains a material and keeps a blended triangle that has one.
+  `NormalFs` writes two outputs: the normal buffer, now blended `ONE,
+  ONE_MINUS_SRC_ALPHA`, so a translucent surface leaves the opaque normal under it;
+  and a new RGBA16F attachment on the target (`GlDisplayRt.Surface`), not blended,
+  holding the last surface drawn at each pixel as an octahedral normal, a depth and
+  a material. An edge-on opaque polygon writes a zero vector with alpha 1 instead
+  of clearing, and `AoFs` treats a short vector as no normal. `Gpu/SurfaceMaterial.cs`
+  is the id and its table (`Reflectivity`, `F0`); a triangle takes the packet's
+  `GtePacketDepth.Rec.Material` (carried to `HleVertex.Material`), then a
+  port-published VRAM rect's (translucent-only rects need blend mode 0 or 3), then
+  `Opaque`. `GteDepth.Reflections` joins `DepthWanted` and `Active`, and
+  `SurfacesWanted` (AO or reflections) replaces `AmbientOcclusion` at every site
+  that meant "a pass wants the frame's surfaces": the far-plane mask, `zMode 4`,
+  the opaque-texel depth draw and the projection read in `Gte.Rtp`. `SsrFs` marches
+  the reflected ray through the depth with the GTE's H and centre, halves back to
+  the crossing, falls back to the last far-plane pixel it crossed, and writes a
+  premultiplied colour that `PresentFs` composites after the occlusion multiply.
+  A hit's colour is fogged for its path through the mirror on the game's own depth
+  cue (`Gte.Rtp` publishes DQA and DQB, `GteDepth.NoteDepthCue`), and the march
+  runs to where that fog is black (`ScreenReflections.March`). `HleVertex.Projected`
+  (the vertex map or PGXP answered) tells 2D from the scene; 2D triangles and
+  sprites are kept as material `Overlay`, which the pass refuses as a sky sample or
+  a hit, so the HUD is not reflected.
+  `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
+  timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
+  `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
+  and reads back what each reflective pixel found (`ScreenReflections.SetMap`). The
+  occlusion census is identical with it on and off. Off by default. GL core only.
+  **No recompile.** See "Screen-space reflections" in `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

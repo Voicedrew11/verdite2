@@ -1015,6 +1015,7 @@ public sealed class Capture
                 if (f < Flushes.Length && Flushes[f].Start <= sec.Enter) sec.Flush = f++;
             }
             var what = sec.Id == Profiler.Ao ? GpuWork.AmbientOcclusion
+                : sec.Id == Profiler.Ssr ? GpuWork.Reflections
                 : sec.Id == Profiler.Composite ? GpuWork.Composite
                 : sec.Id == Profiler.Display ? GpuWork.Present : (GpuWork)255;
             if ((int)what == 255) continue;
@@ -1150,6 +1151,7 @@ public sealed class Capture
     public static string WorkName(GpuWork w) => w switch
     {
         GpuWork.AmbientOcclusion => "AO pass",
+        GpuWork.Reflections => "reflection pass",
         GpuWork.Composite => "composite (present blit + post-fx)",
         GpuWork.Present => "whole present",
         _ => "batch",
@@ -1446,6 +1448,7 @@ public sealed class Capture
         if (!TimerQueries) return "GPU: no timer queries on this GL context";
         if (!GpuFinal) return "GPU: waiting for the GPU to answer";
         var ao = TailWorks.FirstOrDefault(w => w.What == GpuWork.AmbientOcclusion);
+        var ssr = TailWorks.FirstOrDefault(w => w.What == GpuWork.Reflections);
         var comp = TailWorks.FirstOrDefault(w => w.What == GpuWork.Composite);
         var pres = TailWorks.FirstOrDefault(w => w.What == GpuWork.Present);
         return $"GPU: the frame's batches {BatchGpuNs / 1e6:0.000} ms" +
@@ -1453,6 +1456,7 @@ public sealed class Capture
                (TailDone
                    ? $"; its present: whole {pres.Ticks * TicksToMs:0.000} ms CPU" +
                      (ao.What == GpuWork.AmbientOcclusion ? $", AO pass {ao.Ticks * TicksToMs:0.000} CPU / {Gpu(ao)} GPU" : ", no AO pass") +
+                     (ssr.What == GpuWork.Reflections ? $", reflection pass {ssr.Ticks * TicksToMs:0.000} CPU / {Gpu(ssr)} GPU" : "") +
                      $", composite {comp.Ticks * TicksToMs:0.000} CPU / {Gpu(comp)} GPU"
                    : "; its present was not seen");
 

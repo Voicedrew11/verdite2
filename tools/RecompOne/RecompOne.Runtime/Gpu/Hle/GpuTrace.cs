@@ -55,6 +55,8 @@ public enum GpuWork : byte
     /// <summary>The whole of <c>GlCore.PresentDisplay</c>; CPU only, and the last
     /// call a present makes.</summary>
     Present,
+    /// <summary>0067. The surface buffer and the reflection pass.</summary>
+    Reflections,
 }
 
 public static class GpuTrace

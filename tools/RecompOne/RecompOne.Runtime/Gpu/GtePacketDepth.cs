@@ -27,6 +27,9 @@ public static class GtePacketDepth
         // A blended packet that is still a solid surface: it writes its depth for
         // the occlusion pass. The port sets it for models (a secret door).
         public bool Solid;
+        // 0067. The surface's material (SurfaceMaterial), when the port that built
+        // the packet knows it; None leaves the choice to the texture.
+        public byte Material;
     }
 
     /// <summary>The port's switch.</summary>
