@@ -497,3 +497,20 @@ index 0000000..17df147
 +        try { D3DKMTCloseAdapter(ref args); } catch { }
 +    }
 +}
+diff --git a/tools/RecompOne/RecompOne.Runtime/Host/Window/HostWindow.cs b/tools/RecompOne/RecompOne.Runtime/Host/Window/HostWindow.cs
+index 7337a3a..dde6d36 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Host/Window/HostWindow.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Host/Window/HostWindow.cs
+@@ -605,7 +605,11 @@ public static class HostWindow
+     public static void SetFullscreen(bool on)
+     {
+         if (_window == null) return;
+-        var borderless = on && ConfigManager.View.Borderless;
++        // Windows only, where the vblank wait needs a composed window. Wayland lets
++        // no client place itself, and an X11 window manager fits an undecorated
++        // one to the work area, so elsewhere a monitor-sized window never covers
++        // the screen; there Borderless is the window manager's fullscreen.
++        var borderless = on && ConfigManager.View.Borderless && OperatingSystem.IsWindows();
+ 
+         if (!borderless && _borderlessActive)
+         {

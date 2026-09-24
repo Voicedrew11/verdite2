@@ -605,7 +605,11 @@ public static class HostWindow
     public static void SetFullscreen(bool on)
     {
         if (_window == null) return;
-        var borderless = on && ConfigManager.View.Borderless;
+        // Windows only, where the vblank wait needs a composed window. Wayland lets
+        // no client place itself, and an X11 window manager fits an undecorated
+        // one to the work area, so elsewhere a monitor-sized window never covers
+        // the screen; there Borderless is the window manager's fullscreen.
+        var borderless = on && ConfigManager.View.Borderless && OperatingSystem.IsWindows();
 
         if (!borderless && _borderlessActive)
         {

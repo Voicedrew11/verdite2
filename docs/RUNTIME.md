@@ -1179,6 +1179,20 @@ the whole run, then 96%**. Whether Borderless is really composed on this driver 
 that is, whether it tears — has to be looked at; no counter here says. Game code
 reads 1.5-2 ms higher in Borderless in both pairs, not chased.
 
+**Off Windows, Borderless is the window manager's fullscreen.** The monitor-sized
+window never covered the screen there. A Wayland client cannot set its own
+position, so it came out undecorated, fixed at 2560x1440 (`set_min_size` =
+`set_max_size` on the wire) against a 1920x1034 work area, with no
+`set_fullscreen` ever sent; under XWayland, KWin fitted it to the work area,
+2560x1189 with the panel uncovered and no `_NET_WM_STATE_FULLSCREEN`. The mode
+exists for the vblank wait, which is Windows-only, so elsewhere VSync is the
+interval (or `0064`'s CPU hold on Wayland) whichever mode is chosen, and Borderless
+takes GLFW's fullscreen. Measured after: `set_fullscreen(wl_output#17)` and a
+fullscreen `configure` at the output's size on Wayland; `_NET_WM_STATE_FULLSCREEN`
+with no size hints under XWayland. GLFW's X11 fullscreen also sets
+`_NET_WM_BYPASS_COMPOSITOR`, so on X11 the two modes are the same mode. A native
+X11 session has not been run.
+
 `FramePacing`'s own 60 fps floor stays in series with the wait. Standing it down
 whenever VSync already holds the frame to the refresh was tried and measured,
 alternating: 92% and 99% within the millisecond without the floor, 100% and 99%

@@ -829,6 +829,12 @@ Four files in the directory have no entry below:
   `KF2_SWAP=interval`, `KF2_SWAP=immediate` and `KF2_SWAP=vblank` are the
   comparisons. Whether Borderless is composed on a given driver, and so tear-free,
   is judged by eye. **No recompile.** See "VSync on Windows" in `docs/RUNTIME.md`.
+  Since amended: off Windows, Borderless never covered the screen — Wayland lets
+  no client position itself, and KWin fitted the undecorated X11 window to the
+  work area (2560x1189 under the panel) — so Borderless is Windows-only in
+  effect and takes GLFW's fullscreen elsewhere. It bought nothing there: the
+  vblank wait is Windows-only, so VSync is the interval either way. The amendment is the second diff in
+  the patch file.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
