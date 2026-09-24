@@ -523,8 +523,11 @@ internal static class GlShaders
         in vec2 vUv;
         layout(location = 0) out vec4 oColor;
         // The probe's: alpha 1/255 no hit, 2/255 a surface, 3/255 the sky, 4/255 a
-        // surface under the HUD, refused, on every reflective pixel; plus 8/255 when
-        // the ray passed behind something on the way. Written to nothing unless the probe attached it.
+        // surface under the HUD, refused, 5/255 the planar texture, on every
+        // reflective pixel; plus 8/255 when the ray passed behind something on the
+        // way, and 16/255 on a planar pixel whose march found a surface too, with
+        // green and blue the two colours' differences (see uCompare). Written to
+        // nothing unless the probe attached it.
         layout(location = 1) out vec4 oInfo;
 
         uniform sampler2D uDepth;
@@ -548,6 +551,20 @@ internal static class GlShaders
         uniform float uDqa;
         uniform float uDqb;
         uniform int   uFogCurve;
+        // 0068. The scene drawn from the camera mirrored in the water, at this
+        // target's own size, and its depth, which is what says a texel was drawn.
+        // The plane is this frame's, in this view: dot(xyz, p) + w is a surface's
+        // height above the water in world units (negative is above, Y being down).
+        uniform sampler2D uPlanar;
+        uniform sampler2D uPlanarDepth;
+        uniform int   uPlanarOn;
+        uniform vec4  uPlanarPlane;
+        uniform float uPlanarTol;
+        uniform float uRipple;
+        // The probe's check on the mirror: march a planar pixel as well, and where
+        // both found a surface, write how far apart their brightness is, against
+        // the planar texture read unmirrored as the control.
+        uniform int   uCompare;
 
         const float FAR = 65536.0;
         const float OVERLAY = 3.0;
@@ -576,6 +593,36 @@ internal static class GlShaders
             if (n.z < 0.0)
                 n.xy = (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
             return normalize(n);
+        }
+
+        float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+
+        // 0068. The planar reflection at this pixel, when the surface lies on the
+        // mirrored plane and something above the water was drawn where it looks:
+        // the mirrored image of display row y is row 2*centre - y. The water's own
+        // brightness gradient bends the lookup, so the reflection moves with the
+        // scrolling texture rather than lying on it like glass. The colour was
+        // fogged by the mirrored camera, whose distance to it is the length of the
+        // path through the mirror, so it needs no correction here.
+        bool planarAt(vec3 p, out vec3 c) {
+            c = vec3(0.0);
+            if (uPlanarOn == 0) return false;
+            if (abs(dot(uPlanarPlane.xyz, p) + uPlanarPlane.w) > uPlanarTol) return false;
+            vec2 muv = vec2(vUv.x, 2.0 * uCentre.y - vUv.y);
+            if (uRipple > 0.0) {
+                vec2 px = 1.0 / uSize;
+                float l0 = luma(texture(uColor, tc(vUv)).rgb);
+                float lx = luma(texture(uColor, tc(vUv + vec2(px.x, 0.0))).rgb);
+                float ly = luma(texture(uColor, tc(vUv + vec2(0.0, px.y))).rgb);
+                muv += vec2(lx - l0, ly - l0) * uRipple * px;
+            }
+            muv = clamp(muv, vec2(0.0), vec2(1.0));
+            vec3 pc = texture(uPlanar, tc(muv)).rgb;
+            // Nothing drawn: the capture cleared to black with the far plane, and an
+            // opaque surface writes a depth whatever its colour.
+            if (texture(uPlanarDepth, tc(muv)).r >= 1.0 && max(pc.r, max(pc.g, pc.b)) <= 0.0) return false;
+            c = pc;
+            return true;
         }
 
         // Fades a reflection out as its source nears the picture's edge, where the
@@ -614,6 +661,15 @@ internal static class GlShaders
             // Schlick, running from F0 looking straight down to the material's
             // reflectivity at a grazing angle.
             float w = f0 + (max(refl, f0) - f0) * pow(1.0 - cosv, 5.0);
+
+            vec3 pc;
+            bool planarHit = planarAt(p, pc);
+            if (planarHit && uCompare == 0) {
+                oInfo.a += 4.0 / 255.0;
+                w = clamp(w, 0.0, 1.0);
+                oColor = vec4(pc * w, w);
+                return;
+            }
 
             // The same 4x4 interleaved pattern the occlusion pass uses, as a start
             // offset along the ray, so step banding becomes a fine grain.
@@ -665,6 +721,21 @@ internal static class GlShaders
                     passed = true;
                 }
                 tPrev = t;
+            }
+            if (planarHit) {
+                oInfo.a += 4.0 / 255.0;
+                if (hit && !overlayAt(huv) && edgeFade(huv) > 0.99) {
+                    vec3 sc = texture(uColor, tc(huv)).rgb;
+                    float zHit = viewAt(huv, depthAt(huv) * FAR).z;
+                    float zImage = p.z * (length(p) + ht) / length(p);
+                    sc *= clamp(fogKeep(zImage) / max(fogKeep(zHit), 1e-3), 0.0, 1.0);
+                    oInfo.b = abs(luma(pc) - luma(sc));
+                    oInfo.g = abs(luma(texture(uPlanar, tc(vUv)).rgb) - luma(sc));
+                    oInfo.a += 16.0 / 255.0;
+                }
+                w = clamp(w, 0.0, 1.0);
+                oColor = vec4(pc * w, w);
+                return;
             }
             if (passed) oInfo.a += 8.0 / 255.0;
 
@@ -827,6 +898,14 @@ internal static class GlShaders
         uniform vec4  uFluidRect[8];
         uniform float uFluidOff[8];
         uniform float uFluidN;
+        // 0068. Drawing a planar reflection: the water's plane in the mirrored
+        // camera's view space, kept where dot(xyz, p) + w >= 0, and the projection
+        // to take a fragment back to that space with (the GTE's centre, in the
+        // target's own pixels, and H).
+        uniform int   uClipOn;
+        uniform vec4  uClipPlane;
+        uniform vec2  uClipCentre;
+        uniform float uClipH;
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -988,6 +1067,11 @@ internal static class GlShaders
             // 0051. The tolerance is on the test only; GlCore draws the true depth first.
             float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
             gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
+            if (uClipOn != 0 && vDepth > 0.0) {
+                float cz = vDepth * 65536.0;
+                vec3 cp = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (cz / uClipH), cz);
+                if (dot(uClipPlane.xyz, cp) + uClipPlane.w < 0.0) discard;
+            }
             ivec3 c8in = shade8();
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 

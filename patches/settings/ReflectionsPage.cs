@@ -25,6 +25,16 @@ public sealed class ReflectionsPage : IPatchPage
           "en": "Water reflects what is on screen above it. Experimental.",
           "pt-BR": "A água reflete o que está na tela acima dela. Experimental.",
           "es-419": "El agua refleja lo que está en pantalla por encima de ella. Experimental."
+        },
+        "kf2.ssr.planar.label": {
+          "en": "Planar reflections",
+          "pt-BR": "Reflexos planares",
+          "es-419": "Reflejos planares"
+        },
+        "kf2.ssr.planar.tooltip": {
+          "en": "Draws the world a second time from below the water, so the reflection includes what is off screen or hidden. Costs a second walk of the scene whenever water is in view. Experimental.",
+          "pt-BR": "Desenha o mundo uma segunda vez por baixo da água, para que o reflexo inclua o que está fora da tela ou escondido. Custa um segundo percurso da cena sempre que há água à vista. Experimental.",
+          "es-419": "Dibuja el mundo una segunda vez desde debajo del agua, para que el reflejo incluya lo que está fuera de pantalla u oculto. Cuesta un segundo recorrido de la escena siempre que haya agua a la vista. Experimental."
         }
       }
     }
@@ -41,5 +51,19 @@ public sealed class ReflectionsPage : IPatchPage
             PatchSettings.Set(Reflections.OnKey, on);
         }
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("kf2.ssr.tooltip"));
+
+        // Read by the reflection pass, so it means nothing with that off.
+        ImGui.Indent();
+        ImGui.BeginDisabled(!on);
+        bool planar = PlanarWalk.Enabled;
+        if (ImGui.Checkbox(Localization.T("kf2.ssr.planar.label"), ref planar))
+        {
+            PlanarWalk.SetEnabled(planar);
+            PatchSettings.Set(PlanarWalk.OnKey, planar);
+        }
+        ImGui.EndDisabled();
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(Localization.T("kf2.ssr.planar.tooltip"));
+        ImGui.Unindent();
     }
 }

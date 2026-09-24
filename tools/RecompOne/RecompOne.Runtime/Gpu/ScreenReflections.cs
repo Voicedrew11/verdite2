@@ -92,15 +92,22 @@ public static class ScreenReflections
     /// found, so a miss is still counted.</summary>
     public static void SetMap(byte[] rgba, byte[] info, int w, int h)
     {
-        long n = (long)w * h, refl = 0, hit = 0, sky = 0, under = 0, passed = 0;
+        long n = (long)w * h, refl = 0, hit = 0, sky = 0, under = 0, passed = 0, planar = 0;
         double wsum = 0, skyR = 0, skyG = 0, skyB = 0, hitL = 0, keepSum = 0;
-        long fogged = 0;
+        long fogged = 0, compared = 0;
+        double mirrorDiff = 0, controlDiff = 0;
         for (long i = 0; i < n; i++)
         {
             int k = info[i * 4 + 3];
             if (k == 0) continue;
             refl++;
             if ((k & 8) != 0) passed++;
+            if ((k & 16) != 0)
+            {
+                compared++;
+                mirrorDiff += info[i * 4 + 2] / 255.0;
+                controlDiff += info[i * 4 + 1] / 255.0;
+            }
             k &= 7;
             if (k == 2)
             {
@@ -118,6 +125,7 @@ public static class ScreenReflections
                 skyR += rgba[i * 4] / a; skyG += rgba[i * 4 + 1] / a; skyB += rgba[i * 4 + 2] / a;
             }
             else if (k == 4) under++;
+            else if (k == 5) planar++;
             wsum += rgba[i * 4 + 3] / 255.0;
         }
         ReflectivePct = n == 0 ? 0f : 100f * refl / n;
@@ -125,6 +133,10 @@ public static class ScreenReflections
         SkyPct = refl == 0 ? 0f : 100f * sky / refl;
         OverlayPct = refl == 0 ? 0f : 100f * under / refl;
         PassedPct = refl == 0 ? 0f : 100f * passed / refl;
+        PlanarReflections.PlanarPct = refl == 0 ? 0f : 100f * planar / refl;
+        PlanarReflections.ComparedPct = planar == 0 ? 0f : 100f * compared / planar;
+        PlanarReflections.MirrorDiff = compared == 0 ? 0f : (float)(mirrorDiff / compared * 255);
+        PlanarReflections.ControlDiff = compared == 0 ? 0f : (float)(controlDiff / compared * 255);
         SkyColour = sky == 0 ? "none" : $"{skyR / sky * 255:F0},{skyG / sky * 255:F0},{skyB / sky * 255:F0}";
         HitLuma = hit == 0 ? 0f : (float)(hitL / hit * 255);
         HitKeep = hit == 0 ? 1f : (float)(keepSum / hit);

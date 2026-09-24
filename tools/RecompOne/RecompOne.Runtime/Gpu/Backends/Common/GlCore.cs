@@ -82,6 +82,11 @@ public sealed class GlCore : IGpuBackend
     int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrReflect, _uSsrF0;
     int _uSsrDqa, _uSsrDqb, _uSsrFogCurve;
     int _uPresentSsrOn;
+    // 0068. The planar texture the reflection pass reads first, and the clip plane
+    // the prim program discards the water's underside with while drawing into one.
+    int _uSsrPlanarOn, _uSsrPlanarPlane, _uSsrPlanarTol, _uSsrRipple, _uSsrCompare;
+    int _uClipOn, _uClipPlane, _uClipCentre, _uClipH;
+    int _clipOnSent = -1;
 
     uint _postProg, _postFbo, _postTex;
     int _postW, _postH, _postVersion = -1;
@@ -213,6 +218,11 @@ public sealed class GlCore : IGpuBackend
         _uLcmB = _gl.GetUniformLocation(_progPrim, "uLcmB");
         GteLightMap.Supported = !_legacy && _uLightBk >= 0;
         _rtsTrueColor = GteDepth.TrueColor;
+        _uClipOn = _gl.GetUniformLocation(_progPrim, "uClipOn");
+        _uClipPlane = _gl.GetUniformLocation(_progPrim, "uClipPlane");
+        _uClipCentre = _gl.GetUniformLocation(_progPrim, "uClipCentre");
+        _uClipH = _gl.GetUniformLocation(_progPrim, "uClipH");
+        _clipOnSent = -1;
         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
 
@@ -335,11 +345,24 @@ public sealed class GlCore : IGpuBackend
                 _uSsrDqa = _gl.GetUniformLocation(_progSsr, "uDqa");
                 _uSsrDqb = _gl.GetUniformLocation(_progSsr, "uDqb");
                 _uSsrFogCurve = _gl.GetUniformLocation(_progSsr, "uFogCurve");
+                _uSsrPlanarOn = _gl.GetUniformLocation(_progSsr, "uPlanarOn");
+                _uSsrPlanarPlane = _gl.GetUniformLocation(_progSsr, "uPlanarPlane");
+                _uSsrPlanarTol = _gl.GetUniformLocation(_progSsr, "uPlanarTol");
+                _uSsrRipple = _gl.GetUniformLocation(_progSsr, "uRipple");
+                _uSsrCompare = _gl.GetUniformLocation(_progSsr, "uCompare");
                 _gl.UseProgram(_progSsr);
                 _gl.Uniform1(_gl.GetUniformLocation(_progSsr, "uDepth"), 0);
                 _gl.Uniform1(_gl.GetUniformLocation(_progSsr, "uSurface"), 1);
                 _gl.Uniform1(_gl.GetUniformLocation(_progSsr, "uColor"), 2);
+                int uPlanar = _gl.GetUniformLocation(_progSsr, "uPlanar");
+                if (uPlanar >= 0) _gl.Uniform1(uPlanar, 3);
+                int uPlanarDepth = _gl.GetUniformLocation(_progSsr, "uPlanarDepth");
+                if (uPlanarDepth >= 0) _gl.Uniform1(uPlanarDepth, 4);
+                if (_uSsrPlanarOn >= 0) _gl.Uniform1(_uSsrPlanarOn, 0);
             }
+            // 0068. Only this backend can draw into a planar texture; the port walks
+            // nothing mirrored without it.
+            PlanarReflections.Supported = _progSsr != 0 && _uClipOn >= 0 && _uSsrPlanarOn >= 0;
         }
 
         _uPresent24Origin = _gl.GetUniformLocation(_progPresent24, "uOrigin");
@@ -430,6 +453,68 @@ public sealed class GlCore : IGpuBackend
     // aspect moves the margin, and PresentDisplay destroys idle ones -- so the
     // cache would hand back a destroyed target. Left uncached.
     GlDisplayRt? Classify()
+    {
+        var rt = ClassifyDisplay();
+        return rt != null && PlanarReflections.Capturing ? EnsurePlanar(rt) : rt;
+    }
+
+    /// <summary>0068. The planar texture of the target the game is drawing into,
+    /// made at its size and cleared the first time a capture reaches it. It takes
+    /// the capture's two planes with it, so the pass that reads it later reads the
+    /// planes it was drawn with.</summary>
+    GlDisplayRt EnsurePlanar(GlDisplayRt rt)
+    {
+        var p = rt.Planar;
+        if (p == null || p.W != rt.W || p.H != rt.H || p.Margin != rt.Margin || p.CreatedScale != GlVram.Scale)
+        {
+            if (p != null)
+            {
+                if (_kTarget == p) Flush(FlushReason.Target);
+                p.Destroy(_gl);
+            }
+            p = new GlDisplayRt { X = rt.X, Y = rt.Y, W = rt.W, H = rt.H, Margin = rt.Margin, IsPlanar = true };
+            p.Create(_gl);
+            // Never written back to VRAM and never presented, only sampled -- and
+            // sampled off the pixel grid when the water bends it.
+            _gl.BindTexture(TextureTarget.Texture2D, p.Tex);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+            _gl.BindTexture(TextureTarget.Texture2D, 0);
+            rt.Planar = p;
+            rt.PlanarSerial = -1;
+        }
+        if (rt.PlanarSerial != PlanarReflections.Serial)
+        {
+            Flush(FlushReason.Target);
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, p.Fbo);
+            _gl.Disable(EnableCap.ScissorTest);
+            _gl.ColorMask(true, true, true, true);
+            _gl.ClearColor(0f, 0f, 0f, 0f);
+            _gl.ClearDepth(1.0);
+            _gl.DepthMask(true);
+            _gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+            p.LastDrawFrame = _frame;
+            p.ZGen = GteDepth.Generation;
+            rt.PlanarSerial = PlanarReflections.Serial;
+            rt.PlanarFrame = _frame;
+            PlanarReflections.ViewPlane.CopyTo(rt.PlanarPlane, 0);
+            PlanarReflections.ClipPlane.CopyTo(p.ClipPlane, 0);
+            PlanarReflections.Cleared++;
+        }
+        return p;
+    }
+
+    /// <summary>0068. A capture with no display target has nowhere to go: drawn
+    /// through, it would land in VRAM over whatever the game keeps there.</summary>
+    bool PlanarDrop()
+    {
+        if (!PlanarReflections.Capturing || ClassifyDisplay() != null) return false;
+        PlanarReflections.Dropped++;
+        return true;
+    }
+
+    GlDisplayRt? ClassifyDisplay()
     {
         int clipX = _env.ClipX0, clipY = _env.ClipY0;
         int clipW = _env.ClipX1 - _env.ClipX0 + 1, clipH = _env.ClipY1 - _env.ClipY0 + 1;
@@ -762,6 +847,7 @@ public sealed class GlCore : IGpuBackend
 
     public void DrawTri(in HleVertex a, in HleVertex b, in HleVertex c, in PrimFlags f)
     {
+        if (PlanarReflections.Capturing && PlanarDrop()) return;
         ResolveReplacement(f,
             (int)Math.Min(a.U, Math.Min(b.U, c.U)), (int)Math.Min(a.V, Math.Min(b.V, c.V)),
             (int)Math.Max(a.U, Math.Max(b.U, c.U)), (int)Math.Max(a.V, Math.Max(b.V, c.V)));
@@ -794,7 +880,7 @@ public sealed class GlCore : IGpuBackend
         // so reaches the surface buffer and nothing else.
         // A 2D primitive (no corner the GTE projected) is kept too, as Overlay, so
         // the reflection pass can tell the HUD from the scene under it.
-        if (_kTarget != null && AoGeometry.Active)
+        if (_kTarget != null && AoGeometry.Active && !_kTarget.IsPlanar)
         {
             byte m = SurfaceMaterial.None;
             if (zMode == 1 || zMode == 4 || zMode == 2)
@@ -811,6 +897,15 @@ public sealed class GlCore : IGpuBackend
                                       Math.Max(a.X, Math.Max(b.X, c.X)), Math.Max(a.Y, Math.Max(b.Y, c.Y))))
                 m = SurfaceMaterial.Overlay;
             if (m == SurfaceMaterial.Overlay) SurfaceMaterial.Overlays++;
+            // 0068. The plane a planar reflection mirrors in is found here, from
+            // the water the frame actually drew.
+            if (m == SurfaceMaterial.Water && PlanarReflections.Enabled)
+            {
+                float ox = _kTarget.X + GteDepth.ProjCx, oy = _kTarget.Y + GteDepth.ProjCy;
+                PlanarReflections.NoteWater(a.X - ox, a.Y - oy, a.Z, b.X - ox, b.Y - oy, b.Z, c.X - ox, c.Y - oy, c.Z,
+                    -GteDepth.ProjCx - _kTarget.Margin, -GteDepth.ProjCy,
+                    _kTarget.W - GteDepth.ProjCx + _kTarget.Margin, _kTarget.H - GteDepth.ProjCy);
+            }
             if (m != SurfaceMaterial.None)
             {
                 _kTarget.Geo.Frame(_frame, GteDepth.Generation);
@@ -897,6 +992,7 @@ public sealed class GlCore : IGpuBackend
 
     public void DrawRect(in HleRect r, in PrimFlags f)
     {
+        if (PlanarReflections.Capturing && PlanarDrop()) return;
         ResolveReplacement(f, r.U, r.V, r.U + Math.Max(0, r.W - 1), r.V + Math.Max(0, r.H - 1));
         // A sprite never carries a recovered depth, so under the occlusion pass it
         // is the mask (see DrawTri): opaque stamps the far plane, semi-transparent
@@ -909,7 +1005,7 @@ public sealed class GlCore : IGpuBackend
         _verts[_count++] = V(a, f, false); _verts[_count++] = V(b, f, false); _verts[_count++] = V(c, f, false);
         _verts[_count++] = V(b, f, false); _verts[_count++] = V(d, f, false); _verts[_count++] = V(c, f, false);
         // 0067. A sprite is 2D: the HUD's, as far as the reflection pass is concerned.
-        if (GteDepth.Reflections && _kTarget != null && AoGeometry.Active
+        if (GteDepth.Reflections && _kTarget is { IsPlanar: false } && AoGeometry.Active
             && !CoversTarget(r.X, r.Y, r.X + r.W, r.Y + r.H))
         {
             float m = SurfaceMaterial.Overlay;
@@ -922,6 +1018,7 @@ public sealed class GlCore : IGpuBackend
 
     public void DrawLine(in HleVertex a, in HleVertex b, in PrimFlags f)
     {
+        if (PlanarReflections.Capturing && PlanarDrop()) return;
         _pendingRepTex = 0;
         _pendingRepClut = 0;
         Begin(f, 6, FarMask(f));
@@ -1361,14 +1458,14 @@ public sealed class GlCore : IGpuBackend
             // surface already stamped there, and this has to overwrite one -- the
             // HUD is drawn over the world, and the point of the mask is that the
             // world's depth under it is gone.
-            if (rt != null) _lastZRt = rt;
+            if (rt is { IsPlanar: false }) _lastZRt = rt;
             _gl.Enable(EnableCap.DepthTest);
             _gl.DepthFunc(DepthFunction.Always);
             _gl.DepthMask(true);
         }
         else if (_kZMode != 0)
         {
-            if (rt != null) { GteDepth.ZBatchRt++; _lastZRt = rt; } else GteDepth.ZBatchVram++;
+            if (rt != null) { GteDepth.ZBatchRt++; if (!rt.IsPlanar) _lastZRt = rt; } else GteDepth.ZBatchVram++;
             _gl.Enable(EnableCap.DepthTest);
             // The two consumers of the attachment differ here and nowhere else.
             // The Z-buffer rejects what the recovered depth says is behind; the
@@ -1469,6 +1566,21 @@ public sealed class GlCore : IGpuBackend
             _gl.Uniform2(_uFbInv, 2f / VramShadow.Width, 2f / VramShadow.Height);
         }
         if (_uTrueColor >= 0) _gl.Uniform1(_uTrueColor, GteDepth.TrueColor ? 1f : 0f);
+        // 0068. Drawing into a planar texture: nothing on the camera's side of the
+        // water, which from under it is the pool's own floor and walls.
+        int clipOn = rt is { IsPlanar: true } ? 1 : 0;
+        if (_uClipOn >= 0 && (clipOn != 0 || _clipOnSent != 0))
+        {
+            if (clipOn != _clipOnSent) _gl.Uniform1(_uClipOn, clipOn);
+            _clipOnSent = clipOn;
+            if (clipOn != 0)
+            {
+                var cp = rt!.ClipPlane;
+                _gl.Uniform4(_uClipPlane, cp[0], cp[1], cp[2], cp[3]);
+                _gl.Uniform2(_uClipCentre, GteDepth.ProjCx + rt.Margin, GteDepth.ProjCy);
+                _gl.Uniform1(_uClipH, Math.Max(1f, GteDepth.ProjH));
+            }
+        }
         // A plain uniform the next batch reads: unlike true color, changing the
         // anisotropy rebuilds nothing.
         GteDepth.AnisotropyLive = _uAniso >= 0;
@@ -2310,6 +2422,24 @@ public sealed class GlCore : IGpuBackend
             if (_uSsrReflect >= 0) _gl.Uniform1(_uSsrReflect, SurfaceMaterial.Count, r);
         fixed (float* f0 = SurfaceMaterial.F0)
             if (_uSsrF0 >= 0) _gl.Uniform1(_uSsrF0, SurfaceMaterial.Count, f0);
+        // 0068. The planar texture, when this target's picture and its capture are
+        // the same frame's; otherwise the march alone, as before.
+        var planar = src.Planar;
+        bool planarOn = PlanarReflections.Enabled && planar is { Tex: not 0 } && src.PlanarFrame == src.LastDrawFrame;
+        if (_uSsrPlanarOn >= 0) _gl.Uniform1(_uSsrPlanarOn, planarOn ? 1 : 0);
+        if (_uSsrCompare >= 0) _gl.Uniform1(_uSsrCompare, planarOn && _ssrInfo && ScreenReflections.WantMap ? 1 : 0);
+        if (planarOn)
+        {
+            var pp = src.PlanarPlane;
+            if (_uSsrPlanarPlane >= 0) _gl.Uniform4(_uSsrPlanarPlane, pp[0], pp[1], pp[2], pp[3]);
+            if (_uSsrPlanarTol >= 0) _gl.Uniform1(_uSsrPlanarTol, Math.Max(1f, PlanarReflections.Tolerance));
+            if (_uSsrRipple >= 0) _gl.Uniform1(_uSsrRipple, Math.Max(0f, PlanarReflections.Ripple));
+            _gl.ActiveTexture(TextureUnit.Texture4);
+            _gl.BindTexture(TextureTarget.Texture2D, planar!.Depth);
+            _gl.ActiveTexture(TextureUnit.Texture3);
+            _gl.BindTexture(TextureTarget.Texture2D, planar.Tex);
+            PlanarReflections.Read++;
+        }
         _gl.ActiveTexture(TextureUnit.Texture2);
         _gl.BindTexture(TextureTarget.Texture2D, src.Tex);
         _gl.ActiveTexture(TextureUnit.Texture1);
@@ -2318,6 +2448,16 @@ public sealed class GlCore : IGpuBackend
         _gl.BindTexture(TextureTarget.Texture2D, src.Depth);
         _gl.DrawArrays(PrimitiveType.TriangleStrip, 0, 4);
         ScreenReflections.Passes++;
+        if (planarOn)
+        {
+            // The next capture draws into these; leave nothing bound that a prim
+            // batch could read back while writing it.
+            _gl.ActiveTexture(TextureUnit.Texture4);
+            _gl.BindTexture(TextureTarget.Texture2D, 0);
+            _gl.ActiveTexture(TextureUnit.Texture3);
+            _gl.BindTexture(TextureTarget.Texture2D, 0);
+            _gl.ActiveTexture(TextureUnit.Texture0);
+        }
 
         if (ScreenReflections.WantMap && _ssrInfo) CaptureSsrMap(w, h);
     }

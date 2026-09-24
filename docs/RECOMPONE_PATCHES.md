@@ -13,7 +13,7 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Forty-nine of the fifty-five are load-bearing; `0002`, `0003`, `0015`, `0046` and
+Fifty of the fifty-six are load-bearing; `0002`, `0003`, `0015`, `0046` and
 `0065` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
@@ -881,6 +881,32 @@ Four files in the directory have no entry below:
   and reads back what each reflective pixel found (`ScreenReflections.SetMap`). The
   occlusion census is identical with it on and off. Off by default. GL core only.
   **No recompile.** See "Screen-space reflections" in `docs/RENDERING.md`.
+
+- `0068-planar-reflections.patch` — the scene drawn a second time from the camera
+  mirrored in the water, for the reflection pass to read before it marches.
+  `Gpu/PlanarReflections.cs` is the interface: `Capturing` and `Serial`, which the
+  port sets around its own `DrawOTag` of the mirrored table; `ClipPlane` (the
+  water in the mirrored view) and `ViewPlane` (the same plane in the real view);
+  and the plane finder. `GlCore.DrawTri` hands every triangle it classifies as
+  water to `NoteWater`, which takes it back to world Y with the camera the port
+  published (`SetCamera`), refuses one that is not level, and bins the area it
+  covers on screen by height. `TakePlane` gives the port the heaviest band once
+  a frame. While capturing, `Classify` swaps the target for its planar texture
+  (`GlDisplayRt.Planar`, the same size and margin, `IsPlanar`, never written back
+  to VRAM, linear-filtered, cleared on the first primitive of each capture, and
+  carrying the two planes and the frame it was drawn in). A primitive with no
+  target is dropped rather than drawn into VRAM, and a planar triangle is kept
+  out of the surface list. `PrimFs` gains `uClipOn`/`uClipPlane`/`uClipCentre`/
+  `uClipH` and discards a fragment on the camera's side of the plane, from the
+  view position it rebuilds as `NormalFs` does. `SsrFs` gains `planarAt`: a
+  surface within `Tolerance` of `ViewPlane` takes the texel at the mirrored row
+  `2·OFY - y`, bent by the water's brightness gradient (`Ripple`), when the
+  texel's depth or colour says something was drawn there; anything else marches
+  as before. The probe's readback counts the planar outcome (5) and, on its own
+  frame (`uCompare`), marches a planar pixel as well and writes both colours'
+  brightness difference against the planar texture read unmirrored.
+  `PlanarReflections.Supported` is set only by the GL core backend. Off by
+  default. **No recompile.** See "Planar reflections" in `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

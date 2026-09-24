@@ -617,3 +617,18 @@ useful than the question was.
    light in it; per-pixel lighting (`0048`) records what that light was made of
    per packet, which is where to start. See "Screen-space reflections" in
    [RENDERING.md](RENDERING.md).
+19. **Look at the planar reflections.** `KF2_SSR=1 KF2_PLANAR=1` (or *Planar
+   reflections* under *Water reflections*), `KF2_AUTOSTART=new`, facing the pool.
+   The mechanism is measured, and the mirror is sampled in the right place (3.5
+   against 24.2 unmirrored); the picture has never been looked at. To judge: the
+   ripple (`KF2_PLANAR_RIPPLE`), the seam where an empty mirrored texel falls back
+   to the march's sky, the pool's rim at the 8-unit clip bias, creatures and
+   billboards in the water, and a moving camera. Open, in order of payoff: the GPU
+   time of the mirrored draw (the frame viewer skips it; a timer query around the
+   capture would give it); the skybox, which neither walk draws, and whose routine
+   would have to be run again too; the object kind `0xF0`; a second plane for a
+   second pool at another height; and the walk's 1.1 ms, most of which is the
+   pool's own floor and walls being assembled under the water only to be
+   discarded per fragment. A tile half whose whole model lies below the plane
+   could be skipped in the mirrored walk. See "Planar reflections" in
+   [RENDERING.md](RENDERING.md).

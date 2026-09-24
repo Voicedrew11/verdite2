@@ -29,7 +29,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
 | `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0067` |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0068` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -177,6 +177,7 @@ what it is) live there, not here.
 | `Pgxp` | upstream's PGXP as the vertex source (`0034`-`0036`); env only | off | RENDERING, "PGXP has no control in the window" |
 | `AmbientOcclusion` | SSAO from painter's-order depth (`0040`), normals from the frame's own geometry redrawn into a G-buffer (`0058`); optional world-space term marching the area's tile grid, so off-screen geometry occludes (`0059`, off); the *SSAO* slider is Off/Low/Medium/High, and the three qualities cap the pass at 1x/2x the game's pixels or runs it at the render scale | on, Medium | RENDERING, "Ambient occlusion", "The normal was the guess", "Occluders the camera cannot see", "What the pass costs" |
 | `Reflections` | screen-space reflections on water (`0067`): the normal pass gains a surface buffer (normal, depth, material per pixel) that keeps the translucent water the depth buffer cannot; water found by the fluid slots' VRAM rects, translucent in an averaging blend; the material id is there for lighting later | off (not judged) | RENDERING, "Screen-space reflections" |
+| `PlanarWalk` | planar reflections (`0068`): after the object walk, the tile walk runs again and the walk's model submits are replayed from a camera mirrored in the water, into an arena and ordering table `PrimBuffer` keeps past its buffers; drawn at the frame's `DrawOTag` into a planar texture per target, fragments under the water discarded; the reflection pass takes it where a surface lies on the plane and marches elsewhere; the plane is binned from the water the backend classifies | off (not judged); needs `Reflections` | RENDERING, "Planar reflections" |
 | `Anisotropic` | post-CLUT footprint supersampling (`0041`), every tap held inside the polygon's texture rectangle; one *Texture filtering* slider, Off / Trilinear / 2x-16x, every position past Off with mipmaps: minified textures decoded into an atlas with a mip chain each (`0060`, `KF2_MIPMAPS`) | 16x, mipmaps on | RENDERING, "Anisotropic filtering", "Mipmaps where the texture is decoded" |
 | `PerPixelLighting` | the depth cue and the models' light evaluated per pixel from what `PolyAssembler` recorded per packet (`0048`) | on | RENDERING, "Per-pixel lighting" |
 | `EvenFog` | clipped map tiles refogged on the tiles' curve instead of `func_800302E8`'s `IR0 >> 1`, and each tile vertex's fog blended between the light records of the tiles around it (hooks `func_80031950`; `0049`); and the records' colour matrix and back colour the same way; one *Even fog and lighting* checkbox, dimmed without Fast geometry (`KF2_EVENFOG_BLEND=0`, `KF2_EVENLIGHT=0` drop a part); stands down under verify | on | RENDERING, "A clipped tile is fogged at half, and that is the block on the floor", "Fog changes at a tile edge" |
@@ -427,7 +428,7 @@ removed for the same reason.
 
 **`tools/RecompOne/` is vendored: an edit inside it is a change to this
 repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0067`) are how the source
+what the port changed and why, and the numbers (`0001`-`0068`) are how the source
 refers to each change, but they are **no longer replayed**. The merge base is
 `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
 gitignored `tools/RecompOne.git/`, reached with

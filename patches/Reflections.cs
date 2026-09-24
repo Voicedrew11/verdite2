@@ -70,6 +70,9 @@ public static class Reflections
 
     public static bool Enabled => ScreenReflections.Enabled;
 
+    /// <summary>Whether this patch prints the readback's map itself.</summary>
+    public static bool Probing => _probe;
+
     public static void Configure(string? on, string? strength, string? f0, string? distance, string? steps,
                                  string? thickness, string? sky, string? resolution, string? probe,
                                  string? fogCurve = null)

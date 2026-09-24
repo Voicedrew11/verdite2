@@ -700,6 +700,18 @@ Kf2.Reflections.Configure(Environment.GetEnvironmentVariable("KF2_SSR"),
                           Environment.GetEnvironmentVariable("KF2_SSR_FOGCURVE"));
 Kf2.Reflections.Install();
 
+// Planar reflections (patches/recompone/0068): the tile walk and the object walk's
+// submits run a second time from the camera mirrored in the water, into an ordering
+// table of the port's own, drawn into a texture the reflection pass reads first.
+// Needs KF2_SSR. Off by default: measured, not judged. See "Planar reflections" in
+// docs/RENDERING.md.
+Kf2.PlanarWalk.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR"),
+                         Environment.GetEnvironmentVariable("KF2_PLANAR_TOLERANCE"),
+                         Environment.GetEnvironmentVariable("KF2_PLANAR_RIPPLE"),
+                         Environment.GetEnvironmentVariable("KF2_PLANAR_BIAS"),
+                         Environment.GetEnvironmentVariable("KF2_PLANAR_PROBE"));
+Kf2.PlanarWalk.Install();
+
 // PGXP -- upstream RecompOne's own vertex tracking, backported as
 // patches/recompone/0034-0036, and the second mechanism the port has for the one
 // number everything above depends on. GteVertexMap pairs memory reads and writes

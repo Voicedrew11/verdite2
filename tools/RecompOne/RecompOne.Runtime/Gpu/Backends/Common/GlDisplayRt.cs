@@ -25,6 +25,18 @@ public sealed class GlDisplayRt
     // octahedral normal, a depth and a material. Only while reflections are on.
     public uint Surface;
     public readonly AoGeometry Geo = new();
+    // 0068. The scene from the camera mirrored in the water, drawn at this target's
+    // size so the reflection pass indexes it exactly as it indexes this one. Its
+    // own depth attachment is what says a texel was drawn. Serial and frame say
+    // which capture it holds and whether this target's picture is that frame's;
+    // the plane is the one the capture mirrored in, in that frame's view space.
+    public GlDisplayRt? Planar;
+    public bool IsPlanar;
+    public int PlanarSerial = -1;
+    public long PlanarFrame = -1;
+    public readonly float[] PlanarPlane = new float[4];
+    public readonly float[] ClipPlane = new float[4];
+    public int CreatedScale;
     public bool Dirty;
     public long Stamp;
     public long LastDrawFrame;
@@ -62,6 +74,7 @@ public sealed class GlDisplayRt
 
     public unsafe void Create(GL gl)
     {
+        CreatedScale = GlVram.Scale;
         Tex = gl.GenTexture();
         gl.BindTexture(TextureTarget.Texture2D, Tex);
         gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
@@ -117,6 +130,8 @@ public sealed class GlDisplayRt
         if (NormalFbo != 0) gl.DeleteFramebuffer(NormalFbo);
         if (Normal != 0) gl.DeleteTexture(Normal);
         if (Surface != 0) gl.DeleteTexture(Surface);
+        Planar?.Destroy(gl);
+        Planar = null;
         Fbo = Tex = Depth = Normal = NormalFbo = Surface = 0;
     }
 }

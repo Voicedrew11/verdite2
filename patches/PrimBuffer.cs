@@ -65,12 +65,30 @@ public static class PrimBuffer
 
     static uint Bytes => Scale * StockBytes;
 
+    /// <summary>What <see cref="PlanarWalk"/> needs past the two buffers: an arena of
+    /// the same size for the mirrored walk's packets, its own ordering table, and a
+    /// page of scratch.</summary>
+    const uint OtBytes = 0x2000u * 4u, ScratchBytes = 0x8000u;
+
+    static uint MirrorBytes => Bytes + OtBytes + ScratchBytes;
+
+    /// <summary>The mirrored walk's arena, ordering table and scratch, in that order
+    /// after the two buffers; valid only while <see cref="Relocated"/>.</summary>
+    public static uint MirrorArena => Base + 2u * Bytes;
+    public static uint MirrorArenaBytes => Bytes;
+    public static uint MirrorOt => MirrorArena + Bytes;
+    public static uint MirrorScratch => MirrorOt + OtBytes;
+
+    /// <summary>Whether the buffers were moved, which is what gives the mirrored walk
+    /// somewhere to put its own.</summary>
+    public static bool Relocated => _relocated;
+
     /// <summary>Guest RAM the port asks for: enough for the buffers, or KF2_RAMSIZE.</summary>
     public static uint RamSize
     {
         get
         {
-            uint need = Scale > 1 ? (Base & 0x1FFFFFFFu) + 2u * Bytes : MemoryMap.RetailRamSize;
+            uint need = Scale > 1 ? (Base & 0x1FFFFFFFu) + 2u * Bytes + MirrorBytes : MemoryMap.RetailRamSize;
             if (uint.TryParse(Environment.GetEnvironmentVariable("KF2_RAMSIZE"), out uint mb) && mb is > 0 and <= 8)
                 need = Math.Max(need, mb << 20);
             uint size = MemoryMap.RetailRamSize;
@@ -110,7 +128,9 @@ public static class PrimBuffer
     public static void PublishRange()
     {
         uint lo = _relocated ? Base : StockBase;
-        uint bytes = 2u * (_relocated ? Bytes : StockBytes);
+        // The mirrored walk's arena follows the two buffers, and its packets want
+        // the same records.
+        uint bytes = _relocated ? 3u * Bytes : 2u * StockBytes;
         GtePacketDepth.SetRange(lo, bytes);
         GteLightMap.SetRange(lo, bytes);
         GteTexRect.SetRange(lo, bytes);
@@ -222,7 +242,7 @@ public static class PrimBuffer
     static void ReportRam()
     {
         uint lo = _relocated ? (Base & 0x1FFFFFFFu) : uint.MaxValue;
-        uint hi = _relocated ? lo + 2u * Bytes : 0u;
+        uint hi = _relocated ? lo + 2u * Bytes + MirrorBytes : 0u;
         long inside = 0, outside = 0;
         var pages = new List<string>();
         for (int i = 0; i < _pages.Length; i++)

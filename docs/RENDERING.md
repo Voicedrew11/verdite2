@@ -1968,6 +1968,164 @@ ripple yet); and how the reflection holds up while the camera moves. It is
 screen-space, so anything off the screen or behind something else cannot be
 reflected, and the reflection fades as its source nears the edge.
 
+## Planar reflections: the world walked twice, from under the water
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(`KF2_PLANAR=1` with `KF2_SSR=1`, or Video ▸ Enhancements ▸ *Water reflections* ▸
+*Planar reflections*). The runtime half is `0068`; the port half is
+`patches/PlanarWalk.cs`, with an arena from `patches/PrimBuffer.cs`.
+
+The screen-space pass can reflect only what is on screen and in front of everything
+else. A wall above the top of the view, or a creature behind a pillar, is simply
+absent from the water. At the `fdat02` spawn, looking down at the pool, **79.5% of
+the pixels the planar texture answered were ones the march could not find at all**.
+This extends that pass rather than replacing it. A reflective pixel whose surface
+lies on the mirrored plane takes the planar texture; any other reflective pixel,
+and any whose planar texel is empty, marches as before.
+
+### Moving the camera, not the world
+
+A mirror turns every winding round, and the game's culling, clipper and backface
+tests all assume they do not. So the port does not mirror the world. With `M` the
+flip of world Y about the plane, the mirrored view `R·M` equals `M·(M·R·M)`. `M·R·M`
+is an ordinary rotation: `func_80015048` builds the view as `Rx(pitch)·Rz(roll)·
+Ry(-yaw)`, and conjugating by `M` negates the X and Z rotations and leaves the Y
+one. The camera is therefore mirrored by position (`Y' = 2h - Y`) with the pitch
+and roll negated, and the remaining `M` is a flip of the camera's own Y. The game
+renders the first part as the ordinary camera it is. The pass does the flip when
+it samples: the mirrored image of display row `y` is row `2·OFY - y`, with OFY read
+off the GTE like everything else.
+
+### The walks, twice
+
+After the game's own object walk (`func_800331B4`) returns, inside stage 13:
+
+1. The camera block at `0x80192E18` (the view matrix, the pitch-only matrix
+   `0x80192E38`, position, angles, tile index) is saved. `func_8002E22C`, which
+   stage 13 builds that block with, is called again with the mirrored position
+   and angles.
+2. The frame's arena descriptor (`0x8017E0A4`) and ordering-table pointer
+   (`0x8018E0A8`) are pointed at an arena of the port's own. `PrimBuffer` now
+   keeps it past its two buffers: an arena as large as one of them, a
+   `0x2000`-entry table and a page of scratch, still inside 4 MB. The tile walk
+   `func_80031C94` then runs over **the same 24x24 grid** the frame used. The grid
+   is a plan-view footprint, and a mirror in a horizontal plane moves nothing in
+   plan.
+3. The object walk is **not** run again. It plays ambient sounds, uploads texture
+   pages and steps the billboard clock, all once per walk. Instead every call it
+   made to the submitter `func_80032588` was recorded: four registers, nine stack
+   words, and the position and rotation it built in its own frame. Each call is
+   made again from the same stack pointer, so every hook on the submitter sees the
+   call it saw the first time. `AnimSmoothing` keys its slots on the position
+   pointer, and it gets the same pointer. A matrix of 0 is a model placed in view
+   space and belongs to the real camera, so it is skipped.
+4. Everything is put back: the camera block, the two pointers, the model table
+   (`0x8018E19C`) and vertex base (`0x8018EAA0`) the submitter moves, the fog
+   word (`0x80192EA8`), the GTE and the registers.
+
+At the frame's own `DrawOTag`, a pre-hook hands the mirrored table to the runtime's
+`LibGpu.DrawOTag` directly (so no hook on the game's `DrawOTag` fires twice) with
+`PlanarReflections.Capturing` set. `GlCore.Classify` then swaps every primitive's
+target for that target's **planar texture**: a `GlDisplayRt` of the same size and
+margin, never written back to VRAM, cleared on the first primitive of each
+capture. Nothing else about a primitive changes. Perspective, sub-pixel, per-pixel
+lighting, even fog and the mip atlas all come from the same records as for the
+real frame, because the mirrored packets were built by the same C# assemblers. The
+depth cue is computed from the mirrored camera's own SZ, so a reflection is fogged
+for the length of the path through the mirror with no correction in the pass. That
+is exact, where the screen-space pass's path fog is an estimate.
+
+The pool's own floor and walls lie between the mirrored camera and the water, so
+the prim shader discards any fragment on the camera's side of the plane:
+`uClipPlane` is the plane in the mirrored view, and the view position is rebuilt
+from the fragment's depth exactly as the normal pass rebuilds it. It keeps what is
+more than `KF2_PLANAR_BIAS` (8 units) above the water, which also drops the water
+itself.
+
+### The plane comes from the picture
+
+Nothing in the map says which tiles are water: water is found by the fluid slots'
+VRAM rects when the backend classifies a triangle (see "What a surface is made of"
+above). So the plane is found at that same point. Every triangle classified as
+water is taken back to world Y with the camera the port published before the
+frame's `DrawOTag`. A triangle whose corners differ by more than 64 units (a
+waterfall) is refused. The rest are binned in 16-unit bands by the area they cover
+**on screen**: the walks submit water past the picture's edge too, and at first that
+kept the mirrored walk running while looking straight up. The next frame mirrors in
+the heaviest band. The previous plane is kept while its band holds at least 60% of
+the heaviest, so two pools cannot trade places frame by frame. No water on screen
+means no mirrored walk. Neither does a camera at or below the water.
+
+### What a pixel takes
+
+In `SsrFs`, a reflective pixel takes the planar texture when its surface lies
+within `KF2_PLANAR_TOLERANCE` (48 units) of the plane, in the view the target was
+drawn with, and the mirrored texel is drawn. The capture clears to black at the far
+plane, and an opaque surface writes a depth whatever its colour, so a texel is
+drawn if its depth is nearer than the far plane or its colour is not black. The
+weight is the same Schlick term. The lookup is bent by the water's own brightness
+gradient (`KF2_PLANAR_RIPPLE`, 4 game pixels per unit of brightness change), so
+the reflection moves with the scrolling texture instead of lying on it like glass.
+An empty texel is looking into the void over the water, and falls through to the
+march and its sky fallback.
+
+The planar texture belongs to the target, like the depth and the surface buffer,
+because with two display buffers the target presented was drawn a frame ago. It
+carries the two planes it was drawn with, and it is read only while the target's
+last draw is the same frame as its capture. A menu drawn over an old world
+therefore gets the march alone.
+
+### What is measured
+
+`KF2_PLANAR_PROBE=1` prints two lines every two seconds (the plane, the walk, the
+arena, the capture, the binning) and turns on the reflection pass's readback, which
+now counts a fifth outcome: the planar texture. **The readback also checks the
+mirror.** On the probe's frame, a planar pixel is marched as well. Where the march
+found an on-screen surface too, the two colours' brightness difference is written
+out, against the planar texture read *unmirrored* as the control. A mirror sampled
+in the right place reads far below its control, and one sampled in the wrong place
+reads like it.
+
+`KF2_AUTOSTART=new`, the `fdat02` spawn, facing the pool:
+
+- Plane at world Y -12160: 2240 below the eye, 640 below the floor the player
+  stands on. 144 mirrored walks a second at 1.09-1.12 ms each, 2 submits replayed
+  a frame, arena peak 33,940 of 409,600 bytes, no overflow, no table mismatch.
+- 55.6% of reflective pixels took the planar texture; the other 44.4% took the sky
+  through the march, all of it in the void to the right of the pool (the march
+  alone gave 46.7% sky and 51.2% hits here). 86.0% of the planar pixels were found by the
+  march too, and there the two are **3.5 apart in brightness (of 255) against
+  24.2 unmirrored**.
+- Turning in place with `goto`: yaw 0 is 0.2% planar and 99.8% sky (facing the
+  void); 1024 is 1.4%; 2048 is 25.9%, 3.6 against 25.8; 3072 is 73.6%, 3.1
+  against 23.2. Pitched down 300, 41.4% planar, and only 20.5% of those were found
+  by the march. Pitched up 700 with no water on screen: 0 mirrored walks, 144
+  frames a second counted as having no water.
+- The same readback with `KF2_ZBUFFER=0`, with `KF2_AO=0` and with
+  `KF2_POLYASM=0` (depth from the address map): 55.5-55.6% planar, 3.3-3.5 against
+  24.2. No GL errors or warnings under `KF2_GLDEBUG=1`.
+- **The occlusion census is identical with planar on and off** (darkest 0.76, mean
+  0.994, 9.9% shaded, 71.6% surface, 100.0% geometry normals): a capture adds
+  nothing to the target's surface list.
+- Cost, frame profiler at 144 fps: frame work 3.56-3.76 ms without, 5.19-5.38 ms
+  with; `LibGpu.DrawOTag` 0.87-0.93 to 1.24-1.29 ms; buffer swap and driver
+  0.15-0.17 ms either way. 144.0 fps drawn at 19.9-20.0 ticks/s. **GPU time is not
+  measured**: the frame viewer's capture skips the mirrored draw, since its
+  software replay would draw the reflection into the display buffer.
+- Slot 2 (`KF2_AUTOSTART=2`): `fdat05`, hp 46/86 in area 1, 144.0 fps at 20.0
+  ticks/s, `[present] wide 288`, the vertex map at 63.0% hit, identical to planar
+  off. No water in view, so no mirrored walk.
+
+**Not reflected**: the skybox and anything else drawn outside the two walks (the
+march still finds them on screen); the player's arm; models in view space; the
+object kind `0xF0`, whose submitter is handed a translation the first walk already
+projected. Only one plane is mirrored. A second pool at another height marches.
+
+**What still has to be judged by eye**: whether it reads as water; the ripple
+strength; the seam between the planar reflection and the march's sky where the
+mirrored texel is empty; the rim of the pool at an 8-unit clip bias; creatures and
+billboards in the reflection; and all of it while the camera moves.
+
 ## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
 
 **Mechanism measured; on by default.** One
