@@ -13,7 +13,7 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Forty-eight of the fifty-four are load-bearing; `0002`, `0003`, `0015`, `0046` and
+Forty-seven of the fifty-three are load-bearing; `0002`, `0003`, `0015`, `0046` and
 `0065` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
@@ -80,14 +80,6 @@ Four files in the directory have no entry below:
   inside `PresentFrame`, so a game busy-waiting on the pad without vsyncing read
   a frozen snapshot forever. King's Field's screen transitions all begin with
   such a wait; this is what hung the in-game menu.
-  Since amended: the poll also drew and swapped whenever 16 ms had passed since
-  the *start* of the last `Present`, to keep the window live during such a wait.
-  With the swap waiting for a 60 Hz refresh every frame is at least that long, so
-  the pad read drew a second frame and paid a second blocking swap on almost every
-  frame: 21-37 fps with VSync on, and 6.6 ms a frame in "CD, card and pad ticks".
-  It now draws only once the game has not presented for 250 ms, measured from where
-  the last `Present` ended. The amendment's hunks are in `0066`'s file, where they
-  share hunks with the deferred swap. See "VSync on Windows" in `docs/RUNTIME.md`.
 - `0008-unload-overlapping-overlays.patch` — `HandleRegionOverwrites` only
   dropped an overlay fully contained in the new one. `END.EXE` is smaller than
   `GAME.EXE` at the same base, so GAME's functions past `0x8003A000` stayed
@@ -788,13 +780,6 @@ Four files in the directory have no entry below:
   `FrameClock.WaitRefresh` holds one present per monitor refresh on the CPU
   (`Profiler.VSyncWait`). `FrameClock.VSync` now means "the swap blocks". **No
   recompile.** See "Minimising froze the game on Wayland" in `docs/RUNTIME.md`.
-  Since amended: Silk applies its own `VSync` lazily, inside the first `DoRender`
-  after it is set, so holding it false wrote interval 0 over `OnLoad`'s 1 before
-  the first frame. **VSync on was interval 0 from boot off Wayland**
-  (`wglGetSwapIntervalEXT` read 0 every frame on Windows, 112 fps drawn on a 60 Hz
-  monitor, and tearing) until the setting was toggled in play. Silk's `VSync` is now
-  set to agree with the interval `ApplySwapInterval` chose. The amendment's hunk is
-  in `0066`'s file, where it shares a hunk with the deferred swap. See "VSync on Windows" in `docs/RUNTIME.md`.
 
 - `0065-gl-debug-output.patch` — nothing in the GL backend read an error back, so a
   driver that refused a framebuffer or a call left that pass empty with no line
@@ -806,35 +791,6 @@ Four files in the directory have no entry below:
   each first report. Off, nothing is installed. The `Present` hunk carrying
   `GlDebug.Poll` is in `0064`'s file, where it shares a hunk with the refresh wait.
   **No recompile.** See "The GL backend reported nothing" in `docs/DEVELOPMENT.md`.
-
-- `0066-vsync-without-the-driver.patch` — how VSync is kept off Wayland, and the
-  port takes the swap from Silk to do it (`ShouldSwapAutomatically` off; every
-  caller of `DoRender` goes through `HostWindow.RenderFrame`). **On Windows, in a
-  window the compositor presents, the driver's interval is not used**: at interval
-  1 an integrated Radeon fell into stretches of 30-55 fps (its swap blocks until
-  the flip it queues), where VSync off in the same minute held 60.0. The interval
-  stays 0, the frame is composed and flushed, and the swap waits on the kernel's
-  vblank event for the window's monitor (`Host/Window/VBlankWait.cs`,
-  `D3DKMTWaitForVerticalBlankEvent`, reopened on a window move; a failed wait falls
-  back to the interval): 99-100% of frame intervals within a millisecond of 16.7 ms
-  in four runs alternated with the interval. GLFW's fullscreen bypasses the
-  compositor and tore that way, so the patch adds a **Borderless** display mode
-  (Video ▸ Display mode, `ViewConfig.Borderless`, three new localisation keys and a
-  hint), takes the wait there and windowed, and leaves Fullscreen on the interval.
-  **Elsewhere the interval's swap is deferred** to the start of the next
-  present, so the frame's GPU work — the occlusion pass and the composite, issued
-  at present — overlaps the next frame's game code as it does with VSync off: 60.0
-  fps deferred against 56.0 immediate on Windows with SSAO on High; the pad poll
-  puts a waiting frame on the screen once the game has not presented for 34 ms.
-  `KF2_SWAP=interval`, `KF2_SWAP=immediate` and `KF2_SWAP=vblank` are the
-  comparisons. Whether Borderless is composed on a given driver, and so tear-free,
-  is judged by eye. **No recompile.** See "VSync on Windows" in `docs/RUNTIME.md`.
-  Since amended: off Windows, Borderless never covered the screen — Wayland lets
-  no client position itself, and KWin fitted the undecorated X11 window to the
-  work area (2560x1189 under the panel) — so Borderless is Windows-only in
-  effect and takes GLFW's fullscreen elsewhere. It bought nothing there: the
-  vblank wait is Windows-only, so VSync is the interval either way. The amendment is the second diff in
-  the patch file.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

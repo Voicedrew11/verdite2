@@ -13,24 +13,13 @@ internal sealed class DisplaySettingsSection : ISettingsSection
 
     public void Draw()
     {
-        // Windowed, fullscreen, borderless: Fullscreen says "covers the screen" and
-        // Borderless how, so F11 and the menu bar's toggle keep their meaning.
-        var modes = new[]
+        var fullscreen = ConfigManager.View.Fullscreen;
+        if (ImGui.Checkbox(Localization.T("settings.display.fullscreen"), ref fullscreen))
         {
-            Localization.T("settings.display.mode.windowed"),
-            Localization.T("settings.display.fullscreen"),
-            Localization.T("settings.display.mode.borderless")
-        };
-        var mode = !ConfigManager.View.Fullscreen ? 0 : ConfigManager.View.Borderless ? 2 : 1;
-        if (ImGui.Combo(Localization.T("settings.display.mode"), ref mode, modes, modes.Length))
-        {
-            ConfigManager.View.Fullscreen = mode != 0;
-            if (mode != 0) ConfigManager.View.Borderless = mode == 2;
-            HostWindow.SetFullscreen(mode != 0);
+            ConfigManager.View.Fullscreen = fullscreen;
+            HostWindow.SetFullscreen(fullscreen);
             ConfigManager.SaveView(PanelManager.Panels);
         }
-
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("settings.display.mode_hint"));
 
         var vsync = ConfigManager.View.VSync;
         if (ImGui.Checkbox(Localization.T("settings.display.vsync"), ref vsync))

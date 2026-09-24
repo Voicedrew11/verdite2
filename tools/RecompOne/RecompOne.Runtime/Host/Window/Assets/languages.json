@@ -596,38 +596,6 @@
       "zh-CN": "全屏模式",
       "fr-FR": "Plein écran"
     },
-    "settings.display.mode": {
-      "en": "Display mode",
-      "pt-BR": "Modo de exibição",
-      "es-419": "Modo de pantalla",
-      "ja-JP": "表示モード",
-      "zh-CN": "窗口模式",
-      "fr-FR": "Mode d'affichage"
-    },
-    "settings.display.mode.windowed": {
-      "en": "Windowed",
-      "pt-BR": "Janela",
-      "es-419": "Ventana",
-      "ja-JP": "ウィンドウ",
-      "zh-CN": "窗口化",
-      "fr-FR": "Fenêtré"
-    },
-    "settings.display.mode.borderless": {
-      "en": "Borderless",
-      "pt-BR": "Sem bordas",
-      "es-419": "Sin bordes",
-      "ja-JP": "ボーダーレス",
-      "zh-CN": "无边框",
-      "fr-FR": "Sans bordure"
-    },
-    "settings.display.mode_hint": {
-      "en": "Borderless covers the screen as a window the desktop presents, so VSync there cannot tear",
-      "pt-BR": "Sem bordas cobre a tela como uma janela apresentada pela área de trabalho, então o VSync nele não causa tearing",
-      "es-419": "Sin bordes cubre la pantalla como una ventana que presenta el escritorio, así que el VSync ahí no produce tearing",
-      "ja-JP": "ボーダーレスはデスクトップが表示するウィンドウとして画面を覆うため、VSync でティアリングが起きません",
-      "zh-CN": "无边框以桌面合成的窗口覆盖屏幕，因此垂直同步不会产生画面撕裂",
-      "fr-FR": "Sans bordure couvre l'écran avec une fenêtre présentée par le bureau, donc la V-Sync n'y provoque pas de déchirement"
-    },
     "settings.display.vsync": {
       "en": "VSync",
       "pt-BR": "VSync",
