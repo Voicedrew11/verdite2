@@ -1493,3 +1493,50 @@ index 807467e..9653751 100644
      /// <summary>How much of the scene a material reflects at most, 0..1; 0 is not
      /// reflective, and the pass skips the pixel after one texture read.</summary>
      public static readonly float[] Reflectivity = new float[Count];
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
+index ac884bd..e9e1776 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
+@@ -154,7 +154,10 @@ public sealed partial class Gpu
+                 {
+                     if (!GteVertexMap.TryGet(_fifoSrc[vwAt[i]], _fifo[vwAt[i]], out var a)) continue;
+                     hits++;
+-                    v[i].Projected = true;
++                    // 0067, amended. A vertex published with no depth was placed on
++                    // the screen, not projected (the HUD): its fraction applies, and
++                    // the polygon stays 2D.
++                    v[i].Projected = a.Z > 0f;
+                     v[i].W = a.Z;
+                     v[i].HasW = wantW && a.Z > 0f;
+                     v[i].HasZ = wantZ && a.Z > 0f;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GteVertexMap.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GteVertexMap.cs
+index a7a8eb2..9cef1dc 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GteVertexMap.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GteVertexMap.cs
+@@ -189,7 +189,9 @@ public static class GteVertexMap
+ 
+     /// <summary>Offer a value and the attributes that belong to it, for whichever
+     /// store copies it next. Called from <c>Gte.Read</c> as a screen coordinate
+-    /// leaves the GTE, and from a load of a word this map already knows.</summary>
++    /// leaves the GTE, and from a load of a word this map already knows. A port may
++    /// offer a vertex it placed on the screen itself with a <paramref name="z"/> of 0:
++    /// it takes the fraction and no depth, and is not counted as projected.</summary>
+     public static void Publish(uint value, float z, float fx, float fy, bool clipped)
+     {
+         TracePublished++;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+index 5fa60ca..40505dd 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+@@ -28,8 +28,9 @@ public struct HleVertex
+     public bool Solid;
+     // 0067. GtePacketDepth.Rec.Material: the port's word on what the surface is.
+     public byte Material;
+-    // 0067. The GTE projected this vertex (the vertex map or PGXP answered for it).
+-    // A polygon with no projected corner is 2D: the HUD, text, a menu.
++    // 0067. The GTE projected this vertex (the vertex map or PGXP answered for it
++    // with a depth; a vertex the port placed on the screen carries a fraction and
++    // no depth). A polygon with no projected corner is 2D: the HUD, text, a menu.
+     public bool Projected;
+ }
+ 

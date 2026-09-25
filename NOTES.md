@@ -321,6 +321,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - `ending` exists because the last ten minutes of the game are otherwise untestable
 - The MCP layer
 - The polygon assembler in C#
+- The HUD's transform in C#
 - The map tile walk in C#
 - The object and creature walk in C#
 - A verify pass replays, it does not re-run

@@ -154,7 +154,10 @@ public sealed partial class Gpu
                 {
                     if (!GteVertexMap.TryGet(_fifoSrc[vwAt[i]], _fifo[vwAt[i]], out var a)) continue;
                     hits++;
-                    v[i].Projected = true;
+                    // 0067, amended. A vertex published with no depth was placed on
+                    // the screen, not projected (the HUD): its fraction applies, and
+                    // the polygon stays 2D.
+                    v[i].Projected = a.Z > 0f;
                     v[i].W = a.Z;
                     v[i].HasW = wantW && a.Z > 0f;
                     v[i].HasZ = wantZ && a.Z > 0f;

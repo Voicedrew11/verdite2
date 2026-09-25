@@ -5455,6 +5455,50 @@ fourth replace hook under `KF2_POLYASM_TRANSFORM`, which now covers both transfo
 Like `func_8002E650` it keeps the depth cue and the flag in locals rather than on
 its stack, which leaves those stores out of the vertex map's store count.
 
+### The HUD's transform in C#
+
+**Mechanism measured; whether the compass still wobbles is judged by eye.**
+
+The compass wobbled as it turned, and a frame capture said why: of the frame's
+polygons, the world's and the models' vertices were all found in the vertex map
+(213 of 213, 189 of 189), and the HUD's none (0 of 236), with no vertex published
+while the HUD builder ran. So the HUD was drawn at whole pixels. The reason is its
+transform, `func_8002E910`, called only by the HUD builder: for each vertex it calls
+`RotTrans` -- rotate and translate, **no divide** -- and writes the result's X and Y
+into the vertex cache as the screen position. The HUD is orthographic. The vertex
+map learns a position from `Rtp`, the perspective divide, which the HUD never
+reaches, and `RotTrans` drops the fraction in its shift of 12.
+
+`patches/PolyAssemblerHud.cs` has the routine in C#, beside the other two
+transforms and on their switch (`KF2_POLYASM_TRANSFORM=0`, `KF2_POLYASM=verify`):
+the same `MvmvaOp` for the integers, and the same cache bytes, X and Y written as
+one word rather than two halfwords. Before the store it works out the product the
+GTE shifted -- `(TR << 12) + R·V`, from the GTE's own control registers -- and
+offers its low twelve bits to `GteVertexMap.Publish`, the call `Gte.Read` makes for a
+projected vertex. The store binds it, and the lit assembler, already C# and already
+following the map for the models, carries it into the packets. A product that
+disagrees with the GTE's integer offers no fraction.
+
+**Only the fraction.** An orthographic model needs no perspective correction --
+with no divide, affine texturing is exact -- and the HUD must write no depth. So the
+vertex is published with a depth of 0, which gives it no W and no depth, and which
+`0067` now reads as "placed on the screen, not projected": `HleVertex.Projected` is
+true only for a hit with a depth. The reflection pass tells the HUD from the scene
+by that flag, so without the amendment the HUD would have stopped being an overlay.
+
+Measured:
+
+- `KF2_POLYASM=verify`: `func_8002E910` 0 RAM, 0 register and 0 GTE mismatches;
+  `func_8002F214` clean alongside it.
+- A frame capture: the HUD's vertices 296 of 296 found (0 of 236 before).
+- `KF2_SUBPIXEL_PROBE=1` at 144 fps, turning: 18,720 HUD vertices a second placed
+  on the screen, 13,104 of them with a fraction (the rest are unrotated pieces that
+  land on whole pixels).
+- `KF2_SSR=1 KF2_SSR_PROBE=1`: 17,850-21,034 of the surface triangles a second 2D
+  overlays, against 14,626-20,745 on the committed tree in the same run, so the HUD
+  is still an overlay.
+- 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`.
+
 ### The clipper in C#
 
 `Clip4FTP` and `Clip3FTP` are two more replace hooks, in `patches/PolyAssemblerClip.cs`

@@ -189,7 +189,9 @@ public static class GteVertexMap
 
     /// <summary>Offer a value and the attributes that belong to it, for whichever
     /// store copies it next. Called from <c>Gte.Read</c> as a screen coordinate
-    /// leaves the GTE, and from a load of a word this map already knows.</summary>
+    /// leaves the GTE, and from a load of a word this map already knows. A port may
+    /// offer a vertex it placed on the screen itself with a <paramref name="z"/> of 0:
+    /// it takes the fraction and no depth, and is not counted as projected.</summary>
     public static void Publish(uint value, float z, float fx, float fy, bool clipped)
     {
         TracePublished++;

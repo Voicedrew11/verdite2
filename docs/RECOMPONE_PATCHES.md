@@ -884,6 +884,14 @@ Four files in the directory have no entry below:
   existing id reaches the shader with the opacity it had, so the pass is unchanged.
   The amendment is the third diff in the patch file. See "Phase 1, the first slice"
   in `docs/REMASTER.md`.
+  Since amended: `HleVertex.Projected` was set on any vertex-map hit, which was the
+  same thing as "the GTE projected it" only while every published vertex came out
+  of `Rtp`. The port now publishes the HUD's vertices itself, placed on the screen
+  by `RotTrans` with no divide, so that they get their sub-pixel fraction; they are
+  published with a depth of 0, and a hit counts as projected only with a depth. The
+  HUD therefore stays 2D to the reflection pass (measured: its overlay count did not
+  fall). The amendment is the fourth diff in the patch file. See "The HUD's
+  transform in C#" in `docs/PATCHES_AND_MODS.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
