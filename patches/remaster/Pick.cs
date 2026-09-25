@@ -14,9 +14,7 @@ namespace Kf2.Remaster;
 /// </summary>
 public static class Pick
 {
-    const uint ViewMatrix = 0x80192E18;
-    const uint CamWorldX = 0x80192E78, CamWorldY = 0x80192E7C, CamWorldZ = 0x80192E80;
-    const uint PosXAddr = 0x801994EC, PosZAddr = 0x801994F4;
+    const uint ViewMatrix = CameraBlock.ViewMatrix;
 
     /// <summary>How many cells a ray is followed through.</summary>
     const int MaxCells = 64;
@@ -34,12 +32,8 @@ public static class Pick
         float E(uint off) => (short)m.ReadU16(ViewMatrix + off) / 4096f;
         v.R = new Matrix4x4(E(0), E(2), E(4), 0, E(6), E(8), E(10), 0, E(12), E(14), E(16), 0, 0, 0, 0, 1);
         v.T = new Vector3((int)m.ReadU32(ViewMatrix + 0x14), (int)m.ReadU32(ViewMatrix + 0x18), (int)m.ReadU32(ViewMatrix + 0x1C));
-        // The camera is kept in sixteen bits, which a map 163,840 units wide
-        // overflows; the player is never 32,768 units from it.
-        int px = (int)m.ReadU32(PosXAddr), pz = (int)m.ReadU32(PosZAddr);
-        v.Cam = new Vector3(px + (short)(m.ReadU16(CamWorldX) - px),
-                            (short)m.ReadU16(CamWorldY),
-                            pz + (short)(m.ReadU16(CamWorldZ) - pz));
+        var cam = Camera.Read(m);
+        v.Cam = new Vector3(cam.X, cam.Y, cam.Z);
         v.H = Math.Max(1f, GteDepth.ProjH);
         v.Cx = GteDepth.ProjCx;
         v.Cy = GteDepth.ProjCy;

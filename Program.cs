@@ -1217,6 +1217,21 @@ Kf2.ModelWalk.Configure(Environment.GetEnvironmentVariable("KF2_MODELWALK"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_PROBE"));
 Kf2.ModelWalk.Install();
 
+// Stage 13 itself, func_800342D8, and the camera block it opens with, func_8002E22C,
+// in C#. The renderer is nineteen calls and one block of HUD arithmetic; with it here
+// the frame's view is a value (Stage13.ViewOverride), the drawing half is one call
+// (Stage13.DrawScene), and the compass needle's spring inside its body is reachable.
+// Every call still goes through its hooks.
+//
+//     KF2_STAGE13=0            the recompiled renderer
+//     KF2_STAGE13=verify       the recompiled one draws; ours is replayed against a record of it
+//     KF2_CAMERABLOCK=0        the recompiled camera block
+//     KF2_CAMERABLOCK=verify   run both on every call and compare RAM, registers, GTE
+Kf2.CameraBlock.Configure(Environment.GetEnvironmentVariable("KF2_CAMERABLOCK"));
+Kf2.CameraBlock.Install();
+Kf2.Stage13.Configure(Environment.GetEnvironmentVariable("KF2_STAGE13"));
+Kf2.Stage13.Install();
+
 // The game's other cull: a six-plane view-space clipper (func_8005CAC8) that only
 // the near floor and ceiling are big enough to reach, set to twice the screen
 // frustum as a guard band against the GPU's 1023-pixel limit. Twice the frustum is

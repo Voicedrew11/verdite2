@@ -143,7 +143,7 @@ the emitted C# for `DrawOTag`, `VSync`, `PutDispEnv` or `PutDrawEnv`.
 | stage 5 `func_80046A60` | 128 effect lifetimes at `rec+0x0E` | no |
 | stage 6 `func_8004910C` | the module's own per-frame logic | **no**, in all nine modules |
 | stage 2 `func_80037C0C` | the object table at `0x80177714` — every world prop that moves | **yes**, but through one edge only — see below; gated regardless |
-| stage 13 `func_800342D8` | the jitter accumulator at `0x8006E608`, in its own body | yes, it is the renderer |
+| stage 13 `func_800342D8` | the compass needle's speed at `0x8006E608`, in its own body | yes, it is the renderer |
 | — `func_80033FBC` | the fade state machine, called by stage 13 | **no** — three functions, none of them draw |
 
 ### Stage 2 is the object-table state machine
@@ -232,11 +232,12 @@ Its only callees are `func_80033FAC` (one byte write) and `func_80022B20` (a sma
 byte fill), so it cannot draw and can be run on the game's clock rather than the
 renderer's.
 
-**The jitter accumulator at `0x8006E608`** is inline in `func_800342D8` itself,
-just after a `func_80015374()` call: it adds the result, then subtracts an eighth
-of it (`(v + 7) >> 3` with the sign fixup), so it is a damped accumulator driving
-the screen shake, not a counter. No hook can reach it — `HookManager` detours whole
-functions and stage 13 must draw.
+**The word at `0x8006E608`** is inline in `func_800342D8` itself, just after a
+`func_80015374()` call: it adds the result, then subtracts an eighth of it
+(`(v + 7) >> 3` with the sign fixup). It was written up here as a damped
+accumulator driving the screen shake. **It is the compass needle's speed**: see
+"Stage 13's HUD block, and the compass needle" below. It was out of every hook's
+reach while stage 13 was recompiled; `patches/Stage13.cs` has it in C# now.
 
 ### Stage 8 is the render camera, and it is the only copy
 
@@ -372,6 +373,39 @@ like every other clip in the game. Because the clock is a per-tick counter feedi
 time, `patches/AnimSmoothing.cs` carries it exactly as it carries a creature's —
 see "The player's arm is the same bug after all" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+### Stage 13's HUD block, and the compass needle
+
+Stage 13 is nineteen calls and one block of its own arithmetic, between the arm
+(`func_80032400`) and the HUD builder (`func_80031D5C`); the calls are tabled under
+"Stage 13 in C#" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md). The block fills
+in what the HUD builder draws from: fourteen records of `0x24` bytes at
+`0x80067774`, which the builder walks until a `0xFF` in `+0`.
+
+| field | what | written by the block from |
+|---|---|---|
+| `+0x0` u8 | drawn when 1 | `0x801994DE` for record 0, `0x801994DD` for records 1-13 |
+| `+0x4` u16 | the model: a digit's is the digit plus 3 | records 3-5 the hundreds, tens and ones of HP (`0x80199428`) mod 1000; records 6-8 the same of MP (`0x8019942C`) |
+| `+0x8` u16 | a gauge's length, 204 at 5000 | record 9 from `0x8019942E`, record 10 from `0x80199432`, as `v * 204 / 5000` |
+| `+0x18` u16 | pitch | record 0: the camera's pitch, `0x80192E88` |
+| `+0x1A` u16 | yaw | record 0: see below |
+
+**Record 0 is the compass**, by what the block does with it rather than by a
+picture: its pitch is the camera's, and its yaw chases the camera's through a damped
+spring. `func_80015374(a0, a1)` is `(a1 - a0) & 0xFFF`, less 4096 when that is
+above 2048 -- the wrapped difference of two angles, here record 0's yaw and the
+camera's.
+That error is added to the word at `0x8006E608`, which then loses about an eighth of
+itself (`v - ((v + 7) >> 3)` for a positive `v`, `v - ((v - 7) >> 3)` for a negative
+one, nothing at zero), and record 0's yaw then turns by `v >> 6`. So `0x8006E608` is
+the needle's **speed**: the needle swings after a turn, overshoots and settles.
+
+**It is stepped once per call of stage 13, so once per rendered frame**, which is a
+rate defect of the kind `docs/TODO.md` lists: on the console it stepped once a
+tick, and above the tick rate it steps more often, so the needle settles sooner in
+wall-clock time. Nothing has been reported from play. It
+is one line of C# in `patches/Stage13.cs` now (`SwingNeedle`), which is where a hold
+to the tick would go.
+
 ### The map is an 80x80 tile grid, and a tile's height is one byte
 
 `func_80031C94` (the "map tiles" line in `KF2_DRAWCENSUS`, and 78% of a frame's

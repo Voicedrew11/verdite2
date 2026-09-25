@@ -69,13 +69,12 @@ public static class PlanarWalk
     const uint Walk = 0x800331B4;       // the object walk: its submits are recorded
     const uint Submit = 0x80032588;     // the model submitter
     const uint DrawOTag = 0x80060818;
-    const uint CameraBuild = 0x8002E22C;
 
     /// <summary>The camera block `func_8002E22C` writes: the view matrix at `+0`, the
     /// pitch-only matrix at `+0x20`, position at `+0x60`, angles at `+0x70` and the
     /// tile index at `+0x78`.</summary>
-    const uint CameraBlock = 0x80192E18, CameraBytes = 0x80;
-    const uint ViewMatrix = 0x80192E18, CamPos = 0x80192E78, CamAngles = 0x80192E88;
+    const uint CameraStart = CameraBlock.ViewMatrix, CameraBytes = 0x80;
+    const uint ViewMatrix = CameraBlock.ViewMatrix, CamPos = CameraBlock.Position;
 
     /// <summary>What the walks and the submitter move that stage 13 goes on to read:
     /// the fog word `func_8002DDDC` keeps, the model table and vertex base the
@@ -266,11 +265,11 @@ public static class PlanarWalk
     {
         var entry = c.Snapshot();
         Gte.Save(_gte);
-        for (uint i = 0; i < CameraBytes; i++) _camera[i] = mem.ReadU8(CameraBlock + i);
+        for (uint i = 0; i < CameraBytes; i++) _camera[i] = mem.ReadU8(CameraStart + i);
         uint fog = mem.ReadU32(FogWord), models = mem.ReadU32(ModelTable), verts = mem.ReadU32(VertexBase);
         uint desc0 = mem.ReadU32(ActiveDescriptor), ot0 = mem.ReadU32(OtBase);
 
-        int camX = (int)mem.ReadU32(CamPos), camY = (int)mem.ReadU32(CamPos + 4u), camZ = (int)mem.ReadU32(CamPos + 8u);
+        int camY = (int)mem.ReadU32(CamPos + 4u);
         int h = (int)MathF.Round(plane);
         int mirroredY = 2 * h - camY;
 
@@ -283,20 +282,14 @@ public static class PlanarWalk
         try
         {
             // The mirrored camera, built by the routine that builds the real one.
-            uint scratch = PrimBuffer.MirrorScratch;
-            uint pos = scratch, ang = scratch + 0x10u, desc = scratch + 0x20u;
-            mem.WriteU32(pos, (uint)camX);
-            mem.WriteU32(pos + 4u, (uint)mirroredY);
-            mem.WriteU32(pos + 8u, (uint)camZ);
-            mem.WriteU32(pos + 12u, mem.ReadU32(CamPos + 12u));
-            mem.WriteU16(ang, (ushort)(-(short)mem.ReadU16(CamAngles)));
-            mem.WriteU16(ang + 2u, mem.ReadU16(CamAngles + 2u));
-            mem.WriteU16(ang + 4u, (ushort)(-(short)mem.ReadU16(CamAngles + 4u)));
-            mem.WriteU16(ang + 6u, mem.ReadU16(CamAngles + 6u));
-            c.A0 = pos;
-            c.A1 = ang;
-            c.RA = 0x800342E8u;
-            KingsField2.func_8002E22C(c, mem);
+            var cam = Camera.Read(mem);
+            CameraBlock.Build(c, mem, cam with
+            {
+                Y = mirroredY,
+                Pitch = (short)-cam.Pitch,
+                Roll = (short)-cam.Roll,
+            });
+            uint desc = PrimBuffer.MirrorScratch;
 
             // Kept above the water, in the mirrored view: with R' that view's
             // rotation, a view position's world Y is R'^T row 1 . p + Y'.
@@ -358,7 +351,7 @@ public static class PlanarWalk
             mem.WriteU32(FogWord, fog);
             mem.WriteU32(ModelTable, models);
             mem.WriteU32(VertexBase, verts);
-            for (uint i = 0; i < CameraBytes; i++) mem.WriteU8(CameraBlock + i, _camera[i]);
+            for (uint i = 0; i < CameraBytes; i++) mem.WriteU8(CameraStart + i, _camera[i]);
             Gte.Load(_gte);
             c.Restore(entry);
         }

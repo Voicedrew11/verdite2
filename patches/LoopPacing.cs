@@ -178,7 +178,7 @@ namespace Kf2;
 ///
 /// **The one thing a redraw costs** is that whatever stage 13 steps in its *own*
 /// body now steps once per rendered frame inside a modal loop, exactly as it
-/// already does in the main loop -- the jitter accumulator at `0x8006E608` and
+/// already does in the main loop -- the compass needle's spring at `0x8006E608` and
 /// `func_800331B4`'s ambient-sound retrigger. Both are already on that list in
 /// docs/TODO.md; this makes a modal loop no worse than an ordinary frame rather
 /// than better.

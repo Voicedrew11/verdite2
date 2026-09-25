@@ -449,20 +449,23 @@ is to 128 units in Y, the height step, and to tile centres in X and Z.
 
 ### The editor camera
 
-**The `PlanarWalk` pattern:**
-1. save the camera block;
-2. rebuild it through `func_8002E22C` for a free eye;
-3. let stage 13 draw;
-4. put it back.
+**`Stage13.ViewOverride`.** Stage 13 is C# (`patches/Stage13.cs`), so the view
+a frame is drawn from is a value: set a `Camera` and every frame is drawn from it,
+with no camera block to save and put back. See "Drawing the frame from another
+camera" in `docs/PATCHES_AND_MODS.md`.
 
-**The catch is the visibility grid.** `CullGrid` builds the 24×24 window around
-the camera the game has, so an eye far from the player would see its surroundings
-through the player's window, with tiles missing. `CullGrid.Build` reads the camera
-from memory. **Open**: whether running it again after the camera block has been
-swapped gives a correct window for the free eye.
+**The visibility grid follows, measured.** The 24×24 window is built by the game's
+own `func_8002D3A8`, which reads its eye from the camera block and nothing else of
+the player's. So the grid is right for a free eye by construction. The `view` shell
+verb tests it: the grid built from an override camera is byte-identical to the grid
+built with the player standing there, with the player 3 to 20 tiles away in six
+directions. (`patches/CullGrid.cs` was not the route: it is off by default and does
+not match the game's build.)
 
-**Until then, the fallback is `goto` plus the game's own camera**, which puts the
-player where the author wants to look. That costs nothing new and is enough for
+**What does not follow is the arm and the object walk**: both read the player's
+position directly, so from far away they may place or cull things by where the
+player is. That is the first thing to look at in a frame drawn from an override.
+`goto` plus the game's own camera remains the fallback, and it is enough for
 Phases 1–6.
 
 ### Undo, save, autosave
@@ -966,12 +969,14 @@ light term is next on the main line and needs nothing more from Phase 1.
 ### Phase 7: the editor camera, and sharing
 
 - **Ships:**
-  - the free camera: the `PlanarWalk` pattern, plus `CullGrid` run from the eye;
+  - the free camera: `Stage13.ViewOverride`, with the grid following it;
   - export of the working pack as a zip;
   - a compatibility report per pack: fingerprints matched, keys resolved and
     keys missing, per area.
-- **Risk:** `CullGrid` from a free eye. If it cannot be made correct, the free
-  camera is limited to within a few tiles of the player.
+- **Risk:** the arm and the object walk read the player's position rather than the
+  camera. If that shows from far away, the free camera is limited to near the
+  player until those two are given the eye. The grid is not a risk any more: it
+  follows the eye, measured.
 - **You look at:** flying the camera through an area with nothing missing.
 
 ### Phase 8: later
@@ -998,7 +1003,9 @@ light term is next on the main line and needs nothing more from Phase 1.
    Phase 4 and normalised through `GteTexRect` or the upload rectangle.
 2. **Instance slots may not be stable.** They are measured before any instance
    key is used, and there is a fallback key.
-3. **`CullGrid` from a free eye** may not work; `goto` is the fallback.
+3. **The arm and the object walk from a free eye** read the player's position;
+   `goto` is the fallback. (The cull grid from a free eye was this risk, and is
+   measured correct.)
 4. **Shader cost at a high render scale**, since the port is CPU-bound and frame
    rate hides it. GPU timers per feature are the answer.
 5. **Save contamination** from placement edits. Opt-in, labelled, and last.

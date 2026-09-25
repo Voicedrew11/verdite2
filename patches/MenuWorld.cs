@@ -506,18 +506,7 @@ public static class MenuWorld
         SpriteAnim.Hold = true;
         try
         {
-            c.A0 = 0u; c.A1 = 0u;
-            KingsField2.func_8002E22C(c, mem);      // the stored view, as a0 = a1 = 0 asks
-            KingsField2.func_8002D3A8(c, mem);      // the cull grid
-            KingsField2.func_80032400(c, mem);      // the arm
-            KingsField2.func_80031D5C(c, mem);      // the HUD
-            KingsField2.func_80033E78(c, mem);
-            KingsField2.func_80031C94(c, mem);      // the map tiles
-            KingsField2.func_800331B4(c, mem);      // objects, creatures, effects, sprites
-            KingsField2.func_8003202C(c, mem);      // the four screen tints
-            KingsField2.func_800320BC(c, mem);
-            KingsField2.func_8003214C(c, mem);
-            KingsField2.func_80032234(c, mem);
+            Stage13.DrawScene(c, mem);              // the stored view
         }
         finally
         {
