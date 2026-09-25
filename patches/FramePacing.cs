@@ -132,10 +132,9 @@ namespace Kf2;
 /// version of the stage 3 sentence was wrong.)
 ///
 /// **What this still does not cover, stated rather than discovered later.**
-/// Stage 13's **jitter accumulator at 0x8006E608** is in stage 13's own body
-/// rather than in a callee, so no hook can reach it -- it is a damped accumulator
-/// (decayed by an eighth a call) driving the screen shake, so above the tick rate
-/// it settles faster and smaller. **The modal loops are covered, and not by this
+/// The **compass needle's spring at 0x8006E608** is in stage 13's own body rather
+/// than in a callee, so a gate cannot reach it; above the tick rate the needle
+/// settles sooner. Stage 13 is C# now (<see cref="Stage13"/>), so it is one line. **The modal loops are covered, and not by this
 /// class**: `func_80037B5C` (the transition fade), the item-use and spell-cast
 /// animations and the menu all step once per *rendered* frame inside a loop of
 /// their own, which a gate cannot reach because it decides only whether such a

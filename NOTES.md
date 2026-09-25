@@ -292,6 +292,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - The model pipeline has no skeleton
 - Stage 8 is the render camera, and it is the only copy
 - What in the renderer draws what
+- Stage 13's HUD block, and the compass needle
 - The frame's applied position delta is a triple of its own
 - Player state: found, and it was in stage 3 all along
 - The inventory is one byte per item, and the item id is the name-table index
@@ -326,6 +327,11 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - The map tile walk in C#
 - The object and creature walk in C#
 - A verify pass replays, it does not re-run
+- Stage 13 in C#
+- Drawing the frame from another camera
+- The compass needle is held to the tick
+- The hooks on stage 13 are ordered by what they need
+- A pass of the port's own
 
 ### [INPUT.md](docs/INPUT.md)
 
@@ -360,7 +366,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0069`, one entry each.
+Every change the port made to RecompOne, `0001`-`0070`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

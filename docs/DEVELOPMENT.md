@@ -946,6 +946,7 @@ address", never "not written".
     python3 scripts/rate_matrix.py menu-scroll --fps 144 --env KF2_MENUPACING=0
     python3 scripts/rate_matrix.py modal-rate --fps 20 144 --env KF2_LOOPPACING=0
     python3 scripts/rate_matrix.py sprite-anim --fps 20 60 144
+    python3 scripts/rate_matrix.py compass-needle --fps 20 60 144
     python3 scripts/rate_matrix.py --list
 
 Every empirical claim in these documents should be reproducible by one of these.

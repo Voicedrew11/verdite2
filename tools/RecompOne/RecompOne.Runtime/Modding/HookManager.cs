@@ -13,6 +13,7 @@ public static class HookManager
         public ModInfo Mod = null!;
         public T Fn = default!;
         public int Profile;
+        public int Order;
     }
 
     private sealed class FunctionHooks
@@ -101,7 +102,11 @@ public static class HookManager
         return true;
     }
 
-    public static bool AddPre(ModInfo mod, MethodInfo target, MethodInfo impl)
+    //0070. Pres and posts on one function run in ascending `order`, and in the
+    //order they were added among equals. Without it the order is whatever order
+    //the patches happened to be installed in, and a post that must run after
+    //another's (a redraw after the restores) depends on a line's place in a file.
+    public static bool AddPre(ModInfo mod, MethodInfo target, MethodInfo impl, int order = 0)
     {
         Func<CpuContext, IMemory, bool> pre;
         if (Matches(impl, typeof(bool), SigBasic))
@@ -126,13 +131,13 @@ public static class HookManager
         lock (_gate)
         {
             var hooks = Get(target);
-            hooks.Pres = [.. hooks.Pres, new Entry<Func<CpuContext, IMemory, bool>> { Mod = mod, Fn = pre, Profile = HookSection(impl, "pre") }];
+            hooks.Pres = Insert(hooks.Pres, new Entry<Func<CpuContext, IMemory, bool>> { Mod = mod, Fn = pre, Profile = HookSection(impl, "pre"), Order = order });
         }
 
         return true;
     }
 
-    public static bool AddPost(ModInfo mod, MethodInfo target, MethodInfo impl)
+    public static bool AddPost(ModInfo mod, MethodInfo target, MethodInfo impl, int order = 0)
     {
         if (!Matches(impl, typeof(void), SigBasic))
         {
@@ -144,7 +149,7 @@ public static class HookManager
         lock (_gate)
         {
             var hooks = Get(target);
-            hooks.Posts = [.. hooks.Posts, new Entry<Action<CpuContext, IMemory>> { Mod = mod, Fn = post, Profile = HookSection(impl, "post") }];
+            hooks.Posts = Insert(hooks.Posts, new Entry<Action<CpuContext, IMemory>> { Mod = mod, Fn = post, Profile = HookSection(impl, "post"), Order = order });
         }
 
         return true;
@@ -298,6 +303,14 @@ public static class HookManager
     private static int HookSection(MethodInfo impl, string kind)
     {
         return Profiler.Register($"{kind} {impl.DeclaringType?.Name}.{impl.Name}", ProfileGroup.Hook);
+    }
+
+    //0070. After every entry of the same or a lower order.
+    private static Entry<T>[] Insert<T>(Entry<T>[] list, Entry<T> entry)
+    {
+        var at = list.Length;
+        while (at > 0 && list[at - 1].Order > entry.Order) at--;
+        return [.. list[..at], entry, .. list[at..]];
     }
 
     private static FunctionHooks Get(MethodInfo target)

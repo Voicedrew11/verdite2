@@ -48,6 +48,7 @@ namespace Kf2;
 ///    plays ambient sounds, uploads texture pages and steps the sprite clock.
 /// 4. Everything is put back -- the camera block, the two pointers, the model and
 ///    vertex bases the submitter moved, the fog word, the GTE and the registers.
+///    Steps 2 and 4 are a <see cref="ScenePass"/>.
 ///
 /// Then at the frame's own `DrawOTag`, before the game's table is drawn, the mirrored
 /// table is handed to the runtime's `DrawOTag` with
@@ -69,21 +70,9 @@ public static class PlanarWalk
     const uint Walk = 0x800331B4;       // the object walk: its submits are recorded
     const uint Submit = 0x80032588;     // the model submitter
     const uint DrawOTag = 0x80060818;
-    const uint CameraBuild = 0x8002E22C;
 
-    /// <summary>The camera block `func_8002E22C` writes: the view matrix at `+0`, the
-    /// pitch-only matrix at `+0x20`, position at `+0x60`, angles at `+0x70` and the
-    /// tile index at `+0x78`.</summary>
-    const uint CameraBlock = 0x80192E18, CameraBytes = 0x80;
-    const uint ViewMatrix = 0x80192E18, CamPos = 0x80192E78, CamAngles = 0x80192E88;
+    const uint ViewMatrix = CameraBlock.ViewMatrix, CamPos = CameraBlock.Position;
 
-    /// <summary>What the walks and the submitter move that stage 13 goes on to read:
-    /// the fog word `func_8002DDDC` keeps, the model table and vertex base the
-    /// submitter selects, and the frame's arena descriptor and ordering table.</summary>
-    const uint FogWord = 0x80192EA8, ModelTable = 0x8018E19C, VertexBase = 0x8018EAA0;
-    const uint ActiveDescriptor = 0x8017E0A4, OtBase = 0x8018E0A8;
-
-    const uint OtEntries = 0x2000;
     const uint WalkFrame = 0x300;
 
     public const string OnKey = "kf2.ssr.planar";
@@ -220,8 +209,7 @@ public static class PlanarWalk
 
     // ---- the mirrored walk -----------------------------------------------------
 
-    static readonly Gte.State _gte = new();
-    static readonly byte[] _camera = new byte[CameraBytes];
+    static readonly ScenePass _pass = new();
     static readonly short[] _r = new short[9];
 
     // What the next DrawOTag draws first, and the two planes it is drawn with.
@@ -264,39 +252,31 @@ public static class PlanarWalk
 
     static void Mirror(CpuContext c, PSMemory mem, float plane)
     {
-        var entry = c.Snapshot();
-        Gte.Save(_gte);
-        for (uint i = 0; i < CameraBytes; i++) _camera[i] = mem.ReadU8(CameraBlock + i);
-        uint fog = mem.ReadU32(FogWord), models = mem.ReadU32(ModelTable), verts = mem.ReadU32(VertexBase);
-        uint desc0 = mem.ReadU32(ActiveDescriptor), ot0 = mem.ReadU32(OtBase);
-
-        int camX = (int)mem.ReadU32(CamPos), camY = (int)mem.ReadU32(CamPos + 4u), camZ = (int)mem.ReadU32(CamPos + 8u);
+        uint walkSp = c.SP;
+        uint mainHead = mem.ReadU32(ScenePass.OtPointer) + (ScenePass.OtEntries - 1u) * 4u;
+        var cam = Camera.Read(mem);
         int h = (int)MathF.Round(plane);
-        int mirroredY = 2 * h - camY;
+        int mirroredY = 2 * h - cam.Y;
 
         // The main view's plane, for the pass: a surface's height below the water,
         // Y being down, from its view position. Row 1 of R transposed.
         _view[0] = _r[1] / 4096f; _view[1] = _r[4] / 4096f; _view[2] = _r[7] / 4096f;
-        _view[3] = camY - plane;
+        _view[3] = cam.Y - plane;
 
+        // The port's own arena and table.
+        uint arena = PrimBuffer.MirrorArena;
+        _pass.Begin(c, mem, PrimBuffer.MirrorScratch, PrimBuffer.MirrorOt, arena, arena + PrimBuffer.MirrorArenaBytes);
         _replaying = true;
+        int replayed = 0;
         try
         {
             // The mirrored camera, built by the routine that builds the real one.
-            uint scratch = PrimBuffer.MirrorScratch;
-            uint pos = scratch, ang = scratch + 0x10u, desc = scratch + 0x20u;
-            mem.WriteU32(pos, (uint)camX);
-            mem.WriteU32(pos + 4u, (uint)mirroredY);
-            mem.WriteU32(pos + 8u, (uint)camZ);
-            mem.WriteU32(pos + 12u, mem.ReadU32(CamPos + 12u));
-            mem.WriteU16(ang, (ushort)(-(short)mem.ReadU16(CamAngles)));
-            mem.WriteU16(ang + 2u, mem.ReadU16(CamAngles + 2u));
-            mem.WriteU16(ang + 4u, (ushort)(-(short)mem.ReadU16(CamAngles + 4u)));
-            mem.WriteU16(ang + 6u, mem.ReadU16(CamAngles + 6u));
-            c.A0 = pos;
-            c.A1 = ang;
-            c.RA = 0x800342E8u;
-            KingsField2.func_8002E22C(c, mem);
+            CameraBlock.Build(c, mem, cam with
+            {
+                Y = mirroredY,
+                Pitch = (short)-cam.Pitch,
+                Roll = (short)-cam.Roll,
+            });
 
             // Kept above the water, in the mirrored view: with R' that view's
             // rotation, a view position's world Y is R'^T row 1 . p + Y'.
@@ -305,21 +285,10 @@ public static class PlanarWalk
             _clip[0] = -rm[1] / 4096f; _clip[1] = -rm[4] / 4096f; _clip[2] = -rm[7] / 4096f;
             _clip[3] = plane - _bias - mirroredY;
 
-            // The port's own arena and table.
-            uint ot = PrimBuffer.MirrorOt;
-            ClearOt(mem, ot);
-            uint arena = PrimBuffer.MirrorArena;
-            mem.WriteU32(desc, arena);
-            mem.WriteU32(desc + 4u, arena + PrimBuffer.MirrorArenaBytes);
-            mem.WriteU32(desc + 8u, arena);
-            mem.WriteU32(ActiveDescriptor, desc);
-            mem.WriteU32(OtBase, ot);
-
-            c.SP = entry.SP;
+            c.SP = walkSp;
             c.RA = 0x80034684u;
             KingsField2.func_80031C94(c, mem);
 
-            int replayed = 0;
             for (int i = 0; i < _n; i++)
             {
                 // Matrix 0 is a model placed in view space, already where it is
@@ -338,39 +307,20 @@ public static class PlanarWalk
                 KingsField2.func_80032588(c, mem);
                 replayed++;
             }
-            _replayed += replayed;
-
-            uint cur = mem.ReadU32(desc + 8u);
-            long used = (long)cur - arena;
-            if (used > _peak) _peak = used;
-            if (cur > arena + PrimBuffer.MirrorArenaBytes) _overflows++;
-
-            _pendingOt = ot + (OtEntries - 1u) * 4u;
-            _pendingMain = ot0 + (OtEntries - 1u) * 4u;
-            _pending = true;
-            _walks++;
         }
         finally
         {
             _replaying = false;
-            mem.WriteU32(ActiveDescriptor, desc0);
-            mem.WriteU32(OtBase, ot0);
-            mem.WriteU32(FogWord, fog);
-            mem.WriteU32(ModelTable, models);
-            mem.WriteU32(VertexBase, verts);
-            for (uint i = 0; i < CameraBytes; i++) mem.WriteU8(CameraBlock + i, _camera[i]);
-            Gte.Load(_gte);
-            c.Restore(entry);
+            _pass.End(c, mem);
         }
-    }
 
-    /// <summary>ClearOTagR: each entry links to the one before it, and the first is
-    /// the terminator, so the walk starts at the last and ends at the first.</summary>
-    static void ClearOt(PSMemory mem, uint ot)
-    {
-        mem.WriteU32(ot, 0x00FFFFFFu);
-        for (uint i = 1; i < OtEntries; i++)
-            mem.WriteU32(ot + i * 4u, (ot + (i - 1u) * 4u) & 0x00FFFFFFu);
+        _replayed += replayed;
+        if (_pass.Used > _peak) _peak = _pass.Used;
+        if (_pass.Overflowed) _overflows++;
+        _pendingOt = _pass.Head;
+        _pendingMain = mainHead;
+        _pending = true;
+        _walks++;
     }
 
     static uint _pendingMain;

@@ -109,6 +109,7 @@ public static class AgentServer
         "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
         "map [on|off|toggle] - the full-screen map, which pauses the world unless KF2_MAP_PAUSE=0",
         "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
+        "view [<x> <y> <z> <pitch> <yaw> <roll> | off] - the camera the last frame was drawn from, a digest of its cull grid and the cells it draws; with a camera, draw every frame from it until 'view off'",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -304,6 +305,7 @@ public static class AgentServer
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         // goto and the remaster verbs take the whole rest of the line.
         bool whole = parts[0].Equals("goto", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("view", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("snap", StringComparison.OrdinalIgnoreCase)
                      || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
@@ -325,6 +327,7 @@ public static class AgentServer
             case "pack":
             case "remaster":
             case "snap":
+            case "view":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -397,6 +400,7 @@ public static class AgentServer
         "ending" => DoEnding(cmd.Arg1),
         "map" => DoMap(cmd.Arg1),
         "goto" => DoGoto(cmd.Arg1),
+        "view" => DoView(cmd.Arg1),
         "edit" or "select" or "set" or "pack" or "remaster" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
@@ -626,6 +630,49 @@ public static class AgentServer
         if (a.Length >= 4) m.WriteU16(BaseYaw, (ushort)(int.Parse(a[3]) & 0xFFF));
         if (a.Length == 5) m.WriteU16(Analog.Pitch, (ushort)int.Parse(a[4]));
         return "{\"ok\":true,\"cmd\":\"goto\",\"pos\":[" + x + "," + y + "," + z + "]}";
+    }
+
+    const uint GridOffsetX = 0x80192E98, GridOffsetZ = 0x80192E9C;   // words
+    const uint Grid = 0x80192EAC, GridCells = 24 * 24;                  // what the tile walk reads
+
+    /// <summary>
+    /// The camera the last frame was drawn from, and a digest of the cull grid built
+    /// from it: the grid's two offset words and its 576 cells. With a camera, every
+    /// frame is drawn from it (<see cref="Stage13.ViewOverride"/>) until <c>view off</c>.
+    /// Two frames drawn from one camera, wherever the player stands, should give one
+    /// digest if the grid depends on the eye alone.
+    /// </summary>
+    static string DoView(string args)
+    {
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (m == null) return Err("not running");
+        var a = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (a.Length == 1 && a[0].Equals("off", StringComparison.OrdinalIgnoreCase))
+            Stage13.ViewOverride = null;
+        else if (a.Length == 6 && a.All(t => int.TryParse(t, out _)))
+        {
+            var n = Array.ConvertAll(a, int.Parse);
+            Stage13.ViewOverride = new Camera(n[0], n[1], n[2], (short)n[3], (short)n[4], (short)n[5]);
+        }
+        else if (a.Length != 0)
+            return Err("usage: view [<x> <y> <z> <pitch> <yaw> <roll> | off]");
+
+        var cam = Camera.Read(m);
+        ulong hash = 14695981039346656037UL;
+        void Mix(uint b) { hash ^= b; hash *= 1099511628211UL; }
+        Mix(m.ReadU32(GridOffsetX));
+        Mix(m.ReadU32(GridOffsetZ));
+        int drawn = 0;
+        for (uint i = 0; i < GridCells; i++)
+        {
+            uint cell = m.ReadU8(Grid + i);
+            if ((cell & 3u) != 0) drawn++;   // bit 0 the lower half, bit 1 the upper
+            Mix(cell);
+        }
+        return "{\"ok\":true,\"cmd\":\"view\",\"camera\":[" +
+               $"{cam.X},{cam.Y},{cam.Z},{cam.Pitch},{cam.Yaw},{cam.Roll}]," +
+               $"\"override\":{(Stage13.ViewOverride != null ? "true" : "false")}," +
+               $"\"grid\":\"{hash:x16}\",\"drawn\":{drawn}}}";
     }
 
     // ---- the ending ----

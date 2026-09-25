@@ -301,6 +301,9 @@ public static class MapFog
         int slack = CamSlackTiles * Map.TileUnits;
         if (Math.Abs(cx - px) > slack || Math.Abs(cz - pz) > slack) return;
 
+        // A view the port set is not where the player looked.
+        if (Stage13.ViewOverride != null) return;
+
         int slot = m.ReadU8(CurrentSlot);
         int area = m.ReadU8(AreaAddr);
 

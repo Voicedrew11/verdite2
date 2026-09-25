@@ -57,7 +57,7 @@ namespace Kf2;
 /// ## Why the stage gate cannot reach it
 ///
 /// This is the class `docs/TODO.md` records as *"a counter stepped inside a
-/// drawing function's own body"*, alongside stage 13's shake accumulator at
+/// drawing function's own body"*, alongside the compass needle's spring at
 /// `0x8006E608` and `func_800331B4`'s own ambient-sound retrigger at `rec+0x40`.
 /// `HookManager` detours whole functions, `func_800331B4` **is** the renderer's
 /// world and object walk, and skipping it would draw nothing -- so the gate the

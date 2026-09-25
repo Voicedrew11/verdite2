@@ -1606,11 +1606,12 @@ against 3.00-3.12 off, and the same GPU time. What water on screen did cost was
 the batch submits its semi-transparency forces, see "Water on screen cost 5 ms a
 frame" in `docs/DEVELOPMENT.md`.
 
-* **The jitter accumulator at `0x8006E608`** is in stage 13's *own body*
-  (`func_800342D8`), not in a callee, so no hook can reach it — `HookManager` only
-  detours whole functions and stage 13 must draw. It sums `func_80015374()` and
-  decays by an eighth a call to drive the screen shake, so above the tick rate the
-  shake settles faster and smaller. A quirk of amplitude, not a timer.
+* **The word at `0x8006E608`** is in stage 13's *own body* (`func_800342D8`), not
+  in a callee, so no hook could reach it while stage 13 was recompiled. It sums
+  `func_80015374()` and decays by an eighth a call. It was written up here as the
+  screen shake. **It is the compass needle's speed**, so above the tick rate the
+  needle settled sooner. Stage 13 is C# now and steps it on the tick; see "The
+  compass needle is held to the tick".
 
 ### The view has to be carried between ticks
 
@@ -2853,10 +2854,12 @@ the "does nothing at or below the tick rate" claim in one number. Menu, warp, de
 and auto-reload raised no exception and no unmapped call.
 
 **Two things it costs, both stated rather than discovered later.** Whatever stage
-13 steps in its *own* body now steps once per rendered frame inside a modal loop —
-the jitter accumulator at `0x8006E608` and `func_800331B4`'s ambient-sound
-retrigger — which makes a modal loop no worse than an ordinary frame rather than
-better; both are already open in [TODO.md](TODO.md). And a redraw cannot reach a
+13's callees step in their *own* bodies now steps once per rendered frame inside a
+modal loop — `func_800331B4`'s ambient-sound retrigger — which makes a modal loop
+no worse than an ordinary frame rather than better; it is open in
+[TODO.md](TODO.md). The compass needle's spring at `0x8006E608` was on this list
+too; stage 13 now steps it only on the first walk of a tick, and a redraw never
+is one (see "The compass needle is held to the tick"). And a redraw cannot reach a
 counter the modal loop steps in its own body: a picked-up item's spin, or a
 cutscene camera the loop pans itself, steps once a tick, which is the console's own
 rate for it, and smoothing *that* would need the model submit's arguments
@@ -3011,12 +3014,12 @@ ever lengthens a frame. `MenuPacing` is untouched by it — the repeat gate's si
 and this cannot see them.
 
 **What it does not reach**, stated rather than discovered later: a counter stepped
-inside a *drawing function's own body*, where no whole-function hook lands. Two are
-known — stage 13's jitter accumulator at `0x8006E608` (the screen shake, which
-settles faster and smaller above the tick rate) and the per-object ambient-sound
-retrigger at `rec+0x40` in `func_800331B4`. Neither is an animation anyone has
-reported; both need the hold/restore shape rather than a deadline, and both are
-still in [TODO.md](TODO.md).
+inside a *drawing function's own body*, where no whole-function hook lands. Two
+were known — the compass needle's spring at `0x8006E608` in stage 13, held to the
+tick now that stage 13 is C# ("The compass needle is held to the tick"), and the
+per-object ambient-sound retrigger at `rec+0x40` in `func_800331B4`, which is not
+an animation anyone has reported, needs the hold/restore shape rather than a
+deadline, and is still in [TODO.md](TODO.md).
 
 On by default and with no settings page, for the reason the menu repeat gives: a
 correctness fix rather than a taste. `KF2_LOOPPACING=0` is the comparison.
@@ -3194,7 +3197,7 @@ against 640 at 20**, which is the ratio of the two render rates and nothing else
 #### Why the stage gate cannot reach it, and what can
 
 This is the class `docs/TODO.md` records as *"a counter stepped inside a drawing
-function's own body"*, alongside stage 13's shake accumulator at `0x8006E608` and
+function's own body"*, alongside the compass needle's spring at `0x8006E608` and
 `func_800331B4`'s own ambient-sound retrigger at `rec+0x40`. `HookManager` detours
 whole functions; `func_800331B4` **is** the renderer's world and object walk, so
 skipping it draws nothing and the gate is not available.
@@ -3364,7 +3367,9 @@ table, and one `DrawOTag` walks both, so the world is under everything the menu
 draws, the HUD included, exactly as the paste was. What is not called is what
 advances the world or presents: stage 13's head `func_8002E064` (its three frame
 counters are zeroed by hand), the tickers `func_8002DC78` and `func_80033FBC`, the
-inline jitter accumulator, `func_8002E0FC`, the frame gate and `func_8003549C`.
+compass needle's spring in stage 13's own body, `func_8002E0FC`, the frame gate
+and `func_8003549C`. The list is `Stage13.DrawScene` now, so the two cannot drift
+apart.
 Two holds cover what the walk steps by itself: `SpriteAnim.Hold` keeps the cels,
 and a pre on `func_80014158`/`func_80013D08` keeps the ambient sources silent.
 
@@ -5018,6 +5023,12 @@ map [on|off|toggle]   open or close the full-screen map, which pauses the world
 goto <x> <y> <z> [yaw [pitch]]  put the player at a position in the current area, after
                       stage 3; yaw is the base heading, 0x1000 a turn. Sent before
                       an autostarted save has loaded, the load puts them back
+view [<x> <y> <z> <pitch> <yaw> <roll> | off]
+                      the camera the last frame was drawn from, a digest of the
+                      cull grid built from it and how many cells it draws; with a
+                      camera, every frame is drawn from it until "view off"
+                      (Stage13.ViewOverride; see "Drawing the frame from another
+                      camera")
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the
@@ -5032,7 +5043,7 @@ enable a package would get nothing.
 Commands arrive on socket threads and must run on the game thread. Where they
 run depends on whether the command re-enters the loader:
 
-- **`state`, `press`, `kill`, `help`, `nearby`, `map` drain from a `VSyncEvent` listener** — the
+- **`state`, `press`, `kill`, `help`, `nearby`, `map`, `view` drain from a `VSyncEvent` listener** — the
   same place the beacon reads memory, so no cross-thread access and no new
   machinery. **`map` has a second reason to be there**: the full-screen map
   pauses the world, and a paused world does not run stage 3, so a `map` verb on
@@ -5797,3 +5808,257 @@ trusting a `verify` count, ask what is under the routine that a RAM, register an
 GTE rollback cannot reach: the SPU, the GPU, the disc, and **the port's own patches
 hooked into the subtree**. The last is the easy one to miss, because it is code this
 repository wrote and it looks like part of the game from the caller's side.
+
+### Stage 13 in C#
+
+**Mechanism measured against the recompiled routine on every frame; the picture has
+not been looked at, and does not need to be — every call the routine makes is made
+in the same order with the same registers, and every store with the same value.**
+
+`patches/Stage13.cs` takes the renderer itself, `func_800342D8(VECTOR *pos, SVECTOR
+*rot)`, and `patches/CameraBlock.cs` the routine it opens with, `func_8002E22C`.
+`KF2_STAGE13=0` and `KF2_CAMERABLOCK=0` are the comparisons; `=verify` is the proof
+for each.
+
+**What the routine is.** Nineteen calls in a fixed order, with no branch around any
+of them, and one block of arithmetic between the seventh and the ninth:
+
+| # | callee | what | `jal` returns to |
+|---|---|---|---|
+| 1 | `func_8002E22C` | the camera block, from `a0`/`a1` | `0x800342E8` |
+| 2 | `func_8002DC78` | animated textures (gated) | `0x800342F0` |
+| 3 | `func_80033FBC` | the fade stepper (gated) | `0x800342F8` |
+| 4 | `func_8002D3A8` | the cull grid, round the eye | `0x80034300` |
+| 5 | `func_8002E064` | flip the buffers, clear the ordering table | `0x80034308` |
+| 6 | `func_800353AC` | every live sound slot set to 1 | `0x80034310` |
+| 7 | `func_80032400` | the first-person arm | `0x80034318` |
+| 8 | `func_80015374` | the wrapped difference of two angles | `0x800343B0` |
+| 9 | `func_80031D5C` | the HUD | `0x8003466C` |
+| 10 | `func_80033E78` | overlays | `0x80034674` |
+| 11 | `func_80031C94` | the map tiles (`TileWalk`) | `0x8003467C` |
+| 12 | `func_800331B4` | creatures, objects, effects, sprites (`ModelWalk`) | `0x80034684` |
+| 13-16 | `func_8003202C`, `func_800320BC`, `func_8003214C`, `func_80032234` | four full-screen quads | `0x8003468C`-`0x800346A4` |
+| 17 | `func_8002E0FC` | DrawSync, VSync, PutDrawEnv, PutDispEnv, DrawOTag | `0x800346AC` |
+| 18 | `func_80017880` | the frame gate (skipped by `FramePacing`) | `0x800346B4` |
+| 19 | `func_8003549C` | each slot marked 1, serviced | `0x800346BC` |
+
+The block is the HUD's state, and it is written up under "Stage 13's HUD block, and
+the compass needle" in `docs/GAME_INTERNALS.md`: which HUD records are drawn, the
+digits of HP and MP, the two gauges' lengths, and the compass's rotation — including
+the damped spring at `0x8006E608` that every document here had called the screen
+shake's jitter accumulator. Only two callees read an argument register: the camera
+block reads stage 13's own `a0`/`a1`, and #8 reads the two angles. Found by listing,
+per callee, the registers read before they are written in the emitted C#.
+
+**Every call goes through its hooks.** The calls are made through a delegate to each
+recompiled function, bound from its address, and a delegate runs the function's
+detour just as the recompiled body's direct call does. So `FramePacing`'s gates on
+#2 and #3 and its skip of #18, the smoothers, `LoopPacing`, `PrimBuffer`'s head, the
+C# walks and every probe see exactly the calls they saw. Measured: 144.0 fps drawn
+at 20.0 ticks/s with `[present] wide 288`, the same perspective counters as the
+unmodified tree to the vertex, `scripts/check_gate.py` 0 violations. The hooks *on*
+stage 13 need nothing either, because a replace hook is called between them.
+
+**Verify cannot run the routine twice.** Every other rewrite's `verify` runs both
+versions from one state, and that is impossible here: the routine presents a frame,
+passes the frame gate and paces the port, and a second run would be a second frame.
+So the recompiled routine draws the frame, and a pre and a post on each of the
+nineteen callees record it as it goes — the registers and the GTE at every call, and
+the whole of RAM at the three calls the body's own work comes before (#1, #8, #9)
+and after the two it comes after (#7, #8). Then the C# runs from the same entry
+state with every call *replayed* from that record: each call is checked for its
+place in the order, its SP, RA and callee-saved registers, its arguments where it
+has any, and — at #1, #8 and #9 — every byte of RAM; then it is handed what the
+recorded call left. Between any other two calls the body does nothing, so there is
+nothing to compare there. The recompiled result stands.
+
+Two details that make the record trustworthy. **The recorder's pre is ordered
+first and its post last on every callee** (`0070`; they are added on the first
+verified frame, so nothing is hooked unless verify is on), so an entry record is
+what the body handed the call and an exit record includes whatever every other hook
+on that callee did. Until `0070` the post was last only because it was added last. And **a
+call is matched to its site by its return address and by the order of the sites**,
+with anything that starts while a site is open counted as nested and ignored —
+`PlanarWalk` calls `func_80031C94` from a post on #12 with RA set to #12's own return
+address, which is exactly the call a looser matcher would take.
+
+**Measured, and shown to be able to fail.** Over a session through `fdat02` and
+`fdat05` — standing, turning both ways, two attacks, the menu open (MenuWorld's pass,
+with the camera block verified inside it at 60 passes/s) — **0 mismatches, 0
+incomplete records and 0 stray calls** for stage 13 in every report window, and 0 RAM,
+register and GTE mismatches for the camera block over about 330 calls every two
+seconds. Four bugs were then planted and each was caught: two tints swapped (`ours
+called Tint3 where the routine called Tint2` on every frame), the needle's rounding
+off by one on a negative speed (`entering Hud: 1 byte(s), first 0x8006E608` while
+turning), a gauge scaled by 205 instead of 204 (`first 0x800678E4 recompiled CC ours
+CD`), and the camera's tile shifted by 12 instead of 11 (`first 0x80192E94`).
+
+**What it cost, which is nothing.** The frame profiler, area 1 at the autostart
+position, uncapped at about 800 fps, 15,000-17,000 frames each: the routine's own
+body 0.005 ms a frame recompiled and 0.005 in C#, the camera block 0.003 either way,
+median work 0.848 against 0.854 ms. Not a performance change, and not argued as one.
+
+### Drawing the frame from another camera
+
+**Mechanism measured; a frame drawn from another camera has not been looked at.**
+
+With stage 13 in C#, the view it draws with is a value. `Camera` is
+`func_8002E22C`'s two arguments as one record — X, Y, Z in world units, pitch, yaw
+and roll — and three things take one:
+
+- **`Stage13.ViewOverride`**: set, every frame is drawn from it instead of from the
+  camera the main loop hands over. It is stored into the camera block in place of
+  the routine's first call's copy, so everything downstream reads it — the cull
+  grid, the two walks, `Pick`, the reflection passes. Null is the game's. It needs
+  the C# routine: under `KF2_STAGE13=0` or `verify` the recompiled one draws and the
+  override is not read. `MapFog` takes no sample while it is set, since a view the
+  port set is not where the player looked.
+- **`Stage13.DrawScene(c, mem, view)`**: the drawing half as one call — the view,
+  the cull grid, the arm and the eight calls that add to the ordering table — into
+  whatever table and descriptor are current. `MenuWorld` used to keep its own copy
+  of that list and calls this instead; a null view is the stored one, as before.
+  Pointing the frame at a table of the port's own and putting it back is
+  `ScenePass`; see "A pass of the port's own".
+- **`CameraBlock.Build(c, mem, camera)`**: store a camera and rebuild the matrices
+  through `func_8002E22C`, hooks and all. `PlanarWalk` used to stage a VECTOR and an
+  SVECTOR in guest RAM and hand the routine pointers to them; it builds the mirrored
+  camera with this now. Measured against the unmodified tree facing `fdat02`'s
+  water: the same plane, 120 submits replayed a second, the same arena peak of
+  33,940 bytes, the same clip planes and the same readback shares (55.6% planar,
+  44.4% sky, 86.0% of planar pixels also marched to a surface).
+
+`Pick` reads the camera through `Camera.Read` too, at full precision. It used to
+rebuild the camera from the low sixteen bits of each word and the player's position,
+on the belief that the block kept only sixteen bits; the block holds the whole
+words stage 8 wrote, and the reconstruction was only right within 32,768 units of
+the player, which a free camera need not be.
+
+**The cull grid from a free eye, which `docs/REMASTER.md` had as its Phase 7 risk,
+is measured and holds.** The grid `func_8002D3A8` builds takes its eye from the
+camera block and nothing else of the player's, so stage 13 building the block from
+an explicit camera is the whole of "the grid taking the eye as a parameter". The
+test is the `view` verb: read the camera `C` and the grid's digest `H` where the
+player stands; `goto` somewhere else and read the digest there (it differs); set
+`view C` and read it again. **The digest came back `H` at all six places tried** —
+the player 3, 4 and 6 tiles away, where the two windows overlap, and 20 tiles away
+in three directions, where they do not — and `H` again once the player was put
+back. `patches/CullGrid.cs` was not the way to do this: it is off by default and its
+transcription disagrees with the game's build by about 120 cells a frame (see "The
+cull the margin runs into" in `docs/WIDESCREEN.md`).
+
+**What does not follow the camera**, found by reading rather than measured in a
+picture: `func_80032400` (the arm) and `func_800331B4` (the object walk) read the
+player's position triple directly (see "Stage 8 is the render camera" in
+`docs/GAME_INTERNALS.md`), so a frame drawn from far away may place or cull things
+by where the player is. Whether that shows is the first thing to look at in a frame
+drawn from an override.
+
+### The compass needle is held to the tick
+
+**A rate defect of the SpriteAnim and TintHold class, measured; the needle's swing
+has not been looked at.** On by default for that reason, as those two are;
+`KF2_STAGE13_NEEDLE=0` is the comparison.
+
+Stage 13's body steps the needle's spring once a call (see "Stage 13's HUD block,
+and the compass needle" in `docs/GAME_INTERNALS.md`): the speed at `0x8006E608`
+takes the error and loses an eighth, and record 0's yaw turns by a 64th of the
+speed. On the console a call was a tick. Above the tick rate it is a frame drawn,
+so at 144 fps the spring was stepped seven times a tick and the needle settled
+seven times as fast in wall-clock time. Now the speed and the yaw are stepped only
+when `FramePacing.FirstWalkOfTick` says, and the rest of the block — the records
+shown, the digits, the gauges, the needle's pitch — runs every frame as before,
+since all of it is derived from what it reads. The call to `func_80015374` is still
+made on every frame, so the nineteen calls stay the routine's and the verify record
+is unchanged.
+
+`FirstWalkOfTick` rather than `TickedThisFrame`, for the reason it exists: a
+`LoopPacing` redraw and the transition fade's own frames reach stage 13 again, and
+a redraw is never the first walk of a tick, since the fill stops the moment the
+world ticks. A paused world is no tick either, so the needle stands still while the
+map is up. The identity drops itself past the boundary watchdog, as it does for
+every caller.
+
+Measured with `scripts/rate_matrix.py compass-needle` (`KF2_STAGE13_PROBE=1`,
+standing in area 1):
+
+| fps | frame/s | needle step/s |
+|---|---|---|
+| 20 | 20.0 | 20.0 |
+| 60 | 60.0 | 20.0 |
+| 144 | 144.0 | 20.0 |
+| 144, `KF2_STAGE13_NEEDLE=0` | 144.0 | 144.0 |
+
+Through a modal loop, with `rate_matrix.py modal-rate` at 144 fps (the menu, then a
+warp, 5.2-7.0 redraws an iteration): 19.0-20.5 steps a second in every window.
+
+**Under `KF2_STAGE13=verify` the needle swings at the frame rate again**, because
+the recompiled routine is what draws there and the replay is compared against it; it
+steps on every call, as TintHold's verify resets on every call. Verify still reads 0
+mismatches. Under `KF2_STAGE13=0`, or with PGXP's CPU tracking on, the recompiled
+routine runs and nothing is held.
+
+What is left of the class is `func_800331B4`'s per-object ambient-sound retrigger at
+`rec+0x40`, in [TODO.md](TODO.md).
+
+### The hooks on stage 13 are ordered by what they need
+
+**`LoopPacing`'s post on stage 13 has to run after every smoother's post**, or its
+redraws start while the carried positions and poses are still in the tables and
+each one carries from carried values. `HookManager` ran the posts on a function in
+the order they were added, so the rule was kept by `LoopPacing.Install()` sitting
+below the three smoothers in `Program.cs` — an invariant held by a line's position
+in a file, which a reorder would break with nothing reported.
+
+`0070` gives `AddPre` and `AddPost` an `order`: hooks on one function run in
+ascending order, then in the order added. Every existing call passes none and gets
+0, so every existing order is unchanged. `Stage13.HookOrder` names the two that
+matter on the renderer — `Frame` (0), the smoothers, the probes and the menu's record
+of the world's state, and `Redraw` (1000), which `LoopPacing` declares — and the
+`Program.cs` comment that made the install order load-bearing is gone. The verify
+recorder uses the two ends of the range for the same reason.
+
+What moved: the posts added after `LoopPacing`'s — `PrimBuffer`'s probe and
+`CrossProbe`'s leave, both diagnostics — now run before the redraws instead of after
+them, so each sees the frame it bracketed rather than the last redraw's. Measured:
+144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`, `modal-rate` at 144 fps
+reading 144.0 modal world frames a second at 20.9 world iterations, and
+`scripts/check_gate.py` 0 violations.
+
+### A pass of the port's own
+
+`MenuWorld` draws the world into an ordering table behind a menu's, and `PlanarWalk`
+draws it mirrored into a table the planar capture reads; the editor camera and a
+shadow pass in `docs/REMASTER.md` are the same shape. Each carried its own copy of
+the part that is not about what it draws: save the registers, the GTE, the frame's
+descriptor and table pointers and whatever the drawing routines move; clear a
+table (`ClearOTagR`); point the frame at it and at an arena; draw; measure the arena;
+put everything back. The two copies had already drifted — `MenuWorld` put back the
+model table and the vertex base, `PlanarWalk` those and the fog word and the camera
+block.
+
+`patches/ScenePass.cs` is that part, once:
+
+    pass.Begin(c, mem, descriptor, table, arena, arenaEnd);
+    try { /* Stage13.DrawScene, CameraBlock.Build, a walk */ }
+    finally { pass.End(c, mem); }
+
+**What it borrows is the union of what any pass moves** — the registers, the GTE,
+the active descriptor and ordering-table pointer, the model table and vertex base
+the submitter selects, the fog word `func_8002DDDC` keeps, and the whole camera
+block (`CameraBlock.Start`, `0x80` bytes) — so a pass leaves the frame as it found
+it whatever it draws, and a new one cannot forget a word. `End` measures the arena
+first (`Used`, `Overflowed`), and `LinkBefore` points the table's terminator at
+another table's head so one `DrawOTag` walks both, which is how `MenuWorld` puts
+the world under the menu. One instance per caller, reused every frame; it holds the
+saved state, so it refuses to be opened inside itself.
+
+For `MenuWorld` that is two more words put back than before, the fog word and the
+camera block, and neither changes: the pass rebuilds the camera from the stored
+view and walks the same tiles. Measured: 60 passes a second with a peak of 24,784
+bytes and 0 overflows in the menu, and `KF2_STAGE13=verify KF2_CAMERABLOCK=verify`
+reading 0 mismatches with the camera block verified inside the pass. For
+`PlanarWalk` it is the same state it saved by hand: facing `fdat02`'s water, plane
+Y -12160, two submits replayed per mirrored walk, arena peak 33,940 bytes, 0
+overflows and 0 table mismatches, and the readback's shares identical to the run
+before (55.6% planar, 44.4% sky, 86.0% of planar pixels also marched to a
+surface).
