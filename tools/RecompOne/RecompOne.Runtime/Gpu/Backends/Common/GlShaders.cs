@@ -785,6 +785,13 @@ internal static class GlShaders
         // 0060. The texture rectangle, and the atlas entry with its flags.
         layout(location = 10) in uvec2 inTex;
 
+        // 0051 draws an opaque tested batch twice with this program -- depth with
+        // colour masked, then colour against it -- and the driver may compile
+        // those as two variants. Only `invariant` obliges them to put a vertex in
+        // the same place. See "The world lost its textures on NVIDIA" in
+        // docs/RENDERING.md.
+        invariant gl_Position;
+
         // vUV is the one thing that wants correcting: handing gl_Position a real W
         // makes the rasterizer interpolate it in 1/W, which is exactly the
         // perspective-correct mapping the PlayStation could not afford. vColor is
@@ -1276,6 +1283,9 @@ internal static class GlShaders
         attribute vec2  inUV;
         attribute float inW;
         attribute float inZ;
+
+        // The depth pre-pass and the colour pass must agree; see the core profile.
+        invariant gl_Position;
 
         varying vec4  vColor;
         varying vec2  vUV;

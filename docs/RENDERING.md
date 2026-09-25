@@ -1012,6 +1012,23 @@ which was the only reason the select was there. The occlusion normal pass
 Ti: GL 4.5 and GL 2.1, every enhancement on, textures correct. The reporter's
 RTX 3080 Ti on Windows has not been checked.
 
+Two changes that close the neighbouring holes; neither one was the cause:
+
+- **`invariant gl_Position`** in both prim vertex shaders. `0051` draws an opaque
+  tested batch twice with this program and needs the two passes to agree, and GLSL
+  promises that only for an invariant output, whatever variants the driver builds.
+- **Every disabled `0048`/`0060` attribute reads a defined "no record".** `inLight`
+  is a `uint`, and its generic value was never set, so it read GL's initial float
+  `(0,0,0,1)`, which is undefined for an integer input. `inTex` was set once at
+  init. Both are now given in their own type (`LightDefaults`, `TexDefaults` in
+  `GlCore`), again whenever the arrays go off, since an attribute's current value
+  is not guaranteed to survive a draw with its array enabled.
+
+Measured on the GTX 1050 Ti, area 1 at `KF2_FPS=144`: 70.5-70.7 fps drawn before
+and 71.6-71.8 after (GPU-bound), 19.9 ticks/s both. GL 4.5 and 2.1 both compile,
+link and reach an area with `KF2_GLDEBUG=1` reporting no errors, and the picture
+was checked by eye on it after both.
+
 ## PGXP: upstream's own recovery, and what taking it actually bought
 
 **Mechanism confirmed and measured; the picture has not been looked at.**

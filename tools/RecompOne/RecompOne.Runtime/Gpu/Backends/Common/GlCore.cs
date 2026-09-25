@@ -398,13 +398,14 @@ public sealed class GlCore : IGpuBackend
             _gl.VertexAttribPointer(7, 3, VertexAttribPointerType.Float, false, ls, (void*)0);
             _gl.VertexAttribPointer(8, 1, VertexAttribPointerType.Float, false, ls, (void*)12);
             _gl.VertexAttribIPointer(9, 1, VertexAttribIType.UnsignedInt, ls, (void*)16);
+            LightDefaults();
 
             // 0060. Disabled until a batch carries them; the generic 0 is "none".
             _vboTex = _gl.GenBuffer();
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vboTex);
             _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(MaxVerts * sizeof(GlTex)), null, BufferUsageARB.DynamicDraw);
             _gl.VertexAttribIPointer(10, 2, VertexAttribIType.UnsignedInt, (uint)sizeof(GlTex), (void*)0);
-            _gl.VertexAttribI4(10, 0u, 0u, 0u, 0u);
+            TexDefaults();
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _vbo);
         }
 
@@ -1655,6 +1656,7 @@ public sealed class GlCore : IGpuBackend
             _lightAttribs = _litFilled > 0;
             for (uint i = 7; i <= 9; i++)
                 if (_lightAttribs) _gl.EnableVertexAttribArray(i); else _gl.DisableVertexAttribArray(i);
+            if (!_lightAttribs) LightDefaults();
         }
         if (_texFilled > 0)
         {
@@ -1665,7 +1667,7 @@ public sealed class GlCore : IGpuBackend
         if ((_texFilled > 0) != _texAttribs)
         {
             _texAttribs = _texFilled > 0;
-            if (_texAttribs) _gl.EnableVertexAttribArray(10); else _gl.DisableVertexAttribArray(10);
+            if (_texAttribs) _gl.EnableVertexAttribArray(10); else { _gl.DisableVertexAttribArray(10); TexDefaults(); }
         }
 
         // 0051. A tested batch draws against a depth pulled towards the camera, so a
@@ -1766,6 +1768,21 @@ public sealed class GlCore : IGpuBackend
     }
 
     void SetBlend(float src, float dst) => _gl.Uniform4(_uBlend, src, src, src, dst);
+
+    // What a disabled 0048/0060 attribute reads: no record. Each value is given in
+    // its input's own type -- `inLight` and `inTex` are integers, and GL's initial
+    // generic value is the float (0,0,0,1), which an integer input reads as
+    // undefined -- and is set again whenever the arrays go off, because the
+    // current value of an attribute whose array was enabled for a draw is not
+    // guaranteed to survive it.
+    void LightDefaults()
+    {
+        _gl.VertexAttrib4(7, 0f, 0f, 0f, 1f);
+        _gl.VertexAttrib4(8, 0f, 0f, 0f, 1f);
+        _gl.VertexAttribI4(9, 0u, 0u, 0u, 0u);
+    }
+
+    void TexDefaults() => _gl.VertexAttribI4(10, 0u, 0u, 0u, 0u);
 
     void SetDepthBias(bool on)
     {
