@@ -108,11 +108,17 @@ namespace Kf2;
 /// in stage 13's own body chases the camera's yaw, and <see cref="Stage13"/> steps
 /// it on the tick. So between ticks it stood still while the view it reads turned.
 /// It is carried here, by the same rule and on the same switch as the view's yaw
-/// (<see cref="WrappedAngle"/>): sampled when the spring stepped it, drawn at
+/// (<see cref="TickPair"/>): sampled when the spring stepped it, drawn at
 /// lerp(prev, cur, phase), written into record 0 for exactly the one function that
 /// reads it -- the HUD builder <c>func_80031D5C</c> -- and put back after.
 /// <c>KF2_SMOOTH_COMPASS=0</c> leaves it on the tick. See "The compass is carried
 /// with the view" in docs/PATCHES_AND_MODS.md.
+///
+/// The HP and MP gauges' lengths are the same kind of value -- a HUD record stage
+/// 13 derives on the tick and only the builder reads -- so they are carried by the
+/// same <see cref="HudReading"/>, sampled on <see cref="Stage13.HudTicks"/>.
+/// <c>KF2_SMOOTH_GAUGES=0</c> leaves them on the tick. See "The gauges are carried
+/// like the needle" in docs/PATCHES_AND_MODS.md.
 /// </summary>
 public static class FrameSmoothing
 {
@@ -156,12 +162,16 @@ public static class FrameSmoothing
     /// <c>KF2_SMOOTH_COMPASS=0</c> separates it, for comparison.</summary>
     public static bool Compass { get; private set; } = true;
 
+    /// <summary>Carry the HP and MP gauges' lengths. Part of the view's switch;
+    /// <c>KF2_SMOOTH_GAUGES=0</c> separates it, for comparison.</summary>
+    public static bool Gauges { get; private set; } = true;
+
     static bool _onFromEnv, _posFromEnv;
 
     // Last tick's and this tick's composed view, sampled on a frame the world
     // advanced on. `_cur` is what the game most recently produced, `_prev` what it
     // produced the tick before; the frame is drawn at lerp(prev, cur, phase).
-    static WrappedAngle _viewYaw;
+    static TickPair _viewYaw = new(wraps: true);
     static ushort _prevPitch, _curPitch;
     static int _prevX, _curX, _prevY, _curY, _prevZ, _curZ;
     static short _prevBob, _curBob, _prevLand, _curLand;
@@ -234,11 +244,12 @@ public static class FrameSmoothing
         Description = "Carries the view between the game's logic ticks.",
     };
 
-    public static void Configure(string? on, string? position, string? compass, string? probe)
+    public static void Configure(string? on, string? position, string? compass, string? gauges, string? probe)
     {
         if (!string.IsNullOrWhiteSpace(on)) { Enabled = on != "0"; _onFromEnv = true; }
         if (!string.IsNullOrWhiteSpace(position)) { Position = position != "0"; _posFromEnv = true; }
         if (!string.IsNullOrWhiteSpace(compass)) Compass = compass != "0";
+        if (!string.IsNullOrWhiteSpace(gauges)) Gauges = gauges != "0";
         _probe = probe is "1" or "2";
         _trace = probe == "2";
     }
@@ -278,7 +289,7 @@ public static class FrameSmoothing
     /// reason.</summary>
     public static void SetEnabled(bool on)
     {
-        if (on && !Enabled) { _primed = false; _carriable = false; _needle.Unprime(); }
+        if (on && !Enabled) { _primed = false; _carriable = false; foreach (var r in _hud) r.Unprime(); }
         Enabled = on && _paired;
     }
 
@@ -326,33 +337,33 @@ public static class FrameSmoothing
             return false;
         }
 
-        _needlePaired = AttachNeedle();
+        _hudPaired = AttachHud();
         Console.WriteLine($"[KF2] smoothing: {(Enabled ? "on" : "off")}" +
                           $"{(Position ? ", carrying position" : "")}" +
-                          $"{(Compass && _needlePaired ? ", carrying the compass" : "")}, hooked stage 8 at 0x{CameraCopy:X8}");
+                          $"{(_hudPaired ? $", carrying the HUD{(Compass ? "" : " but the compass")}{(Gauges ? "" : " but the gauges")}" : "")}, hooked stage 8 at 0x{CameraCopy:X8}");
         return true;
     }
 
-    static bool _needleQueued;
+    static bool _hudQueued;
 
-    /// <summary>The needle's pair on the HUD builder, judged like the view's: both
-    /// halves and the detour, or the needle is left on the tick. The view carries
-    /// either way.</summary>
-    static bool AttachNeedle()
+    /// <summary>The HUD's pair on the HUD builder, judged like the view's: both
+    /// halves and the detour, or the needle and the gauges are left on the tick. The
+    /// view carries either way.</summary>
+    static bool AttachHud()
     {
         var target = SymbolRegistry.Resolve("game", null, HudBuilder);
         if (target == null) return false;
-        if (!_needleQueued)
+        if (!_hudQueued)
         {
             var self = typeof(FrameSmoothing);
             const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
-            _needleQueued = HookManager.AddPre(_self, target, self.GetMethod(nameof(BeforeHud), flags)!)
+            _hudQueued = HookManager.AddPre(_self, target, self.GetMethod(nameof(BeforeHud), flags)!)
                             && HookManager.AddPost(_self, target, self.GetMethod(nameof(AfterHud), flags)!);
-            if (!_needleQueued) return false;
+            if (!_hudQueued) return false;
         }
         HookManager.Commit();
         bool ok = HookAttach.Installed(target);
-        if (!ok) Console.Error.WriteLine("[KF2] smoothing: the compass pair did not attach; the needle stays on the tick.");
+        if (!ok) Console.Error.WriteLine("[KF2] smoothing: the HUD pair did not attach; the needle and the gauges stay on the tick.");
         return ok;
     }
 
@@ -549,77 +560,98 @@ public static class FrameSmoothing
         if (_probe) Report();
     }
 
-    // ---- the compass needle -------------------------------------------------
+    // ---- the HUD's readings -------------------------------------------------
 
-    /// <summary>The HUD builder: the one function that reads the needle's yaw.</summary>
+    /// <summary>The HUD builder: the one function that reads the records below.</summary>
     const uint HudBuilder = 0x80031D5C;
 
-    /// <summary>The needle's yaw on its last two steps, with the priming the view
-    /// has: carriable only once both are real.</summary>
-    sealed class NeedleState
-    {
-        public WrappedAngle Yaw;
-        public long Seen = -1;          // Stage13.NeedleSteps at the last sample
-        public bool Primed, Carriable;
-        public void Unprime() { Primed = Carriable = false; Seen = -1; }
-    }
-
-    static readonly NeedleState _needle = new();
-    static bool _needlePaired, _needleApplied;
-    static ushort _needleLive, _needleDrawn;
-    static long _needleCarried, _needleFrames, _needleMoves;
-
     /// <summary>
-    /// Draw the needle at lerp(prev step, this step, phase) for the HUD builder.
-    /// Sampled when <see cref="Stage13.NeedleSteps"/> moves, which is exactly when the
-    /// spring stepped it; a redraw or a frame between ticks only moves the phase.
-    /// Stands down, and unprimes, whenever the needle is not on the tick. A menu's
-    /// pass (<see cref="Stage13.DrawScene"/>) draws the world as it stands, with the
-    /// view and the objects uncarried, so the needle is left where it stands too.
+    /// A halfword of a HUD record that stage 13 steps on the tick and only the HUD
+    /// builder reads: the needle's yaw, and the two gauges' lengths. Sampled when
+    /// <c>steps</c> moves, drawn at lerp(prev, cur, phase) for the builder and put
+    /// back after it. Stands down, and unprimes, whenever <c>onTick</c> says the
+    /// value is not stepped on the tick. A menu's pass
+    /// (<see cref="Stage13.DrawScene"/>) draws the world as it stands, with the view
+    /// and the objects uncarried, so the reading is left where it stands too.
     /// </summary>
-    public static void BeforeHud(CpuContext c, IMemory m)
+    sealed class HudReading(string name, uint address, bool wraps, Func<bool> onTick, Func<long> steps)
     {
-        _needleApplied = false;
-        bool carrying = Enabled && Compass && FramePacing.Extrapolating && Stage13.NeedleOnTick;
-        if (!carrying) _needle.Unprime();
-        if (!Stage13.InFrame) return;
+        public readonly string Name = name;
+        TickPair _pair = new(wraps);
+        long _seen = -1;
+        bool _primed, _carriable, _applied;
+        ushort _live, _drawn;
+        public long Carried, Frames, Moves;
 
-        ushort live = m.ReadU16(Stage13.NeedleYaw);
-        ushort drawn = live;
-        if (carrying)
+        public void Unprime() { _primed = _carriable = false; _seen = -1; }
+
+        public void Before(IMemory m, bool enabled)
         {
-            if (Stage13.NeedleSteps != _needle.Seen)
-            {
-                _needle.Seen = Stage13.NeedleSteps;
-                _needle.Yaw.Roll(live);
-                _needle.Carriable = _needle.Primed;
-                _needle.Primed = true;
-            }
-            // Moved by something other than the spring: a placement, as for the view.
-            else if (_needle.Primed && live != _needle.Yaw.Cur) _needle.Yaw.Shift(live);
+            _applied = false;
+            bool carrying = enabled && FramePacing.Extrapolating && onTick();
+            if (!carrying) Unprime();
+            if (!Stage13.InFrame) return;
 
-            if (_needle.Carriable && _needle.Yaw.Delta != 0)
+            ushort live = m.ReadU16(address);
+            ushort drawn = live;
+            if (carrying)
             {
-                drawn = (ushort)(_needle.Yaw.Prev + _needle.Yaw.Step(FramePacing.LogicPhase));
-                _needleLive = live;
-                m.WriteU16(Stage13.NeedleYaw, drawn);
-                _needleApplied = true;
-                _needleCarried++;
+                long n = steps();
+                if (n != _seen)
+                {
+                    _seen = n;
+                    _pair.Roll(live);
+                    _carriable = _primed;
+                    _primed = true;
+                }
+                // Moved by something other than its step: a placement, as for the view.
+                else if (_primed && live != _pair.Cur) _pair.Shift(live);
+
+                if (_carriable && _pair.Delta != 0)
+                {
+                    drawn = (ushort)(_pair.Prev + _pair.Step(FramePacing.LogicPhase));
+                    _live = live;
+                    m.WriteU16(address, drawn);
+                    _applied = true;
+                    Carried++;
+                }
             }
+
+            Frames++;
+            if (drawn != _drawn) Moves++;
+            _drawn = drawn;
         }
 
-        _needleFrames++;
-        if (drawn != _needleDrawn) _needleMoves++;
-        _needleDrawn = drawn;
+        /// <summary>Put the stepped value back the moment the builder has drawn it,
+        /// so the game's next step starts from what the game stepped.</summary>
+        public void After(IMemory m)
+        {
+            if (!_applied) return;
+            m.WriteU16(address, _live);
+            _applied = false;
+        }
+
+        public string Report() => $"{Name} carried on {Carried}/{Frames} frames, drawn at a new value on {Moves}";
+        public void ClearReport() => Carried = Frames = Moves = 0;
     }
 
-    /// <summary>Put the needle back the moment the HUD builder has drawn it, so the
-    /// spring's next step starts from what the game stepped.</summary>
+    static readonly HudReading[] _hud =
+    [
+        new("compass", Stage13.NeedleYaw, wraps: true, () => Compass && Stage13.NeedleOnTick, () => Stage13.NeedleSteps),
+        new("gauge 1", Stage13.GaugeLengths[0], wraps: false, () => Gauges && Stage13.HudOnTick, () => Stage13.HudTicks),
+        new("gauge 2", Stage13.GaugeLengths[1], wraps: false, () => Gauges && Stage13.HudOnTick, () => Stage13.HudTicks),
+    ];
+
+    static bool _hudPaired;
+
+    public static void BeforeHud(CpuContext c, IMemory m)
+    {
+        foreach (var r in _hud) r.Before(m, Enabled);
+    }
+
     public static void AfterHud(CpuContext c, IMemory m)
     {
-        if (!_needleApplied) return;
-        m.WriteU16(Stage13.NeedleYaw, _needleLive);
-        _needleApplied = false;
+        foreach (var r in _hud) r.After(m);
     }
 
     /// <summary>Placements the pair was shifted across: the game moved the view
@@ -640,14 +672,16 @@ public static class FrameSmoothing
     }
 
     /// <summary>
-    /// A 12-bit angle that wraps -- the view's yaw, the compass needle's -- as the
-    /// game produced it on the last two ticks. The frame draws it at
-    /// <c>Prev + Step(phase)</c>, stepped from the game's own previous word in its
-    /// own 16-bit domain (see <see cref="Before"/>), the short way round the wrap.
+    /// A value as the game produced it on the last two ticks: the view's yaw, and the
+    /// HUD's readings. The frame draws it at <c>Prev + Step(phase)</c>, stepped from
+    /// the game's own previous word in its own 16-bit domain (see
+    /// <see cref="Before"/>). A 12-bit angle that wraps is stepped the short way
+    /// round the wrap; anything else as a signed halfword.
     /// </summary>
-    struct WrappedAngle
+    struct TickPair(bool wraps)
     {
         public ushort Prev, Cur;
+        readonly bool _wraps = wraps;
 
         /// <summary>A tick: this tick's value becomes last tick's.</summary>
         public void Roll(ushort next)
@@ -664,7 +698,7 @@ public static class FrameSmoothing
             Cur = live;
         }
 
-        public readonly int Delta => Delta12(Prev, Cur);
+        public readonly int Delta => _wraps ? Delta12(Prev, Cur) : (short)Cur - (short)Prev;
 
         public readonly int Step(double phase) => (int)Math.Round(Delta * phase);
     }
@@ -743,13 +777,12 @@ public static class FrameSmoothing
                               $"yaw {_yawSum / _carried:0.0} u, pitch {_pitchSum / _carried:0.0} u, " +
                               $"pos {_posSum / _carried:0.0} u, " +
                               $"bob carried on {_bobFrames} ({_bobOffTick} between the ticks' values)");
-        Console.WriteLine($"[KF2] smoothing: compass carried on {_needleCarried}/{_needleFrames} frames, " +
-                          $"drawn at a new angle on {_needleMoves}" +
+        Console.WriteLine($"[KF2] smoothing: {string.Join("; ", _hud.Select(r => r.Report()))}" +
                           $"{(Stage13.NeedleOnTick ? "" : ", the needle is not on the tick")}");
+        foreach (var r in _hud) r.ClearReport();
 
         _carried = _skipped = _skipStill = _skipOff = _skipUnprimed = 0;
         _yawSum = _pitchSum = _posSum = _fracSum = 0.0;
         _bobFrames = _bobOffTick = 0;
-        _needleCarried = _needleFrames = _needleMoves = 0;
     }
 }

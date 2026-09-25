@@ -389,11 +389,13 @@ Kf2.RateCensus.Install();
 //     KF2_SMOOTH=0        off; on by default, or the view steps at the logic rate
 //     KF2_SMOOTH_POS=0    leave the position at the tick (carried by default)
 //     KF2_SMOOTH_COMPASS=0  leave the compass needle on the tick (carried by default)
+//     KF2_SMOOTH_GAUGES=0   leave the HP and MP gauges on the tick (carried by default)
 //     KF2_SMOOTH_PROBE=1  what is being carried, per second
 //     KF2_SMOOTH_PROBE=2  also trace every frame for 400 ms after an area load
 Kf2.FrameSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_POS"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_COMPASS"),
+                             Environment.GetEnvironmentVariable("KF2_SMOOTH_GAUGES"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_PROBE"));
 Kf2.FrameSmoothing.Install();
 

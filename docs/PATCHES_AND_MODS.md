@@ -5499,6 +5499,48 @@ Measured:
   is still an overlay.
 - 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`.
 
+#### The gauges lost their shadow
+
+**Mechanism measured, and the picture compared by number against a screenshot of
+the original; not yet looked at in play.**
+
+Reported from play: the HP and MP gauges had a shadow on the original and did not
+here. The gauge is not a flat bar. It is a lit tube 2.5 pixels tall: records 9 and
+10 are one model scaled along X by the gauge's length, with a cross-section whose
+vertices land at Y offsets of -1.25, -1.15, -0.89, -0.49, 0, +0.49, +0.89, +1.15 and
++1.25 pixels from the record's centre (read off the transform, `R22` = 8, `TR` =
+16,35 and 16,52). The faces near the top and bottom are almost edge-on and lit
+dark. The console truncates every vertex, so the tube lands on three whole rows and
+each dark face gets a full row of its own. That dark top and bottom row is the
+shadow. With the fraction offered, the tube is drawn at its true size: the dark
+faces shrink to slivers of 0.1-0.3 of a pixel and the bright middle faces take the
+height.
+
+Measured on the presented picture (`snap`, 5x, 16:9), the mean colour of each
+sub-row across the HP gauge: the original's screenshot and `KF2_SUBPIXEL=0` both read a
+dark ramp (81 → 100), a bright row (119-124) and a dark ramp (100 → 81). With the
+fraction it read 83, a ramp 101 → 123 → 101 and 83, from row 33.8 to 36.2.
+
+So **a piece the matrix does not turn is offered no fraction.** The fraction was
+for the compass, which rotates, and whose truncation is a wobble. A piece placed with
+a scale and a translation alone (the gauges, the digits, the panel's frame) has
+art drawn for the snap, and the fraction only moves it off the rows it was drawn
+for. The test is whether any element of R's first two rows off the diagonal is
+set, once a call, since the matrix is fixed for the piece. It reuses the vertex map
+path: the vertex is still published, with a fraction of 0, so it is still found and
+still 2D.
+
+Measured after:
+
+- The HP gauge's sub-rows 33-35 are identical to `KF2_SUBPIXEL=0`'s, value for
+  value, and so to the screenshot's profile.
+- The HUD panel against `KF2_POLYASM_TRANSFORM=0` (the recompiled transform, no
+  fraction at all): 1,952 of 154,375 pixels differ, by at most 13 levels and spread
+  evenly, which is the world behind the translucent panel moving between runs.
+- `KF2_SUBPIXEL_PROBE=1`: 21,450 HUD vertices a second, 4,290 with a fraction (the
+  compass) and 17,160 on unturned pieces kept whole.
+- `KF2_POLYASM=verify`: `func_8002E910` 266 calls, 0 mismatches.
+
 ### The clipper in C#
 
 `Clip4FTP` and `Clip3FTP` are two more replace hooks, in `patches/PolyAssemblerClip.cs`
@@ -6052,7 +6094,8 @@ read correct but stepping; the carried one has not been looked at yet.
 
 The needle is the HUD's reading of the view's heading, so it is carried by
 `FrameSmoothing`, on the view's switch and by the view's rule, rather than by a
-smoother of its own. What the two share is now one type, `WrappedAngle`: a 12-bit
+smoother of its own. What the two share is now one type, `TickPair` (it was
+`WrappedAngle` until the gauges joined it): a 12-bit
 angle as the game produced it on its last two ticks, `Roll` on a tick, `Shift` for a
 placement between ticks (the whole pair moves, so the lag and the speed carry
 through), and a `Step(phase)` taken the short way round the wrap and added to the
@@ -6102,6 +6145,44 @@ nothing is carried).
 block, which on a tick frame is the carried view at that frame's phase, not the
 tick's own yaw. That was true before the needle was held, and it is a bias of at
 most the phase of one frame of one tick's turn in what the spring is fed.
+
+### The gauges are carried like the needle
+
+**Mechanism measured; the picture not yet judged.**
+
+Reported from play: the HP and MP gauges rise and fall at 20 steps a second. They
+are the same kind of value as the needle. Stage 13's own body derives each gauge's
+length from a word the world steps on the tick (`0x8019942E`, `0x80199432`,
+`* 204 / 5000`) into records 9 and 10 at `+0x8`, and only the HUD builder reads it,
+as the X scale of the tube. So they are carried by the needle's mechanism rather
+than by a smoother of their own.
+
+What the needle had is now one type, `FrameSmoothing.HudReading`: a halfword of a
+HUD record, whether it wraps, when it is on the tick, and the identity it is
+sampled on. The pre on the HUD builder runs every reading's `Before` and the post
+every `After`. The needle is `wraps: true` on `Stage13.NeedleSteps`. A gauge is
+`wraps: false` on `Stage13.HudTicks`, a count of the walks that were the first
+of a tick, which is the walk whose HUD state came from a new tick of the world.
+`Stage13.HudOnTick` is false whenever the recompiled routine draws, as
+`NeedleOnTick` is. `TickPair` gained the linear case: a signed halfword, stepped
+as `Cur - Prev`.
+
+With the fraction gone from unturned pieces (see "The gauges lost their shadow"),
+the gauge's end moves in whole game pixels, a pixel per ~3.3 units of length, at
+the render rate instead of the tick's.
+
+`KF2_SMOOTH_GAUGES=0` leaves them on the tick; `KF2_SMOOTH=0` turns them off with
+the rest of the view.
+
+Measured with `KF2_SMOOTH_PROBE=1` at 144 fps, `kill` in area 1 (the HP gauge
+drains to 0), in the 2 s window holding the drain:
+
+| | HP gauge drawn at a new length |
+|---|---|
+| `KF2_SMOOTH_GAUGES=0` | 17 (the tick) |
+| carried | 122 |
+
+144.0 fps drawn at 20.0 ticks/s either way. `KF2_STAGE13=verify` 0 mismatches.
 
 ### The hooks on stage 13 are ordered by what they need
 

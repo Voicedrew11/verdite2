@@ -130,6 +130,18 @@ public static class Stage13
     /// so a carry samples the needle exactly when the spring moved it.</summary>
     public static long NeedleSteps { get; private set; }
 
+    /// <summary>The two gauges' lengths, records 9 and 10, which the HUD builder
+    /// draws.</summary>
+    public static readonly uint[] GaugeLengths = [HudRecords + 9 * HudStride + Length, HudRecords + 10 * HudStride + Length];
+
+    /// <summary>Whether this routine drew the last frame, so that the HUD state it
+    /// derives changes only on a tick. False while the recompiled routine draws.</summary>
+    public static bool HudOnTick { get; private set; }
+
+    /// <summary>How many walks were the first of a tick: an identity, so a carry
+    /// samples the HUD state the walk after the world moved.</summary>
+    public static long HudTicks { get; private set; }
+
     /// <summary>
     /// Where a pre or post on this routine runs among the others (<c>0070</c>): in
     /// ascending order, then in the order added. The routine is the frame, and more
@@ -151,7 +163,7 @@ public static class Stage13
     enum Mode { Off, On, Verify }
     static Mode _mode = Mode.On;
     static bool _needleHeld = true;
-    static long _needleFrame = -1;
+    static long _tickFrame = -1;
     static bool _probe;
     static long _probeFrames, _probeSteps;
     static double _probeAt = -1.0;
@@ -235,19 +247,23 @@ public static class Stage13
         if (_mode == Mode.Off || RecompOne.Runtime.Pgxp.Pgxp.CpuTracking || m is not PSMemory mem
             || Verifier.Recording)
         {
-            NeedleOnTick = false;
+            NeedleOnTick = HudOnTick = false;
             orig(c, m);
             return;
         }
         if (_mode == Mode.Verify)
         {
-            NeedleOnTick = false;
+            NeedleOnTick = HudOnTick = false;
             Verifier.Run(orig, c, mem);
         }
         else
         {
-            bool step = StepsNeedle();
+            // A redraw, a paused world or a frame between ticks holds the needle.
+            bool tick = FramePacing.FirstWalkOfTick(ref _tickFrame);
+            bool step = tick || !_needleHeld;
             NeedleOnTick = _needleHeld;
+            HudOnTick = true;
+            if (tick) HudTicks++;
             if (step && _needleHeld) NeedleSteps++;
             bool outer = InFrame;
             InFrame = true;
@@ -270,10 +286,6 @@ public static class Stage13
         _probeAt = now;
         _probeFrames = _probeSteps = 0;
     }
-
-    /// <summary>Whether this call steps the needle: on the first walk of a frame the
-    /// world ticked on, so a redraw, a paused world or a frame between ticks holds it.</summary>
-    static bool StepsNeedle() => !_needleHeld || FramePacing.FirstWalkOfTick(ref _needleFrame);
 
     /// <summary>The routine, transcribed. With <paramref name="stepNeedle"/> false the
     /// needle is drawn where it stands; true is the routine as the game wrote it.</summary>

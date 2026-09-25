@@ -54,7 +54,8 @@ KF2_BLACKPROBE=1                       # what the picture held every drawn frame
 KF2_BLACKPROBE_OUT=dir                 # also write the display rect (~12 frames before the load and 250 ms after) as PNGs; default scratch/blackprobe; 0 skips the pictures
 KF2_SMOOTH=0 KF2_SMOOTH_POS=0          # leave the view at the tick (on by default); leave position too
 KF2_SMOOTH_COMPASS=0                   # leave the compass needle on the tick (carried with the view by default)
-KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second; the compass's carries and new angles
+KF2_SMOOTH_GAUGES=0                    # leave the HP and MP gauges on the tick (carried with the view by default)
+KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second; the compass's and the gauges' carries and new values
 KF2_SMOOTH_PROBE=2                     # also every frame for 400 ms after an area load: the verdict, the pair, and what was written
 KF2_CROSSPROBE=1                       # per presented frame across an area crossing: tiles, models, the view, the area, and whether the renderer built it; =2 adds the raw cell counts
 KF2_SMOOTH_OBJECTS=0                   # leave enemies, doors and everything else at the tick (on by default)

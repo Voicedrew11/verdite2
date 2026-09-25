@@ -323,6 +323,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - The MCP layer
 - The polygon assembler in C#
 - The HUD's transform in C#
+- The gauges lost their shadow
 - The map tile walk in C#
 - The object and creature walk in C#
 - A verify pass replays, it does not re-run
@@ -330,6 +331,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Drawing the frame from another camera
 - The compass needle is held to the tick
 - The compass is carried with the view
+- The gauges are carried like the needle
 - The hooks on stage 13 are ordered by what they need
 - A pass of the port's own
 

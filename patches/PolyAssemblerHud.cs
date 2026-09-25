@@ -17,7 +17,7 @@ public static partial class PolyAssembler
 
     /// <summary>Screen-space vertices offered to the vertex map, and those with a
     /// fraction to offer; <c>KF2_SUBPIXEL_PROBE</c> reads and clears them.</summary>
-    public static long ScreenVertices, ScreenFractional;
+    public static long ScreenVertices, ScreenFractional, ScreenAligned;
 
     static void ReplaceHudTransform(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
     {
@@ -50,6 +50,7 @@ public static partial class PolyAssembler
         uint src = mem.ReadU32(VertexBase);
         uint dst = VertexCache;
         bool publish = GteVertexMap.Active;
+        bool turned = publish && Turned();
 
         var fr = new Frame(mem);
         for (uint n = c.A0; n != 0; n--)
@@ -63,7 +64,7 @@ public static partial class PolyAssembler
             int x = (int)Gte.Read(25), y = (int)Gte.Read(26), z = (int)Gte.Read(27);
 
             uint xy = (ushort)x | (uint)(ushort)y << 16;
-            if (publish) PublishScreenVertex(xy, x, y, (short)v01, (short)(v01 >> 16), (short)v2);
+            if (publish) PublishScreenVertex(xy, x, y, (short)v01, (short)(v01 >> 16), (short)v2, turned);
             mem.WriteU32(dst, xy);
             W16(ref fr, dst + 4u, (ushort)(z >> 2));
             W16(ref fr, dst + 6u, (ushort)z);
@@ -79,9 +80,22 @@ public static partial class PolyAssembler
     /// takes no W and no depth, and the polygon stays 2D to the passes that ask
     /// (<c>HleVertex.Projected</c>). A product that disagrees with the GTE's integer
     /// (an overflow the GTE saturated) is offered with no fraction.
+    ///
+    /// A piece that is not <paramref name="turned"/> is offered no fraction either:
+    /// its art was drawn for the whole-pixel snap. The gauges are lit tubes 2.5
+    /// pixels tall whose dark edge faces are slivers of 0.1-0.3 of a pixel, and the
+    /// snap is what gives each of them the full row the console shows.
     /// </summary>
-    static void PublishScreenVertex(uint xy, int x, int y, short vx, short vy, short vz)
+    static void PublishScreenVertex(uint xy, int x, int y, short vx, short vy, short vz, bool turned)
     {
+        if (!turned)
+        {
+            GteVertexMap.Publish(xy, 0f, 0f, 0f, false);
+            ScreenVertices++;
+            ScreenAligned++;
+            return;
+        }
+
         // Rows 1 and 2 of R: control registers 0-2, two s16 elements a word.
         uint r0 = Gte.ReadControl(0), r1 = Gte.ReadControl(1), r2 = Gte.ReadControl(2);
         long sx = ((long)(int)Gte.ReadControl(5) << 12) + (short)r0 * vx + (short)(r0 >> 16) * vy + (short)r1 * vz;
@@ -91,5 +105,13 @@ public static partial class PolyAssembler
         GteVertexMap.Publish(xy, 0f, fx, fy, false);
         ScreenVertices++;
         if (fx != 0f || fy != 0f) ScreenFractional++;
+    }
+
+    /// <summary>Whether the rotation turns a piece in the screen plane: any element
+    /// of R's first two rows off the diagonal. A scale alone does not.</summary>
+    static bool Turned()
+    {
+        uint r0 = Gte.ReadControl(0), r1 = Gte.ReadControl(1), r2 = Gte.ReadControl(2);
+        return (r0 >> 16) != 0 || r1 != 0 || (r2 >> 16) != 0;
     }
 }
