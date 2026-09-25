@@ -248,6 +248,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - The table is not unique: remaining wobble and the "far away" pop
 - Following the value through memory: the address is the vertex
 - Z-buffer: the same depth, used as occlusion
+- The world lost its textures on NVIDIA
 - PGXP: upstream's own recovery, and what taking it actually bought
 - Ambient occlusion: painter's order is the G-buffer
 - Screen-space reflections: the water is the one surface the depth buffer does not have

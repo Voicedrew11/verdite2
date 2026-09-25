@@ -788,6 +788,13 @@ internal static class GlShaders
         // 0060. The texture rectangle, and the atlas entry with its flags.
         layout(location = 10) in uvec2 inTex;
 
+        // 0051 draws an opaque tested batch twice with this program -- depth with
+        // colour masked, then colour against it -- and the driver may compile
+        // those as two variants. Only `invariant` obliges them to put a vertex in
+        // the same place. See "The world lost its textures on NVIDIA" in
+        // docs/RENDERING.md.
+        invariant gl_Position;
+
         // vUV is the one thing that wants correcting: handing gl_Position a real W
         // makes the rasterizer interpolate it in 1/W, which is exactly the
         // perspective-correct mapping the PlayStation could not afford. vColor is
@@ -813,14 +820,19 @@ internal static class GlShaders
 
         void main() {
             vec2 p = (inPos + uVertexOffset + uPosBias) * uFbInv - 1.0;
-            // Exactly 1 is the "no depth was recovered" case, and it is written out
-            // as the original expression rather than as p*1/1, so a primitive
-            // without perspective data lands on the same pixels to the last bit.
+            // W is 1 where no depth was recovered, and p * 1.0 is p exactly, so
+            // such a primitive still lands on the same pixels to the last bit.
+            // **No select on inW.** `inW == 1.0 ? vec4(p, 0, 1) : vec4(p * inW, 0, inW)`
+            // lost every world texture on NVIDIA with the depth buffer on: the
+            // colour-masked pre-pass (0051) is a state-recompiled variant of this
+            // program, and some corners came out at W 1 among real depths, so the
+            // 1/W weights handed the whole polygon one corner's texel. See "The
+            // world lost its textures on NVIDIA" in docs/RENDERING.md.
             // Depth is a fragment value, not clip-space Z: these vertices are
             // already projected, and putting SZ into gl_Position.z lets OpenGL
             // clip them against a far plane the GPU never had — a hard line
             // across the floor where the cave used to continue.
-            gl_Position = inW == 1.0 ? vec4(p, 0.0, 1.0) : vec4(p * inW, 0.0, inW);
+            gl_Position = vec4(p * inW, 0.0, inW);
             vDepth = inZ > 0.0 ? inZ * (1.0/65536.0) : 0.0;
 
             int inClut = int(inClutF + 0.5);
@@ -1275,6 +1287,9 @@ internal static class GlShaders
         attribute float inW;
         attribute float inZ;
 
+        // The depth pre-pass and the colour pass must agree; see the core profile.
+        invariant gl_Position;
+
         varying vec4  vColor;
         varying vec2  vUV;
         varying float vDepth;
@@ -1298,8 +1313,9 @@ internal static class GlShaders
             // different Gouraud gradient on a steeply angled textured polygon.
             // Depth is a fragment value, not clip-space Z: these vertices are
             // already projected, and putting SZ into gl_Position.z lets OpenGL
-            // clip them against a far plane the GPU never had.
-            gl_Position = inW == 1.0 ? vec4(p, 0.0, 1.0) : vec4(p * inW, 0.0, inW);
+            // clip them against a far plane the GPU never had. No select on inW,
+            // as in the core profile.
+            gl_Position = vec4(p * inW, 0.0, inW);
             vDepth = inZ > 0.0 ? inZ * (1.0/65536.0) : 0.0;
 
             float tp = floor(inTexpageF + 0.5);

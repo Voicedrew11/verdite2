@@ -971,6 +971,64 @@ Whether these two panels are separate tiles' faces, as assumed, or share vertice
 not established. If they share vertices, neither change should have been needed, and
 a seam still fighting at a generous tolerance means the cause is something else.
 
+### The world lost its textures on NVIDIA
+
+Issue #34 (Windows 10, RTX 3080 Ti): every world surface was drawn in its shaded
+vertex colour with no texture, while the HUD and the compass were intact. It
+reproduced on a Linux GTX 1050 Ti (driver 580.126.18) with every release up to
+v0.3.1, on GL 4.5, 3.3 and 2.1. So it was never Windows, the CI build or the
+first-run compile: v0.3.1's launcher built locally was broken and HEAD's was not.
+**It was hidden by accident, not fixed.** The temporary driver-diagnostics commit
+(`00f4861`) rewrote the prim vertex shader's position line as an if/else chain on
+a uniform, and that alone was enough: HEAD with only that line put back was broken
+again, and HEAD with only the fragment half put back was fine.
+
+What was measured, on the broken build:
+
+- `KF2_ZBUFFER=0`: textures back. `KF2_PERSPECTIVE=0`: still broken, because a
+  depth-tested triangle is given a real clip W anyway (`persp = z || …` in
+  `HleTri`).
+- The texture coordinate drawn as colour: the whole scene blue (a real W reached
+  the fragment), with no red or green gradient. So the texture coordinate was
+  constant across each polygon, and every pixel read one texel.
+
+With perspective interpolation, a texture coordinate goes constant only when one
+corner's `1/W` swamps the rest, which is a corner at W 1 among real view depths in
+the hundreds. The only source of a W of 1 was the select
+`inW == 1.0 ? vec4(p, 0, 1) : vec4(p * inW, 0, inW)`. The CPU side never mixes the
+two within a triangle (`HleTri` is all or none, and `GlCore` writes
+`W = HasPersp && Z > 0 ? Z : 1`), so the select was being evaluated wrongly on
+the GPU. The Z-buffer is what brings it out: `0051`'s colour-masked pre-pass is a
+different compiled variant of the same program, and the driver says so
+(`KF2_GLDEBUG=2`: `Vertex shader in program 3 is being recompiled based on GL
+state`). Exactly which variant goes wrong, and why, was not established. It is
+the driver's compiler, and the port cannot see into it.
+
+**The fix is not to have a select at all:** `gl_Position = vec4(p * inW, 0.0,
+inW)` in both prim vertex shaders. `p * 1.0` is `p` exactly in IEEE, so a
+primitive with no recovered depth still lands on the same pixels to the last bit,
+which was the only reason the select was there. The occlusion normal pass
+(`NormalVs`) already wrote its position that way. Checked by eye on the GTX 1050
+Ti: GL 4.5 and GL 2.1, every enhancement on, textures correct. The reporter's
+RTX 3080 Ti on Windows has not been checked.
+
+Two changes that close the neighbouring holes; neither one was the cause:
+
+- **`invariant gl_Position`** in both prim vertex shaders. `0051` draws an opaque
+  tested batch twice with this program and needs the two passes to agree, and GLSL
+  promises that only for an invariant output, whatever variants the driver builds.
+- **Every disabled `0048`/`0060` attribute reads a defined "no record".** `inLight`
+  is a `uint`, and its generic value was never set, so it read GL's initial float
+  `(0,0,0,1)`, which is undefined for an integer input. `inTex` was set once at
+  init. Both are now given in their own type (`LightDefaults`, `TexDefaults` in
+  `GlCore`), again whenever the arrays go off, since an attribute's current value
+  is not guaranteed to survive a draw with its array enabled.
+
+Measured on the GTX 1050 Ti, area 1 at `KF2_FPS=144`: 70.5-70.7 fps drawn before
+and 71.6-71.8 after (GPU-bound), 19.9 ticks/s both. GL 4.5 and 2.1 both compile,
+link and reach an area with `KF2_GLDEBUG=1` reporting no errors, and the picture
+was checked by eye on it after both.
+
 ## PGXP: upstream's own recovery, and what taking it actually bought
 
 **Mechanism confirmed and measured; the picture has not been looked at.**
@@ -1766,7 +1824,7 @@ fetches. The integrated GPU itself has not been measured.
 ## Screen-space reflections: the water is the one surface the depth buffer does not have
 
 **Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_SSR=1`, or Video ▸ Enhancements ▸ *Water reflections*). The runtime half is
+(`KF2_SSR=1`, or Video ▸ Experimental ▸ *Water reflections*). The runtime half is
 `0067`; the port half is `patches/Reflections.cs`.
 
 The pass is the occlusion pass's shape: at present, between the finished target and
@@ -1971,7 +2029,7 @@ reflected, and the reflection fades as its source nears the edge.
 ## Planar reflections: the world walked twice, from under the water
 
 **Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_PLANAR=1` with `KF2_SSR=1`, or Video ▸ Enhancements ▸ *Water reflections* ▸
+(`KF2_PLANAR=1` with `KF2_SSR=1`, or Video ▸ Experimental ▸ *Water reflections* ▸
 *Planar reflections*). The runtime half is `0068`; the port half is
 `patches/PlanarWalk.cs`, with an arena from `patches/PrimBuffer.cs`.
 
