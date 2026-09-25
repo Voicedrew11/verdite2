@@ -971,6 +971,47 @@ Whether these two panels are separate tiles' faces, as assumed, or share vertice
 not established. If they share vertices, neither change should have been needed, and
 a seam still fighting at a generous tolerance means the cause is something else.
 
+### The world lost its textures on NVIDIA
+
+Issue #34 (Windows 10, RTX 3080 Ti): every world surface was drawn in its shaded
+vertex colour with no texture, while the HUD and the compass were intact. It
+reproduced on a Linux GTX 1050 Ti (driver 580.126.18) with every release up to
+v0.3.1, on GL 4.5, 3.3 and 2.1. So it was never Windows, the CI build or the
+first-run compile: v0.3.1's launcher built locally was broken and HEAD's was not.
+**It was hidden by accident, not fixed.** The temporary driver-diagnostics commit
+(`00f4861`) rewrote the prim vertex shader's position line as an if/else chain on
+a uniform, and that alone was enough: HEAD with only that line put back was broken
+again, and HEAD with only the fragment half put back was fine.
+
+What was measured, on the broken build:
+
+- `KF2_ZBUFFER=0`: textures back. `KF2_PERSPECTIVE=0`: still broken, because a
+  depth-tested triangle is given a real clip W anyway (`persp = z || …` in
+  `HleTri`).
+- The texture coordinate drawn as colour: the whole scene blue (a real W reached
+  the fragment), with no red or green gradient. So the texture coordinate was
+  constant across each polygon, and every pixel read one texel.
+
+With perspective interpolation, a texture coordinate goes constant only when one
+corner's `1/W` swamps the rest, which is a corner at W 1 among real view depths in
+the hundreds. The only source of a W of 1 was the select
+`inW == 1.0 ? vec4(p, 0, 1) : vec4(p * inW, 0, inW)`. The CPU side never mixes the
+two within a triangle (`HleTri` is all or none, and `GlCore` writes
+`W = HasPersp && Z > 0 ? Z : 1`), so the select was being evaluated wrongly on
+the GPU. The Z-buffer is what brings it out: `0051`'s colour-masked pre-pass is a
+different compiled variant of the same program, and the driver says so
+(`KF2_GLDEBUG=2`: `Vertex shader in program 3 is being recompiled based on GL
+state`). Exactly which variant goes wrong, and why, was not established. It is
+the driver's compiler, and the port cannot see into it.
+
+**The fix is not to have a select at all:** `gl_Position = vec4(p * inW, 0.0,
+inW)` in both prim vertex shaders. `p * 1.0` is `p` exactly in IEEE, so a
+primitive with no recovered depth still lands on the same pixels to the last bit,
+which was the only reason the select was there. The occlusion normal pass
+(`NormalVs`) already wrote its position that way. Checked by eye on the GTX 1050
+Ti: GL 4.5 and GL 2.1, every enhancement on, textures correct. The reporter's
+RTX 3080 Ti on Windows has not been checked.
+
 ## PGXP: upstream's own recovery, and what taking it actually bought
 
 **Mechanism confirmed and measured; the picture has not been looked at.**

@@ -86,7 +86,6 @@ public sealed class GlCore : IGpuBackend
     // the prim program discards the water's underside with while drawing into one.
     int _uSsrPlanarOn, _uSsrPlanarPlane, _uSsrPlanarTol, _uSsrRipple, _uSsrCompare;
     int _uClipOn, _uClipPlane, _uClipCentre, _uClipH;
-    int _uDiagW = -1, _uDiagView = -1;
     int _clipOnSent = -1;
 
     uint _postProg, _postFbo, _postTex;
@@ -223,10 +222,6 @@ public sealed class GlCore : IGpuBackend
         _uClipPlane = _gl.GetUniformLocation(_progPrim, "uClipPlane");
         _uClipCentre = _gl.GetUniformLocation(_progPrim, "uClipCentre");
         _uClipH = _gl.GetUniformLocation(_progPrim, "uClipH");
-        _uDiagW = _gl.GetUniformLocation(_progPrim, "uDiagW");
-        _uDiagView = _gl.GetUniformLocation(_progPrim, "uDiagView");
-        if (_uDiagW < 0 || _uDiagView < 0)
-            Console.WriteLine($"[GL] diag: uniform missing (uDiagW {_uDiagW}, uDiagView {_uDiagView}); the diagnostics do nothing");
         _clipOnSent = -1;
         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
@@ -1571,17 +1566,6 @@ public sealed class GlCore : IGpuBackend
             _gl.Uniform2(_uFbInv, 2f / VramShadow.Width, 2f / VramShadow.Height);
         }
         if (_uTrueColor >= 0) _gl.Uniform1(_uTrueColor, GteDepth.TrueColor ? 1f : 0f);
-        // Temporary: GlDiag's driver experiments. Ints on the core profile, floats on 1.20.
-        if (_legacy)
-        {
-            if (_uDiagW >= 0) _gl.Uniform1(_uDiagW, (float)GlDiag.WMode);
-            if (_uDiagView >= 0) _gl.Uniform1(_uDiagView, (float)GlDiag.View);
-        }
-        else
-        {
-            if (_uDiagW >= 0) _gl.Uniform1(_uDiagW, GlDiag.WMode);
-            if (_uDiagView >= 0) _gl.Uniform1(_uDiagView, GlDiag.View);
-        }
         // 0068. Drawing into a planar texture: nothing on the camera's side of the
         // water, which from under it is the pool's own floor and walls.
         int clipOn = rt is { IsPlanar: true } ? 1 : 0;
