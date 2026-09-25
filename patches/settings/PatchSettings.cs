@@ -196,6 +196,8 @@ public static class PatchSettings
         Register("display", new EvenFogPage());
         Register("display", new ZBufferPage());
         Register("display", new ReflectionsPage());
+        Register("display", new RemasterPage());
+        Register("display", new RemasterPacksPage());
         Register("display", new FastGeometryPage());
         // Nothing registers a PGXP or a geometry-precision page either. PGXP buys
         // no coverage in this game and costs a fifth of the frame rate, and the

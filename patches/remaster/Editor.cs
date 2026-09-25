@@ -56,7 +56,9 @@ public static class Editor
         }
         """);
         PanelManager.Register(Panel.Instance);
-        ConfigManager.ApplyViewToPanels([Panel.Instance]);
+        // Not restored from the saved view: open, it pauses the world, and a boot
+        // that reopened it froze the area's fade-in on a dark frame.
+        Panel.Instance.IsOpen = false;
     }
 
     sealed class Panel : IPanel
@@ -69,6 +71,7 @@ public static class Editor
         public bool IsOpen { get; set; }
 
         string _newName = "";
+        string? _pickStop;
         string? _held;
         float _heldFrom;
 
@@ -98,7 +101,7 @@ public static class Editor
             if (Picking && !hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left)
                 && GamePixel(ImGui.GetIO().MousePos, out var px))
             {
-                var hit = Pick.Floor(m, view, px, out _);
+                var hit = Pick.Floor(m, view, px, out _, out _pickStop);
                 if (hit != null) { Selected = hit; Picking = false; }
             }
             if (Selected is { } k && k.Area == Identity.Area) Outline(m, view, k);
@@ -151,6 +154,7 @@ public static class Editor
                 ImGui.SetTooltip("The next click on the game picture selects the floor under it. " +
                                  "Right-click a tile in the docked map (Shift+M) does the same.");
             ImGui.EndDisabled();
+            if (Picking && _pickStop != null) ImGui.TextDisabled($"No floor there: {_pickStop}.");
 
             if (Selected is not { } k) { ImGui.TextDisabled("Nothing selected."); return; }
             ImGui.Text(k.ToString());

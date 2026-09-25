@@ -2059,12 +2059,27 @@ public sealed class GlCore : IGpuBackend
         uint outTex = ApplyPostFx(_presentTex, fbW, fbH);
         EndGpuTimer(compQuery, GpuWork.Composite, compStart);
         Diagnostics.Profiler.End(compProfile);
+        if (PresentSnap.Due(dispY)) SnapPresent(outTex == _postTex ? _postFbo : _presentFbo, fbW, fbH, dispX, dispY);
 
         _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
         GpuTrace.Sink?.Work(GpuWork.Present, presentStart, System.Diagnostics.Stopwatch.GetTimestamp(), 0);
         return (outTex, fbW, fbH, aspect);
     }
     
+    /// <summary>0069. The composited picture, read back for <see cref="PresentSnap"/>.
+    /// The present texture holds the top row first, as the Output panel draws it.</summary>
+    unsafe void SnapPresent(uint fbo, int w, int h, int dispX, int dispY)
+    {
+        var rgba = new byte[(long)w * h * 4];
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, fbo);
+        _gl.PixelStore(PixelStoreParameter.PackAlignment, 1);
+        fixed (byte* p = rgba)
+            _gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        _gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        PresentSnap.Deliver(rgba, w, h, dispX, dispY);
+    }
+
     //support for post-fx shaders to be loaded, so you can have cool shaders (this was too anonying to implement)
     unsafe uint ApplyPostFx(uint srcTex, int w, int h)
     {

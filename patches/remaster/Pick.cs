@@ -76,15 +76,20 @@ public static class Pick
 
     /// <summary>
     /// The first drawn floor a ray comes down on, walking the grid cell by cell from
-    /// the eye. Floors only: a wall is part of a tile's mesh, which is not read here,
-    /// so a ray can pass through one to the floor beyond it.
+    /// the eye, or what stopped it. Walls are not in the grid as geometry, so a tile
+    /// with no drawn floor is taken as rock and a ray entering a tile below its lowest
+    /// floor as having met the step. `+4` bit 0x80 is not a wall: every tile of
+    /// fdat02's shore carries it.
     /// </summary>
     public static TileKey? Floor(IMemory m, in View v, Vector2 screen, out Vector3 hit)
+        => Floor(m, v, screen, out hit, out _);
+
+    public static TileKey? Floor(IMemory m, in View v, Vector2 screen, out Vector3 hit, out string? stop)
     {
         hit = default;
-        if (Identity.Area < 0) return null;
+        stop = null;
+        if (Identity.Area < 0) { stop = "no area"; return null; }
         var (o, d) = Ray(v, screen);
-        if (d.Y <= 1e-4f) return null;   // up is -Y: a floor is only seen from above
 
         float unit = Identity.TileUnits;
         int cx = (int)MathF.Floor(o.X / unit), cz = (int)MathF.Floor(o.Z / unit);
@@ -99,30 +104,41 @@ public static class Pick
         for (int i = 0; i < MaxCells; i++)
         {
             float t1 = MathF.Min(tx, tz);
-            if ((uint)cx < Identity.Span && (uint)cz < Identity.Span)
+            if ((uint)cx >= Identity.Span || (uint)cz >= Identity.Span) { stop = "off the map"; return null; }
+
+            bool drawn = false;
+            float lowest = float.MinValue;   // up is -Y, so the lowest floor has the largest Y
+            TileKey? best = null;
+            float bt = float.MaxValue;
+            for (int half = 0; half < 2; half++)
             {
-                TileKey? best = null;
-                float bt = float.MaxValue;
-                for (int half = 0; half < 2; half++)
-                {
-                    uint rec = Identity.HalfRecord(cx, cz, half);
-                    if (m.ReadU8(rec) >= 240) continue;
-                    float y = -(m.ReadU8(rec + 1u) << 7);
-                    float t = (y - o.Y) / d.Y;
-                    if (t < t0 - 1f || t > t1 + 1f || t <= 0f || t >= bt) continue;
-                    bt = t;
-                    best = new TileKey(Identity.Area, cx, cz, half);
-                }
-                if (best != null)
-                {
-                    hit = o + d * bt;
-                    return best;
-                }
+                uint rec = Identity.HalfRecord(cx, cz, half);
+                if (m.ReadU8(rec) >= 240) continue;
+                drawn = true;
+                float y = -(m.ReadU8(rec + 1u) << 7);
+                lowest = MathF.Max(lowest, y);
+                if (d.Y <= 1e-4f) continue;   // a floor is only seen from above
+                float t = (y - o.Y) / d.Y;
+                if (t < t0 - 1f || t > t1 + 1f || t <= 0f || t >= bt) continue;
+                bt = t;
+                best = new TileKey(Identity.Area, cx, cz, half);
+            }
+            // The eye's own tile is never a wall to the eye.
+            if (i > 0)
+            {
+                if (!drawn) { stop = $"rock at {cx},{cz}"; hit = o + d * t0; return null; }
+                if (o.Y + d.Y * t0 > lowest + 1f) { stop = $"a step up at {cx},{cz}"; hit = o + d * t0; return null; }
+            }
+            if (best != null)
+            {
+                hit = o + d * bt;
+                return best;
             }
             t0 = t1;
             if (tx < tz) { cx += sx; tx += tdx; }
             else { cz += sz; tz += tdz; }
         }
+        stop = "too far";
         return null;
     }
 

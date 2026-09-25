@@ -30,6 +30,9 @@ namespace Kf2;
 ///                           entity reading is still Inferred)
 ///     edit, select, set, pack, remaster
 ///                           the remaster editor's verbs (Remaster.Shell)
+///     snap [hash|PATH] [after N]
+///                           the presented picture (Remaster.Snap), answered
+///                           from the present that reads it
 ///
 /// Off unless KF2_SHELL is set, like every other agent switch: an unasked
 /// listener is worse than one switch to find (the mouse-look precedent). A
@@ -301,6 +304,7 @@ public static class AgentServer
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
         // goto and the remaster verbs take the whole rest of the line.
         bool whole = parts[0].Equals("goto", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("snap", StringComparison.OrdinalIgnoreCase)
                      || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
                           parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",
@@ -320,6 +324,7 @@ public static class AgentServer
             case "set":
             case "pack":
             case "remaster":
+            case "snap":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -350,6 +355,12 @@ public static class AgentServer
     {
         while (queue.TryDequeue(out var cmd))
         {
+            if (cmd.Name == "snap")
+            {
+                // Answered by the present that is read, not here.
+                Remaster.Snap.Run(cmd.Arg1, r => cmd.Reply.TrySetResult(r));
+                continue;
+            }
             string reply;
             try { reply = Execute(cmd); }
             catch (Exception ex)
@@ -555,7 +566,7 @@ public static class AgentServer
     static string DoHelp()
     {
         var sb = new StringBuilder("{\"ok\":true,\"cmd\":\"help\",\"commands\":[");
-        var all = HelpCommands.Concat(Remaster.Shell.Help).ToArray();
+        var all = HelpCommands.Concat(Remaster.Shell.Help).Append(Remaster.Snap.Usage).ToArray();
         for (int i = 0; i < all.Length; i++)
         {
             if (i > 0) sb.Append(',');

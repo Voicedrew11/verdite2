@@ -292,6 +292,9 @@ public static class Pack
         return doc;
     }
 
+    /// <summary>The areas the pack holds documents for.</summary>
+    public static IEnumerable<int> Areas() => _set.Surfaces.Keys.Order();
+
     /// <summary>The fingerprint an area's documents were authored against, or null.</summary>
     public static string? AreaFingerprint(int area)
         => _set.Surfaces.TryGetValue(area, out var d) ? Str(d["fingerprint"]) : null;

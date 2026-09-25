@@ -75,8 +75,8 @@ public static class Shell
                 || !float.TryParse(a[2], CultureInfo.InvariantCulture, out float gy))
                 return Err("select", "select pick GX GY");
             var view = Pick.Read(m);
-            var hit = Pick.Floor(m, view, new Vector2(gx, gy), out var at);
-            if (hit == null) return Err("select", "no floor under that pixel");
+            var hit = Pick.Floor(m, view, new Vector2(gx, gy), out var at, out var stop);
+            if (hit == null) return Err("select", $"no floor under that pixel: {stop}");
             Editor.Select(hit);
             var d = Describe(hit);
             d["hit"] = new JsonArray(MathF.Round(at.X), MathF.Round(at.Y), MathF.Round(at.Z));
@@ -187,6 +187,7 @@ public static class Shell
             uint rec = Identity.HalfRecord(k.X, k.Z, k.Half);
             o["model"] = m.ReadU8(rec);
             o["height"] = m.ReadU8(rec + 1);
+            o["flags"] = m.ReadU8(rec + 4);
             o["drawn"] = m.ReadU8(rec) < 240;
         }
         return o;

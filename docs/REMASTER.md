@@ -1,8 +1,8 @@
 # The remaster: authoring tools first, effects second
 
 **A design document, and from Phase 1 on a record of the work done against it.**
-The first slice of Phase 1 is in (see "Phase 1, the first slice" under the
-roadmap); everything else is still design. The
+Phase 1 is in, in two slices (see "Phase 1, the first slice" and "Phase 1, the
+second slice" under the roadmap); everything else is still design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -197,7 +197,7 @@ work into layers, and each layer has one owner.
         |  change events, on the game thread
   application (one IRemasterFeature per layer)
         |  writes side tables and uniforms, hooks through HookAttach
-  render features (vendored runtime, 0069+)   one uniform block, shader terms
+  render features (vendored runtime, 0070+)   one uniform block, shader terms
         |
   identity (patches/remaster/Identity.cs)     area, fingerprint, keys, resolvers
 ```
@@ -245,11 +245,14 @@ work into layers, and each layer has one owner.
    `RECOMPONE_PATCHES.md`, where a new number is for a new mechanism:
    - widening the material ids and moving their table into the block **amends
      `0067`**;
-   - authored lights are `0069`;
-   - fog colour and the sky fill are `0070`;
-   - normal and roughness maps are `0071`;
-   - a GPU id buffer for picking would be `0072`, and only if it turns out to be
+   - authored lights are `0070`;
+   - fog colour and the sky fill are `0071`;
+   - normal and roughness maps are `0072`;
+   - a GPU id buffer for picking would be `0073`, and only if it turns out to be
      needed.
+
+   `snap`'s readback of the presented picture took `0069`, so each planned number
+   moved one along from what this plan first said.
 
    All of it is **GL core only**; the 2.1 path and the software rasterizer ignore
    it, as they do `0048` and `0067`.
@@ -420,8 +423,9 @@ is a command-line converter.
 
 - **Tiles:** a ray cast on the CPU from the cursor, through the camera block at
   `0x80192E18` and the GTE's H, OFX and OFY, against the 80×80 grid's drawn
-  halves, whose floors sit at `-(height << 7)`. Exact, cheap, and it returns a
-  tile key directly.
+  halves, whose floors sit at `-(height << 7)`. Cheap, and it returns a tile key
+  directly. Exact for floors, not for walls: the grid carries no wall a ray can
+  read (see "Phase 1, the second slice"), so it stops only at rock and at a step up.
 - **Models:** the same ray against `ModelWalk.Scene`'s positions with a bounding
   radius per model id. It returns a `ModelDraw`, and through that an instance or
   a model key.
@@ -432,7 +436,7 @@ is a command-line converter.
 - **The map panel** doubles as a top-down tile picker: it already reads all ten
   bytes under the cursor.
 - **No GPU id buffer at first.** It would be a render-target attachment and a
-  per-triangle id, which is a new runtime mechanism (`0072`). The CPU paths
+  per-triangle id, which is a new runtime mechanism (`0073`). The CPU paths
   answer everything the first phases need.
 
 ### Gizmos
@@ -479,7 +483,7 @@ edit on|off                        enter or leave Edit mode (pause, editor camer
 select <key>                       select by key: tile:1:35:36:upper, model:41, tex:5b1e..., light:1:"hall brazier"
 set <key> <field> <value>          change one field through the same undo stack the panels use
 pack save|reload|list              the working pack
-snap <path> [hash]                 read the presented target back; write a PNG, or print its hash
+snap [hash|PATH] [after N] [buffer Y|any]   the presented picture: its hash, what changed, a PNG
 ```
 
 **`snap` is the tool the whole "off is bit-identical" rule depends on.** It is
@@ -685,10 +689,10 @@ port-side. (Wrong by one amendment to `0067`; see "Phase 1, the first slice".)
   - [~] a minimal editor: tile pick by ray and from the map panel, a material
     inspector, save, reload, live reload, undo -- all in, driven over the shell
     and used by hand to place the first mirror floor;
-  - [~] the `edit`, `select`, `set`, `pack` and `snap` shell verbs -- all but
-    `snap`, which has to read the presented target;
-  - [ ] the Remaster packs settings page, and the switch under Video ▸
-    Enhancements (the editor's checkbox saves `kf2.remaster.on` for now).
+  - [x] the `edit`, `select`, `set`, `pack` and `snap` shell verbs (`snap` in the
+    second slice, reading the presented target through `0069`);
+  - [x] the Remaster packs settings page, and the switch under Video ▸
+    Enhancements (the second slice).
 - **Depends on:** reflections being switched on (`KF2_SSR=1`), since that is the
   only reader of a material today.
 - **Risks:**
@@ -704,7 +708,7 @@ port-side. (Wrong by one amendment to `0067`; see "Phase 1, the first slice".)
   - [x] the same tile key resolving after a `warp` out and back, after `load 2`, and
     after a restart;
   - [x] the fingerprint identical across those -- once `+2` was left out of it;
-  - [ ] `snap` identical to baseline with the pack disabled;
+  - [x] `snap` identical to baseline with the pack disabled (the second slice);
   - [x] `KF2_POLYASM=verify` and `KF2_TILEWALK=verify` clean;
   - [x] 144.0 at 20.0.
 - **You look at** (the first judged: a dry tile at reflectivity 1 reads as a
@@ -712,7 +716,8 @@ port-side. (Wrong by one amendment to `0067`; see "Phase 1, the first slice".)
   - whether the floor reads as polished stone or as a mirror;
   - whether the reflection's fog and sky fallback look wrong on something that
     is not water;
-  - whether the editor is usable: picking, the inspector, the save round trip.
+  - whether the editor is usable: picking, the inspector, the save round trip;
+  - [ ] a floor at a partial reflectivity, and a larger area of floor.
 - **Cost:** one table read per sealed tile packet while on, one bool while off.
 
 ### Phase 1, the first slice
@@ -782,7 +787,7 @@ that Phase 1 needs no runtime patch was wrong by exactly this.
 - **Off costs one test a frame** (`Host.Frame` returns before reading anything) and
   one byte store per sealed packet, which writes the `None` the record always held.
 
-**Not measured, and why.** `snap` is not built: `GpuHle.Backend.ReadVram` reads 1×
+**Not measured, and why** (at the time; the second slice built `snap`). `snap` is not built: `GpuHle.Backend.ReadVram` reads 1×
 VRAM, and the reflection pass composites at present, after VRAM, so a VRAM hash
 cannot see what a material changes. `snap` has to read the presented target, which
 is a runtime hook (`GlCore.PresentDisplay`) — next. Until then "off is
@@ -798,12 +803,78 @@ same screenshot shows a speckled fringe along the reflected wall edge; that is t
 reflection pass's march, not the material, and is in `docs/TODO.md`'s open
 questions.
 
-**Next.** `snap` from the presented target; the Remaster packs settings page and
-the saved switch under Video ▸ Enhancements (the editor's checkbox saves
-`kf2.remaster.on` today); picking that stops at walls; the texture-key census
-(Phase 4) can start independently.
+**Next.** Taken in the second slice, below: `snap`, the settings, and picks that
+stop.
 
-### Phase 2: authored point and spot lights (`0069`)
+### Phase 1, the second slice
+
+**What is in.** The three things the first slice left for next:
+
+- **`snap`** (`patches/remaster/Snap.cs`, runtime `0069`). `snap [hash | PATH.png]
+  [after N] [buffer Y|any]` reads the picture the window is drawn from -- after the
+  occlusion, the reflections and any post shader, at the render scale -- hashes it
+  (SHA-256, the first sixteen hex digits), counts the pixels that differ from the
+  previous snap with their largest channel difference and bounding rectangle, and
+  writes a PNG when given a path. It waits two presents by default, so an edit made
+  by the command before it has been drawn and presented. The reply is sent from the
+  present that was read, so `AgentServer` hands `snap` its reply rather than
+  answering it at the VSync drain.
+- **The settings.** Video ▸ Enhancements gains *Remaster packs*, the saved switch
+  (`kf2.remaster.on`, the same key the editor's checkbox writes; `KF2_REMASTER`
+  still overrides it). Under it a *Remaster packs* heading lists the working pack:
+  its root, its materials, every area it holds with the fingerprint that area was
+  authored against, and for the area now loaded whether it applies or why not.
+  Only the working pack exists, so the list is one entry; layering is Phase 7's.
+- **Picks that stop.** `Pick.Floor` now stops a ray at a tile with no drawn floor
+  (rock) and at a tile whose lowest floor is above the ray where it enters (a step
+  up), and says which: `select pick` answers `no floor under that pixel: a step up
+  at 44,47`. The eye's own tile is never a stop.
+
+**The wall flag is not a wall.** The plan was to stop at `+4` bit `0x80`, which
+`AoWorld` and `CullGrid` read as the tile that stops the visibility flood. Measured
+over the 12×12 tiles around the New Game spawn in area 0: **every one** of them
+carries it, on both halves, water, shore and sea floor alike. Stopping on it
+stopped every pick at the tile next to the player. So the grid has no wall a ray
+can read here, only floors, and a real wall -- one standing on a floor, with floor
+beyond it at the same height -- still lets a pick through. The depth buffer is the
+exact answer (the picture's own nearest surface under the cursor), and it is
+where picking goes if this is not enough; `AoWorld`'s comment calling the bit a
+wall is **Open** for the same reason.
+
+**Measured** (`KF2_AUTOSTART=new`, `KF2_SSR=1`, area 0 in `fdat02`, 144 fps,
+render scale 5, 16:9: a 2140×1200 picture):
+- **A paused frame is repeatable.** Three snaps in a row, same hash. The two
+  display buffers are not: at `0,0` and `0,240` the same paused frame differed in
+  4 pixels by up to 3 levels, so a snap takes the buffer the last one took (the one
+  at row 0 first) and says which in `buffer`.
+- **Off is bit-identical.** With nothing authored, `set remaster off` and `set
+  remaster on` gave the same hash (`8661b58c3cd089e9`). With a mirror on the tile
+  a pick chose, off went back to the unauthored hash and on to the authored one,
+  both ways round.
+- **A pick lands where it was clicked.** `select pick 140 238` chose
+  `tile:0:35:47:upper`; a mirror there changed 3,881 pixels (0.15%) by up to 3
+  levels, all inside render pixels 900-1069 by 1151-1199 -- game pixels 126-160
+  by 230-240, around the click. A mirror on the water tile under `200 238`
+  changed 46,874 pixels in a rectangle round that one.
+- **A mirror can change nothing, and that is not the pack failing.** In one view
+  straight after the area loaded the same mirror on 35,47 moved no pixel at all,
+  while its packets rose (2,072 in two seconds, `ByMaterial[4]` with them). A
+  floor at the bottom edge reflects upwards and out of the picture; a ray that
+  finds nothing and crosses no background pixel adds nothing. The SSR readback
+  (`KF2_SSR_PROBE=1`) is what tells "not applied" from "nothing to reflect".
+- 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288, plain 0, vram fallback 0`,
+  with the remaster on and after a dozen snaps. **Off costs one null test a
+  present**; a snap costs one `glReadPixels` of the picture and a hash, once.
+
+**Not judged.** The settings page and the editor's new "No floor there" line have
+not been looked at. The pick's stops are checked against the grid only: whether a
+click on a cliff face or a bank reads as "nothing picked" rather than "wrong tile"
+is for the eye.
+
+**Next.** The texture-key census (Phase 4) can start independently; Phase 2's
+light term is next on the main line and needs nothing more from Phase 1.
+
+### Phase 2: authored point and spot lights (`0070`)
 
 - **Ships:**
   - `RemasterUniforms` and the light list;
@@ -850,7 +921,7 @@ the saved switch under Video ▸ Enhancements (the editor's checkbox saves
       and the mip atlas;
     - do the fluid slots scroll a replaced water texture through `0053`;
     - fixes by amendment to those patches;
-  - normal and roughness maps, **only paired with a replacement texture** (`0071`),
+  - normal and roughness maps, **only paired with a replacement texture** (`0072`),
     read in `PrimFs` for the light term and passed to the surface buffer for SSR;
   - a texture-key census that tells a pack author which textures of an area the
     pack covers.
@@ -864,7 +935,7 @@ the saved switch under Video ▸ Enhancements (the editor's checkbox saves
 
 - **Ships:**
   - light-record overrides after stage 1's copy;
-  - fog colour and curve (`0070`);
+  - fog colour and curve (`0071`);
   - a sky fill at the far plane that respects `Overlay`, so the HUD is never
     painted over;
   - `atmosphere.json`.
@@ -908,7 +979,7 @@ the saved switch under Video ▸ Enhancements (the editor's checkbox saves
 - shadows by marching the tile grid;
 - port-drawn props;
 - opt-in object and creature placement;
-- a GPU id buffer (`0072`), if picking is ever too slow.
+- a GPU id buffer (`0073`), if picking is ever too slow.
 
 ### Dependencies, in one list
 

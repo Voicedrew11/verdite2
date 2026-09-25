@@ -13,8 +13,8 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Fifty of the fifty-six are load-bearing; `0002`, `0003`, `0015`, `0046` and
-`0065` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
+Fifty of the fifty-seven are load-bearing; `0002`, `0003`, `0015`, `0046`,
+`0065` and `0069` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -916,6 +916,17 @@ Four files in the directory have no entry below:
   brightness difference against the planar texture read unmirrored.
   `PlanarReflections.Supported` is set only by the GL core backend. Off by
   default. **No recompile.** See "Planar reflections" in `docs/RENDERING.md`.
+
+- `0069-present-snap.patch` — a diagnostic: the presented picture read back once,
+  on request. `Gpu/PresentSnap.cs` holds one pending request (skip `N` presents,
+  then the first whose display buffer starts at a named VRAM row, or any after
+  eight); `GlCore.PresentDisplay` asks it once per present, after the composite
+  and any post shader, and `SnapPresent` reads the texture the window is drawn
+  from with `glReadPixels` into RGBA8, top row first. VRAM could not answer this:
+  the occlusion and reflection passes composite at present and write nothing back,
+  so a VRAM hash cannot see what a material changes. One null test a present while
+  nothing is asked. The port half is `patches/remaster/Snap.cs` (the `snap` shell
+  verb). **No recompile.** See "Phase 1, the second slice" in `docs/REMASTER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
