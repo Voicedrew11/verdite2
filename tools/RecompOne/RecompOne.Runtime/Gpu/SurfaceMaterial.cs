@@ -32,6 +32,13 @@ public static class SurfaceMaterial
     /// <summary>The table's size, and one past the largest id a pass will read.</summary>
     public const int Count = 8;
 
+    /// <summary>Ids a port may author; the ones below are the runtime's.</summary>
+    public const byte FirstAuthored = 4;
+
+    /// <summary>Added to a blended triangle's material in the surface list, so the
+    /// normal pass takes opacity from the draw rather than from the id.</summary>
+    public const float BlendedFlag = 128f;
+
     /// <summary>How much of the scene a material reflects at most, 0..1; 0 is not
     /// reflective, and the pass skips the pixel after one texture read.</summary>
     public static readonly float[] Reflectivity = new float[Count];

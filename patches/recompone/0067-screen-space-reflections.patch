@@ -1430,3 +1430,66 @@ index 371f094..5645565 100644
          SkyColour = sky == 0 ? "none" : $"{skyR / sky * 255:F0},{skyG / sky * 255:F0},{skyB / sky * 255:F0}";
          HitLuma = hit == 0 ? 0f : (float)(hitL / hit * 255);
          HitKeep = hit == 0 ? 1f : (float)(keepSum / hit);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index 6a69ab6..23e46d7 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -908,8 +908,10 @@ public sealed class GlCore : IGpuBackend
+             }
+             if (m != SurfaceMaterial.None)
+             {
++                // A blended triangle carries 128 over its material (NormalFs).
++                float gm = zMode == 2 ? m + SurfaceMaterial.BlendedFlag : m;
+                 _kTarget.Geo.Frame(_frame, GteDepth.Generation);
+-                _kTarget.Geo.Add(GeoVert(a, m), GeoVert(b, m), GeoVert(c, m));
++                _kTarget.Geo.Add(GeoVert(a, gm), GeoVert(b, gm), GeoVert(c, gm));
+             }
+         }
+         if (lightGen >= 0) _kLightGen = lightGen;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index fa79881..f38cab7 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -477,10 +477,13 @@ internal static class GlShaders
+ 
+         void main() {
+             float z = vDepth * 65536.0;
+-            bool opaque = vM < 1.5;
++            // A blended triangle arrives with 128 added to its material, so
++            // opacity is the draw's and not a guess from the id.
++            bool opaque = vM < 127.5;
++            float id = opaque ? vM : vM - 128.0;
+             // 0067. The HUD and anything else 2D: no normal and no depth, only the
+             // fact that it covers what is under it.
+-            if (vM > 2.5 && vM < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, vM); return; }
++            if (id > 2.5 && id < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, id); return; }
+             if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
+             vec2 s = gl_FragCoord.xy / uScale;
+             vec3 p = vec3((s - uCentre) * (z / uProjH), z);
+@@ -497,7 +500,7 @@ internal static class GlShaders
+             // The camera is at the origin looking down +Z.
+             if (dot(n, p) > 0.0) n = -n;
+             oColor = opaque ? vec4(n * 0.5 + 0.5, 1.0) : vec4(0.0);
+-            oSurface = vec4(octEncode(n), vDepth, vM);
++            oSurface = vec4(octEncode(n), vDepth, id);
+         }
+         """;
+ 
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+index 807467e..9653751 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+@@ -32,6 +32,13 @@ public static class SurfaceMaterial
+     /// <summary>The table's size, and one past the largest id a pass will read.</summary>
+     public const int Count = 8;
+ 
++    /// <summary>Ids a port may author; the ones below are the runtime's.</summary>
++    public const byte FirstAuthored = 4;
++
++    /// <summary>Added to a blended triangle's material in the surface list, so the
++    /// normal pass takes opacity from the draw rather than from the id.</summary>
++    public const float BlendedFlag = 128f;
++
+     /// <summary>How much of the scene a material reflects at most, 0..1; 0 is not
+     /// reflective, and the pass skips the pixel after one texture read.</summary>
+     public static readonly float[] Reflectivity = new float[Count];

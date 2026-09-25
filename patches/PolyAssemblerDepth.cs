@@ -29,6 +29,10 @@ public static partial class PolyAssembler
     /// other blended model, the water and the glows included, is not.</summary>
     public static bool InModel;
 
+    /// <summary>The authored material of the tile half being assembled, or 0; set by
+    /// <see cref="TileWalk"/> around each half (docs/REMASTER.md).</summary>
+    public static byte TileMaterial;
+
     /// <summary>Blended model packets by the table they came from (ModelKind).</summary>
     public static readonly long[] BlendedByKind = new long[4];
 
@@ -116,6 +120,8 @@ public static partial class PolyAssembler
         r.Cmd = Peek32(mem, pkt + 4u);
         r.Xy0 = Peek32(mem, pkt + 8u);
         r.XyLast = Peek32(mem, pkt + last);
+        r.Material = TileMaterial;
+        if (TileMaterial != 0) Remaster.Surfaces.Packets++;
         // Bit 25 of the command word: semi-transparent.
         r.Solid = false;
         if (InModel && (r.Cmd & (1u << 25)) != 0)

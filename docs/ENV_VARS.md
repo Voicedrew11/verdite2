@@ -168,6 +168,9 @@ KF2_PLANAR=1                           # planar reflections: the world walked ag
 KF2_PLANAR_TOLERANCE=48 KF2_PLANAR_BIAS=8   # how far off the plane a surface may be and take it; how far above it geometry must be to be reflected
 KF2_PLANAR_RIPPLE=4                    # how far the water's own texture bends the reflection, game pixels per unit of brightness change; 0 a flat mirror
 KF2_PLANAR_PROBE=1                     # the plane, the mirrored walk and its arena, captures, binned water, and the readback with its check on the mirror
+KF2_REMASTER=1                         # apply the working pack (off by default; the editor's checkbox saves it); Shift+E opens the editor
+KF2_REMASTER_PACK=dir                  # the working pack (packs/working)
+KF2_REMASTER_PROBE=1                   # a line every 2 s: the area, its fingerprint, what applied; a diff of the tile bytes when an area's fingerprint changes
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report

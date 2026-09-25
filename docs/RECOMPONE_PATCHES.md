@@ -13,8 +13,8 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Fifty of the fifty-six are load-bearing; `0002`, `0003`, `0015`, `0046` and
-`0065` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
+Fifty of the fifty-seven are load-bearing; `0002`, `0003`, `0015`, `0046`,
+`0065` and `0069` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
@@ -875,6 +875,15 @@ Four files in the directory have no entry below:
   to its crossing and kept only if the ray is within the thickness of the surface
   there; otherwise the march goes on. The amendment is the second diff in the patch
   file.
+  Since amended: `NormalFs` took a triangle's opacity from its material id
+  (`vM < 1.5`), which was right only while every id above 1 was water. An authored
+  id on an opaque floor would have dropped that floor out of the normal buffer. A
+  blended triangle now carries its material plus `SurfaceMaterial.BlendedFlag` (128)
+  in the surface list, and `NormalFs` takes opacity from that and the id from the
+  rest; `SurfaceMaterial.FirstAuthored` (4) is where a port's ids start. Every
+  existing id reaches the shader with the opacity it had, so the pass is unchanged.
+  The amendment is the third diff in the patch file. See "Phase 1, the first slice"
+  in `docs/REMASTER.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
@@ -907,6 +916,17 @@ Four files in the directory have no entry below:
   brightness difference against the planar texture read unmirrored.
   `PlanarReflections.Supported` is set only by the GL core backend. Off by
   default. **No recompile.** See "Planar reflections" in `docs/RENDERING.md`.
+
+- `0069-present-snap.patch` — a diagnostic: the presented picture read back once,
+  on request. `Gpu/PresentSnap.cs` holds one pending request (skip `N` presents,
+  then the first whose display buffer starts at a named VRAM row, or any after
+  eight); `GlCore.PresentDisplay` asks it once per present, after the composite
+  and any post shader, and `SnapPresent` reads the texture the window is drawn
+  from with `glReadPixels` into RGBA8, top row first. VRAM could not answer this:
+  the occlusion and reflection passes composite at present and write nothing back,
+  so a VRAM hash cannot see what a material changes. One null test a present while
+  nothing is asked. The port half is `patches/remaster/Snap.cs` (the `snap` shell
+  verb). **No recompile.** See "Phase 1, the second slice" in `docs/REMASTER.md`.
 
 - `0069-imgui-size-after-fullscreen.patch` — Silk's `ImGuiController` takes the
   window's size only from the `Resize` event, and GLFW on Wayland raises none when

@@ -477,10 +477,13 @@ internal static class GlShaders
 
         void main() {
             float z = vDepth * 65536.0;
-            bool opaque = vM < 1.5;
+            // A blended triangle arrives with 128 added to its material, so
+            // opacity is the draw's and not a guess from the id.
+            bool opaque = vM < 127.5;
+            float id = opaque ? vM : vM - 128.0;
             // 0067. The HUD and anything else 2D: no normal and no depth, only the
             // fact that it covers what is under it.
-            if (vM > 2.5 && vM < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, vM); return; }
+            if (id > 2.5 && id < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, id); return; }
             if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
             vec2 s = gl_FragCoord.xy / uScale;
             vec3 p = vec3((s - uCentre) * (z / uProjH), z);
@@ -497,7 +500,7 @@ internal static class GlShaders
             // The camera is at the origin looking down +Z.
             if (dot(n, p) > 0.0) n = -n;
             oColor = opaque ? vec4(n * 0.5 + 0.5, 1.0) : vec4(0.0);
-            oSurface = vec4(octEncode(n), vDepth, vM);
+            oSurface = vec4(octEncode(n), vDepth, id);
         }
         """;
 

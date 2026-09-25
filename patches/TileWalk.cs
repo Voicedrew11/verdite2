@@ -104,6 +104,11 @@ public static class TileWalk
     /// <inheritdoc cref="CellsWalked"/>
     public static long CellsDrawn => _cellsDrawn;
 
+    /// <summary>The map record of the half `func_80031950` is assembling, or 0 outside
+    /// one -- the tile-side counterpart of <c>ModelWalk.SetSubmit</c>.
+    /// <c>Remaster.Identity.FromRecord</c> turns it into a tile and a half.</summary>
+    public static uint CurrentRecord { get; private set; }
+
     // What the last walk saw, which is the whole point of the routine being here.
     static long _cellsWalked, _cellsDrawn, _halves, _unclipped, _plain, _subdivided, _skipped;
     static double _probeAt;
@@ -386,6 +391,10 @@ public static class TileWalk
         uint model = mem.ReadU8(rec);
         if (Beyond(mem, model)) { _skipped++; Epilogue(c, mem, sp); return; }
 
+        // The half being assembled, for whatever the assemblers record per packet.
+        CurrentRecord = rec;
+        PolyAssembler.TileMaterial = Remaster.Surfaces.At(rec);
+
         c.A0 = model;
         c.RA = 0x80031A84u;
         KingsField2.func_8002E1F0(c, mem);
@@ -444,6 +453,8 @@ public static class TileWalk
 
     static void Epilogue(CpuContext c, PSMemory mem, uint sp)
     {
+        CurrentRecord = 0;
+        PolyAssembler.TileMaterial = 0;
         c.RA = mem.ReadU32(sp + 0x1048u);
         c.S3 = mem.ReadU32(sp + 0x1044u);
         c.S2 = mem.ReadU32(sp + 0x1040u);
