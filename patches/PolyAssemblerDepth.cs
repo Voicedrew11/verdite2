@@ -122,6 +122,7 @@ public static partial class PolyAssembler
         r.XyLast = Peek32(mem, pkt + last);
         r.Material = TileMaterial;
         if (TileMaterial != 0) Remaster.Surfaces.Packets++;
+        if (Remaster.FaceProbe.On) Remaster.FaceProbe.Seal(mem, pkt, last, r);
         // Bit 25 of the command word: semi-transparent.
         r.Solid = false;
         if (InModel && (r.Cmd & (1u << 25)) != 0)
@@ -161,6 +162,7 @@ public static partial class PolyAssembler
             r.Z1 = Unrounded(mem, ra, (int)Peek32(mem, ra + 0x10u));
             r.Z2 = Unrounded(mem, rb, (int)Peek32(mem, rb + 0x10u));
             if (r.Z0 <= 0f || r.Z1 <= 0f || r.Z2 <= 0f) { r.Cmd = 0; continue; }
+            if (Remaster.FaceProbe.On) r.Z3 = 0f;
             SealDepth(mem, ref r, pkt, 0x20u);
         }
     }

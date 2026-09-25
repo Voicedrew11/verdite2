@@ -131,7 +131,7 @@ repository and be shared between players who each own the disc.
 |---|---|---|---|
 | **Game**: the disc serial `SLUS-00158`, as upstream's strict `PackGame.Id` | the whole pack | a different game, above all the US-boxed *King's Field II* (`SLUS-00255`) | already refused twice: by `DiscCheck.Validate` and by a strict pack game id |
 | **Area**: the area byte at `0x8017E060` **plus an area fingerprint**, an FNV-64 of the 64,000-byte tile block at `0x801C8484` **less each half's `+2`** and the `0x600`-byte collision-shape block at `0x801D8484`, taken once the area has settled and before any edit is applied. `+2` is out because the game writes a moving footprint into it (**Confirmed**, see "Phase 1, the first slice") | everything authored in that area | a different revision or region of the same game; anything that rewrites the tile block before the fingerprint is taken | the fingerprint is taken before the remaster's own edits. **On a mismatch the area's layers are switched off whole, and the editor says why**; they are never half-applied |
-| **Tile half**: `(area, x, z, lower \| upper)` | one floor or ceiling surface; the mesh instance the tile draws; its collision cell; its light record (`+4 & 0x3F`) | the game rewriting tiles at run time: the drawbridge and the minecart are tiles, not models (see "The map is an 80x80 tile grid" in `GAME_INTERNALS.md`) | the key stays valid, but what it names can change under it. An entry may carry a condition on the tile's current model index, which is an index and not payload |
+| **Tile half**: `(area, x, z, lower \| upper)` | the mesh instance the tile draws, whole (a cave tile's floor, ceiling and rock together; see "A tile half is a whole mesh"); a face of it is `(tile half, mesh, face index)`; its collision cell; its light record (`+4 & 0x3F`) | the game rewriting tiles at run time: the drawbridge and the minecart are tiles, not models (see "The map is an 80x80 tile grid" in `GAME_INTERNALS.md`) | the key stays valid, but what it names can change under it. An entry may carry a condition on the tile's current model index, which is an index and not payload |
 | **Tile mesh**: `(area, model index at half +0)` | every instance of that mesh in the area | nothing known. **Open**: where the area's model bank lives, and so whether two areas share a mesh | once the bank is found, a content hash of the mesh gives an identity across areas |
 | **Model**: `ModelDraw.Model` (the model id), and for objects `(area, definition index at rec +0x6)` | "every creature of this kind", "every torch" | an MO morph changes a model's vertices, not its identity | a kind is the natural key for materials and for lights attached to a model |
 | **Instance**: `(area, table, spawn ordinal)`, where the ordinal is the slot the area loader filled | one placed prop or creature | dynamic slots (drops, projectiles, respawns); saved state (a killed creature, a picked-up item) | **Inferred**, not measured, that static props land in the same slot on every load. Fallback: `(area, definition index, spawn position rounded to 64 units)`, matched to the nearest live record at load |
@@ -882,6 +882,51 @@ is for the eye.
 
 **Next.** The texture-key census (Phase 4) can start independently; Phase 2's
 light term is next on the main line and needs nothing more from Phase 1.
+
+### A tile half is a whole mesh, and a face is the key under it
+
+**Reported from play: a material on a floor tile put the ceiling above it in the
+mirror too.** Nothing is wrong with the pick. A tile half draws one mesh, and in a
+cave that mesh is the tile's whole column: floor, ceiling and the rock between.
+`TileWalk` sets the half's material around the assembler call, so every packet the
+mesh makes carries it. The key table's "one floor or ceiling surface" was never
+what the code did.
+
+**Neither facing nor texture separates them.** Faceted rock points every way, so
+a normal threshold cuts it at arbitrary seams, and nothing promises that a floor
+and a wall use different textures. The face itself does: a mesh is a fixed list
+of polygons, and `func_80030540`, `func_8002FECC` and the clipped fans all walk it
+in order, so `(tile half, mesh, face index)` names one polygon on every path.
+
+**The subdivider keeps the order.** Read from `func_80030C94`: it walks the
+source faces in order and writes each one's pieces contiguously. A quad or a
+triangle (`0x2C`, `0x2E`, `0x24`, `0x26`) becomes four, and anything else is
+copied as one. So an output face maps back to its source face by counting.
+
+**Measured** (`KF2_FACE_PROBE=1`, `patches/remaster/FaceProbe.cs`; `KF2_AUTOSTART=2`, area 1 in
+`fdat05`, `KF2_SSR=1`, eight cameras through `view`). Every tile face was given one
+of the ids 4-7 by a hash of its key, and the reflection probe's readback holds the
+id per pixel:
+- **The mapping.** 763k source faces over 15 meshes, 11.9M output vertices: 0
+  count, command, CLUT or tpage mismatches. Every output vertex lies inside its
+  source face's box, and every source corner reappears in its four pieces. No
+  copied (non-splitting) face occurred, so that branch is read from the code only.
+- **A pick from the frame's own triangles.** Every sealed packet was recorded
+  with its key, its screen corners and its depths. The nearest triangle under a
+  point was then compared with the GPU's id at that pixel. At face centroids it
+  agreed 100% once the view had settled. On a 6-pixel grid it agreed 98-100%, and
+  almost every disagreement lay within 2 px of the picked triangle's edge.
+- **The one interior disagreement is overlapping geometry.** In one view, a band
+  near the camera went to a different face than the nearest one. Two neighbouring
+  tiles' meshes overlap there: face 1 of `801CF667` and face 1 of `801CF671` cover
+  the same pixels 1 unit of depth apart. With the depth tolerance off
+  (`KF2_ZBUFFER_BIAS=0 KF2_ZBUFFER_SLOPE=0`) the band stays, so the depth test's
+  own fight decides it, not the tolerance.
+
+**What follows for the design.** Key materials by face. Pick by the frame's
+triangles, and when faces lie within the depth tolerance under the cursor, select
+all of them: which one wins there changes per pixel and per angle, so an author
+cannot see one without the other anyway.
 
 ### Phase 2: authored point and spot lights (`0070`)
 

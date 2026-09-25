@@ -892,6 +892,11 @@ Four files in the directory have no entry below:
   HUD therefore stays 2D to the reflection pass (measured: its overlay count did not
   fall). The amendment is the fourth diff in the patch file. See "The HUD's
   transform in C#" in `docs/PATCHES_AND_MODS.md`.
+  Since amended: the probe's readback keeps its per-pixel info texels
+  (`ScreenReflections.LastInfo`, `LastW`, `LastH`, `MapSerial`), so the port can ask
+  which material the GPU drew at a pixel. `patches/remaster/FaceProbe.cs` is the
+  reader. The amendment is the fifth diff in the patch file. See "A tile half is a
+  whole mesh, and a face is the key under it" in `docs/REMASTER.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass

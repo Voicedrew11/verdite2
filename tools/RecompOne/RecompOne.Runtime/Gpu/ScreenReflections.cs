@@ -92,6 +92,7 @@ public static class ScreenReflections
     /// found, so a miss is still counted.</summary>
     public static void SetMap(byte[] rgba, byte[] info, int w, int h)
     {
+        LastInfo = info; LastW = w; LastH = h; MapSerial++;
         long n = (long)w * h, refl = 0, hit = 0, sky = 0, under = 0, passed = 0, planar = 0;
         double wsum = 0, skyR = 0, skyG = 0, skyB = 0, hitL = 0, keepSum = 0;
         long fogged = 0, compared = 0;
@@ -173,6 +174,11 @@ public static class ScreenReflections
     /// <summary>The last readback's map: '.' opaque, '~' water, 'H' 2D overlay,
     /// '*' far plane with no surface (the sky), ' ' nothing.</summary>
     public static string? Map;
+
+    /// <summary>The last readback's info texels (red is the material), top row first.</summary>
+    public static byte[]? LastInfo;
+    public static int LastW, LastH;
+    public static long MapSerial;
 
     /// <summary>The mean colour the sky fallback took, and the mean brightness of
     /// what a hit took, both 0..255.</summary>

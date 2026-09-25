@@ -206,6 +206,7 @@ public static class TileWalk
         mem.WriteU32(sp + 0x14u, c.S1);
         mem.WriteU32(sp + 0x10u, c.S0);
 
+        if (Remaster.FaceProbe.On) Remaster.FaceProbe.FrameStart();
         c.A0 = 0u;
         c.RA = 0x80031CBCu;
         KingsField2.func_8002E190(c, mem);
@@ -415,16 +416,19 @@ public static class TileWalk
             if (mem.ReadU32(c.V0 + 0x14u) < 0x10u)
             {
                 _subdivided++;
+                uint srcVerts = mem.ReadU32(0x8018EAA0u);
                 c.A0 = mem.ReadU32(ModelTable);
                 c.A1 = model;
                 c.A2 = sp + 0x38u;
                 c.RA = 0x80031AC8u;
                 KingsField2.func_80030C94(c, mem);
+                if (Remaster.FaceProbe.On) Remaster.FaceProbe.Subdivided(mem, model, sp + 0x38u, srcVerts);
                 c.A0 = model;
                 c.A1 = 0xF0u;
                 c.A2 = sp + 0x38u;
                 c.RA = 0x80031AD8u;
                 KingsField2.func_80030540(c, mem);
+                if (Remaster.FaceProbe.On) Remaster.FaceProbe.SubdividedDone();
             }
             else Plain(c, mem, model);
         }
@@ -453,6 +457,7 @@ public static class TileWalk
 
     static void Epilogue(CpuContext c, PSMemory mem, uint sp)
     {
+        if (Remaster.FaceProbe.On) Remaster.FaceProbe.LeaveHalf();
         CurrentRecord = 0;
         PolyAssembler.TileMaterial = 0;
         c.RA = mem.ReadU32(sp + 0x1048u);
