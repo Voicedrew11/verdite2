@@ -53,7 +53,9 @@ KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
 KF2_BLACKPROBE=1                       # what the picture held every drawn frame around an area load: luminance, black runs, the tint the game asked for, whether the frame's pixels were new, and whether the view was carried; camgap and camstep rows: how far the renderer's camera sat from the true position, and how far it moved per present
 KF2_BLACKPROBE_OUT=dir                 # also write the display rect (~12 frames before the load and 250 ms after) as PNGs; default scratch/blackprobe; 0 skips the pictures
 KF2_SMOOTH=0 KF2_SMOOTH_POS=0          # leave the view at the tick (on by default); leave position too
-KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
+KF2_SMOOTH_COMPASS=0                   # leave the compass needle on the tick (carried with the view by default)
+KF2_SMOOTH_GAUGES=0                    # leave the HP and MP gauges on the tick (carried with the view by default)
+KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second; the compass's and the gauges' carries and new values
 KF2_SMOOTH_PROBE=2                     # also every frame for 400 ms after an area load: the verdict, the pair, and what was written
 KF2_CROSSPROBE=1                       # per presented frame across an area crossing: tiles, models, the view, the area, and whether the renderer built it; =2 adds the raw cell counts
 KF2_SMOOTH_OBJECTS=0                   # leave enemies, doors and everything else at the tick (on by default)
@@ -89,7 +91,7 @@ KF2_POLYASM=verify                       # run both on every call and compare RA
 KF2_POLYASM_REJECT=0                     # send every oversized polygon to the view-space clipper, including those it clips to nothing
 KF2_POLYASM_REJECT=replay                # a rejection also writes the clipper's scratch records and lists, which nothing reads
 KF2_POLYASM_UNCLIPPED=0                  # the recompiled func_8002FECC (the far map tiles' assembler) instead of the C# one
-KF2_POLYASM_TRANSFORM=0                  # the recompiled func_8002E650 and func_8002E7CC (the vertex transforms) instead of the C# ones
+KF2_POLYASM_TRANSFORM=0                  # the recompiled func_8002E650, func_8002E7CC and func_8002E910 (the vertex transforms, the last the HUD's) instead of the C# ones
 KF2_POLYASM_LIT=0                        # the recompiled func_8002F214 and func_8002EAEC (the models' lit assembler) instead of the C# one
 KF2_POLYASM_CLIPPER=0                    # the recompiled Clip4FTP and Clip3FTP (the view-space clipper) instead of the C# ones
 KF2_POLYASM_FACING=0                     # cull a clipped polygon or a quad on its first three whole-pixel corners, as the game does (the whole polygon, at its fractional corners, by default)
@@ -135,7 +137,7 @@ KF2_EVENFOG=0                          # the game's fog and light edges (even fo
 KF2_EVENFOG_BLEND=0                    # no fog blend: the game's hard fog edge between records
 KF2_EVENLIGHT=0                        # no light blend: the game's hard colour matrix and back colour edge
 KF2_SUBPIXEL=0                         # whole-pixel vertex positions (sub-pixel is on by default)
-KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels; also polygons drawn back to front, and faces the fractional cull changed
+KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels; also polygons drawn back to front, faces the fractional cull changed, and the HUD's vertices placed with a fraction
 KF2_SUBPIXEL_CULL=0                    # cull the C# assemblers' faces on whole pixels again, as the game does (fractional corners by default under sub-pixel)
 KF2_PGXP=1                             # upstream's PGXP as the vertex source (off; the address map answers)
 KF2_PGXP_TEXTURE=0                     # its share of perspective correction off

@@ -324,12 +324,16 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - `ending` exists because the last ten minutes of the game are otherwise untestable
 - The MCP layer
 - The polygon assembler in C#
+- The HUD's transform in C#
+- The gauges lost their shadow
 - The map tile walk in C#
 - The object and creature walk in C#
 - A verify pass replays, it does not re-run
 - Stage 13 in C#
 - Drawing the frame from another camera
 - The compass needle is held to the tick
+- The compass is carried with the view
+- The gauges are carried like the needle
 - The hooks on stage 13 are ordered by what they need
 - A pass of the port's own
 

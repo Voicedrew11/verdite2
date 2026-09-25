@@ -14,7 +14,8 @@ namespace Kf2;
 /// `func_80030540`, the polygon assembler, in C#: the same reads and stores in the
 /// same order, with the registers in locals. Also its unclipped twin
 /// `func_8002FECC`, which draws the far map tiles, the two vertex transforms
-/// `func_8002E650` and `func_8002E7CC`, and the models' lit assembler `func_8002F214`
+/// `func_8002E650` and `func_8002E7CC`, the HUD's transform `func_8002E910`
+/// (PolyAssemblerHud.cs), and the models' lit assembler `func_8002F214`
 /// with its semi-transparent twin `func_8002EAEC` (PolyAssemblerLit.cs).
 ///
 ///     KF2_POLYASM=0             all of them recompiled
@@ -22,7 +23,7 @@ namespace Kf2;
 ///     KF2_POLYASM_REJECT=0      send every oversized polygon to the clipper again
 ///     KF2_POLYASM_REJECT=replay a rejection makes the clipper's scratch writes too
 ///     KF2_POLYASM_UNCLIPPED=0   func_8002FECC recompiled
-///     KF2_POLYASM_TRANSFORM=0   func_8002E650 and func_8002E7CC recompiled
+///     KF2_POLYASM_TRANSFORM=0   func_8002E650, func_8002E7CC and func_8002E910 recompiled
 ///     KF2_POLYASM_LIT=0         func_8002F214 and func_8002EAEC recompiled
 ///     KF2_POLYASM_CLIPPER=0     Clip4FTP and Clip3FTP recompiled
 ///
@@ -102,7 +103,7 @@ public static partial class PolyAssembler
         Id = "kf2.polyasm",
         Name = "Polygon assembler",
         Version = "1.0",
-        Description = "func_80030540, func_8002FECC, func_8002E650, func_8002E7CC, func_8002F214, func_8002EAEC and the view-space clipper in C#.",
+        Description = "func_80030540, func_8002FECC, func_8002E650, func_8002E7CC, func_8002E910, func_8002F214, func_8002EAEC and the view-space clipper in C#.",
     };
 
     public static void Configure(string? mode, string? reject, string? unclipped, string? transform, string? lit,
@@ -138,12 +139,13 @@ public static partial class PolyAssembler
         var unclipped = SymbolRegistry.Resolve("game", null, Unclipped);
         var transform = SymbolRegistry.Resolve("game", null, Transform);
         var near = SymbolRegistry.Resolve("game", null, NearTransform);
+        var hud = SymbolRegistry.Resolve("game", null, HudTransform);
         var lit = SymbolRegistry.Resolve("game", null, Lit);
         var litBlend = SymbolRegistry.Resolve("game", null, LitBlend);
         var clip4 = SymbolRegistry.Resolve("game", null, Clip4);
         var clip3 = SymbolRegistry.Resolve("game", null, Clip3);
         var nclip = SymbolRegistry.Resolve("game", null, NormalClipAddress);
-        if (assembler == null || unclipped == null || transform == null || near == null || lit == null || litBlend == null
+        if (assembler == null || unclipped == null || transform == null || near == null || hud == null || lit == null || litBlend == null
             || clip4 == null || clip3 == null || nclip == null)
             return false;
 
@@ -151,6 +153,7 @@ public static partial class PolyAssembler
         if (!Queue(ref _queuedUnclipped, unclipped, nameof(ReplaceUnclipped))) return false;
         if (!Queue(ref _queuedTransform, transform, nameof(ReplaceTransform))) return false;
         if (!Queue(ref _queuedNearTransform, near, nameof(ReplaceNearTransform))) return false;
+        if (!Queue(ref _queuedHudTransform, hud, nameof(ReplaceHudTransform))) return false;
         if (!Queue(ref _queuedLit, lit, nameof(ReplaceLit))) return false;
         if (!Queue(ref _queuedLitBlend, litBlend, nameof(ReplaceLitBlend))) return false;
         if (!Queue(ref _queuedClip4, clip4, nameof(ReplaceClip4))) return false;
@@ -159,7 +162,7 @@ public static partial class PolyAssembler
 
         HookManager.Commit();
         bool ok = HookAttach.Installed(assembler) && HookAttach.Installed(unclipped) && HookAttach.Installed(transform)
-               && HookAttach.Installed(near) && HookAttach.Installed(lit) && HookAttach.Installed(litBlend)
+               && HookAttach.Installed(near) && HookAttach.Installed(hud) && HookAttach.Installed(lit) && HookAttach.Installed(litBlend)
                && HookAttach.Installed(clip4) && HookAttach.Installed(clip3) && HookAttach.Installed(nclip);
         string State(bool on) => !on ? "off" : _mode.ToString().ToLowerInvariant();
         Console.WriteLine(!ok

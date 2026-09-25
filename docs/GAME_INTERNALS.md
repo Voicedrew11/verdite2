@@ -405,8 +405,9 @@ which is a rate defect of the kind `docs/TODO.md` lists: on the console it stepp
 once a tick, and above the tick rate it steps more often, so the needle settles
 sooner in wall-clock time -- seven steps a tick at 144 fps. Nothing had been
 reported from play. The port steps the speed and the yaw only on the first walk of
-a tick (`KF2_STAGE13_NEEDLE=0` is the recompiled behaviour); see "The compass
-needle is held to the tick" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+a tick (`KF2_STAGE13_NEEDLE=0` is the recompiled behaviour), and `FrameSmoothing`
+draws it between its steps; see "The compass needle is held to the tick" and "The
+compass is carried with the view" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 ### The map is an 80x80 tile grid, and a tile's height is one byte
 

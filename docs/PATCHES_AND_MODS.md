@@ -483,7 +483,8 @@ between game ticks*, which writes `FrameSmoothing`, `FrameSmoothing.Position`,
 five of their `interface.ini` keys, so a restart restores what was clicked. The
 parts stay reachable from the console — `KF2_SMOOTH`, `KF2_SMOOTH_POS`,
 `KF2_SMOOTH_OBJECTS`, `KF2_SMOOTH_ANIM`, `KF2_SMOOTH_FLUID` — and that is now
-the only way to set them apart.
+the only way to set them apart. The compass needle rides with the view
+(`KF2_SMOOTH_COMPASS`; see "The compass is carried with the view").
 
 **The tick sits under the frame rate rather than in Enhancements**, sharing the
 `Frame pacing` heading with it. Everything else under Enhancements is a choice
@@ -5457,6 +5458,92 @@ fourth replace hook under `KF2_POLYASM_TRANSFORM`, which now covers both transfo
 Like `func_8002E650` it keeps the depth cue and the flag in locals rather than on
 its stack, which leaves those stores out of the vertex map's store count.
 
+### The HUD's transform in C#
+
+**Mechanism measured; whether the compass still wobbles is judged by eye.**
+
+The compass wobbled as it turned, and a frame capture said why: of the frame's
+polygons, the world's and the models' vertices were all found in the vertex map
+(213 of 213, 189 of 189), and the HUD's none (0 of 236), with no vertex published
+while the HUD builder ran. So the HUD was drawn at whole pixels. The reason is its
+transform, `func_8002E910`, called only by the HUD builder: for each vertex it calls
+`RotTrans` -- rotate and translate, **no divide** -- and writes the result's X and Y
+into the vertex cache as the screen position. The HUD is orthographic. The vertex
+map learns a position from `Rtp`, the perspective divide, which the HUD never
+reaches, and `RotTrans` drops the fraction in its shift of 12.
+
+`patches/PolyAssemblerHud.cs` has the routine in C#, beside the other two
+transforms and on their switch (`KF2_POLYASM_TRANSFORM=0`, `KF2_POLYASM=verify`):
+the same `MvmvaOp` for the integers, and the same cache bytes, X and Y written as
+one word rather than two halfwords. Before the store it works out the product the
+GTE shifted -- `(TR << 12) + R·V`, from the GTE's own control registers -- and
+offers its low twelve bits to `GteVertexMap.Publish`, the call `Gte.Read` makes for a
+projected vertex. The store binds it, and the lit assembler, already C# and already
+following the map for the models, carries it into the packets. A product that
+disagrees with the GTE's integer offers no fraction.
+
+**Only the fraction.** An orthographic model needs no perspective correction --
+with no divide, affine texturing is exact -- and the HUD must write no depth. So the
+vertex is published with a depth of 0, which gives it no W and no depth, and which
+`0067` now reads as "placed on the screen, not projected": `HleVertex.Projected` is
+true only for a hit with a depth. The reflection pass tells the HUD from the scene
+by that flag, so without the amendment the HUD would have stopped being an overlay.
+
+Measured:
+
+- `KF2_POLYASM=verify`: `func_8002E910` 0 RAM, 0 register and 0 GTE mismatches;
+  `func_8002F214` clean alongside it.
+- A frame capture: the HUD's vertices 296 of 296 found (0 of 236 before).
+- `KF2_SUBPIXEL_PROBE=1` at 144 fps, turning: 18,720 HUD vertices a second placed
+  on the screen, 13,104 of them with a fraction (the rest are unrotated pieces that
+  land on whole pixels).
+- `KF2_SSR=1 KF2_SSR_PROBE=1`: 17,850-21,034 of the surface triangles a second 2D
+  overlays, against 14,626-20,745 on the committed tree in the same run, so the HUD
+  is still an overlay.
+- 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`.
+
+#### The gauges lost their shadow
+
+**Mechanism measured, and the picture compared by number against a screenshot of
+the original; not yet looked at in play.**
+
+Reported from play: the HP and MP gauges had a shadow on the original and did not
+here. The gauge is not a flat bar. It is a lit tube 2.5 pixels tall: records 9 and
+10 are one model scaled along X by the gauge's length, with a cross-section whose
+vertices land at Y offsets of -1.25, -1.15, -0.89, -0.49, 0, +0.49, +0.89, +1.15 and
++1.25 pixels from the record's centre (read off the transform, `R22` = 8, `TR` =
+16,35 and 16,52). The faces near the top and bottom are almost edge-on and lit
+dark. The console truncates every vertex, so the tube lands on three whole rows and
+each dark face gets a full row of its own. That dark top and bottom row is the
+shadow. With the fraction offered, the tube is drawn at its true size: the dark
+faces shrink to slivers of 0.1-0.3 of a pixel and the bright middle faces take the
+height.
+
+Measured on the presented picture (`snap`, 5x, 16:9), the mean colour of each
+sub-row across the HP gauge: the original's screenshot and `KF2_SUBPIXEL=0` both read a
+dark ramp (81 → 100), a bright row (119-124) and a dark ramp (100 → 81). With the
+fraction it read 83, a ramp 101 → 123 → 101 and 83, from row 33.8 to 36.2.
+
+So **a piece the matrix does not turn is offered no fraction.** The fraction was
+for the compass, which rotates, and whose truncation is a wobble. A piece placed with
+a scale and a translation alone (the gauges, the digits, the panel's frame) has
+art drawn for the snap, and the fraction only moves it off the rows it was drawn
+for. The test is whether any element of R's first two rows off the diagonal is
+set, once a call, since the matrix is fixed for the piece. It reuses the vertex map
+path: the vertex is still published, with a fraction of 0, so it is still found and
+still 2D.
+
+Measured after:
+
+- The HP gauge's sub-rows 33-35 are identical to `KF2_SUBPIXEL=0`'s, value for
+  value, and so to the screenshot's profile.
+- The HUD panel against `KF2_POLYASM_TRANSFORM=0` (the recompiled transform, no
+  fraction at all): 1,952 of 154,375 pixels differ, by at most 13 levels and spread
+  evenly, which is the world behind the translucent panel moving between runs.
+- `KF2_SUBPIXEL_PROBE=1`: 21,450 HUD vertices a second, 4,290 with a fraction (the
+  compass) and 17,160 on unturned pieces kept whole.
+- `KF2_POLYASM=verify`: `func_8002E910` 266 calls, 0 mismatches.
+
 ### The clipper in C#
 
 `Clip4FTP` and `Clip3FTP` are two more replace hooks, in `patches/PolyAssemblerClip.cs`
@@ -5955,9 +6042,9 @@ drawn from an override.
 
 ### The compass needle is held to the tick
 
-**A rate defect of the SpriteAnim and TintHold class, measured; the needle's swing
-has not been looked at.** On by default for that reason, as those two are;
-`KF2_STAGE13_NEEDLE=0` is the comparison.
+**A rate defect of the SpriteAnim and TintHold class, measured, and judged by eye:
+the swing reads correct.** On by default, as those two are; `KF2_STAGE13_NEEDLE=0`
+is the comparison.
 
 Stage 13's body steps the needle's spring once a call (see "Stage 13's HUD block,
 and the compass needle" in `docs/GAME_INTERNALS.md`): the speed at `0x8006E608`
@@ -5999,6 +6086,106 @@ routine runs and nothing is held.
 
 What is left of the class is `func_800331B4`'s per-object ambient-sound retrigger at
 `rec+0x40`, in [TODO.md](TODO.md).
+
+Held to the tick, the needle then stepped at 20 Hz while the view it reads turned
+at the render rate; that is the next section.
+
+### The compass is carried with the view
+
+**Mechanism measured, and the picture judged**: the held needle was looked at and
+read correct but stepping; the carried one has not been looked at yet.
+
+The needle is the HUD's reading of the view's heading, so it is carried by
+`FrameSmoothing`, on the view's switch and by the view's rule, rather than by a
+smoother of its own. What the two share is now one type, `TickPair` (it was
+`WrappedAngle` until the gauges joined it): a 12-bit
+angle as the game produced it on its last two ticks, `Roll` on a tick, `Shift` for a
+placement between ticks (the whole pair moves, so the lag and the speed carry
+through), and a `Step(phase)` taken the short way round the wrap and added to the
+game's own previous word. The view's yaw was rewritten onto it with its arithmetic
+unchanged; the needle is its second user.
+
+What differs is only where the value lives and who reads it. The view's yaw is
+bracketed around stage 8; the needle's is record 0's `+0x1A`, written in stage 13's
+own body and read by one function, the HUD builder `func_80031D5C`. So
+`FrameSmoothing` puts a pre and a post on the builder: the pre writes
+`lerp(prev, cur, phase)` into the record and the post puts the stepped value back,
+so the spring's next step starts from what the game stepped. The pair is attached
+and checked like the view's, and a failure leaves the needle on the tick and the
+view carrying.
+
+**It is sampled when the spring moves it, not when the frame ticks.** `Stage13`
+publishes the needle as the simulation state it is: `NeedleYaw` (the address),
+`NeedleOnTick` (the C# routine stepped it on the tick on the last frame it drew,
+false whenever the recompiled routine draws, where it moves every frame and there is
+nothing between ticks to carry), and `NeedleSteps`, a count of steps that the carry
+compares against the one it last saw. One source of truth for "the needle moved",
+with no second reading of the tick identity to disagree with the first. A value
+the carry did not see stepped is a placement and shifts the pair.
+
+**It is carried only in a frame the renderer draws** (`Stage13.InFrame`): the main
+loop's, a modal loop's, a redraw. A menu's pass (`Stage13.DrawScene`) draws the world
+as it stands — the view and the objects are not carried there either, since
+their brackets are on stages 8 and 13 and the pass calls neither — so the needle
+is left where it stands instead of rocking with a phase that no longer means
+anything. `KF2_SMOOTH_COMPASS=0` leaves it on the tick; `KF2_SMOOTH=0` turns it off
+with the rest of the view.
+
+Measured with `KF2_SMOOTH_PROBE=1` at 144 fps, turning in area 1 (three 2.5 s turns),
+per 2 s window of about 288 frames:
+
+| | needle drawn at a new angle |
+|---|---|
+| `KF2_SMOOTH_COMPASS=0` | 35-40 (the tick) |
+| carried | 262-289 |
+
+In the menu's windows it drew 1 new angle, and through `modal-rate`'s loops,
+standing still, 0. 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`, and
+`KF2_STAGE13=verify` still 0 mismatches (the needle is not on the tick there, so
+nothing is carried).
+
+**One thing stays as the routine has it**: the spring chases the yaw in the camera
+block, which on a tick frame is the carried view at that frame's phase, not the
+tick's own yaw. That was true before the needle was held, and it is a bias of at
+most the phase of one frame of one tick's turn in what the spring is fed.
+
+### The gauges are carried like the needle
+
+**Mechanism measured; the picture not yet judged.**
+
+Reported from play: the HP and MP gauges rise and fall at 20 steps a second. They
+are the same kind of value as the needle. Stage 13's own body derives each gauge's
+length from a word the world steps on the tick (`0x8019942E`, `0x80199432`,
+`* 204 / 5000`) into records 9 and 10 at `+0x8`, and only the HUD builder reads it,
+as the X scale of the tube. So they are carried by the needle's mechanism rather
+than by a smoother of their own.
+
+What the needle had is now one type, `FrameSmoothing.HudReading`: a halfword of a
+HUD record, whether it wraps, when it is on the tick, and the identity it is
+sampled on. The pre on the HUD builder runs every reading's `Before` and the post
+every `After`. The needle is `wraps: true` on `Stage13.NeedleSteps`. A gauge is
+`wraps: false` on `Stage13.HudTicks`, a count of the walks that were the first
+of a tick, which is the walk whose HUD state came from a new tick of the world.
+`Stage13.HudOnTick` is false whenever the recompiled routine draws, as
+`NeedleOnTick` is. `TickPair` gained the linear case: a signed halfword, stepped
+as `Cur - Prev`.
+
+With the fraction gone from unturned pieces (see "The gauges lost their shadow"),
+the gauge's end moves in whole game pixels, a pixel per ~3.3 units of length, at
+the render rate instead of the tick's.
+
+`KF2_SMOOTH_GAUGES=0` leaves them on the tick; `KF2_SMOOTH=0` turns them off with
+the rest of the view.
+
+Measured with `KF2_SMOOTH_PROBE=1` at 144 fps, `kill` in area 1 (the HP gauge
+drains to 0), in the 2 s window holding the drain:
+
+| | HP gauge drawn at a new length |
+|---|---|
+| `KF2_SMOOTH_GAUGES=0` | 17 (the tick) |
+| carried | 122 |
+
+144.0 fps drawn at 20.0 ticks/s either way. `KF2_STAGE13=verify` 0 mismatches.
 
 ### The hooks on stage 13 are ordered by what they need
 
