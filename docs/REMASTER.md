@@ -793,9 +793,10 @@ amendment keeping every existing id's opacity, both read from the code.
 editor, judged good as a first step: it reads as a mirror of the doorway and the
 wall above it, in the right place and the right way up. The editor was used end to
 end to get there (pick, material, sliders). Still to judge: a floor at a *partial*
-reflectivity (does it read as polished stone), a larger area of floor, and the
-speckled fringe along the reflected wall edge in the same screenshot, which is
-where the march's thickness test decides hit or miss and has not been looked into.
+reflectivity (does it read as polished stone), and a larger area of floor. The
+same screenshot shows a speckled fringe along the reflected wall edge; that is the
+reflection pass's march, not the material, and is in `docs/TODO.md`'s open
+questions.
 
 **Next.** `snap` from the presented target; the Remaster packs settings page and
 the saved switch under Video ▸ Enhancements (the editor's checkbox saves
