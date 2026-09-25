@@ -599,7 +599,7 @@ useful than the question was.
    one *Even fog and lighting* checkbox (`KF2_EVENLIGHT=0` drops the light part).
    See "The light colour changes at the same edge" in [RENDERING.md](RENDERING.md).
 18. **Look at the water reflections, then decide what comes next on the surface
-   buffer.** `KF2_SSR=1` (or Video ▸ Enhancements ▸ *Water reflections*) with
+   buffer.** `KF2_SSR=1` (or Video ▸ Experimental ▸ *Water reflections*) with
    `KF2_AUTOSTART=new`, facing the water in `fdat02`. The mechanism is measured and
    the picture has been seen once, and the two things reported (the HUD reflected,
    pop-in past the fog) are fixed by mechanism and not yet looked at again. Still to

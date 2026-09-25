@@ -1824,7 +1824,7 @@ fetches. The integrated GPU itself has not been measured.
 ## Screen-space reflections: the water is the one surface the depth buffer does not have
 
 **Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_SSR=1`, or Video ▸ Enhancements ▸ *Water reflections*). The runtime half is
+(`KF2_SSR=1`, or Video ▸ Experimental ▸ *Water reflections*). The runtime half is
 `0067`; the port half is `patches/Reflections.cs`.
 
 The pass is the occlusion pass's shape: at present, between the finished target and
@@ -2029,7 +2029,7 @@ reflected, and the reflection fades as its source nears the edge.
 ## Planar reflections: the world walked twice, from under the water
 
 **Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_PLANAR=1` with `KF2_SSR=1`, or Video ▸ Enhancements ▸ *Water reflections* ▸
+(`KF2_PLANAR=1` with `KF2_SSR=1`, or Video ▸ Experimental ▸ *Water reflections* ▸
 *Planar reflections*). The runtime half is `0068`; the port half is
 `patches/PlanarWalk.cs`, with an arena from `patches/PrimBuffer.cs`.
 
