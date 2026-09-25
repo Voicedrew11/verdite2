@@ -369,12 +369,14 @@ public static partial class PolyAssembler
         face += mesh != 0 ? mesh : mem.ReadU32(ModelTable);
 
         uint count = mem.ReadU32(header + 0x14u);
+        uint total = count;
 
         var fr = new Frame(mem);
         for (; count != 0; count--)
         {
             Interrupts.Poll(c, mem);
             fr.Check();
+            if (Remaster.Faces.Wanted) Remaster.Faces.Enter(mesh != 0, (int)(total - count));
             uint word = mem.ReadU32(face);
             face += 4u;
             uint cmd = word >> 24;
@@ -469,7 +471,7 @@ public static partial class PolyAssembler
 
         W8(ref fr, pkt + 3u, 0x0C);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x3Cu));
-        if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c3, 4, p0, p1, p2, p3);
+        if (fr.Lighting) LightTile(mem, pkt, LightWord(ref fr), c0, c1, c2, c3, 4, p0, p1, p2, p3);
         RecordDepth(ref fr, pkt, 0x2Cu, 4, p0, p1, p2, p3);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u)
@@ -541,7 +543,7 @@ public static partial class PolyAssembler
 
         W8(ref fr, pkt + 3u, 0x09);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x34u));
-        if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c0, 3, p0, p1, p2, 0u);
+        if (fr.Lighting) LightTile(mem, pkt, LightWord(ref fr), c0, c1, c2, c0, 3, p0, p1, p2, 0u);
         RecordDepth(ref fr, pkt, 0x20u, 3, p0, p1, p2, 0u);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u) + (short)R16(ref fr, p2 + 4u);
@@ -821,12 +823,14 @@ public static partial class PolyAssembler
 
         uint count = mem.ReadU32(header + 0x14u);
         uint face = mem.ReadU32(header + 0x10u) + 0xCu + mem.ReadU32(ModelTable);
+        uint total = count;
 
         var fr = new Frame(mem);
         for (; count != 0; count--)
         {
             Interrupts.Poll(c, mem);
             fr.Check();
+            if (Remaster.Faces.Wanted) Remaster.Faces.Enter(false, (int)(total - count));
             uint word = mem.ReadU32(face);
             face += 4u;
             uint cmd = word >> 24;

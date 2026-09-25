@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
@@ -8,7 +9,11 @@ namespace Kf2.Remaster;
 ///
 /// A remaster pack is an upstream asset pack (<c>pack.json</c>) with a
 /// <c>remaster/</c> directory beside it: <c>materials.json</c>, the named material
-/// library, and <c>areas/&lt;n&gt;/surfaces.json</c>, tile halves to material names.
+/// library, and <c>areas/&lt;n&gt;/surfaces.json</c>: under <c>tiles</c>, a material for
+/// a whole half and a face list for the mesh it draws; under <c>meshes</c>, the same
+/// for a mesh wherever the area uses it. A face list carries the mesh index and the
+/// mesh's hash it was authored against. <c>areas/&lt;n&gt;/lights.json</c> holds the
+/// area's authored lights, each named, in world units with up at -Y.
 /// Documents are kept as JSON trees, so a field this version does not know survives a
 /// round trip. Only the working pack is read in this phase; layering other packs
 /// under it is later. See "Data model and file format" in docs/REMASTER.md.
@@ -25,6 +30,7 @@ public static class Pack
     static string RemasterDir => Path.Combine(Root, "remaster");
     static string MaterialsPath => Path.Combine(RemasterDir, "materials.json");
     static string SurfacesPath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "surfaces.json");
+    static string LightsPath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "lights.json");
 
     static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
@@ -41,6 +47,7 @@ public static class Pack
     {
         public JsonObject Materials = null!;
         public readonly Dictionary<int, JsonObject> Surfaces = new();
+        public readonly Dictionary<int, JsonObject> Lights = new();
 
         public static Set Empty() => new() { Materials = NewMaterials() };
     }
@@ -81,6 +88,8 @@ public static class Pack
                 if (!int.TryParse(Path.GetFileName(dir), out int area)) continue;
                 var path = Path.Combine(dir, "surfaces.json");
                 if (File.Exists(path)) s.Surfaces[area] = Migrate(ParseObject(path), "tiles");
+                path = Path.Combine(dir, "lights.json");
+                if (File.Exists(path)) s.Lights[area] = Migrate(ParseObject(path), "lights");
             }
         return s;
     }
@@ -100,6 +109,7 @@ public static class Pack
             Console.Error.WriteLine($"[KF2] remaster: a formatVersion {v} document read by version {FormatVersion}; unknown fields are kept");
         if (collection == "materials" && doc["materials"] is not JsonObject) doc["materials"] = new JsonObject();
         if (collection == "tiles" && doc["tiles"] is not JsonArray) doc["tiles"] = new JsonArray();
+        if (collection == "lights" && doc["lights"] is not JsonArray) doc["lights"] = new JsonArray();
         return doc;
     }
 
@@ -116,6 +126,12 @@ public static class Pack
                 doc["formatVersion"] = FormatVersion;
                 Directory.CreateDirectory(Path.GetDirectoryName(SurfacesPath(area))!);
                 Write(SurfacesPath(area), doc);
+            }
+            foreach (var (area, doc) in _set.Lights)
+            {
+                doc["formatVersion"] = FormatVersion;
+                Directory.CreateDirectory(Path.GetDirectoryName(LightsPath(area))!);
+                Write(LightsPath(area), doc);
             }
             Dirty = false;
             LastError = null;
@@ -278,26 +294,30 @@ public static class Pack
     // ---- surfaces ----------------------------------------------------------
 
     /// <summary>An area's surfaces document, made on first write.</summary>
-    static JsonObject SurfacesDoc(int area, string fingerprint)
+    static JsonObject SurfacesDoc(int area, string fingerprint) => AreaDoc(_set.Surfaces, "tiles", area, fingerprint);
+
+    static JsonObject AreaDoc(Dictionary<int, JsonObject> docs, string collection, int area, string fingerprint)
     {
-        if (_set.Surfaces.TryGetValue(area, out var doc)) return doc;
+        if (docs.TryGetValue(area, out var doc)) return doc;
         doc = new JsonObject
         {
             ["formatVersion"] = FormatVersion,
             ["area"] = area,
             ["fingerprint"] = fingerprint,
-            ["tiles"] = new JsonArray(),
+            [collection] = new JsonArray(),
         };
-        _set.Surfaces[area] = doc;
+        docs[area] = doc;
         return doc;
     }
 
     /// <summary>The areas the pack holds documents for.</summary>
-    public static IEnumerable<int> Areas() => _set.Surfaces.Keys.Order();
+    public static IEnumerable<int> Areas() => _set.Surfaces.Keys.Union(_set.Lights.Keys).Order();
 
-    /// <summary>The fingerprint an area's documents were authored against, or null.</summary>
+    /// <summary>The fingerprint an area's documents were authored against, or null. Each
+    /// document carries its own; the first that names one answers.</summary>
     public static string? AreaFingerprint(int area)
-        => _set.Surfaces.TryGetValue(area, out var d) ? Str(d["fingerprint"]) : null;
+        => (_set.Surfaces.TryGetValue(area, out var d) ? Str(d["fingerprint"]) : null)
+        ?? (_set.Lights.TryGetValue(area, out var l) ? Str(l["fingerprint"]) : null);
 
     public static IEnumerable<(TileKey Key, string Material)> Tiles(int area)
     {
@@ -333,17 +353,350 @@ public static class Pack
     static void PutTile(TileKey k, string? material, string fingerprint)
     {
         var tiles = (JsonArray)SurfacesDoc(k.Area, fingerprint)["tiles"]!;
-        for (int i = 0; i < tiles.Count; i++)
+        var t = FindTile(tiles, k);
+        if (t == null)
         {
-            if (tiles[i] is not JsonObject t) continue;
-            if (Int(t["x"]) != k.X || Int(t["z"]) != k.Z) continue;
-            if ((Str(t["half"]) == "upper" ? 1 : 0) != k.Half) continue;
-            if (material == null) tiles.RemoveAt(i);
-            else t["material"] = material;
+            if (material != null)
+                tiles.Add(new JsonObject { ["x"] = k.X, ["z"] = k.Z, ["half"] = k.HalfName, ["material"] = material });
             return;
         }
-        if (material != null)
-            tiles.Add(new JsonObject { ["x"] = k.X, ["z"] = k.Z, ["half"] = k.HalfName, ["material"] = material });
+        if (material == null) t.Remove("material");
+        else t["material"] = material;
+        Prune(tiles, t);
+    }
+
+    static JsonObject? FindTile(JsonArray tiles, TileKey k)
+    {
+        foreach (var n in tiles)
+            if (n is JsonObject t && Int(t["x"]) == k.X && Int(t["z"]) == k.Z
+                && (Str(t["half"]) == "upper" ? 1 : 0) == k.Half)
+                return t;
+        return null;
+    }
+
+    static JsonObject? FindMesh(JsonArray meshes, int mesh)
+    {
+        foreach (var n in meshes)
+            if (n is JsonObject o && Int(o["mesh"]) == mesh) return o;
+        return null;
+    }
+
+    /// <summary>An entry with nothing left in it goes, and an empty face list with its mesh.</summary>
+    static void Prune(JsonArray list, JsonObject e)
+    {
+        bool tile = e["x"] != null;
+        if (e["faces"] is JsonObject f && f.Count == 0)
+        {
+            e.Remove("faces");
+            // A tile entry's mesh belongs to its face list; a mesh entry's is its key.
+            if (tile) { e.Remove("mesh"); e.Remove("meshHash"); }
+        }
+        if (e["material"] == null && e["faces"] == null) list.Remove(e);
+    }
+
+    // ---- faces -------------------------------------------------------------
+
+    public readonly record struct TileFaces(TileKey Tile, int Mesh, string? Hash, List<(int Face, string Material)> Faces);
+    public readonly record struct MeshRule(int Mesh, string? Hash, string? Material, List<(int Face, string Material)> Faces);
+
+    static List<(int, string)> FaceList(JsonNode? node)
+    {
+        var list = new List<(int, string)>();
+        if (node is not JsonObject o) return list;
+        foreach (var (key, v) in o)
+            if (int.TryParse(key, out int f) && Str(v) is { } m) list.Add((f, m));
+        return list;
+    }
+
+    /// <summary>The face lists authored on tile halves.</summary>
+    public static IEnumerable<TileFaces> TileFaceLists(int area)
+    {
+        if (!_set.Surfaces.TryGetValue(area, out var doc) || doc["tiles"] is not JsonArray tiles) yield break;
+        foreach (var n in tiles)
+        {
+            if (n is not JsonObject t || t["faces"] is not JsonObject) continue;
+            if (Int(t["x"]) is not { } x || Int(t["z"]) is not { } z || Int(t["mesh"]) is not { } mesh) continue;
+            int half = Str(t["half"]) == "upper" ? TileKey.Upper : TileKey.Lower;
+            yield return new TileFaces(new TileKey(area, x, z, half), mesh, Str(t["meshHash"]), FaceList(t["faces"]));
+        }
+    }
+
+    /// <summary>The area-wide rules, by mesh.</summary>
+    public static IEnumerable<MeshRule> MeshRules(int area)
+    {
+        if (!_set.Surfaces.TryGetValue(area, out var doc) || doc["meshes"] is not JsonArray meshes) yield break;
+        foreach (var n in meshes)
+            if (n is JsonObject o && Int(o["mesh"]) is { } mesh)
+                yield return new MeshRule(mesh, Str(o["meshHash"]), Str(o["material"]), FaceList(o["faces"]));
+    }
+
+    /// <summary>The material a face is given at one scope: on its tile half, or on its
+    /// mesh area-wide. Null when that scope names none.</summary>
+    public static string? FaceMaterial(FaceRef f, bool meshScope)
+    {
+        if (!_set.Surfaces.TryGetValue(f.Tile.Area, out var doc)) return null;
+        JsonObject? e = meshScope
+            ? doc["meshes"] is JsonArray ms ? FindMesh(ms, f.Mesh) : null
+            : doc["tiles"] is JsonArray ts ? FindTile(ts, f.Tile) : null;
+        if (e == null || Int(e["mesh"]) != f.Mesh || e["faces"] is not JsonObject faces) return null;
+        return Str(faces[f.Face.ToString()]);
+    }
+
+    /// <summary>The material a mesh is given everywhere in the area, or null.</summary>
+    public static string? MeshMaterial(int area, int mesh)
+        => _set.Surfaces.TryGetValue(area, out var doc) && doc["meshes"] is JsonArray ms && FindMesh(ms, mesh) is { } e
+            ? Str(e["material"]) : null;
+
+    /// <summary>Give faces a material, or clear them with null, as one undo entry. On the
+    /// half's mesh, or with <paramref name="meshScope"/> on every tile of the area using
+    /// that mesh. A face list authored on another mesh, or against another hash of this
+    /// one, is replaced rather than merged.</summary>
+    public static void SetFaces(IReadOnlyList<FaceRef> faces, string? material, bool meshScope,
+                                Func<int, string?> hashOf, string fingerprint)
+    {
+        if (faces.Count == 0) return;
+        int area = faces[0].Tile.Area;
+        string label = $"{(faces.Count == 1 ? faces[0].ToString() : $"{faces.Count} faces")}" +
+                       $"{(meshScope ? " (mesh)" : "")} = {material ?? "none"}";
+        EditArea(area, fingerprint, label, doc =>
+        {
+            foreach (var f in faces)
+            {
+                string? hash = hashOf(f.Mesh);
+                if (hash == null) continue;
+                JsonArray list;
+                JsonObject? e;
+                if (meshScope)
+                {
+                    list = doc["meshes"] as JsonArray ?? (JsonArray)(doc["meshes"] = new JsonArray());
+                    e = FindMesh(list, f.Mesh);
+                    if (e == null)
+                    {
+                        if (material == null) continue;
+                        list.Add(e = new JsonObject { ["mesh"] = f.Mesh, ["meshHash"] = hash });
+                    }
+                }
+                else
+                {
+                    list = (JsonArray)doc["tiles"]!;
+                    e = FindTile(list, f.Tile);
+                    if (e == null)
+                    {
+                        if (material == null) continue;
+                        list.Add(e = new JsonObject { ["x"] = f.Tile.X, ["z"] = f.Tile.Z, ["half"] = f.Tile.HalfName });
+                    }
+                }
+                if (Int(e["mesh"]) != f.Mesh || Str(e["meshHash"]) != hash || e["faces"] is not JsonObject)
+                {
+                    e["mesh"] = f.Mesh;
+                    e["meshHash"] = hash;
+                    e["faces"] = new JsonObject();
+                }
+                var fo = (JsonObject)e["faces"]!;
+                if (material == null) fo.Remove(f.Face.ToString());
+                else fo[f.Face.ToString()] = material;
+                Prune(list, e);
+            }
+        });
+    }
+
+    /// <summary>Give a mesh a material wherever the area uses it, or clear it.</summary>
+    public static void SetMeshMaterial(int area, int mesh, string hash, string? material, string fingerprint)
+    {
+        if (MeshMaterial(area, mesh) == material) return;
+        EditArea(area, fingerprint, $"mesh {mesh} = {material ?? "none"}", doc =>
+        {
+            var list = doc["meshes"] as JsonArray ?? (JsonArray)(doc["meshes"] = new JsonArray());
+            var e = FindMesh(list, mesh);
+            if (e == null)
+            {
+                if (material == null) return;
+                list.Add(e = new JsonObject { ["mesh"] = mesh, ["meshHash"] = hash });
+            }
+            if (Str(e["meshHash"]) != hash) { e["meshHash"] = hash; e.Remove("faces"); }
+            if (material == null) e.Remove("material");
+            else e["material"] = material;
+            Prune(list, e);
+        });
+    }
+
+    /// <summary>An edit to one area's document, undone by putting the document back.</summary>
+    static void EditArea(int area, string fingerprint, string label, Action<JsonObject> change,
+                         bool lights = false)
+    {
+        var docs = lights ? _set.Lights : _set.Surfaces;
+        var before = docs.TryGetValue(area, out var d) ? (JsonObject)d.DeepClone() : null;
+        Edit(label,
+            () => change(AreaDoc(lights ? _set.Lights : _set.Surfaces, lights ? "lights" : "tiles", area, fingerprint)),
+            () =>
+            {
+                var now = lights ? _set.Lights : _set.Surfaces;
+                if (before == null) now.Remove(area);
+                else now[area] = (JsonObject)before.DeepClone();
+            });
+    }
+
+    // ---- lights ------------------------------------------------------------
+
+    /// <summary>One authored light, as the document holds it. Position is world units,
+    /// up at -Y; colour is linear 0..1 per channel; cone is inner and outer half-angles
+    /// in degrees; flicker scales the intensity by up to <c>FlickerAmount</c>, varying
+    /// at about <c>FlickerHz</c>.</summary>
+    public readonly record struct Light(
+        string Name, bool Spot, Vector3 Position, Vector3 Colour, float Intensity, float Radius,
+        Vector3 Direction, float ConeInner, float ConeOuter, float FlickerAmount, float FlickerHz, bool Off);
+
+    static Vector3 Vec(JsonNode? n, Vector3 fallback)
+    {
+        if (n is not JsonArray a || a.Count < 3) return fallback;
+        float C(int i) => a[i] is JsonValue v && v.TryGetValue(out double d) ? (float)d : 0f;
+        return new Vector3(C(0), C(1), C(2));
+    }
+
+    static float NumOr(JsonNode? n, float fallback)
+        => n is JsonValue v && v.TryGetValue(out double d) ? (float)d : fallback;
+
+    static JsonObject? LightsDoc(int area) => _set.Lights.TryGetValue(area, out var d) ? d : null;
+
+    static JsonObject? FindLight(int area, string name)
+    {
+        if (LightsDoc(area)?["lights"] is not JsonArray list) return null;
+        foreach (var n in list)
+            if (n is JsonObject o && Str(o["name"]) == name) return o;
+        return null;
+    }
+
+    static Light ParseLight(JsonObject o, string name)
+    {
+        var cone = o["cone"] as JsonArray;
+        var flicker = o["flicker"] as JsonObject;
+        return new Light(
+            name,
+            Str(o["type"]) == "spot",
+            Vec(o["position"], Vector3.Zero),
+            Vec(o["colour"], Vector3.One),
+            NumOr(o["intensity"], 1f),
+            NumOr(o["radius"], 4096f),
+            Vec(o["direction"], new Vector3(0, 1, 0)),
+            NumOr(cone?.Count > 0 ? cone[0] : null, 20f),
+            NumOr(cone?.Count > 1 ? cone[1] : null, 35f),
+            NumOr(flicker?["amount"], 0f),
+            NumOr(flicker?["hz"], 0f),
+            o["enabled"] is JsonValue ev && ev.TryGetValue(out bool en) && !en);
+    }
+
+    /// <summary>The area's lights, in document order.</summary>
+    public static IEnumerable<Light> Lights(int area)
+    {
+        if (LightsDoc(area)?["lights"] is not JsonArray list) yield break;
+        foreach (var n in list)
+            if (n is JsonObject o && Str(o["name"]) is { } name)
+                yield return ParseLight(o, name);
+    }
+
+    public static Light? GetLight(int area, string name)
+        => FindLight(area, name) is { } o ? ParseLight(o, name) : null;
+
+    /// <summary>A name not yet used in the area.</summary>
+    public static string FreeLightName(int area, string stem = "light")
+    {
+        for (int i = 1; ; i++)
+            if (FindLight(area, $"{stem} {i}") == null) return $"{stem} {i}";
+    }
+
+    static JsonArray Arr(Vector3 v) => new(Math.Round(v.X, 3), Math.Round(v.Y, 3), Math.Round(v.Z, 3));
+
+    public static bool AddLight(int area, string fingerprint, string name, Vector3 position)
+    {
+        if (string.IsNullOrWhiteSpace(name) || FindLight(area, name) != null) return false;
+        EditArea(area, fingerprint, $"add light {name}", doc => ((JsonArray)doc["lights"]!).Add(new JsonObject
+        {
+            ["name"] = name,
+            ["type"] = "point",
+            ["position"] = Arr(new Vector3(MathF.Round(position.X), MathF.Round(position.Y), MathF.Round(position.Z))),
+            ["colour"] = Arr(new Vector3(1f, 0.62f, 0.3f)),
+            ["intensity"] = 1.0,
+            ["radius"] = 4096,
+        }), lights: true);
+        return true;
+    }
+
+    public static void RemoveLight(int area, string name)
+    {
+        if (FindLight(area, name) == null) return;
+        EditArea(area, AreaFingerprint(area) ?? "", $"remove light {name}", doc =>
+        {
+            var list = (JsonArray)doc["lights"]!;
+            foreach (var n in list)
+                if (n is JsonObject o && Str(o["name"]) == name) { list.Remove(o); break; }
+        }, lights: true);
+    }
+
+    /// <summary>The light's document fields as they stand, for an undo to return to.</summary>
+    public static JsonObject? LightSnapshot(int area, string name) => FindLight(area, name)?.DeepClone() as JsonObject;
+
+    /// <summary>A change to one light as one undo entry. <paramref name="before"/> is what
+    /// undo puts back, so a gizmo drag or a slider held over many frames is one entry.</summary>
+    public static void SetLight(int area, string name, string label, Action<JsonObject> change, JsonObject? before = null)
+    {
+        var cur = FindLight(area, name);
+        if (cur == null) return;
+        var from = before ?? (JsonObject)cur.DeepClone();
+        if (before != null) Put(area, name, before);
+        Edit($"{name}: {label}", () => { if (FindLight(area, name) is { } o) change(o); },
+            () => Put(area, name, from));
+    }
+
+    /// <summary>What previews did to a light since <paramref name="before"/>, as one undo entry.</summary>
+    public static void CommitLight(int area, string name, string label, JsonObject before)
+    {
+        if (FindLight(area, name) is not { } cur) return;
+        var after = (JsonObject)cur.DeepClone();
+        Edit($"{name}: {label}", () => Put(area, name, after), () => Put(area, name, before));
+    }
+
+    /// <summary>A live change with no undo entry of its own.</summary>
+    public static void PreviewLight(int area, string name, Action<JsonObject> change)
+    {
+        if (FindLight(area, name) is not { } o) return;
+        change(o);
+        Dirty = true;
+        Version++;
+    }
+
+    /// <summary>Replace a light's fields with a snapshot, keeping its place in the list.</summary>
+    static void Put(int area, string name, JsonObject snapshot)
+    {
+        if (LightsDoc(area)?["lights"] is not JsonArray list) return;
+        for (int i = 0; i < list.Count; i++)
+            if (list[i] is JsonObject o && Str(o["name"]) == name)
+            {
+                list[i] = snapshot.DeepClone();
+                return;
+            }
+    }
+
+    public static void SetPosition(JsonObject o, Vector3 p)
+        => o["position"] = Arr(new Vector3(MathF.Round(p.X), MathF.Round(p.Y), MathF.Round(p.Z)));
+
+    public static void SetColour(JsonObject o, Vector3 c) => o["colour"] = Arr(c);
+
+    public static void SetDirection(JsonObject o, Vector3 d)
+        => o["direction"] = Arr(d.LengthSquared() > 1e-8f ? Vector3.Normalize(d) : new Vector3(0, 1, 0));
+
+    public static void SetNumber(JsonObject o, string field, float v) => o[field] = Math.Round(v, 4);
+
+    public static void SetCone(JsonObject o, float inner, float outer)
+    {
+        outer = Math.Clamp(outer, 1f, 89f);
+        inner = Math.Clamp(inner, 0f, outer);
+        o["cone"] = new JsonArray(Math.Round(inner, 2), Math.Round(outer, 2));
+    }
+
+    public static void SetFlicker(JsonObject o, float amount, float hz)
+    {
+        if (amount <= 0f) { o.Remove("flicker"); return; }
+        o["flicker"] = new JsonObject { ["amount"] = Math.Round(Math.Clamp(amount, 0f, 1f), 3), ["hz"] = Math.Round(Math.Max(hz, 0f), 2) };
     }
 
     // ---- undo --------------------------------------------------------------

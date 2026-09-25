@@ -12,6 +12,13 @@
 // number of cases more than 1 out. KF2_PERPIXEL_PROBE=2 checks the same formula
 // against the GTE in play, so between them the chain is closed. See "Per-pixel
 // lighting" in docs/RENDERING.md.
+//
+// 0071. The same strips again with the authored light list: every case above with
+// a light uploaded but no recovered depth (it must be untouched, since only a
+// packet with a depth is lit), then a wall facing the camera at a known depth, lit
+// by point and spot lights, against the shader's formula in C. With no light
+// uploaded the program is the one above, which is the "off is bit-identical"
+// case. See "Phase 2, the first slice" in docs/REMASTER.md.
 #define GL_GLES_PROTOTYPES 0
 #include <EGL/egl.h>
 #include <GL/gl.h>
@@ -38,7 +45,8 @@ F(void,glAttachShader,(GLuint,GLuint)) F(void,glLinkProgram,(GLuint))
 F(void,glGetProgramiv,(GLuint,GLenum,GLint*)) F(void,glGetProgramInfoLog,(GLuint,GLsizei,GLsizei*,char*))
 F(void,glUseProgram,(GLuint)) F(GLint,glGetUniformLocation,(GLuint,const char*))
 F(void,glUniform1i,(GLint,GLint)) F(void,glUniform1f,(GLint,GLfloat)) F(void,glUniform1ui,(GLint,GLuint))
-F(void,glUniform3f,(GLint,GLfloat,GLfloat,GLfloat))
+F(void,glUniform3f,(GLint,GLfloat,GLfloat,GLfloat)) F(void,glUniform2f,(GLint,GLfloat,GLfloat))
+F(void,glUniform4fv,(GLint,GLsizei,const GLfloat*))
 F(void,glGenBuffers,(GLsizei,GLuint*)) F(void,glBindBuffer,(GLenum,GLuint))
 F(void,glBufferData,(GLenum,GLsizeiptr,const void*,GLenum))
 F(void,glGenVertexArrays,(GLsizei,GLuint*)) F(void,glBindVertexArray,(GLuint))
@@ -52,7 +60,7 @@ static void load(void){
 #define L(n) n##_=(P_##n)eglGetProcAddress(#n); if(!n##_){printf("missing %s\n",#n);exit(2);}
  L(glCreateShader)L(glShaderSource)L(glCompileShader)L(glGetShaderiv)L(glGetShaderInfoLog)
  L(glCreateProgram)L(glAttachShader)L(glLinkProgram)L(glGetProgramiv)L(glGetProgramInfoLog)
- L(glUseProgram)L(glGetUniformLocation)L(glUniform1i)L(glUniform1f)L(glUniform1ui)L(glUniform3f)
+ L(glUseProgram)L(glGetUniformLocation)L(glUniform1i)L(glUniform1f)L(glUniform1ui)L(glUniform3f)L(glUniform2f)L(glUniform4fv)
  L(glGenBuffers)L(glBindBuffer)L(glBufferData)L(glGenVertexArrays)L(glBindVertexArray)
  L(glEnableVertexAttribArray)L(glVertexAttribPointer)L(glGenFramebuffers)L(glBindFramebuffer)
  L(glFramebufferTexture2D)L(glCheckFramebufferStatus)L(glBindAttribLocation)
@@ -70,23 +78,43 @@ static const char *VS =
 "flat out ivec2 clutBase; flat out ivec2 pageBase; flat out int texMode;\n"
 "flat out int vDither; flat out int vRepClut;\n"
 "noperspective out vec3 vLit; noperspective out float vFog; flat out uint vLight;\n"
-"uniform uint uTestLight; uniform vec3 uLit0, uLit1; uniform float uFog0, uFog1;\n"
+"uniform uint uTestLight; uniform vec3 uLit0, uLit1; uniform float uFog0, uFog1; uniform float uTestDepth;\n"
 "void main(){\n"
 "  gl_Position = vec4(aPos,0.0,1.0);\n"
 "  float t = aPos.x*0.5+0.5;\n"
 "  vLit = mix(uLit0, uLit1, t); vFog = mix(uFog0, uFog1, t); vLight = uTestLight;\n"
-"  vColor = vec4(1.0); vUV = vec2(0.0); vDepth = 0.0; clutBase = ivec2(0); pageBase = ivec2(0);\n"
+"  vColor = vec4(1.0); vUV = vec2(0.0); vDepth = uTestDepth; clutBase = ivec2(0); pageBase = ivec2(0);\n"
 "  texMode = 4; vDither = 0; vRepClut = 0;\n"
 "}\n";
+
+#define VH 2
+// The light list, as RemasterUniforms lays it out, and the view it is in.
+#define NL 3
+static float LPOS[NL*4], LCOL[NL*4], LDIR[NL*4];
+static const float H=200.f, CX=128.f, CY=1.f, DEPTH=2000.f;
+
+static float sstep(float e0,float e1,float x){float t=(x-e0)/(e1-e0);t=t<0?0:t>1?1:t;return t*t*(3-2*t);}
+
+// authored() in C, at pixel (x,y), for a wall at DEPTH facing the camera.
+static void authored(int n,int x,int y,float out[3]){
+ float z=DEPTH, p[3]={((x+0.5f)-CX)*(z/H),((y+0.5f)-CY)*(z/H),z}, nn[3]={0,0,-1};
+ out[0]=out[1]=out[2]=0;
+ for(int i=0;i<n;i++){ float l[3]={LPOS[i*4]-p[0],LPOS[i*4+1]-p[1],LPOS[i*4+2]-p[2]};
+   float r2=LPOS[i*4+3]*LPOS[i*4+3], d2=l[0]*l[0]+l[1]*l[1]+l[2]*l[2]; if(d2>=r2) continue;
+   float inv=1.f/sqrtf(d2), dir[3]={l[0]*inv,l[1]*inv,l[2]*inv};
+   float q=1.f-d2/r2, ndl=nn[0]*dir[0]+nn[1]*dir[1]+nn[2]*dir[2]; if(ndl<0)ndl=0;
+   float spot=sstep(LDIR[i*4+3],LCOL[i*4+3],-(dir[0]*LDIR[i*4]+dir[1]*LDIR[i*4+1]+dir[2]*LDIR[i*4+2]));
+   for(int c=0;c<3;c++) out[c]+=LCOL[i*4+c]*(ndl*q*q*spot); } }
 
 static const float BK[3]={1920,1920,1920};
 static const float LCM[9]={2662,2662,3328, 2662,2662,3328, 2662,2662,3328};
 
-static int expect(unsigned light, float lit[3], float fog, int ch){
+static int expect(unsigned light, float lit[3], float fog, int ch, float extra){
  unsigned mode=light>>24; float l=lit[ch];
  if(mode&0x80){ float a[3]; for(int i=0;i<3;i++){a[i]=lit[i]<0?0:lit[i]>32767?32767:lit[i];}
    float ir=BK[ch]+(LCM[ch*3]*a[0]+LCM[ch*3+1]*a[1]+LCM[ch*3+2]*a[2])/4096.f;
    ir=ir<0?0:ir>32767?32767:ir; l=((light>>(8*ch))&255)*ir/4096.f; }
+ l+=((light>>(8*ch))&255)*extra;
  float ir0=fog<0?0:fog>4096?4096:fog; float w; unsigned c=mode&7;
  w = c==1 ? (ir0-800>0?(ir0-800)*2:0) : c==2 ? (ir0<2800?ir0:3*ir0-5600) : c==3 ? ir0*0.5f : c==4 ? fog : 0;
  float v=floor(l*(1-w/4096.f)); return v<0?0:v>255?255:(int)v; }
@@ -123,11 +151,11 @@ int main(int argc,char**argv){
  glUniform3f_(glGetUniformLocation_(p,"uLcmB"),LCM[6],LCM[7],LCM[8]);
 
  GLuint rt; glGenTextures(1,&rt); glBindTexture(GL_TEXTURE_2D,rt);
- glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,VW,1,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
+ glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,VW,VH,0,GL_RGBA,GL_UNSIGNED_BYTE,NULL);
  GLuint fbo; glGenFramebuffers_(1,&fbo); glBindFramebuffer_(GL_FRAMEBUFFER,fbo);
  glFramebufferTexture2D_(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,rt,0);
  if(glCheckFramebufferStatus_(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE){printf("fbo\n");return 2;}
- glViewport(0,0,VW,1);
+ glViewport(0,0,VW,VH);
  float quad[]={-1,-1, 3,-1, -1,3};
  GLuint vao,vbo; glGenVertexArrays_(1,&vao); glBindVertexArray_(vao);
  glGenBuffers_(1,&vbo); glBindBuffer_(GL_ARRAY_BUFFER,vbo);
@@ -142,10 +170,32 @@ int main(int argc,char**argv){
   {"none",            (0x40u|0)<<24,            {300,20,255},{300,20,255}, 0, 4096},
   {"lit, knee",       ((0xC0u|2)<<24)|0x806040, {-4000,1500,3000},{4000,-2000,500}, 500, 3500},
   {"lit, bright",     ((0xC0u|0)<<24)|0xFFFFFF, {-8000,8000,-100},{9000,-500,12000}, 0, 0},
+  {"tile rgbc, knee",  ((0x40u|2)<<24)|0x808080, {60,50,40},{60,50,40}, -500, 3500},
+  {"tile rgbc, none",  ((0x40u|0)<<24)|0x6080A0, {30,30,30},{90,90,90}, 0, 0},
  };
  GLint uL=glGetUniformLocation_(p,"uTestLight"), uL0=glGetUniformLocation_(p,"uLit0"), uL1=glGetUniformLocation_(p,"uLit1");
  GLint uF0=glGetUniformLocation_(p,"uFog0"), uF1=glGetUniformLocation_(p,"uFog1");
- unsigned char px[VW*4]; int fails=0;
+ unsigned char px[VW*VH*4]; int fails=0;
+ GLint uD=glGetUniformLocation_(p,"uTestDepth"), uN=glGetUniformLocation_(p,"uLightN");
+ if(uN<0){printf("no uLightN\n");return 2;}
+ glUniform1i_(glGetUniformLocation_(p,"uScale"),1);
+ glUniform2f_(glGetUniformLocation_(p,"uLightCentre"),CX,CY);
+ glUniform1f_(glGetUniformLocation_(p,"uLightH"),H);
+ // A warm point light 500 in front of the wall's centre, a cool one to the right,
+ // and a spot pointing into the wall from the left.
+ float lp[NL*4]={0,0,DEPTH-500,1500, 900,0,DEPTH-300,1200, -800,0,DEPTH-600,2500};
+ float lc[NL*4]={0.9f,0.5f,0.2f,-1, 0.2f,0.4f,1.2f,-1, 1.0f,1.0f,0.8f,0.9848f};
+ float ld[NL*4]={0,0,0,-2, 0,0,0,-2, 0.3f,0,0.954f,0.8192f};
+ memcpy(LPOS,lp,sizeof lp); memcpy(LCOL,lc,sizeof lc); memcpy(LDIR,ld,sizeof ld);
+ glUniform4fv_(glGetUniformLocation_(p,"uLightPos"),NL,LPOS);
+ glUniform4fv_(glGetUniformLocation_(p,"uLightCol"),NL,LCOL);
+ glUniform4fv_(glGetUniformLocation_(p,"uLightDir"),NL,LDIR);
+ // pass 0: no light list, no depth (the program as 0048 had it); pass 1: the list
+ // uploaded, no depth (nothing may change); pass 2: the list and a wall at DEPTH.
+ for(int pass=0;pass<3;pass++){
+ glUniform1i_(uN,pass==0?0:NL);
+ glUniform1f_(uD,pass==2?DEPTH/65536.f:0.f);
+ printf("-- %s\n", pass==0?"no lights":pass==1?"lights, no depth":"lights on a wall at depth 2000");
  for(unsigned k=0;k<sizeof cases/sizeof cases[0];k++){
    glUniform1ui_(uL,cases[k].light);
    glUniform3f_(uL0,cases[k].l0[0],cases[k].l0[1],cases[k].l0[2]);
@@ -153,16 +203,20 @@ int main(int argc,char**argv){
    glUniform1f_(uF0,cases[k].f0); glUniform1f_(uF1,cases[k].f1);
    glClearColor(0,0,0,1); glClear(GL_COLOR_BUFFER_BIT);
    glDrawArrays(GL_TRIANGLES,0,3);
-   glReadPixels(0,0,VW,1,GL_RGBA,GL_UNSIGNED_BYTE,px);
-   int worst=0, off1=0, distinct=0, last=-1;
-   for(int x=0;x<VW;x++){
+   glReadPixels(0,0,VW,VH,GL_RGBA,GL_UNSIGNED_BYTE,px);
+   int worst=0, off1=0, distinct=0, last=-1, lit_px=0;
+   for(int y=0;y<VH;y++) for(int x=0;x<VW;x++){
      float t=(x+0.5f)/VW; float lit[3]; for(int i=0;i<3;i++) lit[i]=cases[k].l0[i]+(cases[k].l1[i]-cases[k].l0[i])*t;
      float fog=cases[k].f0+(cases[k].f1-cases[k].f0)*t;
-     for(int ch=0;ch<3;ch++){ int e=expect(cases[k].light,lit,fog,ch), g=px[x*4+ch]; int dd=abs(e-g); if(dd>worst)worst=dd; if(dd==1)off1++; }
-     int g=px[x*4]|(px[x*4+1]<<8)|(px[x*4+2]<<16); if(g!=last){distinct++; last=g;}
+     float ex[3]={0,0,0}; if(pass==2) authored(NL,x,y,ex);
+     if(ex[0]+ex[1]+ex[2]>0.01f) lit_px++;
+     const unsigned char*q=px+(y*VW+x)*4;
+     for(int ch=0;ch<3;ch++){ int e=expect(cases[k].light,lit,fog,ch,ex[ch]), g=q[ch]; int dd=abs(e-g); if(dd>worst)worst=dd; if(dd==1)off1++; }
+     int g=q[0]|(q[1]<<8)|(q[2]<<16); if(y==0&&g!=last){distinct++; last=g;}
    }
-   printf("%-14s worst |shader - formula| %d, off by 1 in %d channel(s), %d distinct colours across %d px; first %d,%d,%d last %d,%d,%d\n",
-     cases[k].name, worst, off1, distinct, VW, px[0],px[1],px[2], px[(VW-1)*4],px[(VW-1)*4+1],px[(VW-1)*4+2]);
+   printf("%-14s worst |shader - formula| %d, off by 1 in %d channel(s), %d distinct colours across %d px, %d px lit; first %d,%d,%d last %d,%d,%d\n",
+     cases[k].name, worst, off1, distinct, VW, lit_px, px[0],px[1],px[2], px[(VW-1)*4],px[(VW-1)*4+1],px[(VW-1)*4+2]);
    if(worst>1) fails++;
+ }
  }
  return fails;}

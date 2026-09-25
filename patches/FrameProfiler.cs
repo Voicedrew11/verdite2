@@ -135,7 +135,7 @@ public static class FrameProfiler
         // offered as the mouse-capture key.
         Event.AddListener<KeyboardEvent>(e =>
         {
-            if (!e.Pressed || e.Repeat || e.Key != (int)Key.P || PopupManager.AnyOpen) return;
+            if (!e.Pressed || e.Repeat || e.Key != (int)Key.P || PopupManager.AnyOpen || HotkeyGate.Typing) return;
             if (!HostWindow.IsKeyDown(Key.ShiftLeft) && !HostWindow.IsKeyDown(Key.ShiftRight)) return;
             ProfilerPanel.Instance.IsOpen = !ProfilerPanel.Instance.IsOpen;
         });

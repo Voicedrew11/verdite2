@@ -2,7 +2,9 @@
 
 **A design document, and from Phase 1 on a record of the work done against it.**
 Phase 1 is in, in two slices (see "Phase 1, the first slice" and "Phase 1, the
-second slice" under the roadmap); everything else is still design. The
+second slice" under the roadmap), with materials since keyed by face ("Faces, picked
+from the frame"); Phase 2 has its first slice ("Phase 2, the first slice");
+everything else is still design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -130,8 +132,8 @@ repository and be shared between players who each own the disc.
 | key | names | what breaks it | how the design survives it |
 |---|---|---|---|
 | **Game**: the disc serial `SLUS-00158`, as upstream's strict `PackGame.Id` | the whole pack | a different game, above all the US-boxed *King's Field II* (`SLUS-00255`) | already refused twice: by `DiscCheck.Validate` and by a strict pack game id |
-| **Area**: the area byte at `0x8017E060` **plus an area fingerprint**, an FNV-64 of the 64,000-byte tile block at `0x801C8484` **less each half's `+2`** and the `0x600`-byte collision-shape block at `0x801D8484`, taken once the area has settled and before any edit is applied. `+2` is out because the game writes a moving footprint into it (**Confirmed**, see "Phase 1, the first slice") | everything authored in that area | a different revision or region of the same game; anything that rewrites the tile block before the fingerprint is taken | the fingerprint is taken before the remaster's own edits. **On a mismatch the area's layers are switched off whole, and the editor says why**; they are never half-applied |
-| **Tile half**: `(area, x, z, lower \| upper)` | one floor or ceiling surface; the mesh instance the tile draws; its collision cell; its light record (`+4 & 0x3F`) | the game rewriting tiles at run time: the drawbridge and the minecart are tiles, not models (see "The map is an 80x80 tile grid" in `GAME_INTERNALS.md`) | the key stays valid, but what it names can change under it. An entry may carry a condition on the tile's current model index, which is an index and not payload |
+| **Area**: the area byte at `0x8017E060` **plus an area fingerprint**, an FNV-64 of the 64,000-byte tile block **less each half's `+2`** and the first `0x600` bytes of the collision-shape block, **taken from the loader's source buffer** as `func_80017244` copies each into `0x801C8484` and `0x801D8484` — the disc's bytes, before the game rewrites any. `+2` is out because the game writes a moving footprint into it (**Confirmed**, see "Phase 1, the first slice"); the live block is out because doors and lifts rewrite `+3` and `+4` and a save keeps them (**Confirmed**, see "The fingerprint moved with the game's progress") | everything authored in that area | a different revision or region of the same game | the fingerprint is taken before the remaster's own edits and before the game's. **On a mismatch the area's layers are switched off whole, and the editor says why**; they are never half-applied |
+| **Tile half**: `(area, x, z, lower \| upper)` | the mesh instance the tile draws, whole (a cave tile's floor, ceiling and rock together; see "A tile half is a whole mesh"); a face of it is `(tile half, mesh, face index)`; its collision cell; its light record (`+4 & 0x3F`) | the game rewriting tiles at run time: the drawbridge and the minecart are tiles, not models (see "The map is an 80x80 tile grid" in `GAME_INTERNALS.md`) | the key stays valid, but what it names can change under it. An entry may carry a condition on the tile's current model index, which is an index and not payload |
 | **Tile mesh**: `(area, model index at half +0)` | every instance of that mesh in the area | nothing known. **Open**: where the area's model bank lives, and so whether two areas share a mesh | once the bank is found, a content hash of the mesh gives an identity across areas |
 | **Model**: `ModelDraw.Model` (the model id), and for objects `(area, definition index at rec +0x6)` | "every creature of this kind", "every torch" | an MO morph changes a model's vertices, not its identity | a kind is the natural key for materials and for lights attached to a model |
 | **Instance**: `(area, table, spawn ordinal)`, where the ordinal is the slot the area loader filled | one placed prop or creature | dynamic slots (drops, projectiles, respawns); saved state (a killed creature, a picked-up item) | **Inferred**, not measured, that static props land in the same slot on every load. Fallback: `(area, definition index, spawn position rounded to 64 units)`, matched to the nearest live record at load |
@@ -169,8 +171,11 @@ load inside a branch (see "The area loader looks like the right hook and is not"
 in `PATCHES_AND_MODS.md`), and `OverlayLoadedEvent` fires before the tile block
 is copied. The map patches wait for the invariant instead: the player stands on a
 drawn half whose floor height matches their own Y exactly. The identity layer
-uses the same test, plus the area byte changing. It takes the fingerprint on the
-first frame both hold, and only then applies the area's layers.
+uses the same test, plus the area byte changing. It settles on the first frame
+both hold, and only then applies the area's layers. The fingerprint it settles on
+is the one hashed as the loader copied the block in; only if that copy was never
+seen does it fall back to the live block, and the probe line says `LIVE` when it
+does.
 
 ### What has to be measured before the keys are trusted
 
@@ -197,7 +202,7 @@ work into layers, and each layer has one owner.
         |  change events, on the game thread
   application (one IRemasterFeature per layer)
         |  writes side tables and uniforms, hooks through HookAttach
-  render features (vendored runtime, 0070+)   one uniform block, shader terms
+  render features (vendored runtime, 0071+)   one uniform block, shader terms
         |
   identity (patches/remaster/Identity.cs)     area, fingerprint, keys, resolvers
 ```
@@ -245,14 +250,16 @@ work into layers, and each layer has one owner.
    `RECOMPONE_PATCHES.md`, where a new number is for a new mechanism:
    - widening the material ids and moving their table into the block **amends
      `0067`**;
-   - authored lights are `0070`;
-   - fog colour and the sky fill are `0071`;
-   - normal and roughness maps are `0072`;
-   - a GPU id buffer for picking would be `0073`, and only if it turns out to be
+   - authored lights are `0071`;
+   - fog colour and the sky fill are `0072`;
+   - normal and roughness maps are `0073`;
+   - a GPU id buffer for picking would be `0074`, and only if it turns out to be
      needed.
 
-   `snap`'s readback of the presented picture took `0069`, so each planned number
-   moved one along from what this plan first said.
+   `snap`'s readback of the presented picture took `0069` and the hook order
+   `0070`, so each planned number moved along from what this plan first said.
+   `0071` is in (see "Phase 2, the first slice"); the block holds the light list
+   only so far, and the material table is still `0067`'s.
 
    All of it is **GL core only**; the 2.1 path and the software rasterizer ignore
    it, as they do `0048` and `0067`.
@@ -318,18 +325,27 @@ time and two packs cannot collide on a number:
     "brazier-coal":   { "emissive": [1.0, 0.45, 0.1], "emissiveStrength": 0.8 } } }
 ```
 
-Surfaces assign materials, from the most specific key to the least:
+Surfaces assign materials, and the most specific key wins: a face of a half, the
+whole half, a face of a mesh anywhere in the area, the whole mesh. A face list names
+the mesh it was authored on and that mesh's hash, and applies only while both still
+hold (see "Faces, picked from the frame"). `models` is not built yet:
 
 ```json
 // areas/1/surfaces.json
 { "formatVersion": 1, "area": 1, "fingerprint": "9f3c1a0be4d27765",
-  "tiles":  [ { "x": 35, "z": 36, "half": "upper", "material": "polished-stone" } ],
-  "meshes": [ { "tileModel": 12, "material": "wet-rock" } ],
+  "tiles":  [ { "x": 35, "z": 36, "half": "upper", "material": "polished-stone" },
+              { "x": 36, "z": 36, "half": "upper",
+                "mesh": 1, "meshHash": "8613becbcde29491", "faces": { "1": "mirror" } } ],
+  "meshes": [ { "mesh": 12, "meshHash": "0c41d9e2a7b3f865", "material": "wet-rock",
+                "faces": { "3": "polished-stone" } } ],
   "models": [ { "model": 41, "material": "brazier-coal" } ] }
 ```
 
 Lights are world positions in the game's own units: a tile is 2048, a height step
-is 128, and up is **−Y**:
+is 128, and up is **−Y**. Built so far: `type`, `position`, `colour`, `intensity`,
+`radius`, `direction`, `cone`, `flicker` and `enabled`; `falloff` is always the
+smooth window, and `affects` and `shadow` are kept on a round trip and read by
+nothing:
 
 ```json
 // areas/1/lights.json
@@ -421,11 +437,12 @@ is a command-line converter.
 
 ### Picking
 
-- **Tiles:** a ray cast on the CPU from the cursor, through the camera block at
-  `0x80192E18` and the GTE's H, OFX and OFY, against the 80×80 grid's drawn
-  halves, whose floors sit at `-(height << 7)`. Cheap, and it returns a tile key
-  directly. Exact for floors, not for walls: the grid carries no wall a ray can
-  read (see "Phase 1, the second slice"), so it stops only at rock and at a step up.
+- **Tiles:** the faces under the cursor, from the frame's own triangles. While the
+  editor is open every sealed packet is recorded with its face key, its screen
+  corners and its depths, and a click takes the nearest, with every other face
+  within the coplanar tolerance of it. That is what the depth buffer drew, walls
+  and ceilings included. It replaced a ray through the 80×80 grid, which could see
+  only floors (see "Faces, picked from the frame").
 - **Models:** the same ray against `ModelWalk.Scene`'s positions with a bounding
   radius per model id. It returns a `ModelDraw`, and through that an instance or
   a model key.
@@ -436,7 +453,7 @@ is a command-line converter.
 - **The map panel** doubles as a top-down tile picker: it already reads all ten
   bytes under the cursor.
 - **No GPU id buffer at first.** It would be a render-target attachment and a
-  per-triangle id, which is a new runtime mechanism (`0073`). The CPU paths
+  per-triangle id, which is a new runtime mechanism (`0074`). The CPU paths
   answer everything the first phases need.
 
 ### Gizmos
@@ -783,6 +800,21 @@ that Phase 1 needs no runtime patch was wrong by exactly this.
   the obvious candidate (**Inferred**). With `+2` left out, area 0 reads
   `3f7d7b45edcbda59` from both, and area 1 `49930d41f830e0a3` across two loads and
   an auto-reload.
+- **The fingerprint moved with the game's progress.** Reported from play: area 1
+  refused a pack authored against `b6770a…` once the player had been elsewhere,
+  reading `5056f1…`. Measured from slot 2: area 1 read `49930d…` on entry and
+  `49787d…` after leaving for area 2 and coming back, and flipped back again on a
+  reload. The probe's diff, with the ignored `+2` taken out: 12 upper halves at
+  10-13 × 47-49, `+3` (the collision shape) `75` → `32`/`33` and `+4` losing bit
+  `0x40`, and no collision-shape byte. The game rewrites a door's or a lift's tiles
+  as it plays, and that state travels with the save, so **no live reading is the
+  area's identity**. The fingerprint is now taken from `func_8001689C`'s source
+  buffer as `func_80017244` copies it (a pre-hook matching the destination and the
+  word count). Measured after: area 1 `be64c93e02071c09` on entry, after areas 2
+  and 3, and after reloads from slots 1, 3 and 2, while the live block went on
+  flipping; area 0 `58d4e515d1aea80a`, area 2 `f6f8cec2c5dc7135`, area 3
+  `370ef222844b0ee9`. The values below are the old live readings and no longer
+  match anything.
 - A pack authored against the old fingerprint was refused whole, with the reason on
   the panel and in `remaster`; editing the file's fingerprint by hand applied it
   through the watcher with no restart.
@@ -834,7 +866,8 @@ stop.
   its root, its materials, every area it holds with the fingerprint that area was
   authored against, and for the area now loaded whether it applies or why not.
   Only the working pack exists, so the list is one entry; layering is Phase 7's.
-- **Picks that stop.** `Pick.Floor` now stops a ray at a tile with no drawn floor
+- **Picks that stop** (since replaced by a pick from the frame's triangles; see
+  "Faces, picked from the frame"). `Pick.Floor` now stops a ray at a tile with no drawn floor
   (rock) and at a tile whose lowest floor is above the ray where it enters (a step
   up), and says which: `select pick` answers `no floor under that pixel: a step up
   at 44,47`. The eye's own tile is never a stop.
@@ -883,15 +916,143 @@ is for the eye.
 **Next.** The texture-key census (Phase 4) can start independently; Phase 2's
 light term is next on the main line and needs nothing more from Phase 1.
 
-### Phase 2: authored point and spot lights (`0070`)
+### A tile half is a whole mesh, and a face is the key under it
+
+**Reported from play: a material on a floor tile put the ceiling above it in the
+mirror too.** Nothing is wrong with the pick. A tile half draws one mesh, and in a
+cave that mesh is the tile's whole column: floor, ceiling and the rock between.
+`TileWalk` sets the half's material around the assembler call, so every packet the
+mesh makes carries it. The key table's "one floor or ceiling surface" was never
+what the code did.
+
+**Neither facing nor texture separates them.** Faceted rock points every way, so
+a normal threshold cuts it at arbitrary seams, and nothing promises that a floor
+and a wall use different textures. The face itself does: a mesh is a fixed list
+of polygons, and `func_80030540`, `func_8002FECC` and the clipped fans all walk it
+in order, so `(tile half, mesh, face index)` names one polygon on every path.
+
+**The subdivider keeps the order.** Read from `func_80030C94`: it walks the
+source faces in order and writes each one's pieces contiguously. A quad or a
+triangle (`0x2C`, `0x2E`, `0x24`, `0x26`) becomes four, and anything else is
+copied as one. So an output face maps back to its source face by counting.
+
+**Measured** (`KF2_FACE_PROBE=1`, `patches/remaster/FaceProbe.cs`; `KF2_AUTOSTART=2`, area 1 in
+`fdat05`, `KF2_SSR=1`, eight cameras through `view`). Every tile face was given one
+of the ids 4-7 by a hash of its key, and the reflection probe's readback holds the
+id per pixel:
+- **The mapping.** 763k source faces over 15 meshes, 11.9M output vertices: 0
+  count, command, CLUT or tpage mismatches. Every output vertex lies inside its
+  source face's box, and every source corner reappears in its four pieces. No
+  copied (non-splitting) face occurred, so that branch is read from the code only.
+- **A pick from the frame's own triangles.** Every sealed packet was recorded
+  with its key, its screen corners and its depths. The nearest triangle under a
+  point was then compared with the GPU's id at that pixel. At face centroids it
+  agreed 100% once the view had settled. On a 6-pixel grid it agreed 98-100%, and
+  almost every disagreement lay within 2 px of the picked triangle's edge.
+- **The one interior disagreement is overlapping geometry.** In one view, a band
+  near the camera went to a different face than the nearest one. Two neighbouring
+  tiles' meshes overlap there: face 1 of `801CF667` and face 1 of `801CF671` cover
+  the same pixels 1 unit of depth apart. With the depth tolerance off
+  (`KF2_ZBUFFER_BIAS=0 KF2_ZBUFFER_SLOPE=0`) the band stays, so the depth test's
+  own fight decides it, not the tolerance.
+
+**What follows for the design.** Key materials by face. Pick by the frame's
+triangles, and when faces lie within the depth tolerance under the cursor, select
+all of them: which one wins there changes per pixel and per angle, so an author
+cannot see one without the other anyway.
+
+### Faces, picked from the frame
+
+**What is in.** Materials are authored per face, and a click picks faces:
+
+- `patches/remaster/Faces.cs` -- the face being assembled (`Faces.Enter`, from
+  both of `PolyAssembler`'s face loops), the subdivider's output mapped back by
+  counting (`Faces.Subdivided`, refused whole if the count does not come out), the
+  frame's triangles recorded at `SealDepth` while the editor is open, the pick,
+  and the meshes: faces, a structural hash, and the grow queries.
+- `Surfaces` resolves four levels per face: the half's face list, the whole half,
+  the mesh's face list, the whole mesh. `TileWalk` asks for the half
+  (`Surfaces.EnterHalf`) and `Faces` for each face, and only while something
+  below the whole half is authored (`Surfaces.PerFace`).
+- `Pack` keeps face lists on tile entries and area-wide rules under `meshes`, each
+  with `mesh` and `meshHash`. A face edit is one undo entry, undone by putting the
+  area's document back.
+- The editor picks faces on a click (Shift+click adds or removes), grows a
+  selection (*Connected*: joined by an edge and the same texture; *Same texture*;
+  *Whole mesh*), selects the whole half, assigns at the half or, with *Every tile
+  with this mesh*, at the mesh, and tints the selection's triangles over the
+  picture. The map panel and the player's tile still select a whole half.
+- Shell: `select pick GX GY [add]`, `select faces F,F,...`,
+  `select grow connected|texture|mesh`, `set selected material NAME|none [tile|mesh]`;
+  a selection's reply carries `sealedIds`, what the last frame sealed each of the
+  half's faces with.
+- `Pick.cs` is gone, and with it the second slice's picks that stop at rock.
+
+**The mesh table pointer moves within a frame.** `0x8018E19C` points at the tile
+meshes only while the tile walk runs; the object walk repoints it at the models',
+so read at VSync it named nonsense (mesh 1's face count `0x00100008`). The walk
+notes it for every half (`Faces.TileTable`), meshes are read from that, and
+`Surfaces` re-applies when it moves. Its `+4` word is the far-model limit, not a
+count.
+
+**The mesh hash** is the face count and each face's command, length and corners:
+the structure a face index means, not its texture or where its vertices are, so
+a scrolling UV cannot move it. A face list whose mesh no longer hashes the same is
+dropped whole, and the editor says so.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, `KF2_SSR=1`):
+- A click on the floor in front of the player picked `tile:1:36:36:upper:1`
+  (mesh 1, four faces). Authored as a mirror, the last frame sealed face 1 with id 4
+  and faces 0, 2 and 3 with 0, and the picture changed in rows 559-1117 of 1200
+  only. The same material on the whole half sealed all four faces and reached row
+  35, the ceiling. Undo returned the face-only picture to the same hash.
+- *Connected* grew face 1 to faces 1 and 3.
+- A mesh rule on face 1 of mesh 1 reached the two other mesh-1 tiles in view and
+  left a mesh-27 tile alone.
+- After a restart the saved pack sealed the same ids. A hand-edited `meshHash`
+  dropped that face list (`meshRefused: 1`) through the watcher, and the mesh rule
+  still covered the face.
+- The pick against the GPU (`KF2_FACE_PROBE=1`, nine cameras through `view`):
+  about 20,200 grid samples, no interior disagreement, and 46 (0.23%) within 2 px
+  of a triangle edge. Selecting the coplanar faces too took the overlapping view
+  from 56 disagreements to 3.
+- `KF2_TILEWALK=verify KF2_POLYASM=verify` with face lists applied: 162 reports, all
+  0 RAM, register and GTE mismatches. 144.0 fps drawn at 20.0 ticks/s,
+  `[present] wide 288, plain 0, vram fallback 0`.
+- **Cost:** nothing authored below the half, one bool per face. Authored, a few
+  array reads per face. Recording runs only while the editor or the probe is open.
+
+**Not judged.** The editor's new controls and the selection tint have not been
+looked at, and neither has whether *Connected* grows to what an author means on
+faceted rock.
+
+**Every "click" above was the shell's `select pick`, and the window's own click
+never worked.** Reported from play: neither *Pick on the picture* nor *Place on the
+picture* did anything. The editor gated a click on `!io.WantCaptureMouse`, but the
+picture is drawn inside the Output panel, an ImGui window, so ImGui wants the mouse
+whenever the pointer is over it: the gate was shut exactly where it should open.
+`OutputView.Hovered` (`0029`, amended) is the picture's own `IsItemHovered`, which
+is also false when another panel or a popup is in front of it. The click through
+the window is **not yet confirmed by hand**.
+
+**Typing reached the hotkeys.** A key typed into a text field (a material's name)
+also arrives on the `KeyboardEvent` bus, so an `m` opened the map. The port's
+hotkeys now ask `patches/HotkeyGate.cs`: Shift+E, Shift+P and Shift+F wait while
+ImGui has a text field focused, and M, N and the mouse-capture key also wait while
+the editor is open. `mods/kf2debug`'s F-keys are left alone, since nothing types
+them.
+
+### Phase 2: authored point and spot lights (`0071`)
 
 - **Ships:**
-  - `RemasterUniforms` and the light list;
-  - the light term in `shade8` (core `PrimFs`);
-  - the light gizmo and inspector;
-  - `lights.json`;
-  - flicker, evaluated on the world tick so it holds with the world;
-  - a probe counting lights culled, uploaded and lit fragments.
+  - [x] `RemasterUniforms` and the light list;
+  - [x] the light term in `shade8` (core `PrimFs`);
+  - [~] the light gizmo and inspector: a dot and a reach ring per light, a drag
+    across the screen at the light's depth (Shift: up and down in height steps),
+    and the inspector; no axis handles;
+  - [x] `lights.json`;
+  - [x] flicker, evaluated on the world tick so it holds with the world;
+  - [~] a probe counting lights culled, uploaded and lit batches (not fragments).
 - **Depends on:** Phase 1's pack, editor and `snap`; per-pixel lighting on
   (`0048`), since the term lives in `shade8`.
 - **Risks:**
@@ -907,6 +1068,83 @@ light term is next on the main line and needs nothing more from Phase 1.
     and 5.
 - **You look at:** falloff and colour; how a light reads through the fog; a
   creature walking through a light; the look at the edge of the radius.
+
+### Phase 2, the first slice
+
+**What is in.** Point and spot lights, authored per area, drawn by the game's own
+lighting chain:
+
+- **Runtime `0071`**: `Gpu/RemasterUniforms.cs` holds up to 16 lights already in
+  the GTE's view space, with a generation; `GlCore` uploads the list when the
+  generation moves and flushes a batch built under the previous one. `PrimFs`
+  gains `authored()`: the fragment's view position rebuilt from its recovered
+  depth, H and the centre exactly as `NormalFs` does, its normal from that
+  position's screen derivatives, and per light `colour * max(N·L, 0) * (1 -
+  d²/r²)² * spot`, the spot a smoothstep between the cone's two cosines. `shade8`
+  adds it times the packet's RGBC to the lit colour, **before** the depth cue, so
+  the game's fog darkens it, the texture is modulated by it and it saturates
+  where the game's light does. Not drawn into a planar reflection's texture, whose
+  view is the mirrored camera's.
+- **What a light reaches**: a packet with a `0048` record and a recovered depth.
+  So map tiles, clipped fans and models, including the first-person arm (its
+  position is rebuilt in view space like everything else, so the design's worry
+  about view-space receivers does not arise). The HUD and anything unrecorded keep
+  their vertex colour. Per-pixel lighting and Fast geometry must be on.
+- **The record carries RGBC now.** A tile's, a clipped fan's and a flat model
+  face's record had `0` in the low bytes, which only a directional record read;
+  they carry the light colour word at `0x8006E604` that `NormalColorCol` lit them
+  with. And with lights applied, a face drawn with no fog at all keeps its record
+  (`PolyAssembler.KeepUnfogged`), where before it was dropped as interpolating
+  the same; without a record it could not be lit.
+- `patches/remaster/Lights.cs`: the area's `lights.json` behind the fingerprint;
+  before each `DrawOTag` (the camera block then holds the view the table was
+  built with) every light goes to view space as `R (w - cam) + T`, is culled
+  behind the eye and past twelve tiles, and the nearest 16 are published. Flicker
+  is value noise on a tick count taken with `FramePacing.FirstWalkOfTick`.
+- The editor gains a Lights section: *Add at eye*, *Place on the picture* (the
+  next click adds one 192 units short of the nearest surface the last frame drew
+  there, from `Faces`' triangles), a list, and the inspector: type, position,
+  colour, intensity, radius, direction and cones, flicker, on, move to eye,
+  delete. Each light is drawn over the picture; a click on its dot selects it and
+  a drag moves it. A held slider or drag is one undo entry.
+- Shell: `light list | add NAME [here | pick GX GY | X Y Z] | remove | select |
+  set NAME FIELD V...`; `list` gives each light's projected pixel and depth, and
+  the counters. `KF2_REMASTER_LIGHTS=0` leaves the pack's lights out.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, 144 fps,
+render scale 5, 16:9):
+- **The term is the formula.** `scripts/light_probe.c` runs the real `PrimFs`
+  with three lights (two points and a spot) over a wall at a known depth and
+  compares every pixel with the same formula in C: worst difference **0** over
+  all nine strips. With no light uploaded, and with lights uploaded but no depth,
+  the strips are 0 from 0048's formula as before.
+- **Off is the picture it was.** At a pinned view, `set remaster off` gave the
+  hash of the frame before any light was added (`210d55698c875fb8`), and so did
+  switching the light off with `light set ... enabled off`; undo went back to the
+  earlier lit hash.
+- **A pick places the light where it was clicked**: `light add warm pick 160 170`
+  projected back to game pixel `160.1,170.1` at depth 1447. The brightest changed
+  pixel was at `170,172`, and it followed the light through four more cameras
+  through `view` -- yaw ±100, pitch 150, and the eye moved 800 units -- at 9-19
+  pixels from the light's own projection, the offset the surface's slope gives.
+  No pixel ever got darker.
+- Radius 1024 changed 27.9% of the picture inside one rectangle round the light;
+  4096 changed 97.9%.
+- Flicker ran at 20 steps a second with the world, and three snaps with the
+  editor open were identical.
+- A restart read the saved `lights.json` and sent both lights. Under
+  `KF2_POLYASM=verify KF2_TILEWALK=verify` with them applied: 2,517 reports, all 0
+  RAM, register and GTE mismatches.
+- **Cost**, 16 lights against none at render scale 5 (2140×1200): the frame's GPU
+  batches 0.51 → 0.69 ms by the frame capture's timers (0.97 in a noisier first
+  capture), CPU work 0.96 → 0.99 ms a frame, 144.0 fps drawn at 20.0 ticks/s
+  either way, `[present] wide 288`. Off, one test a frame and one `int` compare
+  per triangle.
+
+**Not judged.** Nothing about the look: falloff, colour, how a light reads in the
+fog, the edge of the radius, a creature walking through one. Nor the editor's
+Lights section, the gizmos and the drag. Render scale 1 was not measured, and
+neither was a light on the arm.
 
 ### Phase 3: the material system proper
 
@@ -930,7 +1168,7 @@ light term is next on the main line and needs nothing more from Phase 1.
       and the mip atlas;
     - do the fluid slots scroll a replaced water texture through `0053`;
     - fixes by amendment to those patches;
-  - normal and roughness maps, **only paired with a replacement texture** (`0072`),
+  - normal and roughness maps, **only paired with a replacement texture** (`0073`),
     read in `PrimFs` for the light term and passed to the surface buffer for SSR;
   - a texture-key census that tells a pack author which textures of an area the
     pack covers.
@@ -944,7 +1182,7 @@ light term is next on the main line and needs nothing more from Phase 1.
 
 - **Ships:**
   - light-record overrides after stage 1's copy;
-  - fog colour and curve (`0071`);
+  - fog colour and curve (`0072`);
   - a sky fill at the far plane that respects `Overlay`, so the HUD is never
     painted over;
   - `atmosphere.json`.
@@ -990,7 +1228,7 @@ light term is next on the main line and needs nothing more from Phase 1.
 - shadows by marching the tile grid;
 - port-drawn props;
 - opt-in object and creature placement;
-- a GPU id buffer (`0073`), if picking is ever too slow.
+- a GPU id buffer (`0074`), if picking is ever too slow.
 
 ### Dependencies, in one list
 

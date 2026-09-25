@@ -28,7 +28,7 @@ namespace Kf2;
 ///     nearby [radius]       live world-table records within radius of the
 ///                           player, nearest first (positions only; buf6's
 ///                           entity reading is still Inferred)
-///     edit, select, set, pack, remaster
+///     edit, select, set, pack, remaster, light
 ///                           the remaster editor's verbs (Remaster.Shell)
 ///     snap [hash|PATH] [after N]
 ///                           the presented picture (Remaster.Snap), answered
@@ -326,6 +326,7 @@ public static class AgentServer
             case "set":
             case "pack":
             case "remaster":
+            case "light":
             case "snap":
             case "view":
                 Enqueue(_fast, cmd);
@@ -401,7 +402,7 @@ public static class AgentServer
         "map" => DoMap(cmd.Arg1),
         "goto" => DoGoto(cmd.Arg1),
         "view" => DoView(cmd.Arg1),
-        "edit" or "select" or "set" or "pack" or "remaster" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
+        "edit" or "select" or "set" or "pack" or "remaster" or "light" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
 

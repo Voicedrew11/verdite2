@@ -156,6 +156,9 @@ public static class PlanarWalk
     const int StackWords = 9;
 
     static bool _recording, _replaying;
+
+    /// <summary>Set while the tile walk runs from the mirrored camera.</summary>
+    public static bool Mirroring { get; private set; }
     static uint _walkLo, _walkHi;
     static int _n;
     static uint[] _regs = new uint[4 * 128];
@@ -287,7 +290,9 @@ public static class PlanarWalk
 
             c.SP = walkSp;
             c.RA = 0x80034684u;
-            KingsField2.func_80031C94(c, mem);
+            Mirroring = true;
+            try { KingsField2.func_80031C94(c, mem); }
+            finally { Mirroring = false; }
 
             for (int i = 0; i < _n; i++)
             {

@@ -13,7 +13,7 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Fifty-one of the fifty-eight are load-bearing; `0002`, `0003`, `0015`, `0046`,
+Fifty-two of the fifty-nine are load-bearing; `0002`, `0003`, `0015`, `0046`,
 `0065` and `0069` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
@@ -305,6 +305,11 @@ Four files in the directory have no entry below:
   a window pixel back into a game pixel — which is what the menu pointer needs to
   ask which item is under the cursor. UI only — **no recompile**. See "A dynamic
   map" in `docs/PATCHES_AND_MODS.md` and "The menu pointer" in `docs/INPUT.md`.
+  Since amended: `OutputView.Hovered`, the picture's own `IsItemHovered`. The
+  picture is an ImGui window, so `io.WantCaptureMouse` is true whenever the
+  pointer is over it, and the remaster editor's click gate
+  (`!WantCaptureMouse`) never opened: neither a pick nor a light placement on
+  the picture did anything. The amendment is the second diff in the patch file.
 
 - `0030-expose-host-pump.patch` — the shipped launcher has to build the game
   before there is a game to run, and that blocks for seconds; a window that stops
@@ -892,6 +897,11 @@ Four files in the directory have no entry below:
   HUD therefore stays 2D to the reflection pass (measured: its overlay count did not
   fall). The amendment is the fourth diff in the patch file. See "The HUD's
   transform in C#" in `docs/PATCHES_AND_MODS.md`.
+  Since amended: the probe's readback keeps its per-pixel info texels
+  (`ScreenReflections.LastInfo`, `LastW`, `LastH`, `MapSerial`), so the port can ask
+  which material the GPU drew at a pixel. `patches/remaster/FaceProbe.cs` is the
+  reader. The amendment is the fifth diff in the patch file. See "A tile half is a
+  whole mesh, and a face is the key under it" in `docs/REMASTER.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
@@ -945,6 +955,24 @@ Four files in the directory have no entry below:
   existing order is unchanged. `Stage13.HookOrder` names the orders on the
   renderer. **No recompile.** See "The hooks on stage 13 are ordered by what they
   need" in `docs/PATCHES_AND_MODS.md`.
+
+- `0071-authored-lights.patch` — the remaster's point and spot lights, as one more
+  term in the lit colour. `Gpu/RemasterUniforms.cs` holds up to 16 lights the port
+  has already put in the GTE's view space (position and radius, colour times
+  intensity and the spot's inner cosine, direction and the outer cosine), with a
+  generation. `PrimFs` gains `authored()`: the fragment's view position rebuilt
+  from its recovered depth, H and the centre as `NormalFs` does, its normal from
+  that position's screen derivatives (taken before any per-fragment test), and a
+  smooth-windowed, cosine-weighted sum over the lights; `shade8` takes it and adds
+  it times the packet's RGBC (the record's low bytes) to the lit colour before the
+  depth cue, so fog, texture and saturation apply to it as to the game's light.
+  Only a packet with a `0048` record and a depth is lit, and nothing is lit in a
+  planar texture (`uClipOn`). `GlCore` uploads the arrays when the generation
+  moves, sends the centre and H per batch like `uClipCentre`, and flushes a batch
+  built under the previous generation (`FlushReason.StateLight`). With no light
+  the shader's output is 0048's to the bit (`scripts/light_probe.c`).
+  `patches/remaster/Lights.cs` is the only writer. GL core only. **No recompile.**
+  See "Phase 2, the first slice" in `docs/REMASTER.md`.
 
 - `0069-imgui-size-after-fullscreen.patch` — Silk's `ImGuiController` takes the
   window's size only from the `Resize` event, and GLFW on Wayland raises none when
