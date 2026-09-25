@@ -483,7 +483,8 @@ between game ticks*, which writes `FrameSmoothing`, `FrameSmoothing.Position`,
 five of their `interface.ini` keys, so a restart restores what was clicked. The
 parts stay reachable from the console — `KF2_SMOOTH`, `KF2_SMOOTH_POS`,
 `KF2_SMOOTH_OBJECTS`, `KF2_SMOOTH_ANIM`, `KF2_SMOOTH_FLUID` — and that is now
-the only way to set them apart.
+the only way to set them apart. The compass needle rides with the view
+(`KF2_SMOOTH_COMPASS`; see "The compass is carried with the view").
 
 **The tick sits under the frame rate rather than in Enhancements**, sharing the
 `Frame pacing` heading with it. Everything else under Enhancements is a choice
@@ -5952,9 +5953,9 @@ drawn from an override.
 
 ### The compass needle is held to the tick
 
-**A rate defect of the SpriteAnim and TintHold class, measured; the needle's swing
-has not been looked at.** On by default for that reason, as those two are;
-`KF2_STAGE13_NEEDLE=0` is the comparison.
+**A rate defect of the SpriteAnim and TintHold class, measured, and judged by eye:
+the swing reads correct.** On by default, as those two are; `KF2_STAGE13_NEEDLE=0`
+is the comparison.
 
 Stage 13's body steps the needle's spring once a call (see "Stage 13's HUD block,
 and the compass needle" in `docs/GAME_INTERNALS.md`): the speed at `0x8006E608`
@@ -5996,6 +5997,67 @@ routine runs and nothing is held.
 
 What is left of the class is `func_800331B4`'s per-object ambient-sound retrigger at
 `rec+0x40`, in [TODO.md](TODO.md).
+
+Held to the tick, the needle then stepped at 20 Hz while the view it reads turned
+at the render rate; that is the next section.
+
+### The compass is carried with the view
+
+**Mechanism measured, and the picture judged**: the held needle was looked at and
+read correct but stepping; the carried one has not been looked at yet.
+
+The needle is the HUD's reading of the view's heading, so it is carried by
+`FrameSmoothing`, on the view's switch and by the view's rule, rather than by a
+smoother of its own. What the two share is now one type, `WrappedAngle`: a 12-bit
+angle as the game produced it on its last two ticks, `Roll` on a tick, `Shift` for a
+placement between ticks (the whole pair moves, so the lag and the speed carry
+through), and a `Step(phase)` taken the short way round the wrap and added to the
+game's own previous word. The view's yaw was rewritten onto it with its arithmetic
+unchanged; the needle is its second user.
+
+What differs is only where the value lives and who reads it. The view's yaw is
+bracketed around stage 8; the needle's is record 0's `+0x1A`, written in stage 13's
+own body and read by one function, the HUD builder `func_80031D5C`. So
+`FrameSmoothing` puts a pre and a post on the builder: the pre writes
+`lerp(prev, cur, phase)` into the record and the post puts the stepped value back,
+so the spring's next step starts from what the game stepped. The pair is attached
+and checked like the view's, and a failure leaves the needle on the tick and the
+view carrying.
+
+**It is sampled when the spring moves it, not when the frame ticks.** `Stage13`
+publishes the needle as the simulation state it is: `NeedleYaw` (the address),
+`NeedleOnTick` (the C# routine stepped it on the tick on the last frame it drew,
+false whenever the recompiled routine draws, where it moves every frame and there is
+nothing between ticks to carry), and `NeedleSteps`, a count of steps that the carry
+compares against the one it last saw. One source of truth for "the needle moved",
+with no second reading of the tick identity to disagree with the first. A value
+the carry did not see stepped is a placement and shifts the pair.
+
+**It is carried only in a frame the renderer draws** (`Stage13.InFrame`): the main
+loop's, a modal loop's, a redraw. A menu's pass (`Stage13.DrawScene`) draws the world
+as it stands — the view and the objects are not carried there either, since
+their brackets are on stages 8 and 13 and the pass calls neither — so the needle
+is left where it stands instead of rocking with a phase that no longer means
+anything. `KF2_SMOOTH_COMPASS=0` leaves it on the tick; `KF2_SMOOTH=0` turns it off
+with the rest of the view.
+
+Measured with `KF2_SMOOTH_PROBE=1` at 144 fps, turning in area 1 (three 2.5 s turns),
+per 2 s window of about 288 frames:
+
+| | needle drawn at a new angle |
+|---|---|
+| `KF2_SMOOTH_COMPASS=0` | 35-40 (the tick) |
+| carried | 262-289 |
+
+In the menu's windows it drew 1 new angle, and through `modal-rate`'s loops,
+standing still, 0. 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`, and
+`KF2_STAGE13=verify` still 0 mismatches (the needle is not on the tick there, so
+nothing is carried).
+
+**One thing stays as the routine has it**: the spring chases the yaw in the camera
+block, which on a tick frame is the carried view at that frame's phase, not the
+tick's own yaw. That was true before the needle was held, and it is a bias of at
+most the phase of one frame of one tick's turn in what the spring is fed.
 
 ### The hooks on stage 13 are ordered by what they need
 

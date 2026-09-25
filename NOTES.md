@@ -327,6 +327,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Stage 13 in C#
 - Drawing the frame from another camera
 - The compass needle is held to the tick
+- The compass is carried with the view
 - The hooks on stage 13 are ordered by what they need
 - A pass of the port's own
 
