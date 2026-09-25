@@ -7,8 +7,8 @@ Static recompilation of **King's Field** (NTSC-U, `SLUS-00158`) using
 everything else lives in `docs/`, split by what you would be doing when you need
 it. **Nine documents became ten**: `docs/PACKAGING.md` is how the port becomes
 something a person can download, which is a different job from building it. The
-eleventh, `docs/REMASTER.md`, is a design for work not yet started: the authoring
-tools for a remaster.
+eleventh, `docs/REMASTER.md`, is the design for a remaster's authoring tools,
+and the record of the work against it; Phase 1's first slice is in.
 
 **Source comments still say `See "X" in NOTES.md`, and the text they mean is no
 longer in this file.** The section titles are unchanged, so the map below resolves
@@ -368,7 +368,7 @@ Next steps, and an index of what is reported but not diagnosed.
 
 ### [REMASTER.md](docs/REMASTER.md)
 
-A design, nothing implemented: the authoring tools (identity, packs, editor) and the engine work for a remaster the user places, tunes, saves and shares.
+The authoring tools (identity, packs, editor) and the engine work for a remaster the user places, tunes, saves and shares. Phase 1's first slice is in: a material per tile half, from the working pack, through the editor (Shift+E) or `KF2_SHELL`.
 
 - What this is, and what it is not
 - What exists, and what each piece gives the remaster
@@ -380,6 +380,7 @@ A design, nothing implemented: the authoring tools (identity, packs, editor) and
 - Level editing: what can be edited and what can only be decorated
 - Rules every phase keeps
 - The phased roadmap
+- Phase 1, the first slice
 - Open decisions
 
 ## Where to write a new finding

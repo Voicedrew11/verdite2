@@ -248,6 +248,16 @@ public sealed class MapPanel : IPanel
                 : $"  floor Y {-(h << 7)}{((flags & Map.StopsFlood) != 0 ? ", stops the visibility flood" : "")}");
         }
 
+        // The remaster editor's second picker: the half the map is showing.
+        if (Remaster.Editor.Open)
+        {
+            ImGui.Separator();
+            int shown = Map.HalfOffset == 0 ? Remaster.TileKey.Lower : Remaster.TileKey.Upper;
+            var key = new Remaster.TileKey(Map.Area, tx, tz, shown);
+            ImGui.TextDisabled($"right-click: select {key} ({Remaster.Pack.TileMaterial(key) ?? "no material"})");
+            if (ImGui.IsMouseClicked(ImGuiMouseButton.Right)) Remaster.Editor.Select(key);
+        }
+
         // The marker readout is the same instrument one layer up: nothing in this
         // repo maps an object's type byte to a noun, so the tooltip prints the
         // slot, the type and the definition index of everything standing in the

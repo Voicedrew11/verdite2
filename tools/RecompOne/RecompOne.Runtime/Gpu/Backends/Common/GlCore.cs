@@ -908,8 +908,10 @@ public sealed class GlCore : IGpuBackend
             }
             if (m != SurfaceMaterial.None)
             {
+                // A blended triangle carries 128 over its material (NormalFs).
+                float gm = zMode == 2 ? m + SurfaceMaterial.BlendedFlag : m;
                 _kTarget.Geo.Frame(_frame, GteDepth.Generation);
-                _kTarget.Geo.Add(GeoVert(a, m), GeoVert(b, m), GeoVert(c, m));
+                _kTarget.Geo.Add(GeoVert(a, gm), GeoVert(b, gm), GeoVert(c, gm));
             }
         }
         if (lightGen >= 0) _kLightGen = lightGen;

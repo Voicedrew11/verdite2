@@ -28,6 +28,8 @@ namespace Kf2;
 ///     nearby [radius]       live world-table records within radius of the
 ///                           player, nearest first (positions only; buf6's
 ///                           entity reading is still Inferred)
+///     edit, select, set, pack, remaster
+///                           the remaster editor's verbs (Remaster.Shell)
 ///
 /// Off unless KF2_SHELL is set, like every other agent switch: an unasked
 /// listener is worse than one switch to find (the mouse-look precedent). A
@@ -297,8 +299,11 @@ public static class AgentServer
     static string Route(string line)
     {
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // goto and the remaster verbs take the whole rest of the line.
+        bool whole = parts[0].Equals("goto", StringComparison.OrdinalIgnoreCase)
+                     || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
-                          parts.Length > 1 ? (parts[0].Equals("goto", StringComparison.OrdinalIgnoreCase) ? string.Join(' ', parts[1..]) : parts[1]) : "",
+                          parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",
                           parts.Length > 2 ? parts[2] : "",
                           new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously));
 
@@ -310,6 +315,11 @@ public static class AgentServer
             case "help":
             case "nearby":
             case "map":
+            case "edit":
+            case "select":
+            case "set":
+            case "pack":
+            case "remaster":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -376,6 +386,7 @@ public static class AgentServer
         "ending" => DoEnding(cmd.Arg1),
         "map" => DoMap(cmd.Arg1),
         "goto" => DoGoto(cmd.Arg1),
+        "edit" or "select" or "set" or "pack" or "remaster" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
 
@@ -544,10 +555,11 @@ public static class AgentServer
     static string DoHelp()
     {
         var sb = new StringBuilder("{\"ok\":true,\"cmd\":\"help\",\"commands\":[");
-        for (int i = 0; i < HelpCommands.Length; i++)
+        var all = HelpCommands.Concat(Remaster.Shell.Help).ToArray();
+        for (int i = 0; i < all.Length; i++)
         {
             if (i > 0) sb.Append(',');
-            sb.Append(Q(HelpCommands[i]));
+            sb.Append(Q(all[i]));
         }
         sb.Append("]}");
         return sb.ToString();

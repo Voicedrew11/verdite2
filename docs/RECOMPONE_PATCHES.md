@@ -875,6 +875,15 @@ Four files in the directory have no entry below:
   to its crossing and kept only if the ray is within the thickness of the surface
   there; otherwise the march goes on. The amendment is the second diff in the patch
   file.
+  Since amended: `NormalFs` took a triangle's opacity from its material id
+  (`vM < 1.5`), which was right only while every id above 1 was water. An authored
+  id on an opaque floor would have dropped that floor out of the normal buffer. A
+  blended triangle now carries its material plus `SurfaceMaterial.BlendedFlag` (128)
+  in the surface list, and `NormalFs` takes opacity from that and the id from the
+  rest; `SurfaceMaterial.FirstAuthored` (4) is where a port's ids start. Every
+  existing id reaches the shader with the opacity it had, so the pass is unchanged.
+  The amendment is the third diff in the patch file. See "Phase 1, the first slice"
+  in `docs/REMASTER.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass

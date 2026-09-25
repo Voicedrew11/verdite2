@@ -1,6 +1,8 @@
 # The remaster: authoring tools first, effects second
 
-**A design document, not a record of work done. Nothing here is implemented.** The
+**A design document, and from Phase 1 on a record of the work done against it.**
+The first slice of Phase 1 is in (see "Phase 1, the first slice" under the
+roadmap); everything else is still design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -128,7 +130,7 @@ repository and be shared between players who each own the disc.
 | key | names | what breaks it | how the design survives it |
 |---|---|---|---|
 | **Game**: the disc serial `SLUS-00158`, as upstream's strict `PackGame.Id` | the whole pack | a different game, above all the US-boxed *King's Field II* (`SLUS-00255`) | already refused twice: by `DiscCheck.Validate` and by a strict pack game id |
-| **Area**: the area byte at `0x8017E060` **plus an area fingerprint**, an FNV-64 of the 64,000-byte tile block at `0x801C8484` and the `0x600`-byte collision-shape block at `0x801D8484`, taken once the area has settled and before any edit is applied | everything authored in that area | a different revision or region of the same game; anything that rewrites the tile block before the fingerprint is taken | the fingerprint is taken before the remaster's own edits. **On a mismatch the area's layers are switched off whole, and the editor says why**; they are never half-applied |
+| **Area**: the area byte at `0x8017E060` **plus an area fingerprint**, an FNV-64 of the 64,000-byte tile block at `0x801C8484` **less each half's `+2`** and the `0x600`-byte collision-shape block at `0x801D8484`, taken once the area has settled and before any edit is applied. `+2` is out because the game writes a moving footprint into it (**Confirmed**, see "Phase 1, the first slice") | everything authored in that area | a different revision or region of the same game; anything that rewrites the tile block before the fingerprint is taken | the fingerprint is taken before the remaster's own edits. **On a mismatch the area's layers are switched off whole, and the editor says why**; they are never half-applied |
 | **Tile half**: `(area, x, z, lower \| upper)` | one floor or ceiling surface; the mesh instance the tile draws; its collision cell; its light record (`+4 & 0x3F`) | the game rewriting tiles at run time: the drawbridge and the minecart are tiles, not models (see "The map is an 80x80 tile grid" in `GAME_INTERNALS.md`) | the key stays valid, but what it names can change under it. An entry may carry a condition on the tile's current model index, which is an index and not payload |
 | **Tile mesh**: `(area, model index at half +0)` | every instance of that mesh in the area | nothing known. **Open**: where the area's model bank lives, and so whether two areas share a mesh | once the bank is found, a content hash of the mesh gives an identity across areas |
 | **Model**: `ModelDraw.Model` (the model id), and for objects `(area, definition index at rec +0x6)` | "every creature of this kind", "every torch" | an MO morph changes a model's vertices, not its identity | a kind is the natural key for materials and for lights attached to a model |
@@ -155,6 +157,12 @@ position, a VRAM position on its own, an LBA, and a slot number for anything tha
 can be spawned.
 
 ### When an area has settled
+
+**Confirmed in Phase 1, with two additions the design did not have.** A New Game
+passed the floor test once *before* `fdat02` loaded, on the block the last area
+left, so an area can settle only after an `fdat` module has loaded since the last
+executable did. And the fingerprint must read the same twice 200 ms apart, so a
+block still being copied in cannot settle.
 
 **The loader is not the signal.** `func_8001689C` is called every frame with the
 load inside a branch (see "The area loader looks like the right hook and is not"
@@ -662,19 +670,25 @@ has to look at, because nobody else can.
 editor, saved, reloaded and rendered. A material, not a light, because the
 reflection pass already reads `SurfaceMaterial` and `GtePacketDepth.Rec.Material`
 already exists, so **no new runtime patch is needed**. The whole slice is
-port-side.
+port-side. (Wrong by one amendment to `0067`; see "Phase 1, the first slice".)
+
+**Status:** [x] done and measured, [~] done in part, [ ] not started.
 
 - **Ships:**
-  - `Identity` with area, fingerprint and tile half only;
-  - `TileWalk` publishing the half it is assembling (`x, z, half`), the way
+  - [x] `Identity` with area, fingerprint and tile half only;
+  - [x] `TileWalk` publishing the half it is assembling (`x, z, half`), the way
     `ModelWalk.SetSubmit` publishes a model;
-  - `PolyAssemblerDepth.SealDepth` writing `Rec.Material` from a table the
+  - [x] `PolyAssemblerDepth.SealDepth` writing `Rec.Material` from a table the
     surfaces feature fills;
-  - `SurfaceMaterial.Reflectivity`/`F0` filled from `materials.json`;
-  - the pack loader (the working pack only);
-  - a minimal editor: tile pick by ray and from the map panel, a material
-    inspector, save, reload, live reload, undo;
-  - the `edit`, `select`, `set`, `pack` and `snap` shell verbs.
+  - [x] `SurfaceMaterial.Reflectivity`/`F0` filled from `materials.json`;
+  - [x] the pack loader (the working pack only);
+  - [~] a minimal editor: tile pick by ray and from the map panel, a material
+    inspector, save, reload, live reload, undo -- all in, driven over the shell
+    and used by hand to place the first mirror floor;
+  - [~] the `edit`, `select`, `set`, `pack` and `snap` shell verbs -- all but
+    `snap`, which has to read the presented target;
+  - [ ] the Remaster packs settings page, and the switch under Video ▸
+    Enhancements (the editor's checkbox saves `kf2.remaster.on` for now).
 - **Depends on:** reflections being switched on (`KF2_SSR=1`), since that is the
   only reader of a material today.
 - **Risks:**
@@ -683,20 +697,110 @@ port-side.
   - SSR's water assumptions (the fog curve, the sky fallback) may look wrong on
     a floor. That is for the eye to judge, and it is useful to learn early.
 - **Mechanism measured by:**
-  - `SurfaceMaterial.FromPacket` and `ByMaterial[id]` rising for the authored id;
-  - the SSR readback's reflective share with the tile in view;
-  - the same tile key resolving after a `warp` out and back, after `load 2`, and
+  - [x] `SurfaceMaterial.FromPacket` and `ByMaterial[id]` rising for the authored id;
+  - [~] the SSR readback's reflective share with the tile in view -- the id shows
+    in the readback's map, but the only tile tried was the water surface, so the
+    share could not move;
+  - [x] the same tile key resolving after a `warp` out and back, after `load 2`, and
     after a restart;
-  - the fingerprint identical across those;
-  - `snap` identical to baseline with the pack disabled;
-  - `KF2_POLYASM=verify` and `KF2_TILEWALK=verify` clean;
-  - 144.0 at 20.0.
-- **You look at:**
+  - [x] the fingerprint identical across those -- once `+2` was left out of it;
+  - [ ] `snap` identical to baseline with the pack disabled;
+  - [x] `KF2_POLYASM=verify` and `KF2_TILEWALK=verify` clean;
+  - [x] 144.0 at 20.0.
+- **You look at** (the first judged: a dry tile at reflectivity 1 reads as a
+  mirror, placed correctly):
   - whether the floor reads as polished stone or as a mirror;
   - whether the reflection's fog and sky fallback look wrong on something that
     is not water;
   - whether the editor is usable: picking, the inspector, the save round trip.
 - **Cost:** one table read per sealed tile packet while on, one bool while off.
+
+### Phase 1, the first slice
+
+**What is in.** Everything in the Ships list above except `snap`, the Remaster
+packs settings page and the camera-free parts of the editor's gizmos:
+
+- `patches/remaster/Identity.cs` — area, fingerprint, the settle test, `TileKey`
+  (`tile:A:X:Z:lower|upper`), record address to key and back.
+- `TileWalk.CurrentRecord` — the half `func_80031950` is assembling, set around the
+  assembler call. `PolyAssembler.TileMaterial` is what `Surfaces` resolved for it,
+  and `SealDepth` writes it into `GtePacketDepth.Rec.Material` for every packet it
+  seals, clipped fans included. A material therefore needs the C# half
+  (`KF2_TILEWALK_TILE=0` authors nothing).
+- `patches/remaster/Pack.cs` — the working pack (`packs/working`, or
+  `KF2_REMASTER_PACK`), `materials.json` and `areas/<n>/surfaces.json` kept as JSON
+  trees so unknown fields survive, upstream's `pack.json` written once, a
+  `FileSystemWatcher` whose parse is swapped in at the next VSync, and one undo stack.
+- `patches/remaster/Surfaces.cs` — the one `IRemasterFeature` so far: names to ids
+  from `SurfaceMaterial.FirstAuthored`, the fingerprint gate, an 80×80×2 id table.
+- `patches/remaster/Pick.cs` — the game's projection both ways: the view matrix at
+  `0x80192E18` less the camera (whose 16-bit X and Z are unwrapped against the
+  player's), and `GteDepth.ProjH`/`ProjCx`/`ProjCy`. A floor ray is walked cell by
+  cell through the grid; walls are not read, so a ray can pass through one.
+- `patches/remaster/Editor.cs` — Shift+E; pauses the world; picks by a click on the
+  picture, by right-click in the docked map, or as the player's tile; outlines the
+  selection; a material library with reflectivity and F0 sliders (one undo entry per
+  drag); Save, Reload, Undo, Redo.
+- `patches/remaster/Shell.cs` — `edit`, `select`, `set`, `pack`, `remaster` on
+  `KF2_SHELL`, through the same calls the panel makes.
+
+**The runtime needed one change after all, an amendment to `0067`.** `NormalFs`
+decided opacity from the id (`vM < 1.5`), so any authored id on an opaque floor
+would have taken that floor out of the occlusion pass's normals. Opacity now
+travels with the triangle; every existing id is drawn as before. The design's claim
+that Phase 1 needs no runtime patch was wrong by exactly this.
+
+**Measured** (`KF2_AUTOSTART=new`, `KF2_SSR=1`, area 0 in `fdat02`):
+- The authored id reaches the classifier and the surface buffer:
+  `SurfaceMaterial.ByMaterial[4]` and `FromPacket` rise together (4,032 in one
+  window), about 4,600 authored packets a second for two tiles in view.
+- The pick and the projection agree with the picture: `select pick 160 200` chose
+  tile 37,45, and the SSR readback's material map then showed the new id in the
+  cells covering game pixels 115-169 by 195-210. Picks follow the player's heading.
+- Tile 37,45 is **the water surface itself** — the water is a tile, drawn blended by
+  the tile assembler — so a packet material there replaces `Water` and the pixels
+  stay reflective (the readback's reflective share did not move, 36.3%). It is also
+  the amendment's test: a blended tile with an authored id stays translucent.
+- **The first fingerprint was too strict.** Area 0 read `75069e…` from a New Game
+  and `fab65f…` entered from save slot 2. The probe's diff: 32 empty lower halves
+  (model `FF`) in two 4×4 blocks, `+2` bit `0x04` set in one and cleared in the
+  other, nothing else different. Something four tiles square moves between the two
+  saves and stamps its footprint into the collision flags; the ship by the shore is
+  the obvious candidate (**Inferred**). With `+2` left out, area 0 reads
+  `3f7d7b45edcbda59` from both, and area 1 `49930d41f830e0a3` across two loads and
+  an auto-reload.
+- A pack authored against the old fingerprint was refused whole, with the reason on
+  the panel and in `remaster`; editing the file's fingerprint by hand applied it
+  through the watcher with no restart.
+- A hand edit adding a material with an unknown field (`roughness`) and a root field
+  reloaded live and survived the next save.
+- `KF2_TILEWALK=verify KF2_POLYASM=verify` with materials applied: 1,297 reports,
+  all 0 RAM, register and GTE mismatches.
+- 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`, vertex map 97.1% hit, with
+  the remaster on. `set remaster off` in the same run: sealed packets stop, the
+  authored id's count stops growing.
+- **Off costs one test a frame** (`Host.Frame` returns before reading anything) and
+  one byte store per sealed packet, which writes the `None` the record always held.
+
+**Not measured, and why.** `snap` is not built: `GpuHle.Backend.ReadVram` reads 1×
+VRAM, and the reflection pass composites at present, after VRAM, so a VRAM hash
+cannot see what a material changes. `snap` has to read the presented target, which
+is a runtime hook (`GlCore.PresentDisplay`) — next. Until then "off is
+bit-identical" rests on the record holding `None` with the switch off and on the
+amendment keeping every existing id's opacity, both read from the code.
+
+**Looked at.** One dry floor tile in area 0, set to reflectivity 1 through the
+editor, judged good as a first step: it reads as a mirror of the doorway and the
+wall above it, in the right place and the right way up. The editor was used end to
+end to get there (pick, material, sliders). Still to judge: a floor at a *partial*
+reflectivity (does it read as polished stone), a larger area of floor, and the
+speckled fringe along the reflected wall edge in the same screenshot, which is
+where the march's thickness test decides hit or miss and has not been looked into.
+
+**Next.** `snap` from the presented target; the Remaster packs settings page and
+the saved switch under Video ▸ Enhancements (the editor's checkbox saves
+`kf2.remaster.on` today); picking that stops at walls; the texture-key census
+(Phase 4) can start independently.
 
 ### Phase 2: authored point and spot lights (`0069`)
 

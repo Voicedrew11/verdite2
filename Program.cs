@@ -712,6 +712,14 @@ Kf2.PlanarWalk.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR"),
                          Environment.GetEnvironmentVariable("KF2_PLANAR_PROBE"));
 Kf2.PlanarWalk.Install();
 
+// The remaster (docs/REMASTER.md): authored data from a pack, applied over the
+// game. Phase 1 is a material per tile half, read by the reflection pass. Off by
+// default and nothing is authored until the editor (Shift+E) saves something.
+Kf2.Remaster.Host.Configure(Environment.GetEnvironmentVariable("KF2_REMASTER"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_PACK"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_PROBE"));
+Kf2.Remaster.Host.Install();
+
 // PGXP -- upstream RecompOne's own vertex tracking, backported as
 // patches/recompone/0034-0036, and the second mechanism the port has for the one
 // number everything above depends on. GteVertexMap pairs memory reads and writes
