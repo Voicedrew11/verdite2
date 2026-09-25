@@ -785,6 +785,13 @@ internal static class GlShaders
         // 0060. The texture rectangle, and the atlas entry with its flags.
         layout(location = 10) in uvec2 inTex;
 
+        // 0051 draws an opaque tested batch twice with this program -- depth with
+        // colour masked, then colour against it -- and the driver may compile
+        // those as two variants. Only `invariant` obliges them to put a vertex in
+        // the same place. See "The world lost its textures on NVIDIA" in
+        // docs/RENDERING.md.
+        invariant gl_Position;
+
         // vUV is the one thing that wants correcting: handing gl_Position a real W
         // makes the rasterizer interpolate it in 1/W, which is exactly the
         // perspective-correct mapping the PlayStation could not afford. vColor is
@@ -807,23 +814,22 @@ internal static class GlShaders
         uniform vec2 uVertexOffset;
         uniform vec2 uPosBias;
         uniform vec2 uFbInv;
-        uniform int uDiagW;
 
         void main() {
             vec2 p = (inPos + uVertexOffset + uPosBias) * uFbInv - 1.0;
-            // Exactly 1 is the "no depth was recovered" case, and it is written out
-            // as the original expression rather than as p*1/1, so a primitive
-            // without perspective data lands on the same pixels to the last bit.
+            // W is 1 where no depth was recovered, and p * 1.0 is p exactly, so
+            // such a primitive still lands on the same pixels to the last bit.
+            // **No select on inW.** `inW == 1.0 ? vec4(p, 0, 1) : vec4(p * inW, 0, inW)`
+            // lost every world texture on NVIDIA with the depth buffer on: the
+            // colour-masked pre-pass (0051) is a state-recompiled variant of this
+            // program, and some corners came out at W 1 among real depths, so the
+            // 1/W weights handed the whole polygon one corner's texel. See "The
+            // world lost its textures on NVIDIA" in docs/RENDERING.md.
             // Depth is a fragment value, not clip-space Z: these vertices are
             // already projected, and putting SZ into gl_Position.z lets OpenGL
             // clip them against a far plane the GPU never had — a hard line
             // across the floor where the cave used to continue.
-            // Driver diagnostics (GlDiag): 1 clip W forced to 1, 2 W over 65536,
-            // 3 a clip Z that is not 0.
-            if (inW == 1.0 || uDiagW == 1) gl_Position = vec4(p, 0.0, 1.0);
-            else if (uDiagW == 2) gl_Position = vec4(p * (inW * (1.0/65536.0)), 0.0, inW * (1.0/65536.0));
-            else if (uDiagW == 3) gl_Position = vec4(p * inW, 0.5 * inW, inW);
-            else gl_Position = vec4(p * inW, 0.0, inW);
+            gl_Position = vec4(p * inW, 0.0, inW);
             vDepth = inZ > 0.0 ? inZ * (1.0/65536.0) : 0.0;
 
             int inClut = int(inClutF + 0.5);
@@ -912,7 +918,6 @@ internal static class GlShaders
         uniform vec4  uClipPlane;
         uniform vec2  uClipCentre;
         uniform float uClipH;
-        uniform int   uDiagView;
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -1107,15 +1112,6 @@ internal static class GlShaders
             int rawU = dUVdx.x < 0.0 ? int(ceil(vUV.x - 0.0001)) : int(floor(vUV.x + 0.0001));
             int rawV = dUVdy.y < 0.0 ? int(ceil(vUV.y - 0.0001)) : int(floor(vUV.y + 0.0001));
 
-            // Driver diagnostics (GlDiag) view 1: the texture coordinate as colour,
-            // blue where the triangle carries a real clip W.
-            if (uDiagView == 1 && texMode <= 2) {
-                if (uOpaqueDepth == 1) discard;
-                FragColor = vec4(fract(vUV / 32.0), gl_FragCoord.w < 0.999 ? 1.0 : 0.0, 1.0);
-                BlendColor = uBlendOpaque;
-                return;
-            }
-
             if (texMode == 6) {
                 vec2 win = vec2(uTexWindow.xy) + 1.0;
                 vec2 fuv = mod(vUV, win) + vec2(uTexWindow.zw);
@@ -1130,16 +1126,14 @@ internal static class GlShaders
                 return;
             }
 
-            // Driver diagnostics (GlDiag) view 2: the console's texel alone, no fluid
-            // blend, no filter.
-            vec4 texel = uDiagView == 2 ? decode(ivec2(rawU, rawV)) : decodeFluid(ivec2(rawU, rawV));
+            vec4 texel = decodeFluid(ivec2(rawU, rawV));
 
             // Anisotropic filtering and mipmaps. See "Anisotropic filtering" in
             // docs/RENDERING.md. The centre tap above is the console's texel and
             // decides the silhouette and the semi-transparency bit; the filters only
             // replace its colour, and every tap stays inside the polygon's texture
             // rectangle (0060), since past it is other art read through this CLUT.
-            if (uDiagView != 2 && (uAniso > 1.5 || uMipOn > 0.5) && vRepClut == 0
+            if ((uAniso > 1.5 || uMipOn > 0.5) && vRepClut == 0
                     && !(texel.rgb == vec3(0.0) && texel.a < 0.5)) {
                 bool hasRect = (vTex.y & 0x80000000u) != 0u;
                 ivec2 rMin = hasRect ? ivec2(int(vTex.x & 255u), int((vTex.x >> 8) & 255u)) : ivec2(0);
@@ -1290,6 +1284,9 @@ internal static class GlShaders
         attribute float inW;
         attribute float inZ;
 
+        // The depth pre-pass and the colour pass must agree; see the core profile.
+        invariant gl_Position;
+
         varying vec4  vColor;
         varying vec2  vUV;
         varying float vDepth;
@@ -1302,7 +1299,6 @@ internal static class GlShaders
         uniform vec2 uVertexOffset;
         uniform vec2 uPosBias;
         uniform vec2 uFbInv;
-        uniform float uDiagW;
 
         float bitAt(float v, float bit) { return floor(mod(v / bit, 2.0)); }
 
@@ -1314,13 +1310,9 @@ internal static class GlShaders
             // different Gouraud gradient on a steeply angled textured polygon.
             // Depth is a fragment value, not clip-space Z: these vertices are
             // already projected, and putting SZ into gl_Position.z lets OpenGL
-            // clip them against a far plane the GPU never had.
-            // Driver diagnostics (GlDiag): 1 clip W forced to 1, 2 W over 65536,
-            // 3 a clip Z that is not 0.
-            if (inW == 1.0 || abs(uDiagW - 1.0) < 0.5) gl_Position = vec4(p, 0.0, 1.0);
-            else if (abs(uDiagW - 2.0) < 0.5) gl_Position = vec4(p * (inW * (1.0/65536.0)), 0.0, inW * (1.0/65536.0));
-            else if (abs(uDiagW - 3.0) < 0.5) gl_Position = vec4(p * inW, 0.5 * inW, inW);
-            else gl_Position = vec4(p * inW, 0.0, inW);
+            // clip them against a far plane the GPU never had. No select on inW,
+            // as in the core profile.
+            gl_Position = vec4(p * inW, 0.0, inW);
             vDepth = inZ > 0.0 ? inZ * (1.0/65536.0) : 0.0;
 
             float tp = floor(inTexpageF + 0.5);
@@ -1378,7 +1370,6 @@ internal static class GlShaders
         uniform float uAniso;
         uniform float uDepthBias;
         uniform float uDepthSlope;
-        uniform float uDiagView;
         // 0053. Same leftover V shift as the core-profile shader.
         uniform vec4  uFluidRect[8];
         uniform float uFluidOff[8];
@@ -1504,10 +1495,6 @@ internal static class GlShaders
                 vec2 dUVdy = dFdy(vUV);
                 float rawU = dUVdx.x < 0.0 ? ceil(vUV.x - 0.0001) : floor(vUV.x + 0.0001);
                 float rawV = dUVdy.y < 0.0 ? ceil(vUV.y - 0.0001) : floor(vUV.y + 0.0001);
-                if (abs(uDiagView - 1.0) < 0.5 && vTexMode < 2.5) {
-                    gl_FragColor = vec4(fract(vUV / 32.0), gl_FragCoord.w < 0.999 ? 1.0 : 0.0, 1.0);
-                    return;
-                }
 
                 if (vTexMode > 5.5) {
                     vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
@@ -1517,14 +1504,14 @@ internal static class GlShaders
                     stp = img.a < 0.95 ? 1.0 : 0.0;
                     mask = max(stp, uSetMask);
                 } else {
-                    vec4 texel = abs(uDiagView - 2.0) < 0.5 ? decode(vec2(rawU, rawV)) : decodeFluid(vec2(rawU, rawV));
+                    vec4 texel = decodeFluid(vec2(rawU, rawV));
 
                     // Anisotropic filtering -- see the core-profile shader for what
                     // the footprint is, why the taps are one texel apart rather
                     // than spread over the whole span, why the transparent texels
                     // are weighed out and why the centre tap alone decides the
                     // silhouette. Identical arithmetic; only the types differ.
-                    if (uDiagView < 1.5 && uAniso > 1.5 && vRepClut < 0.5
+                    if (uAniso > 1.5 && vRepClut < 0.5
                             && !(texel.r == 0.0 && texel.g == 0.0
                                  && texel.b == 0.0 && texel.a < 0.5)) {
                         vec2 axis = dot(dUVdx, dUVdx) >= dot(dUVdy, dUVdy) ? dUVdx : dUVdy;

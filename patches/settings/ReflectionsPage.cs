@@ -4,13 +4,13 @@ using RecompOne.Runtime.Host.Window;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The reflections switch, under Video ▸ Enhancements after the Z-buffer. Its
+/// The reflections switch, under Video ▸ Experimental after the Z-buffer. Its
 /// tuning is on the console (<c>KF2_SSR_*</c>), as the occlusion pass's is.
 /// </summary>
 public sealed class ReflectionsPage : IPatchPage
 {
     public string Id => "ssr";
-    public string Title => "Enhancements";
+    public string Title => "Experimental";
     public int Order => 28;
 
     const string Strings = """
