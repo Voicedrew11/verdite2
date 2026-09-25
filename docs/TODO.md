@@ -169,19 +169,18 @@ useful than the question was.
      the question is not "can it be gated" but "is there one word upstream of all
      of it". See "The flames run at the render rate" in
      [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
-   * **The compass needle's speed at `0x8006E608`**, stepped in stage 13's own
-     body -- long written up here as a screen-shake "jitter accumulator"; see
-     "Stage 13's HUD block, and the compass needle" in
-     [GAME_INTERNALS.md](GAME_INTERNALS.md). With the modal loops closed and the
-     sprite cels fixed, this and the `rec+0x40` retrigger above are the **only**
-     rate defects left, and they are the same shape as each other: a counter
-     stepped inside a drawing function's own body, which needs a hold/restore pair
-     on the field rather than a deadline on the frame. Neither has been reported
-     from play. **The needle is reachable now**: stage 13 is C#
-     (`patches/Stage13.cs`), and stepping the spring once a tick is a change to
-     `SwingNeedle`. The retrigger is still per object. **A modal loop's redraws make both of them fire
-     inside it as often as they already do in the main loop** — no worse than an
-     ordinary frame, but no better either.
+   * ~~**The compass needle's speed at `0x8006E608`**~~, stepped in stage 13's own
+     body -- long written up here as a screen-shake "jitter accumulator". **Fixed**:
+     stage 13 is C# (`patches/Stage13.cs`) and steps the spring on the first walk
+     of a tick, 20.0 steps a second at 20, 60 and 144 fps against 144.0 before,
+     and 19-20.5 through a modal loop's redraws. See "The compass needle is held
+     to the tick" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md). With it, the
+     `rec+0x40` retrigger above is the **only** rate defect left: a counter
+     stepped per object inside a drawing function's own body, which needs a
+     hold/restore pair on the field rather than a deadline on the frame. Not
+     reported from play. **A modal loop's redraws make it fire inside the loop as
+     often as it already does in the main loop** — no worse than an ordinary
+     frame, but no better either.
 
    * **A counter a modal loop steps in its own body** — a picked-up item's spin, if
      its transform does not come from a table `ObjectSmoothing` carries. Its

@@ -13,7 +13,7 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Fifty of the fifty-seven are load-bearing; `0002`, `0003`, `0015`, `0046`,
+Fifty-one of the fifty-eight are load-bearing; `0002`, `0003`, `0015`, `0046`,
 `0065` and `0069` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
@@ -927,6 +927,16 @@ Four files in the directory have no entry below:
   so a VRAM hash cannot see what a material changes. One null test a present while
   nothing is asked. The port half is `patches/remaster/Snap.cs` (the `snap` shell
   verb). **No recompile.** See "Phase 1, the second slice" in `docs/REMASTER.md`.
+
+- `0070-hook-order.patch` — `HookManager.AddPre` and `AddPost` take an `order`,
+  and the hooks on one function run in ascending order, then in the order added.
+  Without it the order was the order of the calls, so a post that must run after
+  another's was kept there by where its patch's `Install()` sat in `Program.cs`:
+  `LoopPacing`'s redraw on stage 13, after the smoothers' restores. The default is
+  0 and an insert goes after every entry of the same or a lower order, so every
+  existing order is unchanged. `Stage13.HookOrder` names the orders on the
+  renderer. **No recompile.** See "The hooks on stage 13 are ordered by what they
+  need" in `docs/PATCHES_AND_MODS.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

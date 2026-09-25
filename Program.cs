@@ -498,10 +498,9 @@ Kf2.FluidSmoothing.Install();
 //     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface
 //     KF2_LOOPPACING_PROBE=2  also how far the loop's own view moves per iteration
 //
-// Installed *after* the three smoothing patches, and that ordering is
-// load-bearing: HookManager runs the posts on a function in the order they
-// were added, and the redraw has to be asked for once their own posts
-// have put the tables back.
+// The redraw has to be asked for once the smoothing patches' own posts have put
+// the tables back. That is declared on the hook (Stage13.HookOrder.Redraw, 0070),
+// so where this line sits no longer matters.
 Kf2.LoopPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
                          Environment.GetEnvironmentVariable("KF2_LOOPPACING_PROBE"));
 Kf2.LoopPacing.Install();
@@ -1220,16 +1219,20 @@ Kf2.ModelWalk.Install();
 // Stage 13 itself, func_800342D8, and the camera block it opens with, func_8002E22C,
 // in C#. The renderer is nineteen calls and one block of HUD arithmetic; with it here
 // the frame's view is a value (Stage13.ViewOverride), the drawing half is one call
-// (Stage13.DrawScene), and the compass needle's spring inside its body is reachable.
-// Every call still goes through its hooks.
+// (Stage13.DrawScene), and the compass needle's spring inside its body steps on the
+// world tick rather than on every frame drawn. Every call still goes through its hooks.
 //
 //     KF2_STAGE13=0            the recompiled renderer
 //     KF2_STAGE13=verify       the recompiled one draws; ours is replayed against a record of it
+//     KF2_STAGE13_NEEDLE=0     step the compass needle every frame drawn, as the routine does
+//     KF2_STAGE13_PROBE=1      frames drawn and needle steps a second
 //     KF2_CAMERABLOCK=0        the recompiled camera block
 //     KF2_CAMERABLOCK=verify   run both on every call and compare RAM, registers, GTE
 Kf2.CameraBlock.Configure(Environment.GetEnvironmentVariable("KF2_CAMERABLOCK"));
 Kf2.CameraBlock.Install();
-Kf2.Stage13.Configure(Environment.GetEnvironmentVariable("KF2_STAGE13"));
+Kf2.Stage13.Configure(Environment.GetEnvironmentVariable("KF2_STAGE13"),
+                      Environment.GetEnvironmentVariable("KF2_STAGE13_NEEDLE"),
+                      Environment.GetEnvironmentVariable("KF2_STAGE13_PROBE"));
 Kf2.Stage13.Install();
 
 // The game's other cull: a six-plane view-space clipper (func_8005CAC8) that only

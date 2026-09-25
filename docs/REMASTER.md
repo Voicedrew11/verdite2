@@ -468,6 +468,12 @@ player is. That is the first thing to look at in a frame drawn from an override.
 `goto` plus the game's own camera remains the fallback, and it is enough for
 Phases 1–6.
 
+**A second view drawn beside the game's**, such as a picture-in-picture preview or
+a shadow map's light view, is a `ScenePass` around `Stage13.DrawScene(c, mem,
+camera)`: the pass points the frame at a table and arena of its own and puts back
+everything any pass moves. See "A pass of the port's own" in
+`docs/PATCHES_AND_MODS.md`.
+
 ### Undo, save, autosave
 
 - **Undo** is a stack of document diffs, each able to apply and revert, kept per

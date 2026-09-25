@@ -29,7 +29,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
 | `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0069` |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0070` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -171,7 +171,7 @@ what it is) live there, not here.
 | `PolyAssembler` | `func_80030540` in C# as a replace hook, rejecting polygons the view-space clipper would clip to nothing; also `func_8002FECC` (the far map tiles' unclipped assembler), the vertex transforms `func_8002E650`/`func_8002E7CC`, `func_8002F214`/`func_8002EAEC` (the models' lit assembler) and the clipper `Clip4FTP`/`Clip3FTP`; the GTE ops they call have a fast path in the runtime (`0047`); `KF2_POLYASM=verify` diffs each against the recompiled routine, GTE included; a clipped polygon or quad is culled on its whole area at the fractional corners, not its first three corners, through a hook on `NormalClip` (`KF2_POLYASM_FACING=0` to compare); Video ▸ Fast geometry switches them all, with the GTE fast path | on | PATCHES_AND_MODS, "The polygon assembler in C#", "The lit model assembler", "The clipper in C#", "The GTE fast path"; RENDERING, "A floor quarter missing at a short edge", "An edge-on wall lost its strips" |
 | `TileWalk` | the map tile walk in C#: `func_80031C94` (the 24×24 cell sweep), `func_80031B1C` (a cell's two halves) and `func_80031950` (a half, set up and assembled). Taken for the scene it enumerates, not for time (0.013 ms a frame); `KF2_TILEWALK=verify` diffs each against the recompiled routine | on | PATCHES_AND_MODS, "The map tile walk in C#" |
 | `ModelWalk` | the object and creature walk in C#: `func_800331B4` (the creature, object, effect and billboard tables) and `func_80032588` (the model submitter). Taken for the scene it enumerates, not for time (3 us a frame); `ModelWalk.Scene` publishes each submit's record, model, position and assembler; `KF2_MODELWALK=verify` diffs both against the recompiled routines | on | PATCHES_AND_MODS, "The object and creature walk in C#" |
-| `Stage13`, `CameraBlock` | stage 13 `func_800342D8` and its camera block `func_8002E22C` in C#: nineteen calls, each through its hooks, and the HUD block (the compass needle's spring at `0x8006E608` among it); `Stage13.ViewOverride` draws the frame from a `Camera` of the port's, the cull grid following; `Stage13.DrawScene` is the drawing half (`MenuWorld`); `CameraBlock.Build` (`PlanarWalk`); `KF2_STAGE13=verify` records the recompiled routine's calls and replays ours against them, `KF2_CAMERABLOCK=verify` diffs both | on; no override | PATCHES_AND_MODS, "Stage 13 in C#", "Drawing the frame from another camera"; GAME_INTERNALS, "Stage 13's HUD block, and the compass needle" |
+| `Stage13`, `CameraBlock` | stage 13 `func_800342D8` and its camera block `func_8002E22C` in C#: nineteen calls, each through its hooks, and the HUD block, with the compass needle's spring at `0x8006E608` stepped on the tick (`KF2_STAGE13_NEEDLE=0` to compare); `Stage13.HookOrder` orders the hooks on it (`0070`); `Stage13.ViewOverride` draws the frame from a `Camera` of the port's, the cull grid following; `Stage13.DrawScene` is the drawing half (`MenuWorld`); `CameraBlock.Build` (`PlanarWalk`); `ScenePass` points the frame at a table and arena of the port's and puts everything back (both); `KF2_STAGE13=verify` records the recompiled routine's calls and replays ours against them, `KF2_CAMERABLOCK=verify` diffs both | on; no override | PATCHES_AND_MODS, "Stage 13 in C#", "Drawing the frame from another camera", "The compass needle is held to the tick", "The hooks on stage 13 are ordered by what they need", "A pass of the port's own"; GAME_INTERNALS, "Stage 13's HUD block, and the compass needle" |
 | `Perspective` | perspective-correct textures (`0009`, `0012`) | on | RENDERING, "Perspective correction" |
 | `Subpixel` | sub-pixel vertex positions (`0010`); under it, the C# assemblers' backface cull is taken at the fractional corners (`0052`, `KF2_SUBPIXEL_CULL=0` to compare) | on | RENDERING, "Sub-pixel vertex positioning", "A thin face was culled on whole pixels" |
 | `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); Video ▸ Enhancements, with two tolerance sliders | on | RENDERING, "Z-buffer", "The assemblers write the depth" |
@@ -226,8 +226,12 @@ judged by eye; say which of the two a change has when you write it up.
 - **`Widescreen` owns the one `Replace` of `DrawOTag`**, so every other `DrawOTag`
   hook must be a pre or a post, and a replacement must pass the source address to
   `WriteGp0` or perspective correction silently turns off.
-- **`LoopPacing` is installed last in `Program.cs`** — its post on stage 13 must run
-  after the smoothers'.
+- **A hook whose place among the others matters declares it** (`order` on
+  `AddPre`/`AddPost`, `0070`), never by where its `Install()` sits in `Program.cs`.
+  On stage 13 the orders are `Stage13.HookOrder`: `LoopPacing`'s redraw post is
+  `Redraw`, after every smoother's restore.
+- **A pass that draws into a table of the port's own goes through `ScenePass`**, so
+  it puts back everything any pass moves.
 - **A liveness test is the renderer's, not the owning stage's**: an object is drawn
   when `u16[+0x6] != 0xFF`, a creature when `u8[+0x9] == 1`.
 - **Settings**: a page registers against a runtime section with
@@ -430,7 +434,7 @@ removed for the same reason.
 
 **`tools/RecompOne/` is vendored: an edit inside it is a change to this
 repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0069`) are how the source
+what the port changed and why, and the numbers (`0001`-`0070`) are how the source
 refers to each change, but they are **no longer replayed**. The merge base is
 `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
 gitignored `tools/RecompOne.git/`, reached with

@@ -12,6 +12,9 @@ namespace Kf2;
 ///     KF2_STAGE13=0         the recompiled routine
 ///     KF2_STAGE13=verify    the recompiled routine draws the frame; this one is then
 ///                           run against a record of it and the two compared
+///     KF2_STAGE13_NEEDLE=0  step the compass needle every rendered frame, as the
+///                           routine does (held to the world tick by default)
+///     KF2_STAGE13_PROBE=1   frames drawn and needle steps a second
 ///
 /// The routine is nineteen calls in a fixed order with no branch around any of them,
 /// and one block of arithmetic for the HUD (<see cref="HudState"/>). Every call is
@@ -24,8 +27,11 @@ namespace Kf2;
 /// downstream follows it, the cull grid included, because the grid reads its eye from
 /// the camera block. <see cref="DrawScene"/> is the drawing half as one call, the list
 /// <see cref="MenuWorld"/> used to keep a copy of. And the compass needle's spring
-/// (<see cref="NeedleSpeed"/>), which no hook could reach inside this body, is now a
-/// line of C#.
+/// (<see cref="NeedleSpeed"/>), which no hook could reach inside this body, steps on
+/// the world tick instead of on every frame drawn (<see cref="HudState"/>).
+///
+/// **The order of the hooks on this routine is declared, not installed**:
+/// <see cref="HookOrder"/>.
 ///
 /// **Verify cannot run the routine twice**, since it presents a frame and passes the
 /// frame gate. It records the recompiled run at every call instead -- the registers,
@@ -104,8 +110,31 @@ public static class Stage13
     /// chases the camera's on. Long documented as a screen-shake accumulator.</summary>
     public const uint NeedleSpeed = 0x8006E608;
 
+    /// <summary>
+    /// Where a pre or post on this routine runs among the others (<c>0070</c>): in
+    /// ascending order, then in the order added. The routine is the frame, and more
+    /// patches bracket it than any other function, so which bracket closes first is a
+    /// contract of the routine's rather than of Program.cs's line order.
+    /// </summary>
+    public static class HookOrder
+    {
+        /// <summary>The default: the smoothers' carry and restore, the probes, the
+        /// menu's record of the world's state.</summary>
+        public const int Frame = 0;
+
+        /// <summary><see cref="LoopPacing"/>'s redraws. Each redraw runs every hook
+        /// again, so it must start after every post that puts back what a carry moved,
+        /// or it carries from carried values.</summary>
+        public const int Redraw = 1000;
+    }
+
     enum Mode { Off, On, Verify }
     static Mode _mode = Mode.On;
+    static bool _needleHeld = true;
+    static long _needleFrame = -1;
+    static bool _probe;
+    static long _probeFrames, _probeSteps;
+    static double _probeAt = -1.0;
     static bool _queued;
     static Action<CpuContext, IMemory>[]? _callees;
 
@@ -125,7 +154,7 @@ public static class Stage13
         Description = "func_800342D8, the renderer, in C#.",
     };
 
-    public static void Configure(string? mode)
+    public static void Configure(string? mode, string? needle, string? probe)
     {
         _mode = mode?.Trim().ToLowerInvariant() switch
         {
@@ -133,6 +162,8 @@ public static class Stage13
             "verify" => Mode.Verify,
             _ => Mode.On,
         };
+        _needleHeld = needle?.Trim() is not ("0" or "off");
+        _probe = !string.IsNullOrWhiteSpace(probe) && probe.Trim() != "0";
     }
 
     public static void Install() => HookAttach.OnOverlayLoad("stage 13", Attach);
@@ -154,7 +185,8 @@ public static class Stage13
         }
         HookManager.Commit();
         bool ok = HookAttach.Installed(target);
-        Console.WriteLine(ok ? $"[KF2] stage 13: {_mode.ToString().ToLowerInvariant()}"
+        Console.WriteLine(ok ? $"[KF2] stage 13: {_mode.ToString().ToLowerInvariant()}, " +
+                               $"compass needle {(_needleHeld && _mode == Mode.On ? "on the tick" : "every frame")}"
                              : "[KF2] stage 13: not installed");
         return ok;
     }
@@ -187,11 +219,35 @@ public static class Stage13
             return;
         }
         if (_mode == Mode.Verify) Verifier.Run(orig, c, mem);
-        else Run(c, mem);
+        else
+        {
+            bool step = NeedleSteps();
+            Run(c, mem, step);
+            if (_probe) Probe(step);
+        }
     }
 
-    /// <summary>The routine, transcribed.</summary>
-    static void Run(CpuContext c, PSMemory mem)
+    static void Probe(bool stepped)
+    {
+        _probeFrames++;
+        if (stepped) _probeSteps++;
+        double now = Environment.TickCount64 / 1000.0;
+        if (_probeAt < 0.0) _probeAt = now;
+        double dt = now - _probeAt;
+        if (dt < 2.0) return;
+        Console.WriteLine($"[KF2] stage 13: {_probeFrames / dt:0.0} frame(s) a second, " +
+                          $"{_probeSteps / dt:0.0} needle step(s) a second");
+        _probeAt = now;
+        _probeFrames = _probeSteps = 0;
+    }
+
+    /// <summary>Whether this call steps the needle: on the first walk of a frame the
+    /// world ticked on, so a redraw, a paused world or a frame between ticks holds it.</summary>
+    static bool NeedleSteps() => !_needleHeld || FramePacing.FirstWalkOfTick(ref _needleFrame);
+
+    /// <summary>The routine, transcribed. With <paramref name="stepNeedle"/> false the
+    /// needle is drawn where it stands; true is the routine as the game wrote it.</summary>
+    static void Run(CpuContext c, PSMemory mem, bool stepNeedle)
     {
         uint sp = c.SP - 0x18u;
         c.SP = sp;
@@ -210,7 +266,7 @@ public static class Stage13
         Call(c, mem, Site.FrameHead);
         Call(c, mem, Site.SoundMark);
         Call(c, mem, Site.Arm);
-        HudState(c, mem);
+        HudState(c, mem, stepNeedle);
         Submit(c, mem);
         Call(c, mem, Site.Present);
         Call(c, mem, Site.FrameGate);
@@ -268,8 +324,15 @@ public static class Stage13
     /// Which HUD records are drawn, the digits of HP and MP, the two gauges' lengths,
     /// and the compass's rotation: its pitch is the camera's, and its yaw chases the
     /// camera's through <see cref="SwingNeedle"/>.
+    ///
+    /// Everything here is derived from the state it reads except the needle, whose
+    /// speed and yaw are stepped. The routine steps them on every call, which was a
+    /// tick on the console and is seven steps a tick at 144 fps; the port steps them
+    /// only when <paramref name="step"/> says. The call to
+    /// <see cref="Site.CompassError"/> is made either way, so the calls stay the
+    /// routine's.
     /// </summary>
-    static void HudState(CpuContext c, PSMemory mem)
+    static void HudState(CpuContext c, PSMemory mem, bool step)
     {
         uint compass = mem.ReadU8(CompassShown), others = mem.ReadU8(OthersShown);
         mem.WriteU8(Record(0) + Shown, (byte)compass);
@@ -278,20 +341,23 @@ public static class Stage13
         c.A0 = (uint)(short)mem.ReadU16(Record(0) + Yaw);
         c.A1 = (uint)(short)mem.ReadU16(CameraBlock.Angles + 2u);
         Call(c, mem, Site.CompassError);
-        SwingNeedle(mem, (int)c.V0);
+        if (step) SwingNeedle(mem, (int)c.V0);
 
         Digits(mem, 3, mem.ReadU16(Hp) % 1000u);
         Digits(mem, 6, mem.ReadU16(Mp) % 1000u);
         mem.WriteU16(Record(9) + Length, Gauge(mem.ReadU16(GaugeA)));
         mem.WriteU16(Record(10) + Length, Gauge(mem.ReadU16(GaugeB)));
 
-        int speed = (int)mem.ReadU32(NeedleSpeed);
-        mem.WriteU16(Record(0) + Yaw, (ushort)(mem.ReadU16(Record(0) + Yaw) + (speed >> 6)));
+        if (step)
+        {
+            int speed = (int)mem.ReadU32(NeedleSpeed);
+            mem.WriteU16(Record(0) + Yaw, (ushort)(mem.ReadU16(Record(0) + Yaw) + (speed >> 6)));
+        }
         mem.WriteU16(Record(0) + Pitch, mem.ReadU16(CameraBlock.Angles));
     }
 
     /// <summary>
-    /// The needle's spring, stepped once a call and so once a rendered frame: the
+    /// The needle's spring, one step: the
     /// error is added to the speed <c>v</c>, which then loses about an eighth of
     /// itself -- <c>(v + 7) &gt;&gt; 3</c> when positive, <c>(v - 7) &gt;&gt; 3</c> when
     /// negative. The needle turns by a 64th of the speed in <see cref="HudState"/>.
@@ -328,9 +394,11 @@ public static class Stage13
     /// <see cref="Site.CompassError"/>, which is where the replay picks up. Between
     /// any other two calls the body does nothing, so there is nothing to compare.
     ///
-    /// The hooks are added on the first verified call, after every patch has attached,
-    /// so the posts run last and a callee's record includes what every other hook on
-    /// it did. A call is matched to its site by the return address and by the order
+    /// The hooks are added on the first verified call, so nothing is hooked unless
+    /// verify is on. The pre is ordered first and the post last on each callee, so an
+    /// entry record is what the body handed the call and an exit record includes what
+    /// every other hook on it did. The replay steps the needle on every call, as the
+    /// routine does, so under verify the needle swings at the frame rate again. A call is matched to its site by the return address and by the order
     /// the sites come in; one made from inside another is nested and ignored.
     /// </summary>
     static class Verifier
@@ -400,7 +468,7 @@ public static class Stage13
                 Gte.Load(_gteBefore);
                 _taken = 0;
                 Replaying = true;
-                try { Stage13.Run(c, mem); }
+                try { Stage13.Run(c, mem, stepNeedle: true); }
                 finally { Replaying = false; }
 
                 if (_taken != N) Mismatch($"ours made {_taken} of {N} calls");
@@ -470,8 +538,8 @@ public static class Stage13
                 targets[i] = SymbolRegistry.Resolve("game", null, Calls[i].Callee)!;
             foreach (var t in targets)
             {
-                HookManager.AddPre(_self, t, enter);
-                HookManager.AddPost(_self, t, exit);
+                HookManager.AddPre(_self, t, enter, int.MinValue);
+                HookManager.AddPost(_self, t, exit, int.MaxValue);
             }
             HookManager.Commit();
             bool ok = targets.All(HookAttach.Installed);

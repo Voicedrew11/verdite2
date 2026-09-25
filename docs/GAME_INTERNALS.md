@@ -143,7 +143,7 @@ the emitted C# for `DrawOTag`, `VSync`, `PutDispEnv` or `PutDrawEnv`.
 | stage 5 `func_80046A60` | 128 effect lifetimes at `rec+0x0E` | no |
 | stage 6 `func_8004910C` | the module's own per-frame logic | **no**, in all nine modules |
 | stage 2 `func_80037C0C` | the object table at `0x80177714` — every world prop that moves | **yes**, but through one edge only — see below; gated regardless |
-| stage 13 `func_800342D8` | the compass needle's speed at `0x8006E608`, in its own body | yes, it is the renderer |
+| stage 13 `func_800342D8` | the compass needle's speed at `0x8006E608`, in its own body (held to the tick by `patches/Stage13.cs`) | yes, it is the renderer |
 | — `func_80033FBC` | the fade state machine, called by stage 13 | **no** — three functions, none of them draw |
 
 ### Stage 2 is the object-table state machine
@@ -237,7 +237,8 @@ renderer's.
 (`(v + 7) >> 3` with the sign fixup). It was written up here as a damped
 accumulator driving the screen shake. **It is the compass needle's speed**: see
 "Stage 13's HUD block, and the compass needle" below. It was out of every hook's
-reach while stage 13 was recompiled; `patches/Stage13.cs` has it in C# now.
+reach while stage 13 was recompiled; `patches/Stage13.cs` has it in C# now, and
+steps it on the tick.
 
 ### Stage 8 is the render camera, and it is the only copy
 
@@ -399,12 +400,13 @@ itself (`v - ((v + 7) >> 3)` for a positive `v`, `v - ((v - 7) >> 3)` for a nega
 one, nothing at zero), and record 0's yaw then turns by `v >> 6`. So `0x8006E608` is
 the needle's **speed**: the needle swings after a turn, overshoots and settles.
 
-**It is stepped once per call of stage 13, so once per rendered frame**, which is a
-rate defect of the kind `docs/TODO.md` lists: on the console it stepped once a
-tick, and above the tick rate it steps more often, so the needle settles sooner in
-wall-clock time. Nothing has been reported from play. It
-is one line of C# in `patches/Stage13.cs` now (`SwingNeedle`), which is where a hold
-to the tick would go.
+**The routine steps it once per call of stage 13, so once per rendered frame**,
+which is a rate defect of the kind `docs/TODO.md` lists: on the console it stepped
+once a tick, and above the tick rate it steps more often, so the needle settles
+sooner in wall-clock time -- seven steps a tick at 144 fps. Nothing had been
+reported from play. The port steps the speed and the yaw only on the first walk of
+a tick (`KF2_STAGE13_NEEDLE=0` is the recompiled behaviour); see "The compass
+needle is held to the tick" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 ### The map is an 80x80 tile grid, and a tile's height is one byte
 

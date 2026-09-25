@@ -215,6 +215,29 @@ def sc_sprite_anim(run: kf2.Run) -> dict:
     }
 
 
+def sc_compass_needle(run: kf2.Run) -> dict:
+    """Stand still and read what rate the compass needle's spring stepped at.
+
+    The spring at `0x8006E608` is stepped in stage 13's own body, so the recompiled
+    routine steps it once a frame drawn and the needle swings stiffer the faster the
+    picture. `step/s` is the number that must equal the tick rate; `frame/s` is there
+    to prove the scene was drawn as fast as it was asked to be.
+
+    Needs KF2_STAGE13_PROBE=1, which the scenario asks for below. Pair it with
+    --env KF2_STAGE13_NEEDLE=0 for the before.
+    """
+    time.sleep(8.0)
+    rows = [(float(m.group(1)), float(m.group(2)))
+            for m in run.matching(r"stage 13: ([\d.]+) frame\(s\) a second, ([\d.]+) needle step")]
+    steady = rows[1:-1] or rows
+    if not steady:
+        return {"frame/s": None, "step/s": None}
+    return {
+        "frame/s": round(statistics.median(r[0] for r in steady), 1),
+        "step/s": round(statistics.median(r[1] for r in steady), 1),
+    }
+
+
 def sc_idle(run: kf2.Run) -> dict:
     """Stand still for five seconds. For pairing with KF2_RATECENSUS."""
     time.sleep(5.0)
@@ -231,6 +254,8 @@ SCENARIOS = {
                     "open the menu, then warp; what rate each self-rendered loop ran at"),
     "sprite-anim": (sc_sprite_anim, {"KF2_SPRITEANIM_PROBE": "1"},
                     "stand still; what rate the billboard sprites' cels stepped at"),
+    "compass-needle": (sc_compass_needle, {"KF2_STAGE13_PROBE": "1"},
+                       "stand still; what rate the compass needle's spring stepped at"),
     "idle":        (sc_idle, {}, "stand still for 5 s (pair with KF2_RATECENSUS)"),
 }
 

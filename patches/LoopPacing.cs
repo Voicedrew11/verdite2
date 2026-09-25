@@ -176,12 +176,12 @@ namespace Kf2;
 /// render rate". Nothing here reads or writes game memory: it lengthens a frame, or
 /// it asks the renderer to draw the same one again.
 ///
-/// **The one thing a redraw costs** is that whatever stage 13 steps in its *own*
-/// body now steps once per rendered frame inside a modal loop, exactly as it
-/// already does in the main loop -- the compass needle's spring at `0x8006E608` and
-/// `func_800331B4`'s ambient-sound retrigger. Both are already on that list in
-/// docs/TODO.md; this makes a modal loop no worse than an ordinary frame rather
-/// than better.
+/// **The one thing a redraw costs** is that whatever stage 13's callees step in
+/// their own bodies now steps once per rendered frame inside a modal loop, exactly
+/// as it already does in the main loop -- `func_800331B4`'s ambient-sound retrigger,
+/// which is on that list in docs/TODO.md. The compass needle's spring at
+/// `0x8006E608`, stage 13's own, is held to the tick by <see cref="Stage13"/>, and
+/// a redraw is never the first walk of a tick, so a redraw does not step it.
 ///
 /// On by default and with no settings page: a correctness fix in the class of
 /// frame pacing and the menu repeat, not a taste like dithering. See "Loops that
@@ -477,9 +477,8 @@ public static class LoopPacing
 
         // The argument recorder and the gap filler. The post must run *after* the
         // smoothing patches' own posts on the same function, or the redraw would be
-        // asked for while their interpolated values were still in the tables --
-        // hence Program.cs installing this class after all three of them.
-        // HookManager runs posts in the order they were added.
+        // asked for while their interpolated values were still in the tables; its
+        // order says so (Stage13.HookOrder.Redraw).
         var renderer = _rendererHooked ? null : SymbolRegistry.Resolve("game", null, Renderer);
         if (renderer == null && !_rendererHooked)
             Console.Error.WriteLine($"[KF2] loop pacing: no game function at 0x{Renderer:X8} -- " +
@@ -490,7 +489,7 @@ public static class LoopPacing
             var args = self.GetMethod(nameof(BeforeRenderer), BindingFlags.Public | BindingFlags.Static)!;
             var fill = self.GetMethod(nameof(AfterRenderer), BindingFlags.Public | BindingFlags.Static)!;
             HookManager.AddPre(_self, renderer, args);
-            HookManager.AddPost(_self, renderer, fill);
+            HookManager.AddPost(_self, renderer, fill, Stage13.HookOrder.Redraw);
         }
 
         HookManager.Commit();

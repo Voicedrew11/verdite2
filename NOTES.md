@@ -326,6 +326,9 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - A verify pass replays, it does not re-run
 - Stage 13 in C#
 - Drawing the frame from another camera
+- The compass needle is held to the tick
+- The hooks on stage 13 are ordered by what they need
+- A pass of the port's own
 
 ### [INPUT.md](docs/INPUT.md)
 
@@ -360,7 +363,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0069`, one entry each.
+Every change the port made to RecompOne, `0001`-`0070`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

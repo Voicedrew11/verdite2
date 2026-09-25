@@ -59,6 +59,10 @@ public static class CameraBlock
     /// <summary>The eye's tile, <c>X &gt;&gt; 11</c> and <c>Z &gt;&gt; 11</c>, the cull grid's centre.</summary>
     public const uint TileX = 0x80192E90, TileZ = 0x80192E94;
 
+    /// <summary>The whole block, the view matrix through the tile, for saving and
+    /// putting back around a pass of the port's own (<see cref="ScenePass"/>).</summary>
+    public const uint Start = ViewMatrix, Bytes = TileZ + 4u - Start;
+
     enum Mode { Off, On, Verify }
     static Mode _mode = Mode.On;
     static bool _queued;

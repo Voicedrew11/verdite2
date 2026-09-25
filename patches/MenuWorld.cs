@@ -49,22 +49,22 @@ public static class MenuWorld
 
     const uint BufferIndex = 0x8017E084;      // u8
     const uint Descriptor0 = 0x8017E08C, Descriptor1 = 0x8017E098;
-    const uint ActiveDescriptor = 0x8017E0A4;
-    const uint OtPointer = 0x8018E0A8;
+    const uint ActiveDescriptor = ScenePass.ActiveDescriptor;
+    const uint OtPointer = ScenePass.OtPointer;
     const uint DrawEnvs = 0x8018E0AC, DrawEnvStride = 0x5C;
     const uint DispEnvs = 0x8018E164, DispEnvStride = 0x14;
     const uint SavedDescriptor1 = 0x8006EB30; // func_80022754's copy of the world's
-    const uint CurrentBank = 0x8018E19C, CurrentMesh = 0x8018EAA0;
 
     // Zeroed by stage 13's head, func_8002E064, which a pass does not call.
     static readonly uint[] FrameCounters = [0x801DA554, 0x80192D54, 0x80192D50];
 
-    const uint OtEntries = 0x2000;
+    const uint OtEntries = ScenePass.OtEntries;
     const uint MenuPrimBytes = 0xC800;        // both shrunk buffers
     const uint MessageVramSave = 0x25800;     // func_80035B48's StoreImage after them, restored at the end
     const uint MessageRect = 0x8006E610;      // RECT func_80035B48 saves, MoveImages into, restores
     const uint MessageSave = 0x8017E09C;      // where it saved it: start + 0xC800
-    const uint ScratchBytes = 0x10 + OtEntries * 4;
+    const uint TableOffset = 0x10;            // the pass's descriptor, then its table
+    const uint ScratchBytes = TableOffset + ScenePass.OtBytes;
 
     public static bool Enabled { get; private set; } = true;
     static bool _probe;
@@ -83,8 +83,9 @@ public static class MenuWorld
     static uint _scratch, _bufLo, _bufHi;
 
     // The world's state as the last stage 13 left it, put back before a pass.
-    static readonly Gte.State _worldGte = new(), _menuGte = new();
-    static uint _worldBank, _worldMesh;
+    static readonly Gte.State _worldGte = new();
+    static uint _worldModels, _worldVerts;
+    static readonly ScenePass _pass = new();
 
     // The draw environments' clear (isbg and its colour, DRAWENV +0x18), as stage 13
     // leaves it. A menu turns it off since its paste covers the frame; without the
@@ -180,8 +181,8 @@ public static class MenuWorld
         if (_drawing) return;
         _worldSeen = true;
         Gte.Save(_worldGte);
-        _worldBank = m.ReadU32(CurrentBank);
-        _worldMesh = m.ReadU32(CurrentMesh);
+        _worldModels = m.ReadU32(ScenePass.ModelTable);
+        _worldVerts = m.ReadU32(ScenePass.VertexBase);
         for (uint i = 0; i < 2; i++)
             _worldClear[i] = m.ReadU32(DrawEnvs + i * DrawEnvStride + EnvClear);
     }
@@ -477,58 +478,29 @@ public static class MenuWorld
     /// <paramref name="menuHead"/>. Returns the entry to walk from.</summary>
     static uint DrawWorld(CpuContext c, PSMemory mem, uint menuHead)
     {
-        uint desc = _scratch;
-        uint ot = _scratch + 0x10u;
-
-        var regs = c.Snapshot();
-        Gte.Save(_menuGte);
-        uint menuOt = mem.ReadU32(OtPointer);
-        uint menuDesc = mem.ReadU32(ActiveDescriptor);
-        uint menuBank = mem.ReadU32(CurrentBank);
-        uint menuMesh = mem.ReadU32(CurrentMesh);
-
-        // ClearOTagR: each entry points at the one below it, entry 0 ends the list.
-        mem.WriteU32(ot, 0x00FFFFFFu);
-        for (uint i = 1; i < OtEntries; i++)
-            mem.WriteU32(ot + i * 4u, (ot + (i - 1u) * 4u) & 0x00FFFFFFu);
-
-        mem.WriteU32(desc, _bufLo);
-        mem.WriteU32(desc + 4u, _bufHi);
-        mem.WriteU32(desc + 8u, _bufLo);
-        mem.WriteU32(OtPointer, ot);
-        mem.WriteU32(ActiveDescriptor, desc);
-        mem.WriteU32(CurrentBank, _worldBank);
-        mem.WriteU32(CurrentMesh, _worldMesh);
-        foreach (uint a in FrameCounters) mem.WriteU32(a, 0u);
-        Gte.Load(_worldGte);
-
+        _pass.Begin(c, mem, _scratch, _scratch + TableOffset, _bufLo, _bufHi);
         _drawing = true;
         SpriteAnim.Hold = true;
         try
         {
+            // The world as stage 13 left it, which the menu has moved since; and the
+            // counters the frame head zeroes, which a pass does not call.
+            mem.WriteU32(ScenePass.ModelTable, _worldModels);
+            mem.WriteU32(ScenePass.VertexBase, _worldVerts);
+            foreach (uint a in FrameCounters) mem.WriteU32(a, 0u);
+            Gte.Load(_worldGte);
             Stage13.DrawScene(c, mem);              // the stored view
         }
         finally
         {
             _drawing = false;
             SpriteAnim.Hold = false;
-
-            uint cur = mem.ReadU32(desc + 8u);
-            uint used = cur - _bufLo;
-            if (used > _peak) _peak = used;
-            if (cur > _bufHi) _overflows++;
+            _pass.End(c, mem);
+            if (_pass.Used > _peak) _peak = _pass.Used;
+            if (_pass.Overflowed) _overflows++;
             _passes++;
-
-            mem.WriteU32(OtPointer, menuOt);
-            mem.WriteU32(ActiveDescriptor, menuDesc);
-            mem.WriteU32(CurrentBank, menuBank);
-            mem.WriteU32(CurrentMesh, menuMesh);
-            Gte.Load(_menuGte);
-            c.Restore(regs);
         }
-
-        mem.WriteU32(ot, menuHead & 0x00FFFFFFu);
-        return ot + (OtEntries - 1u) * 4u;
+        return _pass.LinkBefore(mem, menuHead);
     }
 
     static void Report()
@@ -538,7 +510,7 @@ public static class MenuWorld
         if (elapsed < 1000.0) return;
         Console.WriteLine($"[KF2] menu world: {_passes * 1000.0 / elapsed:0.#} passes/s, " +
                           $"peak {_peak}/{_bufHi - _bufLo} bytes at 0x{_bufLo:X8}, {_overflows} overflow(s), " +
-                          $"table at 0x{_scratch + 0x10u:X8}, {_refused} session(s) refused, " +
+                          $"table at 0x{_scratch + TableOffset:X8}, {_refused} session(s) refused, " +
                           $"{_messages} message(s) live, {_messagesRefused} left to the game");
         _windowMs = now;
         _passes = _overflows = 0;
