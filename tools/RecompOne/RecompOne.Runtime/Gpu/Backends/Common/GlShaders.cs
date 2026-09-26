@@ -972,9 +972,12 @@ internal static class GlShaders
         uniform vec2  uLightCentre;
         uniform float uLightH;
         // 0071. Emissive materials: row 1 of SurfaceMaterial's table is the light an
-        // id gives off, in the same units as a light's colour.
+        // id gives off, in the same units as a light's colour, and in alpha whether it
+        // is added after the texture (1) or to the lit colour before it (0).
         uniform int   uEmitOn;
         uniform sampler2D uMatTable;
+        // An additive glow, fogged, in 8-bit colour; added to the modulated texel.
+        ivec3 gGlow8 = ivec3(0);
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -1116,6 +1119,17 @@ internal static class GlShaders
             return sum;
         }
 
+        // The depth cue's weight, 0..4096, from the raw MAC0 through the curve.
+        float cueWeight() {
+            uint curve = (vLight >> 24) & 7u;
+            float ir0 = clamp(vFog, 0.0, 4096.0);
+            return curve == 1u ? max(ir0 - 800.0, 0.0) * 2.0
+                 : curve == 2u ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0)
+                 : curve == 3u ? ir0 * 0.5
+                 : curve == 4u ? vFog
+                 : 0.0;
+        }
+
         ivec3 shade8(vec3 extra) {
             if (vLight == 0u) return ivec3(vColor.rgb * 255.0 + 0.5);
             uint mode = vLight >> 24;
@@ -1129,13 +1143,7 @@ internal static class GlShaders
             // 0071. Before the depth cue, so the game's fog darkens it too.
             if (uLightN > 0 || uEmitOn != 0)
                 lit += vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u)) * extra;
-            uint curve = mode & 7u;
-            float ir0 = clamp(vFog, 0.0, 4096.0);
-            float w = curve == 1u ? max(ir0 - 800.0, 0.0) * 2.0
-                    : curve == 2u ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0)
-                    : curve == 3u ? ir0 * 0.5
-                    : curve == 4u ? vFog
-                    : 0.0;
+            float w = cueWeight();
             return ivec3(clamp(floor(lit * (1.0 - w / 4096.0)), 0.0, 255.0));
         }
 
@@ -1175,14 +1183,21 @@ internal static class GlShaders
             vec3 extra = vec3(0.0);
             if (uLightN > 0 && uClipOn == 0) extra = authored();
             // A surface's own glow needs no position, so it is in a planar
-            // reflection too.
-            if (uEmitOn != 0 && vMat != 0u) extra += texelFetch(uMatTable, ivec2(int(vMat), 1), 0).rgb;
+            // reflection too. Additive: RGBC times the glow, fogged as the lit
+            // colour is, then added past the texture so a dark texel lights too.
+            if (uEmitOn != 0 && vMat != 0u && vLight != 0u) {
+                vec4 glow = texelFetch(uMatTable, ivec2(int(vMat), 1), 0);
+                if (glow.a > 0.5) {
+                    vec3 rgbc = vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u));
+                    gGlow8 = ivec3(clamp(floor(rgbc * glow.rgb * (1.0 - cueWeight() / 4096.0)), 0.0, 255.0));
+                } else extra += glow.rgb;
+            }
             ivec3 c8in = shade8(extra);
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 
             if (texMode == 4) {
                 if (uOpaqueDepth == 1) discard;
-                FragColor = vec4(quant5(c8in), uSetMask);
+                FragColor = vec4(quant5(c8in + gGlow8), uSetMask);
                 BlendColor = uBlend;
                 return;
             }
@@ -1190,7 +1205,7 @@ internal static class GlShaders
             if (texMode == 5) {
                 vec4 img = texture(uExtTex, vUV);
                 if (img.a < 0.5 || uOpaqueDepth == 1) discard;
-                ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7;
+                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
                 FragColor = vec4(quant5(e8), uSetMask);
                 BlendColor = uBlend;
                 return;
@@ -1211,7 +1226,7 @@ internal static class GlShaders
                 vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
                 vec4 img = texture(uRepTex, t);
                 if (img.a < 0.5) discard;
-                ivec3 e8 = (ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7;
+                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
                 float stp = img.a < 0.95 ? 1.0 : 0.0;
                 if (uOpaqueDepth == 1 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
@@ -1272,7 +1287,7 @@ internal static class GlShaders
 
             if (vRepClut != 0 && texMode != 2) {
                 if (texel.a < 0.5) discard;
-                ivec3 e8 = (ivec3(texel.rgb * 255.0 + 0.5) * c8in) >> 7;
+                ivec3 e8 = ((ivec3(texel.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
                 float stp = texel.a < 0.95 ? 1.0 : 0.0;
                 if (uOpaqueDepth == 1 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
@@ -1284,7 +1299,7 @@ internal static class GlShaders
             if (uOpaqueDepth == 1 && texel.a >= 0.5) discard;
             // 248 = 31 << 3: exact for a texel, and keeps a filtered colour's fraction.
             ivec3 t8 = ivec3(texel.rgb * 248.0 + 0.5);
-            ivec3 c8 = (t8 * c8in) >> 7;
+            ivec3 c8 = ((t8 * c8in) >> 7) + gGlow8;
             FragColor = vec4(quant5(c8), max(texel.a, uSetMask));
             BlendColor = texel.a >= 0.5 ? uBlend : uBlendOpaque;
         }

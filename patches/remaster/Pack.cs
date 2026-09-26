@@ -232,9 +232,16 @@ public static class Pack
     // ---- materials ---------------------------------------------------------
 
     /// <summary>A named material. Emissive is a linear colour and its strength, in the
-    /// game's light units: strength 1 lights a surface as its own RGBC at full.</summary>
+    /// game's light units: strength 1 lights a surface as its own RGBC at full.
+    /// <c>GlowAdditive</c> (<c>"glowMode": "additive"</c>, the default) adds the glow
+    /// past the texture, <c>"lit"</c> to the lit colour under it. A glowing surface
+    /// also gives off a light <c>GlowRadius</c> across at <c>GlowLight</c> times its
+    /// glow; a radius of 0 gives none.</summary>
     public readonly record struct Material(string Name, float Reflectivity, float F0, float Roughness,
-                                           Vector3 Emissive, float EmissiveStrength);
+                                           Vector3 Emissive, float EmissiveStrength,
+                                           bool GlowAdditive, float GlowLight, float GlowRadius);
+
+    public const float DefaultGlowLight = 0.5f, DefaultGlowRadius = 2048f, MaxGlowRadius = 8192f;
 
     static JsonObject NewMaterials() => new() { ["formatVersion"] = FormatVersion, ["materials"] = new JsonObject() };
 
@@ -245,7 +252,10 @@ public static class Pack
         foreach (var (name, node) in MaterialsObj)
             if (node is JsonObject o)
                 yield return new Material(name, Num(o, "reflectivity"), Num(o, "f0"), Num(o, "roughness"),
-                                          Vec(o["emissive"], Vector3.One), Num(o, "emissiveStrength"));
+                                          Vec(o["emissive"], Vector3.One), Num(o, "emissiveStrength"),
+                                          Str(o["glowMode"]) != "lit",
+                                          NumOr(o["glowLight"], DefaultGlowLight),
+                                          NumOr(o["glowRadius"], DefaultGlowRadius));
     }
 
     public static bool HasMaterial(string name) => MaterialsObj[name] is JsonObject;
@@ -275,6 +285,24 @@ public static class Pack
 
     public static float GetField(string name, string field)
         => MaterialsObj[name] is JsonObject o ? Num(o, field) : 0f;
+
+    public static string? GetText(string name, string field)
+        => MaterialsObj[name] is JsonObject o ? Str(o[field]) : null;
+
+    /// <summary>A text field change, or its removal with null.</summary>
+    public static void SetText(string name, string field, string? value)
+    {
+        if (MaterialsObj[name] is not JsonObject) return;
+        string? old = GetText(name, field);
+        if (old == value) return;
+        void Put(string? v)
+        {
+            if (MaterialsObj[name] is not JsonObject o) return;
+            if (v == null) o.Remove(field);
+            else o[field] = v;
+        }
+        Edit($"{name}.{field} = {value ?? "default"}", () => Put(value), () => Put(old));
+    }
 
     /// <summary>A field change. <paramref name="from"/> is what an undo returns to, so a
     /// slider dragged over many frames is one entry.</summary>

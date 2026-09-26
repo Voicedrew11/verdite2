@@ -1263,7 +1263,8 @@ Two causes in the design, neither of them the missing bloom:
 - Roughness did nothing in that shot, correctly: it only blurs a reflection, and
   the panel had reflectivity 0.
 
-**Next, for glow** (agreed with the user, not started):
+**Next, for glow** (agreed with the user; 2 and 3 are built, see "The glow is a
+light source" below):
 1. **Try by hand first**: an authored point light just in front of the panel, the
    glow's colour, radius 1500-3000. The user was to say whether that is much
    closer; if so, build 2 and 3 together.
@@ -1288,6 +1289,79 @@ Two causes in the design, neither of them the missing bloom:
 by it, so this phase's third key waits for that. Instances (one door, not every
 door) need the slot measurement "Identity" asks for. Roughness on a mirror floor and
 on water has still not been looked at.
+
+### The glow is a light source
+
+Items 2 and 3 above, built together.
+
+- **An additive glow, the new default** (`0071`, amended again). Row 1's alpha of
+  the material table says how an id glows (`SurfaceMaterial.EmissiveAdditive`):
+  additive adds RGBC times the glow *after* the texture is modulated, so a dark
+  texel lights as much as a bright one; the old mode (`"glowMode": "lit"`) is kept.
+  The additive term is fogged on the packet's own depth-cue curve, like everything
+  else the game draws: an unfogged glow would pop out of the black at the draw
+  window's edge, where the tiles themselves are cut. `PrimFs` splits the curve out of
+  `shade8` as `cueWeight()` and adds the fogged glow, `gGlow8`, to the modulated colour
+  on every output path (flat, texture, replacement texture, replacement CLUT). Zero
+  on every packet without an additive glow, so the other programs are unchanged.
+- **A glowing material gives off a light** (`Lights`). When the area applies, every
+  tile half with a glowing face gets one point light per material: the glowing
+  faces' area-weighted centroid, 192 units out along their summed normal. A face's
+  world corners are the half's placement (the tile centre, the floor at `-(h << 7)`)
+  plus its mesh vertex (`table + 0xC + header[+0]`, 8 bytes a vertex, indexed by byte
+  offset), turned by the record's quarter turn as `func_80014B88` turns the matrix:
+  1 is `(z, y, -x)`, 2 `(-x, y, -z)`, 3 `(-z, y, x)`. Its normal is the one the game
+  lights it with (`header[+8]`, indexed from the face), turned the same way. A
+  glowing model gets a light 384 units above its origin, per draw, from
+  `ModelWalk.Scene`. The light's colour is the glow's, times *Glow light*
+  (`glowLight`, 0.5 by default); its radius is *Glow reach* (`glowRadius`, 2048;
+  0 gives no light).
+- **Authored lights win the 16 slots.** Every derived light ranks after every
+  authored one, then nearest first. They were placed by hand; a derived light
+  comes from any glowing face, however many there are.
+- Editor: *Light source* (the mode), *Glow light*, *Glow reach* under each material.
+  Shell: `set material:NAME glowMode additive|lit`, `glowLight V`, `glowRadius V`;
+  `light list` gives each derived light (`glow`) with its normal and projection,
+  and `modelGlow`.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, 144 fps,
+render scale 5, 16:9, reflections on, the view pinned with the editor open: camera
+`73709,-16448,74986`, pitch 26, yaw 2639, the same view as Phase 2's hash):
+- **The formula.** `light_probe.c` gains four passes on a strip textured with a
+  known 15-bit texel: no glow, the lit glow, the additive glow, and the additive
+  glow untextured. Worst difference from the formula **0** in all ten passes; the
+  first six read as before, to the line.
+- **Off is the picture it was**: `210d55698c875fb8` with nothing authored, remaster
+  on or off, and again after every glow was set back to 0. A zero-glow material that
+  keeps its default reflectivity 0.3 is not the baseline with reflections on, which
+  is its reflection and not the glow: at reflectivity 0 it is.
+- **A wall panel** (`tile:1:37:36:upper`, face 2, colour 1,0.6,0.25, glow 1.5): the
+  panel's darkest tenth of pixels had a mean luminance of 54 unglowing, **98 lit**
+  and **179 additive**; the median 73, 135, 196. Only the panel's own rectangle
+  changed in either mode (12.1% of the picture).
+- **Its light** sits at `77376,-17248,74885` with the normal `(-1,0,0)`, towards
+  the camera at X 73709, so the lit side is the side the camera can see (it would be
+  backface-culled from the other). It projects inside the panel, at depth 2914. At
+  glow light 0.5 and reach 2048 it changed 336,078 more pixels outside the panel, by
+  up to 29 levels, and **darkened none**. A second face, a wall facing +Z, got a
+  normal of `(0,0,1)` with the camera on that side too.
+- A glowing model (`model:1:object:486`) got its light (`modelGlow 1`, three sent).
+- The saved pack reproduced the same hash after a restart (`d8c08a2ca30faedc`).
+- 144.0 fps drawn at 20.0 ticks/s with the panel's glow and light, editor closed;
+  `[present] wide 288, plain 0, vram fallback 0`.
+- **Cost**: a half is looked at only if something is authored on it, once per apply;
+  a model's light is one dictionary lookup per model drawn, only while a model
+  material gives light.
+
+**Changed for an existing pack.** A material without `glowMode` is now additive,
+so a pack saved in Phase 3 draws its glows differently, and gives off light unless
+its reach is set to 0. The Phase 3 hashes above are of the old mode.
+
+**Not judged.** The whole look: whether the additive glow and the spill now read as
+a light source, the defaults (glow light 0.5, reach 2048), a model's light at 384
+above its origin (a guess at the middle of a figure; a view-space model such as the
+arm would get one at a meaningless position), several adjacent halves each giving
+a light (they add), and fog on the glow. Bloom is still item 4.
 
 ### Phase 4: textures
 

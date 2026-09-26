@@ -25,6 +25,13 @@
 // material glows adds its row-1 colour times RGBC before the depth cue, with no
 // depth needed; with the switch off the same glowing material changes nothing. See
 // "Phase 3, the first slice" in docs/REMASTER.md.
+//
+// 0071, amended again. The additive glow: the same glowing material with the
+// table's alpha set adds RGBC times its colour, fogged on the packet's own curve,
+// after the texture is modulated. Four passes on a strip textured with a known
+// 15-bit texel: no glow (the texture path's formula), the lit mode, the additive
+// mode, and the additive mode untextured. See "The glow is a light source" in
+// docs/REMASTER.md.
 #define GL_GLES_PROTOTYPES 0
 #include <EGL/egl.h>
 #include <GL/gl.h>
@@ -61,7 +68,7 @@ F(void,glVertexAttribPointer,(GLuint,GLint,GLenum,GLboolean,GLsizei,const void*)
 F(void,glGenFramebuffers,(GLsizei,GLuint*)) F(void,glBindFramebuffer,(GLenum,GLuint))
 F(void,glFramebufferTexture2D,(GLenum,GLenum,GLenum,GLuint,GLint))
 F(GLenum,glCheckFramebufferStatus,(GLenum)) F(void,glBindAttribLocation,(GLuint,GLuint,const char*))
-F(void,glActiveTexture,(GLenum))
+F(void,glActiveTexture,(GLenum)) F(void,glUniform4i,(GLint,GLint,GLint,GLint,GLint))
 
 static void load(void){
 #define L(n) n##_=(P_##n)eglGetProcAddress(#n); if(!n##_){printf("missing %s\n",#n);exit(2);}
@@ -70,7 +77,7 @@ static void load(void){
  L(glUseProgram)L(glGetUniformLocation)L(glUniform1i)L(glUniform1f)L(glUniform1ui)L(glUniform3f)L(glUniform2f)L(glUniform4fv)
  L(glGenBuffers)L(glBindBuffer)L(glBufferData)L(glGenVertexArrays)L(glBindVertexArray)
  L(glEnableVertexAttribArray)L(glVertexAttribPointer)L(glGenFramebuffers)L(glBindFramebuffer)
- L(glFramebufferTexture2D)L(glCheckFramebufferStatus)L(glBindAttribLocation)L(glActiveTexture)
+ L(glFramebufferTexture2D)L(glCheckFramebufferStatus)L(glBindAttribLocation)L(glActiveTexture)L(glUniform4i)
 }
 
 static char *slurp(const char*p){FILE*f=fopen(p,"rb");if(!f){perror(p);exit(2);}
@@ -85,13 +92,13 @@ static const char *VS =
 "flat out ivec2 clutBase; flat out ivec2 pageBase; flat out int texMode;\n"
 "flat out int vDither; flat out int vRepClut;\n"
 "noperspective out vec3 vLit; noperspective out float vFog; flat out uint vLight; flat out uint vMat; flat out uvec2 vTex;\n"
-"uniform uint uTestLight; uniform vec3 uLit0, uLit1; uniform float uFog0, uFog1; uniform float uTestDepth; uniform uint uTestMat;\n"
+"uniform uint uTestLight; uniform vec3 uLit0, uLit1; uniform float uFog0, uFog1; uniform float uTestDepth; uniform uint uTestMat; uniform int uTestTex;\n"
 "void main(){\n"
 "  gl_Position = vec4(aPos,0.0,1.0);\n"
 "  float t = aPos.x*0.5+0.5;\n"
 "  vLit = mix(uLit0, uLit1, t); vFog = mix(uFog0, uFog1, t); vLight = uTestLight;\n"
-"  vColor = vec4(1.0); vUV = vec2(0.0); vDepth = uTestDepth; clutBase = ivec2(0); pageBase = ivec2(0);\n"
-"  texMode = 4; vDither = 0; vRepClut = 0; vMat = uTestMat; vTex = uvec2(0u);\n"
+"  vColor = vec4(1.0); vUV = vec2(3.0, 5.0); vDepth = uTestDepth; clutBase = ivec2(0); pageBase = ivec2(0);\n"
+"  texMode = uTestTex != 0 ? 2 : 4; vDither = 0; vRepClut = 0; vMat = uTestMat; vTex = uvec2(0u);\n"
 "}\n";
 
 #define VH 2
@@ -116,6 +123,10 @@ static void authored(int n,int x,int y,float out[3]){
 static const float BK[3]={1920,1920,1920};
 static const float LCM[9]={2662,2662,3328, 2662,2662,3328, 2662,2662,3328};
 
+static float cue(unsigned light, float fog){
+ unsigned c=(light>>24)&7; float ir0=fog<0?0:fog>4096?4096:fog;
+ return c==1 ? (ir0-800>0?(ir0-800)*2:0) : c==2 ? (ir0<2800?ir0:3*ir0-5600) : c==3 ? ir0*0.5f : c==4 ? fog : 0; }
+
 static int expect(unsigned light, float lit[3], float fog, int ch, float extra){
  unsigned mode=light>>24; float l=lit[ch];
  if(mode&0x80){ float a[3]; for(int i=0;i<3;i++){a[i]=lit[i]<0?0:lit[i]>32767?32767:lit[i];}
@@ -125,6 +136,12 @@ static int expect(unsigned light, float lit[3], float fog, int ch, float extra){
  float ir0=fog<0?0:fog>4096?4096:fog; float w; unsigned c=mode&7;
  w = c==1 ? (ir0-800>0?(ir0-800)*2:0) : c==2 ? (ir0<2800?ir0:3*ir0-5600) : c==3 ? ir0*0.5f : c==4 ? fog : 0;
  float v=floor(l*(1-w/4096.f)); return v<0?0:v>255?255:(int)v; }
+
+// The additive glow at a pixel, 8-bit, and the texel the textured strip reads (a
+// 15-bit colour as RGBA8, which is what the VRAM texture holds).
+static int glow8(unsigned light, float fog, int ch, float e){
+ float v=floor(((light>>(8*ch))&255)*e*(1-cue(light,fog)/4096.f)); return v<0?0:v>255?255:(int)v; }
+static const unsigned char TEXEL[3]={66,165,214};
 
 int main(int argc,char**argv){
  EGLDisplay d=eglGetDisplay(EGL_DEFAULT_DISPLAY);
@@ -202,6 +219,8 @@ int main(int argc,char**argv){
  static const float EMIT[3]={1.2f,0.6f,0.15f};
  static float table[256*2*4];
  table[(256+MAT)*4]=EMIT[0]; table[(256+MAT)*4+1]=EMIT[1]; table[(256+MAT)*4+2]=EMIT[2];
+ #define MATADD 6
+ table[(256+MATADD)*4]=EMIT[0]; table[(256+MATADD)*4+1]=EMIT[1]; table[(256+MATADD)*4+2]=EMIT[2]; table[(256+MATADD)*4+3]=1.f;
  GLuint mt; glGenTextures(1,&mt); glActiveTexture_(0x84C0+6); glBindTexture(GL_TEXTURE_2D,mt);
  glTexImage2D(GL_TEXTURE_2D,0,0x8814 /*RGBA32F*/,256,2,0,GL_RGBA,GL_FLOAT,table);
  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
@@ -209,17 +228,31 @@ int main(int argc,char**argv){
  GLint uEmit=glGetUniformLocation_(p,"uEmitOn"), uMatT=glGetUniformLocation_(p,"uMatTable"), uM=glGetUniformLocation_(p,"uTestMat");
  if(uEmit<0||uMatT<0){printf("no uEmitOn/uMatTable\n");return 2;}
  glUniform1i_(uMatT,6);
+ // VRAM for the textured passes: one texel everywhere, direct 15-bit, opaque.
+ static unsigned char vram[1024*512*4];
+ for(int i=0;i<1024*512;i++){ vram[i*4]=TEXEL[0]; vram[i*4+1]=TEXEL[1]; vram[i*4+2]=TEXEL[2]; vram[i*4+3]=0; }
+ GLuint vt; glGenTextures(1,&vt); glActiveTexture_(0x84C0+7); glBindTexture(GL_TEXTURE_2D,vt);
+ glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,1024,512,0,GL_RGBA,GL_UNSIGNED_BYTE,vram);
+ glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+ glActiveTexture_(0x84C0);
+ glUniform1i_(glGetUniformLocation_(p,"uVram"),7);
+ glUniform4i_(glGetUniformLocation_(p,"uTexWindow"),255,255,0,0);
+ GLint uT=glGetUniformLocation_(p,"uTestTex");
  // pass 0: no light list, no depth (the program as 0048 had it); pass 1: the list
  // uploaded, no depth (nothing may change); pass 2: the list and a wall at DEPTH.
  // pass 3: emissive on, material 0 (as pass 0); pass 4: emissive on, material 5,
- // no depth; pass 5: emissive off, material 5 (as pass 0).
+ // no depth; pass 5: emissive off, material 5 (as pass 0). Textured: pass 6 no glow,
+ // pass 7 material 5 (lit), pass 8 material 6 (additive); pass 9 material 6 untextured.
  const char*names[]={"no lights","lights, no depth","lights on a wall at depth 2000",
-   "emissive on, material 0","emissive on, material 5 glowing","emissive off, material 5"};
- for(int pass=0;pass<6;pass++){
+   "emissive on, material 0","emissive on, material 5 glowing","emissive off, material 5",
+   "textured, no glow","textured, lit glow","textured, additive glow","untextured, additive glow"};
+ for(int pass=0;pass<10;pass++){
+ int tex=pass>=6&&pass<=8, add=pass>=8;
  glUniform1i_(uN,pass==1||pass==2?NL:0);
  glUniform1f_(uD,pass==2?DEPTH/65536.f:0.f);
- glUniform1i_(uEmit,pass==3||pass==4?1:0);
- glUniform1ui_(uM,pass>=4?MAT:0);
+ glUniform1i_(uEmit,pass==3||pass==4||pass>=7?1:0);
+ glUniform1ui_(uM,add?MATADD:pass>=4?MAT:0);
+ glUniform1i_(uT,tex);
  printf("-- %s\n", names[pass]);
  for(unsigned k=0;k<sizeof cases/sizeof cases[0];k++){
    glUniform1ui_(uL,cases[k].light);
@@ -234,10 +267,16 @@ int main(int argc,char**argv){
      float t=(x+0.5f)/VW; float lit[3]; for(int i=0;i<3;i++) lit[i]=cases[k].l0[i]+(cases[k].l1[i]-cases[k].l0[i])*t;
      float fog=cases[k].f0+(cases[k].f1-cases[k].f0)*t;
      float ex[3]={0,0,0}; if(pass==2) authored(NL,x,y,ex);
-     if(pass==4) for(int c=0;c<3;c++) ex[c]=EMIT[c];
+     if(pass==4||pass==7) for(int c=0;c<3;c++) ex[c]=EMIT[c];
      if(ex[0]+ex[1]+ex[2]>0.01f) lit_px++;
      const unsigned char*q=px+(y*VW+x)*4;
-     for(int ch=0;ch<3;ch++){ int e=expect(cases[k].light,lit,fog,ch,ex[ch]), g=q[ch]; int dd=abs(e-g); if(dd>worst)worst=dd; if(dd==1)off1++; }
+     if(add) lit_px++;
+     for(int ch=0;ch<3;ch++){ int e=expect(cases[k].light,lit,fog,ch,ex[ch]), g=q[ch];
+       // The texture path: 248 = 31 << 3, the texel times the shaded colour over 128.
+       if(tex){ int t8=(int)(TEXEL[ch]/255.f*248.f+0.5f); e=(t8*e)>>7; }
+       if(add) e+=glow8(cases[k].light,fog,ch,EMIT[ch]);
+       if(e>255) e=255;
+       int dd=abs(e-g); if(dd>worst)worst=dd; if(dd==1)off1++; }
      int g=q[0]|(q[1]<<8)|(q[2]<<16); if(y==0&&g!=last){distinct++; last=g;}
    }
    printf("%-14s worst |shader - formula| %d, off by 1 in %d channel(s), %d distinct colours across %d px, %d px lit; first %d,%d,%d last %d,%d,%d\n",

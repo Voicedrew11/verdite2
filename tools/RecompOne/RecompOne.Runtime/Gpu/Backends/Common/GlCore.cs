@@ -1883,7 +1883,7 @@ public sealed class GlCore : IGpuBackend
                 _matRows[(n + i) * 4] = SurfaceMaterial.Emissive[i * 3];
                 _matRows[(n + i) * 4 + 1] = SurfaceMaterial.Emissive[i * 3 + 1];
                 _matRows[(n + i) * 4 + 2] = SurfaceMaterial.Emissive[i * 3 + 2];
-                _matRows[(n + i) * 4 + 3] = 0f;
+                _matRows[(n + i) * 4 + 3] = SurfaceMaterial.EmissiveAdditive[i] ? 1f : 0f;
             }
             fixed (float* p = _matRows)
                 _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)n, 2, PixelFormat.Rgba, PixelType.Float, p);

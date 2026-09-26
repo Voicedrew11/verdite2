@@ -20,6 +20,11 @@ namespace Kf2.Remaster;
 /// before the depth cue. Flicker steps on the world tick, so it holds while the world
 /// is paused. Needs per-pixel lighting and the C# assemblers, whose records carry the
 /// colour a light is added in. See "Phase 2, the first slice" in docs/REMASTER.md.
+///
+/// A glowing material also gives off a light: one per tile half and material, at the
+/// glowing faces' centroid off their lit side, found once when the area applies, and
+/// one per glowing model drawn, each frame. Authored lights take the slots first. See
+/// "The glow is a light source" in docs/REMASTER.md.
 /// </summary>
 public sealed class Lights : IRemasterFeature
 {
@@ -35,6 +40,17 @@ public sealed class Lights : IRemasterFeature
 
     public static int Authored => _lights.Length;
 
+    /// <summary>The lights the area's glowing tile faces give off.</summary>
+    static Pack.Light[] _derived = [];
+    public static int Derived => _derived.Length;
+    public static IReadOnlyList<Pack.Light> DerivedLights => _derived;
+
+    /// <summary>The last frame's lights from glowing models.</summary>
+    public static int ModelLights { get; private set; }
+
+    /// <summary>The frame's candidates: authored, then derived, then models'.</summary>
+    static Pack.Light[] _frame = new Pack.Light[64];
+
     /// <summary>The last frame's count sent, and culled.</summary>
     public static int Sent { get; private set; }
     public static int Culled { get; private set; }
@@ -47,7 +63,7 @@ public sealed class Lights : IRemasterFeature
     /// <summary>The world tick the flicker is evaluated at.</summary>
     public static long Ticks => _ticks;
 
-    int _version = -1, _settle = -1;
+    int _version = -1, _settle = -1, _surfaces = -1;
 
     /// <summary>How far past the eye a light may sit and still reach the draw window:
     /// twelve tiles each way.</summary>
@@ -98,24 +114,28 @@ public sealed class Lights : IRemasterFeature
         if (!want)
         {
             if (_lights.Length > 0 || RemasterUniforms.Enabled) Clear();
-            _version = _settle = -1;
+            _version = _settle = _surfaces = -1;
             return;
         }
-        if (_version == Pack.Version && _settle == Identity.Settles) return;
+        // Derived lights follow the surfaces, which follow the tile table.
+        if (_version == Pack.Version && _settle == Identity.Settles && _surfaces == Surfaces.Serial) return;
         _version = Pack.Version;
         _settle = Identity.Settles;
+        _surfaces = Surfaces.Serial;
         Resolve();
     }
 
     public void Detach()
     {
         Clear();
-        _version = _settle = -1;
+        _version = _settle = _surfaces = -1;
     }
 
     static void Clear()
     {
         _lights = [];
+        _derived = [];
+        ModelLights = 0;
         Refused = null;
         RemasterUniforms.Enabled = false;
         RemasterUniforms.Publish(0);
@@ -136,12 +156,104 @@ public sealed class Lights : IRemasterFeature
         }
         Refused = null;
         _lights = Pack.Lights(area).Where(l => !l.Off && l.Radius > 0f && l.Intensity != 0f).ToArray();
-        bool any = _lights.Length > 0;
+        _derived = Runtime.Mem is { } mem ? TileGlow(mem) : [];
+        bool any = _lights.Length > 0 || _derived.Length > 0 || Surfaces.ModelsGiveLight;
         RemasterUniforms.Enabled = any;
         PolyAssembler.KeepForLights = any;
         PolyAssembler.Keep();
-        if (!any) RemasterUniforms.Publish(0);
+        if (!any) { RemasterUniforms.Publish(0); Sent = Culled = ModelLights = 0; }
     }
+
+    /// <summary>How far off its surface a glow's light sits, along the lit side.</summary>
+    const float GlowOffset = 192f;
+
+    /// <summary>How far above a model's origin (its feet) its glow's light sits.</summary>
+    const float ModelGlowHeight = 384f;
+
+    /// <summary>A glow's point light; its direction, unused by a point, holds the
+    /// surface's normal for the shell to report.</summary>
+    static Pack.Light GlowLight(string name, Vector3 at, byte id, Vector3 normal)
+    {
+        var c = Surfaces.GlowLight[id];
+        float s = MathF.Max(c.X, MathF.Max(c.Y, c.Z));
+        return new Pack.Light(name, false, at, c / s, s, Surfaces.GlowRadius[id],
+                              normal, 0f, 0f, 0f, 0f, false);
+    }
+
+    /// <summary>
+    /// A light for every tile half and material that glows and gives light: at the
+    /// area-weighted centroid of those faces, <see cref="GlowOffset"/> out along their
+    /// summed normal. A face's world corners are the half's placement (the tile centre,
+    /// the floor at <c>-(h &lt;&lt; 7)</c>) plus its mesh vertex turned by the record's
+    /// quarter turn, as <c>func_80014B88</c> turns the view matrix; its normal is the
+    /// one the game lights it with, turned the same way.
+    /// </summary>
+    static Pack.Light[] TileGlow(IMemory m)
+    {
+        if (!Surfaces.AnyGivesLight() || Faces.TileTable == 0) return [];
+        uint table = Faces.TileTable;
+        var list = new List<Pack.Light>();
+        var sum = new Dictionary<byte, (Vector3 C, Vector3 N, float A)>();
+        for (int z = 0; z < Identity.Span; z++)
+        for (int x = 0; x < Identity.Span; x++)
+        for (int half = 0; half < 2; half++)
+        {
+            uint rec = Identity.HalfRecord(x, z, half);
+            int model = m.ReadU8(rec);
+            if (model >= 240 || !Surfaces.Authored(x, z, half, model)) continue;
+            var faces = Faces.Mesh(m, model);
+            if (faces == null) continue;
+            sum.Clear();
+            uint header = table + 0xCu + (uint)model * 28u;
+            uint verts = table + 0xCu + m.ReadU32(header);
+            uint normals = table + 0xCu + m.ReadU32(header + 8u);
+            uint f = table + 0xCu + m.ReadU32(header + 0x10u);
+            int rot = m.ReadU8(rec + 2u) & 3;
+            var pos = new Vector3(x * Identity.TileUnits + Identity.TileUnits / 2, -(m.ReadU8(rec + 1u) << 7),
+                                  z * Identity.TileUnits + Identity.TileUnits / 2);
+            for (int i = 0; i < faces.Length; i++, f = f + 4u + ((m.ReadU32(f) >> 6) & 0x3FCu))
+            {
+                if (faces[i].Verts.Length == 0) continue;
+                byte id = Surfaces.FaceOf(x, z, half, model, i);
+                if (!Surfaces.GivesLight(id)) continue;
+                var v = faces[i].Verts;
+                Span<Vector3> w = stackalloc Vector3[4];
+                for (int k = 0; k < v.Length; k++) w[k] = pos + Turn(Vec(m, verts + (uint)v[k]), rot);
+                // A quad's corners are 0 1 3 2 around.
+                var cross = v.Length == 4
+                    ? Vector3.Cross(w[3] - w[0], w[2] - w[1])
+                    : Vector3.Cross(w[1] - w[0], w[2] - w[0]);
+                float area = cross.Length() * 0.5f;
+                if (area <= 0f) continue;
+                var centre = Vector3.Zero;
+                for (int k = 0; k < v.Length; k++) centre += w[k];
+                centre /= v.Length;
+                uint ni = m.ReadU16(f + 4u + (v.Length == 4 ? 0x10u : 0x0Cu));
+                var n = Turn(Vec(m, normals + ni), rot);
+                sum.TryGetValue(id, out var acc);
+                sum[id] = (acc.C + centre * area, acc.N + n * area, acc.A + area);
+            }
+            foreach (var (id, acc) in sum)
+            {
+                var n = acc.N.LengthSquared() > 1e-6f ? Vector3.Normalize(acc.N) : -Vector3.UnitY;
+                var at = acc.C / acc.A + n * GlowOffset;
+                list.Add(GlowLight($"glow {new TileKey(Identity.Area, x, z, half)} {Surfaces.IdNames[id]}", at, id, n));
+            }
+        }
+        return list.ToArray();
+    }
+
+    static Vector3 Vec(IMemory m, uint a)
+        => new((short)m.ReadU16(a), (short)m.ReadU16(a + 2u), (short)m.ReadU16(a + 4u));
+
+    /// <summary>A half's quarter turn, as <c>func_80014B88</c> applies it to the matrix.</summary>
+    static Vector3 Turn(Vector3 v, int rot) => rot switch
+    {
+        1 => new Vector3(v.Z, v.Y, -v.X),
+        2 => new Vector3(-v.X, v.Y, -v.Z),
+        3 => new Vector3(-v.Z, v.Y, v.X),
+        _ => v,
+    };
 
     /// <summary>The frame's view: <c>v = R (w - cam) + T</c>, as <c>func_80031950</c>
     /// feeds the tile walk.</summary>
@@ -206,21 +318,25 @@ public sealed class Lights : IRemasterFeature
 
     static readonly (float Key, int Index)[] _order = new (float, int)[256];
 
+    /// <summary>Authored lights sort ahead of every derived one.</summary>
+    const float DerivedRank = 1e9f;
+
     public static void BeforeDrawOTag(CpuContext c, IMemory m)
     {
-        if (!RemasterUniforms.Enabled || _lights.Length == 0) return;
+        if (!RemasterUniforms.Enabled) return;
         if (FramePacing.FirstWalkOfTick(ref _tickFrame)) _ticks++;
 
+        int total = Gather();
         var v = ReadView(m);
         int n = 0, culled = 0;
-        for (int i = 0; i < _lights.Length && n < _order.Length; i++)
+        for (int i = 0; i < total && n < _order.Length; i++)
         {
-            ref readonly var l = ref _lights[i];
+            ref readonly var l = ref _frame[i];
             var p = v.ToView(l.Position);
             float r = l.Radius;
             // Behind the eye, or past the draw window in any direction.
             if (p.Z + r < 0f || p.Length() - r > Reach) { culled++; continue; }
-            _order[n++] = (MathF.Max(p.Length() - r, 0f), i);
+            _order[n++] = (MathF.Max(p.Length() - r, 0f) + (i < _lights.Length ? 0f : DerivedRank), i);
         }
         Array.Sort(_order, 0, n, Comparer<(float Key, int Index)>.Create((a, b) => a.Key.CompareTo(b.Key)));
         int sent = Math.Min(n, RemasterUniforms.MaxLights);
@@ -229,7 +345,7 @@ public sealed class Lights : IRemasterFeature
         double t = _ticks / 20.0;
         for (int k = 0; k < sent; k++)
         {
-            ref readonly var l = ref _lights[_order[k].Index];
+            ref readonly var l = ref _frame[_order[k].Index];
             var p = v.ToView(l.Position);
             int o = k * 4;
             RemasterUniforms.LightPos[o] = p.X;
@@ -266,6 +382,31 @@ public sealed class Lights : IRemasterFeature
         Frames++;
     }
 
+    /// <summary>The frame's candidates into <see cref="_frame"/>: the authored lights,
+    /// the tile glows, and a light per glowing model the last walk drew.</summary>
+    static int Gather()
+    {
+        int n = 0;
+        void Add(in Pack.Light l)
+        {
+            if (n == _frame.Length) Array.Resize(ref _frame, n * 2);
+            _frame[n++] = l;
+        }
+        foreach (var l in _lights) Add(l);
+        foreach (var l in _derived) Add(l);
+        int models = 0;
+        if (Surfaces.ModelsGiveLight)
+            foreach (ref readonly var d in ModelWalk.Scene)
+            {
+                byte id = Surfaces.EnterModel(d.Kind, d.Model);
+                if (!Surfaces.GivesLight(id)) continue;
+                Add(GlowLight("glow model", new Vector3(d.X, d.Y - ModelGlowHeight, d.Z), id, -Vector3.UnitY));
+                models++;
+            }
+        ModelLights = models;
+        return n;
+    }
+
     /// <summary>1 less up to the light's amount, varying smoothly at about its rate:
     /// value noise on the world clock, a different phase per light.</summary>
     static float Flicker(in Pack.Light l, double t, int seed)
@@ -290,7 +431,7 @@ public sealed class Lights : IRemasterFeature
 
     public string Probe()
         => Refused != null ? $"lights refused: {Refused}"
-         : $"lights {Authored} authored, {Sent} sent, {Culled} culled; " +
+         : $"lights {Authored} authored, {Derived} from tile glow, {ModelLights} from model glow, {Sent} sent, {Culled} culled; " +
            $"{RemasterUniforms.Uploads} upload(s), {RemasterUniforms.LitBatches} lit batch(es)" +
            (RemasterUniforms.Supported ? "" : " (the backend has no light term)") +
            (Authored > 0 && !PerPixelLighting.Enabled ? " (per-pixel lighting is off, so nothing is lit)" : "");

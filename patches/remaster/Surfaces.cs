@@ -55,6 +55,20 @@ public sealed class Surfaces : IRemasterFeature
     /// <summary>The name each authored id was given, from <see cref="SurfaceMaterial.FirstAuthored"/>.</summary>
     public static readonly string?[] IdNames = new string?[SurfaceMaterial.Count];
 
+    /// <summary>The light a glowing id gives off (colour times intensity), and how far
+    /// it reaches; a radius of 0 is none. Read by <see cref="Lights"/>.</summary>
+    public static readonly Vector3[] GlowLight = new Vector3[SurfaceMaterial.Count];
+    public static readonly float[] GlowRadius = new float[SurfaceMaterial.Count];
+
+    /// <summary>Whether an id gives off a light.</summary>
+    public static bool GivesLight(byte id) => id != 0 && GlowRadius[id] > 0f;
+
+    /// <summary>Bumped each time the area's surfaces are applied or cleared.</summary>
+    public static int Serial { get; private set; }
+
+    /// <summary>Whether any model rule's material gives off a light.</summary>
+    public static bool ModelsGiveLight { get; private set; }
+
     /// <summary>Why the area's surfaces are not applied, or null.</summary>
     public static string? Refused { get; private set; }
 
@@ -101,7 +115,8 @@ public sealed class Surfaces : IRemasterFeature
         _meshWhole.Clear();
         _meshFaces.Clear();
         _models.Clear();
-        _active = PerFace = false;
+        _active = PerFace = ModelsGiveLight = false;
+        Serial++;
         PolyAssembler.KeepForGlow = false;
         PolyAssembler.Keep();
         _tf = _mf = null;
@@ -118,6 +133,9 @@ public sealed class Surfaces : IRemasterFeature
             SurfaceMaterial.F0[i] = 0f;
             SurfaceMaterial.Roughness[i] = 0f;
             SurfaceMaterial.Emissive[i * 3] = SurfaceMaterial.Emissive[i * 3 + 1] = SurfaceMaterial.Emissive[i * 3 + 2] = 0f;
+            SurfaceMaterial.EmissiveAdditive[i] = false;
+            GlowLight[i] = Vector3.Zero;
+            GlowRadius[i] = 0f;
             IdNames[i] = null;
         }
         if (_idsSet) SurfaceMaterial.Changed();
@@ -147,6 +165,10 @@ public sealed class Surfaces : IRemasterFeature
             SurfaceMaterial.Emissive[next * 3] = e.X;
             SurfaceMaterial.Emissive[next * 3 + 1] = e.Y;
             SurfaceMaterial.Emissive[next * 3 + 2] = e.Z;
+            SurfaceMaterial.EmissiveAdditive[next] = m.GlowAdditive;
+            bool glows = e.X > 0f || e.Y > 0f || e.Z > 0f;
+            GlowLight[next] = glows ? e * Math.Clamp(m.GlowLight, 0f, 4f) : Vector3.Zero;
+            GlowRadius[next] = glows && GlowLight[next] != Vector3.Zero ? Math.Clamp(m.GlowRadius, 0f, Pack.MaxGlowRadius) : 0f;
             next++;
         }
         Unallocated = over;
@@ -190,6 +212,7 @@ public sealed class Surfaces : IRemasterFeature
         {
             if (!ids.TryGetValue(r.Material, out byte id)) continue;
             _models[(r.Model.Kind, r.Model.Model)] = id;
+            if (GivesLight(id)) ModelsGiveLight = true;
             n++;
         }
         TilesApplied = n;
@@ -198,6 +221,7 @@ public sealed class Surfaces : IRemasterFeature
         // A glowing face near the eye is unfogged, and it glows only through its record.
         PolyAssembler.KeepForGlow = _active && SurfaceMaterial.AnyEmissive;
         PolyAssembler.Keep();
+        Serial++;
     }
 
     static bool Gate(RecompOne.Runtime.Memory.IMemory m, int mesh, string? hash)
@@ -245,6 +269,38 @@ public sealed class Surfaces : IRemasterFeature
         if (id == 0) id = _half;
         if (id == 0 && _mf != null && (uint)f < (uint)_mf.Length) id = _mf[f];
         return id != 0 ? id : _meshAll;
+    }
+
+    /// <summary>The id of face <paramref name="f"/> of mesh <paramref name="model"/> drawn
+    /// by the half at (<paramref name="x"/>, <paramref name="z"/>): what <see cref="EnterHalf"/>
+    /// and <see cref="Face"/> answer during the walk, without touching their state.</summary>
+    public static byte FaceOf(int x, int z, int half, int model, int f)
+    {
+        if (!_active) return 0;
+        int i = Index(x, z, half);
+        byte id = 0;
+        if (PerFace && _tileFaces.TryGetValue(i, out var t) && t.Mesh == model && (uint)f < (uint)t.Ids.Length) id = t.Ids[f];
+        if (id == 0) id = _table[i];
+        if (id == 0 && PerFace && _meshFaces.TryGetValue(model, out var mf) && (uint)f < (uint)mf.Length) id = mf[f];
+        if (id == 0 && PerFace) _meshWhole.TryGetValue(model, out id);
+        return id;
+    }
+
+    /// <summary>Whether anything is authored that could name a face of this half.</summary>
+    public static bool Authored(int x, int z, int half, int model)
+    {
+        if (!_active) return false;
+        int i = Index(x, z, half);
+        return _table[i] != 0 || (PerFace && (_tileFaces.ContainsKey(i) || _meshWhole.ContainsKey(model) || _meshFaces.ContainsKey(model)));
+    }
+
+    /// <summary>Whether anything authored for the area gives off a light.</summary>
+    public static bool AnyGivesLight()
+    {
+        if (!_active) return false;
+        for (int i = SurfaceMaterial.FirstAuthored; i < SurfaceMaterial.Count; i++)
+            if (GivesLight((byte)i)) return true;
+        return false;
     }
 
     /// <summary>The model about to be assembled: its id, or 0.</summary>

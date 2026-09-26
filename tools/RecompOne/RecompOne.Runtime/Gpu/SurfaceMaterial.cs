@@ -59,6 +59,11 @@ public static class SurfaceMaterial
     /// packet with a <see cref="GteLightMap"/> record glows.</summary>
     public static readonly float[] Emissive = new float[Count * 3];
 
+    /// <summary>How an id's glow is added: true after the texture is modulated, so
+    /// every texel lights, as a light source does; false to the lit colour before
+    /// it, so the glow is the texture shown brighter. Fogged either way.</summary>
+    public static readonly bool[] EmissiveAdditive = new bool[Count];
+
     /// <summary>Bumped by <see cref="Changed"/>; the table is uploaded to the GPU when
     /// it moves. A port that writes the arrays calls it once it is done.</summary>
     public static int Generation { get; private set; }

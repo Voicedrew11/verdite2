@@ -618,8 +618,18 @@ public static class Editor
                 Colour(mat.Name, "emissive", "Emissive", mat.Emissive);
                 Slider(mat.Name, "emissiveStrength", "Glow", mat.EmissiveStrength, 4f);
                 if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip("Light the surface gives off, fogged like the game's own light. 1 shows its texture at full. " +
+                    ImGui.SetTooltip("Light the surface gives off, fogged like the game's own light. " +
                                      "Needs per-pixel lighting.");
+                bool additive = mat.GlowAdditive;
+                if (ImGui.Checkbox("Light source", ref additive))
+                    Pack.SetText(mat.Name, "glowMode", additive ? null : "lit");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("On: the glow is added over the texture, so its dark texels light too.\n" +
+                                     "Off: the glow lights the texture, which shows it brighter (1 is the texture at full).");
+                Slider(mat.Name, "glowLight", "Glow light", mat.GlowLight, 2f);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How strongly a glowing surface lights what is around it, as a share of its glow.");
+                Slider(mat.Name, "glowRadius", "Glow reach", mat.GlowRadius, Pack.MaxGlowRadius, "%.0f");
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far that light reaches, in world units (a tile is 2048). 0 gives no light.");
                 ImGui.PopID();
             }
             if (remove != null) Pack.RemoveMaterial(remove);
@@ -636,11 +646,11 @@ public static class Editor
         }
 
         /// <summary>Live while held, one undo entry on release.</summary>
-        void Slider(string name, string field, string label, float value, float max = 1f)
+        void Slider(string name, string field, string label, float value, float max = 1f, string format = "%.3f")
         {
             ImGui.SetNextItemWidth(200);
             float v = value;
-            if (ImGui.SliderFloat(label, ref v, 0f, max, "%.3f")) Pack.Preview(name, field, v);
+            if (ImGui.SliderFloat(label, ref v, 0f, max, format)) Pack.Preview(name, field, v);
             if (ImGui.IsItemActivated()) { _held = name + "." + field; _heldFrom = value; }
             if (ImGui.IsItemDeactivatedAfterEdit() && _held == name + "." + field)
             {

@@ -996,6 +996,14 @@ Four files in the directory have no entry below:
   records while some id glows; with it off, or with material 0, `light_probe.c`
   reads the shader as before to the bit. The hunks are in `0067`'s file (its sixth
   diff). See "Phase 3, the first slice" in `docs/REMASTER.md`.
+  Since amended: the glow multiplied the texture, so glow 4 was the texture at twice
+  full, clipped, and read as overexposed stone rather than a light source. Row 1's
+  alpha now picks the mode (`SurfaceMaterial.EmissiveAdditive`): 0 is the old term,
+  1 adds RGBC times the glow after the texture is modulated, fogged on the packet's
+  own curve (`cueWeight()`, split out of `shade8`), on every output path. A packet
+  without an additive glow adds zero, and `light_probe.c` reads the old passes as
+  before and the four new ones at 0 from the formula. The amendment is the second
+  diff in `0071`'s file. See "The glow is a light source" in `docs/REMASTER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

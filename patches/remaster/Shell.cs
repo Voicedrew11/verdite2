@@ -14,8 +14,9 @@ namespace Kf2.Remaster;
 ///     edit [on|off|toggle]                          the editor, which pauses the world
 ///     select [here | tile:A:X:Z:lower|upper | model:A:KIND:ID | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh]
 ///     set selected|tile:...|model:... material NAME|none [tile|mesh]
-///     set material:NAME reflectivity|f0|roughness|emissiveStrength VALUE
+///     set material:NAME reflectivity|f0|roughness|emissiveStrength|glowLight|glowRadius VALUE
 ///     set material:NAME emissive R G B
+///     set material:NAME glowMode additive|lit
 ///     set remaster on|off
 ///     pack save|reload|undo|redo|list|add NAME
 ///     light list|add NAME [here|pick GX GY|X Y Z]|remove NAME|select NAME|set NAME FIELD V...
@@ -31,7 +32,7 @@ public static class Shell
         "select [here | tile:A:X:Z:lower|upper | model:A:KIND:ID | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh] - " +
             "a half, faces or a model; pick takes the faces or the model under game pixel GX GY (the editor must be open)",
         "set selected|tile:...|model:... material NAME|none [tile|mesh]; " +
-            "set material:NAME reflectivity|f0|roughness|emissiveStrength V; set material:NAME emissive R G B; set remaster on|off",
+            "set material:NAME reflectivity|f0|roughness|emissiveStrength|glowLight|glowRadius V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit; set remaster on|off",
         "pack save|reload|undo|redo|list|add NAME - the working pack",
         "light list | add NAME [here | pick GX GY | X Y Z] | remove NAME | select NAME | " +
             "set NAME position X Y Z|colour R G B|intensity V|radius V|type point|spot|direction X Y Z|cone IN OUT|flicker AMOUNT HZ|enabled on|off - " +
@@ -154,10 +155,17 @@ public static class Shell
                 var e = Pack.GetColour(name, "emissive");
                 return Ok("set", new JsonObject { ["material"] = name, ["emissive"] = new JsonArray(e.X, e.Y, e.Z) });
             }
-            if (a[1] is not ("reflectivity" or "f0" or "roughness" or "emissiveStrength"))
-                return Err("set", "reflectivity, f0, roughness, emissive or emissiveStrength");
+            if (a[1] == "glowMode")
+            {
+                if (a[2] is not ("additive" or "lit")) return Err("set", "glowMode additive|lit");
+                Pack.SetText(name, "glowMode", a[2] == "lit" ? "lit" : null);
+                return Ok("set", new JsonObject { ["material"] = name, ["glowMode"] = a[2] });
+            }
+            if (a[1] is not ("reflectivity" or "f0" or "roughness" or "emissiveStrength" or "glowLight" or "glowRadius"))
+                return Err("set", "reflectivity, f0, roughness, emissive, emissiveStrength, glowMode, glowLight or glowRadius");
             if (!float.TryParse(a[2], CultureInfo.InvariantCulture, out float v)) return Err("set", $"cannot read '{a[2]}'");
-            Pack.SetField(name, a[1], Math.Clamp(v, 0f, a[1] == "emissiveStrength" ? 4f : 1f));
+            float max = a[1] switch { "emissiveStrength" => 4f, "glowLight" => 2f, "glowRadius" => Pack.MaxGlowRadius, _ => 1f };
+            Pack.SetField(name, a[1], Math.Clamp(v, 0f, max));
             return Ok("set", new JsonObject { ["material"] = name, [a[1]] = Pack.GetField(name, a[1]) });
         }
         if (a.Length >= 3 && a[1] == "material")
@@ -183,7 +191,7 @@ public static class Shell
             return Ok("set", Editor.SelectedModel is { } sm ? DescribeModel(sm) : Describe(Editor.Selected));
         }
         return Err("set", "set selected|tile:...|model:... material NAME|none [tile|mesh]; " +
-                          "set material:NAME reflectivity|f0|roughness|emissiveStrength V; set material:NAME emissive R G B; set remaster on|off");
+                          "set material:NAME reflectivity|f0|roughness|emissiveStrength|glowLight|glowRadius V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit; set remaster on|off");
     }
 
     static string PackVerb(string[] a)
@@ -210,6 +218,9 @@ public static class Shell
                 ["roughness"] = mat.Roughness,
                 ["emissive"] = new JsonArray(mat.Emissive.X, mat.Emissive.Y, mat.Emissive.Z),
                 ["emissiveStrength"] = mat.EmissiveStrength,
+                ["glowMode"] = mat.GlowAdditive ? "additive" : "lit",
+                ["glowLight"] = mat.GlowLight,
+                ["glowRadius"] = mat.GlowRadius,
                 ["id"] = Surfaces.IdOf(mat.Name),
             });
         var tiles = new JsonArray();
@@ -321,9 +332,25 @@ public static class Shell
                 o["screen"] = new JsonArray(MathF.Round(s.X, 1), MathF.Round(s.Y, 1), MathF.Round(z));
             list.Add(o);
         }
+        var glow = new JsonArray();
+        foreach (var l in Lights.DerivedLights)
+        {
+            var o = new JsonObject
+            {
+                ["name"] = l.Name,
+                ["position"] = new JsonArray(MathF.Round(l.Position.X), MathF.Round(l.Position.Y), MathF.Round(l.Position.Z)),
+                ["colour"] = new JsonArray(l.Colour.X, l.Colour.Y, l.Colour.Z),
+                ["intensity"] = l.Intensity, ["radius"] = l.Radius,
+                ["normal"] = new JsonArray(MathF.Round(l.Direction.X, 3), MathF.Round(l.Direction.Y, 3), MathF.Round(l.Direction.Z, 3)),
+            };
+            if (m != null && view.Project(l.Position, out var s, out float z))
+                o["screen"] = new JsonArray(MathF.Round(s.X, 1), MathF.Round(s.Y, 1), MathF.Round(z));
+            glow.Add(o);
+        }
         return new JsonObject
         {
-            ["area"] = area, ["lights"] = list, ["selected"] = Editor.SelectedLight,
+            ["area"] = area, ["lights"] = list, ["glow"] = glow, ["modelGlow"] = Lights.ModelLights,
+            ["selected"] = Editor.SelectedLight,
             ["refused"] = Lights.Refused, ["authored"] = Lights.Authored, ["sent"] = Lights.Sent,
             ["culled"] = Lights.Culled, ["uploads"] = RemasterUniforms.Uploads,
             ["litBatches"] = RemasterUniforms.LitBatches, ["supported"] = RemasterUniforms.Supported,
