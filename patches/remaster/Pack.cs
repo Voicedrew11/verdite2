@@ -234,14 +234,23 @@ public static class Pack
     /// <summary>A named material. Emissive is a linear colour and its strength, in the
     /// game's light units: strength 1 lights a surface as its own RGBC at full.
     /// <c>GlowAdditive</c> (<c>"glowMode": "additive"</c>, the default) adds the glow
-    /// past the texture, <c>"lit"</c> to the lit colour under it. A glowing surface
-    /// also gives off a light <c>GlowRadius</c> across at <c>GlowLight</c> times its
-    /// glow; a radius of 0 gives none.</summary>
+    /// past the texture, <c>"lit"</c> to the lit colour under it; <c>GlowUnfogged</c>
+    /// (<c>"glowFog": false</c>) keeps an additive glow out of the fog. The material
+    /// gives off a light of the emissive colour at <c>Light</c> intensity,
+    /// <c>GlowRadius</c> across, whether or not the surface itself glows; with no
+    /// <c>"light"</c> it is <c>"glowLight"</c> (0.5) times the glow's strength, as it
+    /// was first written. <c>Pulse*</c> vary the glow and its light on the world
+    /// tick. <c>Metalness</c> tints the reflection and highlight with the surface's
+    /// colour, <c>Specular</c> is the highlight authored lights leave, and
+    /// <c>Occlusion</c> how much the occlusion pass darkens it (1, or 0 on a glow,
+    /// unless set).</summary>
     public readonly record struct Material(string Name, float Reflectivity, float F0, float Roughness,
                                            Vector3 Emissive, float EmissiveStrength,
-                                           bool GlowAdditive, float GlowLight, float GlowRadius);
+                                           bool GlowAdditive, float Light, float GlowRadius,
+                                           bool GlowUnfogged, float PulseAmount, float PulseHz, bool PulseFlicker,
+                                           float Metalness, float Specular, float Occlusion);
 
-    public const float DefaultGlowLight = 0.5f, DefaultGlowRadius = 2048f, MaxGlowRadius = 8192f;
+    public const float DefaultGlowLight = 0.5f, DefaultGlowRadius = 2048f, MaxGlowRadius = 8192f, MaxLight = 4f;
 
     static JsonObject NewMaterials() => new() { ["formatVersion"] = FormatVersion, ["materials"] = new JsonObject() };
 
@@ -251,11 +260,34 @@ public static class Pack
     {
         foreach (var (name, node) in MaterialsObj)
             if (node is JsonObject o)
+            {
+                float strength = Num(o, "emissiveStrength");
                 yield return new Material(name, Num(o, "reflectivity"), Num(o, "f0"), Num(o, "roughness"),
-                                          Vec(o["emissive"], Vector3.One), Num(o, "emissiveStrength"),
+                                          Vec(o["emissive"], Vector3.One), strength,
                                           Str(o["glowMode"]) != "lit",
-                                          NumOr(o["glowLight"], DefaultGlowLight),
-                                          NumOr(o["glowRadius"], DefaultGlowRadius));
+                                          NumOr(o["light"], NumOr(o["glowLight"], DefaultGlowLight) * strength),
+                                          NumOr(o["glowRadius"], DefaultGlowRadius),
+                                          o["glowFog"] is JsonValue fv && fv.TryGetValue(out bool fog) && !fog,
+                                          Num(o, "pulseAmount"), NumOr(o["pulseHz"], 1f),
+                                          Str(o["pulseStyle"]) == "flicker",
+                                          Num(o, "metalness"), Num(o, "specular"),
+                                          NumOr(o["occlusion"], strength > 0f ? 0f : 1f));
+            }
+    }
+
+    /// <summary>A true/false field, or its removal with null.</summary>
+    public static void SetFlag(string name, string field, bool? value)
+    {
+        if (MaterialsObj[name] is not JsonObject o) return;
+        bool? old = o[field] is JsonValue v && v.TryGetValue(out bool b) ? b : null;
+        if (old == value) return;
+        void Put(bool? x)
+        {
+            if (MaterialsObj[name] is not JsonObject m) return;
+            if (x == null) m.Remove(field);
+            else m[field] = x.Value;
+        }
+        Edit($"{name}.{field} = {value?.ToString() ?? "default"}", () => Put(value), () => Put(old));
     }
 
     public static bool HasMaterial(string name) => MaterialsObj[name] is JsonObject;

@@ -14,9 +14,10 @@ namespace Kf2.Remaster;
 ///     edit [on|off|toggle]                          the editor, which pauses the world
 ///     select [here | tile:A:X:Z:lower|upper | model:A:KIND:ID | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh]
 ///     set selected|tile:...|model:... material NAME|none [tile|mesh]
-///     set material:NAME reflectivity|f0|roughness|emissiveStrength|glowLight|glowRadius VALUE
+///     set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion VALUE
+///     set material:NAME emissiveStrength|light|glowRadius|pulseAmount|pulseHz VALUE
 ///     set material:NAME emissive R G B
-///     set material:NAME glowMode additive|lit
+///     set material:NAME glowMode additive|lit, glowFog on|off, pulseStyle breathe|flicker
 ///     set remaster on|off
 ///     pack save|reload|undo|redo|list|add NAME
 ///     light list|add NAME [here|pick GX GY|X Y Z]|remove NAME|select NAME|set NAME FIELD V...
@@ -32,7 +33,7 @@ public static class Shell
         "select [here | tile:A:X:Z:lower|upper | model:A:KIND:ID | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh] - " +
             "a half, faces or a model; pick takes the faces or the model under game pixel GX GY (the editor must be open)",
         "set selected|tile:...|model:... material NAME|none [tile|mesh]; " +
-            "set material:NAME reflectivity|f0|roughness|emissiveStrength|glowLight|glowRadius V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit; set remaster on|off",
+            "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off",
         "pack save|reload|undo|redo|list|add NAME - the working pack",
         "light list | add NAME [here | pick GX GY | X Y Z] | remove NAME | select NAME | " +
             "set NAME position X Y Z|colour R G B|intensity V|radius V|type point|spot|direction X Y Z|cone IN OUT|flicker AMOUNT HZ|enabled on|off - " +
@@ -161,10 +162,26 @@ public static class Shell
                 Pack.SetText(name, "glowMode", a[2] == "lit" ? "lit" : null);
                 return Ok("set", new JsonObject { ["material"] = name, ["glowMode"] = a[2] });
             }
-            if (a[1] is not ("reflectivity" or "f0" or "roughness" or "emissiveStrength" or "glowLight" or "glowRadius"))
-                return Err("set", "reflectivity, f0, roughness, emissive, emissiveStrength, glowMode, glowLight or glowRadius");
+            if (a[1] == "glowFog")
+            {
+                Pack.SetFlag(name, "glowFog", a[2] is "off" or "0" or "false" ? false : null);
+                return Ok("set", new JsonObject { ["material"] = name, ["glowFog"] = a[2] });
+            }
+            if (a[1] == "pulseStyle")
+            {
+                if (a[2] is not ("breathe" or "flicker")) return Err("set", "pulseStyle breathe|flicker");
+                Pack.SetText(name, "pulseStyle", a[2] == "flicker" ? "flicker" : null);
+                return Ok("set", new JsonObject { ["material"] = name, ["pulseStyle"] = a[2] });
+            }
+            if (a[1] is not ("reflectivity" or "f0" or "roughness" or "metalness" or "specular" or "occlusion"
+                          or "emissiveStrength" or "light" or "glowRadius" or "pulseAmount" or "pulseHz"))
+                return Err("set", "reflectivity, f0, roughness, metalness, specular, occlusion, emissive, emissiveStrength, " +
+                                  "glowMode, glowFog, light, glowRadius, pulseAmount, pulseHz or pulseStyle");
             if (!float.TryParse(a[2], CultureInfo.InvariantCulture, out float v)) return Err("set", $"cannot read '{a[2]}'");
-            float max = a[1] switch { "emissiveStrength" => 4f, "glowLight" => 2f, "glowRadius" => Pack.MaxGlowRadius, _ => 1f };
+            float max = a[1] switch
+            {
+                "emissiveStrength" or "light" => 4f, "glowRadius" => Pack.MaxGlowRadius, "pulseHz" => 10f, _ => 1f,
+            };
             Pack.SetField(name, a[1], Math.Clamp(v, 0f, max));
             return Ok("set", new JsonObject { ["material"] = name, [a[1]] = Pack.GetField(name, a[1]) });
         }
@@ -191,7 +208,7 @@ public static class Shell
             return Ok("set", Editor.SelectedModel is { } sm ? DescribeModel(sm) : Describe(Editor.Selected));
         }
         return Err("set", "set selected|tile:...|model:... material NAME|none [tile|mesh]; " +
-                          "set material:NAME reflectivity|f0|roughness|emissiveStrength|glowLight|glowRadius V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit; set remaster on|off");
+                          "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off");
     }
 
     static string PackVerb(string[] a)
@@ -219,8 +236,13 @@ public static class Shell
                 ["emissive"] = new JsonArray(mat.Emissive.X, mat.Emissive.Y, mat.Emissive.Z),
                 ["emissiveStrength"] = mat.EmissiveStrength,
                 ["glowMode"] = mat.GlowAdditive ? "additive" : "lit",
-                ["glowLight"] = mat.GlowLight,
+                ["glowFog"] = !mat.GlowUnfogged,
+                ["light"] = mat.Light,
                 ["glowRadius"] = mat.GlowRadius,
+                ["pulse"] = new JsonArray(mat.PulseAmount, mat.PulseHz, mat.PulseFlicker ? "flicker" : "breathe"),
+                ["metalness"] = mat.Metalness,
+                ["specular"] = mat.Specular,
+                ["occlusion"] = mat.Occlusion,
                 ["id"] = Surfaces.IdOf(mat.Name),
             });
         var tiles = new JsonArray();

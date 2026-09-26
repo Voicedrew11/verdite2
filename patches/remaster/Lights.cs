@@ -51,6 +51,13 @@ public sealed class Lights : IRemasterFeature
     /// <summary>The frame's candidates: authored, then derived, then models'.</summary>
     static Pack.Light[] _frame = new Pack.Light[64];
 
+    /// <summary>The material a candidate came from, which it does not light; 0 for
+    /// an authored light.</summary>
+    static byte[] _frameSrc = new byte[64];
+
+    /// <summary>The tile glows' materials, beside <see cref="_derived"/>.</summary>
+    static byte[] _derivedSrc = [];
+
     /// <summary>The last frame's count sent, and culled.</summary>
     public static int Sent { get; private set; }
     public static int Culled { get; private set; }
@@ -135,6 +142,7 @@ public sealed class Lights : IRemasterFeature
     {
         _lights = [];
         _derived = [];
+        _derivedSrc = [];
         ModelLights = 0;
         Refused = null;
         RemasterUniforms.Enabled = false;
@@ -156,7 +164,7 @@ public sealed class Lights : IRemasterFeature
         }
         Refused = null;
         _lights = Pack.Lights(area).Where(l => !l.Off && l.Radius > 0f && l.Intensity != 0f).ToArray();
-        _derived = Runtime.Mem is { } mem ? TileGlow(mem) : [];
+        _derived = Runtime.Mem is { } mem ? TileGlow(mem, out _derivedSrc) : [];
         bool any = _lights.Length > 0 || _derived.Length > 0 || Surfaces.ModelsGiveLight;
         RemasterUniforms.Enabled = any;
         PolyAssembler.KeepForLights = any;
@@ -188,11 +196,13 @@ public sealed class Lights : IRemasterFeature
     /// quarter turn, as <c>func_80014B88</c> turns the view matrix; its normal is the
     /// one the game lights it with, turned the same way.
     /// </summary>
-    static Pack.Light[] TileGlow(IMemory m)
+    static Pack.Light[] TileGlow(IMemory m, out byte[] sources)
     {
+        sources = [];
         if (!Surfaces.AnyGivesLight() || Faces.TileTable == 0) return [];
         uint table = Faces.TileTable;
         var list = new List<Pack.Light>();
+        var src = new List<byte>();
         var sum = new Dictionary<byte, (Vector3 C, Vector3 N, float A)>();
         for (int z = 0; z < Identity.Span; z++)
         for (int x = 0; x < Identity.Span; x++)
@@ -238,8 +248,10 @@ public sealed class Lights : IRemasterFeature
                 var n = acc.N.LengthSquared() > 1e-6f ? Vector3.Normalize(acc.N) : -Vector3.UnitY;
                 var at = acc.C / acc.A + n * GlowOffset;
                 list.Add(GlowLight($"glow {new TileKey(Identity.Area, x, z, half)} {Surfaces.IdNames[id]}", at, id, n));
+                src.Add(id);
             }
         }
+        sources = src.ToArray();
         return list.ToArray();
     }
 
@@ -323,8 +335,9 @@ public sealed class Lights : IRemasterFeature
 
     public static void BeforeDrawOTag(CpuContext c, IMemory m)
     {
-        if (!RemasterUniforms.Enabled) return;
+        // The world tick every pulse and flicker is evaluated on.
         if (FramePacing.FirstWalkOfTick(ref _tickFrame)) _ticks++;
+        if (!RemasterUniforms.Enabled) return;
 
         int total = Gather();
         var v = ReadView(m);
@@ -352,7 +365,8 @@ public sealed class Lights : IRemasterFeature
             RemasterUniforms.LightPos[o + 1] = p.Y;
             RemasterUniforms.LightPos[o + 2] = p.Z;
             RemasterUniforms.LightPos[o + 3] = l.Radius;
-            float s = l.Intensity * Flicker(l, t, _order[k].Index);
+            byte from = _frameSrc[_order[k].Index];
+            float s = l.Intensity * Flicker(l, t, _order[k].Index) * (from != 0 ? Surfaces.Pulse[from] : 1f);
             RemasterUniforms.LightCol[o] = l.Colour.X * s;
             RemasterUniforms.LightCol[o + 1] = l.Colour.Y * s;
             RemasterUniforms.LightCol[o + 2] = l.Colour.Z * s;
@@ -373,7 +387,8 @@ public sealed class Lights : IRemasterFeature
             {
                 RemasterUniforms.LightCol[o + 3] = -1f;
                 RemasterUniforms.LightDir[o] = RemasterUniforms.LightDir[o + 1] = RemasterUniforms.LightDir[o + 2] = 0f;
-                RemasterUniforms.LightDir[o + 3] = -2f;
+                // A point's outer cosine is -2; below it, the material it does not light.
+                RemasterUniforms.LightDir[o + 3] = -2f - from;
             }
         }
         RemasterUniforms.Publish(sent);
@@ -387,20 +402,21 @@ public sealed class Lights : IRemasterFeature
     static int Gather()
     {
         int n = 0;
-        void Add(in Pack.Light l)
+        void Add(in Pack.Light l, byte from)
         {
-            if (n == _frame.Length) Array.Resize(ref _frame, n * 2);
+            if (n == _frame.Length) { Array.Resize(ref _frame, n * 2); Array.Resize(ref _frameSrc, n * 2); }
+            _frameSrc[n] = from;
             _frame[n++] = l;
         }
-        foreach (var l in _lights) Add(l);
-        foreach (var l in _derived) Add(l);
+        foreach (var l in _lights) Add(l, 0);
+        for (int i = 0; i < _derived.Length; i++) Add(_derived[i], _derivedSrc[i]);
         int models = 0;
         if (Surfaces.ModelsGiveLight)
             foreach (ref readonly var d in ModelWalk.Scene)
             {
                 byte id = Surfaces.EnterModel(d.Kind, d.Model);
                 if (!Surfaces.GivesLight(id)) continue;
-                Add(GlowLight("glow model", new Vector3(d.X, d.Y - ModelGlowHeight, d.Z), id, -Vector3.UnitY));
+                Add(GlowLight("glow model", new Vector3(d.X, d.Y - ModelGlowHeight, d.Z), id, -Vector3.UnitY), id);
                 models++;
             }
         ModelLights = models;
@@ -418,6 +434,16 @@ public sealed class Lights : IRemasterFeature
         f = f * f * (3f - 2f * f);
         float a = Hash(k, seed), b = Hash(k + 1, seed);
         return 1f - Math.Clamp(l.FlickerAmount, 0f, 1f) * (a + (b - a) * f);
+    }
+
+    /// <summary>Smooth value noise, 0..1, at <paramref name="x"/> cycles.</summary>
+    public static float Noise(double x, int seed)
+    {
+        long k = (long)Math.Floor(x);
+        float f = (float)(x - k);
+        f = f * f * (3f - 2f * f);
+        float a = Hash(k, seed), b = Hash(k + 1, seed);
+        return a + (b - a) * f;
     }
 
     static float Hash(long k, int seed)

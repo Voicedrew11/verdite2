@@ -2030,3 +2030,588 @@ index 9653751..2cfee39 100644
                  return r.Material;
              }
          }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index 1ec23ce..bf40c22 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -83,6 +83,12 @@ public sealed class GlCore : IGpuBackend
+     int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps;
+     int _uSsrDqa, _uSsrDqb, _uSsrFogCurve;
+     int _uPresentSsrOn;
++    int _uPresentAoMatOn;
++    // The reflection blur's mip chains of the picture and of the planar texture,
++    // each with its framebuffer to blit level 0 through.
++    uint _colorMipTex, _colorMipFbo, _planarMipTex, _planarMipFbo;
++    int _colorMipW, _colorMipH, _planarMipW, _planarMipH;
++    int _uSsrColorMipH, _uSsrPlanarMipH;
+     // 0068. The planar texture the reflection pass reads first, and the clip plane
+     // the prim program discards the water's underside with while drawing into one.
+     int _uSsrPlanarOn, _uSsrPlanarPlane, _uSsrPlanarTol, _uSsrRipple, _uSsrCompare;
+@@ -270,6 +276,13 @@ public sealed class GlCore : IGpuBackend
+         int uPresentSsr = _gl.GetUniformLocation(_progPresent, "uSsr");
+         if (uPresentSsr >= 0) _gl.Uniform1(uPresentSsr, 2);
+         if (_uPresentSsrOn >= 0) _gl.Uniform1(_uPresentSsrOn, 0f);
++        _uPresentAoMatOn = _gl.GetUniformLocation(_progPresent, "uAoMatOn");
++        if (_uPresentAoMatOn >= 0)
++        {
++            _gl.Uniform1(_uPresentAoMatOn, 0f);
++            _gl.Uniform1(_gl.GetUniformLocation(_progPresent, "uSurface"), 3);
++            _gl.Uniform1(_gl.GetUniformLocation(_progPresent, "uMatTable"), MatUnit);
++        }
+ 
+         // Ambient occlusion. A failure here disables the pass and nothing else --
+         // the backend is perfectly usable without it, so it is deliberately not
+@@ -376,6 +389,12 @@ public sealed class GlCore : IGpuBackend
+                 if (uPlanarDepth >= 0) _gl.Uniform1(uPlanarDepth, 4);
+                 int uMatSsr = _gl.GetUniformLocation(_progSsr, "uMatTable");
+                 if (uMatSsr >= 0) _gl.Uniform1(uMatSsr, MatUnit);
++                int uColorMip = _gl.GetUniformLocation(_progSsr, "uColorMip");
++                if (uColorMip >= 0) _gl.Uniform1(uColorMip, ColorMipUnit);
++                int uPlanarMip = _gl.GetUniformLocation(_progSsr, "uPlanarMip");
++                if (uPlanarMip >= 0) _gl.Uniform1(uPlanarMip, PlanarMipUnit);
++                _uSsrColorMipH = _gl.GetUniformLocation(_progSsr, "uColorMipH");
++                _uSsrPlanarMipH = _gl.GetUniformLocation(_progSsr, "uPlanarMipH");
+                 if (_uSsrPlanarOn >= 0) _gl.Uniform1(_uSsrPlanarOn, 0);
+             }
+             // 0068. Only this backend can draw into a planar texture; the port walks
+@@ -1632,7 +1651,9 @@ public sealed class GlCore : IGpuBackend
+             }
+         }
+         // 0071. A batch with light records glows where its material says so.
+-        int emit = SurfaceMaterial.AnyEmissive && _litFilled > 0 && _uEmitOn >= 0 ? 1 : 0;
++        // A highlight needs a light to come from.
++        int emit = (SurfaceMaterial.AnyEmissive || (SurfaceMaterial.AnySpecular && lightN != 0))
++                   && _litFilled > 0 && _uEmitOn >= 0 ? 1 : 0;
+         if (emit != 0) BindMaterials();
+         if (_uEmitOn >= 0 && emit != _emitOnSent)
+         {
+@@ -1849,7 +1870,8 @@ public sealed class GlCore : IGpuBackend
+     const int MatUnit = 6;
+     uint _matTex;
+     int _matGen = -1;
+-    readonly float[] _matRows = new float[SurfaceMaterial.Count * 4 * 2];
++    const int MatRows = 3;
++    readonly float[] _matRows = new float[SurfaceMaterial.Count * 4 * MatRows];
+ 
+     /// <summary>0067. SurfaceMaterial's table as a 256x2 texture, uploaded when the port
+     /// changes it, and bound. Row 0: reflectivity, F0, roughness. Row 1: the emissive
+@@ -1862,7 +1884,7 @@ public sealed class GlCore : IGpuBackend
+             _matTex = _gl.GenTexture();
+             _gl.ActiveTexture(TextureUnit.Texture0 + MatUnit);
+             _gl.BindTexture(TextureTarget.Texture2D, _matTex);
+-            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba32f, (uint)SurfaceMaterial.Count, 2, 0,
++            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba32f, (uint)SurfaceMaterial.Count, MatRows, 0,
+                 PixelFormat.Rgba, PixelType.Float, null);
+             _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+             _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+@@ -1879,14 +1901,20 @@ public sealed class GlCore : IGpuBackend
+                 _matRows[i * 4] = SurfaceMaterial.Reflectivity[i];
+                 _matRows[i * 4 + 1] = SurfaceMaterial.F0[i];
+                 _matRows[i * 4 + 2] = SurfaceMaterial.Roughness[i];
+-                _matRows[i * 4 + 3] = 0f;
++                _matRows[i * 4 + 3] = SurfaceMaterial.Metalness[i];
+                 _matRows[(n + i) * 4] = SurfaceMaterial.Emissive[i * 3];
+                 _matRows[(n + i) * 4 + 1] = SurfaceMaterial.Emissive[i * 3 + 1];
+                 _matRows[(n + i) * 4 + 2] = SurfaceMaterial.Emissive[i * 3 + 2];
+-                _matRows[(n + i) * 4 + 3] = SurfaceMaterial.EmissiveAdditive[i] ? 1f : 0f;
++                // Flags: 1 additive, 2 unfogged.
++                _matRows[(n + i) * 4 + 3] = (SurfaceMaterial.EmissiveAdditive[i] ? 1f : 0f)
++                                          + (SurfaceMaterial.EmissiveUnfogged[i] ? 2f : 0f);
++                _matRows[(2 * n + i) * 4] = SurfaceMaterial.Specular[i];
++                _matRows[(2 * n + i) * 4 + 1] = 1f - SurfaceMaterial.Occlusion[i];
++                _matRows[(2 * n + i) * 4 + 2] = 0f;
++                _matRows[(2 * n + i) * 4 + 3] = 0f;
+             }
+             fixed (float* p = _matRows)
+-                _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)n, 2, PixelFormat.Rgba, PixelType.Float, p);
++                _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)n, MatRows, PixelFormat.Rgba, PixelType.Float, p);
+             _matGen = SurfaceMaterial.Generation;
+             SurfaceMaterial.Uploads++;
+         }
+@@ -2150,6 +2178,18 @@ public sealed class GlCore : IGpuBackend
+                 _gl.BindTexture(TextureTarget.Texture2D, _aoBlurTex);
+             }
+         }
++        if (!rgb24 && _uPresentAoMatOn >= 0)
++        {
++            bool aoMat = aoOn && surfaces && SurfaceMaterial.AnyOcclusion && src!.Surface != 0;
++            _gl.Uniform1(_uPresentAoMatOn, aoMat ? 1f : 0f);
++            if (aoMat)
++            {
++                BindMaterials();
++                _gl.UseProgram(_progPresent);
++                _gl.ActiveTexture(TextureUnit.Texture3);
++                _gl.BindTexture(TextureTarget.Texture2D, src!.Surface);
++            }
++        }
+         if (!rgb24 && _uPresentSsrOn >= 0)
+         {
+             _gl.Uniform1(_uPresentSsrOn, ssrOn ? 1f : 0f);
+@@ -2578,6 +2618,16 @@ public sealed class GlCore : IGpuBackend
+             _gl.BindTexture(TextureTarget.Texture2D, planar.Tex);
+             PlanarReflections.Read++;
+         }
++        // Rough materials read the picture, and the planar texture, from a mip chain.
++        bool rough = SurfaceMaterial.AnyRoughness;
++        float colorMipH = rough ? BuildMip(src, ref _colorMipTex, ref _colorMipFbo, ref _colorMipW, ref _colorMipH, ColorMipUnit) : 0f;
++        float planarMipH = rough && planarOn
++            ? BuildMip(planar!, ref _planarMipTex, ref _planarMipFbo, ref _planarMipW, ref _planarMipH, PlanarMipUnit) : 0f;
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _ssrFbo);
++        _gl.Viewport(0, 0, (uint)w, (uint)h);
++        _gl.UseProgram(_progSsr);
++        if (_uSsrColorMipH >= 0) _gl.Uniform1(_uSsrColorMipH, colorMipH);
++        if (_uSsrPlanarMipH >= 0) _gl.Uniform1(_uSsrPlanarMipH, planarMipH);
+         _gl.ActiveTexture(TextureUnit.Texture2);
+         _gl.BindTexture(TextureTarget.Texture2D, src.Tex);
+         _gl.ActiveTexture(TextureUnit.Texture1);
+@@ -2600,6 +2650,49 @@ public sealed class GlCore : IGpuBackend
+         if (ScreenReflections.WantMap && _ssrInfo) CaptureSsrMap(w, h);
+     }
+ 
++    const int ColorMipUnit = 7, PlanarMipUnit = 8;
++
++    /// <summary>A target's colour, shrunk to half size and mipped, bound on
++    /// <paramref name="unit"/>; its level-0 height in texels.</summary>
++    unsafe float BuildMip(GlDisplayRt rt, ref uint tex, ref uint fbo, ref int mw, ref int mh, int unit)
++    {
++        int s = Math.Max(1, rt.CreatedScale);
++        int sw = rt.Wide1x * s, sh = rt.H * s;
++        int w = Math.Max(1, sw / 2), h = Math.Max(1, sh / 2);
++        if (tex == 0)
++        {
++            tex = _gl.GenTexture();
++            fbo = _gl.GenFramebuffer();
++        }
++        _gl.ActiveTexture(TextureUnit.Texture0 + unit);
++        _gl.BindTexture(TextureTarget.Texture2D, tex);
++        if (w != mw || h != mh)
++        {
++            int levels = 1 + (int)Math.Floor(Math.Log2(Math.Max(w, h)));
++            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
++                PixelFormat.Rgba, PixelType.UnsignedByte, null);
++            _gl.GenerateMipmap(TextureTarget.Texture2D);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.LinearMipmapLinear);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, levels - 1);
++            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
++            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
++                TextureTarget.Texture2D, tex, 0);
++            mw = w; mh = h;
++        }
++        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, rt.Fbo);
++        _gl.ReadBuffer(ReadBufferMode.ColorAttachment0);
++        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, fbo);
++        _gl.BlitFramebuffer(0, 0, sw, sh, 0, 0, w, h, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Linear);
++        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
++        _gl.GenerateMipmap(TextureTarget.Texture2D);
++        _gl.ActiveTexture(TextureUnit.Texture0);
++        ScreenReflections.MipBuilds++;
++        return h;
++    }
++
+     unsafe void EnsureSsrSize(int w, int h)
+     {
+         bool info = ScreenReflections.Probe;
+@@ -2826,6 +2919,10 @@ public sealed class GlCore : IGpuBackend
+         if (_aoFbo != 0) _gl.DeleteFramebuffer(_aoFbo);
+         if (_aoBlurFbo != 0) _gl.DeleteFramebuffer(_aoBlurFbo);
+         if (_ssrTex != 0) _gl.DeleteTexture(_ssrTex);
++        if (_colorMipTex != 0) _gl.DeleteTexture(_colorMipTex);
++        if (_colorMipFbo != 0) _gl.DeleteFramebuffer(_colorMipFbo);
++        if (_planarMipTex != 0) _gl.DeleteTexture(_planarMipTex);
++        if (_planarMipFbo != 0) _gl.DeleteFramebuffer(_planarMipFbo);
+         if (_matTex != 0) _gl.DeleteTexture(_matTex);
+         if (_ssrInfoTex != 0) _gl.DeleteTexture(_ssrInfoTex);
+         if (_ssrFbo != 0) _gl.DeleteFramebuffer(_ssrFbo);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index e753eaa..e3fab34 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -30,6 +30,11 @@ internal static class GlShaders
+         // rectangle; skipped rather than blended with zero when it is off.
+         uniform sampler2D uSsr;
+         uniform float uSsrOn;
++        // How much the occlusion reaches each material: the surface buffer's id and
++        // row 2 of SurfaceMaterial's table, whose green is the share taken off.
++        uniform sampler2D uSurface;
++        uniform sampler2D uMatTable;
++        uniform float uAoMatOn;
+         out vec4 oColor;
+         void main() {
+             vec2 t = (uOrigin + vUv * uSize) / uTexSize;
+@@ -37,7 +42,14 @@ internal static class GlShaders
+             // The occlusion texture is rendered at exactly this framebuffer's
+             // size, so it is indexed by the present's own uv and needs no
+             // geometry of its own.
+-            if (uAoOn > 0.5) c *= texture(uAo, vUv).r;
++            if (uAoOn > 0.5) {
++                float ao = texture(uAo, vUv).r;
++                if (uAoMatOn > 0.5) {
++                    int m = int(texture(uSurface, t).a + 0.5);
++                    if (m > 0 && m < 256) ao = mix(ao, 1.0, texelFetch(uMatTable, ivec2(m, 2), 0).g);
++                }
++                c *= ao;
++            }
+             if (uSsrOn > 0.5) {
+                 vec4 r = texture(uSsr, vUv);
+                 c = c * (1.0 - r.a) + r.rgb;
+@@ -567,6 +579,12 @@ internal static class GlShaders
+         // both found a surface, write how far apart their brightness is, against
+         // the planar texture read unmirrored as the control.
+         uniform int   uCompare;
++        // Rough surfaces: the colour and the planar texture shrunk into mip chains,
++        // and each chain's level-0 height in texels. 0 when no id is rough.
++        uniform sampler2D uColorMip;
++        uniform sampler2D uPlanarMip;
++        uniform float uColorMipH;
++        uniform float uPlanarMipH;
+ 
+         const float FAR = 65536.0;
+         const float OVERLAY = 3.0;
+@@ -600,27 +618,35 @@ internal static class GlShaders
+         float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+ 
+         // A rough surface's reflection: the colour averaged over the footprint of the
+-        // cone the reflected ray stands for, `radius` of the picture wide. Eight taps
+-        // on a ring and the centre, turned per pixel by the interleaved pattern; a
+-        // tap under the HUD or off the picture is left out. Radius 0 is one read.
+-        vec3 blurAt(sampler2D tex, vec2 uv, float radius, bool mirrored) {
++        // cone the reflected ray stands for, `radius` of the picture high. Read from
++        // a mip chain of the picture at the level whose texel is that wide: the
++        // centre and four taps at half the radius, each trilinear, the same at every
++        // pixel. Eight sparse taps turned per pixel left a woven 4x4 pattern on a
++        // busy texture. Below a texel it fades back to the sharp read.
++        vec3 blurAt(sampler2D tex, sampler2D mip, float mipH, vec2 uv, float radius, bool mirrored) {
+             vec3 c0 = texture(tex, tc(uv)).rgb;
+-            if (radius <= 0.0) return c0;
+-            ivec2 px = ivec2(gl_FragCoord.xy) & 3;
+-            float a0 = float((px.y << 2) | px.x) * 0.3927;
+-            vec3 sum = c0;
++            if (radius <= 0.0 || mipH <= 0.0) return c0;
++            float texels = radius * uSize.y / uTexSize.y * mipH;
++            float lod = log2(max(texels, 1.0));
++            vec3 sum = textureLod(mip, tc(uv), lod).rgb;
+             float n = 1.0;
+-            for (int k = 0; k < 8; k++) {
+-                float a = a0 + float(k) * 0.7854;
+-                float r = radius * (k < 4 ? 0.5 : 1.0);
+-                vec2 o = vec2(cos(a), sin(a)) * r * vec2(uSize.y / uSize.x, 1.0);
+-                vec2 q = uv + o;
++            vec2 d = 0.5 * radius * vec2(uSize.y / uSize.x, 1.0);
++            for (int k = 0; k < 4; k++) {
++                vec2 q = uv + d * vec2(k < 2 ? -1.0 : 1.0, (k & 1) == 0 ? -1.0 : 1.0);
+                 if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) continue;
+                 if (!mirrored && overlayAt(q)) continue;
+-                sum += texture(tex, tc(q)).rgb;
++                sum += textureLod(mip, tc(q), lod).rgb;
+                 n += 1.0;
+             }
+-            return sum / n;
++            return mix(c0, sum / n, clamp(texels * 2.0, 0.0, 1.0));
++        }
++
++        // A metal's reflection takes its colour: the surface's hue at full value,
++        // so a dark bronze tints without darkening what it reflects.
++        vec3 metalTint(float metal) {
++            if (metal <= 0.0) return vec3(1.0);
++            vec3 sc = texture(uColor, tc(vUv)).rgb;
++            return mix(vec3(1.0), sc / max(max(sc.r, max(sc.g, sc.b)), 1e-3), metal);
+         }
+ 
+         // 0068. The planar reflection at this pixel, when the surface lies on the
+@@ -654,7 +680,7 @@ internal static class GlShaders
+             if (rough > 0.0) {
+                 float zi = texture(uPlanarDepth, tc(muv)).r * FAR;
+                 float travel = zi < FAR * 0.999 ? max(zi - p.z, 0.0) * length(p) / p.z : 0.0;
+-                c = blurAt(uPlanar, muv, rough * travel * uProjH / (max(zi, 1.0) * uSize.y), true);
++                c = blurAt(uPlanar, uPlanarMip, uPlanarMipH, muv, rough * travel * uProjH / (max(zi, 1.0) * uSize.y), true);
+             }
+             return true;
+         }
+@@ -693,7 +719,9 @@ internal static class GlShaders
+             vec3 r = reflect(v, n);
+             float cosv = clamp(dot(-v, n), 0.0, 1.0);
+             float f0 = mat.g;
+-            float rough = mat.b;
++            // Squared, so the slider's lower half is the useful range.
++            float rough = mat.b * mat.b;
++            vec3 tint = metalTint(mat.a);
+             // Schlick, running from F0 looking straight down to the material's
+             // reflectivity at a grazing angle.
+             float w = f0 + (max(refl, f0) - f0) * pow(1.0 - cosv, 5.0);
+@@ -703,7 +731,7 @@ internal static class GlShaders
+             if (planarHit && uCompare == 0) {
+                 oInfo.a += 4.0 / 255.0;
+                 w = clamp(w, 0.0, 1.0);
+-                oColor = vec4(pc * w, w);
++                oColor = vec4(pc * tint * w, w);
+                 return;
+             }
+ 
+@@ -770,7 +798,7 @@ internal static class GlShaders
+                     oInfo.a += 16.0 / 255.0;
+                 }
+                 w = clamp(w, 0.0, 1.0);
+-                oColor = vec4(pc * w, w);
++                oColor = vec4(pc * tint * w, w);
+                 return;
+             }
+             if (passed) oInfo.a += 8.0 / 255.0;
+@@ -783,7 +811,7 @@ internal static class GlShaders
+                 // The cone's width where it lands, `rough * ht` across, as a share of
+                 // the picture's height at the hit's depth.
+                 float hz = max(depthAt(huv) * FAR, 1.0);
+-                c = blurAt(uColor, huv, rough * ht * uProjH / (hz * uSize.y), false);
++                c = blurAt(uColor, uColorMip, uColorMipH, huv, rough * ht * uProjH / (hz * uSize.y), false);
+                 // The colour there was fogged for its own distance, and the light
+                 // reaching the water has come further: out to the water and back up
+                 // to the surface. Its image stands that much further down the mirrored
+@@ -805,7 +833,7 @@ internal static class GlShaders
+                 return;
+             }
+             w = clamp(w, 0.0, 1.0);
+-            oColor = vec4(c * w, w);
++            oColor = vec4(c * tint * w, w);
+         }
+         """;
+ 
+@@ -964,7 +992,8 @@ internal static class GlShaders
+         uniform float uClipH;
+         // 0071. Authored lights, published by the port in the GTE's view space
+         // (RemasterUniforms): position and radius; colour times intensity and the
+-        // spot's inner cosine; direction and the outer cosine (-2 for a point).
++        // spot's inner cosine; direction and the outer cosine (-2 for a point, and
++        // -2 - id for a point a material gives off, which does not light that id).
+         uniform int   uLightN;
+         uniform vec4  uLightPos[16];
+         uniform vec4  uLightCol[16];
+@@ -972,12 +1001,21 @@ internal static class GlShaders
+         uniform vec2  uLightCentre;
+         uniform float uLightH;
+         // 0071. Emissive materials: row 1 of SurfaceMaterial's table is the light an
+-        // id gives off, in the same units as a light's colour, and in alpha whether it
+-        // is added after the texture (1) or to the lit colour before it (0).
++        // id gives off, in the same units as a light's colour, and in alpha its flags:
++        // 1 added after the texture rather than to the lit colour before it, 2 not
++        // fogged. Row 0's alpha is metalness and row 2's red the highlight.
+         uniform int   uEmitOn;
+         uniform sampler2D uMatTable;
+         // An additive glow, fogged, in 8-bit colour; added to the modulated texel.
+         ivec3 gGlow8 = ivec3(0);
++        // The authored lights' highlight, fogged, in 8-bit colour before the
++        // metal's tint, and the metalness that tints it.
++        vec3  gSpec8 = vec3(0.0);
++        float gMetal = 0.0;
++        // What is added past the texture, given the surface's own colour.
++        ivec3 post(vec3 base) {
++            return gGlow8 + ivec3(floor(gSpec8 * mix(vec3(1.0), clamp(base, 0.0, 1.0), gMetal)));
++        }
+ 
+         const int ditherTbl[16] = int[16](
+             -4,  0, -3,  1,
+@@ -1097,16 +1135,27 @@ internal static class GlShaders
+         // from the recovered depth as NormalFs rebuilds it, and the normal is that
+         // position's plane, so a light is placed and faced exactly where the GTE
+         // put the polygon. The derivatives are taken before any per-fragment test.
+-        vec3 authored() {
++        vec3 authored(float spec, float rough, out vec3 hi) {
++            hi = vec3(0.0);
+             float z = vDepth * 65536.0;
+             vec3 p = vec3((gl_FragCoord.xy / float(uScale) - uLightCentre) * (z / uLightH), z);
+             vec3 n = cross(dFdx(p), dFdy(p));
+             if (vDepth <= 0.0 || vLight == 0u || !(dot(n, n) > 1e-12)) return vec3(0.0);
+             n = normalize(n);
+             if (dot(n, p) > 0.0) n = -n;
++            // Normalised Blinn-Phong: the lobe's size from roughness, squared as
++            // the reflections take it, and its energy kept as it widens.
++            vec3 eye = normalize(-p);
++            float a = max(rough, 0.15);
++            a *= a;
++            float shin = 2.0 / (a * a) - 2.0;
++            float norm = (shin + 8.0) / 25.1327;
+             vec3 sum = vec3(0.0);
+             for (int i = 0; i < 16; ++i) {
+                 if (i >= uLightN) break;
++                // A point below -2 is a material's own light, which leaves that
++                // material as its glow drew it.
++                if (uLightDir[i].w < -2.5 && vMat != 0u && int(-uLightDir[i].w - 2.0 + 0.5) == int(vMat)) continue;
+                 vec3 l = uLightPos[i].xyz - p;
+                 float r2 = uLightPos[i].w * uLightPos[i].w;
+                 float d2 = dot(l, l);
+@@ -1114,7 +1163,10 @@ internal static class GlShaders
+                 vec3 dir = d2 > 0.0 ? l * inversesqrt(d2) : -n;
+                 float q = 1.0 - d2 / r2;
+                 float spot = smoothstep(uLightDir[i].w, uLightCol[i].w, dot(-dir, uLightDir[i].xyz));
+-                sum += uLightCol[i].rgb * (max(dot(n, dir), 0.0) * q * q * spot);
++                float ndl = max(dot(n, dir), 0.0);
++                sum += uLightCol[i].rgb * (ndl * q * q * spot);
++                if (spec > 0.0 && ndl > 0.0)
++                    hi += uLightCol[i].rgb * (spec * norm * pow(max(dot(n, normalize(dir + eye)), 0.0), shin) * ndl * q * q * spot);
+             }
+             return sum;
+         }
+@@ -1181,23 +1233,32 @@ internal static class GlShaders
+             }
+             // 0071. Not into a planar reflection: its view is the mirrored camera's.
+             vec3 extra = vec3(0.0);
+-            if (uLightN > 0 && uClipOn == 0) extra = authored();
++            bool mat = uEmitOn != 0 && vMat != 0u && vLight != 0u;
++            vec4 m0 = mat ? texelFetch(uMatTable, ivec2(int(vMat), 0), 0) : vec4(0.0);
++            float spec = mat ? texelFetch(uMatTable, ivec2(int(vMat), 2), 0).r : 0.0;
++            vec3 hi = vec3(0.0);
++            if (uLightN > 0 && uClipOn == 0) extra = authored(spec, m0.b, hi);
+             // A surface's own glow needs no position, so it is in a planar
+             // reflection too. Additive: RGBC times the glow, fogged as the lit
+             // colour is, then added past the texture so a dark texel lights too.
+-            if (uEmitOn != 0 && vMat != 0u && vLight != 0u) {
++            if (mat) {
++                vec3 rgbc = vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u));
++                float keep = 1.0 - cueWeight() / 4096.0;
+                 vec4 glow = texelFetch(uMatTable, ivec2(int(vMat), 1), 0);
+-                if (glow.a > 0.5) {
+-                    vec3 rgbc = vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u));
+-                    gGlow8 = ivec3(clamp(floor(rgbc * glow.rgb * (1.0 - cueWeight() / 4096.0)), 0.0, 255.0));
+-                } else extra += glow.rgb;
++                int flags = int(glow.a + 0.5);
++                if ((flags & 1) != 0)
++                    gGlow8 = ivec3(clamp(floor(rgbc * glow.rgb * ((flags & 2) != 0 ? 1.0 : keep)), 0.0, 255.0));
++                else extra += glow.rgb;
++                // The highlight is the light's, not the surface's: past the texture.
++                gSpec8 = clamp(rgbc * hi * keep, 0.0, 255.0);
++                gMetal = m0.a;
+             }
+             ivec3 c8in = shade8(extra);
+             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
+ 
+             if (texMode == 4) {
+                 if (uOpaqueDepth == 1) discard;
+-                FragColor = vec4(quant5(c8in + gGlow8), uSetMask);
++                FragColor = vec4(quant5(c8in + post(vec3(c8in) / 255.0)), uSetMask);
+                 BlendColor = uBlend;
+                 return;
+             }
+@@ -1205,7 +1266,7 @@ internal static class GlShaders
+             if (texMode == 5) {
+                 vec4 img = texture(uExtTex, vUV);
+                 if (img.a < 0.5 || uOpaqueDepth == 1) discard;
+-                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
++                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + post(img.rgb);
+                 FragColor = vec4(quant5(e8), uSetMask);
+                 BlendColor = uBlend;
+                 return;
+@@ -1226,7 +1287,7 @@ internal static class GlShaders
+                 vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
+                 vec4 img = texture(uRepTex, t);
+                 if (img.a < 0.5) discard;
+-                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
++                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + post(img.rgb);
+                 float stp = img.a < 0.95 ? 1.0 : 0.0;
+                 if (uOpaqueDepth == 1 && stp > 0.5) discard;
+                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
+@@ -1287,7 +1348,7 @@ internal static class GlShaders
+ 
+             if (vRepClut != 0 && texMode != 2) {
+                 if (texel.a < 0.5) discard;
+-                ivec3 e8 = ((ivec3(texel.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
++                ivec3 e8 = ((ivec3(texel.rgb * 255.0 + 0.5) * c8in) >> 7) + post(texel.rgb);
+                 float stp = texel.a < 0.95 ? 1.0 : 0.0;
+                 if (uOpaqueDepth == 1 && stp > 0.5) discard;
+                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
+@@ -1299,7 +1360,7 @@ internal static class GlShaders
+             if (uOpaqueDepth == 1 && texel.a >= 0.5) discard;
+             // 248 = 31 << 3: exact for a texel, and keeps a filtered colour's fraction.
+             ivec3 t8 = ivec3(texel.rgb * 248.0 + 0.5);
+-            ivec3 c8 = ((t8 * c8in) >> 7) + gGlow8;
++            ivec3 c8 = ((t8 * c8in) >> 7) + post(texel.rgb);
+             FragColor = vec4(quant5(c8), max(texel.a, uSetMask));
+             BlendColor = texel.a >= 0.5 ? uBlend : uBlendOpaque;
+         }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RemasterUniforms.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RemasterUniforms.cs
+index 2b9bb6a..32980c0 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RemasterUniforms.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RemasterUniforms.cs
+@@ -32,7 +32,8 @@ public static class RemasterUniforms
+     /// <summary>Per light, four floats each. Pos: view position and radius. Col: colour
+     /// times intensity, in the game's light units (1.0 adds the packet's own RGBC once),
+     /// and the cosine of the spot's inner cone. Dir: the spot's view direction and the
+-    /// cosine of its outer cone; a point light's outer cosine is -2.</summary>
++    /// cosine of its outer cone; a point light's outer cosine is -2, or -2 - id for a
++    /// light a material gives off, which leaves that material unlit by it.</summary>
+     public static readonly float[] LightPos = new float[MaxLights * 4];
+     public static readonly float[] LightCol = new float[MaxLights * 4];
+     public static readonly float[] LightDir = new float[MaxLights * 4];
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/ScreenReflections.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/ScreenReflections.cs
+index 2a29b0d..75856cf 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/ScreenReflections.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/ScreenReflections.cs
+@@ -80,6 +80,9 @@ public static class ScreenReflections
+     /// <summary>Passes run, presents that could not run one, and surface passes drawn.</summary>
+     public static long Passes, NoTarget;
+ 
++    /// <summary>Mip chains built for a rough reflection; never reset.</summary>
++    public static long MipBuilds;
++
+     /// <summary>The last readback: the share of the picture that reflects, the share
+     /// of those that found a surface, the share that took the sky, and the mean
+     /// weight blended over a reflective pixel.</summary>
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+index 569cab0..5984ba9 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+@@ -64,6 +64,29 @@ public static class SurfaceMaterial
+     /// it, so the glow is the texture shown brighter. Fogged either way.</summary>
+     public static readonly bool[] EmissiveAdditive = new bool[Count];
+ 
++    /// <summary>An additive glow the depth cue does not darken: a lamp seen from
++    /// across the dark.</summary>
++    public static readonly bool[] EmissiveUnfogged = new bool[Count];
++
++    /// <summary>How much a material's reflection and highlight take its own colour,
++    /// 0..1: 0 is stone or water, 1 a metal.</summary>
++    public static readonly float[] Metalness = new float[Count];
++
++    /// <summary>The highlight an authored light leaves, 0..1; its size is the
++    /// material's roughness.</summary>
++    public static readonly float[] Specular = new float[Count];
++
++    /// <summary>How much the occlusion pass darkens a material, 0..1; 1 is every
++    /// id's until a port says otherwise.</summary>
++    public static readonly float[] Occlusion = Filled(1f);
++
++    static float[] Filled(float v)
++    {
++        var a = new float[Count];
++        Array.Fill(a, v);
++        return a;
++    }
++
+     /// <summary>Bumped by <see cref="Changed"/>; the table is uploaded to the GPU when
+     /// it moves. A port that writes the arrays calls it once it is done.</summary>
+     public static int Generation { get; private set; }
+@@ -71,6 +94,14 @@ public static class SurfaceMaterial
+     /// <summary>Whether any id glows, so the prim shader can skip the lookup.</summary>
+     public static bool AnyEmissive { get; private set; }
+ 
++    /// <summary>Whether any id has a highlight, or is occluded other than fully.</summary>
++    public static bool AnySpecular { get; private set; }
++    public static bool AnyOcclusion { get; private set; }
++
++    /// <summary>Whether any id's reflection is blurred, so the pass builds the mip
++    /// chains its blur reads.</summary>
++    public static bool AnyRoughness { get; private set; }
++
+     /// <summary>Uploads of the table to the GPU; never reset.</summary>
+     public static long Uploads;
+ 
+@@ -79,6 +110,9 @@ public static class SurfaceMaterial
+         bool any = false;
+         foreach (float e in Emissive) if (e > 0f) { any = true; break; }
+         AnyEmissive = any;
++        AnySpecular = Array.Exists(Specular, v => v > 0f);
++        AnyOcclusion = Array.Exists(Occlusion, v => v != 1f);
++        AnyRoughness = Array.Exists(Roughness, v => v > 0f);
+         Generation++;
+     }
+ 

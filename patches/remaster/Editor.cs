@@ -614,7 +614,13 @@ public static class Editor
                 Slider(mat.Name, "reflectivity", "Reflectivity", mat.Reflectivity);
                 Slider(mat.Name, "f0", "F0", mat.F0);
                 Slider(mat.Name, "roughness", "Roughness", mat.Roughness);
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far the reflection is blurred, growing with the distance to what it shows.");
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Blurs the reflection, more the further what it shows is, and widens the highlight.");
+                Slider(mat.Name, "metalness", "Metalness", mat.Metalness);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How much the reflection and the highlight take the surface's own colour: 0 stone, 1 metal.");
+                Slider(mat.Name, "specular", "Specular", mat.Specular);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("The highlight authored lights (and glows) leave on it. Its size is the roughness.");
+                Slider(mat.Name, "occlusion", "Occlusion", mat.Occlusion);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How much ambient occlusion darkens it. A glowing material defaults to 0.");
                 Colour(mat.Name, "emissive", "Emissive", mat.Emissive);
                 Slider(mat.Name, "emissiveStrength", "Glow", mat.EmissiveStrength, 4f);
                 if (ImGui.IsItemHovered())
@@ -626,10 +632,24 @@ public static class Editor
                 if (ImGui.IsItemHovered())
                     ImGui.SetTooltip("On: the glow is added over the texture, so its dark texels light too.\n" +
                                      "Off: the glow lights the texture, which shows it brighter (1 is the texture at full).");
-                Slider(mat.Name, "glowLight", "Glow light", mat.GlowLight, 2f);
-                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How strongly a glowing surface lights what is around it, as a share of its glow.");
-                Slider(mat.Name, "glowRadius", "Glow reach", mat.GlowRadius, Pack.MaxGlowRadius, "%.0f");
+                ImGui.SameLine();
+                ImGui.BeginDisabled(!additive);
+                bool fog = !mat.GlowUnfogged;
+                if (ImGui.Checkbox("Fogged", ref fog)) Pack.SetFlag(mat.Name, "glowFog", fog ? null : false);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Off: the glow stays bright in the dark distance, like a lamp.");
+                ImGui.EndDisabled();
+                Slider(mat.Name, "light", "Light", mat.Light, Pack.MaxLight);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("The light it gives off, in the emissive colour, with or without a glow of its own. " +
+                                     "It lights what is around it and not the material itself.");
+                Slider(mat.Name, "glowRadius", "Light reach", mat.GlowRadius, Pack.MaxGlowRadius, "%.0f");
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far that light reaches, in world units (a tile is 2048). 0 gives no light.");
+                Slider(mat.Name, "pulseAmount", "Pulse", mat.PulseAmount);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far the glow and its light dip, on the world clock.");
+                Slider(mat.Name, "pulseHz", "Pulse rate", mat.PulseHz, 10f, "%.2f Hz");
+                bool flicker = mat.PulseFlicker;
+                if (ImGui.Checkbox("Flicker", ref flicker)) Pack.SetText(mat.Name, "pulseStyle", flicker ? "flicker" : null);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("On: an irregular flicker, like a flame. Off: a steady breathing.");
                 ImGui.PopID();
             }
             if (remove != null) Pack.RemoveMaterial(remove);

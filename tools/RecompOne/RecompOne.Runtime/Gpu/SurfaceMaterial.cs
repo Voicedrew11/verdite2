@@ -64,12 +64,43 @@ public static class SurfaceMaterial
     /// it, so the glow is the texture shown brighter. Fogged either way.</summary>
     public static readonly bool[] EmissiveAdditive = new bool[Count];
 
+    /// <summary>An additive glow the depth cue does not darken: a lamp seen from
+    /// across the dark.</summary>
+    public static readonly bool[] EmissiveUnfogged = new bool[Count];
+
+    /// <summary>How much a material's reflection and highlight take its own colour,
+    /// 0..1: 0 is stone or water, 1 a metal.</summary>
+    public static readonly float[] Metalness = new float[Count];
+
+    /// <summary>The highlight an authored light leaves, 0..1; its size is the
+    /// material's roughness.</summary>
+    public static readonly float[] Specular = new float[Count];
+
+    /// <summary>How much the occlusion pass darkens a material, 0..1; 1 is every
+    /// id's until a port says otherwise.</summary>
+    public static readonly float[] Occlusion = Filled(1f);
+
+    static float[] Filled(float v)
+    {
+        var a = new float[Count];
+        Array.Fill(a, v);
+        return a;
+    }
+
     /// <summary>Bumped by <see cref="Changed"/>; the table is uploaded to the GPU when
     /// it moves. A port that writes the arrays calls it once it is done.</summary>
     public static int Generation { get; private set; }
 
     /// <summary>Whether any id glows, so the prim shader can skip the lookup.</summary>
     public static bool AnyEmissive { get; private set; }
+
+    /// <summary>Whether any id has a highlight, or is occluded other than fully.</summary>
+    public static bool AnySpecular { get; private set; }
+    public static bool AnyOcclusion { get; private set; }
+
+    /// <summary>Whether any id's reflection is blurred, so the pass builds the mip
+    /// chains its blur reads.</summary>
+    public static bool AnyRoughness { get; private set; }
 
     /// <summary>Uploads of the table to the GPU; never reset.</summary>
     public static long Uploads;
@@ -79,6 +110,9 @@ public static class SurfaceMaterial
         bool any = false;
         foreach (float e in Emissive) if (e > 0f) { any = true; break; }
         AnyEmissive = any;
+        AnySpecular = Array.Exists(Specular, v => v > 0f);
+        AnyOcclusion = Array.Exists(Occlusion, v => v != 1f);
+        AnyRoughness = Array.Exists(Roughness, v => v > 0f);
         Generation++;
     }
 

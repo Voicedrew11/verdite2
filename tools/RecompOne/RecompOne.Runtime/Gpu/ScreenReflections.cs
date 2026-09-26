@@ -80,6 +80,9 @@ public static class ScreenReflections
     /// <summary>Passes run, presents that could not run one, and surface passes drawn.</summary>
     public static long Passes, NoTarget;
 
+    /// <summary>Mip chains built for a rough reflection; never reset.</summary>
+    public static long MipBuilds;
+
     /// <summary>The last readback: the share of the picture that reflects, the share
     /// of those that found a surface, the share that took the sky, and the mean
     /// weight blended over a reflective pixel.</summary>

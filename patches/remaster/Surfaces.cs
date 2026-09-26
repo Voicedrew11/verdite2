@@ -63,6 +63,23 @@ public sealed class Surfaces : IRemasterFeature
     /// <summary>Whether an id gives off a light.</summary>
     public static bool GivesLight(byte id) => id != 0 && GlowRadius[id] > 0f;
 
+    /// <summary>Each id's glow before its pulse, and the pulse: amount, rate, and
+    /// whether it flickers (value noise) or breathes (a sine).</summary>
+    static readonly Vector3[] _baseGlow = new Vector3[SurfaceMaterial.Count];
+    static readonly (float Amount, float Hz, bool Flicker)[] _pulse = new (float, float, bool)[SurfaceMaterial.Count];
+    static bool _anyPulse;
+    static long _pulseTick = -1;
+
+    /// <summary>What an id's pulse multiplies its glow and its light by this tick.</summary>
+    public static readonly float[] Pulse = Filled(1f);
+
+    static float[] Filled(float v)
+    {
+        var a = new float[SurfaceMaterial.Count];
+        Array.Fill(a, v);
+        return a;
+    }
+
     /// <summary>Bumped each time the area's surfaces are applied or cleared.</summary>
     public static int Serial { get; private set; }
 
@@ -92,6 +109,7 @@ public sealed class Surfaces : IRemasterFeature
             if (!Host.Enabled) ClearIds();
             return;
         }
+        if (_anyPulse) StepPulse();
         // A face list is checked against its mesh, which is readable once the tile walk
         // has noted the table.
         if (_version == Pack.Version && _settle == Identity.Settles && _tableSerial == Faces.TableSerial) return;
@@ -134,12 +152,20 @@ public sealed class Surfaces : IRemasterFeature
             SurfaceMaterial.Roughness[i] = 0f;
             SurfaceMaterial.Emissive[i * 3] = SurfaceMaterial.Emissive[i * 3 + 1] = SurfaceMaterial.Emissive[i * 3 + 2] = 0f;
             SurfaceMaterial.EmissiveAdditive[i] = false;
+            SurfaceMaterial.EmissiveUnfogged[i] = false;
+            SurfaceMaterial.Metalness[i] = 0f;
+            SurfaceMaterial.Specular[i] = 0f;
+            SurfaceMaterial.Occlusion[i] = 1f;
+            _baseGlow[i] = Vector3.Zero;
+            _pulse[i] = default;
+            Pulse[i] = 1f;
             GlowLight[i] = Vector3.Zero;
             GlowRadius[i] = 0f;
             IdNames[i] = null;
         }
         if (_idsSet) SurfaceMaterial.Changed();
         _idsSet = false;
+        _anyPulse = false;
     }
 
     static void Apply()
@@ -161,17 +187,26 @@ public sealed class Surfaces : IRemasterFeature
             SurfaceMaterial.Reflectivity[next] = Math.Clamp(m.Reflectivity, 0f, 1f);
             SurfaceMaterial.F0[next] = Math.Clamp(m.F0, 0f, 1f);
             SurfaceMaterial.Roughness[next] = Math.Clamp(m.Roughness, 0f, 1f);
-            var e = Vector3.Clamp(m.Emissive, Vector3.Zero, Vector3.One) * Math.Clamp(m.EmissiveStrength, 0f, 4f);
+            var colour = Vector3.Clamp(m.Emissive, Vector3.Zero, Vector3.One);
+            var e = colour * Math.Clamp(m.EmissiveStrength, 0f, 4f);
+            _baseGlow[next] = e;
             SurfaceMaterial.Emissive[next * 3] = e.X;
             SurfaceMaterial.Emissive[next * 3 + 1] = e.Y;
             SurfaceMaterial.Emissive[next * 3 + 2] = e.Z;
             SurfaceMaterial.EmissiveAdditive[next] = m.GlowAdditive;
-            bool glows = e.X > 0f || e.Y > 0f || e.Z > 0f;
-            GlowLight[next] = glows ? e * Math.Clamp(m.GlowLight, 0f, 4f) : Vector3.Zero;
-            GlowRadius[next] = glows && GlowLight[next] != Vector3.Zero ? Math.Clamp(m.GlowRadius, 0f, Pack.MaxGlowRadius) : 0f;
+            SurfaceMaterial.EmissiveUnfogged[next] = m.GlowAdditive && m.GlowUnfogged;
+            SurfaceMaterial.Metalness[next] = Math.Clamp(m.Metalness, 0f, 1f);
+            SurfaceMaterial.Specular[next] = Math.Clamp(m.Specular, 0f, 1f);
+            SurfaceMaterial.Occlusion[next] = Math.Clamp(m.Occlusion, 0f, 1f);
+            // The light is its own: a material may give light with no glow at all.
+            GlowLight[next] = colour * Math.Clamp(m.Light, 0f, Pack.MaxLight);
+            GlowRadius[next] = GlowLight[next] != Vector3.Zero ? Math.Clamp(m.GlowRadius, 0f, Pack.MaxGlowRadius) : 0f;
+            _pulse[next] = (Math.Clamp(m.PulseAmount, 0f, 1f), Math.Max(m.PulseHz, 0f), m.PulseFlicker);
+            if (_pulse[next].Amount > 0f && _pulse[next].Hz > 0f) _anyPulse = true;
             next++;
         }
         Unallocated = over;
+        _pulseTick = -1;
         SurfaceMaterial.Changed();
         _idsSet = true;
 
@@ -219,9 +254,33 @@ public sealed class Surfaces : IRemasterFeature
         PerFace = _tileFaces.Count > 0 || _meshWhole.Count > 0 || _meshFaces.Count > 0;
         _active = n > 0;
         // A glowing face near the eye is unfogged, and it glows only through its record.
-        PolyAssembler.KeepForGlow = _active && SurfaceMaterial.AnyEmissive;
+        // A highlight is on the record too, so an unfogged face needs one for it.
+        PolyAssembler.KeepForGlow = _active && (SurfaceMaterial.AnyEmissive || SurfaceMaterial.AnySpecular);
         PolyAssembler.Keep();
         Serial++;
+    }
+
+    /// <summary>Once per world tick: every pulsing id's glow times its pulse, so it
+    /// holds while the world is paused, as a light's flicker does.</summary>
+    static void StepPulse()
+    {
+        long tick = Lights.Ticks;
+        if (tick == _pulseTick) return;
+        _pulseTick = tick;
+        double t = tick / 20.0;
+        for (int i = SurfaceMaterial.FirstAuthored; i < SurfaceMaterial.Count; i++)
+        {
+            var (amount, hz, flicker) = _pulse[i];
+            if (amount <= 0f || hz <= 0f) continue;
+            float wave = flicker ? Lights.Noise(t * hz, i) : 0.5f - 0.5f * MathF.Cos((float)(t * hz * 2.0 * Math.PI));
+            float k = 1f - amount * wave;
+            Pulse[i] = k;
+            var e = _baseGlow[i] * k;
+            SurfaceMaterial.Emissive[i * 3] = e.X;
+            SurfaceMaterial.Emissive[i * 3 + 1] = e.Y;
+            SurfaceMaterial.Emissive[i * 3 + 2] = e.Z;
+        }
+        SurfaceMaterial.Changed();
     }
 
     static bool Gate(RecompOne.Runtime.Memory.IMemory m, int mesh, string? hash)

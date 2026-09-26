@@ -32,6 +32,12 @@
 // 15-bit texel: no glow (the texture path's formula), the lit mode, the additive
 // mode, and the additive mode untextured. See "The glow is a light source" in
 // docs/REMASTER.md.
+//
+// Then the material's other terms. The authored lights' highlight on the wall at
+// depth, untextured, and textured on a metal (tinted by the texel); a point light
+// that names a material in its outer cosine (-2 - id), which must leave that
+// material unlit by it; and an additive glow flagged unfogged. See "Phase 3, the
+// second slice" in docs/REMASTER.md.
 #define GL_GLES_PROTOTYPES 0
 #include <EGL/egl.h>
 #include <GL/gl.h>
@@ -109,16 +115,26 @@ static const float H=200.f, CX=128.f, CY=1.f, DEPTH=2000.f;
 
 static float sstep(float e0,float e1,float x){float t=(x-e0)/(e1-e0);t=t<0?0:t>1?1:t;return t*t*(3-2*t);}
 
-// authored() in C, at pixel (x,y), for a wall at DEPTH facing the camera.
-static void authored(int n,int x,int y,float out[3]){
+// authored() in C, at pixel (x,y), for a wall at DEPTH facing the camera; `hi` the
+// highlight at `spec` and `rough`, and `mat` the packet's material, which a light
+// naming it in its outer cosine does not reach.
+static void authored2(int n,int x,int y,float out[3],float spec,float rough,float hi[3],int mat){
  float z=DEPTH, p[3]={((x+0.5f)-CX)*(z/H),((y+0.5f)-CY)*(z/H),z}, nn[3]={0,0,-1};
- out[0]=out[1]=out[2]=0;
- for(int i=0;i<n;i++){ float l[3]={LPOS[i*4]-p[0],LPOS[i*4+1]-p[1],LPOS[i*4+2]-p[2]};
+ float pl=sqrtf(p[0]*p[0]+p[1]*p[1]+p[2]*p[2]), eye[3]={-p[0]/pl,-p[1]/pl,-p[2]/pl};
+ float a=rough>0.15f?rough:0.15f; a*=a; float shin=2.f/(a*a)-2.f, norm=(shin+8.f)/25.1327f;
+ out[0]=out[1]=out[2]=0; hi[0]=hi[1]=hi[2]=0;
+ for(int i=0;i<n;i++){
+   if(LDIR[i*4+3]< -2.5f && mat!=0 && (int)(-LDIR[i*4+3]-2.f+0.5f)==mat) continue;
+   float l[3]={LPOS[i*4]-p[0],LPOS[i*4+1]-p[1],LPOS[i*4+2]-p[2]};
    float r2=LPOS[i*4+3]*LPOS[i*4+3], d2=l[0]*l[0]+l[1]*l[1]+l[2]*l[2]; if(d2>=r2) continue;
    float inv=1.f/sqrtf(d2), dir[3]={l[0]*inv,l[1]*inv,l[2]*inv};
    float q=1.f-d2/r2, ndl=nn[0]*dir[0]+nn[1]*dir[1]+nn[2]*dir[2]; if(ndl<0)ndl=0;
    float spot=sstep(LDIR[i*4+3],LCOL[i*4+3],-(dir[0]*LDIR[i*4]+dir[1]*LDIR[i*4+1]+dir[2]*LDIR[i*4+2]));
-   for(int c=0;c<3;c++) out[c]+=LCOL[i*4+c]*(ndl*q*q*spot); } }
+   for(int c=0;c<3;c++) out[c]+=LCOL[i*4+c]*(ndl*q*q*spot);
+   if(spec>0&&ndl>0){ float h[3]={dir[0]+eye[0],dir[1]+eye[1],dir[2]+eye[2]}; float hl=sqrtf(h[0]*h[0]+h[1]*h[1]+h[2]*h[2]);
+     float nh=(nn[0]*h[0]+nn[1]*h[1]+nn[2]*h[2])/hl; if(nh<0)nh=0; float k=spec*norm*powf(nh,shin)*ndl*q*q*spot;
+     for(int c=0;c<3;c++) hi[c]+=LCOL[i*4+c]*k; } } }
+static void authored(int n,int x,int y,float out[3]){ float hi[3]; authored2(n,x,y,out,0,0,hi,0); }
 
 static const float BK[3]={1920,1920,1920};
 static const float LCM[9]={2662,2662,3328, 2662,2662,3328, 2662,2662,3328};
@@ -217,12 +233,22 @@ int main(int argc,char**argv){
  // The material table: id 5 glows, every other id is dark.
  #define MAT 5
  static const float EMIT[3]={1.2f,0.6f,0.15f};
- static float table[256*2*4];
+ static float table[256*3*4];
  table[(256+MAT)*4]=EMIT[0]; table[(256+MAT)*4+1]=EMIT[1]; table[(256+MAT)*4+2]=EMIT[2];
  #define MATADD 6
  table[(256+MATADD)*4]=EMIT[0]; table[(256+MATADD)*4+1]=EMIT[1]; table[(256+MATADD)*4+2]=EMIT[2]; table[(256+MATADD)*4+3]=1.f;
+ // 7 has a highlight (roughness 0.4); 8 is the same on a metal; 9 an unfogged
+ // additive glow.
+ #define MATSPEC 7
+ #define MATMETAL 8
+ #define MATNOFOG 9
+ #define MATSKIP 10
+ static const float SPEC=0.8f, ROUGH=0.4f;
+ table[MATSPEC*4+2]=ROUGH; table[(512+MATSPEC)*4]=SPEC;
+ table[MATMETAL*4+2]=ROUGH; table[MATMETAL*4+3]=1.f; table[(512+MATMETAL)*4]=SPEC;
+ table[(256+MATNOFOG)*4]=EMIT[0]; table[(256+MATNOFOG)*4+1]=EMIT[1]; table[(256+MATNOFOG)*4+2]=EMIT[2]; table[(256+MATNOFOG)*4+3]=3.f;
  GLuint mt; glGenTextures(1,&mt); glActiveTexture_(0x84C0+6); glBindTexture(GL_TEXTURE_2D,mt);
- glTexImage2D(GL_TEXTURE_2D,0,0x8814 /*RGBA32F*/,256,2,0,GL_RGBA,GL_FLOAT,table);
+ glTexImage2D(GL_TEXTURE_2D,0,0x8814 /*RGBA32F*/,256,3,0,GL_RGBA,GL_FLOAT,table);
  glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
  glActiveTexture_(0x84C0);
  GLint uEmit=glGetUniformLocation_(p,"uEmitOn"), uMatT=glGetUniformLocation_(p,"uMatTable"), uM=glGetUniformLocation_(p,"uTestMat");
@@ -243,15 +269,22 @@ int main(int argc,char**argv){
  // pass 3: emissive on, material 0 (as pass 0); pass 4: emissive on, material 5,
  // no depth; pass 5: emissive off, material 5 (as pass 0). Textured: pass 6 no glow,
  // pass 7 material 5 (lit), pass 8 material 6 (additive); pass 9 material 6 untextured.
+ // pass 10: the highlight, untextured; 11: textured, on a metal; 12: light 0 names
+ // material 10 (nothing else set), drawn as 10; 13: the unfogged glow.
  const char*names[]={"no lights","lights, no depth","lights on a wall at depth 2000",
    "emissive on, material 0","emissive on, material 5 glowing","emissive off, material 5",
-   "textured, no glow","textured, lit glow","textured, additive glow","untextured, additive glow"};
- for(int pass=0;pass<10;pass++){
- int tex=pass>=6&&pass<=8, add=pass>=8;
- glUniform1i_(uN,pass==1||pass==2?NL:0);
- glUniform1f_(uD,pass==2?DEPTH/65536.f:0.f);
+   "textured, no glow","textured, lit glow","textured, additive glow","untextured, additive glow",
+   "highlight, untextured","highlight, textured metal","own light skipped","unfogged glow"};
+ for(int pass=0;pass<14;pass++){
+ int tex=(pass>=6&&pass<=8)||pass==11, add=pass==8||pass==9, lit=pass==2||(pass>=10&&pass<=12);
+ int mat=add?MATADD:pass==10?MATSPEC:pass==11?MATMETAL:pass==12?MATSKIP:pass==13?MATNOFOG:pass>=4?MAT:0;
+ // Light 0 names material 10 only in pass 12.
+ LDIR[3]=pass==12?-2.f-MATSKIP:-2.f;
+ glUniform4fv_(glGetUniformLocation_(p,"uLightDir"),NL,LDIR);
+ glUniform1i_(uN,pass==1||lit?NL:0);
+ glUniform1f_(uD,lit?DEPTH/65536.f:0.f);
  glUniform1i_(uEmit,pass==3||pass==4||pass>=7?1:0);
- glUniform1ui_(uM,add?MATADD:pass>=4?MAT:0);
+ glUniform1ui_(uM,mat);
  glUniform1i_(uT,tex);
  printf("-- %s\n", names[pass]);
  for(unsigned k=0;k<sizeof cases/sizeof cases[0];k++){
@@ -266,15 +299,21 @@ int main(int argc,char**argv){
    for(int y=0;y<VH;y++) for(int x=0;x<VW;x++){
      float t=(x+0.5f)/VW; float lit[3]; for(int i=0;i<3;i++) lit[i]=cases[k].l0[i]+(cases[k].l1[i]-cases[k].l0[i])*t;
      float fog=cases[k].f0+(cases[k].f1-cases[k].f0)*t;
-     float ex[3]={0,0,0}; if(pass==2) authored(NL,x,y,ex);
+     float ex[3]={0,0,0}, hi[3]={0,0,0};
+     if(pass==2) authored(NL,x,y,ex);
+     if(pass>=10&&pass<=12) authored2(NL,x,y,ex,pass==12?0.f:SPEC,ROUGH,hi,mat);
      if(pass==4||pass==7) for(int c=0;c<3;c++) ex[c]=EMIT[c];
      if(ex[0]+ex[1]+ex[2]>0.01f) lit_px++;
      const unsigned char*q=px+(y*VW+x)*4;
-     if(add) lit_px++;
+     if(add||pass==13) lit_px++;
      for(int ch=0;ch<3;ch++){ int e=expect(cases[k].light,lit,fog,ch,ex[ch]), g=q[ch];
        // The texture path: 248 = 31 << 3, the texel times the shaded colour over 128.
        if(tex){ int t8=(int)(TEXEL[ch]/255.f*248.f+0.5f); e=(t8*e)>>7; }
        if(add) e+=glow8(cases[k].light,fog,ch,EMIT[ch]);
+       unsigned rgbc=(cases[k].light>>(8*ch))&255;
+       if(pass==13){ float v=floorf(rgbc*EMIT[ch]); e+=(int)(v>255?255:v); }
+       if(pass==10||pass==11){ float s8=rgbc*hi[ch]*(1-cue(cases[k].light,fog)/4096.f); s8=s8<0?0:s8>255?255:s8;
+         float tint=pass==11?TEXEL[ch]/255.f:1.f; e+=(int)floorf(s8*tint); }
        if(e>255) e=255;
        int dd=abs(e-g); if(dd>worst)worst=dd; if(dd==1)off1++; }
      int g=q[0]|(q[1]<<8)|(q[2]<<16); if(y==0&&g!=last){distinct++; last=g;}

@@ -30,6 +30,11 @@ internal static class GlShaders
         // rectangle; skipped rather than blended with zero when it is off.
         uniform sampler2D uSsr;
         uniform float uSsrOn;
+        // How much the occlusion reaches each material: the surface buffer's id and
+        // row 2 of SurfaceMaterial's table, whose green is the share taken off.
+        uniform sampler2D uSurface;
+        uniform sampler2D uMatTable;
+        uniform float uAoMatOn;
         out vec4 oColor;
         void main() {
             vec2 t = (uOrigin + vUv * uSize) / uTexSize;
@@ -37,7 +42,14 @@ internal static class GlShaders
             // The occlusion texture is rendered at exactly this framebuffer's
             // size, so it is indexed by the present's own uv and needs no
             // geometry of its own.
-            if (uAoOn > 0.5) c *= texture(uAo, vUv).r;
+            if (uAoOn > 0.5) {
+                float ao = texture(uAo, vUv).r;
+                if (uAoMatOn > 0.5) {
+                    int m = int(texture(uSurface, t).a + 0.5);
+                    if (m > 0 && m < 256) ao = mix(ao, 1.0, texelFetch(uMatTable, ivec2(m, 2), 0).g);
+                }
+                c *= ao;
+            }
             if (uSsrOn > 0.5) {
                 vec4 r = texture(uSsr, vUv);
                 c = c * (1.0 - r.a) + r.rgb;
@@ -567,6 +579,12 @@ internal static class GlShaders
         // both found a surface, write how far apart their brightness is, against
         // the planar texture read unmirrored as the control.
         uniform int   uCompare;
+        // Rough surfaces: the colour and the planar texture shrunk into mip chains,
+        // and each chain's level-0 height in texels. 0 when no id is rough.
+        uniform sampler2D uColorMip;
+        uniform sampler2D uPlanarMip;
+        uniform float uColorMipH;
+        uniform float uPlanarMipH;
 
         const float FAR = 65536.0;
         const float OVERLAY = 3.0;
@@ -600,27 +618,35 @@ internal static class GlShaders
         float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
         // A rough surface's reflection: the colour averaged over the footprint of the
-        // cone the reflected ray stands for, `radius` of the picture wide. Eight taps
-        // on a ring and the centre, turned per pixel by the interleaved pattern; a
-        // tap under the HUD or off the picture is left out. Radius 0 is one read.
-        vec3 blurAt(sampler2D tex, vec2 uv, float radius, bool mirrored) {
+        // cone the reflected ray stands for, `radius` of the picture high. Read from
+        // a mip chain of the picture at the level whose texel is that wide: the
+        // centre and four taps at half the radius, each trilinear, the same at every
+        // pixel. Eight sparse taps turned per pixel left a woven 4x4 pattern on a
+        // busy texture. Below a texel it fades back to the sharp read.
+        vec3 blurAt(sampler2D tex, sampler2D mip, float mipH, vec2 uv, float radius, bool mirrored) {
             vec3 c0 = texture(tex, tc(uv)).rgb;
-            if (radius <= 0.0) return c0;
-            ivec2 px = ivec2(gl_FragCoord.xy) & 3;
-            float a0 = float((px.y << 2) | px.x) * 0.3927;
-            vec3 sum = c0;
+            if (radius <= 0.0 || mipH <= 0.0) return c0;
+            float texels = radius * uSize.y / uTexSize.y * mipH;
+            float lod = log2(max(texels, 1.0));
+            vec3 sum = textureLod(mip, tc(uv), lod).rgb;
             float n = 1.0;
-            for (int k = 0; k < 8; k++) {
-                float a = a0 + float(k) * 0.7854;
-                float r = radius * (k < 4 ? 0.5 : 1.0);
-                vec2 o = vec2(cos(a), sin(a)) * r * vec2(uSize.y / uSize.x, 1.0);
-                vec2 q = uv + o;
+            vec2 d = 0.5 * radius * vec2(uSize.y / uSize.x, 1.0);
+            for (int k = 0; k < 4; k++) {
+                vec2 q = uv + d * vec2(k < 2 ? -1.0 : 1.0, (k & 1) == 0 ? -1.0 : 1.0);
                 if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) continue;
                 if (!mirrored && overlayAt(q)) continue;
-                sum += texture(tex, tc(q)).rgb;
+                sum += textureLod(mip, tc(q), lod).rgb;
                 n += 1.0;
             }
-            return sum / n;
+            return mix(c0, sum / n, clamp(texels * 2.0, 0.0, 1.0));
+        }
+
+        // A metal's reflection takes its colour: the surface's hue at full value,
+        // so a dark bronze tints without darkening what it reflects.
+        vec3 metalTint(float metal) {
+            if (metal <= 0.0) return vec3(1.0);
+            vec3 sc = texture(uColor, tc(vUv)).rgb;
+            return mix(vec3(1.0), sc / max(max(sc.r, max(sc.g, sc.b)), 1e-3), metal);
         }
 
         // 0068. The planar reflection at this pixel, when the surface lies on the
@@ -654,7 +680,7 @@ internal static class GlShaders
             if (rough > 0.0) {
                 float zi = texture(uPlanarDepth, tc(muv)).r * FAR;
                 float travel = zi < FAR * 0.999 ? max(zi - p.z, 0.0) * length(p) / p.z : 0.0;
-                c = blurAt(uPlanar, muv, rough * travel * uProjH / (max(zi, 1.0) * uSize.y), true);
+                c = blurAt(uPlanar, uPlanarMip, uPlanarMipH, muv, rough * travel * uProjH / (max(zi, 1.0) * uSize.y), true);
             }
             return true;
         }
@@ -693,7 +719,9 @@ internal static class GlShaders
             vec3 r = reflect(v, n);
             float cosv = clamp(dot(-v, n), 0.0, 1.0);
             float f0 = mat.g;
-            float rough = mat.b;
+            // Squared, so the slider's lower half is the useful range.
+            float rough = mat.b * mat.b;
+            vec3 tint = metalTint(mat.a);
             // Schlick, running from F0 looking straight down to the material's
             // reflectivity at a grazing angle.
             float w = f0 + (max(refl, f0) - f0) * pow(1.0 - cosv, 5.0);
@@ -703,7 +731,7 @@ internal static class GlShaders
             if (planarHit && uCompare == 0) {
                 oInfo.a += 4.0 / 255.0;
                 w = clamp(w, 0.0, 1.0);
-                oColor = vec4(pc * w, w);
+                oColor = vec4(pc * tint * w, w);
                 return;
             }
 
@@ -770,7 +798,7 @@ internal static class GlShaders
                     oInfo.a += 16.0 / 255.0;
                 }
                 w = clamp(w, 0.0, 1.0);
-                oColor = vec4(pc * w, w);
+                oColor = vec4(pc * tint * w, w);
                 return;
             }
             if (passed) oInfo.a += 8.0 / 255.0;
@@ -783,7 +811,7 @@ internal static class GlShaders
                 // The cone's width where it lands, `rough * ht` across, as a share of
                 // the picture's height at the hit's depth.
                 float hz = max(depthAt(huv) * FAR, 1.0);
-                c = blurAt(uColor, huv, rough * ht * uProjH / (hz * uSize.y), false);
+                c = blurAt(uColor, uColorMip, uColorMipH, huv, rough * ht * uProjH / (hz * uSize.y), false);
                 // The colour there was fogged for its own distance, and the light
                 // reaching the water has come further: out to the water and back up
                 // to the surface. Its image stands that much further down the mirrored
@@ -805,7 +833,7 @@ internal static class GlShaders
                 return;
             }
             w = clamp(w, 0.0, 1.0);
-            oColor = vec4(c * w, w);
+            oColor = vec4(c * tint * w, w);
         }
         """;
 
@@ -964,7 +992,8 @@ internal static class GlShaders
         uniform float uClipH;
         // 0071. Authored lights, published by the port in the GTE's view space
         // (RemasterUniforms): position and radius; colour times intensity and the
-        // spot's inner cosine; direction and the outer cosine (-2 for a point).
+        // spot's inner cosine; direction and the outer cosine (-2 for a point, and
+        // -2 - id for a point a material gives off, which does not light that id).
         uniform int   uLightN;
         uniform vec4  uLightPos[16];
         uniform vec4  uLightCol[16];
@@ -972,12 +1001,21 @@ internal static class GlShaders
         uniform vec2  uLightCentre;
         uniform float uLightH;
         // 0071. Emissive materials: row 1 of SurfaceMaterial's table is the light an
-        // id gives off, in the same units as a light's colour, and in alpha whether it
-        // is added after the texture (1) or to the lit colour before it (0).
+        // id gives off, in the same units as a light's colour, and in alpha its flags:
+        // 1 added after the texture rather than to the lit colour before it, 2 not
+        // fogged. Row 0's alpha is metalness and row 2's red the highlight.
         uniform int   uEmitOn;
         uniform sampler2D uMatTable;
         // An additive glow, fogged, in 8-bit colour; added to the modulated texel.
         ivec3 gGlow8 = ivec3(0);
+        // The authored lights' highlight, fogged, in 8-bit colour before the
+        // metal's tint, and the metalness that tints it.
+        vec3  gSpec8 = vec3(0.0);
+        float gMetal = 0.0;
+        // What is added past the texture, given the surface's own colour.
+        ivec3 post(vec3 base) {
+            return gGlow8 + ivec3(floor(gSpec8 * mix(vec3(1.0), clamp(base, 0.0, 1.0), gMetal)));
+        }
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -1097,16 +1135,27 @@ internal static class GlShaders
         // from the recovered depth as NormalFs rebuilds it, and the normal is that
         // position's plane, so a light is placed and faced exactly where the GTE
         // put the polygon. The derivatives are taken before any per-fragment test.
-        vec3 authored() {
+        vec3 authored(float spec, float rough, out vec3 hi) {
+            hi = vec3(0.0);
             float z = vDepth * 65536.0;
             vec3 p = vec3((gl_FragCoord.xy / float(uScale) - uLightCentre) * (z / uLightH), z);
             vec3 n = cross(dFdx(p), dFdy(p));
             if (vDepth <= 0.0 || vLight == 0u || !(dot(n, n) > 1e-12)) return vec3(0.0);
             n = normalize(n);
             if (dot(n, p) > 0.0) n = -n;
+            // Normalised Blinn-Phong: the lobe's size from roughness, squared as
+            // the reflections take it, and its energy kept as it widens.
+            vec3 eye = normalize(-p);
+            float a = max(rough, 0.15);
+            a *= a;
+            float shin = 2.0 / (a * a) - 2.0;
+            float norm = (shin + 8.0) / 25.1327;
             vec3 sum = vec3(0.0);
             for (int i = 0; i < 16; ++i) {
                 if (i >= uLightN) break;
+                // A point below -2 is a material's own light, which leaves that
+                // material as its glow drew it.
+                if (uLightDir[i].w < -2.5 && vMat != 0u && int(-uLightDir[i].w - 2.0 + 0.5) == int(vMat)) continue;
                 vec3 l = uLightPos[i].xyz - p;
                 float r2 = uLightPos[i].w * uLightPos[i].w;
                 float d2 = dot(l, l);
@@ -1114,7 +1163,10 @@ internal static class GlShaders
                 vec3 dir = d2 > 0.0 ? l * inversesqrt(d2) : -n;
                 float q = 1.0 - d2 / r2;
                 float spot = smoothstep(uLightDir[i].w, uLightCol[i].w, dot(-dir, uLightDir[i].xyz));
-                sum += uLightCol[i].rgb * (max(dot(n, dir), 0.0) * q * q * spot);
+                float ndl = max(dot(n, dir), 0.0);
+                sum += uLightCol[i].rgb * (ndl * q * q * spot);
+                if (spec > 0.0 && ndl > 0.0)
+                    hi += uLightCol[i].rgb * (spec * norm * pow(max(dot(n, normalize(dir + eye)), 0.0), shin) * ndl * q * q * spot);
             }
             return sum;
         }
@@ -1181,23 +1233,32 @@ internal static class GlShaders
             }
             // 0071. Not into a planar reflection: its view is the mirrored camera's.
             vec3 extra = vec3(0.0);
-            if (uLightN > 0 && uClipOn == 0) extra = authored();
+            bool mat = uEmitOn != 0 && vMat != 0u && vLight != 0u;
+            vec4 m0 = mat ? texelFetch(uMatTable, ivec2(int(vMat), 0), 0) : vec4(0.0);
+            float spec = mat ? texelFetch(uMatTable, ivec2(int(vMat), 2), 0).r : 0.0;
+            vec3 hi = vec3(0.0);
+            if (uLightN > 0 && uClipOn == 0) extra = authored(spec, m0.b, hi);
             // A surface's own glow needs no position, so it is in a planar
             // reflection too. Additive: RGBC times the glow, fogged as the lit
             // colour is, then added past the texture so a dark texel lights too.
-            if (uEmitOn != 0 && vMat != 0u && vLight != 0u) {
+            if (mat) {
+                vec3 rgbc = vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u));
+                float keep = 1.0 - cueWeight() / 4096.0;
                 vec4 glow = texelFetch(uMatTable, ivec2(int(vMat), 1), 0);
-                if (glow.a > 0.5) {
-                    vec3 rgbc = vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u));
-                    gGlow8 = ivec3(clamp(floor(rgbc * glow.rgb * (1.0 - cueWeight() / 4096.0)), 0.0, 255.0));
-                } else extra += glow.rgb;
+                int flags = int(glow.a + 0.5);
+                if ((flags & 1) != 0)
+                    gGlow8 = ivec3(clamp(floor(rgbc * glow.rgb * ((flags & 2) != 0 ? 1.0 : keep)), 0.0, 255.0));
+                else extra += glow.rgb;
+                // The highlight is the light's, not the surface's: past the texture.
+                gSpec8 = clamp(rgbc * hi * keep, 0.0, 255.0);
+                gMetal = m0.a;
             }
             ivec3 c8in = shade8(extra);
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 
             if (texMode == 4) {
                 if (uOpaqueDepth == 1) discard;
-                FragColor = vec4(quant5(c8in + gGlow8), uSetMask);
+                FragColor = vec4(quant5(c8in + post(vec3(c8in) / 255.0)), uSetMask);
                 BlendColor = uBlend;
                 return;
             }
@@ -1205,7 +1266,7 @@ internal static class GlShaders
             if (texMode == 5) {
                 vec4 img = texture(uExtTex, vUV);
                 if (img.a < 0.5 || uOpaqueDepth == 1) discard;
-                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
+                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + post(img.rgb);
                 FragColor = vec4(quant5(e8), uSetMask);
                 BlendColor = uBlend;
                 return;
@@ -1226,7 +1287,7 @@ internal static class GlShaders
                 vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
                 vec4 img = texture(uRepTex, t);
                 if (img.a < 0.5) discard;
-                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
+                ivec3 e8 = ((ivec3(img.rgb * 255.0 + 0.5) * c8in) >> 7) + post(img.rgb);
                 float stp = img.a < 0.95 ? 1.0 : 0.0;
                 if (uOpaqueDepth == 1 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
@@ -1287,7 +1348,7 @@ internal static class GlShaders
 
             if (vRepClut != 0 && texMode != 2) {
                 if (texel.a < 0.5) discard;
-                ivec3 e8 = ((ivec3(texel.rgb * 255.0 + 0.5) * c8in) >> 7) + gGlow8;
+                ivec3 e8 = ((ivec3(texel.rgb * 255.0 + 0.5) * c8in) >> 7) + post(texel.rgb);
                 float stp = texel.a < 0.95 ? 1.0 : 0.0;
                 if (uOpaqueDepth == 1 && stp > 0.5) discard;
                 FragColor = vec4(quant5(e8), max(stp, uSetMask));
@@ -1299,7 +1360,7 @@ internal static class GlShaders
             if (uOpaqueDepth == 1 && texel.a >= 0.5) discard;
             // 248 = 31 << 3: exact for a texel, and keeps a filtered colour's fraction.
             ivec3 t8 = ivec3(texel.rgb * 248.0 + 0.5);
-            ivec3 c8 = ((t8 * c8in) >> 7) + gGlow8;
+            ivec3 c8 = ((t8 * c8in) >> 7) + post(texel.rgb);
             FragColor = vec4(quant5(c8), max(texel.a, uSetMask));
             BlendColor = texel.a >= 0.5 ? uBlend : uBlendOpaque;
         }

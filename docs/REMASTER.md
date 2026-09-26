@@ -1162,7 +1162,9 @@ neither was a light on the arm.
   - [~] materials keyed by tile mesh (Phase 1's faces), model (in) and texture
     index hash (not started: it waits on Phase 4's key census);
   - [x] emissive, which adds to the lit term the way a light does, and roughness,
-    which only SSR reads, as a blur of its hit.
+    which only SSR reads, as a blur of its hit;
+  - [x] metalness, specular, occlusion, a light of its own, pulse and unfogged glow
+    (the second slice).
 - **Mechanism measured by:** the `ByMaterial` census for every source; the
   reflection census identical with no pack; `shader_probe.c` for emissive
   (`light_probe.c` in the event, since the term is `0071`'s).
@@ -1362,6 +1364,94 @@ a light source, the defaults (glow light 0.5, reach 2048), a model's light at 38
 above its origin (a guess at the middle of a figure; a view-space model such as the
 arm would get one at a meaningless position), several adjacent halves each giving
 a light (they add), and fog on the glow. Bloom is still item 4.
+
+**Looked at: glow.** "It looks pretty good." The same judgement asked for a light
+that leaves the texture alone, which the second slice below adds.
+
+**Looked at: roughness.** At 1.0 the reflection on a mirror floor turned into a
+fine woven crosshatch rather than a smear; see the second slice.
+
+### Phase 3, the second slice
+
+**What is in.** Everything a material could still say without a texture key:
+
+- **Roughness, without the weave** (`0067`, amended). The blur now reads a half-size
+  mip chain of the picture (and of the planar texture) at the level whose texel
+  spans the blur, instead of eight sparse taps turned per pixel. Roughness is
+  squared before use, so the slider's lower half is the useful range.
+- **Metalness** (`0067`): the reflection takes the surface's hue at full value, so a
+  dark bronze tints what it reflects without darkening it.
+- **Specular** (`0071`, amended): the highlight an authored light, or a glow's own
+  light, leaves. Normalised Blinn-Phong, its size from roughness, added past the
+  texture, fogged, and tinted by the texel on a metal.
+- **Occlusion** (`0067`): how much the occlusion pass darkens a material, applied at
+  the present from the surface buffer's id. A glowing material defaults to 0.
+- **Light without glow**: `"light"` is the material's own light intensity, in its
+  emissive colour, whether or not the surface glows; without it, a material reads as
+  it did (`glowLight`, 0.5, times the glow). **A material's light does not light that
+  material** (a point's outer cosine carries the id, `0071`), so a lamp with no glow
+  keeps its texture exactly and a glowing panel is no longer lit by itself too.
+- **Glow ignores fog** (`"glowFog": false`), additive glows only.
+- **Pulse**: `pulseAmount`, `pulseHz`, `pulseStyle` breathe or flicker, on the world
+  tick (`Lights.Ticks`, now counted whether or not a light is sent), so it holds while
+  the world is paused. The glow and its light pulse together.
+- Editor: *Metalness*, *Specular*, *Occlusion*, *Fogged*, *Light*, *Light reach*,
+  *Pulse*, *Pulse rate*, *Flicker*. Shell: `set material:NAME metalness|specular|
+  occlusion|light|pulseAmount|pulseHz V`, `glowFog on|off`, `pulseStyle breathe|flicker`.
+
+**Measured** (area 1, the pinned view, reflections on, a scratch pack):
+- **The weave was the roughness blur, not the reflections.** A mirror floor
+  (`tile:1:37:36:upper` face 3) at roughness 0, 0.5 and 1, on the previous build and
+  this one, each with the pass at 2x and at full resolution; the autocorrelation of
+  the reflection's fine detail:
+
+  | build, pass | roughness 0 | 0.5 | 1 |
+  |---|---|---|---|
+  | previous, 2x | no repeat | **every 8 px, +0.50** | **8 px, +0.39** |
+  | previous, full | no repeat | **every 4 px, +0.72** | **4 px, +0.68** |
+  | this, 2x or full | no repeat | no repeat | no repeat |
+
+  The repeat was the 4x4 pattern at the pass's resolution (render scale 4 there),
+  so the resolution set its size and not its existence. The dark band under the ledge
+  in the report's shots was not checked; it is in area 0.
+- **The formula.** `light_probe.c`: 14 passes, 126 cases, every one 0 from the
+  formula; the first ten read as before. The skip pass lights 452 pixels of 512.
+- **Off is the picture it was**: `210d55698c875fb8` with nothing authored, and again
+  after each new term was set back to 0.
+- **Light only** (colour 1,0.7,0.4, light 1.5, reach 3000, no glow, on the wall
+  panel): all 309,703 of the panel's pixels unchanged; 601,350 around it lit; none
+  darker.
+- **Specular 1** on the floor under a light placed to mirror into it: at roughness
+  0.5, 66,444 pixels brighter by up to 49; at 0.2, 6,245 by up to 213; none darker.
+  On a metal the same pixels take the texel's colour.
+- **Metalness 1** on a mirror floor changed its reflection by up to 24 levels.
+- **Occlusion 0** on a wall: 210,402 pixels brighter by up to 10, none darker.
+- **Pulse** 1 at 2 Hz: three snaps 0.3 s apart with the world running, three hashes;
+  with the editor open, the same hash twice.
+- 144.0 fps drawn at 20.0 ticks/s with all of it at once (a pulsing glowing panel
+  with its light, a rough metal mirror floor with a highlight, a wall at occlusion 0
+  and an authored light), editor closed; `[present] wide 288`.
+
+**Changed for an existing pack.** A glowing material is exempt from occlusion unless
+it says otherwise, and its light no longer lights itself, so a glowing panel reads a
+little dimmer than in the first slice. Roughness is squared, so a saved value blurs
+less than it did.
+
+**Not judged.** All of it: whether roughness 0.2-0.5 reads as polished or wet stone
+and whether the blur grows with distance as it should, highlights on the floor and
+on models, metal on a mirror, a pulse's rate and a flicker's feel, a lamp with no
+glow, an unfogged glow at the edge of the draw window. The blur reads the whole
+picture, HUD included, at high roughness near it.
+
+**Looked at: metalness is hard to see.** "I'm struggling to see metalness
+whatsoever." Three reasons in the design: it only tints the reflection and the
+highlight, so with reflectivity 0 (or reflections off) and no highlight it does
+nothing; the tint is the surface's hue, and this game's stone is nearly grey
+(measured: 24 levels at most); and it leaves out what makes a metal read as one --
+a strong reflection looking straight at it (F0 is not raised) and a darker base
+colour. **Next** (proposed, not started): metalness pulls F0 up to the reflectivity,
+darkens the surface's own colour, and saturates the tint a little; whether it also
+brings some reflectivity of its own when that is 0 is the user's call.
 
 ### Phase 4: textures
 
