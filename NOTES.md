@@ -368,7 +368,7 @@ How the vendored RecompOne checkout is kept, why it is not a patch stack, and wh
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0070`, one entry each.
+Every change the port made to RecompOne, `0001`-`0071`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 
@@ -379,7 +379,7 @@ Next steps, and an index of what is reported but not diagnosed.
 
 ### [REMASTER.md](docs/REMASTER.md)
 
-The authoring tools (identity, packs, editor) and the engine work for a remaster the user places, tunes, saves and shares. Phase 1 is in: a material per tile half, from the working pack, through the editor (Shift+E) or `KF2_SHELL`; `snap` hashes the presented picture, and the switch is under Video ▸ Enhancements.
+The authoring tools (identity, packs, editor) and the engine work for a remaster the user places, tunes, saves and shares. Phase 1 is in: a material per tile half or per face, from the working pack, through the editor (Shift+E) or `KF2_SHELL`; `snap` hashes the presented picture, and the switch is under Video ▸ Enhancements. Phase 2's first slice adds authored point and spot lights (`0071`).
 
 - What this is, and what it is not
 - What exists, and what each piece gives the remaster
@@ -393,6 +393,9 @@ The authoring tools (identity, packs, editor) and the engine work for a remaster
 - The phased roadmap
 - Phase 1, the first slice
 - Phase 1, the second slice
+- A tile half is a whole mesh, and a face is the key under it
+- Faces, picked from the frame
+- Phase 2, the first slice
 - Open decisions
 
 ## Where to write a new finding

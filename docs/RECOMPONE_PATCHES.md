@@ -13,7 +13,7 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Fifty-one of the fifty-eight are load-bearing; `0002`, `0003`, `0015`, `0046`,
+Fifty-two of the fifty-nine are load-bearing; `0002`, `0003`, `0015`, `0046`,
 `0065` and `0069` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
@@ -950,6 +950,24 @@ Four files in the directory have no entry below:
   existing order is unchanged. `Stage13.HookOrder` names the orders on the
   renderer. **No recompile.** See "The hooks on stage 13 are ordered by what they
   need" in `docs/PATCHES_AND_MODS.md`.
+
+- `0071-authored-lights.patch` — the remaster's point and spot lights, as one more
+  term in the lit colour. `Gpu/RemasterUniforms.cs` holds up to 16 lights the port
+  has already put in the GTE's view space (position and radius, colour times
+  intensity and the spot's inner cosine, direction and the outer cosine), with a
+  generation. `PrimFs` gains `authored()`: the fragment's view position rebuilt
+  from its recovered depth, H and the centre as `NormalFs` does, its normal from
+  that position's screen derivatives (taken before any per-fragment test), and a
+  smooth-windowed, cosine-weighted sum over the lights; `shade8` takes it and adds
+  it times the packet's RGBC (the record's low bytes) to the lit colour before the
+  depth cue, so fog, texture and saturation apply to it as to the game's light.
+  Only a packet with a `0048` record and a depth is lit, and nothing is lit in a
+  planar texture (`uClipOn`). `GlCore` uploads the arrays when the generation
+  moves, sends the centre and H per batch like `uClipCentre`, and flushes a batch
+  built under the previous generation (`FlushReason.StateLight`). With no light
+  the shader's output is 0048's to the bit (`scripts/light_probe.c`).
+  `patches/remaster/Lights.cs` is the only writer. GL core only. **No recompile.**
+  See "Phase 2, the first slice" in `docs/REMASTER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

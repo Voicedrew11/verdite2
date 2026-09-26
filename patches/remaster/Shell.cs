@@ -12,23 +12,28 @@ namespace Kf2.Remaster;
 /// the panel does, so the undo stack sees them:
 ///
 ///     edit [on|off|toggle]                          the editor, which pauses the world
-///     select [here | tile:A:X:Z:lower|upper | pick GX GY]
-///     set selected|tile:... material NAME|none
+///     select [here | tile:A:X:Z:lower|upper | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh]
+///     set selected|tile:... material NAME|none [tile|mesh]
 ///     set material:NAME reflectivity|f0 VALUE
 ///     set remaster on|off
 ///     pack save|reload|undo|redo|list|add NAME
+///     light list|add NAME [here|pick GX GY|X Y Z]|remove NAME|select NAME|set NAME FIELD V...
 ///     remaster                                      the status, as the probe line has it
 /// </summary>
 public static class Shell
 {
-    public static readonly string[] Verbs = ["edit", "select", "set", "pack", "remaster"];
+    public static readonly string[] Verbs = ["edit", "select", "set", "pack", "remaster", "light"];
 
     public static readonly string[] Help =
     [
         "edit [on|off|toggle] - the remaster editor, which pauses the world",
-        "select [here | tile:A:X:Z:lower|upper | pick GX GY] - pick a tile half; GX GY in game pixels",
-        "set selected|tile:... material NAME|none; set material:NAME reflectivity|f0 V; set remaster on|off",
+        "select [here | tile:A:X:Z:lower|upper | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh] - " +
+            "a half, or faces; pick takes the faces under game pixel GX GY (the editor must be open)",
+        "set selected|tile:... material NAME|none [tile|mesh]; set material:NAME reflectivity|f0 V; set remaster on|off",
         "pack save|reload|undo|redo|list|add NAME - the working pack",
+        "light list | add NAME [here | pick GX GY | X Y Z] | remove NAME | select NAME | " +
+            "set NAME position X Y Z|colour R G B|intensity V|radius V|type point|spot|direction X Y Z|cone IN OUT|flicker AMOUNT HZ|enabled on|off - " +
+            "the area's authored lights; pick places one short of the surface under game pixel GX GY",
         "remaster - area, fingerprint, what is applied",
     ];
 
@@ -44,6 +49,7 @@ public static class Shell
                 "set" => Set(a),
                 "pack" => PackVerb(a),
                 "remaster" => Status(),
+                "light" => LightVerb(a),
                 _ => Err(verb, "unknown verb"),
             };
         }
@@ -73,14 +79,42 @@ public static class Shell
         {
             if (a.Length < 3 || !float.TryParse(a[1], CultureInfo.InvariantCulture, out float gx)
                 || !float.TryParse(a[2], CultureInfo.InvariantCulture, out float gy))
-                return Err("select", "select pick GX GY");
-            var view = Pick.Read(m);
-            var hit = Pick.Floor(m, view, new Vector2(gx, gy), out var at, out var stop);
-            if (hit == null) return Err("select", $"no floor under that pixel: {stop}");
-            Editor.Select(hit);
-            var d = Describe(hit);
-            d["hit"] = new JsonArray(MathF.Round(at.X), MathF.Round(at.Y), MathF.Round(at.Z));
-            return Ok("select", d);
+                return Err("select", "select pick GX GY [add]");
+            if (!Faces.Recording) return Err("select", "the editor is closed (edit on), so no triangles are recorded");
+            var hit = Faces.PickAt(new Vector2(gx, gy), out var why);
+            if (hit == null) return Err("select", $"nothing picked: {why}");
+            Editor.SelectFaces(hit, a.Length > 3 && a[3] == "add");
+            return Ok("select", Describe(Editor.Selected));
+        }
+        if (a[0] == "faces")
+        {
+            if (Editor.Selected is not { } k0) return Err("select", "select a half first");
+            int mesh = Editor.MeshOf(m, k0);
+            if (mesh < 0) return Err("select", "the half draws no mesh");
+            var list = new List<FaceRef>();
+            foreach (var t in (a.Length > 1 ? a[1] : "").Split(',', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!int.TryParse(t, out int f) || f < 0 || f >= (Faces.Mesh(m, mesh)?.Length ?? 0))
+                    return Err("select", $"no face '{t}' in mesh {mesh}");
+                list.Add(new FaceRef(k0, mesh, f));
+            }
+            if (list.Count == 0) return Err("select", "select faces F,F,...");
+            Editor.SelectFaces(list, false);
+            return Ok("select", Describe(Editor.Selected));
+        }
+        if (a[0] == "grow")
+        {
+            if (Editor.SelectedFaces.Count == 0) return Err("select", "select faces first");
+            Editor.Grow how = (a.Length > 1 ? a[1] : "") switch
+            {
+                "connected" => Editor.Grow.Connected,
+                "texture" => Editor.Grow.Texture,
+                "mesh" => Editor.Grow.Mesh,
+                _ => (Editor.Grow)(-1),
+            };
+            if ((int)how < 0) return Err("select", "select grow connected|texture|mesh");
+            Editor.GrowSelection(m, how);
+            return Ok("select", Describe(Editor.Selected));
         }
         if (!TileKey.TryParse(a[0], out var k)) return Err("select", $"cannot read '{a[0]}'");
         Editor.Select(k);
@@ -105,21 +139,26 @@ public static class Shell
         }
         if (a.Length >= 3 && a[1] == "material")
         {
-            TileKey k;
-            if (a[0] == "selected")
+            var m = Runtime.Mem;
+            if (m == null) return Err("set", "not running");
+            if (a[0] != "selected")
             {
-                if (Editor.Selected is not { } s) return Err("set", "nothing selected");
-                k = s;
+                if (!TileKey.TryParse(a[0], out var k)) return Err("set", $"cannot read '{a[0]}'");
+                Editor.Select(k);
             }
-            else if (!TileKey.TryParse(a[0], out k)) return Err("set", $"cannot read '{a[0]}'");
-            if (!Identity.Settled || k.Area != Identity.Area) return Err("set", "the tile's area is not the settled one");
-            if (Surfaces.Refused != null) return Err("set", Surfaces.Refused);
+            if (Editor.Selected == null) return Err("set", "nothing selected");
             string? name = a[2] == "none" ? null : a[2];
             if (name != null && !Pack.HasMaterial(name)) return Err("set", $"no material '{name}'");
-            Pack.SetTile(k, name, Identity.FingerprintText);
-            return Ok("set", Describe(k));
+            bool was = Editor.MeshScope;
+            Editor.MeshScope = a.Length > 3 && a[3] == "mesh";
+            try
+            {
+                if (Editor.Assign(m, name) is { } why) return Err("set", why);
+            }
+            finally { Editor.MeshScope = was; }
+            return Ok("set", Describe(Editor.Selected));
         }
-        return Err("set", "set selected|tile:... material NAME|none; set material:NAME reflectivity|f0 V; set remaster on|off");
+        return Err("set", "set selected|tile:... material NAME|none [tile|mesh]; set material:NAME reflectivity|f0 V; set remaster on|off");
     }
 
     static string PackVerb(string[] a)
@@ -147,12 +186,120 @@ public static class Shell
             });
         var tiles = new JsonArray();
         if (Identity.Area >= 0)
+        {
             foreach (var (k, name) in Pack.Tiles(Identity.Area)) tiles.Add($"{k} = {name}");
+            foreach (var e in Pack.TileFaceLists(Identity.Area))
+                foreach (var (f, name) in e.Faces) tiles.Add($"{e.Tile}:{f} (mesh {e.Mesh}) = {name}");
+            foreach (var e in Pack.MeshRules(Identity.Area))
+            {
+                if (e.Material != null) tiles.Add($"mesh {e.Mesh} = {e.Material}");
+                foreach (var (f, name) in e.Faces) tiles.Add($"mesh {e.Mesh}:{f} = {name}");
+            }
+        }
         return Ok("pack", new JsonObject
         {
             ["root"] = Pack.Root, ["dirty"] = Pack.Dirty, ["error"] = Pack.LastError,
             ["materials"] = mats, ["tiles"] = tiles,
         });
+    }
+
+    static string LightVerb(string[] a)
+    {
+        var m = Runtime.Mem;
+        if (m == null) return Err("light", "not running");
+        int area = Identity.Area;
+        if (area < 0 || !Identity.Settled) return Err("light", "no settled area");
+        string op = a.Length > 0 ? a[0] : "list";
+        float F(int i) => float.Parse(a[i], CultureInfo.InvariantCulture);
+        switch (op)
+        {
+            case "list":
+                return Ok("light", LightList(area));
+            case "add":
+            {
+                if (a.Length < 2) return Err("light", "light add NAME [here|pick GX GY|X Y Z]");
+                string name = a[1].Replace('_', ' ');
+                Vector3 pos;
+                if (a.Length >= 5 && a[2] != "pick") pos = new Vector3(F(2), F(3), F(4));
+                else if (a.Length >= 5 && a[2] == "pick")
+                {
+                    if (!Faces.Recording) return Err("light", "the editor is closed (edit on), so no triangles are recorded");
+                    if (Editor.PlaceAt(m, new Vector2(F(3), F(4))) is not { } p) return Err("light", "no surface under that pixel");
+                    pos = p;
+                }
+                else pos = Editor.PlayerLightPosition(m);
+                if (!Pack.AddLight(area, Identity.FingerprintText, name, pos)) return Err("light", $"'{name}' exists");
+                Editor.SelectLight(name);
+                return Ok("light", LightList(area));
+            }
+            case "remove":
+                if (a.Length < 2) return Err("light", "light remove NAME");
+                Pack.RemoveLight(area, a[1].Replace('_', ' '));
+                return Ok("light", LightList(area));
+            case "select":
+                if (a.Length < 2 || Pack.GetLight(area, a[1].Replace('_', ' ')) == null) return Err("light", "no such light");
+                Editor.SelectLight(a[1].Replace('_', ' '));
+                return Ok("light", LightList(area));
+            case "set":
+            {
+                if (a.Length < 4) return Err("light", "light set NAME FIELD V...");
+                string name = a[1].Replace('_', ' ');
+                if (Pack.GetLight(area, name) is not { } l) return Err("light", $"no light '{name}'");
+                string field = a[2];
+                System.Action<JsonObject>? change = field switch
+                {
+                    "position" when a.Length >= 6 => o => Pack.SetPosition(o, new Vector3(F(3), F(4), F(5))),
+                    "colour" or "color" when a.Length >= 6 => o => Pack.SetColour(o, new Vector3(F(3), F(4), F(5))),
+                    "direction" when a.Length >= 6 => o => Pack.SetDirection(o, new Vector3(F(3), F(4), F(5))),
+                    "intensity" => o => Pack.SetNumber(o, "intensity", F(3)),
+                    "radius" => o => Pack.SetNumber(o, "radius", Math.Max(F(3), 1f)),
+                    "type" when a[3] is "point" or "spot" => o => o["type"] = a[3],
+                    "cone" when a.Length >= 5 => o => Pack.SetCone(o, F(3), F(4)),
+                    "flicker" when a.Length >= 5 => o => Pack.SetFlicker(o, F(3), F(4)),
+                    "enabled" => o => { if (a[3] is "on" or "1") o.Remove("enabled"); else o["enabled"] = false; },
+                    _ => null,
+                };
+                if (change == null) return Err("light", $"cannot set '{field}' from that");
+                Pack.SetLight(area, name, $"{field} = {string.Join(' ', a[3..])}", change);
+                return Ok("light", LightList(area));
+            }
+        }
+        return Err("light", "light list|add|remove|select|set");
+    }
+
+    static JsonObject LightList(int area)
+    {
+        var list = new JsonArray();
+        var m = Runtime.Mem;
+        var view = m != null ? Lights.ReadView(m) : default;
+        foreach (var l in Pack.Lights(area))
+        {
+            var o = new JsonObject
+            {
+                ["name"] = l.Name, ["type"] = l.Spot ? "spot" : "point",
+                ["position"] = new JsonArray(l.Position.X, l.Position.Y, l.Position.Z),
+                ["colour"] = new JsonArray(l.Colour.X, l.Colour.Y, l.Colour.Z),
+                ["intensity"] = l.Intensity, ["radius"] = l.Radius,
+            };
+            if (l.Spot)
+            {
+                o["direction"] = new JsonArray(l.Direction.X, l.Direction.Y, l.Direction.Z);
+                o["cone"] = new JsonArray(l.ConeInner, l.ConeOuter);
+            }
+            if (l.FlickerAmount > 0f) o["flicker"] = new JsonArray(l.FlickerAmount, l.FlickerHz);
+            if (l.Off) o["enabled"] = false;
+            if (m != null && view.Project(l.Position, out var s, out float z))
+                o["screen"] = new JsonArray(MathF.Round(s.X, 1), MathF.Round(s.Y, 1), MathF.Round(z));
+            list.Add(o);
+        }
+        return new JsonObject
+        {
+            ["area"] = area, ["lights"] = list, ["selected"] = Editor.SelectedLight,
+            ["refused"] = Lights.Refused, ["authored"] = Lights.Authored, ["sent"] = Lights.Sent,
+            ["culled"] = Lights.Culled, ["uploads"] = RemasterUniforms.Uploads,
+            ["litBatches"] = RemasterUniforms.LitBatches, ["supported"] = RemasterUniforms.Supported,
+            ["perPixel"] = PerPixelLighting.Enabled, ["ticks"] = Lights.Ticks,
+        };
     }
 
     static string Status()
@@ -168,6 +315,8 @@ public static class Shell
             ["gap"] = Identity.LastGap,
             ["refused"] = Surfaces.Refused,
             ["tilesApplied"] = Surfaces.TilesApplied,
+            ["meshRefused"] = Surfaces.MeshRefused,
+            ["subdividedRefused"] = Faces.MapRefused,
             ["packets"] = Surfaces.Packets,
             ["reflections"] = Reflections.Enabled,
             ["byMaterial"] = byMat,
@@ -181,6 +330,17 @@ public static class Shell
     {
         if (key is not { } k) return new JsonObject { ["selected"] = null };
         var o = new JsonObject { ["selected"] = k.ToString(), ["material"] = Pack.TileMaterial(k) };
+        if (Editor.SelectedFaces.Count > 0)
+        {
+            var faces = new JsonArray();
+            foreach (var f in Editor.SelectedFaces)
+                faces.Add(new JsonObject
+                {
+                    ["face"] = f.ToString(), ["mesh"] = f.Mesh,
+                    ["material"] = Pack.FaceMaterial(f, false), ["meshMaterial"] = Pack.FaceMaterial(f, true),
+                });
+            o["faces"] = faces;
+        }
         var m = Runtime.Mem;
         if (m != null && k.Area == Identity.Area)
         {
@@ -189,6 +349,20 @@ public static class Shell
             o["height"] = m.ReadU8(rec + 1);
             o["flags"] = m.ReadU8(rec + 4);
             o["drawn"] = m.ReadU8(rec) < 240;
+            int mesh = m.ReadU8(rec);
+            o["meshFaces"] = Faces.Mesh(m, mesh)?.Length;
+            o["meshHash"] = Faces.MeshHash(m, mesh);
+            // What the last frame sealed this half's triangles with, by face.
+            var sealedIds = new SortedDictionary<int, SortedSet<int>>();
+            foreach (var t in Faces.Last)
+                if (t.Rec == rec)
+                {
+                    if (!sealedIds.TryGetValue(t.Face, out var set)) sealedIds[t.Face] = set = new SortedSet<int>();
+                    set.Add(t.Label);
+                }
+            var ids = new JsonObject();
+            foreach (var (f, set) in sealedIds) ids[f.ToString()] = string.Join("/", set);
+            o["sealedIds"] = ids;
         }
         return o;
     }

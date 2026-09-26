@@ -87,6 +87,9 @@ public sealed class GlCore : IGpuBackend
     int _uSsrPlanarOn, _uSsrPlanarPlane, _uSsrPlanarTol, _uSsrRipple, _uSsrCompare;
     int _uClipOn, _uClipPlane, _uClipCentre, _uClipH;
     int _clipOnSent = -1;
+    // 0071. Authored lights.
+    int _uLightN, _uLightPos, _uLightCol, _uLightDir, _uLightCentre, _uLightH;
+    int _lightNSent = -1, _lightsSentGen = -1, _kRemasterGen;
 
     uint _postProg, _postFbo, _postTex;
     int _postW, _postH, _postVersion = -1;
@@ -223,6 +226,14 @@ public sealed class GlCore : IGpuBackend
         _uClipCentre = _gl.GetUniformLocation(_progPrim, "uClipCentre");
         _uClipH = _gl.GetUniformLocation(_progPrim, "uClipH");
         _clipOnSent = -1;
+        _uLightN = _gl.GetUniformLocation(_progPrim, "uLightN");
+        _uLightPos = _gl.GetUniformLocation(_progPrim, "uLightPos");
+        _uLightCol = _gl.GetUniformLocation(_progPrim, "uLightCol");
+        _uLightDir = _gl.GetUniformLocation(_progPrim, "uLightDir");
+        _uLightCentre = _gl.GetUniformLocation(_progPrim, "uLightCentre");
+        _uLightH = _gl.GetUniformLocation(_progPrim, "uLightH");
+        _lightNSent = _lightsSentGen = -1;
+        RemasterUniforms.Supported = !_legacy && _uLightN >= 0 && _uLightPos >= 0;
         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
 
@@ -871,6 +882,12 @@ public sealed class GlCore : IGpuBackend
         // it was lit with.
         int lightGen = (a.Light & (GteLightMap.Directional << 24)) != 0 ? a.LightGen : -1;
         if (lightGen >= 0 && _kLightGen >= 0 && lightGen != _kLightGen) Flush(FlushReason.StateLight);
+        // 0071. A batch is drawn with the light list it was built under.
+        if (RemasterUniforms.Generation != _kRemasterGen)
+        {
+            if (_count > 0) Flush(FlushReason.StateLight);
+            _kRemasterGen = RemasterUniforms.Generation;
+        }
         Begin(f, 3, zMode);
         // 0058. Keep the triangle for the normal buffer. zMode 1 is exactly the
         // geometry that writes depth and is opaque, which is the geometry the
@@ -1582,6 +1599,28 @@ public sealed class GlCore : IGpuBackend
                 _gl.Uniform4(_uClipPlane, cp[0], cp[1], cp[2], cp[3]);
                 _gl.Uniform2(_uClipCentre, GteDepth.ProjCx + rt.Margin, GteDepth.ProjCy);
                 _gl.Uniform1(_uClipH, Math.Max(1f, GteDepth.ProjH));
+            }
+        }
+        // 0071. The light list, sent when the port publishes a new one. Not into
+        // VRAM or a planar texture, whose view is not the one the lights are in.
+        int lightN = RemasterUniforms.Active && rt is { IsPlanar: false } ? RemasterUniforms.LightCount : 0;
+        if (_uLightN >= 0 && (lightN != 0 || _lightNSent != 0))
+        {
+            if (lightN != _lightNSent) _gl.Uniform1(_uLightN, lightN);
+            _lightNSent = lightN;
+            if (lightN != 0)
+            {
+                if (_lightsSentGen != RemasterUniforms.Generation)
+                {
+                    _gl.Uniform4(_uLightPos, (uint)lightN, new ReadOnlySpan<float>(RemasterUniforms.LightPos, 0, lightN * 4));
+                    _gl.Uniform4(_uLightCol, (uint)lightN, new ReadOnlySpan<float>(RemasterUniforms.LightCol, 0, lightN * 4));
+                    _gl.Uniform4(_uLightDir, (uint)lightN, new ReadOnlySpan<float>(RemasterUniforms.LightDir, 0, lightN * 4));
+                    _lightsSentGen = RemasterUniforms.Generation;
+                    RemasterUniforms.Uploads++;
+                }
+                _gl.Uniform2(_uLightCentre, GteDepth.ProjCx + rt!.Margin, GteDepth.ProjCy);
+                _gl.Uniform1(_uLightH, Math.Max(1f, GteDepth.ProjH));
+                RemasterUniforms.LitBatches++;
             }
         }
         // A plain uniform the next batch reads: unlike true color, changing the

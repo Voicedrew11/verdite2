@@ -716,11 +716,13 @@ Kf2.PlanarWalk.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR"),
 Kf2.PlanarWalk.Install();
 
 // The remaster (docs/REMASTER.md): authored data from a pack, applied over the
-// game. Phase 1 is a material per tile half, read by the reflection pass. Off by
-// default and nothing is authored until the editor (Shift+E) saves something.
+// game: materials on tile faces, read by the reflection pass, and point and spot
+// lights in the prim shader (0071). Off by default and nothing is authored until
+// the editor (Shift+E) saves something.
 Kf2.Remaster.Host.Configure(Environment.GetEnvironmentVariable("KF2_REMASTER"),
                             Environment.GetEnvironmentVariable("KF2_REMASTER_PACK"),
-                            Environment.GetEnvironmentVariable("KF2_REMASTER_PROBE"));
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_PROBE"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_LIGHTS"));
 Kf2.Remaster.Host.Install();
 
 // PGXP -- upstream RecompOne's own vertex tracking, backported as

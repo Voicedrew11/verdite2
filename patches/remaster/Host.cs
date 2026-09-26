@@ -27,6 +27,7 @@ public interface IRemasterFeature
 ///     KF2_REMASTER=1         on (off by default; nothing is applied until it is)
 ///     KF2_REMASTER_PACK=dir  the working pack (packs/working)
 ///     KF2_REMASTER_PROBE=1   a line every two seconds: the area, its fingerprint, what applied
+///     KF2_REMASTER_LIGHTS=0  leave the pack's lights out
 ///
 /// Shift+E opens the editor, which pauses the world. See docs/REMASTER.md.
 /// </summary>
@@ -42,10 +43,11 @@ public static class Host
 
     public static bool Enabled { get; private set; }
 
-    public static readonly IRemasterFeature[] Features = [new Surfaces()];
+    public static readonly IRemasterFeature[] Features = [new Surfaces(), new Lights()];
 
-    public static void Configure(string? on, string? pack, string? probe)
+    public static void Configure(string? on, string? pack, string? probe, string? lights)
     {
+        Lights.Configure(lights);
         if (!string.IsNullOrWhiteSpace(on)) _forced = on.Trim() != "0";
         Pack.Configure(pack);
         _probe = probe?.Trim() is not (null or "" or "0");
@@ -68,6 +70,7 @@ public static class Host
 
         Event.AddListener<OverlayLoadedEvent>(e => Identity.Invalidate(e.Name));
         Event.AddListener<VSyncEvent>(_ => Frame());
+        Lights.Install();
         Editor.Install();
     }
 
@@ -83,6 +86,8 @@ public static class Host
     /// <summary>Off and closed, one test.</summary>
     static void Frame()
     {
+        Faces.Recording = Editor.Open || FaceProbe.On;
+        Faces.Wanted = Faces.Recording || Surfaces.PerFace;
         if (!Enabled && !Editor.Open) return;
         var m = RecompOne.Runtime.Runtime.Mem;
         if (m == null) return;

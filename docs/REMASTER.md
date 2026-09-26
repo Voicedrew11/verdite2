@@ -2,7 +2,9 @@
 
 **A design document, and from Phase 1 on a record of the work done against it.**
 Phase 1 is in, in two slices (see "Phase 1, the first slice" and "Phase 1, the
-second slice" under the roadmap); everything else is still design. The
+second slice" under the roadmap), with materials since keyed by face ("Faces, picked
+from the frame"); Phase 2 has its first slice ("Phase 2, the first slice");
+everything else is still design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -197,7 +199,7 @@ work into layers, and each layer has one owner.
         |  change events, on the game thread
   application (one IRemasterFeature per layer)
         |  writes side tables and uniforms, hooks through HookAttach
-  render features (vendored runtime, 0070+)   one uniform block, shader terms
+  render features (vendored runtime, 0071+)   one uniform block, shader terms
         |
   identity (patches/remaster/Identity.cs)     area, fingerprint, keys, resolvers
 ```
@@ -245,14 +247,16 @@ work into layers, and each layer has one owner.
    `RECOMPONE_PATCHES.md`, where a new number is for a new mechanism:
    - widening the material ids and moving their table into the block **amends
      `0067`**;
-   - authored lights are `0070`;
-   - fog colour and the sky fill are `0071`;
-   - normal and roughness maps are `0072`;
-   - a GPU id buffer for picking would be `0073`, and only if it turns out to be
+   - authored lights are `0071`;
+   - fog colour and the sky fill are `0072`;
+   - normal and roughness maps are `0073`;
+   - a GPU id buffer for picking would be `0074`, and only if it turns out to be
      needed.
 
-   `snap`'s readback of the presented picture took `0069`, so each planned number
-   moved one along from what this plan first said.
+   `snap`'s readback of the presented picture took `0069` and the hook order
+   `0070`, so each planned number moved along from what this plan first said.
+   `0071` is in (see "Phase 2, the first slice"); the block holds the light list
+   only so far, and the material table is still `0067`'s.
 
    All of it is **GL core only**; the 2.1 path and the software rasterizer ignore
    it, as they do `0048` and `0067`.
@@ -318,18 +322,27 @@ time and two packs cannot collide on a number:
     "brazier-coal":   { "emissive": [1.0, 0.45, 0.1], "emissiveStrength": 0.8 } } }
 ```
 
-Surfaces assign materials, from the most specific key to the least:
+Surfaces assign materials, and the most specific key wins: a face of a half, the
+whole half, a face of a mesh anywhere in the area, the whole mesh. A face list names
+the mesh it was authored on and that mesh's hash, and applies only while both still
+hold (see "Faces, picked from the frame"). `models` is not built yet:
 
 ```json
 // areas/1/surfaces.json
 { "formatVersion": 1, "area": 1, "fingerprint": "9f3c1a0be4d27765",
-  "tiles":  [ { "x": 35, "z": 36, "half": "upper", "material": "polished-stone" } ],
-  "meshes": [ { "tileModel": 12, "material": "wet-rock" } ],
+  "tiles":  [ { "x": 35, "z": 36, "half": "upper", "material": "polished-stone" },
+              { "x": 36, "z": 36, "half": "upper",
+                "mesh": 1, "meshHash": "8613becbcde29491", "faces": { "1": "mirror" } } ],
+  "meshes": [ { "mesh": 12, "meshHash": "0c41d9e2a7b3f865", "material": "wet-rock",
+                "faces": { "3": "polished-stone" } } ],
   "models": [ { "model": 41, "material": "brazier-coal" } ] }
 ```
 
 Lights are world positions in the game's own units: a tile is 2048, a height step
-is 128, and up is **−Y**:
+is 128, and up is **−Y**. Built so far: `type`, `position`, `colour`, `intensity`,
+`radius`, `direction`, `cone`, `flicker` and `enabled`; `falloff` is always the
+smooth window, and `affects` and `shadow` are kept on a round trip and read by
+nothing:
 
 ```json
 // areas/1/lights.json
@@ -421,11 +434,12 @@ is a command-line converter.
 
 ### Picking
 
-- **Tiles:** a ray cast on the CPU from the cursor, through the camera block at
-  `0x80192E18` and the GTE's H, OFX and OFY, against the 80×80 grid's drawn
-  halves, whose floors sit at `-(height << 7)`. Cheap, and it returns a tile key
-  directly. Exact for floors, not for walls: the grid carries no wall a ray can
-  read (see "Phase 1, the second slice"), so it stops only at rock and at a step up.
+- **Tiles:** the faces under the cursor, from the frame's own triangles. While the
+  editor is open every sealed packet is recorded with its face key, its screen
+  corners and its depths, and a click takes the nearest, with every other face
+  within the coplanar tolerance of it. That is what the depth buffer drew, walls
+  and ceilings included. It replaced a ray through the 80×80 grid, which could see
+  only floors (see "Faces, picked from the frame").
 - **Models:** the same ray against `ModelWalk.Scene`'s positions with a bounding
   radius per model id. It returns a `ModelDraw`, and through that an instance or
   a model key.
@@ -436,7 +450,7 @@ is a command-line converter.
 - **The map panel** doubles as a top-down tile picker: it already reads all ten
   bytes under the cursor.
 - **No GPU id buffer at first.** It would be a render-target attachment and a
-  per-triangle id, which is a new runtime mechanism (`0073`). The CPU paths
+  per-triangle id, which is a new runtime mechanism (`0074`). The CPU paths
   answer everything the first phases need.
 
 ### Gizmos
@@ -834,7 +848,8 @@ stop.
   its root, its materials, every area it holds with the fingerprint that area was
   authored against, and for the area now loaded whether it applies or why not.
   Only the working pack exists, so the list is one entry; layering is Phase 7's.
-- **Picks that stop.** `Pick.Floor` now stops a ray at a tile with no drawn floor
+- **Picks that stop** (since replaced by a pick from the frame's triangles; see
+  "Faces, picked from the frame"). `Pick.Floor` now stops a ray at a tile with no drawn floor
   (rock) and at a tile whose lowest floor is above the ray where it enters (a step
   up), and says which: `select pick` answers `no floor under that pixel: a step up
   at 44,47`. The eye's own tile is never a stop.
@@ -928,15 +943,82 @@ triangles, and when faces lie within the depth tolerance under the cursor, selec
 all of them: which one wins there changes per pixel and per angle, so an author
 cannot see one without the other anyway.
 
-### Phase 2: authored point and spot lights (`0070`)
+### Faces, picked from the frame
+
+**What is in.** Materials are authored per face, and a click picks faces:
+
+- `patches/remaster/Faces.cs` -- the face being assembled (`Faces.Enter`, from
+  both of `PolyAssembler`'s face loops), the subdivider's output mapped back by
+  counting (`Faces.Subdivided`, refused whole if the count does not come out), the
+  frame's triangles recorded at `SealDepth` while the editor is open, the pick,
+  and the meshes: faces, a structural hash, and the grow queries.
+- `Surfaces` resolves four levels per face: the half's face list, the whole half,
+  the mesh's face list, the whole mesh. `TileWalk` asks for the half
+  (`Surfaces.EnterHalf`) and `Faces` for each face, and only while something
+  below the whole half is authored (`Surfaces.PerFace`).
+- `Pack` keeps face lists on tile entries and area-wide rules under `meshes`, each
+  with `mesh` and `meshHash`. A face edit is one undo entry, undone by putting the
+  area's document back.
+- The editor picks faces on a click (Shift+click adds or removes), grows a
+  selection (*Connected*: joined by an edge and the same texture; *Same texture*;
+  *Whole mesh*), selects the whole half, assigns at the half or, with *Every tile
+  with this mesh*, at the mesh, and tints the selection's triangles over the
+  picture. The map panel and the player's tile still select a whole half.
+- Shell: `select pick GX GY [add]`, `select faces F,F,...`,
+  `select grow connected|texture|mesh`, `set selected material NAME|none [tile|mesh]`;
+  a selection's reply carries `sealedIds`, what the last frame sealed each of the
+  half's faces with.
+- `Pick.cs` is gone, and with it the second slice's picks that stop at rock.
+
+**The mesh table pointer moves within a frame.** `0x8018E19C` points at the tile
+meshes only while the tile walk runs; the object walk repoints it at the models',
+so read at VSync it named nonsense (mesh 1's face count `0x00100008`). The walk
+notes it for every half (`Faces.TileTable`), meshes are read from that, and
+`Surfaces` re-applies when it moves. Its `+4` word is the far-model limit, not a
+count.
+
+**The mesh hash** is the face count and each face's command, length and corners:
+the structure a face index means, not its texture or where its vertices are, so
+a scrolling UV cannot move it. A face list whose mesh no longer hashes the same is
+dropped whole, and the editor says so.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, `KF2_SSR=1`):
+- A click on the floor in front of the player picked `tile:1:36:36:upper:1`
+  (mesh 1, four faces). Authored as a mirror, the last frame sealed face 1 with id 4
+  and faces 0, 2 and 3 with 0, and the picture changed in rows 559-1117 of 1200
+  only. The same material on the whole half sealed all four faces and reached row
+  35, the ceiling. Undo returned the face-only picture to the same hash.
+- *Connected* grew face 1 to faces 1 and 3.
+- A mesh rule on face 1 of mesh 1 reached the two other mesh-1 tiles in view and
+  left a mesh-27 tile alone.
+- After a restart the saved pack sealed the same ids. A hand-edited `meshHash`
+  dropped that face list (`meshRefused: 1`) through the watcher, and the mesh rule
+  still covered the face.
+- The pick against the GPU (`KF2_FACE_PROBE=1`, nine cameras through `view`):
+  about 20,200 grid samples, no interior disagreement, and 46 (0.23%) within 2 px
+  of a triangle edge. Selecting the coplanar faces too took the overlapping view
+  from 56 disagreements to 3.
+- `KF2_TILEWALK=verify KF2_POLYASM=verify` with face lists applied: 162 reports, all
+  0 RAM, register and GTE mismatches. 144.0 fps drawn at 20.0 ticks/s,
+  `[present] wide 288, plain 0, vram fallback 0`.
+- **Cost:** nothing authored below the half, one bool per face. Authored, a few
+  array reads per face. Recording runs only while the editor or the probe is open.
+
+**Not judged.** The editor's new controls and the selection tint have not been
+looked at, and neither has whether *Connected* grows to what an author means on
+faceted rock.
+
+### Phase 2: authored point and spot lights (`0071`)
 
 - **Ships:**
-  - `RemasterUniforms` and the light list;
-  - the light term in `shade8` (core `PrimFs`);
-  - the light gizmo and inspector;
-  - `lights.json`;
-  - flicker, evaluated on the world tick so it holds with the world;
-  - a probe counting lights culled, uploaded and lit fragments.
+  - [x] `RemasterUniforms` and the light list;
+  - [x] the light term in `shade8` (core `PrimFs`);
+  - [~] the light gizmo and inspector: a dot and a reach ring per light, a drag
+    across the screen at the light's depth (Shift: up and down in height steps),
+    and the inspector; no axis handles;
+  - [x] `lights.json`;
+  - [x] flicker, evaluated on the world tick so it holds with the world;
+  - [~] a probe counting lights culled, uploaded and lit batches (not fragments).
 - **Depends on:** Phase 1's pack, editor and `snap`; per-pixel lighting on
   (`0048`), since the term lives in `shade8`.
 - **Risks:**
@@ -952,6 +1034,83 @@ cannot see one without the other anyway.
     and 5.
 - **You look at:** falloff and colour; how a light reads through the fog; a
   creature walking through a light; the look at the edge of the radius.
+
+### Phase 2, the first slice
+
+**What is in.** Point and spot lights, authored per area, drawn by the game's own
+lighting chain:
+
+- **Runtime `0071`**: `Gpu/RemasterUniforms.cs` holds up to 16 lights already in
+  the GTE's view space, with a generation; `GlCore` uploads the list when the
+  generation moves and flushes a batch built under the previous one. `PrimFs`
+  gains `authored()`: the fragment's view position rebuilt from its recovered
+  depth, H and the centre exactly as `NormalFs` does, its normal from that
+  position's screen derivatives, and per light `colour * max(N·L, 0) * (1 -
+  d²/r²)² * spot`, the spot a smoothstep between the cone's two cosines. `shade8`
+  adds it times the packet's RGBC to the lit colour, **before** the depth cue, so
+  the game's fog darkens it, the texture is modulated by it and it saturates
+  where the game's light does. Not drawn into a planar reflection's texture, whose
+  view is the mirrored camera's.
+- **What a light reaches**: a packet with a `0048` record and a recovered depth.
+  So map tiles, clipped fans and models, including the first-person arm (its
+  position is rebuilt in view space like everything else, so the design's worry
+  about view-space receivers does not arise). The HUD and anything unrecorded keep
+  their vertex colour. Per-pixel lighting and Fast geometry must be on.
+- **The record carries RGBC now.** A tile's, a clipped fan's and a flat model
+  face's record had `0` in the low bytes, which only a directional record read;
+  they carry the light colour word at `0x8006E604` that `NormalColorCol` lit them
+  with. And with lights applied, a face drawn with no fog at all keeps its record
+  (`PolyAssembler.KeepUnfogged`), where before it was dropped as interpolating
+  the same; without a record it could not be lit.
+- `patches/remaster/Lights.cs`: the area's `lights.json` behind the fingerprint;
+  before each `DrawOTag` (the camera block then holds the view the table was
+  built with) every light goes to view space as `R (w - cam) + T`, is culled
+  behind the eye and past twelve tiles, and the nearest 16 are published. Flicker
+  is value noise on a tick count taken with `FramePacing.FirstWalkOfTick`.
+- The editor gains a Lights section: *Add at eye*, *Place on the picture* (the
+  next click adds one 192 units short of the nearest surface the last frame drew
+  there, from `Faces`' triangles), a list, and the inspector: type, position,
+  colour, intensity, radius, direction and cones, flicker, on, move to eye,
+  delete. Each light is drawn over the picture; a click on its dot selects it and
+  a drag moves it. A held slider or drag is one undo entry.
+- Shell: `light list | add NAME [here | pick GX GY | X Y Z] | remove | select |
+  set NAME FIELD V...`; `list` gives each light's projected pixel and depth, and
+  the counters. `KF2_REMASTER_LIGHTS=0` leaves the pack's lights out.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, 144 fps,
+render scale 5, 16:9):
+- **The term is the formula.** `scripts/light_probe.c` runs the real `PrimFs`
+  with three lights (two points and a spot) over a wall at a known depth and
+  compares every pixel with the same formula in C: worst difference **0** over
+  all nine strips. With no light uploaded, and with lights uploaded but no depth,
+  the strips are 0 from 0048's formula as before.
+- **Off is the picture it was.** At a pinned view, `set remaster off` gave the
+  hash of the frame before any light was added (`210d55698c875fb8`), and so did
+  switching the light off with `light set ... enabled off`; undo went back to the
+  earlier lit hash.
+- **A pick places the light where it was clicked**: `light add warm pick 160 170`
+  projected back to game pixel `160.1,170.1` at depth 1447. The brightest changed
+  pixel was at `170,172`, and it followed the light through four more cameras
+  through `view` -- yaw ±100, pitch 150, and the eye moved 800 units -- at 9-19
+  pixels from the light's own projection, the offset the surface's slope gives.
+  No pixel ever got darker.
+- Radius 1024 changed 27.9% of the picture inside one rectangle round the light;
+  4096 changed 97.9%.
+- Flicker ran at 20 steps a second with the world, and three snaps with the
+  editor open were identical.
+- A restart read the saved `lights.json` and sent both lights. Under
+  `KF2_POLYASM=verify KF2_TILEWALK=verify` with them applied: 2,517 reports, all 0
+  RAM, register and GTE mismatches.
+- **Cost**, 16 lights against none at render scale 5 (2140×1200): the frame's GPU
+  batches 0.51 → 0.69 ms by the frame capture's timers (0.97 in a noisier first
+  capture), CPU work 0.96 → 0.99 ms a frame, 144.0 fps drawn at 20.0 ticks/s
+  either way, `[present] wide 288`. Off, one test a frame and one `int` compare
+  per triangle.
+
+**Not judged.** Nothing about the look: falloff, colour, how a light reads in the
+fog, the edge of the radius, a creature walking through one. Nor the editor's
+Lights section, the gizmos and the drag. Render scale 1 was not measured, and
+neither was a light on the arm.
 
 ### Phase 3: the material system proper
 
@@ -975,7 +1134,7 @@ cannot see one without the other anyway.
       and the mip atlas;
     - do the fluid slots scroll a replaced water texture through `0053`;
     - fixes by amendment to those patches;
-  - normal and roughness maps, **only paired with a replacement texture** (`0072`),
+  - normal and roughness maps, **only paired with a replacement texture** (`0073`),
     read in `PrimFs` for the light term and passed to the surface buffer for SSR;
   - a texture-key census that tells a pack author which textures of an area the
     pack covers.
@@ -989,7 +1148,7 @@ cannot see one without the other anyway.
 
 - **Ships:**
   - light-record overrides after stage 1's copy;
-  - fog colour and curve (`0071`);
+  - fog colour and curve (`0072`);
   - a sky fill at the far plane that respects `Overlay`, so the HUD is never
     painted over;
   - `atmosphere.json`.
@@ -1035,7 +1194,7 @@ cannot see one without the other anyway.
 - shadows by marching the tile grid;
 - port-drawn props;
 - opt-in object and creature placement;
-- a GPU id buffer (`0073`), if picking is ever too slow.
+- a GPU id buffer (`0074`), if picking is ever too slow.
 
 ### Dependencies, in one list
 

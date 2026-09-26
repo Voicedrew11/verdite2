@@ -921,6 +921,15 @@ internal static class GlShaders
         uniform vec4  uClipPlane;
         uniform vec2  uClipCentre;
         uniform float uClipH;
+        // 0071. Authored lights, published by the port in the GTE's view space
+        // (RemasterUniforms): position and radius; colour times intensity and the
+        // spot's inner cosine; direction and the outer cosine (-2 for a point).
+        uniform int   uLightN;
+        uniform vec4  uLightPos[16];
+        uniform vec4  uLightCol[16];
+        uniform vec4  uLightDir[16];
+        uniform vec2  uLightCentre;
+        uniform float uLightH;
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -1035,7 +1044,34 @@ internal static class GlShaders
         // colour, or a light colour and the three light dots, then the depth cue's
         // weight from the raw MAC0 through the game's own clamp and curve. Floor,
         // because the GTE truncates.
-        ivec3 shade8() {
+        // 0071. What the authored lights add at this fragment, in the game's light
+        // units: 1.0 adds the packet's own RGBC once. The view position is rebuilt
+        // from the recovered depth as NormalFs rebuilds it, and the normal is that
+        // position's plane, so a light is placed and faced exactly where the GTE
+        // put the polygon. The derivatives are taken before any per-fragment test.
+        vec3 authored() {
+            float z = vDepth * 65536.0;
+            vec3 p = vec3((gl_FragCoord.xy / float(uScale) - uLightCentre) * (z / uLightH), z);
+            vec3 n = cross(dFdx(p), dFdy(p));
+            if (vDepth <= 0.0 || vLight == 0u || !(dot(n, n) > 1e-12)) return vec3(0.0);
+            n = normalize(n);
+            if (dot(n, p) > 0.0) n = -n;
+            vec3 sum = vec3(0.0);
+            for (int i = 0; i < 16; ++i) {
+                if (i >= uLightN) break;
+                vec3 l = uLightPos[i].xyz - p;
+                float r2 = uLightPos[i].w * uLightPos[i].w;
+                float d2 = dot(l, l);
+                if (d2 >= r2) continue;
+                vec3 dir = d2 > 0.0 ? l * inversesqrt(d2) : -n;
+                float q = 1.0 - d2 / r2;
+                float spot = smoothstep(uLightDir[i].w, uLightCol[i].w, dot(-dir, uLightDir[i].xyz));
+                sum += uLightCol[i].rgb * (max(dot(n, dir), 0.0) * q * q * spot);
+            }
+            return sum;
+        }
+
+        ivec3 shade8(vec3 extra) {
             if (vLight == 0u) return ivec3(vColor.rgb * 255.0 + 0.5);
             uint mode = vLight >> 24;
             vec3 lit = vLit;
@@ -1045,6 +1081,9 @@ internal static class GlShaders
                 vec3 ir = clamp(uLightBk + vec3(dot(uLcmR, a), dot(uLcmG, a), dot(uLcmB, a)) / 4096.0, 0.0, 32767.0);
                 lit = rgbc * ir / 4096.0;
             }
+            // 0071. Before the depth cue, so the game's fog darkens it too.
+            if (uLightN > 0)
+                lit += vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u)) * extra;
             uint curve = mode & 7u;
             float ir0 = clamp(vFog, 0.0, 4096.0);
             float w = curve == 1u ? max(ir0 - 800.0, 0.0) * 2.0
@@ -1087,7 +1126,10 @@ internal static class GlShaders
                 vec3 cp = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (cz / uClipH), cz);
                 if (dot(uClipPlane.xyz, cp) + uClipPlane.w < 0.0) discard;
             }
-            ivec3 c8in = shade8();
+            // 0071. Not into a planar reflection: its view is the mirrored camera's.
+            vec3 extra = vec3(0.0);
+            if (uLightN > 0 && uClipOn == 0) extra = authored();
+            ivec3 c8in = shade8(extra);
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 
             if (texMode == 4) {
