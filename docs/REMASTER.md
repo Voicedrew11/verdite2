@@ -104,7 +104,11 @@ has three pieces:
 
 The replacement branch in `PrimFs` sits beside all three. **Inferred**: a
 replaced texture skips the mip atlas and the rectangle clamp. That is the first
-thing Phase 4 measures.
+thing Phase 4 measures. **Answered by reading `PrimFs`** (see "Phase 4, the first
+slice"): a replaced texture (`texMode` 6) was one bilinear `texture()` with no
+mips and no anisotropy; a replaced CLUT skipped both the anisotropic taps and the
+mip atlas. The rectangle clamp holds by construction, since the replacement is its
+own texture clamped at its edge. Neither goes through `0053`'s scroll.
 
 ## Identity: what authored data attaches to
 
@@ -137,7 +141,7 @@ repository and be shared between players who each own the disc.
 | **Tile mesh**: `(area, model index at half +0)` | every instance of that mesh in the area | nothing known. **Open**: where the area's model bank lives, and so whether two areas share a mesh | once the bank is found, a content hash of the mesh gives an identity across areas |
 | **Model**: `ModelDraw.Model` (the model id), and for objects `(area, definition index at rec +0x6)` | "every creature of this kind", "every torch" | an MO morph changes a model's vertices, not its identity | a kind is the natural key for materials and for lights attached to a model |
 | **Instance**: `(area, table, spawn ordinal)`, where the ordinal is the slot the area loader filled | one placed prop or creature | dynamic slots (drops, projectiles, respawns); saved state (a killed creature, a picked-up item) | **Inferred**, not measured, that static props land in the same slot on every load. Fallback: `(area, definition index, spawn position rounded to 64 units)`, matched to the nearest live record at load |
-| **Texture**: upstream's `(index hash, CLUT hash, bpp, w, h)` | a piece of art, wherever VRAM puts it | (a) the key hashes the **polygon's UV bounds**, so one piece of art can have several keys; (b) the scrolling textures are re-uploaded every tick, so their content, and their hash, changes every tick; (c) a CLUT that cycles; (d) a region the GPU drew into is rejected as dirty; (e) a port patch that changes a palette (`MessageText` zeroes one) | (a) key a face on its `GteTexRect` rectangle, and measure whether the game uploads per texture or per page (**Open**); (b) key the fluid slots as `(area, fluid slot)`, the same slots `Reflections` already publishes as water; (c, e) a material keys on the **index hash alone**, with the CLUT hash as an optional narrowing |
+| **Texture**: upstream's `(index hash, CLUT hash, bpp, w, h)` | a piece of art, wherever VRAM puts it | (a) the key hashes the **polygon's UV bounds**, so one piece of art can have several keys; (b) the scrolling textures are re-uploaded every tick, so their content, and their hash, changes every tick; (c) a CLUT that cycles; (d) a region the GPU drew into is rejected as dirty; (e) a port patch that changes a palette (`MessageText` zeroes one) | (a) key a face on its `GteTexRect` rectangle, and measure whether the game uploads per texture or per page (**Open**); (b) key a fluid slot's face on the slot's source image in RAM, which does not scroll (see "Phase 4, the second slice"); (c, e) a material keys on the **index hash alone**, with the CLUT hash as an optional narrowing |
 | **Face**: `(mesh key, primitive index)` | one polygon of one mesh | nothing, provided the assembler can expose the index | only needed for per-face materials, late in the roadmap |
 
 ### What the keys survive by construction
@@ -183,7 +187,12 @@ does.
    `slot → (definition index, position)` for the object and creature tables.
 2. **The model bank's address**, for mesh identity across areas.
 3. **Texture upload granularity.** Do `LoadImage` calls carry one texture each,
-   or whole pages? That decides whether key (a) needs normalising.
+   or whole pages? That decides whether key (a) needs normalising. **Measured**
+   (see "Phase 4, the first slice" and "the second slice"): one texture each --
+   the map's as 128x128 images (`32x128` words at 4 bpp), sometimes in two
+   pieces, the models' as 64x64, 32x32 and 16x16 -- and the scrolling textures in
+   strips every tick. Keys are normalised to the upload, pieces joined, and a
+   scrolling texture is keyed on its source image.
 4. **Which tile bytes the game rewrites at run time, and when.** The map already
    copies the block four times a second; the probe needs a diff.
 
@@ -251,9 +260,11 @@ work into layers, and each layer has one owner.
    - widening the material ids and moving their table into the block **amends
      `0067`**;
    - authored lights are `0071`;
-   - fog colour and the sky fill are `0073`;
-   - normal and roughness maps are `0074`;
-   - a GPU id buffer for picking would be `0075`, and only if it turns out to be
+   - replacement textures on the port's path are `0073` (see "Phase 4, the first
+     slice");
+   - fog colour and the sky fill are `0074`;
+   - normal and roughness maps are `0075`;
+   - a GPU id buffer for picking would be `0076`, and only if it turns out to be
      needed.
 
    `snap`'s readback of the presented picture took `0069` and the hook order
@@ -460,7 +471,7 @@ is a command-line converter.
 - **The map panel** doubles as a top-down tile picker: it already reads all ten
   bytes under the cursor.
 - **No GPU id buffer at first.** It would be a render-target attachment and a
-  per-triangle id, which is a new runtime mechanism (`0075`). The CPU paths
+  per-triangle id, which is a new runtime mechanism (`0076`). The CPU paths
   answer everything the first phases need.
 
 ### Gizmos
@@ -1451,31 +1462,188 @@ nothing; the tint is the surface's hue, and this game's stone is nearly grey
 a strong reflection looking straight at it (F0 is not raised) and a darker base
 colour. **Next** (proposed, not started): metalness pulls F0 up to the reflectivity,
 darkens the surface's own colour, and saturates the tint a little; whether it also
-brings some reflectivity of its own when that is 0 is the user's call.
+brings some reflectivity of its own when that is 0 is the user's call. **Decided (2026-09-26): it does** -- a metal is a mirror tinted
+by its colour, so the reflectivity a metal gets is at least its metalness, as in
+PBR. Not built yet; Phase 4 was taken first.
 
-### Phase 4: textures
+### Phase 4: materials by texture
+
+**Rescoped (2026-09-26).** Phase 4 was written for texture packs: replacement
+images, then normal and roughness maps that come only with one. Nobody here is
+making a pack, so none of that would change a picture anyone looks at. What the
+first slice built -- one stable name per piece of art -- is kept, and turned to
+what an author of materials wants: **set a material once on a texture, and have it
+wherever that art is drawn, in every area.**
 
 - **Ships:**
-  - upstream replacement packs brought into the port's path, first measured:
-    - does a replaced texture keep the `0041` kernel, the `0060` rectangle clamp
-      and the mip atlas;
-    - do the fluid slots scroll a replaced water texture through `0053`;
-    - fixes by amendment to those patches;
-  - normal and roughness maps, **only paired with a replacement texture** (`0074`),
-    read in `PrimFs` for the light term and passed to the surface buffer for SSR;
-  - a texture-key census that tells a pack author which textures of an area the
-    pack covers.
-- **Risks:**
-  - the UV-rectangle problem in the texture key (see "Identity");
-  - the atlas's 2048×2048 budget with high-resolution replacements.
-- **You look at:** replaced textures under filtering, at a distance, and in
-  motion; normal maps under an authored light.
+  - the texture key made stable for materials: the image the game uploaded, its
+    pieces joined, and the scrolling textures keyed on their source image;
+  - `remaster/textures.json`, game-wide, the least specific rule (a half, a face,
+    a mesh and a model all win over it);
+  - the editor's pick names the texture under the click, with an *Everywhere*
+    material and an *Any palette* choice; `set texture material NAME`;
+  - the rule reaching everything that reads a material: the packet (reflections,
+    glow, highlight, occlusion), the retained scene, and a glow's lights.
+- **Mechanism measured by:** the census of material keys in view, stable across
+  ticks while the water scrolls, across areas and across a reload; packets sealed
+  by texture; the pinned view's hash with nothing authored; the frame's cost.
+- **You look at:** a wet or rough stone set once, in every area it appears.
+
+The replacement work from the first slice stays in, costs nothing without a pack,
+and is parked: the water's replacement through `0053`, replacements in the
+retained scene, and normal and roughness maps (`0075`) are Phase 8.
+
+### Phase 4, the first slice
+
+**What is in** (`0073`, and `patches/remaster/TextureCensus.cs`):
+
+- **The census.** Every lookup the replacement resolver makes, bucketed by the
+  settled area: keys, distinct art, the places (page, CLUT, rectangle) each key was
+  seen at, places whose art changes under them, page+CLUT groups whose rectangles
+  overlap, GPU-dirty keys, what a pack covers, and what the game uploads at a time.
+  `KF2_TEXCENSUS=1` prints a line every 5 s; the `textures [on|off|reset|save]`
+  shell verb answers the same, and `save` writes `dump/SLUS-00158/census/area-N.json`
+  with each key's file name (`INDEX_CLUT.png`, the name `TextureDumper` writes and
+  a pack's `textures/` takes), page, rectangle, hits, covered, dynamic. Hashes and
+  rectangles only, so a report may sit beside a pack.
+- **Textures were refused as GPU-dirty**, which nothing had said: 74 of area 1's
+  86 keys. `GlCore`'s batch bounds were never reset (see `0073` in
+  `RECOMPONE_PATCHES.md`), so the game's first untargeted draw at `GAME.EXE`'s
+  start -- a 32x32 black box at `(0,344)` -- marked `(0,0)` 748x481 dirty, and
+  every texture page under it stayed refused until the game happened to upload it
+  again. After: 0 dirty keys.
+- **A key per uploaded image.** The key was the polygon's UV bounding box, and this
+  game's faces read a texel past their texture: one texture showed as
+  `[191,63,65,64]`, `[191,63,64,64]` and more. A rectangle is keyed on the
+  LoadImage that last wrote its centre when it lies inside that image to within two
+  texels, else on the face's `0060` rectangle, never a fan triangle's own UVs.
+  `KF2_TEXKEY=face` and `KF2_TEXKEY=triangle` are the comparisons.
+- **A replacement is filtered by the port's slider**: trilinear with the
+  anisotropy level while mipmaps are on, bilinear with them off, taken on the
+  unwrapped UV's gradients; a replaced CLUT keeps the anisotropic taps.
+
+**Measured.**
+
+- **Keys in area 1** (slot 2, the spawn, 12 s):
+
+  | keying | keys | overlapping pairs | rects inside another |
+  |---|---|---|---|
+  | triangle (upstream) | 109 | 540 | 59 |
+  | face | 86 | 471 | 44 |
+  | upload | **21** | **6** | **1** |
+
+  The six left are one sheet at page `0x6` uploaded 128x120 while its faces reach
+  row 127, so they fall back to the face's rectangle.
+- **What the game uploads**: the map's textures as 128x128 images (read at first as
+  sheets of four tiles; see the correction below), models' as 64x64, 32x32 and
+  16x16 images. In area 1, six 8-word-wide strips (heights 4-28) go up about five
+  times a second each.
+- **The water cannot be keyed by content.** In `fdat02` (area 0) the census saw
+  1,657 keys in 12 s, 1,631 of them on page `0x15` and 1,538 of those dynamic:
+  `func_8002DC78` rewrites the fluid slots in strips every tick, so the upload
+  under a face is a strip and its texels change with the phase. The other 26 keys
+  of the area are ordinary.
+- **A pack reaches the screen.** A scratch pack (`packs/phase4-test`, generated
+  test patterns, not committed) replacing area 1's two tile sheets at 512x512:
+  `[assets] tile ...: 128x128 -> 512x512 (4x, 4x)`, 2 keys replaced, 97.4% of the
+  pinned view's pixels changed, the filter set twice, no GL error under
+  `KF2_GLDEBUG=1`. With `KF2_TEXKEY=face` the same pack replaces nothing, since no
+  face's rectangle is a sheet.
+- **Off is the picture it was**: with no pack, the pinned area-1 view is
+  `210d55698c875fb8`, as before, and with the census on.
+- **Cost**: frame work 1.10-1.12 ms with the pack against 1.05-1.08 without, at
+  144.0 fps drawn and 20.0 ticks/s; the packet walk's self time goes 0.135 to
+  0.167 ms, the resolver's lookups. `[present] wide 288`.
+
+**Not judged.** All of it: a replaced sheet under trilinear and anisotropic
+filtering at a distance and in motion, and whether the test pattern lies on the
+floor the right way up and at the right scale. `packs/phase4-test` is the pack to
+look with (delete the folder to take it out).
+
+**Not done**, parked with the rescope (see "Phase 4: materials by texture"): a
+replaced water texture scrolled through `0053`; replacements in the retained
+scene's world program (`0072`); upstream's 16-bit and page fallbacks, untested
+here; normal and roughness maps (`0075`).
+
+**Corrected by the second slice.** The map's 128x128 upload is **one texture**, not
+four tiles: a source face's UVs span the whole of it, and the subdivider draws it
+as four quarter-quads, which is where the 64x64 rectangles came from. Some uploads
+are one image in two pieces (100 rows and 28), which the second slice joins. And
+area 1's 8-word strips are a scrolling texture's wrap, drawn in view.
+
+### Phase 4, the second slice
+
+**What is in** (`patches/remaster/TextureKeys.cs`, `0073` amended):
+
+- **A material key per piece of art.** `TextureKeys` names the art a face draws as
+  upstream's texture packs would (`TexKey`: the index hash and the hash of the CLUT
+  entries it uses), from the image the game uploaded it in
+  (`TextureResolver.ToUpload`, now public). Two things the first slice had wrong
+  about the art are fixed in `0073`: an image the game loads in pieces straight
+  down, at one x and width, is one image (`VramTracker.NoteUpload` extends the
+  previous load), and the map's 128x128 image is one texture.
+- **The scrolling textures keyed on their source.** Their VRAM is rewritten at a
+  new phase every tick, so no hash of it holds. A face whose centre lies in a live
+  `func_8002DC78` slot's dest rectangle is keyed on the slot's source image in RAM,
+  hashed as `TextureTile.Hash` hashes a rectangle, so it is the key the VRAM would
+  have at phase 0 (not checked against a phase-0 upload); the slots are read again
+  only when VRAM has been written.
+- **`remaster/textures.json`**: `{"index", "clut"?, "material", "note"?}`, in every
+  area and with no fingerprint (it names content). Without `"clut"` a rule holds
+  for the art in any palette. It is the least specific rule: `SealDepth` asks for
+  it only when no half, face, mesh or model rule named the packet, so it reaches
+  models as well as the map.
+- **Everything that reads a material sees it**: the packet's record (reflections,
+  glow, highlight, occlusion), the retained scene's map, and a glow's lights
+  (`Lights.TileGlow` asks per mesh face).
+- **Editor**: a pick records the texture of the triangle under the click; the
+  selection panel shows it with *Any palette* (on by default) and an *Everywhere*
+  material. Shell: `select pick` answers `texture` and `textureMaterial`;
+  `set texture material NAME|none` sets the picked art, `set texture:INDEX[:CLUT]
+  material NAME|none` a key. The census (`textures save`) lists the material keys
+  looked up since its last reset (`cells`).
+
+**Measured.**
+
+- **Keys in view.** Area 1 at the spawn, editor open: 7 material keys, none outside
+  an upload; before the pieces were joined, three faces on page `0x6` and `0x7` fell
+  outside theirs. The replacement census on the same view: **17 keys and no
+  overlapping rectangles** (21 and 6 pairs before).
+- **Stable across ticks.** `fdat02`'s water (`texture:304d2876ffce31b6`, from the
+  source image) given a glow: 68,991-69,399 packets a second sealed with it while
+  the world ran and the water scrolled, 0 once the rule was cleared.
+- **Stable across areas.** Area 1's main 128x128 texture (`texture:db3893e2e2480ee2`)
+  is also drawn in `fdat02` (and is the key the first slice's replacement took). A
+  rule set on it in area 0 sealed 144 packets a second there; after `load 2`,
+  6,768 a second in area 1, from the same saved `textures.json`.
+- **The retained scene**: with reflections and the retained scene on, 4,443
+  authored faces in its map from that one rule, and four planes ranked; no GL
+  error under `KF2_GLDEBUG=1`.
+- **Off is the picture it was**: remaster on with an empty pack, the pinned area-1
+  view is `210d55698c875fb8`.
+- **Cost**, frame work in area 1 at 144 fps with a material that neither glows nor
+  reflects (so only the lookup is paid): 1.15-1.16 ms against 1.06-1.10 with
+  nothing authored. The C# assembler's self time goes 0.105 to 0.128 ms. 144.0 fps
+  drawn at 20.0 ticks/s.
+
+**A glowing texture gives a light per half.** A glow's light is placed per tile half
+and material, as for a mesh rule; a texture on most of an area makes thousands
+(2,175 in area 1 from one rule), of which the nearest 16 are sent. Set *Light* to 0
+on a material meant to glow without lighting the room.
+
+**Not judged.** All of it: the *Everywhere* combo and *Any palette* in the editor
+have been driven only through the shell, and no picture of a texture material has
+been looked at.
+
+**Not done.** A texture rule on a model gives no glow light of its own (the model
+lights come from model rules); the retained scene's models take only their model
+rule. The metalness change is still waiting.
 
 ### Phase 5: atmosphere
 
 - **Ships:**
   - light-record overrides after stage 1's copy;
-  - fog colour and curve (`0073`);
+  - fog colour and curve (`0074`);
   - a sky fill at the far plane that respects `Overlay`, so the HUD is never
     painted over;
   - `atmosphere.json`.
@@ -1521,7 +1689,9 @@ brings some reflectivity of its own when that is 0 is the user's call.
 - shadows by marching the tile grid;
 - port-drawn props;
 - opt-in object and creature placement;
-- a GPU id buffer (`0075`), if picking is ever too slow.
+- a GPU id buffer (`0076`), if picking is ever too slow;
+- texture packs, parked from Phase 4: a replaced water texture scrolled through
+  `0053`, replacements in the retained scene, normal and roughness maps (`0075`).
 
 ### Dependencies, in one list
 
