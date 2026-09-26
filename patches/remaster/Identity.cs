@@ -1,4 +1,7 @@
+using System.Reflection;
+using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Memory;
+using RecompOne.Runtime.Modding;
 
 namespace Kf2.Remaster;
 
@@ -33,8 +36,9 @@ public readonly record struct TileKey(int Area, int X, int Z, int Half)
 /// An area has *settled* once the area byte has held since the last module load and
 /// the player stands on a half the renderer draws, at that half's floor height --
 /// the invariant the map already prints, and the one moment the tile block is known
-/// to be this area's. The fingerprint is taken then, before anything is applied.
-/// See "Identity: what authored data attaches to" in docs/REMASTER.md.
+/// to be this area's. It settles then, on the fingerprint of the block as the loader
+/// copied it off the disc, before the game rewrote any of it and before anything is
+/// applied. See "Identity: what authored data attaches to" in docs/REMASTER.md.
 /// </summary>
 public static class Identity
 {
@@ -66,6 +70,10 @@ public static class Identity
 
     public static string FingerprintText => Fingerprint.ToString("x16");
 
+    /// <summary>Whether the fingerprint came from the loader's copy, or from the live
+    /// block because the copy was never seen.</summary>
+    public static bool FromLoad { get; private set; }
+
     /// <summary>Raised on the game thread once an area has settled.</summary>
     public static event Action? AreaSettled;
 
@@ -89,6 +97,7 @@ public static class Identity
         Settled = false;
         _candidateAt = -1;
         _module = overlay.StartsWith("fdat", StringComparison.OrdinalIgnoreCase);
+        if (!_module) _loaded = null;
     }
 
     /// <summary>Once a frame, on the game thread.</summary>
@@ -127,47 +136,70 @@ public static class Identity
         if (fp != _candidate) { _candidate = fp; _candidateAt = now; return; }
 
         if (Probe) Compare(m, area, fp);
-        Fingerprint = fp;
+        FromLoad = _loaded != null;
+        Fingerprint = _loaded ?? fp;
         LastGap = gap;
         Settled = true;
         Settles++;
         AreaSettled?.Invoke();
     }
 
-    /// <summary>KF2_REMASTER_PROBE: name the tile bytes that differ when an area
-    /// settles on a fingerprint it has not settled on before.</summary>
+    /// <summary>KF2_REMASTER_PROBE: name the tile bytes the game has rewritten when an
+    /// area settles on a live block it has not settled on before.</summary>
     public static bool Probe;
 
     static readonly Dictionary<int, (ulong Fp, byte[] Block)> _seen = new();
 
+    /// <summary>The tile block and the collision shapes, as the fingerprint reads them.</summary>
+    static byte[] Snapshot(IMemory m)
+    {
+        var block = new byte[TileBytes + ShapeBytes];
+        for (uint i = 0; i < TileBytes; i++) block[i] = m.ReadU8(TileBase + i);
+        for (uint i = 0; i < ShapeBytes; i++) block[TileBytes + i] = m.ReadU8(ShapeBase + i);
+        return block;
+    }
+
     static void Compare(IMemory m, int area, ulong fp)
     {
-        var block = new byte[TileBytes];
-        for (uint i = 0; i < TileBytes; i++) block[i] = m.ReadU8(TileBase + i);
+        var block = Snapshot(m);
         if (_seen.TryGetValue(area, out var old) && old.Fp != fp)
         {
             var lines = new List<string>();
-            int halves = 0;
+            int halves = 0, hashed = 0, shapes = 0;
             for (int h = 0; h < Span * Span * 2; h++)
             {
                 int o = h * HalfBytes;
                 if (block.AsSpan(o, HalfBytes).SequenceEqual(old.Block.AsSpan(o, HalfBytes))) continue;
                 halves++;
+                bool counts = false;
+                for (int b = 0; b < HalfBytes; b++)
+                    if (b != 2 && block[o + b] != old.Block[o + b]) counts = true;
+                if (!counts) continue;
+                hashed++;
                 int z = o / (Span * Stride), x = o % (Span * Stride) / Stride;
                 if (lines.Count < 24)
                     lines.Add($"{x},{z},{(h % 2 == 0 ? "lower" : "upper")} " +
                               $"{Convert.ToHexString(old.Block, o, HalfBytes)}->{Convert.ToHexString(block, o, HalfBytes)}");
             }
-            Console.WriteLine($"[KF2] remaster: area {area} fingerprint {old.Fp:x16} -> {fp:x16}; " +
-                              $"{halves} tile half/halves differ" + (halves == 0 ? " (the collision shapes do)" : ":"));
+            for (int i = (int)TileBytes; i < block.Length; i++)
+            {
+                if (block[i] == old.Block[i]) continue;
+                shapes++;
+                if (lines.Count < 48)
+                    lines.Add($"shape +0x{i - TileBytes:X3} {old.Block[i]:X2}->{block[i]:X2}");
+            }
+            Console.WriteLine($"[KF2] remaster: area {area} live block {old.Fp:x16} -> {fp:x16}; " +
+                              $"{halves} tile half/halves differ, {hashed} outside +2; {shapes} collision shape byte(s) differ" +
+                              (lines.Count > 0 ? ":" : ""));
             foreach (var l in lines) Console.WriteLine($"[KF2] remaster:   {l}");
         }
         _seen[area] = (fp, block);
     }
 
     /// <summary>
-    /// FNV-1a 64 over the tile block and the collision shapes. A fingerprint, not a
-    /// copy: it cannot be turned back into either.
+    /// FNV-1a 64 over the live tile block and the collision shapes: what the probe
+    /// compares, and the fingerprint only when the load was not seen. A fingerprint,
+    /// not a copy: it cannot be turned back into either.
     ///
     /// Each half's +2, the collision flags, is left out: the game writes a moving
     /// thing's footprint into it. Measured, area 0 from a New Game against area 0
@@ -175,24 +207,77 @@ public static class Identity
     /// one and cleared in the other, and nothing else in the block different.
     /// </summary>
     static ulong Take(IMemory m)
+        => Hash(m, ShapeBase, ShapeBytes, false, Hash(m, TileBase, TileBytes, true, Fnv));
+
+    const ulong Fnv = 0xCBF29CE484222325UL;
+
+    static ulong Hash(IMemory m, uint start, uint bytes, bool tiles, ulong h)
     {
-        ulong h = 0xCBF29CE484222325UL;
-        void Run(uint start, uint bytes, bool tiles)
+        for (uint i = 0; i < bytes; i += 4)
         {
-            for (uint i = 0; i < bytes; i += 4)
+            uint w = m.ReadU32(start + i);
+            for (uint b = 0; b < 4; b++)
             {
-                uint w = m.ReadU32(start + i);
-                for (uint b = 0; b < 4; b++)
-                {
-                    if (tiles && (i + b) % HalfBytes == 2) continue;
-                    h ^= (byte)(w >> (int)(b * 8));
-                    h *= 0x100000001B3UL;
-                }
+                if (tiles && (i + b) % HalfBytes == 2) continue;
+                h ^= (byte)(w >> (int)(b * 8));
+                h *= 0x100000001B3UL;
             }
         }
-        Run(TileBase, TileBytes, true);
-        Run(ShapeBase, ShapeBytes, false);
         return h;
+    }
+
+    /// <summary>
+    /// The fingerprint of the block as the area loader copied it in, or null. The game
+    /// rewrites tiles as it plays -- a door or a lift changes +3 and +4 of the halves
+    /// it covers, and that state persists in a save -- so the live block is not the
+    /// area's identity. Measured, area 1 from slot 2: 49930d... on entry, 49787d...
+    /// after leaving and coming back, 12 upper halves at 10-13,47-49 differing.
+    /// </summary>
+    static ulong? _loaded;
+    static ulong _tilesHash;
+    static bool _tilesSeen;
+
+    /// <summary>The word copy the loader moves both blocks in with.</summary>
+    const uint CopyAddr = 0x80017244;
+    const uint TileWords = TileBytes / 4, ShapeWords = 0x600;
+
+    static readonly ModInfo _self = new()
+    {
+        Id = "kf2.remaster.identity",
+        Name = "Remaster identity",
+        Version = "1.0",
+        Description = "Fingerprints an area's tile block as the loader copies it in.",
+    };
+
+    public static void Install() => HookAttach.OnOverlayLoad("remaster identity", Attach);
+
+    static bool Attach()
+    {
+        SymbolRegistry.Build();
+        var target = SymbolRegistry.Resolve("game", null, CopyAddr);
+        if (target == null) return false;
+        if (!HookAttach.Installed(target))
+        {
+            var pre = typeof(Identity).GetMethod(nameof(BeforeCopy), BindingFlags.Public | BindingFlags.Static)!;
+            if (HookManager.AddPre(_self, target, pre)) HookManager.Commit();
+        }
+        return HookAttach.Installed(target);
+    }
+
+    /// <summary>func_80017244(dst, src, words): hash the source of the two copies
+    /// func_8001689C makes into the tile and shape blocks.</summary>
+    public static void BeforeCopy(CpuContext c, IMemory m)
+    {
+        if (c.A0 == TileBase && c.A2 == TileWords)
+        {
+            _tilesHash = Hash(m, c.A1, TileBytes, true, Fnv);
+            _tilesSeen = true;
+        }
+        else if (c.A0 == ShapeBase && c.A2 == ShapeWords && _tilesSeen)
+        {
+            _loaded = Hash(m, c.A1, ShapeBytes, false, _tilesHash);
+            _tilesSeen = false;
+        }
     }
 
     public static uint HalfRecord(int x, int z, int half)

@@ -132,7 +132,7 @@ repository and be shared between players who each own the disc.
 | key | names | what breaks it | how the design survives it |
 |---|---|---|---|
 | **Game**: the disc serial `SLUS-00158`, as upstream's strict `PackGame.Id` | the whole pack | a different game, above all the US-boxed *King's Field II* (`SLUS-00255`) | already refused twice: by `DiscCheck.Validate` and by a strict pack game id |
-| **Area**: the area byte at `0x8017E060` **plus an area fingerprint**, an FNV-64 of the 64,000-byte tile block at `0x801C8484` **less each half's `+2`** and the `0x600`-byte collision-shape block at `0x801D8484`, taken once the area has settled and before any edit is applied. `+2` is out because the game writes a moving footprint into it (**Confirmed**, see "Phase 1, the first slice") | everything authored in that area | a different revision or region of the same game; anything that rewrites the tile block before the fingerprint is taken | the fingerprint is taken before the remaster's own edits. **On a mismatch the area's layers are switched off whole, and the editor says why**; they are never half-applied |
+| **Area**: the area byte at `0x8017E060` **plus an area fingerprint**, an FNV-64 of the 64,000-byte tile block **less each half's `+2`** and the first `0x600` bytes of the collision-shape block, **taken from the loader's source buffer** as `func_80017244` copies each into `0x801C8484` and `0x801D8484` — the disc's bytes, before the game rewrites any. `+2` is out because the game writes a moving footprint into it (**Confirmed**, see "Phase 1, the first slice"); the live block is out because doors and lifts rewrite `+3` and `+4` and a save keeps them (**Confirmed**, see "The fingerprint moved with the game's progress") | everything authored in that area | a different revision or region of the same game | the fingerprint is taken before the remaster's own edits and before the game's. **On a mismatch the area's layers are switched off whole, and the editor says why**; they are never half-applied |
 | **Tile half**: `(area, x, z, lower \| upper)` | the mesh instance the tile draws, whole (a cave tile's floor, ceiling and rock together; see "A tile half is a whole mesh"); a face of it is `(tile half, mesh, face index)`; its collision cell; its light record (`+4 & 0x3F`) | the game rewriting tiles at run time: the drawbridge and the minecart are tiles, not models (see "The map is an 80x80 tile grid" in `GAME_INTERNALS.md`) | the key stays valid, but what it names can change under it. An entry may carry a condition on the tile's current model index, which is an index and not payload |
 | **Tile mesh**: `(area, model index at half +0)` | every instance of that mesh in the area | nothing known. **Open**: where the area's model bank lives, and so whether two areas share a mesh | once the bank is found, a content hash of the mesh gives an identity across areas |
 | **Model**: `ModelDraw.Model` (the model id), and for objects `(area, definition index at rec +0x6)` | "every creature of this kind", "every torch" | an MO morph changes a model's vertices, not its identity | a kind is the natural key for materials and for lights attached to a model |
@@ -171,8 +171,11 @@ load inside a branch (see "The area loader looks like the right hook and is not"
 in `PATCHES_AND_MODS.md`), and `OverlayLoadedEvent` fires before the tile block
 is copied. The map patches wait for the invariant instead: the player stands on a
 drawn half whose floor height matches their own Y exactly. The identity layer
-uses the same test, plus the area byte changing. It takes the fingerprint on the
-first frame both hold, and only then applies the area's layers.
+uses the same test, plus the area byte changing. It settles on the first frame
+both hold, and only then applies the area's layers. The fingerprint it settles on
+is the one hashed as the loader copied the block in; only if that copy was never
+seen does it fall back to the live block, and the probe line says `LIVE` when it
+does.
 
 ### What has to be measured before the keys are trusted
 
@@ -797,6 +800,21 @@ that Phase 1 needs no runtime patch was wrong by exactly this.
   the obvious candidate (**Inferred**). With `+2` left out, area 0 reads
   `3f7d7b45edcbda59` from both, and area 1 `49930d41f830e0a3` across two loads and
   an auto-reload.
+- **The fingerprint moved with the game's progress.** Reported from play: area 1
+  refused a pack authored against `b6770a…` once the player had been elsewhere,
+  reading `5056f1…`. Measured from slot 2: area 1 read `49930d…` on entry and
+  `49787d…` after leaving for area 2 and coming back, and flipped back again on a
+  reload. The probe's diff, with the ignored `+2` taken out: 12 upper halves at
+  10-13 × 47-49, `+3` (the collision shape) `75` → `32`/`33` and `+4` losing bit
+  `0x40`, and no collision-shape byte. The game rewrites a door's or a lift's tiles
+  as it plays, and that state travels with the save, so **no live reading is the
+  area's identity**. The fingerprint is now taken from `func_8001689C`'s source
+  buffer as `func_80017244` copies it (a pre-hook matching the destination and the
+  word count). Measured after: area 1 `be64c93e02071c09` on entry, after areas 2
+  and 3, and after reloads from slots 1, 3 and 2, while the live block went on
+  flipping; area 0 `58d4e515d1aea80a`, area 2 `f6f8cec2c5dc7135`, area 3
+  `370ef222844b0ee9`. The values below are the old live readings and no longer
+  match anything.
 - A pack authored against the old fingerprint was refused whole, with the reason on
   the panel and in `remaster`; editing the file's fingerprint by hand applied it
   through the watcher with no restart.

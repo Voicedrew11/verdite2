@@ -69,6 +69,7 @@ public static class Host
         });
 
         Event.AddListener<OverlayLoadedEvent>(e => Identity.Invalidate(e.Name));
+        Identity.Install();
         Event.AddListener<VSyncEvent>(_ => Frame());
         Lights.Install();
         Editor.Install();
@@ -106,7 +107,7 @@ public static class Host
         long packets = Surfaces.Packets - _packetsAt;
         _packetsAt = Surfaces.Packets;
         Console.WriteLine($"[KF2] remaster: {(Enabled ? "on" : "off")}, area {Identity.Area} " +
-                          (Identity.Settled ? $"settled (fingerprint {Identity.FingerprintText}, gap {Identity.LastGap})" : "not settled") +
+                          (Identity.Settled ? $"settled (fingerprint {Identity.FingerprintText} {(Identity.FromLoad ? "as loaded" : "LIVE, the load was not seen")}, gap {Identity.LastGap})" : "not settled") +
                           $"; {string.Join("; ", Features.Select(f => f.Probe()))}; {packets / dt:F0} authored packet(s)/s");
     }
 }

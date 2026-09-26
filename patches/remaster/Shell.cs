@@ -312,6 +312,7 @@ public static class Shell
             ["area"] = Identity.Area,
             ["settled"] = Identity.Settled,
             ["fingerprint"] = Identity.Settled ? Identity.FingerprintText : null,
+            ["fromLoad"] = Identity.Settled ? Identity.FromLoad : null,
             ["gap"] = Identity.LastGap,
             ["refused"] = Surfaces.Refused,
             ["tilesApplied"] = Surfaces.TilesApplied,
