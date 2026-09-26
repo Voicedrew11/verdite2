@@ -6,7 +6,9 @@ second slice" under the roadmap), with materials since keyed by face ("Faces, pi
 from the frame"); Phase 2 has its first slice ("Phase 2, the first slice"), and so
 does Phase 3 ("Phase 3, the first slice"); Phase 4 is in, rescoped to materials
 by texture ("Phase 4, the second slice"), and metalness made a tinted mirror
-("Metal is a tinted mirror"); Phase 5 on is still design. The
+("Metal is a tinted mirror"); Phase 5 has its first slice, overrides of the game's
+own light records ("Phase 5, the first slice"), after a census showed only the
+renderer reads them; the rest of Phase 5 and Phase 6 on are still design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -267,7 +269,9 @@ work into layers, and each layer has one owner.
    - fog colour and the sky fill are `0074`;
    - normal and roughness maps are `0075`;
    - a GPU id buffer for picking would be `0076`, and only if it turns out to be
-     needed.
+     needed;
+   - shadows for the authored lights are `0077` (see "Shadows, the first slice"),
+     numbered past the three held above.
 
    `snap`'s readback of the presented picture took `0069` and the hook order
    `0070`, so each planned number moved along from what this plan first said.
@@ -593,16 +597,17 @@ finished picture: a specular highlight along the SSR path, light shafts, bloom.
 
 - **None in the first version.** An authored light lights everything inside its
   radius, which is how the game's own light records behave.
-- **Then a march through the tile grid.** `AoWorld` already marches the 80×80 grid
-  in a shader for occlusion. A march from the fragment towards the light through
-  the same texture gives whole-tile walls, with creatures and props casting
-  nothing. It is coarse, but it is a known cost.
-- **Shadow maps are pushed back.** They need the scene drawn from each light. The
-  mirrored walk alone costs 1.09–1.12 ms of CPU a frame, measured under
-  "Planar reflections", and the port is CPU-bound, so even one shadowed light
-  would cost a planar reflection's worth of frame time. If a static shadow map
-  per area is ever wanted, it should be taken once when the area settles, never
-  per frame.
+- **What was planned next was a march through the tile grid**, and shadow maps
+  were pushed back because drawing the scene from a light meant walking it again:
+  the mirrored walk alone costs 1.09–1.12 ms of CPU a frame ("Planar reflections"),
+  and the port is CPU-bound.
+- **The retained scene (`0072`) removed that cost**, so what shipped is shadow
+  maps after all: a depth cubemap per light, drawn on the GPU from the retained map
+  with no walk, and drawn again only when the light or the map changes. Exact to
+  the mesh, where a grid march would have been whole tiles. See "Shadows, the first
+  slice". Creatures and objects cast too, from the models the retained scene
+  captures each frame, drawn over a copy of the map's cubemap only while one in
+  reach moves; see "Shadows, the second slice".
 
 ### The game's own light and fog, authored through the game
 
@@ -1559,8 +1564,10 @@ retained scene, and normal and roughness maps (`0075`) are Phase 8.
 
 **Not judged.** All of it: a replaced sheet under trilinear and anisotropic
 filtering at a distance and in motion, and whether the test pattern lies on the
-floor the right way up and at the right scale. `packs/phase4-test` is the pack to
-look with (delete the folder to take it out).
+floor the right way up and at the right scale. The pack is kept in
+`scratch/phase4-test`; copy it into `packs/` to look with it. **It was first left in
+`packs/`, where every pack is enabled by default**, so every boot drew area 1 in the
+test pattern until it was moved out.
 
 **Not done**, parked with the rescope (see "Phase 4: materials by texture"): a
 replaced water texture scrolled through `0053`; replacements in the retained
@@ -1698,12 +1705,357 @@ push on this game's near-grey stone.
     painted over;
   - `atmosphere.json`.
 - **Depends on:** the read census confirming that only rendering reads the light
-  records.
+  records. Done: see "The light records are read only by the renderer".
 - **Mechanism measured by:** `KF2_PERPIXEL_PROBE=2`, the formula against the GTE's
   colour, still exact with an override on; the SSR fog-curve readback moving
   with the new curve; `snap` for the no-override case.
 - **You look at:** the whole area's mood; the sky against the void past the draw
   distance.
+
+### The light records are read only by the renderer
+
+**Confirmed, statically and at run time**, which is what Phase 5's overrides were
+waiting on.
+
+**Statically** (`scripts/callgraph.py`'s `Graph.touching`, after the parser was
+brought up to the current codegen; see "The static model read nothing" in
+`DEVELOPMENT.md`): every function in any overlay that forms an address inside the
+destination records (`0x801930EC`-`0x80195170`) or the source
+(`0x800679A0`-`0x80068760`). The destination's are stage 1 (`func_8002C944`, the
+copy), stage 10 (`func_8002CA74`, which turns each light matrix through its three
+quarter-turns with `func_80014B88`), `func_8002CBD4` (the same, inside the NPC
+conversation loop `func_80043388`), the tile half `func_80031950`, the HUD
+`func_80031D5C`, the arm `func_80032400`, the model submitter `func_80032588` and
+`func_80032AC4`, which loads a record's colour matrix and back colour to draw a
+model. All of it is lighting. The source's are the area setup `func_80015DD4` and,
+in `fdat14` and `fdat20`, the area modules, which write records 63-64 and the load
+flag. A table reached through an index the dataflow cannot follow would not show,
+so the run-time census is the one that settles it.
+
+**At run time** (`KF2_LIGHTCENSUS=1`, `patches/remaster/LightCensus.cs`): the
+runtime's RAM logger stamps each byte a read or write touches, and a pre and post on
+each of 24 owners (the thirteen stages, the NPC loop, the two derivations, the area
+setup and stage 13's own callees) credits the bytes stamped since the last event to
+the innermost owner running. Area 1 from save slot 2, walking, attacking, the menu
+opened and closed, then `warp 6` into `fdat20`, 99 s:
+
+| owner | destination | source |
+|---|---|---|
+| stage 1 | writes all 80 | reads all 80 |
+| stage 10 | reads each record's first matrix (+0x00-0x11), writes the other three; reads the load flag | -- |
+| tile walk `func_80031C94` | reads the drawn halves' records, +0x00-0x67 | -- |
+| model walk `func_800331B4` | reads 0, 15-16, 20, 62, 67, 69, 71 | -- |
+| HUD `func_80031D5C` | reads 64, 65, 72 | -- |
+| stage 6, in `fdat20` | writes record 63's first matrix, now and then (400 bytes over the run) | -- |
+| stage 7, the area loader | -- | writes 62-63 |
+| area setup `func_80015DD4` | -- | writes 0-63 |
+
+No other stage, and nothing outside a stage, read either block. **So nothing but
+rendering reads a record, and an override cannot change what the game does.**
+
+Two things the census had to get past, both worth knowing before reading the RAM
+logger for anything else:
+- **The RAM logger masks every address to 2 MB**, and `PrimBuffer` put the
+  primitive buffers above 2 MB, so a primitive written at `0x802679A0` is stamped as
+  `0x800679A0`. The first run showed the tile walk rewriting the whole source block
+  once a tick; it was the packets. The census is run with `KF2_PRIMBUF=1`.
+- **The host clears `TrackReads` at every present** from whether its RAM panels are
+  open, so the census sets it again at every event.
+
+Stage 6's write into the destination lasts until the next stage 1 copies the
+source back over it: a tick at the original rate, one frame at 144. It is listed
+in `TODO.md`; nothing has been seen on screen.
+
+### Phase 5, the first slice
+
+**What is in.** Overrides of the area's own light records, written through the
+game:
+
+- `patches/remaster/Atmosphere.cs`: a post on stage 1 writes the pack's
+  `areas/<n>/atmosphere.json` over the 80 records stage 1 has just copied in. Stage
+  10 then turns each light matrix through its quarter-turns, and the tile half, the
+  model walk, the HUD and the arm load the result with the game's own
+  `SetLightMatrix`, `SetColorMatrix`, `SetBackColor` and `SetFogNear`. So an
+  override reaches the GTE, `0048`'s per-pixel records, `EvenFog`'s blend and the
+  retained scene without any of them knowing, and is exact whether per-pixel
+  lighting is on or off. Turning it off needs no restore: the next stage 1 copies
+  the game's records back.
+- **An override names the record's own bytes.** Each carries `recordHash`, FNV-1a
+  64 over the record's 0x2C source bytes when it was authored; while the game's
+  record hashes differently the override is refused and counted. That is the same
+  shape as a face list's `meshHash`. Records are per area in the pack, but the data
+  is shared: records 15 and 16 hash the same in area 0 and area 1.
+- Every part is optional and a missing one is the game's:
+
+  ```json
+  // areas/1/atmosphere.json
+  { "formatVersion": 1, "area": 1, "fingerprint": "be64c93e02071c09",
+    "records": [
+      { "record": 15, "recordHash": "486b851794a9bd96",
+        "back": [200, 60, 40],
+        "lights": [ { "direction": [0, 1, 0] }, null, { "colour": [1.2, 0.7, 0.4] } ],
+        "fog": 4000 } ] }
+  ```
+
+  `back` is the back colour's three bytes. Light `j` is row `j` of the light matrix
+  (the way a face it lights fully faces) and column `j` of the colour matrix, both
+  in the GTE's 4.12 units as floats. `fog` is the record's fog word: the fog starts
+  at `(fog & 0x7FFF) / 2` view units, bit `0x8000` picks the linear curve, and 32000
+  or more draws none (see "Fog changes at a tile edge" in `RENDERING.md`).
+- The editor gains an Atmosphere section: the record under the player, or any
+  record the area's halves use, with how many halves use it; a checkbox per part
+  (back colour, each light's direction and colour, fog) that starts it from the
+  game's value; fog as a start distance, *Linear* and *No fog*; *Reset record*. A
+  held control is one undo entry.
+- Shell: `atmos list` (halves per record, the record under the player, the
+  overrides and whether each is current); `atmos show N` (the game's values, the
+  override, what is drawn); `atmos set N back R G B | light J direction X Y Z |
+  light J colour R G B | fog WORD`; `atmos reset N [back | light J | fog]`.
+  `KF2_REMASTER_ATMOS=0` leaves the overrides out, and the probe line gains
+  `N of M record override(s) written`.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 at the spawn, a scratch pack, 144 fps, the
+editor open and the world paused, 2140x1200):
+
+- **Nothing authored is the picture it was**: `3c64ce3b3e2bdd2e`, the hash the
+  previous build gave for the same view under "Metal is a tinted mirror".
+- **Record 15 decodes as the GTE was measured**: back 120 (`BK 1920`), light
+  columns 0.6499, 0.6499, 0.8125 (`2662, 2662, 3328`), fog word 16000.
+- **An override moves the picture and a reset returns it**: back `200 60 40` on
+  record 15 (3,813 of the area's halves) changed 97.6% of the pixels, largest step
+  80; `atmos reset 15` gave `3c64ce3b3e2bdd2e` again. Fog 4000 changed 97.6%,
+  largest step 150. **Fog 24000 changed nothing**, which is itself a measurement:
+  every surface in this view is nearer than the game's own 8,000, where its fog
+  starts.
+- **The lighting formula still holds**: `KF2_PERPIXEL_PROBE=2` with back colour,
+  one light's direction, another's colour and the fog word all overridden, 60,480
+  corners, **0 off by 2 or more**.
+- **A record changed under its override is refused**: with the saved file's
+  `recordHash` edited, the watcher reloaded it, `atmos list` read record 15
+  `current: false`, the probe `1 of 2 ... 1 refused`, and the view went back to
+  `3c64ce3b3e2bdd2e`.
+- Under `KF2_TILEWALK=verify KF2_POLYASM=verify KF2_MODELWALK=verify` with two
+  overrides written in area 0: 706 reports over 251,497 calls, **0 RAM, register and
+  GTE mismatches**.
+- 144.0 fps drawn at 19.9-20.8 ticks/s with the world running and two overrides
+  written, `[present] wide 288`. The post costs one hash of 44 bytes and at most
+  twenty stores per override per frame; not timed on its own.
+
+**A limit, measured.** The editor's pause holds a modal loop by redrawing stage 13
+without stage 1, so an edit made while the world is paused inside one (the area's
+fade-in, a conversation) is not written until the loop exits: opened during the
+fade-in, the probe read 92 stage 1 passes and `0 of 2 written` until the editor
+closed. In the main loop, stage 1 runs through the pause and an edit shows at once.
+An override already written stays through a modal loop, since nothing there copies
+the records back.
+
+**Judged**, from play through the editor: the area's own lights turned to black and
+one authored point light added (Phase 2) "looks fantastic". It is the first remaster
+look the user has signed off: a dark cave lit only where a light is, the pillar's
+far face black and the floor falling off round the light. The picture also shows
+what that look asks for next: **nothing casts a shadow** (the pillar leaves none on
+the floor behind it), and blacking out an area means editing each record it uses.
+
+**Not judged.** The light directions against their tooltip, fog at other starts
+and curves, and the look in any area but the one in the picture.
+
+### The area's darkness
+
+**What is in.** The look the user signed off in Phase 5 was an area with its own
+light turned down, lit by an authored light, and getting there meant editing each
+record the area uses (area 1 uses nine). The area now has a **Darkness** slider:
+0% is the game's light and 100% leaves only authored lights and glows.
+
+```json
+{ "record": "all", "darkness": 0.6 }
+```
+
+- It scales the back colour and the three light colours of **records 0-63**, every
+  record a tile half's `+4 & 0x3F` can name, after the record's own override. The
+  HUD's records (64, 65, 72) lie above them, so the HUD keeps its light. Directions
+  and fog are left alone.
+- **It is a scale, not an edit.** Each stage 1 pass computes it from the game's source
+  record (and the record's own override), so it cannot compound, and nothing of the
+  game's or of the author's per-record edits is replaced. At 0 the entry is removed
+  from the document.
+- An earlier version of this wrote black over every used record in one button
+  press. It was rejected as destructive: it replaced the values instead of scaling
+  them, and gave no way to choose how dark.
+- The entry carries no record hash: it is a setting for the area, and the area's
+  fingerprint is its gate.
+- Editor: the *Darkness* slider at the top of the Atmosphere section, live while
+  held and one undo entry on release. A record dimmed by it says so. Shell: `atmos
+  darkness [0..1]`; `atmos list` reports it.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 at the spawn, a scratch pack, the editor
+open and the world paused, 2140x1200):
+- Nothing authored: `210d55698c875fb8`, Phase 2's pinned hash.
+- Darkness 0.5: 98.7% of the pixels changed, largest step 70 (half of the 140 that
+  black gives). The same hash on four snaps, set twice.
+- Darkness 1: `33baaf5f08d7e504`, the same picture to the bit as the nine records'
+  back colours and lights overridden to black.
+- Back to 0: `210d55698c875fb8` again, and the document's records empty.
+- Record 15's back colour overridden to `200 60 40` under darkness 0.5 is drawn
+  `100 30 20`.
+
+**Not judged.** Only the black end was ever looked at (Phase 5). Nothing between has
+been. **A known gap**: creatures and objects lit by records above 63 (the model walk
+reads 67, 69 and 71 in area 1) keep the game's light. Which models those are has not
+been looked at.
+
+### Shadows, the first slice
+
+**What is in.** An authored light casts shadows from the area's map (runtime
+`0077`):
+
+- **A depth cubemap per light**, up to four, drawn on the GPU from the retained
+  map (`0072`) with the light at its centre. The draw goes through the world
+  program, so a texel the game draws as a hole (bars, grates) casts none, and it
+  draws only the opaque range, so water casts none. Each face holds the distance
+  along its axis to the nearest surface, which is what the world program already
+  writes as its depth.
+- **Drawn again only when the light moves or the map is rebuilt**, from the top of a
+  flush, before the batch that samples it, so a light never shows a frame without
+  its shadow. Walking and turning draw nothing: measured, 3 s walking forward and 3 s
+  back with a shadowed light in view, 0 cubemaps drawn. The static map is built
+  for shadows even with reflections off (`RetainedScene.ShadowsWanted`); the models
+  and planes stay reflections-only.
+- **Sampled in `authored()`**, per light, before the light is added to the lit
+  colour: the fragment is moved off its surface by 1.5 texels at its distance, then
+  compared five times, each compare the hardware's own 2x2, at fixed offsets **along
+  the receiving surface**. An earlier version offset the taps across the cubemap's
+  face instead, which made a sloped floor shadow itself: 11.6% of the pixels an
+  unoccluded light reached lost up to 10% of it. Along the surface, that is 0.02%.
+  The pattern is the same at every pixel, so there is nothing to weave a grid.
+- **Slots**: the nearest shadowed authored lights in the frame's list take the four
+  slots, and a light keeps its slot while it stays in the list, so its cubemap is
+  not redrawn when the order changes. Glow lights cast none.
+- A light casts unless its document says `"shadows": false` (the editor's
+  *Shadows* checkbox, `light set NAME shadows off`). `KF2_REMASTER_SHADOWS=0` and
+  `light shadows off` turn them all off; `light shadows tune BIAS OFFSET SOFT
+  [SIZE]` sets the bias (6 world units), the normal offset (1.5 texels), the filter's
+  spread (1.25 texels) and the face size (1024) live. `light list` and the probe
+  line report cubemaps ready and drawn and the triangles drawn into them.
+
+**Measured.** Headless, `scripts/light_probe.c`: with no light shadowed, the first
+fourteen passes read as before; a cubemap holding nothing leaves the lit wall exactly
+as the formula has it, and one occluding its left half removes light 0 there and
+nowhere right of centre, 0 off in every case (the filter's bands at the occluder's
+edge and at the face's edge are not checked). In play, area 1 at the spawn with the
+area's own lights black (darkness 1, above), one light at intensity 4 and radius 8000; for each pixel,
+the share of that light a shadow removes, `(off - on) / (off - no light)`, over the
+pixels the light adds at least 8 levels a channel to:
+
+| light | pixels reached | fully shadowed | untouched | between |
+|---|---|---|---|---|
+| in the open, near the far left wall | 2,492,066 | 0.0% | 99.98% | 0.02% |
+| behind the right-hand wall | 801,316 | 98.9% | 0.2% | 0.9% |
+| partly into the right-hand wall | 966,517 | 90.4% | 9.0% | 0.6% |
+
+- A shadow only ever takes light away: no channel of any pixel brighter with
+  shadows on, checked on the first open-light pair and the last.
+- The fully shadowed regions are solid, 97.0-98.7% of their pixels with all four
+  neighbours shadowed too.
+- The same with reflections and the retained scene off (`KF2_RETAINED=0
+  KF2_SSR=0`): the behind-the-wall light 98.9% fully shadowed, and the open one
+  100.0% untouched.
+- Toggling shadows returns the same hash; with nothing authored the view is
+  `210d55698c875fb8`.
+- One cubemap is about 13,000 triangles over its six faces in area 1.
+- 144.0 fps drawn at 19.9-20.0 ticks/s with the world running, and uncapped
+  715-764 fps with the shadowed light in view against 758-776 without, in the same
+  session.
+- `KF2_GLDEBUG=1` reported nothing over five runs.
+
+**Limits, by construction.**
+- **Only the map casts.** Creatures, objects, doors drawn as models and the player
+  cast nothing; they receive. *Since:* creatures and objects cast; see "Shadows,
+  the second slice".
+- **A light inside geometry** is fully shadowed outside it, which is correct but
+  easy to do by accident with *Place on the picture* near a thin wall.
+- **Spot lights** use the whole cubemap.
+
+**Not judged.** Nothing here has been looked at. Worth looking at: the shadow's
+edge (soft over about two and a half texels, so wider further from the light); the
+contact where a wall meets the floor (the offset and bias could lift a shadow off
+it); bars and grates; and the pillar in area 1 that cast nothing in the Phase 5
+picture.
+
+### Shadows, the second slice
+
+**What is in.** Creatures and objects cast too (`0077`, amended):
+
+- **The frame's models, from the retained scene.** `RetainedModels` already captured
+  every model the object walk submits, in world space, for reflections; it now
+  captures them whenever a light casts, reflections on or off, and without
+  colouring them when only shadows ask. The lights publish which frame's models cast
+  (`RemasterUniforms.ShadowFrame`) once the walk has submitted all of them, before
+  `DrawOTag`.
+- **A second cubemap per light**, used only while a model is in the light's reach:
+  the map's cubemap copied face by face (a depth blit), then the casters drawn over
+  it through the world program. The map's own cubemap is still drawn only when the
+  light or the map changes, so a model costs a copy and a few hundred triangles,
+  never the map again. A light with no model in reach samples the map's cubemap as
+  before.
+- **Drawn again only when the models in reach move**: a hash of the corners of every
+  caster triangle whose bounds reach the light's sphere, once a frame. A creature
+  idling redraws every frame; a chest, a pillar or a closed door never does.
+- **Which models cast.** Opaque faces with every texel. A blended face with the
+  texels the GPU draws opaque, those without the semi-transparency bit, through the
+  prim shader's existing `uOpaqueDepth = 1`: area 1's creature 129 has every face
+  blended and every texel translucent, so it casts nothing, which is what it looks
+  like. A door's blended model (`ModelWalk.SolidKind`, the same test the occlusion
+  pass takes) casts with every texel (`RetainedScene.FlagSolid`). Effects (sparks,
+  flames, `ModelKind.Effect`) cast nothing (`FlagNoShadow`). Billboards and the arm
+  were never captured and cast nothing.
+- **Placed from the record, not the camera.** The first version's corners moved by a
+  unit or two as the camera turned (the camera's rotation is only good to 1/4096),
+  so turning in place redrew a cubemap on 357 of about 475 frames with nothing
+  moving. The submitter now publishes each model's own rotation and world position,
+  and turning redraws nothing. See "Models, every frame" in `docs/RENDERING.md`.
+- `KF2_REMASTER_SHADOW_MODELS=0` and `light shadows models off` leave the models out
+  (the map still casts); `light list` reports the caster triangles in reach, the
+  model redraws and the triangles drawn into them, as does the remaster probe line.
+
+**Measured**, in area 1 with the area's lights black (darkness 1), one light at
+intensity 4 and radius 6000, the share each pixel loses as in the first slice
+(`(off - on) / (off - no light)` between models casting and not, over the pixels
+the light adds at least 8 levels a channel to), each shot twice and a pixel left out
+where the two shots differ:
+
+| caster | fully shadowed by it | of those, all four neighbours too | brighter with models on |
+|---|---|---|---|
+| object 445, the world running | 90,279 | | 0 |
+| creature 144, the world paused | 188,141 | 95.7% | 0 |
+
+- Standing still with only objects in reach: 0 redraws in 4-5 s. Turning in place
+  (60 turns in 3.4 s): 0. Creature 144 in reach: a redraw every frame it moves (434
+  in 3 s at 144 fps), 0 while the world is paused.
+- Model corners against the GTE's own screen words (`KF2_RETAINED_PROBE=1`, creatures
+  in view): 100.00% within 1 px, worst 2 px.
+- The same with reflections and the retained scene off (`KF2_RETAINED=0
+  KF2_SSR=0`): the models are captured for the shadows alone, 516 caster triangles
+  in reach, and the light redraws as it did with reflections on.
+- 144.0 fps drawn at 20.0 ticks/s with the creature redrawn every frame, and
+  uncapped (`KF2_FPS=2000`, reflections off, the same view) 275-285 fps with models
+  casting, 270-284 without and 267-279 with shadows off: nothing measurable, the
+  port being CPU-bound and a redraw being a copy and a few hundred triangles six
+  times.
+- `KF2_GLDEBUG=1` reported nothing.
+
+**Limits, by construction.**
+- **A model the walk does not submit casts nothing**: behind the camera, past the
+  draw window, or outside the grid the walk sweeps. A creature standing behind the
+  player, lit from in front, throws no shadow into view.
+- **The player casts nothing**; there is no player model.
+- **A model's shadow is its frame's pose**, drawn with the frame; nothing is
+  carried between frames, so it moves exactly as the model does.
+
+**Judged by eye (2026-09-26): good.** The creatures' moving shadows, and a light
+behind a door as the door opens, both approved. Not specifically looked at yet:
+whether a creature darkens itself where its own limbs face away from the light
+(the offset and bias were set against the map's surfaces), and creature 129, which
+casts nothing because every texel of it is translucent.
 
 ### Phase 6: level edits
 
@@ -1736,7 +2088,6 @@ push on this game's near-grey stone.
 
 ### Phase 8: later
 
-- shadows by marching the tile grid;
 - port-drawn props;
 - opt-in object and creature placement;
 - a GPU id buffer (`0076`), if picking is ever too slow;
@@ -1788,8 +2139,10 @@ two.
    and deferred only for terms that apply to the finished picture.
 6. **Whether object and creature edits may reach a save.** *Recommend no by
    default*: opt-in per pack, labelled, and last in the roadmap.
-7. **Shadows.** *Recommend none at first, then the tile-grid march*; no per-frame
-   shadow maps on a CPU-bound port.
+7. **Shadows.** *Decided: shadow cubemaps from the retained map* (`0077`), drawn
+   on the GPU only when a light or the map changes, so a CPU-bound port pays
+   nothing a frame for them. The tile-grid march this recommended first is not
+   needed.
 8. **Normal maps only with replacement textures.** *Recommend yes.* A normal map
    drawn over a 64×64 four-bit texture fights it.
 9. **Whether a remaster pack may change collision.** *Recommend tile collision

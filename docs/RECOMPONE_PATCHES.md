@@ -13,9 +13,11 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Sixty-four of the seventy-two are load-bearing; `0002`, `0003`, `0015`, `0045`,
+Sixty-five of the seventy-three are load-bearing; `0002`, `0003`, `0015`, `0045`,
 `0046`, `0065` and `0069` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
-it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
+it was folded into `0054` as an amendment, and the number is not reused. `0074`-`0076`
+are held by the remaster's plan for work not yet made (`docs/REMASTER.md`), so the
+shadows are `0077`. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
 patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
 embeds, which is now simply a tracked file in the vendored tree.
@@ -1098,6 +1100,41 @@ Four files in the directory have no entry below:
   the port's texture materials key on the same rectangle. The amendment is the
   second diff in the patch file. See "Phase 4, the second slice" in
   `docs/REMASTER.md`.
+
+- `0077-light-shadows.patch` — shadows for `0071`'s authored lights, from `0072`'s
+  retained map. `RemasterUniforms` gains up to four shadow slots (the light's world
+  position and radius), the slot each light in the list samples (`LightShadow`, -1
+  none) and the frame's world-to-view rotation (`ToWorld`), which the port publishes
+  with the lights; `RetainedScene.ShadowsWanted` asks for the static map without
+  reflections. `GlShadows.cs` (`GlCore` partial) draws a slot's depth cubemap from the
+  top of `FlushCore`, before the batch that samples it, and only when the light, the
+  map's generation or the size changed: six faces through the world program
+  (`WorldVs` and `PrimFs`, so a texel drawn as a hole casts none), the opaque range
+  of the chunks the light's sphere reaches, into a `DepthComponent24` cubemap with a
+  compare mode. What a face holds is what the world program already writes, the
+  distance along the face's axis over 65536. `PrimFs` gains `uLightShadow[16]`,
+  `uShadowToWorld`, four `samplerCubeShadow`s on units 12-15 (named, since GLSL 3.30
+  cannot index a sampler array by a loop variable; a cube sampler left on unit 0 beside
+  `uVram` fails every draw, so both programs set them at init) and `shadowAt()`: the
+  fragment moved off its surface by `uShadowOffset` texels at its distance, and five
+  compares, each the hardware's 2x2, at fixed offsets **along the surface** rather
+  than across the face, so a sloped floor does not shadow itself. With no light
+  shadowed the shader's output is `0071`'s to the bit (`scripts/light_probe.c`, whose
+  first fourteen passes read as before; two new passes read 0 from the formula).
+  `DrawRange` returns the static vertices it drew and takes no frame for a shadow.
+  GL core only. **No recompile.** See "Shadows, the first slice" in
+  `docs/REMASTER.md`.
+  Since amended: models cast. A slot whose light has a model in reach samples a
+  second cubemap, the map's blitted face by face and the frame's casters drawn over
+  it, from the frame the port names in `RemasterUniforms.ShadowFrame`; it is drawn
+  again when a hash of the casters in reach changes, and the map's cubemap still only
+  when the light or the map does. Casters are the frame's opaque model triangles and
+  those flagged `RetainedScene.FlagSolid` (a door), with every texel, then the other
+  blended ones with `uOpaqueDepth = 1`, which keeps the texels the GPU draws opaque;
+  `FlagNoShadow` (an effect) casts nothing. `RetainedScene.ShadowModels` is the
+  switch; `ShadowModelRenders`, `ShadowModelTriangles` and `ShadowCasters` count it.
+  The amendment is the second diff in the patch file. See "Shadows, the second
+  slice" in `docs/REMASTER.md`.
 
 - `0069-imgui-size-after-fullscreen.patch` — Silk's `ImGuiController` takes the
   window's size only from the `Resize` event, and GLFW on Wayland raises none when
