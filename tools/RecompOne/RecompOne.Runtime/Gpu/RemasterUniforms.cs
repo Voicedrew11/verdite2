@@ -32,7 +32,8 @@ public static class RemasterUniforms
     /// <summary>Per light, four floats each. Pos: view position and radius. Col: colour
     /// times intensity, in the game's light units (1.0 adds the packet's own RGBC once),
     /// and the cosine of the spot's inner cone. Dir: the spot's view direction and the
-    /// cosine of its outer cone; a point light's outer cosine is -2.</summary>
+    /// cosine of its outer cone; a point light's outer cosine is -2, or -2 - id for a
+    /// light a material gives off, which leaves that material unlit by it.</summary>
     public static readonly float[] LightPos = new float[MaxLights * 4];
     public static readonly float[] LightCol = new float[MaxLights * 4];
     public static readonly float[] LightDir = new float[MaxLights * 4];

@@ -29,6 +29,29 @@ public readonly record struct TileKey(int Area, int X, int Z, int Half)
     }
 }
 
+/// <summary>A model as the object and creature walk submits it: the table it came out
+/// of and its model id, within an area.</summary>
+public readonly record struct ModelKey(int Area, ModelKind Kind, int Model)
+{
+    public string KindName => Kind.ToString().ToLowerInvariant();
+
+    public override string ToString() => $"model:{Area}:{KindName}:{Model}";
+
+    public static ModelKind? ParseKind(string? s)
+        => Enum.TryParse(s, ignoreCase: true, out ModelKind k) && Enum.IsDefined(k) ? k : null;
+
+    /// <summary><c>model:1:object:130</c>.</summary>
+    public static bool TryParse(string s, out ModelKey key)
+    {
+        key = default;
+        var p = s.Split(':');
+        if (p.Length != 4 || p[0] != "model" || !int.TryParse(p[1], out int a)) return false;
+        if (ParseKind(p[2]) is not { } kind || !int.TryParse(p[3], out int m) || m is < 0 or > 0xFFFF) return false;
+        key = new ModelKey(a, kind, m);
+        return true;
+    }
+}
+
 /// <summary>
 /// What authored data attaches to: the area, its fingerprint, and the tile halves in
 /// it. Reads guest memory and writes nothing.

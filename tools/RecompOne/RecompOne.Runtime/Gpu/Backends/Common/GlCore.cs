@@ -15,7 +15,8 @@ public sealed class GlCore : IGpuBackend
     // 0048. GteLightMap's inputs, in a buffer of their own: widening GlVertex took
     // its VBO to exactly 16 MiB, and that alone cost area 1 two thirds of its frame
     // rate with the feature off. Uploaded only for a batch that carries them.
-    struct GlLight { public float Lx, Ly, Lz, Fog; public uint Light; }
+    // 0071. Mat is the packet's material, for an emissive one's glow.
+    struct GlLight { public float Lx, Ly, Lz, Fog; public uint Light, Mat; }
 
     // 0060. The texture rectangle and the atlas entry, in a buffer of their own for
     // the same reason; uploaded only for a batch that carries them.
@@ -79,9 +80,15 @@ public sealed class GlCore : IGpuBackend
     int _ssrW, _ssrH;
     bool _ssrInfo;
     int _uSsrOrigin, _uSsrSize, _uSsrTexSize, _uSsrProjH, _uSsrCentre;
-    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrReflect, _uSsrF0;
+    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps;
     int _uSsrDqa, _uSsrDqb, _uSsrFogCurve;
     int _uPresentSsrOn;
+    int _uPresentAoMatOn;
+    // The reflection blur's mip chains of the picture and of the planar texture,
+    // each with its framebuffer to blit level 0 through.
+    uint _colorMipTex, _colorMipFbo, _planarMipTex, _planarMipFbo;
+    int _colorMipW, _colorMipH, _planarMipW, _planarMipH;
+    int _uSsrColorMipH, _uSsrPlanarMipH;
     // 0068. The planar texture the reflection pass reads first, and the clip plane
     // the prim program discards the water's underside with while drawing into one.
     int _uSsrPlanarOn, _uSsrPlanarPlane, _uSsrPlanarTol, _uSsrRipple, _uSsrCompare;
@@ -89,6 +96,8 @@ public sealed class GlCore : IGpuBackend
     int _clipOnSent = -1;
     // 0071. Authored lights.
     int _uLightN, _uLightPos, _uLightCol, _uLightDir, _uLightCentre, _uLightH;
+    // 0071. Emissive materials, and 0067's table they are read from.
+    int _uEmitOn, _emitOnSent;
     int _lightNSent = -1, _lightsSentGen = -1, _kRemasterGen;
 
     uint _postProg, _postFbo, _postTex;
@@ -234,6 +243,8 @@ public sealed class GlCore : IGpuBackend
         _uLightH = _gl.GetUniformLocation(_progPrim, "uLightH");
         _lightNSent = _lightsSentGen = -1;
         RemasterUniforms.Supported = !_legacy && _uLightN >= 0 && _uLightPos >= 0;
+        _uEmitOn = _gl.GetUniformLocation(_progPrim, "uEmitOn");
+        _emitOnSent = -1;
         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
 
@@ -245,6 +256,8 @@ public sealed class GlCore : IGpuBackend
         _gl.Uniform1(_gl.GetUniformLocation(_progPrim, "uRepClut"), 4);
         int uMip = _gl.GetUniformLocation(_progPrim, "uMip");
         if (uMip >= 0) _gl.Uniform1(uMip, 5);
+        int uMatPrim = _gl.GetUniformLocation(_progPrim, "uMatTable");
+        if (uMatPrim >= 0) _gl.Uniform1(uMatPrim, MatUnit);
         _uPrimScale = _gl.GetUniformLocation(_progPrim, "uScale");
         SetScaleUniform(_progPrim, GlVram.Scale);
         _primScaleSent = GlVram.Scale;
@@ -263,6 +276,13 @@ public sealed class GlCore : IGpuBackend
         int uPresentSsr = _gl.GetUniformLocation(_progPresent, "uSsr");
         if (uPresentSsr >= 0) _gl.Uniform1(uPresentSsr, 2);
         if (_uPresentSsrOn >= 0) _gl.Uniform1(_uPresentSsrOn, 0f);
+        _uPresentAoMatOn = _gl.GetUniformLocation(_progPresent, "uAoMatOn");
+        if (_uPresentAoMatOn >= 0)
+        {
+            _gl.Uniform1(_uPresentAoMatOn, 0f);
+            _gl.Uniform1(_gl.GetUniformLocation(_progPresent, "uSurface"), 3);
+            _gl.Uniform1(_gl.GetUniformLocation(_progPresent, "uMatTable"), MatUnit);
+        }
 
         // Ambient occlusion. A failure here disables the pass and nothing else --
         // the backend is perfectly usable without it, so it is deliberately not
@@ -351,8 +371,6 @@ public sealed class GlCore : IGpuBackend
                 _uSsrThickness = _gl.GetUniformLocation(_progSsr, "uThickness");
                 _uSsrSky = _gl.GetUniformLocation(_progSsr, "uSky");
                 _uSsrSteps = _gl.GetUniformLocation(_progSsr, "uSteps");
-                _uSsrReflect = _gl.GetUniformLocation(_progSsr, "uReflect[0]");
-                _uSsrF0 = _gl.GetUniformLocation(_progSsr, "uF0[0]");
                 _uSsrDqa = _gl.GetUniformLocation(_progSsr, "uDqa");
                 _uSsrDqb = _gl.GetUniformLocation(_progSsr, "uDqb");
                 _uSsrFogCurve = _gl.GetUniformLocation(_progSsr, "uFogCurve");
@@ -369,6 +387,14 @@ public sealed class GlCore : IGpuBackend
                 if (uPlanar >= 0) _gl.Uniform1(uPlanar, 3);
                 int uPlanarDepth = _gl.GetUniformLocation(_progSsr, "uPlanarDepth");
                 if (uPlanarDepth >= 0) _gl.Uniform1(uPlanarDepth, 4);
+                int uMatSsr = _gl.GetUniformLocation(_progSsr, "uMatTable");
+                if (uMatSsr >= 0) _gl.Uniform1(uMatSsr, MatUnit);
+                int uColorMip = _gl.GetUniformLocation(_progSsr, "uColorMip");
+                if (uColorMip >= 0) _gl.Uniform1(uColorMip, ColorMipUnit);
+                int uPlanarMip = _gl.GetUniformLocation(_progSsr, "uPlanarMip");
+                if (uPlanarMip >= 0) _gl.Uniform1(uPlanarMip, PlanarMipUnit);
+                _uSsrColorMipH = _gl.GetUniformLocation(_progSsr, "uColorMipH");
+                _uSsrPlanarMipH = _gl.GetUniformLocation(_progSsr, "uPlanarMipH");
                 if (_uSsrPlanarOn >= 0) _gl.Uniform1(_uSsrPlanarOn, 0);
             }
             // 0068. Only this backend can draw into a planar texture; the port walks
@@ -409,6 +435,7 @@ public sealed class GlCore : IGpuBackend
             _gl.VertexAttribPointer(7, 3, VertexAttribPointerType.Float, false, ls, (void*)0);
             _gl.VertexAttribPointer(8, 1, VertexAttribPointerType.Float, false, ls, (void*)12);
             _gl.VertexAttribIPointer(9, 1, VertexAttribIType.UnsignedInt, ls, (void*)16);
+            _gl.VertexAttribIPointer(11, 1, VertexAttribIType.UnsignedInt, ls, (void*)20);
             LightDefaults();
 
             // 0060. Disabled until a batch carries them; the generic 0 is "none".
@@ -936,9 +963,9 @@ public sealed class GlCore : IGpuBackend
         if (a.Light != 0 && _vboLight != 0)
         {
             if (_litFilled < _count) Array.Clear(_lights, _litFilled, _count - _litFilled);
-            _lights[_count] = new GlLight { Lx = a.Lx, Ly = a.Ly, Lz = a.Lz, Fog = a.Fog, Light = a.Light };
-            _lights[_count + 1] = new GlLight { Lx = b.Lx, Ly = b.Ly, Lz = b.Lz, Fog = b.Fog, Light = b.Light };
-            _lights[_count + 2] = new GlLight { Lx = c.Lx, Ly = c.Ly, Lz = c.Lz, Fog = c.Fog, Light = c.Light };
+            _lights[_count] = new GlLight { Lx = a.Lx, Ly = a.Ly, Lz = a.Lz, Fog = a.Fog, Light = a.Light, Mat = a.Material };
+            _lights[_count + 1] = new GlLight { Lx = b.Lx, Ly = b.Ly, Lz = b.Lz, Fog = b.Fog, Light = b.Light, Mat = a.Material };
+            _lights[_count + 2] = new GlLight { Lx = c.Lx, Ly = c.Ly, Lz = c.Lz, Fog = c.Fog, Light = c.Light, Mat = a.Material };
             _litFilled = _count + 3;
         }
         if (a.HasTexRect && _vboTex != 0 && f.Textured && !f.UseImage)
@@ -1623,6 +1650,16 @@ public sealed class GlCore : IGpuBackend
                 RemasterUniforms.LitBatches++;
             }
         }
+        // 0071. A batch with light records glows where its material says so.
+        // A highlight needs a light to come from.
+        int emit = (SurfaceMaterial.AnyEmissive || (SurfaceMaterial.AnySpecular && lightN != 0))
+                   && _litFilled > 0 && _uEmitOn >= 0 ? 1 : 0;
+        if (emit != 0) BindMaterials();
+        if (_uEmitOn >= 0 && emit != _emitOnSent)
+        {
+            _gl.Uniform1(_uEmitOn, emit);
+            _emitOnSent = emit;
+        }
         // A plain uniform the next batch reads: unlike true color, changing the
         // anisotropy rebuilds nothing.
         GteDepth.AnisotropyLive = _uAniso >= 0;
@@ -1695,7 +1732,7 @@ public sealed class GlCore : IGpuBackend
         if ((_litFilled > 0) != _lightAttribs)
         {
             _lightAttribs = _litFilled > 0;
-            for (uint i = 7; i <= 9; i++)
+            foreach (uint i in LightAttribs)
                 if (_lightAttribs) _gl.EnableVertexAttribArray(i); else _gl.DisableVertexAttribArray(i);
             if (!_lightAttribs) LightDefaults();
         }
@@ -1821,9 +1858,68 @@ public sealed class GlCore : IGpuBackend
         _gl.VertexAttrib4(7, 0f, 0f, 0f, 1f);
         _gl.VertexAttrib4(8, 0f, 0f, 0f, 1f);
         _gl.VertexAttribI4(9, 0u, 0u, 0u, 0u);
+        _gl.VertexAttribI4(11, 0u, 0u, 0u, 0u);
     }
 
+    static readonly uint[] LightAttribs = [7, 8, 9, 11];
+
     void TexDefaults() => _gl.VertexAttribI4(10, 0u, 0u, 0u, 0u);
+
+    /// <summary>0067. The texture unit SurfaceMaterial's table is bound to, for the prim
+    /// and reflection shaders both.</summary>
+    const int MatUnit = 6;
+    uint _matTex;
+    int _matGen = -1;
+    const int MatRows = 3;
+    readonly float[] _matRows = new float[SurfaceMaterial.Count * 4 * MatRows];
+
+    /// <summary>0067. SurfaceMaterial's table as a 256x2 texture, uploaded when the port
+    /// changes it, and bound. Row 0: reflectivity, F0, roughness. Row 1: the emissive
+    /// colour (0071).</summary>
+    unsafe void BindMaterials()
+    {
+        if (_legacy) return;
+        if (_matTex == 0)
+        {
+            _matTex = _gl.GenTexture();
+            _gl.ActiveTexture(TextureUnit.Texture0 + MatUnit);
+            _gl.BindTexture(TextureTarget.Texture2D, _matTex);
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba32f, (uint)SurfaceMaterial.Count, MatRows, 0,
+                PixelFormat.Rgba, PixelType.Float, null);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 0);
+            _matGen = -1;
+        }
+        _gl.ActiveTexture(TextureUnit.Texture0 + MatUnit);
+        _gl.BindTexture(TextureTarget.Texture2D, _matTex);
+        if (_matGen != SurfaceMaterial.Generation)
+        {
+            const int n = SurfaceMaterial.Count;
+            for (int i = 0; i < n; i++)
+            {
+                _matRows[i * 4] = SurfaceMaterial.Reflectivity[i];
+                _matRows[i * 4 + 1] = SurfaceMaterial.F0[i];
+                _matRows[i * 4 + 2] = SurfaceMaterial.Roughness[i];
+                _matRows[i * 4 + 3] = SurfaceMaterial.Metalness[i];
+                _matRows[(n + i) * 4] = SurfaceMaterial.Emissive[i * 3];
+                _matRows[(n + i) * 4 + 1] = SurfaceMaterial.Emissive[i * 3 + 1];
+                _matRows[(n + i) * 4 + 2] = SurfaceMaterial.Emissive[i * 3 + 2];
+                // Flags: 1 additive, 2 unfogged.
+                _matRows[(n + i) * 4 + 3] = (SurfaceMaterial.EmissiveAdditive[i] ? 1f : 0f)
+                                          + (SurfaceMaterial.EmissiveUnfogged[i] ? 2f : 0f);
+                _matRows[(2 * n + i) * 4] = SurfaceMaterial.Specular[i];
+                _matRows[(2 * n + i) * 4 + 1] = 1f - SurfaceMaterial.Occlusion[i];
+                _matRows[(2 * n + i) * 4 + 2] = 0f;
+                _matRows[(2 * n + i) * 4 + 3] = 0f;
+            }
+            fixed (float* p = _matRows)
+                _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, (uint)n, MatRows, PixelFormat.Rgba, PixelType.Float, p);
+            _matGen = SurfaceMaterial.Generation;
+            SurfaceMaterial.Uploads++;
+        }
+        _gl.ActiveTexture(TextureUnit.Texture0);
+    }
 
     void SetDepthBias(bool on)
     {
@@ -2080,6 +2176,18 @@ public sealed class GlCore : IGpuBackend
             {
                 _gl.ActiveTexture(TextureUnit.Texture1);
                 _gl.BindTexture(TextureTarget.Texture2D, _aoBlurTex);
+            }
+        }
+        if (!rgb24 && _uPresentAoMatOn >= 0)
+        {
+            bool aoMat = aoOn && surfaces && SurfaceMaterial.AnyOcclusion && src!.Surface != 0;
+            _gl.Uniform1(_uPresentAoMatOn, aoMat ? 1f : 0f);
+            if (aoMat)
+            {
+                BindMaterials();
+                _gl.UseProgram(_progPresent);
+                _gl.ActiveTexture(TextureUnit.Texture3);
+                _gl.BindTexture(TextureTarget.Texture2D, src!.Surface);
             }
         }
         if (!rgb24 && _uPresentSsrOn >= 0)
@@ -2491,10 +2599,7 @@ public sealed class GlCore : IGpuBackend
         if (_uSsrDqa >= 0) _gl.Uniform1(_uSsrDqa, (float)GteDepth.ProjDqa);
         if (_uSsrDqb >= 0) _gl.Uniform1(_uSsrDqb, (float)GteDepth.ProjDqb);
         if (_uSsrFogCurve >= 0) _gl.Uniform1(_uSsrFogCurve, ScreenReflections.FogCurve);
-        fixed (float* r = SurfaceMaterial.Reflectivity)
-            if (_uSsrReflect >= 0) _gl.Uniform1(_uSsrReflect, SurfaceMaterial.Count, r);
-        fixed (float* f0 = SurfaceMaterial.F0)
-            if (_uSsrF0 >= 0) _gl.Uniform1(_uSsrF0, SurfaceMaterial.Count, f0);
+        BindMaterials();
         // 0068. The planar texture, when this target's picture and its capture are
         // the same frame's; otherwise the march alone, as before.
         var planar = src.Planar;
@@ -2513,6 +2618,16 @@ public sealed class GlCore : IGpuBackend
             _gl.BindTexture(TextureTarget.Texture2D, planar.Tex);
             PlanarReflections.Read++;
         }
+        // Rough materials read the picture, and the planar texture, from a mip chain.
+        bool rough = SurfaceMaterial.AnyRoughness;
+        float colorMipH = rough ? BuildMip(src, ref _colorMipTex, ref _colorMipFbo, ref _colorMipW, ref _colorMipH, ColorMipUnit) : 0f;
+        float planarMipH = rough && planarOn
+            ? BuildMip(planar!, ref _planarMipTex, ref _planarMipFbo, ref _planarMipW, ref _planarMipH, PlanarMipUnit) : 0f;
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _ssrFbo);
+        _gl.Viewport(0, 0, (uint)w, (uint)h);
+        _gl.UseProgram(_progSsr);
+        if (_uSsrColorMipH >= 0) _gl.Uniform1(_uSsrColorMipH, colorMipH);
+        if (_uSsrPlanarMipH >= 0) _gl.Uniform1(_uSsrPlanarMipH, planarMipH);
         _gl.ActiveTexture(TextureUnit.Texture2);
         _gl.BindTexture(TextureTarget.Texture2D, src.Tex);
         _gl.ActiveTexture(TextureUnit.Texture1);
@@ -2533,6 +2648,49 @@ public sealed class GlCore : IGpuBackend
         }
 
         if (ScreenReflections.WantMap && _ssrInfo) CaptureSsrMap(w, h);
+    }
+
+    const int ColorMipUnit = 7, PlanarMipUnit = 8;
+
+    /// <summary>A target's colour, shrunk to half size and mipped, bound on
+    /// <paramref name="unit"/>; its level-0 height in texels.</summary>
+    unsafe float BuildMip(GlDisplayRt rt, ref uint tex, ref uint fbo, ref int mw, ref int mh, int unit)
+    {
+        int s = Math.Max(1, rt.CreatedScale);
+        int sw = rt.Wide1x * s, sh = rt.H * s;
+        int w = Math.Max(1, sw / 2), h = Math.Max(1, sh / 2);
+        if (tex == 0)
+        {
+            tex = _gl.GenTexture();
+            fbo = _gl.GenFramebuffer();
+        }
+        _gl.ActiveTexture(TextureUnit.Texture0 + unit);
+        _gl.BindTexture(TextureTarget.Texture2D, tex);
+        if (w != mw || h != mh)
+        {
+            int levels = 1 + (int)Math.Floor(Math.Log2(Math.Max(w, h)));
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba8, (uint)w, (uint)h, 0,
+                PixelFormat.Rgba, PixelType.UnsignedByte, null);
+            _gl.GenerateMipmap(TextureTarget.Texture2D);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.LinearMipmapLinear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Linear);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)GLEnum.ClampToEdge);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.ClampToEdge);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, levels - 1);
+            _gl.BindFramebuffer(FramebufferTarget.Framebuffer, fbo);
+            _gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0,
+                TextureTarget.Texture2D, tex, 0);
+            mw = w; mh = h;
+        }
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, rt.Fbo);
+        _gl.ReadBuffer(ReadBufferMode.ColorAttachment0);
+        _gl.BindFramebuffer(FramebufferTarget.DrawFramebuffer, fbo);
+        _gl.BlitFramebuffer(0, 0, sw, sh, 0, 0, w, h, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Linear);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+        _gl.GenerateMipmap(TextureTarget.Texture2D);
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        ScreenReflections.MipBuilds++;
+        return h;
     }
 
     unsafe void EnsureSsrSize(int w, int h)
@@ -2761,6 +2919,11 @@ public sealed class GlCore : IGpuBackend
         if (_aoFbo != 0) _gl.DeleteFramebuffer(_aoFbo);
         if (_aoBlurFbo != 0) _gl.DeleteFramebuffer(_aoBlurFbo);
         if (_ssrTex != 0) _gl.DeleteTexture(_ssrTex);
+        if (_colorMipTex != 0) _gl.DeleteTexture(_colorMipTex);
+        if (_colorMipFbo != 0) _gl.DeleteFramebuffer(_colorMipFbo);
+        if (_planarMipTex != 0) _gl.DeleteTexture(_planarMipTex);
+        if (_planarMipFbo != 0) _gl.DeleteFramebuffer(_planarMipFbo);
+        if (_matTex != 0) _gl.DeleteTexture(_matTex);
         if (_ssrInfoTex != 0) _gl.DeleteTexture(_ssrInfoTex);
         if (_ssrFbo != 0) _gl.DeleteFramebuffer(_ssrFbo);
         if (_progSsr != 0) _gl.DeleteProgram(_progSsr);

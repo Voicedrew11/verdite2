@@ -84,6 +84,7 @@ public static class Reflections
         if (float.TryParse(f0, out float ff) && ff >= 0f) f = Math.Clamp(ff, 0f, 1f);
         SurfaceMaterial.Reflectivity[SurfaceMaterial.Water] = s;
         SurfaceMaterial.F0[SurfaceMaterial.Water] = f;
+        SurfaceMaterial.Changed();
 
         if (float.TryParse(distance, out float d) && d > 0f) ScreenReflections.MaxDistance = d;
         if (int.TryParse(steps, out int n) && n > 0) ScreenReflections.Steps = Math.Clamp(n, 1, 128);

@@ -18,7 +18,8 @@ namespace Kf2.Remaster;
 /// the renderer keeps drawing, so an edit shows on the frozen scene.
 ///
 /// A click on the picture picks the faces under it from the frame's own triangles
-/// (<see cref="Faces.PickAt"/>), which is what the depth buffer drew there; the docked
+/// (<see cref="Faces.PickAt"/>), which is what the depth buffer drew there, or the model
+/// drawn there, which takes a material wherever the area draws it; the docked
 /// map (right-click, Shift+M) and the player's tile select a whole half. Lights are
 /// placed at the eye or on the surface under a click, drawn over the picture, and
 /// dragged across the screen at their depth. See "The editor", "Faces, picked from the
@@ -33,6 +34,16 @@ public static class Editor
 
     /// <summary>The selected faces; empty selects the whole of <see cref="Selected"/>.</summary>
     public static readonly List<FaceRef> SelectedFaces = new();
+
+    /// <summary>The selected model; a model and a tile are never selected together.</summary>
+    public static ModelKey? SelectedModel { get; private set; }
+
+    public static void SelectModel(ModelKey? k)
+    {
+        SelectedModel = k;
+        Selected = null;
+        SelectedFaces.Clear();
+    }
 
     /// <summary>Assignments go to the mesh wherever the area uses it, not to the half.</summary>
     public static bool MeshScope;
@@ -69,6 +80,7 @@ public static class Editor
     public static void Select(TileKey? key)
     {
         Selected = key;
+        SelectedModel = null;
         SelectedFaces.Clear();
     }
 
@@ -77,6 +89,7 @@ public static class Editor
     public static void SelectFaces(IReadOnlyList<FaceRef> faces, bool toggle)
     {
         if (!toggle) SelectedFaces.Clear();
+        SelectedModel = null;
         foreach (var f in faces)
             if (!toggle || !SelectedFaces.Remove(f)) SelectedFaces.Add(f);
         Selected = SelectedFaces.Count > 0 ? SelectedFaces[0].Tile : toggle ? Selected : null;
@@ -112,14 +125,17 @@ public static class Editor
     }
 
     /// <summary>Whether the selection's area can be edited now, and why not.</summary>
-    public static string? Blocked(TileKey k)
+    public static string? Blocked(TileKey k) => Blocked(k.Area);
+
+    public static string? Blocked(int area)
         => !Identity.Settled ? "the area is settling"
-         : k.Area != Identity.Area ? "the selection is in another area"
+         : area != Identity.Area ? "the selection is in another area"
          : Surfaces.Refused;
 
     /// <summary>What the selection is given at the current scope, or "(mixed)".</summary>
     public static string? SelectionMaterial(RecompOne.Runtime.Memory.IMemory m)
     {
+        if (SelectedModel is { } mk) return Pack.ModelMaterial(mk);
         if (Selected is not { } k) return null;
         if (SelectedFaces.Count == 0)
             return MeshScope ? MeshOf(m, k) is int mesh and >= 0 ? Pack.MeshMaterial(k.Area, mesh) : null
@@ -133,6 +149,12 @@ public static class Editor
     /// <summary>Give the selection a material at the current scope, or clear it.</summary>
     public static string? Assign(RecompOne.Runtime.Memory.IMemory m, string? material)
     {
+        if (SelectedModel is { } mk)
+        {
+            if (Blocked(mk.Area) is { } w) return w;
+            Pack.SetModelMaterial(mk, material, Identity.FingerprintText);
+            return null;
+        }
         if (Selected is not { } k) return "nothing selected";
         if (Blocked(k) is { } why) return why;
         string fp = Identity.FingerprintText;
@@ -235,12 +257,14 @@ public static class Editor
                 else if (Picking)
                 {
                     bool toggle = ImGui.GetIO().KeyShift;
-                    var hit = Faces.PickAt(px, out _pickWhy);
+                    var hit = Faces.PickAt(px, out var model, out _pickWhy);
                     if (hit != null) SelectFaces(hit, toggle);
+                    else if (model != null) SelectModel(model);
                 }
             }
             Drag(m, mouse);
             if (_highlight && Selected is { } k && k.Area == Identity.Area) Highlight(k);
+            if (_highlight && SelectedModel is { } mk && mk.Area == Identity.Area) HighlightModel(mk);
             if (_lightGizmos) DrawGizmos(m);
         }
 
@@ -463,7 +487,7 @@ public static class Editor
 
             if (!Reflections.Enabled)
                 ImGui.TextColored(new Vector4(1f, 0.75f, 0.3f, 1f),
-                    "Water reflections are off; a material is only read by them so far.");
+                    "Water reflections are off, so only a material's glow is drawn.");
 
             if (Identity.Area < 0) ImGui.TextDisabled("No area loaded.");
             else
@@ -501,7 +525,7 @@ public static class Editor
             ImGui.SameLine();
             ImGui.Checkbox("Pick on the picture", ref Picking);
             if (ImGui.IsItemHovered())
-                ImGui.SetTooltip("A click on the game picture selects the faces under it; Shift+click adds or removes. " +
+                ImGui.SetTooltip("A click on the game picture selects the faces under it, or the model; Shift+click adds or removes faces. " +
                                  "Faces lying on top of each other are picked together. " +
                                  "Right-click a tile in the docked map (Shift+M) selects its whole half.");
             ImGui.SameLine();
@@ -509,6 +533,12 @@ public static class Editor
             ImGui.EndDisabled();
             if (Picking && _pickWhy != null) ImGui.TextDisabled($"Nothing picked: {_pickWhy}.");
 
+            if (SelectedModel is { } mk && m != null)
+            {
+                ImGui.Text($"{mk} (every draw of it in the area)");
+                MaterialCombo(m, Blocked(mk.Area));
+                return;
+            }
             if (Selected is not { } k || m == null) { ImGui.TextDisabled("Nothing selected."); return; }
             if (SelectedFaces.Count == 0)
             {
@@ -541,8 +571,12 @@ public static class Editor
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip("Assign to the mesh wherever this area uses it. A half's own assignment still wins on that half.");
 
+            MaterialCombo(m, Blocked(k));
+        }
+
+        static void MaterialCombo(RecompOne.Runtime.Memory.IMemory m, string? blocked)
+        {
             string current = SelectionMaterial(m) ?? "(none)";
-            string? blocked = Blocked(k);
             ImGui.BeginDisabled(blocked != null);
             ImGui.SetNextItemWidth(220);
             if (ImGui.BeginCombo("Material", current))
@@ -579,6 +613,43 @@ public static class Editor
                 if (ImGui.IsItemHovered()) ImGui.SetTooltip("Remove from the library");
                 Slider(mat.Name, "reflectivity", "Reflectivity", mat.Reflectivity);
                 Slider(mat.Name, "f0", "F0", mat.F0);
+                Slider(mat.Name, "roughness", "Roughness", mat.Roughness);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Blurs the reflection, more the further what it shows is, and widens the highlight.");
+                Slider(mat.Name, "metalness", "Metalness", mat.Metalness);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How much the reflection and the highlight take the surface's own colour: 0 stone, 1 metal.");
+                Slider(mat.Name, "specular", "Specular", mat.Specular);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("The highlight authored lights (and glows) leave on it. Its size is the roughness.");
+                Slider(mat.Name, "occlusion", "Occlusion", mat.Occlusion);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How much ambient occlusion darkens it. A glowing material defaults to 0.");
+                Colour(mat.Name, "emissive", "Emissive", mat.Emissive);
+                Slider(mat.Name, "emissiveStrength", "Glow", mat.EmissiveStrength, 4f);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Light the surface gives off, fogged like the game's own light. " +
+                                     "Needs per-pixel lighting.");
+                bool additive = mat.GlowAdditive;
+                if (ImGui.Checkbox("Light source", ref additive))
+                    Pack.SetText(mat.Name, "glowMode", additive ? null : "lit");
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("On: the glow is added over the texture, so its dark texels light too.\n" +
+                                     "Off: the glow lights the texture, which shows it brighter (1 is the texture at full).");
+                ImGui.SameLine();
+                ImGui.BeginDisabled(!additive);
+                bool fog = !mat.GlowUnfogged;
+                if (ImGui.Checkbox("Fogged", ref fog)) Pack.SetFlag(mat.Name, "glowFog", fog ? null : false);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("Off: the glow stays bright in the dark distance, like a lamp.");
+                ImGui.EndDisabled();
+                Slider(mat.Name, "light", "Light", mat.Light, Pack.MaxLight);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("The light it gives off, in the emissive colour, with or without a glow of its own. " +
+                                     "It lights what is around it and not the material itself.");
+                Slider(mat.Name, "glowRadius", "Light reach", mat.GlowRadius, Pack.MaxGlowRadius, "%.0f");
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far that light reaches, in world units (a tile is 2048). 0 gives no light.");
+                Slider(mat.Name, "pulseAmount", "Pulse", mat.PulseAmount);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("How far the glow and its light dip, on the world clock.");
+                Slider(mat.Name, "pulseHz", "Pulse rate", mat.PulseHz, 10f, "%.2f Hz");
+                bool flicker = mat.PulseFlicker;
+                if (ImGui.Checkbox("Flicker", ref flicker)) Pack.SetText(mat.Name, "pulseStyle", flicker ? "flicker" : null);
+                if (ImGui.IsItemHovered()) ImGui.SetTooltip("On: an irregular flicker, like a flame. Off: a steady breathing.");
                 ImGui.PopID();
             }
             if (remove != null) Pack.RemoveMaterial(remove);
@@ -595,15 +666,36 @@ public static class Editor
         }
 
         /// <summary>Live while held, one undo entry on release.</summary>
-        void Slider(string name, string field, string label, float value)
+        void Slider(string name, string field, string label, float value, float max = 1f, string format = "%.3f")
         {
             ImGui.SetNextItemWidth(200);
             float v = value;
-            if (ImGui.SliderFloat(label, ref v, 0f, 1f, "%.3f")) Pack.Preview(name, field, v);
+            if (ImGui.SliderFloat(label, ref v, 0f, max, format)) Pack.Preview(name, field, v);
             if (ImGui.IsItemActivated()) { _held = name + "." + field; _heldFrom = value; }
             if (ImGui.IsItemDeactivatedAfterEdit() && _held == name + "." + field)
             {
                 Pack.SetField(name, field, Pack.GetField(name, field), _heldFrom);
+                _held = null;
+            }
+        }
+
+        Vector3 _heldColour;
+
+        /// <summary>A colour field, live while held, one undo entry on release.</summary>
+        void Colour(string name, string field, string label, Vector3 value)
+        {
+            ImGui.SetNextItemWidth(200);
+            var v = value;
+            bool changed = ImGui.ColorEdit3(label, ref v, ImGuiColorEditFlags.Float);
+            if (ImGui.IsItemActivated()) { _held = name + "." + field; _heldColour = value; }
+            if (changed)
+            {
+                if (ImGui.IsItemActive() && _held == name + "." + field) Pack.PreviewColour(name, field, v);
+                else Pack.SetColourField(name, field, v);
+            }
+            if (ImGui.IsItemDeactivatedAfterEdit() && _held == name + "." + field)
+            {
+                Pack.SetColourField(name, field, Pack.GetColour(name, field), _heldColour);
                 _held = null;
             }
         }
@@ -630,6 +722,21 @@ public static class Editor
             var min = OutputView.Min;
             var size = OutputView.Size;
             return new Vector2(min.X + (game.X + margin) / picW * size.X, min.Y + game.Y / OutputView.GameH * size.Y);
+        }
+
+        /// <summary>The selected model's triangles from the last frame, tinted over the picture.</summary>
+        static void HighlightModel(ModelKey k)
+        {
+            if (!OutputView.Valid || OutputView.GameW <= 0) return;
+            var dl = ImGui.GetForegroundDrawList();
+            dl.PushClipRect(OutputView.Min, OutputView.Max, true);
+            uint col = ImGui.GetColorU32(new Vector4(0.3f, 0.85f, 1f, 0.35f));
+            foreach (var t in Faces.Last)
+            {
+                if (t.Rec != 0 || t.Model != k.Model || t.Kind != k.Kind) continue;
+                dl.AddTriangleFilled(WindowPixel(new(t.X0, t.Y0)), WindowPixel(new(t.X1, t.Y1)), WindowPixel(new(t.X2, t.Y2)), col);
+            }
+            dl.PopClipRect();
         }
 
         /// <summary>The selection's triangles from the last frame, tinted over the picture.</summary>

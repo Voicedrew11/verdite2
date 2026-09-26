@@ -3,8 +3,8 @@
 **A design document, and from Phase 1 on a record of the work done against it.**
 Phase 1 is in, in two slices (see "Phase 1, the first slice" and "Phase 1, the
 second slice" under the roadmap), with materials since keyed by face ("Faces, picked
-from the frame"); Phase 2 has its first slice ("Phase 2, the first slice");
-everything else is still design. The
+from the frame"); Phase 2 has its first slice ("Phase 2, the first slice"), and so
+does Phase 3 ("Phase 3, the first slice"); everything else is still design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -259,7 +259,11 @@ work into layers, and each layer has one owner.
    `snap`'s readback of the presented picture took `0069` and the hook order
    `0070`, so each planned number moved along from what this plan first said.
    `0071` is in (see "Phase 2, the first slice"); the block holds the light list
-   only so far, and the material table is still `0067`'s.
+   only. **The material table did not move into it**: it stays `SurfaceMaterial`'s,
+   widened by the `0067` amendment and uploaded as a 256×2 texture that the prim and
+   reflection shaders both read, because 256 ids of reflectivity, F0, roughness and
+   an emissive colour as uniform arrays would pass the fragment stage's uniform
+   minimum (see "Phase 3, the first slice").
 
    All of it is **GL core only**; the 2.1 path and the software rasterizer ignore
    it, as they do `0048` and `0067`.
@@ -328,7 +332,9 @@ time and two packs cannot collide on a number:
 Surfaces assign materials, and the most specific key wins: a face of a half, the
 whole half, a face of a mesh anywhere in the area, the whole mesh. A face list names
 the mesh it was authored on and that mesh's hash, and applies only while both still
-hold (see "Faces, picked from the frame"). `models` is not built yet:
+hold (see "Faces, picked from the frame"). A model is named by the table it comes
+out of and its model id, since a creature and an object may share an id and not a
+mesh:
 
 ```json
 // areas/1/surfaces.json
@@ -338,7 +344,7 @@ hold (see "Faces, picked from the frame"). `models` is not built yet:
                 "mesh": 1, "meshHash": "8613becbcde29491", "faces": { "1": "mirror" } } ],
   "meshes": [ { "mesh": 12, "meshHash": "0c41d9e2a7b3f865", "material": "wet-rock",
                 "faces": { "3": "polished-stone" } } ],
-  "models": [ { "model": 41, "material": "brazier-coal" } ] }
+  "models": [ { "kind": "object", "model": 486, "material": "brazier-coal" } ] }
 ```
 
 Lights are world positions in the game's own units: a tile is 2048, a height step
@@ -443,9 +449,10 @@ is a command-line converter.
   within the coplanar tolerance of it. That is what the depth buffer drew, walls
   and ceilings included. It replaced a ray through the 80×80 grid, which could see
   only floors (see "Faces, picked from the frame").
-- **Models:** the same ray against `ModelWalk.Scene`'s positions with a bounding
-  radius per model id. It returns a `ModelDraw`, and through that an instance or
-  a model key.
+- **Models:** the same triangles. A model's are recorded with the kind and model
+  id the object walk was submitting, so a click whose nearest triangle is a model's
+  selects that model (`model:1:object:486`) rather than refusing. Instances are not
+  told apart: a material on a model is on every draw of it in the area.
 - **Textures:** on a click, a one-frame `FrameCapture`, which already answers
   which GP0 command and owner routine drew a pixel. The command gives the page,
   the CLUT and the UVs, and from those upstream's key. It is only needed on a
@@ -1149,16 +1156,302 @@ neither was a light on the arm.
 ### Phase 3: the material system proper
 
 - **Ships:**
-  - the `0067` amendment: ids widened to 256, which fits exactly in the
-    `RGBA16F` alpha, with the table moved into `RemasterUniforms`;
-  - materials keyed by tile mesh, model and texture index hash, resolved in that
-    order after the tile half;
-  - emissive, which adds to the lit term the way a light does, and roughness,
-    which only SSR reads, as a blur of its hit.
+  - [x] the `0067` amendment: ids widened to 256 (the `RGBA16F` alpha holds them
+    exactly); the table stayed `SurfaceMaterial`'s, as a texture, not in
+    `RemasterUniforms`;
+  - [~] materials keyed by tile mesh (Phase 1's faces), model (in) and texture
+    index hash (not started: it waits on Phase 4's key census);
+  - [x] emissive, which adds to the lit term the way a light does, and roughness,
+    which only SSR reads, as a blur of its hit;
+  - [x] metalness, specular, occlusion, a light of its own, pulse and unfogged glow
+    (the second slice).
 - **Mechanism measured by:** the `ByMaterial` census for every source; the
-  reflection census identical with no pack; `shader_probe.c` for emissive.
+  reflection census identical with no pack; `shader_probe.c` for emissive
+  (`light_probe.c` in the event, since the term is `0071`'s).
 - **You look at:** emissive surfaces in the dark areas; how roughness looks on
   SSR.
+
+### Phase 3, the first slice
+
+**What is in.** Two material properties, a key, and the table they need:
+
+- **Runtime, `0067` amended**: `SurfaceMaterial.Count` 256, `BlendedFlag` 256,
+  `Roughness`, `Emissive`, `Generation` and `Changed()`. `GlCore` uploads the table
+  as a 256×2 RGBA32F texture when the generation moves: row 0 reflectivity, F0 and
+  roughness for `SsrFs`, row 1 the emissive colour for `PrimFs`.
+- **Roughness** is a blur of the reflection, not a jittered ray: nine taps over the
+  footprint of the cone the reflected ray stands for, `roughness × distance`
+  across at the hit's depth, skipping taps under the HUD or off the picture. A
+  planar lookup takes its distance from the planar texture's depth. 0 is the single
+  read it was.
+- **Emissive, `0071` amended**: the packet's material rides in the light buffer
+  (attribute 11), and `PrimFs` adds its row-1 colour to the authored term, before
+  the depth cue and times the packet's RGBC, so a glow is fogged and textured like
+  the game's own light and strength 1 shows the texture at full. It needs no depth,
+  so it is drawn into a planar reflection too. Only a packet with a `0048` record
+  glows, which needs per-pixel lighting and Fast geometry.
+- **The first thing that did not work**: a glowing model changed no pixel. A face
+  with no fog at all keeps no light record (it interpolates the same per pixel), and
+  near the eye that is every face; only authored lights kept them
+  (`PolyAssembler.KeepUnfogged`). It is now kept for either reason, each owned by
+  its feature (`KeepForLights`, `KeepForGlow`), and only while the area has a
+  glowing material applied.
+- **Models**: `ModelWalk`'s submitter asks `Surfaces.EnterModel(kind, model)` before
+  the assembler call and `SealDepth` writes the id as it does for a tile.
+  `surfaces.json` gains `models`, keyed by kind and model id. `Faces` records a
+  model's triangles with both, so a click on a model selects it; the editor tints
+  its triangles and gives it the material combo. Nothing is keyed by instance.
+- The editor's library gains *Roughness*, *Emissive* (a colour) and *Glow* (0-4);
+  a colour held is one undo entry. Shell: `select model:A:KIND:ID`, `select pick`
+  answering a model, `set model:... material NAME`, `set material:NAME
+  roughness|emissiveStrength V` and `emissive R G B`; `pack list` shows models and
+  the new fields; `remaster` gives `byMaterial` as only the ids drawn, the table's
+  uploads and whether anything glows.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, `KF2_SSR=1`, a scratch pack,
+144 fps, render scale 5, 16:9, the view pinned with the editor open):
+- **The formula.** `light_probe.c` adds three passes: glow on with material 0,
+  glow on with a glowing material and no depth, glow off with the same material.
+  Worst difference from the formula 0 in all six passes; the first and third new
+  ones are the program as `0071` left it, to the bit.
+- **Off is the picture it was.** With nothing authored, remaster on and off gave
+  `210d55698c875fb8`, the hash Phase 2 recorded at this view before this change, so
+  moving the table into a texture moved no pixel.
+- **A model glows, and only it.** `select pick 180 100` chose
+  `model:1:object:486` (63 triangles). At glow 1.5 the picture changed in 11.1% of
+  its pixels, by up to 153 levels, all inside render pixels 930-1378 by 0-912, the
+  model's rectangle; at 0.5, by up to 94. At glow 0 -- the records kept, the term
+  zero -- and with the remaster off, the hash was the baseline's.
+- A face of a floor half in area 0 at glow 1.5 changed 3.2% of the picture, all in
+  the bottom rows where it lies.
+- **Roughness moves only the reflection.** A mirror (reflectivity 1, F0 0.5) on a
+  floor face; roughness 0.3 and 1 changed 3.6-3.9% of the picture, inside the
+  floor's rectangle, by up to 15-24 levels. Back at 0 the hash was the mirror's own
+  again.
+- **The saved pack reproduces it.** After a restart, the same view's hash was the
+  one before (`22f23314bc315e90`).
+- **Verify.** `KF2_POLYASM=verify KF2_TILEWALK=verify` in area 0 with the glowing
+  face applied and sealed: 899 reports over the nine routines, all 0 RAM, register
+  and GTE mismatches. `KF2_MODELWALK=verify` into area 1 with the glowing model: 72
+  reports, one of them 1 RAM mismatch in `func_800331B4`, in area 0 before the save
+  loaded (a word at `0x80073DF4`), which is the ambient-sound key-on the walk's
+  verify is documented to show ("A verify pass replays, it does not re-run" in
+  `PATCHES_AND_MODS.md`) -- **Inferred**, since the probe that counts key-ons was
+  not on. The picture under that verify was the normal run's hash. All three
+  verifiers together run at 0.2 fps in area 0, too slow to reach a save.
+- 144.0 fps drawn at 19.9-20.0 ticks/s in area 1 with the pack applied, and in
+  area 0 with the glow on and with the remaster off; `[present] wide 288, plain 0,
+  vram fallback 0`. One view in area 0 facing the sea, editor open, read 114 fps;
+  it was not compared with the build before this and is not explained.
+- **Cost:** nothing glowing, one bool a batch. Glowing, one texel fetch per
+  fragment of a recorded packet, and the records of unfogged faces kept, as authored
+  lights already do. Roughness 0 costs nothing; above it, eight more reads per
+  reflective pixel.
+
+**Not judged.** Most of the look: how a glow reads through the fog, roughness on a
+floor mirror and on water, the editor's new controls and the model tint. One glow
+was looked at; see below. Under `KF2_MODELWALK=verify` a click cannot pick a model (the last
+submit recorded is the recompiled pass's, which names nothing).
+
+**Looked at: glow reads as lit, not glowing.** Judged from play (area 0, a wall
+panel at glow 4.0, roughness 1): "it kinda looks like it's glowing, but not quite".
+Two causes in the design, neither of them the missing bloom:
+- **It multiplies the texture.** The term is added to the lit colour *before*
+  the texture is modulated, so glow 4 is "the texture at twice full, clipped": the
+  texture's dark blotches stay dark and the panel reads as overexposed stone. Right
+  for a lit window; wrong for a light source.
+- **Nothing around it is lit.** The floor in front of the panel is as dark as
+  anywhere else, and that is the strongest glow cue there is.
+- Roughness did nothing in that shot, correctly: it only blurs a reflection, and
+  the panel had reflectivity 0.
+
+**Next, for glow** (agreed with the user; 2 and 3 are built, see "The glow is a
+light source" below):
+1. **Try by hand first**: an authored point light just in front of the panel, the
+   glow's colour, radius 1500-3000. The user was to say whether that is much
+   closer; if so, build 2 and 3 together.
+2. **A glowing material gives off a light.** `Lights` builds the frame's list from
+   `Pack.Lights(area)` (`patches/remaster/Lights.cs`, `Resolve` and the publish
+   before `DrawOTag`); add derived lights for the area's glowing faces and models.
+   A tile face's world position comes from its half (`Identity`: tile X, Z at 2048
+   units, the floor at `-(h) << 7`) and the mesh's vertices (`Faces.Mesh`); a
+   model's from `ModelWalk.Scene`. The cap is 16 lights, nearest first, so derived
+   ones compete with authored ones; decide which wins. Keep it off with no glowing
+   material, so off stays bit-identical.
+3. **An additive glow mode**: add the emissive colour *after* the texture is
+   modulated, so dark texels light too. The term is in `PrimFs`
+   (`GlShaders.cs`: `extra += texelFetch(uMatTable, ivec2(int(vMat), 1), 0).rgb`
+   in `main`, applied in `shade8`); row 1's alpha of the material table is free for
+   a mode flag (`GlCore.BindMaterials`, `SurfaceMaterial.Emissive`). Keep the
+   current mode as the other choice, extend `scripts/light_probe.c` for the new
+   one, and amend `0071` (a correction to its own term, not a new mechanism).
+4. Bloom is a pass on the finished picture, a separate feature, later.
+
+**Next, otherwise.** The texture key needs Phase 4's census before anything is keyed
+by it, so this phase's third key waits for that. Instances (one door, not every
+door) need the slot measurement "Identity" asks for. Roughness on a mirror floor and
+on water has still not been looked at.
+
+### The glow is a light source
+
+Items 2 and 3 above, built together.
+
+- **An additive glow, the new default** (`0071`, amended again). Row 1's alpha of
+  the material table says how an id glows (`SurfaceMaterial.EmissiveAdditive`):
+  additive adds RGBC times the glow *after* the texture is modulated, so a dark
+  texel lights as much as a bright one; the old mode (`"glowMode": "lit"`) is kept.
+  The additive term is fogged on the packet's own depth-cue curve, like everything
+  else the game draws: an unfogged glow would pop out of the black at the draw
+  window's edge, where the tiles themselves are cut. `PrimFs` splits the curve out of
+  `shade8` as `cueWeight()` and adds the fogged glow, `gGlow8`, to the modulated colour
+  on every output path (flat, texture, replacement texture, replacement CLUT). Zero
+  on every packet without an additive glow, so the other programs are unchanged.
+- **A glowing material gives off a light** (`Lights`). When the area applies, every
+  tile half with a glowing face gets one point light per material: the glowing
+  faces' area-weighted centroid, 192 units out along their summed normal. A face's
+  world corners are the half's placement (the tile centre, the floor at `-(h << 7)`)
+  plus its mesh vertex (`table + 0xC + header[+0]`, 8 bytes a vertex, indexed by byte
+  offset), turned by the record's quarter turn as `func_80014B88` turns the matrix:
+  1 is `(z, y, -x)`, 2 `(-x, y, -z)`, 3 `(-z, y, x)`. Its normal is the one the game
+  lights it with (`header[+8]`, indexed from the face), turned the same way. A
+  glowing model gets a light 384 units above its origin, per draw, from
+  `ModelWalk.Scene`. The light's colour is the glow's, times *Glow light*
+  (`glowLight`, 0.5 by default); its radius is *Glow reach* (`glowRadius`, 2048;
+  0 gives no light).
+- **Authored lights win the 16 slots.** Every derived light ranks after every
+  authored one, then nearest first. They were placed by hand; a derived light
+  comes from any glowing face, however many there are.
+- Editor: *Light source* (the mode), *Glow light*, *Glow reach* under each material.
+  Shell: `set material:NAME glowMode additive|lit`, `glowLight V`, `glowRadius V`;
+  `light list` gives each derived light (`glow`) with its normal and projection,
+  and `modelGlow`.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, 144 fps,
+render scale 5, 16:9, reflections on, the view pinned with the editor open: camera
+`73709,-16448,74986`, pitch 26, yaw 2639, the same view as Phase 2's hash):
+- **The formula.** `light_probe.c` gains four passes on a strip textured with a
+  known 15-bit texel: no glow, the lit glow, the additive glow, and the additive
+  glow untextured. Worst difference from the formula **0** in all ten passes; the
+  first six read as before, to the line.
+- **Off is the picture it was**: `210d55698c875fb8` with nothing authored, remaster
+  on or off, and again after every glow was set back to 0. A zero-glow material that
+  keeps its default reflectivity 0.3 is not the baseline with reflections on, which
+  is its reflection and not the glow: at reflectivity 0 it is.
+- **A wall panel** (`tile:1:37:36:upper`, face 2, colour 1,0.6,0.25, glow 1.5): the
+  panel's darkest tenth of pixels had a mean luminance of 54 unglowing, **98 lit**
+  and **179 additive**; the median 73, 135, 196. Only the panel's own rectangle
+  changed in either mode (12.1% of the picture).
+- **Its light** sits at `77376,-17248,74885` with the normal `(-1,0,0)`, towards
+  the camera at X 73709, so the lit side is the side the camera can see (it would be
+  backface-culled from the other). It projects inside the panel, at depth 2914. At
+  glow light 0.5 and reach 2048 it changed 336,078 more pixels outside the panel, by
+  up to 29 levels, and **darkened none**. A second face, a wall facing +Z, got a
+  normal of `(0,0,1)` with the camera on that side too.
+- A glowing model (`model:1:object:486`) got its light (`modelGlow 1`, three sent).
+- The saved pack reproduced the same hash after a restart (`d8c08a2ca30faedc`).
+- 144.0 fps drawn at 20.0 ticks/s with the panel's glow and light, editor closed;
+  `[present] wide 288, plain 0, vram fallback 0`.
+- **Cost**: a half is looked at only if something is authored on it, once per apply;
+  a model's light is one dictionary lookup per model drawn, only while a model
+  material gives light.
+
+**Changed for an existing pack.** A material without `glowMode` is now additive,
+so a pack saved in Phase 3 draws its glows differently, and gives off light unless
+its reach is set to 0. The Phase 3 hashes above are of the old mode.
+
+**Not judged.** The whole look: whether the additive glow and the spill now read as
+a light source, the defaults (glow light 0.5, reach 2048), a model's light at 384
+above its origin (a guess at the middle of a figure; a view-space model such as the
+arm would get one at a meaningless position), several adjacent halves each giving
+a light (they add), and fog on the glow. Bloom is still item 4.
+
+**Looked at: glow.** "It looks pretty good." The same judgement asked for a light
+that leaves the texture alone, which the second slice below adds.
+
+**Looked at: roughness.** At 1.0 the reflection on a mirror floor turned into a
+fine woven crosshatch rather than a smear; see the second slice.
+
+### Phase 3, the second slice
+
+**What is in.** Everything a material could still say without a texture key:
+
+- **Roughness, without the weave** (`0067`, amended). The blur now reads a half-size
+  mip chain of the picture (and of the planar texture) at the level whose texel
+  spans the blur, instead of eight sparse taps turned per pixel. Roughness is
+  squared before use, so the slider's lower half is the useful range.
+- **Metalness** (`0067`): the reflection takes the surface's hue at full value, so a
+  dark bronze tints what it reflects without darkening it.
+- **Specular** (`0071`, amended): the highlight an authored light, or a glow's own
+  light, leaves. Normalised Blinn-Phong, its size from roughness, added past the
+  texture, fogged, and tinted by the texel on a metal.
+- **Occlusion** (`0067`): how much the occlusion pass darkens a material, applied at
+  the present from the surface buffer's id. A glowing material defaults to 0.
+- **Light without glow**: `"light"` is the material's own light intensity, in its
+  emissive colour, whether or not the surface glows; without it, a material reads as
+  it did (`glowLight`, 0.5, times the glow). **A material's light does not light that
+  material** (a point's outer cosine carries the id, `0071`), so a lamp with no glow
+  keeps its texture exactly and a glowing panel is no longer lit by itself too.
+- **Glow ignores fog** (`"glowFog": false`), additive glows only.
+- **Pulse**: `pulseAmount`, `pulseHz`, `pulseStyle` breathe or flicker, on the world
+  tick (`Lights.Ticks`, now counted whether or not a light is sent), so it holds while
+  the world is paused. The glow and its light pulse together.
+- Editor: *Metalness*, *Specular*, *Occlusion*, *Fogged*, *Light*, *Light reach*,
+  *Pulse*, *Pulse rate*, *Flicker*. Shell: `set material:NAME metalness|specular|
+  occlusion|light|pulseAmount|pulseHz V`, `glowFog on|off`, `pulseStyle breathe|flicker`.
+
+**Measured** (area 1, the pinned view, reflections on, a scratch pack):
+- **The weave was the roughness blur, not the reflections.** A mirror floor
+  (`tile:1:37:36:upper` face 3) at roughness 0, 0.5 and 1, on the previous build and
+  this one, each with the pass at 2x and at full resolution; the autocorrelation of
+  the reflection's fine detail:
+
+  | build, pass | roughness 0 | 0.5 | 1 |
+  |---|---|---|---|
+  | previous, 2x | no repeat | **every 8 px, +0.50** | **8 px, +0.39** |
+  | previous, full | no repeat | **every 4 px, +0.72** | **4 px, +0.68** |
+  | this, 2x or full | no repeat | no repeat | no repeat |
+
+  The repeat was the 4x4 pattern at the pass's resolution (render scale 4 there),
+  so the resolution set its size and not its existence. The dark band under the ledge
+  in the report's shots was not checked; it is in area 0.
+- **The formula.** `light_probe.c`: 14 passes, 126 cases, every one 0 from the
+  formula; the first ten read as before. The skip pass lights 452 pixels of 512.
+- **Off is the picture it was**: `210d55698c875fb8` with nothing authored, and again
+  after each new term was set back to 0.
+- **Light only** (colour 1,0.7,0.4, light 1.5, reach 3000, no glow, on the wall
+  panel): all 309,703 of the panel's pixels unchanged; 601,350 around it lit; none
+  darker.
+- **Specular 1** on the floor under a light placed to mirror into it: at roughness
+  0.5, 66,444 pixels brighter by up to 49; at 0.2, 6,245 by up to 213; none darker.
+  On a metal the same pixels take the texel's colour.
+- **Metalness 1** on a mirror floor changed its reflection by up to 24 levels.
+- **Occlusion 0** on a wall: 210,402 pixels brighter by up to 10, none darker.
+- **Pulse** 1 at 2 Hz: three snaps 0.3 s apart with the world running, three hashes;
+  with the editor open, the same hash twice.
+- 144.0 fps drawn at 20.0 ticks/s with all of it at once (a pulsing glowing panel
+  with its light, a rough metal mirror floor with a highlight, a wall at occlusion 0
+  and an authored light), editor closed; `[present] wide 288`.
+
+**Changed for an existing pack.** A glowing material is exempt from occlusion unless
+it says otherwise, and its light no longer lights itself, so a glowing panel reads a
+little dimmer than in the first slice. Roughness is squared, so a saved value blurs
+less than it did.
+
+**Not judged.** All of it: whether roughness 0.2-0.5 reads as polished or wet stone
+and whether the blur grows with distance as it should, highlights on the floor and
+on models, metal on a mirror, a pulse's rate and a flicker's feel, a lamp with no
+glow, an unfogged glow at the edge of the draw window. The blur reads the whole
+picture, HUD included, at high roughness near it.
+
+**Looked at: metalness is hard to see.** "I'm struggling to see metalness
+whatsoever." Three reasons in the design: it only tints the reflection and the
+highlight, so with reflectivity 0 (or reflections off) and no highlight it does
+nothing; the tint is the surface's hue, and this game's stone is nearly grey
+(measured: 24 levels at most); and it leaves out what makes a metal read as one --
+a strong reflection looking straight at it (F0 is not raised) and a darker base
+colour. **Next** (proposed, not started): metalness pulls F0 up to the reflectivity,
+darkens the surface's own colour, and saturates the tint a little; whether it also
+brings some reflectivity of its own when that is 0 is the user's call.
 
 ### Phase 4: textures
 

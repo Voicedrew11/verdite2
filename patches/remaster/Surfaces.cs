@@ -1,15 +1,19 @@
+using System.Numerics;
 using RecompOne.Runtime;
 
 namespace Kf2.Remaster;
 
 /// <summary>
-/// Authored materials on map tiles. The pack names a material for a whole tile half,
-/// for faces of the mesh a half draws, and for faces of a mesh wherever the area uses
-/// it; this resolves the names to <see cref="SurfaceMaterial"/> ids when the area
-/// settles or the pack changes. <see cref="TileWalk"/> asks for the half it is
-/// assembling and <see cref="Faces"/> for each face, and <c>PolyAssembler.SealDepth</c>
-/// writes the id into the packet's depth record. From there it is 0067's: the surface
-/// buffer carries it and the reflection pass reads the material's reflectivity and F0.
+/// Authored materials on map tiles and models. The pack names a material for a whole
+/// tile half, for faces of the mesh a half draws, for faces of a mesh wherever the area
+/// uses it, and for a model wherever the area draws it; this resolves the names to
+/// <see cref="SurfaceMaterial"/> ids when the area settles or the pack changes.
+/// <see cref="TileWalk"/> asks for the half it is assembling, <see cref="Faces"/> for
+/// each face and <see cref="ModelWalk"/> for each model, and
+/// <c>PolyAssembler.SealDepth</c> writes the id into the packet's depth record. From
+/// there it is the runtime's: the surface buffer carries it to the reflection pass
+/// (reflectivity, F0, roughness, 0067), and the light record to the prim shader
+/// (emissive, 0071).
 ///
 /// The most specific entry wins: the half's face, the whole half, the mesh's face, the
 /// whole mesh. A face list applies only to the mesh it was authored on, and only while
@@ -30,6 +34,9 @@ public sealed class Surfaces : IRemasterFeature
     /// <summary>Face lists by half index, each with the mesh it was authored on.</summary>
     static readonly Dictionary<int, (int Mesh, byte[] Ids)> _tileFaces = new();
 
+    /// <summary>Models by kind and id.</summary>
+    static readonly Dictionary<(ModelKind, int), byte> _models = new();
+
     /// <summary>Area-wide rules by mesh: a whole-mesh id and a face list.</summary>
     static readonly Dictionary<int, byte> _meshWhole = new();
     static readonly Dictionary<int, byte[]> _meshFaces = new();
@@ -47,6 +54,37 @@ public sealed class Surfaces : IRemasterFeature
 
     /// <summary>The name each authored id was given, from <see cref="SurfaceMaterial.FirstAuthored"/>.</summary>
     public static readonly string?[] IdNames = new string?[SurfaceMaterial.Count];
+
+    /// <summary>The light a glowing id gives off (colour times intensity), and how far
+    /// it reaches; a radius of 0 is none. Read by <see cref="Lights"/>.</summary>
+    public static readonly Vector3[] GlowLight = new Vector3[SurfaceMaterial.Count];
+    public static readonly float[] GlowRadius = new float[SurfaceMaterial.Count];
+
+    /// <summary>Whether an id gives off a light.</summary>
+    public static bool GivesLight(byte id) => id != 0 && GlowRadius[id] > 0f;
+
+    /// <summary>Each id's glow before its pulse, and the pulse: amount, rate, and
+    /// whether it flickers (value noise) or breathes (a sine).</summary>
+    static readonly Vector3[] _baseGlow = new Vector3[SurfaceMaterial.Count];
+    static readonly (float Amount, float Hz, bool Flicker)[] _pulse = new (float, float, bool)[SurfaceMaterial.Count];
+    static bool _anyPulse;
+    static long _pulseTick = -1;
+
+    /// <summary>What an id's pulse multiplies its glow and its light by this tick.</summary>
+    public static readonly float[] Pulse = Filled(1f);
+
+    static float[] Filled(float v)
+    {
+        var a = new float[SurfaceMaterial.Count];
+        Array.Fill(a, v);
+        return a;
+    }
+
+    /// <summary>Bumped each time the area's surfaces are applied or cleared.</summary>
+    public static int Serial { get; private set; }
+
+    /// <summary>Whether any model rule's material gives off a light.</summary>
+    public static bool ModelsGiveLight { get; private set; }
 
     /// <summary>Why the area's surfaces are not applied, or null.</summary>
     public static string? Refused { get; private set; }
@@ -71,6 +109,7 @@ public sealed class Surfaces : IRemasterFeature
             if (!Host.Enabled) ClearIds();
             return;
         }
+        if (_anyPulse) StepPulse();
         // A face list is checked against its mesh, which is readable once the tile walk
         // has noted the table.
         if (_version == Pack.Version && _settle == Identity.Settles && _tableSerial == Faces.TableSerial) return;
@@ -93,10 +132,16 @@ public sealed class Surfaces : IRemasterFeature
         _tileFaces.Clear();
         _meshWhole.Clear();
         _meshFaces.Clear();
-        _active = PerFace = false;
+        _models.Clear();
+        _active = PerFace = ModelsGiveLight = false;
+        Serial++;
+        PolyAssembler.KeepForGlow = false;
+        PolyAssembler.Keep();
         _tf = _mf = null;
         _half = _meshAll = 0;
     }
+
+    static bool _idsSet;
 
     static void ClearIds()
     {
@@ -104,8 +149,23 @@ public sealed class Surfaces : IRemasterFeature
         {
             SurfaceMaterial.Reflectivity[i] = 0f;
             SurfaceMaterial.F0[i] = 0f;
+            SurfaceMaterial.Roughness[i] = 0f;
+            SurfaceMaterial.Emissive[i * 3] = SurfaceMaterial.Emissive[i * 3 + 1] = SurfaceMaterial.Emissive[i * 3 + 2] = 0f;
+            SurfaceMaterial.EmissiveAdditive[i] = false;
+            SurfaceMaterial.EmissiveUnfogged[i] = false;
+            SurfaceMaterial.Metalness[i] = 0f;
+            SurfaceMaterial.Specular[i] = 0f;
+            SurfaceMaterial.Occlusion[i] = 1f;
+            _baseGlow[i] = Vector3.Zero;
+            _pulse[i] = default;
+            Pulse[i] = 1f;
+            GlowLight[i] = Vector3.Zero;
+            GlowRadius[i] = 0f;
             IdNames[i] = null;
         }
+        if (_idsSet) SurfaceMaterial.Changed();
+        _idsSet = false;
+        _anyPulse = false;
     }
 
     static void Apply()
@@ -115,20 +175,40 @@ public sealed class Surfaces : IRemasterFeature
         MeshRefused = 0;
 
         // Ids are handed out by name at load time, so two packs never collide on a
-        // number. 0067's table has eight and the runtime keeps four.
+        // number. 0067's table has 256 and the runtime keeps four.
         var ids = new Dictionary<string, byte>();
-        byte next = SurfaceMaterial.FirstAuthored;
+        int next = SurfaceMaterial.FirstAuthored;
         int over = 0;
         foreach (var m in Pack.Materials())
         {
             if (next >= SurfaceMaterial.Count) { over++; continue; }
-            ids[m.Name] = next;
+            ids[m.Name] = (byte)next;
             IdNames[next] = m.Name;
             SurfaceMaterial.Reflectivity[next] = Math.Clamp(m.Reflectivity, 0f, 1f);
             SurfaceMaterial.F0[next] = Math.Clamp(m.F0, 0f, 1f);
+            SurfaceMaterial.Roughness[next] = Math.Clamp(m.Roughness, 0f, 1f);
+            var colour = Vector3.Clamp(m.Emissive, Vector3.Zero, Vector3.One);
+            var e = colour * Math.Clamp(m.EmissiveStrength, 0f, 4f);
+            _baseGlow[next] = e;
+            SurfaceMaterial.Emissive[next * 3] = e.X;
+            SurfaceMaterial.Emissive[next * 3 + 1] = e.Y;
+            SurfaceMaterial.Emissive[next * 3 + 2] = e.Z;
+            SurfaceMaterial.EmissiveAdditive[next] = m.GlowAdditive;
+            SurfaceMaterial.EmissiveUnfogged[next] = m.GlowAdditive && m.GlowUnfogged;
+            SurfaceMaterial.Metalness[next] = Math.Clamp(m.Metalness, 0f, 1f);
+            SurfaceMaterial.Specular[next] = Math.Clamp(m.Specular, 0f, 1f);
+            SurfaceMaterial.Occlusion[next] = Math.Clamp(m.Occlusion, 0f, 1f);
+            // The light is its own: a material may give light with no glow at all.
+            GlowLight[next] = colour * Math.Clamp(m.Light, 0f, Pack.MaxLight);
+            GlowRadius[next] = GlowLight[next] != Vector3.Zero ? Math.Clamp(m.GlowRadius, 0f, Pack.MaxGlowRadius) : 0f;
+            _pulse[next] = (Math.Clamp(m.PulseAmount, 0f, 1f), Math.Max(m.PulseHz, 0f), m.PulseFlicker);
+            if (_pulse[next].Amount > 0f && _pulse[next].Hz > 0f) _anyPulse = true;
             next++;
         }
         Unallocated = over;
+        _pulseTick = -1;
+        SurfaceMaterial.Changed();
+        _idsSet = true;
 
         int area = Identity.Area;
         string? fp = Pack.AreaFingerprint(area);
@@ -163,9 +243,44 @@ public sealed class Surfaces : IRemasterFeature
             if (Ids(e.Faces, ids) is { } list) _meshFaces[e.Mesh] = list;
             n++;
         }
+        foreach (var r in Pack.ModelRules(area))
+        {
+            if (!ids.TryGetValue(r.Material, out byte id)) continue;
+            _models[(r.Model.Kind, r.Model.Model)] = id;
+            if (GivesLight(id)) ModelsGiveLight = true;
+            n++;
+        }
         TilesApplied = n;
         PerFace = _tileFaces.Count > 0 || _meshWhole.Count > 0 || _meshFaces.Count > 0;
         _active = n > 0;
+        // A glowing face near the eye is unfogged, and it glows only through its record.
+        // A highlight is on the record too, so an unfogged face needs one for it.
+        PolyAssembler.KeepForGlow = _active && (SurfaceMaterial.AnyEmissive || SurfaceMaterial.AnySpecular);
+        PolyAssembler.Keep();
+        Serial++;
+    }
+
+    /// <summary>Once per world tick: every pulsing id's glow times its pulse, so it
+    /// holds while the world is paused, as a light's flicker does.</summary>
+    static void StepPulse()
+    {
+        long tick = Lights.Ticks;
+        if (tick == _pulseTick) return;
+        _pulseTick = tick;
+        double t = tick / 20.0;
+        for (int i = SurfaceMaterial.FirstAuthored; i < SurfaceMaterial.Count; i++)
+        {
+            var (amount, hz, flicker) = _pulse[i];
+            if (amount <= 0f || hz <= 0f) continue;
+            float wave = flicker ? Lights.Noise(t * hz, i) : 0.5f - 0.5f * MathF.Cos((float)(t * hz * 2.0 * Math.PI));
+            float k = 1f - amount * wave;
+            Pulse[i] = k;
+            var e = _baseGlow[i] * k;
+            SurfaceMaterial.Emissive[i * 3] = e.X;
+            SurfaceMaterial.Emissive[i * 3 + 1] = e.Y;
+            SurfaceMaterial.Emissive[i * 3 + 2] = e.Z;
+        }
+        SurfaceMaterial.Changed();
     }
 
     static bool Gate(RecompOne.Runtime.Memory.IMemory m, int mesh, string? hash)
@@ -214,6 +329,42 @@ public sealed class Surfaces : IRemasterFeature
         if (id == 0 && _mf != null && (uint)f < (uint)_mf.Length) id = _mf[f];
         return id != 0 ? id : _meshAll;
     }
+
+    /// <summary>The id of face <paramref name="f"/> of mesh <paramref name="model"/> drawn
+    /// by the half at (<paramref name="x"/>, <paramref name="z"/>): what <see cref="EnterHalf"/>
+    /// and <see cref="Face"/> answer during the walk, without touching their state.</summary>
+    public static byte FaceOf(int x, int z, int half, int model, int f)
+    {
+        if (!_active) return 0;
+        int i = Index(x, z, half);
+        byte id = 0;
+        if (PerFace && _tileFaces.TryGetValue(i, out var t) && t.Mesh == model && (uint)f < (uint)t.Ids.Length) id = t.Ids[f];
+        if (id == 0) id = _table[i];
+        if (id == 0 && PerFace && _meshFaces.TryGetValue(model, out var mf) && (uint)f < (uint)mf.Length) id = mf[f];
+        if (id == 0 && PerFace) _meshWhole.TryGetValue(model, out id);
+        return id;
+    }
+
+    /// <summary>Whether anything is authored that could name a face of this half.</summary>
+    public static bool Authored(int x, int z, int half, int model)
+    {
+        if (!_active) return false;
+        int i = Index(x, z, half);
+        return _table[i] != 0 || (PerFace && (_tileFaces.ContainsKey(i) || _meshWhole.ContainsKey(model) || _meshFaces.ContainsKey(model)));
+    }
+
+    /// <summary>Whether anything authored for the area gives off a light.</summary>
+    public static bool AnyGivesLight()
+    {
+        if (!_active) return false;
+        for (int i = SurfaceMaterial.FirstAuthored; i < SurfaceMaterial.Count; i++)
+            if (GivesLight((byte)i)) return true;
+        return false;
+    }
+
+    /// <summary>The model about to be assembled: its id, or 0.</summary>
+    public static byte EnterModel(ModelKind kind, int model)
+        => _active && _models.Count > 0 && _models.TryGetValue((kind, model), out byte id) ? id : (byte)0;
 
     public static byte IdOf(string? name)
     {

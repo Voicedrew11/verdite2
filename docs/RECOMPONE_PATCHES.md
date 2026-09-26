@@ -902,6 +902,34 @@ Four files in the directory have no entry below:
   which material the GPU drew at a pixel. `patches/remaster/FaceProbe.cs` is the
   reader. The amendment is the fifth diff in the patch file. See "A tile half is a
   whole mesh, and a face is the key under it" in `docs/REMASTER.md`.
+  Since amended: eight ids were four a port could author, so `SurfaceMaterial.Count`
+  is 256 (the surface buffer's half-float alpha holds every integer to 2048, and the
+  record holds a byte) and `BlendedFlag` 256. The table gains `Roughness` and
+  `Emissive` (the latter `0071`'s, below) and a `Generation` a port bumps with
+  `Changed()`; `GlCore` uploads it as a 256x2 RGBA32F texture on unit 6 when that
+  moves, and `SsrFs` reads row 0 by `texelFetch` instead of two 8-float uniform
+  arrays -- 256 of each would pass the fragment stage's uniform minimum. Roughness is
+  a blur of the hit: nine taps over the footprint of the cone the reflected ray
+  stands for, `roughness * distance` across at the hit's depth, the planar lookup
+  taking its distance from the planar depth; 0 is the one read it was. With nothing
+  authored the picture is the one before, to the bit (the pinned area-1 view's hash
+  is Phase 2's `210d55698c875fb8`). The amendment is the sixth diff in the patch
+  file, and it carries `0071`'s amendment too, since the two share `GlCore` and
+  `GlShaders` hunks. See "Phase 3, the first slice" in `docs/REMASTER.md`.
+  Since amended: the roughness blur's eight taps were turned per pixel by the 4x4
+  interleaved pattern with nothing after it to cancel it, which on a busy texture
+  left a woven grid repeating every 4 pixels of the pass (8 render pixels at the
+  default resolution, 4 at full; measured, autocorrelation +0.39 to +0.72 at that
+  lag, none at roughness 0). The pass now shrinks the picture, and the planar
+  texture, into a half-size mip chain (`BuildMip`, units 7 and 8, only while an id is
+  rough; `ScreenReflections.MipBuilds`) and reads the level whose texel spans the
+  blur, centre and four taps, the same at every pixel: no repeat at any lag after.
+  Roughness is squared before use. The table grows to 256x3: row 0's alpha is
+  metalness, which tints a reflection with the surface's hue at full value; row 2
+  is a highlight (`0071`'s) and the share of occlusion taken off, which the present
+  shader reads from the surface buffer's id (`uAoMatOn`, only while an id is
+  occluded other than fully). The seventh diff in the patch file, carrying `0071`'s
+  amendment too. See "Phase 3, the second slice" in `docs/REMASTER.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
@@ -973,6 +1001,32 @@ Four files in the directory have no entry below:
   the shader's output is 0048's to the bit (`scripts/light_probe.c`).
   `patches/remaster/Lights.cs` is the only writer. GL core only. **No recompile.**
   See "Phase 2, the first slice" in `docs/REMASTER.md`.
+  Since amended: a material can glow. `GlLight` carries the packet's material
+  (attribute 11, beside the light record), and `PrimFs` adds
+  `SurfaceMaterial.Emissive[id]`, row 1 of `0067`'s table, to the same term an
+  authored light adds, before the depth cue -- so it is fogged and textured as the
+  game's own light is, and times the packet's RGBC. It needs no depth, so unlike a
+  light it is drawn into a planar texture too. `uEmitOn` is set only for a batch with
+  records while some id glows; with it off, or with material 0, `light_probe.c`
+  reads the shader as before to the bit. The hunks are in `0067`'s file (its sixth
+  diff). See "Phase 3, the first slice" in `docs/REMASTER.md`.
+  Since amended: the glow multiplied the texture, so glow 4 was the texture at twice
+  full, clipped, and read as overexposed stone rather than a light source. Row 1's
+  alpha now picks the mode (`SurfaceMaterial.EmissiveAdditive`): 0 is the old term,
+  1 adds RGBC times the glow after the texture is modulated, fogged on the packet's
+  own curve (`cueWeight()`, split out of `shade8`), on every output path. A packet
+  without an additive glow adds zero, and `light_probe.c` reads the old passes as
+  before and the four new ones at 0 from the formula. The amendment is the second
+  diff in `0071`'s file. See "The glow is a light source" in `docs/REMASTER.md`.
+  Since amended: an authored light leaves a highlight on an id with a specular
+  value: normalised Blinn-Phong in `authored()`, its size from the id's roughness
+  (squared, floored at 0.15), added past the texture and fogged, and tinted by the
+  texel on a metal (`post()`). Row 1's alpha is flags now, 2 keeping an additive
+  glow out of the fog. A point light's outer cosine below -2 names the material that
+  gave it off (`-2 - id`), and that material is not lit by it. `light_probe.c` gains
+  four passes (the highlight flat and on a textured metal, the skip, the unfogged
+  glow), all at 0 from the formula, the first ten unchanged. The hunks are in
+  `0067`'s seventh diff. See "Phase 3, the second slice" in `docs/REMASTER.md`.
 
 - `0069-imgui-size-after-fullscreen.patch` — Silk's `ImGuiController` takes the
   window's size only from the `Resize` event, and GLFW on Wayland raises none when

@@ -86,9 +86,11 @@ public static class Faces
     public struct Tri
     {
         public float X0, Y0, Z0, X1, Y1, Z1, X2, Y2, Z2;
-        public uint Rec;     // 0 for a model's triangle, which only blocks
+        public uint Rec;     // 0 for a model's triangle
         public int Mesh, Face;
         public byte Label;   // the material it was sealed with
+        public int Model;    // a model's id, or -1 (a tile, or a model the C# walk did not submit)
+        public ModelKind Kind;
     }
 
     static List<Tri> _cur = new(), _last = new();
@@ -124,11 +126,13 @@ public static class Faces
         int mesh = tile ? mem.ReadU8(rec) : -1;
         int face = tile ? Current : -1;
         byte label = PolyAssembler.TileMaterial;
+        int model = PolyAssembler.InModel ? ModelWalk.SubmitModel : -1;
+        var kind = ModelWalk.SubmitKind;
         _cur.Add(new Tri { X0 = x[0], Y0 = y[0], Z0 = r.Z0, X1 = x[1], Y1 = y[1], Z1 = r.Z1, X2 = x[2], Y2 = y[2], Z2 = r.Z2,
-                           Rec = rec, Mesh = mesh, Face = face, Label = label });
+                           Rec = rec, Mesh = mesh, Face = face, Label = label, Model = model, Kind = kind });
         if (n == 4)
             _cur.Add(new Tri { X0 = x[1], Y0 = y[1], Z0 = r.Z1, X1 = x[3], Y1 = y[3], Z1 = r.Z3, X2 = x[2], Y2 = y[2], Z2 = r.Z2,
-                               Rec = rec, Mesh = mesh, Face = face, Label = label });
+                               Rec = rec, Mesh = mesh, Face = face, Label = label, Model = model, Kind = kind });
     }
 
     /// <summary>The view depth of a triangle at a point, or +inf when it does not cover it.</summary>
@@ -164,16 +168,24 @@ public static class Faces
 
     /// <summary>
     /// The tile faces under a game pixel: the nearest, and every other within the
-    /// coplanar tolerance of it. Null with a reason when there is nothing to pick: no
-    /// triangle, a model in front, or a face the subdivider could not map.
+    /// coplanar tolerance of it. When the nearest is a model's, that model instead, in
+    /// <paramref name="model"/>. Null with a reason when there is nothing to pick: no
+    /// triangle, a model the C# walk did not submit, or a face the subdivider could not
+    /// map.
     /// </summary>
-    public static List<FaceRef>? PickAt(Vector2 p, out string? why)
+    public static List<FaceRef>? PickAt(Vector2 p, out ModelKey? model, out string? why)
     {
         why = null;
+        model = null;
         if (_last.Count == 0) { why = "no triangles recorded (is the editor open?)"; return null; }
         int n = Nearest(p, out float z);
         if (n < 0) { why = "nothing drawn there"; return null; }
-        if (_last[n].Rec == 0) { why = "a model is in front"; return null; }
+        if (_last[n].Rec == 0)
+        {
+            if (_last[n].Model >= 0) model = new ModelKey(Identity.Area, _last[n].Kind, _last[n].Model);
+            else why = "a model the object walk did not name is in front";
+            return null;
+        }
         var list = new List<FaceRef>();
         float limit = z + Coplanar(z);
         foreach (var t in _last)
