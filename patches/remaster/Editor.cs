@@ -156,7 +156,7 @@ public static class Editor
 
         Event.AddListener<KeyboardEvent>(e =>
         {
-            if (!e.Pressed || e.Repeat || e.Key != (int)Key.E || PopupManager.AnyOpen) return;
+            if (!e.Pressed || e.Repeat || e.Key != (int)Key.E || PopupManager.AnyOpen || HotkeyGate.Typing) return;
             if (!HostWindow.IsKeyDown(Key.ShiftLeft) && !HostWindow.IsKeyDown(Key.ShiftRight)) return;
             Panel.Instance.IsOpen = !Panel.Instance.IsOpen;
         });
@@ -218,7 +218,7 @@ public static class Editor
             var m = Runtime.Mem;
             if (m == null || Identity.Area < 0) return;
             var mouse = ImGui.GetIO().MousePos;
-            if (!hovered && !ImGui.GetIO().WantCaptureMouse && ImGui.IsMouseClicked(ImGuiMouseButton.Left)
+            if (!hovered && OutputView.Hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left)
                 && GamePixel(mouse, out var px))
             {
                 if (_placing)

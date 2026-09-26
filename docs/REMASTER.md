@@ -1026,6 +1026,22 @@ dropped whole, and the editor says so.
 looked at, and neither has whether *Connected* grows to what an author means on
 faceted rock.
 
+**Every "click" above was the shell's `select pick`, and the window's own click
+never worked.** Reported from play: neither *Pick on the picture* nor *Place on the
+picture* did anything. The editor gated a click on `!io.WantCaptureMouse`, but the
+picture is drawn inside the Output panel, an ImGui window, so ImGui wants the mouse
+whenever the pointer is over it: the gate was shut exactly where it should open.
+`OutputView.Hovered` (`0029`, amended) is the picture's own `IsItemHovered`, which
+is also false when another panel or a popup is in front of it. The click through
+the window is **not yet confirmed by hand**.
+
+**Typing reached the hotkeys.** A key typed into a text field (a material's name)
+also arrives on the `KeyboardEvent` bus, so an `m` opened the map. The port's
+hotkeys now ask `patches/HotkeyGate.cs`: Shift+E, Shift+P and Shift+F wait while
+ImGui has a text field focused, and M, N and the mouse-capture key also wait while
+the editor is open. `mods/kf2debug`'s F-keys are left alone, since nothing types
+them.
+
 ### Phase 2: authored point and spot lights (`0071`)
 
 - **Ships:**

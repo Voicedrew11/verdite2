@@ -277,6 +277,7 @@ public static class Mouse
             // key belongs to it while one is open. Releasing is still allowed --
             // that is the popup taking the pointer back, below.
             if (!Captured && PopupManager.AnyOpen) return;
+            if (!Captured && HotkeyGate.Editing) return;
 
             SetCaptured(!Captured);
         });

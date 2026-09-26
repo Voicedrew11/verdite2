@@ -305,6 +305,11 @@ Four files in the directory have no entry below:
   a window pixel back into a game pixel — which is what the menu pointer needs to
   ask which item is under the cursor. UI only — **no recompile**. See "A dynamic
   map" in `docs/PATCHES_AND_MODS.md` and "The menu pointer" in `docs/INPUT.md`.
+  Since amended: `OutputView.Hovered`, the picture's own `IsItemHovered`. The
+  picture is an ImGui window, so `io.WantCaptureMouse` is true whenever the
+  pointer is over it, and the remaster editor's click gate
+  (`!WantCaptureMouse`) never opened: neither a pick nor a light placement on
+  the picture did anything. The amendment is the second diff in the patch file.
 
 - `0030-expose-host-pump.patch` — the shipped launcher has to build the game
   before there is a game to run, and that blocks for seconds; a window that stops

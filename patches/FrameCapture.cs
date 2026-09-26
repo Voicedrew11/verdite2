@@ -152,7 +152,7 @@ public static class FrameCapture
         Event.AddListener<KeyboardEvent>(e =>
         {
             if (!e.Pressed || e.Repeat || e.Key != (int)Silk.NET.Input.Key.F) return;
-            if (RecompOne.Runtime.Host.Window.PopupManager.AnyOpen) return;
+            if (RecompOne.Runtime.Host.Window.PopupManager.AnyOpen || HotkeyGate.Typing) return;
             if (!RecompOne.Runtime.Host.HostWindow.IsKeyDown(Silk.NET.Input.Key.ShiftLeft) &&
                 !RecompOne.Runtime.Host.HostWindow.IsKeyDown(Silk.NET.Input.Key.ShiftRight)) return;
             FrameViewerPanel.Instance.IsOpen = !FrameViewerPanel.Instance.IsOpen;
