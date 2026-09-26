@@ -19,6 +19,12 @@
 // by point and spot lights, against the shader's formula in C. With no light
 // uploaded the program is the one above, which is the "off is bit-identical"
 // case. See "Phase 2, the first slice" in docs/REMASTER.md.
+//
+// 0071, amended. Emissive materials: with the material table bound and the switch
+// on, a packet whose material is 0 is the program above to the bit; one whose
+// material glows adds its row-1 colour times RGBC before the depth cue, with no
+// depth needed; with the switch off the same glowing material changes nothing. See
+// "Phase 3, the first slice" in docs/REMASTER.md.
 #define GL_GLES_PROTOTYPES 0
 #include <EGL/egl.h>
 #include <GL/gl.h>
@@ -55,6 +61,7 @@ F(void,glVertexAttribPointer,(GLuint,GLint,GLenum,GLboolean,GLsizei,const void*)
 F(void,glGenFramebuffers,(GLsizei,GLuint*)) F(void,glBindFramebuffer,(GLenum,GLuint))
 F(void,glFramebufferTexture2D,(GLenum,GLenum,GLenum,GLuint,GLint))
 F(GLenum,glCheckFramebufferStatus,(GLenum)) F(void,glBindAttribLocation,(GLuint,GLuint,const char*))
+F(void,glActiveTexture,(GLenum))
 
 static void load(void){
 #define L(n) n##_=(P_##n)eglGetProcAddress(#n); if(!n##_){printf("missing %s\n",#n);exit(2);}
@@ -63,7 +70,7 @@ static void load(void){
  L(glUseProgram)L(glGetUniformLocation)L(glUniform1i)L(glUniform1f)L(glUniform1ui)L(glUniform3f)L(glUniform2f)L(glUniform4fv)
  L(glGenBuffers)L(glBindBuffer)L(glBufferData)L(glGenVertexArrays)L(glBindVertexArray)
  L(glEnableVertexAttribArray)L(glVertexAttribPointer)L(glGenFramebuffers)L(glBindFramebuffer)
- L(glFramebufferTexture2D)L(glCheckFramebufferStatus)L(glBindAttribLocation)
+ L(glFramebufferTexture2D)L(glCheckFramebufferStatus)L(glBindAttribLocation)L(glActiveTexture)
 }
 
 static char *slurp(const char*p){FILE*f=fopen(p,"rb");if(!f){perror(p);exit(2);}
@@ -77,14 +84,14 @@ static const char *VS =
 "noperspective out vec4 vColor; out vec2 vUV; out float vDepth;\n"
 "flat out ivec2 clutBase; flat out ivec2 pageBase; flat out int texMode;\n"
 "flat out int vDither; flat out int vRepClut;\n"
-"noperspective out vec3 vLit; noperspective out float vFog; flat out uint vLight;\n"
-"uniform uint uTestLight; uniform vec3 uLit0, uLit1; uniform float uFog0, uFog1; uniform float uTestDepth;\n"
+"noperspective out vec3 vLit; noperspective out float vFog; flat out uint vLight; flat out uint vMat; flat out uvec2 vTex;\n"
+"uniform uint uTestLight; uniform vec3 uLit0, uLit1; uniform float uFog0, uFog1; uniform float uTestDepth; uniform uint uTestMat;\n"
 "void main(){\n"
 "  gl_Position = vec4(aPos,0.0,1.0);\n"
 "  float t = aPos.x*0.5+0.5;\n"
 "  vLit = mix(uLit0, uLit1, t); vFog = mix(uFog0, uFog1, t); vLight = uTestLight;\n"
 "  vColor = vec4(1.0); vUV = vec2(0.0); vDepth = uTestDepth; clutBase = ivec2(0); pageBase = ivec2(0);\n"
-"  texMode = 4; vDither = 0; vRepClut = 0;\n"
+"  texMode = 4; vDither = 0; vRepClut = 0; vMat = uTestMat; vTex = uvec2(0u);\n"
 "}\n";
 
 #define VH 2
@@ -190,12 +197,30 @@ int main(int argc,char**argv){
  glUniform4fv_(glGetUniformLocation_(p,"uLightPos"),NL,LPOS);
  glUniform4fv_(glGetUniformLocation_(p,"uLightCol"),NL,LCOL);
  glUniform4fv_(glGetUniformLocation_(p,"uLightDir"),NL,LDIR);
+ // The material table: id 5 glows, every other id is dark.
+ #define MAT 5
+ static const float EMIT[3]={1.2f,0.6f,0.15f};
+ static float table[256*2*4];
+ table[(256+MAT)*4]=EMIT[0]; table[(256+MAT)*4+1]=EMIT[1]; table[(256+MAT)*4+2]=EMIT[2];
+ GLuint mt; glGenTextures(1,&mt); glActiveTexture_(0x84C0+6); glBindTexture(GL_TEXTURE_2D,mt);
+ glTexImage2D(GL_TEXTURE_2D,0,0x8814 /*RGBA32F*/,256,2,0,GL_RGBA,GL_FLOAT,table);
+ glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_NEAREST); glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_NEAREST);
+ glActiveTexture_(0x84C0);
+ GLint uEmit=glGetUniformLocation_(p,"uEmitOn"), uMatT=glGetUniformLocation_(p,"uMatTable"), uM=glGetUniformLocation_(p,"uTestMat");
+ if(uEmit<0||uMatT<0){printf("no uEmitOn/uMatTable\n");return 2;}
+ glUniform1i_(uMatT,6);
  // pass 0: no light list, no depth (the program as 0048 had it); pass 1: the list
  // uploaded, no depth (nothing may change); pass 2: the list and a wall at DEPTH.
- for(int pass=0;pass<3;pass++){
- glUniform1i_(uN,pass==0?0:NL);
+ // pass 3: emissive on, material 0 (as pass 0); pass 4: emissive on, material 5,
+ // no depth; pass 5: emissive off, material 5 (as pass 0).
+ const char*names[]={"no lights","lights, no depth","lights on a wall at depth 2000",
+   "emissive on, material 0","emissive on, material 5 glowing","emissive off, material 5"};
+ for(int pass=0;pass<6;pass++){
+ glUniform1i_(uN,pass==1||pass==2?NL:0);
  glUniform1f_(uD,pass==2?DEPTH/65536.f:0.f);
- printf("-- %s\n", pass==0?"no lights":pass==1?"lights, no depth":"lights on a wall at depth 2000");
+ glUniform1i_(uEmit,pass==3||pass==4?1:0);
+ glUniform1ui_(uM,pass>=4?MAT:0);
+ printf("-- %s\n", names[pass]);
  for(unsigned k=0;k<sizeof cases/sizeof cases[0];k++){
    glUniform1ui_(uL,cases[k].light);
    glUniform3f_(uL0,cases[k].l0[0],cases[k].l0[1],cases[k].l0[2]);
@@ -209,6 +234,7 @@ int main(int argc,char**argv){
      float t=(x+0.5f)/VW; float lit[3]; for(int i=0;i<3;i++) lit[i]=cases[k].l0[i]+(cases[k].l1[i]-cases[k].l0[i])*t;
      float fog=cases[k].f0+(cases[k].f1-cases[k].f0)*t;
      float ex[3]={0,0,0}; if(pass==2) authored(NL,x,y,ex);
+     if(pass==4) for(int c=0;c<3;c++) ex[c]=EMIT[c];
      if(ex[0]+ex[1]+ex[2]>0.01f) lit_px++;
      const unsigned char*q=px+(y*VW+x)*4;
      for(int ch=0;ch<3;ch++){ int e=expect(cases[k].light,lit,fog,ch,ex[ch]), g=q[ch]; int dd=abs(e-g); if(dd>worst)worst=dd; if(dd==1)off1++; }

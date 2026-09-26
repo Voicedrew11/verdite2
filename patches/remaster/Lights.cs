@@ -119,7 +119,8 @@ public sealed class Lights : IRemasterFeature
         Refused = null;
         RemasterUniforms.Enabled = false;
         RemasterUniforms.Publish(0);
-        PolyAssembler.KeepUnfogged = false;
+        PolyAssembler.KeepForLights = false;
+        PolyAssembler.Keep();
         Sent = Culled = 0;
     }
 
@@ -137,7 +138,8 @@ public sealed class Lights : IRemasterFeature
         _lights = Pack.Lights(area).Where(l => !l.Off && l.Radius > 0f && l.Intensity != 0f).ToArray();
         bool any = _lights.Length > 0;
         RemasterUniforms.Enabled = any;
-        PolyAssembler.KeepUnfogged = any;
+        PolyAssembler.KeepForLights = any;
+        PolyAssembler.Keep();
         if (!any) RemasterUniforms.Publish(0);
     }
 

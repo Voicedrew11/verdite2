@@ -146,6 +146,12 @@ public static class ModelWalk
     /// <summary>The slot the model being submitted came from.</summary>
     public static int SubmitSlot => _slot;
 
+    static int _model = -1;
+
+    /// <summary>The model id being assembled, or -1 outside an assembler call or when
+    /// the walk is not the C# one.</summary>
+    public static int SubmitModel => _model;
+
     /// <summary>Name the model about to be submitted from outside the walk, as the
     /// walk names it before each of its own calls: <see cref="PlanarWalk"/> replays
     /// the walk's submits, and the packet records read the kind and record.</summary>
@@ -908,6 +914,10 @@ public static class ModelWalk
 
         Record(mem, pos, model, (byte)(assembler & 0xFFu), light);
 
+        // The remaster's material for this model, sealed into every packet it makes.
+        _model = _walkOwns ? model : -1;
+        PolyAssembler.TileMaterial = _walkOwns ? Remaster.Surfaces.EnterModel(_kind, model) : (byte)0;
+
         uint pick = assembler & 0xFFu;
         if (pick == 0xFFu)
         {
@@ -935,6 +945,8 @@ public static class ModelWalk
             c.RA = 0x80032A94u;
             KingsField2.func_8002EAEC(c, mem);
         }
+        PolyAssembler.TileMaterial = 0;
+        _model = -1;
 
         c.RA = mem.ReadU32(sp + 0xD4u);
         c.FP = mem.ReadU32(sp + 0xD0u);

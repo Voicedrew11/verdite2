@@ -902,6 +902,20 @@ Four files in the directory have no entry below:
   which material the GPU drew at a pixel. `patches/remaster/FaceProbe.cs` is the
   reader. The amendment is the fifth diff in the patch file. See "A tile half is a
   whole mesh, and a face is the key under it" in `docs/REMASTER.md`.
+  Since amended: eight ids were four a port could author, so `SurfaceMaterial.Count`
+  is 256 (the surface buffer's half-float alpha holds every integer to 2048, and the
+  record holds a byte) and `BlendedFlag` 256. The table gains `Roughness` and
+  `Emissive` (the latter `0071`'s, below) and a `Generation` a port bumps with
+  `Changed()`; `GlCore` uploads it as a 256x2 RGBA32F texture on unit 6 when that
+  moves, and `SsrFs` reads row 0 by `texelFetch` instead of two 8-float uniform
+  arrays -- 256 of each would pass the fragment stage's uniform minimum. Roughness is
+  a blur of the hit: nine taps over the footprint of the cone the reflected ray
+  stands for, `roughness * distance` across at the hit's depth, the planar lookup
+  taking its distance from the planar depth; 0 is the one read it was. With nothing
+  authored the picture is the one before, to the bit (the pinned area-1 view's hash
+  is Phase 2's `210d55698c875fb8`). The amendment is the sixth diff in the patch
+  file, and it carries `0071`'s amendment too, since the two share `GlCore` and
+  `GlShaders` hunks. See "Phase 3, the first slice" in `docs/REMASTER.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
@@ -973,6 +987,15 @@ Four files in the directory have no entry below:
   the shader's output is 0048's to the bit (`scripts/light_probe.c`).
   `patches/remaster/Lights.cs` is the only writer. GL core only. **No recompile.**
   See "Phase 2, the first slice" in `docs/REMASTER.md`.
+  Since amended: a material can glow. `GlLight` carries the packet's material
+  (attribute 11, beside the light record), and `PrimFs` adds
+  `SurfaceMaterial.Emissive[id]`, row 1 of `0067`'s table, to the same term an
+  authored light adds, before the depth cue -- so it is fogged and textured as the
+  game's own light is, and times the packet's RGBC. It needs no depth, so unlike a
+  light it is drawn into a planar texture too. `uEmitOn` is set only for a batch with
+  records while some id glows; with it off, or with material 0, `light_probe.c`
+  reads the shader as before to the bit. The hunks are in `0067`'s file (its sixth
+  diff). See "Phase 3, the first slice" in `docs/REMASTER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

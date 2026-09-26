@@ -12,9 +12,10 @@ namespace Kf2.Remaster;
 /// the panel does, so the undo stack sees them:
 ///
 ///     edit [on|off|toggle]                          the editor, which pauses the world
-///     select [here | tile:A:X:Z:lower|upper | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh]
-///     set selected|tile:... material NAME|none [tile|mesh]
-///     set material:NAME reflectivity|f0 VALUE
+///     select [here | tile:A:X:Z:lower|upper | model:A:KIND:ID | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh]
+///     set selected|tile:...|model:... material NAME|none [tile|mesh]
+///     set material:NAME reflectivity|f0|roughness|emissiveStrength VALUE
+///     set material:NAME emissive R G B
 ///     set remaster on|off
 ///     pack save|reload|undo|redo|list|add NAME
 ///     light list|add NAME [here|pick GX GY|X Y Z]|remove NAME|select NAME|set NAME FIELD V...
@@ -27,9 +28,10 @@ public static class Shell
     public static readonly string[] Help =
     [
         "edit [on|off|toggle] - the remaster editor, which pauses the world",
-        "select [here | tile:A:X:Z:lower|upper | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh] - " +
-            "a half, or faces; pick takes the faces under game pixel GX GY (the editor must be open)",
-        "set selected|tile:... material NAME|none [tile|mesh]; set material:NAME reflectivity|f0 V; set remaster on|off",
+        "select [here | tile:A:X:Z:lower|upper | model:A:KIND:ID | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh] - " +
+            "a half, faces or a model; pick takes the faces or the model under game pixel GX GY (the editor must be open)",
+        "set selected|tile:...|model:... material NAME|none [tile|mesh]; " +
+            "set material:NAME reflectivity|f0|roughness|emissiveStrength V; set material:NAME emissive R G B; set remaster on|off",
         "pack save|reload|undo|redo|list|add NAME - the working pack",
         "light list | add NAME [here | pick GX GY | X Y Z] | remove NAME | select NAME | " +
             "set NAME position X Y Z|colour R G B|intensity V|radius V|type point|spot|direction X Y Z|cone IN OUT|flicker AMOUNT HZ|enabled on|off - " +
@@ -69,7 +71,13 @@ public static class Shell
     {
         var m = Runtime.Mem;
         if (m == null) return Err("select", "not running");
-        if (a.Length == 0) return Ok("select", Describe(Editor.Selected));
+        if (a.Length == 0)
+            return Ok("select", Editor.SelectedModel is { } sm ? DescribeModel(sm) : Describe(Editor.Selected));
+        if (ModelKey.TryParse(a[0], out var mkey))
+        {
+            Editor.SelectModel(mkey);
+            return Ok("select", DescribeModel(mkey));
+        }
         if (a[0] == "here")
         {
             Editor.Select(Identity.PlayerTile(m));
@@ -81,7 +89,12 @@ public static class Shell
                 || !float.TryParse(a[2], CultureInfo.InvariantCulture, out float gy))
                 return Err("select", "select pick GX GY [add]");
             if (!Faces.Recording) return Err("select", "the editor is closed (edit on), so no triangles are recorded");
-            var hit = Faces.PickAt(new Vector2(gx, gy), out var why);
+            var hit = Faces.PickAt(new Vector2(gx, gy), out var model, out var why);
+            if (model is { } mk)
+            {
+                Editor.SelectModel(mk);
+                return Ok("select", DescribeModel(mk));
+            }
             if (hit == null) return Err("select", $"nothing picked: {why}");
             Editor.SelectFaces(hit, a.Length > 3 && a[3] == "add");
             return Ok("select", Describe(Editor.Selected));
@@ -132,9 +145,19 @@ public static class Shell
         {
             string name = a[0]["material:".Length..];
             if (!Pack.HasMaterial(name)) return Err("set", $"no material '{name}'");
-            if (a[1] is not ("reflectivity" or "f0")) return Err("set", "reflectivity or f0");
+            if (a[1] == "emissive")
+            {
+                if (a.Length < 5) return Err("set", "set material:NAME emissive R G B");
+                var c = new Vector3(float.Parse(a[2], CultureInfo.InvariantCulture), float.Parse(a[3], CultureInfo.InvariantCulture),
+                                    float.Parse(a[4], CultureInfo.InvariantCulture));
+                Pack.SetColourField(name, "emissive", Vector3.Clamp(c, Vector3.Zero, Vector3.One));
+                var e = Pack.GetColour(name, "emissive");
+                return Ok("set", new JsonObject { ["material"] = name, ["emissive"] = new JsonArray(e.X, e.Y, e.Z) });
+            }
+            if (a[1] is not ("reflectivity" or "f0" or "roughness" or "emissiveStrength"))
+                return Err("set", "reflectivity, f0, roughness, emissive or emissiveStrength");
             if (!float.TryParse(a[2], CultureInfo.InvariantCulture, out float v)) return Err("set", $"cannot read '{a[2]}'");
-            Pack.SetField(name, a[1], Math.Clamp(v, 0f, 1f));
+            Pack.SetField(name, a[1], Math.Clamp(v, 0f, a[1] == "emissiveStrength" ? 4f : 1f));
             return Ok("set", new JsonObject { ["material"] = name, [a[1]] = Pack.GetField(name, a[1]) });
         }
         if (a.Length >= 3 && a[1] == "material")
@@ -143,10 +166,11 @@ public static class Shell
             if (m == null) return Err("set", "not running");
             if (a[0] != "selected")
             {
-                if (!TileKey.TryParse(a[0], out var k)) return Err("set", $"cannot read '{a[0]}'");
-                Editor.Select(k);
+                if (ModelKey.TryParse(a[0], out var mk)) Editor.SelectModel(mk);
+                else if (TileKey.TryParse(a[0], out var k)) Editor.Select(k);
+                else return Err("set", $"cannot read '{a[0]}'");
             }
-            if (Editor.Selected == null) return Err("set", "nothing selected");
+            if (Editor.Selected == null && Editor.SelectedModel == null) return Err("set", "nothing selected");
             string? name = a[2] == "none" ? null : a[2];
             if (name != null && !Pack.HasMaterial(name)) return Err("set", $"no material '{name}'");
             bool was = Editor.MeshScope;
@@ -156,9 +180,10 @@ public static class Shell
                 if (Editor.Assign(m, name) is { } why) return Err("set", why);
             }
             finally { Editor.MeshScope = was; }
-            return Ok("set", Describe(Editor.Selected));
+            return Ok("set", Editor.SelectedModel is { } sm ? DescribeModel(sm) : Describe(Editor.Selected));
         }
-        return Err("set", "set selected|tile:... material NAME|none [tile|mesh]; set material:NAME reflectivity|f0 V; set remaster on|off");
+        return Err("set", "set selected|tile:...|model:... material NAME|none [tile|mesh]; " +
+                          "set material:NAME reflectivity|f0|roughness|emissiveStrength V; set material:NAME emissive R G B; set remaster on|off");
     }
 
     static string PackVerb(string[] a)
@@ -182,6 +207,9 @@ public static class Shell
             mats.Add(new JsonObject
             {
                 ["name"] = mat.Name, ["reflectivity"] = mat.Reflectivity, ["f0"] = mat.F0,
+                ["roughness"] = mat.Roughness,
+                ["emissive"] = new JsonArray(mat.Emissive.X, mat.Emissive.Y, mat.Emissive.Z),
+                ["emissiveStrength"] = mat.EmissiveStrength,
                 ["id"] = Surfaces.IdOf(mat.Name),
             });
         var tiles = new JsonArray();
@@ -195,6 +223,7 @@ public static class Shell
                 if (e.Material != null) tiles.Add($"mesh {e.Mesh} = {e.Material}");
                 foreach (var (f, name) in e.Faces) tiles.Add($"mesh {e.Mesh}:{f} = {name}");
             }
+            foreach (var r in Pack.ModelRules(Identity.Area)) tiles.Add($"{r.Model} = {r.Material}");
         }
         return Ok("pack", new JsonObject
         {
@@ -304,8 +333,10 @@ public static class Shell
 
     static string Status()
     {
-        var byMat = new JsonArray();
-        foreach (long n in SurfaceMaterial.ByMaterial) byMat.Add(n);
+        // Only the ids that were drawn, by id.
+        var byMat = new JsonObject();
+        for (int i = 0; i < SurfaceMaterial.Count; i++)
+            if (SurfaceMaterial.ByMaterial[i] != 0) byMat[i.ToString()] = SurfaceMaterial.ByMaterial[i];
         return Ok("remaster", new JsonObject
         {
             ["on"] = Host.Enabled,
@@ -322,8 +353,10 @@ public static class Shell
             ["reflections"] = Reflections.Enabled,
             ["byMaterial"] = byMat,
             ["fromPacket"] = SurfaceMaterial.FromPacket,
-            ["selected"] = Editor.Selected?.ToString(),
+            ["selected"] = Editor.SelectedModel?.ToString() ?? Editor.Selected?.ToString(),
             ["editor"] = Editor.Open,
+            ["tableUploads"] = SurfaceMaterial.Uploads,
+            ["emissive"] = SurfaceMaterial.AnyEmissive,
         });
     }
 
@@ -366,6 +399,20 @@ public static class Shell
             o["sealedIds"] = ids;
         }
         return o;
+    }
+
+    static JsonObject DescribeModel(ModelKey k)
+    {
+        // What the last frame sealed this model's triangles with.
+        var ids = new SortedSet<int>();
+        int tris = 0;
+        foreach (var t in Faces.Last)
+            if (t.Rec == 0 && t.Model == k.Model && t.Kind == k.Kind) { ids.Add(t.Label); tris++; }
+        return new JsonObject
+        {
+            ["selected"] = k.ToString(), ["material"] = Pack.ModelMaterial(k),
+            ["triangles"] = tris, ["sealedIds"] = string.Join("/", ids),
+        };
     }
 
     static string Ok(string cmd, JsonObject body)

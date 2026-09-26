@@ -29,15 +29,17 @@ public static class SurfaceMaterial
     /// reflects it, and a ray that lands under it has found nothing it can use.</summary>
     public const byte Overlay = 3;
 
-    /// <summary>The table's size, and one past the largest id a pass will read.</summary>
-    public const int Count = 8;
+    /// <summary>The table's size, and one past the largest id a pass will read: the
+    /// surface buffer's half-float alpha holds every integer to 2048, and a packet's
+    /// record holds a byte.</summary>
+    public const int Count = 256;
 
     /// <summary>Ids a port may author; the ones below are the runtime's.</summary>
     public const byte FirstAuthored = 4;
 
     /// <summary>Added to a blended triangle's material in the surface list, so the
     /// normal pass takes opacity from the draw rather than from the id.</summary>
-    public const float BlendedFlag = 128f;
+    public const float BlendedFlag = 256f;
 
     /// <summary>How much of the scene a material reflects at most, 0..1; 0 is not
     /// reflective, and the pass skips the pixel after one texture read.</summary>
@@ -46,6 +48,34 @@ public static class SurfaceMaterial
     /// <summary>Schlick's F0: the share reflected looking straight down at it. The
     /// share rises to <see cref="Reflectivity"/> at a grazing angle.</summary>
     public static readonly float[] F0 = new float[Count];
+
+    /// <summary>How far a reflection is blurred, 0..1: the spread of the cone the
+    /// reflected ray stands for, as a share of the distance it travelled. The
+    /// reflection pass averages the hit over that footprint.</summary>
+    public static readonly float[] Roughness = new float[Count];
+
+    /// <summary>Light a surface gives off, per id and channel, in the game's light
+    /// units (1.0 adds the packet's own RGBC once, as an authored light does). Only a
+    /// packet with a <see cref="GteLightMap"/> record glows.</summary>
+    public static readonly float[] Emissive = new float[Count * 3];
+
+    /// <summary>Bumped by <see cref="Changed"/>; the table is uploaded to the GPU when
+    /// it moves. A port that writes the arrays calls it once it is done.</summary>
+    public static int Generation { get; private set; }
+
+    /// <summary>Whether any id glows, so the prim shader can skip the lookup.</summary>
+    public static bool AnyEmissive { get; private set; }
+
+    /// <summary>Uploads of the table to the GPU; never reset.</summary>
+    public static long Uploads;
+
+    public static void Changed()
+    {
+        bool any = false;
+        foreach (float e in Emissive) if (e > 0f) { any = true; break; }
+        AnyEmissive = any;
+        Generation++;
+    }
 
     /// <summary>A VRAM rectangle whose texels are one material.</summary>
     public struct TexRect
@@ -89,7 +119,7 @@ public static class SurfaceMaterial
     public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage,
                                 int u0, int v0, int u1, int v1)
     {
-        if (packet != None) { FromPacket++; ByMaterial[packet & (Count - 1)]++; return packet; }
+        if (packet != None) { FromPacket++; ByMaterial[packet]++; return packet; }
         if (semi) Blended++;
         if (textured && RectN > 0)
         {
@@ -110,7 +140,7 @@ public static class SurfaceMaterial
                     continue;
                 }
                 FromRect++;
-                ByMaterial[r.Material & (Count - 1)]++;
+                ByMaterial[r.Material]++;
                 return r.Material;
             }
         }

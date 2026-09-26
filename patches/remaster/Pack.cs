@@ -11,8 +11,9 @@ namespace Kf2.Remaster;
 /// <c>remaster/</c> directory beside it: <c>materials.json</c>, the named material
 /// library, and <c>areas/&lt;n&gt;/surfaces.json</c>: under <c>tiles</c>, a material for
 /// a whole half and a face list for the mesh it draws; under <c>meshes</c>, the same
-/// for a mesh wherever the area uses it. A face list carries the mesh index and the
-/// mesh's hash it was authored against. <c>areas/&lt;n&gt;/lights.json</c> holds the
+/// for a mesh wherever the area uses it; under <c>models</c>, a material for a model
+/// (its table's kind and its id) wherever the area draws it. A face list carries the
+/// mesh index and the mesh's hash it was authored against. <c>areas/&lt;n&gt;/lights.json</c> holds the
 /// area's authored lights, each named, in world units with up at -Y.
 /// Documents are kept as JSON trees, so a field this version does not know survives a
 /// round trip. Only the working pack is read in this phase; layering other packs
@@ -230,7 +231,10 @@ public static class Pack
 
     // ---- materials ---------------------------------------------------------
 
-    public readonly record struct Material(string Name, float Reflectivity, float F0);
+    /// <summary>A named material. Emissive is a linear colour and its strength, in the
+    /// game's light units: strength 1 lights a surface as its own RGBC at full.</summary>
+    public readonly record struct Material(string Name, float Reflectivity, float F0, float Roughness,
+                                           Vector3 Emissive, float EmissiveStrength);
 
     static JsonObject NewMaterials() => new() { ["formatVersion"] = FormatVersion, ["materials"] = new JsonObject() };
 
@@ -240,7 +244,8 @@ public static class Pack
     {
         foreach (var (name, node) in MaterialsObj)
             if (node is JsonObject o)
-                yield return new Material(name, Num(o, "reflectivity"), Num(o, "f0"));
+                yield return new Material(name, Num(o, "reflectivity"), Num(o, "f0"), Num(o, "roughness"),
+                                          Vec(o["emissive"], Vector3.One), Num(o, "emissiveStrength"));
     }
 
     public static bool HasMaterial(string name) => MaterialsObj[name] is JsonObject;
@@ -287,6 +292,27 @@ public static class Pack
     {
         if (MaterialsObj[name] is not JsonObject o) return;
         o[field] = Math.Round(value, 4);
+        Dirty = true;
+        Version++;
+    }
+
+    public static Vector3 GetColour(string name, string field)
+        => MaterialsObj[name] is JsonObject o ? Vec(o[field], Vector3.One) : Vector3.One;
+
+    /// <summary>A colour field change; <paramref name="from"/> as for <see cref="SetField"/>.</summary>
+    public static void SetColourField(string name, string field, Vector3 value, Vector3? from = null)
+    {
+        if (MaterialsObj[name] is not JsonObject) return;
+        var old = from ?? GetColour(name, field);
+        Edit($"{name}.{field}",
+            () => ((JsonObject)MaterialsObj[name]!)[field] = Arr(value),
+            () => { if (MaterialsObj[name] is JsonObject o) o[field] = Arr(old); });
+    }
+
+    public static void PreviewColour(string name, string field, Vector3 value)
+    {
+        if (MaterialsObj[name] is not JsonObject o) return;
+        o[field] = Arr(value);
         Dirty = true;
         Version++;
     }
@@ -517,6 +543,51 @@ public static class Pack
             if (material == null) e.Remove("material");
             else e["material"] = material;
             Prune(list, e);
+        });
+    }
+
+    // ---- models ------------------------------------------------------------
+
+    /// <summary>A material for every draw of one model in the area: the table it comes
+    /// out of (a creature and an object may share an id and not a mesh) and its id.</summary>
+    public readonly record struct ModelRule(ModelKey Model, string Material);
+
+    static JsonObject? FindModel(JsonArray models, ModelKey k)
+    {
+        foreach (var n in models)
+            if (n is JsonObject o && Int(o["model"]) == k.Model && Str(o["kind"]) == k.KindName) return o;
+        return null;
+    }
+
+    public static IEnumerable<ModelRule> ModelRules(int area)
+    {
+        if (!_set.Surfaces.TryGetValue(area, out var doc) || doc["models"] is not JsonArray models) yield break;
+        foreach (var n in models)
+            if (n is JsonObject o && Int(o["model"]) is { } id && ModelKey.ParseKind(Str(o["kind"])) is { } kind
+                && Str(o["material"]) is { } m)
+                yield return new ModelRule(new ModelKey(area, kind, id), m);
+    }
+
+    public static string? ModelMaterial(ModelKey k)
+        => _set.Surfaces.TryGetValue(k.Area, out var doc) && doc["models"] is JsonArray ms && FindModel(ms, k) is { } e
+            ? Str(e["material"]) : null;
+
+    /// <summary>Give a model a material wherever the area draws it, or clear it.</summary>
+    public static void SetModelMaterial(ModelKey k, string? material, string fingerprint)
+    {
+        if (ModelMaterial(k) == material) return;
+        EditArea(k.Area, fingerprint, $"{k} = {material ?? "none"}", doc =>
+        {
+            var list = doc["models"] as JsonArray ?? (JsonArray)(doc["models"] = new JsonArray());
+            var e = FindModel(list, k);
+            if (e == null)
+            {
+                if (material == null) return;
+                list.Add(e = new JsonObject { ["kind"] = k.KindName, ["model"] = k.Model });
+            }
+            if (material == null) list.Remove(e);
+            else e["material"] = material;
+            if (list.Count == 0) doc.Remove("models");
         });
     }
 

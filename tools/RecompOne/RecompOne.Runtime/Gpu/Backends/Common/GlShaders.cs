@@ -477,10 +477,10 @@ internal static class GlShaders
 
         void main() {
             float z = vDepth * 65536.0;
-            // A blended triangle arrives with 128 added to its material, so
+            // A blended triangle arrives with 256 added to its material, so
             // opacity is the draw's and not a guess from the id.
-            bool opaque = vM < 127.5;
-            float id = opaque ? vM : vM - 128.0;
+            bool opaque = vM < 255.5;
+            float id = opaque ? vM : vM - 256.0;
             // 0067. The HUD and anything else 2D: no normal and no depth, only the
             // fact that it covers what is under it.
             if (id > 2.5 && id < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, id); return; }
@@ -546,9 +546,8 @@ internal static class GlShaders
         uniform float uThickness;
         uniform float uSky;
         uniform int   uSteps;
-        // SurfaceMaterial's table, by id.
-        uniform float uReflect[8];
-        uniform float uF0[8];
+        // SurfaceMaterial's table, by id: row 0 is reflectivity, F0 and roughness.
+        uniform sampler2D uMatTable;
         // The game's depth cue, off the GTE: IR0 = (DQA * H/SZ + DQB) / 4096, and
         // which of its curves turns that into a darkening (GteLightMap's numbering).
         uniform float uDqa;
@@ -600,6 +599,30 @@ internal static class GlShaders
 
         float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
+        // A rough surface's reflection: the colour averaged over the footprint of the
+        // cone the reflected ray stands for, `radius` of the picture wide. Eight taps
+        // on a ring and the centre, turned per pixel by the interleaved pattern; a
+        // tap under the HUD or off the picture is left out. Radius 0 is one read.
+        vec3 blurAt(sampler2D tex, vec2 uv, float radius, bool mirrored) {
+            vec3 c0 = texture(tex, tc(uv)).rgb;
+            if (radius <= 0.0) return c0;
+            ivec2 px = ivec2(gl_FragCoord.xy) & 3;
+            float a0 = float((px.y << 2) | px.x) * 0.3927;
+            vec3 sum = c0;
+            float n = 1.0;
+            for (int k = 0; k < 8; k++) {
+                float a = a0 + float(k) * 0.7854;
+                float r = radius * (k < 4 ? 0.5 : 1.0);
+                vec2 o = vec2(cos(a), sin(a)) * r * vec2(uSize.y / uSize.x, 1.0);
+                vec2 q = uv + o;
+                if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0) continue;
+                if (!mirrored && overlayAt(q)) continue;
+                sum += texture(tex, tc(q)).rgb;
+                n += 1.0;
+            }
+            return sum / n;
+        }
+
         // 0068. The planar reflection at this pixel, when the surface lies on the
         // mirrored plane and something above the water was drawn where it looks:
         // the mirrored image of display row y is row 2*centre - y. The water's own
@@ -607,7 +630,7 @@ internal static class GlShaders
         // scrolling texture rather than lying on it like glass. The colour was
         // fogged by the mirrored camera, whose distance to it is the length of the
         // path through the mirror, so it needs no correction here.
-        bool planarAt(vec3 p, out vec3 c) {
+        bool planarAt(vec3 p, float rough, out vec3 c) {
             c = vec3(0.0);
             if (uPlanarOn == 0) return false;
             if (abs(dot(uPlanarPlane.xyz, p) + uPlanarPlane.w) > uPlanarTol) return false;
@@ -624,7 +647,15 @@ internal static class GlShaders
             // Nothing drawn: the capture cleared to black with the far plane, and an
             // opaque surface writes a depth whatever its colour.
             if (texture(uPlanarDepth, tc(muv)).r >= 1.0 && max(pc.r, max(pc.g, pc.b)) <= 0.0) return false;
+            // Roughness blurs it as it does a march's hit: the image stands as far
+            // behind the water as its source stands above it, and the planar depth
+            // is the mirrored eye's distance to it.
             c = pc;
+            if (rough > 0.0) {
+                float zi = texture(uPlanarDepth, tc(muv)).r * FAR;
+                float travel = zi < FAR * 0.999 ? max(zi - p.z, 0.0) * length(p) / p.z : 0.0;
+                c = blurAt(uPlanar, muv, rough * travel * uProjH / (max(zi, 1.0) * uSize.y), true);
+            }
             return true;
         }
 
@@ -641,9 +672,10 @@ internal static class GlShaders
             vec4 s = texture(uSurface, tc(vUv));
             int m = int(s.a + 0.5);
             // Red is the material here, for the probe's map.
-            oInfo = vec4(float(clamp(m, 0, 7)) / 255.0, depthAt(vUv) >= 1.0 ? 1.0 / 255.0 : 0.0, 0.0, 0.0);
-            if (m <= 0 || m >= 8) return;
-            float refl = uReflect[m];
+            oInfo = vec4(float(clamp(m, 0, 255)) / 255.0, depthAt(vUv) >= 1.0 ? 1.0 / 255.0 : 0.0, 0.0, 0.0);
+            if (m <= 0 || m >= 256) return;
+            vec4 mat = texelFetch(uMatTable, ivec2(m, 0), 0);
+            float refl = mat.r;
             if (refl <= 0.0) return;
             oInfo.a = 1.0 / 255.0;
 
@@ -660,13 +692,14 @@ internal static class GlShaders
             vec3 v = normalize(p);
             vec3 r = reflect(v, n);
             float cosv = clamp(dot(-v, n), 0.0, 1.0);
-            float f0 = uF0[m];
+            float f0 = mat.g;
+            float rough = mat.b;
             // Schlick, running from F0 looking straight down to the material's
             // reflectivity at a grazing angle.
             float w = f0 + (max(refl, f0) - f0) * pow(1.0 - cosv, 5.0);
 
             vec3 pc;
-            bool planarHit = planarAt(p, pc);
+            bool planarHit = planarAt(p, rough, pc);
             if (planarHit && uCompare == 0) {
                 oInfo.a += 4.0 / 255.0;
                 w = clamp(w, 0.0, 1.0);
@@ -747,7 +780,10 @@ internal static class GlShaders
             if (hit && overlayAt(huv)) { oInfo.a += 3.0 / 255.0; return; }
             if (hit) {
                 w *= edgeFade(huv) * (1.0 - smoothstep(0.7, 1.0, ht / uMaxDist));
-                c = texture(uColor, tc(huv)).rgb;
+                // The cone's width where it lands, `rough * ht` across, as a share of
+                // the picture's height at the hit's depth.
+                float hz = max(depthAt(huv) * FAR, 1.0);
+                c = blurAt(uColor, huv, rough * ht * uProjH / (hz * uSize.y), false);
                 // The colour there was fogged for its own distance, and the light
                 // reaching the water has come further: out to the water and back up
                 // to the surface. Its image stands that much further down the mirrored
@@ -787,6 +823,8 @@ internal static class GlShaders
         layout(location = 9) in uint  inLight;
         // 0060. The texture rectangle, and the atlas entry with its flags.
         layout(location = 10) in uvec2 inTex;
+        // 0071. The packet's material (SurfaceMaterial), beside its light record.
+        layout(location = 11) in uint  inMat;
 
         // 0051 draws an opaque tested batch twice with this program -- depth with
         // colour masked, then colour against it -- and the driver may compile
@@ -813,6 +851,7 @@ internal static class GlShaders
         noperspective out float vFog;
         flat out uint vLight;
         flat out uvec2 vTex;
+        flat out uint vMat;
 
         uniform vec2 uVertexOffset;
         uniform vec2 uPosBias;
@@ -843,6 +882,7 @@ internal static class GlShaders
             vFog = inFog;
             vLight = inLight;
             vTex = inTex;
+            vMat = inMat;
             vDither = (inTexpage >> 10) & 1;
             vRepClut = (inTexpage >> 12) & 1;
 
@@ -877,6 +917,7 @@ internal static class GlShaders
         noperspective in float vFog;
         flat in uint vLight;
         flat in uvec2 vTex;
+        flat in uint vMat;
 
         layout(location = 0, index = 0) out vec4 FragColor;
         layout(location = 0, index = 1) out vec4 BlendColor;
@@ -930,6 +971,10 @@ internal static class GlShaders
         uniform vec4  uLightDir[16];
         uniform vec2  uLightCentre;
         uniform float uLightH;
+        // 0071. Emissive materials: row 1 of SurfaceMaterial's table is the light an
+        // id gives off, in the same units as a light's colour.
+        uniform int   uEmitOn;
+        uniform sampler2D uMatTable;
 
         const int ditherTbl[16] = int[16](
             -4,  0, -3,  1,
@@ -1082,7 +1127,7 @@ internal static class GlShaders
                 lit = rgbc * ir / 4096.0;
             }
             // 0071. Before the depth cue, so the game's fog darkens it too.
-            if (uLightN > 0)
+            if (uLightN > 0 || uEmitOn != 0)
                 lit += vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u)) * extra;
             uint curve = mode & 7u;
             float ir0 = clamp(vFog, 0.0, 4096.0);
@@ -1129,6 +1174,9 @@ internal static class GlShaders
             // 0071. Not into a planar reflection: its view is the mirrored camera's.
             vec3 extra = vec3(0.0);
             if (uLightN > 0 && uClipOn == 0) extra = authored();
+            // A surface's own glow needs no position, so it is in a planar
+            // reflection too.
+            if (uEmitOn != 0 && vMat != 0u) extra += texelFetch(uMatTable, ivec2(int(vMat), 1), 0).rgb;
             ivec3 c8in = shade8(extra);
             if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
 

@@ -3,8 +3,8 @@
 **A design document, and from Phase 1 on a record of the work done against it.**
 Phase 1 is in, in two slices (see "Phase 1, the first slice" and "Phase 1, the
 second slice" under the roadmap), with materials since keyed by face ("Faces, picked
-from the frame"); Phase 2 has its first slice ("Phase 2, the first slice");
-everything else is still design. The
+from the frame"); Phase 2 has its first slice ("Phase 2, the first slice"), and so
+does Phase 3 ("Phase 3, the first slice"); everything else is still design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -259,7 +259,11 @@ work into layers, and each layer has one owner.
    `snap`'s readback of the presented picture took `0069` and the hook order
    `0070`, so each planned number moved along from what this plan first said.
    `0071` is in (see "Phase 2, the first slice"); the block holds the light list
-   only so far, and the material table is still `0067`'s.
+   only. **The material table did not move into it**: it stays `SurfaceMaterial`'s,
+   widened by the `0067` amendment and uploaded as a 256×2 texture that the prim and
+   reflection shaders both read, because 256 ids of reflectivity, F0, roughness and
+   an emissive colour as uniform arrays would pass the fragment stage's uniform
+   minimum (see "Phase 3, the first slice").
 
    All of it is **GL core only**; the 2.1 path and the software rasterizer ignore
    it, as they do `0048` and `0067`.
@@ -328,7 +332,9 @@ time and two packs cannot collide on a number:
 Surfaces assign materials, and the most specific key wins: a face of a half, the
 whole half, a face of a mesh anywhere in the area, the whole mesh. A face list names
 the mesh it was authored on and that mesh's hash, and applies only while both still
-hold (see "Faces, picked from the frame"). `models` is not built yet:
+hold (see "Faces, picked from the frame"). A model is named by the table it comes
+out of and its model id, since a creature and an object may share an id and not a
+mesh:
 
 ```json
 // areas/1/surfaces.json
@@ -338,7 +344,7 @@ hold (see "Faces, picked from the frame"). `models` is not built yet:
                 "mesh": 1, "meshHash": "8613becbcde29491", "faces": { "1": "mirror" } } ],
   "meshes": [ { "mesh": 12, "meshHash": "0c41d9e2a7b3f865", "material": "wet-rock",
                 "faces": { "3": "polished-stone" } } ],
-  "models": [ { "model": 41, "material": "brazier-coal" } ] }
+  "models": [ { "kind": "object", "model": 486, "material": "brazier-coal" } ] }
 ```
 
 Lights are world positions in the game's own units: a tile is 2048, a height step
@@ -443,9 +449,10 @@ is a command-line converter.
   within the coplanar tolerance of it. That is what the depth buffer drew, walls
   and ceilings included. It replaced a ray through the 80×80 grid, which could see
   only floors (see "Faces, picked from the frame").
-- **Models:** the same ray against `ModelWalk.Scene`'s positions with a bounding
-  radius per model id. It returns a `ModelDraw`, and through that an instance or
-  a model key.
+- **Models:** the same triangles. A model's are recorded with the kind and model
+  id the object walk was submitting, so a click whose nearest triangle is a model's
+  selects that model (`model:1:object:486`) rather than refusing. Instances are not
+  told apart: a material on a model is on every draw of it in the area.
 - **Textures:** on a click, a one-frame `FrameCapture`, which already answers
   which GP0 command and owner routine drew a pixel. The command gives the page,
   the CLUT and the UVs, and from those upstream's key. It is only needed on a
@@ -1149,16 +1156,104 @@ neither was a light on the arm.
 ### Phase 3: the material system proper
 
 - **Ships:**
-  - the `0067` amendment: ids widened to 256, which fits exactly in the
-    `RGBA16F` alpha, with the table moved into `RemasterUniforms`;
-  - materials keyed by tile mesh, model and texture index hash, resolved in that
-    order after the tile half;
-  - emissive, which adds to the lit term the way a light does, and roughness,
+  - [x] the `0067` amendment: ids widened to 256 (the `RGBA16F` alpha holds them
+    exactly); the table stayed `SurfaceMaterial`'s, as a texture, not in
+    `RemasterUniforms`;
+  - [~] materials keyed by tile mesh (Phase 1's faces), model (in) and texture
+    index hash (not started: it waits on Phase 4's key census);
+  - [x] emissive, which adds to the lit term the way a light does, and roughness,
     which only SSR reads, as a blur of its hit.
 - **Mechanism measured by:** the `ByMaterial` census for every source; the
-  reflection census identical with no pack; `shader_probe.c` for emissive.
+  reflection census identical with no pack; `shader_probe.c` for emissive
+  (`light_probe.c` in the event, since the term is `0071`'s).
 - **You look at:** emissive surfaces in the dark areas; how roughness looks on
   SSR.
+
+### Phase 3, the first slice
+
+**What is in.** Two material properties, a key, and the table they need:
+
+- **Runtime, `0067` amended**: `SurfaceMaterial.Count` 256, `BlendedFlag` 256,
+  `Roughness`, `Emissive`, `Generation` and `Changed()`. `GlCore` uploads the table
+  as a 256×2 RGBA32F texture when the generation moves: row 0 reflectivity, F0 and
+  roughness for `SsrFs`, row 1 the emissive colour for `PrimFs`.
+- **Roughness** is a blur of the reflection, not a jittered ray: nine taps over the
+  footprint of the cone the reflected ray stands for, `roughness × distance`
+  across at the hit's depth, skipping taps under the HUD or off the picture. A
+  planar lookup takes its distance from the planar texture's depth. 0 is the single
+  read it was.
+- **Emissive, `0071` amended**: the packet's material rides in the light buffer
+  (attribute 11), and `PrimFs` adds its row-1 colour to the authored term, before
+  the depth cue and times the packet's RGBC, so a glow is fogged and textured like
+  the game's own light and strength 1 shows the texture at full. It needs no depth,
+  so it is drawn into a planar reflection too. Only a packet with a `0048` record
+  glows, which needs per-pixel lighting and Fast geometry.
+- **The first thing that did not work**: a glowing model changed no pixel. A face
+  with no fog at all keeps no light record (it interpolates the same per pixel), and
+  near the eye that is every face; only authored lights kept them
+  (`PolyAssembler.KeepUnfogged`). It is now kept for either reason, each owned by
+  its feature (`KeepForLights`, `KeepForGlow`), and only while the area has a
+  glowing material applied.
+- **Models**: `ModelWalk`'s submitter asks `Surfaces.EnterModel(kind, model)` before
+  the assembler call and `SealDepth` writes the id as it does for a tile.
+  `surfaces.json` gains `models`, keyed by kind and model id. `Faces` records a
+  model's triangles with both, so a click on a model selects it; the editor tints
+  its triangles and gives it the material combo. Nothing is keyed by instance.
+- The editor's library gains *Roughness*, *Emissive* (a colour) and *Glow* (0-4);
+  a colour held is one undo entry. Shell: `select model:A:KIND:ID`, `select pick`
+  answering a model, `set model:... material NAME`, `set material:NAME
+  roughness|emissiveStrength V` and `emissive R G B`; `pack list` shows models and
+  the new fields; `remaster` gives `byMaterial` as only the ids drawn, the table's
+  uploads and whether anything glows.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, `KF2_SSR=1`, a scratch pack,
+144 fps, render scale 5, 16:9, the view pinned with the editor open):
+- **The formula.** `light_probe.c` adds three passes: glow on with material 0,
+  glow on with a glowing material and no depth, glow off with the same material.
+  Worst difference from the formula 0 in all six passes; the first and third new
+  ones are the program as `0071` left it, to the bit.
+- **Off is the picture it was.** With nothing authored, remaster on and off gave
+  `210d55698c875fb8`, the hash Phase 2 recorded at this view before this change, so
+  moving the table into a texture moved no pixel.
+- **A model glows, and only it.** `select pick 180 100` chose
+  `model:1:object:486` (63 triangles). At glow 1.5 the picture changed in 11.1% of
+  its pixels, by up to 153 levels, all inside render pixels 930-1378 by 0-912, the
+  model's rectangle; at 0.5, by up to 94. At glow 0 -- the records kept, the term
+  zero -- and with the remaster off, the hash was the baseline's.
+- A face of a floor half in area 0 at glow 1.5 changed 3.2% of the picture, all in
+  the bottom rows where it lies.
+- **Roughness moves only the reflection.** A mirror (reflectivity 1, F0 0.5) on a
+  floor face; roughness 0.3 and 1 changed 3.6-3.9% of the picture, inside the
+  floor's rectangle, by up to 15-24 levels. Back at 0 the hash was the mirror's own
+  again.
+- **The saved pack reproduces it.** After a restart, the same view's hash was the
+  one before (`22f23314bc315e90`).
+- **Verify.** `KF2_POLYASM=verify KF2_TILEWALK=verify` in area 0 with the glowing
+  face applied and sealed: 899 reports over the nine routines, all 0 RAM, register
+  and GTE mismatches. `KF2_MODELWALK=verify` into area 1 with the glowing model: 72
+  reports, one of them 1 RAM mismatch in `func_800331B4`, in area 0 before the save
+  loaded (a word at `0x80073DF4`), which is the ambient-sound key-on the walk's
+  verify is documented to show ("A verify pass replays, it does not re-run" in
+  `PATCHES_AND_MODS.md`) -- **Inferred**, since the probe that counts key-ons was
+  not on. The picture under that verify was the normal run's hash. All three
+  verifiers together run at 0.2 fps in area 0, too slow to reach a save.
+- 144.0 fps drawn at 19.9-20.0 ticks/s in area 1 with the pack applied, and in
+  area 0 with the glow on and with the remaster off; `[present] wide 288, plain 0,
+  vram fallback 0`. One view in area 0 facing the sea, editor open, read 114 fps;
+  it was not compared with the build before this and is not explained.
+- **Cost:** nothing glowing, one bool a batch. Glowing, one texel fetch per
+  fragment of a recorded packet, and the records of unfogged faces kept, as authored
+  lights already do. Roughness 0 costs nothing; above it, eight more reads per
+  reflective pixel.
+
+**Not judged.** Nothing about the look: a glow in a dark area, how it reads through
+the fog, roughness on a floor mirror and on water, the editor's new controls and
+the model tint. Under `KF2_MODELWALK=verify` a click cannot pick a model (the last
+submit recorded is the recompiled pass's, which names nothing).
+
+**Next.** The texture key needs Phase 4's census before anything is keyed by it,
+so this phase's third key waits for that. Instances (one door, not every door) need
+the slot measurement "Identity" asks for.
 
 ### Phase 4: textures
 

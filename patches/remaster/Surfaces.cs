@@ -1,15 +1,19 @@
+using System.Numerics;
 using RecompOne.Runtime;
 
 namespace Kf2.Remaster;
 
 /// <summary>
-/// Authored materials on map tiles. The pack names a material for a whole tile half,
-/// for faces of the mesh a half draws, and for faces of a mesh wherever the area uses
-/// it; this resolves the names to <see cref="SurfaceMaterial"/> ids when the area
-/// settles or the pack changes. <see cref="TileWalk"/> asks for the half it is
-/// assembling and <see cref="Faces"/> for each face, and <c>PolyAssembler.SealDepth</c>
-/// writes the id into the packet's depth record. From there it is 0067's: the surface
-/// buffer carries it and the reflection pass reads the material's reflectivity and F0.
+/// Authored materials on map tiles and models. The pack names a material for a whole
+/// tile half, for faces of the mesh a half draws, for faces of a mesh wherever the area
+/// uses it, and for a model wherever the area draws it; this resolves the names to
+/// <see cref="SurfaceMaterial"/> ids when the area settles or the pack changes.
+/// <see cref="TileWalk"/> asks for the half it is assembling, <see cref="Faces"/> for
+/// each face and <see cref="ModelWalk"/> for each model, and
+/// <c>PolyAssembler.SealDepth</c> writes the id into the packet's depth record. From
+/// there it is the runtime's: the surface buffer carries it to the reflection pass
+/// (reflectivity, F0, roughness, 0067), and the light record to the prim shader
+/// (emissive, 0071).
 ///
 /// The most specific entry wins: the half's face, the whole half, the mesh's face, the
 /// whole mesh. A face list applies only to the mesh it was authored on, and only while
@@ -29,6 +33,9 @@ public sealed class Surfaces : IRemasterFeature
 
     /// <summary>Face lists by half index, each with the mesh it was authored on.</summary>
     static readonly Dictionary<int, (int Mesh, byte[] Ids)> _tileFaces = new();
+
+    /// <summary>Models by kind and id.</summary>
+    static readonly Dictionary<(ModelKind, int), byte> _models = new();
 
     /// <summary>Area-wide rules by mesh: a whole-mesh id and a face list.</summary>
     static readonly Dictionary<int, byte> _meshWhole = new();
@@ -93,10 +100,15 @@ public sealed class Surfaces : IRemasterFeature
         _tileFaces.Clear();
         _meshWhole.Clear();
         _meshFaces.Clear();
+        _models.Clear();
         _active = PerFace = false;
+        PolyAssembler.KeepForGlow = false;
+        PolyAssembler.Keep();
         _tf = _mf = null;
         _half = _meshAll = 0;
     }
+
+    static bool _idsSet;
 
     static void ClearIds()
     {
@@ -104,8 +116,12 @@ public sealed class Surfaces : IRemasterFeature
         {
             SurfaceMaterial.Reflectivity[i] = 0f;
             SurfaceMaterial.F0[i] = 0f;
+            SurfaceMaterial.Roughness[i] = 0f;
+            SurfaceMaterial.Emissive[i * 3] = SurfaceMaterial.Emissive[i * 3 + 1] = SurfaceMaterial.Emissive[i * 3 + 2] = 0f;
             IdNames[i] = null;
         }
+        if (_idsSet) SurfaceMaterial.Changed();
+        _idsSet = false;
     }
 
     static void Apply()
@@ -115,20 +131,27 @@ public sealed class Surfaces : IRemasterFeature
         MeshRefused = 0;
 
         // Ids are handed out by name at load time, so two packs never collide on a
-        // number. 0067's table has eight and the runtime keeps four.
+        // number. 0067's table has 256 and the runtime keeps four.
         var ids = new Dictionary<string, byte>();
-        byte next = SurfaceMaterial.FirstAuthored;
+        int next = SurfaceMaterial.FirstAuthored;
         int over = 0;
         foreach (var m in Pack.Materials())
         {
             if (next >= SurfaceMaterial.Count) { over++; continue; }
-            ids[m.Name] = next;
+            ids[m.Name] = (byte)next;
             IdNames[next] = m.Name;
             SurfaceMaterial.Reflectivity[next] = Math.Clamp(m.Reflectivity, 0f, 1f);
             SurfaceMaterial.F0[next] = Math.Clamp(m.F0, 0f, 1f);
+            SurfaceMaterial.Roughness[next] = Math.Clamp(m.Roughness, 0f, 1f);
+            var e = Vector3.Clamp(m.Emissive, Vector3.Zero, Vector3.One) * Math.Clamp(m.EmissiveStrength, 0f, 4f);
+            SurfaceMaterial.Emissive[next * 3] = e.X;
+            SurfaceMaterial.Emissive[next * 3 + 1] = e.Y;
+            SurfaceMaterial.Emissive[next * 3 + 2] = e.Z;
             next++;
         }
         Unallocated = over;
+        SurfaceMaterial.Changed();
+        _idsSet = true;
 
         int area = Identity.Area;
         string? fp = Pack.AreaFingerprint(area);
@@ -163,9 +186,18 @@ public sealed class Surfaces : IRemasterFeature
             if (Ids(e.Faces, ids) is { } list) _meshFaces[e.Mesh] = list;
             n++;
         }
+        foreach (var r in Pack.ModelRules(area))
+        {
+            if (!ids.TryGetValue(r.Material, out byte id)) continue;
+            _models[(r.Model.Kind, r.Model.Model)] = id;
+            n++;
+        }
         TilesApplied = n;
         PerFace = _tileFaces.Count > 0 || _meshWhole.Count > 0 || _meshFaces.Count > 0;
         _active = n > 0;
+        // A glowing face near the eye is unfogged, and it glows only through its record.
+        PolyAssembler.KeepForGlow = _active && SurfaceMaterial.AnyEmissive;
+        PolyAssembler.Keep();
     }
 
     static bool Gate(RecompOne.Runtime.Memory.IMemory m, int mesh, string? hash)
@@ -214,6 +246,10 @@ public sealed class Surfaces : IRemasterFeature
         if (id == 0 && _mf != null && (uint)f < (uint)_mf.Length) id = _mf[f];
         return id != 0 ? id : _meshAll;
     }
+
+    /// <summary>The model about to be assembled: its id, or 0.</summary>
+    public static byte EnterModel(ModelKind kind, int model)
+        => _active && _models.Count > 0 && _models.TryGetValue((kind, model), out byte id) ? id : (byte)0;
 
     public static byte IdOf(string? name)
     {

@@ -39,9 +39,14 @@ public static partial class PolyAssembler
     const int RecordSlots = 64;
     static readonly RecordLight[] _recordLight = new RecordLight[RecordSlots];
 
-    /// <summary>Authored lights are on: a face drawn unfogged keeps its record, since the
-    /// light term is evaluated from it (0071).</summary>
+    /// <summary>Authored lights or a glowing material are applied: a face drawn unfogged
+    /// keeps its record, since both terms are evaluated from it (0071).</summary>
     public static bool KeepUnfogged;
+
+    /// <summary>The two reasons, each owned by the remaster feature that has it.</summary>
+    public static bool KeepForLights, KeepForGlow;
+
+    public static void Keep() => KeepUnfogged = KeepForLights || KeepForGlow;
 
     /// <summary>Set while the HUD builder runs, whose icons go through the lit assembler
     /// too and are left to draw their own colours.</summary>
