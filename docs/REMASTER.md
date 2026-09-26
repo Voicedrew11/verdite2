@@ -1246,14 +1246,48 @@ neither was a light on the arm.
   lights already do. Roughness 0 costs nothing; above it, eight more reads per
   reflective pixel.
 
-**Not judged.** Nothing about the look: a glow in a dark area, how it reads through
-the fog, roughness on a floor mirror and on water, the editor's new controls and
-the model tint. Under `KF2_MODELWALK=verify` a click cannot pick a model (the last
+**Not judged.** Most of the look: how a glow reads through the fog, roughness on a
+floor mirror and on water, the editor's new controls and the model tint. One glow
+was looked at; see below. Under `KF2_MODELWALK=verify` a click cannot pick a model (the last
 submit recorded is the recompiled pass's, which names nothing).
 
-**Next.** The texture key needs Phase 4's census before anything is keyed by it,
-so this phase's third key waits for that. Instances (one door, not every door) need
-the slot measurement "Identity" asks for.
+**Looked at: glow reads as lit, not glowing.** Judged from play (area 0, a wall
+panel at glow 4.0, roughness 1): "it kinda looks like it's glowing, but not quite".
+Two causes in the design, neither of them the missing bloom:
+- **It multiplies the texture.** The term is added to the lit colour *before*
+  the texture is modulated, so glow 4 is "the texture at twice full, clipped": the
+  texture's dark blotches stay dark and the panel reads as overexposed stone. Right
+  for a lit window; wrong for a light source.
+- **Nothing around it is lit.** The floor in front of the panel is as dark as
+  anywhere else, and that is the strongest glow cue there is.
+- Roughness did nothing in that shot, correctly: it only blurs a reflection, and
+  the panel had reflectivity 0.
+
+**Next, for glow** (agreed with the user, not started):
+1. **Try by hand first**: an authored point light just in front of the panel, the
+   glow's colour, radius 1500-3000. The user was to say whether that is much
+   closer; if so, build 2 and 3 together.
+2. **A glowing material gives off a light.** `Lights` builds the frame's list from
+   `Pack.Lights(area)` (`patches/remaster/Lights.cs`, `Resolve` and the publish
+   before `DrawOTag`); add derived lights for the area's glowing faces and models.
+   A tile face's world position comes from its half (`Identity`: tile X, Z at 2048
+   units, the floor at `-(h) << 7`) and the mesh's vertices (`Faces.Mesh`); a
+   model's from `ModelWalk.Scene`. The cap is 16 lights, nearest first, so derived
+   ones compete with authored ones; decide which wins. Keep it off with no glowing
+   material, so off stays bit-identical.
+3. **An additive glow mode**: add the emissive colour *after* the texture is
+   modulated, so dark texels light too. The term is in `PrimFs`
+   (`GlShaders.cs`: `extra += texelFetch(uMatTable, ivec2(int(vMat), 1), 0).rgb`
+   in `main`, applied in `shade8`); row 1's alpha of the material table is free for
+   a mode flag (`GlCore.BindMaterials`, `SurfaceMaterial.Emissive`). Keep the
+   current mode as the other choice, extend `scripts/light_probe.c` for the new
+   one, and amend `0071` (a correction to its own term, not a new mechanism).
+4. Bloom is a pass on the finished picture, a separate feature, later.
+
+**Next, otherwise.** The texture key needs Phase 4's census before anything is keyed
+by it, so this phase's third key waits for that. Instances (one door, not every
+door) need the slot measurement "Identity" asks for. Roughness on a mirror floor and
+on water has still not been looked at.
 
 ### Phase 4: textures
 
