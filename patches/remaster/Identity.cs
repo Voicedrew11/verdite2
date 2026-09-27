@@ -71,9 +71,9 @@ public static class Identity
     public const int TileUnits = 2048;
 
     public const uint TileBase = 0x801C8484;     // 80 * 80 * 10
-    const uint TileBytes = Span * Span * Stride;
-    const uint ShapeBase = 0x801D8484;            // the collision shapes
-    const uint ShapeBytes = 0x600;
+    public const uint TileBytes = Span * Span * Stride;
+    public const uint ShapeBase = 0x801D8484;     // the collision shapes
+    public const uint ShapeBytes = 0x600;
     const uint AreaAddr = 0x8017E060;
     const uint MaxHpAddr = 0x80199426;
     const uint PosXAddr = 0x801994EC, PosYAddr = 0x801994F0, PosZAddr = 0x801994F4;
@@ -96,6 +96,15 @@ public static class Identity
     /// <summary>Whether the fingerprint came from the loader's copy, or from the live
     /// block because the copy was never seen.</summary>
     public static bool FromLoad { get; private set; }
+
+    /// <summary>The settled area's tile block as the loader copied it in, before the
+    /// game or the remaster changed any of it; null when the copy was not seen. Held in
+    /// the port's memory only: it is disc data, and no document may carry it.</summary>
+    public static ReadOnlyMemory<byte>? Baseline { get; private set; }
+
+    /// <summary>Times the loader has copied a tile block in; a write into the block is
+    /// void once this moves, since the block it was made in is gone.</summary>
+    public static int BlockLoads { get; private set; }
 
     /// <summary>Raised on the game thread once an area has settled.</summary>
     public static event Action? AreaSettled;
@@ -120,7 +129,7 @@ public static class Identity
         Settled = false;
         _candidateAt = -1;
         _module = overlay.StartsWith("fdat", StringComparison.OrdinalIgnoreCase);
-        if (!_module) _loaded = null;
+        if (!_module) { _loaded = null; _loadedBlock = null; }
     }
 
     /// <summary>Once a frame, on the game thread.</summary>
@@ -161,6 +170,7 @@ public static class Identity
         if (Probe) Compare(m, area, fp);
         FromLoad = _loaded != null;
         Fingerprint = _loaded ?? fp;
+        Baseline = FromLoad ? _loadedBlock : null;
         LastGap = gap;
         Settled = true;
         Settles++;
@@ -257,6 +267,7 @@ public static class Identity
     /// after leaving and coming back, 12 upper halves at 10-13,47-49 differing.
     /// </summary>
     static ulong? _loaded;
+    static byte[]? _loadedBlock, _copying;
     static ulong _tilesHash;
     static bool _tilesSeen;
 
@@ -295,10 +306,15 @@ public static class Identity
         {
             _tilesHash = Hash(m, c.A1, TileBytes, true, Fnv);
             _tilesSeen = true;
+            _copying = new byte[TileBytes];
+            for (uint i = 0; i < TileBytes; i += 4)
+                System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(_copying.AsSpan((int)i), m.ReadU32(c.A1 + i));
+            BlockLoads++;
         }
         else if (c.A0 == ShapeBase && c.A2 == ShapeWords && _tilesSeen)
         {
             _loaded = Hash(m, c.A1, ShapeBytes, false, _tilesHash);
+            _loadedBlock = _copying;
             _tilesSeen = false;
         }
     }

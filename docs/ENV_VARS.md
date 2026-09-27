@@ -192,6 +192,7 @@ KF2_REMASTER_PACK=dir                  # the working pack (packs/working)
 KF2_REMASTER_PROBE=1                   # a line every 2 s: the area, its fingerprint, what applied; a diff of the tile bytes when an area's fingerprint changes
 KF2_REMASTER_LIGHTS=0                  # leave the pack's authored lights out (they apply with the remaster by default; 0071)
 KF2_REMASTER_ATMOS=0                   # leave the pack's light-record overrides out (they apply with the remaster by default)
+KF2_REMASTER_LEVEL=1                   # apply the pack's tile edits, which change gameplay (off by default; 0 never; unset, the saved setting)
 KF2_REMASTER_SHADOWS=0                 # no shadows from the authored lights (on by default: a depth cubemap per light from the retained map, 0077)
 KF2_REMASTER_SHADOW_MODELS=0           # only the map casts: creatures and objects stay out of the lights' cubemaps (they cast by default)
 KF2_REMASTER_SHADOW_SIZE=1024          # a shadow cubemap face's size in texels (64-4096)

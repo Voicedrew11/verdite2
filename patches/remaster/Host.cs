@@ -31,6 +31,7 @@ public interface IRemasterFeature
 ///     KF2_REMASTER_ATMOS=0   leave the pack's light-record overrides out
 ///     KF2_REMASTER_SHADOWS=0 no shadows from the authored lights
 ///     KF2_REMASTER_SHADOW_MODELS=0 only the map casts them
+///     KF2_REMASTER_LEVEL=1   apply the pack's level edits, which change gameplay (off by default)
 ///
 /// Shift+E opens the editor, which pauses the world. See docs/REMASTER.md.
 /// </summary>
@@ -46,12 +47,14 @@ public static class Host
 
     public static bool Enabled { get; private set; }
 
-    public static readonly IRemasterFeature[] Features = [new Surfaces(), new Lights(), new Atmosphere()];
+    public static readonly IRemasterFeature[] Features = [new Surfaces(), new Lights(), new Atmosphere(), new Level()];
 
-    public static void Configure(string? on, string? pack, string? probe, string? lights, string? atmos = null)
+    public static void Configure(string? on, string? pack, string? probe, string? lights, string? atmos = null,
+                                 string? level = null)
     {
         Lights.Configure(lights);
         Atmosphere.Configure(atmos);
+        Level.Configure(level);
         if (!string.IsNullOrWhiteSpace(on)) _forced = on.Trim() != "0";
         Pack.Configure(pack);
         _probe = probe?.Trim() is not (null or "" or "0");
@@ -77,6 +80,7 @@ public static class Host
         Event.AddListener<VSyncEvent>(_ => Frame());
         Lights.Install();
         Atmosphere.Install();
+        Level.Install();
         Editor.Install();
     }
 
@@ -98,6 +102,7 @@ public static class Host
         var m = RecompOne.Runtime.Runtime.Mem;
         if (m == null) return;
         Identity.Poll(m);
+        TileRewrites.Poll(m, Level.Holding, Level.Generation);
         Pack.Poll();
         foreach (var f in Features) f.OnFrame();
         if (_probe) Report();

@@ -25,7 +25,7 @@ namespace Kf2.Remaster;
 /// dragged across the screen at their depth. See "The editor", "Faces, picked from the
 /// frame" and "Phase 2, the first slice" in docs/REMASTER.md.
 /// </summary>
-public static class Editor
+public static partial class Editor
 {
     public static bool Open => Panel.Instance.IsOpen;
 
@@ -230,7 +230,7 @@ public static class Editor
         Panel.Instance.IsOpen = false;
     }
 
-    sealed class Panel : IPanel
+    sealed partial class Panel : IPanel
     {
         public static readonly Panel Instance = new();
         Panel() { }
@@ -266,6 +266,8 @@ public static class Editor
             DrawLights();
             ImGui.Separator();
             DrawAtmosphere();
+            ImGui.Separator();
+            DrawLevel();
             bool hovered = ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows);
             ImGui.End();
 

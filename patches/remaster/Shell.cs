@@ -24,11 +24,12 @@ namespace Kf2.Remaster;
 ///     light list|shadows on|off|shadows models on|off|shadows tune BIAS OFFSET SOFT [SIZE]|add NAME [here|pick GX GY|X Y Z]|remove NAME|select NAME|set NAME FIELD V...
 ///     atmos [list|darkness [V]|fog R G B|off|curve P [MAX]|off|sky R G B|fog|show N|set N FIELD V...|reset N [FIELD]]
 ///                                                    the area's light records, their overrides, its darkness and fog
+///     level [status|on|off|show T|set T FIELD V|game|reset T|rewrites [reset]]   the area's tile edits (Shell.Level.cs)
 ///     remaster                                      the status, as the probe line has it
 /// </summary>
-public static class Shell
+public static partial class Shell
 {
-    public static readonly string[] Verbs = ["edit", "select", "set", "pack", "remaster", "light", "textures", "atmos"];
+    public static readonly string[] Verbs = ["edit", "select", "set", "pack", "remaster", "light", "textures", "atmos", "level"];
 
     public static readonly string[] Help =
     [
@@ -44,6 +45,7 @@ public static class Shell
         "atmos [list | darkness [0..1] | fog R G B|off | curve POWER [MAX]|off | sky R G B|fog | show N | set N back R G B | set N light J direction X Y Z | set N light J colour R G B | set N fog WORD | " +
             "reset N [back|light J|fog]] - the area's light records (N 0..79): which halves use each, the game's values and the pack's overrides",
         "remaster - area, fingerprint, what is applied",
+        LevelHelp,
         "textures [on|off|reset|save] - the texture-key census of this area: keys, art, overlapping rects, what a pack covers; save writes dump/GAME/census/area-N.json",
     ];
 
@@ -62,6 +64,7 @@ public static class Shell
                 "light" => LightVerb(a),
                 "textures" => Ok("textures", TextureCensus.Verb(a)),
                 "atmos" => AtmosVerb(a),
+                "level" => LevelVerb(a),
                 _ => Err(verb, "unknown verb"),
             };
         }

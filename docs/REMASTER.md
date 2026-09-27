@@ -6,9 +6,11 @@ second slice" under the roadmap), with materials since keyed by face ("Faces, pi
 from the frame"); Phase 2 has its first slice ("Phase 2, the first slice"), and so
 does Phase 3 ("Phase 3, the first slice"); Phase 4 is in, rescoped to materials
 by texture ("Phase 4, the second slice"), and metalness made a tinted mirror
-("Metal is a tinted mirror"); Phase 5 has its first slice, overrides of the game's
-own light records ("Phase 5, the first slice"), after a census showed only the
-renderer reads them; the rest of Phase 5 and Phase 6 on are still design. The
+("Metal is a tinted mirror"); Phase 5 is in: overrides of the game's own light
+records ("Phase 5, the first slice"), after a census showed only the renderer reads
+them, the area's darkness, shadows, and the fog's colour and the sky ("Phase 5, the
+second slice"); Phase 6 has its first slice, tile edits behind their own switch
+("Phase 6, the first slice"); Phase 7 on is still design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -197,8 +199,9 @@ does.
    pieces, the models' as 64x64, 32x32 and 16x16 -- and the scrolling textures in
    strips every tick. Keys are normalised to the upload, pieces joined, and a
    scrolling texture is keyed on its source image.
-4. **Which tile bytes the game rewrites at run time, and when.** The map already
-   copies the block four times a second; the probe needs a diff.
+4. **Which tile bytes the game rewrites at run time, and when.** **Measured** by the
+   rewrite census (see "Phase 6, the first slice"): in area 1, 100 upper halves, in
+   `+0`, `+3` and `+4`, all of them within seconds of the settle.
 
 ## Architecture: five layers and the seams between them
 
@@ -656,9 +659,9 @@ Limits that follow from the format and cannot be designed away:
 - **The game's own tile rewrites win.** A door, the drawbridge or the minecart
   rewrites its tiles at run time, so an edit to one of those tiles is undone by
   the game. The editor flags such tiles from the rewrite census.
-- **Open**: whether any of the tile block is written into a save, or whether it
-  is always re-read from the disc on an area load. Until that is measured, level
-  edits are marked gameplay-changing.
+- **Confirmed: none of the tile block is written into a save, and it is re-read
+  from the disc on every area load** (see "The tile block never reaches a save").
+  Level edits are still marked gameplay-changing, because they are.
 
 The test for an edit is the invariant the map already prints. Stand on the edited
 tile with `goto`; `state` must give a floor gap of 0 at the new height. Walk into
@@ -2163,6 +2166,98 @@ fog word already sets.
     original tile.
 - **You look at:** whether edited heights meet their neighbours; lighting on the
   edited tiles, which take their light record from `+4`.
+
+### Phase 6, the first slice
+
+**What is in.** `areas/<n>/level.json` and the feature that applies it
+(`patches/remaster/Level.cs`), the rewrite census (`TileRewrites.cs`), the save check
+(`SaveCheck.cs`), a Level section in the editor, the `level` and `savecheck` shell
+verbs, and a switch of its own.
+
+- **The document holds fields, never bytes.** A half's entry names any of six fields
+  (`TileField.cs`): `mesh` (`+0`), `height` (`+1`), `collision` (`+2`, the bits
+  `0xF8` written where the byte holds them), `shape` (`+3`), `light` (`+4 & 0x3F`) and
+  `stopsFlood` (`+4 & 0x80`, a true/false). Each owns only its bits, so no edit can
+  write `+2`'s `0x04`, the footprint the game moves, or `+4`'s unexplained `0x40`. The
+  values are the author's own; the bytes as the disc holds them stay in the port's
+  memory (`Identity.Baseline`, copied from the loader's source buffer with the
+  fingerprint) and never reach a file. A field the document does not know is kept.
+
+      { "x": 35, "z": 37, "half": "upper", "height": 118, "stopsFlood": true }
+
+- **An area applies whole or not at all; so does a half.** The level document carries
+  its own fingerprint and is refused whole on a mismatch, and also when the load was
+  not seen (no baseline, so no way to know what an edit replaces). A half is refused
+  whole, with the reason on the probe line, the shell and the editor, when a value is
+  out of a field's range, when a mesh or a collision shape is not one the area's own
+  block uses (the only bound there is: the mesh table's `+4` is not a count, and a
+  shape is a slot in the 0x600-byte block), or when the game has rewritten the half
+  (any byte but `+2` differs from the loaded block): **the game's rewrites win**.
+- **Every write is held, and put back only if it still reads as written.** A write
+  keeps the byte it replaced; turning the edits off, changing the document or a new
+  settle puts the owned bits back only where they still read as written, so a door the
+  game opened over an edit since stays open (`keptGames` counts those; not exercised,
+  since no door was worked over an edit). A write is
+  void, and forgotten without writing, once the loader copies a block in
+  (`Identity.BlockLoads`), since the block it was made in is gone.
+- **The switch.** `KF2_REMASTER_LEVEL=1`, or *Level edits (changes gameplay)* on
+  Video ▸ Enhancements ▸ Remaster packs, or *Apply level edits* in the editor; **off by
+  default**, and applied only with the remaster on too. A pack with edits is labelled
+  with its count and *changes gameplay* on the packs page. The setting is the port's
+  gameplay rule in practice: an edit is opt-in twice.
+
+**The tile block never reaches a save.** `func_80023764` writes the card buffer
+(`*(u32*)0x8006E98C`, 0x4000 bytes) after `func_80049A88(buf + 0x400)` packs the
+state into it. Read off the code, the packer reads the inventory, the character at
+`0x80199414`-`0x8019953C`, the area bytes and the per-area state heap at
+`0x801B3188` -- which `func_800492B8` fills from the creature, descriptor and object
+tables -- and nothing in `0x801C8484`-`0x801D8A84`; the block is also four times the
+size of a save. **Measured** with `savecheck`, which runs the packer on the game's own
+buffer three times and puts everything back: in area 1, inverting all 64,000 tile
+bytes and the 0x600 shape bytes moved **0 of the 15,360 packed bytes**, and the
+control, inverting only the player's X, moved **4**. On the load side, `load 2`
+advanced `BlockLoads` from 2 to 3: the loader copied the block off the disc again,
+and the edits re-applied over it. So a save made with edits on loads with them off as
+the disc's tiles. **What a save does carry is the position** (the control is it): a
+save made standing on a raised floor keeps the height, not the floor. What the game
+does with a position above or below its floor on load is **Open**.
+
+**The rewrite census.** Four times a second the live block is compared with the
+loaded one, with the edits' held bits over it and every `+2` left out, and each half
+that differs is kept by fingerprint in `dump/SLUS-00158/census/rewrites.json`
+(coordinates and offsets, nothing else), so it grows over sessions. Area 1 from slot
+2: **100 upper halves**, all within seconds of the settle at the spawn -- 2x2 and 2x3 blocks changing
+`+3` and `+4` (an object's collision shape and flood bit written over the tiles it
+stands on), some `+0` too; area 0's New Game, 37. `level rewrites` lists them and the
+editor flags a selected one.
+
+**Measured, in area 1 from slot 2, at 144.0 fps drawn and 19.9-20.0 ticks/s,
+`[present] wide 288`:**
+- **An edited floor is the floor.** Lowering the player's own half from 116 to 112
+  dropped them to Y -14336, its new floor; `goto` onto (35,37) raised from 116 to 120
+  landed at -15360, the new floor (an unedited control at the same spot, -14848).
+  Gap 0 each time.
+- **An edited wall is a wall.** Walking from (35,37) into (36,36) with Up for 600 ms
+  ends at (74916, 75058), inside it. With (36,36) raised to 140 the walk slid along it
+  and stopped at z 75777, one unit short of it; with its `shape` 1 changed to 10 (the
+  shape of the wall pieces beside it) it stopped at z 75732, 44 units inside its edge.
+- **`+2`'s bits did not stop the player.** Each of `0x08`-`0x80` set alone on (36,36)
+  held (the game left it) and the same walk ended where the control did. What
+  `func_8002C700`'s `& 0xFC` test is for is **Open**; the field is kept, since the
+  game reads it.
+- **A floor lowered by more than 1024 under a standing player leaves them in the
+  air**, standing and unable to walk: drops of 256, 512 and 1024 were followed at
+  once, 1536 and 1792 were not. The game's rule, not the edit's; an author lowering
+  a floor more than eight steps should not do it under the player.
+- Off put every edited byte back to the game's (height 116, light 15, flood 0) and on
+  applied them again; a reload re-applied over the fresh block with nothing written
+  into it; a hand edit to the file applied on `pack reload`, a `light` of 99 refused
+  its half with the reason, and an unknown field survived a save.
+
+**Not judged.** Nothing has been looked at: an edited floor or wall on the picture,
+how an edited height meets its neighbours, the lighting on a half given another light
+record, a mesh swapped for another, the map panel showing an edit (it reads the live
+block, so it should), and the editor's Level section, which has not been opened.
 
 ### Phase 7: the editor camera, and sharing
 

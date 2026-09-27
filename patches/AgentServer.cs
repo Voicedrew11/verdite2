@@ -28,8 +28,10 @@ namespace Kf2;
 ///     nearby [radius]       live world-table records within radius of the
 ///                           player, nearest first (positions only; buf6's
 ///                           entity reading is still Inferred)
-///     edit, select, set, pack, remaster, light
+///     edit, select, set, pack, remaster, light, atmos, level
 ///                           the remaster editor's verbs (Remaster.Shell)
+///     savecheck             whether a save carries any of the tile block
+///                           (Remaster.SaveCheck), on the heavy queue
 ///     snap [hash|PATH] [after N]
 ///                           the presented picture (Remaster.Snap), answered
 ///                           from the present that reads it
@@ -331,6 +333,7 @@ public static class AgentServer
             case "light":
             case "textures":
             case "atmos":
+            case "level":
             case "snap":
             case "view":
             case "waves":
@@ -340,6 +343,7 @@ public static class AgentServer
             case "warp":
             case "goto":
             case "ending":
+            case "savecheck":
                 Enqueue(_heavy, cmd);
                 break;
             default:
@@ -408,7 +412,8 @@ public static class AgentServer
         "goto" => DoGoto(cmd.Arg1),
         "view" => DoView(cmd.Arg1),
         "waves" => Waves.Shell(cmd.Arg1),
-        "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
+        "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
+        "savecheck" => DoSaveCheck(),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
 
@@ -577,7 +582,7 @@ public static class AgentServer
     static string DoHelp()
     {
         var sb = new StringBuilder("{\"ok\":true,\"cmd\":\"help\",\"commands\":[");
-        var all = HelpCommands.Concat(Remaster.Shell.Help).Append(Remaster.Snap.Usage).ToArray();
+        var all = HelpCommands.Concat(Remaster.Shell.Help).Append(Remaster.Snap.Usage).Append(Remaster.SaveCheck.Usage).ToArray();
         for (int i = 0; i < all.Length; i++)
         {
             if (i > 0) sb.Append(',');
@@ -604,6 +609,16 @@ public static class AgentServer
             2 => Err("checksum failed"),
             _ => Err($"load failed ({result})"),
         };
+    }
+
+    /// <summary>On the heavy queue, since it runs the game's save packer on the
+    /// game's own CPU context.</summary>
+    static string DoSaveCheck()
+    {
+        var c = RecompOne.Runtime.Runtime.Cpu;
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (c == null || m == null) return Err("not running");
+        return "{\"ok\":true,\"cmd\":\"savecheck\",\"result\":" + Remaster.SaveCheck.Run(c, m).ToJsonString() + "}";
     }
 
     static string DoWarp(string areaArg)

@@ -65,11 +65,23 @@ public sealed class RemasterPacksPage : IPatchPage
         if (Surfaces.Unallocated > 0)
             ImGui.TextColored(Warn, $"{Surfaces.Unallocated} past the id table apply nowhere.");
 
+        bool level = Level.Enabled;
+        if (ImGui.Checkbox($"Level edits ({Level.Label})", ref level)) Level.SetEnabled(level);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Apply a pack's tile edits: floors, collision and what is drawn. Off by default, because they change " +
+                             "how an area plays. They never reach a save; a save made on an edited floor keeps the position, not the floor.");
+
         foreach (int area in Pack.Areas())
         {
             int tiles = Pack.Tiles(area).Count();
+            int edits = Pack.LevelEdits(area).Count();
             string? fp = Pack.AreaFingerprint(area);
             ImGui.BulletText($"Area {area}: {tiles} tile half/halves, fingerprint {fp ?? "none"}");
+            if (edits > 0)
+            {
+                ImGui.SameLine();
+                ImGui.TextColored(Warn, $"{edits} level edit(s), {Level.Label}");
+            }
             if (area != Identity.Area || !Identity.Settled) continue;
             ImGui.SameLine();
             if (fp != null && fp != Identity.FingerprintText)

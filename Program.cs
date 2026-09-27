@@ -759,7 +759,8 @@ Kf2.Remaster.Host.Configure(Environment.GetEnvironmentVariable("KF2_REMASTER"),
                             Environment.GetEnvironmentVariable("KF2_REMASTER_PACK"),
                             Environment.GetEnvironmentVariable("KF2_REMASTER_PROBE"),
                             Environment.GetEnvironmentVariable("KF2_REMASTER_LIGHTS"),
-                            Environment.GetEnvironmentVariable("KF2_REMASTER_ATMOS"));
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_ATMOS"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_LEVEL"));
 // Shadows for the authored lights (0077): a depth cubemap per light from the retained map
 // and the frame's models.
 Kf2.Remaster.Lights.ConfigureShadows(Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOWS"),

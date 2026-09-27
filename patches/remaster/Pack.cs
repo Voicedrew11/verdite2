@@ -14,7 +14,8 @@ namespace Kf2.Remaster;
 /// for a mesh wherever the area uses it; under <c>models</c>, a material for a model
 /// (its table's kind and its id) wherever the area draws it. A face list carries the
 /// mesh index and the mesh's hash it was authored against. <c>areas/&lt;n&gt;/lights.json</c> holds the
-/// area's authored lights, each named, in world units with up at -Y.
+/// area's authored lights, each named, in world units with up at -Y, and
+/// <c>areas/&lt;n&gt;/level.json</c> its tile edits (<c>Pack.Level.cs</c>).
 /// Documents are kept as JSON trees, so a field this version does not know survives a
 /// round trip. Only the working pack is read in this phase; layering other packs
 /// under it is later. See "Data model and file format" in docs/REMASTER.md.
@@ -22,7 +23,7 @@ namespace Kf2.Remaster;
 /// Everything here runs on the game thread except the file watch, which parses on
 /// its own thread and hands the result over at the next <see cref="Poll"/>.
 /// </summary>
-public static class Pack
+public static partial class Pack
 {
     public const int FormatVersion = 1;
     public const string GameId = "SLUS-00158";
@@ -34,6 +35,7 @@ public static class Pack
     static string SurfacesPath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "surfaces.json");
     static string LightsPath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "lights.json");
     static string AtmospherePath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "atmosphere.json");
+    static string LevelPath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "level.json");
 
     static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
@@ -53,6 +55,7 @@ public static class Pack
         public readonly Dictionary<int, JsonObject> Surfaces = new();
         public readonly Dictionary<int, JsonObject> Lights = new();
         public readonly Dictionary<int, JsonObject> Atmosphere = new();
+        public readonly Dictionary<int, JsonObject> Level = new();
 
         public static Set Empty() => new() { Materials = NewMaterials(), Textures = NewTextures() };
     }
@@ -98,6 +101,8 @@ public static class Pack
                 if (File.Exists(path)) s.Lights[area] = Migrate(ParseObject(path), "lights");
                 path = Path.Combine(dir, "atmosphere.json");
                 if (File.Exists(path)) s.Atmosphere[area] = Migrate(ParseObject(path), "records");
+                path = Path.Combine(dir, "level.json");
+                if (File.Exists(path)) s.Level[area] = Migrate(ParseObject(path), "halves");
             }
         return s;
     }
@@ -120,6 +125,7 @@ public static class Pack
         if (collection == "lights" && doc["lights"] is not JsonArray) doc["lights"] = new JsonArray();
         if (collection == "textures" && doc["textures"] is not JsonArray) doc["textures"] = new JsonArray();
         if (collection == "records" && doc["records"] is not JsonArray) doc["records"] = new JsonArray();
+        if (collection == "halves" && doc["halves"] is not JsonArray) doc["halves"] = new JsonArray();
         return doc;
     }
 
@@ -136,24 +142,10 @@ public static class Pack
                 _set.Textures["formatVersion"] = FormatVersion;
                 Write(TexturesPath, _set.Textures);
             }
-            foreach (var (area, doc) in _set.Surfaces)
-            {
-                doc["formatVersion"] = FormatVersion;
-                Directory.CreateDirectory(Path.GetDirectoryName(SurfacesPath(area))!);
-                Write(SurfacesPath(area), doc);
-            }
-            foreach (var (area, doc) in _set.Lights)
-            {
-                doc["formatVersion"] = FormatVersion;
-                Directory.CreateDirectory(Path.GetDirectoryName(LightsPath(area))!);
-                Write(LightsPath(area), doc);
-            }
-            foreach (var (area, doc) in _set.Atmosphere)
-            {
-                doc["formatVersion"] = FormatVersion;
-                Directory.CreateDirectory(Path.GetDirectoryName(AtmospherePath(area))!);
-                Write(AtmospherePath(area), doc);
-            }
+            WriteAreaDocs(_set.Surfaces, SurfacesPath);
+            WriteAreaDocs(_set.Lights, LightsPath);
+            WriteAreaDocs(_set.Atmosphere, AtmospherePath);
+            WriteAreaDocs(_set.Level, LevelPath);
             Dirty = false;
             LastError = null;
             SavedAt = DateTime.Now;
@@ -163,6 +155,16 @@ public static class Pack
         {
             LastError = e.Message;
             Console.Error.WriteLine($"[KF2] remaster: cannot save {Root}: {e.Message}");
+        }
+    }
+
+    static void WriteAreaDocs(Dictionary<int, JsonObject> docs, Func<int, string> path)
+    {
+        foreach (var (area, doc) in docs)
+        {
+            doc["formatVersion"] = FormatVersion;
+            Directory.CreateDirectory(Path.GetDirectoryName(path(area))!);
+            Write(path(area), doc);
         }
     }
 
@@ -418,14 +420,16 @@ public static class Pack
     }
 
     /// <summary>The areas the pack holds documents for.</summary>
-    public static IEnumerable<int> Areas() => _set.Surfaces.Keys.Union(_set.Lights.Keys).Union(_set.Atmosphere.Keys).Order();
+    public static IEnumerable<int> Areas()
+        => _set.Surfaces.Keys.Union(_set.Lights.Keys).Union(_set.Atmosphere.Keys).Union(_set.Level.Keys).Order();
 
     /// <summary>The fingerprint an area's documents were authored against, or null. Each
     /// document carries its own; the first that names one answers.</summary>
     public static string? AreaFingerprint(int area)
         => (_set.Surfaces.TryGetValue(area, out var d) ? Str(d["fingerprint"]) : null)
         ?? (_set.Lights.TryGetValue(area, out var l) ? Str(l["fingerprint"]) : null)
-        ?? (_set.Atmosphere.TryGetValue(area, out var a) ? Str(a["fingerprint"]) : null);
+        ?? (_set.Atmosphere.TryGetValue(area, out var a) ? Str(a["fingerprint"]) : null)
+        ?? LevelFingerprint(area);
 
     public static IEnumerable<(TileKey Key, string Material)> Tiles(int area)
     {
@@ -731,13 +735,21 @@ public static class Pack
     static void EditArea(int area, string fingerprint, string label, Action<JsonObject> change,
                          bool lights = false)
     {
-        var docs = lights ? _set.Lights : _set.Surfaces;
-        var before = docs.TryGetValue(area, out var d) ? (JsonObject)d.DeepClone() : null;
+        if (lights) EditDoc(s => s.Lights, "lights", area, fingerprint, label, change);
+        else EditDoc(s => s.Surfaces, "tiles", area, fingerprint, label, change);
+    }
+
+    /// <summary>An edit to one area's document of a kind, undone by putting the document
+    /// back. The kind is chosen from the set each time, since a reload replaces the set.</summary>
+    static void EditDoc(Func<Set, Dictionary<int, JsonObject>> kind, string collection, int area,
+                        string fingerprint, string label, Action<JsonObject> change)
+    {
+        var before = kind(_set).TryGetValue(area, out var d) ? (JsonObject)d.DeepClone() : null;
         Edit(label,
-            () => change(AreaDoc(lights ? _set.Lights : _set.Surfaces, lights ? "lights" : "tiles", area, fingerprint)),
+            () => change(AreaDoc(kind(_set), collection, area, fingerprint)),
             () =>
             {
-                var now = lights ? _set.Lights : _set.Surfaces;
+                var now = kind(_set);
                 if (before == null) now.Remove(area);
                 else now[area] = (JsonObject)before.DeepClone();
             });
