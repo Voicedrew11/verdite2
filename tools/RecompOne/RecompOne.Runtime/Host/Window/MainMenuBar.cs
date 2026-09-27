@@ -66,9 +66,20 @@ public static class MainMenuBar
             .Item("menu.debug.reset_view", ResetView);
     }
 
+    private static readonly List<(Func<float> Width, Action Draw)> _rightItems = [];
+
+    /// <summary>
+    /// An item for the right end of the bar, laid out right to left after the FPS
+    /// counter: <paramref name="width"/> is asked first, and 0 skips the item.
+    /// </summary>
+    public static void AddRightItem(Func<float> width, Action draw)
+    {
+        _rightItems.Add((width, draw));
+    }
+
     public static void Draw()
     {
-        MenuRegistry.RightAligned = DrawFps;
+        MenuRegistry.RightAligned = DrawRight;
         MenuRegistry.Draw();
     }
 
@@ -83,15 +94,29 @@ public static class MainMenuBar
         }
     }
 
-    private static void DrawFps()
+    private static void DrawRight()
     {
-        if (!ConfigManager.View.ShowFps) return;
+        var x = ImGuiNET.ImGui.GetWindowWidth() - ImGuiNET.ImGui.GetStyle().FramePadding.X * 2f;
+        var spacing = ImGuiNET.ImGui.GetStyle().ItemSpacing.X;
 
-        var text = $"{FrameClock.PresentFps:F0} / {FrameClock.Fps:F0} fps";
-        var width = ImGuiNET.ImGui.CalcTextSize(text).X;
-        ImGuiNET.ImGui.SameLine(ImGuiNET.ImGui.GetWindowWidth() - width -
-                                ImGuiNET.ImGui.GetStyle().FramePadding.X * 2f);
-        ImGuiNET.ImGui.TextUnformatted(text);
+        if (ConfigManager.View.ShowFps)
+        {
+            var text = $"{FrameClock.PresentFps:F0} / {FrameClock.Fps:F0} fps";
+            x -= ImGuiNET.ImGui.CalcTextSize(text).X;
+            ImGuiNET.ImGui.SameLine(x);
+            ImGuiNET.ImGui.TextUnformatted(text);
+            x -= spacing;
+        }
+
+        foreach (var (width, draw) in _rightItems)
+        {
+            var w = width();
+            if (w <= 0f) continue;
+            x -= w;
+            ImGuiNET.ImGui.SameLine(x);
+            draw();
+            x -= spacing;
+        }
     }
 
 

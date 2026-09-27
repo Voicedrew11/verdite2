@@ -918,6 +918,16 @@ Four files in the directory have no entry below:
   "Leaving fullscreen left the interface at the fullscreen size" in
   `docs/RUNTIME.md`.
 
+- `0081-menu-bar-right-items.patch` — the right end of the menu bar held only the
+  FPS counter: `MainMenuBar.Draw` set `MenuRegistry.RightAligned` to it every
+  frame, so anything else a port put there was overwritten. `AddRightItem(width,
+  draw)` adds an item there. Items are laid out right to left after the counter, or
+  from the edge when the counter is off, and a width of 0 skips one.
+  `Verdite2.Launcher/UpdateBadge.cs` is the only caller. Numbered past
+  `remaster-design`'s `0070`-`0080` so the two branches do not collide. UI only —
+  **no recompile**. See "Telling the player about a new release" in
+  `docs/PACKAGING.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.

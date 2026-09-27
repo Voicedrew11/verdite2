@@ -227,6 +227,59 @@ the tag is what publishes the draft release and that is a decision rather than a
 step. The workflow builds both platforms, asserts the tag against `VERSION`, and
 opens a **draft** with the commits since the previous tag appended to the body.
 
+## Telling the player about a new release
+
+The shipped launcher checks GitHub for a newer release at startup and says so;
+**it downloads nothing and replaces nothing.** The player takes the new build
+from the release page as before. The check is the same for the AppImage, the
+installer and the zip, which is why it stops there: installing in place would
+mean a separate path for each (the AppImage replacing `$APPIMAGE`, the installer
+running a new `setup.exe` silently), and none of those can be tested until a
+release exists to update to.
+
+- `UpdateCheck.Start()` runs on a worker thread after `Runtime.Initialize`, so
+  the disc picker and the build never wait on the network. It asks
+  `api.github.com/repos/Voicedrew11/verdite2/releases/latest`, which leaves out
+  drafts and prereleases, so the draft `release.yml` opens is announced only
+  once it is published.
+- **It reaches the network at most once a day.** `update.json` in the data
+  directory keeps the last answer (`checked`, `tag`, `url`) and any version the
+  player skipped (`skipped`). Between checks the cached answer is used, so a
+  player who launches twice in a day still sees the notice. Offline or
+  rate-limited, it prints one `[Verdite2] update check failed:` line and shows
+  nothing.
+- **The notice is a popup at startup, and a badge that stays.** Once the check
+  finds a newer tag (compared as `MAJOR.MINOR.PATCH` against `Ver.Number`),
+  `UpdatePopup` opens once per launch, and only while no other popup is open, so
+  it never lands on the picker or the build. It says only the new version and the
+  running one, with *Download page* (the release's `html_url`, in gold), *Skip
+  this version* (never announce that tag again; a later one is announced) and
+  *Later*. `UpdateBadge` puts a square gold *Update available!* button at the right
+  of the menu bar, left of the FPS counter or where the counter would be when that
+  is off (`MainMenuBar.AddRightItem`, `0081`). Clicking it opens a small menu with
+  the same choices, *Later* being *Hide until next launch*. Release notes are left
+  out on purpose, because they can run long; the page has them. The badge shares
+  the counter's limit: with the menu bar hidden (F1) the badge is hidden too.
+- It is on by default. *Check for updates at launch* is a checkbox at the foot of
+  Settings ▸ Interface (`SettingsRegistry.Extend("interface", …)`, saved under
+  `Verdite2.UpdateCheck` in the view config). `VERDITE2_UPDATE_CHECK=0` turns it
+  off from the environment. `=force` ignores the daily limit; a skipped version
+  stays skipped. To see a skipped release again, delete `skipped` from
+  `update.json`.
+
+Only the launcher checks. The developer path (`KingsField2Recomp.csproj`) never
+reaches GitHub.
+
+Measured with a launcher stamped `0.3.0` (`-p:Version=0.3.0`) against the
+published `v0.3.2`: `[Verdite2] update available: v0.3.2 (running 0.3.0)` and
+`update.json` written. A second launch reused the cache, with `checked`
+unchanged. Nothing was announced at `0.3.2`, with `v0.3.2` skipped, or with
+`VERDITE2_UPDATE_CHECK=0`. **Seen by eye:** the popup, the badge, and *Skip this
+version* taking both away (`[Verdite2] skipped v0.3.2`, then `v0.3.2 is available
+and was skipped` on the next launch). **Never looked at by eye:** the Interface
+checkbox, and *Open download page* opening a browser from inside the AppImage
+and on Windows.
+
 ## Building a release
 
 ```bash

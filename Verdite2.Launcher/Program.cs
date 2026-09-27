@@ -45,6 +45,11 @@ try
     Runtime.AppId = "verdite2";
     Runtime.Initialize($"Verdite2 {Ver.Number}");
     Localization.Merge(BuildProgressPopup.Strings);
+    Localization.Merge(UpdateBadge.Strings);
+
+    // In the background; the badge appears in the menu bar once it has an answer.
+    UpdateBadge.Install();
+    UpdateCheck.Start();
 
     var icon = Path.Combine(AppContext.BaseDirectory, "verdite2.png");
     if (File.Exists(icon)) Runtime.SetIcon(File.ReadAllBytes(icon));
