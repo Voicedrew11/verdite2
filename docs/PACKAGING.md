@@ -246,15 +246,28 @@ release exists to update to.
   directory keeps the last answer (`checked`, `tag`, `url`) and any version the
   player skipped (`skipped`). Between checks the cached answer is used, so a
   player who launches twice in a day still sees the notice. Offline or
-  rate-limited, it prints one `[Verdite2] update check failed:` line and shows
-  nothing.
+  rate-limited, it prints one `[Verdite2] update check failed:` line, leaves
+  `checked` alone so the next launch tries again, and **still announces the cached
+  answer**: a release already known is not forgotten because the network is down.
+  The file is a cache anyone can edit, so a field that is missing or of the wrong
+  type reads as absent rather than throwing, and a `checked` in the future (a
+  clock that was wrong) counts as stale rather than holding off checks until real
+  time catches up. Every read-modify-write of it holds one lock, and *Skip* writes
+  it on a worker, not the interface thread.
 - **The notice is a popup at startup, and a badge that stays.** Once the check
-  finds a newer tag (compared as `MAJOR.MINOR.PATCH` against `Ver.Number`),
-  `UpdatePopup` opens once per launch, and only while no other popup is open, so
-  it never lands on the picker or the build. It says only the new version and the
-  running one, with *Download page* (the release's `html_url`, in gold), *Skip
-  this version* (never announce that tag again; a later one is announced) and
-  *Later*. `UpdateBadge` puts a square gold *Update available!* button at the right
+  finds a newer tag (compared as `MAJOR.MINOR.PATCH` against `Ver.Number`; a
+  suffix after the numbers, `v0.4.0-hotfix`, is ignored, and a tag with no number
+  in it prints `update check: cannot read a version in the tag …` rather than
+  vanishing), `UpdatePopup` opens once per launch, only while no other popup is
+  open, so it never lands on the picker or the build, and **only outside play**:
+  it is modal, so once an area module (`fdat…`) or `END.EXE` has loaded it waits
+  until `OPEN.EXE` or a fresh `GAME.EXE` (the title) loads, and the badge alone
+  carries the news meanwhile (the attract demo loads an area, so it counts as
+  play). It says only the new version and the running one,
+  with *Download page* (the release's `html_url`, in gold), *Skip this version*
+  (never announce that tag again; a later one is announced) and *Later* — one row
+  of equal buttons when the widest label fits a third of the popup, a column of
+  full-width ones when it does not, which the pt-BR and es-419 labels need. `UpdateBadge` puts a square gold *Update available!* button at the right
   of the menu bar, left of the FPS counter or where the counter would be when that
   is off (`MainMenuBar.AddRightItem`, `0081`). Clicking it opens a small menu with
   the same choices, *Later* being *Hide until next launch*. Release notes are left
@@ -279,6 +292,15 @@ version* taking both away (`[Verdite2] skipped v0.3.2`, then `v0.3.2 is availabl
 and was skipped` on the next launch). **Never looked at by eye:** the Interface
 checkbox, and *Open download page* opening a browser from inside the AppImage
 and on Windows.
+
+Measured again after the review fixes, with crafted `update.json` files: a
+`checked` in 2030 fetched and announced `v0.3.2`; `checked` and `tag` as numbers
+fetched and announced it without an exception; a stale cache with the network
+refused (`HTTPS_PROXY=http://127.0.0.1:9`) printed the failure, left the file
+untouched and still announced the cached `v0.3.2`; a cached `v0.4.0-hotfix` was
+announced; a cached `latest` printed the cannot-read line. **Never looked at by
+eye:** the popup's buttons stacked in pt-BR and es-419, the popup waiting out
+play until the title, and the badge holding still as the counter changes width.
 
 ## Building a release
 

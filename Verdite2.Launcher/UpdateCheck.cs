@@ -54,22 +54,31 @@ static class UpdateCheck
     {
         try
         {
-            var state = LoadState();
-            var checkedAt = state["checked"]?.GetValue<DateTime>();
+            var state = Locked(LoadState);
+            var age = DateTime.UtcNow - ReadTime(state, "checked");
 
-            if (force || checkedAt is null || DateTime.UtcNow - checkedAt.Value > Interval)
+            // A time in the future is a clock that was wrong; check again.
+            if (force || age is null || age < TimeSpan.Zero || age > Interval)
             {
-                var (tag, url) = Fetch();
-                state["checked"] = DateTime.UtcNow;
-                state["tag"] = tag;
-                state["url"] = url;
-                SaveState(state);
+                // Outside the lock: the request can take ten seconds.
+                if (TryFetch() is var (tag, url))
+                {
+                    state = Locked(() =>
+                    {
+                        var s = LoadState();
+                        s["checked"] = DateTime.UtcNow;
+                        s["tag"] = tag;
+                        s["url"] = url;
+                        SaveState(s);
+                        return s;
+                    });
+                }
             }
 
-            var latest = state["tag"]?.GetValue<string>();
-            var page = state["url"]?.GetValue<string>();
+            var latest = ReadText(state, "tag");
+            var page = ReadText(state, "url");
             if (latest is null || page is null) return;
-            if (state["skipped"]?.GetValue<string>() == latest)
+            if (ReadText(state, "skipped") == latest)
             {
                 Console.WriteLine($"[Verdite2] {latest} is available and was skipped");
                 return;
@@ -83,45 +92,97 @@ static class UpdateCheck
         }
         catch (Exception e)
         {
-            // Offline, rate-limited, or GitHub is down: nothing to tell the player.
             Console.WriteLine($"[Verdite2] update check failed: {e.Message}");
         }
     }
 
-    static (string Tag, string Url) Fetch()
-    {
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-        http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Verdite2", Ver.Number));
-        http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
-
-        // /releases/latest skips drafts and prereleases, so a draft release.yml has
-        // opened is not announced until it is published.
-        var json = JsonNode.Parse(http.GetStringAsync(Api).GetAwaiter().GetResult())
-                   ?? throw new InvalidDataException("empty response");
-        var tag = json["tag_name"]?.GetValue<string>() ?? throw new InvalidDataException("no tag_name");
-        var url = json["html_url"]?.GetValue<string>() ?? throw new InvalidDataException("no html_url");
-        return (tag, url);
-    }
-
-    public static bool IsNewer(string tag, string current) =>
-        Version.TryParse(tag.TrimStart('v', 'V'), out var a) &&
-        Version.TryParse(current, out var b) &&
-        a > b;
-
-    /// <summary>Stop announcing this release; a later one is announced again.</summary>
-    public static void Skip(string tag)
+    /// <summary>Null when offline, rate-limited or GitHub is down; the cached answer then stands.</summary>
+    static (string Tag, string Url)? TryFetch()
     {
         try
         {
-            var state = LoadState();
-            state["skipped"] = tag;
-            SaveState(state);
-            Console.WriteLine($"[Verdite2] skipped {tag}");
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Verdite2", Ver.Number));
+            http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+
+            // /releases/latest skips drafts and prereleases, so a draft release.yml has
+            // opened is not announced until it is published.
+            var json = JsonNode.Parse(http.GetStringAsync(Api).GetAwaiter().GetResult())
+                       ?? throw new InvalidDataException("empty response");
+            var tag = ReadText(json, "tag_name") ?? throw new InvalidDataException("no tag_name");
+            var url = ReadText(json, "html_url") ?? throw new InvalidDataException("no html_url");
+            return (tag, url);
         }
         catch (Exception e)
         {
-            Console.WriteLine($"[Verdite2] could not record the skipped version: {e.Message}");
+            Console.WriteLine($"[Verdite2] update check failed: {e.Message}");
+            return null;
         }
+    }
+
+    /// <summary>
+    /// Compares MAJOR.MINOR.PATCH; a suffix after the numbers (v0.4.0-hotfix) is
+    /// ignored, and a tag with no number to read is reported rather than dropped.
+    /// </summary>
+    public static bool IsNewer(string tag, string current)
+    {
+        if (Numeric(tag) is not { } a)
+        {
+            Console.WriteLine($"[Verdite2] update check: cannot read a version in the tag {tag}");
+            return false;
+        }
+
+        return Numeric(current) is { } b && a > b;
+    }
+
+    static Version? Numeric(string s)
+    {
+        s = s.TrimStart('v', 'V');
+        var end = 0;
+        while (end < s.Length && (char.IsAsciiDigit(s[end]) || s[end] == '.')) end++;
+        return Version.TryParse(s[..end].TrimEnd('.'), out var v) ? v : null;
+    }
+
+    /// <summary>
+    /// Stop announcing this release; a later one is announced again. On a worker,
+    /// since it is called from the interface.
+    /// </summary>
+    public static void Skip(string tag)
+    {
+        ThreadPool.QueueUserWorkItem(_ =>
+        {
+            try
+            {
+                Locked(() =>
+                {
+                    var state = LoadState();
+                    state["skipped"] = tag;
+                    SaveState(state);
+                    return state;
+                });
+                Console.WriteLine($"[Verdite2] skipped {tag}");
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine($"[Verdite2] could not record the skipped version: {e.Message}");
+            }
+        });
+    }
+
+    // The value, or null when it is missing or of another type: update.json is a
+    // cache anyone can edit, and GetValue throws on a mismatch.
+    static DateTime? ReadTime(JsonNode node, string key) =>
+        node[key] is JsonValue v && v.TryGetValue(out DateTime x) ? x : null;
+
+    static string? ReadText(JsonNode node, string key) =>
+        node[key] is JsonValue v && v.TryGetValue(out string? x) ? x : null;
+
+    static readonly object _stateGate = new();
+
+    /// <summary>A whole read-modify-write of update.json, so Run and Skip cannot lose each other's field.</summary>
+    static JsonObject Locked(Func<JsonObject> body)
+    {
+        lock (_stateGate) return body();
     }
 
     static JsonObject LoadState()
@@ -138,11 +199,6 @@ static class UpdateCheck
         return new JsonObject();
     }
 
-    static readonly object _stateGate = new();
-
-    static void SaveState(JsonObject state)
-    {
-        lock (_stateGate)
-            File.WriteAllText(StatePath, state.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
-    }
+    static void SaveState(JsonObject state) =>
+        File.WriteAllText(StatePath, state.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
 }

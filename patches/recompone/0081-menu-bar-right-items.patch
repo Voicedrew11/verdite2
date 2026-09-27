@@ -1,12 +1,13 @@
 diff --git a/RecompOne.Runtime/Host/Window/MainMenuBar.cs b/RecompOne.Runtime/Host/Window/MainMenuBar.cs
-index 1960cf8..c2af553 100644
+index 1960cf8..35d9d93 100644
 --- a/RecompOne.Runtime/Host/Window/MainMenuBar.cs
 +++ b/RecompOne.Runtime/Host/Window/MainMenuBar.cs
-@@ -66,9 +66,20 @@ public static class MainMenuBar
+@@ -66,9 +66,21 @@ public static class MainMenuBar
              .Item("menu.debug.reset_view", ResetView);
      }
  
-+    private static readonly List<(Func<float> Width, Action Draw)> _rightItems = [];
++    // The FPS counter is the first, so it sits at the right edge.
++    private static readonly List<(Func<float> Width, Action Draw)> _rightItems = [(FpsWidth, DrawFps)];
 +
 +    /// <summary>
 +    /// An item for the right end of the bar, laid out right to left after the FPS
@@ -24,30 +25,36 @@ index 1960cf8..c2af553 100644
          MenuRegistry.Draw();
      }
  
-@@ -83,15 +94,29 @@ public static class MainMenuBar
+@@ -83,17 +95,37 @@ public static class MainMenuBar
          }
      }
  
--    private static void DrawFps()
-+    private static void DrawRight()
++    private static string FpsText => $"{FrameClock.PresentFps:F0} / {FrameClock.Fps:F0} fps";
++
++    // At least three digits a side, so the items left of it do not move as the
++    // count changes width.
++    private static float FpsWidth() =>
++        !ConfigManager.View.ShowFps
++            ? 0f
++            : MathF.Max(ImGuiNET.ImGui.CalcTextSize("000 / 000 fps").X, ImGuiNET.ImGui.CalcTextSize(FpsText).X);
++
+     private static void DrawFps()
      {
 -        if (!ConfigManager.View.ShowFps) return;
-+        var x = ImGuiNET.ImGui.GetWindowWidth() - ImGuiNET.ImGui.GetStyle().FramePadding.X * 2f;
-+        var spacing = ImGuiNET.ImGui.GetStyle().ItemSpacing.X;
- 
+-
 -        var text = $"{FrameClock.PresentFps:F0} / {FrameClock.Fps:F0} fps";
 -        var width = ImGuiNET.ImGui.CalcTextSize(text).X;
 -        ImGuiNET.ImGui.SameLine(ImGuiNET.ImGui.GetWindowWidth() - width -
 -                                ImGuiNET.ImGui.GetStyle().FramePadding.X * 2f);
--        ImGuiNET.ImGui.TextUnformatted(text);
-+        if (ConfigManager.View.ShowFps)
-+        {
-+            var text = $"{FrameClock.PresentFps:F0} / {FrameClock.Fps:F0} fps";
-+            x -= ImGuiNET.ImGui.CalcTextSize(text).X;
-+            ImGuiNET.ImGui.SameLine(x);
-+            ImGuiNET.ImGui.TextUnformatted(text);
-+            x -= spacing;
-+        }
++        var text = FpsText;
++        ImGuiNET.ImGui.SetCursorPosX(ImGuiNET.ImGui.GetCursorPosX() + FpsWidth() - ImGuiNET.ImGui.CalcTextSize(text).X);
+         ImGuiNET.ImGui.TextUnformatted(text);
+     }
+ 
++    private static void DrawRight()
++    {
++        var x = ImGuiNET.ImGui.GetWindowWidth() - ImGuiNET.ImGui.GetStyle().FramePadding.X * 2f;
++        var spacing = ImGuiNET.ImGui.GetStyle().ItemSpacing.X;
 +
 +        foreach (var (width, draw) in _rightItems)
 +        {
@@ -58,6 +65,7 @@ index 1960cf8..c2af553 100644
 +            draw();
 +            x -= spacing;
 +        }
-     }
++    }
  
- 
+     private static void ResetView()
+     {

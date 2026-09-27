@@ -66,7 +66,8 @@ public static class MainMenuBar
             .Item("menu.debug.reset_view", ResetView);
     }
 
-    private static readonly List<(Func<float> Width, Action Draw)> _rightItems = [];
+    // The FPS counter is the first, so it sits at the right edge.
+    private static readonly List<(Func<float> Width, Action Draw)> _rightItems = [(FpsWidth, DrawFps)];
 
     /// <summary>
     /// An item for the right end of the bar, laid out right to left after the FPS
@@ -94,19 +95,26 @@ public static class MainMenuBar
         }
     }
 
+    private static string FpsText => $"{FrameClock.PresentFps:F0} / {FrameClock.Fps:F0} fps";
+
+    // At least three digits a side, so the items left of it do not move as the
+    // count changes width.
+    private static float FpsWidth() =>
+        !ConfigManager.View.ShowFps
+            ? 0f
+            : MathF.Max(ImGuiNET.ImGui.CalcTextSize("000 / 000 fps").X, ImGuiNET.ImGui.CalcTextSize(FpsText).X);
+
+    private static void DrawFps()
+    {
+        var text = FpsText;
+        ImGuiNET.ImGui.SetCursorPosX(ImGuiNET.ImGui.GetCursorPosX() + FpsWidth() - ImGuiNET.ImGui.CalcTextSize(text).X);
+        ImGuiNET.ImGui.TextUnformatted(text);
+    }
+
     private static void DrawRight()
     {
         var x = ImGuiNET.ImGui.GetWindowWidth() - ImGuiNET.ImGui.GetStyle().FramePadding.X * 2f;
         var spacing = ImGuiNET.ImGui.GetStyle().ItemSpacing.X;
-
-        if (ConfigManager.View.ShowFps)
-        {
-            var text = $"{FrameClock.PresentFps:F0} / {FrameClock.Fps:F0} fps";
-            x -= ImGuiNET.ImGui.CalcTextSize(text).X;
-            ImGuiNET.ImGui.SameLine(x);
-            ImGuiNET.ImGui.TextUnformatted(text);
-            x -= spacing;
-        }
 
         foreach (var (width, draw) in _rightItems)
         {
@@ -118,7 +126,6 @@ public static class MainMenuBar
             x -= spacing;
         }
     }
-
 
     private static void ResetView()
     {

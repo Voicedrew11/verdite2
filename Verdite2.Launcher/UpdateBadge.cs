@@ -38,8 +38,10 @@ static class UpdateBadge
     {
         if (Shown is not { } release) return;
 
-        PushGold(square: true);
+        PushGold();
+        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 0f);
         if (ImGui.Button(Label)) ImGui.OpenPopup(MenuId);
+        ImGui.PopStyleVar();
         PopGold();
 
         if (!ImGui.BeginPopup(MenuId)) return;
@@ -53,20 +55,17 @@ static class UpdateBadge
         ImGui.EndPopup();
     }
 
-    /// <summary>The badge's colours, shared with the startup popup's main button;
-    /// the badge alone is square.</summary>
-    public static void PushGold(bool square = false)
+    /// <summary>The badge's colours, shared with the startup popup's main button.</summary>
+    public static void PushGold()
     {
         ImGui.PushStyleColor(ImGuiCol.Button, Gold);
         ImGui.PushStyleColor(ImGuiCol.ButtonHovered, Vector4.Lerp(Gold, Vector4.One, 0.2f));
         ImGui.PushStyleColor(ImGuiCol.ButtonActive, Vector4.Lerp(Gold, Vector4.One, 0.35f));
         ImGui.PushStyleColor(ImGuiCol.Text, Ink);
-        ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, square ? 0f : ImGui.GetStyle().FrameRounding);
     }
 
     public static void PopGold()
     {
-        ImGui.PopStyleVar();
         ImGui.PopStyleColor(4);
     }
 

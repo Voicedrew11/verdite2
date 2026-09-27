@@ -1,13 +1,16 @@
 using System.Numerics;
 using ImGuiNET;
+using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Host.Window;
 
 namespace Verdite2.Launcher;
 
 /// <summary>
 /// The startup notice: once per launch, when <see cref="UpdateCheck"/> finds a newer
-/// release, and only while no other popup is open, so it never lands on the disc
-/// picker or the build. <see cref="UpdateBadge"/> stays in the menu bar after it.
+/// release, only while no other popup is open, so it never lands on the disc
+/// picker or the build, and only outside play, since it is modal: once an area
+/// module or END.EXE has loaded it waits for the next title (OPEN.EXE, or GAME.EXE
+/// arriving afresh). <see cref="UpdateBadge"/> stays in the menu bar either way.
 /// </summary>
 sealed class UpdatePopup : Popup
 {
@@ -15,10 +18,20 @@ sealed class UpdatePopup : Popup
     protected override Vector2 Size => new(420f, 0f);
 
     UpdateCheck.Release? _shown;
+    volatile bool _inPlay;
+
+    public UpdatePopup()
+    {
+        Event.AddListener<OverlayLoadedEvent>(e =>
+        {
+            if (e.Name is "open" or "game") _inPlay = false;
+            else if (e.Name == "end" || e.Name.StartsWith("fdat", StringComparison.Ordinal)) _inPlay = true;
+        });
+    }
 
     protected override void Update()
     {
-        if (_shown is not null || IsOpen || PopupManager.AnyOpen) return;
+        if (_shown is not null || IsOpen || _inPlay || PopupManager.AnyOpen) return;
         if (UpdateCheck.Available is not { } release) return;
         _shown = release;
         Open();
@@ -36,11 +49,23 @@ sealed class UpdatePopup : Popup
         ImGui.Separator();
         ImGui.Spacing();
 
-        var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var width = (ImGui.GetContentRegionAvail().X - spacing * 2f) / 3f;
+        string[] labels =
+        [
+            Localization.T("verdite2.update.download"),
+            Localization.T("verdite2.update.skip"),
+            Localization.T("verdite2.update.later"),
+        ];
+
+        // One row of equal buttons when the widest label fits a third of the
+        // popup, and a column of full-width ones when it does not (pt-BR, es-419).
+        var style = ImGui.GetStyle();
+        var avail = ImGui.GetContentRegionAvail().X;
+        var widest = labels.Max(l => ImGui.CalcTextSize(l).X) + style.FramePadding.X * 2f;
+        var row = widest * 3f + style.ItemSpacing.X * 2f <= avail;
+        var size = new Vector2(row ? (avail - style.ItemSpacing.X * 2f) / 3f : avail, 0f);
 
         UpdateBadge.PushGold();
-        var open = ImGui.Button(Localization.T("verdite2.update.download"), new Vector2(width, 0f));
+        var open = ImGui.Button(labels[0], size);
         UpdateBadge.PopGold();
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(release.Url);
         if (open)
@@ -49,14 +74,14 @@ sealed class UpdatePopup : Popup
             Close();
         }
 
-        ImGui.SameLine();
-        if (ImGui.Button(Localization.T("verdite2.update.skip"), new Vector2(width, 0f)))
+        if (row) ImGui.SameLine();
+        if (ImGui.Button(labels[1], size))
         {
             UpdateBadge.Skip(release);
             Close();
         }
 
-        ImGui.SameLine();
-        if (ImGui.Button(Localization.T("verdite2.update.later"), new Vector2(width, 0f))) Close();
+        if (row) ImGui.SameLine();
+        if (ImGui.Button(labels[2], size)) Close();
     }
 }
