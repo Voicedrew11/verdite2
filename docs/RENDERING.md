@@ -1032,6 +1032,18 @@ of an opaque one in front of it still draws over it (the previous section), and 
 does so whatever the table said, so the shore's edge in the water may move by that
 tolerance. Whether that shows is for the eye.
 
+**A corner at the camera made its polygon a barrier.** Up close, looking down at
+something under the water, it could still show above it. The GTE saturates a
+corner at or behind the camera plane to SZ 0, and a record with a zero corner was
+dropped, so a nearby model's polygon was a barrier in the middle of the table:
+it sent the held water there, and every underwater packet linked after it drew
+over the water. Measured with a census of the barriers that sent held packets (a
+local probe, not kept) at four poses over the `fdat02` beach: textured Gouraud
+polygons (`0x3C`, `0x34`) with no record at slots 7494-7678, and the water sent in
+1.9-2.5 runs. Such a corner is now recorded at depth 1, the nearest there is:
+after, the only barriers were the table's last two slots and the water went in
+1.0 runs at every pose, no exceptions. Judged by eye: fixed.
+
 ### The world lost its textures on NVIDIA
 
 Issue #34 (Windows 10, RTX 3080 Ti): every world surface was drawn in its shaded
@@ -1968,7 +1980,57 @@ the right inside the `*` void: exactly the samples the fallback had been taking.
 Rays refused under the HUD: 0.0-0.4% of reflective pixels, depending on the yaw.
 **Not covered:** a HUD piece the GTE projects (a 3D compass or item model) reads
 as scene, and the first-person arm stamps the far plane without being 2D. Neither
-has been seen in a reflection, but nothing would stop either.
+has been seen in a reflection, but nothing would stop either. (The arm has since
+been seen, the other way round: see the next section.)
+
+### The arm showed the water through it
+
+Reported from play with the murk on: swinging over water, the first-person arm was
+drawn dark and carried the water's reflection. The arm's corners come out of the
+GTE (`func_8002E650`), so they are projected, but its packets are deliberately not
+recorded (`InArm`), so it draws in painter's order with no depth: zMode 3, the far
+plane stamped for the occlusion pass. The surface list kept such a triangle only
+as an `Overlay`, and only when no corner was projected, so the arm was not in it at
+all and the surface buffer still held the water drawn under it. The pass then
+composited the murk and the reflection at those pixels, over the arm.
+
+Every opaque zMode 3 triangle is now kept as `Overlay`, except in the table's slot 0
+(the skybox, which projects near and must read as no surface). Its pixels are what
+is on screen and are not water; the depth buffer already treated them as no
+surface. Measured in the `fdat02` New Game, facing the sea, `KF2_MURK=1
+KF2_SSR_PROBE=1`, 40 presses of Square: before, the material map's lower rows were
+all `~` and the 2D overlay count stayed at 16,170/s; after, the arm is an `H` block
+in the lower right over the `~` and the count rises from 17,160 to about 22,300/s
+while it swings. Judged by eye: fixed.
+
+### A see-through box showed the water unmurked
+
+Reported from play with the murk on: an item's name box over water ("BONES",
+bottom of the picture) showed the water through it at its own, lighter colour, as
+a pale patch in the murk. Every 2D primitive went into the surface list as
+`Overlay`, which the pass leaves alone, so the water under a *translucent* box
+kept no surface and got no murk, while the picture through the box was still that
+water.
+
+A see-through 2D primitive is a **veil** now. It leaves the surface under it and
+adds a mark to the id: `SurfaceMaterial.VeilHalf` (512) for blend mode 0, which
+shows half of what is behind, `VeilFull` (1024) for the others. The normal pass
+draws a run of veils blended RGB-kept, alpha-added, so the water's normal, depth
+and id stay; the reflection pass decodes `id & 511` and scales its whole output by
+the share (0.5 or 1), and treats a veiled pixel as the HUD for a ray landing on
+it. A textured veil is decided per texel: `NormalFs` reads the texel from sample
+VRAM (`veilTexel`, PrimFs's decode without the window), marks it where the
+semi-transparency bit is set, and writes `Overlay` where it is not, in a second
+draw of the run (`uVeilPass` 1 and 2); a transparent texel writes nothing. A
+replacement image stays `Overlay`, since VRAM is not its texel. `ssrKey` and the
+occlusion's material lookup decode the id the same way.
+
+Exact only where the box does not change what is behind it: the murk is laid over
+the finished picture, so it darkens a mode-0 box's own colour by half its weight
+as well as the water through it. Measured in the `fdat02` New Game, `KF2_MURK=1
+KF2_SSR_PROBE=1 KF2_GLDEBUG=1`: 8,580 textured see-through 2D triangles a second
+(the HUD panel) now go in as veils, no GL error, the probe's map unchanged. The
+name box itself was not measured. Judged by eye: fixed.
 
 ### Reflections popped in, because the path is longer than the direct distance
 
@@ -3691,8 +3753,9 @@ so the vendor half of the question is a report rather than a measurement.
 
 ### Murky water
 
-**Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_MURK=1`, or Video ▸ Experimental ▸ *Murky water*). Runtime `WaterMurk`
+**Mechanism measured; the tuning judged by eye. Off by default**, at the user's
+tuning when switched on (depth 2654, the colour unchanged; `KF2_MURK=1`, or Video ▸
+Experimental ▸ *Murky water*). Runtime `WaterMurk`
 (amending `0067`), port `patches/Murk.cs`.
 
 Water was clear to the bottom. The reflection pass now lays a murk under the
@@ -3701,10 +3764,51 @@ translucent surface and the surface buffer the water itself, so the view ray's r
 between the two is the water it crosses, `1 - exp(-run / KF2_MURK_DISTANCE)` of a
 dark teal (`WaterMurk.R/G/B`, fogged at the water's depth), sky behind the water
 counting as all water. It is per pixel and independent of world height, so a pond
-above the player does not darken anything else. Default 700 units (a tile is 2048).
+above the player does not darken anything else. Default 2654 units (a tile is 2048;
+700 until it was judged).
 Under the checkbox, *Murk depth* (100-8000, logarithmic; `kf2.murk.distance`,
 which `KF2_MURK_DISTANCE` overrides) and *Murk colour* (`kf2.murk.r/g/b`) set both
-live, with a reset back to 700 and `0.03,0.05,0.06`.
+live, with a reset back to 2654 and `0.03,0.05,0.06`.
+
+**The tiles' cracks as lines of murk.** Reported: seams between water quads with
+the murk on. The likely cause, not measured: the water tiles and the floor under
+them meet with hairline cracks the game's own picture hides, and the murk turned
+each into a seam: a surface texel no water triangle covered took no murk, and a
+floor texel no floor covered read as the sky's full run. `SsrFs` now takes such a
+texel as water when the texels either side of it on one axis are, and a missing
+floor depth from its nearest neighbour. Judged by eye: the seams are gone.
+
+**A halo round the pier's pillars.** Reported with a screenshot at `fdat02`'s
+pier (player `75773,-11520,83101`, yaw 1586, pitch 35; `view 75773 -13026 83101 35
+1586 0`), with the murk on and nothing else mattering. Measured at that camera with
+`snap`, three faults, each checked by its own before and after:
+
+- **Water with no floor under it.** The cells along the pier have no seabed: with
+  the murk off the water there lies over black. The murk takes the sky behind water
+  as a full run, so those cells are solid teal, flat patches ending at the cell
+  edges beside each pillar. **Kept as the look.** Three fills of that floor from
+  the water around it were built and reverted (`084707d`, `577d480`, and murking
+  what is drawn under the surface instead, `0b1b034`); the user preferred this
+  version's water, and only the two edge fixes below were carried forward.
+- **The crack fill borrowed the pillar's depth.** The fill for a one-texel crack in
+  the floor took the nearest neighbouring depth, and beside a pillar that is the
+  pillar, in front of the water: a run of 0, and a strip of unmurked water about a
+  game pixel wide down both sides of every pillar. Only a depth behind the water
+  counts now.
+- **The pass's resolution.** The pass runs at `KF2_SSR_RESOLUTION` (2x the game's
+  pixels) and the present read it bilinear, which put a teal fringe on the pillar's
+  own edge. `PresentFs` upsamples it by the surface under each pixel (`ssrAt`): what
+  the pass computed from at the pixel and at each of the four texels round it (the
+  surface buffer's material and view depth, cracks filled as the pass fills them,
+  nothing where the depth buffer has an opaque surface in front), nothing where
+  that is nothing, and otherwise only the texels with the same material and a depth
+  within 10%, renormalised, or the nearest such. The surface buffer is drawn at the
+  render scale while the pass runs, and the depth is bound for the composite on
+  unit 4.
+
+Measured, with the fill, at the pier: 330 fps uncapped with the murk against 336
+without, and no GL errors. The two edge fixes without the fill: no GL errors, 144.0
+fps drawn at 20.0 ticks/s in `fdat02`; judged by eye at the pier, good.
 
 ### The reflection pass runs for each term on its own
 
@@ -3729,8 +3833,10 @@ pass. 144.0 fps drawn at 19.9-20.0 ticks/s and `[present] wide 288` in each.
 
 ### Water waves
 
-**Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_WAVES=1`, or Video ▸ Experimental ▸ *Water waves*). Runtime `WaterWaves`
+**Mechanism measured; the tuning judged by eye. Off by default**, at the user's
+tuning when switched on: swell 338 over 6114, ripples 139 over 700, shade 0.51,
+speed 1 (first 96 over 12000, 48 over 700 and 0.25; `KF2_WAVES=1`, or Video ▸
+Experimental ▸ *Water waves*). Runtime `WaterWaves`
 (`0078`), port `patches/Waves.cs` and `patches/WaterSwell.cs`.
 
 **The water is coarse, and that decides what a vertex can do.** A census of
@@ -3790,6 +3896,6 @@ construction (`uv` is `vUV`, the wrap returns its argument, no multiply).
 
 **What still needs an eye**: whether the swell reads as water or as the floor
 moving (at tile-corner resolution a short swell is faceted, which is why the
-default length is 12000); whether the rims, held still, look pinned; the ripples'
+length was first 12000, and the judged default is 6114); whether the rims, held still, look pinned; the ripples'
 strength and shading defaults; and that no crack opens anywhere a water tile meets
 something else.

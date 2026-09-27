@@ -951,6 +951,26 @@ Four files in the directory have no entry below:
   `emit()`. With the march on and no murk the output is the one before. The ninth
   diff in the patch file. See "The reflection pass runs for each term on its own"
   and "Murky water" in `docs/RENDERING.md`.
+  Since amended: an opaque triangle drawn in painter's order (zMode 3, no depth
+  record) was kept out of the surface list unless no corner was projected, so the
+  first-person arm, whose corners the GTE projects but whose packets are not
+  recorded, left the water under it in the surface buffer, and the murk and the
+  reflection were composited over the arm. It is kept as `Overlay` now, except in
+  the table's slot 0 (the skybox, which must read as no surface). The tenth diff in
+  the patch file. See "The arm showed the water through it" in `docs/RENDERING.md`.
+  Since amended: the one-texel crack fill took a pillar in front of the water as
+  the floor, leaving a strip unmurked; it takes only a depth behind the water now.
+  And `PresentFs` upsamples the pass by the surface
+  under each pixel (`ssrAt`), with the surface buffer at the render scale while the
+  pass runs and the depth on unit 4. The eleventh diff in the patch file. See "A
+  halo round the pier's pillars" in `docs/RENDERING.md`.
+  Since amended: a see-through 2D primitive (a name box, the HUD panel) is a veil
+  in the surface list rather than an `Overlay`: it keeps the water under it and adds
+  512 (blend mode 0) or 1024 to the id, and the pass murks and reflects that water
+  at the share the box lets through. A textured one is decided per texel from
+  sample VRAM in `NormalFs`, its opaque texels an `Overlay` as before. The twelfth
+  diff in the patch file. See "A see-through box showed the water unmurked" in
+  `docs/RENDERING.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
