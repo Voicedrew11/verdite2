@@ -96,6 +96,7 @@ public static class Host
     /// <summary>Off and closed, one test.</summary>
     static void Frame()
     {
+        EditorCamera.Poll();
         Faces.Recording = Editor.Open || FaceProbe.On;
         Faces.Wanted = Faces.Recording || Surfaces.PerFace;
         if (!Enabled && !Editor.Open) return;
@@ -105,6 +106,7 @@ public static class Host
         TileRewrites.Poll(m, Level.Holding, Level.Generation);
         Pack.Poll();
         foreach (var f in Features) f.OnFrame();
+        Compat.Poll();
         if (_probe) Report();
     }
 

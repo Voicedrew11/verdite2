@@ -6033,12 +6033,17 @@ back. `patches/CullGrid.cs` was not the way to do this: it is off by default and
 transcription disagrees with the game's build by about 120 cells a frame (see "The
 cull the margin runs into" in `docs/WIDESCREEN.md`).
 
-**What does not follow the camera**, found by reading rather than measured in a
-picture: `func_80032400` (the arm) and `func_800331B4` (the object walk) read the
-player's position triple directly (see "Stage 8 is the render camera" in
-`docs/GAME_INTERNALS.md`), so a frame drawn from far away may place or cull things
-by where the player is. Whether that shows is the first thing to look at in a frame
-drawn from an override.
+**What reads the player instead of the camera, and why it does not show.**
+`func_80032400` (the arm) and `func_800331B4` (the object walk) read the player's
+position triple directly (see "Stage 8 is the render camera" in
+`docs/GAME_INTERNALS.md`), but the arm uses it only to pick its tile's light record,
+drawing in view space, and the walk only to range an ambient sound source; the walk
+culls by the grid, which follows the eye. Measured: a frame drawn from one override
+camera hashed the same with the player far away and standing under it, at five
+cameras with up to 5 creatures in view. The arm, drawn in view space, hangs in front
+of any eye, so `Stage13.HideArmOnOverride` leaves it out; the remaster editor's free
+camera sets it. `Stage13.Handed` is the camera the main loop handed the routine last,
+override or not. See "Phase 7, the first slice" in `docs/REMASTER.md`.
 
 ### The compass needle is held to the tick
 

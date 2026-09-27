@@ -20,16 +20,17 @@ namespace Kf2.Remaster;
 ///     set material:NAME glowMode additive|lit, glowFog on|off, pulseStyle breathe|flicker
 ///     set texture|texture:INDEX[:CLUT] material NAME|none   the picked art, or a key, in every area
 ///     set remaster on|off
-///     pack save|reload|undo|redo|list|add NAME
+///     pack save|reload|undo|redo|list|add NAME|report|export [PATH]
 ///     light list|shadows on|off|shadows models on|off|shadows tune BIAS OFFSET SOFT [SIZE]|add NAME [here|pick GX GY|X Y Z]|remove NAME|select NAME|set NAME FIELD V...
 ///     atmos [list|darkness [V]|fog R G B|off|curve P [MAX]|off|sky R G B|fog|show N|set N FIELD V...|reset N [FIELD]]
 ///                                                    the area's light records, their overrides, its darkness and fog
 ///     level [status|on|off|show T|set T FIELD V|game|reset T|rewrites [reset]]   the area's tile edits (Shell.Level.cs)
+///     camera [state|on|off|player|move R U F|turn R U|at X Y Z [P Y]]   the editor's free camera (Shell.Camera.cs)
 ///     remaster                                      the status, as the probe line has it
 /// </summary>
 public static partial class Shell
 {
-    public static readonly string[] Verbs = ["edit", "select", "set", "pack", "remaster", "light", "textures", "atmos", "level"];
+    public static readonly string[] Verbs = ["edit", "select", "set", "pack", "remaster", "light", "textures", "atmos", "level", "camera"];
 
     public static readonly string[] Help =
     [
@@ -38,7 +39,8 @@ public static partial class Shell
             "a half, faces or a model; pick takes the faces or the model under game pixel GX GY (the editor must be open)",
         "set selected|tile:...|model:... material NAME|none [tile|mesh]; set texture|texture:INDEX[:CLUT] material NAME|none (the picked art, or a key; every area); " +
             "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off",
-        "pack save|reload|undo|redo|list|add NAME - the working pack",
+        "pack save|reload|undo|redo|list|add NAME|report|export [PATH] - the working pack; report says, per area, whether each document " +
+            "matches an area this disc has and what resolved when it was last applied; export writes the saved pack as a zip",
         "light list | shadows on|off | shadows models on|off | shadows tune BIAS OFFSET SOFT [SIZE] | add NAME [here | pick GX GY | X Y Z] | remove NAME | select NAME | " +
             "set NAME position X Y Z|colour R G B|intensity V|radius V|type point|spot|direction X Y Z|cone IN OUT|flicker AMOUNT HZ|enabled on|off - " +
             "the area's authored lights; pick places one short of the surface under game pixel GX GY",
@@ -46,6 +48,7 @@ public static partial class Shell
             "reset N [back|light J|fog]] - the area's light records (N 0..79): which halves use each, the game's values and the pack's overrides",
         "remaster - area, fingerprint, what is applied",
         LevelHelp,
+        CameraHelp,
         "textures [on|off|reset|save] - the texture-key census of this area: keys, art, overlapping rects, what a pack covers; save writes dump/GAME/census/area-N.json",
     ];
 
@@ -65,6 +68,7 @@ public static partial class Shell
                 "textures" => Ok("textures", TextureCensus.Verb(a)),
                 "atmos" => AtmosVerb(a),
                 "level" => LevelVerb(a),
+                "camera" => CameraVerb(a),
                 _ => Err(verb, "unknown verb"),
             };
         }
@@ -263,7 +267,10 @@ public static partial class Shell
                 Pack.AddMaterial(a[1]);
                 break;
             case "list": break;
-            default: return Err("pack", "save|reload|undo|redo|list|add NAME");
+            case "report": return Ok("pack", Compat.Report());
+            case "export":
+                return Ok("pack", new JsonObject { ["exported"] = Pack.Export(a.Length > 1 ? string.Join(' ', a[1..]) : null) });
+            default: return Err("pack", "save|reload|undo|redo|list|add NAME|report|export [PATH]");
         }
         var mats = new JsonArray();
         foreach (var mat in Pack.Materials())

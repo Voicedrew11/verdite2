@@ -64,6 +64,9 @@ public sealed class Surfaces : IRemasterFeature
     /// <summary>Face lists dropped because their mesh no longer hashes as it did.</summary>
     public static int MeshRefused { get; private set; }
 
+    /// <summary>Half and model entries naming a material the library does not hold.</summary>
+    public static int NoMaterial { get; private set; }
+
     /// <summary>The name each authored id was given, from <see cref="SurfaceMaterial.FirstAuthored"/>.</summary>
     public static readonly string?[] IdNames = new string?[SurfaceMaterial.Count];
 
@@ -186,7 +189,7 @@ public sealed class Surfaces : IRemasterFeature
     {
         Clear();
         ClearIds();
-        MeshRefused = 0;
+        MeshRefused = NoMaterial = 0;
 
         // Ids are handed out by name at load time, so two packs never collide on a
         // number. 0067's table has 256 and the runtime keeps four.
@@ -255,7 +258,7 @@ public sealed class Surfaces : IRemasterFeature
         int n = 0;
         foreach (var (k, name) in Pack.Tiles(area))
         {
-            if (!ids.TryGetValue(name, out byte id)) continue;
+            if (!ids.TryGetValue(name, out byte id)) { NoMaterial++; continue; }
             _table[Index(k.X, k.Z, k.Half)] = id;
             n++;
         }
@@ -276,7 +279,7 @@ public sealed class Surfaces : IRemasterFeature
         }
         foreach (var r in Pack.ModelRules(area))
         {
-            if (!ids.TryGetValue(r.Material, out byte id)) continue;
+            if (!ids.TryGetValue(r.Material, out byte id)) { NoMaterial++; continue; }
             _models[(r.Model.Kind, r.Model.Model)] = id;
             if (GivesLight(id)) ModelsGiveLight = true;
             n++;

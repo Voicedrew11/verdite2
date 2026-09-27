@@ -178,6 +178,17 @@ public static class Stage13
     /// </summary>
     public static Camera? ViewOverride { get; set; }
 
+    /// <summary>Leave the first-person arm out of a frame drawn from
+    /// <see cref="ViewOverride"/>. The arm is drawn in view space, so from another eye
+    /// it hangs in front of that eye.</summary>
+    public static bool HideArmOnOverride { get; set; }
+
+    /// <summary>The camera the main loop handed stage 13 last, override or not: where
+    /// the player is looking from.</summary>
+    public static Camera? Handed { get; private set; }
+
+    static bool ArmShown => !(HideArmOnOverride && ViewOverride != null) || Verifier.Replaying;
+
     static readonly ModInfo _self = new()
     {
         Id = "kf2.stage13",
@@ -295,6 +306,9 @@ public static class Stage13
         c.SP = sp;
         mem.WriteU32(sp + 0x10u, c.RA);
 
+        if (c.A0 != 0u && c.A1 != 0u && !Verifier.Replaying)
+            Handed = new Camera((int)mem.ReadU32(c.A0), (int)mem.ReadU32(c.A0 + 4u), (int)mem.ReadU32(c.A0 + 8u),
+                                (short)mem.ReadU16(c.A1), (short)mem.ReadU16(c.A1 + 2u), (short)mem.ReadU16(c.A1 + 4u));
         if (ViewOverride is { } view && !Verifier.Replaying)
         {
             CameraBlock.Store(mem, view);
@@ -307,7 +321,7 @@ public static class Stage13
         Call(c, mem, Site.CullGrid);
         Call(c, mem, Site.FrameHead);
         Call(c, mem, Site.SoundMark);
-        Call(c, mem, Site.Arm);
+        if (ArmShown) Call(c, mem, Site.Arm);
         HudState(c, mem, stepNeedle);
         Submit(c, mem);
         Call(c, mem, Site.Present);
@@ -333,7 +347,7 @@ public static class Stage13
         c.A1 = 0u;
         Call(c, mem, Site.View);
         Call(c, mem, Site.CullGrid);
-        Call(c, mem, Site.Arm);
+        if (ArmShown) Call(c, mem, Site.Arm);
         Submit(c, mem);
         return true;
     }

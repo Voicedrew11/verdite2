@@ -283,6 +283,13 @@ after stage 13 instead of after stage 8, so the walks and the camera agree, left
 the flash on 2 of 2 walked crossings ("What the crossing frame actually is" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)).
 
+**What the two read it for, since read from the code and measured: neither places
+geometry by it.** `func_80032400` takes the player's tile from X and Z to pick the
+arm's light record, and draws the arm in view space; `func_800331B4` reads the
+triple only in the ambient sound source (kind `0x1F`), to range its volume. A frame
+drawn from a camera of the port's hashed the same with the player far from it and
+standing under it (see "Phase 7, the first slice" in [REMASTER.md](REMASTER.md)).
+
 ### Stage 9 is the sound listener, and the 3D sound it serves
 
 `func_800140AC(pos, angles)` copies the stage-8 camera into `0x80198584` (X, Y, Z,

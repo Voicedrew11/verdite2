@@ -208,7 +208,8 @@ public static partial class Editor
 
         Event.AddListener<KeyboardEvent>(e =>
         {
-            if (!e.Pressed || e.Repeat || e.Key != (int)Key.E || PopupManager.AnyOpen || HotkeyGate.Typing) return;
+            if (!e.Pressed || e.Repeat || e.Key != (int)Key.E || PopupManager.AnyOpen || HotkeyGate.Typing
+                || EditorCamera.Looking) return;
             if (!HostWindow.IsKeyDown(Key.ShiftLeft) && !HostWindow.IsKeyDown(Key.ShiftRight)) return;
             Panel.Instance.IsOpen = !Panel.Instance.IsOpen;
         });
@@ -259,6 +260,8 @@ public static partial class Editor
 
             DrawStatus();
             ImGui.Separator();
+            DrawCamera();
+            ImGui.Separator();
             DrawSelection();
             ImGui.Separator();
             DrawMaterials();
@@ -268,11 +271,14 @@ public static partial class Editor
             DrawAtmosphere();
             ImGui.Separator();
             DrawLevel();
+            ImGui.Separator();
+            DrawShare();
             bool hovered = ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows);
             ImGui.End();
 
             var m = Runtime.Mem;
             if (m == null || Identity.Area < 0) return;
+            EditorCamera.Input(m, !hovered && OutputView.Hovered);
             var mouse = ImGui.GetIO().MousePos;
             if (!hovered && OutputView.Hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left)
                 && GamePixel(mouse, out var px))

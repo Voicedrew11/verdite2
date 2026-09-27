@@ -10,7 +10,9 @@ by texture ("Phase 4, the second slice"), and metalness made a tinted mirror
 records ("Phase 5, the first slice"), after a census showed only the renderer reads
 them, the area's darkness, shadows, and the fog's colour and the sky ("Phase 5, the
 second slice"); Phase 6 has its first slice, tile edits behind their own switch
-("Phase 6, the first slice"); Phase 7 on is still design. The
+("Phase 6, the first slice"); Phase 7 has its first slice, the free camera, the
+compatibility report and the export ("Phase 7, the first slice"); Phase 8 is still
+design. The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -506,11 +508,10 @@ built with the player standing there, with the player 3 to 20 tiles away in six
 directions. (`patches/CullGrid.cs` was not the route: it is off by default and does
 not match the game's build.)
 
-**What does not follow is the arm and the object walk**: both read the player's
-position directly, so from far away they may place or cull things by where the
-player is. That is the first thing to look at in a frame drawn from an override.
-`goto` plus the game's own camera remains the fallback, and it is enough for
-Phases 1–6.
+**The arm and the object walk read the player's position, and it does not matter**:
+the arm only for its tile's light record (and the free camera leaves it out), the walk
+only to range an ambient sound. A frame drawn from the free camera hashed the same with
+the player far away and standing under it; see "Phase 7, the first slice".
 
 **A second view drawn beside the game's**, such as a picture-in-picture preview or
 a shadow map's light view, is a `ScenePass` around `Stage13.DrawScene(c, mem,
@@ -536,6 +537,8 @@ edit on|off                        enter or leave Edit mode (pause, editor camer
 select <key>                       select by key: tile:1:35:36:upper, model:41, tex:5b1e..., light:1:"hall brazier"
 set <key> <field> <value>          change one field through the same undo stack the panels use
 pack save|reload|list              the working pack
+pack report|export [PATH]          the compatibility report per area; the saved pack as a zip
+camera on|off|move|turn|at         the editor's free camera
 snap [hash|PATH] [after N] [buffer Y|any]   the presented picture: its hash, what changed, a PNG
 ```
 
@@ -2272,6 +2275,78 @@ block, so it should), and the editor's Level section, which has not been opened.
   follows the eye, measured.
 - **You look at:** flying the camera through an area with nothing missing.
 
+### Phase 7, the first slice
+
+**What is in.** The editor's free camera (`patches/remaster/EditorCamera.cs`, a Camera
+section in the editor, the `camera` shell verb), the compatibility report
+(`Compat.cs`, a Share section, `pack report`) and the export (`Pack.Share.cs`,
+`pack export`).
+
+- **The free camera is `Stage13.ViewOverride`, owned by the editor.** *Free camera*
+  starts it at the player's eye (`Stage13.Handed`, the camera the main loop handed
+  stage 13 last, override or not); hold the right mouse button on the picture to look,
+  WASD to fly along the view, Q and E down and up in the world, Shift four times as
+  fast, Ctrl a quarter, the wheel for the speed (4096 units a second, two tiles, by
+  default). Shift+E does not close the editor while the button is held, since Shift+E
+  is also "up, fast". Closing the editor turns it off and the view is the game's again.
+  The world is paused while the editor is open, so the player stays where they are.
+- **The first-person arm is left out of a frame drawn from it**
+  (`Stage13.HideArmOnOverride`, set only by the editor camera). The arm is drawn in
+  view space, so from any eye it hangs in front of that eye. The `view` verb's override
+  still draws it.
+- **The stored angles run the other way from a mouse.** Measured with `camera turn`
+  against the axes the view matrix gives: a larger yaw turns the view left and a larger
+  pitch tips it down. Pitch is held within 1000 of level, short of straight up or down.
+
+**The Phase 7 risk does not hold: a frame drawn from the free camera does not depend on
+where the player is.** Read first, then measured. `func_80032400` (the arm) reads the
+player's X and Z only to pick the light record of the player's tile, and draws in view
+space; `func_800331B4` (the object walk) reads the player's position only to range an
+ambient sound source (kind `0x1F`), and culls by the cull grid, which follows the eye.
+Measured in area 1 from slot 2, with the world paused: the same override camera, the
+player at the spawn and then moved by `goto` to stand under it, **the presented
+picture hashed the same** (`snap hash`) at five cameras -- 10 tiles from the player
+and 1.5 tiles away, 1 object in view each; two 3.6 tiles away facing 5 creatures and 4
+objects, and 4 creatures and 3 objects; one 8 tiles away with 1 creature, 6 objects and
+3 billboards.
+While paused, only what the renderer reads directly can differ, and nothing did.
+Flying ten tiles changed the cull grid's digest and closing the editor put back the
+player's (`0a4cf34bc982d023`, 11 cells drawn); 144.0 fps drawn with the world paused,
+20.0 ticks/s once closed, `[present] wide 288`; `KF2_STAGE13=verify` 0 mismatches over
+288 calls a report.
+
+**The compatibility report.** A fingerprint is known only by loading the area, so the
+port keeps a census of every fingerprint it has settled on as loaded, per disc, in
+`dump/SLUS-00158/census/areas.json`, with the last count of what resolved there: the
+surfaces applied, dropped for a changed mesh and naming a material the library does
+not hold (`Surfaces.NoMaterial`, new); the lights authored; the light-record overrides
+written and refused for a changed record; the level edits applied and refused, or
+`off`; and any whole-area refusal with its reason. A count is taken a second after the
+area settles and every two seconds after, written only when it changes, and tagged
+with the pack it was taken with, so another pack's counts are never shown. The census
+grows while the remaster is on or the editor is open, which is when the area is
+identified at all. For each area the pack holds, the report gives each document's
+entries and fingerprint as **matches** (seen on this disc), **differs** (the area was
+seen, under another fingerprint: the document is refused whole) or **unseen** (the area
+has not been loaded here yet), and the last count. Texture rules are counted apart:
+they key on content and carry no fingerprint. Measured on a scratch pack: area 1
+matched with one tile naming an unknown material counted, area 0 given a wrong
+fingerprint read *differs* with the surfaces' refusal and its reason, and area 7,
+never loaded, read *unseen*.
+
+**The export** is the saved pack as a zip in upstream's own zip-pack layout, `pack.json`
+at its root, written to `exports/` (gitignored) with the date in its name, or to a path
+given to `pack export`. Not to `packs/`, where upstream loads every `*.zip` as a pack of
+its own. It is refused while an edit is unsaved, since it holds the saved files, and
+leaves out dotfiles. The remaster itself still reads only one directory, the working
+pack, so a pack received is unzipped into a directory and pointed at with
+`KF2_REMASTER_PACK`; layering packs is still to do.
+
+**Accepted as it stands; the editor's feel is deferred.** The slice was accepted
+without a pass over its handling: the mouse look's rate, the flying and the Share
+section's layout are the editor's UX, which is to be reworked once the editor is
+feature complete rather than section by section.
+
 ### Phase 8: later
 
 - port-drawn props;
@@ -2297,9 +2372,10 @@ block, so it should), and the editor's Level section, which has not been opened.
    Phase 4 and normalised through `GteTexRect` or the upload rectangle.
 2. **Instance slots may not be stable.** They are measured before any instance
    key is used, and there is a fallback key.
-3. **The arm and the object walk from a free eye** read the player's position;
-   `goto` is the fallback. (The cull grid from a free eye was this risk, and is
-   measured correct.)
+3. **The arm and the object walk from a free eye** read the player's position.
+   Measured harmless: the arm uses it only for its light record, and is left out of
+   the free camera's frames; the walk only to range an ambient sound. See "Phase 7,
+   the first slice".
 4. **Shader cost at a high render scale**, since the port is CPU-bound and frame
    rate hides it. GPU timers per feature are the answer.
 5. **Save contamination** from placement edits. Opt-in, labelled, and last.

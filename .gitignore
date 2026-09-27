@@ -32,6 +32,8 @@ interface.ini
 
 # Optional runtime asset-replacement packs
 packs/
+# The remaster editor's pack exports
+exports/
 
 # Upstream's texture dumper writes the disc's textures here, and the census its reports.
 dump/

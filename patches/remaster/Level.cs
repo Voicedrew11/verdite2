@@ -75,6 +75,7 @@ public sealed class Level : IRemasterFeature
 
     public static int Authored { get; private set; }
     public static int Applied { get; private set; }
+    public static int RefusedHalves => _why.Count;
 
     /// <summary>Held bytes left as the game rewrote them when the edits were put back; never reset.</summary>
     public static long KeptGames { get; private set; }
