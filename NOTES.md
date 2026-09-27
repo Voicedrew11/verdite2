@@ -193,6 +193,7 @@ Turning the port into something a person can download.
 - First run
 - Two things that were nearly wrong
 - Versioning
+- Telling the player about a new release
 - Building a release
 - The one patch this needed
 - Not done
