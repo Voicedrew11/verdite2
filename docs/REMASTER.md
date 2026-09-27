@@ -11,8 +11,9 @@ records ("Phase 5, the first slice"), after a census showed only the renderer re
 them, the area's darkness, shadows, and the fog's colour and the sky ("Phase 5, the
 second slice"); Phase 6 has its first slice, tile edits behind their own switch
 ("Phase 6, the first slice"); Phase 7 has its first slice, the free camera, the
-compatibility report and the export ("Phase 7, the first slice"); Phase 8 is still
-design. The
+compatibility report and the export ("Phase 7, the first slice"); Phase 8 has its
+first slice, props drawn from the area's own object models ("Phase 8, the first
+slice"). The
 stretch goal is a full visual remaster the user authors themselves: placing lights,
 assigning materials, tuning reflections, editing levels. **An effect is worth
 nothing to that goal until it can be placed, tuned, saved and shared**, so this
@@ -328,7 +329,7 @@ packs/verdite-stone/
     areas/1/surfaces.json          tile, mesh and model -> material
     areas/1/atmosphere.json        fog colour and curve, sky, light-record overrides
     areas/1/level.json             tile byte edits
-    areas/1/props.json             port-drawn decorations (late)
+    areas/1/props.json             props: the area's object models, placed
 ```
 
 Every area file carries its gate:
@@ -683,11 +684,12 @@ Remaster packs page.
 ### Decorated: everything only the renderer reads
 
 - materials, lights, fog, sky, and the light-record overrides;
-- **port-drawn props**: meshes the author supplies, submitted through
-  `PolyAssembler` into the frame's ordering table, so they get depth, fog,
-  per-pixel lighting and reflections the same way the game's own models do.
-  They have no collision, and are said to have none. This is the only way to
-  add geometry, and it is late in the roadmap.
+- **port-drawn props**: submitted through the game's own model submitter into the
+  frame's ordering table, so they get depth, fog, per-pixel lighting and
+  reflections the same way the game's own models do. They have no collision, and
+  are said to have none. This is the only way to add geometry. The first slice
+  places the area's own object models ("Phase 8, the first slice"); meshes the
+  author supplies are later.
 
 ### Pushed back
 
@@ -2349,11 +2351,101 @@ feature complete rather than section by section.
 
 ### Phase 8: later
 
-- port-drawn props;
+- port-drawn props: the area's own object models first (see "Phase 8, the first
+  slice"), meshes the author supplies after;
 - opt-in object and creature placement;
 - a GPU id buffer (`0076`), if picking is ever too slow;
 - texture packs, parked from Phase 4: a replaced water texture scrolled through
   `0053`, replacements in the retained scene, normal and roughness maps (`0075`).
+
+### Phase 8, the first slice
+
+**What is in.** Props: `areas/<n>/props.json`, each an object model the area already
+has, placed, turned and scaled where the author puts it (`patches/remaster/Props.cs`,
+`Pack.Props.cs`), a Props section in the editor and the `prop` shell verb.
+`KF2_REMASTER_PROPS=0` leaves them out; they apply with the remaster otherwise.
+
+```json
+{ "formatVersion": 1, "area": 1, "fingerprint": "be64c93e02071c09",
+  "props": [ { "name": "urn", "model": 443, "position": [74151, -14848, 74298],
+               "rotation": [0, 90, 0], "scale": 1.5, "half": "upper" } ] }
+```
+
+`model` is the id a pick names (`model:1:object:443`): the object definition index
+plus `0x100`, which is what the walk hands the submitter. Position is world units, up
+at -Y, the floor of a half at `-(height << 7)`; rotation is degrees about X, Y and Z;
+scale is against the model's own and may be one number or three; `half` is the tile
+half the prop is lit from and culled with, lower unless it says upper.
+
+**A prop is an object record of the port's own, drawn by the game's code.** Each is
+0x44 bytes above 2 MB (`PrimBuffer.PropScratch`, 0x2000 bytes past the wave copy, so
+120 fit), copied when the area settles from a live object drawn with the same model,
+and then given the prop's position (`+0x14`), rotation (`+0x24`), scale (`+0x2C`,
+scaled from the copy's; a zero, which a model the game grows in has, counts as 4096)
+and half mask (`+0`: 1 the lower, 2 the upper, read off the table below). The C#
+object walk submits them after the game's own objects, through the same code: the
+ordinary-object body of `WalkObjects` is now `ModelWalk.Ordinary`, called per record,
+and `Props.Walk` calls it once per prop. So a prop is culled by the game's own grid
+(`func_80032D78`), skipped while its model is not loaded (`func_80032CD8`), marks its
+texture page and CLUT as wanted like any object, is lit from its tile's light record,
+and goes through the game's assembler with the port's packet records. Depth, fog,
+per-pixel light, occlusion, a material on the model, a glow's light, the planar
+walk's replay and the retained scene's shadows all follow from that without a line of
+their own; the pointers the submitter is handed stay valid after the walk, since the
+record is not in the walk's frame. Nothing but the renderer reads the record: a prop
+has no collision, no behaviour, no use handler and never reaches a save. Copying the
+record rather than building one means a prop is only ever a model some object of the
+area is drawn with; a model no live object uses is refused by name, and retried each
+second, so one that appears later (a door opened, a drop) resolves then.
+
+**What a copied record carries, read off area 1's 343 live objects** (`prop objects`
+lists them): `+1` the clip byte, `0x80` and up rigid (sub-model in the low bits) and
+below it MO-posed from the record's own inline MO state at `+0x34`, so a prop of an
+animated object (a chest, a door) holds the pose it was copied in; `+2` the assembler
+(`0xFF`, lit, for every object there); `+3` bit 0 forces the assembler by the
+visibility answer and bit 1 asks the volume query; the scale at `+0x2C` is 4096 for
+1.0. The half mask read 0 (never drawn: markers, model 496), 1, 2 or 3; most of
+area 1's floor objects are 2, the upper half.
+
+**Placing.** *Add here* puts a prop on the floor of the player's own half (the
+position the game keeps is the feet: `-14848` there, the half's `-(116 << 7)`).
+*Place on the picture* takes the nearest surface the frame drew under the click, then
+stands the prop on the floor of that half (the picked tile's, or the player's under a
+model), and when the surface is more than 256 units off that floor -- a wall -- pulls
+it 512 towards the eye first. Picking a prop's triangles selects the prop
+(`Faces.Tri.Prop`, from the record the walk submitted), as well as its model, so a
+material set on the selection reaches every draw of that model, props included.
+
+**Measured.** Area 1 from slot 2, world paused, the editor open:
+- **Nothing authored is the picture before**: `snap hash` read `210d55698c875fb8`,
+  the pinned area-1 hash, with the refactored walk; adding a prop changed it, and
+  removing every prop put it back to `210d55698c875fb8`.
+- **A prop draws where it is put**: an urn (model 443, rigid) on the floor 830 units
+  ahead changed 40.5% of the presented picture; `select pick` over a grid of game
+  pixels named prop `urn` across its whole lower-screen footprint, and the game's own
+  object beside it as `model:1:object:486` as before. A door (386, MO-posed) resolved
+  and drew as well. `prop list` read `resolved 2, drawn 2` and the probe `props 1 of 1
+  resolved, 1 drawn last walk`.
+- **A material follows the model onto its props**: a glowing material on model 443,
+  with three props of it in view and none of the area's own, read `3 from model
+  glow, 3 sent` on the probe; all three props switched off read `0 from model glow`.
+- **The pack round-trips**: `pack save`, `pack reload`, and the prop came back from
+  `props.json` as written.
+- **The walk is unchanged**: `KF2_MODELWALK=verify`, 24 reports over `open → game →
+  fdat02 → fdat05`: 23 read 0 RAM, 0 register and 0 GTE mismatches (288 walks and
+  1,152 submits a report in area 1); one read 1 RAM mismatch, in area 0 with no prop,
+  4 bytes at `0x80073DF4` -- the ambient sound's key-on in libsnd's voice table that
+  "A verify pass replays, it does not re-run" in `PATCHES_AND_MODS.md` records. Props
+  stand down under verify, since the recompiled walk draws none (`props refused`).
+- **It costs nothing to see**: 144.0 fps drawn at 20.0 ticks/s with the prop in view,
+  `[present] wide 288, plain 0, vram fallback 0`.
+
+**Not measured**: a prop in the planar walk's mirror or in the retained scene's
+shadows; they follow from the submit, but no run has
+looked at the counters. **Not judged**: nothing of this has been looked at -- whether
+a prop sits on the floor rather than in it or above it (a model's origin need not be
+its base), whether its light matches the objects beside it, and how the editor's
+placement feels. The editor's handling is deferred with the rest of its UX.
 
 ### Dependencies, in one list
 

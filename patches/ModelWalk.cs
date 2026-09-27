@@ -476,65 +476,75 @@ public static class ModelWalk
                 continue;
             }
 
-            // The ordinary model. Bit 1 of the kind byte picks the volume query,
-            // which is asked with the definition's own mask.
-            uint seen;
-            if ((kindByte & 2u) != 0u)
-            {
-                uint def = ObjectDefs + (mem.ReadU16(rec + 0x6u) * 24u);
-                c.A0 = rec + 0x14u;
-                c.A1 = mem.ReadU8(def + 0xCu);
-                c.RA = 0x80033900u;
-                KingsField2.func_80032DE8(c, mem);
-                seen = c.V0;
-            }
-            else
-            {
-                c.A0 = rec + 0x14u;
-                c.RA = 0x800337A8u;
-                KingsField2.func_80032D78(c, mem);
-                seen = c.V0;
-            }
-            if ((seen & mem.ReadU8(rec)) == 0u) continue;
-
-            Interrupts.Poll(c, mem);
-            uint model = mem.ReadU16(rec + 0x6u);
-            mem.WriteU8(sp + 0x58u + model, 1);
-            mem.WriteU8(sp + 0x198u + mem.ReadU8(ObjectDefs + model * 24u + 2u), 1);
-
-            c.A0 = model + 0x100u;
-            c.RA = 0x8003380Cu;
-            KingsField2.func_80032CD8(c, mem);
-            if (c.V0 == 0u) continue;
-
-            mem.WriteU16(sp + 0x38u, mem.ReadU16(rec + 0x24u));
-            mem.WriteU16(sp + 0x3Au, (ushort)(mem.ReadU16(rec + 0x26u) + 0x800u));
-            mem.WriteU16(sp + 0x3Cu, mem.ReadU16(rec + 0x28u));
-
-            uint assembler = mem.ReadU8(rec + 2u);
-            if ((mem.ReadU8(rec + 3u) & 1u) != 0u)
-                assembler = (seen & 0x80u) != 0u ? 0xFEu : 0xFFu;
-
-            mem.WriteU32(sp + 0x10u, rec + 0x2Cu);
-            mem.WriteU32(sp + 0x14u, rec + 0x34u);
-            mem.WriteU32(sp + 0x18u, ViewMatrix);
-            mem.WriteU32(sp + 0x1Cu, mem.ReadU8(rec + 1u));
-            mem.WriteU32(sp + 0x20u, mem.ReadU16(rec + 0xAu));
-            mem.WriteU32(sp + 0x24u, mem.ReadU8(rec + 5u));
-            mem.WriteU32(sp + 0x28u, mem.ReadU16(rec + 0x10u));
-            mem.WriteU32(sp + 0x2Cu, assembler);
-            mem.WriteU32(sp + 0x30u, (uint)(short)mem.ReadU16(rec + 0xEu));
-
-            _kind = ModelKind.Object; _slot = i; _record = rec;
-            _objects++;
-            c.A0 = mem.ReadU8(rec);
-            c.A1 = model + 0x100u;
-            c.A2 = rec + 0x14u;
-            c.A3 = sp + 0x38u;
-            c.RA = 0x800338C0u;
-            KingsField2.func_80032588(c, mem);
-            mem.WriteU8(rec + 3u, (byte)(mem.ReadU8(rec + 3u) | 0x80u));
+            Ordinary(c, mem, sp, rec, i, kindByte);
         }
+
+        Remaster.Props.Walk(c, mem, sp);
+    }
+
+    /// <summary>An ordinary object model, from its record: the visibility query, the
+    /// page bitmaps, and the submit. <see cref="Remaster.Props"/> submits its own
+    /// records through here, after the table.</summary>
+    internal static void Ordinary(CpuContext c, PSMemory mem, uint sp, uint rec, int i, uint kindByte)
+    {
+        // The ordinary model. Bit 1 of the kind byte picks the volume query,
+        // which is asked with the definition's own mask.
+        uint seen;
+        if ((kindByte & 2u) != 0u)
+        {
+            uint def = ObjectDefs + (mem.ReadU16(rec + 0x6u) * 24u);
+            c.A0 = rec + 0x14u;
+            c.A1 = mem.ReadU8(def + 0xCu);
+            c.RA = 0x80033900u;
+            KingsField2.func_80032DE8(c, mem);
+            seen = c.V0;
+        }
+        else
+        {
+            c.A0 = rec + 0x14u;
+            c.RA = 0x800337A8u;
+            KingsField2.func_80032D78(c, mem);
+            seen = c.V0;
+        }
+        if ((seen & mem.ReadU8(rec)) == 0u) return;
+
+        Interrupts.Poll(c, mem);
+        uint model = mem.ReadU16(rec + 0x6u);
+        mem.WriteU8(sp + 0x58u + model, 1);
+        mem.WriteU8(sp + 0x198u + mem.ReadU8(ObjectDefs + model * 24u + 2u), 1);
+
+        c.A0 = model + 0x100u;
+        c.RA = 0x8003380Cu;
+        KingsField2.func_80032CD8(c, mem);
+        if (c.V0 == 0u) return;
+
+        mem.WriteU16(sp + 0x38u, mem.ReadU16(rec + 0x24u));
+        mem.WriteU16(sp + 0x3Au, (ushort)(mem.ReadU16(rec + 0x26u) + 0x800u));
+        mem.WriteU16(sp + 0x3Cu, mem.ReadU16(rec + 0x28u));
+
+        uint assembler = mem.ReadU8(rec + 2u);
+        if ((mem.ReadU8(rec + 3u) & 1u) != 0u)
+            assembler = (seen & 0x80u) != 0u ? 0xFEu : 0xFFu;
+
+        mem.WriteU32(sp + 0x10u, rec + 0x2Cu);
+        mem.WriteU32(sp + 0x14u, rec + 0x34u);
+        mem.WriteU32(sp + 0x18u, ViewMatrix);
+        mem.WriteU32(sp + 0x1Cu, mem.ReadU8(rec + 1u));
+        mem.WriteU32(sp + 0x20u, mem.ReadU16(rec + 0xAu));
+        mem.WriteU32(sp + 0x24u, mem.ReadU8(rec + 5u));
+        mem.WriteU32(sp + 0x28u, mem.ReadU16(rec + 0x10u));
+        mem.WriteU32(sp + 0x2Cu, assembler);
+        mem.WriteU32(sp + 0x30u, (uint)(short)mem.ReadU16(rec + 0xEu));
+
+        _kind = ModelKind.Object; _slot = i; _record = rec;
+        _objects++;
+        c.A0 = mem.ReadU8(rec);
+        c.A1 = model + 0x100u;
+        c.A2 = rec + 0x14u;
+        c.A3 = sp + 0x38u;
+        c.RA = 0x800338C0u;
+        KingsField2.func_80032588(c, mem);
+        mem.WriteU8(rec + 3u, (byte)(mem.ReadU8(rec + 3u) | 0x80u));
     }
 
     /// <summary>Kind `0x1F`: an ambient sound source. It draws nothing — it asks

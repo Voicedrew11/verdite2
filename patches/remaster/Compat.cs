@@ -92,6 +92,7 @@ public static class Compat
                                 ("changedMesh", Surfaces.MeshRefused), ("noMaterial", Surfaces.NoMaterial)),
             ["lights"] = Part(Lights.Refused, ("authored", Lights.Authored)),
             ["atmosphere"] = Part(Atmosphere.Refused, ("applied", Atmosphere.Applied), ("changedRecord", Atmosphere.Stale)),
+            ["props"] = Part(Props.Refused, ("resolved", Props.Resolved), ("unresolved", Props.Authored - Props.Resolved)),
             ["level"] = Level.Enabled
                 ? Part(Level.Refused, ("applied", Level.Applied), ("refused", Level.RefusedHalves))
                 : new JsonObject { ["off"] = true },

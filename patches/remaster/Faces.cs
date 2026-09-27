@@ -92,6 +92,7 @@ public static class Faces
         public TexKey Tex;   // the art it draws, or default
         public int Model;    // a model's id, or -1 (a tile, or a model the C# walk did not submit)
         public ModelKind Kind;
+        public string? Prop;  // the remaster prop it belongs to, or null
     }
 
     static List<Tri> _cur = new(), _last = new();
@@ -130,11 +131,12 @@ public static class Faces
         TextureKeys.OfPacket(mem, pkt, r.Cmd, out var tex);
         int model = PolyAssembler.InModel ? ModelWalk.SubmitModel : -1;
         var kind = ModelWalk.SubmitKind;
+        string? prop = model >= 0 ? Props.NameOf(ModelWalk.SubmitRecord) : null;
         _cur.Add(new Tri { X0 = x[0], Y0 = y[0], Z0 = r.Z0, X1 = x[1], Y1 = y[1], Z1 = r.Z1, X2 = x[2], Y2 = y[2], Z2 = r.Z2,
-                           Rec = rec, Mesh = mesh, Face = face, Label = label, Model = model, Kind = kind, Tex = tex });
+                           Rec = rec, Mesh = mesh, Face = face, Label = label, Model = model, Kind = kind, Tex = tex, Prop = prop });
         if (n == 4)
             _cur.Add(new Tri { X0 = x[1], Y0 = y[1], Z0 = r.Z1, X1 = x[3], Y1 = y[3], Z1 = r.Z3, X2 = x[2], Y2 = y[2], Z2 = r.Z2,
-                               Rec = rec, Mesh = mesh, Face = face, Label = label, Model = model, Kind = kind, Tex = tex });
+                               Rec = rec, Mesh = mesh, Face = face, Label = label, Model = model, Kind = kind, Tex = tex, Prop = prop });
     }
 
     /// <summary>The view depth of a triangle at a point, or +inf when it does not cover it.</summary>
@@ -179,17 +181,22 @@ public static class Faces
 
     /// <summary><see cref="PickAt(Vector2, out ModelKey?, out string?)"/>, and the art the
     /// nearest triangle draws, if it is textured.</summary>
+    /// <summary>The prop the last pick's model belongs to, or null.</summary>
+    public static string? PickedProp { get; private set; }
+
     public static List<FaceRef>? PickAt(Vector2 p, out ModelKey? model, out string? why, out TexKey? texture)
     {
         why = null;
         model = null;
         texture = null;
+        PickedProp = null;
         if (_last.Count == 0) { why = "no triangles recorded (is the editor open?)"; return null; }
         int n = Nearest(p, out float z);
         if (n < 0) { why = "nothing drawn there"; return null; }
         if (_last[n].Tex.Index != 0) texture = _last[n].Tex;
         if (_last[n].Rec == 0)
         {
+            PickedProp = _last[n].Prop;
             if (_last[n].Model >= 0) model = new ModelKey(Identity.Area, _last[n].Kind, _last[n].Model);
             else why = "a model the object walk did not name is in front";
             return null;

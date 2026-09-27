@@ -26,11 +26,12 @@ namespace Kf2.Remaster;
 ///                                                    the area's light records, their overrides, its darkness and fog
 ///     level [status|on|off|show T|set T FIELD V|game|reset T|rewrites [reset]]   the area's tile edits (Shell.Level.cs)
 ///     camera [state|on|off|player|move R U F|turn R U|at X Y Z [P Y]]   the editor's free camera (Shell.Camera.cs)
+///     prop [list|objects|add NAME MODEL [here|pick GX GY|X Y Z]|remove NAME|set NAME FIELD V...]   the area's props (Shell.Props.cs)
 ///     remaster                                      the status, as the probe line has it
 /// </summary>
 public static partial class Shell
 {
-    public static readonly string[] Verbs = ["edit", "select", "set", "pack", "remaster", "light", "textures", "atmos", "level", "camera"];
+    public static readonly string[] Verbs = ["edit", "select", "set", "pack", "remaster", "light", "textures", "atmos", "level", "camera", "prop"];
 
     public static readonly string[] Help =
     [
@@ -49,6 +50,7 @@ public static partial class Shell
         "remaster - area, fingerprint, what is applied",
         LevelHelp,
         CameraHelp,
+        PropHelp,
         "textures [on|off|reset|save] - the texture-key census of this area: keys, art, overlapping rects, what a pack covers; save writes dump/GAME/census/area-N.json",
     ];
 
@@ -69,6 +71,7 @@ public static partial class Shell
                 "atmos" => AtmosVerb(a),
                 "level" => LevelVerb(a),
                 "camera" => CameraVerb(a),
+                "prop" => PropVerb(a),
                 _ => Err(verb, "unknown verb"),
             };
         }
@@ -111,7 +114,9 @@ public static partial class Shell
             {
                 Editor.SelectModel(mk);
                 Editor.SelectTexture(tex);
-                return Ok("select", WithTexture(DescribeModel(mk)));
+                var d = WithTexture(DescribeModel(mk));
+                if (Faces.PickedProp is { } prop) { Editor.SelectProp(prop); d["prop"] = prop; }
+                return Ok("select", d);
             }
             if (hit == null) return Err("select", $"nothing picked: {why}");
             Editor.SelectFaces(hit, a.Length > 3 && a[3] == "add");

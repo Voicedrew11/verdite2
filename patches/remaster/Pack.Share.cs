@@ -26,6 +26,8 @@ public static partial class Pack
             all.Add(new(area, "atmosphere", Str(d["fingerprint"]), Count(d, "records")));
         foreach (var (area, d) in _set.Level)
             all.Add(new(area, "level", Str(d["fingerprint"]), Count(d, "halves")));
+        foreach (var (area, d) in _set.Props)
+            all.Add(new(area, "props", Str(d["fingerprint"]), Count(d, "props")));
         return all.OrderBy(d => d.Area).ThenBy(d => d.Kind, StringComparer.Ordinal);
     }
 

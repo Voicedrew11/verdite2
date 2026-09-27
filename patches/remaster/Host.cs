@@ -32,6 +32,7 @@ public interface IRemasterFeature
 ///     KF2_REMASTER_SHADOWS=0 no shadows from the authored lights
 ///     KF2_REMASTER_SHADOW_MODELS=0 only the map casts them
 ///     KF2_REMASTER_LEVEL=1   apply the pack's level edits, which change gameplay (off by default)
+///     KF2_REMASTER_PROPS=0   leave the pack's props out
 ///
 /// Shift+E opens the editor, which pauses the world. See docs/REMASTER.md.
 /// </summary>
@@ -47,11 +48,12 @@ public static class Host
 
     public static bool Enabled { get; private set; }
 
-    public static readonly IRemasterFeature[] Features = [new Surfaces(), new Lights(), new Atmosphere(), new Level()];
+    public static readonly IRemasterFeature[] Features = [new Surfaces(), new Lights(), new Atmosphere(), new Level(), new Props()];
 
     public static void Configure(string? on, string? pack, string? probe, string? lights, string? atmos = null,
-                                 string? level = null)
+                                 string? level = null, string? props = null)
     {
+        Props.Configure(props);
         Lights.Configure(lights);
         Atmosphere.Configure(atmos);
         Level.Configure(level);

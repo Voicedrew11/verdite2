@@ -669,3 +669,12 @@ useful than the question was.
    have been driven only through the shell, and no picture has been judged. A
    glowing texture gives a light per tile half: set *Light* to 0 on a material
    meant only to glow.
+23. **Look at a prop.** Open the editor (Shift+E), click an object in the picture
+   (an urn, a chest), and under *Props* press *Add here* or tick *Place on the
+   picture* and click the floor. The mechanism is measured (see "Phase 8, the first
+   slice" in [REMASTER.md](REMASTER.md)): it draws, picks as itself, takes the
+   model's material and its glow's light, and costs nothing at 144 fps. Nothing has
+   been looked at: whether it stands on the floor rather than in it or above it (a
+   model's origin need not be its base), whether its light matches the objects
+   beside it, and how an MO-posed model (a door, a chest) looks held in the pose it
+   was copied in.

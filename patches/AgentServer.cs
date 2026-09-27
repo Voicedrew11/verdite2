@@ -335,6 +335,7 @@ public static class AgentServer
             case "atmos":
             case "level":
             case "camera":
+            case "prop":
             case "snap":
             case "view":
             case "waves":
@@ -413,7 +414,7 @@ public static class AgentServer
         "goto" => DoGoto(cmd.Arg1),
         "view" => DoView(cmd.Arg1),
         "waves" => Waves.Shell(cmd.Arg1),
-        "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
+        "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         "savecheck" => DoSaveCheck(),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };

@@ -86,6 +86,11 @@ public static partial class Editor
 
     public static void SelectLight(string? name) => SelectedLight = name;
 
+    /// <summary>The selected prop, by name, in the loaded area.</summary>
+    public static string? SelectedProp { get; private set; }
+
+    public static void SelectProp(string? name) => SelectedProp = name;
+
     /// <summary>How far short of a picked surface a light is placed, towards the eye.</summary>
     const float PlaceBack = 192f;
 
@@ -99,6 +104,54 @@ public static partial class Editor
         float len = p.Length();
         p *= MathF.Max(len - PlaceBack, len * 0.5f) / len;
         return v.ToWorld(p);
+    }
+
+    /// <summary>The nearest surface the last frame drew at a game pixel, where a prop
+    /// is placed.</summary>
+    public static Vector3? SurfaceAt(RecompOne.Runtime.Memory.IMemory m, Vector2 px)
+    {
+        if (Faces.Nearest(px, out float z) < 0 || !float.IsFinite(z)) return null;
+        var v = Lights.ReadView(m);
+        return v.ToWorld(new Vector3((px.X - v.Cx) * z / v.H, (px.Y - v.Cy) * z / v.H, z));
+    }
+
+    /// <summary>Where a prop goes for a click at a game pixel: stood on the floor of the
+    /// tile half under the surface there (the picked half's, or the player's for a
+    /// model), and pulled towards the eye when the surface is a wall, so it stands in
+    /// front of it rather than inside it.</summary>
+    public static Vector3? PropPlaceAt(RecompOne.Runtime.Memory.IMemory m, Vector2 px)
+    {
+        int n = Faces.Nearest(px, out _);
+        if (n < 0 || SurfaceAt(m, px) is not { } p) return null;
+        int half = Identity.PlayerTile(m)?.Half ?? TileKey.Lower;
+        if (Faces.Last[n].Rec != 0 && Identity.FromRecord(Faces.Last[n].Rec, out _, out _, out int h)) half = h;
+        float Floor(Vector3 at)
+        {
+            int tx = (int)at.X / Identity.TileUnits, tz = (int)at.Z / Identity.TileUnits;
+            if ((uint)tx >= Identity.Span || (uint)tz >= Identity.Span) return at.Y;
+            return -(m.ReadU8(Identity.HalfRecord(tx, tz, half) + (uint)TileField.Height.Offset) << 7);
+        }
+        if (MathF.Abs(p.Y - Floor(p)) > PropWallGap)
+        {
+            var eye = PlayerLightPosition(m);
+            var flat = new Vector3(eye.X - p.X, 0f, eye.Z - p.Z);
+            if (flat.LengthSquared() > 1f) p += Vector3.Normalize(flat) * MathF.Min(PropWallGap * 2f, flat.Length() * 0.5f);
+        }
+        p.Y = Floor(p);
+        return p;
+    }
+
+    /// <summary>A surface this far off the floor is a wall; a prop is stood twice this far out from it.</summary>
+    const float PropWallGap = 256f;
+
+    /// <summary>Where the player stands, which is where "Add here" puts a prop: on the
+    /// floor of their own tile half, since the position the game keeps is the eye's.</summary>
+    public static Vector3 PlayerFeet(RecompOne.Runtime.Memory.IMemory m)
+    {
+        var at = new Vector3((int)m.ReadU32(0x801994ECu), (int)m.ReadU32(0x801994F0u), (int)m.ReadU32(0x801994F4u));
+        if (Identity.PlayerTile(m) is { } k)
+            at.Y = -(m.ReadU8(Identity.HalfRecord(k.X, k.Z, k.Half) + (uint)TileField.Height.Offset) << 7);
+        return at;
     }
 
     /// <summary>The eye, which is where "Add at eye" puts a light.</summary>
@@ -272,6 +325,8 @@ public static partial class Editor
             ImGui.Separator();
             DrawLevel();
             ImGui.Separator();
+            DrawProps();
+            ImGui.Separator();
             DrawShare();
             bool hovered = ImGui.IsWindowHovered(ImGuiHoveredFlags.RootAndChildWindows);
             ImGui.End();
@@ -283,7 +338,8 @@ public static partial class Editor
             if (!hovered && OutputView.Hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left)
                 && GamePixel(mouse, out var px))
             {
-                if (_placing)
+                if (PlacePropClick(m, px)) { }
+                else if (_placing)
                 {
                     _placing = false;
                     if (PlaceAt(m, px) is { } at) AddLight(at);
@@ -300,6 +356,7 @@ public static partial class Editor
                     var hit = Faces.PickAt(px, out var model, out _pickWhy, out var tex);
                     if (hit != null) SelectFaces(hit, toggle);
                     else if (model != null) SelectModel(model);
+                    if (model != null && Faces.PickedProp is { } prop) SelectProp(prop);
                     if (hit != null || model != null) SelectTexture(tex);
                 }
             }

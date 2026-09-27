@@ -36,6 +36,7 @@ public static partial class Pack
     static string LightsPath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "lights.json");
     static string AtmospherePath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "atmosphere.json");
     static string LevelPath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "level.json");
+    static string PropsPath(int area) => Path.Combine(RemasterDir, "areas", area.ToString(), "props.json");
 
     static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
@@ -56,6 +57,7 @@ public static partial class Pack
         public readonly Dictionary<int, JsonObject> Lights = new();
         public readonly Dictionary<int, JsonObject> Atmosphere = new();
         public readonly Dictionary<int, JsonObject> Level = new();
+        public readonly Dictionary<int, JsonObject> Props = new();
 
         public static Set Empty() => new() { Materials = NewMaterials(), Textures = NewTextures() };
     }
@@ -103,6 +105,8 @@ public static partial class Pack
                 if (File.Exists(path)) s.Atmosphere[area] = Migrate(ParseObject(path), "records");
                 path = Path.Combine(dir, "level.json");
                 if (File.Exists(path)) s.Level[area] = Migrate(ParseObject(path), "halves");
+                path = Path.Combine(dir, "props.json");
+                if (File.Exists(path)) s.Props[area] = Migrate(ParseObject(path), "props");
             }
         return s;
     }
@@ -126,6 +130,7 @@ public static partial class Pack
         if (collection == "textures" && doc["textures"] is not JsonArray) doc["textures"] = new JsonArray();
         if (collection == "records" && doc["records"] is not JsonArray) doc["records"] = new JsonArray();
         if (collection == "halves" && doc["halves"] is not JsonArray) doc["halves"] = new JsonArray();
+        if (collection == "props" && doc["props"] is not JsonArray) doc["props"] = new JsonArray();
         return doc;
     }
 
@@ -146,6 +151,7 @@ public static partial class Pack
             WriteAreaDocs(_set.Lights, LightsPath);
             WriteAreaDocs(_set.Atmosphere, AtmospherePath);
             WriteAreaDocs(_set.Level, LevelPath);
+            WriteAreaDocs(_set.Props, PropsPath);
             Dirty = false;
             LastError = null;
             SavedAt = DateTime.Now;
@@ -421,7 +427,7 @@ public static partial class Pack
 
     /// <summary>The areas the pack holds documents for.</summary>
     public static IEnumerable<int> Areas()
-        => _set.Surfaces.Keys.Union(_set.Lights.Keys).Union(_set.Atmosphere.Keys).Union(_set.Level.Keys).Order();
+        => _set.Surfaces.Keys.Union(_set.Lights.Keys).Union(_set.Atmosphere.Keys).Union(_set.Level.Keys).Union(_set.Props.Keys).Order();
 
     /// <summary>The fingerprint an area's documents were authored against, or null. Each
     /// document carries its own; the first that names one answers.</summary>
