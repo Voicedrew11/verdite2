@@ -117,7 +117,7 @@ public static class PatchSettings
     /// stack up duplicates.
     ///
     /// The list is kept in <see cref="IPatchPage.Order"/> order, ties broken by
-    /// title, so the order the pages are registered in below carries no meaning —
+    /// title and then id, so the order the pages are registered in below carries no meaning —
     /// keep it matching the drawn order anyway, so the file reads as the pane does.
     /// </summary>
     public static void Register(string sectionId, IPatchPage page)
@@ -141,9 +141,9 @@ public static class PatchSettings
 
         list.RemoveAll(p => p.Id == page.Id);
         list.Add(page);
-        list.Sort((a, b) => a.Order != b.Order
-            ? a.Order.CompareTo(b.Order)
-            : string.Compare(a.Title, b.Title, StringComparison.Ordinal));
+        list.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order)
+            : a.Title != b.Title ? string.Compare(a.Title, b.Title, StringComparison.Ordinal)
+            : string.Compare(a.Id, b.Id, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -195,6 +195,7 @@ public static class PatchSettings
         Register("display", new PerPixelLightingPage());
         Register("display", new EvenFogPage());
         Register("display", new ZBufferPage());
+        Register("display", new DistancePage());
         Register("display", new ReflectionsPage());
         Register("display", new RemasterPage());
         Register("display", new RemasterPacksPage());

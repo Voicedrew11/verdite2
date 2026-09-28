@@ -276,8 +276,9 @@ public static class RetainedScene
         public bool SortedValid;
         public readonly float[] Planes = new float[MaxPlanes];
         public int PlaneCount;
-        /// <summary>1 for each map half the frame's own tile walk drew, by
-        /// <c>(tile Z * 80 + tile X) * 2 + upper</c>.</summary>
+        /// <summary>Each map half's weight in the reflections, by
+        /// <c>(tile Z * 80 + tile X) * 2 + upper</c>: 255 for one the frame's own
+        /// tile walk drew, unless the port weighs them (<see cref="CurrentHalves"/>).</summary>
         public readonly byte[] Halves = new byte[HalvesW * HalvesH];
 
         public ReadOnlySpan<Vertex> SortedDynamic()
@@ -316,12 +317,17 @@ public static class RetainedScene
         Array.Clear(f.Halves);
     }
 
-    /// <summary>A map half the current frame's walk drew.</summary>
+    /// <summary>A map half the current frame's walk drew, at full weight.</summary>
     public static void NoteHalf(int tx, int tz, int upper)
     {
         var f = Current;
-        if (f.Serial == _serial && (uint)tx < 80u && (uint)tz < 80u) f.Halves[(tz * 80 + tx) * 2 + upper] = 1;
+        if (f.Serial == _serial && (uint)tx < 80u && (uint)tz < 80u) f.Halves[(tz * 80 + tx) * 2 + upper] = 255;
     }
+
+    /// <summary>The current frame's halves, for a port that weighs them itself: 0
+    /// is not reflected, 255 fully, and between is dithered (the world program's
+    /// <c>vFade</c>). Empty outside a frame.</summary>
+    public static Span<byte> CurrentHalves => Current.Serial == _serial ? Current.Halves : Span<byte>.Empty;
 
     /// <summary>One model's triangles, in world space, to the current frame.</summary>
     public static void AddDynamic(ReadOnlySpan<Vertex> tris)

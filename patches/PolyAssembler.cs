@@ -900,12 +900,17 @@ public static partial class PolyAssembler
         return front;
     }
 
-    /// <summary>A fixed bias, and a slot out of range is dropped rather than clamped.
-    /// The packet is still allocated.</summary>
+    /// <summary>A fixed bias, and a slot out of range is dropped rather than clamped,
+    /// unless the render distance has drawn past it. The packet is still allocated.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static void Place(ref Frame fr, uint otz, uint pkt)
     {
-        if (otz >= 0x2000u) return;
+        if (otz >= 0x2000u)
+        {
+            if (!RenderDistance.Any) return;
+            otz = 0x1FFEu;
+            RenderDistance.Clamped();
+        }
         AddPrim(fr.Mem, (fr.Hoisted ? fr.Ot : fr.Mem.ReadU32(OtBase)) + (otz << 2), pkt);
     }
 

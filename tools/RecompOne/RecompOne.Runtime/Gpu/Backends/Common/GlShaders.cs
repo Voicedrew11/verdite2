@@ -196,6 +196,8 @@ internal static class GlShaders
         uniform float uBias;
         uniform float uMaxDepth;
         uniform int   uSamples;
+        // 0083. Past this view depth the surface is left as the game drew it.
+        uniform float uPlainZ;
 
         // 0059. The area's floor plan, and the transform that reaches it. uViewR is
         // the game's own world-to-view rotation uploaded untransposed, which GLSL
@@ -345,6 +347,8 @@ internal static class GlShaders
 
             vec3 p = viewAt(vUv, d);
             if (p.z > uMaxDepth) { oColor = vec4(1.0, 0.0, 0.0, 0.0); return; }
+            float plain = uPlainZ > 0.0 ? smoothstep(uPlainZ - 2048.0, uPlainZ, p.z) : 0.0;
+            if (plain >= 1.0) { oColor = vec4(1.0, 1.0, 0.0, 0.0); return; }
 
             // 0058. The polygon's own plane, where the frame's geometry reached
             // this pixel. It is exact and constant across a face, where the
@@ -415,6 +419,7 @@ internal static class GlShaders
             // 0059. The room the surface is in, on top of the picture it is in.
             if (uWorldOn > 0.5)
                 ao *= 1.0 - uWorldStrength * clamp(worldOcclusion(p, n, a0), 0.0, 1.0);
+            ao = mix(ao, 1.0, plain);
             oColor = vec4(clamp(ao, 0.0, 1.0), 1.0, geo, clamp(disagree, 0.0, 1.0));
         }
         """;
@@ -673,6 +678,8 @@ internal static class GlShaders
         // Murk: water thickens towards its colour with the distance the view ray
         // runs through it, surface to the opaque floor behind. 0 is off.
         uniform float uMurkDist;
+        // 0083. Past this view depth the surface is left as the game drew it.
+        uniform float uPlainZ;
         uniform vec3  uMurkColor;
         // SurfaceMaterial's table, by id: row 0 is reflectivity, F0 and roughness.
         uniform sampler2D uMatTable;
@@ -989,6 +996,10 @@ internal static class GlShaders
 
             float zs = s.b * FAR;
             if (zs <= 1.0) return;
+            if (uPlainZ > 0.0) {
+                gShare *= 1.0 - smoothstep(uPlainZ - 2048.0, uPlainZ, zs);
+                if (gShare <= 0.0) return;
+            }
             // With the Z-buffer on, visibility is the depth test's and not the
             // order's, so a surface redrawn last may still be behind the opaque
             // one the picture shows. The picture is the authority.
@@ -1233,6 +1244,9 @@ internal static class GlShaders
         flat out uint vLight;
         flat out uvec2 vTex;
         flat out uint vMat;
+        // 0072, amended. A half's weight in the gate, faded in and out by the port;
+        // PrimFs dithers it away. 1 for everything the gate does not weigh.
+        flat out float vFade;
 
         uniform mat3  uR;
         uniform vec3  uCam;
@@ -1265,9 +1279,12 @@ internal static class GlShaders
 
         void main() {
             uint hid = (inFlags >> 13) & 0x3FFFu;
+            vFade = 1.0;
             if (uHalfGate != 0) {
-                bool drawn = hid == 0u
-                    || texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r != 0u;
+                uint weight = hid == 0u ? 255u
+                    : texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r;
+                bool drawn = weight != 0u;
+                if (uHalfGate == 1) vFade = float(weight) / 255.0;
                 if (drawn != (uHalfGate == 1)) {
                     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
                     gl_ClipDistance[0] = -1.0;
@@ -1362,6 +1379,7 @@ internal static class GlShaders
         flat out uint vLight;
         flat out uvec2 vTex;
         flat out uint vMat;
+        flat out float vFade;
 
         uniform vec2 uVertexOffset;
         uniform vec2 uPosBias;
@@ -1393,6 +1411,7 @@ internal static class GlShaders
             vLight = inLight;
             vTex = inTex;
             vMat = inMat;
+            vFade = 1.0;
             vDither = (inTexpage >> 10) & 1;
             vRepClut = (inTexpage >> 12) & 1;
 
@@ -1428,6 +1447,7 @@ internal static class GlShaders
         flat in uint vLight;
         flat in uvec2 vTex;
         flat in uint vMat;
+        flat in float vFade;
 
         layout(location = 0, index = 0) out vec4 FragColor;
         layout(location = 0, index = 1) out vec4 BlendColor;
@@ -1534,6 +1554,10 @@ internal static class GlShaders
         uniform vec3  uAtmosColour;
         uniform vec2  uAtmosShape;
         uniform int   uAtmosSkip;
+        // 0083. The view depth past which the port's enhancements give way to the
+        // game's own look, over the tile before it; 0 is everywhere enhanced.
+        uniform float uPlainZ;
+        float gPlain = 0.0;
         // The fog's share of the colour, added past the texture: the lit colour was
         // darkened by the same weight, so the two make a mix towards the fog.
         vec3 gFog8 = vec3(0.0);
@@ -1814,7 +1838,16 @@ internal static class GlShaders
                 lit += vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u)) * extra;
             float w = cueWeight();
             if (uAtmosOn != 0) gFog8 = uAtmosColour * clamp(w / 4096.0, 0.0, 1.0);
-            return ivec3(clamp(floor(lit * (1.0 - w / 4096.0)), 0.0, 255.0));
+            vec3 pp = clamp(floor(lit * (1.0 - w / 4096.0)), 0.0, 255.0);
+            // 0083. Past the distance, the corner colours the game lit, with the
+            // glow a material adds before the cue still added.
+            if (gPlain > 0.0) {
+                vec3 gc = vColor.rgb * 255.0 + 0.5;
+                if (uEmitOn != 0)
+                    gc += floor(vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u)) * extra * (1.0 - w / 4096.0));
+                pp = mix(pp, clamp(floor(gc), 0.0, 255.0), gPlain);
+            }
+            return ivec3(pp);
         }
 
         uniform float uTrueColor;
@@ -1849,6 +1882,14 @@ internal static class GlShaders
                 vec3 cp = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (cz / uClipH), cz);
                 if (dot(uClipPlane.xyz, cp) + uClipPlane.w < 0.0) discard;
             }
+            // 0072, amended. A half fading in or out of a reflection: an ordered
+            // dither, so it needs no blending and keeps its depth.
+            if (vFade < 1.0) {
+                ivec2 fp = ivec2(gl_FragCoord.xy) & 3;
+                if ((float(ditherTbl[fp.y * 4 + fp.x] + 4) + 0.5) / 8.0 > vFade) discard;
+            }
+            if (uPlainZ > 0.0 && vDepth > 0.0)
+                gPlain = smoothstep(uPlainZ - 2048.0, uPlainZ, vDepth * 65536.0);
             if (uMaskOn != 0) {
                 vec2 mq = gl_FragCoord.xy / float(uScale);
                 float mz = texture(uMaskSurface, mq / uMaskSize).b * 65536.0;
@@ -1862,7 +1903,10 @@ internal static class GlShaders
             vec4 m0 = mat ? texelFetch(uMatTable, ivec2(int(vMat), 0), 0) : vec4(0.0);
             float spec = mat ? texelFetch(uMatTable, ivec2(int(vMat), 2), 0).r : 0.0;
             vec3 hi = vec3(0.0);
-            if (uLightN > 0 && uClipOn == 0) extra = authored(spec, m0.b, hi);
+            if (uLightN > 0 && uClipOn == 0 && gPlain < 1.0) {
+                extra = authored(spec, m0.b, hi) * (1.0 - gPlain);
+                hi *= 1.0 - gPlain;
+            }
             // A surface's own glow needs no position, so it is in a planar
             // reflection too. Additive: RGBC times the glow, fogged as the lit
             // colour is, then added past the texture so a dark texel lights too.
@@ -1923,7 +1967,7 @@ internal static class GlShaders
                     float len = uWaveParams.y;
                     float fw = max(length(wx), length(wy));
                     float fade = 1.0 - smoothstep(len * 0.03, len * 0.09, fw);
-                    vec2 sl = waveSlope(wp.xz, len) * fade;
+                    vec2 sl = waveSlope(wp.xz, len) * fade * (1.0 - gPlain);
                     // The inverse of [wx wy], then the UV's own derivatives.
                     vec2 push = sl * uWaveParams.x;
                     vec2 sp = vec2(wy.y * push.x - wy.x * push.y, -wx.y * push.x + wx.x * push.y) / det;
@@ -1963,7 +2007,8 @@ internal static class GlShaders
             // rectangle (0060), since past it is other art read through this CLUT.
             // 0073. A replaced CLUT keeps the anisotropic taps (each decodes through it), not
             // the mip atlas, which was decoded through the game's CLUT.
-            if ((uAniso > 1.5 || (uMipOn > 0.5 && vRepClut == 0))
+            vec3 rawTexel = texel.rgb;
+            if ((uAniso > 1.5 || (uMipOn > 0.5 && vRepClut == 0)) && gPlain < 1.0
                     && !(texel.rgb == vec3(0.0) && texel.a < 0.5)) {
                 bool hasRect = (vTex.y & 0x80000000u) != 0u;
                 ivec2 rMin = hasRect ? ivec2(int(vTex.x & 255u), int((vTex.x >> 8) & 255u)) : ivec2(0);
@@ -2007,6 +2052,8 @@ internal static class GlShaders
                         if (solid > 0.0) texel = vec4(sum / solid, texel.a);
                     }
                 }
+                // 0083. Fading to the console's one texel.
+                if (gPlain > 0.0) texel.rgb = mix(texel.rgb, rawTexel, gPlain);
             }
 
             // 0078. A transparent texel is black, and stays so.

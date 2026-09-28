@@ -82,6 +82,8 @@ KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the 
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
 KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
 KF2_WIDESCREEN_CULL_PROBE=3              # also rebuild the stock grid each frame: stock tiles missing from the widened one (must be 0)
+KF2_RENDERDIST=13.5                      # draw the map past the game's 24x24 window, to this many tiles (10.5, the game's, is off; 15 at most)
+KF2_RENDERDIST_PROBE=1                   # a line every 2 s: cells added, walked, model queries let through, packets clamped to the table's end; =2 adds the grid round the camera as ASCII
 KF2_PRIMBUF=1                            # the game's primitive buffers where it put them (moved above 2 MB, 4x as large, by default; =N for N x)
 KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, capacity, overflows
 KF2_RAMSIZE=8                            # guest RAM in MB, at least what the buffers need (4 by default, 2 with KF2_PRIMBUF=1)
@@ -156,6 +158,7 @@ KF2_ZBUFFER_SOURCE=map                 # depth from the address map, not the ass
 KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  # coplanar tolerance on the test: SZ units, and pixels of depth slope; 0 0 is exact (0051)
 KF2_BLENDORDER=0                       # blended surfaces (water) in table order again, painted over by opaque geometry behind them that the table put later (drawn after it by default, 0079)
 KF2_BLENDORDER_PROBE=1                 # a line every 2 s: packets held and passed, and opaque samples drawn behind a nearer translucent one, models and tiles
+KF2_ENHANCEDIST=8                      # past this many tiles of view depth, the game's own look: no per-pixel lighting, authored lights, filtering, ripples, occlusion or reflections (0, everywhere enhanced, by default; 0083)
 KF2_AO=0                               # ambient occlusion off (on by default; GL backend only)
 KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
 KF2_AO_QUALITY=low                     # low (1x, 8 samples), medium (2x, the default), high (the render scale)
@@ -186,6 +189,8 @@ KF2_RETAINED_PLANAR=0 KF2_RETAINED_CUBE=0   # leave out its planes, or its camer
 KF2_RETAINED_CUBESIZE=256              # a cubemap face's size in pixels
 KF2_RETAINED_CULL=0                    # draw the faces a mirror or a cube face sees from behind (culled by default, as the game culls them)
 KF2_RETAINED_GATE=0                    # reflect every map half, not only those the frame's own tile walk drew
+KF2_REFLECT_REACH=2                    # what the reflections may show grown past the camera's cull by this many cells, held 0.75 s and faded (0, the frame's own, by default)
+KF2_REFLECT_REACH_PROBE=1              # a line every 2 s: halves drawn, grown, held after leaving, fading, extra tiles, model queries let through, halves that entered inside the view and the nearest's depth
 KF2_RETAINED_PROBE=1                   # the mesh and its check against the GTE's own vertices, the planes, GPU time per draw, chunks culled, and (with KF2_SSR_PROBE=1) the planar-vs-cubemap agreement
 KF2_RETAINED_LIT=0                     # leave authored lights and glows out of the reflections (in by default)
 KF2_RETAINED_MIPS=0                    # no mip atlas in the reflections, only the anisotropic taps (on by default)

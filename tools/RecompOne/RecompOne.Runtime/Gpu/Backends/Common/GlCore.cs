@@ -127,6 +127,7 @@ public sealed partial class GlCore : IGpuBackend
     bool _texAttribs;
     GlTexCache? _mip;
     int _uMipOn;
+    int _uPlainZ, _uAoPlainZ, _uSsrPlainZ;
     // The last lookup, since a quad asks twice.
     uint _mipLastRect, _mipLastEntry;
     int _mipLastTPage = -1, _mipLastClut, _mipLastClock;
@@ -221,6 +222,7 @@ public sealed partial class GlCore : IGpuBackend
         _uTrueColor = _gl.GetUniformLocation(_progPrim, "uTrueColor");
         _uAniso = _gl.GetUniformLocation(_progPrim, "uAniso");
         _uMipOn = _gl.GetUniformLocation(_progPrim, "uMipOn");
+        _uPlainZ = _gl.GetUniformLocation(_progPrim, "uPlainZ");
         _uFluidN = _gl.GetUniformLocation(_progPrim, "uFluidN");
         for (int i = 0; i < 8; i++)
         {
@@ -334,6 +336,7 @@ public sealed partial class GlCore : IGpuBackend
                 _uAoStrength = _gl.GetUniformLocation(_progAo, "uStrength");
                 _uAoBias = _gl.GetUniformLocation(_progAo, "uBias");
                 _uAoMaxDepth = _gl.GetUniformLocation(_progAo, "uMaxDepth");
+                _uAoPlainZ = _gl.GetUniformLocation(_progAo, "uPlainZ");
                 _uAoSamples = _gl.GetUniformLocation(_progAo, "uSamples");
                 _uAoNormalOn = _gl.GetUniformLocation(_progAo, "uNormalOn");
                 _uAoNormalCompare = _gl.GetUniformLocation(_progAo, "uNormalCompare");
@@ -409,6 +412,7 @@ public sealed partial class GlCore : IGpuBackend
                 _uSsrSky = _gl.GetUniformLocation(_progSsr, "uSky");
                 _uSsrMarchOn = _gl.GetUniformLocation(_progSsr, "uMarchOn");
                 _uSsrMurkDist = _gl.GetUniformLocation(_progSsr, "uMurkDist");
+                _uSsrPlainZ = _gl.GetUniformLocation(_progSsr, "uPlainZ");
                 _uSsrMurkColor = _gl.GetUniformLocation(_progSsr, "uMurkColor");
                 _uSsrSteps = _gl.GetUniformLocation(_progSsr, "uSteps");
                 _uSsrDqa = _gl.GetUniformLocation(_progSsr, "uDqa");
@@ -1846,6 +1850,9 @@ public sealed partial class GlCore : IGpuBackend
         GteDepth.AnisotropyLive = _uAniso >= 0;
         if (_uAniso >= 0) _gl.Uniform1(_uAniso, (float)GteDepth.Anisotropy);
         if (_uMipOn >= 0) _gl.Uniform1(_uMipOn, GteDepth.Mipmaps && _mip != null ? 1f : 0f);
+        // 0083.
+        GteDepth.PlainDepthLive = _uPlainZ >= 0;
+        if (_uPlainZ >= 0) _gl.Uniform1(_uPlainZ, GteDepth.PlainDepth);
         if (_mip != null && _texFilled > 0)
         {
             _gl.ActiveTexture(TextureUnit.Texture5);
@@ -2616,6 +2623,7 @@ public sealed partial class GlCore : IGpuBackend
         if (_uAoStrength >= 0) _gl.Uniform1(_uAoStrength, GteDepth.AoStrength);
         if (_uAoBias >= 0) _gl.Uniform1(_uAoBias, GteDepth.AoBias);
         if (_uAoMaxDepth >= 0) _gl.Uniform1(_uAoMaxDepth, GteDepth.AoMaxDepth);
+        if (_uAoPlainZ >= 0) _gl.Uniform1(_uAoPlainZ, GteDepth.PlainDepth);
         if (_uAoSamples >= 0) _gl.Uniform1(_uAoSamples, Math.Clamp(GteDepth.AoSamples, 1, 64));
         if (_uAoNormalOn >= 0) _gl.Uniform1(_uAoNormalOn, normals ? 1f : 0f);
         // Only the frame the census reads back pays for the second reconstruction.
@@ -2833,6 +2841,7 @@ public sealed partial class GlCore : IGpuBackend
         // Each term on its own switch: the pass runs for any of them.
         if (_uSsrMarchOn >= 0) _gl.Uniform1(_uSsrMarchOn, ScreenReflections.Enabled ? 1 : 0);
         if (_uSsrMurkDist >= 0) _gl.Uniform1(_uSsrMurkDist, WaterMurk.Enabled ? Math.Max(1f, WaterMurk.Distance) : 0f);
+        if (_uSsrPlainZ >= 0) _gl.Uniform1(_uSsrPlainZ, GteDepth.PlainDepth);
         if (_uSsrMurkColor >= 0) _gl.Uniform3(_uSsrMurkColor, WaterMurk.R, WaterMurk.G, WaterMurk.B);
         if (_uSsrSteps >= 0) _gl.Uniform1(_uSsrSteps, Math.Clamp(ScreenReflections.Steps, 1, 128));
         if (_uSsrDqa >= 0) _gl.Uniform1(_uSsrDqa, (float)GteDepth.ProjDqa);

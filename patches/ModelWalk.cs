@@ -359,6 +359,7 @@ public static class ModelWalk
                 c.A1 = 3u;
                 c.RA = 0x800333F8u;
                 KingsField2.func_80032DE8(c, mem);
+                if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Box(mem, rec + 0x2Cu, 3u) | ReflectionReach.Box(mem, rec + 0x2Cu, 3u);
                 if ((c.V0 & mem.ReadU8(rec + 3u)) == 0u) continue;
             }
             else
@@ -366,6 +367,7 @@ public static class ModelWalk
                 c.A0 = rec + 0x2Cu;
                 c.RA = 0x80033268u;
                 KingsField2.func_80032D78(c, mem);
+                if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 0x2Cu) | ReflectionReach.Point(mem, rec + 0x2Cu);
                 if ((c.V0 & mask) == 0u) continue;
             }
 
@@ -497,6 +499,7 @@ public static class ModelWalk
             c.A1 = mem.ReadU8(def + 0xCu);
             c.RA = 0x80033900u;
             KingsField2.func_80032DE8(c, mem);
+            if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Box(mem, rec + 0x14u, mem.ReadU8(def + 0xCu)) | ReflectionReach.Box(mem, rec + 0x14u, mem.ReadU8(def + 0xCu));
             seen = c.V0;
         }
         else
@@ -504,6 +507,7 @@ public static class ModelWalk
             c.A0 = rec + 0x14u;
             c.RA = 0x800337A8u;
             KingsField2.func_80032D78(c, mem);
+            if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 0x14u) | ReflectionReach.Point(mem, rec + 0x14u);
             seen = c.V0;
         }
         if ((seen & mem.ReadU8(rec)) == 0u) return;
@@ -633,6 +637,7 @@ public static class ModelWalk
                 c.A0 = rec + 0x14u;
                 c.RA = 0x800339C8u;
                 KingsField2.func_80032D78(c, mem);
+                if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 0x14u) | ReflectionReach.Point(mem, rec + 0x14u);
                 if ((c.V0 & mem.ReadU8(rec + 0xAu)) == 0u) continue;
             }
 
@@ -696,6 +701,7 @@ public static class ModelWalk
             c.A0 = rec + 8u;
             c.RA = 0x80033BDCu;
             KingsField2.func_80032D78(c, mem);
+            if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 8u) | ReflectionReach.Point(mem, rec + 8u);
             uint mask = mem.ReadU8(rec + 2u);
             if ((c.V0 & mask) != 0u)
             {

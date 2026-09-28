@@ -1206,6 +1206,32 @@ Kf2.CullGrid.Configure(Environment.GetEnvironmentVariable("KF2_CULLGRID"),
                        Environment.GetEnvironmentVariable("KF2_CULLGRID_COMPARE"));
 Kf2.CullGrid.Install();
 
+// The map drawn past the game's 24x24 window: the cone carried further, the flood
+// continued outward from what the game lit (Video ▸ Experimental ▸ Render distance).
+// See "Render distance" in docs/WIDESCREEN.md.
+//
+//     KF2_RENDERDIST=13.5       the far edge in tiles; 10.5 is the game's
+//     KF2_RENDERDIST_PROBE=1    cells added, walked, models let through, packets clamped
+Kf2.RenderDistance.Configure(Environment.GetEnvironmentVariable("KF2_RENDERDIST"),
+                             Environment.GetEnvironmentVariable("KF2_RENDERDIST_PROBE"));
+Kf2.RenderDistance.Install();
+
+// How far the enhancements reach; past it the game's own look (0083).
+//
+//     KF2_ENHANCEDIST=8         tiles of view depth; 0 everywhere
+Kf2.EnhancementDistance.Configure(Environment.GetEnvironmentVariable("KF2_ENHANCEDIST"));
+Kf2.EnhancementDistance.Install();
+
+// What the reflections may show: the frame's halves grown past the camera's cull and
+// held over time, so what the mirror sees and the eye does not stops popping in.
+// See "The reflections see past the camera's cull" in docs/RENDERING.md.
+//
+//     KF2_REFLECT_REACH=2         cells to grow by; 0 the frame's own
+//     KF2_REFLECT_REACH_PROBE=1   halves drawn, grown, held, fading, models let through
+Kf2.ReflectionReach.Configure(Environment.GetEnvironmentVariable("KF2_REFLECT_REACH"),
+                              Environment.GetEnvironmentVariable("KF2_REFLECT_REACH_PROBE"));
+Kf2.ReflectionReach.Install();
+
 // The frame's primitive buffers. The game hands out 0x19000 bytes a frame -- 1969
 // POLY_GT4 packets -- and its assemblers abandon the rest of the frame when the bump
 // passes the end, which a widened cull cone reaches. The port moves them above 2 MB

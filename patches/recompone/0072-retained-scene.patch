@@ -2105,3 +2105,66 @@ diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/Reco
      // ---- the static map ----------------------------------------------------------
  
      static Vertex[] _static = [];
+
+diff --git a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index f332000..4ffa372 100644
+--- a/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -1235,2 +1246,5 @@ internal static class GlShaders
+         flat out uint vMat;
++        // 0072, amended. A half's weight in the gate, faded in and out by the port;
++        // PrimFs dithers it away. 1 for everything the gate does not weigh.
++        flat out float vFade;
+ 
+@@ -1267,5 +1281,8 @@ internal static class GlShaders
+             uint hid = (inFlags >> 13) & 0x3FFFu;
++            vFade = 1.0;
+             if (uHalfGate != 0) {
+-                bool drawn = hid == 0u
+-                    || texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r != 0u;
++                uint weight = hid == 0u ? 255u
++                    : texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r;
++                bool drawn = weight != 0u;
++                if (uHalfGate == 1) vFade = float(weight) / 255.0;
+                 if (drawn != (uHalfGate == 1)) {
+@@ -1364,2 +1381,3 @@ internal static class GlShaders
+         flat out uint vMat;
++        flat out float vFade;
+ 
+@@ -1395,2 +1413,3 @@ internal static class GlShaders
+             vMat = inMat;
++            vFade = 1.0;
+             vDither = (inTexpage >> 10) & 1;
+@@ -1430,2 +1449,3 @@ internal static class GlShaders
+         flat in uint vMat;
++        flat in float vFade;
+ 
+diff --git a/RecompOne.Runtime/Gpu/RetainedScene.cs b/RecompOne.Runtime/Gpu/RetainedScene.cs
+index a61c861..9f70ef3 100644
+--- a/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -278,4 +278,5 @@ public static class RetainedScene
+         public int PlaneCount;
+-        /// <summary>1 for each map half the frame's own tile walk drew, by
+-        /// <c>(tile Z * 80 + tile X) * 2 + upper</c>.</summary>
++        /// <summary>Each map half's weight in the reflections, by
++        /// <c>(tile Z * 80 + tile X) * 2 + upper</c>: 255 for one the frame's own
++        /// tile walk drew, unless the port weighs them (<see cref="CurrentHalves"/>).</summary>
+         public readonly byte[] Halves = new byte[HalvesW * HalvesH];
+@@ -318,3 +319,3 @@ public static class RetainedScene
+ 
+-    /// <summary>A map half the current frame's walk drew.</summary>
++    /// <summary>A map half the current frame's walk drew, at full weight.</summary>
+     public static void NoteHalf(int tx, int tz, int upper)
+@@ -322,5 +323,10 @@ public static class RetainedScene
+         var f = Current;
+-        if (f.Serial == _serial && (uint)tx < 80u && (uint)tz < 80u) f.Halves[(tz * 80 + tx) * 2 + upper] = 1;
++        if (f.Serial == _serial && (uint)tx < 80u && (uint)tz < 80u) f.Halves[(tz * 80 + tx) * 2 + upper] = 255;
+     }
+ 
++    /// <summary>The current frame's halves, for a port that weighs them itself: 0
++    /// is not reflected, 255 fully, and between is dithered (the world program's
++    /// <c>vFade</c>). Empty outside a frame.</summary>
++    public static Span<byte> CurrentHalves => Current.Serial == _serial ? Current.Halves : Span<byte>.Empty;
++
+     /// <summary>One model's triangles, in world space, to the current frame.</summary>

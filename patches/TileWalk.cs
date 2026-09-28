@@ -207,7 +207,7 @@ public static class TileWalk
         mem.WriteU32(sp + 0x10u, c.S0);
 
         if (Remaster.Faces.Recording) Remaster.Faces.FrameStart();
-        if (!PlanarWalk.Mirroring) { RetainedMap.AtWalk(c, mem); Waves.AtWalk(c, mem); }
+        if (!PlanarWalk.Mirroring) { RetainedMap.AtWalk(c, mem); Waves.AtWalk(c, mem); RenderDistance.Build(mem); }
         c.A0 = 0u;
         c.RA = 0x80031CBCu;
         KingsField2.func_8002E190(c, mem);
@@ -248,6 +248,9 @@ public static class TileWalk
             else cell += GridSpan;
             z++;
         }
+        if (RenderDistance.Any) RenderDistance.Walk(c, mem);
+        if (PlanarWalk.Mirroring) { if (ReflectionReach.Any) ReflectionReach.WalkMirror(c, mem); }
+        else { RenderDistance.Report(); ReflectionReach.Build(mem); }
 
         c.RA = mem.ReadU32(sp + 0x28u);
         c.S5 = mem.ReadU32(sp + 0x24u);
@@ -392,11 +395,14 @@ public static class TileWalk
 
         uint model = mem.ReadU8(rec);
         if (Beyond(mem, model)) { _skipped++; Epilogue(c, mem, sp); return; }
-        // What the frame drew is what its reflections may show (RetainedScene.HalfGate).
-        if (RetainedMap.Ready && !PlanarWalk.Mirroring)
+        // What the frame drew is what its reflections may show (RetainedScene.HalfGate),
+        // grown and held by ReflectionReach.
+        if (!PlanarWalk.Mirroring)
         {
             uint off = rec - MapBase;
-            RetainedScene.NoteHalf((int)(off % 800u / 10u), (int)(off / 800u), (int)(off % 10u / 5u));
+            int hx = (int)(off % 800u / 10u), hz = (int)(off / 800u), hu = (int)(off % 10u / 5u);
+            if (RetainedMap.Ready) RetainedScene.NoteHalf(hx, hz, hu);
+            ReflectionReach.NoteDrawn(hx, hz, hu);
         }
 
         // The half being assembled, for whatever the assemblers record per packet.

@@ -265,6 +265,8 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - The first intro movie never reached the screen
 - The display list cannot name a face: why packet-level smoothing failed
 - "No textures on the other machine": splitting the three layers
+- The reflections see past the camera's cull
+- The enhancement distance: past it, the game's own look
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 
@@ -281,6 +283,7 @@ Aspect ratio, the HUD and screen-space effects authored 320 wide, and the three 
 - The second cull: a view-space clipper, and it is set to twice the screen
 - Is the 24-tile window worth lifting? Measured: binding, and barely
 - There is a third cull and it is none of the obvious ones
+- Render distance: the game's flood carried past its window
 
 ### [GAME_INTERNALS.md](docs/GAME_INTERNALS.md)
 

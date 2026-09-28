@@ -2517,7 +2517,9 @@ heading 3072) **99.0%** of what the mirror drew was halves the game did not draw
 Everything reflected now is something the game shows from that eye, and appears in
 the reflection in the same frame it appears in the picture. **Judged by eye, 2026-09-26: worse than without the gate**, and kept for now at
 the user's word; `KF2_RETAINED_GATE=0` is the comparison. Why it reads worse is not
-yet known.
+yet known. A likely reason, from play on 2026-09-28: the gate is the eye's cull,
+and the mirror sees places the eye's flood culled, which then pop into the water as
+the eye turns. See "The reflections see past the camera's cull".
 
 And one change of rule: a pixel whose surface lies on a plane but whose planar texel
 is empty (open sky in the mirror) no longer marches the cubemap. The plane's answer
@@ -3964,3 +3966,119 @@ moving (at tile-corner resolution a short swell is faceted, which is why the
 length was first 12000, and the judged default is 6114); whether the rims, held still, look pinned; the ripples'
 strength and shading defaults; and that no crack opens anywhere a water tile meets
 something else.
+
+## The reflections see past the camera's cull
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(`KF2_REFLECT_REACH=<cells>`, or Video ▸ Experimental ▸ *Reflection reach*, 0 to 4,
+under the world and planar reflections). `patches/ReflectionReach.cs`; the world
+program's fade is `0072`, amended.
+
+Reported from play at the `fdat02` shore: the inside of a cavern round the cliff,
+just out of the eye's view, was missing from the water and popped into it as the
+view turned, and a squid close by vanished from it. **A reflection could show only
+what the game drew for the eye.** The retained scene's half gate is the halves the
+frame's tile walk drew ("What the mirror showed that it should not"), its models
+are those the object walk submitted, and the planar walk re-runs the same walk over
+the same grid. The mirror looks from under the water and sees what the game's
+visibility flood culled for the eye: a cell behind the cliff edge, or a creature
+whose one tested cell is dark. When the eye turns and the game starts drawing it,
+it appears in the water at once. That is very likely why the half gate was judged
+worse than no gate: without it those places were there all along, and with it they
+popped.
+
+What the reflections may show is now a set of its own, built after the frame's walk:
+
+- **Grown.** Breadth first from every half the walk drew (the game's cells and the
+  render distance's), to its eight neighbours on the same level, through halves that
+  are drawn at all (model byte below 240), for *Reflection reach* steps. No wall
+  test, which is the point: the cavern is behind one. The other level is never
+  added, so the slab that ungating showed stays out.
+- **Held.** A half stays in the set for 0.75 s after the set loses it.
+- **Faded.** A half entering or leaving fades over 0.3 s. A half the frame drew is
+  at full weight at once, since the picture shows it. The retained scene's gate
+  byte is the weight (0 not reflected, 255 fully; `NoteHalf` writes 255 now), and
+  the world program passes it to `PrimFs` as `vFade`, which drops fragments in the
+  4x4 ordered dither the game's own dither uses (eight levels). It needs no blending
+  and keeps its depth. `PrimVs` writes 1.
+- **Planar.** The mirrored walk walks the set's halves the frame did not draw after
+  its own: within 3 tiles of the camera through the clipped assembler, as the game
+  draws its near tiles, and the rest through the far one. It has no fade, since its
+  packets are drawn as the game's.
+- **Creatures, objects, effects, sprites.** The object walk's six visibility
+  queries OR in the set's level bits at the model's tile, so a model standing in the
+  set is submitted: the retained scene captures it and the planar walk replays it.
+  It is drawn in the picture too, where it was out of view or behind the walls the
+  flood culled it for, which hide it there.
+
+Measured, `fdat02` spawn, world reflections, reach 2, eight headings at 2.5 s each:
+116 to 204 halves grown a frame beyond the 156 to 318 drawn, up to 80 held after
+leaving and 41 fading at once, 1 to 5 model queries let through. Frame work at
+heading 0 is 5.64 ms at reach 0 and 5.52 ms at reach 2 (noise), 144.0 fps drawn at
+20.0 ticks/s, the planes and cubemap 0.29 and 0.29-0.32 ms GPU, no GL errors. Planar
+(`KF2_RETAINED=0 KF2_PLANAR=1`), heading 0: the mirrored walk takes 1.35 ms at reach
+2 against 0.65 ms at 0 (2.15 ms before the far tiles were moved off the clipper),
+arena peak 21,144 bytes. `scripts/light_probe.c` and `scripts/shader_probe.c` print
+what they did before (their vertex shaders write `vFade` 1). The retained probe
+(`KF2_RETAINED_PROBE=1`) costs about a third of the frame rate by itself, so it is
+not the place to read the frame rate from.
+
+**Not judged by eye**: whether the cavern and the squid now stay in the water as the
+view turns, whether the dither reads as a fade at the render scale, and whether
+anything shows in the water that the reach should not have added.
+
+**Past the placing limit.** A tile is placed by an s16 offset from the camera, so
+nothing past 15 tiles on an axis can be drawn (`RenderDistance.Reach`). With a
+render distance of 15 and a reach of 4 the set grew to 19, and the mirrored walk
+placed those tiles wrapped round, on the far side of the camera. The grow stops at
+the limit now, and `WalkMirror` skips a held tile the camera has moved away from.
+
+**Where halves still enter.** The probe counts halves that join the set inside the
+eye's own cone (`entered inside the view`, and the nearest's depth), since those
+are the ones the mirror may already be showing. `fdat02`, reach 4, render distance
+15, a four-second turn: about 20 a second while turning, none at rest, **the
+nearest 8.8 to 10.8 tiles deep**, all of them at the draw distance's far edge,
+where the picture's own tiles come and go. Tried and taken back: growing through
+the whole view cone to the draw distance rather than by steps, which let more in
+(29 inside 12 tiles against 22) at more cost in the mirrored walk. **So what pops
+nearer than that is not the set**, as far as a counter can see, and needs saying
+what it is: geometry or a creature, near or far, turning or walking.
+
+## The enhancement distance: past it, the game's own look
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(`KF2_ENHANCEDIST=<tiles>`, or Video ▸ Experimental ▸ *Enhancement distance*, 2 to
+16 tiles, the top reading as everywhere). `patches/EnhancementDistance.cs` sets
+`GteDepth.PlainDepth` (`0083`).
+
+Past a view depth, a surface is drawn as the console drew it. The cut is by the
+recovered depth, so it is the same measure the fog uses, faded in over the 2048
+units before it:
+
+- `PrimFs`: per-pixel lighting gives way to the packet's corner colours (`vColor`,
+  which the GTE lit), keeping a material's lit-mode glow. Authored lights and their
+  highlight fade out. The anisotropic taps and the mip footprint fade to the
+  console's one texel, and the ripple's slope to nothing.
+- `AoFs`: the occlusion fades to 1.
+- `SsrFs`: the whole output, reflection and murk, fades by `gShare`.
+
+Kept, because they correct the picture rather than add to it: perspective,
+sub-pixel positions and the depth test. A packet with no recovered depth (2D, the
+HUD) is never cut. The fog colour a remaster adds (`gFog8`) is kept, since that is
+the area's look. Only the core programs read it; the retained world program and the
+GLSL 1.20 path are left unset, which is off.
+
+Measured. `scripts/light_probe.c` gains three passes on pass 2's lit wall at depth
+2000: the cut at 5000 is pass 2 to the bit, the cut at 1000 is the corner colour,
+and the cut at 3024 is the mix, with the lights halved on the lit side. All 0 from
+the formula, and the first 21 passes print the same as the shader at `HEAD`.
+`scripts/shader_probe.c` gains `PLAIN=z`: at 5000 every row is the old one, at 1000
+every `uAniso` and `MIP=1` reads as `uAniso=1`, and at 3024 half. Its output with
+`PLAIN` unset is the same as at `HEAD`. In play at the `fdat02` spawn, heading 2048,
+with the cut at 4 tiles: the occluded share of the picture went from 5.9% to 0.5%,
+and the reflection's mean weight from 0.061 to 0.028. No GL errors. The occlusion
+census reads a cut pixel as a surface with no geometry normal, which is why its
+"lit from a geometry normal" share falls too.
+
+**Not judged by eye**: where the change of look sits, and whether a tile's fade
+reads as a band.

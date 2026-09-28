@@ -139,6 +139,21 @@ public sealed class ReflectionsPage : IPatchPage
           "pt-BR": "A água reflete o que está na tela acima dela, onde nenhum reflexo planar ou do mundo responde. Experimental.",
           "es-419": "El agua refleja lo que está en pantalla por encima de ella, donde ningún reflejo planar o del mundo responde. Experimental."
         },
+        "kf2.reflectreach.label": {
+          "en": "Reflection reach",
+          "pt-BR": "Alcance dos reflexos",
+          "es-419": "Alcance de los reflejos"
+        },
+        "kf2.reflectreach.tooltip": {
+          "en": "How many floor tiles past what the camera sees the reflections may show. A reflection looks from under the water, so it sees places the game hides from you, like the inside of a cave round a corner, and those popped into the water as you turned. With a reach, they are there already, and anything that leaves fades out. Creatures standing there are reflected too. Off is only what the camera sees. Experimental.",
+          "pt-BR": "Quantos ladrilhos do piso além do que a câmera vê os reflexos podem mostrar. Um reflexo olha de baixo da água, então vê lugares que o jogo esconde de você, como o interior de uma caverna depois de uma esquina, e esses surgiam de repente na água quando você virava. Com alcance, eles já estão lá, e o que sai some aos poucos. Criaturas ali também são refletidas. Desligado é só o que a câmera vê. Experimental.",
+          "es-419": "Cuántas baldosas del piso más allá de lo que ve la cámara pueden mostrar los reflejos. Un reflejo mira desde debajo del agua, así que ve lugares que el juego te oculta, como el interior de una cueva a la vuelta de una esquina, y esos aparecían de golpe en el agua al girar. Con alcance, ya están ahí, y lo que sale se desvanece. Las criaturas que están ahí también se reflejan. Apagado es solo lo que ve la cámara. Experimental."
+        },
+        "kf2.reflectreach.off": {
+          "en": "Off",
+          "pt-BR": "Desligado",
+          "es-419": "Apagado"
+        },
         "kf2.ssr.planar.label": {
           "en": "Planar reflections",
           "pt-BR": "Reflexos planares",
@@ -204,6 +219,22 @@ public sealed class ReflectionsPage : IPatchPage
         ImGui.EndDisabled();
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
             ImGui.SetTooltip(Localization.T("kf2.ssr.planar.tooltip"));
+
+        // Only the world and planar reflections draw geometry the reach can add.
+        ImGui.BeginDisabled(!retained && !planar);
+        ImGui.Indent();
+        int reach = ReflectionReach.Reach;
+        string rf = reach == 0 ? Localization.T("kf2.reflectreach.off").Replace("%", "%%") : "%d";
+        if (ImGui.SliderInt(Localization.T("kf2.reflectreach.label"), ref reach, 0, ReflectionReach.Max, rf,
+                            ImGuiSliderFlags.AlwaysClamp))
+        {
+            ReflectionReach.Set(reach);
+            PatchSettings.Set(ReflectionReach.Key, ReflectionReach.Reach);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(Localization.T("kf2.reflectreach.tooltip"));
+        ImGui.Unindent();
+        ImGui.EndDisabled();
 
         bool on = Reflections.Enabled;
         if (ImGui.Checkbox(Localization.T("kf2.ssr.label"), ref on))

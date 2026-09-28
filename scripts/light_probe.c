@@ -53,6 +53,12 @@
 // after the texture (untextured and textured); a curve raises the weight to a power
 // and caps it, darkening and colouring by the same weight; and a batch whose blended
 // texels add skips the colour. See "Phase 5, the second slice" in docs/REMASTER.md.
+//
+// 0083. The enhancement distance, on pass 2's lit wall at depth 2000: the cut well
+// past the wall must be pass 2 to the bit; the cut in front of it leaves the corner
+// colour (vColor, white here) with no authored light; the cut a half-tile behind it
+// is halfway between the two, the lights halved on the lit side. See "The
+// enhancement distance" in docs/RENDERING.md.
 #define GL_GLES_PROTOTYPES 0
 #include <EGL/egl.h>
 #include <GL/gl.h>
@@ -113,7 +119,7 @@ static const char *VS =
 "layout(location=0) in vec2 aPos;\n"
 "noperspective out vec4 vColor; out vec2 vUV; out float vDepth;\n"
 "flat out ivec2 clutBase; flat out ivec2 pageBase; flat out int texMode;\n"
-"flat out int vDither; flat out int vRepClut;\n"
+"flat out int vDither; flat out int vRepClut; flat out float vFade;\n"
 "noperspective out vec3 vLit; noperspective out float vFog; flat out uint vLight; flat out uint vMat; flat out uvec2 vTex;\n"
 "uniform uint uTestLight; uniform vec3 uLit0, uLit1; uniform float uFog0, uFog1; uniform float uTestDepth; uniform uint uTestMat; uniform int uTestTex;\n"
 "void main(){\n"
@@ -121,7 +127,7 @@ static const char *VS =
 "  float t = aPos.x*0.5+0.5;\n"
 "  vLit = mix(uLit0, uLit1, t); vFog = mix(uFog0, uFog1, t); vLight = uTestLight;\n"
 "  vColor = vec4(1.0); vUV = vec2(3.0, 5.0); vDepth = uTestDepth; clutBase = ivec2(0); pageBase = ivec2(0);\n"
-"  texMode = uTestTex != 0 ? 2 : 4; vDither = 0; vRepClut = 0; vMat = uTestMat; vTex = uvec2(0u);\n"
+"  texMode = uTestTex != 0 ? 2 : 4; vDither = 0; vRepClut = 0; vMat = uTestMat; vTex = uvec2(0u); vFade = 1.0;\n"
 "}\n";
 
 #define VH 2
@@ -310,7 +316,9 @@ int main(int argc,char**argv){
    "highlight, untextured","highlight, textured metal","own light skipped","unfogged glow",
    "light 0 shadowed, nothing in the cubemap","light 0 shadowed, left half occluded",
    "fog on, black, the game's curve","fog colour, untextured","fog colour, textured",
-   "fog colour and curve","fog colour, additive batch"};
+   "fog colour and curve","fog colour, additive batch",
+   "enhancement distance past the wall","enhancement distance before the wall","enhancement distance halfway"};
+ GLint uPZ=glGetUniformLocation_(p,"uPlainZ"); if(uPZ<0){printf("no uPlainZ\n");return 2;}
  GLint uAO=glGetUniformLocation_(p,"uAtmosOn"), uAC=glGetUniformLocation_(p,"uAtmosColour");
  GLint uAS=glGetUniformLocation_(p,"uAtmosShape"), uAK=glGetUniformLocation_(p,"uAtmosSkip");
  if(uAO<0||uAC<0||uAS<0||uAK<0){printf("no uAtmos*\n");return 2;}
@@ -330,9 +338,11 @@ int main(int argc,char**argv){
  glUniform1f_(glGetUniformLocation_(p,"uShadowOffset"),1.5f);
  glUniform1f_(glGetUniformLocation_(p,"uShadowBias"),6.f);
  glUniform1f_(glGetUniformLocation_(p,"uShadowSoft"),1.25f);
- for(int pass=0;pass<21;pass++){
+ for(int pass=0;pass<24;pass++){
+ int plainPass=pass>=21;
+ glUniform1f_(uPZ,pass==21?5000.f:pass==22?1000.f:pass==23?DEPTH+1024.f:0.f);
  // 0074. Passes 16-20.
- FOGON=pass>=16; FOGSKIP=pass==20;
+ FOGON=pass>=16&&!plainPass; FOGSKIP=pass==20;
  FOGC[0]=pass==16?0:90; FOGC[1]=pass==16?0:140; FOGC[2]=pass==16?0:200;
  FPOW=pass==19?0.5f:1.f; FMAX=pass==19?0.7f:1.f;
  glUniform1i_(uAO,FOGON); glUniform3f_(uAC,FOGC[0],FOGC[1],FOGC[2]); glUniform2f_(uAS,FPOW,FMAX); glUniform1i_(uAK,FOGSKIP);
@@ -344,14 +354,15 @@ int main(int argc,char**argv){
    glActiveTexture_(0x84C0);
    GLint sh[16]; for(int i=0;i<16;i++) sh[i]=i==0?0:-1; glUniform1iv_(uLS,16,sh);
  }
- int tex=(pass>=6&&pass<=8)||pass==11||pass==18, add=pass==8||pass==9, lit=pass==2||(pass>=10&&pass<=12)||pass==14||pass==15;
- int mat=add?MATADD:pass==10?MATSPEC:pass==11?MATMETAL:pass==12?MATSKIP:pass==13?MATNOFOG:pass>=14?0:pass>=4?MAT:0;
+ int tex=(pass>=6&&pass<=8)||pass==11||pass==18, add=pass==8||pass==9, lit=pass==2||(pass>=10&&pass<=12)||pass==14||pass==15||plainPass;
+ int mat=plainPass?0:add?MATADD:pass==10?MATSPEC:pass==11?MATMETAL:pass==12?MATSKIP:pass==13?MATNOFOG:pass>=14?0:pass>=4?MAT:0;
  // Light 0 names material 10 only in pass 12.
  LDIR[3]=pass==12?-2.f-MATSKIP:-2.f;
  glUniform4fv_(glGetUniformLocation_(p,"uLightDir"),NL,LDIR);
  glUniform1i_(uN,pass==1||lit?NL:0);
  glUniform1f_(uD,lit?DEPTH/65536.f:0.f);
  glUniform1i_(uEmit,pass==3||pass==4||(pass>=7&&pass<16)?1:0);
+ if(pass==21) glUniform1iv_(uLS,16,NOSH);
  glUniform1ui_(uM,mat);
  glUniform1i_(uT,tex);
  printf("-- %s\n", names[pass]);
@@ -368,7 +379,8 @@ int main(int argc,char**argv){
      float t=(x+0.5f)/VW; float lit[3]; for(int i=0;i<3;i++) lit[i]=cases[k].l0[i]+(cases[k].l1[i]-cases[k].l0[i])*t;
      float fog=cases[k].f0+(cases[k].f1-cases[k].f0)*t;
      float ex[3]={0,0,0}, hi[3]={0,0,0};
-     if(pass==2||pass==14) authored(NL,x,y,ex);
+     if(pass==2||pass==14||pass==21) authored(NL,x,y,ex);
+     if(pass==23){ authored(NL,x,y,ex); for(int c=0;c<3;c++) ex[c]*=0.5f; }
      // Left of centre the occluder hides light 0; right of it nothing does; the
      // filter's band across the edge is left out.
      if(pass==15){ float px_=((x+0.5f)-CX)*(DEPTH/H); if(px_>-400.f&&px_<-50.f) authoredNo0(NL,x,y,ex);
@@ -387,6 +399,9 @@ int main(int argc,char**argv){
        if(pass==10||pass==11){ float s8=rgbc*hi[ch]*(1-cue(cases[k].light,fog)/4096.f); s8=s8<0?0:s8>255?255:s8;
          float tint=pass==11?TEXEL[ch]/255.f:1.f; e+=(int)floorf(s8*tint); }
        e+=fog8(cases[k].light,fog,ch);
+       // The corner colour is white; halfway is the mix, truncated as the shader's ivec3.
+       if(pass==22) e=255;
+       if(pass==23) e=(int)floorf(0.5f*(float)e+127.5f);
        if(e>255) e=255;
        int dd=abs(e-g); if(dd>worst)worst=dd; if(dd==1)off1++; }
      int g=q[0]|(q[1]<<8)|(q[2]<<16); if(y==0&&g!=last){distinct++; last=g;}

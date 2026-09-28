@@ -13,7 +13,7 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Sixty-eight of the seventy-six are load-bearing; `0002`, `0003`, `0015`, `0045`,
+Seventy-two of the eighty are load-bearing; `0002`, `0003`, `0015`, `0045`,
 `0046`, `0065` and `0069` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. `0075` and `0076`
 are held by the remaster's plan for work not yet made (`docs/REMASTER.md`), which is
@@ -1125,6 +1125,15 @@ Four files in the directory have no entry below:
   frame's models' per present. `RetainedScene.Lit` and `Mips` are the comparisons.
   The third diff in the patch file. See "Lights, fog blends and mipmaps in the
   reflections" in `docs/RENDERING.md`.
+  Since amended: a half's gate byte is a weight. `NoteHalf` writes 255, and
+  `RetainedScene.CurrentHalves` lets the port write its own, 0 to 255, after the
+  frame's walk. `WorldVs` passes it as `vFade` (1 for anything the gate does not
+  weigh, and for the shadow and probe draws), `PrimVs` writes 1, and `PrimFs` drops a
+  fragment whose 4x4 ordered-dither threshold is above it. With every weight 255 the
+  shader's output is the one before (`scripts/light_probe.c` and `shader_probe.c`
+  unchanged). The fourth diff in the patch file; the discard shares a hunk with
+  `0083` and is in that file. See "The reflections see past the camera's cull" in
+  `docs/RENDERING.md`.
 
 - `0073-texture-replacement-on-the-port-path.patch` — upstream's texture packs
   (`Assets/`) made to work in this port, and a way to see what they would key.
@@ -1294,6 +1303,20 @@ Four files in the directory have no entry below:
   and the frame after it almost none: at 60 fps a steady turn drew 22, 1 and 11
   units a tick. `Mouse.Poll` is the only caller. Input only — **no recompile**.
   See "The mouse was sampled at two points" in `docs/INPUT.md`.
+
+- `0083-enhancement-distance.patch` — past a view depth, a surface is drawn the
+  game's own way. `GteDepth.PlainDepth` (0, the default, is off) is sent as
+  `uPlainZ` to `PrimFs`, `AoFs` and `SsrFs`, and each fades its own additions out
+  over the 2048 units before it, by the recovered depth: `PrimFs` mixes the per-pixel
+  lit colour towards the packet's corner colour (keeping a lit-mode glow), scales
+  the authored lights and their highlight down, mixes the filtered texel towards the
+  centre one, and scales the ripple's slope; `AoFs` fades the occlusion to 1; `SsrFs`
+  scales the whole output by `gShare`. A fragment with no recovered depth is never
+  cut. `GteDepth.PlainDepthLive` says the prim program has the uniform.
+  `scripts/light_probe.c` and `scripts/shader_probe.c` read the old passes the same
+  as the shader at `HEAD` and the new ones at 0 from the formula. The port half is
+  `patches/EnhancementDistance.cs`. GL core only. **No recompile.** See "The
+  enhancement distance" in `docs/RENDERING.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
