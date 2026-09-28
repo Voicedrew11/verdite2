@@ -312,6 +312,11 @@ Four files in the directory have no entry below:
   pointer is over it, and the remaster editor's click gate
   (`!WantCaptureMouse`) never opened: neither a pick nor a light placement on
   the picture did anything. The amendment is the second diff in the patch file.
+  Since amended: `OutputView.DockId`, the dock node the Output panel sits in (0
+  while it floats). A node holding a window is a leaf, so the port can split it
+  with `DockBuilder` to dock a panel of its own beside the picture: the remaster
+  editor opens at the right edge that way. The third diff in the patch file. See
+  "Modes" in `docs/REMASTER.md`.
 
 - `0030-expose-host-pump.patch` — the shipped launcher has to build the game
   before there is a game to run, and that blocks for seconds; a window that stops

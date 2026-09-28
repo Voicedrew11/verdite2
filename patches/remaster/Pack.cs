@@ -262,7 +262,8 @@ public static partial class Pack
     /// gives off a light of the emissive colour at <c>Light</c> intensity,
     /// <c>GlowRadius</c> across, whether or not the surface itself glows; with no
     /// <c>"light"</c> it is <c>"glowLight"</c> (0.5) times the glow's strength, as it
-    /// was first written. <c>Pulse*</c> vary the glow and its light on the world
+    /// was first written, in <c>LightColour</c> (<c>"lightColour"</c>) where one is set.
+    /// <c>Pulse*</c> vary the glow and its light on the world
     /// tick. <c>Metalness</c> makes it a mirror tinted by its colour: the reflection
     /// and highlight take that colour, the reflectivity is at least the metalness, F0
     /// rises to it, and the surface's own colour is darkened, <c>Specular</c> is the highlight authored lights leave, and
@@ -272,7 +273,8 @@ public static partial class Pack
                                            Vector3 Emissive, float EmissiveStrength,
                                            bool GlowAdditive, float Light, float GlowRadius,
                                            bool GlowUnfogged, float PulseAmount, float PulseHz, bool PulseFlicker,
-                                           float Metalness, float Specular, float Occlusion);
+                                           float Metalness, float Specular, float Occlusion,
+                                           Vector3? LightColour);
 
     public const float DefaultGlowLight = 0.5f, DefaultGlowRadius = 2048f, MaxGlowRadius = 8192f, MaxLight = 4f;
 
@@ -295,7 +297,8 @@ public static partial class Pack
                                           Num(o, "pulseAmount"), NumOr(o["pulseHz"], 1f),
                                           Str(o["pulseStyle"]) == "flicker",
                                           Num(o, "metalness"), Num(o, "specular"),
-                                          NumOr(o["occlusion"], strength > 0f ? 0f : 1f));
+                                          NumOr(o["occlusion"], strength > 0f ? 0f : 1f),
+                                          o["lightColour"] is JsonArray ? Vec(o["lightColour"], Vector3.One) : null);
             }
     }
 
@@ -378,6 +381,40 @@ public static partial class Pack
         o[field] = Math.Round(value, 4);
         Dirty = true;
         Version++;
+    }
+
+    /// <summary>A field's removal, back to its default, as one undo entry.</summary>
+    public static void RemoveField(string name, string field)
+    {
+        if (MaterialsObj[name] is not JsonObject o || o[field] is not { } old) return;
+        var copy = old.DeepClone();
+        Edit($"{name}.{field} = default",
+            () => (MaterialsObj[name] as JsonObject)?.Remove(field),
+            () => { if (MaterialsObj[name] is JsonObject m) m[field] = copy.DeepClone(); });
+    }
+
+    /// <summary>What names a material, in every area of the pack.</summary>
+    public readonly record struct Uses(int Faces, int Halves, int Meshes, int Textures, int Models)
+    {
+        public bool None => Faces + Halves + Meshes + Textures + Models == 0;
+    }
+
+    public static Uses UsesOf(string name)
+    {
+        int faces = 0, halves = 0, meshes = 0, textures = 0, models = 0;
+        foreach (int area in _set.Surfaces.Keys)
+        {
+            foreach (var (_, m) in Tiles(area)) if (m == name) halves++;
+            foreach (var t in TileFaceLists(area)) faces += t.Faces.Count(f => f.Material == name);
+            foreach (var r in MeshRules(area))
+            {
+                if (r.Material == name) meshes++;
+                faces += r.Faces.Count(f => f.Material == name);
+            }
+            foreach (var r in ModelRules(area)) if (r.Material == name) models++;
+        }
+        foreach (var r in TextureRules()) if (r.Material == name) textures++;
+        return new Uses(faces, halves, meshes, textures, models);
     }
 
     public static Vector3 GetColour(string name, string field)
@@ -1051,6 +1088,36 @@ public static partial class Pack
         var before = RecordSnapshot(area, record);
         string fp = AreaFingerprint(area) ?? "";
         Edit($"{RecordName(record)}: reset", () => PutRecord(area, record, null, fp), () => PutRecord(area, record, before, fp));
+    }
+
+    /// <summary>A record's overrides copied onto others as one undo entry: each part the
+    /// source sets replaces the target's (per light, per field), the target keeps the
+    /// rest, and a new override takes the target's own hash.</summary>
+    public static void CopyRecord(int area, int from, IReadOnlyList<(int Record, string Hash)> to, string fingerprint)
+    {
+        if (RecordSnapshot(area, from) is not { } src || to.Count == 0) return;
+        EditDoc(s => s.Atmosphere, "records", area, fingerprint, $"{RecordName(from)}: copied to {to.Count} record(s)", _ =>
+        {
+            foreach (var (rec, hash) in to)
+            {
+                if (rec == from) continue;
+                var o = RecordSnapshot(area, rec) ?? NewRecord(rec, hash);
+                foreach (var (key, node) in src)
+                {
+                    if (key is "record" or "recordHash") continue;
+                    if (key != "lights" || node is not JsonArray ls) { o[key] = node?.DeepClone(); continue; }
+                    if (o["lights"] is not JsonArray tl) o["lights"] = tl = new JsonArray();
+                    while (tl.Count < 3) tl.Add(null);
+                    for (int j = 0; j < 3 && j < ls.Count; j++)
+                    {
+                        if (ls[j] is not JsonObject sl) continue;
+                        if (tl[j] is not JsonObject tj) tl[j] = tj = new JsonObject();
+                        foreach (var (k, v) in sl) tj[k] = v?.DeepClone();
+                    }
+                }
+                PutRecord(area, rec, o, fingerprint);
+            }
+        });
     }
 
     /// <summary>Replace a record's override with a snapshot, or remove it (null),

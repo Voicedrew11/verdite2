@@ -49,6 +49,13 @@ public static class OutputView
     /// </summary>
     public static int GameW { get; internal set; }
     public static int GameH { get; internal set; }
+
+    /// <summary>
+    /// The dock node the Output panel sits in, or 0 while it floats. A node that
+    /// holds a window is a leaf, so a port can split it to dock a panel of its own
+    /// beside the picture.
+    /// </summary>
+    public static uint DockId { get; internal set; }
 }
 
 internal sealed class OutputPanel : IPanel
@@ -93,6 +100,7 @@ internal sealed class OutputPanel : IPanel
         var visible = ImGui.Begin(this.Title());
         ImGui.PopStyleVar(2);
         IsDocked = ImGui.IsWindowDocked();
+        OutputView.DockId = IsDocked ? ImGui.GetWindowDockID() : 0u;
         OutputView.Valid = false;
         OutputView.Hovered = false;
 

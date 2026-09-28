@@ -221,7 +221,8 @@ public sealed class Surfaces : IRemasterFeature
             SurfaceMaterial.Specular[next] = Math.Clamp(m.Specular, 0f, 1f);
             SurfaceMaterial.Occlusion[next] = Math.Clamp(m.Occlusion, 0f, 1f);
             // The light is its own: a material may give light with no glow at all.
-            GlowLight[next] = colour * Math.Clamp(m.Light, 0f, Pack.MaxLight);
+            var lightColour = m.LightColour is { } lc ? Vector3.Clamp(lc, Vector3.Zero, Vector3.One) : colour;
+            GlowLight[next] = lightColour * Math.Clamp(m.Light, 0f, Pack.MaxLight);
             GlowRadius[next] = GlowLight[next] != Vector3.Zero ? Math.Clamp(m.GlowRadius, 0f, Pack.MaxGlowRadius) : 0f;
             _pulse[next] = (Math.Clamp(m.PulseAmount, 0f, 1f), Math.Max(m.PulseHz, 0f), m.PulseFlicker);
             if (_pulse[next].Amount > 0f && _pulse[next].Hz > 0f) _anyPulse = true;

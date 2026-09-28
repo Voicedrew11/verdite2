@@ -22,7 +22,7 @@ namespace Kf2.Remaster;
 ///     set remaster on|off
 ///     pack save|reload|undo|redo|list|add NAME|report|export [PATH]
 ///     light list|shadows on|off|shadows models on|off|shadows tune BIAS OFFSET SOFT [SIZE]|add NAME [here|pick GX GY|X Y Z]|remove NAME|select NAME|set NAME FIELD V...
-///     atmos [list|darkness [V]|fog R G B|off|curve P [MAX]|off|sky R G B|fog|show N|set N FIELD V...|reset N [FIELD]]
+///     atmos [list|darkness [V]|fog R G B|off|curve P [MAX]|off|sky R G B|fog|show N|set N FIELD V...|copy N M,...|used|reset N [FIELD]]
 ///                                                    the area's light records, their overrides, its darkness and fog
 ///     level [status|on|off|show T|set T FIELD V|game|reset T|rewrites [reset]]   the area's tile edits (Shell.Level.cs)
 ///     camera [state|on|off|player|move R U F|turn R U|at X Y Z [P Y]]   the editor's free camera (Shell.Camera.cs)
@@ -35,17 +35,17 @@ public static partial class Shell
 
     public static readonly string[] Help =
     [
-        "edit [on|off|toggle] - the remaster editor, which pauses the world",
+        "edit [on|off|toggle | tab material|lights|atmos|level|props|pack] - the remaster editor, which pauses the world; says whether it is docked, where, and which tab is open",
         "select [here | tile:A:X:Z:lower|upper | model:A:KIND:ID | pick GX GY [add] | faces F,F,... | grow connected|texture|mesh] - " +
             "a half, faces or a model; pick takes the faces or the model under game pixel GX GY (the editor must be open)",
         "set selected|tile:...|model:... material NAME|none [tile|mesh]; set texture|texture:INDEX[:CLUT] material NAME|none (the picked art, or a key; every area); " +
-            "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off",
+            "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive|lightColour R G B; set material:NAME lightColour glow; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off",
         "pack save|reload|undo|redo|list|add NAME|report|export [PATH]|layers|layer ID on|off - the working pack, over the other packs' remaster/ layers (layers lists them, layer switches one); report says, per area, whether each document " +
             "matches an area this disc has and what resolved when it was last applied; export writes the saved pack as a zip",
         "light list | shadows on|off | shadows models on|off | shadows tune BIAS OFFSET SOFT [SIZE] | add NAME [here | pick GX GY | X Y Z] | remove NAME | select NAME | " +
             "set NAME position X Y Z|colour R G B|intensity V|radius V|type point|spot|direction X Y Z|cone IN OUT|flicker AMOUNT HZ|enabled on|off - " +
             "the area's authored lights; pick places one short of the surface under game pixel GX GY",
-        "atmos [list | darkness [0..1] | fog R G B|off | curve POWER [MAX]|off | sky R G B|fog | show N | set N back R G B | set N light J direction X Y Z | set N light J colour R G B | set N fog WORD | " +
+        "atmos [list | darkness [0..1] | fog R G B|off | curve POWER [MAX]|off | sky R G B|fog | show N | set N back R G B | set N light J direction X Y Z | set N light J colour R G B | set N fog WORD | copy N M[,M...]|used | " +
             "reset N [back|light J|fog]] - the area's light records (N 0..79): which halves use each, the game's values and the pack's overrides",
         "remaster - area, fingerprint, what is applied",
         LevelHelp,
@@ -81,10 +81,18 @@ public static partial class Shell
     static string Edit(string[] a)
     {
         string mode = a.Length > 0 ? a[0].ToLowerInvariant() : "toggle";
-        bool open = mode switch { "on" => true, "off" => false, "toggle" => !Editor.Open, _ => Editor.Open };
-        if (mode is not ("on" or "off" or "toggle")) return Err("edit", "edit on|off|toggle");
+        bool open = mode switch { "on" or "tab" => true, "off" => false, "toggle" => !Editor.Open, _ => Editor.Open };
+        if (mode is not ("on" or "off" or "toggle" or "tab")) return Err("edit", "edit on|off|toggle|tab NAME");
+        if (mode == "tab" && (a.Length < 2 || !Editor.ShowTab(a[1])))
+            return Err("edit", "edit tab " + string.Join("|", Enum.GetNames<Editor.Tab>()).ToLowerInvariant());
         Editor.SetOpen(open);
-        return Ok("edit", new JsonObject { ["open"] = open, ["pauses"] = Identity.Area >= 0 });
+        var vp = ImGuiNET.ImGui.GetMainViewport();
+        return Ok("edit", new JsonObject
+        {
+            ["open"] = open, ["pauses"] = Identity.Area >= 0, ["docked"] = Editor.Docked, ["tab"] = Editor.ActiveTab,
+            ["panel"] = new JsonArray(Editor.PanelMin.X, Editor.PanelMin.Y, Editor.PanelMax.X, Editor.PanelMax.Y),
+            ["viewport"] = new JsonArray(vp.WorkPos.X, vp.WorkPos.Y, vp.WorkPos.X + vp.WorkSize.X, vp.WorkPos.Y + vp.WorkSize.Y),
+        });
     }
 
     static string Select(string[] a)
@@ -203,6 +211,17 @@ public static partial class Shell
                 var e = Pack.GetColour(name, "emissive");
                 return Ok("set", new JsonObject { ["material"] = name, ["emissive"] = new JsonArray(e.X, e.Y, e.Z) });
             }
+            if (a[1] == "lightColour")
+            {
+                if (a.Length == 3 && a[2] == "glow") Pack.RemoveField(name, "lightColour");
+                else if (a.Length < 5) return Err("set", "set material:NAME lightColour R G B|glow");
+                else
+                    Pack.SetColourField(name, "lightColour", Vector3.Clamp(new Vector3(
+                        float.Parse(a[2], CultureInfo.InvariantCulture), float.Parse(a[3], CultureInfo.InvariantCulture),
+                        float.Parse(a[4], CultureInfo.InvariantCulture)), Vector3.Zero, Vector3.One));
+                var lc = Pack.Materials().First(x => x.Name == name).LightColour;
+                return Ok("set", new JsonObject { ["material"] = name, ["lightColour"] = lc is { } l ? (JsonNode)new JsonArray(l.X, l.Y, l.Z) : "glow" });
+            }
             if (a[1] == "glowMode")
             {
                 if (a[2] is not ("additive" or "lit")) return Err("set", "glowMode additive|lit");
@@ -223,7 +242,7 @@ public static partial class Shell
             if (a[1] is not ("reflectivity" or "f0" or "roughness" or "metalness" or "specular" or "occlusion"
                           or "emissiveStrength" or "light" or "glowRadius" or "pulseAmount" or "pulseHz"))
                 return Err("set", "reflectivity, f0, roughness, metalness, specular, occlusion, emissive, emissiveStrength, " +
-                                  "glowMode, glowFog, light, glowRadius, pulseAmount, pulseHz or pulseStyle");
+                                  "glowMode, glowFog, light, lightColour, glowRadius, pulseAmount, pulseHz or pulseStyle");
             if (!float.TryParse(a[2], CultureInfo.InvariantCulture, out float v)) return Err("set", $"cannot read '{a[2]}'");
             float max = a[1] switch
             {
@@ -255,7 +274,7 @@ public static partial class Shell
             return Ok("set", Editor.SelectedModel is { } sm ? DescribeModel(sm) : Describe(Editor.Selected));
         }
         return Err("set", "set selected|tile:...|model:... material NAME|none [tile|mesh]; " +
-                          "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off");
+                          "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive|lightColour R G B; set material:NAME lightColour glow; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off");
     }
 
     static JsonObject LayerList()
@@ -310,6 +329,7 @@ public static partial class Shell
                 ["glowMode"] = mat.GlowAdditive ? "additive" : "lit",
                 ["glowFog"] = !mat.GlowUnfogged,
                 ["light"] = mat.Light,
+                ["lightColour"] = mat.LightColour is { } lc ? (JsonNode)new JsonArray(lc.X, lc.Y, lc.Z) : "glow",
                 ["glowRadius"] = mat.GlowRadius,
                 ["pulse"] = new JsonArray(mat.PulseAmount, mat.PulseHz, mat.PulseFlicker ? "flicker" : "breathe"),
                 ["metalness"] = mat.Metalness,
@@ -520,6 +540,19 @@ public static partial class Shell
         {
             case "show":
                 return Ok("atmos", AtmosRecord(m, area, rec));
+            case "copy":
+            {
+                if (a.Length < 3) return Err("atmos", "atmos copy N M[,M...]|used");
+                if (Pack.GetRecord(area, rec) == null) return Err("atmos", $"record {rec} has no override to copy");
+                var usage = Atmosphere.Usage(m);
+                var targets = a[2] == "used"
+                    ? Enumerable.Range(0, Atmosphere.Records).Where(r => r < usage.Length && usage[r] > 0)
+                    : a[2].Split(',').Select(s => int.Parse(s, CultureInfo.InvariantCulture));
+                var list = targets.Where(r => r != rec && (uint)r < Atmosphere.Records)
+                                  .Select(r => (r, Atmosphere.SourceHash(m, r))).ToList();
+                Pack.CopyRecord(area, rec, list, fp);
+                return Ok("atmos", AtmosList(m, area));
+            }
             case "set":
             {
                 if (a.Length < 4) return Err("atmos", "atmos set N back R G B|light J direction|colour X Y Z|fog WORD");

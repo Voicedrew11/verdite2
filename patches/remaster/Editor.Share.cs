@@ -4,8 +4,8 @@ using ImGuiNET;
 
 namespace Kf2.Remaster;
 
-/// <summary>The editor's share section: the compatibility report per area, and the pack
-/// exported as a zip. See <see cref="Compat"/> and "Phase 7, the first slice" in
+/// <summary>The editor's Pack tab: the working pack, the packs under it, the export,
+/// and the compatibility report per area. See <see cref="Compat"/> and "Phase 7, the first slice" in
 /// docs/REMASTER.md.</summary>
 public static partial class Editor
 {
@@ -14,9 +14,15 @@ public static partial class Editor
         JsonObject? _report;
         string? _exported, _exportError;
 
-        void DrawShare()
+        void DrawPackTab()
         {
-            if (!ImGui.CollapsingHeader("Share")) return;
+            ImGui.TextUnformatted("Working pack");
+            Wrapped(Pack.Root, dim: true);
+            if (ImGui.Button(L(Icon.Save, "Save"))) Pack.Save();
+            ImGui.SameLine();
+            if (ImGui.Button("Reload")) Pack.Load();
+            Tip("Read the pack from disk again.");
+            Flow("Export as zip");
             ImGui.BeginDisabled(Pack.Dirty);
             if (ImGui.Button("Export as zip"))
             {
@@ -24,50 +30,63 @@ public static partial class Editor
                 catch (Exception e) { _exportError = e.Message; _exported = null; }
             }
             ImGui.EndDisabled();
-            if (Pack.Dirty && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-                ImGui.SetTooltip("Save first: the zip holds the saved files.");
-            ImGui.SameLine();
-            if (ImGui.Button("Check this disc") || _report == null) _report = Compat.Report();
-            if (_exported != null) ImGui.TextDisabled(_exported);
-            if (_exportError != null) ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), _exportError);
+            Tip(Pack.Dirty ? "Save first: the zip holds the saved files." : "The saved pack, in upstream's layout, into exports/.");
+            if (_exported != null) Wrapped(_exported, dim: true);
+            if (_exportError != null) Wrapped(_exportError, Bad);
+            if (Pack.WorkSetAside.Count > 0)
+                Wrapped($"{Pack.WorkSetAside.Count} of the working pack's entries are set aside: " + string.Join("; ", Pack.WorkSetAside), Warn);
 
+            ImGui.SeparatorText("Packs under it");
+            if (Pack.Layers.Count == 0) Wrapped("No other pack has a remaster/ directory.", dim: true);
+            foreach (var l in Pack.Layers)
+            {
+                bool on = l.Enabled;
+                ImGui.BeginDisabled(l.Error != null);
+                if (ImGui.Checkbox($"{l.Name}##{l.Id}", ref on)) Pack.SetLayerEnabled(l.Id, on);
+                ImGui.EndDisabled();
+                Tip($"{l.Path}\nSwitching a pack merges again and clears undo; unsaved edits are kept.");
+                ImGui.SameLine();
+                ImGui.TextDisabled($"{l.Documents} document(s)");
+                if (l.Error != null) Wrapped(l.Error, Bad);
+                if (l.SetAside.Count > 0) Wrapped($"set aside: {string.Join("; ", l.SetAside)}", Warn);
+            }
+
+            ImGui.SeparatorText("This disc");
+            if (ImGui.Button("Check again") || _report == null) _report = Compat.Report();
+            Tip("Whether each area document matches an area this disc has, and what resolved there when it was last applied.");
             if (_report["areas"] is not JsonArray areas || areas.Count == 0)
             {
                 ImGui.TextDisabled("The pack holds no area documents.");
                 return;
             }
-            ImGui.TextDisabled($"{_report["matched"]} area(s) match this disc, {_report["differ"]} differ, " +
-                               $"{_report["unseen"]} not yet visited; {_report["textureRules"]} texture rule(s), keyed on content");
-            if (!ImGui.BeginTable("compat", 3, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg | ImGuiTableFlags.SizingStretchProp))
-                return;
-            ImGui.TableSetupColumn("Area");
-            ImGui.TableSetupColumn("Documents");
-            ImGui.TableSetupColumn("Last applied");
-            ImGui.TableHeadersRow();
+            Wrapped($"{_report["matched"]} area(s) match this disc, {_report["differ"]} differ, " +
+                    $"{_report["unseen"]} not yet visited; {_report["textureRules"]} texture rule(s), keyed on content.", dim: true);
             foreach (var n in areas)
             {
                 if (n is not JsonObject a) continue;
                 string status = a["status"]?.GetValue<string>() ?? "";
-                ImGui.TableNextRow();
-                ImGui.TableNextColumn();
                 var colour = status switch
                 {
                     "matches" => new Vector4(0.5f, 0.9f, 0.5f, 1f),
-                    "differs" => new Vector4(1f, 0.4f, 0.4f, 1f),
-                    _ => new Vector4(1f, 0.75f, 0.3f, 1f),
+                    "differs" => Bad,
+                    _ => Warn,
                 };
-                ImGui.TextColored(colour, $"{a["area"]} {status}");
-                ImGui.TableNextColumn();
-                foreach (var d in a["documents"] as JsonArray ?? [])
-                    ImGui.TextUnformatted($"{d?["kind"]}: {d?["entries"]}, {d?["status"]}");
-                ImGui.TableNextColumn();
-                if (a["resolved"] is JsonObject r)
-                    foreach (var (k, v) in r)
-                        if (k != "at") ImGui.TextUnformatted($"{k}: {Brief(v)}");
-                        else ImGui.TextDisabled(v?.ToString() ?? "");
-                else ImGui.TextDisabled("not applied here yet");
+                ImGui.PushID(a["area"]?.ToString() ?? "");
+                ImGui.PushStyleColor(ImGuiCol.Text, colour);
+                bool open = ImGui.TreeNode($"Area {a["area"]}: {status}");
+                ImGui.PopStyleColor();
+                if (open)
+                {
+                    foreach (var d in a["documents"] as JsonArray ?? [])
+                        Wrapped($"{d?["kind"]}: {d?["entries"]}, {d?["status"]}");
+                    if (a["resolved"] is JsonObject r)
+                        foreach (var (k, v) in r)
+                            Wrapped(k != "at" ? $"{k}: {Brief(v)}" : $"last applied {v}", dim: k == "at");
+                    else ImGui.TextDisabled("not applied here yet");
+                    ImGui.TreePop();
+                }
+                ImGui.PopID();
             }
-            ImGui.EndTable();
         }
 
         static string Brief(JsonNode? n)

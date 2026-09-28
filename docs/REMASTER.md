@@ -349,7 +349,8 @@ time and two packs cannot collide on a number:
   "materials": {
     "polished-stone": { "reflectivity": 0.35, "f0": 0.04, "roughness": 0.3 },
     "wet-rock":       { "reflectivity": 0.2,  "f0": 0.03, "roughness": 0.6 },
-    "brazier-coal":   { "emissive": [1.0, 0.45, 0.1], "emissiveStrength": 0.8 } } }
+    "brazier-coal":   { "emissive": [1.0, 0.45, 0.1], "emissiveStrength": 0.8,
+                        "light": 1.0, "lightColour": [1.0, 0.6, 0.3] } } }
 ```
 
 Surfaces assign materials, and the most specific key wins: a face of a half, the
@@ -501,6 +502,169 @@ is a command-line converter.
   **Shift+E** is proposed as the hotkey. It has to be checked against
   `KeyLayout` and the existing Shift+P, Shift+F and Shift+M, M and N.
 
+  The panel opens docked at the right edge of the picture. On an opening where
+  ImGui has not already put it in a dock node, it splits the Output panel's node
+  (`OutputView.DockId`, `0029`) and takes the right side, about 440 base-font
+  pixels wide; a docked panel closed keeps its node, hidden, and reopens there, so
+  wherever the user moves it after, it stays. `edit` reports `docked` and the
+  panel's rectangle. Measured with no saved layout: first open docked at
+  x 1347-2226 of a 2226-wide viewport, and at the same place after closing and
+  reopening.
+
+  Opening it releases the pointer from mouse look, and closing it captures the
+  pointer again if opening took it -- `MenuMouse`'s shape, in the panel's `IsOpen`
+  setter, so Shift+E, the close button and `edit` all go through it. **Closing it
+  with Shift+E always captures the pointer** (with mouse look on), even if it was
+  free when the editor opened: that key is how a player goes back to playing. The
+  close button and `edit off` keep the rule above, so a click on the panel or an
+  agent's session does not grab the pointer.
+
+### The panel's layout
+
+The panel is laid out for a narrow dock beside the picture: a header that never
+scrolls, then six tabs, each with a body that scrolls on its own
+(`InputSection.Tab`'s shape). Nothing is a separate section below the rest.
+
+- **The header** (`Editor.Header.cs`) has four parts:
+  - The remaster's switch, Save, Undo and Redo (each button's tooltip names what it
+    would undo), and "unsaved" or the time of the last save.
+  - The area and the selection in a few words, with the fingerprint on hover.
+  - Three toggles: the selection's tint, the player's tile, and the free camera,
+    whose speed and "back to the player" appear as one row under it while it is
+    on.
+  - What stops the pack applying: one warning inline, several as a count with the
+    list on hover. A failed pick's reason stays here until the next pick.
+- **The tabs** are an icon (Font Awesome solid, which `FontSet` already merges)
+  and a word. The bar shrinks the words when the panel is narrow.
+  - **Material:** the selection card (what is picked, *Select more*, *Assign to*,
+    the material that rule names, and the *Result*), then *Edit material*: one
+    library entry at a time, which moves to the selection's material whenever that
+    changes, so pick, assign and tweak happen on one tab. See "The Material tab".
+  - **Lights:** add at the eye or Place, the list, the selected light's fields.
+  - **Atmos:** one light record, followed or chosen, over two groups, *Light* and
+    *Fog*, each with the whole area's settings above the record's. See "The
+    Atmosphere tab".
+  - **Level:** the selected half's tile fields, behind *Apply level edits*.
+  - **Props:** add here or Place, the list, the selected prop's fields.
+  - **Pack:** the working pack's path, save, reload and export, the packs layered
+    under it (a checkbox each), and the compatibility report as one tree node per
+    area.
+- **Fields are a two-column grid** (`Editor.Layout.cs`): the label takes a fixed
+  share of the width and the control fills the rest. A narrow panel shortens the
+  controls rather than cutting off labels.
+- **An override shows the game's value until it is edited.** In Atmos and Level, a
+  field the pack does not override shows the game's value under a plain label.
+  Editing it writes the override: the label turns the accent colour with a dot after
+  it, and the row gets a button at its end that puts the game's value back. That
+  replaced a leading checkbox per field in Atmos and a "game's" button in Level.
+  Until 2026-09-28 it was the other way round, the game's values dimmed, which read
+  as disabled (a dimmed label means that everywhere else in ImGui) and needed a line
+  at the top of the tab to explain itself; a dimmed label now means only that the
+  control does nothing at the moment.
+- **A slider's grab is see-through in the editor**, so the value centred over it
+  stays readable: at 1.00 of a 0.25-4 logarithmic slider the grab sat on the number.
+- **A click on the picture does what the open tab is for.**
+  - On every tab it picks the faces under it, or the model.
+  - On Lights it first grabs a light's arrow or dot. The light gizmos are drawn
+    only while that tab is open.
+  - A Place button (Lights, Props) arms the next click instead. The armed state
+    shows as a hint by the pointer, Esc disarms it, and switching tabs drops it.
+
+  The *Pick on the picture* and *Place on the picture* checkboxes this replaced
+  are gone.
+- **Ctrl+Z undoes, and Ctrl+Y or Ctrl+Shift+Z redoes. Ctrl+S saves.** They work
+  while the panel is open, and not while typing, looking with the free camera, or
+  holding a control or a light. That last condition matters because such an edit
+  is still a preview and not yet an undo entry.
+- **`edit tab NAME` opens a tab from the shell, and `edit` reports the one that
+  is open.** The gizmos are ImGui drawing over the picture, not part of the
+  presented frame, so `snap` cannot see them. Whether they show on the right tab
+  has to be checked by eye.
+
+### The Material tab
+
+Reworked 2026-09-28, because the tab mixed two jobs that looked alike: choosing
+which material the selection uses, and editing a material in the library. The
+screenshot that prompted it read `Material: (none)` over sliders editing `stone`.
+None of it changes what a pack means; the one new field is `lightColour`.
+
+- **One *Assign to* list for every rule**, most specific first, as they win: these
+  faces (or this half, or this model), the same faces or the whole mesh on every use
+  of it in the area, and the picked art in every area (with *Any palette* under it).
+  The texture rule was a collapsing header of its own. It is dropped on every new
+  pick, since it reaches every area. *Material* names what that one rule says, and
+  *Result* what the selection draws with and which rule gave it
+  (`Editor.Effective`, `Surfaces`' order read off the pack, gates ignored).
+- **The editor says what it is editing.** *Edit material* shows what names the
+  entry across the pack (`Pack.UsesOf`: faces, halves, meshes, models, textures) and
+  says so when the selection has no material, has several, or draws with another
+  one (with a button to edit that). The id moved to the combo's tooltip. The editor
+  follows the selection's *effective* material now, not the one at the chosen scope.
+- **Grouped by what is seen.** *Finish*: Roughness, Metal. *Reflection*: Edge
+  reflection (`reflectivity`) and F0, greyed out with a *Turn on world reflections*
+  button (the retained scene, saved as the setting is) while no reflection is on.
+  *Shading*: Shine from lights (`specular`), Ambient occlusion. *Glow (the surface
+  itself)*: Colour, Brightness, a Blend radio (*Add over texture* / *Brighten
+  texture*, which was the *Light source* checkbox), Fades in fog. *Gives off light*:
+  Strength, Reach in tiles, and its colour, the glow's or its own
+  (`"lightColour"`; `set material:NAME lightColour R G B|glow`). *Pulse* shows only
+  while the material glows or gives light.
+- **The grow buttons are *Select more*** and *Whole mesh* is gone from the panel:
+  it selected every face of the mesh one by one, which *Whole half* already covers.
+  The shell's `select grow mesh` keeps it.
+
+Measured: `lightColour` reaches the glow's light (`light` reports `[1,0,0]` for a
+red light on a white glow, and white again after `lightColour glow`), with no
+exception over a session of the tab open. The layout itself is for the eye.
+
+### The Atmosphere tab
+
+Reworked 2026-09-28, from a critique of the tab as it was: it was laid out like the
+record's bytes rather than the way a room is lit. Nothing a pack means changed.
+
+- **The record comes first**, then two groups. The combo keeps the halves count
+  and *edited* while following. *On the picture* has two checkboxes: *Halves* tints
+  the frame's triangles whose half names the record (`Faces.Last`, the half's
+  `+4 & 0x3F`), and *Light directions* draws the record's three lights as arrows
+  from a point 1,800 units ahead of the eye, each in its light's colour (grey when
+  dark) and numbered, over a level ring so the elevation reads. Then *Copy to...*,
+  *Reset record*, and the count of the record's own overridden fields; the area's
+  written and refused counts, which the old footer showed as if they were the
+  record's, are its tooltip.
+- **Light**: the area's *Darkness*, then the record's back colour and three lights.
+  **Fog**: the area's colour, curve, most and sky, then the record's start and
+  shape. The two scopes are separated by a heading in each group ("Whole area",
+  "Record N"). Fog's start and shape had been in a different section from its colour.
+- **A light is a colour, a direction and a strength.** The direction was three
+  floats whose length was also the light's strength, so no drag changed one without
+  the other. It is a compass bearing (0 faces +Z, 90 faces +X) and an elevation (90
+  from straight above), and the strength is the vector's length, 0-2; each has its
+  own reset, which keeps the other. A vector that comes back to the game's
+  removes the override.
+- **One scale for every colour.** The back colour is bytes (`BK = b * 16`, so 256
+  is full light) and a light's colour 4.12, so the light's is shown times 256: the
+  game's 0.575 reads 147 beside a back colour of 120.
+- **The fog's start is in tiles** (2048 view units). *Shape* is one combo, *Knee*,
+  *Linear* or *None*, where it was two checkboxes, and start and shape reset
+  separately. The old *Linear* ticked over *No fog* wrote a linear fog starting at
+  16000, past the slider's end; a start is held to 15999 now.
+- **Copy to...** puts the record's overrides on the records ticked, as one undo
+  entry (`Pack.CopyRecord`): each part set on the source replaces the target's (per
+  light, per field), the target keeps the rest, and a new override takes the target's
+  own hash. Shell: `atmos copy N M[,M...]|used`.
+
+Measured (`KF2_AUTOSTART=2`, area 1, a scratch pack, the tab open): with record 16's
+fog at 6000 and record 15's back colour and light 2 colour overridden, `atmos copy 15
+16,23` gave record 16 back `200 60 40` and light 2 `1.2 0.7 0.4`, kept its fog 6000
+and its own hash `8aed2ed9dca6ad04`; one `pack undo` left only the fog. No exception
+with the tab and its overlay drawn.
+
+**Not judged.** The layout, and whether the direction arrows point where the light
+visibly comes from. The bearing takes the record's light vector as a world
+direction with up at -Y; that holds for floors whatever the tile's turn, but stage 10
+turns each matrix through quarter-turns for the tile and model walks, so on a turned
+mesh the horizontal part may read rotated.
+
 ### Picking
 
 - **Tiles:** the faces under the cursor, from the frame's own triangles. While the
@@ -571,7 +735,7 @@ New `KF2_SHELL` verbs, also exposed through `mcp/`, so an agent can run every
 measurement in the roadmap:
 
 ```
-edit on|off                        enter or leave Edit mode (pause, editor camera)
+edit on|off|tab NAME               enter or leave Edit mode (pause, editor camera); open a tab
 select <key>                       select by key: tile:1:35:36:upper, model:41, tex:5b1e..., light:1:"hall brazier"
 set <key> <field> <value>          change one field through the same undo stack the panels use
 pack save|reload|list              the working pack
@@ -1124,9 +1288,10 @@ them.
 - **Ships:**
   - [x] `RemasterUniforms` and the light list;
   - [x] the light term in `shade8` (core `PrimFs`);
-  - [~] the light gizmo and inspector: a dot and a reach ring per light, a drag
+  - [x] the light gizmo and inspector: a dot and a reach ring per light, a drag
     across the screen at the light's depth (Shift: up and down in height steps),
-    and the inspector; no axis handles;
+    axis arrows on the selected light, depth cues drawn in the world (see "The
+    light gizmo is drawn in the world"), and the inspector;
   - [x] `lights.json`;
   - [x] flicker, evaluated on the world tick so it holds with the world;
   - [~] a probe counting lights culled, uploaded and lit batches (not fragments).
@@ -1222,6 +1387,30 @@ render scale 5, 16:9):
 fog, the edge of the radius, a creature walking through one. Nor the editor's
 Lights section, the gizmos and the drag. Render scale 1 was not measured, and
 neither was a light on the arm.
+
+### The light gizmo is drawn in the world
+
+A dot and a screen-facing ring said where a light was on the screen and nothing
+about how far away it was, so placing one meant moving it and looking for where the
+light landed. The gizmo is drawn in the world now, projected through the frame's own
+view (`Lights.View`) and cut at the near plane, so perspective carries the depth:
+
+- every light's reach is a ring flat at its own height, and a line drops from it to
+  the floor below with a small ring where it lands -- the nearer below it of its
+  tile's two halves' floors (`-(h << 7)`, the height `PropPlaceAt` stands a prop
+  on); the selected light's label gives its height above that floor;
+- the dot is 96 world units across, held to 3-9 pixels, so a far light is small;
+- a spot is its outer cone, to its reach when selected and 1024 units otherwise,
+  and the inner cone's rim;
+- the selected light's reach is a sphere of three rings, and it has an arrow per
+  world axis (X red, Y green and pointing up, which is -Y, Z blue), 70 window pixels
+  long at any distance. An arrow drags the light along its axis: the point on the
+  axis nearest the mouse's ray from the eye, less where it was grabbed, so the light
+  stays under the cursor; Ctrl snaps to a height step. The dot inside 12 pixels of
+  the centre is still the drag across the screen.
+
+**Judged** in play: it looks right. Nothing about it is measured, since it is
+the editor's overlay and reaches no frame the game draws.
 
 ### Phase 3: the material system proper
 
