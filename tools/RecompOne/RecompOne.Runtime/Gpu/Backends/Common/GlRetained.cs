@@ -860,7 +860,7 @@ public sealed partial class GlCore
     uint BeginRetainedTimer()
     {
         // Queries do not nest, and a frame capture's are running around the pass.
-        if (!RetainedScene.Probe || !_timerQueries || GpuTrace.Sink != null) return 0;
+        if (!RetainedScene.Probe || !_timerQueries || GpuTrace.Sink != null || Diagnostics.GpuTimes.Enabled) return 0;
         var q = _gl.GenQuery();
         _gl.BeginQuery(QueryTarget.TimeElapsed, q);
         return q;

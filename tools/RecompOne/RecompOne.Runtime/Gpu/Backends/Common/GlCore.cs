@@ -195,6 +195,7 @@ public sealed partial class GlCore : IGpuBackend
         _vram.Init();
         // 0046. Core since 3.3; the 2.1 context needs the extension.
         _timerQueries = !_legacy || _gl.IsExtensionPresent("ARB_timer_query");
+        Diagnostics.GpuTimes.Supported = _timerQueries;
 
         string primVs = _legacy ? GlShaders.PrimVs120 : GlShaders.PrimVs;
         string primFs = _legacy ? GlShaders.PrimFs120 : GlShaders.PrimFs;
@@ -1524,8 +1525,9 @@ public sealed partial class GlCore : IGpuBackend
         //0045.
         var profile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.GlFlush);
         var query = BeginGpuTimer();
+        var pass = _kTarget is { IsPlanar: true } ? Diagnostics.GpuTimes.Pass.Capture : Diagnostics.GpuTimes.Pass.Scene;
         FlushCore();
-        EndGpuTimer(query, GpuWork.Batch, 0);
+        EndGpuTimer(query, GpuWork.Batch, 0, pass);
         Diagnostics.Profiler.End(profile);
         trace?.Flushed();
     }
@@ -1538,18 +1540,63 @@ public sealed partial class GlCore : IGpuBackend
 
     uint BeginGpuTimer()
     {
-        if (!_timerQueries || GpuTrace.Sink == null) return 0;
+        if (!_timerQueries || (GpuTrace.Sink == null && !Diagnostics.GpuTimes.Enabled)) return 0;
         var q = _gl.GenQuery();
         _gl.BeginQuery(QueryTarget.TimeElapsed, q);
         return q;
     }
 
-    void EndGpuTimer(uint query, GpuWork what, long start)
+    void EndGpuTimer(uint query, GpuWork what, long start, Diagnostics.GpuTimes.Pass pass)
     {
         if (query != 0) _gl.EndQuery(QueryTarget.TimeElapsed);
         if (GpuTrace.Sink is { } t)
             t.Work(what, start, what == GpuWork.Batch ? 0 : System.Diagnostics.Stopwatch.GetTimestamp(), query);
-        else if (query != 0) _gl.DeleteQuery(query);
+        else if (query != 0)
+        {
+            // 0084. Read back presents later, oldest first; the GPU finishes in order.
+            if (_gpuPending.Count >= 1024)
+            {
+                _gl.DeleteQuery(_gpuPending.Dequeue().Query);
+                Diagnostics.GpuTimes.Dropped++;
+            }
+            _gpuPending.Enqueue((query, pass, _gpuPresent));
+        }
+    }
+
+    // 0084. The profiler's GPU times: queries waiting for the GPU, and the present
+    // each was issued in.
+    readonly Queue<(uint Query, Diagnostics.GpuTimes.Pass Pass, long Present)> _gpuPending = new();
+    long _gpuPresent, _gpuResolved = -1;
+
+    void ResolveGpuTimes()
+    {
+        while (_gpuPending.Count > 0)
+        {
+            var (q, pass, present) = _gpuPending.Peek();
+            if (!Diagnostics.GpuTimes.Enabled)
+            {
+                _gl.DeleteQuery(_gpuPending.Dequeue().Query);
+                Diagnostics.GpuTimes.Dropped++;
+                continue;
+            }
+            _gl.GetQueryObject(q, QueryObjectParameterName.ResultAvailable, out int ready);
+            if (ready == 0) break;
+            _gl.GetQueryObject(q, QueryObjectParameterName.Result, out long ns);
+            _gl.DeleteQuery(q);
+            _gpuPending.Dequeue();
+            if (present != _gpuResolved)
+            {
+                if (_gpuResolved >= 0)
+                {
+                    Diagnostics.GpuTimes.Presents++;
+                    Diagnostics.GpuTimes.Complete = _gpuResolved;
+                }
+                _gpuResolved = present;
+            }
+            Diagnostics.GpuTimes.Resolve(present, pass, ns);
+        }
+        // Called after the present's last query: nothing left means it is done too.
+        if (_gpuPending.Count == 0 && _gpuResolved >= 0) Diagnostics.GpuTimes.Complete = _gpuResolved;
     }
 
     /// <summary>0046. A timer query's result in nanoseconds, deleting it; -1 while the
@@ -2340,7 +2387,7 @@ public sealed partial class GlCore : IGpuBackend
             var aoQuery = BeginGpuTimer();
             surfaces = DrawSurfaces(src!, gScale);
             RunAo(src!, dispX - src!.X, dispY - src.Y, w1x, h1x, fbW, fbH, surfaces && GteDepth.AoNormals);
-            EndGpuTimer(aoQuery, GpuWork.AmbientOcclusion, aoStart);
+            EndGpuTimer(aoQuery, GpuWork.AmbientOcclusion, aoStart, Diagnostics.GpuTimes.Pass.Ao);
             Diagnostics.Profiler.End(aoProfile);
         }
         else if (GteDepth.AmbientOcclusion && !rgb24)
@@ -2358,7 +2405,7 @@ public sealed partial class GlCore : IGpuBackend
                 DrawRetained(src!);
                 RunSsr(src!, dispX - src!.X, dispY - src.Y, w1x, h1x);
             }
-            EndGpuTimer(ssrQuery, GpuWork.Reflections, ssrStart);
+            EndGpuTimer(ssrQuery, GpuWork.Reflections, ssrStart, Diagnostics.GpuTimes.Pass.Reflections);
             Diagnostics.Profiler.End(ssrProfile);
         }
         else if (GteDepth.Reflections && !rgb24)
@@ -2439,7 +2486,9 @@ public sealed partial class GlCore : IGpuBackend
         }
 
         uint outTex = ApplyPostFx(_presentTex, fbW, fbH);
-        EndGpuTimer(compQuery, GpuWork.Composite, compStart);
+        EndGpuTimer(compQuery, GpuWork.Composite, compStart, Diagnostics.GpuTimes.Pass.Composite);
+        ResolveGpuTimes();
+        Diagnostics.GpuTimes.Issued = ++_gpuPresent;
         Diagnostics.Profiler.End(compProfile);
         if (PresentSnap.Due(dispY)) SnapPresent(outTex == _postTex ? _postFbo : _presentFbo, fbW, fbH, dispX, dispY);
 

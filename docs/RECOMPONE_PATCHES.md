@@ -14,7 +14,7 @@ number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
 Seventy-two of the eighty are load-bearing; `0002`, `0003`, `0015`, `0045`,
-`0046`, `0065` and `0069` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
+`0046`, `0065`, `0069` and `0084` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
 it was folded into `0054` as an amendment, and the number is not reused. `0075` and `0076`
 are held by the remaster's plan for work not yet made (`docs/REMASTER.md`), which is
 why the shadows are `0077`. **Three force a recompile** —
@@ -1340,6 +1340,18 @@ Four files in the directory have no entry below:
   as the shader at `HEAD` and the new ones at 0 from the formula. The port half is
   `patches/EnhancementDistance.cs`. GL core only. **No recompile.** See "The
   enhancement distance" in `docs/RENDERING.md`.
+
+- `0084-gpu-frame-timers.patch` — a diagnostic: GPU time per present, by pass.
+  `Diagnostics/GpuTimes.cs` holds the totals; while `GpuTimes.Enabled` (the port
+  sets it with the profiler) `GlCore`'s `BeginGpuTimer`/`EndGpuTimer`, which `0046`
+  used only under a trace sink, queue each query with its pass (a flush into a
+  planar texture is `Capture`, any other `Scene`; then AO, reflections, composite)
+  and the present it was issued in, and `ResolveGpuTimes` reads them back at the
+  end of each present without waiting. `GpuTimes.Issued`, `Complete` and the
+  `Resolved` event let the port charge each query to the frame that issued it
+  (`patches/GpuFrames.cs`). A trace sink takes precedence, and the
+  retained scene's probe timer stands down, since `GL_TIME_ELAPSED` queries may
+  not nest. **No recompile.** See "GPU time per present" in `docs/DEVELOPMENT.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

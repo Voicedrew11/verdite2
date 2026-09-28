@@ -38,6 +38,7 @@ you would be doing when you need them:
 | `docs/INPUT.md` | pad, sticks, keyboard, mouse, the menu pointer |
 | `docs/PACKAGING.md` | the redistributable: the launcher, the first-run build, CI |
 | `docs/TODO.md` | next steps and open, undiagnosed questions |
+| `docs/GPU_RENDERER.md` | the GPU (retained-mode) world renderer: the plan and its work |
 
 Update the right document when you learn something — that is where findings
 belong, not in commit messages, and not in this file. Source comments still say

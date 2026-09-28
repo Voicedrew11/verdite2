@@ -151,6 +151,11 @@ public sealed class ProfilerPanel : IPanel
     int _aggFrames;
     double _aggSeconds, _avgMs, _p50, _p99, _maxMs, _avgWork, _avgWait, _avgGpu, _gcMs, _jitMs, _allocKb, _medianWork;
     int _gcCount;
+    // GPU time over the window, from the frames whose queries have all resolved.
+    readonly double[] _gpuSum = new double[GpuTimes.Passes], _gpuTmp = new double[GpuTimes.Passes];
+    readonly double[] _gpuPassMax = new double[GpuTimes.Passes];
+    double _gpuMax;
+    int _gpuFrames;
     long _aggNewest = -1;
     double _aggAt;
     long _aggSelected = -2;
@@ -182,6 +187,10 @@ public sealed class ProfilerPanel : IPanel
         _sortedWork.Clear();
         double work = 0, wait = 0, gpu = 0, gc = 0, jit = 0, alloc = 0;
         _gcCount = 0;
+        Array.Clear(_gpuSum);
+        Array.Clear(_gpuPassMax);
+        _gpuMax = 0;
+        _gpuFrames = 0;
 
         var horizon = newest.Start + newest.Ticks - (long)(_windowSeconds * 1000.0 / Profiler.TicksToMs);
         long oldestStart = newest.Start;
@@ -248,6 +257,16 @@ public sealed class ProfilerPanel : IPanel
             jit += f.JitMs;
             alloc += f.AllocBytes;
             _gcCount += f.Gc0 + f.Gc1 + f.Gc2;
+            if (GpuFrames.TryGet(f.Index, _gpuTmp))
+            {
+                _gpuFrames++;
+                for (var i = 0; i < GpuTimes.Passes; i++)
+                {
+                    _gpuSum[i] += _gpuTmp[i];
+                    _gpuPassMax[i] = Math.Max(_gpuPassMax[i], _gpuTmp[i]);
+                }
+                _gpuMax = Math.Max(_gpuMax, GpuFrames.Total(_gpuTmp));
+            }
             foreach (var s in f.Span)
             {
                 _aggSelf[s.Id] += s.Self;
@@ -266,7 +285,8 @@ public sealed class ProfilerPanel : IPanel
     // ---- the header -------------------------------------------------------------------
 
     // Built when the numbers change, not every frame the panel draws.
-    string _summaryFrame = "", _summaryWork = "", _summaryGc = "";
+    string _summaryFrame = "", _summaryWork = "", _summaryGc = "", _summaryGpu = "";
+    readonly string[] _gpuLegend = new string[GpuTimes.Passes];
     string? _summarySelected;
 
     void BuildSummary()
@@ -281,8 +301,23 @@ public sealed class ProfilerPanel : IPanel
             ? $"Frame {f.Index}: {f.Ms:0.00} ms, work {f.WorkMs:0.00}, swap {f.GpuMs:0.00}, wait {f.WaitMs:0.00}" +
               (f.GcPauseMs > 0 ? $", GC {f.GcPauseMs:0.00} ms" : "") +
               (f.JitMs > 0.05 ? $", JIT {f.JitMs:0.00} ms / {f.JitMethods} methods" : "") +
-              $", {f.AllocBytes / 1024.0:0.0} KB"
+              $", {f.AllocBytes / 1024.0:0.0} KB" + GpuOf(f.Index)
             : null;
+
+        var n = Math.Max(1, _gpuFrames);
+        _summaryGpu = !GpuTimes.Supported ? "GPU: this backend has no timer queries"
+            : _gpuFrames == 0 ? "GPU: waiting for the first frame to resolve"
+            : $"GPU {_gpuSum.Sum() / n:0.00} ms avg, {_gpuMax:0.00} max over {_gpuFrames} frames";
+        for (var i = 0; i < GpuTimes.Passes; i++)
+            _gpuLegend[i] = $"■ {GpuTimes.Names[i]} {_gpuSum[i] / n:0.00}";
+    }
+
+    string GpuOf(long index)
+    {
+        if (!GpuFrames.TryGet(index, _gpuTmp)) return ", GPU not resolved yet";
+        return $", GPU {GpuFrames.Total(_gpuTmp):0.00} ms (" +
+               string.Join(", ", Enumerable.Range(0, GpuTimes.Passes).Where(i => _gpuTmp[i] > 0)
+                   .Select(i => $"{GpuTimes.Names[i]} {_gpuTmp[i]:0.00}")) + ")";
     }
 
     void DrawSummary()
@@ -297,6 +332,12 @@ public sealed class ProfilerPanel : IPanel
             ImGui.SetTooltip("Over the window. GC pauses stop every thread, the audio mixer's included. " +
                              "Allocation is the game thread's own. JIT is methods compiled for the first time -- " +
                              "QuickJit is off, so first-hit code compiles fully optimised and can spike a frame.");
+
+        ImGui.TextUnformatted(_summaryGpu);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("GPU time a frame, from timer queries around every batch submit and each present " +
+                             "pass (runtime 0084), read back once the GPU has finished them, a few frames late. " +
+                             "Not counted: VRAM uploads, writebacks, the interface and the swap.");
 
         if (_selected >= 0 && _summarySelected != null)
         {
@@ -408,6 +449,7 @@ public sealed class ProfilerPanel : IPanel
             ImGui.Text($"frame {f.Index}: {f.Ms:0.00} ms  (work {f.WorkMs:0.00}, swap {f.GpuMs:0.00}, wait {f.WaitMs:0.00})");
             if (f.GcPauseMs > 0) ImGui.Text($"GC pause {f.GcPauseMs:0.00} ms");
             if (f.JitMs > 0.05) ImGui.Text($"JIT {f.JitMs:0.00} ms, {f.JitMethods} methods");
+            ImGui.TextUnformatted(GpuOf(f.Index).TrimStart(',', ' '));
             foreach (var s in f.Span.ToArray().OrderByDescending(s => s.Self).Take(10))
             {
                 if (!_showWaits && Profiler.Group(s.Id) == ProfileGroup.Wait) continue;
@@ -417,6 +459,8 @@ public sealed class ProfilerPanel : IPanel
             ImGui.EndTooltip();
             if (ImGui.IsItemClicked()) _selected = f.Index;
         }
+
+        DrawGpuStrip(width, barW, bars, scale, target);
 
         // The legend doubles as the key to the table's group column.
         for (var g = 0; g < GroupNames.Length; g++)
@@ -442,6 +486,86 @@ public sealed class ProfilerPanel : IPanel
             dl.AddLine(new Vector2(p0.X, y), new Vector2(p0.X + width, y), c);
             dl.AddText(new Vector2(p0.X + 4, y - ImGui.GetTextLineHeight()), c, text);
         }
+    }
+
+    // ---- the GPU strip ---------------------------------------------------------------------
+
+    static readonly Vector4[] PassColours =
+    [
+        new(0.35f, 0.78f, 0.55f, 1f),   // scene
+        new(0.25f, 0.85f, 0.90f, 1f),   // capture
+        new(0.70f, 0.70f, 0.40f, 1f),   // ao
+        new(0.55f, 0.55f, 0.95f, 1f),   // reflections
+        new(0.95f, 0.55f, 0.80f, 1f),   // composite
+    ];
+
+    /// <summary>The GPU time of the same frames, at the CPU graph's milliseconds per
+    /// pixel so the two can be read against each other; a bar the strip cannot hold
+    /// is cut, with a tick. A frame still waiting on the GPU is left empty.</summary>
+    void DrawGpuStrip(float width, float barW, int bars, double scale, double target)
+    {
+        const float height = 64f;
+        var p0 = ImGui.GetCursorScreenPos();
+        var dl = ImGui.GetWindowDrawList();
+        dl.AddRectFilled(p0, p0 + new Vector2(width, height), ImGui.GetColorU32(ImGuiCol.FrameBg));
+
+        var mouse = ImGui.GetMousePos();
+        var hovered = -1;
+        Span<double> ms = stackalloc double[GpuTimes.Passes];
+        for (var i = 0; i < bars; i++)
+        {
+            var f = Profiler.GetFrame(i);
+            var x1 = p0.X + width - i * barW;
+            var x0 = x1 - barW + 1f;
+            if (mouse.X >= x0 - 0.5f && mouse.X < x1 + 0.5f && mouse.Y >= p0.Y && mouse.Y < p0.Y + height) hovered = i;
+            if (!GpuFrames.TryGet(f.Index, ms)) continue;
+
+            var y = p0.Y + height;
+            for (var k = 0; k < ms.Length; k++)
+            {
+                var h = (float)(ms[k] * scale);
+                if (h <= 0) continue;
+                var yTop = Math.Max(p0.Y, y - h);
+                dl.AddRectFilled(new Vector2(x0, yTop), new Vector2(x1, y), ImGui.GetColorU32(PassColours[k]));
+                y = yTop;
+            }
+            if (GpuFrames.Total(ms) * scale > height)
+                dl.AddRectFilled(new Vector2(x0, p0.Y), new Vector2(x1, p0.Y + 3), ImGui.GetColorU32(new Vector4(1, 1, 1, 1)));
+            if (f.Index == _selected)
+                dl.AddRect(new Vector2(x0 - 1, p0.Y), new Vector2(x1 + 1, p0.Y + height), ImGui.GetColorU32(new Vector4(1, 1, 1, 1)));
+        }
+
+        if (target > 0 && target * scale <= height)
+        {
+            var y = p0.Y + height - (float)(target * scale);
+            dl.AddLine(new Vector2(p0.X, y), new Vector2(p0.X + width, y), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.35f)));
+        }
+        dl.AddText(new Vector2(p0.X + 4, p0.Y + 2), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.5f)), "GPU");
+
+        ImGui.InvisibleButton("##kf2profgpu", new Vector2(width, height));
+        if (hovered >= 0 && ImGui.IsItemHovered())
+        {
+            var f = Profiler.GetFrame(hovered);
+            ImGui.BeginTooltip();
+            if (!GpuFrames.TryGet(f.Index, ms)) ImGui.Text($"frame {f.Index}: GPU not resolved yet");
+            else
+            {
+                ImGui.Text($"frame {f.Index}: GPU {GpuFrames.Total(ms):0.00} ms, CPU work {f.WorkMs:0.00} ms");
+                for (var k = 0; k < ms.Length; k++)
+                    if (ms[k] > 0) ImGui.TextColored(PassColours[k], $"{ms[k],7:0.00}  {GpuTimes.Names[k]}");
+            }
+            ImGui.TextDisabled("click to read this frame in the table");
+            ImGui.EndTooltip();
+            if (ImGui.IsItemClicked()) _selected = f.Index;
+        }
+
+        for (var k = 0; k < GpuTimes.Passes; k++)
+        {
+            if (k > 0) ImGui.SameLine();
+            ImGui.TextColored(PassColours[k], _gpuLegend[k] ?? GpuTimes.Names[k]);
+        }
+        ImGui.SameLine();
+        ImGui.TextDisabled("   GPU ms a frame by pass, the same scale as the bars above");
     }
 
     static Vector4 GroupTint(ProfileGroup g)
@@ -497,31 +621,23 @@ public sealed class ProfilerPanel : IPanel
 
     // ---- the table ------------------------------------------------------------------------
 
-    void SortRows()
-    {
-        var n = _selected >= 0 ? 1.0 : Math.Max(1, _aggFrames);
-        _rows.Sort((a, b) =>
-        {
-            int c = _sortColumn switch
-            {
-                0 => string.Compare(Profiler.DisplayName(a), Profiler.DisplayName(b), StringComparison.OrdinalIgnoreCase),
-                1 => Profiler.Group(a).CompareTo(Profiler.Group(b)),
-                2 => _aggSelf[a].CompareTo(_aggSelf[b]),
-                3 => _aggMax[a].CompareTo(_aggMax[b]),
-                4 => _aggIncl[a].CompareTo(_aggIncl[b]),
-                5 => _aggCalls[a].CompareTo(_aggCalls[b]),
-                _ => 0,
-            };
-            if (c == 0) c = _aggSelf[a].CompareTo(_aggSelf[b]);
-            return _sortAscending ? c : -c;
-        });
-    }
+    // The rows sort in BuildRows, where the GPU passes join the sections.
+    void SortRows() { }
 
-    readonly record struct Row(int Id, ProfileGroup Group, string Name, string Self, string Max, string Incl,
+    /// <summary>A table row: a CPU section, or a GPU pass (<see cref="Gpu"/>, whose
+    /// <see cref="Id"/> is the pass). The numbers sort; the strings are drawn.</summary>
+    readonly record struct Row(int Id, bool Gpu, ProfileGroup Group, string Name, double SelfV, double MaxV,
+                               double InclV, double CallsV, string Self, string Max, string Incl,
                                string Calls, string Share);
 
     readonly List<Row> _visible = new();
     string _tableCaption = "";
+
+    // 0 both, 1 the CPU's sections, 2 the GPU's passes.
+    int _side;
+    static readonly string[] Sides = ["CPU + GPU", "CPU", "GPU"];
+
+    static string Ms(double v) => v.ToString("0.000", CultureInfo.InvariantCulture);
 
     void BuildRows()
     {
@@ -531,30 +647,88 @@ public sealed class ProfilerPanel : IPanel
             if (Profiler.Group(id) is not (ProfileGroup.Wait or ProfileGroup.Gpu)) workTicks += _aggSelf[id];
 
         _visible.Clear();
-        foreach (var id in _rows)
-        {
-            var group = Profiler.Group(id);
-            if (!_showWaits && group == ProfileGroup.Wait) continue;
-            var name = Profiler.DisplayName(id);
-            if (_filter.Length > 0 && name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+        if (_side != 2)
+            foreach (var id in _rows)
+            {
+                var group = Profiler.Group(id);
+                if (!_showWaits && group == ProfileGroup.Wait) continue;
+                var name = Profiler.DisplayName(id);
+                if (_filter.Length > 0 && name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
 
-            _visible.Add(new Row(id, group, name,
-                (_aggSelf[id] * Profiler.TicksToMs / frames).ToString("0.000", CultureInfo.InvariantCulture),
-                (_aggMax[id] * Profiler.TicksToMs).ToString("0.000", CultureInfo.InvariantCulture),
-                (_aggIncl[id] * Profiler.TicksToMs / frames).ToString("0.000", CultureInfo.InvariantCulture),
-                (_aggCalls[id] / frames).ToString(frames == 1 ? "0" : "0.0", CultureInfo.InvariantCulture),
-                group is not (ProfileGroup.Wait or ProfileGroup.Gpu) && workTicks > 0
-                    ? (100.0 * _aggSelf[id] / workTicks).ToString("0.0", CultureInfo.InvariantCulture) + "%"
-                    : ""));
+                double self = _aggSelf[id] * Profiler.TicksToMs / frames, max = _aggMax[id] * Profiler.TicksToMs,
+                       incl = _aggIncl[id] * Profiler.TicksToMs / frames, calls = _aggCalls[id] / frames;
+                _visible.Add(new Row(id, false, group, name, self, max, incl, calls, Ms(self), Ms(max), Ms(incl),
+                    calls.ToString(frames == 1 ? "0" : "0.0", CultureInfo.InvariantCulture),
+                    group is not (ProfileGroup.Wait or ProfileGroup.Gpu) && workTicks > 0
+                        ? (100.0 * _aggSelf[id] / workTicks).ToString("0.0", CultureInfo.InvariantCulture) + "%"
+                        : ""));
+            }
+
+        // The GPU's passes: the window's average and worst, or the selected frame's.
+        var gpuNote = "";
+        if (_side != 1)
+        {
+            Span<double> avg = stackalloc double[GpuTimes.Passes], max = stackalloc double[GpuTimes.Passes];
+            bool have;
+            if (_selected >= 0)
+            {
+                have = GpuFrames.TryGet(_selected, _gpuTmp);
+                _gpuTmp.CopyTo(avg);
+                _gpuTmp.CopyTo(max);
+            }
+            else
+            {
+                have = _gpuFrames > 0;
+                for (var k = 0; k < GpuTimes.Passes; k++)
+                {
+                    avg[k] = _gpuSum[k] / Math.Max(1, _gpuFrames);
+                    max[k] = _gpuPassMax[k];
+                }
+            }
+            if (!have) gpuNote = _selected >= 0 ? ", GPU not resolved yet" : ", no GPU time yet";
+            var total = 0.0;
+            foreach (var a in avg) total += a;
+            for (var k = 0; have && k < GpuTimes.Passes; k++)
+            {
+                var name = "GPU " + GpuTimes.Names[k];
+                if (_filter.Length > 0 && name.IndexOf(_filter, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                if (avg[k] <= 0 && max[k] <= 0) continue;
+                _visible.Add(new Row(k, true, ProfileGroup.Gpu, name, avg[k], max[k], avg[k], 0, Ms(avg[k]), Ms(max[k]),
+                    Ms(avg[k]), "",
+                    total > 0 ? (100.0 * avg[k] / total).ToString("0.0", CultureInfo.InvariantCulture) + "%" : ""));
+            }
         }
 
-        _tableCaption = _selected >= 0 ? "one frame" : $"per frame, averaged over {_aggFrames} frames";
+        _visible.Sort((a, b) =>
+        {
+            int c = _sortColumn switch
+            {
+                0 => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase),
+                1 => (a.Gpu ? 99 : (int)a.Group).CompareTo(b.Gpu ? 99 : (int)b.Group),
+                2 => a.SelfV.CompareTo(b.SelfV),
+                3 => a.MaxV.CompareTo(b.MaxV),
+                4 => a.InclV.CompareTo(b.InclV),
+                5 => a.CallsV.CompareTo(b.CallsV),
+                _ => 0,
+            };
+            if (c == 0) c = a.SelfV.CompareTo(b.SelfV);
+            return _sortAscending ? c : -c;
+        });
+
+        _tableCaption = (_selected >= 0 ? "one frame" : $"per frame, averaged over {_aggFrames} frames") + gpuNote;
     }
 
     unsafe void DrawTable()
     {
         ImGui.SetNextItemWidth(220);
         if (ImGui.InputTextWithHint("##kf2proffilter", "filter sections", ref _filter, 128)) BuildRows();
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(120);
+        if (ImGui.Combo("##kf2profside", ref _side, Sides, Sides.Length)) BuildRows();
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("CPU: the game thread's sections; % is the share of the frame's work. GPU: the GPU's " +
+                             "passes, from timer queries; % is the share of the frame's GPU time. \"swap\" is the " +
+                             "CPU waiting on the driver, so it is a CPU row.");
         ImGui.SameLine();
         ImGui.TextDisabled(_tableCaption);
 
@@ -571,7 +745,7 @@ public sealed class ProfilerPanel : IPanel
         ImGui.TableSetupColumn("max self", ImGuiTableColumnFlags.PreferSortDescending, 1f);
         ImGui.TableSetupColumn("incl ms", ImGuiTableColumnFlags.PreferSortDescending, 1f);
         ImGui.TableSetupColumn("calls", ImGuiTableColumnFlags.PreferSortDescending, 0.9f);
-        ImGui.TableSetupColumn("% work", ImGuiTableColumnFlags.NoSort, 0.9f);
+        ImGui.TableSetupColumn(_side == 2 ? "% GPU" : _side == 1 ? "% work" : "% work/GPU", ImGuiTableColumnFlags.NoSort, 0.9f);
         ImGui.TableHeadersRow();
 
         var specs = ImGui.TableGetSortSpecs();
@@ -593,9 +767,10 @@ public sealed class ProfilerPanel : IPanel
                 ImGui.TableNextRow();
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(row.Name);
-                if (ImGui.IsItemHovered() && Profiler.Label(row.Id) != null) ImGui.SetTooltip(Profiler.Name(row.Id));
+                if (!row.Gpu && ImGui.IsItemHovered() && Profiler.Label(row.Id) != null) ImGui.SetTooltip(Profiler.Name(row.Id));
                 ImGui.TableNextColumn();
-                ImGui.TextColored(GroupTint(row.Group), GroupNames[(int)row.Group]);
+                if (row.Gpu) ImGui.TextColored(PassColours[row.Id], "gpu");
+                else ImGui.TextColored(GroupTint(row.Group), GroupNames[(int)row.Group]);
                 ImGui.TableNextColumn();
                 ImGui.TextUnformatted(row.Self);
                 ImGui.TableNextColumn();

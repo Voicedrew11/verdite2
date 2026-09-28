@@ -8,7 +8,9 @@ everything else lives in `docs/`, split by what you would be doing when you need
 it. **Nine documents became ten**: `docs/PACKAGING.md` is how the port becomes
 something a person can download, which is a different job from building it. The
 eleventh, `docs/REMASTER.md`, is the design for a remaster's authoring tools,
-and the record of the work against it; Phase 1 is in, in two slices.
+and the record of the work against it; Phase 1 is in, in two slices. The twelfth,
+`docs/GPU_RENDERER.md`, is the plan to draw the world from meshes kept on the
+GPU instead of from the triangles the game's code builds each frame.
 
 **Source comments still say `See "X" in NOTES.md`, and the text they mean is no
 longer in this file.** The section titles are unchanged, so the map below resolves
@@ -409,6 +411,17 @@ The authoring tools (identity, packs, editor) and the engine work for a remaster
 - Phase 7, the first slice
 - Phase 8, the first slice
 - Open decisions
+
+### [GPU_RENDERER.md](docs/GPU_RENDERER.md)
+
+The plan to draw the world from meshes kept on the GPU (retained-mode rendering), the steps, and where the planar reflections come in. Nothing built yet.
+
+- Why: the frame is the game's geometry, done on one CPU thread
+- The target
+- The steps
+- Where the reflections come in
+- The old path stays as the comparison
+- Rules this keeps
 
 ## Where to write a new finding
 

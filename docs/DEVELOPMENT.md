@@ -522,6 +522,57 @@ morph is still the next largest thing here, and it is now the largest recompiled
 thing left inside a C# submit. See "The object and creature walk in C#" in
 `PATCHES_AND_MODS.md`.
 
+### GPU time per present
+
+The sections above are CPU time on the game thread, and "buffer swap + driver" is
+the only place a GPU-bound frame shows, as a wait. **The profiler also times the
+GPU now** (`0084`, `Diagnostics/GpuTimes.cs`): while it records, the GL backend
+puts a `GL_TIME_ELAPSED` query around every batch submit and each present pass, and
+reads them back without waiting, oldest first, once the GPU has finished them. The
+console line gains `GPU ms/present`, by pass; `KF2_PROFILE_OUT` gains `gpu.scene`,
+`gpu.capture`, `gpu.ao`, `gpu.reflections`, `gpu.composite` and `gpu.total` rows,
+which `scripts/profile_report.py` averages. The passes:
+
+- **scene**: every batch drawn into a display target or VRAM (the world, the HUD,
+  the authored lights' shadow cubemaps, which are drawn at the top of a flush);
+- **capture**: batches drawn into a planar texture (`0068`);
+- **ao**: the surface buffer and the occlusion pass;
+- **reflections**: the retained scene's draws and the reflection pass (and the
+  surface buffer when the occlusion pass is off);
+- **composite**: the present blit and post-fx.
+
+Not counted: VRAM uploads, writebacks, the interface and the swap. A query covers
+the wall time of the GPU work inside it, so a GPU that starves inside a submit
+counts the bubble.
+
+**Each query is charged to the frame that issued it** (`patches/GpuFrames.cs`): a
+frame keeps the range of presents it issued (`GpuTimes.Issued`), the runtime raises
+`GpuTimes.Resolved` for each query as it is read, and a frame is complete once
+`GpuTimes.Complete` has passed its last present, about three frames later. The CSV
+writes a frame's `gpu.*` rows then, under its own index, so they line up with its
+CPU rows; the last few frames of a run have none. The console line is the window's
+average per present.
+
+**In the panel** (Shift+P): a `GPU` line under the header (average and worst over
+the window), a strip under the frame bars with each frame's GPU time stacked by
+pass, at the bars' own milliseconds per pixel so the two read against each other
+(a white tick where a frame is taller than the strip), a legend with each pass's
+average, and the GPU breakdown in the hover and in the selected frame's line. A
+frame still waiting on the GPU is left empty. The table's selector beside the filter
+shows **CPU + GPU**, **CPU** or **GPU**: the passes are rows (`GPU scene` and so on,
+group `gpu`), sorted with the sections, their `%` the share of the frame's GPU time
+where a section's is the share of its work. `swap` stays a CPU row: it is the game
+thread waiting on the driver. Whether the strip reads well is to be
+judged by eye. **Off while a frame capture traces** (`0046`'s
+queries take precedence; the two may not nest), and the retained scene's probe
+timer stands down while it is on.
+
+Measured at the `KF2_AUTOSTART=new` spot facing the pool, render scale 5, 16:9,
+SSAO, murk and waves on, RX 9070 XT, `KF2_FPS=1000`: 294 fps with it, 290 before
+it, so the queries cost nothing measurable. GPU 1.46 ms a present with planar
+off (scene 1.03, ao 0.27, reflections 0.02, composite 0.15) and 1.50 with it on
+(capture 0.18). No GL errors under `KF2_GLDEBUG=1`.
+
 ## The first frame of an area was the JIT
 
 Reported from play as a **hitch when walking between two areas**, and explicitly
