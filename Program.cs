@@ -762,9 +762,11 @@ Kf2.RetainedMap.Install();
 // code. Off by default: measured, not judged. See docs/GPU_RENDERER.md.
 //
 //     KF2_GPUWORLD=1          on; 0 never; unset, the saved setting
-//     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept
+//     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept; the surface buffer against the depth
+//     KF2_GPUWORLD_SURFACES=0 leave the map out of the normal and surface buffers (the comparison)
 Kf2.GpuWorld.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD"),
-                       Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"));
+                       Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"),
+                       Environment.GetEnvironmentVariable("KF2_GPUWORLD_SURFACES"));
 Kf2.GpuWorld.Install();
 
 // The remaster (docs/REMASTER.md): authored data from a pack, applied over the

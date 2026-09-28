@@ -78,6 +78,12 @@ public sealed class AoGeometry
 
     public List<int> Breaks => _breaks;
 
+    /// <summary>0085. The retained scene's frame whose map the GPU drew into this
+    /// target this frame (0 for none), and the projection centre it was drawn with,
+    /// in the target's 1x pixels. The normal pass draws that map first.</summary>
+    public int WorldSerial;
+    public float WorldCx, WorldCy;
+
     /// <summary>Start this target's list over when it is first drawn in a new frame,
     /// or when the depth generation moved under it.</summary>
     public void Frame(long frame, int gen)
@@ -86,6 +92,7 @@ public sealed class AoGeometry
         _frame = frame;
         _gen = gen;
         _n = 0;
+        WorldSerial = 0;
         _breaks.Clear();
         _inVeil = false;
     }

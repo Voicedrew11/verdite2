@@ -1380,6 +1380,19 @@ Four files in the directory have no entry below:
   Against the packet path, at most 4.9% of pixels differ by more than 4 levels in
   `fdat02` and 14.2% in area 1, all texel edges one render pixel over. GL core only. **No
   recompile.** See "Step 1, the first slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the map drawn on the GPU reached neither the occlusion pass's
+  normal buffer nor the surface buffer (`0058`, `0067`), so the table's triangles
+  alone filled them, in table order, and a creature behind a wall left its normal
+  where the wall stood: its shading showed through. `RenderSurfaces` now draws the
+  frame's map first (`GlMainView.DrawWorldNormals`, `WorldNormalVs` with `NormalFs`,
+  for the frame `AoGeometry.WorldSerial` names, through its half gate), and
+  `NormalFs` drops a fragment behind the frame's own depth (`uDepthCull`,
+  `uFrameDepth` on unit 18), since the order no longer says which surface is in
+  front. Without the map on the GPU the uniform is 0 and the pass is the one before.
+  `RetainedScene.MainSurfaces` (`KF2_GPUWORLD_SURFACES=0`, `gpuworld surfaces off`)
+  is the comparison, and `RetainedScene.SurfaceCheck` the probe's readback. The
+  second diff in the patch file. See "Step 2, the first slice" in
+  `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

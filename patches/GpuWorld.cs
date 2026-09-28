@@ -11,7 +11,9 @@ namespace Kf2;
 ///
 ///     KF2_GPUWORLD=1         draw the map on the GPU (off: not judged); 0 never
 ///                            (unset, Video ▸ Experimental ▸ GPU world renderer)
-///     KF2_GPUWORLD_PROBE=1   a line every 2 s: draws, misses, halves skipped and kept
+///     KF2_GPUWORLD_PROBE=1   a line every 2 s: draws, misses, halves skipped and kept,
+///                            and the surface buffer read back against the frame's depth
+///     KF2_GPUWORLD_SURFACES=0  leave the map out of the normal and surface buffers
 ///
 /// The tile walk still decides: every half it visits is noted in the frame's gate
 /// (<see cref="RetainedScene.NoteHalf"/>), and the backend draws exactly those halves
@@ -34,8 +36,9 @@ public static class GpuWorld
 
     public static bool Enabled => _on;
 
-    public static void Configure(string? on, string? probe)
+    public static void Configure(string? on, string? probe, string? surfaces = null)
     {
+        RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (!string.IsNullOrWhiteSpace(on)) _forced = on.Trim() is "1" or "on";
         _probe = probe?.Trim() is not (null or "" or "0");
     }
@@ -132,17 +135,20 @@ public static class GpuWorld
         {
             case "on": SetEnabled(true); break;
             case "off": SetEnabled(false); break;
+            case "surfaces on": RetainedScene.MainSurfaces = true; break;
+            case "surfaces off": RetainedScene.MainSurfaces = false; break;
             case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
+               $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
     // ---- the probe -----------------------------------------------------------------
 
     static double _reportAt;
-    static long _draws, _missed, _tris, _uploads;
+    static long _draws, _missed, _tris, _uploads, _nrmTris;
 
     static void Report()
     {
@@ -160,6 +166,14 @@ public static class GpuWorld
         Array.Clear(RetainedScene.MipTicks);
         _uploads = RetainedScene.MipTableUploads;
         Array.Clear(RetainedScene.MainTicks);
+        long px = RetainedScene.SurfaceDepthPixels;
+        Console.WriteLine($"[KF2] gpu world: surfaces: {RetainedScene.MainNormalTriangles - _nrmTris} map triangle(s) into the normal pass; " +
+                          (RetainedScene.SurfaceChecks == 0 ? "no readback (needs the surface buffer: a reflection or the murk on)" :
+                           $"of {px} pixel(s) with a depth, {(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceBehind / px):F2}% whose surface lies behind it, " +
+                           $"{(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceMissing / px):F2}% with none"));
+        _nrmTris = RetainedScene.MainNormalTriangles;
+        RetainedScene.SurfaceDepthPixels = RetainedScene.SurfaceBehind = RetainedScene.SurfaceMissing = RetainedScene.SurfaceChecks = 0;
+        RetainedScene.SurfaceCheck = true;
         Skipped = Kept = 0;
     }
 }

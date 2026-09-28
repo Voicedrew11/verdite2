@@ -114,7 +114,7 @@ public static class AgentServer
         "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
         "view [<x> <y> <z> <pitch> <yaw> <roll> | off] - the camera the last frame was drawn from, a digest of its cull grid and the cells it draws; with a camera, draw every frame from it until 'view off'",
         "waves [on|off | swell|swellsize|ripple|ripplesize|shade|speed <value>] - the water waves: their state, the switch, or one setting (not saved)",
-        "gpuworld [on|off] - the map drawn on the GPU (0085): its state, or the switch (not saved)",
+        "gpuworld [on|off | surfaces on|off] - the map drawn on the GPU (0085): its state, the switch, or whether it reaches the normal and surface buffers (not saved)",
         "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
     ];
 
@@ -315,6 +315,7 @@ public static class AgentServer
                      || parts[0].Equals("view", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("snap", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("waves", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("gpuworld", StringComparison.OrdinalIgnoreCase)
                      || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
                           parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",

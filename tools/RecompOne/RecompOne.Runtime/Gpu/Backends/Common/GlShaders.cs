@@ -552,6 +552,12 @@ internal static class GlShaders
         // 2 a textured one's opaque texels, 0 is no veil.
         uniform sampler2D uVram;
         uniform int uVeilPass;
+        // 0085. The frame's own depth, when the map was drawn on the GPU: the map is
+        // drawn here first and the table's triangles after it, so order no longer
+        // says which surface is in front, and a fragment behind the depth is dropped.
+        uniform sampler2D uFrameDepth;
+        uniform int uDepthCull;
+        uniform vec2 uDepthStep;
 
         vec4 vfetch(ivec2 c) { return texelFetch(uVram, c & ivec2(1023, 511), 0); }
         int vu5(float f) { return int(floor(f * 31.0 + 0.5)); }
@@ -613,7 +619,14 @@ internal static class GlShaders
             if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
             vec2 s = gl_FragCoord.xy / uScale;
             vec3 p = vec3((s - uCentre) * (z / uProjH), z);
-            vec3 n = cross(dFdx(p), dFdy(p));
+            vec3 dpx = dFdx(p), dpy = dFdy(p);
+            if (uDepthCull != 0) {
+                float d = texelFetch(uFrameDepth, ivec2(gl_FragCoord.xy * uDepthStep), 0).r;
+                float dz = d * 65536.0;
+                // The depth texel may sit up to a pixel off this one's centre.
+                if (d < 0.99999 && z > dz + 16.0 + dz / 128.0 + abs(dpx.z) + abs(dpy.z)) discard;
+            }
+            vec3 n = cross(dpx, dpy);
             // A polygon edge-on to the camera, or one degenerate after projection:
             // no plane to report. The zero vector leaves the occlusion pass its own
             // answer, and material None leaves this pixel out of the reflections.
@@ -627,6 +640,56 @@ internal static class GlShaders
             if (dot(n, p) > 0.0) n = -n;
             oColor = opaque ? vec4(n * 0.5 + 0.5, 1.0) : vec4(0.0);
             oSurface = vec4(octEncode(n), vDepth, id);
+        }
+        """;
+
+    /// <summary>
+    /// 0085. The retained map into the normal and surface buffers: <c>WorldVs</c>'s
+    /// position to the letter, for <c>NormalFs</c>. The material is the face's own,
+    /// or <c>Opaque</c>, as <c>SurfaceMaterial.Classify</c> gives an opaque packet.
+    /// </summary>
+    public const string WorldNormalVs = """
+        #version 330 core
+        layout(location = 0) in vec3  inWorld;
+        layout(location = 7) in uint  inFlags;
+
+        invariant gl_Position;
+
+        out float vDepth;
+        flat out float vM;
+        out vec2 vUv;
+        flat out uint vTex;
+
+        uniform mat3  uR;
+        uniform vec3  uCam;
+        uniform vec3  uT;
+        uniform float uH;
+        uniform vec2  uC;
+        uniform vec2  uFb;
+        uniform float uNear;
+        uniform usampler2D uHalves;
+        uniform int uHalfGate;
+        uniform int uWorldSnap;
+
+        void main() {
+            uint hid = (inFlags >> 13) & 0x3FFFu;
+            if (uHalfGate != 0 && hid != 0u
+                && texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r == 0u) {
+                gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
+                return;
+            }
+            vec3 w = inWorld;
+            vec3 v = uR * (w - uCam) + uT;
+            float z = v.z;
+            gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
+            if (uWorldSnap != 0 && z > 0.0)
+                gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+            vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
+            uint m = inFlags & 255u;
+            vM = float(m == 0u ? 1u : m);
+            vUv = vec2(0.0);
+            vTex = 0u;
         }
         """;
 

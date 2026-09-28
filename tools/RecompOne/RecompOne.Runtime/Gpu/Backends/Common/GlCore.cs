@@ -2772,7 +2772,8 @@ public sealed partial class GlCore : IGpuBackend
     /// reads; see NormalFs.
     unsafe bool RenderSurfaces(GlDisplayRt src, int scale)
     {
-        if ((!GteDepth.AoNormals && !GteDepth.Reflections) || _progNormal == 0 || src.Geo.Count == 0) return false;
+        if ((!GteDepth.AoNormals && !GteDepth.Reflections) || _progNormal == 0
+            || src.Geo.Count == 0 && src.Geo.WorldSerial == 0) return false;
         EnsureNormalTarget(src, scale);
         if (src.Normal == 0) return false;
 
@@ -2792,6 +2793,9 @@ public sealed partial class GlCore : IGpuBackend
         _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
         _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
 
+        // 0085. The map the GPU drew goes in first, and the rest is tested against
+        // the frame's depth.
+        bool world = DrawWorldNormals(src, scale);
         _gl.UseProgram(_progNormal);
         // The same transform the colour pass used on this target, so a triangle
         // lands on the pixels it landed on there.
@@ -2847,6 +2851,8 @@ public sealed partial class GlCore : IGpuBackend
         }
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         _gl.Disable(EnableCap.Blend);
+        if (world && _uNrmDepthCull >= 0) _gl.Uniform1(_uNrmDepthCull, 0);
+        if (RetainedScene.SurfaceCheck && src.Surface != 0) CheckSurfaces(src);
         AoGeometry.Passes++;
         return true;
     }

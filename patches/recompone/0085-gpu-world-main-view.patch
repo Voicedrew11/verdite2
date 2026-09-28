@@ -604,3 +604,392 @@ index 41e05f6..54e0ad5 100644
              GteDepth.OtSlot = slot;
  
              if (count > 0)
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
+index fe3572f..b2ed6fe 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
+@@ -78,6 +78,12 @@ public sealed class AoGeometry
+ 
+     public List<int> Breaks => _breaks;
+ 
++    /// <summary>0085. The retained scene's frame whose map the GPU drew into this
++    /// target this frame (0 for none), and the projection centre it was drawn with,
++    /// in the target's 1x pixels. The normal pass draws that map first.</summary>
++    public int WorldSerial;
++    public float WorldCx, WorldCy;
++
+     /// <summary>Start this target's list over when it is first drawn in a new frame,
+     /// or when the depth generation moved under it.</summary>
+     public void Frame(long frame, int gen)
+@@ -86,6 +92,7 @@ public sealed class AoGeometry
+         _frame = frame;
+         _gen = gen;
+         _n = 0;
++        WorldSerial = 0;
+         _breaks.Clear();
+         _inVeil = false;
+     }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index a196b53..5964011 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -2772,7 +2772,8 @@ public sealed partial class GlCore : IGpuBackend
+     /// reads; see NormalFs.
+     unsafe bool RenderSurfaces(GlDisplayRt src, int scale)
+     {
+-        if ((!GteDepth.AoNormals && !GteDepth.Reflections) || _progNormal == 0 || src.Geo.Count == 0) return false;
++        if ((!GteDepth.AoNormals && !GteDepth.Reflections) || _progNormal == 0
++            || src.Geo.Count == 0 && src.Geo.WorldSerial == 0) return false;
+         EnsureNormalTarget(src, scale);
+         if (src.Normal == 0) return false;
+ 
+@@ -2792,6 +2793,9 @@ public sealed partial class GlCore : IGpuBackend
+         _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+         _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+ 
++        // 0085. The map the GPU drew goes in first, and the rest is tested against
++        // the frame's depth.
++        bool world = DrawWorldNormals(src, scale);
+         _gl.UseProgram(_progNormal);
+         // The same transform the colour pass used on this target, so a triangle
+         // lands on the pixels it landed on there.
+@@ -2847,6 +2851,8 @@ public sealed partial class GlCore : IGpuBackend
+         }
+         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+         _gl.Disable(EnableCap.Blend);
++        if (world && _uNrmDepthCull >= 0) _gl.Uniform1(_uNrmDepthCull, 0);
++        if (RetainedScene.SurfaceCheck && src.Surface != 0) CheckSurfaces(src);
+         AoGeometry.Passes++;
+         return true;
+     }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index 61b0f8a..c5431e3 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -13,9 +13,17 @@ public sealed partial class GlCore
+ {
+     int _uwTrueColor, _uwPlainZ, _uwSnap, _uwPerPixel, _uwDither;
+ 
++    // The map into the normal and surface buffers (WorldNormalVs, NormalFs).
++    uint _progWorldNrm;
++    int _uwnR, _uwnCam, _uwnT, _uwnH, _uwnC, _uwnFb, _uwnNear, _uwnHalfGate, _uwnSnap;
++    int _uwnProjH, _uwnCentre, _uwnScale, _uwnDepthCull, _uwnDepthStep;
++    int _uNrmDepthCull, _uNrmDepthStep;
++    const int FrameDepthUnit = 18;
++
+     void InitMainView()
+     {
+         if (_progWorld == 0) return;
++        InitWorldNormals();
+         _uwTrueColor = _gl.GetUniformLocation(_progWorld, "uTrueColor");
+         _uwPlainZ = _gl.GetUniformLocation(_progWorld, "uPlainZ");
+         _uwSnap = _gl.GetUniformLocation(_progWorld, "uWorldSnap");
+@@ -126,6 +134,14 @@ public sealed partial class GlCore
+         long t4 = System.Diagnostics.Stopwatch.GetTimestamp();
+         RetainedScene.MainTicks[0] += t1 - t0; RetainedScene.MainTicks[1] += t2 - t1;
+         RetainedScene.MainTicks[2] += t3 - t2; RetainedScene.MainTicks[3] += t4 - t3;
++        // The normal pass draws this map first (DrawWorldNormals).
++        if (AoGeometry.Active)
++        {
++            rt.Geo.Frame(_frame, GteDepth.Generation);
++            rt.Geo.WorldSerial = RetainedScene.MainSerial;
++            rt.Geo.WorldCx = cx;
++            rt.Geo.WorldCy = cy;
++        }
+         rt.Dirty = true;
+         rt.LastDrawFrame = _frame;
+         rt.RetainedSerial = RetainedScene.Serial;
+@@ -134,4 +150,122 @@ public sealed partial class GlCore
+         RetainedScene.MainTriangles += drawn / 3;
+         return true;
+     }
++
++    // ---- the normal and surface buffers ------------------------------------------
++
++    void InitWorldNormals()
++    {
++        _progWorldNrm = GlShaders.Build(_gl, GlShaders.WorldNormalVs, GlShaders.NormalFs, "worldnormal");
++        if (_progNormal != 0)
++        {
++            _uNrmDepthCull = _gl.GetUniformLocation(_progNormal, "uDepthCull");
++            _uNrmDepthStep = _gl.GetUniformLocation(_progNormal, "uDepthStep");
++            _gl.UseProgram(_progNormal);
++            int u = _gl.GetUniformLocation(_progNormal, "uFrameDepth");
++            if (u >= 0) _gl.Uniform1(u, FrameDepthUnit);
++            if (_uNrmDepthCull >= 0) _gl.Uniform1(_uNrmDepthCull, 0);
++        }
++        if (_progWorldNrm == 0) return;
++        int L(string n) => _gl.GetUniformLocation(_progWorldNrm, n);
++        _uwnR = L("uR"); _uwnCam = L("uCam"); _uwnT = L("uT"); _uwnH = L("uH"); _uwnC = L("uC"); _uwnFb = L("uFb");
++        _uwnNear = L("uNear"); _uwnHalfGate = L("uHalfGate"); _uwnSnap = L("uWorldSnap");
++        _uwnProjH = L("uProjH"); _uwnCentre = L("uCentre"); _uwnScale = L("uScale");
++        _uwnDepthCull = L("uDepthCull"); _uwnDepthStep = L("uDepthStep");
++        _gl.UseProgram(_progWorldNrm);
++        void Unit(string n, int v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
++        Unit("uVram", 0); Unit("uHalves", HalvesUnit); Unit("uFrameDepth", FrameDepthUnit); Unit("uVeilPass", 0);
++        _gl.UseProgram(0);
++    }
++
++    /// <summary>
++    /// Before the normal pass draws the target's triangles: bind the frame's depth
++    /// and, when the map was drawn on the GPU into this target, draw it first. The
++    /// triangles after it then drop what lies behind the depth, since the order they
++    /// are drawn in no longer says which surface is in front. False with no map, and
++    /// the pass is the one it was.
++    /// </summary>
++    bool DrawWorldNormals(GlDisplayRt src, int scale)
++    {
++        var geo = src.Geo;
++        if (geo.WorldSerial == 0 || src.Depth == 0 || !RetainedScene.MainSurfaces) return false;
++        _gl.ActiveTexture(TextureUnit.Texture0 + FrameDepthUnit);
++        _gl.BindTexture(TextureTarget.Texture2D, src.Depth);
++        _gl.ActiveTexture(TextureUnit.Texture0);
++        float stepX = (float)src.TexW / Math.Max(1, src.NormalW), stepY = (float)src.TexH / Math.Max(1, src.NormalH);
++
++        var f = RetainedScene.Find(geo.WorldSerial);
++        if (_progWorldNrm != 0 && f != null && RetainedScene.StaticCount[0] > 0)
++        {
++            var v = f.View;
++            Span<float> r = [v.R00, v.R01, v.R02, v.R10, v.R11, v.R12, v.R20, v.R21, v.R22];
++            CullChunks(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, v.H, geo.WorldCx, geo.WorldCy, src.Wide1x, src.H,
++                       false, 0f, v.H, float.PositiveInfinity);
++            _gl.ActiveTexture(TextureUnit.Texture0 + HalvesUnit);
++            _gl.BindTexture(TextureTarget.Texture2D, _halvesTex);
++            _gl.TexSubImage2D<byte>(TextureTarget.Texture2D, 0, 0, 0, RetainedScene.HalvesW, RetainedScene.HalvesH,
++                PixelFormat.RedInteger, PixelType.UnsignedByte, f.MainHalves);
++            _gl.ActiveTexture(TextureUnit.Texture0);
++
++            _gl.UseProgram(_progWorldNrm);
++            if (_uwnR >= 0) _gl.UniformMatrix3(_uwnR, 1, true, r);
++            if (_uwnCam >= 0) _gl.Uniform3(_uwnCam, (float)v.CamX, (float)v.CamY, (float)v.CamZ);
++            if (_uwnT >= 0) _gl.Uniform3(_uwnT, (float)v.Tx, v.Ty, v.Tz);
++            if (_uwnH >= 0) _gl.Uniform1(_uwnH, v.H);
++            if (_uwnC >= 0) _gl.Uniform2(_uwnC, geo.WorldCx, geo.WorldCy);
++            if (_uwnFb >= 0) _gl.Uniform2(_uwnFb, (float)src.Wide1x, src.H);
++            if (_uwnNear >= 0) _gl.Uniform1(_uwnNear, 16f);
++            if (_uwnHalfGate >= 0) _gl.Uniform1(_uwnHalfGate, 1);
++            if (_uwnSnap >= 0) _gl.Uniform1(_uwnSnap, GteDepth.Subpixel ? 0 : 1);
++            if (_uwnProjH >= 0) _gl.Uniform1(_uwnProjH, Math.Max(1f, v.H));
++            if (_uwnCentre >= 0) _gl.Uniform2(_uwnCentre, geo.WorldCx, geo.WorldCy);
++            if (_uwnScale >= 0) _gl.Uniform1(_uwnScale, (float)scale);
++            if (_uwnDepthCull >= 0) _gl.Uniform1(_uwnDepthCull, 1);
++            if (_uwnDepthStep >= 0) _gl.Uniform2(_uwnDepthStep, stepX, stepY);
++            if (RetainedScene.CullBack)
++            {
++                _gl.Enable(EnableCap.CullFace);
++                _gl.FrontFace(FrontFaceDirection.Ccw);
++                _gl.CullFace(TriangleFace.Back);
++            }
++            RetainedScene.MainNormalTriangles += DrawStaticChunks(0) / 3;
++            _gl.Disable(EnableCap.CullFace);
++            _gl.BindVertexArray(0);
++        }
++
++        _gl.UseProgram(_progNormal);
++        if (_uNrmDepthCull >= 0) _gl.Uniform1(_uNrmDepthCull, 1);
++        if (_uNrmDepthStep >= 0) _gl.Uniform2(_uNrmDepthStep, stepX, stepY);
++        return true;
++    }
++
++    float[]? _chkSurf, _chkDepth;
++
++    /// <summary>The probe's: the surface buffer just drawn, read back against the
++    /// target's depth on a 4-pixel grid. Waits on the GPU; the probe only.</summary>
++    unsafe void CheckSurfaces(GlDisplayRt src)
++    {
++        RetainedScene.SurfaceCheck = false;
++        int sw = src.NormalW, sh = src.NormalH, dw = src.TexW, dh = src.TexH;
++        if (_chkSurf == null || _chkSurf.Length < sw * sh * 4) _chkSurf = new float[sw * sh * 4];
++        if (_chkDepth == null || _chkDepth.Length < dw * dh) _chkDepth = new float[dw * dh];
++        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, src.NormalFbo);
++        _gl.ReadBuffer(ReadBufferMode.ColorAttachment1);
++        fixed (float* p = _chkSurf) _gl.ReadPixels(0, 0, (uint)sw, (uint)sh, PixelFormat.Rgba, PixelType.Float, p);
++        _gl.ReadBuffer(ReadBufferMode.ColorAttachment0);
++        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, src.Fbo);
++        fixed (float* p = _chkDepth) _gl.ReadPixels(0, 0, (uint)dw, (uint)dh, PixelFormat.DepthComponent, PixelType.Float, p);
++        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, 0);
++        for (int y = 0; y < sh; y += 4)
++        for (int x = 0; x < sw; x += 4)
++        {
++            float d = _chkDepth[Math.Min(dh - 1, y * dh / sh) * dw + Math.Min(dw - 1, x * dw / sw)];
++            if (d >= 0.99999f) continue;
++            RetainedScene.SurfaceDepthPixels++;
++            int i = (y * sw + x) * 4;
++            float z = _chkSurf[i + 2] * 65536f, id = _chkSurf[i + 3], dz = d * 65536f;
++            if (id < 0.5f || z <= 0f) { if (id < 2.5f || id > 3.5f) RetainedScene.SurfaceMissing++; continue; }
++            if (z > dz + 64f + dz / 64f) RetainedScene.SurfaceBehind++;
++        }
++        RetainedScene.SurfaceChecks++;
++    }
+ }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
+index caadc39..1c52b0d 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
+@@ -373,23 +373,8 @@ public sealed partial class GlCore
+         int drawn = 0;
+         if (RetainedScene.StaticCount[r] > 0)
+         {
+-            _gl.BindVertexArray(_worldVao);
+             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
+-            // Runs of neighbouring visible chunks are one draw.
+-            int first = -1, count = 0;
+-            for (int c = 0; c <= RetainedScene.Chunks; c++)
+-            {
+-                int k = r * RetainedScene.Chunks + c;
+-                bool take = c < RetainedScene.Chunks && _chunkVis[c] && RetainedScene.ChunkCount[k] > 0;
+-                if (take && first >= 0 && RetainedScene.ChunkStart[k] == first + count) { count += RetainedScene.ChunkCount[k]; continue; }
+-                if (first >= 0 && count > 0)
+-                {
+-                    _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)count);
+-                    drawn += count;
+-                }
+-                first = take ? RetainedScene.ChunkStart[k] : -1;
+-                count = take ? RetainedScene.ChunkCount[k] : 0;
+-            }
++            drawn = DrawStaticChunks(r);
+         }
+         if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+         int dn = f?.DynCount[r] ?? 0;
+@@ -402,6 +387,30 @@ public sealed partial class GlCore
+         return drawn;
+     }
+ 
++    /// <summary>Range <paramref name="r"/> of the visible static chunks through
++    /// whatever program is bound; the vertices drawn.</summary>
++    int DrawStaticChunks(int r)
++    {
++        int drawn = 0;
++        _gl.BindVertexArray(_worldVao);
++        // Runs of neighbouring visible chunks are one draw.
++        int first = -1, count = 0;
++        for (int c = 0; c <= RetainedScene.Chunks; c++)
++        {
++            int k = r * RetainedScene.Chunks + c;
++            bool take = c < RetainedScene.Chunks && _chunkVis[c] && RetainedScene.ChunkCount[k] > 0;
++            if (take && first >= 0 && RetainedScene.ChunkStart[k] == first + count) { count += RetainedScene.ChunkCount[k]; continue; }
++            if (first >= 0 && count > 0)
++            {
++                _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)count);
++                drawn += count;
++            }
++            first = take ? RetainedScene.ChunkStart[k] : -1;
++            count = take ? RetainedScene.ChunkCount[k] : 0;
++        }
++        return drawn;
++    }
++
+     // ---- which chunks a view can see --------------------------------------------
+ 
+     readonly bool[] _chunkVis = new bool[RetainedScene.Chunks];
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 6beaee4..0088cb4 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -552,6 +552,12 @@ internal static class GlShaders
+         // 2 a textured one's opaque texels, 0 is no veil.
+         uniform sampler2D uVram;
+         uniform int uVeilPass;
++        // 0085. The frame's own depth, when the map was drawn on the GPU: the map is
++        // drawn here first and the table's triangles after it, so order no longer
++        // says which surface is in front, and a fragment behind the depth is dropped.
++        uniform sampler2D uFrameDepth;
++        uniform int uDepthCull;
++        uniform vec2 uDepthStep;
+ 
+         vec4 vfetch(ivec2 c) { return texelFetch(uVram, c & ivec2(1023, 511), 0); }
+         int vu5(float f) { return int(floor(f * 31.0 + 0.5)); }
+@@ -613,7 +619,14 @@ internal static class GlShaders
+             if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
+             vec2 s = gl_FragCoord.xy / uScale;
+             vec3 p = vec3((s - uCentre) * (z / uProjH), z);
+-            vec3 n = cross(dFdx(p), dFdy(p));
++            vec3 dpx = dFdx(p), dpy = dFdy(p);
++            if (uDepthCull != 0) {
++                float d = texelFetch(uFrameDepth, ivec2(gl_FragCoord.xy * uDepthStep), 0).r;
++                float dz = d * 65536.0;
++                // The depth texel may sit up to a pixel off this one's centre.
++                if (d < 0.99999 && z > dz + 16.0 + dz / 128.0 + abs(dpx.z) + abs(dpy.z)) discard;
++            }
++            vec3 n = cross(dpx, dpy);
+             // A polygon edge-on to the camera, or one degenerate after projection:
+             // no plane to report. The zero vector leaves the occlusion pass its own
+             // answer, and material None leaves this pixel out of the reflections.
+@@ -630,6 +643,56 @@ internal static class GlShaders
+         }
+         """;
+ 
++    /// <summary>
++    /// 0085. The retained map into the normal and surface buffers: <c>WorldVs</c>'s
++    /// position to the letter, for <c>NormalFs</c>. The material is the face's own,
++    /// or <c>Opaque</c>, as <c>SurfaceMaterial.Classify</c> gives an opaque packet.
++    /// </summary>
++    public const string WorldNormalVs = """
++        #version 330 core
++        layout(location = 0) in vec3  inWorld;
++        layout(location = 7) in uint  inFlags;
++
++        invariant gl_Position;
++
++        out float vDepth;
++        flat out float vM;
++        out vec2 vUv;
++        flat out uint vTex;
++
++        uniform mat3  uR;
++        uniform vec3  uCam;
++        uniform vec3  uT;
++        uniform float uH;
++        uniform vec2  uC;
++        uniform vec2  uFb;
++        uniform float uNear;
++        uniform usampler2D uHalves;
++        uniform int uHalfGate;
++        uniform int uWorldSnap;
++
++        void main() {
++            uint hid = (inFlags >> 13) & 0x3FFFu;
++            if (uHalfGate != 0 && hid != 0u
++                && texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r == 0u) {
++                gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
++                vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
++                return;
++            }
++            vec3 w = inWorld;
++            vec3 v = uR * (w - uCam) + uT;
++            float z = v.z;
++            gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
++            if (uWorldSnap != 0 && z > 0.0)
++                gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
++            vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
++            uint m = inFlags & 255u;
++            vM = float(m == 0u ? 1u : m);
++            vUv = vec2(0.0);
++            vTex = 0u;
++        }
++        """;
++
+     /// <summary>
+     /// 0067. Screen-space reflections. For each pixel whose surface reflects, the
+     /// view ray is reflected about the surface's own plane (the surface buffer's
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index fa7e9f1..c6af777 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -109,6 +109,16 @@ public static class RetainedScene
+     /// <summary>0085. Main-view draws made, walks that found no target or no frame,
+     /// and static triangles submitted.</summary>
+     public static long MainDraws, MainMissed, MainTriangles;
++    /// <summary>The map's triangles the normal pass drew for the surface buffers.</summary>
++    public static long MainNormalTriangles;
++    /// <summary>0085's probe: read the surface buffer back against the frame's depth
++    /// when set, and clear it. Of the pixels with a depth: those whose surface lies
++    /// behind it, and those with no surface at all.</summary>
++    public static bool SurfaceCheck;
++    /// <summary>Whether the map drawn on the GPU goes into the normal and surface
++    /// buffers; off is the comparison (the map missing from both).</summary>
++    public static bool MainSurfaces = true;
++    public static long SurfaceDepthPixels, SurfaceBehind, SurfaceMissing, SurfaceChecks;
+ 
+     /// <summary>0085. Stopwatch ticks in the draw's parts: shadows and the static
+     /// upload, the mip entries, the uniforms and the cull, the draw and after.</summary>

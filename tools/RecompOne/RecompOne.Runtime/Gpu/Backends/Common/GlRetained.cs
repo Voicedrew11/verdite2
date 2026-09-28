@@ -373,23 +373,8 @@ public sealed partial class GlCore
         int drawn = 0;
         if (RetainedScene.StaticCount[r] > 0)
         {
-            _gl.BindVertexArray(_worldVao);
             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
-            // Runs of neighbouring visible chunks are one draw.
-            int first = -1, count = 0;
-            for (int c = 0; c <= RetainedScene.Chunks; c++)
-            {
-                int k = r * RetainedScene.Chunks + c;
-                bool take = c < RetainedScene.Chunks && _chunkVis[c] && RetainedScene.ChunkCount[k] > 0;
-                if (take && first >= 0 && RetainedScene.ChunkStart[k] == first + count) { count += RetainedScene.ChunkCount[k]; continue; }
-                if (first >= 0 && count > 0)
-                {
-                    _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)count);
-                    drawn += count;
-                }
-                first = take ? RetainedScene.ChunkStart[k] : -1;
-                count = take ? RetainedScene.ChunkCount[k] : 0;
-            }
+            drawn = DrawStaticChunks(r);
         }
         if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
         int dn = f?.DynCount[r] ?? 0;
@@ -398,6 +383,30 @@ public sealed partial class GlCore
             _gl.BindVertexArray(_worldDynVao);
             _gl.DrawArrays(PrimitiveType.Triangles, f!.DynStart[r], (uint)dn);
             RetainedScene.Triangles += dn / 3;
+        }
+        return drawn;
+    }
+
+    /// <summary>Range <paramref name="r"/> of the visible static chunks through
+    /// whatever program is bound; the vertices drawn.</summary>
+    int DrawStaticChunks(int r)
+    {
+        int drawn = 0;
+        _gl.BindVertexArray(_worldVao);
+        // Runs of neighbouring visible chunks are one draw.
+        int first = -1, count = 0;
+        for (int c = 0; c <= RetainedScene.Chunks; c++)
+        {
+            int k = r * RetainedScene.Chunks + c;
+            bool take = c < RetainedScene.Chunks && _chunkVis[c] && RetainedScene.ChunkCount[k] > 0;
+            if (take && first >= 0 && RetainedScene.ChunkStart[k] == first + count) { count += RetainedScene.ChunkCount[k]; continue; }
+            if (first >= 0 && count > 0)
+            {
+                _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)count);
+                drawn += count;
+            }
+            first = take ? RetainedScene.ChunkStart[k] : -1;
+            count = take ? RetainedScene.ChunkCount[k] : 0;
         }
         return drawn;
     }

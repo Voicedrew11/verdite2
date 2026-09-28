@@ -2,9 +2,10 @@
 
 The plan to draw the world from meshes kept on the GPU instead of from the
 triangles the game's code builds every frame, and the record of the work against
-it. Started 2026-09-28 on the branch `retained-world`. **Step 0 is in, and the
-first slice of Step 1: the map's opaque faces drawn by the GPU in the main view,
-off by default (`KF2_GPUWORLD=1`), measured and not judged.**
+it. Started 2026-09-28 on the branch `retained-world`. **Step 0 is in, the
+first slice of Step 1 (the map's opaque faces drawn by the GPU in the main view,
+off by default, `KF2_GPUWORLD=1`, measured and not judged), and the first slice of
+Step 2 (that map in the occlusion's normals and the surface buffer).**
 
 ## Why: the frame is the game's geometry, done on one CPU thread
 
@@ -230,8 +231,9 @@ map's triangles.
 Recorded as found, not fixed: the steps are built through first and the fixes
 come after (decided 2026-09-28), unless an issue is something a later step builds on.
 
-1. **The occlusion shows creatures and objects through walls** (reported from play,
-   2026-09-28, SSAO on). Only the shading shows, not the model. The likely cause, from
+1. **Fixed: the occlusion showed creatures and objects through walls** (reported
+   from play, 2026-09-28, SSAO on). Fixed by Step 2's first slice (below), where the
+   cause is confirmed by measurement; the reading here was right. Only the shading shows, not the model. The likely cause, from
    the code rather than a measurement: the occlusion pass takes its normals from a
    redraw of the frame's own triangles (`0058`, `AoGeometry`), drawn in table order
    with no depth test, so order is what hides a model behind a wall there. The
@@ -258,12 +260,69 @@ What hooks the tile packets today, and has to work the new way first:
 - `WaterSwell`: moves the water's interior vertices; a vertex-shader function of the same field.
 - The remaster's materials per half and per face, lights, fog colour, sky, darkness.
 - `RenderDistance`: a larger mask, and no 15-tile cap (the s16 placement is the game's, not the GPU's).
-- AO and the reflection pass's surface buffer (`0058`, `0067`): fed from the renderer's draws, not `DrawTri`.
+- AO and the reflection pass's surface buffer (`0058`, `0067`): fed from the renderer's draws, not `DrawTri`. **Done for the map** (the first slice, below).
 - `BlendOrder` (`0079`): an opaque pass, then the blended one.
 - `EnhancementDistance` (`0083`), the fluid scroll (`0053`), the mip atlas (`0060`), texture replacement (`0073`).
 
 Free with float vertices and a depth: perspective correction, sub-pixel,
 the Z-buffer and its records, the backface and facing culls.
+
+#### Step 2, the first slice
+
+**The GPU-drawn map in the occlusion's normals and the surface buffer. Mechanism
+measured, and the occlusion judged by eye.** It fixes known issue 1. The runtime
+half amends `0085` (`GlMainView.DrawWorldNormals`, `GlShaders.WorldNormalVs`, the
+depth test in `NormalFs`); `KF2_GPUWORLD_SURFACES=0` or `gpuworld surfaces off` is
+the comparison.
+
+**The cause, confirmed.** The occlusion pass (`0058`) and the reflection pass's
+surface buffer (`0067`) are drawn after the frame from a list of its triangles,
+kept as `GlCore.DrawTri` submits them and redrawn with no depth test, so the last
+triangle drawn at a pixel wins. That was right while the table's walk drew
+everything in painter's order. The map drawn on the GPU never entered the list, so
+at a wall's pixels the list held whatever the table drew there: a creature behind
+the wall, which the depth buffer had hidden and the redraw did not. The pass then
+shaded the creature's plane at the wall's depth.
+
+**What it does.** The main view marks the target's list with its frame
+(`AoGeometry.WorldSerial`) and projection centre, and the normal pass draws that
+frame's map first, through `WorldNormalVs` (`WorldVs`'s position to the letter,
+the frame's half gate, the face's material or `Opaque`) and the same `NormalFs`.
+Then the list, as before. Since neither order is painter's any more, `NormalFs`
+drops a fragment that lies behind the frame's own depth texel by more than a
+tolerance (16 units, 1/128 of the depth, and the fragment's depth slope, since the
+normal buffer may be coarser than the depth). The depth buffer holds the nearest
+opaque surface, so what survives is that surface, with water in front of it (water
+writes no depth) still on top. The 2D (overlays, veils) carries no depth and is
+never tested. Without the map on the GPU the test is off and the pass is the one
+it was.
+
+**Measured.** `KF2_GPUWORLD_PROBE=1` reads the surface buffer back against the
+frame's depth every 2 s, on a 4-pixel grid (it needs the surface buffer: a
+reflection or the murk on). Area 1 (slot 2), paused, drawn from three spots at
+eight headings each (`view`), render scale 5, 16:9:
+
+| | behind the frame's depth | no surface where the depth has one |
+|---|---|---|
+| map left out (`gpuworld surfaces off`) | 0.00-10.12% | 74.1-100% |
+| map drawn first, the rest tested | 0.00% at all 24 | 0.00% at all 24 |
+
+The "behind" share is the defect as reported: a surface lying behind the nearest
+one, which is what showed through. `fdat02` at the New Game spot, murk on: 0.00%
+and 0.00%. The pass draws about 27,000 of the map's triangles in area 1.
+
+Cost, area 1 spawn, `KF2_FPS=1000 KF2_PROFILE=1`, SSAO on, reflections and murk
+off: GPU per present 0.85 to 0.95 ms. The occlusion pass went from 0.564 to 0.589
+ms: the map's draw into it. The composite went from 0.037 to 0.113 ms. That is the
+occlusion reaching the map again: before the fix the map had no normal, most of the
+picture took the pass's cheaper fallback, and the old path's composite measured
+0.14-0.15 ms in Step 0. CPU frame work 0.87 to 0.92 ms; 895 to 760 fps. At 144 fps:
+144.0 drawn at 20.0 ticks/s, no GL error under `KF2_GLDEBUG=1`.
+
+**Judged by eye** (2026-09-28, from play): the occlusion no longer shows anything
+through a wall. **Not checked**: the murk and the planar reflection's water over the map,
+which now have the map's surfaces under them (the water's own surfaces are
+unchanged).
 
 ### Step 3: models
 

@@ -109,6 +109,16 @@ public static class RetainedScene
     /// <summary>0085. Main-view draws made, walks that found no target or no frame,
     /// and static triangles submitted.</summary>
     public static long MainDraws, MainMissed, MainTriangles;
+    /// <summary>The map's triangles the normal pass drew for the surface buffers.</summary>
+    public static long MainNormalTriangles;
+    /// <summary>0085's probe: read the surface buffer back against the frame's depth
+    /// when set, and clear it. Of the pixels with a depth: those whose surface lies
+    /// behind it, and those with no surface at all.</summary>
+    public static bool SurfaceCheck;
+    /// <summary>Whether the map drawn on the GPU goes into the normal and surface
+    /// buffers; off is the comparison (the map missing from both).</summary>
+    public static bool MainSurfaces = true;
+    public static long SurfaceDepthPixels, SurfaceBehind, SurfaceMissing, SurfaceChecks;
 
     /// <summary>0085. Stopwatch ticks in the draw's parts: shadows and the static
     /// upload, the mip entries, the uniforms and the cull, the draw and after.</summary>
