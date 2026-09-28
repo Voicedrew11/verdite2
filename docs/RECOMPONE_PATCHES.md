@@ -1297,7 +1297,7 @@ Four files in the directory have no entry below:
   recompile.** See "Water was painted over by what lay under it" in
   `docs/RENDERING.md`.
 
-- `0069-imgui-size-after-fullscreen.patch` — Silk's `ImGuiController` takes the
+- `0080-imgui-size-after-fullscreen.patch` — Silk's `ImGuiController` takes the
   window's size only from the `Resize` event, and GLFW on Wayland raises none when
   a window leaves fullscreen (the framebuffer callback fires; the window-size one
   does not), so `io.DisplaySize` stayed at the fullscreen size and the menu bar

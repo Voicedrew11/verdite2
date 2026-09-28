@@ -771,7 +771,7 @@ controller's integer framebuffer scale also reads `0` then (`1472 / 2226`), whic
 `0018` overwrites with 1.15 after `Update()` — so the stale layout was drawn at
 1.15× on top, pushing even more of it off the window.
 
-`0069` compares `io.DisplaySize` — which still holds what the controller last
+`0080` compares `io.DisplaySize` — which still holds what the controller last
 applied — with `IWindow.Size` before each `Update()`, and on a difference calls the
 controller's private `WindowResized` with the real size (by reflection, once; Silk
 is pinned at 2.22.0 and trimming is off). It catches any missed resize, not only
