@@ -346,6 +346,9 @@ public static class PlanarWalk
                 // Matrix 0 is a model placed in view space, already where it is
                 // drawn: it belongs to the real camera and has no mirror image.
                 if (_stack[i * StackWords + 2] == 0u) { _viewSpace++; continue; }
+                // The walk polls interrupts, so the loader may have evicted the model
+                // since the walk tested it.
+                if (!Resident(mem, _regs[i * 4 + 1])) { _gone++; continue; }
                 uint sp = _sp[i];
                 if (_regs[i * 4 + 2] >= _walkLo && _regs[i * 4 + 2] < _walkHi)
                     for (int k = 0; k < 12; k++) mem.WriteU8(_regs[i * 4 + 2] + (uint)k, _pos[i * 12 + k]);
@@ -377,6 +380,21 @@ public static class PlanarWalk
     }
 
     static uint _pendingMain;
+
+    const uint ModelTable = 0x8018E1A0;
+
+    /// <summary>`func_80032CD8`'s test: a model id past the 104 static ones is
+    /// resident when its entry is set and the status byte before it is 1 or 2. The
+    /// entry and the mesh table it leads to must also lie in RAM.</summary>
+    static bool Resident(PSMemory mem, uint id)
+    {
+        uint lo = 0x80000010u, hi = 0x80000000u + RecompOne.Runtime.Runtime.RamSize - 0x10u;
+        uint entry = mem.ReadU32(ModelTable + (id & 0xFFFFu) * 4u);
+        if (entry < lo || entry >= hi) return false;
+        if ((id & 0xFFFFu) >= 0x68u && ((mem.ReadU8(entry - 0xCu) - 1u) & 0xFFu) >= 2u) return false;
+        uint table = entry + mem.ReadU32(entry + 8u);
+        return table >= lo && table < hi;
+    }
 
     /// <summary>The mirrored table first, into the planar texture of the target the
     /// game's own table is about to be drawn into.</summary>
@@ -411,7 +429,7 @@ public static class PlanarWalk
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt, _ms;
-    static long _walks, _replayed, _props, _viewSpace, _noWater, _below, _mismatch, _overflows, _peak;
+    static long _walks, _replayed, _props, _viewSpace, _gone, _noWater, _below, _mismatch, _overflows, _peak;
     static float _plane, _planeMin, _planeMax;
     static long _moves, _mirrorOnlyAt;
     static double _area;
@@ -425,7 +443,7 @@ public static class PlanarWalk
 
         Console.WriteLine($"[KF2] planar: plane Y {_plane:F0} over {_area:F0} px of water (min {_planeMin:F0}, max {_planeMax:F0}, moved {_moves / dt:F1}/s); " +
                           $"{_walks / dt:F1} mirrored walks/s at {(_walks == 0 ? 0 : _ms / _walks):F3} ms, " +
-                          $"{_replayed / dt:F0} submits replayed/s ({_props / dt:F0} of them props, {_viewSpace / dt:F0} view-space skipped), " +
+                          $"{_replayed / dt:F0} submits replayed/s ({_props / dt:F0} of them props, {_viewSpace / dt:F0} view-space skipped, {_gone} evicted before the replay in all), " +
                           $"{_noWater / dt:F1} frames/s with no water, {_below / dt:F1} under it; arena peak {_peak}/{PrimBuffer.MirrorArenaBytes} bytes, " +
                           $"{_overflows} overflow(s), {_mismatch} table mismatch(es); " +
                           $"its own cull {(PlanarCull.On ? $"{PlanarCull.Added / (double)Math.Max(PlanarCull.Frames, 1):F1} cells added a frame, " +

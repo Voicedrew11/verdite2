@@ -2464,6 +2464,30 @@ screen showed the cull until the cone was widened for the pitch (below), and
 after that "looks way better". The three checks above have not been gone through
 one by one.
 
+### A replayed model can be evicted after the walk tested it
+
+Reported from play with planar reflections on: `unmapped address: 0x8A32D234` in
+`ModelWalk.RunSubmit`, reached from `PlanarWalk.Mirror`'s replay, on the MO path
+reading `mesh + 4` after `func_8002E1BC(0)`. The mesh table `0x8018E19C` is
+`entry + u32[entry + 8]` for the id's entry in the model table at `0x8018E1A0`,
+so that entry pointed at something that was no longer a model.
+
+The walk tests a model with `func_80032CD8` (entry set, and for an id past the
+104 static ones a status byte at `entry - 0xC` of 1 or 2) just before submitting
+it, but the replay comes after the rest of the walk and the mirrored tile walk,
+and both poll interrupts at every loop head. The area streams its creature and
+object models while it plays (area 1 went from 26 to 48 resident within seconds of
+loading), so the loader can evict or replace a model between the record and the
+replay. Measured with every recorded submit re-tested at the walk's end: once in
+ten area loads, object model `0x218` was resident when recorded and gone by the
+end of the same walk. The game's own submit follows its test immediately, so only
+the replay is exposed.
+
+The replay now re-runs that test, plus the entry and its mesh table lying in RAM,
+before each submit (`PlanarWalk.Resident`), and skips a model that fails;
+`KF2_PLANAR_PROBE=1` counts them (`evicted before the replay`). The crash itself
+was not reproduced: the eviction was measured, not the replay hitting it.
+
 ## The retained scene: the world kept on the GPU, so a reflection can draw it again
 
 **Mechanism measured; the picture has not been judged. Off by default**
