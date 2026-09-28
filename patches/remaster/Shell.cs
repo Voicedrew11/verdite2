@@ -51,7 +51,7 @@ public static partial class Shell
         LevelHelp,
         CameraHelp,
         PropHelp,
-        "textures [on|off|reset|save] - the texture-key census of this area: keys, art, overlapping rects, what a pack covers; save writes dump/GAME/census/area-N.json",
+        "textures [on|off|reset|save|dump on|off|replace on|off] - replace switches the texture packs off and on; dump writes each texture drawn as upstream's dumper does, a scrolling one as its source image; the texture-key census of this area: keys, art, overlapping rects, what a pack covers; save writes dump/GAME/census/area-N.json",
     ];
 
     public static string Run(string verb, string args)

@@ -189,10 +189,24 @@ public static class TextureCensus
         if (sub == "on") SetOn(true);
         else if (sub == "off") SetOn(false);
         else if (sub == "reset") { _areas.Clear(); _lookupsAt = 0; TextureResolver.Invalidate(); TextureKeys.Census?.Clear(); }
+        else if (sub == "dump" && a.Length > 1) TextureDumper.SetTiles(a[1] == "on");
+        else if (sub == "replace" && a.Length > 1) TextureResolver.Enabled = a[1] == "on";
         int area = Identity.Settled ? Identity.Area : -1;
         var body = new JsonObject
         {
-            ["on"] = On, ["area"] = area, ["keying"] = Keying,
+            ["on"] = On, ["area"] = area, ["keying"] = Keying, ["replace"] = TextureResolver.Enabled,
+            ["scroll"] = new JsonObject
+            {
+                ["lookups"] = TextureKeys.ScrollLookups, ["replaced"] = TextureResolver.ScrollHits,
+                ["unreplaced"] = TextureResolver.ScrollMisses,
+                ["slots"] = new JsonArray(TextureKeys.CheckSlots()
+                    .Select(t => (JsonNode)new JsonArray(t.Phase, t.Shift, t.H)).ToArray()),
+            },
+            ["dump"] = new JsonObject
+            {
+                ["on"] = TextureDumper.Tiles, ["root"] = TextureDumper.Root, ["offered"] = TextureDumper.Offered,
+                ["written"] = TextureDumper.Written, ["failed"] = TextureDumper.Failed,
+            },
         };
         if (TextureKeys.Census is { } cells)
         {

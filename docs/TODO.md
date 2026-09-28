@@ -658,7 +658,10 @@ useful than the question was.
    changed, the filter set, no GL error. Nothing about the picture has been judged:
    whether the pattern lies on the floor the right way up and at the right scale,
    and how it holds under the *Texture filtering* slider at a distance and while
-   turning.
+   turning. A scrolling texture can be replaced too now (see "Phase 8, the
+   second slice" in [REMASTER.md](REMASTER.md)): `textures dump on` in `fdat02`
+   writes the water's source image, and a replacement of it should scroll as the
+   water does, with no seam where it wraps.
 22. **Look at a material set on a texture.** Open the editor (Shift+E), pick a
    wall or floor, and under *Texture* give it a material *Everywhere*; it should
    reach every face drawing that art, in every area, and the water in `fdat02`

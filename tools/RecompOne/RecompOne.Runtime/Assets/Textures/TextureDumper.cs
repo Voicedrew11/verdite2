@@ -187,6 +187,34 @@ public static class TextureDumper
         OfferPage(vram, rect, clutHash, tpage, clut);
     }
 
+    /// <summary>0073. An image that is not in VRAM as it is keyed (a scrolling texture's
+    /// source, which VRAM only ever holds shifted): its words, <paramref name="rect"/>'s
+    /// width in words by its height, dumped under the key the port gave it.</summary>
+    public static void OfferImage(ushort[] vram, ushort[] window, in TileRect rect, ulong indexHash, ulong clutHash,
+        int tpage, int clut)
+    {
+        if (!Tiles || window.Length < rect.VramW * rect.H) return;
+        var id = indexHash ^ (clutHash * 1099511628211UL);
+        lock (_gate)
+        {
+            if (!_seen.Add(id)) return;
+        }
+
+        Interlocked.Increment(ref _offered);
+        var job = new Job
+        {
+            Id = id, Rect = rect, IndexHash = indexHash, ClutHash = clutHash, TPage = tpage, ClutId = clut,
+            Window = window, Clut = TextureTile.CopyClut(vram, rect)
+        };
+        if (_queue.TryAdd(job)) return;
+        lock (_gate)
+        {
+            _seen.Remove(id);
+        }
+
+        Interlocked.Increment(ref _dropped);
+    }
+
     private static void OfferPage(ushort[] vram, in TileRect tile, ulong clutHash, int tpage, int clut)
     {
         if (!Pages || tile.Bpp == 16) return;

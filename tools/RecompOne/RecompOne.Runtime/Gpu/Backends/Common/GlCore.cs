@@ -156,7 +156,7 @@ public sealed partial class GlCore : IGpuBackend
     int _kTwAndX, _kTwAndY, _kTwOrX, _kTwOrY;
     int _kClipX0, _kClipY0, _kClipX1, _kClipY1;
     uint _kRepTex, _kRepClut;
-    float _kRepX, _kRepY, _kRepW, _kRepH;
+    float _kRepX, _kRepY, _kRepW, _kRepH, _kRepScroll = -1;
     int _kRepClutCount;
     int _uTexWindow, _uBlend, _uBlendOpaque, _uSetMask, _uCheckMask, _uPosBias, _uFbInv;
     int _uTrueColor;
@@ -174,7 +174,7 @@ public sealed partial class GlCore : IGpuBackend
     // from GteDepth.TrueColor the targets carry the wrong pixel format, so they are
     // torn down at the next present and rebuilt (their content survives in VRAM).
     bool _rtsTrueColor;
-    int _uRepRect, _uRepClutCount;
+    int _uRepRect, _uRepClutCount, _uRepScroll;
     int _uPresentOrigin, _uPresentSize, _uPresentTexSize, _uPresent24Origin, _uPresent24Size;
 
     public bool Ready { get; private set; }
@@ -272,6 +272,7 @@ public sealed partial class GlCore : IGpuBackend
         _emitOnSent = -1;
         _uRepRect = _gl.GetUniformLocation(_progPrim, "uRepRect");
         _uRepClutCount = _gl.GetUniformLocation(_progPrim, "uRepClutCount");
+        _uRepScroll = _gl.GetUniformLocation(_progPrim, "uRepScroll");
 
         _gl.UseProgram(_progPrim);
         _gl.Uniform1(_gl.GetUniformLocation(_progPrim, "uVram"), 0);
@@ -746,7 +747,8 @@ public sealed partial class GlCore : IGpuBackend
     {
         if (_kRepTex != _pendingRepTex || _kRepClut != _pendingRepClut
             || (_pendingRepTex != 0 && (_kRepX != _pendingRepX || _kRepY != _pendingRepY
-                                        || _kRepW != _pendingRepW || _kRepH != _pendingRepH)))
+                                        || _kRepW != _pendingRepW || _kRepH != _pendingRepH
+                                        || _kRepScroll != _pendingRepScroll)))
             return FlushReason.StateReplacement;
         if (_kTransparent != transparent) return FlushReason.StateSemi;
         if (_kBlend != blend) return FlushReason.StateBlend;
@@ -764,7 +766,8 @@ public sealed partial class GlCore : IGpuBackend
         int twOrX = (_env.TwOffX & _env.TwMaskX) * 8, twOrY = (_env.TwOffY & _env.TwMaskY) * 8;
         return _kRepTex == _pendingRepTex && _kRepClut == _pendingRepClut
             && (_pendingRepTex == 0 || (_kRepX == _pendingRepX && _kRepY == _pendingRepY
-                                        && _kRepW == _pendingRepW && _kRepH == _pendingRepH))
+                                        && _kRepW == _pendingRepW && _kRepH == _pendingRepH
+                                        && _kRepScroll == _pendingRepScroll))
             && _kTransparent == transparent && _kBlend == blend && _kImage == image
             && _kZMode == zMode
             && _kSetMask == (_env.SetMask ? 1 : 0) && _kCheckMask == (_env.CheckMask ? 1 : 0)
@@ -797,11 +800,15 @@ public sealed partial class GlCore : IGpuBackend
         _kClipX0 = _env.ClipX0; _kClipY0 = _env.ClipY0; _kClipX1 = _env.ClipX1; _kClipY1 = _env.ClipY1;
         _kRepTex = _pendingRepTex; _kRepClut = _pendingRepClut; _kRepClutCount = _pendingRepClutCount;
         _kRepX = _pendingRepX; _kRepY = _pendingRepY; _kRepW = _pendingRepW; _kRepH = _pendingRepH;
+        _kRepScroll = _pendingRepScroll;
     }
 
     uint _pendingRepTex, _pendingRepClut;
     int _pendingRepClutCount = 16;
-    float _pendingRepX, _pendingRepY, _pendingRepW = 1, _pendingRepH = 1;
+    float _pendingRepX, _pendingRepY, _pendingRepW = 1, _pendingRepH = 1, _pendingRepScroll = -1;
+
+    /// <summary>0073. Replacements drawn scrolling, set to wrap in V once.</summary>
+    readonly HashSet<uint> _repWrapped = [];
 
     readonly Dictionary<Assets.ReplacementTexture, uint> _repTextures = [];
     readonly Dictionary<Assets.ReplacementClut, uint> _repCluts = [];
@@ -810,6 +817,7 @@ public sealed partial class GlCore : IGpuBackend
     {
         _pendingRepTex = 0;
         _pendingRepClut = 0;
+        _pendingRepScroll = -1;
 
         if (!f.Textured || f.UseImage) return;
 
@@ -823,6 +831,8 @@ public sealed partial class GlCore : IGpuBackend
         if (res.Texture is { Mode: Assets.TextureMode.Rgba } tex)
         {
             _pendingRepTex = EnsureRepTexture(tex);
+            // 0073. A scrolling texture's phase, wrapped inside the dest rectangle.
+            _pendingRepScroll = res.Scrolls ? ((res.Scroll % res.Rect.H) + res.Rect.H) % res.Rect.H : -1;
             _pendingRepX = res.Rect.U0;
             _pendingRepY = res.Rect.V0;
             _pendingRepW = res.Rect.W;
@@ -1708,7 +1718,10 @@ public sealed partial class GlCore : IGpuBackend
             _gl.ActiveTexture(TextureUnit.Texture3);
             _gl.BindTexture(TextureTarget.Texture2D, _kRepTex);
             RepFilter(_kRepTex);
+            if (_kRepScroll >= 0 && _repWrapped.Add(_kRepTex))
+                _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)GLEnum.Repeat);
             _gl.Uniform4(_uRepRect, _kRepX, _kRepY, _kRepW, _kRepH);
+            _gl.Uniform1(_uRepScroll, _kRepScroll);
         }
         if (_kRepClut != 0)
         {

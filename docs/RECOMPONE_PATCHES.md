@@ -1157,6 +1157,16 @@ Four files in the directory have no entry below:
   the port's texture materials key on the same rectangle. The amendment is the
   second diff in the patch file. See "Phase 4, the second slice" in
   `docs/REMASTER.md`.
+  Since amended: a texture the game scrolls (`func_8002DC78` rewrites its VRAM at a
+  new phase every tick, so no hash of the VRAM holds) is replaced by its source
+  image's replacement. `TextureResolver.Scroll` asks the port for the source's key,
+  the dest rectangle and the phase to draw at; `ResolvedTexture.Scrolls`/`Scroll`
+  carry them, `GlCore` batches on the phase (`uRepScroll`, -1 for none) and sets the
+  texture to wrap in V, and both prim shaders read row `d` of the dest at the
+  replacement's `(d - phase) mod h`. `TextureDumper.OfferImage` dumps an image that
+  is not in VRAM as it is keyed, so the source can be dumped at all. With no pack
+  and nothing observing, `Scroll` is never called. The third diff in the patch file.
+  See "Phase 8, the second slice" in `docs/REMASTER.md`.
 
 - `0074-fog-colour-and-sky.patch` — the area's fog colour and curve, from the
   remaster. The game's depth cue darkens a colour towards the GTE's far colour,

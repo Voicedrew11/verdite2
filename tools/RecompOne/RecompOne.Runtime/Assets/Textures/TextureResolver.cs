@@ -6,6 +6,12 @@ public struct ResolvedTexture
     public ReplacementClut? Clut;
     public TileRect Rect;
     public bool Hit;
+
+    /// <summary>0073. A scrolling texture's replacement: <see cref="Rect"/> is the whole
+    /// dest rectangle, and a row <c>d</c> of it shows the source's row
+    /// <c>(d - Scroll) mod H</c>, <see cref="Scroll"/> in texels and fractional.</summary>
+    public bool Scrolls;
+    public float Scroll;
 }
 
 public static class TextureResolver
@@ -110,6 +116,18 @@ public static class TextureResolver
 
     public static LookupObserver? Observer;
 
+    /// <summary>0073. A face on a texture the game scrolls by rewriting its VRAM every
+    /// tick, so no hash of the VRAM holds: the port answers with the key of the source
+    /// image, the dest rectangle and the phase to draw at. Null, or false, is the
+    /// ordinary lookup.</summary>
+    public delegate bool ScrollLookup(int tpage, int clut, int uMin, int vMin, int uMax, int vMax,
+        out ulong indexHash, out ulong clutHash, out TileRect dest, out float phase);
+
+    public static ScrollLookup? Scroll;
+
+    private static readonly Dictionary<(ulong, ulong), (TextureAsset? Tex, bool Seen)> _scrollAssets = [];
+    public static long ScrollHits, ScrollMisses;
+
     /// <summary>0073. Look a triangle up by its face's texture rectangle when the
     /// assembler recorded one; false keys each triangle on its own UVs, as upstream does.</summary>
     public static bool KeyOnFaceRect = true;
@@ -171,6 +189,11 @@ public static class TextureResolver
         {
             _pages.Clear();
         }
+
+        lock (_scrollAssets)
+        {
+            _scrollAssets.Clear();
+        }
     }
 
     public static int CachedTiles
@@ -182,6 +205,38 @@ public static class TextureResolver
                 return _memo.Count;
             }
         }
+    }
+
+    private static bool ResolveScroll(AssetReplacerManager mgr, int tpage, int clut, ulong index, ulong clutHash,
+        in TileRect dest, float phase, LookupObserver? observer, ref ResolvedTexture result)
+    {
+        (TextureAsset? Tex, bool Seen) e;
+        lock (_scrollAssets)
+        {
+            if (!_scrollAssets.TryGetValue((index, clutHash), out e))
+            {
+                e = (mgr.ResolveTexture(index, clutHash), true);
+                _scrollAssets[(index, clutHash)] = e;
+            }
+        }
+
+        var tex = e.Tex != null ? mgr.LoadTexture(e.Tex) : null;
+        observer?.Invoke(tpage, clut, dest, index, clutHash, true, false, tex != null);
+        if (tex == null)
+        {
+            ScrollMisses++;
+            return false;
+        }
+
+        CheckAspect(e.Tex!, tex, dest, "scrolling");
+        ScrollHits++;
+        result.Rect = dest;
+        result.Texture = tex;
+        result.Clut = null;
+        result.Scrolls = true;
+        result.Scroll = phase;
+        result.Hit = true;
+        return true;
     }
 
     public static bool Resolve(int tpage, int clut, int uMin, int vMin, int uMax, int vMax,
@@ -224,7 +279,12 @@ public static class TextureResolver
             h = vMax - vMin + 1;
         }
 
-        if (KeyOnUpload && twAndX == 0xFF && twOrX == 0 && twAndY == 0xFF && twOrY == 0)
+        bool windowed = twAndX != 0xFF || twOrX != 0 || twAndY != 0xFF || twOrY != 0;
+        if (!windowed && Scroll is { } scroll
+            && scroll(tpage, clut, uMin, vMin, uMax, vMax, out var sIndex, out var sClut, out var dest, out var phase))
+            return ResolveScroll(mgr, tpage, clut, sIndex, sClut, dest, phase, observer, ref result);
+
+        if (KeyOnUpload && !windowed)
             ToUpload(tpage, ref u0, ref v0, ref w, ref h);
 
         if (w <= 0 || h <= 0 || w > 256 || h > 256)

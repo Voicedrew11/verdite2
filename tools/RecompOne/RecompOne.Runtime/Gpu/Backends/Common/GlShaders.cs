@@ -1439,6 +1439,7 @@ internal static class GlShaders
         uniform sampler2D uRepClut;
         uniform vec4  uRepRect;
         uniform float uRepClutCount;
+        uniform float uRepScroll;
         uniform ivec4 uTexWindow;
         uniform vec4  uBlend;
         uniform vec4  uBlendOpaque = vec4(1.0, 1.0, 1.0, 0.0);
@@ -1938,6 +1939,8 @@ internal static class GlShaders
                 vec2 win = vec2(uTexWindow.xy) + 1.0;
                 vec2 fuv = mod(vUV, win) + vec2(uTexWindow.zw);
                 vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
+                // 0073. A scrolling texture: row d shows the source's row d - phase.
+                if (uRepScroll >= 0.0) t.y = fract(t.y - uRepScroll / uRepRect.w);
                 // 0073. A replacement is a real texture, so the GL sampler filters it
                 // (mipmaps and anisotropy, set by the Texture filtering slider), with the
                 // gradients of the unwrapped UV so a texture window's wrap is not a seam.
@@ -2191,6 +2194,7 @@ internal static class GlShaders
         uniform sampler2D uRepClut;
         uniform vec4  uRepRect;
         uniform float uRepClutCount;
+        uniform float uRepScroll;
         uniform vec4  uTexWindow;
         uniform float uSetMask;
         uniform float uCheckMask;
@@ -2331,6 +2335,7 @@ internal static class GlShaders
 
                 if (vTexMode > 5.5) {
                     vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
+                    if (uRepScroll >= 0.0) t.y = fract(t.y - uRepScroll / uRepRect.w);
                     vec4 img = texture2D(uRepTex, t);
                     if (img.a < 0.5) discard;
                     rgb = floor(img.rgb * 255.0 + 0.5) * floor(vColor.rgb * 255.0 + 0.5) / 128.0;

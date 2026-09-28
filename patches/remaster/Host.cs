@@ -78,6 +78,8 @@ public static class Host
         });
 
         Event.AddListener<OverlayLoadedEvent>(e => Identity.Invalidate(e.Name));
+        // A replacement pack's scrolling textures, with or without the remaster on.
+        RecompOne.Runtime.Assets.Textures.TextureResolver.Scroll = TextureKeys.ScrollLookup;
         Identity.Install();
         Event.AddListener<VSyncEvent>(_ => Frame());
         Lights.Install();

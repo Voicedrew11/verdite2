@@ -2399,7 +2399,8 @@ feature complete rather than section by section.
   placement of objects and creatures");
 - a GPU id buffer (`0076`), if picking is ever too slow;
 - texture packs, parked from Phase 4: a replaced water texture scrolled through
-  `0053`, replacements in the retained scene, normal and roughness maps (`0075`).
+  `0053` (done, "Phase 8, the second slice"), replacements in the retained scene,
+  normal and roughness maps (`0075`).
 
 ### Phase 8, the first slice
 
@@ -2501,6 +2502,45 @@ material set on the selection reaches every draw of that model, props included.
 a prop sits on the floor rather than in it or above it (a model's origin need not be
 its base), whether its light matches the objects beside it, and how the editor's
 placement feels. The editor's handling is deferred with the rest of its UX.
+
+### Phase 8, the second slice
+
+**What is in**: a scrolling texture replaced (`0073` amended; `TextureKeys.ScrollLookup`).
+The water in `fdat02`, the main hall's fire and the creatures' scrolling skins are
+`func_8002DC78`'s eight slots, which rewrite a dest rectangle in VRAM from a source
+image in RAM every tick at a new phase, so a texture pack could never key them: the
+first slice's census saw 1,538 dynamic keys on the water's page in 12 s. A face on a
+live slot's dest is now keyed on the slot's source image -- the key the materials
+already used (`texture:304d2876ffce31b6` for the water) -- and drawn from that
+image's replacement over the whole dest, at the phase the frame shows: the slot's
+own, less the leftover `FluidSmoothing` publishes, so a replaced texture scrolls
+between ticks as the game's own does. `textures dump on` dumps it as its source
+image, 64x64 at phase 0, so an author has one image to paint over rather than 64
+shifted copies; `textures replace on|off` switches the texture packs for a
+comparison. The shell's `textures` answers the scroll lookups, how many were
+replaced, and for each live slot its phase against the shift VRAM actually holds.
+
+**Measured** (`fdat02`'s New Game, a pack in `packs/`):
+- **The mapping.** For every live slot (five in `fdat02`), VRAM row `d` of the dest
+  holds source row `(d - phase) mod h`: at 8 moments over two seconds the shift found
+  by comparing every row was the slot's phase, 40 of 40. The shader reads the
+  replacement at that row.
+- **The dump**: `textures dump on` for 6 s wrote 21 textures, the water once as
+  `304d2876ffce31b6_af8f80b2d98f5c2f` (4-bit, 64x64), and none of its shifted phases.
+- **It reaches the screen**: a pack with that image stretched in contrast and 4x,
+  every lookup on the water replaced (377,623-756,834 over the runs, none missed).
+  World paused, packs off against on, the high-passed brightness of the changed
+  pixels correlates 0.24-0.26 with the game's water, against 0.11-0.14 for the same
+  image shifted by half its height, at three phases each. Weak because the game's
+  water is 4-bit and fogged and the two paths filter differently; the mapping check
+  above is the exact one.
+- **Cost**: uncapped, facing the water, 133-145 fps with the pack against 122-153
+  without, inside the spread of each.
+
+**Not done**: `0078`'s ripples do not push a replaced texture (they run on the
+game's texel path only); a replaced CLUT on a scrolling texture is not looked up;
+upstream's page fallback is skipped for a scrolling face. **Not judged**: a real
+replacement water scrolling, at any speed, or the seam where it wraps.
 
 ### Dependencies, in one list
 

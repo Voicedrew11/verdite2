@@ -112,8 +112,12 @@ public static class TextureKeys
     /// <see cref="TextureTile.Hash"/> hashes the rectangle at phase 0 -- the key the
     /// VRAM would have had before the first scroll.</summary>
     static bool Fluid(int tpage, int clut, int u0, int v0, int u1, int v1, out TexKey key)
+        => Fluid(tpage, clut, u0, v0, u1, v1, out key, out _);
+
+    static bool Fluid(int tpage, int clut, int u0, int v0, int u1, int v1, out TexKey key, out int slot)
     {
         key = default;
+        slot = -1;
         var m = Runtime.Mem;
         if (m == null) return false;
         // The slots, read again only when VRAM has been written since.
@@ -129,7 +133,7 @@ public static class TextureKeys
                 int x = (short)m.ReadU16(rec + 6u), y = (short)m.ReadU16(rec + 8u);
                 int w = (short)m.ReadU16(rec + 0xAu), h = (short)m.ReadU16(rec + 0xCu);
                 if (w <= 0 || h <= 0 || w * h > 16384) continue;
-                _slots[_slotN++] = (x, y, w, h, m.ReadU32(rec + 0x10u));
+                _slots[_slotN++] = (x, y, w, h, m.ReadU32(rec + 0x10u), rec);
             }
         }
         if (_slotN == 0) return false;
@@ -137,7 +141,7 @@ public static class TextureKeys
         int wx = (tpage & 0xF) * 64 + (u0 + u1 + 1) / 2 / per, wy = ((tpage >> 4) & 1) * 256 + (v0 + v1 + 1) / 2;
         for (int i = 0; i < _slotN; i++)
         {
-            var (x, y, w, h, src) = _slots[i];
+            var (x, y, w, h, src, _) = _slots[i];
             if (wx < x || wy < y || wx >= x + w || wy >= y + h) continue;
             if (_fluidSettle != Identity.Settles) { _fluid.Clear(); _fluidSettle = Identity.Settles; }
             var id = (src, w, h, tpage & 0x180, clut & 0x7FFF);
@@ -148,12 +152,83 @@ public static class TextureKeys
                 _fluid[id] = key;
             }
             if (Census != null && key.Index != 0) Census[key] = Census.GetValueOrDefault(key) + 1;
+            slot = i;
             return key.Index != 0;
         }
         return false;
     }
 
-    static readonly (int X, int Y, int W, int H, uint Src)[] _slots = new (int, int, int, int, uint)[8];
+    static readonly (int X, int Y, int W, int H, uint Src, uint Rec)[] _slots = new (int, int, int, int, uint, uint)[8];
+
+    /// <summary>0073's <see cref="TextureResolver.Scroll"/>: a face on a scrolling
+    /// texture is replaced by the replacement of its source image, drawn over the whole
+    /// dest rectangle at the phase the frame shows -- the slot's own, less the leftover
+    /// <see cref="FluidSmoothing"/> publishes -- since VRAM row d holds source row
+    /// (d - phase) mod h. Offers the source to the texture dumper, which could only
+    /// ever see it shifted.</summary>
+    public static bool ScrollLookup(int tpage, int clut, int uMin, int vMin, int uMax, int vMax,
+        out ulong index, out ulong clutHash, out TileRect dest, out float phase)
+    {
+        index = clutHash = 0;
+        dest = default;
+        phase = 0;
+        if (!Fluid(tpage, clut, uMin, vMin, uMax, vMax, out var key, out int i)) return false;
+        var m = Runtime.Mem!;
+        var (x, y, w, h, src, rec) = _slots[i];
+        int per = ((tpage >> 7) & 3) switch { 0 => 4, 1 => 2, _ => 1 };
+        int pageX = (tpage & 0xF) * 64, pageY = ((tpage >> 4) & 1) * 256;
+        int u0 = (x - pageX) * per, v0 = y - pageY;
+        if (u0 < 0 || v0 < 0 || u0 + w * per > 256 || v0 + h > 256) return false;
+        dest = TextureTile.Describe(tpage, clut, u0, v0, w * per, h);
+        phase = (short)m.ReadU16(rec + 4u);
+        for (int k = 0; k < GteDepth.FluidN; k++)
+            if ((int)GteDepth.Fluid[k].X == x && (int)GteDepth.Fluid[k].Y == y) { phase -= GteDepth.Fluid[k].Off; break; }
+        index = key.Index;
+        clutHash = key.Clut;
+        if (TextureDumper.Tiles && Runtime.Gpu?.Vram is { } vram && _dumped.Add(key))
+        {
+            var window = new ushort[w * h];
+            for (int t = 0; t < window.Length; t++) window[t] = m.ReadU16(src + (uint)t * 2u);
+            TextureDumper.OfferImage(vram, window, dest, key.Index, key.Clut, tpage, clut);
+        }
+        ScrollLookups++;
+        return true;
+    }
+
+    static readonly HashSet<TexKey> _dumped = new();
+
+    /// <summary>For each live slot: its phase, and the shift s at which every VRAM row d
+    /// of the dest holds source row (d - s) mod h, or -1 if none does. The two agreeing
+    /// is what <see cref="ScrollLookup"/> assumes.</summary>
+    public static IEnumerable<(int Phase, int Shift, int H)> CheckSlots()
+    {
+        var m = Runtime.Mem;
+        var vram = Runtime.Gpu?.Vram;
+        if (m == null || vram == null) yield break;
+        for (uint i = 0; i < 8; i++)
+        {
+            uint rec = FluidSlots + i * FluidStride;
+            if (m.ReadU8(rec) != 1) continue;
+            int x = (short)m.ReadU16(rec + 6u), y = (short)m.ReadU16(rec + 8u);
+            int w = (short)m.ReadU16(rec + 0xAu), h = (short)m.ReadU16(rec + 0xCu);
+            if (w <= 0 || h <= 0 || w * h > 16384) continue;
+            uint src = m.ReadU32(rec + 0x10u);
+            int found = -1;
+            for (int sh = 0; sh < h && found < 0; sh++)
+            {
+                bool all = true;
+                for (int d = 0; d < h && all; d++)
+                {
+                    int sr = ((d - sh) % h + h) % h;
+                    for (int c = 0; c < w && all; c++)
+                        all = vram[((y + d) & 511) * 1024 + ((x + c) & 1023)] == m.ReadU16(src + (uint)((sr * w + c) * 2));
+                }
+                if (all) found = sh;
+            }
+            yield return ((short)m.ReadU16(rec + 4u), found, h);
+        }
+    }
+    public static long ScrollLookups;
     static int _slotN, _slotsClock = -1;
 
     /// <summary><see cref="TextureTile.Hash"/>, over a RAM image instead of VRAM.</summary>
