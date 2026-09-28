@@ -95,9 +95,9 @@ public static class RetainedMap
     /// (<see cref="RetainedScene.Supported"/>).</summary>
     public static bool ReflectionsReady => RetainedScene.Enabled;
 
-    /// <summary>Whether to build the static map: for reflections, or for the authored
-    /// lights' shadows (0077), which need nothing else of it.</summary>
-    public static bool Ready => ReflectionsReady || RetainedScene.ShadowsWanted;
+    /// <summary>Whether to build the static map: for reflections, for the authored
+    /// lights' shadows (0077), which need nothing else of it, or for the GPU world (0085).</summary>
+    public static bool Ready => ReflectionsReady || RetainedScene.ShadowsWanted || GpuWorld.Wanted;
 
     // ---- once a walk -------------------------------------------------------------
 
@@ -121,9 +121,11 @@ public static class RetainedMap
             _builds++;
             _lastWhy = _why;
         }
-        // 0077. The models are captured for the lights' shadows too.
-        if (!ReflectionsReady && !RetainedScene.ShadowModelsWanted) return;
+        // 0077. The models are captured for the lights' shadows too; 0085, the main
+        // view draws the map from the frame's camera.
+        if (!ReflectionsReady && !RetainedScene.ShadowModelsWanted && !GpuWorld.Wanted) return;
         RetainedScene.BeginFrame(ReadView(mem));
+        GpuWorld.AtFrame();
         if (!ReflectionsReady) return;
         RetainedPlanes.Choose(mem);
         if (_probe) Report();

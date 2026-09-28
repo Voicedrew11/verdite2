@@ -497,6 +497,7 @@ public sealed class ProfilerPanel : IPanel
         new(0.70f, 0.70f, 0.40f, 1f),   // ao
         new(0.55f, 0.55f, 0.95f, 1f),   // reflections
         new(0.95f, 0.55f, 0.80f, 1f),   // composite
+        new(0.90f, 0.60f, 0.30f, 1f),   // world
     ];
 
     /// <summary>The GPU time of the same frames, at the CPU graph's milliseconds per

@@ -65,7 +65,16 @@ public static class LibGpu
 
             var header = m.ReadU32(addr);
             var count = (int)(header >> 24);
-            if (count == 0) slot++;
+            if (count == 0)
+            {
+                slot++;
+                // 0085. The map, past the sky and ahead of everything tested against it.
+                if (slot == 1 && RetainedScene.MainSerial > 0 && !custom && !PlanarReflections.Capturing)
+                {
+                    if (!gpu.DrawRetainedMain()) RetainedScene.MainMissed++;
+                    RetainedScene.MainSerial = 0;
+                }
+            }
             GteDepth.OtSlot = slot;
 
             if (count > 0)

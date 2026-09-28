@@ -1157,6 +1157,15 @@ Four files in the directory have no entry below:
   unchanged). The fourth diff in the patch file; the discard shares a hunk with
   `0083` and is in that file. See "The reflections see past the camera's cull" in
   `docs/RENDERING.md`.
+  Since amended: a static corner carried its mip-atlas entry, and every texture on
+  the map was looked up each present (1,633 in `fdat02`, 361 of them held), which
+  re-uploaded the map's whole entry buffer whenever one moved and kept textures no
+  frame draws in the atlas. A corner now carries its texture's index plus one;
+  `WorldVs` reads the entry from a table of one word per texture (`uMipTable`, a
+  buffer texture on unit 17, `uMipIndirect` 1 for the static map and 0 for the frame's
+  models); and `UpdateWorldMips` looks up only the textures of the halves a draw
+  gates in (`Frame.Halves` while the half gate is on). The hunks are in `0085`'s
+  file. See "Step 1, the first slice" in `docs/GPU_RENDERER.md`.
 
 - `0073-texture-replacement-on-the-port-path.patch` — upstream's texture packs
   (`Assets/`) made to work in this port, and a way to see what they would key.
@@ -1352,6 +1361,25 @@ Four files in the directory have no entry below:
   (`patches/GpuFrames.cs`). A trace sink takes precedence, and the
   retained scene's probe timer stands down, since `GL_TIME_ELAPSED` queries may
   not nest. **No recompile.** See "GPU time per present" in `docs/DEVELOPMENT.md`.
+
+- `0085-gpu-world-main-view.patch` — the retained map (`0072`) drawn into the frame
+  itself, the first slice of the GPU world renderer. `RetainedScene.MainView`,
+  `MainSerial` (the frame whose map the next table walk draws) and `MainDrawer`, which
+  `GlCore` fills; `LibGpu.WalkOTag` calls `Gpu.DrawRetainedMain` as the walk reaches
+  slot 1, past the sky, and not in a planar capture or an asset pack's custom order.
+  `GlMainView.cs` flushes the batch, takes the display target the draw area names,
+  clears its depth as `FlushCore` would on a first draw (`ClearStaleDepth`, now shared),
+  and draws the static opaque range through `WorldVs` with the frame's camera, centred
+  by the GPU's draw offset and the margin, scissored to the game's clip, culled on
+  facing, depth tested and written, gated to `Frame.MainHalves` (the halves the walk
+  visited, which `ReflectionReach` does not grow). `GpuTimes` gains the `World` pass.
+  The first cut spent 1.3-1.5 ms a frame keeping mip-atlas entries current, so `0072`
+  is amended with it (below). `WorldVs` gains `uWorldSnap`, `uWorldPerPixel` and
+  `uWorldDither`, so the main view follows sub-pixel, per-pixel lighting and the
+  crosshatch as the frame's packets do; the reflections leave them at their defaults.
+  Against the packet path, at most 4.9% of pixels differ by more than 4 levels in
+  `fdat02` and 14.2% in area 1, all texel edges one render pixel over. GL core only. **No
+  recompile.** See "Step 1, the first slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

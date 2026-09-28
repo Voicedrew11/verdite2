@@ -81,6 +81,10 @@ public static partial class PolyAssembler
     }
 
     public static bool UnclippedEnabled { get; set; } = true;
+
+    /// <summary>0085. Set by the tile walk around a half the GPU draws: only its
+    /// semi-transparent faces are assembled, the rest being the retained map's.</summary>
+    public static bool BlendedOnly;
     public static bool TransformEnabled { get; set; } = true;
 
     public static bool RejectEnabled
@@ -382,7 +386,7 @@ public static partial class PolyAssembler
             uint word = mem.ReadU32(face);
             face += 4u;
             uint cmd = word >> 24;
-            uint type = cmd & 0xFDu;
+            uint type = BlendedOnly && (cmd & 2u) == 0u ? 0u : cmd & 0xFDu;
 
             if (type == 0x2Cu)
             {
@@ -837,7 +841,7 @@ public static partial class PolyAssembler
             uint word = mem.ReadU32(face);
             face += 4u;
             uint cmd = word >> 24;
-            uint type = cmd & 0xFDu;
+            uint type = BlendedOnly && (cmd & 2u) == 0u ? 0u : cmd & 0xFDu;
 
             if (type == 0x24u)
             {

@@ -365,6 +365,16 @@ public static class TileWalk
         uint rec = c.A0, pos = c.A1, flags = c.A2;
         uint rot = mem.ReadU8(rec + 2u) & 3u;
 
+        // 0085. A half the GPU draws whole needs none of the setup below.
+        bool gpu = GpuWorld.Active && !PlanarWalk.Mirroring;
+        if (gpu && !Beyond(mem, mem.ReadU8(rec)) && !GpuWorld.HasBlended(mem, mem.ReadU8(rec)))
+        {
+            NoteDrawn(rec);
+            GpuWorld.Skipped++;
+            Epilogue(c, mem, sp);
+            return;
+        }
+
         c.A0 = ViewMatrix;
         c.RA = 0x80031988u;
         KingsField2.SetRotMatrix(c, mem);
@@ -408,13 +418,9 @@ public static class TileWalk
         if (Beyond(mem, model)) { _skipped++; Epilogue(c, mem, sp); return; }
         // What the frame drew is what its reflections may show (RetainedScene.HalfGate),
         // grown and held by ReflectionReach.
-        if (!PlanarWalk.Mirroring)
-        {
-            uint off = rec - MapBase;
-            int hx = (int)(off % 800u / 10u), hz = (int)(off / 800u), hu = (int)(off % 10u / 5u);
-            if (RetainedMap.Ready) RetainedScene.NoteHalf(hx, hz, hu);
-            ReflectionReach.NoteDrawn(hx, hz, hu);
-        }
+        if (!PlanarWalk.Mirroring) NoteDrawn(rec);
+        // 0085. The GPU draws the half's opaque faces; only its water is assembled.
+        if (gpu) GpuWorld.Kept++;
 
         // The half being assembled, for whatever the assemblers record per packet.
         CurrentRecord = rec;
@@ -429,6 +435,7 @@ public static class TileWalk
 
         // A subdivided mesh leaves the subdivider's corners in the vertex cache.
         bool whole = true;
+        PolyAssembler.BlendedOnly = gpu;
         try
         {
             if ((flags & 0x80u) == 0u)
@@ -466,10 +473,22 @@ public static class TileWalk
                 else Plain(c, mem, model);
             }
         }
-        finally { WaterSwell.Leave(mem); }
+        finally
+        {
+            PolyAssembler.BlendedOnly = false;
+            WaterSwell.Leave(mem);
+        }
 
-        if (RetainedMap.Checking && !PlanarWalk.Mirroring && whole) RetainedMap.CheckHalf(mem, rec, model);
+        if (RetainedMap.Checking && !PlanarWalk.Mirroring && whole && !gpu) RetainedMap.CheckHalf(mem, rec, model);
         Epilogue(c, mem, sp);
+    }
+
+    static void NoteDrawn(uint rec)
+    {
+        uint off = rec - MapBase;
+        int hx = (int)(off % 800u / 10u), hz = (int)(off / 800u), hu = (int)(off % 10u / 5u);
+        if (RetainedMap.Ready) RetainedScene.NoteHalf(hx, hz, hu);
+        ReflectionReach.NoteDrawn(hx, hz, hu);
     }
 
     static void Plain(CpuContext c, PSMemory mem, uint model)

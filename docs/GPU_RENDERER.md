@@ -2,8 +2,9 @@
 
 The plan to draw the world from meshes kept on the GPU instead of from the
 triangles the game's code builds every frame, and the record of the work against
-it. Started 2026-09-28 on the branch `retained-world`. **Step 0 is in; nothing of
-the renderer itself is built yet.**
+it. Started 2026-09-28 on the branch `retained-world`. **Step 0 is in, and the
+first slice of Step 1: the map's opaque faces drawn by the GPU in the main view,
+off by default (`KF2_GPUWORLD=1`), measured and not judged.**
 
 ## Why: the frame is the game's geometry, done on one CPU thread
 
@@ -111,6 +112,142 @@ record update rather than the 5.5-7.5 ms rebuild the retained scene does today.
 
 Checked against the old path by `snap` hash and a per-pixel difference, then by
 eye.
+
+#### Step 1, the first slice
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(Video ▸ Experimental ▸ *GPU world renderer*, `KF2_GPUWORLD=1`, or the `gpuworld
+on|off` shell verb). The runtime
+half is `0085` (`Gpu/Backends/Common/GlMainView.cs`, `Gpu/GpuRetainedMain.cs`, the
+hook in `LibGpu.WalkOTag`); the port half is `patches/GpuWorld.cs`, with the skip in
+`TileWalk.RunTile` and a filter in `PolyAssembler`.
+
+**What it does.** The retained scene's static map (`0072`) is drawn into the frame
+itself: its opaque range, with the frame's camera, into the display target the game
+is drawing, depth tested and written, culled on facing as the game culls. It is
+drawn from the table walk the moment it passes slot 0, so the sky is under it and
+everything the table still carries (models, water, the arm, the HUD) is drawn and
+tested after it. The halves are exactly the frame's: the tile walk still sweeps and
+notes every half it visits (`Frame.MainHalves`, a gate of its own, since
+`ReflectionReach` grows and fades `Frame.Halves`), and `WorldVs` drops the rest.
+A half the GPU draws whole is then not set up or assembled at all.
+
+**Two departures from the plan above, both for this slice only.**
+
+- **Not instanced yet.** The slice draws the retained map as `0072` builds it: every
+  corner placed and lit once on the CPU, through the GTE, with `EvenFog`'s fog and
+  light blends. That is what makes it match the old path (below); instancing moves
+  the lighting and the blends into the shader, which is a parity question of its
+  own. The cost is the one the plan names: a rewrite of the map's mesh bytes
+  rebuilds the whole map (5.5-7.5 ms; 274 ms the first time a session builds it,
+  with the JIT).
+- **Water stays on packets.** A half whose mesh has a semi-transparent face is still
+  assembled, with only those faces kept (`PolyAssembler.BlendedOnly`). So `BlendOrder`
+  (`0079`), the swell, the ripples, the surface buffer (murk, the planar walk's
+  plane) and the blended texels' occlusion depth see the water exactly as before.
+  Where in the table's walk the map's own water would go is the open question: the
+  table's barriers (mode packets, billboards, the arm) are not a clean "after the
+  3D" point. In `fdat02` that keeps 72% of the halves on the old path (their opaque
+  faces are skipped; their water is not); area 1 has no water and keeps none.
+
+**The picture against the old path.** The `pause` shell verb holds the world on the
+stage gate, so a view (`view`) can be snapped with `gpuworld off` and `on` in the same
+paused frame; a paused "off" snapped twice differs by 0 pixels. Render scale 5,
+16:9, per-pixel difference over the whole picture (`>4` is more than 4 levels in any
+channel):
+
+| view | differ | >4 | >16 | max |
+|---|---|---|---|---|
+| `fdat02` spawn, five headings | 0.3-20.3% | 0.01-4.0% | 0.00-0.22% | 46 |
+| same, two headings, the world's mips off (`KF2_RETAINED_MIPS=0`) | 2.1-24.4% | 2.1-4.1% | 0.00-0.21% | 45 |
+| same, sub-pixel off (`KF2_SUBPIXEL=0`) | 3.7-25.8% | 3.6-4.9% | 0.00-0.18% | 76 |
+| same, per-pixel lighting off (`KF2_PERPIXEL=0`) | 2.1-35.2% | 2.1-4.1% | 0.00-0.21% | 45 |
+| area 1 spawn (slot 2), five headings | 4.1-17.8% | 2.4-14.2% | 0.00-0.28% | 78 |
+
+Every difference is unbiased: where it is over 4 levels, on is brighter at 50% of
+pixels and darker at 50%, and 40x40 tile means are identical. There is no crack and
+no missing half. The mip atlas is not the cause (the figures with the world's
+mipmaps off are the ones with them on). The differences lie on texel edges, densest
+on area 1's marble and along tile seams, and at every one read a texel edge sits one
+render pixel over (0.2 of a game pixel at scale 5) with the same colours either side:
+the GTE's corners against the float ones, and the game's subdivided halves (`0xC0`,
+fewer than 16 faces), whose midpoints' UVs the subdivider truncates.
+
+**A snap in a fade proves nothing.** A first pass of the mips-off comparison read
+0.00-0.15% and was taken during the New Game's fade-in: both pictures near black
+(mean level 2.4, 76% of pixels under 8), so they agreed whatever was drawn. Check a
+snap's mean before trusting its difference.
+
+**Settings the main view follows.** The map's packets obey four Video settings the
+reflections never had to: sub-pixel positions, per-pixel lighting, the crosshatch
+(*Shading: Dither*) and perspective correction. `WorldVs` takes the first three from
+the frame (`uWorldSnap` puts each corner on the GTE's whole pixel, `uWorldPerPixel`
+0 fogs at the corners and leaves authored lights out, as a packet without a light
+record is drawn; `uWorldDither` is the draw area's dither bit), measured above except
+the crosshatch, which has no switch but the saved setting. Affine textures would need
+a second program, so with perspective correction off the renderer stands down
+(`GpuWorld.Blocker`), as it does without Fast geometry, the Z-buffer or the GL core
+renderer. The checkbox is Video ▸ Experimental ▸ *GPU world renderer*
+(`kf2.gpuworld.on`); its tooltip says so while it stands down.
+
+**Measured.** RX 9070 XT, render scale 5, 16:9, `KF2_FPS=1000 KF2_PROFILE=1`, the
+same run with `gpuworld off` then `on`:
+
+| | `fdat02` spawn, off | on |
+|---|---|---|
+| CPU frame work | 5.55 ms | 4.58 ms |
+| fps | 178 | 215 |
+| `DrawOTag` (self) | 1.42 ms | 1.08 ms |
+| GPU per present | 1.68 ms | 1.33 ms |
+| of it: scene | 1.00 | 0.44 |
+| world (the map's draw) | - | 0.32 |
+
+That spot had the planar walk on (the saved setting), which is unchanged: its
+mirrored walk still assembles every half. In area 1, where no half is kept, frame
+work is 0.89 ms at 972 fps, against the 1000 fps cap. The draw itself costs 0.06 ms
+of CPU. At 144 fps: 144.0 fps drawn at 19.9-20.0 ticks/s, `[present] wide 288`, the
+vertex map 99.9% hit, no GL error under `KF2_GLDEBUG=1`, no walk that missed its map.
+
+**The first cut cost 2.2 ms of CPU, and the reason generalises.** The retained
+scene kept each static corner's mip-atlas entry in its vertex buffer, and looked up
+every texture the map holds on every present: 1,633 keys in `fdat02`, of which the
+atlas held 361, chosen by whichever got there first. The lookups were 1.3-1.5 ms, and
+they kept textures the frame never draws in the atlas ahead of those it does.
+A static corner now carries its texture's index and `WorldVs` reads the entry from a
+table of one word per texture (`uMipTable`, a buffer texture on unit 17), and only
+the textures of the halves the frame draws are looked up (`UpdateWorldMips`'s
+`halves`; the reflections pass `Frame.Halves` while the half gate is on). 0.017 ms.
+
+**Not checked**: the picture by eye; a menu, shop or message drawn live over it
+(`MenuWorld`, whose walk goes through the same path); `LoopPacing`'s redraws; area
+transitions beyond the load into area 1; the remaster's per-face materials, lights
+and fog colour in the main view (the world program takes them, as it does for the
+reflections, but no pack was applied); the frame viewer, which no longer sees the
+map's triangles.
+
+#### Known issues
+
+Recorded as found, not fixed: the steps are built through first and the fixes
+come after (decided 2026-09-28), unless an issue is something a later step builds on.
+
+1. **The occlusion shows creatures and objects through walls** (reported from play,
+   2026-09-28, SSAO on). Only the shading shows, not the model. The likely cause, from
+   the code rather than a measurement: the occlusion pass takes its normals from a
+   redraw of the frame's own triangles (`0058`, `AoGeometry`), drawn in table order
+   with no depth test, so order is what hides a model behind a wall there. The
+   GPU-drawn map never enters that list, so nothing drawn after a model covers it in
+   the normal buffer, and the pass shades the model's shape where the wall stands.
+   The reflection pass's surface buffer (`0067`) is fed from the same list, and loses
+   the map's authored materials for the same reason. Step 2 feeds both from the
+   renderer.
+2. **Geometry near the camera is cut away** (reported from play, 2026-09-28, the
+   `fdat02` pool ledge). A straight-edged wedge of the floor at the bottom right of
+   the picture, close to the camera, is missing and shows the background. The cut is
+   smooth, a plane or a triangle's edge, unlike the cell-shaped holes the view cone
+   left before it was widened. Cause not found. To rule out first: the backface cull
+   (`CullFace` on the whole faces, where the game culls a quad on its whole area);
+   the half gate missing a half the old path draws there; the world program's near
+   plane at 16 units (`uNear`), which the game's clipper does not share.
 
 ### Step 2: every map feature in the renderer
 

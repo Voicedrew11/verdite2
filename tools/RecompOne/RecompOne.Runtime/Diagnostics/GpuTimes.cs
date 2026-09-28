@@ -22,10 +22,12 @@ public static class GpuTimes
         Reflections,
         /// <summary>The present blit and any post-fx.</summary>
         Composite,
+        /// <summary>0085. The retained map drawn into the frame.</summary>
+        World,
     }
 
-    public const int Passes = 5;
-    public static readonly string[] Names = ["scene", "capture", "ao", "reflections", "composite"];
+    public const int Passes = 6;
+    public static readonly string[] Names = ["scene", "capture", "ao", "reflections", "composite", "world"];
 
     public static bool Enabled;
     /// <summary>Set by a backend that has timer queries.</summary>

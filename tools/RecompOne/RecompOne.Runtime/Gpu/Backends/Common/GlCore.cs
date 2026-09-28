@@ -453,6 +453,8 @@ public sealed partial class GlCore : IGpuBackend
             PlanarReflections.Supported = _progSsr != 0 && _uClipOn >= 0 && _uSsrPlanarOn >= 0;
             // 0072.
             InitRetained(_progSsr);
+            // 0085.
+            InitMainView();
         }
 
         _uPresent24Origin = _gl.GetUniformLocation(_progPresent24, "uOrigin");
@@ -1668,14 +1670,10 @@ public sealed partial class GlCore : IGpuBackend
         // — or after the setting was flipped — clears the attachment so last
         // frame's depths cannot occlude this one. The clear is not gated on this
         // batch's mode, so a 2D primitive arriving first cannot skip it.
-        if (rt != null && GteDepth.DepthWanted && (rt.LastDrawFrame != _frame || rt.ZGen != GteDepth.Generation))
+        if (rt != null)
         {
-            _gl.Disable(EnableCap.ScissorTest);
-            _gl.DepthMask(true);
-            _gl.ClearDepth(1.0);
-            _gl.Clear(ClearBufferMask.DepthBufferBit);
+            ClearStaleDepth(rt);
             _gl.Enable(EnableCap.ScissorTest);
-            rt.ZGen = GteDepth.Generation;
         }
         if (_kZMode == 3)
         {
@@ -2085,6 +2083,18 @@ public sealed partial class GlCore : IGpuBackend
         _drawEmpty = true;
         _litFilled = 0;
         _texFilled = 0;
+    }
+
+    /// <summary>The target's depth cleared on its first draw of a frame, or after the
+    /// depth setting moved, with its framebuffer bound; leaves the scissor off.</summary>
+    void ClearStaleDepth(GlDisplayRt rt)
+    {
+        if (!GteDepth.DepthWanted || (rt.LastDrawFrame == _frame && rt.ZGen == GteDepth.Generation)) return;
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.DepthMask(true);
+        _gl.ClearDepth(1.0);
+        _gl.Clear(ClearBufferMask.DepthBufferBit);
+        rt.ZGen = GteDepth.Generation;
     }
 
     unsafe void Orphan(uint buffer, int bytes)

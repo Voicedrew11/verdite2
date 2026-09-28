@@ -757,6 +757,16 @@ Kf2.RetainedMap.Configure(Environment.GetEnvironmentVariable("KF2_RETAINED"),
                           Environment.GetEnvironmentVariable("KF2_RETAINED_MIPS"));
 Kf2.RetainedMap.Install();
 
+// The GPU world renderer (patches/recompone/0085): the map's opaque faces drawn
+// from the retained scene into the frame, and no longer assembled by the game's
+// code. Off by default: measured, not judged. See docs/GPU_RENDERER.md.
+//
+//     KF2_GPUWORLD=1          on; 0 never; unset, the saved setting
+//     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept
+Kf2.GpuWorld.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD"),
+                       Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"));
+Kf2.GpuWorld.Install();
+
 // The remaster (docs/REMASTER.md): authored data from a pack, applied over the
 // game: materials on tile faces, read by the reflection pass, and point and spot
 // lights in the prim shader (0071). Off by default and nothing is authored until

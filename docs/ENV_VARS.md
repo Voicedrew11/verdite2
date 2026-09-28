@@ -196,6 +196,8 @@ KF2_REFLECT_REACH_PROBE=1              # a line every 2 s: halves drawn, grown, 
 KF2_RETAINED_PROBE=1                   # the mesh and its check against the GTE's own vertices, the planes, GPU time per draw, chunks culled, and (with KF2_SSR_PROBE=1) the planar-vs-cubemap agreement
 KF2_RETAINED_LIT=0                     # leave authored lights and glows out of the reflections (in by default)
 KF2_RETAINED_MIPS=0                    # no mip atlas in the reflections, only the anisotropic taps (on by default)
+KF2_GPUWORLD=1                         # the map's opaque faces drawn on the GPU from the retained scene, not assembled by the game's code (off by default; 0 never; unset, Video ▸ Experimental ▸ GPU world renderer; the `gpuworld on|off` shell verb; GL core only; 0085)
+KF2_GPUWORLD_PROBE=1                   # a line every 2 s: draws, walks that missed the map, triangles a draw, halves left whole and kept for their water, and the draw's CPU time by part
 KF2_REMASTER=1                         # apply the working pack (off by default; the editor's checkbox saves it); Shift+E opens the editor
 KF2_REMASTER_PACK=dir                  # the working pack (packs/working)
 KF2_REMASTER_PROBE=1                   # a line every 2 s: the area, its fingerprint, what applied; a diff of the tile bytes when an area's fingerprint changes

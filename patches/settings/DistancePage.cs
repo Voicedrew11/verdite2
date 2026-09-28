@@ -4,8 +4,8 @@ using RecompOne.Runtime.Host.Window;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The render distance and the enhancement distance, at the head of Video ▸
-/// Experimental. Sorted before <see cref="ReflectionsPage"/> by id.
+/// The GPU world renderer, the render distance and the enhancement distance, at the
+/// head of Video ▸ Experimental. Sorted before <see cref="ReflectionsPage"/> by id.
 /// </summary>
 public sealed class DistancePage : IPatchPage
 {
@@ -16,6 +16,21 @@ public sealed class DistancePage : IPatchPage
     const string Strings = """
     {
       "strings": {
+        "kf2.gpuworld.label": {
+          "en": "GPU world renderer",
+          "pt-BR": "Renderizador do mundo na GPU",
+          "es-419": "Renderizador del mundo en la GPU"
+        },
+        "kf2.gpuworld.tooltip": {
+          "en": "The map is drawn by the graphics card from a copy it keeps, instead of being rebuilt by the game's code every frame. Faster, and meant to look the same; creatures, objects and water are still drawn the old way. Experimental.",
+          "pt-BR": "O mapa é desenhado pela placa de vídeo a partir de uma cópia que ela guarda, em vez de ser reconstruído pelo código do jogo a cada quadro. Mais rápido, e feito para parecer igual; criaturas, objetos e água ainda são desenhados do jeito antigo. Experimental.",
+          "es-419": "El mapa lo dibuja la tarjeta gráfica a partir de una copia que guarda, en lugar de reconstruirlo el código del juego en cada cuadro. Más rápido, y pensado para verse igual; las criaturas, los objetos y el agua todavía se dibujan a la manera anterior. Experimental."
+        },
+        "kf2.gpuworld.blocked": {
+          "en": "Standing down: it needs Fast geometry, the Z-buffer and perspective-correct textures, on the OpenGL renderer.",
+          "pt-BR": "Inativo: precisa da Geometria rápida, do Z-buffer e das texturas com correção de perspectiva, no renderizador OpenGL.",
+          "es-419": "Inactivo: necesita la Geometría rápida, el Z-buffer y las texturas con corrección de perspectiva, en el renderizador OpenGL."
+        },
         "kf2.renderdistance.label": {
           "en": "Render distance",
           "pt-BR": "Distância de renderização",
@@ -55,6 +70,16 @@ public sealed class DistancePage : IPatchPage
     public void Draw()
     {
         var flags = ImGuiSliderFlags.AlwaysClamp;
+
+        bool gpu = GpuWorld.Enabled;
+        if (ImGui.Checkbox(Localization.T("kf2.gpuworld.label"), ref gpu))
+        {
+            GpuWorld.SetEnabled(gpu);
+            PatchSettings.Set(GpuWorld.OnKey, gpu);
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(Localization.T("kf2.gpuworld.tooltip") +
+                             (GpuWorld.Blocker != null ? "\n\n" + Localization.T("kf2.gpuworld.blocked") : ""));
 
         float reach = RenderDistance.Tiles;
         string rf = RenderDistance.On ? "%.1f" : Escape(Localization.T("kf2.renderdistance.game"));

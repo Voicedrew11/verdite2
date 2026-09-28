@@ -5030,6 +5030,12 @@ view [<x> <y> <z> <pitch> <yaw> <roll> | off]
                       camera, every frame is drawn from it until "view off"
                       (Stage13.ViewOverride; see "Drawing the frame from another
                       camera")
+pause [on|off]        hold the world on the stage gate (FramePacing.PauseWhen, as
+                      the full map does): a view snapped twice while paused differs
+                      by 0 pixels, so "snap" before and after a switch compares one
+                      frame
+gpuworld [on|off]     the map drawn on the GPU (0085; see "Step 1, the first
+                      slice" in docs/GPU_RENDERER.md)
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the

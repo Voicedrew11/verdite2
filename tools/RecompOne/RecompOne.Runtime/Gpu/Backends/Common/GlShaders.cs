@@ -1282,6 +1282,16 @@ internal static class GlShaders
         uniform int uHalfGate;
         // Authored lights or a glow are drawn: the corner carries its RGBC to them.
         uniform int uWorldLit;
+        // 0085. inMip is a texture's index plus one into this table of atlas
+        // entries (the static map), not the entry itself (the frame's models).
+        uniform usamplerBuffer uMipTable;
+        uniform int uMipIndirect;
+        // 0085. The main view follows the frame's settings: corner positions on whole
+        // pixels (sub-pixel off), the depth cue at the corners (per-pixel lighting
+        // off), and the crosshatch. The reflections leave all three at their defaults.
+        uniform int uWorldSnap;
+        uniform int uWorldPerPixel;
+        uniform int uWorldDither;
 
         float cueKeep(float z) {
             int curve = int(inCue.z + 0.5);
@@ -1313,6 +1323,8 @@ internal static class GlShaders
             vec3 v = uR * (w - uCam) + uT;
             float z = v.z;
             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
+            if (uWorldSnap != 0 && z > 0.0)
+                gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
 
             vColor = vec4(inColorF * cueKeep(z), 0.0) / 255.0;
@@ -1320,7 +1332,7 @@ internal static class GlShaders
             // affine on screen (it goes as 1/z), so interpolated it is exact, and
             // shade8 puts it through the curve at every pixel.
             int curve = int(inCue.z + 0.5);
-            if (uFogOn != 0 && curve != 0) {
+            if (uFogOn != 0 && curve != 0 && uWorldPerPixel != 0) {
                 float q = min(uCueH * 65536.0 / max(z, 1.0), 131071.0);
                 vLit = inColorF;
                 vFog = (inCue.x * q + inCue.y) / 4096.0;
@@ -1330,13 +1342,15 @@ internal static class GlShaders
                 vFog = 0.0;
                 vLight = 0u;
             }
-            if (uWorldLit != 0 && inRgbc != 0u) {
+            if (uWorldLit != 0 && uWorldPerPixel != 0 && inRgbc != 0u) {
                 if (vLight == 0u) { vLit = inColorF; vFog = 0.0; }
                 vLight |= inRgbc & 0xFFFFFFu;
             }
-            vTex = uvec2(inRect, (inFlags & 0x80000000u) | inMip);
+            uint mip = inMip;
+            if (uMipIndirect != 0) mip = inMip == 0u ? 0u : texelFetch(uMipTable, int(inMip) - 1).r;
+            vTex = uvec2(inRect, (inFlags & 0x80000000u) | mip);
             vMat = inFlags & 255u;
-            vDither = 0;
+            vDither = uWorldDither;
             vRepClut = 0;
             vUV = inUV;
 

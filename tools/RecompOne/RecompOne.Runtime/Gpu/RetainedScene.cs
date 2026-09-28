@@ -91,6 +91,29 @@ public static class RetainedScene
     /// <summary>Set by the GL core backend once its world program built.</summary>
     public static bool Supported;
 
+    // ---- 0085: the main view -------------------------------------------------------
+
+    /// <summary>0085. The port's switch: the static map's opaque range is drawn into
+    /// the frame by the backend, at the head of the ordering table's walk, and the
+    /// port stops assembling those faces.</summary>
+    public static bool MainView;
+
+    /// <summary>0085. The frame whose map the next table walk draws, set by the port
+    /// when its tile walk starts; 0 once drawn.</summary>
+    public static int MainSerial;
+
+    /// <summary>0085. The backend's draw, given the GPU's draw offset: true when the
+    /// map went into a display target.</summary>
+    public static Func<int, int, bool>? MainDrawer;
+
+    /// <summary>0085. Main-view draws made, walks that found no target or no frame,
+    /// and static triangles submitted.</summary>
+    public static long MainDraws, MainMissed, MainTriangles;
+
+    /// <summary>0085. Stopwatch ticks in the draw's parts: shadows and the static
+    /// upload, the mip entries, the uniforms and the cull, the draw and after.</summary>
+    public static readonly long[] MainTicks = new long[4];
+
     /// <summary>Draw planar reflections from it, and the camera cubemap.</summary>
     public static bool Planar = true, Cube = true;
 
@@ -114,6 +137,12 @@ public static class RetainedScene
     /// <summary>The last present's: lights sent to the world draws, whether a glow was
     /// on, and the retained textures with an atlas entry of those that could have one.</summary>
     public static int LitLights, MipsFound, MipsKeys;
+
+    /// <summary>0085. Uploads of the static map's table of atlas entries, one word a texture.</summary>
+    public static long MipTableUploads;
+
+    /// <summary>0085. Stopwatch ticks in the atlas lookups and in the decode they queued.</summary>
+    public static readonly long[] MipTicks = new long[2];
     public static bool LitGlow;
 
     // ---- the static map ----------------------------------------------------------
@@ -280,6 +309,9 @@ public static class RetainedScene
         /// <c>(tile Z * 80 + tile X) * 2 + upper</c>: 255 for one the frame's own
         /// tile walk drew, unless the port weighs them (<see cref="CurrentHalves"/>).</summary>
         public readonly byte[] Halves = new byte[HalvesW * HalvesH];
+        /// <summary>0085. The halves the frame's own walk drew, 255 each: the main
+        /// view's gate, which nothing grows or fades.</summary>
+        public readonly byte[] MainHalves = new byte[HalvesW * HalvesH];
 
         public ReadOnlySpan<Vertex> SortedDynamic()
         {
@@ -315,13 +347,16 @@ public static class RetainedScene
         f.SortedValid = false;
         f.PlaneCount = 0;
         Array.Clear(f.Halves);
+        Array.Clear(f.MainHalves);
     }
 
     /// <summary>A map half the current frame's walk drew, at full weight.</summary>
     public static void NoteHalf(int tx, int tz, int upper)
     {
         var f = Current;
-        if (f.Serial == _serial && (uint)tx < 80u && (uint)tz < 80u) f.Halves[(tz * 80 + tx) * 2 + upper] = 255;
+        if (f.Serial != _serial || (uint)tx >= 80u || (uint)tz >= 80u) return;
+        f.Halves[(tz * 80 + tx) * 2 + upper] = 255;
+        f.MainHalves[(tz * 80 + tx) * 2 + upper] = 255;
     }
 
     /// <summary>The current frame's halves, for a port that weighs them itself: 0
