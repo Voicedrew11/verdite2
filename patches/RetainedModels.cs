@@ -17,13 +17,15 @@ namespace Kf2;
 /// from the reflection's own camera with the DQA, DQB and curve the model was
 /// fogged with.
 ///
-/// Not captured: the billboards and effects drawn by other assemblers, and anything
-/// drawn outside the object walk (the arm, the HUD).
+/// Billboards and effects are captured too, since the walk hands both to the
+/// blended lit assembler; a billboard is its card as the real camera faces it. Not
+/// captured: anything drawn outside the object walk (the arm, the HUD).
 ///
 /// Also captured for the authored lights' shadows (runtime <c>0077</c>), with
 /// reflections off; then nothing is lit, since a shadow wants only the corners. A
 /// door's blended model is marked solid (<see cref="RetainedScene.FlagSolid"/>), so it
-/// casts as the wall it stands for, and an effect is marked to cast nothing.
+/// casts as the wall it stands for, and an effect or a billboard is marked to cast
+/// nothing: a billboard's card faces the player, not the light.
 /// </summary>
 static class RetainedModels
 {
@@ -38,7 +40,7 @@ static class RetainedModels
     public static bool Capturing => (RetainedMap.ReflectionsReady || RetainedScene.ShadowModelsWanted)
                                     && ModelWalk.InWalk && !PolyAssembler.Verifying;
 
-    public static long Models, Faces;
+    public static long Models, Faces, Props;
 
     /// <summary>Models captured by the table they came from, and faces of a kind no
     /// capture reads, by command byte; never reset.</summary>
@@ -61,7 +63,7 @@ static class RetainedModels
         uint verts = mem.ReadU32(VertexBase);
         byte mat = PolyAssembler.TileMaterial;
         bool lit = RetainedMap.ReflectionsReady;
-        uint solid = ModelWalk.SubmitKind == ModelKind.Effect ? RetainedScene.FlagNoShadow
+        uint solid = ModelWalk.SubmitKind is ModelKind.Effect or ModelKind.Sprite ? RetainedScene.FlagNoShadow
                    : abr != uint.MaxValue && ModelWalk.SubmitKind == ModelKind.Object
                      && ModelWalk.SolidKind(ModelWalk.ObjectKind(mem, ModelWalk.SubmitRecord)) ? RetainedScene.FlagSolid : 0u;
 
@@ -127,6 +129,7 @@ static class RetainedModels
         RetainedScene.AddDynamic(_tris.AsSpan(0, n));
         Models++;
         ByKind[(int)ModelWalk.SubmitKind]++;
+        if (Remaster.Props.NameOf(ModelWalk.SubmitRecord) != null) Props++;
     }
 
     /// <summary>One model the object walk hands the tile assemblers
@@ -142,7 +145,7 @@ static class RetainedModels
         float dqa = (short)Gte.ReadControl(27), dqb = (int)Gte.ReadControl(28);
         int mode = (int)mem.ReadU32(FogMode);
         float curve = mode >= 32000 ? 0f : twoCurves ? 2f : (mode & 0x8000) != 0 ? 1f : 2f;
-        uint noShadow = ModelWalk.SubmitKind == ModelKind.Effect ? RetainedScene.FlagNoShadow : 0u;
+        uint noShadow = ModelWalk.SubmitKind is ModelKind.Effect or ModelKind.Sprite ? RetainedScene.FlagNoShadow : 0u;
         uint rgbc = mem.ReadU32(LightColour);
         uint verts = mem.ReadU32(VertexBase);
         byte mat = PolyAssembler.TileMaterial;
@@ -197,6 +200,7 @@ static class RetainedModels
         RetainedScene.AddDynamic(_tris.AsSpan(0, n));
         Models++;
         ByKind[(int)ModelWalk.SubmitKind]++;
+        if (Remaster.Props.NameOf(ModelWalk.SubmitRecord) != null) Props++;
     }
 
     /// <summary>A model corner to world space. A model the walk placed in the world

@@ -26,7 +26,8 @@ namespace Kf2;
 ///     press &lt;button&gt; [ms]   hold a pad button for ms (default 150)
 ///     kill                  drop HP to zero, the way a hit would
 ///     nearby [radius]       live world-table records within radius of the
-///                           player, nearest first (positions only; buf6's
+///                           player, nearest first: objects, entities, effects
+///                           and billboard sprites (positions only; buf6's
 ///                           entity reading is still Inferred)
 ///     edit, select, set, pack, remaster, light, atmos, level
 ///                           the remaster editor's verbs (Remaster.Shell)
@@ -107,7 +108,7 @@ public static class AgentServer
         "warp <area 0..7> - re-enter an area through the game's own entry routine",
         "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
         "kill - drop HP to zero, the way a hit would",
-        "nearby [radius=8192] - live records of the world tables within radius units",
+        "nearby [radius=8192] - live records of the world tables (objects, entities, effects, sprites) within radius units",
         "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
         "map [on|off|toggle] - the full-screen map, which pauses the world unless KF2_MAP_PAUSE=0",
         "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
@@ -482,6 +483,10 @@ public static class AgentServer
     const int EntityCount = 0xC8;
     const int EntityEmptyOff = 0x0;
     const int EntityPosOff = 0x2C;         // VECTOR
+    const uint EffectTable = 0x8019CC6C;
+    const int EffectStride = 0x48, EffectCount = 128, EffectEmptyOff = 0x0, EffectPosOff = 0x14;
+    const uint SpriteTable = 0x80195174;   // billboards; free is u16 0xFFFF, read by its low byte
+    const int SpriteStride = 0x18, SpriteCount = 128, SpriteEmptyOff = 0x0, SpritePosOff = 0x8;
 
     const int NearbyDefaultRadius = 8192;  // four tiles
     const int NearbyMaxRadius = 0x10000;
@@ -516,6 +521,10 @@ public static class AgentServer
                      ObjectEmptyOff, ObjectPosOff, px, pz, radius);
         AppendNearby(sb, m, "entities", EntityTable, EntityStride, EntityCount,
                      EntityEmptyOff, EntityPosOff, px, pz, radius);
+        AppendNearby(sb, m, "effects", EffectTable, EffectStride, EffectCount,
+                     EffectEmptyOff, EffectPosOff, px, pz, radius);
+        AppendNearby(sb, m, "sprites", SpriteTable, SpriteStride, SpriteCount,
+                     SpriteEmptyOff, SpritePosOff, px, pz, radius);
         sb.Append('}');
         return sb.ToString();
     }

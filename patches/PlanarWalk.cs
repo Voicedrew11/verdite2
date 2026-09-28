@@ -311,6 +311,7 @@ public static class PlanarWalk
                 c.RA = 0x800338C0u;
                 KingsField2.func_80032588(c, mem);
                 replayed++;
+                if (Remaster.Props.NameOf(_record[i]) != null) _props++;
             }
         }
         finally
@@ -362,7 +363,7 @@ public static class PlanarWalk
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt, _ms;
-    static long _walks, _replayed, _viewSpace, _noWater, _below, _mismatch, _overflows, _peak;
+    static long _walks, _replayed, _props, _viewSpace, _noWater, _below, _mismatch, _overflows, _peak;
     static float _plane;
     static double _area;
 
@@ -375,7 +376,7 @@ public static class PlanarWalk
 
         Console.WriteLine($"[KF2] planar: plane Y {_plane:F0} over {_area:F0} px of water; " +
                           $"{_walks / dt:F1} mirrored walks/s at {(_walks == 0 ? 0 : _ms / _walks):F3} ms, " +
-                          $"{_replayed / dt:F0} submits replayed/s ({_viewSpace / dt:F0} view-space skipped), " +
+                          $"{_replayed / dt:F0} submits replayed/s ({_props / dt:F0} of them props, {_viewSpace / dt:F0} view-space skipped), " +
                           $"{_noWater / dt:F1} frames/s with no water, {_below / dt:F1} under it; arena peak {_peak}/{PrimBuffer.MirrorArenaBytes} bytes, " +
                           $"{_overflows} overflow(s), {_mismatch} table mismatch(es)");
         Console.WriteLine($"[KF2] planar: {PlanarReflections.Captures / dt:F1} captures/s, {PlanarReflections.Cleared / dt:F1} cleared/s, " +
@@ -390,7 +391,7 @@ public static class PlanarWalk
         if (ScreenReflections.Map is { } map && !Reflections.Probing) Console.Write(map);
         ScreenReflections.WantMap = true;
 
-        _walks = _replayed = _viewSpace = _noWater = _below = _mismatch = _overflows = _peak = 0;
+        _walks = _replayed = _props = _viewSpace = _noWater = _below = _mismatch = _overflows = _peak = 0;
         _ms = 0;
         PlanarReflections.ResetCounters();
         PlanarReflections.WaterTris = PlanarReflections.WaterTilted = 0;

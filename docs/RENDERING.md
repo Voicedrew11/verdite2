@@ -2625,11 +2625,20 @@ making three tiles `mirror`, reflectivity 1, 16:9, `KF2_RETAINED=1`), hashed wit
 - The first run crashed on an empty mip buffer;
   the upload is at least one entry now. No GL errors, no exceptions in any run.
 
-**Billboards are not reached at all.** The probe counts captured models by the table
-they came from: `creature 0, object 3916, effect 0, sprite 0`, and no face of a kind
-the capture does not read. So a billboard is not a model the capture drops faces of;
-it never reaches the lit assembler that `RetainedModels` sits on, and reflecting one
-means capturing its own assembler.
+**Billboards are reached; the view above had none in it.** The probe counts captured
+models by the table they came from, and read `creature 0, object 3916, effect 0,
+sprite 0` -- but `KF2_MODELWALK_PROBE=1` beside it read 0 sprites *submitted* a
+second as well, at that spot and at every area's warp point. Standing 2,000 units
+from area 1's first billboard (`nearby` now lists the effect and sprite tables) at
+four headings, the walk submitted 35-323 sprites a second and the capture's sprite
+count rose with it, about 200 a second, and no face went unread. A billboard goes
+through the walk's submitter like any model, with the flat matrix, to the blended
+lit assembler `RetainedModels` sits on. It is captured as its card faces the real
+camera, so a mirror shows that card, not one turned to the mirrored eye (not
+judged). It is kept out of the lights' shadow cubemaps (`FlagNoShadow`, as an
+effect is), where a card facing the player would cast a shape no light sees.
+Measured with a light 600 units from area 1's first billboard: 23 caster triangles
+in reach and 11,076 model triangles into its cubemap before, 21 and 2,916 after.
 
 ## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
 

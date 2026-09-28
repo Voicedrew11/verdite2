@@ -532,8 +532,9 @@ public static class RetainedMap
                           $"{RetainedScene.PlanarDraws} planar draw(s) at {RetainedScene.PlanarGpuNs / 1e6:F3} ms GPU, " +
                           $"{RetainedScene.CubeDraws} cubemap(s) at {RetainedScene.CubeGpuNs / 1e6:F3} ms GPU, " +
                           $"{RetainedScene.Triangles} triangle(s) submitted, chunks {RetainedScene.ChunksDrawn}/{RetainedScene.ChunksTested} drawn; " +
-                          $"{RetainedModels.Models} model(s) ({RetainedModels.Placed} placed from their record) and {RetainedModels.Faces} face(s) captured");
-        RetainedModels.Models = RetainedModels.Faces = RetainedModels.Placed = 0;
+                          $"{RetainedModels.Models} model(s) ({RetainedModels.Placed} placed from their record, {RetainedModels.Props} of them props) and {RetainedModels.Faces} face(s) captured; " +
+                          $"shadow casters in reach {RemasterUniforms.ShadowCasters}, {RemasterUniforms.ShadowModelRenders} model cubemap(s) drawn");
+        RetainedModels.Models = RetainedModels.Faces = RetainedModels.Placed = RetainedModels.Props = 0;
         _checked = _within = _worst = 0;
         _sumErr = 0;
         RetainedScene.ResetCounters();

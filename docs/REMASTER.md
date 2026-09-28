@@ -710,6 +710,11 @@ an edited wall with `press`; the position must not cross it.
 
 ### Edited with a warning: placement of objects and creatures
 
+**Dropped (2026-09-28).** Not built, and not in the roadmap: a remaster pack does
+not move the game's own objects or creatures. Props cover placing a model for its
+look without touching a record the game reads or saves. What follows is kept as
+the reason, should it ever come back.
+
 Objects at `rec+0x14` in the table at `0x80177714`; creatures at `rec+0x2C` in the
 table at `0x8016C544`. **`func_800492B8` packs the 200-slot creature table into
 the save buffer** when the player saves. A moved creature is therefore written
@@ -2390,7 +2395,8 @@ feature complete rather than section by section.
 
 - port-drawn props: the area's own object models first (see "Phase 8, the first
   slice"), meshes the author supplies after;
-- opt-in object and creature placement;
+- ~~opt-in object and creature placement~~, dropped (see "Edited with a warning:
+  placement of objects and creatures");
 - a GPU id buffer (`0076`), if picking is ever too slow;
 - texture packs, parked from Phase 4: a replaced water texture scrolled through
   `0053`, replacements in the retained scene, normal and roughness maps (`0075`).
@@ -2477,9 +2483,21 @@ material set on the selection reaches every draw of that model, props included.
 - **It costs nothing to see**: 144.0 fps drawn at 20.0 ticks/s with the prop in view,
   `[present] wide 288, plain 0, vram fallback 0`.
 
-**Not measured**: a prop in the planar walk's mirror or in the retained scene's
-shadows; they follow from the submit, but no run has
-looked at the counters. **Not judged**: nothing of this has been looked at -- whether
+**A prop reaches the mirror, the retained scene and the shadows** (measured
+2026-09-28; the probes now count props: `planar: ... N of them props`,
+`retained: ... N of them props ...; shadow casters in reach N`):
+- *Retained scene*, area 1 from slot 2, `KF2_RETAINED=1`, two urns (443) placed by
+  pick: 576 of 1,152 captured models in two seconds were the props, 2 a frame, and
+  0 before they were added and after they were removed.
+- *Shadows*: a light put just above them (`light add l1 pick 160 140`) read 306
+  caster triangles in reach with the props and 98 once they were removed, and drew
+  the model cubemap again on the removal.
+- *Planar walk*, `fdat02`'s New Game, `KF2_PLANAR=1 KF2_RETAINED=0` (a saved
+  *World reflections* stands it down), two of model 460 over the water: 576
+  submits replayed a second, 288 of them props, against 288 and 0 without; the
+  mirrored walk 1.26 ms to 1.54 ms with them in view.
+
+**Not judged**: nothing of this has been looked at -- whether
 a prop sits on the floor rather than in it or above it (a model's origin need not be
 its base), whether its light matches the objects beside it, and how the editor's
 placement feels. The editor's handling is deferred with the rest of its UX.
@@ -2507,7 +2525,8 @@ placement feels. The editor's handling is deferred with the rest of its UX.
    the first slice".
 4. **Shader cost at a high render scale**, since the port is CPU-bound and frame
    rate hides it. GPU timers per feature are the answer.
-5. **Save contamination** from placement edits. Opt-in, labelled, and last.
+5. **Save contamination** from placement edits. Gone with the placement edits,
+   which were dropped.
 6. **An upstream merge that touches `Assets/`.** The remaster depends on
    upstream's pack code, so the next merge (see `RECOMPONE_FORK.md`) has to
    treat `Assets/` as something the port relies on.
@@ -2528,8 +2547,9 @@ two.
    remaster ship as one thing.
 5. **Forward or deferred authored lights.** *Recommend forward, inside `shade8`*,
    and deferred only for terms that apply to the finished picture.
-6. **Whether object and creature edits may reach a save.** *Recommend no by
-   default*: opt-in per pack, labelled, and last in the roadmap.
+6. **Whether object and creature edits may reach a save.** *Decided: there are
+   none.* Moving the game's own records was dropped (2026-09-28); props are the
+   port's own records and never reach a save.
 7. **Shadows.** *Decided: shadow cubemaps from the retained map* (`0077`), drawn
    on the GPU only when a light or the map changes, so a CPU-bound port pays
    nothing a frame for them. The tile-grid march this recommended first is not

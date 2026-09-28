@@ -647,11 +647,9 @@ useful than the question was.
    picture has been judged: the `fdat02` pool and a mirror floor while turning, the
    cubemap on walls and props (a floor or a wall set reflective through the editor),
    the seam between a plane and the cubemap, and what a miss reflecting nothing looks
-   like. Then the gaps it leaves, in the order they would show: billboards and
-   effects (another assembler to capture), authored lights and glows in the
-   reflection (the world program runs with neither), mipmaps (an atlas entry per
-   retained triangle, cached on `VramTracker.Clock`), and `EvenFog`/`EvenLight`'s
-   blends. If it holds up, the planar walk (`PlanarWalk`) and the screen march are
+   like. Billboards and effects, authored lights and glows, mipmaps and
+   `EvenFog`/`EvenLight`'s blends are all in it now (measured, not judged); a
+   billboard is its card as the player sees it, not turned to the mirror. If it holds up, the planar walk (`PlanarWalk`) and the screen march are
    comparisons only and can leave the settings window.
 21. **Look at a replaced texture.** `packs/phase4-test` (generated test patterns,
    not committed; delete the folder to take it out) replaces area 1's two tile
