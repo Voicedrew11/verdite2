@@ -6,9 +6,9 @@ namespace Kf2.Settings;
 
 /// <summary>
 /// The remaster's switch, under Video ▸ Enhancements after the reflections, and the
-/// packs it applies under a heading of their own. Only the working pack exists so
-/// far, so the list is one entry: where it is, what it holds, and every reason an
-/// area of it is not applied. See "Settings" in docs/REMASTER.md.
+/// packs it applies under a heading of their own: the packs beneath the working pack,
+/// each with its switch, and the working pack on top, with every reason an area of it
+/// is not applied. See "Settings" in docs/REMASTER.md.
 /// </summary>
 public sealed class RemasterPage : IPatchPage
 {
@@ -54,6 +54,22 @@ public sealed class RemasterPacksPage : IPatchPage
 
     public void Draw()
     {
+        foreach (var l in Pack.Layers)
+        {
+            bool on = l.Enabled;
+            ImGui.BeginDisabled(l.Error != null);
+            if (ImGui.Checkbox($"{l.Name}##layer:{l.Id}", ref on)) Pack.SetLayerEnabled(l.Id, on);
+            ImGui.EndDisabled();
+            ImGui.SameLine();
+            ImGui.TextDisabled($"priority {l.Priority}, {l.Documents} document(s)");
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(l.Path);
+            if (l.Error != null) ImGui.TextColored(Bad, l.Error);
+            foreach (var why in l.SetAside) ImGui.TextColored(Warn, "set aside: " + why);
+        }
+        if (Pack.Layers.Count > 0)
+            ImGui.TextDisabled("Each pack overrides those above it in this list per key; the working pack is on top of them all.");
+        foreach (var why in Pack.WorkSetAside) ImGui.TextColored(Warn, "set aside: " + why);
+
         ImGui.Text("Working pack");
         ImGui.SameLine();
         ImGui.TextDisabled(Pack.Root);

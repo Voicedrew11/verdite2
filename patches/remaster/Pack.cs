@@ -49,7 +49,7 @@ public static partial class Pack
 
     static Set _set = Set.Empty();
 
-    sealed class Set
+    internal sealed class Set
     {
         public JsonObject Materials = null!;
         public JsonObject Textures = null!;
@@ -73,7 +73,12 @@ public static partial class Pack
     {
         try
         {
-            _set = Read();
+            _layers = ReadLayers();
+            _base = BuildBase(_layers);
+            WorkSetAside.Clear();
+            var work = Read();
+            NoteRemovals(work);
+            _set = Merge(_base, work, "the working pack", WorkSetAside);
             LastError = null;
         }
         catch (Exception e)
@@ -87,36 +92,12 @@ public static partial class Pack
         Version++;
     }
 
-    static Set Read()
-    {
-        var s = Set.Empty();
-        if (File.Exists(MaterialsPath)) s.Materials = Migrate(ParseObject(MaterialsPath), "materials");
-        if (File.Exists(TexturesPath)) s.Textures = Migrate(ParseObject(TexturesPath), "textures");
-        var areas = Path.Combine(RemasterDir, "areas");
-        if (Directory.Exists(areas))
-            foreach (var dir in Directory.EnumerateDirectories(areas))
-            {
-                if (!int.TryParse(Path.GetFileName(dir), out int area)) continue;
-                var path = Path.Combine(dir, "surfaces.json");
-                if (File.Exists(path)) s.Surfaces[area] = Migrate(ParseObject(path), "tiles");
-                path = Path.Combine(dir, "lights.json");
-                if (File.Exists(path)) s.Lights[area] = Migrate(ParseObject(path), "lights");
-                path = Path.Combine(dir, "atmosphere.json");
-                if (File.Exists(path)) s.Atmosphere[area] = Migrate(ParseObject(path), "records");
-                path = Path.Combine(dir, "level.json");
-                if (File.Exists(path)) s.Level[area] = Migrate(ParseObject(path), "halves");
-                path = Path.Combine(dir, "props.json");
-                if (File.Exists(path)) s.Props[area] = Migrate(ParseObject(path), "props");
-            }
-        return s;
-    }
+    /// <summary>The working pack's own documents, as saved: its changes over the layers below.</summary>
+    static Set Read() => ReadSet(RemasterFiles(Root));
 
-    static JsonObject ParseObject(string path)
-    {
-        var node = JsonNode.Parse(File.ReadAllText(path),
-            documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-        return node as JsonObject ?? throw new InvalidDataException($"{path}: not a JSON object");
-    }
+    /// <summary>What of the working pack was set aside at the last load: an area authored
+    /// against another fingerprint than a layer below holds, which the working pack's own wins over.</summary>
+    public static readonly List<string> WorkSetAside = new();
 
     /// <summary>Version 1 is the only one; a newer file is read as far as it goes.</summary>
     static JsonObject Migrate(JsonObject doc, string collection)
@@ -140,18 +121,21 @@ public static partial class Pack
         {
             Directory.CreateDirectory(RemasterDir);
             WriteManifest();
-            _set.Materials["formatVersion"] = FormatVersion;
-            Write(MaterialsPath, _set.Materials);
-            if (TexturesArr.Count > 0 || File.Exists(TexturesPath))
+            // Only what the working pack changes over the layers below it.
+            var mats = DiffMaterials(_base, _set);
+            mats["formatVersion"] = FormatVersion;
+            Write(MaterialsPath, mats);
+            var tex = DiffTextures(_base, _set);
+            if (((JsonArray)tex["textures"]!).Count > 0 || File.Exists(TexturesPath))
             {
-                _set.Textures["formatVersion"] = FormatVersion;
-                Write(TexturesPath, _set.Textures);
+                tex["formatVersion"] = FormatVersion;
+                Write(TexturesPath, tex);
             }
-            WriteAreaDocs(_set.Surfaces, SurfacesPath);
-            WriteAreaDocs(_set.Lights, LightsPath);
-            WriteAreaDocs(_set.Atmosphere, AtmospherePath);
-            WriteAreaDocs(_set.Level, LevelPath);
-            WriteAreaDocs(_set.Props, PropsPath);
+            WriteAreaDocs("surfaces", _set.Surfaces, SurfacesPath);
+            WriteAreaDocs("lights", _set.Lights, LightsPath);
+            WriteAreaDocs("atmosphere", _set.Atmosphere, AtmospherePath);
+            WriteAreaDocs("level", _set.Level, LevelPath);
+            WriteAreaDocs("props", _set.Props, PropsPath);
             Dirty = false;
             LastError = null;
             SavedAt = DateTime.Now;
@@ -164,10 +148,19 @@ public static partial class Pack
         }
     }
 
-    static void WriteAreaDocs(Dictionary<int, JsonObject> docs, Func<int, string> path)
+    static void WriteAreaDocs(string kind, Dictionary<int, JsonObject> docs, Func<int, string> path)
     {
-        foreach (var (area, doc) in docs)
+        foreach (var (area, merged) in docs)
         {
+            var doc = DiffDoc(kind, area, merged);
+            if (doc == null)
+            {
+                // Nothing of its own: a file that overrode something now overrides nothing.
+                if (!File.Exists(path(area))) continue;
+                doc = (JsonObject)merged.DeepClone();
+                foreach (var c in Collections[kind]) doc.Remove(c);
+                doc[Collections[kind][0]] = new JsonArray();
+            }
             doc["formatVersion"] = FormatVersion;
             Directory.CreateDirectory(Path.GetDirectoryName(path(area))!);
             Write(path(area), doc);
@@ -249,7 +242,9 @@ public static partial class Pack
             LastError = "the files changed on disk while there were unsaved edits; kept the edits (Reload to take the files)";
             return;
         }
-        _set = p;
+        WorkSetAside.Clear();
+        NoteRemovals(p);
+        _set = Merge(_base, p, "the working pack", WorkSetAside);
         LastError = null;
         _undo.Clear();
         _redo.Clear();

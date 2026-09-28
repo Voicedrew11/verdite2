@@ -417,9 +417,46 @@ Atmosphere and level edits are covered in their own sections below.
   Each layer overrides the ones below it **per key**, not per file. An explicit
   `null` for a key removes it, which is how one pack turns off a light another
   pack placed.
+
+  **Built** (`patches/remaster/Pack.Layers.cs`). A layer is any pack under
+  `packs/` -- folder or zip, upstream's `pack.json`, its game id checked -- with a
+  `remaster/` directory, read by the port itself rather than from upstream's list,
+  which is filled when the CD comes up and keeps no enable state. Lowest priority is
+  lowest; the working pack is always on top and never listed as a layer. The keys:
+  a material by name; a tile half or a level edit by `x`, `z` and `half`; a mesh by
+  its index; a model rule by `kind` and `model`; a light or a prop by `name`; a
+  record override by `record`; a texture rule by `index` and `clut`. A removal is an
+  entry of those key fields with `"removed": true`, and for a material the name
+  mapped to `null`. **Every edit works as it did**, because the documents the
+  features and the editor read are the merge: `Save` writes only what differs from
+  the layers below (a changed entry whole, a new one, and a removal for every key the
+  author took away), so the working pack holds the author's changes and nothing
+  inherited. A removal is kept while nothing below holds its key, so switching a
+  layer off and on again does not lose it; putting an entry of that key back
+  replaces it. Each layer has a switch on the Remaster packs page (and `pack layer
+  ID on|off`), saved per pack id and on by default, since a pack in `packs/` was put
+  there to be used and nothing applies until the remaster is on; switching one keeps
+  the working pack's unsaved edits, but not their undo.
 - **The fingerprint gate applies per pack.** A pack whose area fingerprint does
   not match is off for that area only, and the Remaster packs page lists it with
-  the reason.
+  the reason. **Built** as: where two layers both hold a document for an area and
+  kind, and their fingerprints differ, the upper one stands alone and the lower is
+  set aside for that area and kind, named on the page (and in `pack layers`). The
+  merged document then carries the upper fingerprint, which the features gate on as
+  before.
+
+  **Measured** with three packs over area 1 (slot 2): a folder pack at priority 10
+  holding a torch light, two props and two materials; a zip at priority 5 holding
+  area 1's lights against another fingerprint; the working pack holding one of the
+  props. `pack layers` listed the zip's area-1 lights as set aside under the folder
+  pack's fingerprint; the effective area held the folder pack's torch, its second
+  prop, and the working pack's version of the prop both named. Changing the
+  inherited torch's intensity, removing the inherited prop and adding a material
+  then saving wrote `lights.json` with the torch alone, `props.json` with the
+  working prop and `{"name": "pillar", "removed": true}`, and `materials.json` with
+  the new material alone; `pack reload` gave back the same effective set. Switching
+  the folder pack off and on (`pack layer base off|on`) with an unsaved light kept
+  the light and the removal; re-adding a prop of the removed name took its place.
 - **Sharing is a zip of the working pack.** By the rule in "Identity" it contains
   no disc data, so it can be committed to this repository and handed to another
   player. Replacement images are the author's own art.

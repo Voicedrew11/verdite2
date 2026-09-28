@@ -40,7 +40,7 @@ public static partial class Shell
             "a half, faces or a model; pick takes the faces or the model under game pixel GX GY (the editor must be open)",
         "set selected|tile:...|model:... material NAME|none [tile|mesh]; set texture|texture:INDEX[:CLUT] material NAME|none (the picked art, or a key; every area); " +
             "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off",
-        "pack save|reload|undo|redo|list|add NAME|report|export [PATH] - the working pack; report says, per area, whether each document " +
+        "pack save|reload|undo|redo|list|add NAME|report|export [PATH]|layers|layer ID on|off - the working pack, over the other packs' remaster/ layers (layers lists them, layer switches one); report says, per area, whether each document " +
             "matches an area this disc has and what resolved when it was last applied; export writes the saved pack as a zip",
         "light list | shadows on|off | shadows models on|off | shadows tune BIAS OFFSET SOFT [SIZE] | add NAME [here | pick GX GY | X Y Z] | remove NAME | select NAME | " +
             "set NAME position X Y Z|colour R G B|intensity V|radius V|type point|spot|direction X Y Z|cone IN OUT|flicker AMOUNT HZ|enabled on|off - " +
@@ -258,6 +258,23 @@ public static partial class Shell
                           "set material:NAME reflectivity|f0|roughness|metalness|specular|occlusion|emissiveStrength|light|glowRadius|pulseAmount|pulseHz V; set material:NAME emissive R G B; set material:NAME glowMode additive|lit|glowFog on|off|pulseStyle breathe|flicker; set remaster on|off");
     }
 
+    static JsonObject LayerList()
+    {
+        var list = new JsonArray();
+        foreach (var l in Pack.Layers)
+            list.Add(new JsonObject
+            {
+                ["id"] = l.Id, ["name"] = l.Name, ["path"] = l.Path, ["priority"] = l.Priority, ["enabled"] = l.Enabled,
+                ["documents"] = l.Documents, ["error"] = l.Error,
+                ["setAside"] = new JsonArray(l.SetAside.Select(x => (JsonNode)x).ToArray()),
+            });
+        return new JsonObject
+        {
+            ["layers"] = list, ["working"] = Pack.Root,
+            ["workingSetAside"] = new JsonArray(Pack.WorkSetAside.Select(x => (JsonNode)x).ToArray()),
+        };
+    }
+
     static string PackVerb(string[] a)
     {
         string op = a.Length > 0 ? a[0] : "list";
@@ -273,9 +290,14 @@ public static partial class Shell
                 break;
             case "list": break;
             case "report": return Ok("pack", Compat.Report());
+            case "layers": return Ok("pack", LayerList());
+            case "layer":
+                if (a.Length < 3 || Pack.Layers.All(l => l.Id != a[1])) return Err("pack", "pack layer ID on|off");
+                Pack.SetLayerEnabled(a[1], a[2] is "on" or "1");
+                return Ok("pack", LayerList());
             case "export":
                 return Ok("pack", new JsonObject { ["exported"] = Pack.Export(a.Length > 1 ? string.Join(' ', a[1..]) : null) });
-            default: return Err("pack", "save|reload|undo|redo|list|add NAME|report|export [PATH]");
+            default: return Err("pack", "save|reload|undo|redo|list|add NAME|report|export [PATH]|layers|layer ID on|off");
         }
         var mats = new JsonArray();
         foreach (var mat in Pack.Materials())
