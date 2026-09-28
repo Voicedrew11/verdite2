@@ -63,6 +63,17 @@ public static class PlanarReflections
     /// distance, for the reflection pass to tell which surfaces lie on it.</summary>
     public static readonly float[] ViewPlane = new float[4];
 
+    /// <summary>The view's forward with its world height taken out, in the
+    /// mirrored camera's view space. The game fogs by view depth and culls its
+    /// map by a level cone, so the cone's far edge is black only while the
+    /// camera looks level; from a mirrored camera looking up it reflected lit.
+    /// A capture fogs a fragment at the larger of its own depth and its depth
+    /// along this axis. Zero leaves the game's fog alone.</summary>
+    public static readonly float[] LevelAxis = new float[3];
+
+    /// <summary>The switch for <see cref="LevelAxis"/>: <c>KF2_PLANAR_FOG=0</c> is the comparison.</summary>
+    public static bool LevelFog = true;
+
     /// <summary>How far a surface may lie off the plane, in world units, and still
     /// take the planar reflection rather than the march.</summary>
     public static float Tolerance = 48f;
@@ -82,22 +93,28 @@ public static class PlanarReflections
 
     // ---- the real camera, for finding the water ------------------------------
 
-    // Row 1 of R transposed (world Y from a view position) and the camera's Y.
-    static float _ry0, _ry1, _ry2, _camY;
+    // R transposed (world axes from a view position) and the camera's position.
+    static float _rx0, _rx1, _rx2, _ry0, _ry1, _ry2, _rz0, _rz1, _rz2, _camX, _camY, _camZ;
     static bool _camera;
 
     /// <summary>The camera the frame is being drawn with: <paramref name="r"/> is
     /// the GTE rotation, world to view, row-major at the GTE's 4096 scale, and
-    /// <paramref name="camY"/> its world Y. Published by the port before the frame's
+    /// the rest its world position. Published by the port before the frame's
     /// <c>DrawOTag</c>.</summary>
-    public static void SetCamera(ReadOnlySpan<short> r, float camY)
+    public static void SetCamera(ReadOnlySpan<short> r, float camX, float camY, float camZ)
     {
-        _ry0 = r[1] / 4096f;
-        _ry1 = r[4] / 4096f;
-        _ry2 = r[7] / 4096f;
-        _camY = camY;
+        _rx0 = r[0] / 4096f; _rx1 = r[3] / 4096f; _rx2 = r[6] / 4096f;
+        _ry0 = r[1] / 4096f; _ry1 = r[4] / 4096f; _ry2 = r[7] / 4096f;
+        _rz0 = r[2] / 4096f; _rz1 = r[5] / 4096f; _rz2 = r[8] / 4096f;
+        _camX = camX; _camY = camY; _camZ = camZ;
         _camera = true;
     }
+
+    /// <summary>Where the water rests at a world X and Z, given the height it was
+    /// drawn at, or NaN for water the port does not move. Set by a port that moves
+    /// the water's vertices itself (a swell): a moved triangle is neither level nor
+    /// at the height to mirror in, and the rest height is both.</summary>
+    public static Func<float, float, float, float>? RestHeight;
 
     public static void ClearCamera() => _camera = false;
 
@@ -109,8 +126,9 @@ public static class PlanarReflections
     static readonly double[] _weight = new double[Bins], _sum = new double[Bins];
     static int _bins;
 
-    /// <summary>Water triangles binned, and those refused as not level.</summary>
-    public static long WaterTris, WaterTilted;
+    /// <summary>Water triangles binned, those refused as not level, and those binned
+    /// at the height <see cref="RestHeight"/> gave.</summary>
+    public static long WaterTris, WaterTilted, WaterRested;
 
     /// <summary>One water triangle, as the backend drew it: target coordinates
     /// relative to the GTE's centre, the view depth, and the picture's own
@@ -128,8 +146,17 @@ public static class PlanarReflections
         float h = Math.Max(1f, GteDepth.ProjH);
         float w0 = WorldY(x0, y0, z0, h), w1 = WorldY(x1, y1, z1, h), w2 = WorldY(x2, y2, z2, h);
         float lo = Math.Min(w0, Math.Min(w1, w2)), hi = Math.Max(w0, Math.Max(w1, w2));
+        float y = (w0 + w1 + w2) / 3f;
+        float rest = float.NaN;
+        if (RestHeight is { } restAt)
+        {
+            float sx = (x0 + x1 + x2) / 3f, sy = (y0 + y1 + y2) / 3f, sz = (z0 + z1 + z2) / 3f;
+            rest = restAt(_rx0 * sx * sz / h + _rx1 * sy * sz / h + _rx2 * sz + _camX,
+                          _rz0 * sx * sz / h + _rz1 * sy * sz / h + _rz2 * sz + _camZ, y);
+        }
+        if (!float.IsNaN(rest)) { y = rest; WaterRested++; }
         // A waterfall is water too, and has no plane to mirror in.
-        if (hi - lo > 64f) { WaterTilted++; return; }
+        else if (hi - lo > 64f) { WaterTilted++; return; }
         // The area on screen, near enough for a weight: the corners pulled into
         // the rectangle.
         float cx0 = Math.Clamp(x0, left, right), cy0 = Math.Clamp(y0, top, bottom);
@@ -137,7 +164,6 @@ public static class PlanarReflections
         float cx2 = Math.Clamp(x2, left, right), cy2 = Math.Clamp(y2, top, bottom);
         double area = Math.Abs((cx1 - cx0) * (cy2 - cy0) - (cy1 - cy0) * (cx2 - cx0)) * 0.5;
         if (area <= 0.0) return;
-        float y = (w0 + w1 + w2) / 3f;
         int key = (int)MathF.Round(y / 16f);
         int i = 0;
         while (i < _bins && _key[i] != key) i++;
@@ -198,4 +224,9 @@ public static class PlanarReflections
     /// texture read unmirrored. A mirror sampled in the right place reads well
     /// under its control; one sampled in the wrong place reads like it.</summary>
     public static float ComparedPct, MirrorDiff, ControlDiff;
+
+    /// <summary>The probe's fog check: asked for by the port, filled by the next
+    /// reflection pass that reads a planar texture.</summary>
+    public static bool WantFogCensus;
+    public static string? FogCensus;
 }

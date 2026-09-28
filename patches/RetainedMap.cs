@@ -73,7 +73,10 @@ public static class RetainedMap
         RetainedScene.Enabled = _forced ?? false;
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            RetainedScene.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            // No longer a setting: KF2_RETAINED=1 is the comparison, and the planar
+            // walk, which draws into the same texture, wins over it.
+            RetainedScene.Enabled = (_forced ?? false) && !PlanarReflections.Enabled;
+            if (_forced == true && !Enabled) Console.WriteLine("[KF2] retained scene: reflections stood down for the planar walk");
             Console.WriteLine($"[KF2] retained scene: {(Enabled ? "on" : "off")}" +
                               (Enabled ? $", planar {(RetainedScene.Planar ? "on" : "off")}, " +
                                          $"cubemap {(RetainedScene.Cube ? $"{RetainedScene.CubeSize}px" : "off")}" : ""));

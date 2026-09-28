@@ -679,3 +679,11 @@ useful than the question was.
    model's origin need not be its base), whether its light matches the objects
    beside it, and how an MO-posed model (a door, a chest) looks held in the pose it
    was copied in.
+24. **`CullGrid`'s port of the flood differs from `func_8002D15C` in two places.**
+   Found by checking a flood written from `CullGrid` against the game's grid.
+   `patches/CullGrid.cs`'s `Cell` returns as soon as the eye's level is dark, where
+   the game still carries the other level (the `alive` bit) on through a cell whose
+   other half is not empty; and it seeds from the lower half's flags
+   (`MapBase + 4`), where the game adds the half selector. Only `KF2_CULLGRID=on`
+   runs it, which is off by default. `KF2_CULLGRID=shadow KF2_CULLGRID_COMPARE=1` is
+   the check to fix it against.

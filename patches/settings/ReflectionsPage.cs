@@ -5,10 +5,11 @@ using RecompOne.Runtime.Host.Window;
 namespace Kf2.Settings;
 
 /// <summary>
-/// The water switches, under Video ▸ Experimental after the Z-buffer: the murk, the
-/// waves and the three reflection sources, each on its own. Their tuning is on the console
-/// (<c>KF2_MURK_*</c>, <c>KF2_SSR_*</c>, <c>KF2_PLANAR_*</c>, <c>KF2_RETAINED_*</c>),
-/// as the occlusion pass's is.
+/// The water switches, under Video ▸ Experimental after the Z-buffer: planar
+/// reflections and their strength, the murk and the waves. The screen march, the
+/// retained scene's reflections and the reflection reach are no longer settings
+/// (<c>KF2_SSR</c>, <c>KF2_RETAINED</c>, <c>KF2_REFLECT_REACH</c>); the rest of the
+/// tuning is on the console, as the occlusion pass's is.
 /// </summary>
 public sealed class ReflectionsPage : IPatchPage
 {
@@ -129,50 +130,25 @@ public sealed class ReflectionsPage : IPatchPage
           "pt-BR": "Restaurar ondas",
           "es-419": "Restablecer olas"
         },
-        "kf2.ssr.label": {
-          "en": "Screen-space reflections",
-          "pt-BR": "Reflexos em espaço de tela",
-          "es-419": "Reflejos en espacio de pantalla"
-        },
-        "kf2.ssr.tooltip": {
-          "en": "Water reflects what is on screen above it, where no planar or world reflection answers. Experimental.",
-          "pt-BR": "A água reflete o que está na tela acima dela, onde nenhum reflexo planar ou do mundo responde. Experimental.",
-          "es-419": "El agua refleja lo que está en pantalla por encima de ella, donde ningún reflejo planar o del mundo responde. Experimental."
-        },
-        "kf2.reflectreach.label": {
-          "en": "Reflection reach",
-          "pt-BR": "Alcance dos reflexos",
-          "es-419": "Alcance de los reflejos"
-        },
-        "kf2.reflectreach.tooltip": {
-          "en": "How many floor tiles past what the camera sees the reflections may show. A reflection looks from under the water, so it sees places the game hides from you, like the inside of a cave round a corner, and those popped into the water as you turned. With a reach, they are there already, and anything that leaves fades out. Creatures standing there are reflected too. Off is only what the camera sees. Experimental.",
-          "pt-BR": "Quantos ladrilhos do piso além do que a câmera vê os reflexos podem mostrar. Um reflexo olha de baixo da água, então vê lugares que o jogo esconde de você, como o interior de uma caverna depois de uma esquina, e esses surgiam de repente na água quando você virava. Com alcance, eles já estão lá, e o que sai some aos poucos. Criaturas ali também são refletidas. Desligado é só o que a câmera vê. Experimental.",
-          "es-419": "Cuántas baldosas del piso más allá de lo que ve la cámara pueden mostrar los reflejos. Un reflejo mira desde debajo del agua, así que ve lugares que el juego te oculta, como el interior de una cueva a la vuelta de una esquina, y esos aparecían de golpe en el agua al girar. Con alcance, ya están ahí, y lo que sale se desvanece. Las criaturas que están ahí también se reflejan. Apagado es solo lo que ve la cámara. Experimental."
-        },
-        "kf2.reflectreach.off": {
-          "en": "Off",
-          "pt-BR": "Desligado",
-          "es-419": "Apagado"
-        },
         "kf2.ssr.planar.label": {
           "en": "Planar reflections",
           "pt-BR": "Reflexos planares",
           "es-419": "Reflejos planares"
         },
+        "kf2.planar.strength": {
+          "en": "Reflection strength",
+          "pt-BR": "Intensidade do reflexo",
+          "es-419": "Intensidad del reflejo"
+        },
+        "kf2.planar.strength.tooltip": {
+          "en": "How much the water reflects when seen at a low angle. Looking straight down it reflects much less, as real water does.",
+          "pt-BR": "Quanto a água reflete quando vista de um ângulo baixo. Olhando direto para baixo ela reflete bem menos, como a água de verdade.",
+          "es-419": "Cuánto refleja el agua vista desde un ángulo bajo. Mirando directo hacia abajo refleja mucho menos, como el agua real."
+        },
         "kf2.ssr.planar.tooltip": {
-          "en": "Draws the world a second time from below the water, so the reflection includes what is off screen or hidden. Costs a second walk of the scene whenever water is in view. Experimental.",
-          "pt-BR": "Desenha o mundo uma segunda vez por baixo da água, para que o reflexo inclua o que está fora da tela ou escondido. Custa um segundo percurso da cena sempre que há água à vista. Experimental.",
-          "es-419": "Dibuja el mundo una segunda vez desde debajo del agua, para que el reflejo incluya lo que está fuera de pantalla u oculto. Cuesta un segundo recorrido de la escena siempre que haya agua a la vista. Experimental."
-        },
-        "kf2.ssr.retained.label": {
-          "en": "World reflections",
-          "pt-BR": "Reflexos do mundo",
-          "es-419": "Reflejos del mundo"
-        },
-        "kf2.ssr.retained.tooltip": {
-          "en": "Keeps the area's geometry on the graphics card and draws reflections from it: water and reflective floors are mirrored exactly, and every other reflective surface looks up a cubemap around the camera instead of the picture. Nothing on screen is borrowed. Replaces planar reflections while on. Experimental.",
-          "pt-BR": "Mantém a geometria da área na placa de vídeo e desenha os reflexos a partir dela: a água e os pisos reflexivos são espelhados com exatidão, e toda outra superfície reflexiva consulta um cubemap ao redor da câmera em vez da imagem. Nada da tela é reaproveitado. Substitui os reflexos planares enquanto ligado. Experimental.",
-          "es-419": "Mantiene la geometría del área en la tarjeta gráfica y dibuja los reflejos a partir de ella: el agua y los pisos reflectantes se reflejan con exactitud, y cualquier otra superficie reflectante consulta un cubemap alrededor de la cámara en lugar de la imagen. No se toma nada de la pantalla. Reemplaza los reflejos planares mientras está activo. Experimental."
+          "en": "Water reflects the world: it is drawn a second time from below the water, including what is off screen or hidden from you. Costs a second walk of the scene whenever water is in view. Experimental.",
+          "pt-BR": "A água reflete o mundo: ele é desenhado uma segunda vez por baixo da água, incluindo o que está fora da tela ou escondido de você. Custa um segundo percurso da cena sempre que há água à vista. Experimental.",
+          "es-419": "El agua refleja el mundo: se dibuja una segunda vez desde debajo del agua, incluido lo que está fuera de pantalla u oculto para ti. Cuesta un segundo recorrido de la escena siempre que haya agua a la vista. Experimental."
         }
       }
     }
@@ -182,6 +158,26 @@ public sealed class ReflectionsPage : IPatchPage
 
     public void Draw()
     {
+        bool planar = PlanarWalk.Enabled;
+        if (ImGui.Checkbox(Localization.T("kf2.ssr.planar.label"), ref planar))
+        {
+            PlanarWalk.SetEnabled(planar);
+            PatchSettings.Set(PlanarWalk.OnKey, planar);
+        }
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("kf2.ssr.planar.tooltip"));
+        ImGui.BeginDisabled(!planar);
+        ImGui.Indent();
+        float strength = PlanarWalk.Strength;
+        if (ImGui.SliderFloat(Localization.T("kf2.planar.strength"), ref strength, 0f, 1f, "%.2f", ImGuiSliderFlags.AlwaysClamp))
+        {
+            PlanarWalk.SetStrength(strength);
+            PatchSettings.Set(PlanarWalk.StrengthKey, PlanarWalk.Strength);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(Localization.T("kf2.planar.strength.tooltip"));
+        ImGui.Unindent();
+        ImGui.EndDisabled();
+
         bool murk = Murk.Enabled;
         if (ImGui.Checkbox(Localization.T("kf2.murk.label"), ref murk))
         {
@@ -199,50 +195,6 @@ public sealed class ReflectionsPage : IPatchPage
         }
         if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("kf2.waves.tooltip"));
         DrawWaves(waves);
-
-        bool retained = RetainedMap.Enabled;
-        if (ImGui.Checkbox(Localization.T("kf2.ssr.retained.label"), ref retained))
-        {
-            RetainedMap.SetEnabled(retained);
-            PatchSettings.Set(RetainedMap.OnKey, retained);
-        }
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("kf2.ssr.retained.tooltip"));
-
-        // The world reflections draw the planes themselves.
-        ImGui.BeginDisabled(retained);
-        bool planar = PlanarWalk.Enabled;
-        if (ImGui.Checkbox(Localization.T("kf2.ssr.planar.label"), ref planar))
-        {
-            PlanarWalk.SetEnabled(planar);
-            PatchSettings.Set(PlanarWalk.OnKey, planar);
-        }
-        ImGui.EndDisabled();
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(Localization.T("kf2.ssr.planar.tooltip"));
-
-        // Only the world and planar reflections draw geometry the reach can add.
-        ImGui.BeginDisabled(!retained && !planar);
-        ImGui.Indent();
-        int reach = ReflectionReach.Reach;
-        string rf = reach == 0 ? Localization.T("kf2.reflectreach.off").Replace("%", "%%") : "%d";
-        if (ImGui.SliderInt(Localization.T("kf2.reflectreach.label"), ref reach, 0, ReflectionReach.Max, rf,
-                            ImGuiSliderFlags.AlwaysClamp))
-        {
-            ReflectionReach.Set(reach);
-            PatchSettings.Set(ReflectionReach.Key, ReflectionReach.Reach);
-        }
-        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip(Localization.T("kf2.reflectreach.tooltip"));
-        ImGui.Unindent();
-        ImGui.EndDisabled();
-
-        bool on = Reflections.Enabled;
-        if (ImGui.Checkbox(Localization.T("kf2.ssr.label"), ref on))
-        {
-            Reflections.SetEnabled(on);
-            PatchSettings.Set(Reflections.OnKey, on);
-        }
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("kf2.ssr.tooltip"));
     }
 
     static void DrawWaves(bool on)

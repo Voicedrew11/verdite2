@@ -92,7 +92,7 @@ public sealed partial class GlCore : IGpuBackend
     // 0068. The planar texture the reflection pass reads first, and the clip plane
     // the prim program discards the water's underside with while drawing into one.
     int _uSsrPlanarOn, _uSsrPlanarPlane, _uSsrPlanarTol, _uSsrRipple, _uSsrCompare;
-    int _uClipOn, _uClipPlane, _uClipCentre, _uClipH;
+    int _uClipOn, _uClipPlane, _uClipCentre, _uClipH, _uClipLevel, _uClipDq;
     int _clipOnSent = -1;
     // 0071. Authored lights.
     int _uLightN, _uLightPos, _uLightCol, _uLightDir, _uLightCentre, _uLightH;
@@ -244,6 +244,8 @@ public sealed partial class GlCore : IGpuBackend
         _uClipPlane = _gl.GetUniformLocation(_progPrim, "uClipPlane");
         _uClipCentre = _gl.GetUniformLocation(_progPrim, "uClipCentre");
         _uClipH = _gl.GetUniformLocation(_progPrim, "uClipH");
+        _uClipLevel = _gl.GetUniformLocation(_progPrim, "uClipLevel");
+        _uClipDq = _gl.GetUniformLocation(_progPrim, "uClipDq");
         _clipOnSent = -1;
         _uLightN = _gl.GetUniformLocation(_progPrim, "uLightN");
         _uLightPos = _gl.GetUniformLocation(_progPrim, "uLightPos");
@@ -589,6 +591,8 @@ public sealed partial class GlCore : IGpuBackend
             rt.PlanarFrame = _frame;
             PlanarReflections.ViewPlane.CopyTo(rt.PlanarPlane, 0);
             PlanarReflections.ClipPlane.CopyTo(p.ClipPlane, 0);
+            if (PlanarReflections.LevelFog) PlanarReflections.LevelAxis.CopyTo(p.LevelAxis, 0);
+            else Array.Clear(p.LevelAxis);
             PlanarReflections.Cleared++;
         }
         return p;
@@ -1758,6 +1762,9 @@ public sealed partial class GlCore : IGpuBackend
                 _gl.Uniform4(_uClipPlane, cp[0], cp[1], cp[2], cp[3]);
                 _gl.Uniform2(_uClipCentre, GteDepth.ProjCx + rt.Margin, GteDepth.ProjCy);
                 _gl.Uniform1(_uClipH, Math.Max(1f, GteDepth.ProjH));
+                var la = rt.LevelAxis;
+                if (_uClipLevel >= 0) _gl.Uniform3(_uClipLevel, la[0], la[1], la[2]);
+                if (_uClipDq >= 0) _gl.Uniform2(_uClipDq, (float)GteDepth.ProjDqa, GteDepth.ProjDqb / 4096f);
             }
         }
         // 0071. The light list, sent when the port publishes a new one. Not into
@@ -2883,6 +2890,11 @@ public sealed partial class GlCore : IGpuBackend
             _gl.BindTexture(TextureTarget.Texture2D, planar.Tex);
             PlanarReflections.Read++;
         }
+        if (planarOn && PlanarReflections.WantFogCensus)
+        {
+            PlanarReflections.WantFogCensus = false;
+            PlanarReflections.FogCensus = LevelFogCensus(planar!);
+        }
         // 0072. The retained scene's planes and cubemap, drawn for this target.
         BindRetainedForSsr();
         if (_retPlanar != null && _retPlaneN > 0) planar = _retPlanar;
@@ -2916,6 +2928,47 @@ public sealed partial class GlCore : IGpuBackend
         }
 
         if (ScreenReflections.WantMap && _ssrInfo) CaptureSsrMap(w, h);
+    }
+
+    /// <summary>0068, amended. A planar texture read back, its drawn texels binned
+    /// by the depth they are fogged at (the larger of their own and the level
+    /// one), from 9 tiles: a texel still lit past the fog's black is the pop-in.
+    /// Diagnostic only; it stalls the pipeline.</summary>
+    unsafe string LevelFogCensus(GlDisplayRt rt)
+    {
+        int w = rt.TexW, h = rt.TexH;
+        var col = new byte[(long)w * h * 4];
+        var dep = new float[(long)w * h];
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.BindFramebuffer(FramebufferTarget.ReadFramebuffer, rt.Fbo);
+        _gl.PixelStore(PixelStoreParameter.PackAlignment, 4);
+        fixed (byte* p = col) _gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        fixed (float* p = dep) _gl.ReadPixels(0, 0, (uint)w, (uint)h, PixelFormat.DepthComponent, PixelType.Float, p);
+        _gl.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+
+        const int B = 18;
+        var la = PlanarReflections.LevelAxis;
+        float sc = GlVram.Scale, cx = GteDepth.ProjCx + rt.Margin, cy = GteDepth.ProjCy, hh = Math.Max(1f, GteDepth.ProjH);
+        var n = new long[B]; var lit = new long[B]; var max = new int[B];
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++)
+            {
+                long i = (long)y * w + x;
+                float d = dep[i];
+                if (d >= 1f || d <= 0f) continue;
+                float z = d * 65536f;
+                float px = ((x + 0.5f) / sc - cx) * z / hh, py = ((y + 0.5f) / sc - cy) * z / hh;
+                float lz = Math.Max(z, la[0] * px + la[1] * py + la[2] * z);
+                int b = Math.Min((int)(lz / 2048f), B - 1);
+                int l = (col[i * 4] * 299 + col[i * 4 + 1] * 587 + col[i * 4 + 2] * 114) / 1000;
+                n[b]++;
+                if (l > 8) lit[b]++;
+                if (l > max[b]) max[b] = l;
+            }
+        var sb = new System.Text.StringBuilder();
+        for (int b = 9; b < B; b++)
+            if (n[b] > 0) sb.Append($" {b}t {n[b]}/{lit[b]} max {max[b]};");
+        return sb.ToString();
     }
 
     const int ColorMipUnit = 7, PlanarMipUnit = 8, SsrDepthUnit = 4;

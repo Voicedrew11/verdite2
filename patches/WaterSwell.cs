@@ -46,6 +46,10 @@ public static class WaterSwell
 
     static readonly Dictionary<uint, Mesh> _meshes = new();
     static readonly HashSet<long> _free = new();
+    /// <summary>Per half, the height its water rests at, or NaN: none, or not level.</summary>
+    static readonly float[] _rest = NewRest();
+
+    static float[] NewRest() { var a = new float[12800]; Array.Fill(a, float.NaN); return a; }
     static ulong _hash;
     static uint _table;
     static bool _ready;
@@ -56,6 +60,21 @@ public static class WaterSwell
     static double _buildMs;
 
     public static void Forget() { _hash = 0; _ready = false; }
+
+    /// <summary>For <see cref="PlanarReflections.RestHeight"/>: where the water at a
+    /// world position rests, of the two halves there the one nearer the height it
+    /// was drawn at, within the swell's reach of it.</summary>
+    public static float RestAt(float x, float z, float drawn)
+    {
+        if (!_ready || !Waves.Enabled || Waves.Swell <= 0f) return float.NaN;
+        int tx = (int)MathF.Floor(x / 2048f), tz = (int)MathF.Floor(z / 2048f);
+        if ((uint)tx >= 80u || (uint)tz >= 80u) return float.NaN;
+        float a = _rest[(tz * 80 + tx) * 2], b = _rest[(tz * 80 + tx) * 2 + 1];
+        float best = float.NaN, gap = Waves.Swell + 64f;
+        if (!float.IsNaN(a) && MathF.Abs(a - drawn) <= gap) { best = a; gap = MathF.Abs(a - drawn); }
+        if (!float.IsNaN(b) && MathF.Abs(b - drawn) <= gap) best = b;
+        return best;
+    }
 
     // ---- once a walk: the area's water ---------------------------------------------
 
@@ -92,6 +111,7 @@ public static class WaterSwell
     {
         _meshes.Clear();
         _free.Clear();
+        Array.Fill(_rest, float.NaN);
         _ready = false;
         _table = mem.ReadU32(Banks);
         if (_table == 0 || WaterWaves.RectN == 0) return;
@@ -110,6 +130,13 @@ public static class WaterSwell
             halves.Add((rec, mesh));
             if (mesh.WaterFaces.Count == 0) continue;
             var place = Place.Of(mem, rec, _table, model);
+            float lo = float.MaxValue, hi = float.MinValue, sum = 0f;
+            foreach (ushort v in mesh.WaterVerts)
+            {
+                place.World(mem, v, out _, out int wy, out _);
+                lo = Math.Min(lo, wy); hi = Math.Max(hi, wy); sum += wy;
+            }
+            if (hi - lo <= 64f) _rest[i] = sum / mesh.WaterVerts.Length;
             foreach (var face in mesh.WaterFaces)
                 for (int k = 0; k < face.Length; k++)
                 {
@@ -270,7 +297,11 @@ public static class WaterSwell
     /// move. <see cref="Leave"/> puts the bank back.</summary>
     public static void Enter(PSMemory mem, uint rec, uint model)
     {
-        if (!_ready || !Waves.Enabled || Waves.Swell <= 0f || TileWalk.Verifying || !PrimBuffer.Relocated) return;
+        // The mirrored walk leaves the water at rest, on the plane it is mirrored in,
+        // where the clip plane takes it out; a crest would stand above it and be
+        // reflected in itself.
+        if (!_ready || !Waves.Enabled || Waves.Swell <= 0f || TileWalk.Verifying || !PrimBuffer.Relocated
+            || PlanarWalk.Mirroring) return;
         if (!_meshes.TryGetValue(model, out var mesh) || mesh == null || mesh.WaterVerts.Length == 0) return;
         if (mem.ReadU32(ModelTable) != _table) return;
 

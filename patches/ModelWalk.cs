@@ -148,6 +148,23 @@ public static class ModelWalk
 
     static int _model = -1;
 
+    // The model being submitted was admitted by the planar walk's own cull alone.
+    static bool _mirrorOnly;
+
+    /// <summary>Models admitted for the mirror only, in total.</summary>
+    public static long MirrorOnlySubmits;
+
+    /// <summary>A mirror-only model is recorded for the planar walk to replay and not
+    /// drawn: the picture is the game's.</summary>
+    static bool MirrorOnlySubmit(CpuContext c, PSMemory mem)
+    {
+        if (!_mirrorOnly) return false;
+        _mirrorOnly = false;
+        PlanarWalk.Record(c, mem);
+        MirrorOnlySubmits++;
+        return true;
+    }
+
     /// <summary>The model id being assembled, or -1 outside an assembler call or when
     /// the walk is not the C# one.</summary>
     public static int SubmitModel => _model;
@@ -289,6 +306,7 @@ public static class ModelWalk
         mem.WriteU32(sp + 0x2D8u, c.S0);
 
         _sceneCount = 0;
+        _mirrorOnly = false;
         _walkOwns = true;
         _liveCreatures = _liveObjects = _liveEffects = _liveSprites = 0;
 
@@ -360,7 +378,8 @@ public static class ModelWalk
                 c.RA = 0x800333F8u;
                 KingsField2.func_80032DE8(c, mem);
                 if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Box(mem, rec + 0x2Cu, 3u) | ReflectionReach.Box(mem, rec + 0x2Cu, 3u);
-                if ((c.V0 & mem.ReadU8(rec + 3u)) == 0u) continue;
+                _mirrorOnly = (c.V0 & mem.ReadU8(rec + 3u)) == 0u && PlanarCull.Any && (PlanarCull.Box(mem, rec + 0x2Cu, 3u) & mem.ReadU8(rec + 3u)) != 0u;
+                if ((c.V0 & mem.ReadU8(rec + 3u)) == 0u && !_mirrorOnly) continue;
             }
             else
             {
@@ -368,7 +387,8 @@ public static class ModelWalk
                 c.RA = 0x80033268u;
                 KingsField2.func_80032D78(c, mem);
                 if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 0x2Cu) | ReflectionReach.Point(mem, rec + 0x2Cu);
-                if ((c.V0 & mask) == 0u) continue;
+                _mirrorOnly = (c.V0 & mask) == 0u && PlanarCull.Any && (PlanarCull.Point(mem, rec + 0x2Cu) & mask) != 0u;
+                if ((c.V0 & mask) == 0u && !_mirrorOnly) continue;
             }
 
             Interrupts.Poll(c, mem);
@@ -415,7 +435,7 @@ public static class ModelWalk
                 c.A2 = pos;
                 c.A3 = sp + 0x38u;
                 c.RA = 0x8003339Cu;
-                KingsField2.func_80032588(c, mem);
+                if (!MirrorOnlySubmit(c, mem)) KingsField2.func_80032588(c, mem);
             }
 
             // Bookkeeping, whether or not the model drew: the definition's two
@@ -491,7 +511,7 @@ public static class ModelWalk
     {
         // The ordinary model. Bit 1 of the kind byte picks the volume query,
         // which is asked with the definition's own mask.
-        uint seen;
+        uint seen, mirror;
         if ((kindByte & 2u) != 0u)
         {
             uint def = ObjectDefs + (mem.ReadU16(rec + 0x6u) * 24u);
@@ -501,6 +521,7 @@ public static class ModelWalk
             KingsField2.func_80032DE8(c, mem);
             if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Box(mem, rec + 0x14u, mem.ReadU8(def + 0xCu)) | ReflectionReach.Box(mem, rec + 0x14u, mem.ReadU8(def + 0xCu));
             seen = c.V0;
+            mirror = PlanarCull.Any ? PlanarCull.Box(mem, rec + 0x14u, mem.ReadU8(def + 0xCu)) : 0u;
         }
         else
         {
@@ -509,8 +530,10 @@ public static class ModelWalk
             KingsField2.func_80032D78(c, mem);
             if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 0x14u) | ReflectionReach.Point(mem, rec + 0x14u);
             seen = c.V0;
+            mirror = PlanarCull.Any ? PlanarCull.Point(mem, rec + 0x14u) : 0u;
         }
-        if ((seen & mem.ReadU8(rec)) == 0u) return;
+        _mirrorOnly = (seen & mem.ReadU8(rec)) == 0u && (mirror & mem.ReadU8(rec)) != 0u;
+        if ((seen & mem.ReadU8(rec)) == 0u && !_mirrorOnly) return;
 
         Interrupts.Poll(c, mem);
         uint model = mem.ReadU16(rec + 0x6u);
@@ -547,6 +570,7 @@ public static class ModelWalk
         c.A2 = rec + 0x14u;
         c.A3 = sp + 0x38u;
         c.RA = 0x800338C0u;
+        if (MirrorOnlySubmit(c, mem)) return;
         KingsField2.func_80032588(c, mem);
         mem.WriteU8(rec + 3u, (byte)(mem.ReadU8(rec + 3u) | 0x80u));
     }
@@ -632,13 +656,15 @@ public static class ModelWalk
             uint gate = mem.ReadU8(rec + 8u);
             uint live = gate & 3u;
             if (live == 0u) continue;
+            _mirrorOnly = false;
             if (live != 2u)
             {
                 c.A0 = rec + 0x14u;
                 c.RA = 0x800339C8u;
                 KingsField2.func_80032D78(c, mem);
                 if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 0x14u) | ReflectionReach.Point(mem, rec + 0x14u);
-                if ((c.V0 & mem.ReadU8(rec + 0xAu)) == 0u) continue;
+                _mirrorOnly = (c.V0 & mem.ReadU8(rec + 0xAu)) == 0u && PlanarCull.Any && (PlanarCull.Point(mem, rec + 0x14u) & mem.ReadU8(rec + 0xAu)) != 0u;
+                if ((c.V0 & mem.ReadU8(rec + 0xAu)) == 0u && !_mirrorOnly) continue;
             }
 
             uint place = mem.ReadU8(rec + 8u) & 0xCu;
@@ -677,7 +703,7 @@ public static class ModelWalk
             c.A2 = rec + 0x14u;
             c.A3 = rot;
             c.RA = place == 0u ? 0x80033B18u : 0x80033B78u;
-            KingsField2.func_80032588(c, mem);
+            if (!MirrorOnlySubmit(c, mem)) KingsField2.func_80032588(c, mem);
         }
     }
 
@@ -703,7 +729,8 @@ public static class ModelWalk
             KingsField2.func_80032D78(c, mem);
             if (RenderDistance.Any || ReflectionReach.Any) c.V0 |= RenderDistance.Point(mem, rec + 8u) | ReflectionReach.Point(mem, rec + 8u);
             uint mask = mem.ReadU8(rec + 2u);
-            if ((c.V0 & mask) != 0u)
+            _mirrorOnly = (c.V0 & mask) == 0u && PlanarCull.Any && (PlanarCull.Point(mem, rec + 8u) & mask) != 0u;
+            if ((c.V0 & mask) != 0u || _mirrorOnly)
             {
                 mem.WriteU32(sp + 0x10u, 0u);
                 mem.WriteU32(sp + 0x14u, 0u);
@@ -722,7 +749,7 @@ public static class ModelWalk
                 c.A2 = rec + 8u;
                 c.A3 = sp + 0x38u;
                 c.RA = 0x80033C40u;
-                KingsField2.func_80032588(c, mem);
+                if (!MirrorOnlySubmit(c, mem)) KingsField2.func_80032588(c, mem);
             }
 
             uint interval = mem.ReadU8(rec + 4u);

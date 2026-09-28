@@ -19,6 +19,7 @@ namespace Kf2;
 ///     KF2_PLANAR_RIPPLE=4     how far the water's own texture bends the reflection; 0 a flat mirror
 ///     KF2_PLANAR_BIAS=8       how far above the plane geometry has to be to be reflected
 ///     KF2_PLANAR_PROBE=1      the plane, the walk, the arena and the readback, every two seconds
+///     KF2_PLANAR_FOG=0        fog the reflection at the mirrored camera's own depth (level by default)
 ///
 /// **Why the walks and not the picture.** The screen-space pass can only reflect
 /// what is on screen and in front of everything else, so a wall above the camera's
@@ -76,6 +77,18 @@ public static class PlanarWalk
     const uint WalkFrame = 0x300;
 
     public const string OnKey = "kf2.ssr.planar";
+    public const string StrengthKey = "kf2.planar.strength";
+    public const float DefaultStrength = 0.6f;
+
+    /// <summary>How much water reflects at a grazing angle: the water material's
+    /// reflectivity, which only the planar walk now answers for.</summary>
+    public static float Strength => SurfaceMaterial.Reflectivity[SurfaceMaterial.Water];
+
+    public static void SetStrength(float s)
+    {
+        SurfaceMaterial.Reflectivity[SurfaceMaterial.Water] = Math.Clamp(s, 0f, 1f);
+        SurfaceMaterial.Changed();
+    }
 
     static bool? _forced;
     static bool _probe;
@@ -91,10 +104,14 @@ public static class PlanarWalk
 
     public static bool Enabled => PlanarReflections.Enabled;
 
-    public static void Configure(string? on, string? tolerance, string? ripple, string? bias, string? probe)
+    /// <summary>The tolerance asked for; <see cref="Waves"/> adds the swell's height.</summary>
+    public static float BaseTolerance { get; private set; } = PlanarReflections.Tolerance;
+
+    public static void Configure(string? on, string? tolerance, string? ripple, string? bias, string? probe, string? fog = null)
     {
+        PlanarReflections.LevelFog = fog != "0";
         if (!string.IsNullOrWhiteSpace(on)) _forced = on != "0";
-        if (float.TryParse(tolerance, out float t) && t > 0f) PlanarReflections.Tolerance = t;
+        if (float.TryParse(tolerance, out float t) && t > 0f) PlanarReflections.Tolerance = BaseTolerance = t;
         if (float.TryParse(ripple, out float r) && r >= 0f) PlanarReflections.Ripple = r;
         if (float.TryParse(bias, out float b)) _bias = b;
         _probe = !string.IsNullOrWhiteSpace(probe) && probe != "0";
@@ -110,8 +127,12 @@ public static class PlanarWalk
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             PlanarReflections.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            StandOthersDown();
+            if (!Reflections.StrengthForced)
+                SetStrength(RecompOne.Runtime.Runtime.View.GetFloat(StrengthKey, DefaultStrength));
             Console.WriteLine($"[KF2] planar reflections: {(Enabled ? "on" : "off")}" +
-                              (Enabled ? $", tolerance {PlanarReflections.Tolerance:F0}, ripple {PlanarReflections.Ripple:F1}" : ""));
+                              (Enabled ? $", strength {Strength:F2}, tolerance {PlanarReflections.Tolerance:F0}, ripple {PlanarReflections.Ripple:F1}, " +
+                                         $"cull {(PlanarCull.On ? "its own" : "the eye's")}" : ""));
         });
         Event.AddListener<OverlayLoadedEvent>(_ => { _pending = false; _n = 0; });
         HookAttach.OnOverlayLoad("planar", Attach);
@@ -121,6 +142,16 @@ public static class PlanarWalk
     {
         PlanarReflections.Enabled = on;
         _pending = false;
+        StandOthersDown();
+    }
+
+    /// <summary>The planar walk is the reflection: the world reflections, which draw
+    /// into the same planar texture, stand down while it is on.</summary>
+    static void StandOthersDown()
+    {
+        if (!Enabled || !RetainedMap.Enabled) return;
+        RetainedMap.SetEnabled(false);
+        Console.WriteLine("[KF2] planar reflections: the world reflections stand down while the planar walk is on");
     }
 
     static bool _queuedWalk, _queuedSubmit, _queuedDraw;
@@ -178,7 +209,12 @@ public static class PlanarWalk
         _walkLo = c.SP - WalkFrame;
     }
 
-    public static void BeforeSubmit(CpuContext c, IMemory m)
+    public static void BeforeSubmit(CpuContext c, IMemory m) => Record(c, m);
+
+    /// <summary>One submit, as the walk is about to make it. Also called by
+    /// <see cref="ModelWalk"/> in place of the submit for a model only
+    /// <see cref="PlanarCull"/> admits, which the picture does not draw.</summary>
+    public static void Record(CpuContext c, IMemory m)
     {
         if (!_recording || _replaying) return;
         if (_n == _sp.Length) Grow();
@@ -218,11 +254,11 @@ public static class PlanarWalk
     // What the next DrawOTag draws first, and the two planes it is drawn with.
     static bool _pending;
     static uint _pendingOt;
-    static readonly float[] _clip = new float[4], _view = new float[4];
+    static readonly float[] _clip = new float[4], _view = new float[4], _level = new float[3];
 
     static bool Ready =>
         PlanarReflections.Enabled && PlanarReflections.Supported
-        && PrimBuffer.Relocated && !TileWalk.Verifying && !ModelWalk.Verifying && !RetainedMap.ReflectionsReady
+        && PrimBuffer.Relocated && !TileWalk.Verifying && !ModelWalk.Verifying
         && RecompOne.Runtime.Hle.GpuTrace.Sink == null;
 
     public static void AfterWalk(CpuContext c, IMemory m)
@@ -235,7 +271,7 @@ public static class PlanarWalk
         // it; published whether or not anything is mirrored, since the water is how
         // the plane is found in the first place.
         for (int i = 0; i < 9; i++) _r[i] = (short)mem.ReadU16(ViewMatrix + (uint)i * 2u);
-        PlanarReflections.SetCamera(_r, (int)mem.ReadU32(CamPos + 4u));
+        PlanarReflections.SetCamera(_r, (int)mem.ReadU32(CamPos), (int)mem.ReadU32(CamPos + 4u), (int)mem.ReadU32(CamPos + 8u));
 
         if (!Ready) PlanarReflections.TakePlane(out _, out _);
         else if (!PlanarReflections.TakePlane(out float plane, out double area)) _noWater++;
@@ -244,6 +280,9 @@ public static class PlanarWalk
         else if ((int)mem.ReadU32(CamPos + 4u) >= plane - 16f) _below++;
         else
         {
+            if (_walks == 0 || plane < _planeMin) _planeMin = plane;
+            if (_walks == 0 || plane > _planeMax) _planeMax = plane;
+            if (plane != _plane) _moves++;
             _plane = plane;
             _area = area;
             long start = Stopwatch.GetTimestamp();
@@ -287,6 +326,14 @@ public static class PlanarWalk
             for (int i = 0; i < 9; i++) rm[i] = (short)mem.ReadU16(ViewMatrix + (uint)i * 2u);
             _clip[0] = -rm[1] / 4096f; _clip[1] = -rm[4] / 4096f; _clip[2] = -rm[7] / 4096f;
             _clip[3] = plane - _bias - mirroredY;
+
+            // The view's forward with its height taken out, in the mirrored view:
+            // row 2 of R' is the forward in world axes.
+            float fx = rm[6], fz = rm[8], fl = MathF.Sqrt(fx * fx + fz * fz);
+            if (fl > 0f) { fx /= fl; fz /= fl; }
+            _level[0] = (rm[0] * fx + rm[2] * fz) / 4096f;
+            _level[1] = (rm[3] * fx + rm[5] * fz) / 4096f;
+            _level[2] = (rm[6] * fx + rm[8] * fz) / 4096f;
 
             c.SP = walkSp;
             c.RA = 0x80034684u;
@@ -344,6 +391,7 @@ public static class PlanarWalk
         PlanarReflections.Serial++;
         _clip.CopyTo(PlanarReflections.ClipPlane, 0);
         _view.CopyTo(PlanarReflections.ViewPlane, 0);
+        _level.CopyTo(PlanarReflections.LevelAxis, 0);
         PlanarReflections.Captures++;
         uint a0 = c.A0;
         PlanarReflections.Capturing = true;
@@ -364,7 +412,8 @@ public static class PlanarWalk
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt, _ms;
     static long _walks, _replayed, _props, _viewSpace, _noWater, _below, _mismatch, _overflows, _peak;
-    static float _plane;
+    static float _plane, _planeMin, _planeMax;
+    static long _moves, _mirrorOnlyAt;
     static double _area;
 
     static void Report()
@@ -374,26 +423,33 @@ public static class PlanarWalk
         if (dt < 2.0) return;
         _reportedAt = now;
 
-        Console.WriteLine($"[KF2] planar: plane Y {_plane:F0} over {_area:F0} px of water; " +
+        Console.WriteLine($"[KF2] planar: plane Y {_plane:F0} over {_area:F0} px of water (min {_planeMin:F0}, max {_planeMax:F0}, moved {_moves / dt:F1}/s); " +
                           $"{_walks / dt:F1} mirrored walks/s at {(_walks == 0 ? 0 : _ms / _walks):F3} ms, " +
                           $"{_replayed / dt:F0} submits replayed/s ({_props / dt:F0} of them props, {_viewSpace / dt:F0} view-space skipped), " +
                           $"{_noWater / dt:F1} frames/s with no water, {_below / dt:F1} under it; arena peak {_peak}/{PrimBuffer.MirrorArenaBytes} bytes, " +
-                          $"{_overflows} overflow(s), {_mismatch} table mismatch(es)");
+                          $"{_overflows} overflow(s), {_mismatch} table mismatch(es); " +
+                          $"its own cull {(PlanarCull.On ? $"{PlanarCull.Added / (double)Math.Max(PlanarCull.Frames, 1):F1} cells added a frame, " +
+                                                            $"{(ModelWalk.MirrorOnlySubmits - _mirrorOnlyAt) / dt:F0} mirror-only models/s, cone {(float.IsInfinity(PlanarCull.Pitched) ? "open" : $"{PlanarCull.Pitched:F2}x")} for the pitch" : "off")}");
+        PlanarCull.Frames = PlanarCull.Added = 0;
+        _mirrorOnlyAt = ModelWalk.MirrorOnlySubmits;
         Console.WriteLine($"[KF2] planar: {PlanarReflections.Captures / dt:F1} captures/s, {PlanarReflections.Cleared / dt:F1} cleared/s, " +
                           $"{PlanarReflections.Dropped} dropped, {PlanarReflections.Read / dt:F1} passes read one; " +
-                          $"{PlanarReflections.WaterTris / dt:F0} water tris/s binned, {PlanarReflections.WaterTilted / dt:F0} not level; " +
+                          $"{PlanarReflections.WaterTris / dt:F0} water tris/s binned ({PlanarReflections.WaterRested / dt:F0} at rest), {PlanarReflections.WaterTilted / dt:F0} not level; " +
                           $"clip ({_clip[0]:F2},{_clip[1]:F2},{_clip[2]:F2},{_clip[3]:F0}) view ({_view[0]:F2},{_view[1]:F2},{_view[2]:F2},{_view[3]:F0}); " +
                           $"last readback {PlanarReflections.PlanarPct:F1}% of reflective pixels planar, " +
                           $"{ScreenReflections.HitPct:F1}% marched to a surface, {ScreenReflections.SkyPct:F1}% the sky, " +
                           $"of {ScreenReflections.ReflectivePct:F1}% of the picture reflective; " +
                           $"{PlanarReflections.ComparedPct:F1}% of planar pixels marched to a surface too, " +
                           $"brightness {PlanarReflections.MirrorDiff:F1} apart (unmirrored {PlanarReflections.ControlDiff:F1})");
+        if (PlanarReflections.FogCensus is { } fc) Console.WriteLine("[KF2] planar: fog by level depth, texels drawn and lit above 8/255:" + fc);
+        PlanarReflections.FogCensus = null;
+        PlanarReflections.WantFogCensus = true;
         if (ScreenReflections.Map is { } map && !Reflections.Probing) Console.Write(map);
         ScreenReflections.WantMap = true;
 
-        _walks = _replayed = _props = _viewSpace = _noWater = _below = _mismatch = _overflows = _peak = 0;
+        _walks = _replayed = _props = _viewSpace = _noWater = _below = _mismatch = _overflows = _peak = _moves = 0;
         _ms = 0;
         PlanarReflections.ResetCounters();
-        PlanarReflections.WaterTris = PlanarReflections.WaterTilted = 0;
+        PlanarReflections.WaterTris = PlanarReflections.WaterTilted = PlanarReflections.WaterRested = 0;
     }
 }

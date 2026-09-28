@@ -727,14 +727,18 @@ Kf2.Waves.Install();
 
 // Planar reflections (patches/recompone/0068): the tile walk and the object walk's
 // submits run a second time from the camera mirrored in the water, into an ordering
-// table of the port's own, drawn into a texture the reflection pass reads first.
-// Independent of KF2_SSR. Off by default: measured, not judged. See "Planar
-// reflections" in docs/RENDERING.md.
+// table of the port's own, drawn into a texture the reflection pass reads. It is
+// the reflection: the march, the retained scene and the reflection reach are
+// comparisons now, and the mirror walks a cull of its own (PlanarCull, the cone
+// without the eye's occlusion flood; KF2_PLANAR_CULL=0 the eye's cells). Off by
+// default: measured, not judged. See "Planar reflections" in docs/RENDERING.md.
 Kf2.PlanarWalk.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR"),
                          Environment.GetEnvironmentVariable("KF2_PLANAR_TOLERANCE"),
                          Environment.GetEnvironmentVariable("KF2_PLANAR_RIPPLE"),
                          Environment.GetEnvironmentVariable("KF2_PLANAR_BIAS"),
-                         Environment.GetEnvironmentVariable("KF2_PLANAR_PROBE"));
+                         Environment.GetEnvironmentVariable("KF2_PLANAR_PROBE"),
+                         Environment.GetEnvironmentVariable("KF2_PLANAR_FOG"));
+Kf2.PlanarCull.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR_CULL"));
 Kf2.PlanarWalk.Install();
 
 // The retained scene (patches/recompone/0072): the map kept on the GPU in world

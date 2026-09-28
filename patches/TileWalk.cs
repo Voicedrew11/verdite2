@@ -248,9 +248,20 @@ public static class TileWalk
             else cell += GridSpan;
             z++;
         }
-        if (RenderDistance.Any) RenderDistance.Walk(c, mem);
-        if (PlanarWalk.Mirroring) { if (ReflectionReach.Any) ReflectionReach.WalkMirror(c, mem); }
-        else { RenderDistance.Report(); ReflectionReach.Build(mem); }
+        // The mirror walks a cull of its own (PlanarCull), which covers the render
+        // distance's cells; without it, the eye's.
+        if (PlanarWalk.Mirroring)
+        {
+            if (PlanarCull.Any) PlanarCull.Walk(c, mem);
+            else if (RenderDistance.Any) RenderDistance.Walk(c, mem);
+        }
+        else
+        {
+            if (RenderDistance.Any) RenderDistance.Walk(c, mem);
+            RenderDistance.Report();
+            ReflectionReach.Build(mem);
+            PlanarCull.Build(mem);
+        }
 
         c.RA = mem.ReadU32(sp + 0x28u);
         c.S5 = mem.ReadU32(sp + 0x24u);

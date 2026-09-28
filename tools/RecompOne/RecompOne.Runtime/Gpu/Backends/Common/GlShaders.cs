@@ -842,10 +842,15 @@ internal static class GlShaders
         // scrolling texture rather than lying on it like glass. The colour was
         // fogged by the mirrored camera, whose distance to it is the length of the
         // path through the mirror, so it needs no correction here.
+        bool onPlanar(vec3 p) {
+            return uPlanarOn != 0 && abs(dot(uPlanarPlane.xyz, p) + uPlanarPlane.w) <= uPlanarTol;
+        }
+        // The surface is on the plane and the mirror drew nothing there: what it
+        // sees is the background, past everything the walk drew.
+        bool gPlanarEmpty = false;
         bool planarAt(vec3 p, float rough, out vec3 c) {
             c = vec3(0.0);
-            if (uPlanarOn == 0) return false;
-            if (abs(dot(uPlanarPlane.xyz, p) + uPlanarPlane.w) > uPlanarTol) return false;
+            if (!onPlanar(p)) return false;
             vec2 muv = vec2(vUv.x, 2.0 * uCentre.y - vUv.y);
             if (uRipple > 0.0) {
                 vec2 px = 1.0 / uSize;
@@ -858,7 +863,7 @@ internal static class GlShaders
             vec3 pc = texture(uPlanar, tc(muv)).rgb;
             // Nothing drawn: the capture cleared to black with the far plane, and an
             // opaque surface writes a depth whatever its colour.
-            if (texture(uPlanarDepth, tc(muv)).r >= 1.0 && max(pc.r, max(pc.g, pc.b)) <= 0.0) return false;
+            if (texture(uPlanarDepth, tc(muv)).r >= 1.0 && max(pc.r, max(pc.g, pc.b)) <= 0.0) { gPlanarEmpty = true; return false; }
             // Roughness blurs it as it does a march's hit: the image stands as far
             // behind the water as its source stands above it, and the planar depth
             // is the mirrored eye's distance to it.
@@ -996,10 +1001,6 @@ internal static class GlShaders
 
             float zs = s.b * FAR;
             if (zs <= 1.0) return;
-            if (uPlainZ > 0.0) {
-                gShare *= 1.0 - smoothstep(uPlainZ - 2048.0, uPlainZ, zs);
-                if (gShare <= 0.0) return;
-            }
             // With the Z-buffer on, visibility is the depth test's and not the
             // order's, so a surface redrawn last may still be behind the opaque
             // one the picture shows. The picture is the authority.
@@ -1007,6 +1008,13 @@ internal static class GlShaders
             if (d > 0.0 && d < 1.0 && d * FAR < zs * 0.99 - 8.0) return;
 
             vec3 p = viewAt(vUv, zs);
+            // 0083. Past the enhancement distance, the game's own look; the planar
+            // reflection is left out of it, since what it shows is fogged by the
+            // mirror's own depth and meets the black of the distance by itself.
+            if (uPlainZ > 0.0 && !onPlanar(p)) {
+                gShare *= 1.0 - smoothstep(uPlainZ - 2048.0, uPlainZ, zs);
+                if (gShare <= 0.0) return;
+            }
             // A translucent surface writes no depth, so the depth buffer holds the
             // floor under it: the ray's run between the two is how much water it
             // crosses. An opaque surface has none; the sky behind is all water.
@@ -1050,6 +1058,14 @@ internal static class GlShaders
             if (planarHit && uCompare == 0) {
                 oInfo.a += 4.0 / 255.0;
                 emit(pc * tint, w);
+                return;
+            }
+            // 0068. The planar answer is final on its plane: an empty texel is the
+            // background (black, or the remaster's sky), which the fogged texels
+            // beside it fade into, and never a march.
+            if (gPlanarEmpty && uCompare == 0) {
+                oInfo.a += 4.0 / 255.0;
+                emit((uAtmosOn != 0 ? uAtmosSky : vec3(0.0)) * tint, w);
                 return;
             }
 
@@ -1507,6 +1523,10 @@ internal static class GlShaders
         uniform vec4  uClipPlane;
         uniform vec2  uClipCentre;
         uniform float uClipH;
+        // 0068, amended. The view's level forward in that space, and the frame's
+        // DQA and DQB / 4096. See cueWeight().
+        uniform vec3  uClipLevel;
+        uniform vec2  uClipDq;
         // 0072. Drawing one plane of a retained planar reflection: kept only where
         // the presented frame's own surface (its surface buffer, the target's size
         // in 1x pixels) lies within uMaskTol of the plane, in that frame's view.
@@ -1808,14 +1828,35 @@ internal static class GlShaders
             return sum;
         }
 
+        // 0068, amended. In a planar capture, the fragment's depth over the depth
+        // it is fogged at; 1 everywhere else.
+        float gCueScale = 1.0;
+        float gCueZ = 0.0;
+
+        // The raw depth cue at the depth a level camera would see this fragment at.
+        // MAC0 / 4096 is DQA * H/SZ / 4096 + DQB / 4096, so the part past DQB scales
+        // as SZ does. A curve-4 corner holds a weight (EvenFog's blend): taken back
+        // through the knee, or at the frame's DQA where the knee left it 0.
+        float levelCue(float raw, uint curve) {
+            if (curve == 4u) {
+                float wv = clamp(raw, 0.0, 4096.0);
+                float q = min(uClipH * 65536.0 / max(gCueZ, 1.0), 131071.0);
+                raw = wv <= 0.0 ? min(uClipDq.x * q / 4096.0 + uClipDq.y, 0.0)
+                    : wv < 2800.0 ? wv : (wv + 5600.0) / 3.0;
+            }
+            return uClipDq.y + (raw - uClipDq.y) * gCueScale;
+        }
+
         // The depth cue's weight, 0..4096, from the raw MAC0 through the curve.
         float cueWeight() {
             uint curve = (vLight >> 24) & 7u;
-            float ir0 = clamp(vFog, 0.0, 4096.0);
+            bool level = gCueScale < 1.0 && curve != 0u;
+            float raw = level ? levelCue(vFog, curve) : vFog;
+            float ir0 = clamp(raw, 0.0, 4096.0);
             float w = curve == 1u ? max(ir0 - 800.0, 0.0) * 2.0
                  : curve == 2u ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0)
                  : curve == 3u ? ir0 * 0.5
-                 : curve == 4u ? vFog
+                 : curve == 4u ? (level ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0) : vFog)
                  : 0.0;
             // 0074. The authored curve over the game's.
             if (uAtmosOn != 0 && uAtmosShape != vec2(1.0) && w > 0.0)
@@ -1823,8 +1864,21 @@ internal static class GlShaders
             return w;
         }
 
+        // The knee's keep at the frame's DQA, for a colour with no record.
+        float frameKeep(float z) {
+            float q = min(uClipH * 65536.0 / max(z, 1.0), 131071.0);
+            float ir0 = clamp(uClipDq.x * q / 4096.0 + uClipDq.y, 0.0, 4096.0);
+            return clamp(1.0 - (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0) / 4096.0, 0.0, 1.0);
+        }
+        // A colour the GTE fogged at this fragment's depth, fogged at the level one.
+        vec3 levelColour(vec3 c) {
+            if (gCueScale >= 1.0) return c;
+            float k0 = frameKeep(gCueZ);
+            return k0 > 0.0 ? c * clamp(frameKeep(gCueZ / gCueScale) / k0, 0.0, 1.0) : c;
+        }
+
         ivec3 shade8(vec3 extra) {
-            if (vLight == 0u) return ivec3(vColor.rgb * 255.0 + 0.5);
+            if (vLight == 0u) return ivec3(levelColour(vColor.rgb) * 255.0 + 0.5);
             uint mode = vLight >> 24;
             vec3 lit = vLit;
             if ((mode & 0x80u) != 0u) {
@@ -1842,7 +1896,7 @@ internal static class GlShaders
             // 0083. Past the distance, the corner colours the game lit, with the
             // glow a material adds before the cue still added.
             if (gPlain > 0.0) {
-                vec3 gc = vColor.rgb * 255.0 + 0.5;
+                vec3 gc = levelColour(vColor.rgb) * 255.0 + 0.5;
                 if (uEmitOn != 0)
                     gc += floor(vec3(uvec3(vLight, vLight >> 8u, vLight >> 16u) & uvec3(255u)) * extra * (1.0 - w / 4096.0));
                 pp = mix(pp, clamp(floor(gc), 0.0, 255.0), gPlain);
@@ -1881,6 +1935,12 @@ internal static class GlShaders
                 float cz = vDepth * 65536.0;
                 vec3 cp = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (cz / uClipH), cz);
                 if (dot(uClipPlane.xyz, cp) + uClipPlane.w < 0.0) discard;
+                // The game's map is culled by a level cone and fogged by view depth,
+                // so the cone's far edge is black only to a level camera. The
+                // mirrored one looks up by the eye's pitch and saw it lit: fog at the
+                // larger of the two depths, which is the game's fog looking level.
+                float lz = dot(uClipLevel, cp);
+                if (lz > cz) { gCueScale = cz / lz; gCueZ = cz; }
             }
             // 0072, amended. A half fading in or out of a reflection: an ordered
             // dither, so it needs no blending and keeps its depth.

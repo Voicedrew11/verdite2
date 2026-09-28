@@ -76,6 +76,10 @@ public static class Reflections
     /// murk alone runs the pass and reflects nothing.</summary>
     public static bool AnySource => ScreenReflections.Enabled || PlanarReflections.Enabled || RetainedScene.Enabled;
 
+    /// <summary>KF2_SSR_STRENGTH was given, so the planar walk's slider does not
+    /// replace it.</summary>
+    public static bool StrengthForced;
+
     /// <summary>Whether this patch prints the readback's map itself.</summary>
     public static bool Probing => _probe;
 
@@ -86,7 +90,7 @@ public static class Reflections
         if (!string.IsNullOrWhiteSpace(on)) _forced = on != "0";
 
         float s = 0.6f, f = 0.12f;
-        if (float.TryParse(strength, out float st) && st >= 0f) s = Math.Clamp(st, 0f, 1f);
+        if (float.TryParse(strength, out float st) && st >= 0f) { s = Math.Clamp(st, 0f, 1f); StrengthForced = true; }
         if (float.TryParse(f0, out float ff) && ff >= 0f) f = Math.Clamp(ff, 0f, 1f);
         SurfaceMaterial.Reflectivity[SurfaceMaterial.Water] = s;
         SurfaceMaterial.F0[SurfaceMaterial.Water] = f;
@@ -111,7 +115,8 @@ public static class Reflections
         // config; see AmbientOcclusion.Install.
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            ScreenReflections.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            // The march is no longer a setting; KF2_SSR=1 is the comparison.
+            ScreenReflections.Enabled = _forced ?? false;
             Console.WriteLine($"[KF2] reflections: {(Enabled ? "on" : "off")}" +
                               (Enabled ? $", water {SurfaceMaterial.Reflectivity[SurfaceMaterial.Water]:F2} " +
                                          $"(F0 {SurfaceMaterial.F0[SurfaceMaterial.Water]:F2}), " +

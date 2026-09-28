@@ -1008,6 +1008,29 @@ Four files in the directory have no entry below:
   brightness difference against the planar texture read unmirrored.
   `PlanarReflections.Supported` is set only by the GL core backend. Off by
   default. **No recompile.** See "Planar reflections" in `docs/RENDERING.md`.
+  Since amended: `RestHeight`, where the port says water rests at a world X and Z.
+  The swell moves the water's vertices, so its triangles were refused as not level
+  and the plane was the mean of the few left, moving on 143 of 144 frames.
+  `NoteWater` takes a triangle's centroid to world X and Z (`SetCamera` gains the
+  camera's X and Z) and bins an answered triangle at the rest height with no level
+  test; `WaterRested` counts them. With no answer it is the old path. The
+  amendment is the second diff in the patch file. See "The swell moved the water
+  off the mirror" in `docs/RENDERING.md`.
+  Since amended: a capture fogs a fragment at the larger of its own view depth and
+  its depth along the view's level forward (`PlanarReflections.LevelAxis`,
+  `uClipLevel`, `uClipDq`), rescaling the recorded depth cue's part past DQB. The
+  game culls its map by a level cone and fogs by view depth, so the cone's far edge
+  reflected lit from a mirrored camera looking up, and popped in in the water. Level,
+  the capture is unchanged. The probe reads the planar texture back by that depth
+  (`FogCensus`). `KF2_PLANAR_FOG=0` is the comparison. The third diff in the patch
+  file. See "The fog the mirror dropped" in `docs/RENDERING.md`.
+  Since amended: on its plane the planar answer is final. A surface on the plane
+  whose planar texel is empty reflects the background (`uAtmosSky`, or black) at
+  the water's weight instead of marching, so a cell culled in or out of the mirror
+  no longer flips a pixel between the march and the mirror (`gPlanarEmpty`,
+  `onPlanar`), and `0083`'s enhancement distance leaves a surface on the plane
+  alone. The fourth diff in the patch file. See "The planar walk is the
+  reflection, with a cull of its own" in `docs/RENDERING.md`.
 
 - `0069-present-snap.patch` — a diagnostic: the presented picture read back once,
   on request. `Gpu/PresentSnap.cs` holds one pending request (skip `N` presents,

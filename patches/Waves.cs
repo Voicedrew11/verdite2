@@ -66,6 +66,7 @@ public static class Waves
     public static void Install()
     {
         Enabled = _forced ?? DefaultOn;
+        PlanarReflections.RestHeight = WaterSwell.RestAt;
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
             var view = RecompOne.Runtime.Runtime.View;
@@ -107,6 +108,9 @@ public static class Waves
     public static void AtWalk(CpuContext c, PSMemory mem)
     {
         WaterWaves.Enabled = Enabled;
+        // The swell lifts the water off the plane it is mirrored in by up to its
+        // height, and the reflection pass takes a surface only that near it.
+        PlanarReflections.Tolerance = PlanarWalk.BaseTolerance + (Enabled ? Swell : 0f);
         if (!Enabled) return;
 
         ReadRects(mem);

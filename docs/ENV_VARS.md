@@ -173,8 +173,8 @@ KF2_AO_PROBE=2                         # also read the occlusion back: how dark,
 KF2_MURK=1 KF2_MURK_DISTANCE=2654      # murky water: a dark murk by the distance the view ray runs through water, surface to floor, 63% at the distance (off by default; independent of any reflection; GL core only; depth and colour are also sliders under Video ▸ Experimental ▸ Murky water)
 KF2_WAVES=1                            # water waves: a swell moves the water's vertices, ripples push and shade its texture (off by default; GL core only for the ripples; the settings are sliders under Video ▸ Experimental ▸ Water waves, and the `waves` shell verb)
 KF2_WAVES_PROBE=1                      # a line every 2 s: rects, the clock, rippled batches, water positions free/rim/shared, halves and vertices moved
-KF2_SSR=1                              # screen-space reflections on water (off by default; independent of the murk, planar and retained reflections; GL core only)
-KF2_SSR_STRENGTH=0.6 KF2_SSR_F0=0.12   # how much water reflects at a grazing angle, and looking straight down
+KF2_SSR=1                              # screen-space reflections on water (off by default; no longer a setting, a comparison only; never marches a pixel the planar walk answers; GL core only)
+KF2_SSR_STRENGTH=0.6 KF2_SSR_F0=0.12   # how much water reflects at a grazing angle, and looking straight down (the strength overrides the Reflection strength slider)
 KF2_SSR_DISTANCE=16384 KF2_SSR_STEPS=32 KF2_SSR_THICKNESS=256   # the march: how far (unset: to where the game's fog turns black), how many steps, how far behind a depth still hits
 KF2_SSR_SKY=1                          # a miss takes the last background pixel it crossed, not under the HUD, at this weight; 0 none
 KF2_SSR_FOGCURVE=2                     # the depth-cue curve a reflection's longer path is fogged on: 0 none, 1 offset, 2 knee (default), 3 half, 4 linear
@@ -183,13 +183,15 @@ KF2_SSR_PROBE=1                        # passes, water rects and triangles, 2D o
 KF2_PLANAR=1                           # planar reflections: the world walked again from a camera mirrored in the water (off by default; GL core only)
 KF2_PLANAR_TOLERANCE=48 KF2_PLANAR_BIAS=8   # how far off the plane a surface may be and take it; how far above it geometry must be to be reflected
 KF2_PLANAR_RIPPLE=4                    # how far the water's own texture bends the reflection, game pixels per unit of brightness change; 0 a flat mirror
-KF2_PLANAR_PROBE=1                     # the plane, the mirrored walk and its arena, captures, binned water, and the readback with its check on the mirror
-KF2_RETAINED=1                         # reflections drawn from the retained scene: the map and models kept on the GPU in world space (off by default; GL core only; stands the planar walk down)
+KF2_PLANAR_PROBE=1                     # the plane and how far it moved, the mirrored walk and its arena, captures, binned water (at rest, not level), and the readback with its check on the mirror
+KF2_PLANAR_CULL=0                      # the mirrored walk draws only the eye's cells (its own cull by default: every half on the eye's level in the view cone, no occlusion flood, and the models standing there, drawn only in the mirror)
+KF2_PLANAR_FOG=0                       # fog the planar reflection at the mirrored camera's own view depth, as the game would (the larger of that and the level depth by default)
+KF2_RETAINED=1                         # reflections drawn from the retained scene: the map and models kept on the GPU in world space (off by default; no longer a setting; GL core only; stands down while the planar walk is on)
 KF2_RETAINED_PLANAR=0 KF2_RETAINED_CUBE=0   # leave out its planes, or its camera cubemap (which otherwise replaces the screen march)
 KF2_RETAINED_CUBESIZE=256              # a cubemap face's size in pixels
 KF2_RETAINED_CULL=0                    # draw the faces a mirror or a cube face sees from behind (culled by default, as the game culls them)
 KF2_RETAINED_GATE=0                    # reflect every map half, not only those the frame's own tile walk drew
-KF2_REFLECT_REACH=2                    # what the reflections may show grown past the camera's cull by this many cells, held 0.75 s and faded (0, the frame's own, by default)
+KF2_REFLECT_REACH=2                    # what the retained scene's reflections may show grown past the camera's cull by this many cells, held 0.75 s and faded (0, the frame's own, by default; no longer a setting; the planar walk has its own cull)
 KF2_REFLECT_REACH_PROBE=1              # a line every 2 s: halves drawn, grown, held after leaving, fading, extra tiles, model queries let through, halves that entered inside the view and the nearest's depth
 KF2_RETAINED_PROBE=1                   # the mesh and its check against the GTE's own vertices, the planes, GPU time per draw, chunks culled, and (with KF2_SSR_PROBE=1) the planar-vs-cubemap agreement
 KF2_RETAINED_LIT=0                     # leave authored lights and glows out of the reflections (in by default)

@@ -1,8 +1,6 @@
 using RecompOne.Runtime;
-using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Memory;
-using KingsField2 = Recompiled.KingsField2_game;
 
 namespace Kf2;
 
@@ -20,12 +18,12 @@ namespace Kf2;
 /// and a half stays in the set for <see cref="Hold"/> seconds after it leaves,
 /// fading in and out over <see cref="FadeSeconds"/> (a dither in the world program).
 ///
-/// The retained scene takes the weights as its half gate; the planar walk's mirrored
-/// pass walks the halves the frame did not draw. Creatures, objects, effects and
-/// sprites standing in the set are submitted by the object walk, which the retained
-/// scene captures and the planar walk replays; they are drawn in the picture too,
-/// where the walls in front of them hide them. See "The reflections see past the
-/// camera's cull" in docs/RENDERING.md.
+/// The retained scene takes the weights as its half gate. Creatures, objects, effects
+/// and sprites standing in the set are submitted by the object walk, which the
+/// retained scene captures; they are drawn in the picture too, where the walls in
+/// front of them hide them. The planar walk no longer reads it: it has a cull of its
+/// own (<see cref="PlanarCull"/>). See "The reflections see past the camera's cull"
+/// in docs/RENDERING.md.
 /// </summary>
 public static class ReflectionReach
 {
@@ -37,10 +35,7 @@ public static class ReflectionReach
     public const double Hold = 0.75, FadeSeconds = 0.3;
 
     const uint MapBase = 0x801C8484;
-    const uint CamWorldX = 0x80192E78, CamWorldZ = 0x80192E80;
 
-    /// <summary>Tiles from the camera a mirrored extra half is drawn with the clipper.</summary>
-    const int NearTiles = 3;
     const int Halves = 80 * 80 * 2;
 
     static int? _forced;
@@ -76,7 +71,9 @@ public static class ReflectionReach
     {
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Reach = _forced ?? Math.Clamp(RecompOne.Runtime.Runtime.View.GetInt(Key, DefaultReach), 0, Max);
+            // No longer a setting: the planar walk has a cull of its own (PlanarCull),
+            // and KF2_REFLECT_REACH is the retained scene's comparison.
+            Reach = _forced ?? DefaultReach;
             Console.WriteLine($"[KF2] reflection reach: {(Reach > 0 ? $"{Reach} cell(s), held {Hold} s" : "the frame's own")}");
         });
         Event.AddListener<OverlayLoadedEvent>(_ => Forget());
@@ -88,7 +85,7 @@ public static class ReflectionReach
         if (Reach == 0) Forget();
     }
 
-    static bool Wanted => Reach > 0 && (RetainedMap.ReflectionsReady || PlanarWalk.Enabled);
+    static bool Wanted => Reach > 0 && RetainedMap.ReflectionsReady;
 
     /// <summary>A new area: nothing held from the last one.</summary>
     static void Forget()
@@ -184,7 +181,7 @@ public static class ReflectionReach
             }
         }
 
-        // Publish: the retained scene's gate, the planar walk's cells, the model queries.
+        // Publish: the retained scene's gate and the model queries.
         var gate = RetainedMap.ReflectionsReady ? RetainedScene.CurrentHalves : Span<byte>.Empty;
         foreach (int t in _extraTiles) _tileBits[t] = 0;
         _extraTiles.Clear();
@@ -234,27 +231,6 @@ public static class ReflectionReach
     static float _vcx, _vcz, _vfx, _vfz, _vfar, _vslope;
     static long _enteredInView;
     static float _nearestEntry = float.MaxValue;
-
-    /// <summary>In the mirrored walk, after its own cells: the halves in the set the
-    /// frame did not draw. Within <see cref="NearTiles"/> of the camera through the
-    /// clipped assembler, as the game draws its near tiles; the rest through the far one.</summary>
-    public static void WalkMirror(CpuContext c, PSMemory mem)
-    {
-        int cx = (int)(mem.ReadU32(CamWorldX) >> 11), cz = (int)(mem.ReadU32(CamWorldZ) >> 11);
-        foreach (int t in _extraTiles)
-        {
-            Interrupts.Poll(c, mem);
-            int tx = t % 80, tz = t / 80;
-            // Held from where the camera was: a tile is placed by an s16 offset.
-            if (Math.Max(Math.Abs(tx - cx), Math.Abs(tz - cz)) > RenderDistance.Reach) continue;
-            bool near = Math.Max(Math.Abs(tx - cx), Math.Abs(tz - cz)) <= NearTiles;
-            c.A0 = (uint)tx;
-            c.A1 = (uint)tz;
-            c.A2 = _tileBits[t] | (near ? 0x80u : 0u);
-            c.RA = 0x80031D14u;
-            KingsField2.func_80031B1C(c, mem);
-        }
-    }
 
     /// <summary>The set's level bits at a world position (x at +0, z at +8), for a
     /// visibility query the game's grid answered 0.</summary>

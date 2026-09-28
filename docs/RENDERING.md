@@ -2162,9 +2162,11 @@ The screen-space pass can reflect only what is on screen and in front of everyth
 else. A wall above the top of the view, or a creature behind a pillar, is simply
 absent from the water. At the `fdat02` spawn, looking down at the pool, **79.5% of
 the pixels the planar texture answered were ones the march could not find at all**.
-This extends that pass rather than replacing it. A reflective pixel whose surface
-lies on the mirrored plane takes the planar texture; any other reflective pixel,
-and any whose planar texel is empty, marches as before.
+This extended that pass rather than replacing it: a reflective pixel whose surface
+lay on the mirrored plane took the planar texture, and any other, or any whose
+planar texel was empty, marched. **Since 2026-09-28 the planar walk is the
+reflection**, and the march is a comparison only; see "The planar walk is the
+reflection, with a cull of its own" below.
 
 ### Moving the camera, not the world
 
@@ -2308,6 +2310,159 @@ projected. Only one plane is mirrored. A second pool at another height marches.
 strength; the seam between the planar reflection and the march's sky where the
 mirrored texel is empty; the rim of the pool at an 8-unit clip bias; creatures and
 billboards in the reflection; and all of it while the camera moves.
+
+### The fog the mirror dropped: the game fogs by view depth, and culls level
+
+Reported from play, 2026-09-28, after render distance, reflection reach and the
+enhancement distance had not helped: the map's segments pop in at the distance in
+the water, where the game's fog hides the same pop in the scene; the fog did not
+seem to reach the reflection.
+
+**The capture is fogged, and fogged exactly as the game fogs.** A readback of the
+planar texture binned by its own depth (a temporary probe, the `fdat02` spawn)
+matched the picture band for band: lit to 9 tiles, 2 of 255 at 10, black from 11.
+What differs is *which* depth. The game's depth cue goes by view depth (SZ), and its
+map is culled by a level cone in plan, 10.5 tiles along the yaw. Looking level, the
+cone's far edge lies at about 10.5 tiles of view depth, where `fdat02`'s fog is
+black, so a cell popping in there is black on black. The mirrored camera looks *up*
+by the eye's pitch, so the same edge stands off its axis and its view depth is
+shorter by the cosine: at a pitch of 500 (44 degrees), cells at 10-11 tiles in plan
+were drawn at 7-8 tiles of depth, lit. The scene never shows them, because above the
+top of a pitched picture is exactly where they are; the water does.
+
+So a capture fogs each fragment at **the larger of its own depth and its depth along
+the view's level forward**, which is the game's fog looking level. `PrimFs` rebuilds
+the fragment's mirrored view position (as its clip test already did), takes its
+depth along `uClipLevel` (the view's forward with its world height taken out, in the
+mirrored view, from `PlanarWalk`), and rescales the recorded depth cue: MAC0 / 4096
+is `DQA * H/SZ / 4096 + DQB / 4096`, so the part past DQB scales as SZ does, exactly,
+whatever the tile's light record. A curve-4 corner (`EvenFog`'s blended weight) is
+taken back through the knee first; a colour with no record is darkened by the
+knee's keep at the frame's DQA. Glows, highlights and the authored fog colour go
+through the same `cueWeight()` and follow. Looking level the two depths are one,
+and the capture is what it was.
+
+Measured with `KF2_PLANAR_PROBE=1`, which now prints the planar texture binned by
+the depth it is fogged at, texels drawn / lit above 8 of 255, from 9 tiles:
+
+| pitch | `KF2_PLANAR_FOG=0` 10 tiles | 11 tiles | level fog 10 tiles | 11 tiles |
+|---|---|---|---|---|
+| 0 | 22148 / 10, max 10 | 29424 / 0 | the same | the same |
+| -250 | 521 / 512, max 27 | 6430 / 3, max 9 | 521 / 0, max 8 | 6430 / 0, max 1 |
+| 500 | 94085 / 3297, max 26 | 67954 / 43, max 11 | 94085 / 15, max 9 | 67954 / 0, max 4 |
+
+144.0 fps drawn at 19.9 ticks/s, `[present] wide 274`, no GL errors under
+`KF2_GLDEBUG=1`. `KF2_PLANAR_FOG=0` is the comparison. The retained planes
+(`0072`) fog by the real camera's depth of the mirror image and are not changed.
+
+**Judged by eye: a lot better.** The fix hides the cull's edge rather than moving
+it; the lasting answer is probably a less aggressive cull for the mirrored walk, so
+the reflection has cells to show past where the fog blacks them out.
+
+### The planar walk is the reflection, with a cull of its own
+
+Decided 2026-09-28, after a long run of reflection work in which five mechanisms
+were layered (the planar walk, the screen march as its fallback, the reflection
+reach, the render distance, the enhancement distance) and no one of them could be
+judged apart from the others: **planar is the way to go**, and it stands alone.
+
+**What is no longer in its way.**
+
+- The screen march, the retained scene's reflections and the reflection reach are
+  no longer settings. Their controls are gone from Video ▸ Experimental and their
+  saved keys (`kf2.ssr.on`, `kf2.ssr.retained`, `kf2.reflectreach`) are not read;
+  `KF2_SSR=1`, `KF2_RETAINED=1` and `KF2_REFLECT_REACH` are the comparisons. The
+  retained scene still builds the map for the authored lights' shadows (`0077`),
+  which never depended on its reflections.
+- The precedence is the other way round: the world reflections draw into the same
+  planar texture, so they stand down while the planar walk is on, where the planar
+  walk used to stand down for them.
+- The reflection reach no longer feeds the mirrored walk; it is the retained
+  scene's alone.
+- **On its plane the planar answer is final** (`0068`, amended). A pixel whose
+  surface lies on the plane and whose planar texel is empty reflects the
+  background (black, or the remaster's sky), at the water's own weight, and never
+  marches. Before, such a texel fell back to the march, so a cell culling in or out
+  of the mirror flipped that pixel between the march's guess and the mirror: a pop
+  source of its own. Black is what the fogged texels beside it fade into, so the
+  edge of what the mirror drew meets it without a seam; leaving the texel
+  unreflected instead would have shown bright water beyond dark reflection.
+- The enhancement distance (`0083`) no longer fades a pixel on the plane: what the
+  mirror shows is fogged by its own depth and meets the distance's black by itself.
+- The water's reflectivity has its own slider, *Reflection strength*, under the
+  checkbox (`kf2.planar.strength`, 0.6 by default, 0 to 1). `KF2_SSR_STRENGTH`
+  still overrides it. The old `kf2.ssr.strength` key was never read by anything.
+
+**The mirror's own cull** (`patches/PlanarCull.cs`, `KF2_PLANAR_CULL=0` the eye's
+cells, as before). The game culls its map in two steps: a level cone in plan along
+the yaw, then a flood from the camera that darkens what walls hide from the eye.
+The mirror looks from under the water, so the flood's answer is the wrong one for
+it: a cavern round a cliff is hidden from the eye and plain in the water. The
+mirrored walk now walks the game's cells and then **every half on the eye's level
+inside the cone, with no flood**, out to the larger of the game's reach and the
+render distance (the render distance's own cells are inside it, so they are not
+walked twice), and the depth test hides what the mirror cannot see. Within 3 tiles
+of the camera a half goes through the clipped assembler, as the game's near tiles
+do. A cell enters the cone at its side, which the frustum does not reach, or at its
+far edge, which the level fog above has already blacked out; so there is no hold
+and no fade.
+
+**The cone is widened for the pitch.** Judged by eye on the first build: the
+outdoor section "looks really good", but the very corner of the screen showed the
+cull. The game's cone is drawn for a level camera; a pitched frustum's corner rays
+run wider in plan. A view ray `(tanH, tanV, 1)` turned by the pitch has a forward
+run of `cos - tanV*|sin|` for a sideways run of `tanH`, and the mirror is pitched
+as far as the eye, the other way, so the cull's side lines take the slope
+`tanH / run` when that is wider than the game's (with `tanH = 160*Factor/H` and
+`tanV` 10% over `120/H`, for the ripple's bend), and once `run` falls below 0.2 the
+frustum reaches round behind the camera and every cell within reach is walked.
+Measured at the `fdat02` New Game spot through `view`: the cone 1.12x the game's
+at the pitch the game leaves (16), 1.83x at -300, 4.23x at -500, open at -700;
+cells added a frame 24, 39-41, 51-59, then the open circle.
+
+Models standing in cells only this cull lights are **mirror-only**: the object walk
+asks the cull when the game's grid answers 0, and a model admitted that way has its
+submit handed to `PlanarWalk.Record` instead of made, so the picture does not draw
+it (an object's drawn bit, `+3 | 0x80`, is not set either) and the mirror replays it
+with the rest. The reflection reach had let such models into the picture too, where
+only the depth test hid them.
+
+The proposal before this was to run `CullGrid`'s flood from the mirrored eye, which
+needed its flood fixed first (`docs/TODO.md` #24). That was wrong: the flood runs in
+plan from the camera's tile, which the mirror shares, so it would have given the
+eye's answer again. The cone without the flood needs neither.
+
+Measured at the `fdat02` New Game view, facing the water, `KF2_FPS=300`, with the
+cull and with `KF2_PLANAR_CULL=0`:
+
+| | own cull | the eye's cells |
+|---|---|---|
+| cells added to the mirror a frame | 18.0 | 0 |
+| mirror-only models a frame | 3.0 | 0 |
+| submits replayed a frame | 5.0 | 2.0 |
+| mirrored walk | 1.40 ms | 1.19 ms |
+| arena peak (of 409,600 bytes) | 48,892 | 33,940 |
+| reflective pixels answered by the planar texture | 97.0% | 97.0% |
+
+186-191 fps drawn at 19.9-20.0 ticks/s either way; no exception. The view there
+shows none of the added cells in the water (the fog census is identical), which is
+the point of a cull whose additions arrive where they cannot be seen.
+
+**What "done" is, to be judged by eye**, with only *Planar reflections* on among
+the reflection settings, the render distance at the game's (10.5), SSAO and the
+Z-buffer at their defaults:
+
+1. Turning slowly at the `fdat02` pier and at the shore by the cliff, nothing pops
+   into or out of the water: not the map, not a creature.
+2. The reflection's brightness sits with the scene's: a lit wall is not brighter in
+   the water than in the picture, and the fogged distance is as dark in both.
+3. No seam where the water meets the bank or a pillar standing in it, and no strip
+   where the reflection stops.
+
+**Judged by eye:** the outdoor section "looks really good"; the corner of the
+screen showed the cull until the cone was widened for the pitch (below), and
+after that "looks way better". The three checks above have not been gone through
+one by one.
 
 ## The retained scene: the world kept on the GPU, so a reflection can draw it again
 
@@ -3967,11 +4122,52 @@ length was first 12000, and the judged default is 6114); whether the rims, held 
 strength and shading defaults; and that no crack opens anywhere a water tile meets
 something else.
 
+### The swell moved the water off the mirror
+
+**Mechanism measured; the picture has not been judged.** Reported from play: the
+planar reflection was not stable with the murk and the waves on. The swell was the
+cause, three ways, all measured at the `fdat02` New Game view with the user's
+settings (planar on, murk, waves, render distance 15, reach 4), 144 fps:
+
+- **The plane was found from moved water.** `NoteWater` refuses a water triangle
+  more than 64 units out of level (a waterfall), and a swelling triangle is: 39,448
+  of 54,896 a second were refused, and the plane was the mean of what was left, the
+  crests and troughs that happened to lie flat. It moved on **143 of 144 frames**,
+  over 20 units, so the mirrored camera moved with it.
+- **The pass took only water near the plane.** `planarAt` takes a surface within
+  `Tolerance` (48) of the plane, and the swell puts it up to 338 off, so only the
+  strips crossing the rest height reflected, and they drifted with the waves: 27.5%
+  of the reflective pixels planar where the same view with waves off reads 60.1%.
+- **The mirrored walk moved the water too**, so a crest stood above the plane by
+  more than the clip's 8-unit bias and was drawn into the planar texture: the water
+  reflected in itself.
+
+So `PlanarReflections.RestHeight` (`0068`, amended) lets the port say where water
+rests: `NoteWater` takes the triangle's centroid to world X and Z (`SetCamera`
+gains the camera's X and Z), asks, and bins an answered triangle at that height
+with no level test. `WaterSwell` answers from a height per half, the mean of its
+water vertices' rest heights (NaN where they spread past 64), choosing of a cell's
+two halves the one nearer the drawn height within the swell's reach. `Waves` sets
+the tolerance to the asked one plus the swell's height each walk, and
+`WaterSwell.Enter` leaves the mirrored walk's water at rest, where the clip takes it
+out. After: 72,172 water triangles a second binned, all at rest, none refused; the
+plane moved on 0 frames; **60.1% of the reflective pixels planar, as with waves
+off**. Waves off is the old path (0 at rest; the plane still). 144.0 fps drawn at
+20.0 ticks/s, `[present] wide 288`, no GL errors under `KF2_GLDEBUG=1`.
+
+The murk has no part in it that a counter shows: it reads the surface and the depth
+under it, not the plane. **Not judged by eye**: whether the reflection now holds
+still, how it reads on a surface up to 338 off the plane it is mirrored in (the
+lookup is at the pixel, so a crest shifts its reflection a little, which should read
+as the wave), and whether the wider tolerance lets a surface near the water that is
+not on it take the mirror.
+
 ## The reflections see past the camera's cull
 
 **Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_REFLECT_REACH=<cells>`, or Video ▸ Experimental ▸ *Reflection reach*, 0 to 4,
-under the world and planar reflections). `patches/ReflectionReach.cs`; the world
+(`KF2_REFLECT_REACH=<cells>`, 0 to 4; no longer a setting, and since 2026-09-28 the
+retained scene's alone: the planar walk has a cull of its own, "The planar walk is
+the reflection, with a cull of its own"). `patches/ReflectionReach.cs`; the world
 program's fade is `0072`, amended.
 
 Reported from play at the `fdat02` shore: the inside of a cavern round the cliff,
