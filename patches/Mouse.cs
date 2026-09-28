@@ -350,6 +350,13 @@ public static class Mouse
     /// </summary>
     internal static void Poll()
     {
+        // Pumped here, so every frame's motion is current to this point. Left to
+        // the present's pump and the pad read's, a tick frame sampled after the
+        // pacing wait and the rest before it: at 60 fps a steady turn drew 22, 1
+        // and 11 units a tick. See "The mouse was sampled at two points" in
+        // docs/INPUT.md.
+        if (Enabled && Captured) HostWindow.PumpInput(0.0);
+
         long now = Environment.TickCount64;
         var (dx, dy) = HostWindow.TakeMouseMotion();
         long gap = now - _polled;

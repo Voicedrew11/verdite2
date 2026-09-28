@@ -877,6 +877,34 @@ or a scripted sequence opens (the look routine never spends that motion, so it
 shows for up to three ticks and is then dropped), the mouse and a stick or turn
 key at once, turning across an area load or a death, and the head bob.
 
+### The mouse was sampled at two points
+
+Reported from play on the v0.3.3 draft: instant mouse look was very choppy at 60
+fps, and worse the lower the rate. The lead shows the tick's angle plus the
+motion not yet spent, so what reaches the screen each frame is exactly the
+motion the host had delivered by stage 8, and the host delivers motion only when
+it is pumped. Two things pumped it. The present does, inside the game's `VSync`,
+which comes **before** `FramePacing`'s wait at the frame boundary. The pad read
+(`PAD_dr`, `0007`'s `PumpInput`) does too, and by the measurement below it
+pumped on a tick frame, **after** the wait. A tick frame therefore
+saw motion up to a point about a wait later than every other frame, and the frame
+after it saw only the millisecond or so between that point and the next present.
+The wait is most of a frame at 60 fps and longer below it, which is why it got
+worse as the rate fell; at 144 fps it is a few milliseconds and barely showed.
+
+Measured with a synthetic mouse (a local test hack, not committed: a constant
+400 pixels a second added at each pump) in area 1: at 60 fps the view moved
+**22, 1 and 11** units over each tick's three frames, where 11.4 each is right.
+`Mouse.Poll` now pumps the host itself (`HostWindow.PumpInput`, made public by
+`0082`) before draining the motion, so every frame's sample is taken at stage 8.
+After: 11.4 a frame with an sd of 0.5 at 60 fps, the tick frames the same as the
+others; 22.7 a frame at 30 fps; 4.7 at 144 fps with an sd of 0.5. Pacing held
+at 60.0, 30.0 and 144.0 fps drawn at 20 ticks/s. Only while the pointer is
+captured, so it costs nothing otherwise; the pad read's pump is left as it was.
+
+Mechanism measured; **whether it now feels right at 60 fps is for a real mouse
+to judge**.
+
 ## The menu pointer
 
 Mouse look leaves the menus pad-only: Circle opens `func_80018E80`, and from

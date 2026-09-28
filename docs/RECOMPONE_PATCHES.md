@@ -930,6 +930,14 @@ Four files in the directory have no entry below:
   **no recompile**. See "Telling the player about a new release" in
   `docs/PACKAGING.md`.
 
+- `0082-expose-input-pump.patch` — `HostWindow.PumpInput` becomes public, so the
+  port can take in host events at the moment it samples the mouse. Motion was
+  pumped at the present, before the pacing wait, and by the pad read on a tick
+  frame, after it, so a tick frame's view carried most of a wait's extra motion
+  and the frame after it almost none: at 60 fps a steady turn drew 22, 1 and 11
+  units a tick. `Mouse.Poll` is the only caller. Input only — **no recompile**.
+  See "The mouse was sampled at two points" in `docs/INPUT.md`.
+
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
 game that stops calling `VSync`**, and that failure mode is always silent.
