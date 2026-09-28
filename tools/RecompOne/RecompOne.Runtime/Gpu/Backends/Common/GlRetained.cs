@@ -36,6 +36,13 @@ public sealed partial class GlCore
     uint _halvesTex;
     int _uwHalfGate;
 
+    // Authored lights, glows and mipmaps in the world program (0072 amended).
+    int _uwWorldLit, _uwLightN, _uwLightPos, _uwLightCol, _uwLightDir, _uwLightCentre, _uwLightH, _uwEmitOn, _uwMipOn;
+    int _uwLightShadow, _uwShadowToWorld, _uwShadowSize, _uwShadowOffset, _uwShadowBias, _uwShadowSoft;
+    uint _worldMipVbo, _worldDynMipVbo;
+    readonly float[] _wLightPos = new float[RemasterUniforms.MaxLights * 4], _wLightDir = new float[RemasterUniforms.MaxLights * 4];
+    int _wLightN;
+
     /// <summary>How far above a plane geometry must stand to be mirrored in it:
     /// the water itself, and anything lying in it, is not its own reflection.</summary>
     public static float PlaneBias = 8f;
@@ -58,6 +65,11 @@ public sealed partial class GlCore
         _uwHalfGate = L("uHalfGate");
         _uwAtmosOn = L("uAtmosOn"); _uwAtmosColour = L("uAtmosColour"); _uwAtmosShape = L("uAtmosShape");
         _uwAtmosSkip = L("uAtmosSkip");
+        _uwWorldLit = L("uWorldLit"); _uwLightN = L("uLightN"); _uwLightPos = L("uLightPos"); _uwLightCol = L("uLightCol");
+        _uwLightDir = L("uLightDir"); _uwLightCentre = L("uLightCentre"); _uwLightH = L("uLightH"); _uwEmitOn = L("uEmitOn");
+        _uwMipOn = L("uMipOn"); _uwLightShadow = L("uLightShadow"); _uwShadowToWorld = L("uShadowToWorld");
+        _uwShadowSize = L("uShadowSize"); _uwShadowOffset = L("uShadowOffset"); _uwShadowBias = L("uShadowBias");
+        _uwShadowSoft = L("uShadowSoft");
 
         _gl.UseProgram(_progWorld);
         void Unit(string n, int u) { int l = L(n); if (l >= 0) _gl.Uniform1(l, u); }
@@ -69,7 +81,7 @@ public sealed partial class GlCore
         if (tw >= 0) _gl.Uniform4(tw, 255, 255, 0, 0);
         F("uSetMask", 0f); I("uCheckMask", 0); I("uOpaqueDepth", 0); F("uDepthBias", 0f); F("uDepthSlope", 0f);
         I("uClipOn", 0); I("uLightN", 0); I("uEmitOn", 0); F("uMipOn", 0f); F("uTrueColor", 1f); F("uFluidN", 0f);
-        I("uMaskOn", 0); I("uHalfGate", 0); I("uAtmosOn", 0); I("uAtmosSkip", 0);
+        I("uMaskOn", 0); I("uHalfGate", 0); I("uAtmosOn", 0); I("uAtmosSkip", 0); I("uWorldLit", 0);
         InitShadowUniforms(_progWorld, false);
         if (_uwBlendOpaque >= 0) _gl.Uniform4(_uwBlendOpaque, 1f, 1f, 1f, 0f);
         int pb = L("uPosBias");
@@ -85,8 +97,10 @@ public sealed partial class GlCore
 
         _worldVbo = _gl.GenBuffer();
         _worldDynVbo = _gl.GenBuffer();
-        _worldVao = MakeWorldVao(_worldVbo);
-        _worldDynVao = MakeWorldVao(_worldDynVbo);
+        _worldMipVbo = _gl.GenBuffer();
+        _worldDynMipVbo = _gl.GenBuffer();
+        _worldVao = MakeWorldVao(_worldVbo, _worldMipVbo);
+        _worldDynVao = MakeWorldVao(_worldDynVbo, _worldDynMipVbo);
 
         _gl.UseProgram(progSsr);
         int SL(string n) => _gl.GetUniformLocation(progSsr, n);
@@ -102,7 +116,7 @@ public sealed partial class GlCore
         RetainedScene.Supported = _uSsrRetN >= 0 && _uSsrCubeOn >= 0 && _uwMaskOn >= 0;
     }
 
-    unsafe uint MakeWorldVao(uint vbo)
+    unsafe uint MakeWorldVao(uint vbo, uint mipVbo)
     {
         uint vao = _gl.GenVertexArray();
         _gl.BindVertexArray(vao);
@@ -116,6 +130,15 @@ public sealed partial class GlCore
         _gl.EnableVertexAttribArray(5); _gl.VertexAttribPointer(5, 3, VertexAttribPointerType.Float, false, st, (void*)40);
         _gl.EnableVertexAttribArray(6); _gl.VertexAttribIPointer(6, 1, VertexAttribIType.UnsignedInt, st, (void*)52);
         _gl.EnableVertexAttribArray(7); _gl.VertexAttribIPointer(7, 1, VertexAttribIType.UnsignedInt, st, (void*)56);
+        _gl.EnableVertexAttribArray(8); _gl.VertexAttribIPointer(8, 1, VertexAttribIType.UnsignedInt, st, (void*)60);
+        // The mip entries are the backend's, not the port's: a buffer of their own. A
+        // shadow's casters have none, and read the attribute's constant 0.
+        if (mipVbo != 0)
+        {
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, mipVbo);
+            _gl.EnableVertexAttribArray(9); _gl.VertexAttribIPointer(9, 1, VertexAttribIType.UnsignedInt, 4, (void*)0);
+        }
+        else _gl.VertexAttribI4(9, 0u, 0u, 0u, 0u);
         _gl.BindVertexArray(0);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         return vao;
@@ -139,7 +162,15 @@ public sealed partial class GlCore
         _chunksDrawn = _chunksTested = 0;
 
         UploadWorld(f);
+        bool mips = UpdateWorldMips(f);
         _gl.UseProgram(_progWorld);
+        if (_uwMipOn >= 0) _gl.Uniform1(_uwMipOn, mips ? 1f : 0f);
+        if (mips)
+        {
+            _gl.ActiveTexture(TextureUnit.Texture5);
+            _gl.BindTexture(TextureTarget.Texture2D, _mip!.Texture);
+        }
+        BeginWorldLights();
         _gl.Disable(EnableCap.ScissorTest);
         _gl.Disable(EnableCap.CullFace);
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -172,6 +203,7 @@ public sealed partial class GlCore
         }
 
         if (_uwHalfGate >= 0) _gl.Uniform1(_uwHalfGate, 0);
+        EndWorldLights();
         // Dual-source factors left set are an error for any draw into more than one
         // buffer, blending on or not -- the reflection pass's probe draws into two.
         _gl.BlendFunc(BlendingFactor.One, BlendingFactor.Zero);
@@ -494,6 +526,7 @@ public sealed partial class GlCore
                        float.PositiveInfinity);
             if (_uwMaskPlane >= 0)
                 _gl.Uniform4(_uwMaskPlane, _retPlanes[k * 4], _retPlanes[k * 4 + 1], _retPlanes[k * 4 + 2], _retPlanes[k * 4 + 3]);
+            SendWorldLights(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, cx, v.Cy, v.H, true, h);
             DrawWorldRanges(f);
             if (RetainedScene.Probe) CountFacing(f);
         }
@@ -588,6 +621,7 @@ public sealed partial class GlCore
                          false, 1);
             CullChunks(CubeFaces[i], v.CamX, v.CamY, v.CamZ, 0f, 0f, 0f, n * 0.5f, n * 0.5f, n * 0.5f, n, n, false, 0f,
                        v.H, cubeReach);
+            SendWorldLights(CubeFaces[i], v.CamX, v.CamY, v.CamZ, 0f, 0f, 0f, n * 0.5f, n * 0.5f, n * 0.5f, false, 0f);
             DrawWorldRanges(f);
         }
         _gl.BindTexture(TextureTarget.TextureCubeMap, _cubeTex);
@@ -632,6 +666,191 @@ public sealed partial class GlCore
             _gl.BindTexture(TextureTarget.TextureCubeMap, _cubeTex);
             _gl.ActiveTexture(TextureUnit.Texture0);
         }
+    }
+
+    // ---- authored lights, glows and mipmaps in the world program -----------------
+
+    /// <summary>The frame's lights and glows reach the retained scene: the corners carry
+    /// their RGBC while either is on, so with neither the draws are as they were.</summary>
+    void BeginWorldLights()
+    {
+        _wLightN = RetainedScene.Lit && RemasterUniforms.Active && _uwLightN >= 0 ? RemasterUniforms.LightCount : 0;
+        bool emit = RetainedScene.Lit && (SurfaceMaterial.AnyEmissive || (SurfaceMaterial.AnySpecular && _wLightN != 0)) && _uwEmitOn >= 0;
+        RetainedScene.LitLights = _wLightN;
+        RetainedScene.LitGlow = emit;
+        if (emit) BindMaterials();
+        _gl.UseProgram(_progWorld);
+        if (_uwEmitOn >= 0) _gl.Uniform1(_uwEmitOn, emit ? 1 : 0);
+        if (_uwWorldLit >= 0) _gl.Uniform1(_uwWorldLit, emit || _wLightN != 0 ? 1 : 0);
+        if (_uwLightN >= 0) _gl.Uniform1(_uwLightN, _wLightN);
+        if (_wLightN == 0) return;
+        _gl.Uniform4(_uwLightCol, (uint)_wLightN, new ReadOnlySpan<float>(RemasterUniforms.LightCol, 0, _wLightN * 4));
+        if (_uwLightShadow < 0) return;
+        int mask = Math.Max(_shadowReadyMask, 0);
+        for (int i = 0; i < RemasterUniforms.MaxLights; i++)
+        {
+            int sl = i < _wLightN ? RemasterUniforms.LightShadow[i] : -1;
+            _shadowSend[i] = sl >= 0 && sl < RemasterUniforms.MaxShadows && (mask & (1 << sl)) != 0 ? sl : -1;
+        }
+        _gl.Uniform1(_uwLightShadow, (uint)_shadowSend.Length, _shadowSend);
+        if (mask == 0) return;
+        _gl.Uniform1(_uwShadowSize, (float)Math.Clamp(RemasterUniforms.ShadowSize, 64, 4096));
+        _gl.Uniform1(_uwShadowOffset, RemasterUniforms.ShadowOffset);
+        _gl.Uniform1(_uwShadowBias, RemasterUniforms.ShadowBias);
+        _gl.Uniform1(_uwShadowSoft, RemasterUniforms.ShadowSoft);
+        for (int sl = 0; sl < RemasterUniforms.MaxShadows; sl++)
+            if ((mask & (1 << sl)) != 0)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture0 + ShadowUnit + sl);
+                _gl.BindTexture(TextureTarget.TextureCubeMap, _shadowBind[sl]);
+            }
+        _gl.ActiveTexture(TextureUnit.Texture0);
+    }
+
+    /// <summary>Back to the program as the shadow cubemaps draw with it: no light, no
+    /// glow, nothing shadowed.</summary>
+    void EndWorldLights()
+    {
+        if (_uwLightN >= 0) _gl.Uniform1(_uwLightN, 0);
+        if (_uwEmitOn >= 0) _gl.Uniform1(_uwEmitOn, 0);
+        if (_uwWorldLit >= 0) _gl.Uniform1(_uwWorldLit, 0);
+        if (_uwMipOn >= 0) _gl.Uniform1(_uwMipOn, 0f);
+        if (_uwLightShadow >= 0) _gl.Uniform1(_uwLightShadow, (uint)NoShadows.Length, NoShadows);
+        _wLightN = 0;
+    }
+
+    /// <summary>The lights in one view's space: what the view's rotation and translation
+    /// make of their world positions, mirrored first in <paramref name="planeY"/> for a
+    /// planar pass, whose geometry is mirrored the same way; and the projection the
+    /// shader rebuilds a fragment's position with. The shadow lookup turns a view
+    /// offset back to world axes with the same rotation, mirror included.</summary>
+    void SendWorldLights(ReadOnlySpan<float> r, double camX, double camY, double camZ, float tx, float ty, float tz,
+                         float cx, float cy, float h, bool mirror, float planeY)
+    {
+        if (_wLightN == 0) return;
+        for (int i = 0; i < _wLightN; i++)
+        {
+            int o = i * 4;
+            double wx = RemasterUniforms.LightWorldPos[o], wy = RemasterUniforms.LightWorldPos[o + 1], wz = RemasterUniforms.LightWorldPos[o + 2];
+            float dx = RemasterUniforms.LightWorldDir[o], dy = RemasterUniforms.LightWorldDir[o + 1], dz = RemasterUniforms.LightWorldDir[o + 2];
+            if (mirror) { wy = 2.0 * planeY - wy; dy = -dy; }
+            double px = wx - camX, py = wy - camY, pz = wz - camZ;
+            _wLightPos[o] = (float)(r[0] * px + r[1] * py + r[2] * pz) + tx;
+            _wLightPos[o + 1] = (float)(r[3] * px + r[4] * py + r[5] * pz) + ty;
+            _wLightPos[o + 2] = (float)(r[6] * px + r[7] * py + r[8] * pz) + tz;
+            _wLightPos[o + 3] = RemasterUniforms.LightWorldPos[o + 3];
+            _wLightDir[o] = r[0] * dx + r[1] * dy + r[2] * dz;
+            _wLightDir[o + 1] = r[3] * dx + r[4] * dy + r[5] * dz;
+            _wLightDir[o + 2] = r[6] * dx + r[7] * dy + r[8] * dz;
+            _wLightDir[o + 3] = RemasterUniforms.LightDir[o + 3];
+        }
+        _gl.Uniform4(_uwLightPos, (uint)_wLightN, new ReadOnlySpan<float>(_wLightPos, 0, _wLightN * 4));
+        _gl.Uniform4(_uwLightDir, (uint)_wLightN, new ReadOnlySpan<float>(_wLightDir, 0, _wLightN * 4));
+        if (_uwLightCentre >= 0) _gl.Uniform2(_uwLightCentre, cx, cy);
+        if (_uwLightH >= 0) _gl.Uniform1(_uwLightH, Math.Max(1f, h));
+        if (_uwShadowToWorld >= 0)
+        {
+            // GLSL reads the row-major array as its transpose, the view-to-world turn;
+            // a mirrored view's is that turn with Y flipped after it: R with column 1 negated.
+            Span<float> m = [r[0], mirror ? -r[1] : r[1], r[2], r[3], mirror ? -r[4] : r[4], r[5], r[6], mirror ? -r[7] : r[7], r[8]];
+            _gl.UniformMatrix3(_uwShadowToWorld, 1, false, m);
+        }
+    }
+
+    // The mip atlas entries of the static map, by distinct texture, and the frame's models.
+    readonly Dictionary<(int, int, uint), int> _mipKeyAt = new();
+    readonly List<(int TPage, int Clut, uint Rect)> _mipKeys = new();
+    uint[] _mipKeyEntry = [];
+    int[] _staticMipKey = [];
+    uint[] _staticMip = [], _dynMip = [];
+    int _mipKeysGen = -1;
+    bool _staticMipUploaded;
+
+    /// <summary>The atlas entry of every retained texture, looked up each present so the
+    /// entries the reflections use stay in the atlas and are rebuilt when VRAM under them
+    /// changes; the static buffer is uploaded again only when one moved. False when
+    /// mipmaps are off, and every entry then reads 0.</summary>
+    unsafe bool UpdateWorldMips(RetainedScene.Frame f)
+    {
+        bool on = RetainedScene.Mips && GteDepth.Mipmaps && _mip != null && _uwMipOn >= 0;
+        var st = RetainedScene.Static;
+        if (_mipKeysGen != RetainedScene.StaticGeneration)
+        {
+            _mipKeysGen = RetainedScene.StaticGeneration;
+            _mipKeyAt.Clear();
+            _mipKeys.Clear();
+            if (_staticMipKey.Length < st.Length) _staticMipKey = new int[st.Length];
+            for (int i = 0; i + 2 < st.Length; i += 3)
+            {
+                int k = MipKey(st[i]);
+                _staticMipKey[i] = _staticMipKey[i + 1] = _staticMipKey[i + 2] = k;
+            }
+            _mipKeyEntry = new uint[_mipKeys.Count];
+            if (_staticMip.Length < st.Length) _staticMip = new uint[st.Length];
+            Array.Clear(_staticMip);
+            _staticMipUploaded = false;
+        }
+        bool moved = !_staticMipUploaded;
+        for (int k = 0; k < _mipKeys.Count; k++)
+        {
+            var (tp, cl, rect) = _mipKeys[k];
+            uint e = on ? MipOf(tp, cl, rect) : 0u;
+            if (e != _mipKeyEntry[k]) { _mipKeyEntry[k] = e; moved = true; }
+        }
+        int found = 0;
+        foreach (var e in _mipKeyEntry) if (e != 0) found++;
+        RetainedScene.MipsFound = found;
+        RetainedScene.MipsKeys = _mipKeys.Count;
+        if (moved)
+        {
+            for (int i = 0; i < st.Length; i++)
+                _staticMip[i] = _staticMipKey[i] >= 0 ? _mipKeyEntry[_staticMipKey[i]] : 0u;
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldMipVbo);
+            if (_staticMip.Length == 0) _staticMip = new uint[1];
+            _gl.BufferData<uint>(BufferTargetARB.ArrayBuffer, new ReadOnlySpan<uint>(_staticMip, 0, Math.Max(st.Length, 1)), BufferUsageARB.StaticDraw);
+            _staticMipUploaded = true;
+        }
+        var d = f.SortedDynamic();
+        if (_dynMip.Length < Math.Max(d.Length, 1)) _dynMip = new uint[Math.Max(Math.Max(d.Length, 1), _dynMip.Length * 2)];
+        for (int i = 0; i + 2 < d.Length; i += 3)
+        {
+            uint e = on ? DynMip(d[i]) : 0u;
+            _dynMip[i] = _dynMip[i + 1] = _dynMip[i + 2] = e;
+        }
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldDynMipVbo);
+        _gl.BufferData<uint>(BufferTargetARB.ArrayBuffer, new ReadOnlySpan<uint>(_dynMip, 0, Math.Max(d.Length, 1)), BufferUsageARB.StreamDraw);
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        // Decode what the lookups queued before anything reads the atlas.
+        if (on && _mip!.HasPending) _mip.Process(_vram.SampleTexture);
+        return on;
+    }
+
+    int MipKey(in RetainedScene.Vertex v)
+    {
+        int tp = (int)(v.Texpage + 0.5f), cl = (int)(v.Clut + 0.5f);
+        if ((tp & 0x8000) != 0 || (v.Flags & RetainedScene.FlagRect) == 0) return -1;
+        var key = (tp & 0x1FF, (tp >> 7 & 3) == 2 ? 0 : cl, v.Rect);
+        if (_mipKeyAt.TryGetValue(key, out int k)) return k;
+        _mipKeyAt[key] = k = _mipKeys.Count;
+        _mipKeys.Add(key);
+        return k;
+    }
+
+    uint DynMip(in RetainedScene.Vertex v)
+    {
+        int tp = (int)(v.Texpage + 0.5f), cl = (int)(v.Clut + 0.5f);
+        if ((tp & 0x8000) != 0 || (v.Flags & RetainedScene.FlagRect) == 0) return 0u;
+        return MipOf(tp & 0x1FF, cl, v.Rect);
+    }
+
+    /// <summary>As <see cref="MipEntry"/> takes it, less the magnification test: a
+    /// scrolling texture has none, since its fraction is the shader's.</summary>
+    uint MipOf(int tpage, int clut, uint rect)
+    {
+        int u0 = (int)(rect & 0xFF), v0 = (int)((rect >> 8) & 0xFF);
+        int w = (int)((rect >> 16) & 0xFF) - u0 + 1, h = (int)(rect >> 24) - v0 + 1;
+        if (w <= 0 || h <= 0 || FluidOverlap(tpage, u0, v0, w, h)) return 0u;
+        return _mip!.Lookup(tpage, clut, rect, _frame);
     }
 
     // ---- GPU time, for the probe ------------------------------------------------

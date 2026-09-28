@@ -187,6 +187,8 @@ KF2_RETAINED_CUBESIZE=256              # a cubemap face's size in pixels
 KF2_RETAINED_CULL=0                    # draw the faces a mirror or a cube face sees from behind (culled by default, as the game culls them)
 KF2_RETAINED_GATE=0                    # reflect every map half, not only those the frame's own tile walk drew
 KF2_RETAINED_PROBE=1                   # the mesh and its check against the GTE's own vertices, the planes, GPU time per draw, chunks culled, and (with KF2_SSR_PROBE=1) the planar-vs-cubemap agreement
+KF2_RETAINED_LIT=0                     # leave authored lights and glows out of the reflections (in by default)
+KF2_RETAINED_MIPS=0                    # no mip atlas in the reflections, only the anisotropic taps (on by default)
 KF2_REMASTER=1                         # apply the working pack (off by default; the editor's checkbox saves it); Shift+E opens the editor
 KF2_REMASTER_PACK=dir                  # the working pack (packs/working)
 KF2_REMASTER_PROBE=1                   # a line every 2 s: the area, its fingerprint, what applied; a diff of the tile bytes when an area's fingerprint changes

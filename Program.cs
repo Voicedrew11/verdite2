@@ -748,7 +748,9 @@ Kf2.RetainedMap.Configure(Environment.GetEnvironmentVariable("KF2_RETAINED"),
                           Environment.GetEnvironmentVariable("KF2_RETAINED_CUBESIZE"),
                           Environment.GetEnvironmentVariable("KF2_RETAINED_CULL"),
                           Environment.GetEnvironmentVariable("KF2_RETAINED_GATE"),
-                          Environment.GetEnvironmentVariable("KF2_RETAINED_PROBE"));
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_PROBE"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_LIT"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_MIPS"));
 Kf2.RetainedMap.Install();
 
 // The remaster (docs/REMASTER.md): authored data from a pack, applied over the

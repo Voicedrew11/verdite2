@@ -18,6 +18,8 @@ namespace Kf2;
 ///     KF2_RETAINED_CULL=0     draw the faces a mirror or a cube face sees from behind
 ///     KF2_RETAINED_GATE=0     reflect every map half, not only those the frame's walk drew
 ///     KF2_RETAINED_PROBE=1    the mesh, the check against the game's own vertices, the planes, GPU time
+///     KF2_RETAINED_LIT=0      leave authored lights and glows out of the reflections
+///     KF2_RETAINED_MIPS=0     no mip atlas in the reflections, only the anisotropic taps
 ///
 /// **The map is data.** 80x80 tiles of two halves; a half names a mesh of the map's
 /// model bank, a height, a quarter-turn and a light record (<see cref="TileWalk"/>).
@@ -52,8 +54,10 @@ public static class RetainedMap
     public static bool Enabled => RetainedScene.Enabled;
 
     public static void Configure(string? on, string? planar, string? cube, string? cubeSize, string? cull, string? gate,
-                                 string? probe)
+                                 string? probe, string? lit = null, string? mips = null)
     {
+        RetainedScene.Lit = lit?.Trim() != "0";
+        RetainedScene.Mips = mips?.Trim() != "0";
         RetainedScene.CullBack = cull?.Trim() != "0";
         RetainedScene.HalfGate = gate?.Trim() != "0";
         if (!string.IsNullOrWhiteSpace(on)) _forced = on != "0";
@@ -103,7 +107,8 @@ public static class RetainedMap
     public static void AtWalk(CpuContext c, PSMemory mem)
     {
         if (!Ready) return;
-        ulong h = Hash(mem);
+        // The corners carry EvenFog's blends, so switching them is a rebuild too.
+        ulong h = Hash(mem) ^ ((EvenFog.Enabled ? 1ul : 0ul) | (EvenFog.Blend ? 2ul : 0ul) | (EvenFog.Light ? 4ul : 0ul)) << 61;
         if (h != _hash)
         {
             _hash = h;
@@ -187,14 +192,14 @@ public static class RetainedMap
     static readonly Dictionary<int, (float Dqa, float Dqb)> _cue = new();
 
     // What the last build made, for the probe.
-    static int _halves, _faces, _skippedModels;
+    static int _halves, _faces, _skippedModels, _lightBlended, _fogBlended, _corners;
     static double _buildMs;
     static long _builds;
 
     static void Build(CpuContext c, PSMemory mem)
     {
         _n = 0;
-        _halves = _faces = _skippedModels = 0;
+        _halves = _faces = _skippedModels = _lightBlended = _fogBlended = _corners = 0;
         _cue.Clear();
         RetainedPlanes.Clear();
         _table = mem.ReadU32(Banks);
@@ -251,6 +256,14 @@ public static class RetainedMap
         var (dqa, dqb) = Cue(c, mem, fog);
         float curve = fog >= 32000 ? 0f : fog < 0 ? 1f : 2f;
 
+        PolyAssembler.RetainedTile(rec, mem);
+        try { HalfFaces(c, mem, rec, model, tx, tz, half, rgbc, rot, fog, dqa, dqb, curve); }
+        finally { PolyAssembler.EndTileRetained(); }
+    }
+
+    static void HalfFaces(CpuContext c, PSMemory mem, uint rec, uint model, int tx, int tz, int half, uint rgbc,
+                          uint rot, int fog, float dqa, float dqb, float curve)
+    {
         double wx = tx * 2048 + 1024, wz = tz * 2048 + 1024;
         double wy = -(int)mem.ReadU8(rec + 1u) * 128;
 
@@ -262,7 +275,9 @@ public static class RetainedMap
         if (count > 4096) return;
 
         Span<float> px = stackalloc float[4], py = stackalloc float[4], pz = stackalloc float[4];
-        Span<uint> uv = stackalloc uint[4];
+        Span<uint> uv = stackalloc uint[4], col = stackalloc uint[4];
+        Span<float> qa = stackalloc float[4], qb = stackalloc float[4], qc = stackalloc float[4];
+        Span<short> lx = stackalloc short[4], lz = stackalloc short[4];
         for (int f = 0; f < (int)count; f++)
         {
             uint word = mem.ReadU32(face);
@@ -277,8 +292,8 @@ public static class RetainedMap
                 for (int k = 0; k < corners; k++)
                 {
                     uint v = verts + mem.ReadU16(idx + (uint)k * 2u);
-                    Rotate(rot, (short)mem.ReadU16(v), (short)mem.ReadU16(v + 2u), (short)mem.ReadU16(v + 4u),
-                           out float ox, out float oy, out float oz);
+                    lx[k] = (short)mem.ReadU16(v); lz[k] = (short)mem.ReadU16(v + 4u);
+                    Rotate(rot, lx[k], (short)mem.ReadU16(v + 2u), lz[k], out float ox, out float oy, out float oz);
                     px[k] = (float)(wx + ox); py[k] = (float)(wy + oy); pz[k] = (float)(wz + oz);
                 }
                 uv[0] = mem.ReadU16(at);
@@ -293,6 +308,15 @@ public static class RetainedMap
                 Gte.Write(6, rgbc);
                 Gte.NccsOp(12, true);
                 uint lit = Gte.Read(22);
+                // EvenFog's two blends, per corner, as the drawn tile has them.
+                for (int k = 0; k < corners; k++)
+                {
+                    col[k] = PolyAssembler.RetainedLight(mem, normal, lit, lx[k], lz[k]);
+                    (qa[k], qb[k], qc[k]) = CornerCue(c, mem, lx[k], lz[k], dqa, dqb, curve);
+                    _corners++;
+                    if (col[k] != lit) _lightBlended++;
+                    if (qa[k] != dqa || qb[k] != dqb) _fogBlended++;
+                }
 
                 int u0 = 255, v0 = 255, u1 = 0, v1 = 0;
                 for (int k = 0; k < corners; k++)
@@ -313,11 +337,11 @@ public static class RetainedMap
                     R = lit & 0xFF, G = (lit >> 8) & 0xFF, B = (lit >> 16) & 0xFF,
                     Clut = clut & 0x7FFF, Texpage = tpage,
                     Dqa = dqa, Dqb = dqb, Curve = curve,
-                    Rect = rect, Flags = flags,
+                    Rect = rect, Flags = flags, Rgbc = rgbc & 0xFFFFFFu,
                 };
                 // A quad is the strip 0,1,2 then 1,2,3, as the GPU draws it.
-                Emit(t, px, py, pz, uv, 0, 1, 2);
-                if (corners == 4) Emit(t, px, py, pz, uv, 1, 3, 2);
+                Emit(t, px, py, pz, uv, col, qa, qb, qc, 0, 1, 2);
+                if (corners == 4) Emit(t, px, py, pz, uv, col, qa, qb, qc, 1, 3, 2);
                 RetainedPlanes.Note(px, py, pz, corners, semi, mat, tpage, rect);
                 _faces++;
             }
@@ -326,20 +350,50 @@ public static class RetainedMap
     }
 
     static void Emit(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
-                     int a, int b, int c)
+                     Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, int a, int b, int c)
     {
         if (_n + 3 > _tris.Length) Array.Resize(ref _tris, _tris.Length * 2);
-        Put(t, px, py, pz, uv, a);
-        Put(t, px, py, pz, uv, b);
-        Put(t, px, py, pz, uv, c);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, a);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, b);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, c);
     }
 
-    static void Put(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv, int k)
+    static void Put(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
+                    Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, int k)
     {
         var v = t;
         v.X = px[k]; v.Y = py[k]; v.Z = pz[k];
         v.U = uv[k] & 0xFF; v.V = uv[k] >> 8;
+        v.R = col[k] & 0xFF; v.G = (col[k] >> 8) & 0xFF; v.B = (col[k] >> 16) & 0xFF;
+        v.Dqa = qa[k]; v.Dqb = qb[k]; v.Curve = qc[k];
         _tris[_n++] = v;
+    }
+
+    /// <summary>A corner's depth cue, blended between the fog words of the tiles around
+    /// it with EvenFog's weights. The drawn tile blends each word's weight after its
+    /// curve; a corner here carries one cue, so the words' DQA and DQB are blended
+    /// before it, which agrees wherever the words share a curve and a side of its knee.
+    /// A word with no fog weighs in as no cue.</summary>
+    static (float, float, float) CornerCue(CpuContext c, PSMemory mem, short vx, short vz, float dqa, float dqb, float curve)
+    {
+        Span<int> words = stackalloc int[4];
+        Span<long> k = stackalloc long[4];
+        if (!PolyAssembler.RetainedFog(vx, vz, words, k)) return (dqa, dqb, curve);
+        double a = 0, b = 0, total = 0;
+        long most = 0;
+        float bent = curve;
+        for (int i = 0; i < 4; i++)
+        {
+            if (k[i] == 0 || words[i] == PolyAssembler.EmptyWord) continue;
+            total += k[i];
+            if (words[i] >= 32000) continue;
+            var (wa, wb) = Cue(c, mem, words[i]);
+            a += k[i] * (double)wa;
+            b += k[i] * (double)wb;
+            if (k[i] > most) { most = k[i]; bent = words[i] < 0 ? 1f : 2f; }
+        }
+        if (total <= 0) return (dqa, dqb, curve);
+        return ((float)(a / total), (float)(b / total), bent);
     }
 
     /// <summary>A mesh corner turned as `func_80014B88` turns the view matrix for the
@@ -448,12 +502,18 @@ public static class RetainedMap
         Console.WriteLine($"[KF2] retained: {tris} static triangle(s) from {_faces} face(s) of {_halves} half/halves " +
                           $"({_skippedModels} refused as not a mesh), {_builds} build(s), last {_buildMs:F2} ms for {_lastWhy}; " +
                           $"ranges opaque {RetainedScene.StaticCount[0] / 3}, semi {RetainedScene.StaticCount[1] / 3}/" +
-                          $"{RetainedScene.StaticCount[2] / 3}/{RetainedScene.StaticCount[3] / 3}/{RetainedScene.StaticCount[4] / 3}");
+                          $"{RetainedScene.StaticCount[2] / 3}/{RetainedScene.StaticCount[3] / 3}/{RetainedScene.StaticCount[4] / 3}; " +
+                          $"of {_corners} corner(s), {_lightBlended} lit and {_fogBlended} fogged between records (EvenFog {(EvenFog.Enabled ? "on" : "off")}); " +
+                          $"into the draws {RetainedScene.LitLights} light(s), glow {(RetainedScene.LitGlow ? "on" : "off")}, " +
+                          $"{RetainedScene.MipsFound} of {RetainedScene.MipsKeys} static texture(s) in the mip atlas");
         Console.WriteLine($"[KF2] retained: check {_checked} corner(s), {(_checked == 0 ? 0 : 100.0 * _within / _checked):F2}% within 1 px, " +
                           $"mean {(_checked == 0 ? 0 : _sumErr / _checked):F3} px, worst {_worst} px; models {_mChecked} corner(s), " +
                           $"{(_mChecked == 0 ? 0 : 100.0 * _mWithin / _mChecked):F2}% within 1 px, worst {_mWorst} px");
         _mChecked = _mWithin = _mWorst = 0;
         Console.WriteLine($"[KF2] retained: {RetainedPlanes.Describe()}");
+        Console.WriteLine($"[KF2] retained: models captured by table: creature {RetainedModels.ByKind[0]}, object {RetainedModels.ByKind[1]}, " +
+                          $"effect {RetainedModels.ByKind[2]}, sprite {RetainedModels.ByKind[3]}; faces no capture reads: " +
+                          (RetainedModels.Unread.Count == 0 ? "none" : string.Join(", ", RetainedModels.Unread.Select(p => $"0x{p.Key:X2} x{p.Value}"))));
         long facing = RetainedScene.FrontPixels + RetainedScene.BackPixels;
         Console.WriteLine($"[KF2] retained: faces {(RetainedScene.CullBack ? "culled" : "not culled")}; " +
                           (RetainedScene.CullBack

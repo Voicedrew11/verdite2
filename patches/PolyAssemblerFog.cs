@@ -64,6 +64,37 @@ public static partial class PolyAssembler
         _tileFog = _tileLight = false;
     }
 
+    // ---- the retained map's share: the same blends, at build time -------------------
+
+    /// <summary>The retained map reads a half as <c>func_80031950</c> would draw it:
+    /// between this and <see cref="EndTile"/>, <see cref="RetainedLight"/> and
+    /// <see cref="RetainedFog"/> answer for its corners.</summary>
+    internal static void RetainedTile(uint half, IMemory m) => BeginTile(half, m);
+
+    /// <summary>A corner's lit colour, blended between the records around it as the
+    /// drawn tile's is; <paramref name="own"/> where they light alike.</summary>
+    internal static uint RetainedLight(PSMemory mem, uint normal, uint own, short vx, short vz)
+        => _tileLight ? BlendLight(mem, normal, own, vx, vz) : own;
+
+    /// <summary>The fog words weighing in at a corner and their weights, own first;
+    /// false where every one is the tile's own. <see cref="EmptyWord"/> is no record.</summary>
+    internal static bool RetainedFog(short vx, short vz, Span<int> words, Span<long> weights)
+    {
+        if (!_tileFog) return false;
+        TileWeights(vx, vz, out long kOwn, out long kX, out long kZ, out long kD, out int iX, out int iZ, out int iD);
+        words[0] = _tileWord; weights[0] = kOwn;
+        words[1] = _nearWords[iX]; weights[1] = kX;
+        words[2] = _nearWords[iZ]; weights[2] = kZ;
+        words[3] = _nearWords[iD]; weights[3] = kD;
+        for (int i = 1; i < 4; i++)
+            if (weights[i] != 0 && words[i] != _tileWord) return true;
+        return false;
+    }
+
+    internal const int EmptyWord = Empty;
+
+    internal static void EndTileRetained() => EndTile();
+
     static uint Record(PSMemory mem, uint half) => LightRecords + ((uint)Peek32(mem, half + 4u) & 0x3Fu) * 0x68u;
 
     /// <summary>The colour matrix (+0x50, nine shorts) and back colour (+0x62, three bytes).</summary>

@@ -1109,6 +1109,17 @@ Four files in the directory have no entry below:
   and the game's visibility flood draws far fewer. The probe counts the
   back-facing pixels, the undrawn halves' and the old cull's visible drops. The amendment is the second diff in the patch file. See "What the
   mirror showed that it should not, and the fog it dropped" in `docs/RENDERING.md`.
+  Since amended: `0071`'s authored lights and glows reach the world program. A
+  corner carries the RGBC the game lit it from (`Vertex.Rgbc`, attribute 8; 0 leaves
+  it out), `RemasterUniforms.LightWorldPos`/`LightWorldDir` hold the lights in world
+  space, and `SendWorldLights` turns them into each mirror's and cube face's view
+  (mirrored first for a plane), with the projection `authored()` rebuilds a fragment
+  with and the shadow lookup's view-to-world turn. And the mip atlas (`0060`): an
+  entry per distinct static texture, looked up every present so it stays resident,
+  in a buffer of its own (attribute 9) re-uploaded only when an entry moves; the
+  frame's models' per present. `RetainedScene.Lit` and `Mips` are the comparisons.
+  The third diff in the patch file. See "Lights, fog blends and mipmaps in the
+  reflections" in `docs/RENDERING.md`.
 
 - `0073-texture-replacement-on-the-port-path.patch` — upstream's texture packs
   (`Assets/`) made to work in this port, and a way to see what they would key.

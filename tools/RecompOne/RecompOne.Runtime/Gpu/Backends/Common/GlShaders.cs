@@ -1213,6 +1213,10 @@ internal static class GlShaders
         layout(location = 5) in vec3  inCue;
         layout(location = 6) in uint  inRect;
         layout(location = 7) in uint  inFlags;
+        // The colour the game lit the corner from, which a light and a glow scale; and
+        // its mip atlas entry (0060), 0 for none.
+        layout(location = 8) in uint  inRgbc;
+        layout(location = 9) in uint  inMip;
 
         invariant gl_Position;
 
@@ -1246,6 +1250,8 @@ internal static class GlShaders
         // 2 only the others (the probe's count). Models carry no half.
         uniform usampler2D uHalves;
         uniform int uHalfGate;
+        // Authored lights or a glow are drawn: the corner carries its RGBC to them.
+        uniform int uWorldLit;
 
         float cueKeep(float z) {
             int curve = int(inCue.z + 0.5);
@@ -1291,7 +1297,11 @@ internal static class GlShaders
                 vFog = 0.0;
                 vLight = 0u;
             }
-            vTex = uvec2(inRect, inFlags & 0x80000000u);
+            if (uWorldLit != 0 && inRgbc != 0u) {
+                if (vLight == 0u) { vLit = inColorF; vFog = 0.0; }
+                vLight |= inRgbc & 0xFFFFFFu;
+            }
+            vTex = uvec2(inRect, (inFlags & 0x80000000u) | inMip);
             vMat = inFlags & 255u;
             vDither = 0;
             vRepClut = 0;

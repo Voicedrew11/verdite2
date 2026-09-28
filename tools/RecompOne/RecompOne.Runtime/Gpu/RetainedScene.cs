@@ -39,6 +39,10 @@ public static class RetainedScene
         /// <summary>Bit 31 the rectangle is valid, bit 10 semi-transparent, bits 8-9
         /// the blend mode, the low byte the material.</summary>
         public uint Flags;
+        /// <summary>The colour the game lit this corner from (the GTE's RGBC, low 24
+        /// bits), which an authored light and a glow scale as they do the game's own
+        /// face; 0 leaves the corner out of both.</summary>
+        public uint Rgbc;
     }
 
     public const uint FlagRect = 0x80000000u, FlagSemi = 0x400u;
@@ -101,6 +105,16 @@ public static class RetainedScene
 
     /// <summary>The probe's switch: GPU time per draw, read back with a query.</summary>
     public static bool Probe;
+
+    /// <summary>The frame's authored lights and glows drawn into the reflections, and
+    /// its textures filtered through the mip atlas as the frame's are. Off, each is
+    /// left out as it was before either was drawn (the comparisons).</summary>
+    public static bool Lit = true, Mips = true;
+
+    /// <summary>The last present's: lights sent to the world draws, whether a glow was
+    /// on, and the retained textures with an atlas entry of those that could have one.</summary>
+    public static int LitLights, MipsFound, MipsKeys;
+    public static bool LitGlow;
 
     // ---- the static map ----------------------------------------------------------
 

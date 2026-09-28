@@ -296,7 +296,7 @@ public sealed partial class GlCore
         {
             _uwOpaqueDepth = _gl.GetUniformLocation(_progWorld, "uOpaqueDepth");
             _casterVbo = _gl.GenBuffer();
-            _casterVao = MakeWorldVao(_casterVbo);
+            _casterVao = MakeWorldVao(_casterVbo, 0);
             _shadowReadFbo = _gl.GenFramebuffer();
             _gl.BindFramebuffer(FramebufferTarget.Framebuffer, _shadowReadFbo);
             _gl.DrawBuffer(DrawBufferMode.None);

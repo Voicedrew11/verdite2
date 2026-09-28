@@ -2562,18 +2562,74 @@ Render scale 5, 16:9, 144 fps, this machine (RX 9070 XT), `KF2_RETAINED_PROBE=1`
   under `KF2_GLDEBUG=1`.
 
 **Not reflected**: billboards and effects (their assembler is not captured), the
-arm and anything else drawn outside the two walks, subtractive faces; authored
-lights and glows (the world program runs with neither); `EvenFog`'s and
-`EvenLight`'s blends between records (the retained colours are the assembler's own,
-flat per face); mipmaps (the atlas entry is per batch; the anisotropic taps are
-kept). The cubemap sees from the camera: something the reflecting point would see
-and the camera cannot is missing from it, where a plane has it.
+arm and anything else drawn outside the two walks, subtractive faces. The cubemap
+sees from the camera: something the reflecting point would see and the camera
+cannot is missing from it, where a plane has it.
 
 **What still has to be judged by eye**: all of it — whether the planar water and a
 mirror floor read right and hold still while turning, whether the cubemap's
 reflections on walls and props read as reflections or as a pasted image, the seam
 where a plane meets the cubemap, what a miss reflecting nothing looks like against
 the old sky fallback, and roughness through the cube's mips.
+
+### Lights, fog blends and mipmaps in the reflections
+
+**Mechanism measured; picture never judged.** Three things the frame had and the
+reflections did not, amended into `0072`:
+
+- **Authored lights and glows** (`0071`). The world program is `PrimFs`, so it
+  already had `authored()`; what it lacked was the corner's RGBC, which a light
+  scales, and the lights in its own view. A corner carries the RGBC now
+  (`Vertex.Rgbc`; 0 leaves it out), `Lights` publishes each light's world position
+  and direction beside the view-space ones, and `SendWorldLights` turns them into
+  each mirror's view (mirrored in the plane first, as the geometry is) and each cube
+  face's, with that view's centre and `H` for the shader's position rebuild and the
+  view-to-world turn for the shadow lookup. `KF2_RETAINED_LIT=0` leaves them out.
+- **`EvenFog`'s and `EvenLight`'s blends** (`patches/PolyAssemblerFog.cs`). The
+  retained map is built by reading each half as `func_80031950` would draw it, so
+  the build now brackets a half with the same `BeginTile`/`EndTile` and asks the
+  same weights per corner: the lit colour blended between the light records around
+  it, and the fog words' DQA and DQB blended before the curve (the drawn tile blends
+  after it, one curve per word; the two agree wherever the words share a curve and a
+  side of its knee). Switching `EvenFog` rebuilds the map. It follows `EvenFog`'s own
+  switches, which are the comparison.
+- **The mip atlas** (`0060`). The frame's entry is per batch; the retained map is
+  one buffer, so each distinct static texture is looked up every present (which is
+  also what keeps it resident) and the entries go in a buffer of their own, uploaded
+  again only when one moves. A scrolling texture has none. `KF2_RETAINED_MIPS=0`.
+
+Measured on the pinned area-1 view (editor camera at `edit on`, slot 2, a pack
+making three tiles `mirror`, reflectivity 1, 16:9, `KF2_RETAINED=1`), hashed with
+`snap`:
+
+- **Off is the picture it was.** With all three parts off (`KF2_RETAINED_LIT=0
+  KF2_RETAINED_MIPS=0 KF2_EVENFOG_BLEND=0 KF2_EVENLIGHT=0`), the build before the
+  amendment and the build after both hash `20bef7a6295be72f`; the reflection is in
+  that view, since reflections off hash `210d55698c875fb8`, a difference of 622,446
+  pixels.
+- **Lights.** A light added at the camera (`light add test here`, radius 20000,
+  intensity 3, shadowed): switching `KF2_RETAINED_LIT` changes 622,496 pixels, all
+  but three of them the reflection's, mean 50.7 levels; the reflection's pixels
+  average 108.4 lit against 57.6 unlit, where the rest of the lit picture averages
+  123.4. A light 1-2 tiles off to the side changed no reflected pixel at all, which
+  is the reach of its radius, not a fault. No glow was on in either run.
+- **Blends.** Of 164,923 corners, 8,954 lit and 1,161 fogged between records. Not
+  separated from the frame's own blends in a picture, since the one switch turns
+  both.
+- **Mipmaps.** 376 of 1,331 static textures in the atlas; 231,948 pixels move, all
+  but 804 in the reflection, mean 0.94 levels, at most 10. **Not reproducible run
+  to run** as the other hashes are: two boots with mipmaps on hashed differently
+  (`1289bfa182379cbc`, `3c7c2cb4a00b03a3`), where every off and lit hash repeated.
+  Which entries are resident when the snap is taken is the likely reason, and not
+  measured.
+- The first run crashed on an empty mip buffer;
+  the upload is at least one entry now. No GL errors, no exceptions in any run.
+
+**Billboards are not reached at all.** The probe counts captured models by the table
+they came from: `creature 0, object 3916, effect 0, sprite 0`, and no face of a kind
+the capture does not read. So a billboard is not a model the capture drops faces of;
+it never reaches the lit assembler that `RetainedModels` sits on, and reflecting one
+means capturing its own assembler.
 
 ## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
 

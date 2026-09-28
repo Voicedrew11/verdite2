@@ -412,6 +412,10 @@ public sealed class Lights : IRemasterFeature
             RemasterUniforms.LightPos[o + 1] = p.Y;
             RemasterUniforms.LightPos[o + 2] = p.Z;
             RemasterUniforms.LightPos[o + 3] = l.Radius;
+            RemasterUniforms.LightWorldPos[o] = l.Position.X;
+            RemasterUniforms.LightWorldPos[o + 1] = l.Position.Y;
+            RemasterUniforms.LightWorldPos[o + 2] = l.Position.Z;
+            RemasterUniforms.LightWorldPos[o + 3] = l.Radius;
             byte from = _frameSrc[_order[k].Index];
             float s = l.Intensity * Flicker(l, t, _order[k].Index) * (from != 0 ? Surfaces.Pulse[from] : 1f);
             RemasterUniforms.LightCol[o] = l.Colour.X * s;
@@ -419,7 +423,11 @@ public sealed class Lights : IRemasterFeature
             RemasterUniforms.LightCol[o + 2] = l.Colour.Z * s;
             if (l.Spot)
             {
-                var d = v.Rotate(l.Direction.LengthSquared() > 1e-8f ? Vector3.Normalize(l.Direction) : Vector3.UnitY);
+                var wd = l.Direction.LengthSquared() > 1e-8f ? Vector3.Normalize(l.Direction) : Vector3.UnitY;
+                RemasterUniforms.LightWorldDir[o] = wd.X;
+                RemasterUniforms.LightWorldDir[o + 1] = wd.Y;
+                RemasterUniforms.LightWorldDir[o + 2] = wd.Z;
+                var d = v.Rotate(wd);
                 float outer = Math.Clamp(l.ConeOuter, 1f, 89f), inner = Math.Clamp(l.ConeInner, 0f, outer);
                 RemasterUniforms.LightCol[o + 3] = MathF.Cos(inner * MathF.PI / 180f);
                 RemasterUniforms.LightDir[o] = d.X;

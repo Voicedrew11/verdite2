@@ -40,6 +40,11 @@ static class RetainedModels
 
     public static long Models, Faces;
 
+    /// <summary>Models captured by the table they came from, and faces of a kind no
+    /// capture reads, by command byte; never reset.</summary>
+    public static readonly long[] ByKind = new long[4];
+    public static readonly Dictionary<uint, long> Unread = new();
+
     /// <summary>One model: its header, normals and faces as the lit assembler found
     /// them; <paramref name="abr"/> the blend mode a blended submit forces, or
     /// <see cref="uint.MaxValue"/> for an opaque one.</summary>
@@ -80,7 +85,7 @@ static class RetainedModels
                 default: corners = 0; gouraud = false; break;
             }
             face = f + ((word >> 6) & 0x3FCu);
-            if (corners == 0) continue;
+            if (corners == 0) { Unread[cmd] = Unread.GetValueOrDefault(cmd) + 1; continue; }
 
             for (int k = 0; k < corners; k++)
             {
@@ -112,6 +117,7 @@ static class RetainedModels
                 Clut = clut & 0x7FFF, Texpage = tpage, Dqa = dqa, Dqb = dqb, Curve = curve,
                 Rect = (uint)u0 | (uint)v0 << 8 | (uint)u1 << 16 | (uint)v1 << 24,
                 Flags = RetainedScene.FlagRect | mat | solid | (semi ? RetainedScene.FlagSemi | ((tpage >> 5) & 3u) << 8 : 0u),
+                Rgbc = lit ? rgbc & 0xFFFFFFu : 0u,
             };
             if (n + 6 > _tris.Length) Array.Resize(ref _tris, _tris.Length * 2);
             Put(ref n, t, wx, wy, wz, uv, col, 0); Put(ref n, t, wx, wy, wz, uv, col, 1); Put(ref n, t, wx, wy, wz, uv, col, 2);
@@ -120,6 +126,7 @@ static class RetainedModels
         }
         RetainedScene.AddDynamic(_tris.AsSpan(0, n));
         Models++;
+        ByKind[(int)ModelWalk.SubmitKind]++;
     }
 
     /// <summary>One model the object walk hands the tile assemblers
@@ -180,6 +187,7 @@ static class RetainedModels
                 Clut = clut & 0x7FFF, Texpage = tpage, Dqa = dqa, Dqb = dqb, Curve = curve,
                 Rect = (uint)u0 | (uint)v0 << 8 | (uint)u1 << 16 | (uint)v1 << 24,
                 Flags = RetainedScene.FlagRect | mat | noShadow | (semi ? RetainedScene.FlagSemi | ((tpage >> 5) & 3u) << 8 : 0u),
+                Rgbc = RetainedMap.ReflectionsReady ? rgbc & 0xFFFFFFu : 0u,
             };
             if (n + 6 > _tris.Length) Array.Resize(ref _tris, _tris.Length * 2);
             Put(ref n, t, wx, wy, wz, uv, col, 0); Put(ref n, t, wx, wy, wz, uv, col, 1); Put(ref n, t, wx, wy, wz, uv, col, 2);
@@ -188,6 +196,7 @@ static class RetainedModels
         }
         RetainedScene.AddDynamic(_tris.AsSpan(0, n));
         Models++;
+        ByKind[(int)ModelWalk.SubmitKind]++;
     }
 
     /// <summary>A model corner to world space. A model the walk placed in the world

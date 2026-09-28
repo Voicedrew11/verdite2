@@ -38,6 +38,13 @@ public static class RemasterUniforms
     public static readonly float[] LightCol = new float[MaxLights * 4];
     public static readonly float[] LightDir = new float[MaxLights * 4];
 
+    /// <summary>The same lights in world space, for a view other than the frame's (the
+    /// retained scene's mirrors and cube faces, 0072): position and radius, and the
+    /// spot's direction; the colours and cones are <see cref="LightCol"/> and the
+    /// <c>w</c> of <see cref="LightDir"/>.</summary>
+    public static readonly float[] LightWorldPos = new float[MaxLights * 4];
+    public static readonly float[] LightWorldDir = new float[MaxLights * 4];
+
     public static int LightCount { get; private set; }
 
     /// <summary>Bumped by <see cref="Publish"/>; a batch drawn under one generation is
