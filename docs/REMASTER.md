@@ -2393,6 +2393,11 @@ feature complete rather than section by section.
 
 ### Phase 8: later
 
+**Deferred (2026-09-28).** The remaster plan adds no custom meshes and makes no
+texture pack, so meshes the author supplies, replacements in the retained scene,
+normal and roughness maps (`0075`) and the GPU id buffer (`0076`) wait until one of
+those is wanted. What is below is the list as it stands.
+
 - port-drawn props: the area's own object models first (see "Phase 8, the first
   slice"), meshes the author supplies after;
 - ~~opt-in object and creature placement~~, dropped (see "Edited with a warning:
