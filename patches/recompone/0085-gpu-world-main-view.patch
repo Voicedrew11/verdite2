@@ -4671,3 +4671,312 @@ index 42c0f26..0c784e0 100644
      /// <summary>0085. Whether a packet draws: a polygon, a line or a rectangle.</summary>
      private static bool Draws(IMemory m, uint addr)
      {
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
+index 3cc4e8a..8a2b768 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlRetained.cs
+@@ -75,6 +75,7 @@ public sealed partial class GlCore
+         void Unit(string n, int u) { int l = L(n); if (l >= 0) _gl.Uniform1(l, u); }
+         Unit("uVram", 0); Unit("uDest", 1); Unit("uExtTex", 2); Unit("uRepTex", 3); Unit("uRepClut", 4);
+         Unit("uMip", 5); Unit("uMatTable", MatUnit); Unit("uMaskSurface", MaskUnit); Unit("uHalves", HalvesUnit);
++        Unit("uRecords", RecordsUnit);
+         void I(string n, int v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
+         void F(string n, float v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
+         int tw = L("uTexWindow");
+@@ -137,6 +138,7 @@ public sealed partial class GlCore
+         _gl.EnableVertexAttribArray(6); _gl.VertexAttribIPointer(6, 1, VertexAttribIType.UnsignedInt, st, (void*)52);
+         _gl.EnableVertexAttribArray(7); _gl.VertexAttribIPointer(7, 1, VertexAttribIType.UnsignedInt, st, (void*)56);
+         _gl.EnableVertexAttribArray(8); _gl.VertexAttribIPointer(8, 1, VertexAttribIType.UnsignedInt, st, (void*)60);
++        _gl.EnableVertexAttribArray(10); _gl.VertexAttribIPointer(10, 1, VertexAttribIType.UnsignedInt, st, (void*)64);
+         // The mip entries are the backend's, not the port's: a buffer of their own. A
+         // shadow's casters have none, and read the attribute's constant 0.
+         if (mipVbo != 0)
+@@ -235,9 +237,38 @@ public sealed partial class GlCore
+         _gl.Uniform2(_uwAtmosShape, RemasterUniforms.FogPower, RemasterUniforms.FogMax);
+     }
+ 
++    // 0085. The light records the static map is lit from, 13 RGBA32I texels a record.
++    const int RecordsUnit = 21;
++    uint _recordsTex;
++    int _recordsGen = -1;
++
++    unsafe void UploadRecords()
++    {
++        if (_recordsGen == RetainedScene.RecordGeneration) return;
++        _recordsGen = RetainedScene.RecordGeneration;
++        _gl.ActiveTexture(TextureUnit.Texture0 + RecordsUnit);
++        if (_recordsTex == 0)
++        {
++            _recordsTex = _gl.GenTexture();
++            _gl.BindTexture(TextureTarget.Texture2D, _recordsTex);
++            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba32i, RetainedScene.RecordInts / 4,
++                RetainedScene.RecordCount, 0, PixelFormat.RgbaInteger, PixelType.Int, null);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
++            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
++        }
++        else _gl.BindTexture(TextureTarget.Texture2D, _recordsTex);
++        fixed (int* p = RetainedScene.Records)
++            _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, RetainedScene.RecordInts / 4, RetainedScene.RecordCount,
++                PixelFormat.RgbaInteger, PixelType.Int, p);
++        // Nothing else takes this unit, so the records stay bound for every world draw.
++        _gl.ActiveTexture(TextureUnit.Texture0);
++        RetainedScene.RecordUploads++;
++    }
++
+     /// <summary>The static map, when it was rebuilt since the last upload.</summary>
+     void UploadStatic()
+     {
++        UploadRecords();
+         if (_worldGen == RetainedScene.StaticGeneration) return;
+         var s = RetainedScene.Static;
+         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldVbo);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index ec4cd98..6fdbbcd 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -1449,6 +1449,9 @@ internal static class GlShaders
+         // its mip atlas entry (0060), 0 for none.
+         layout(location = 8) in uint  inRgbc;
+         layout(location = 9) in uint  inMip;
++        // 0085. A static map corner lit here from the light records (bit 31): see
++        // RetainedScene.Vertex.Light.
++        layout(location = 10) in uint inLight;
+ 
+         invariant gl_Position;
+ 
+@@ -1518,6 +1521,101 @@ internal static class GlShaders
+         uniform vec3 uLcmB;
+         //@model
+ 
++        // 0085. The area's light records, 52 ints each in 13 texels (RetainedScene.Records):
++        // the light matrix per quarter turn, the colour matrix, the back colour, the fog
++        // word, its DQA and DQB, and its curve. A corner is lit as the tile assembler
++        // lights its face (NormalColorCol) and blended as EvenFog blends it, in the
++        // same integers, so a record the game rewrites is an upload and not a rebuild.
++        uniform isampler2D uRecords;
++        int recInt(int r, int i) { return texelFetch(uRecords, ivec2(i >> 2, r), 0)[i & 3]; }
++
++        // Round half away from zero of (k . v) / t, exactly, as the CPU's double does:
++        // k up to 4096^2 and v a short do not fit an int product, so k is split in two
++        // and a float guess is corrected by an exact test of the half-way bounds.
++        int mixExact(ivec4 k, ivec4 v, int t) {
++            ivec4 kh = k >> 12, kl = k & 4095;
++            int hi = kh.x * v.x + kh.y * v.y + kh.z * v.z + kh.w * v.w;
++            int lo = kl.x * v.x + kl.y * v.y + kl.z * v.z + kl.w * v.w;
++            float q = (float(hi) * 4096.0 + float(lo)) / float(t);
++            int sgn = q < 0.0 ? -1 : 1;
++            hi *= sgn; lo *= sgn;
++            int c = int(floor(abs(q) + 0.5));
++            // D = 2S - (2c-1)t, in [0, 2t) when c is right.
++            int m = 2 * c - 1;
++            int d = (2 * hi - m * (t >> 12)) * 4096 + (2 * lo - m * (t & 4095));
++            if (d < 0) c--;
++            else if (d >= 2 * t) c++;
++            return sgn * c;
++        }
++
++        bool sameLight(int a, int b) {
++            for (int i = 9; i < 12; i++)
++                if (texelFetch(uRecords, ivec2(i, a), 0) != texelFetch(uRecords, ivec2(i, b), 0)) return false;
++            return true;
++        }
++
++        void recordLit(uint l, vec3 normal, float ax, float az, uint rgbc, out vec3 color, out vec3 cue) {
++            int own = int(l & 63u), rot = int((l >> 6) & 3u);
++            ivec3 nb = ivec3(int((l >> 8) & 63u), int((l >> 14) & 63u), int((l >> 20) & 63u));
++            // TileWeights: own, along X, along Z, the diagonal; 0 where there is no half.
++            int iax = int(ax + 0.5), iaz = int(az + 0.5);
++            ivec4 k = ivec4((4096 - iax) * (4096 - iaz),
++                            (l & (1u << 26)) != 0u ? iax * (4096 - iaz) : 0,
++                            (l & (1u << 27)) != 0u ? (4096 - iax) * iaz : 0,
++                            (l & (1u << 28)) != 0u ? iax * iaz : 0);
++            ivec4 rec = ivec4(own, nb);
++            int t = k.x + k.y + k.z + k.w;
++
++            // The light: the own record's light matrix; the colour matrix and back
++            // colour blended where a neighbour weighing in lights otherwise.
++            bool mixL = (l & 0x40000000u) != 0u
++                && ((k.y != 0 && !sameLight(nb.x, own)) || (k.z != 0 && !sameLight(nb.y, own))
++                    || (k.w != 0 && !sameLight(nb.z, own)));
++            ivec3 n = ivec3(normal);
++            ivec3 a;
++            for (int j = 0; j < 3; j++) {
++                int v = recInt(own, rot * 9 + 3 * j) * n.x + recInt(own, rot * 9 + 3 * j + 1) * n.y
++                      + recInt(own, rot * 9 + 3 * j + 2) * n.z;
++                a[j] = clamp(v >> 12, 0, 0x7FFF);
++            }
++            for (int c = 0; c < 3; c++) {
++                int bk = recInt(own, 45 + c);
++                if (mixL) bk = mixExact(k, ivec4(bk, recInt(rec.y, 45 + c), recInt(rec.z, 45 + c), recInt(rec.w, 45 + c)), t);
++                int v = bk << 12;
++                for (int j = 0; j < 3; j++) {
++                    int i = 36 + 3 * c + j;
++                    int m = recInt(own, i);
++                    if (mixL) m = mixExact(k, ivec4(m, recInt(rec.y, i), recInt(rec.z, i), recInt(rec.w, i)), t);
++                    v += m * a[j];
++                }
++                int ir = clamp(v >> 12, 0, 0x7FFF);
++                int mac = ((int((rgbc >> uint(8 * c)) & 255u) * ir) << 4) >> 12;
++                color[c] = float(clamp(mac >> 4, 0, 255));
++            }
++
++            // The fog: the words' DQA and DQB blended where a neighbour weighing in
++            // has another word; a word with no fog weighs in as no cue.
++            int word = recInt(own, 48);
++            cue = vec3(float(recInt(own, 49)), float(recInt(own, 50)), float(recInt(own, 51)));
++            bool mixF = (l & 0x20000000u) != 0u
++                && ((k.y != 0 && recInt(nb.x, 48) != word) || (k.z != 0 && recInt(nb.y, 48) != word)
++                    || (k.w != 0 && recInt(nb.z, 48) != word));
++            if (mixF) {
++                float qa = 0.0, qb = 0.0, bent = cue.z;
++                int most = 0;
++                for (int i = 0; i < 4; i++) {
++                    if (k[i] == 0) continue;
++                    int w = recInt(rec[i], 48);
++                    if (w >= 32000) continue;
++                    float f = float(k[i]) / float(t);
++                    qa += f * float(recInt(rec[i], 49));
++                    qb += f * float(recInt(rec[i], 50));
++                    if (k[i] > most) { most = k[i]; bent = w < 0 ? 1.0 : 2.0; }
++                }
++                cue = vec3(qa, qb, bent);
++            }
++        }
++
+         float cueKeep(vec3 cue, float z) {
+             int curve = int(cue.z + 0.5);
+             if (uFogOn == 0 || curve == 0) return 1.0;
+@@ -1531,6 +1629,7 @@ internal static class GlShaders
+         void main() {
+             vec3 w = inWorld, color = inColorF, cue = inCue;
+             uint flags = inFlags, rgbc = inRgbc;
++            if ((inLight & 0x80000000u) != 0u) recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue);
+             if (uModel != 0) {
+                 if (!modelFaceKept(inCue, inRgbc)) {
+                     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 168a110..225a5c3 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -43,6 +43,81 @@ public static class RetainedScene
+         /// bits), which an authored light and a glow scale as they do the game's own
+         /// face; 0 leaves the corner out of both.</summary>
+         public uint Rgbc;
++        /// <summary>0085. A static map corner lit in the vertex shader from the light
++        /// records (<see cref="Records"/>) rather than carrying its colour and cue:
++        /// <see cref="LightRecord"/> set, the half's record and quarter turn, and the
++        /// three records EvenFog blends it with. R, G and B are then the face's normal,
++        /// and Dqa and Dqb the corner's two blend weights (TileWeights' ax and az).
++        /// 0 for everything else.</summary>
++        public uint Light;
++    }
++
++    /// <summary>0085. <see cref="Vertex.Light"/>: bit 31 lit from the records; bits
++    /// 0-5 the half's record, 6-7 its quarter turn, 8-13, 14-19 and 20-25 the records
++    /// of the neighbours along X, along Z and on the diagonal, 26-28 whether each is
++    /// there, 29 the fog blended between them, 30 the light.</summary>
++    public const uint LightRecord = 0x80000000u, LightFogBlend = 0x20000000u, LightLitBlend = 0x40000000u;
++
++    public static uint PackLight(int own, int rot, int x, int z, int d, bool hasX, bool hasZ, bool hasD, bool fog, bool light) =>
++        LightRecord | (uint)own | (uint)rot << 6 | (uint)x << 8 | (uint)z << 14 | (uint)d << 20
++        | (hasX ? 1u << 26 : 0u) | (hasZ ? 1u << 27 : 0u) | (hasD ? 1u << 28 : 0u)
++        | (fog ? LightFogBlend : 0u) | (light ? LightLitBlend : 0u);
++
++    // ---- 0085. the light records --------------------------------------------------
++
++    /// <summary>The area's 64 light records as the vertex shader reads them, 52 ints
++    /// each: the light matrix at each quarter turn (4 x 9), the colour matrix (9), the
++    /// back colour (3, shifted as the GTE takes it), the fog word, its DQA and DQB,
++    /// and its curve.</summary>
++    public const int RecordInts = 52, RecordCount = 64;
++    public const int RecLcm = 36, RecBk = 45, RecWord = 48, RecDqa = 49, RecDqb = 50, RecCurve = 51;
++    public static readonly int[] Records = new int[RecordCount * RecordInts];
++
++    /// <summary>Bumped by <see cref="SetRecords"/>; the backend re-uploads.</summary>
++    public static int RecordGeneration { get; private set; }
++
++    /// <summary>The probe's: the records' uploads.</summary>
++    public static long RecordUploads;
++
++    /// <summary>The records changed: the backend uploads them, and each chunk's fog
++    /// bound is taken again from the records its corners use.</summary>
++    public static void SetRecords(ReadOnlySpan<int> records)
++    {
++        records[..Records.Length].CopyTo(Records);
++        RecordGeneration++;
++        RecordFog();
++    }
++
++    // The records each chunk's corners are lit or fogged from, and its bound from
++    // the corners that carry their own cue.
++    static readonly ulong[] _chunkRecords = new ulong[Chunks];
++    static readonly float[] _chunkPlainQ = new float[Chunks];
++    static readonly Vertex[] _chunkPlainOf = new Vertex[Chunks];
++
++    /// <summary>A chunk lit from the records goes black no nearer than the nearest of
++    /// its records does at the knee's end (3232), which bounds any blend of them.</summary>
++    static void RecordFog()
++    {
++        for (int c = 0; c < Chunks; c++)
++        {
++            ChunkFogQ[c] = _chunkPlainQ[c];
++            ChunkFogOf[c] = _chunkPlainOf[c];
++            ulong m = _chunkRecords[c];
++            if (m == 0) continue;
++            float best = float.MaxValue;
++            int of = 0;
++            for (int r = 0; r < RecordCount; r++)
++            {
++                if ((m >> r & 1ul) == 0) continue;
++                int at = r * RecordInts;
++                float dqa = Records[at + RecDqa], dqb = Records[at + RecDqb];
++                float q = Records[at + RecCurve] == 0 || dqa >= 0f ? 0f : Math.Max(0f, (3232f * 4096f - dqb) / dqa);
++                if (q < best) { best = q; of = r; }
++            }
++            if (best >= ChunkFogQ[c]) continue;
++            ChunkFogQ[c] = best;
++            ChunkFogOf[c] = new Vertex { Dqa = Records[of * RecordInts + RecDqa], Dqb = Records[of * RecordInts + RecDqb], Curve = 2f };
++        }
+     }
+ 
+     public const uint FlagRect = 0x80000000u, FlagSemi = 0x400u;
+@@ -243,6 +318,7 @@ public static class RetainedScene
+         int n = tris.Length / 3 * 3;
+         Array.Clear(ChunkCount);
+         Array.Clear(ChunkUsed);
++        Array.Clear(_chunkRecords);
+         for (int c = 0; c < Chunks; c++)
+         {
+             ChunkFogQ[c] = float.MaxValue;
+@@ -264,8 +340,19 @@ public static class RetainedScene
+                 ChunkMin[c * 3] = Math.Min(ChunkMin[c * 3], v.X); ChunkMax[c * 3] = Math.Max(ChunkMax[c * 3], v.X);
+                 ChunkMin[c * 3 + 1] = Math.Min(ChunkMin[c * 3 + 1], v.Y); ChunkMax[c * 3 + 1] = Math.Max(ChunkMax[c * 3 + 1], v.Y);
+                 ChunkMin[c * 3 + 2] = Math.Min(ChunkMin[c * 3 + 2], v.Z); ChunkMax[c * 3 + 2] = Math.Max(ChunkMax[c * 3 + 2], v.Z);
+-                float q = BlackQuotient(v);
+-                if (q < ChunkFogQ[c]) { ChunkFogQ[c] = q; ChunkFogOf[c] = v; }
++                if ((v.Light & LightRecord) != 0)
++                {
++                    uint l = v.Light;
++                    _chunkRecords[c] |= 1ul << (int)(l & 63u);
++                    if ((l & 1u << 26) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 8 & 63u);
++                    if ((l & 1u << 27) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 14 & 63u);
++                    if ((l & 1u << 28) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 20 & 63u);
++                }
++                else
++                {
++                    float q = BlackQuotient(v);
++                    if (q < ChunkFogQ[c]) { ChunkFogQ[c] = q; ChunkFogOf[c] = v; }
++                }
+                 if ((v.Flags & FlagSemi) != 0)
+                 {
+                     ChunkBlendMin[c * 3] = Math.Min(ChunkBlendMin[c * 3], v.X); ChunkBlendMax[c * 3] = Math.Max(ChunkBlendMax[c * 3], v.X);
+@@ -292,6 +379,9 @@ public static class RetainedScene
+             StaticCount[r] = sum;
+         }
+         _staticCount = n;
++        Array.Copy(ChunkFogQ, _chunkPlainQ, Chunks);
++        Array.Copy(ChunkFogOf, _chunkPlainOf, Chunks);
++        RecordFog();
+         StaticGeneration++;
+     }
+ 

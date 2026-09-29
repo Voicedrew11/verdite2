@@ -75,6 +75,7 @@ public sealed partial class GlCore
         void Unit(string n, int u) { int l = L(n); if (l >= 0) _gl.Uniform1(l, u); }
         Unit("uVram", 0); Unit("uDest", 1); Unit("uExtTex", 2); Unit("uRepTex", 3); Unit("uRepClut", 4);
         Unit("uMip", 5); Unit("uMatTable", MatUnit); Unit("uMaskSurface", MaskUnit); Unit("uHalves", HalvesUnit);
+        Unit("uRecords", RecordsUnit);
         void I(string n, int v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
         void F(string n, float v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
         int tw = L("uTexWindow");
@@ -137,6 +138,7 @@ public sealed partial class GlCore
         _gl.EnableVertexAttribArray(6); _gl.VertexAttribIPointer(6, 1, VertexAttribIType.UnsignedInt, st, (void*)52);
         _gl.EnableVertexAttribArray(7); _gl.VertexAttribIPointer(7, 1, VertexAttribIType.UnsignedInt, st, (void*)56);
         _gl.EnableVertexAttribArray(8); _gl.VertexAttribIPointer(8, 1, VertexAttribIType.UnsignedInt, st, (void*)60);
+        _gl.EnableVertexAttribArray(10); _gl.VertexAttribIPointer(10, 1, VertexAttribIType.UnsignedInt, st, (void*)64);
         // The mip entries are the backend's, not the port's: a buffer of their own. A
         // shadow's casters have none, and read the attribute's constant 0.
         if (mipVbo != 0)
@@ -235,9 +237,38 @@ public sealed partial class GlCore
         _gl.Uniform2(_uwAtmosShape, RemasterUniforms.FogPower, RemasterUniforms.FogMax);
     }
 
+    // 0085. The light records the static map is lit from, 13 RGBA32I texels a record.
+    const int RecordsUnit = 21;
+    uint _recordsTex;
+    int _recordsGen = -1;
+
+    unsafe void UploadRecords()
+    {
+        if (_recordsGen == RetainedScene.RecordGeneration) return;
+        _recordsGen = RetainedScene.RecordGeneration;
+        _gl.ActiveTexture(TextureUnit.Texture0 + RecordsUnit);
+        if (_recordsTex == 0)
+        {
+            _recordsTex = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, _recordsTex);
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba32i, RetainedScene.RecordInts / 4,
+                RetainedScene.RecordCount, 0, PixelFormat.RgbaInteger, PixelType.Int, null);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        }
+        else _gl.BindTexture(TextureTarget.Texture2D, _recordsTex);
+        fixed (int* p = RetainedScene.Records)
+            _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, RetainedScene.RecordInts / 4, RetainedScene.RecordCount,
+                PixelFormat.RgbaInteger, PixelType.Int, p);
+        // Nothing else takes this unit, so the records stay bound for every world draw.
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        RetainedScene.RecordUploads++;
+    }
+
     /// <summary>The static map, when it was rebuilt since the last upload.</summary>
     void UploadStatic()
     {
+        UploadRecords();
         if (_worldGen == RetainedScene.StaticGeneration) return;
         var s = RetainedScene.Static;
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldVbo);

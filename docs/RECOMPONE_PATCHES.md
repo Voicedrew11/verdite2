@@ -1496,6 +1496,20 @@ Four files in the directory have no entry below:
   places a `ModelInstance.ViewSpace` instance with the GTE's own matrix in integers.
   With `uFarPlane` 0 the shader is the one before. The ninth diff in the patch file.
   See "Step 3, the fourth slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the static map is lit and fogged in `WorldVs` from the area's 64
+  light records, so a record the game rewrites is an upload and not a rebuild.
+  `RetainedScene.Records` (52 ints a record: the light matrix at each quarter turn,
+  the colour matrix, the back colour, the fog word, its DQA and DQB and its curve;
+  `SetRecords`, `RecordGeneration`) is uploaded as a 13x64 RGBA32I texture on unit 21
+  (`GlRetained.UploadRecords`, from `UploadStatic`). A corner whose
+  `Vertex.Light` (attribute 10) has bit 31 carries its face's normal in R, G and B,
+  its two EvenFog weights in DQA and DQB, and the records of its half and the three
+  it blends with; `recordLit` lights it as `NormalColorCol` does and blends the colour
+  matrix, back colour and fog as `EvenFog` does, in the same integers (`mixExact`
+  rounds half away from zero as the CPU's double does). A chunk's fog bound
+  (`ChunkFogQ`) is taken again from its records when they change. With `Light` 0 the
+  program is the one before. The tenth diff in the patch file. See "Step 1, the second
+  slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

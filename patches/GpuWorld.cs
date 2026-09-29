@@ -16,6 +16,11 @@ namespace Kf2;
 ///     KF2_GPUWORLD_SURFACES=0  leave the map out of the normal and surface buffers
 ///     KF2_GPUWORLD_MODELS=0  leave the object walk's models on the packets
 ///
+/// The map is lit and fogged in the vertex shader from the area's light records, so
+/// a record the game rewrites is an upload and not a rebuild (<see cref="RetainedMap.RecordsOn"/>;
+/// <c>KF2_GPUWORLD_RECORDS=0</c> to compare, <c>KF2_GPUWORLD_RECORDCHECK=1</c> checks the
+/// shader's formula against the CPU's on every corner).
+///
 /// The tile walk still decides: every half it visits is noted in the frame's gate
 /// (<see cref="RetainedScene.NoteHalf"/>), and the backend draws exactly those halves
 /// at the head of the ordering table's walk, past the sky. The half is then not
@@ -37,7 +42,7 @@ namespace Kf2;
 /// The first-person arm is drawn from its mesh too, in the game's painter's order
 /// (<see cref="RetainedModels.TryArm"/>; <c>KF2_GPUWORLD_ARM=0</c> to compare).
 ///
-/// See "Step 1, the first slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice",
+/// See "Step 1, the first slice", "Step 1, the second slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice",
 /// "Step 3, the fourth slice" and "Step 5, the first slice" in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
@@ -77,6 +82,8 @@ public static class GpuWorld
         RetainedModels.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHCHECK")?.Trim() is "1";
         RetainedModels.PosesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSES")?.Trim() != "0";
         RetainedModels.ArmOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_ARM")?.Trim() != "0";
+        RetainedMap.RecordsOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDS")?.Trim() != "0";
+        RetainedMap.RecordCheck = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDCHECK")?.Trim() is "1";
         MoPose.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSECHECK")?.Trim() is "1";
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
@@ -234,6 +241,8 @@ public static class GpuWorld
             case "meshes off": RetainedModels.MeshesOn = false; break;
             case "poses on": RetainedModels.PosesOn = true; break;
             case "poses off": RetainedModels.PosesOn = false; break;
+            case "records on": RetainedMap.RecordsOn = true; break;
+            case "records off": RetainedMap.RecordsOn = false; break;
             case "arm on": RetainedModels.ArmOn = true; break;
             case "arm off": RetainedModels.ArmOn = false; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
@@ -260,11 +269,11 @@ public static class GpuWorld
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
             case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|arm on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|arm on|off|records on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
-               $"\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -272,7 +281,7 @@ public static class GpuWorld
 
     static double _reportAt;
     static long _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
-    static long _gensMax, _gensAt, _builds;
+    static long _gensMax, _gensAt, _builds, _packs, _recUploads;
     static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
     static long _iIns, _iWhole, _iMir, _iDrawn, _iCorners, _iVerts, _iMirDrawn, _iArm, _iArmDrawn, _iArmCalls;
     static long _pPosed, _pRigid, _pDeferred, _pMat, _pTexels;
@@ -353,8 +362,18 @@ public static class GpuWorld
                           $"{MoPose.PoseRefused} pose(s) refused in all" +
                           (MoPose.Checking ? $"; checked {MoPose.CheckVertices} vert(ices), {MoPose.CheckDiffer} placed differently" : ""));
         Console.WriteLine($"[KF2] gpu world: light generations: at most {_gensMax} in a frame; map builds {RetainedMap.Builds - _builds}, " +
-                          $"the last {RetainedMap.LastBuildMs:F2} ms for {RetainedMap.LastWhy}");
+                          $"the last {RetainedMap.LastBuildMs:F2} ms for {RetainedMap.LastWhy}; " +
+                          (RetainedMap.RecordsOn
+                              ? $"lit from the records: {RetainedMap.Packs - _packs} record change(s), the last {RetainedMap.LastPackMs:F3} ms for {RetainedMap.LastPackWhy}, " +
+                                $"{RetainedScene.RecordUploads - _recUploads} upload(s)"
+                              : "lit on the CPU") +
+                          (RetainedMap.RecordCheck
+                              ? $"; checked {RetainedMap.CheckCorners} corner(s): {RetainedMap.CheckColour} coloured and {RetainedMap.CheckCue} fogged otherwise " +
+                                $"(worst {RetainedMap.CheckCueWorst:G3})"
+                              : ""));
         _builds = RetainedMap.Builds;
+        _packs = RetainedMap.Packs;
+        _recUploads = RetainedScene.RecordUploads;
         _gensMax = 0;
         long px = RetainedScene.SurfaceDepthPixels;
         Console.WriteLine($"[KF2] gpu world: surfaces: {RetainedScene.MainNormalTriangles - _nrmTris} map triangle(s) into the normal pass; " +

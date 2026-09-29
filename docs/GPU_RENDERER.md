@@ -15,7 +15,9 @@ leaves it out (measured, not judged). Its third keeps their vertices there too, 
 the vertex shader blends an animated model's pose (bit-identical to the packets'
 picture).
 Step 5's first slice draws the planar walk's mirror on the renderer: its map, its
-water and its opaque models, judged by eye.**
+water and its opaque models, judged by eye. Step 1's second slice lights the map in
+the vertex shader from the light records, so a record the game rewrites is an upload
+and not a rebuild (bit-identical to the CPU-lit map by snap).**
 
 ## Why: the frame is the game's geometry, done on one CPU thread
 
@@ -236,6 +238,77 @@ and fog colour in the main view (the world program takes them, as it does for th
 reflections, but no pack was applied); the frame viewer, which no longer sees the
 map's triangles.
 
+#### Step 1, the second slice
+
+**The map lit and fogged in the vertex shader from the area's light records, so a
+record the game rewrites is an upload and not a rebuild. Mechanism measured; the
+picture is bit-identical to the CPU-lit map by snap, so there is nothing new to judge
+by eye.** It fixes known issue 4. On with the renderer (`KF2_GPUWORLD_RECORDS=0` or
+`gpuworld records off` is the comparison: each corner carries its colour and cue, as
+before). The runtime half amends `0085` (its tenth diff: `RetainedScene.Records`,
+`Vertex.Light`, `recordLit` in `WorldVs`); the port half is `RetainedMap` and
+`PolyAssembler.RetainedRecords`/`RetainedLightWord`, beside EvenFog's own tile code.
+
+**Why this came before the models' blended faces.** A survey of what a frame still
+costs with the renderer on (areas 1, 4, 6 and 7, uncapped) found frame work at
+1.0-1.5 ms everywhere but one place: in area 6 the retained map was rebuilt 40 times
+every 2 s, 8.0-8.4 ms each, which held it at 657-671 fps with a p99 of 9.7 ms, against
+about 900 fps elsewhere. The instanced map (Step 1, above) is the plan's answer to
+rebuilds; this is the part of it that answers a light record changing, which is the
+only rebuild measured in play.
+
+**Two causes, one of them no cause at all.** `RetainedMap`'s probe now names the
+records that moved and which of their fields (`L` light matrix, `C` colour matrix, `B`
+back colour, `F` fog word).
+
+- **Area 6: record 63's light matrix, every tick, and no map half names record 63.**
+  The hash covered all 64 records. It now covers the records a half names (the low six
+  bits of a half's `+4`, for each half with a model). Area 6 then rebuilds nothing after
+  arrival: 891-920 fps, p99 1.4-1.7 ms.
+- **Area 7: nearly every record's back colour and fog word, over a few seconds after a
+  warp** (records 0-40, `BF`): a fade. Those records light the map, so the hash must see
+  them, and with the corners carrying their colours each change was a rebuild: 10 and
+  then 3 in two windows of 2 s, 13.2-13.6 ms each. The fade happens on some warps and not
+  others.
+
+**What a corner carries now.** The static map is built as before -- positions, UVs,
+texture, material, water, swell, the chunks -- except its light. In place of its colour
+and cue a corner carries its face's normal (in R, G and B), EvenFog's two weights at it
+(`TileWeights`' ax and az, in DQA and DQB), and a word (`Vertex.Light`) naming its half's
+record and quarter turn, the records of the three neighbours EvenFog blends it with
+there and whether each is there, and whether each blend is on. The 64 records go to the
+GPU as 52 ints each, a 13x64 integer texture: the light matrix at each quarter turn, the
+colour matrix, the back colour as the GTE takes it, the fog word, the DQA and DQB the
+game's own `SetFogNear` makes of it, and its curve. `recordLit` in `WorldVs` does
+`NormalColorCol`'s arithmetic and EvenFog's blends in the same integers: the colour
+matrix and back colour mixed where a neighbour that weighs in lights otherwise, rounded
+half away from zero as the CPU's double does (`mixExact`: a weight times a short
+overflows an int, so the weight is split in two and a float guess is corrected by an
+exact test of the half-way bounds), and the fog words' DQA and DQB where a neighbour
+that weighs in has another word. A change is 0.013 ms on the CPU and a 13 KB upload. The
+retained reflections' fog cull (`ChunkFogQ`) is taken again from the records each chunk
+uses: the nearest any of them goes black at the knee's end, which bounds any blend of
+them.
+
+**Measured.**
+
+- **The formula.** `KF2_GPUWORLD_RECORDCHECK=1` builds each corner's colour and cue on
+  the CPU as well and compares a C# copy of `recordLit` with it: 0 of 2,399,734 corners
+  coloured or fogged otherwise, over the builds of areas 1, 7 and 6.
+- **The shader.** Records off against on in the same paused frame, at the saved
+  settings: area 1's spawn at four headings, areas 7 and 6 after a warp at four headings
+  pitched 200, and the `fdat02` pool at four headings pitched 300 with planar
+  reflections, waves and the murk on. **0 pixels differ in each of the 16.** The probe
+  shows a rebuild at every switch, so both paths were drawn.
+- **Cost.** The GPU's world pass 0.138 to 0.138-0.142 ms in area 1 and 0.088 to 0.091
+  in area 6, uncapped; a build 14.0 to 11.8 ms, since it no longer lights. At 144 fps:
+  144.0 drawn at 19.9-20.0 ticks/s, `[present] wide 288`, and no GL error under
+  `KF2_GLDEBUG=1`.
+
+**Not checked:** the remaster's *Darkness* slider and light-record overrides dragged
+live, which write the records and so are uploads now; a `Level` edit or a tile the game
+rewrites, which change the map and are still a rebuild (the instanced map's).
+
 #### Known issues
 
 Recorded as found, not fixed: the steps are built through first and the fixes
@@ -270,8 +343,9 @@ come after (decided 2026-09-28), unless an issue is something a later step build
    near is placed on screen where its true projection is not, and the shadow lookup
    rebuilds the surface's position from the screen. The GPU's position is then the
    true one. If so, this is the packet path's error, not the GPU's.
-4. **The map is rebuilt whole whenever the game rewrites a light record** (measured,
-   2026-09-29). For about 40 s after a warp into area 7 the effects there rewrite
+4. **Fixed: the map is rebuilt whole whenever the game rewrites a light record**
+   (measured, 2026-09-29). Fixed by Step 1's second slice (above): the map is lit in
+   the shader from the records, and a record no half names is not hashed at all. For about 40 s after a warp into area 7 the effects there rewrite
    the tiles' light records, and the retained map, whose corners carry their lit
    colours, is rebuilt each time: up to 18 builds in 2 s at 7.2-7.7 ms each, which
    takes 144 fps down to 130-137 in those seconds. It happens with the models on
@@ -295,8 +369,7 @@ come after (decided 2026-09-28), unless an issue is something a later step build
 What hooks the tile packets today, and has to work the new way first:
 
 - `EvenFog`: the fog and light blend between the records of neighbouring tiles.
-  **Works**, computed once per corner on the CPU when the map is built; in the
-  shader only with instancing.
+  **Works**, in the vertex shader from the records since Step 1's second slice.
 - Per-pixel lighting (`0048`): the records the lit colour is made from. **Works**
   (Step 1), and fogged at each pixel's depth (the second slice).
 - `WaterSwell`: moves the water's interior vertices; a vertex-shader function of the

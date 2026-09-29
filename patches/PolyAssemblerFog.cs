@@ -95,6 +95,46 @@ public static partial class PolyAssembler
 
     internal static void EndTileRetained() => EndTile();
 
+    // ---- 0085. the same blends in the records' terms, for the vertex shader ----------
+
+    // A half's record and the eight around it by index, -1 for none, as BeginTile
+    // finds them; its quarter turn; and whether each blend is on.
+    static readonly int[] _retRecs = new int[9];
+    static int _retRot;
+    static bool _retFog, _retLight;
+
+    /// <summary>The records around a half, for <see cref="RetainedLightWord"/>.</summary>
+    internal static void RetainedRecords(PSMemory mem, uint half)
+    {
+        _retFog = EvenFog.Enabled && EvenFog.Blend && _mode != Mode.Verify;
+        _retLight = EvenFog.Light && _mode != Mode.Verify;
+        uint off = half - TileBase;
+        int tx = (int)(off / 10u % 80u), tz = (int)(off / 800u);
+        uint h = off % 10u;
+        _retRot = (int)Peek32(mem, half + 2u) & 3;
+        for (int dz = -1; dz <= 1; dz++)
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            int x = tx + dx, z = tz + dz, i = (dz + 1) * 3 + dx + 1;
+            uint at = TileBase + 800u * (uint)z + 10u * (uint)x + h;
+            _retRecs[i] = (dx | dz) == 0 || ((uint)x < 80u && (uint)z < 80u && (byte)Peek32(mem, at) < 240)
+                ? (int)(Peek32(mem, (dx | dz) == 0 ? half + 4u : at + 4u) & 0x3Fu) : -1;
+        }
+    }
+
+    /// <summary>A corner as <see cref="RetainedScene.Vertex.Light"/> packs it, and its
+    /// two weights (TileWeights' ax and az), which the vertex shader blends with.</summary>
+    internal static uint RetainedLightWord(short vx, short vz, out int ax, out int az)
+    {
+        (int wx, int wz) = _retRot switch { 0 => (vx, vz), 1 => (vz, -vx), 2 => (-vx, -vz), _ => (-vz, vx) };
+        int sx = wx < 0 ? -1 : 1, sz = wz < 0 ? -1 : 1;
+        ax = Math.Min(Math.Abs(wx), 1024) * 2;
+        az = Math.Min(Math.Abs(wz), 1024) * 2;
+        int x = _retRecs[4 + sx], z = _retRecs[4 + 3 * sz], d = _retRecs[4 + 3 * sz + sx];
+        return RetainedScene.PackLight(_retRecs[4], _retRot, Math.Max(x, 0), Math.Max(z, 0), Math.Max(d, 0),
+            x >= 0, z >= 0, d >= 0, _retFog, _retLight);
+    }
+
     static uint Record(PSMemory mem, uint half) => LightRecords + ((uint)Peek32(mem, half + 4u) & 0x3Fu) * 0x68u;
 
     /// <summary>The colour matrix (+0x50, nine shorts) and back colour (+0x62, three bytes).</summary>

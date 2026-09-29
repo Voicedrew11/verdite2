@@ -43,6 +43,81 @@ public static class RetainedScene
         /// bits), which an authored light and a glow scale as they do the game's own
         /// face; 0 leaves the corner out of both.</summary>
         public uint Rgbc;
+        /// <summary>0085. A static map corner lit in the vertex shader from the light
+        /// records (<see cref="Records"/>) rather than carrying its colour and cue:
+        /// <see cref="LightRecord"/> set, the half's record and quarter turn, and the
+        /// three records EvenFog blends it with. R, G and B are then the face's normal,
+        /// and Dqa and Dqb the corner's two blend weights (TileWeights' ax and az).
+        /// 0 for everything else.</summary>
+        public uint Light;
+    }
+
+    /// <summary>0085. <see cref="Vertex.Light"/>: bit 31 lit from the records; bits
+    /// 0-5 the half's record, 6-7 its quarter turn, 8-13, 14-19 and 20-25 the records
+    /// of the neighbours along X, along Z and on the diagonal, 26-28 whether each is
+    /// there, 29 the fog blended between them, 30 the light.</summary>
+    public const uint LightRecord = 0x80000000u, LightFogBlend = 0x20000000u, LightLitBlend = 0x40000000u;
+
+    public static uint PackLight(int own, int rot, int x, int z, int d, bool hasX, bool hasZ, bool hasD, bool fog, bool light) =>
+        LightRecord | (uint)own | (uint)rot << 6 | (uint)x << 8 | (uint)z << 14 | (uint)d << 20
+        | (hasX ? 1u << 26 : 0u) | (hasZ ? 1u << 27 : 0u) | (hasD ? 1u << 28 : 0u)
+        | (fog ? LightFogBlend : 0u) | (light ? LightLitBlend : 0u);
+
+    // ---- 0085. the light records --------------------------------------------------
+
+    /// <summary>The area's 64 light records as the vertex shader reads them, 52 ints
+    /// each: the light matrix at each quarter turn (4 x 9), the colour matrix (9), the
+    /// back colour (3, shifted as the GTE takes it), the fog word, its DQA and DQB,
+    /// and its curve.</summary>
+    public const int RecordInts = 52, RecordCount = 64;
+    public const int RecLcm = 36, RecBk = 45, RecWord = 48, RecDqa = 49, RecDqb = 50, RecCurve = 51;
+    public static readonly int[] Records = new int[RecordCount * RecordInts];
+
+    /// <summary>Bumped by <see cref="SetRecords"/>; the backend re-uploads.</summary>
+    public static int RecordGeneration { get; private set; }
+
+    /// <summary>The probe's: the records' uploads.</summary>
+    public static long RecordUploads;
+
+    /// <summary>The records changed: the backend uploads them, and each chunk's fog
+    /// bound is taken again from the records its corners use.</summary>
+    public static void SetRecords(ReadOnlySpan<int> records)
+    {
+        records[..Records.Length].CopyTo(Records);
+        RecordGeneration++;
+        RecordFog();
+    }
+
+    // The records each chunk's corners are lit or fogged from, and its bound from
+    // the corners that carry their own cue.
+    static readonly ulong[] _chunkRecords = new ulong[Chunks];
+    static readonly float[] _chunkPlainQ = new float[Chunks];
+    static readonly Vertex[] _chunkPlainOf = new Vertex[Chunks];
+
+    /// <summary>A chunk lit from the records goes black no nearer than the nearest of
+    /// its records does at the knee's end (3232), which bounds any blend of them.</summary>
+    static void RecordFog()
+    {
+        for (int c = 0; c < Chunks; c++)
+        {
+            ChunkFogQ[c] = _chunkPlainQ[c];
+            ChunkFogOf[c] = _chunkPlainOf[c];
+            ulong m = _chunkRecords[c];
+            if (m == 0) continue;
+            float best = float.MaxValue;
+            int of = 0;
+            for (int r = 0; r < RecordCount; r++)
+            {
+                if ((m >> r & 1ul) == 0) continue;
+                int at = r * RecordInts;
+                float dqa = Records[at + RecDqa], dqb = Records[at + RecDqb];
+                float q = Records[at + RecCurve] == 0 || dqa >= 0f ? 0f : Math.Max(0f, (3232f * 4096f - dqb) / dqa);
+                if (q < best) { best = q; of = r; }
+            }
+            if (best >= ChunkFogQ[c]) continue;
+            ChunkFogQ[c] = best;
+            ChunkFogOf[c] = new Vertex { Dqa = Records[of * RecordInts + RecDqa], Dqb = Records[of * RecordInts + RecDqb], Curve = 2f };
+        }
     }
 
     public const uint FlagRect = 0x80000000u, FlagSemi = 0x400u;
@@ -243,6 +318,7 @@ public static class RetainedScene
         int n = tris.Length / 3 * 3;
         Array.Clear(ChunkCount);
         Array.Clear(ChunkUsed);
+        Array.Clear(_chunkRecords);
         for (int c = 0; c < Chunks; c++)
         {
             ChunkFogQ[c] = float.MaxValue;
@@ -264,8 +340,19 @@ public static class RetainedScene
                 ChunkMin[c * 3] = Math.Min(ChunkMin[c * 3], v.X); ChunkMax[c * 3] = Math.Max(ChunkMax[c * 3], v.X);
                 ChunkMin[c * 3 + 1] = Math.Min(ChunkMin[c * 3 + 1], v.Y); ChunkMax[c * 3 + 1] = Math.Max(ChunkMax[c * 3 + 1], v.Y);
                 ChunkMin[c * 3 + 2] = Math.Min(ChunkMin[c * 3 + 2], v.Z); ChunkMax[c * 3 + 2] = Math.Max(ChunkMax[c * 3 + 2], v.Z);
-                float q = BlackQuotient(v);
-                if (q < ChunkFogQ[c]) { ChunkFogQ[c] = q; ChunkFogOf[c] = v; }
+                if ((v.Light & LightRecord) != 0)
+                {
+                    uint l = v.Light;
+                    _chunkRecords[c] |= 1ul << (int)(l & 63u);
+                    if ((l & 1u << 26) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 8 & 63u);
+                    if ((l & 1u << 27) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 14 & 63u);
+                    if ((l & 1u << 28) != 0) _chunkRecords[c] |= 1ul << (int)(l >> 20 & 63u);
+                }
+                else
+                {
+                    float q = BlackQuotient(v);
+                    if (q < ChunkFogQ[c]) { ChunkFogQ[c] = q; ChunkFogOf[c] = v; }
+                }
                 if ((v.Flags & FlagSemi) != 0)
                 {
                     ChunkBlendMin[c * 3] = Math.Min(ChunkBlendMin[c * 3], v.X); ChunkBlendMax[c * 3] = Math.Max(ChunkBlendMax[c * 3], v.X);
@@ -292,6 +379,9 @@ public static class RetainedScene
             StaticCount[r] = sum;
         }
         _staticCount = n;
+        Array.Copy(ChunkFogQ, _chunkPlainQ, Chunks);
+        Array.Copy(ChunkFogOf, _chunkPlainOf, Chunks);
+        RecordFog();
         StaticGeneration++;
     }
 

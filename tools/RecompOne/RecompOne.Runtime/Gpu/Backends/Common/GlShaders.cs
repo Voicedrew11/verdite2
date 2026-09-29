@@ -1449,6 +1449,9 @@ internal static class GlShaders
         // its mip atlas entry (0060), 0 for none.
         layout(location = 8) in uint  inRgbc;
         layout(location = 9) in uint  inMip;
+        // 0085. A static map corner lit here from the light records (bit 31): see
+        // RetainedScene.Vertex.Light.
+        layout(location = 10) in uint inLight;
 
         invariant gl_Position;
 
@@ -1518,6 +1521,101 @@ internal static class GlShaders
         uniform vec3 uLcmB;
         //@model
 
+        // 0085. The area's light records, 52 ints each in 13 texels (RetainedScene.Records):
+        // the light matrix per quarter turn, the colour matrix, the back colour, the fog
+        // word, its DQA and DQB, and its curve. A corner is lit as the tile assembler
+        // lights its face (NormalColorCol) and blended as EvenFog blends it, in the
+        // same integers, so a record the game rewrites is an upload and not a rebuild.
+        uniform isampler2D uRecords;
+        int recInt(int r, int i) { return texelFetch(uRecords, ivec2(i >> 2, r), 0)[i & 3]; }
+
+        // Round half away from zero of (k . v) / t, exactly, as the CPU's double does:
+        // k up to 4096^2 and v a short do not fit an int product, so k is split in two
+        // and a float guess is corrected by an exact test of the half-way bounds.
+        int mixExact(ivec4 k, ivec4 v, int t) {
+            ivec4 kh = k >> 12, kl = k & 4095;
+            int hi = kh.x * v.x + kh.y * v.y + kh.z * v.z + kh.w * v.w;
+            int lo = kl.x * v.x + kl.y * v.y + kl.z * v.z + kl.w * v.w;
+            float q = (float(hi) * 4096.0 + float(lo)) / float(t);
+            int sgn = q < 0.0 ? -1 : 1;
+            hi *= sgn; lo *= sgn;
+            int c = int(floor(abs(q) + 0.5));
+            // D = 2S - (2c-1)t, in [0, 2t) when c is right.
+            int m = 2 * c - 1;
+            int d = (2 * hi - m * (t >> 12)) * 4096 + (2 * lo - m * (t & 4095));
+            if (d < 0) c--;
+            else if (d >= 2 * t) c++;
+            return sgn * c;
+        }
+
+        bool sameLight(int a, int b) {
+            for (int i = 9; i < 12; i++)
+                if (texelFetch(uRecords, ivec2(i, a), 0) != texelFetch(uRecords, ivec2(i, b), 0)) return false;
+            return true;
+        }
+
+        void recordLit(uint l, vec3 normal, float ax, float az, uint rgbc, out vec3 color, out vec3 cue) {
+            int own = int(l & 63u), rot = int((l >> 6) & 3u);
+            ivec3 nb = ivec3(int((l >> 8) & 63u), int((l >> 14) & 63u), int((l >> 20) & 63u));
+            // TileWeights: own, along X, along Z, the diagonal; 0 where there is no half.
+            int iax = int(ax + 0.5), iaz = int(az + 0.5);
+            ivec4 k = ivec4((4096 - iax) * (4096 - iaz),
+                            (l & (1u << 26)) != 0u ? iax * (4096 - iaz) : 0,
+                            (l & (1u << 27)) != 0u ? (4096 - iax) * iaz : 0,
+                            (l & (1u << 28)) != 0u ? iax * iaz : 0);
+            ivec4 rec = ivec4(own, nb);
+            int t = k.x + k.y + k.z + k.w;
+
+            // The light: the own record's light matrix; the colour matrix and back
+            // colour blended where a neighbour weighing in lights otherwise.
+            bool mixL = (l & 0x40000000u) != 0u
+                && ((k.y != 0 && !sameLight(nb.x, own)) || (k.z != 0 && !sameLight(nb.y, own))
+                    || (k.w != 0 && !sameLight(nb.z, own)));
+            ivec3 n = ivec3(normal);
+            ivec3 a;
+            for (int j = 0; j < 3; j++) {
+                int v = recInt(own, rot * 9 + 3 * j) * n.x + recInt(own, rot * 9 + 3 * j + 1) * n.y
+                      + recInt(own, rot * 9 + 3 * j + 2) * n.z;
+                a[j] = clamp(v >> 12, 0, 0x7FFF);
+            }
+            for (int c = 0; c < 3; c++) {
+                int bk = recInt(own, 45 + c);
+                if (mixL) bk = mixExact(k, ivec4(bk, recInt(rec.y, 45 + c), recInt(rec.z, 45 + c), recInt(rec.w, 45 + c)), t);
+                int v = bk << 12;
+                for (int j = 0; j < 3; j++) {
+                    int i = 36 + 3 * c + j;
+                    int m = recInt(own, i);
+                    if (mixL) m = mixExact(k, ivec4(m, recInt(rec.y, i), recInt(rec.z, i), recInt(rec.w, i)), t);
+                    v += m * a[j];
+                }
+                int ir = clamp(v >> 12, 0, 0x7FFF);
+                int mac = ((int((rgbc >> uint(8 * c)) & 255u) * ir) << 4) >> 12;
+                color[c] = float(clamp(mac >> 4, 0, 255));
+            }
+
+            // The fog: the words' DQA and DQB blended where a neighbour weighing in
+            // has another word; a word with no fog weighs in as no cue.
+            int word = recInt(own, 48);
+            cue = vec3(float(recInt(own, 49)), float(recInt(own, 50)), float(recInt(own, 51)));
+            bool mixF = (l & 0x20000000u) != 0u
+                && ((k.y != 0 && recInt(nb.x, 48) != word) || (k.z != 0 && recInt(nb.y, 48) != word)
+                    || (k.w != 0 && recInt(nb.z, 48) != word));
+            if (mixF) {
+                float qa = 0.0, qb = 0.0, bent = cue.z;
+                int most = 0;
+                for (int i = 0; i < 4; i++) {
+                    if (k[i] == 0) continue;
+                    int w = recInt(rec[i], 48);
+                    if (w >= 32000) continue;
+                    float f = float(k[i]) / float(t);
+                    qa += f * float(recInt(rec[i], 49));
+                    qb += f * float(recInt(rec[i], 50));
+                    if (k[i] > most) { most = k[i]; bent = w < 0 ? 1.0 : 2.0; }
+                }
+                cue = vec3(qa, qb, bent);
+            }
+        }
+
         float cueKeep(vec3 cue, float z) {
             int curve = int(cue.z + 0.5);
             if (uFogOn == 0 || curve == 0) return 1.0;
@@ -1531,6 +1629,7 @@ internal static class GlShaders
         void main() {
             vec3 w = inWorld, color = inColorF, cue = inCue;
             uint flags = inFlags, rgbc = inRgbc;
+            if ((inLight & 0x80000000u) != 0u) recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue);
             if (uModel != 0) {
                 if (!modelFaceKept(inCue, inRgbc)) {
                     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);

@@ -30,8 +30,12 @@ namespace Kf2;
 /// assembler: none of that depends on the camera. The depth cue does, so each corner
 /// carries the record's DQA, DQB and curve and the vertex shader fogs it.
 ///
-/// Rebuilt when the map block, the light records, the model bank or the remaster's
-/// materials change: a hash of all four once a walk (about 70 KB, a few microseconds).
+/// Rebuilt when the map block, the model bank or the remaster's materials change: a
+/// hash once a walk (about 70 KB, a few microseconds). Only the light records a half
+/// names are hashed, since the game rewrites others as it runs. Lit from the records
+/// in the vertex shader (0085, <see cref="RecordsOn"/>), a corner carries its face's
+/// normal and the records it is blended from, so a record the game rewrites is an
+/// upload of the 64 records and not a rebuild; off, it carries its colour and cue.
 ///
 /// See "The retained scene" in docs/RENDERING.md.
 /// </summary>
@@ -81,7 +85,7 @@ public static class RetainedMap
                               (Enabled ? $", planar {(RetainedScene.Planar ? "on" : "off")}, " +
                                          $"cubemap {(RetainedScene.Cube ? $"{RetainedScene.CubeSize}px" : "off")}" : ""));
         });
-        Event.AddListener<OverlayLoadedEvent>(_ => _hash = 0);
+        Event.AddListener<OverlayLoadedEvent>(_ => { _hash = 0; _lightHash = 0; });
     }
 
     public static void SetEnabled(bool on)
@@ -89,6 +93,25 @@ public static class RetainedMap
         RetainedScene.Enabled = on;
         _hash = 0;
     }
+
+    /// <summary>0085. The static map lit and fogged in the vertex shader from the light
+    /// records, so a record the game rewrites is an upload and not a rebuild; off
+    /// (<c>KF2_GPUWORLD_RECORDS=0</c>, <c>gpuworld records off</c>), each corner carries
+    /// its colour and cue as before. A switch is a rebuild.</summary>
+    public static bool RecordsOn = true;
+
+    /// <summary>0085. Build the corners' colours and cues on the CPU as well and
+    /// compare the shader's formula with them (<c>KF2_GPUWORLD_RECORDCHECK=1</c>).</summary>
+    public static bool RecordCheck;
+
+    static long _packs;
+    static double _packMs;
+    static string _lastPackWhy = "";
+    public static long Packs => _packs;
+    public static double LastPackMs => _packMs;
+    public static string LastPackWhy => _lastPackWhy;
+    public static long CheckCorners, CheckColour, CheckCue;
+    public static float CheckCueWorst;
 
     /// <summary>Whether reflections are drawn from it; the reflection pass runs for
     /// it on its own. The backend draws only once its program built
@@ -110,16 +133,30 @@ public static class RetainedMap
     public static void AtWalk(CpuContext c, PSMemory mem)
     {
         if (!Ready) return;
-        // The corners carry EvenFog's blends, so switching them is a rebuild too.
-        ulong h = Hash(mem) ^ ((EvenFog.Enabled ? 1ul : 0ul) | (EvenFog.Blend ? 2ul : 0ul) | (EvenFog.Light ? 4ul : 0ul)) << 61;
-        if (h != _hash)
+        // The corners carry EvenFog's blends, so switching them is a rebuild too. Lit
+        // from the records (0085), a record the game rewrites is only an upload.
+        Hash(mem);
+        ulong geo = (_hm * 31 + _he) ^ ((EvenFog.Enabled ? 1ul : 0ul) | (EvenFog.Blend ? 2ul : 0ul) | (EvenFog.Light ? 4ul : 0ul)
+                                         | (RecordsOn ? 8ul : 0ul)) << 60;
+        bool lights = _hl != _lightHash;
+        _lightHash = _hl;
+        if (geo != _hash || (lights && !RecordsOn))
         {
-            _hash = h;
+            _hash = geo;
             var start = System.Diagnostics.Stopwatch.GetTimestamp();
             Build(c, mem);
+            if (RecordsOn) PackRecords(c, mem);
             _buildMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             _builds++;
             _lastWhy = _why;
+        }
+        else if (lights)
+        {
+            var start = System.Diagnostics.Stopwatch.GetTimestamp();
+            PackRecords(c, mem);
+            _packMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            _packs++;
+            _lastPackWhy = _why;
         }
         // 0077. The models are captured for the lights' shadows too; 0085, the main
         // view draws the map from the frame's camera.
@@ -131,19 +168,18 @@ public static class RetainedMap
         if (_probe) Report();
     }
 
-    static ulong Hash(PSMemory mem)
+    static void Hash(PSMemory mem)
     {
         var ram = mem.Ram;
         uint mask = (uint)ram.Length - 1u;
         ulong hm = MeshBytes(ram.Slice((int)(MapBase & mask), (int)MapBytes));
-        ulong hl = Mix(0xCBF29CE484222325ul, ram.Slice((int)(LightBase & mask), (int)LightBytes));
+        ulong hl = LightHash(ram.Slice((int)(MapBase & mask), (int)MapBytes), ram.Slice((int)(LightBase & mask), (int)LightBytes));
         // 0085. The corners carry the water's rects and the swell's free positions.
         Span<uint> extra = [mem.ReadU32(Banks), (uint)Remaster.Surfaces.Serial, (uint)SurfaceMaterial.RectN,
-                            (uint)WaterSwell.Generation];
+                            (uint)WaterSwell.Generation, mem.ReadU32(LightColour)];
         ulong he = Mix(0xCBF29CE484222325ul, MemoryMarshal.AsBytes(extra));
-        _why = (hm != _hm ? "map " : "") + (hl != _hl ? "lights " : "") + (he != _he ? $"bank/materials/rects({extra[0]:X},{extra[1]},{extra[2]}) " : "");
+        _why = (hm != _hm ? "map " : "") + (hl != _hl ? "lights" + LightDiff(ram.Slice((int)(LightBase & mask), (int)LightBytes)) + " " : "") + (he != _he ? $"bank/materials/rects/swell({extra[0]:X},{extra[1]},{extra[2]},{extra[3]}) " : "");
         _hm = hm; _hl = hl; _he = he;
-        return (hm * 31 + hl) * 31 + he;
     }
 
     /// <summary>Only what a half's mesh is built from -- its model, height, the low
@@ -161,7 +197,44 @@ public static class RetainedMap
         return h;
     }
 
-    static ulong _hm, _hl, _he;
+    static ulong _hm, _hl, _he, _lightHash;
+
+    /// <summary>The records a half names; the game rewrites others as it runs (area 6's
+    /// record 63, every tick), and none of those lights the map.</summary>
+    static ulong LightHash(ReadOnlySpan<byte> map, ReadOnlySpan<byte> lights)
+    {
+        ulong used = 0;
+        for (int i = 0; i + 5 <= map.Length; i += 5)
+            if (map[i] < 240) used |= 1ul << (map[i + 4] & 0x3F);
+        ulong h = 0xCBF29CE484222325ul ^ used;
+        for (int r = 0; r < 64; r++)
+            if ((used >> r & 1ul) != 0) h = Mix(h * 0x100000001B3ul, lights.Slice(r * 104, 104));
+        _usedRecords = used;
+        return h;
+    }
+    static ulong _usedRecords;
+    static readonly byte[] _lightsWas = new byte[LightBytes];
+
+    // Which records moved, and at which of their fields (the probe's).
+    static string LightDiff(ReadOnlySpan<byte> now)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int r = 0; r < 64; r++)
+        {
+            var a = now.Slice(r * 104, 104);
+            var b = _lightsWas.AsSpan(r * 104, 104);
+            if (a.SequenceEqual(b)) continue;
+            string f = "";
+            if (!a[..0x50].SequenceEqual(b[..0x50])) f += "L";
+            if (!a[0x50..0x62].SequenceEqual(b[0x50..0x62])) f += "C";
+            if (!a[0x62..0x65].SequenceEqual(b[0x62..0x65])) f += "B";
+            if (!a[0x66..0x68].SequenceEqual(b[0x66..0x68])) f += "F";
+            if (a[0x65] != b[0x65]) f += "p";
+            sb.Append($" {r}:{f}");
+        }
+        now.CopyTo(_lightsWas);
+        return sb.ToString();
+    }
     static string _why = "";
     static string _lastWhy = "";
 
@@ -211,6 +284,7 @@ public static class RetainedMap
     static void Build(CpuContext c, PSMemory mem)
     {
         _n = 0;
+        _checkPacked = false;
         _halves = _faces = _skippedModels = _lightBlended = _fogBlended = _corners = 0;
         _cue.Clear();
         RetainedPlanes.Clear();
@@ -269,6 +343,7 @@ public static class RetainedMap
         float curve = fog >= 32000 ? 0f : fog < 0 ? 1f : 2f;
 
         PolyAssembler.RetainedTile(rec, mem);
+        if (RecordsOn) PolyAssembler.RetainedRecords(mem, rec);
         try { HalfFaces(c, mem, rec, model, tx, tz, half, rgbc, rot, fog, dqa, dqb, curve); }
         finally { PolyAssembler.EndTileRetained(); }
     }
@@ -289,7 +364,8 @@ public static class RetainedMap
         Span<float> px = stackalloc float[4], py = stackalloc float[4], pz = stackalloc float[4];
         Span<uint> uv = stackalloc uint[4], col = stackalloc uint[4];
         Span<float> qa = stackalloc float[4], qb = stackalloc float[4], qc = stackalloc float[4];
-        Span<short> lx = stackalloc short[4], lz = stackalloc short[4];
+        Span<short> lx = stackalloc short[4], lz = stackalloc short[4], nzs = stackalloc short[4];
+        Span<uint> lw = stackalloc uint[4];
         for (int f = 0; f < (int)count; f++)
         {
             uint word = mem.ReadU32(face);
@@ -315,19 +391,36 @@ public static class RetainedMap
                 uint clut = mem.ReadU16(at + 2u), tpage = mem.ReadU16(at + 6u) & 0x1FFu;
 
                 uint normal = normals + normalOff;
-                Gte.Write(0, mem.ReadU32(normal));
-                Gte.Write(1, mem.ReadU32(normal + 4u));
-                Gte.Write(6, rgbc);
-                Gte.NccsOp(12, true);
-                uint lit = Gte.Read(22);
-                // EvenFog's two blends, per corner, as the drawn tile has them.
-                for (int k = 0; k < corners; k++)
+                uint lit = 0;
+                if (!RecordsOn || RecordCheck)
                 {
-                    col[k] = PolyAssembler.RetainedLight(mem, normal, lit, lx[k], lz[k]);
-                    (qa[k], qb[k], qc[k]) = CornerCue(c, mem, lx[k], lz[k], dqa, dqb, curve);
-                    _corners++;
-                    if (col[k] != lit) _lightBlended++;
-                    if (qa[k] != dqa || qb[k] != dqb) _fogBlended++;
+                    Gte.Write(0, mem.ReadU32(normal));
+                    Gte.Write(1, mem.ReadU32(normal + 4u));
+                    Gte.Write(6, rgbc);
+                    Gte.NccsOp(12, true);
+                    lit = Gte.Read(22);
+                    // EvenFog's two blends, per corner, as the drawn tile has them.
+                    for (int k = 0; k < corners; k++)
+                    {
+                        col[k] = PolyAssembler.RetainedLight(mem, normal, lit, lx[k], lz[k]);
+                        (qa[k], qb[k], qc[k]) = CornerCue(c, mem, lx[k], lz[k], dqa, dqb, curve);
+                        _corners++;
+                        if (col[k] != lit) _lightBlended++;
+                        if (qa[k] != dqa || qb[k] != dqb) _fogBlended++;
+                    }
+                }
+                // 0085. Lit in the vertex shader: the normal, the records and the weights.
+                if (RecordsOn)
+                {
+                    short nx = (short)mem.ReadU16(normal), ny = (short)mem.ReadU16(normal + 2u), nz = (short)mem.ReadU16(normal + 4u);
+                    for (int k = 0; k < corners; k++)
+                    {
+                        lw[k] = PolyAssembler.RetainedLightWord(lx[k], lz[k], out int ax, out int az);
+                        if (RecordCheck) Check(mem, c, lw[k], nx, ny, nz, ax, az, rgbc, col[k], qa[k], qb[k], qc[k]);
+                        col[k] = (uint)(ushort)nx | (uint)(ushort)ny << 16;
+                        nzs[k] = nz;
+                        qa[k] = ax; qb[k] = az; qc[k] = 0f;
+                    }
                 }
 
                 int u0 = 255, v0 = 255, u1 = 0, v1 = 0;
@@ -358,12 +451,12 @@ public static class RetainedMap
                     Rect = rect, Flags = flags, Rgbc = rgbc & 0xFFFFFFu,
                 };
                 // A quad is the strip 0,1,2 then 1,2,3, as the GPU draws it.
-                Emit(t, px, py, pz, uv, col, qa, qb, qc, swell, 0, 1, 2);
+                Emit(t, px, py, pz, uv, col, qa, qb, qc, lw, nzs, swell, 0, 1, 2);
                 if (corners == 4)
                 {
                     var tail = t;
                     tail.Flags |= RetainedScene.FlagQuadTail;
-                    Emit(tail, px, py, pz, uv, col, qa, qb, qc, swell, 1, 3, 2);
+                    Emit(tail, px, py, pz, uv, col, qa, qb, qc, lw, nzs, swell, 1, 3, 2);
                 }
                 RetainedPlanes.Note(px, py, pz, corners, semi, mat, tpage, rect);
                 _faces++;
@@ -373,25 +466,144 @@ public static class RetainedMap
     }
 
     static void Emit(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
-                     Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, uint swell, int a, int b, int c)
+                     Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, Span<uint> lw, Span<short> nz,
+                     uint swell, int a, int b, int c)
     {
         if (_n + 3 > _tris.Length) Array.Resize(ref _tris, _tris.Length * 2);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, swell, a);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, swell, b);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, swell, c);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, lw, nz, swell, a);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, lw, nz, swell, b);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, lw, nz, swell, c);
     }
 
     static void Put(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
-                    Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, uint swell, int k)
+                    Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, Span<uint> lw, Span<short> nz,
+                    uint swell, int k)
     {
         var v = t;
         if ((swell >> k & 1u) != 0) v.Flags |= RetainedScene.FlagSwell;
         v.X = px[k]; v.Y = py[k]; v.Z = pz[k];
         v.U = uv[k] & 0xFF; v.V = uv[k] >> 8;
-        v.R = col[k] & 0xFF; v.G = (col[k] >> 8) & 0xFF; v.B = (col[k] >> 16) & 0xFF;
+        if (RecordsOn)
+        {
+            // The face's normal in place of a colour (RetainedScene.Vertex.Light).
+            v.R = (short)(col[k] & 0xFFFF); v.G = (short)(col[k] >> 16); v.B = nz[k];
+            v.Light = lw[k];
+        }
+        else { v.R = col[k] & 0xFF; v.G = (col[k] >> 8) & 0xFF; v.B = (col[k] >> 16) & 0xFF; }
         v.Dqa = qa[k]; v.Dqb = qb[k]; v.Curve = qc[k];
         _tris[_n++] = v;
     }
+
+    // ---- 0085. the light records, for the vertex shader -----------------------------
+
+    static readonly int[] _records = new int[RetainedScene.RecordCount * RetainedScene.RecordInts];
+    static readonly Gte.State _gtePack = new();
+
+    /// <summary>The 64 records as RetainedScene.Records lays them out, handed to the
+    /// backend. The fog word's DQA and DQB come from the game's own SetFogNear, which
+    /// writes the GTE, so the registers and the CPU are put back.</summary>
+    static void PackRecords(CpuContext c, PSMemory mem)
+    {
+        var snap = c.Snapshot();
+        Gte.Save(_gtePack);
+        try
+        {
+            for (int r = 0; r < RetainedScene.RecordCount; r++)
+            {
+                uint b = LightBase + (uint)r * 104u;
+                int at = r * RetainedScene.RecordInts;
+                for (int rot = 0; rot < 4; rot++)
+                    for (int i = 0; i < 9; i++) _records[at + rot * 9 + i] = (short)mem.ReadU16(b + (uint)rot * 20u + (uint)i * 2u);
+                for (int i = 0; i < 9; i++) _records[at + RetainedScene.RecLcm + i] = (short)mem.ReadU16(b + 0x50u + (uint)i * 2u);
+                for (int i = 0; i < 3; i++) _records[at + RetainedScene.RecBk + i] = mem.ReadU8(b + 0x62u + (uint)i) << 4;
+                int word = (short)mem.ReadU16(b + 0x66u);
+                var (dqa, dqb) = Cue(c, mem, word);
+                _records[at + RetainedScene.RecWord] = word;
+                _records[at + RetainedScene.RecDqa] = (int)dqa;
+                _records[at + RetainedScene.RecDqb] = (int)dqb;
+                _records[at + RetainedScene.RecCurve] = word >= 32000 ? 0 : word < 0 ? 1 : 2;
+            }
+        }
+        finally
+        {
+            Gte.Load(_gtePack);
+            c.Restore(snap);
+        }
+        RetainedScene.SetRecords(_records);
+    }
+
+    /// <summary>The shader's formula (WorldVs's recordLit) in C#, against the colour and
+    /// cue the CPU builds for the same corner. Needs the records packed first, so it
+    /// packs them itself.</summary>
+    static void Check(PSMemory mem, CpuContext c, uint l, short nx, short ny, short nz, int ax, int az, uint rgbc,
+                      uint col, float qa, float qb, float qc)
+    {
+        if (!_checkPacked) { PackRecords(c, mem); _checkPacked = true; }
+        var R = _records;
+        int Rec(int r, int i) => R[r * RetainedScene.RecordInts + i];
+        int own = (int)(l & 63u), rot = (int)(l >> 6 & 3u);
+        int[] rec = [own, (int)(l >> 8 & 63u), (int)(l >> 14 & 63u), (int)(l >> 20 & 63u)];
+        long[] k = [(4096L - ax) * (4096 - az), (l & 1u << 26) != 0 ? (long)ax * (4096 - az) : 0,
+                    (l & 1u << 27) != 0 ? (4096L - ax) * az : 0, (l & 1u << 28) != 0 ? (long)ax * az : 0];
+        long t = k[0] + k[1] + k[2] + k[3];
+        bool Same(int a, int b)
+        {
+            for (int i = RetainedScene.RecLcm; i < RetainedScene.RecWord; i++) if (Rec(a, i) != Rec(b, i)) return false;
+            return true;
+        }
+        bool mixL = (l & RetainedScene.LightLitBlend) != 0
+            && ((k[1] != 0 && !Same(rec[1], own)) || (k[2] != 0 && !Same(rec[2], own)) || (k[3] != 0 && !Same(rec[3], own)));
+        int Mix(int i)
+        {
+            if (!mixL) return Rec(own, i);
+            long sum = 0;
+            for (int j = 0; j < 4; j++) sum += k[j] * Rec(rec[j], i);
+            return (int)Math.Round((double)sum / t, MidpointRounding.AwayFromZero);
+        }
+        Span<int> a = stackalloc int[3];
+        for (int j = 0; j < 3; j++)
+        {
+            long v = (long)Rec(own, rot * 9 + 3 * j) * nx + (long)Rec(own, rot * 9 + 3 * j + 1) * ny + (long)Rec(own, rot * 9 + 3 * j + 2) * nz;
+            a[j] = Math.Clamp((int)(v >> 12), 0, 0x7FFF);
+        }
+        uint rgb = 0;
+        for (int ch = 0; ch < 3; ch++)
+        {
+            long v = (long)Mix(RetainedScene.RecBk + ch) << 12;
+            for (int j = 0; j < 3; j++) v += (long)Mix(RetainedScene.RecLcm + 3 * ch + j) * a[j];
+            int ir = Math.Clamp((int)(v >> 12), 0, 0x7FFF);
+            int mac = (int)((((long)((rgbc >> (8 * ch)) & 0xFF) * ir) << 4) >> 12);
+            rgb |= (uint)Math.Clamp(mac >> 4, 0, 0xFF) << (8 * ch);
+        }
+        int word = Rec(own, RetainedScene.RecWord);
+        float da = Rec(own, RetainedScene.RecDqa), db = Rec(own, RetainedScene.RecDqb), dc = Rec(own, RetainedScene.RecCurve);
+        bool mixF = (l & RetainedScene.LightFogBlend) != 0
+            && ((k[1] != 0 && Rec(rec[1], RetainedScene.RecWord) != word) || (k[2] != 0 && Rec(rec[2], RetainedScene.RecWord) != word)
+                || (k[3] != 0 && Rec(rec[3], RetainedScene.RecWord) != word));
+        if (mixF)
+        {
+            double sa = 0, sb = 0;
+            long most = 0;
+            float bent = dc;
+            for (int j = 0; j < 4; j++)
+            {
+                if (k[j] == 0) continue;
+                int w = Rec(rec[j], RetainedScene.RecWord);
+                if (w >= 32000) continue;
+                sa += k[j] * (double)Rec(rec[j], RetainedScene.RecDqa);
+                sb += k[j] * (double)Rec(rec[j], RetainedScene.RecDqb);
+                if (k[j] > most) { most = k[j]; bent = w < 0 ? 1f : 2f; }
+            }
+            (da, db, dc) = ((float)(sa / t), (float)(sb / t), bent);
+        }
+        CheckCorners++;
+        if (rgb != (col & 0xFFFFFFu)) CheckColour++;
+        float e = Math.Max(Math.Abs(da - qa), Math.Abs(db - qb) / 4096f);
+        if (e > 0f || dc != qc) CheckCue++;
+        CheckCueWorst = Math.Max(CheckCueWorst, e);
+    }
+
+    static bool _checkPacked;
 
     /// <summary>0085. A blended face the reflection pass takes as water: in an averaging
     /// blend and on one of the water's rects, as SurfaceMaterial.Classify takes a packet.</summary>
