@@ -140,6 +140,15 @@ static class RetainedModels
     public static bool MainCapturing => GpuWorld.ModelsActive && ModelWalk.InWalk && !PolyAssembler.Verifying
                                         && Gte.ReadControl(21) == 0 && Gte.ReadControl(22) == 0 && Gte.ReadControl(23) == 0;
 
+    /// <summary>The same for the planar walk's replay of the walk's submits, into the
+    /// frame's mirror: faces taken by the assemblers' tests on the mirrored camera's
+    /// screen corners.</summary>
+    public static bool MirrorCapturing => GpuWorld.MirrorModelsActive && PlanarWalk.Replaying && !PolyAssembler.Verifying
+                                          && Gte.ReadControl(21) == 0 && Gte.ReadControl(22) == 0 && Gte.ReadControl(23) == 0;
+
+    /// <summary>Models taken into the mirror; never reset.</summary>
+    public static long MirrorModels;
+
     /// <summary>Models and faces taken, faces the facing test dropped and faces the
     /// table's range dropped; never reset.</summary>
     public static long MainModels, MainFaces, MainCulled, MainOutOfTable;
@@ -165,11 +174,11 @@ static class RetainedModels
     /// clipper left to the GPU's own cull; the face's NormalColorCol colour, fogged on
     /// its two curves.
     /// </summary>
-    public static void CaptureMain(PSMemory mem, uint normals, uint face, uint count, uint bias, bool tile = false)
+    public static void CaptureMain(PSMemory mem, uint normals, uint face, uint count, uint bias, bool tile = false, bool mirror = false)
     {
         var frame = RetainedScene.Find(RetainedScene.Serial);
-        if (frame == null || count > 4096) return;
-        var v = frame.View;
+        if (frame == null || count > 4096 || mirror && !frame.MirrorOn) return;
+        var v = mirror ? frame.MirrorView : frame.View;
         var xf = Transform.Read(v);
         float dqa = (short)Gte.ReadControl(27), dqb = (int)Gte.ReadControl(28);
         int mode = (int)mem.ReadU32(FogMode);
@@ -212,20 +221,20 @@ static class RetainedModels
             if (tile)
             {
                 clip = PolyAssembler.TileFaceClips(mem, corners, p0, p1, p2, p3);
-                if (!clip && !PolyAssembler.TileFaceKept(mem, corners, p0, p1, p2, p3)) { MainCulled++; continue; }
+                if (!clip && !PolyAssembler.TileFaceKept(mem, corners, p0, p1, p2, p3)) { if (!mirror) MainCulled++; continue; }
             }
             else
             {
-                if (!PolyAssembler.FaceKept(mem, p0, p1, p2)) { MainCulled++; continue; }
+                if (!PolyAssembler.FaceKept(mem, p0, p1, p2)) { if (!mirror) MainCulled++; continue; }
                 int z = (short)mem.ReadU16(p0 + 4u) + (short)mem.ReadU16(p1 + 4u) + (short)mem.ReadU16(p2 + 4u);
                 z = corners == 4 ? (z + (short)mem.ReadU16(p3 + 4u)) >> 2 : z / 3;
-                if (z <= 0 || (uint)z + bias >= 0x2000u && !RenderDistance.Any) { MainOutOfTable++; continue; }
+                if (z <= 0 || (uint)z + bias >= 0x2000u && !RenderDistance.Any) { if (!mirror) MainOutOfTable++; continue; }
                 // A corner nearer than H/2, where the GTE's divide saturates: its packet
                 // was placed where the corner's projection is not.
                 int near = (int)(GteDepth.ProjH / 8f);
                 if ((short)mem.ReadU16(p0 + 4u) < near || (short)mem.ReadU16(p1 + 4u) < near || (short)mem.ReadU16(p2 + 4u) < near
                     || corners == 4 && (short)mem.ReadU16(p3 + 4u) < near)
-                    MainSaturated++;
+                    if (!mirror) MainSaturated++;
             }
 
             for (int k = 0; k < corners; k++)
@@ -290,11 +299,12 @@ static class RetainedModels
             if (at + 6 > dst.Length) Array.Resize(ref dst, dst.Length * 2);
             PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 0); PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 1); PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 2);
             if (corners == 4) { PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 1); PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 3); PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 2); }
-            MainFaces++;
-            if (clip) MainClipped++;
+            if (!mirror) MainFaces++;
+            if (clip && !mirror) MainClipped++;
         }
-        RetainedScene.AddMainModel(_main.AsSpan(0, n), _light);
-        RetainedScene.AddMainModel(_mainClip.AsSpan(0, nc), _light, cull: true);
+        RetainedScene.AddMainModel(_main.AsSpan(0, n), _light, mirror: mirror);
+        RetainedScene.AddMainModel(_mainClip.AsSpan(0, nc), _light, cull: true, mirror: mirror);
+        if (mirror) { MirrorModels++; return; }
         MainModels++;
         if (tile) MainTileModels++;
     }

@@ -37,6 +37,8 @@ public sealed partial class GlCore
         _uwWaveCam = L("uWaveCam"); _uwWaveT = L("uWaveT"); _uwWaveCentre = L("uWaveCentre"); _uwWaveH = L("uWaveH");
         _uwWaveTime = L("uWaveTime"); _uwWaveParams = L("uWaveParams");
         _uwBk = L("uLightBk"); _uwLcmR = L("uLcmR"); _uwLcmG = L("uLcmG"); _uwLcmB = L("uLcmB");
+        _uwClipOn = L("uClipOn"); _uwClipPlane = L("uClipPlane"); _uwClipCentre = L("uClipCentre");
+        _uwClipH = L("uClipH"); _uwClipLevel = L("uClipLevel"); _uwClipDq = L("uClipDq");
         _gl.UseProgram(_progWorld);
         if (_uwSwellOn >= 0) _gl.Uniform1(_uwSwellOn, 0);
         if (_uwWaveOn >= 0) _gl.Uniform1(_uwWaveOn, 0);
@@ -60,9 +62,10 @@ public sealed partial class GlCore
 
     bool DrawWorldMain(int offX, int offY)
     {
+        if (PlanarReflections.Capturing) return DrawWorldMirror(offX, offY);
         _wFrame = null;
         RetainedScene.WaterPending = false;
-        if (!RetainedScene.MainView || _progWorld == 0 || PlanarReflections.Capturing) return false;
+        if (!RetainedScene.MainView || _progWorld == 0) return false;
         var f = RetainedScene.Find(RetainedScene.MainSerial);
         if (f == null || RetainedScene.StaticCount[0] == 0) return false;
         Flush(FlushReason.Target);
@@ -75,7 +78,7 @@ public sealed partial class GlCore
         UploadStatic();
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         bool mips = UpdateWorldMips(f, f.MainHalves);
-        int models = UploadModels(f, mips);
+        int models = UploadModels(f.Models, f.Serial & (ModelRing - 1), f.Serial, mips);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         var (cx, cy) = BeginWorldMain(f, rt, offX, offY, mips);
         ClearStaleDepth(rt);
@@ -85,7 +88,12 @@ public sealed partial class GlCore
         _gl.DepthMask(true);
         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
         int drawn = DrawRange(0, null);
-        if (models >= 0 && RetainedScene.MainModelsShown) DrawWorldModels(f, models);
+        if (models >= 0 && RetainedScene.MainModelsShown)
+        {
+            DrawWorldModels(f.Models, models);
+            RetainedScene.MainModelTriangles += f.Models.Count / 3;
+            RetainedScene.MainModelGroups += f.Models.Groups.Count;
+        }
         EndWorldState();
         EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
 
@@ -110,7 +118,7 @@ public sealed partial class GlCore
             _wFrame = f; _wRt = rt; _wOffX = offX; _wOffY = offY; _wMips = mips;
             _wDone = float.PositiveInfinity;
             long s0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            RetainedScene.WaterPending = SortWater(f);
+            RetainedScene.WaterPending = SortWater(f, f.View, f.MainHalves);
             RetainedScene.MainWaterSortTicks += System.Diagnostics.Stopwatch.GetTimestamp() - s0;
             if (PlanarReflections.Enabled) NoteWaterPlane(f, rt, cx, cy);
         }
@@ -118,6 +126,85 @@ public sealed partial class GlCore
         _wOpen = RetainedScene.WaterPending;
         if (!_wOpen) { _gl.UseProgram(_progWorld); EndWorldUniforms(); }
         return true;
+    }
+
+    int _uwClipOn = -1, _uwClipPlane = -1, _uwClipCentre = -1, _uwClipH = -1, _uwClipLevel = -1, _uwClipDq = -1;
+
+    /// <summary>
+    /// The planar walk's mirror, drawn as the main view is: the map's opaque faces of
+    /// the halves the mirrored walk left to the backend, and the models its replay took
+    /// off the packets, from the mirrored camera into the planar texture the capture is
+    /// drawing, clipped at the water and fogged level by PrimFs as the capture's packets
+    /// are. The capture's own table walk calls it past slot 0; what the table still
+    /// carries (the blended faces) is drawn and tested after it.
+    /// </summary>
+    bool DrawWorldMirror(int offX, int offY)
+    {
+        var f = RetainedScene.Find(RetainedScene.MirrorSerial);
+        if (_progWorld == 0 || f == null || !f.MirrorOn || RetainedScene.StaticCount[0] == 0) return false;
+        Flush(FlushReason.Target);
+        var p = Classify();
+        if (p is not { IsPlanar: true }) return false;
+        if (!RetainedScene.MirrorShown) return true;
+
+        uint query = BeginGpuTimer();
+        UpdateShadows();
+        UploadStatic();
+        bool mips = UpdateWorldMips(f, f.MirrorHalves);
+        int models = UploadModels(f.MirrorModels, MirrorSlot, f.Serial, mips);
+        BeginWorldMain(f, p, offX, offY, mips, mirror: true);
+        ClearStaleDepth(p);
+        _gl.Disable(EnableCap.Blend);
+        _gl.DepthMask(true);
+        int drawn = DrawRange(0, null);
+        if (models >= 0) DrawWorldModels(f.MirrorModels, models);
+        if (RetainedScene.MirrorWater && WaterInView()) DrawMirrorWater(f);
+        EndWorldState();
+        EndWorldUniforms();
+        _gl.UseProgram(0);
+        EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.Capture);
+
+        p.LastDrawFrame = _frame;
+        RetainedScene.MirrorDraws++;
+        RetainedScene.MirrorTriangles += drawn / 3;
+        RetainedScene.MirrorModelTriangles += f.MirrorModels.Count / 3;
+        return true;
+    }
+
+    /// <summary>The mirror's blended map faces, whole, far to near, after its opaque
+    /// ones and its models: tested and not written, and neither swollen nor rippled, as a
+    /// capture's water packets are. From below the plane, level water faces away and is
+    /// culled; what is left is water standing other than level.</summary>
+    void DrawMirrorWater(RetainedScene.Frame f)
+    {
+        if (!SortWater(f, f.MirrorView, f.MirrorHalves)) return;
+        _gl.BindVertexArray(_worldVao);
+        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
+        bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
+        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, bias ? GteDepth.DepthBias / 65536f : 0f);
+        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, bias ? GteDepth.DepthSlope : 0f);
+        _gl.Enable(EnableCap.CullFace);
+        _gl.DepthMask(false);
+        _gl.Enable(EnableCap.Blend);
+        _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+        _gl.BlendFuncSeparate(BlendingFactor.Src1Color, BlendingFactor.Src1Alpha, BlendingFactor.One, BlendingFactor.Zero);
+        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
+        {
+            int n = _wSortCount[range];
+            if (n == 0) continue;
+            int mode = range - 1;
+            float src = mode switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, dst = mode == 0 ? 0.5f : 1f;
+            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, src, src, src, dst);
+            if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, mode == 0 ? 0 : 1);
+            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)n, DrawElementsType.UnsignedInt, (void*)(_wSortStart[range] * 4L)); }
+            RetainedScene.MirrorWaterTriangles += n / 3;
+        }
+        if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, 0);
+        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+        // The main view sorts its own water again.
+        Array.Clear(_wSortCount);
     }
 
     void MarkDrawn(GlDisplayRt rt)
@@ -129,8 +216,10 @@ public sealed partial class GlCore
     }
 
     /// <summary>The world program set up for the frame's camera in the display target,
-    /// depth tested, culled, scissored to the game's clip; the centre it drew with.</summary>
-    (float, float) BeginWorldMain(RetainedScene.Frame f, GlDisplayRt rt, int offX, int offY, bool mips)
+    /// depth tested, culled, scissored to the game's clip; the centre it drew with.
+    /// With <paramref name="mirror"/>, the mirrored camera into the target's planar
+    /// texture, clipped at the water and fogged level as a capture's packets are.</summary>
+    (float, float) BeginWorldMain(RetainedScene.Frame f, GlDisplayRt rt, int offX, int offY, bool mips, bool mirror = false)
     {
         CloseWorldMain();
         _gl.UseProgram(_progWorld);
@@ -139,7 +228,7 @@ public sealed partial class GlCore
         _gl.ActiveTexture(TextureUnit.Texture0 + HalvesUnit);
         _gl.BindTexture(TextureTarget.Texture2D, _halvesTex);
         _gl.TexSubImage2D<byte>(TextureTarget.Texture2D, 0, 0, 0, RetainedScene.HalvesW, RetainedScene.HalvesH,
-            PixelFormat.RedInteger, PixelType.UnsignedByte, f.MainHalves);
+            PixelFormat.RedInteger, PixelType.UnsignedByte, mirror ? f.MirrorHalves : f.MainHalves);
         if (_uwHalfGate >= 0) _gl.Uniform1(_uwHalfGate, 1);
         if (_uwAniso >= 0) _gl.Uniform1(_uwAniso, (float)GteDepth.Anisotropy);
         if (_uwTrueColor >= 0) _gl.Uniform1(_uwTrueColor, GteDepth.TrueColor ? 1f : 0f);
@@ -156,15 +245,29 @@ public sealed partial class GlCore
         // Fogged at each pixel's own depth: a face clipped at the eye has no corner
         // whose screen-affine fog holds at the clip.
         if (_uwCueFromZ >= 0) _gl.Uniform1(_uwCueFromZ, RetainedScene.MainFogFromZ ? Math.Max(1f, f.View.H) : 0f);
-        SendWorldSwell(f, _uwSwellOn, _uwSwell);
+        // The mirrored walk's water was never swollen (WaterSwell stands down for it).
+        if (mirror) { if (_uwSwellOn >= 0) _gl.Uniform1(_uwSwellOn, 0); }
+        else SendWorldSwell(f, _uwSwellOn, _uwSwell);
         SendWorldFluid();
         SendWorldAtmos();
 
         // The GTE's centre is in the draw area's pixels; the target's are offset
         // from them by the draw offset and the widescreen margin.
-        var v = f.View;
+        var v = mirror ? f.MirrorView : f.View;
         Span<float> r = [v.R00, v.R01, v.R02, v.R10, v.R11, v.R12, v.R20, v.R21, v.R22];
         float cx = v.Cx + offX - rt.X + rt.Margin, cy = v.Cy + offY - rt.Y;
+        // 0068's clip and level fog, as GlCore sends them for a planar batch.
+        if (_uwClipOn >= 0) _gl.Uniform1(_uwClipOn, mirror ? 1 : 0);
+        if (mirror && _uwClipOn >= 0)
+        {
+            var cp = rt.ClipPlane;
+            _gl.Uniform4(_uwClipPlane, cp[0], cp[1], cp[2], cp[3]);
+            _gl.Uniform2(_uwClipCentre, cx, cy);
+            _gl.Uniform1(_uwClipH, Math.Max(1f, v.H));
+            var la = rt.LevelAxis;
+            if (_uwClipLevel >= 0) _gl.Uniform3(_uwClipLevel, la[0], la[1], la[2]);
+            if (_uwClipDq >= 0) _gl.Uniform2(_uwClipDq, (float)GteDepth.ProjDqa, GteDepth.ProjDqb / 4096f);
+        }
         SetWorldView(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, v.H, cx, cy, rt.Wide1x, rt.H, v.H, true, GlVram.Scale);
         if (_uwNear >= 0) _gl.Uniform1(_uwNear, RetainedScene.MainNear);
         SendWorldLights(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, cx, cy, v.H, false, 0f);
@@ -236,6 +339,7 @@ public sealed partial class GlCore
         if (_uwDither >= 0) _gl.Uniform1(_uwDither, 0);
         if (_uwCueFromZ >= 0) _gl.Uniform1(_uwCueFromZ, 0f);
         if (_uwSwellOn >= 0) _gl.Uniform1(_uwSwellOn, 0);
+        if (_uwClipOn >= 0) _gl.Uniform1(_uwClipOn, 0);
         EndWorldLights();
     }
 
@@ -460,7 +564,7 @@ public sealed partial class GlCore
     /// last packet linked into a slot first. A counting sort on each face's centre,
     /// which is kept per static triangle. False when none is left.
     /// </summary>
-    unsafe bool SortWater(RetainedScene.Frame f)
+    unsafe bool SortWater(RetainedScene.Frame f, in RetainedScene.View v, byte[] halves)
     {
         var st = RetainedScene.Static;
         if (_wCentreGen != RetainedScene.StaticGeneration)
@@ -487,7 +591,6 @@ public sealed partial class GlCore
                 }
             }
         }
-        var v = f.View;
         int total = 0;
         if (_wIdx.Length < st.Length) _wIdx = new uint[st.Length];
         if (_wTri.Length < st.Length / 3)
@@ -514,7 +617,7 @@ public sealed partial class GlCore
                 for (int i = RetainedScene.ChunkStart[k]; i + 2 < end; i += 3)
                 {
                     uint hid = (st[i].Flags >> RetainedScene.HalfShift) & RetainedScene.HalfBits;
-                    if (hid == 0 || f.MainHalves[hid - 1] == 0) continue;
+                    if (hid == 0 || halves[hid - 1] == 0) continue;
                     float z = (float)(v.R20 * (_wCentre[i] - v.CamX) + v.R21 * (_wCentre[i + 1] - v.CamY)
                                     + v.R22 * (_wCentre[i + 2] - v.CamZ)) + v.Tz;
                     _wTri[n] = i;
@@ -637,20 +740,20 @@ public sealed partial class GlCore
 
     // The frames' models, one buffer per frame in the ring, so the normal pass at
     // present still finds the models of the frame the presented target holds.
-    const int ModelRing = 4;
-    readonly uint[] _mdlVbo = new uint[ModelRing], _mdlMipVbo = new uint[ModelRing], _mdlVao = new uint[ModelRing];
-    readonly int[] _mdlSerial = new int[ModelRing], _mdlCap = new int[ModelRing];
+    // The mirror's are drawn at once, into one buffer past the ring.
+    const int ModelRing = 4, MirrorSlot = ModelRing;
+    readonly uint[] _mdlVbo = new uint[ModelRing + 1], _mdlMipVbo = new uint[ModelRing + 1], _mdlVao = new uint[ModelRing + 1];
+    readonly int[] _mdlSerial = new int[ModelRing + 1], _mdlCap = new int[ModelRing + 1];
     uint[] _mdlMip = [];
     int _uwBk, _uwLcmR, _uwLcmG, _uwLcmB;
 
     /// <summary>The frame's models into their buffer, with their mip-atlas entries
     /// looked up and decoded; the buffer's slot, or -1 for none. Before the target is
     /// bound, since the decode draws.</summary>
-    unsafe int UploadModels(RetainedScene.Frame f, bool mips)
+    unsafe int UploadModels(RetainedScene.ModelRuns runs, int slot, int serial, bool mips)
     {
-        int n = f.ModelCount;
+        int n = runs.Count;
         if (n == 0) return -1;
-        int slot = f.Serial & (ModelRing - 1);
         if (_mdlVao[slot] == 0)
         {
             _mdlVbo[slot] = _gl.GenBuffer();
@@ -666,18 +769,18 @@ public sealed partial class GlCore
             _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_mdlCap[slot] * 4), null, BufferUsageARB.StreamDraw);
             _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlVbo[slot]);
         }
-        _gl.BufferSubData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, 0, new ReadOnlySpan<RetainedScene.Vertex>(f.Models, 0, n));
+        _gl.BufferSubData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, 0, new ReadOnlySpan<RetainedScene.Vertex>(runs.Tris, 0, n));
         if (_mdlMip.Length < n) _mdlMip = new uint[Math.Max(n, _mdlMip.Length * 2)];
         for (int i = 0; i + 2 < n; i += 3)
         {
-            uint e = mips ? DynMip(f.Models[i]) : 0u;
+            uint e = mips ? DynMip(runs.Tris[i]) : 0u;
             _mdlMip[i] = _mdlMip[i + 1] = _mdlMip[i + 2] = e;
         }
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlMipVbo[slot]);
         _gl.BufferSubData<uint>(BufferTargetARB.ArrayBuffer, 0, new ReadOnlySpan<uint>(_mdlMip, 0, n));
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         if (mips && _mip!.HasPending) _mip.Process(_vram.SampleTexture);
-        _mdlSerial[slot] = f.Serial;
+        _mdlSerial[slot] = serial;
         return slot;
     }
 
@@ -688,7 +791,7 @@ public sealed partial class GlCore
     /// floor wins as the later table entry did. Not culled: the port kept only the faces
     /// the game's own facing test kept. A run per BK and LCM, which light the dots.
     /// </summary>
-    void DrawWorldModels(RetainedScene.Frame f, int slot)
+    void DrawWorldModels(RetainedScene.ModelRuns f, int slot)
     {
         _gl.Disable(EnableCap.CullFace);
         _gl.BindVertexArray(_mdlVao[slot]);
@@ -719,13 +822,11 @@ public sealed partial class GlCore
             if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
             _gl.DepthMask(true);
         }
-        RetainedScene.MainModelTriangles += f.ModelCount / 3;
-        RetainedScene.MainModelGroups += f.Groups.Count;
     }
 
     /// <summary>Every run of the frame's models through the bound program, culled
     /// where the port could not cull (the facing set up as the map's).</summary>
-    void DrawModelRuns(RetainedScene.Frame f)
+    void DrawModelRuns(RetainedScene.ModelRuns f)
     {
         foreach (var g in f.Groups)
         {
@@ -820,11 +921,11 @@ public sealed partial class GlCore
             RetainedScene.MainNormalTriangles += DrawStaticChunks(0) / 3;
             _gl.Disable(EnableCap.CullFace);
             int ms = f.Serial & (ModelRing - 1);
-            if (f.ModelCount > 0 && _mdlSerial[ms] == f.Serial && RetainedScene.MainModelsShown)
+            if (f.Models.Count > 0 && _mdlSerial[ms] == f.Serial && RetainedScene.MainModelsShown)
             {
                 _gl.BindVertexArray(_mdlVao[ms]);
-                DrawModelRuns(f);
-                RetainedScene.MainModelNormalTriangles += f.ModelCount / 3;
+                DrawModelRuns(f.Models);
+                RetainedScene.MainModelNormalTriangles += f.Models.Count / 3;
             }
             _gl.BindVertexArray(0);
         }

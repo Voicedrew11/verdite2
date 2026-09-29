@@ -203,6 +203,7 @@ KF2_GPUWORLD_FOGZ=0                    # fog the GPU-drawn map from the corners'
 KF2_GPUWORLD_NEAR=16                   # the GPU-drawn map's near plane in view depth (16; the game's clipper keeps everything past 0)
 KF2_GPUWORLD_WATER=0                   # leave the map's water on the packets under the GPU world renderer (a comparison; the `gpuworld water off` verb)
 KF2_GPUWORLD_MODELS=0                  # leave the object walk's models on the packets under the GPU world renderer (a comparison; the `gpuworld models off` verb)
+KF2_GPUWORLD_MIRROR=0                  # leave the planar walk's mirror on its packets under the GPU world renderer (a comparison; the `gpuworld mirror off` verb; `gpuworld mirror hide` leaves it undrawn)
 KF2_REMASTER=1                         # apply the working pack (off by default; the editor's checkbox saves it); Shift+E opens the editor
 KF2_REMASTER_PACK=dir                  # the working pack (packs/working)
 KF2_REMASTER_PROBE=1                   # a line every 2 s: the area, its fingerprint, what applied; a diff of the tile bytes when an area's fingerprint changes

@@ -1444,6 +1444,19 @@ Four files in the directory have no entry below:
   so the normal pass at present finds the presented frame's. `MainModelsShown` off
   leaves them undrawn, the probe's measure of what they cover. The fifth diff in the
   patch file. See "Step 3, the first slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the planar walk's mirror is drawn by the backend too. A frame
+  carries a mirror (`RetainedScene.BeginMirror`: the mirrored camera, its own half
+  gate `Frame.MirrorHalves`, `NoteMirrorHalf`, and its models, `AddMainModel`'s
+  `mirror`; a frame's model runs are `ModelRuns` now), and `LibGpu.WalkOTag` calls the
+  same drawer as a planar capture reaches slot 1 (`MirrorSerial`).
+  `GlMainView.DrawWorldMirror` draws the map's opaque range and the mirror's models
+  into the capture's planar texture through `WorldVs` from the mirrored camera, with
+  PrimFs's clip plane and level fog (`uClipOn` and the rest, as `GlCore` sends them for
+  a planar batch), then its blended faces whole, far to near, unswollen and unrippled
+  (`DrawMirrorWater`, `RetainedScene.MirrorWater`); `SortWater` takes the view and the
+  gate. `MirrorShown` off leaves it undrawn, the probe's measure of what it covers.
+  The sixth diff in the patch file. See "Step 5, the first slice" in
+  `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

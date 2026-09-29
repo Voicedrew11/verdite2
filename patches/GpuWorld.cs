@@ -24,13 +24,15 @@ namespace Kf2;
 /// the swell and the ripples; with it off (<c>KF2_GPUWORLD_WATER=0</c>) a half with
 /// semi-transparent faces keeps only those (<see cref="PolyAssembler.BlendedOnly"/>).
 /// A half with a subtractive face is the packets' whole. The mirrored walk
-/// (<see cref="PlanarWalk"/>) is untouched.
+/// (<see cref="PlanarWalk"/>) hands its halves and its replayed models to the backend
+/// the same way (<c>KF2_GPUWORLD_MIRROR=0</c> to compare), which draws them into the
+/// planar texture as the capture's table walk reaches slot 1.
 ///
 /// The object walk's models lit by the models' assembler are drawn by the backend too,
 /// after the map, their opaque faces taken off the packets by <see cref="RetainedModels.CaptureMain"/>;
 /// their blended faces, and the models the other assemblers draw, stay on the packets.
 ///
-/// See "Step 1, the first slice", "Step 2, the third slice" and "Step 3, the first slice"
+/// See "Step 1, the first slice", "Step 2, the third slice", "Step 3, the first slice" and "Step 5, the first slice"
 /// in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
@@ -39,7 +41,17 @@ public static class GpuWorld
 
     public const string OnKey = "kf2.gpuworld.on";
 
-    static bool _on, _probe, _water = true, _models = true;
+    static bool _on, _probe, _water = true, _models = true, _mirror = true;
+
+    /// <summary>Whether this frame's planar walk hands its opaque map and models to the
+    /// GPU too: the mirror drawn by the renderer from the mirrored camera.</summary>
+    public static bool MirrorActive { get; private set; }
+
+    /// <summary>Whether the mirror's replayed models are drawn on the GPU.</summary>
+    public static bool MirrorModelsActive { get; private set; }
+
+    /// <summary>Whether the mirror's water is drawn on the GPU (the water switch).</summary>
+    public static bool MirrorWaterActive { get; private set; }
 
     /// <summary>Whether this frame's water is drawn on the GPU too: the switch, and
     /// 0079's reorder, whose barriers are where each slice goes.</summary>
@@ -55,6 +67,7 @@ public static class GpuWorld
     {
         _water = Environment.GetEnvironmentVariable("KF2_GPUWORLD_WATER")?.Trim() != "0";
         _models = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MODELS")?.Trim() != "0";
+        _mirror = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MIRROR")?.Trim() != "0";
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
             RetainedScene.MainNear = Math.Max(near, 0.01f);
@@ -80,6 +93,7 @@ public static class GpuWorld
         if (on) return;
         Active = false;
         ModelsActive = false;
+        MirrorActive = MirrorModelsActive = MirrorWaterActive = false;
         RetainedScene.MainView = false;
         RetainedScene.MainSerial = 0;
     }
@@ -121,6 +135,10 @@ public static class GpuWorld
                     && ModelWalk.Enabled && ModelWalk.WalkEnabled && ModelWalk.SubmitEnabled && !ModelWalk.Verifying
                     && PolyAssembler.LitEnabled;
         RetainedScene.MainWater = WaterActive;
+        MirrorActive = Active && _mirror && PlanarReflections.Enabled;
+        MirrorModelsActive = MirrorActive && ModelsActive;
+        MirrorWaterActive = MirrorActive && _water;
+        RetainedScene.MirrorWater = MirrorWaterActive;
         if (_probe)
         {
             // BK and LCM generations the last frame started (GteLightMap keeps eight).
@@ -170,6 +188,9 @@ public static class GpuWorld
     /// still assembled.</summary>
     public static long Skipped, Kept, Whole;
 
+    /// <summary>The same for the mirrored walk.</summary>
+    public static long MirrorSkipped, MirrorKept;
+
     /// <summary>The `gpuworld` shell verb: the state, or the switch.</summary>
     public static string Shell(string arg)
     {
@@ -183,6 +204,10 @@ public static class GpuWorld
             case "water off": _water = false; break;
             case "models on": _models = true; break;
             case "models off": _models = false; break;
+            case "mirror on": _mirror = true; break;
+            case "mirror off": _mirror = false; break;
+            case "mirror hide": RetainedScene.MirrorShown = false; break;
+            case "mirror show": RetainedScene.MirrorShown = true; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
             case "models show": RetainedScene.MainModelsShown = true; break;
             case "perpixel on": GteLightMap.Enabled = true; break;
@@ -196,11 +221,11 @@ public static class GpuWorld
                 return $"{{\"ok\":true,\"forward\":[{v.R20:F3},{v.R21:F3},{v.R22:F3}],\"cam\":[{v.CamX},{v.CamY},{v.CamZ}],\"models\":[{items}]}}";
             }
             case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|scene|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|mirror on|off|hide|show|scene|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
-               $"\"models\":{(_models ? "true" : "false")}," +
+               $"\"models\":{(_models ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -209,6 +234,7 @@ public static class GpuWorld
     static double _reportAt;
     static long _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
     static long _gensMax, _gensAt, _builds;
+    static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
     static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
 
     static void Report()
@@ -267,6 +293,18 @@ public static class GpuWorld
                            $"of {px} pixel(s) with a depth, {(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceBehind / px):F2}% whose surface lies behind it, " +
                            $"{(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceMissing / px):F2}% with none"));
         _nrmTris = RetainedScene.MainNormalTriangles;
+        long md = RetainedScene.MirrorDraws - _mDraws;
+        Console.WriteLine($"[KF2] gpu world: mirror {(MirrorActive ? "on the GPU" : "on the packets")}; {md} draw(s), " +
+                          $"{RetainedScene.MirrorMissed - _mMissed} capture(s) missed; a draw: " +
+                          $"{(md == 0 ? 0 : (RetainedScene.MirrorTriangles - _mStatic) / md)} static and " +
+                          $"{(md == 0 ? 0 : (RetainedScene.MirrorModelTriangles - _mModelTris) / md)} model and " +
+                          $"{(md == 0 ? 0 : (RetainedScene.MirrorWaterTriangles - _mWater) / md)} blended triangle(s); " +
+                          $"halves {MirrorSkipped} left whole to the GPU, {MirrorKept} with their blended faces assembled; " +
+                          $"{RetainedModels.MirrorModels - _mMirModels} model(s) taken");
+        _mDraws = RetainedScene.MirrorDraws; _mMissed = RetainedScene.MirrorMissed; _mStatic = RetainedScene.MirrorTriangles;
+        _mModelTris = RetainedScene.MirrorModelTriangles; _mMirModels = RetainedModels.MirrorModels;
+        _mWater = RetainedScene.MirrorWaterTriangles;
+        MirrorSkipped = MirrorKept = 0;
         RetainedScene.SurfaceDepthPixels = RetainedScene.SurfaceBehind = RetainedScene.SurfaceMissing = RetainedScene.SurfaceChecks = 0;
         RetainedScene.SurfaceCheck = true;
         Skipped = Kept = Whole = 0;

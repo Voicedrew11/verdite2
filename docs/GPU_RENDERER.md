@@ -8,7 +8,9 @@ off by default, `KF2_GPUWORLD=1`, measured and not judged), and two slices of
 Step 2: that map in the occlusion's normals and the surface buffer, each map
 feature checked against the packet path, and the map's water drawn in the table's
 order. Step 3's first slice draws the object walk's opaque models on the GPU;
-their blended faces, the effects, the billboards and the arm are still on packets.**
+their blended faces, the effects, the billboards and the arm are still on packets.
+Step 5's first slice draws the planar walk's mirror on the renderer: its map, its
+water and its opaque models, judged by eye.**
 
 ## Why: the frame is the game's geometry, done on one CPU thread
 
@@ -271,6 +273,8 @@ come after (decided 2026-09-28), unless an issue is something a later step build
    the packets too (`KF2_GPUWORLD_MODELS=0`), so it is Step 1's, not Step 3's; the
    plan's answer is the instanced map, lit in the shader from a record per half.
    `KF2_GPUWORLD_PROBE=1` prints the builds and what changed for the last.
+5. **The mirror's far edge is 3-5 levels brighter on the GPU** (measured,
+   2026-09-29; see "Step 5, the first slice"). Within the parity bar, not explained.
 
 ### Step 2: every map feature in the renderer
 
@@ -630,6 +634,85 @@ from the retained map; all six faces in one pass by layered rendering), a camera
 cubemap, `MenuWorld`'s and `LoopPacing`'s redraws (a draw call each), and the
 smoothers (interpolated instance records instead of rebuilt geometry).
 
+#### Step 5, the first slice
+
+**The planar walk's mirror drawn by the renderer: the map's opaque faces, its water
+and the opaque models, from the mirrored camera. Mechanism measured, and judged by
+eye from play (2026-09-29): the reflections look as they did and run much better
+(about 500 fps in areas with water).** `KF2_GPUWORLD_MIRROR=0` or `gpuworld mirror off` is the comparison, and
+`gpuworld mirror hide` leaves the mirror's GPU half undrawn (what it covers). The
+runtime half amends `0085` (its sixth diff). Taken before Steps 3 and 4 are done
+because the mirror was the frame's largest single cost: at the `fdat02` pool, 1.73 ms
+of 3.8 ms of frame work.
+
+**What it does.** Exactly what the main view does, from the planar walk's camera.
+The mirrored walk still runs: `CameraBlock.Build` with the mirrored camera, the tile
+walk's sweep over the eye's cells and then `PlanarCull`'s, and the replay of the
+object walk's submits. What changed is that none of it builds a packet the GPU can
+draw instead. A half the mirrored walk visits is noted in the frame's mirror gate
+(`RetainedScene.NoteMirrorHalf`, `Frame.MirrorHalves`) and not set up or assembled,
+water and all; a half with a subtractive face stays on the packets whole. A replayed
+submit's opaque faces are taken by `RetainedModels.CaptureMain` as the main view's
+are, by the assemblers' own tests on the mirrored camera's screen corners, so the
+facing is the mirror's, and go to the frame's mirror (`AddMainModel`'s `mirror`),
+taken back to world space through the mirrored view. When the capture's own table
+walk (`PlanarWalk.BeforeDrawOTag`) reaches slot 1, the backend draws into the planar
+texture: the opaque map under the mirror's gate, the models, then the mirror's
+blended map faces whole, far to near, neither swollen nor rippled, as the
+capture's water packets were. PrimFs's clip plane and level fog (`uClipOn`,
+`uClipPlane`, `uClipLevel`, `uClipDq`) are set on the world program as `GlCore` sets
+them for a planar batch. What the mirrored table still carries (the models' blended
+faces, effects, billboards) is drawn and tested after it.
+
+**Why the water could go too.** The first cut left the mirror's water on the packets,
+as Step 1 left the main view's. It kept 62% of the halves `fdat02`'s mirror visits
+being set up and transformed for their water, and the mirror's arena peaked at 0
+bytes: from below the plane a level water face faces away and is culled, so they
+built nothing. The GPU draws the same faces, and culls them the same way.
+
+**Measured.** The harness is Step 2's second slice's, the mirror on its packets
+against on the GPU in the same paused frame, with a third snap with the mirror
+hidden: its difference from the packets is the pixels the mirror reaches. Render
+scale 5, 16:9, planar reflections on:
+
+| view (`fdat02`) | the mirror covers | inside it, >4 levels | >16 | worst block |
+|---|---|---|---|---|
+| spawn `71680 -14400 98304`, pitch 0-400, four headings | 9.0-14.6% | 0.05-0.18% | 0 | 0.00 |
+| pier `75773 -13026 83101`, pitch 35 and 300, four headings | 10.0-41.0% | 0.27-8.70% | 0 | 0.00-0.02 |
+
+**The pier's difference (known issue 5)** is a band at the reflection's far edge,
+rows 582-622 of 1200 at pitch 35 heading 1200, the GPU brighter by 2.6, 4.3 and 5.2
+levels (red, green, blue) on the pixels that differ; the pictures are the same by
+eye. It is the water: with the mirror's water on its packets it is 0.32%. It did not
+move with the world's mips off, `EvenFog`'s blend or `EvenFog` off, the planar level
+fog off, the per-pixel cue off (`KF2_GPUWORLD_FOGZ=0`), per-pixel lighting off, nor
+with the GPU's mirror water drawn without its facing cull, its clip plane, its depth
+test or its chunk cull; and leaving the GPU's mirror water out altogether changes the
+band by nothing. So the packets draw water there that the GPU's mirror does not have
+among the faces it draws. Not found.
+
+Cost, uncapped (`KF2_FPS=1000 KF2_PROFILE=1`), the spawn at pitch 400, heading 2500:
+
+| | mirror on the packets | first cut (water on packets) | mirror on the GPU |
+|---|---|---|---|
+| frame work | 3.77-3.81 ms | 2.47 ms | 1.82 ms |
+| fps | 258-261 | 394 | 531 |
+| the mirrored walk | 1.72 ms | 1.07 ms | 0.40 ms |
+| `DrawOTag` (packet walk) | 0.87-0.90 ms | 0.38 ms | 0.40 ms |
+| GPU: the capture | 0.25 ms | 0.15 ms | 0.14 ms |
+| GPU per present | 1.54 ms | 1.44 ms | 1.39 ms |
+
+What is left of the mirror's 0.40 ms is the camera block, the sweeps and the replay:
+each replayed submit still sets its model up and transforms its vertices so that its
+opaque faces can be tested and taken. A mesh cache (Step 3) is what takes the replay
+away. At 144 fps: 144.0 drawn at 19.9-20.0 ticks/s with the mirror on the GPU or on
+its packets, `[present] wide`, and nothing reported under `KF2_GLDEBUG=1` (which on
+its own takes the rate to 140.5 on alternate seconds).
+
+A creature in the reflection was judged by eye from play too. **Not checked**: known issue 5's band by eye on its own; water anywhere but `fdat02` (a sweep of eight headings from each spawn of
+areas 1-7 found none in view); a menu, shop or message over it and `LoopPacing`'s
+redraws, which run the same walk.
+
 ### Step 6, if needed: culling on the GPU
 
 A compute pass over the chunks and halves building the draw list. Worth it only if
@@ -658,13 +741,10 @@ change at all. The retained scene's own reflection code (`GlRetained`'s planes a
 cubemap, the half gate, `WorldVs`) is the renderer's ancestor and folds into it;
 its `KF2_RETAINED` switch is retired then.
 
-**When.** The mirror is the renderer's second consumer, not its first: it moves
-once Step 2 has the map at parity (Step 5 in full). It can move earlier as a
-proving ground, since a difference in the water is easier to live with than one in
-the picture: after Step 1 and the map features the water shows (fog, the swell,
-materials), with the models still replayed through the game's code until Step 3.
-That takes about 1.9 of the planar walk's 2.1 ms off before the main view
-switches.
+**When.** Done for the map, the water and the opaque models, once Step 2 had the map
+at parity and Step 3 the models ("Step 5, the first slice"): it takes 1.3 of the
+mirror's 1.7 ms off. The replay of the submits stays until the mesh cache, and the
+models' blended faces, the effects and the billboards stay on the mirrored table.
 
 The retained scene's reflections were judged worse than the planar walk with the
 eye's cull as their gate (2026-09-26), and the likely reason is that gate:

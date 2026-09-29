@@ -368,13 +368,16 @@ public static class TileWalk
         // 0085. A half the GPU draws whole needs none of the setup below. With its
         // water on the packets, a half with blended faces keeps only those; a half
         // with a subtractive face is the packets' whole.
-        bool gpu = GpuWorld.Active && !PlanarWalk.Mirroring;
+        bool mirror = PlanarWalk.Mirroring;
+        bool gpu = mirror ? GpuWorld.MirrorActive : GpuWorld.Active;
         var faces = gpu ? GpuWorld.KindOf(mem, mem.ReadU8(rec)) : GpuWorld.Faces.Opaque;
         if (gpu && !Beyond(mem, mem.ReadU8(rec))
-            && (faces == GpuWorld.Faces.Opaque || faces == GpuWorld.Faces.Blended && GpuWorld.WaterActive))
+            && (faces == GpuWorld.Faces.Opaque
+                || faces == GpuWorld.Faces.Blended && (mirror ? GpuWorld.MirrorWaterActive : GpuWorld.WaterActive)))
         {
-            NoteDrawn(rec);
-            GpuWorld.Skipped++;
+            if (mirror) NoteMirrored(rec);
+            else NoteDrawn(rec);
+            if (mirror) GpuWorld.MirrorSkipped++; else GpuWorld.Skipped++;
             Epilogue(c, mem, sp);
             return;
         }
@@ -423,10 +426,11 @@ public static class TileWalk
         if (Beyond(mem, model)) { _skipped++; Epilogue(c, mem, sp); return; }
         // What the frame drew is what its reflections may show (RetainedScene.HalfGate),
         // grown and held by ReflectionReach.
-        if (!PlanarWalk.Mirroring) NoteDrawn(rec, main: faces != GpuWorld.Faces.Subtractive);
+        if (!mirror) NoteDrawn(rec, main: faces != GpuWorld.Faces.Subtractive);
+        else if (gpu) NoteMirrored(rec);
         // 0085. The GPU draws the half's opaque faces; only its water is assembled.
-        if (gpu) GpuWorld.Kept++;
-        else if (faces == GpuWorld.Faces.Subtractive) GpuWorld.Whole++;
+        if (gpu) { if (mirror) GpuWorld.MirrorKept++; else GpuWorld.Kept++; }
+        else if (faces == GpuWorld.Faces.Subtractive && !mirror) GpuWorld.Whole++;
 
         // The half being assembled, for whatever the assemblers record per packet.
         CurrentRecord = rec;
@@ -487,6 +491,13 @@ public static class TileWalk
 
         if (RetainedMap.Checking && !PlanarWalk.Mirroring && whole && !gpu) RetainedMap.CheckHalf(mem, rec, model);
         Epilogue(c, mem, sp);
+    }
+
+    /// <summary>0085. A half of the mirrored walk's the backend draws.</summary>
+    static void NoteMirrored(uint rec)
+    {
+        uint off = rec - MapBase;
+        RetainedScene.NoteMirrorHalf((int)(off % 800u / 10u), (int)(off / 800u), (int)(off % 10u / 5u));
     }
 
     static void NoteDrawn(uint rec, bool main = true)

@@ -190,6 +190,9 @@ public static class PlanarWalk
 
     /// <summary>Set while the tile walk runs from the mirrored camera.</summary>
     public static bool Mirroring { get; private set; }
+
+    /// <summary>Set while the object walk's submits are made again from it.</summary>
+    public static bool Replaying => _replaying && !Mirroring;
     static uint _walkLo, _walkHi;
     static int _n;
     static uint[] _regs = new uint[4 * 128];
@@ -334,6 +337,10 @@ public static class PlanarWalk
             _level[0] = (rm[0] * fx + rm[2] * fz) / 4096f;
             _level[1] = (rm[3] * fx + rm[5] * fz) / 4096f;
             _level[2] = (rm[6] * fx + rm[8] * fz) / 4096f;
+
+            // 0085. The backend draws the mirror's opaque map and models; the walk and
+            // the replay below leave them off the mirrored table.
+            if (GpuWorld.MirrorActive) RetainedScene.BeginMirror(RetainedMap.ReadView(mem));
 
             c.SP = walkSp;
             c.RA = 0x80034684u;

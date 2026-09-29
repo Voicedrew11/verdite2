@@ -383,9 +383,14 @@ public static class RetainedScene
         public bool SwellOn;
         /// <summary>0085. The opaque faces of the models the frame's object walk took
         /// off the packets, in world space, in runs lit by one BK and LCM.</summary>
-        public Vertex[] Models = new Vertex[1024];
-        public int ModelCount;
-        public readonly List<ModelGroup> Groups = new();
+        public readonly ModelRuns Models = new();
+        /// <summary>0085. The planar walk's mirrored camera, when the mirror is drawn by
+        /// the backend this frame (<see cref="MirrorSerial"/>): the halves its walk
+        /// visited, 255 each, and the models its replay took off the packets.</summary>
+        public View MirrorView;
+        public bool MirrorOn;
+        public readonly byte[] MirrorHalves = new byte[HalvesW * HalvesH];
+        public readonly ModelRuns MirrorModels = new();
 
         public ReadOnlySpan<Vertex> SortedDynamic()
         {
@@ -421,11 +426,52 @@ public static class RetainedScene
         f.SortedValid = false;
         f.PlaneCount = 0;
         f.SwellOn = false;
-        f.ModelCount = 0;
-        f.Groups.Clear();
+        f.Models.Clear();
+        f.MirrorModels.Clear();
+        f.MirrorOn = false;
+        MirrorSerial = 0;
         Array.Clear(f.Halves);
         Array.Clear(f.MainHalves);
     }
+
+    // ---- 0085: the mirror ----------------------------------------------------------
+
+    /// <summary>0085. The frame whose mirror the next planar capture draws, set by the
+    /// port when its mirrored walk begins; 0 once drawn.</summary>
+    public static int MirrorSerial;
+
+    /// <summary>0085. The current frame's mirror, drawn from <paramref name="view"/>: the
+    /// halves and models the port adds with <c>mirror</c> set belong to it.</summary>
+    public static void BeginMirror(in View view)
+    {
+        var f = Current;
+        if (f.Serial != _serial) return;
+        f.MirrorView = view;
+        f.MirrorOn = true;
+        f.MirrorModels.Clear();
+        Array.Clear(f.MirrorHalves);
+        MirrorSerial = _serial;
+    }
+
+    /// <summary>0085. A map half the mirrored walk left to the backend.</summary>
+    public static void NoteMirrorHalf(int tx, int tz, int upper)
+    {
+        var f = Current;
+        if (f.Serial != _serial || !f.MirrorOn || (uint)tx >= 80u || (uint)tz >= 80u) return;
+        f.MirrorHalves[(tz * 80 + tx) * 2 + upper] = 255;
+    }
+
+    /// <summary>0085. Off, the mirror's map and models are taken off the packets and not
+    /// drawn: the probe's way to see what they cover.</summary>
+    public static bool MirrorShown = true;
+
+    /// <summary>0085. Mirror draws made, captures that found no planar texture or no
+    /// frame, and the static and model triangles drawn.</summary>
+    public static long MirrorDraws, MirrorMissed, MirrorTriangles, MirrorModelTriangles, MirrorWaterTriangles;
+
+    /// <summary>0085. The port's switch: the mirror's blended map faces are drawn by the
+    /// backend too, after its opaque ones.</summary>
+    public static bool MirrorWater;
 
     /// <summary>A map half the current frame's walk drew, at full weight; with
     /// <paramref name="main"/> false, one the game's packets draw in the main view
@@ -476,29 +522,45 @@ public static class RetainedScene
         public float Bk0, Bk1, Bk2, L0, L1, L2, L3, L4, L5, L6, L7, L8;
     }
 
+    /// <summary>0085. A view's models: triangles in world space, in runs of one BK and LCM.</summary>
+    public sealed class ModelRuns
+    {
+        public Vertex[] Tris = new Vertex[1024];
+        public int Count;
+        public readonly List<ModelGroup> Groups = new();
+
+        public void Clear() { Count = 0; Groups.Clear(); }
+
+        public void Add(ReadOnlySpan<Vertex> tris, ReadOnlySpan<float> light, bool cull)
+        {
+            int n = tris.Length / 3 * 3;
+            if (n == 0) return;
+            if (Count + n > Tris.Length) Array.Resize(ref Tris, Math.Max(Tris.Length * 2, Count + n));
+            tris[..n].CopyTo(Tris.AsSpan(Count));
+            var g = Groups.Count > 0 ? Groups[^1] : default;
+            bool same = Groups.Count > 0 && g.Start + g.Count == Count && g.Cull == cull
+                        && g.Bk0 == light[0] && g.Bk1 == light[1] && g.Bk2 == light[2]
+                        && g.L0 == light[3] && g.L1 == light[4] && g.L2 == light[5] && g.L3 == light[6]
+                        && g.L4 == light[7] && g.L5 == light[8] && g.L6 == light[9] && g.L7 == light[10] && g.L8 == light[11];
+            if (same) { g.Count += n; Groups[^1] = g; }
+            else Groups.Add(new ModelGroup
+            {
+                Start = Count, Count = n, Cull = cull, Bk0 = light[0], Bk1 = light[1], Bk2 = light[2],
+                L0 = light[3], L1 = light[4], L2 = light[5], L3 = light[6], L4 = light[7], L5 = light[8],
+                L6 = light[9], L7 = light[10], L8 = light[11],
+            });
+            Count += n;
+        }
+    }
+
     /// <summary>0085. One model's opaque triangles to the current frame's main view,
-    /// with the BK and LCM its light dots are lit by (<paramref name="light"/>, 12).</summary>
-    public static void AddMainModel(ReadOnlySpan<Vertex> tris, ReadOnlySpan<float> light, bool cull = false)
+    /// or its mirror, with the BK and LCM its light dots are lit by
+    /// (<paramref name="light"/>, 12).</summary>
+    public static void AddMainModel(ReadOnlySpan<Vertex> tris, ReadOnlySpan<float> light, bool cull = false, bool mirror = false)
     {
         var f = Current;
-        int n = tris.Length / 3 * 3;
-        if (f.Serial != _serial || n == 0) return;
-        if (f.ModelCount + n > f.Models.Length)
-            Array.Resize(ref f.Models, Math.Max(f.Models.Length * 2, f.ModelCount + n));
-        tris[..n].CopyTo(f.Models.AsSpan(f.ModelCount));
-        var g = f.Groups.Count > 0 ? f.Groups[^1] : default;
-        bool same = f.Groups.Count > 0 && g.Start + g.Count == f.ModelCount && g.Cull == cull
-                    && g.Bk0 == light[0] && g.Bk1 == light[1] && g.Bk2 == light[2]
-                    && g.L0 == light[3] && g.L1 == light[4] && g.L2 == light[5] && g.L3 == light[6]
-                    && g.L4 == light[7] && g.L5 == light[8] && g.L6 == light[9] && g.L7 == light[10] && g.L8 == light[11];
-        if (same) { g.Count += n; f.Groups[^1] = g; }
-        else f.Groups.Add(new ModelGroup
-        {
-            Start = f.ModelCount, Count = n, Cull = cull, Bk0 = light[0], Bk1 = light[1], Bk2 = light[2],
-            L0 = light[3], L1 = light[4], L2 = light[5], L3 = light[6], L4 = light[7], L5 = light[8],
-            L6 = light[9], L7 = light[10], L8 = light[11],
-        });
-        f.ModelCount += n;
+        if (f.Serial != _serial || mirror && !f.MirrorOn) return;
+        (mirror ? f.MirrorModels : f.Models).Add(tris, light, cull);
     }
 
     /// <summary>0085. Models' triangles drawn in the main view, draws, and the models'

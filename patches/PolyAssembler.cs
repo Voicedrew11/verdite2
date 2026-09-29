@@ -377,8 +377,9 @@ public static partial class PolyAssembler
         // 0072. A model the object walk submitted, every face, for the retained scene.
         if (mesh == 0 && RetainedModels.Capturing) RetainedModels.CaptureFlat(mem, header, normals, face, count, true);
         // 0085. An object's opaque faces drawn by the GPU world renderer; only the blended ones built here.
-        bool gpu = mesh == 0 && RetainedModels.MainCapturing;
-        if (gpu) RetainedModels.CaptureMain(mem, normals, face, count, bias, tile: true);
+        bool mirror = mesh == 0 && RetainedModels.MirrorCapturing;
+        bool gpu = mesh == 0 && (mirror || RetainedModels.MainCapturing);
+        if (gpu) RetainedModels.CaptureMain(mem, normals, face, count, bias, tile: true, mirror: mirror);
 
         var fr = new Frame(mem);
         for (; count != 0; count--)

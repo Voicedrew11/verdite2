@@ -70,8 +70,14 @@ public static class LibGpu
             if (count == 0)
             {
                 slot++;
-                // 0085. The map, past the sky and ahead of everything tested against it.
-                if (slot == 1 && RetainedScene.MainSerial > 0 && !custom && !PlanarReflections.Capturing)
+                // 0085. The map, past the sky and ahead of everything tested against it;
+                // in a planar capture, the mirror's.
+                if (slot == 1 && !custom && PlanarReflections.Capturing && RetainedScene.MirrorSerial > 0)
+                {
+                    if (!gpu.DrawRetainedMain()) RetainedScene.MirrorMissed++;
+                    RetainedScene.MirrorSerial = 0;
+                }
+                else if (slot == 1 && RetainedScene.MainSerial > 0 && !custom && !PlanarReflections.Capturing)
                 {
                     if (!gpu.DrawRetainedMain()) RetainedScene.MainMissed++;
                     else water = RetainedScene.WaterPending && reorder;
