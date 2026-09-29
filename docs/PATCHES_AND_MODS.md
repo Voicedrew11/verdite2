@@ -5778,6 +5778,13 @@ handed to an assembler). `KF2_MODELWALK=0` is the comparison and
 `KF2_MODELWALK=verify` the proof; `KF2_MODELWALK_WALK=0` and
 `KF2_MODELWALK_SUBMIT=0` take one routine back on its own.
 
+It also takes `func_80032400`, the first-person arm, which stage 13 draws before
+either (`KF2_MODELWALK_ARM=0` takes it back): nothing while the swing clock reads -1,
+else the player's half's light record, the weapon's placement and model 0x20 posed and
+assembled at slot bias 100. Verified over about 1,300 drawing calls, 0 mismatches. It
+is here so the GPU world renderer can take the arm off its packets; see "Step 3, the
+fourth slice" in `docs/GPU_RENDERER.md`.
+
 **Why this one.** `TileWalk` taught the port the static world; this is everything
 that *moves*. It is not a performance change and must not be argued as one — the
 numbers below say so. It is the point at which the port learns *which creature, at

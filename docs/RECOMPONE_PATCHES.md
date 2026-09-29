@@ -1482,6 +1482,20 @@ Four files in the directory have no entry below:
   pose as the game's decoder does, `key + (short)((delta * weight) >> 12)` in 16 bits.
   An instance with no `Pose` reads the frame's vertices as before. The eighth diff in
   the patch file. See "Step 3, the third slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the first-person arm is drawn by the backend too, in painter's order,
+  as its unrecorded packets were. The port hands the frame the arm's instance and its
+  faces' corners in the walk's order, in runs of one key, with the screen box it covers
+  (`RetainedScene.SetArm`); `LibGpu.WalkOTag` calls `Gpu.DrawRetainedArm` before the
+  first packet past a run's slot that draws and meets that box (`ArmCut`, `ArmMeets`),
+  after the held packets and the water walked before it, as for a barrier; and
+  `GlModelMeshes.DrawWorldArm` draws the runs passed with the depth test off and
+  `PrimFs`'s `uFarPlane` writing the far plane, as zMode 3 does. The normal pass draws
+  it as an `Overlay` at its place in the list (`AoGeometry.ArmAt`). `ModelGlsl` gains
+  `modelPlace`, which puts a model's corner nearer than H/2, or past the screen clamp,
+  where the GTE's saturated projection puts it, with no near clip, and `modelEye`, which
+  places a `ModelInstance.ViewSpace` instance with the GTE's own matrix in integers.
+  With `uFarPlane` 0 the shader is the one before. The ninth diff in the patch file.
+  See "Step 3, the fourth slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

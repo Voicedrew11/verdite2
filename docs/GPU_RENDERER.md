@@ -280,6 +280,15 @@ come after (decided 2026-09-28), unless an issue is something a later step build
    `KF2_GPUWORLD_PROBE=1` prints the builds and what changed for the last.
 5. **The mirror's far edge is 3-5 levels brighter on the GPU** (measured,
    2026-09-29; see "Step 5, the first slice"). Within the parity bar, not explained.
+6. **The packets' per-pixel lighting blackens the arm's nearest faces** (measured,
+   2026-09-29; see "Step 3, the fourth slice"). In area 7, at one phase of a swing
+   reached on some runs after `warp 7`, a block covering 27% of the arm is black on the
+   packets and textured on the GPU. The same frame with per-pixel lighting off
+   (`KF2_PERPIXEL=0`) has no black pixel in the arm (161,646 with it on), so it is the
+   packet path's per-pixel lighting (`0048`) and not the game's look; the GPU arm is
+   not affected. **Inferred**, not tested: those faces have corners nearer than H/2,
+   whose packets' records describe the saturated projection. Not fixed: the GPU draws
+   the arm.
 
 ### Step 2: every map feature in the renderer
 
@@ -791,8 +800,94 @@ At 144 fps: 144.0 drawn at 19.9-20.0 ticks/s, `[present] wide 288`, with the ren
 off and on; no GL error under `KF2_GLDEBUG=1`.
 
 **Not checked:** the arm (outside the object walk; its blender call decodes as
-before); a pose stream that revisits a vertex, which the store refuses and none has
-been seen to use.
+before; since drawn by the renderer, "Step 3, the fourth slice"); a pose stream that
+revisits a vertex, which the store refuses and none has been seen to use.
+
+#### Step 3, the fourth slice
+
+**The first-person arm drawn by the renderer, from its mesh and its pose in the store,
+in the game's own painter's order. Mechanism measured; not judged by eye.** On with the
+models (`KF2_GPUWORLD_ARM=0` or `gpuworld arm off` is the comparison: the arm on its
+packets). The runtime half amends `0085` (its ninth diff: the arm's slot runs in the
+table walk, `GlModelMeshes.DrawWorldArm`, `modelPlace` and `modelEye` in `ModelGlsl`,
+`uFarPlane` in `PrimFs`); the port half is `ModelWalk`'s C# `func_80032400` and
+`RetainedModels.TryArm`.
+
+**The routine in C#** (`KF2_MODELWALK_ARM=0` for the recompiled one; `KF2_MODELWALK=verify`
+runs both). Verified over two runs of twelve swings in area 1, about 4,000 calls a run
+and 1,300 of them drawing: 0 RAM, register or GTE mismatches. It is short: nothing
+while the swing clock reads -1, else the light record of the player's own half, the
+weapon's placement with no camera composed in, model 0x20 posed by the MO blender and
+assembled by the lit assembler at slot bias 100 (see "What in the renderer draws what"
+in `docs/GAME_INTERNALS.md`).
+
+**Four things the arm needs that no other model does**, each found by the per-pixel
+comparison below, in the order they were found:
+
+1. **It is drawn in painter's order.** Its packets carry no depth record (`InArm`, "The
+   assemblers write the depth" in `docs/RENDERING.md`), so on the console and on the
+   packets it is drawn over whatever the table walked before it and never cut by a
+   wall you stand against. Drawn as an instance after the map, depth-tested, it cast
+   an occlusion halo around itself (9.5-15% of the pixels outside it off by more than 4
+   levels, and none with SSAO off) and would have been cut. So the walk draws it where
+   its packets were: each face at the key the lit assembler links it at (its corners'
+   SZ over four, averaged, plus 100), far to near and, within a key, the face linked
+   last first; with the depth test off; the far plane written where it drew, as
+   GlCore's zMode 3 writes for an unrecorded packet; and into the surface buffer as an
+   `Overlay` where the list had it, so nothing is murked or reflected over it
+   (`AoGeometry.ArmAt`, `DrawArmNormals`). The frame has not begun when stage 13 draws
+   the arm (the tile walk begins it), so the instance is held in view space and placed
+   with the frame's camera when it does (`RetainedModels.AtFrame`), and whether to take
+   it is decided from the switches as they are then (`GpuWorld.ModelsReady`), so a
+   switch thrown between the two never leaves it with neither path.
+2. **Its corners come nearer than H/2.** There the GTE's divide saturates, and a packet's
+   corner is placed at the saturated projection, not the true one. `modelPlace` puts a
+   model's corner there too (and at the screen clamp of +-1024), W left its true depth,
+   and does not near-clip it, since the lit assembler clips nothing. It applies to every
+   instance; the other models are at parity with it (worst block 0.00-0.07 in areas 6
+   and 7, all models on their packets against on the GPU).
+3. **A unit of view space is pixels there.** The float transform through the world
+   placed near corners 1-2 pixels from the GTE's integer one, which flips an edge-on
+   face's facing and dropped a thin side face. The arm is placed in view space with the
+   GTE's own matrix, in integers, `(R v >> 12) + T` (`modelEye`, `ModelInstance.ViewSpace`),
+   and its keys are taken the same way, since a float depth swaps two faces a key apart.
+4. **Its faces straddle other packets.** Drawn whole at its farthest face's slot, a
+   packet the walk sends between the arm's faces (a pillar) went under all of it rather
+   than over the farther ones. The walk now stops at each run of one key.
+
+**Measured.** Area 1, paused mid-swing at three phases (0.15, 0.3 and 0.45 s after the
+press), render scale 5, 16:9, arm on its packets against on the GPU; the arm covers
+7-18% of the picture:
+
+| | pixels >4 levels | >16 | worst block |
+|---|---|---|---|
+| instanced after the map, depth-tested | 13-20% | 1.0-3.3% | 1.0 |
+| + the saturated placement | 11-16% | 0.7-1.0% | 0.8-1.0 |
+| + painter's order, far plane, overlay | 1.9-4.5% | 0.4-1.3% | 0.43-1.0 |
+| + the integer transform | 0.004-0.12% | 0.001-0.11% | 0.01-1.0 |
+| + a run per key | 0.002-0.010% | 0.000-0.002% | 0.00-0.02 |
+
+At the `fdat02` spawn with the murk and planar reflections on, the worst block is 0.01;
+in area 7, 0.00-0.01 at every phase but one (known issue 6); in area 6, 0.00-0.02.
+
+**What it costs.** A run per key was 15 draw calls an arm, and the table walk went from
+267 to 406 us a frame: slower than the packets (620 fps against 695). The walk now draws
+the runs it has passed only before a packet that draws and meets the arm's screen box
+(worked out from its corners on the CPU, as the packets' are), since the order shows
+nowhere else: 4 calls an arm. Area 1, uncapped (`KF2_FPS=1000`, `KF2_PROFILE_OUT`),
+swinging four times a second, per frame, arm on the packets against on the GPU:
+
+| | arm routine | lit assembler | table walk | frames in 14 s |
+|---|---|---|---|---|
+| on the packets | 19.1-19.8 us | 42.4-43.3 us | 274-280 us | 9,340-9,357 |
+| on the GPU | 9.4-9.5 us | 29.6 us | 265 us | 9,659-9,686 |
+
+At 144 fps: 144.0 drawn at 19.9-20.0 ticks/s, `[present] wide 288`, and no GL error
+under `KF2_GLDEBUG=1`.
+
+**Not checked:** any of it by eye; weapons but the test save's; a menu over a swing,
+which the game does not open until the swing ends (the arm is not drawn behind it);
+`LoopPacing`'s redraws during a swing.
 
 ### Step 4: the old world path off
 

@@ -696,6 +696,22 @@ internal static class GlShaders
             return uModelR * vec3(modelPosed(int(i))) + uModelT;
         }
 
+        // A model placed in view space (the first-person arm), with the GTE's own
+        // rotation (4.12) and translation: taken to the eye as RTPS takes it, in
+        // integers, (R v >> 12) + T, IR saturated. Near the eye the divide magnifies a
+        // unit into pixels, and a float transform there flips an edge-on face.
+        uniform int   uModelView;
+        uniform ivec3 uModelVR0, uModelVR1, uModelVR2, uModelVT;
+        vec3 modelEye(uint i) {
+            if (uModelView == 0) return uR * (modelVertex(i) - uCam) + uT;
+            ivec3 p = modelPosed(int(i));
+            ivec3 m = ivec3(uModelVR0.x * p.x + uModelVR0.y * p.y + uModelVR0.z * p.z,
+                            uModelVR1.x * p.x + uModelVR1.y * p.y + uModelVR1.z * p.z,
+                            uModelVR2.x * p.x + uModelVR2.y * p.y + uModelVR2.z * p.z);
+            ivec3 v = (m >> 12) + uModelVT;
+            return vec3(clamp(v.xy, ivec2(-32768), ivec2(32767)), v.z);
+        }
+
         // RTPS as the GTE takes it, which the facing test is taken on: the divide
         // saturates below H/2 and the screen position at the ends of its range, so a
         // face reaching behind the eye is kept or dropped as the game keeps it.
@@ -705,17 +721,32 @@ internal static class GlShaders
             return uWorldSnap != 0 ? floor(s) : s;
         }
 
+        // Where the packets put a corner the GTE's divide saturates for (nearer than
+        // H/2) or whose screen position it clamps: modelScreen's place, taken to the
+        // target's pixels, W the true depth as the packets' is (at least 1). The lit
+        // assembler clips nothing, so neither does the near plane here. Anywhere else
+        // the projection is the ordinary one, unchanged.
+        vec4 modelPlace(vec4 p, vec3 v) {
+            if (uModel == 0) return p;
+            if (v.z >= uH * 0.5) {
+                vec2 raw = uModelGteC + uH * v.xy / v.z;
+                if (all(greaterThanEqual(raw, vec2(-1024.0))) && all(lessThanEqual(raw, vec2(1023.0)))) return p;
+            }
+            float w = max(v.z, 1.0);
+            return vec4(((modelScreen(v) - uModelGteC + uC) * 2.0 / uFb - 1.0) * w, 0.0, w);
+        }
+
         bool modelFaceKept(vec3 f, uint f3) {
-            vec3 v0 = uR * (modelVertex(uint(f.x)) - uCam) + uT;
-            vec3 v1 = uR * (modelVertex(uint(f.y)) - uCam) + uT;
-            vec3 v2 = uR * (modelVertex(uint(f.z)) - uCam) + uT;
+            vec3 v0 = modelEye(uint(f.x));
+            vec3 v1 = modelEye(uint(f.y));
+            vec3 v2 = modelEye(uint(f.z));
             // The vertex cache holds each corner's SZ over four; the face sits at their mean.
             int z0 = int(clamp(v0.z, 0.0, 65535.0)) >> 2;
             int z1 = int(clamp(v1.z, 0.0, 65535.0)) >> 2;
             int z2 = int(clamp(v2.z, 0.0, 65535.0)) >> 2;
             int z;
             if (f3 != 0xFFFFFFFFu) {
-                vec3 v3 = uR * (modelVertex(f3) - uCam) + uT;
+                vec3 v3 = modelEye(f3);
                 z = (z0 + z1 + z2 + (int(clamp(v3.z, 0.0, 65535.0)) >> 2)) >> 2;
             } else z = (z0 + z1 + z2) / 3;
             if (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar) return false;
@@ -790,10 +821,12 @@ internal static class GlShaders
             }
             if (uSwellOn != 0 && (flags & 0x8000000u) != 0u) w.y += swellDy(w);
             vec3 v = uR * (w - uCam) + uT;
+            if (uModel != 0 && uModelView != 0) v = modelEye(uint(inWorld.x));
             float z = v.z;
             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
             if (uWorldSnap != 0 && z > 0.0)
                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+            gl_Position = modelPlace(gl_Position, v);
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
             uint m = flags & 255u;
             vM = semi ? 2.0 + 256.0 : float(m == 0u ? 1u : m);
@@ -1528,10 +1561,12 @@ internal static class GlShaders
             gl_ClipDistance[0] = (uPlaneY - uPlaneBias) - w.y;
             if (uMirror != 0) w.y = 2.0 * uPlaneY - w.y;
             vec3 v = uR * (w - uCam) + uT;
+            if (uModel != 0 && uModelView != 0) v = modelEye(uint(inWorld.x));
             float z = v.z;
             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
             if (uWorldSnap != 0 && z > 0.0)
                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+            gl_Position = modelPlace(gl_Position, v);
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
 
             bool dots = (flags & 0x40000000u) != 0u;
@@ -2167,6 +2202,10 @@ internal static class GlShaders
             return vec3(min(c8 >> 3, 31)) / 31.0;
         }
 
+        // 0085. The first-person arm, drawn in painter's order: the far plane where it
+        // draws, as its unrecorded packets leave it. 0 is off.
+        uniform int uFarPlane;
+
         void main() {
             // Written on every path so a 3D triangle's recovered SZ is the
             // window depth. Everything that recovered none writes the *far*
@@ -2181,6 +2220,7 @@ internal static class GlShaders
             // 0051. The tolerance is on the test only; GlCore draws the true depth first.
             float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
             gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
+            if (uFarPlane != 0) gl_FragDepth = 1.0;
             if (uClipOn != 0 && vDepth > 0.0) {
                 float cz = vDepth * 65536.0;
                 vec3 cp = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (cz / uClipH), cz);

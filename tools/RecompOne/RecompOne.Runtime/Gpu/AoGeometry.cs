@@ -88,6 +88,10 @@ public sealed class AoGeometry
     /// vertex count when the colour pass drew it, and its slice of view depth.</summary>
     public readonly List<(int At, float Lo, float Hi)> Water = new();
 
+    /// <summary>0085. Where the first-person arm went in among the list's triangles
+    /// (-1 for nowhere), and the frame it was drawn from.</summary>
+    public int ArmAt = -1, ArmSerial;
+
     /// <summary>Start this target's list over when it is first drawn in a new frame,
     /// or when the depth generation moved under it.</summary>
     public void Frame(long frame, int gen)
@@ -98,6 +102,7 @@ public sealed class AoGeometry
         _n = 0;
         WorldSerial = 0;
         Water.Clear();
+        ArmAt = -1;
         _breaks.Clear();
         _inVeil = false;
     }

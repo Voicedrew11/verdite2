@@ -4114,3 +4114,560 @@ index 378b7e8..84ea9bc 100644
  
      /// <summary>0085. Off, the models taken off the packets are not drawn either: the
      /// probe's way to see what they cover.</summary>
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
+index ca3c4bd..063fe64 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/AoGeometry.cs
+@@ -88,6 +88,10 @@ public sealed class AoGeometry
+     /// vertex count when the colour pass drew it, and its slice of view depth.</summary>
+     public readonly List<(int At, float Lo, float Hi)> Water = new();
+ 
++    /// <summary>0085. Where the first-person arm went in among the list's triangles
++    /// (-1 for nowhere), and the frame it was drawn from.</summary>
++    public int ArmAt = -1, ArmSerial;
++
+     /// <summary>Start this target's list over when it is first drawn in a new frame,
+     /// or when the depth generation moved under it.</summary>
+     public void Frame(long frame, int gen)
+@@ -98,6 +102,7 @@ public sealed class AoGeometry
+         _n = 0;
+         WorldSerial = 0;
+         Water.Clear();
++        ArmAt = -1;
+         _breaks.Clear();
+         _inVeil = false;
+     }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index b11cffe..be5f3a0 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -2830,6 +2830,7 @@ public sealed partial class GlCore : IGpuBackend
+         // 0085. The map's water goes in where the colour pass drew it among the list.
+         var water = world && _wnReady ? src.Geo.Water : null;
+         int start = 0, bi = 0, wi = 0;
++        int armAt = world && _wnReady ? src.Geo.ArmAt : -1;
+         bool veil = false;
+         for (;;)
+         {
+@@ -2847,11 +2848,28 @@ public sealed partial class GlCore : IGpuBackend
+                     _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
+                 }
+             }
++            // After the water the walk drew before it.
++            if (armAt >= 0 && armAt <= start)
++            {
++                armAt = -1;
++                if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
++                _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
++                DrawArmNormals(src);
++                _gl.UseProgram(_progNormal);
++                _gl.BindVertexArray(_nrmVao);
++                _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _nrmVbo);
++                if (breaks.Count > 0)
++                {
++                    _gl.ActiveTexture(TextureUnit.Texture0);
++                    _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
++                }
++            }
+             for (; bi < breaks.Count && breaks[bi] <= start; bi++) veil = !veil;
+             if (start >= verts.Length) break;
+             int end = verts.Length;
+             if (bi < breaks.Count) end = Math.Min(end, breaks[bi]);
+             if (water != null && wi < water.Count) end = Math.Min(end, water[wi].At);
++            if (armAt > start) end = Math.Min(end, armAt);
+             if (veil)
+             {
+                 if (src.Surface != 0) _gl.Enable(EnableCap.Blend, 1);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index 3e2c27b..d1ee2e4 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -45,9 +45,13 @@ public sealed partial class GlCore
+         _gl.UseProgram(0);
+         RetainedScene.MainDrawer = DrawWorldMain;
+         RetainedScene.WaterDrawer = DrawWorldWater;
++        RetainedScene.ArmDrawer = DrawWorldArm;
+         InitModelMeshes();
+     }
+ 
++    // Whether the main view drew with the mip atlas, for the arm the walk draws later.
++    bool _mainMips;
++
+     // The main view's frame, for the water slices the same walk draws after it.
+     RetainedScene.Frame? _wFrame;
+     GlDisplayRt? _wRt;
+@@ -79,6 +83,7 @@ public sealed partial class GlCore
+         UploadStatic();
+         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+         bool mips = UpdateWorldMips(f, f.MainHalves);
++        _mainMips = mips;
+         int models = UploadModels(f.Models, f.Serial & (ModelRing - 1), f.Serial, mips);
+         int inst = PrepareInstances(f, f.Instances, mips);
+         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+index 1fea675..c3de55a 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+@@ -41,6 +41,9 @@ public sealed partial class GlCore
+     int _uwModel = -1, _uwModelBase, _uwModelR, _uwModelT, _uwModelFar, _uwModelNear, _uwModelLlm, _uwModelCue, _uwModelRgbc, _uwModelMat, _uwModelGteC = -1;
+     int _uwnModel = -1, _uwnModelBase, _uwnModelR, _uwnModelT, _uwnModelFar, _uwnModelNear, _uwnModelMat, _uwnModelGteC = -1;
+     int _uwModelPose = -1, _uwModelPoseW = -1, _uwnModelPose = -1, _uwnModelPoseW = -1;
++    // The view-space placement (the arm), per program: uModelView, then the three rows and T.
++    readonly int[] _uwView = [-1, -1, -1, -1, -1], _uwnView = [-1, -1, -1, -1, -1];
++    static readonly string[] ViewNames = ["uModelView", "uModelVR0", "uModelVR1", "uModelVR2", "uModelVT"];
+ 
+     void InitModelMeshes()
+     {
+@@ -50,7 +53,9 @@ public sealed partial class GlCore
+         _uwModelFar = L("uModelFar"); _uwModelNear = L("uModelNear"); _uwModelLlm = L("uModelLlm"); _uwModelCue = L("uModelCue");
+         _uwModelRgbc = L("uModelRgbc"); _uwModelMat = L("uModelMat"); _uwModelGteC = L("uModelGteC");
+         _uwModelPose = L("uModelPose"); _uwModelPoseW = L("uModelPoseW");
++        for (int i = 0; i < ViewNames.Length; i++) _uwView[i] = L(ViewNames[i]);
+         _gl.UseProgram(_progWorld);
++        if (_uwView[0] >= 0) _gl.Uniform1(_uwView[0], 0);
+         if (_uwModel >= 0) _gl.Uniform1(_uwModel, 0);
+         int u = L("uModelVerts");
+         if (u >= 0) _gl.Uniform1(u, ModelVertsUnit);
+@@ -62,7 +67,9 @@ public sealed partial class GlCore
+             _uwnModel = N("uModel"); _uwnModelBase = N("uModelBase"); _uwnModelR = N("uModelR"); _uwnModelT = N("uModelT");
+             _uwnModelFar = N("uModelFar"); _uwnModelNear = N("uModelNear"); _uwnModelMat = N("uModelMat"); _uwnModelGteC = N("uModelGteC");
+             _uwnModelPose = N("uModelPose"); _uwnModelPoseW = N("uModelPoseW");
++            for (int i = 0; i < ViewNames.Length; i++) _uwnView[i] = N(ViewNames[i]);
+             _gl.UseProgram(_progWorldNrm);
++            if (_uwnView[0] >= 0) _gl.Uniform1(_uwnView[0], 0);
+             if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 0);
+             int v = N("uModelVerts");
+             if (v >= 0) _gl.Uniform1(v, ModelVertsUnit);
+@@ -269,6 +276,8 @@ public sealed partial class GlCore
+ 
+     void EndInstances(bool colour)
+     {
++        var view = colour ? _uwView : _uwnView;
++        if (view[0] >= 0) _gl.Uniform1(view[0], 0);
+         if (colour)
+         {
+             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+@@ -290,6 +299,18 @@ public sealed partial class GlCore
+         _m9[6] = m.R20; _m9[7] = m.R21; _m9[8] = m.R22;
+         // The store's first texel, or -1 for the frame's vertices; -1 a rigid weight.
+         int pose = m.Pose - 1, weight = m.PoseMorph ? m.PoseWeight : -1;
++        var view = colour ? _uwView : _uwnView;
++        if (view[0] >= 0)
++        {
++            _gl.Uniform1(view[0], m.ViewSpace ? 1 : 0);
++            if (m.ViewSpace)
++            {
++                _gl.Uniform3(view[1], m.V00, m.V01, m.V02);
++                _gl.Uniform3(view[2], m.V10, m.V11, m.V12);
++                _gl.Uniform3(view[3], m.V20, m.V21, m.V22);
++                _gl.Uniform3(view[4], m.Vtx, m.Vty, m.Vtz);
++            }
++        }
+         if (!colour)
+         {
+             _gl.Uniform1(_uwnModelBase, m.VertBase);
+@@ -363,6 +384,103 @@ public sealed partial class GlCore
+         EndInstances(true);
+     }
+ 
++    int _uwFarPlane = -1;
++    readonly List<RetainedScene.ModelInstance> _armList = new(1);
++
++    uint _armEbo;
++
++    /// <summary>
++    /// The first-person arm, as the table's walk reaches its faces: every run of one key
++    /// the walk has passed (<see cref="RetainedScene.ArmCut"/>), in the order the walk
++    /// would have sent their packets, with no depth test, and the far plane written
++    /// where it drew, as its unrecorded packets leave the depth under them (GlCore's
++    /// zMode 3). What the walk sends between runs is drawn over the ones before it
++    /// where it passes its own test, as it was over the packets. True while runs are
++    /// left, with <see cref="RetainedScene.ArmSlot"/> the next one's slot.
++    /// </summary>
++    unsafe bool DrawWorldArm(int offX, int offY)
++    {
++        var f = RetainedScene.Find(RetainedScene.ArmSerial);
++        if (f == null || !f.HasArm || _progWorld == 0 || !InstancesReady) { RetainedScene.ArmMissed++; return false; }
++        int first = f.ArmNext, last = first;
++        while (last < f.ArmRuns && 0x1FFF - f.ArmRunKey[last] <= RetainedScene.ArmCut) last++;
++        f.ArmNext = last;
++        if (last < f.ArmRuns) RetainedScene.ArmSlot = 0x1FFF - f.ArmRunKey[last];
++        if (last == first) return last < f.ArmRuns;
++        // The probe's hide leaves it out, as it leaves out the other models.
++        if (!RetainedScene.MainModelsShown) return last < f.ArmRuns;
++        if (_uwFarPlane < 0) _uwFarPlane = _gl.GetUniformLocation(_progWorld, "uFarPlane");
++        Flush(FlushReason.Target);
++        var rt = ClassifyDisplay();
++        if (rt == null || _uwFarPlane < 0) { RetainedScene.ArmMissed++; return false; }
++        _armList.Clear();
++        _armList.Add(f.Arm);
++        int inst = PrepareInstances(f, _armList, _mainMips);
++        // The store is uploaded now; one emptied since holds other meshes there.
++        if (inst < 0 || f.Arm.MeshGen != _meshGen) { RetainedScene.ArmMissed++; return false; }
++
++        uint query = BeginGpuTimer();
++        if (_wOpen) BindWorldMain(rt, _mainMips);
++        else
++        {
++            BeginWorldMain(f, rt, offX, offY, _mainMips);
++            _wOpen = true;
++        }
++        _gl.Disable(EnableCap.CullFace);
++        _gl.Disable(EnableCap.Blend);
++        BeginInstances(inst, true);
++        SendInstance(f.Arm, true);
++        if (_armEbo == 0) _armEbo = _gl.GenBuffer();
++        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _armEbo);
++        if (first == 0)
++            _gl.BufferData<int>(BufferTargetARB.ElementArrayBuffer, new ReadOnlySpan<int>(f.ArmOrder, 0, f.ArmOrderCount),
++                                BufferUsageARB.StreamDraw);
++        int from = f.ArmRunAt[first], to = last < f.ArmRuns ? f.ArmRunAt[last] : f.ArmOrderCount;
++        _gl.DepthMask(true);
++        _gl.DepthFunc(DepthFunction.Always);
++        _gl.Uniform1(_uwFarPlane, 1);
++        _gl.DrawElements(PrimitiveType.Triangles, (uint)(to - from), DrawElementsType.UnsignedInt, (void*)(from * 4L));
++        _gl.Uniform1(_uwFarPlane, 0);
++        _gl.DepthFunc(DepthFunction.Lequal);
++        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
++        EndInstances(true);
++        EndWorldState();
++        EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
++        RetainedScene.InstanceCorners += to - from;
++        RetainedScene.ArmCalls++;
++        MarkDrawn(rt);
++        // The normal pass puts it in as an overlay where the list had its first run
++        // (DrawArmNormals).
++        if (AoGeometry.Active && first == 0)
++        {
++            rt.Geo.Frame(_frame, GteDepth.Generation);
++            rt.Geo.ArmAt = rt.Geo.Count;
++            rt.Geo.ArmSerial = f.Serial;
++        }
++        if (first == 0) RetainedScene.ArmDraws++;
++        return last < f.ArmRuns;
++    }
++
++    /// <summary>The arm into the normal and surface buffers as an overlay, at its place
++    /// in the list: the surface under it is then no surface for the passes, as its
++    /// packets made it, and nothing is murked or reflected over it.</summary>
++    void DrawArmNormals(GlDisplayRt src)
++    {
++        var f = RetainedScene.Find(src.Geo.ArmSerial);
++        int slot = src.Geo.ArmSerial & (ModelRing - 1);
++        if (f == null || !f.HasArm || !_wnReady || _uwnModel < 0 || f.Arm.MeshGen != _meshGen
++            || _mvSerial[slot] != f.Serial || _mvGen[slot] != _meshGen) return;
++        _gl.UseProgram(_progWorldNrm);
++        if (_uwnDepthCull >= 0) _gl.Uniform1(_uwnDepthCull, 0);
++        BeginInstances(slot, false);
++        var m = f.Arm;
++        m.Material = SurfaceMaterial.Overlay;
++        SendInstance(m, false);
++        _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
++        EndInstances(false);
++        if (_uwnDepthCull >= 0) _gl.Uniform1(_uwnDepthCull, 1);
++    }
++
+     /// <summary>The frame's instances into the normal and surface buffers, through the
+     /// world normal program; nothing if the frame's vertices have left their slot.</summary>
+     void DrawInstanceNormals(RetainedScene.Frame f)
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index c4f47d1..ec4cd98 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -696,6 +696,22 @@ internal static class GlShaders
+             return uModelR * vec3(modelPosed(int(i))) + uModelT;
+         }
+ 
++        // A model placed in view space (the first-person arm), with the GTE's own
++        // rotation (4.12) and translation: taken to the eye as RTPS takes it, in
++        // integers, (R v >> 12) + T, IR saturated. Near the eye the divide magnifies a
++        // unit into pixels, and a float transform there flips an edge-on face.
++        uniform int   uModelView;
++        uniform ivec3 uModelVR0, uModelVR1, uModelVR2, uModelVT;
++        vec3 modelEye(uint i) {
++            if (uModelView == 0) return uR * (modelVertex(i) - uCam) + uT;
++            ivec3 p = modelPosed(int(i));
++            ivec3 m = ivec3(uModelVR0.x * p.x + uModelVR0.y * p.y + uModelVR0.z * p.z,
++                            uModelVR1.x * p.x + uModelVR1.y * p.y + uModelVR1.z * p.z,
++                            uModelVR2.x * p.x + uModelVR2.y * p.y + uModelVR2.z * p.z);
++            ivec3 v = (m >> 12) + uModelVT;
++            return vec3(clamp(v.xy, ivec2(-32768), ivec2(32767)), v.z);
++        }
++
+         // RTPS as the GTE takes it, which the facing test is taken on: the divide
+         // saturates below H/2 and the screen position at the ends of its range, so a
+         // face reaching behind the eye is kept or dropped as the game keeps it.
+@@ -705,17 +721,32 @@ internal static class GlShaders
+             return uWorldSnap != 0 ? floor(s) : s;
+         }
+ 
++        // Where the packets put a corner the GTE's divide saturates for (nearer than
++        // H/2) or whose screen position it clamps: modelScreen's place, taken to the
++        // target's pixels, W the true depth as the packets' is (at least 1). The lit
++        // assembler clips nothing, so neither does the near plane here. Anywhere else
++        // the projection is the ordinary one, unchanged.
++        vec4 modelPlace(vec4 p, vec3 v) {
++            if (uModel == 0) return p;
++            if (v.z >= uH * 0.5) {
++                vec2 raw = uModelGteC + uH * v.xy / v.z;
++                if (all(greaterThanEqual(raw, vec2(-1024.0))) && all(lessThanEqual(raw, vec2(1023.0)))) return p;
++            }
++            float w = max(v.z, 1.0);
++            return vec4(((modelScreen(v) - uModelGteC + uC) * 2.0 / uFb - 1.0) * w, 0.0, w);
++        }
++
+         bool modelFaceKept(vec3 f, uint f3) {
+-            vec3 v0 = uR * (modelVertex(uint(f.x)) - uCam) + uT;
+-            vec3 v1 = uR * (modelVertex(uint(f.y)) - uCam) + uT;
+-            vec3 v2 = uR * (modelVertex(uint(f.z)) - uCam) + uT;
++            vec3 v0 = modelEye(uint(f.x));
++            vec3 v1 = modelEye(uint(f.y));
++            vec3 v2 = modelEye(uint(f.z));
+             // The vertex cache holds each corner's SZ over four; the face sits at their mean.
+             int z0 = int(clamp(v0.z, 0.0, 65535.0)) >> 2;
+             int z1 = int(clamp(v1.z, 0.0, 65535.0)) >> 2;
+             int z2 = int(clamp(v2.z, 0.0, 65535.0)) >> 2;
+             int z;
+             if (f3 != 0xFFFFFFFFu) {
+-                vec3 v3 = uR * (modelVertex(f3) - uCam) + uT;
++                vec3 v3 = modelEye(f3);
+                 z = (z0 + z1 + z2 + (int(clamp(v3.z, 0.0, 65535.0)) >> 2)) >> 2;
+             } else z = (z0 + z1 + z2) / 3;
+             if (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar) return false;
+@@ -790,10 +821,12 @@ internal static class GlShaders
+             }
+             if (uSwellOn != 0 && (flags & 0x8000000u) != 0u) w.y += swellDy(w);
+             vec3 v = uR * (w - uCam) + uT;
++            if (uModel != 0 && uModelView != 0) v = modelEye(uint(inWorld.x));
+             float z = v.z;
+             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
+             if (uWorldSnap != 0 && z > 0.0)
+                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
++            gl_Position = modelPlace(gl_Position, v);
+             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
+             uint m = flags & 255u;
+             vM = semi ? 2.0 + 256.0 : float(m == 0u ? 1u : m);
+@@ -1528,10 +1561,12 @@ internal static class GlShaders
+             gl_ClipDistance[0] = (uPlaneY - uPlaneBias) - w.y;
+             if (uMirror != 0) w.y = 2.0 * uPlaneY - w.y;
+             vec3 v = uR * (w - uCam) + uT;
++            if (uModel != 0 && uModelView != 0) v = modelEye(uint(inWorld.x));
+             float z = v.z;
+             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
+             if (uWorldSnap != 0 && z > 0.0)
+                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
++            gl_Position = modelPlace(gl_Position, v);
+             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
+ 
+             bool dots = (flags & 0x40000000u) != 0u;
+@@ -2167,6 +2202,10 @@ internal static class GlShaders
+             return vec3(min(c8 >> 3, 31)) / 31.0;
+         }
+ 
++        // 0085. The first-person arm, drawn in painter's order: the far plane where it
++        // draws, as its unrecorded packets leave it. 0 is off.
++        uniform int uFarPlane;
++
+         void main() {
+             // Written on every path so a 3D triangle's recovered SZ is the
+             // window depth. Everything that recovered none writes the *far*
+@@ -2181,6 +2220,7 @@ internal static class GlShaders
+             // 0051. The tolerance is on the test only; GlCore draws the true depth first.
+             float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
+             gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
++            if (uFarPlane != 0) gl_FragDepth = 1.0;
+             if (uClipOn != 0 && vDepth > 0.0) {
+                 float cz = vDepth * 65536.0;
+                 vec3 cp = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (cz / uClipH), cz);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRetainedMain.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRetainedMain.cs
+index 63d573f..c49e44d 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRetainedMain.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRetainedMain.cs
+@@ -14,6 +14,14 @@ public sealed partial class Gpu
+         return draw(_drawOffsetX, _drawOffsetY);
+     }
+ 
++    /// <summary>0085. The first-person arm, at its slot of the table's walk.</summary>
++    public bool DrawRetainedArm()
++    {
++        if (!HleOn || RetainedScene.ArmDrawer is not { } draw) return false;
++        GpuHle.Backend!.SetDrawEnv(CurEnv());
++        return draw(_drawOffsetX, _drawOffsetY);
++    }
++
+     /// <summary>0085. The map's water the table walk passed at view depth
+     /// <paramref name="cut"/>, drawn if it meets the box the walk draws next (all of it
+     /// by default); false once no water is left.</summary>
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 84ea9bc..168a110 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -396,6 +396,17 @@ public static class RetainedScene
+         public readonly List<ModelInstance> Instances = new(), MirrorInstances = new();
+         public short[] Verts = new short[4096];
+         public int VertCount;
++        /// <summary>0085. The first-person arm, when it is drawn from its mesh this
++        /// frame: at <see cref="ArmSlot"/> of the table's walk, in painter's order.</summary>
++        public ModelInstance Arm;
++        public bool HasArm;
++        /// <summary>Its faces' corners in the store, in the order the walk takes its
++        /// packets: far to near by the key the game links each at; and the runs of one
++        /// key, as the key and the first corner, which the walk draws at the key's slot.</summary>
++        public int[] ArmOrder = new int[1024];
++        public int ArmOrderCount;
++        public int[] ArmRunKey = new int[64], ArmRunAt = new int[64];
++        public int ArmRuns, ArmNext;
+ 
+         public ReadOnlySpan<Vertex> SortedDynamic()
+         {
+@@ -436,6 +447,8 @@ public static class RetainedScene
+         f.Instances.Clear();
+         f.MirrorInstances.Clear();
+         f.VertCount = 0;
++        f.HasArm = false;
++        ArmSerial = 0;
+         f.MirrorOn = false;
+         MirrorSerial = 0;
+         Array.Clear(f.Halves);
+@@ -663,6 +676,11 @@ public static class RetainedScene
+         /// <summary>The store's generation when it was added; the backend draws none
+         /// from an emptied store.</summary>
+         public int MeshGen;
++        /// <summary>Placed in view space as the GTE places it: its rotation (4.12, row
++        /// by row) and translation, integers. The world placement above is kept for
++        /// what lights it; the eye's position is taken from these.</summary>
++        public bool ViewSpace;
++        public int V00, V01, V02, V10, V11, V12, V20, V21, V22, Vtx, Vty, Vtz;
+     }
+ 
+     /// <summary>0085. The current frame's posed vertices (x, y, z and a pad, as the
+@@ -689,6 +707,59 @@ public static class RetainedScene
+         (mirror ? f.MirrorInstances : f.Instances).Add(copy);
+     }
+ 
++    /// <summary>0085. The first-person arm (<c>func_80032400</c>), drawn from its mesh:
++    /// the game draws it in view space with no depth record, so it keeps painter's
++    /// order, in front of whatever the table walked before it and behind whatever
++    /// after, face by face. <paramref name="order"/> is its faces' corners in the walk's
++    /// order, in runs of one key (<paramref name="runKey"/>, starting at
++    /// <paramref name="runAt"/>); the backend draws each run when the walk reaches the
++    /// key's slot (0x1FFF less it, counted from the far end as <c>GteDepth.OtSlot</c>
++    /// is), with no depth test, and leaves the far plane where it drew. <paramref name="box"/>
++    /// is the screen box it covers, in the GTE's pixels, as the packets' are.</summary>
++    public static void SetArm(in ModelInstance m, ReadOnlySpan<int> order, ReadOnlySpan<int> runKey, ReadOnlySpan<int> runAt,
++                              ReadOnlySpan<float> box)
++    {
++        ArmX0 = box[0]; ArmY0 = box[1]; ArmX1 = box[2]; ArmY1 = box[3];
++        var f = Current;
++        if (f.Serial != _serial || runKey.Length == 0) return;
++        if (f.ArmOrder.Length < order.Length) f.ArmOrder = new int[order.Length];
++        order.CopyTo(f.ArmOrder);
++        f.ArmOrderCount = order.Length;
++        if (f.ArmRunKey.Length < runKey.Length) { f.ArmRunKey = new int[runKey.Length]; f.ArmRunAt = new int[runKey.Length]; }
++        runKey.CopyTo(f.ArmRunKey);
++        runAt.CopyTo(f.ArmRunAt);
++        f.ArmRuns = runKey.Length;
++        f.ArmNext = 0;
++        f.Arm = m;
++        f.Arm.MeshGen = MeshGeneration;
++        f.HasArm = true;
++        ArmSerial = _serial;
++        ArmSlot = 0x1FFF - runKey[0];
++    }
++
++    /// <summary>0085. The frame whose arm the next table walk draws, and the slot of its
++    /// next run; 0 once drawn.</summary>
++    public static int ArmSerial, ArmSlot;
++
++    /// <summary>0085. The slot the walk has reached, for the backend's arm draw: every
++    /// run at or before it is drawn.</summary>
++    public static int ArmCut;
++
++    /// <summary>0085. The screen box the arm covers; a packet outside it shares no pixel
++    /// with the arm, so the walk need not stop to draw the arm before it.</summary>
++    public static float ArmX0, ArmY0, ArmX1, ArmY1;
++
++    public static bool ArmMeets(float x0, float y0, float x1, float y1) =>
++        x0 <= ArmX1 && x1 >= ArmX0 && y0 <= ArmY1 && y1 >= ArmY0;
++
++    /// <summary>0085. The backend's arm draw, given the GPU's draw offset: the runs the
++    /// walk has reached. True while runs are left.</summary>
++    public static Func<int, int, bool>? ArmDrawer;
++
++    /// <summary>0085. Arms drawn, the draw calls they took, and walks that could not
++    /// draw the arm they had.</summary>
++    public static long ArmDraws, ArmCalls, ArmMissed;
++
+     /// <summary>0085. Instances drawn in the main view and the mirror, their corners,
+     /// and the vertices uploaded; never reset.</summary>
+     public static long InstancesDrawn, InstanceCorners, MirrorInstancesDrawn, InstanceVertices, PoseTexelsUploaded;
+diff --git a/tools/RecompOne/RecompOne.Runtime/sdk/LibGpu.cs b/tools/RecompOne/RecompOne.Runtime/sdk/LibGpu.cs
+index 42c0f26..0c784e0 100644
+--- a/tools/RecompOne/RecompOne.Runtime/sdk/LibGpu.cs
++++ b/tools/RecompOne/RecompOne.Runtime/sdk/LibGpu.cs
+@@ -54,6 +54,13 @@ public static class LibGpu
+         var slot = -1;
+         // 0085. The map's water, drawn by the backend where its packets would be sent.
+         var water = false;
++        // 0085. The first-person arm, drawn by the backend face by face where the walk
++        // would have sent its packets: the runs it has passed go in together before the
++        // next packet the walk sends that draws where the arm does, since nothing between
++        // them shares a pixel with it.
++        var arm = RetainedScene.ArmSerial > 0 && RetainedScene.ArmSerial == RetainedScene.MainSerial
++                  && !custom && !PlanarReflections.Capturing;
++        var armDue = false;
+         for (var guard = 0; guard < 0x100000; guard++)
+         {
+             // Where in the table this primitive was linked, counted from the head —
+@@ -83,11 +90,20 @@ public static class LibGpu
+                     else water = RetainedScene.WaterPending && reorder;
+                     RetainedScene.MainSerial = 0;
+                 }
++                armDue |= arm && slot >= RetainedScene.ArmSlot && slot >= 1;
+             }
+             GteDepth.OtSlot = slot;
+ 
+             if (count > 0)
+             {
++                // The arm is a barrier, as its packets were: what the walk holds goes first.
++                if (armDue && Draws(m, addr) && ArmMeets(m, addr, count))
++                {
++                    if (BlendOrder.Queued > 0) SendHeld(gpu, m, onEntry, probe, guard, slot, ref water);
++                    if (water) water = gpu.DrawRetainedWater(WaterCut(slot));
++                    arm = DrawArm(gpu, slot);
++                    armDue = false;
++                }
+                 // Slot 0 (the skybox) is never depth-tested, whatever it recorded.
+                 var kind = (reorder || probe) && slot != 0 ? BlendOrder.Classify(m, addr, count, out _) : BlendOrder.Kind.Barrier;
+                 if (reorder && kind == BlendOrder.Kind.Deferred)
+@@ -115,6 +131,7 @@ public static class LibGpu
+         }
+         if (BlendOrder.Queued > 0) SendHeld(gpu, m, onEntry, probe, GteDepth.OtEntry, GteDepth.OtSlot, ref water);
+         if (water) gpu.DrawRetainedWater(float.NegativeInfinity);
++        if (arm) DrawArm(gpu, int.MaxValue);
+ 
+         // The length is only known once the walk ends, so it is published for the
+         // next one. An entry is readable as an OTZ against it: the walk starts at
+@@ -125,6 +142,22 @@ public static class LibGpu
+         if (custom) GpuPrims.Clear();
+     }
+ 
++    /// <summary>0085. The arm's runs the walk has reached at <paramref name="slot"/>;
++    /// false once none is left.</summary>
++    private static bool DrawArm(Gpu gpu, int slot)
++    {
++        RetainedScene.ArmCut = slot;
++        if (gpu.DrawRetainedArm()) return true;
++        RetainedScene.ArmSerial = 0;
++        return false;
++    }
++
++    private static bool ArmMeets(IMemory m, uint addr, int count)
++    {
++        var (x0, y0, x1, y1) = PacketBox(m, addr, count);
++        return RetainedScene.ArmMeets(x0, y0, x1, y1);
++    }
++
+     /// <summary>0085. Whether a packet draws: a polygon, a line or a rectangle.</summary>
+     private static bool Draws(IMemory m, uint addr)
+     {

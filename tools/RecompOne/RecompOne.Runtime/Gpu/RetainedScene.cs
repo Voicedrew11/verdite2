@@ -396,6 +396,17 @@ public static class RetainedScene
         public readonly List<ModelInstance> Instances = new(), MirrorInstances = new();
         public short[] Verts = new short[4096];
         public int VertCount;
+        /// <summary>0085. The first-person arm, when it is drawn from its mesh this
+        /// frame: at <see cref="ArmSlot"/> of the table's walk, in painter's order.</summary>
+        public ModelInstance Arm;
+        public bool HasArm;
+        /// <summary>Its faces' corners in the store, in the order the walk takes its
+        /// packets: far to near by the key the game links each at; and the runs of one
+        /// key, as the key and the first corner, which the walk draws at the key's slot.</summary>
+        public int[] ArmOrder = new int[1024];
+        public int ArmOrderCount;
+        public int[] ArmRunKey = new int[64], ArmRunAt = new int[64];
+        public int ArmRuns, ArmNext;
 
         public ReadOnlySpan<Vertex> SortedDynamic()
         {
@@ -436,6 +447,8 @@ public static class RetainedScene
         f.Instances.Clear();
         f.MirrorInstances.Clear();
         f.VertCount = 0;
+        f.HasArm = false;
+        ArmSerial = 0;
         f.MirrorOn = false;
         MirrorSerial = 0;
         Array.Clear(f.Halves);
@@ -663,6 +676,11 @@ public static class RetainedScene
         /// <summary>The store's generation when it was added; the backend draws none
         /// from an emptied store.</summary>
         public int MeshGen;
+        /// <summary>Placed in view space as the GTE places it: its rotation (4.12, row
+        /// by row) and translation, integers. The world placement above is kept for
+        /// what lights it; the eye's position is taken from these.</summary>
+        public bool ViewSpace;
+        public int V00, V01, V02, V10, V11, V12, V20, V21, V22, Vtx, Vty, Vtz;
     }
 
     /// <summary>0085. The current frame's posed vertices (x, y, z and a pad, as the
@@ -688,6 +706,59 @@ public static class RetainedScene
         copy.MeshGen = MeshGeneration;
         (mirror ? f.MirrorInstances : f.Instances).Add(copy);
     }
+
+    /// <summary>0085. The first-person arm (<c>func_80032400</c>), drawn from its mesh:
+    /// the game draws it in view space with no depth record, so it keeps painter's
+    /// order, in front of whatever the table walked before it and behind whatever
+    /// after, face by face. <paramref name="order"/> is its faces' corners in the walk's
+    /// order, in runs of one key (<paramref name="runKey"/>, starting at
+    /// <paramref name="runAt"/>); the backend draws each run when the walk reaches the
+    /// key's slot (0x1FFF less it, counted from the far end as <c>GteDepth.OtSlot</c>
+    /// is), with no depth test, and leaves the far plane where it drew. <paramref name="box"/>
+    /// is the screen box it covers, in the GTE's pixels, as the packets' are.</summary>
+    public static void SetArm(in ModelInstance m, ReadOnlySpan<int> order, ReadOnlySpan<int> runKey, ReadOnlySpan<int> runAt,
+                              ReadOnlySpan<float> box)
+    {
+        ArmX0 = box[0]; ArmY0 = box[1]; ArmX1 = box[2]; ArmY1 = box[3];
+        var f = Current;
+        if (f.Serial != _serial || runKey.Length == 0) return;
+        if (f.ArmOrder.Length < order.Length) f.ArmOrder = new int[order.Length];
+        order.CopyTo(f.ArmOrder);
+        f.ArmOrderCount = order.Length;
+        if (f.ArmRunKey.Length < runKey.Length) { f.ArmRunKey = new int[runKey.Length]; f.ArmRunAt = new int[runKey.Length]; }
+        runKey.CopyTo(f.ArmRunKey);
+        runAt.CopyTo(f.ArmRunAt);
+        f.ArmRuns = runKey.Length;
+        f.ArmNext = 0;
+        f.Arm = m;
+        f.Arm.MeshGen = MeshGeneration;
+        f.HasArm = true;
+        ArmSerial = _serial;
+        ArmSlot = 0x1FFF - runKey[0];
+    }
+
+    /// <summary>0085. The frame whose arm the next table walk draws, and the slot of its
+    /// next run; 0 once drawn.</summary>
+    public static int ArmSerial, ArmSlot;
+
+    /// <summary>0085. The slot the walk has reached, for the backend's arm draw: every
+    /// run at or before it is drawn.</summary>
+    public static int ArmCut;
+
+    /// <summary>0085. The screen box the arm covers; a packet outside it shares no pixel
+    /// with the arm, so the walk need not stop to draw the arm before it.</summary>
+    public static float ArmX0, ArmY0, ArmX1, ArmY1;
+
+    public static bool ArmMeets(float x0, float y0, float x1, float y1) =>
+        x0 <= ArmX1 && x1 >= ArmX0 && y0 <= ArmY1 && y1 >= ArmY0;
+
+    /// <summary>0085. The backend's arm draw, given the GPU's draw offset: the runs the
+    /// walk has reached. True while runs are left.</summary>
+    public static Func<int, int, bool>? ArmDrawer;
+
+    /// <summary>0085. Arms drawn, the draw calls they took, and walks that could not
+    /// draw the arm they had.</summary>
+    public static long ArmDraws, ArmCalls, ArmMissed;
 
     /// <summary>0085. Instances drawn in the main view and the mirror, their corners,
     /// and the vertices uploaded; never reset.</summary>

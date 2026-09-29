@@ -1316,6 +1316,7 @@ Kf2.TileWalk.Install();
 //     KF2_MODELWALK=verify   run both on every call and compare RAM, registers, GTE
 //     KF2_MODELWALK_WALK=0   func_800331B4 recompiled, the submitter still C#
 //     KF2_MODELWALK_SUBMIT=0 func_80032588 recompiled, the walk still C#
+//     KF2_MODELWALK_ARM=0    func_80032400 (the first-person arm) recompiled
 //     KF2_MODELWALK_PROBE=1  what each of the four tables submitted
 Kf2.ModelWalk.Configure(Environment.GetEnvironmentVariable("KF2_MODELWALK"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_WALK"),

@@ -2830,6 +2830,7 @@ public sealed partial class GlCore : IGpuBackend
         // 0085. The map's water goes in where the colour pass drew it among the list.
         var water = world && _wnReady ? src.Geo.Water : null;
         int start = 0, bi = 0, wi = 0;
+        int armAt = world && _wnReady ? src.Geo.ArmAt : -1;
         bool veil = false;
         for (;;)
         {
@@ -2847,11 +2848,28 @@ public sealed partial class GlCore : IGpuBackend
                     _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
                 }
             }
+            // After the water the walk drew before it.
+            if (armAt >= 0 && armAt <= start)
+            {
+                armAt = -1;
+                if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
+                _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+                DrawArmNormals(src);
+                _gl.UseProgram(_progNormal);
+                _gl.BindVertexArray(_nrmVao);
+                _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _nrmVbo);
+                if (breaks.Count > 0)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture0);
+                    _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
+                }
+            }
             for (; bi < breaks.Count && breaks[bi] <= start; bi++) veil = !veil;
             if (start >= verts.Length) break;
             int end = verts.Length;
             if (bi < breaks.Count) end = Math.Min(end, breaks[bi]);
             if (water != null && wi < water.Count) end = Math.Min(end, water[wi].At);
+            if (armAt > start) end = Math.Min(end, armAt);
             if (veil)
             {
                 if (src.Surface != 0) _gl.Enable(EnableCap.Blend, 1);

@@ -41,6 +41,9 @@ public sealed partial class GlCore
     int _uwModel = -1, _uwModelBase, _uwModelR, _uwModelT, _uwModelFar, _uwModelNear, _uwModelLlm, _uwModelCue, _uwModelRgbc, _uwModelMat, _uwModelGteC = -1;
     int _uwnModel = -1, _uwnModelBase, _uwnModelR, _uwnModelT, _uwnModelFar, _uwnModelNear, _uwnModelMat, _uwnModelGteC = -1;
     int _uwModelPose = -1, _uwModelPoseW = -1, _uwnModelPose = -1, _uwnModelPoseW = -1;
+    // The view-space placement (the arm), per program: uModelView, then the three rows and T.
+    readonly int[] _uwView = [-1, -1, -1, -1, -1], _uwnView = [-1, -1, -1, -1, -1];
+    static readonly string[] ViewNames = ["uModelView", "uModelVR0", "uModelVR1", "uModelVR2", "uModelVT"];
 
     void InitModelMeshes()
     {
@@ -50,7 +53,9 @@ public sealed partial class GlCore
         _uwModelFar = L("uModelFar"); _uwModelNear = L("uModelNear"); _uwModelLlm = L("uModelLlm"); _uwModelCue = L("uModelCue");
         _uwModelRgbc = L("uModelRgbc"); _uwModelMat = L("uModelMat"); _uwModelGteC = L("uModelGteC");
         _uwModelPose = L("uModelPose"); _uwModelPoseW = L("uModelPoseW");
+        for (int i = 0; i < ViewNames.Length; i++) _uwView[i] = L(ViewNames[i]);
         _gl.UseProgram(_progWorld);
+        if (_uwView[0] >= 0) _gl.Uniform1(_uwView[0], 0);
         if (_uwModel >= 0) _gl.Uniform1(_uwModel, 0);
         int u = L("uModelVerts");
         if (u >= 0) _gl.Uniform1(u, ModelVertsUnit);
@@ -62,7 +67,9 @@ public sealed partial class GlCore
             _uwnModel = N("uModel"); _uwnModelBase = N("uModelBase"); _uwnModelR = N("uModelR"); _uwnModelT = N("uModelT");
             _uwnModelFar = N("uModelFar"); _uwnModelNear = N("uModelNear"); _uwnModelMat = N("uModelMat"); _uwnModelGteC = N("uModelGteC");
             _uwnModelPose = N("uModelPose"); _uwnModelPoseW = N("uModelPoseW");
+            for (int i = 0; i < ViewNames.Length; i++) _uwnView[i] = N(ViewNames[i]);
             _gl.UseProgram(_progWorldNrm);
+            if (_uwnView[0] >= 0) _gl.Uniform1(_uwnView[0], 0);
             if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 0);
             int v = N("uModelVerts");
             if (v >= 0) _gl.Uniform1(v, ModelVertsUnit);
@@ -269,6 +276,8 @@ public sealed partial class GlCore
 
     void EndInstances(bool colour)
     {
+        var view = colour ? _uwView : _uwnView;
+        if (view[0] >= 0) _gl.Uniform1(view[0], 0);
         if (colour)
         {
             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
@@ -290,6 +299,18 @@ public sealed partial class GlCore
         _m9[6] = m.R20; _m9[7] = m.R21; _m9[8] = m.R22;
         // The store's first texel, or -1 for the frame's vertices; -1 a rigid weight.
         int pose = m.Pose - 1, weight = m.PoseMorph ? m.PoseWeight : -1;
+        var view = colour ? _uwView : _uwnView;
+        if (view[0] >= 0)
+        {
+            _gl.Uniform1(view[0], m.ViewSpace ? 1 : 0);
+            if (m.ViewSpace)
+            {
+                _gl.Uniform3(view[1], m.V00, m.V01, m.V02);
+                _gl.Uniform3(view[2], m.V10, m.V11, m.V12);
+                _gl.Uniform3(view[3], m.V20, m.V21, m.V22);
+                _gl.Uniform3(view[4], m.Vtx, m.Vty, m.Vtz);
+            }
+        }
         if (!colour)
         {
             _gl.Uniform1(_uwnModelBase, m.VertBase);
@@ -361,6 +382,103 @@ public sealed partial class GlCore
             _gl.DepthMask(true);
         }
         EndInstances(true);
+    }
+
+    int _uwFarPlane = -1;
+    readonly List<RetainedScene.ModelInstance> _armList = new(1);
+
+    uint _armEbo;
+
+    /// <summary>
+    /// The first-person arm, as the table's walk reaches its faces: every run of one key
+    /// the walk has passed (<see cref="RetainedScene.ArmCut"/>), in the order the walk
+    /// would have sent their packets, with no depth test, and the far plane written
+    /// where it drew, as its unrecorded packets leave the depth under them (GlCore's
+    /// zMode 3). What the walk sends between runs is drawn over the ones before it
+    /// where it passes its own test, as it was over the packets. True while runs are
+    /// left, with <see cref="RetainedScene.ArmSlot"/> the next one's slot.
+    /// </summary>
+    unsafe bool DrawWorldArm(int offX, int offY)
+    {
+        var f = RetainedScene.Find(RetainedScene.ArmSerial);
+        if (f == null || !f.HasArm || _progWorld == 0 || !InstancesReady) { RetainedScene.ArmMissed++; return false; }
+        int first = f.ArmNext, last = first;
+        while (last < f.ArmRuns && 0x1FFF - f.ArmRunKey[last] <= RetainedScene.ArmCut) last++;
+        f.ArmNext = last;
+        if (last < f.ArmRuns) RetainedScene.ArmSlot = 0x1FFF - f.ArmRunKey[last];
+        if (last == first) return last < f.ArmRuns;
+        // The probe's hide leaves it out, as it leaves out the other models.
+        if (!RetainedScene.MainModelsShown) return last < f.ArmRuns;
+        if (_uwFarPlane < 0) _uwFarPlane = _gl.GetUniformLocation(_progWorld, "uFarPlane");
+        Flush(FlushReason.Target);
+        var rt = ClassifyDisplay();
+        if (rt == null || _uwFarPlane < 0) { RetainedScene.ArmMissed++; return false; }
+        _armList.Clear();
+        _armList.Add(f.Arm);
+        int inst = PrepareInstances(f, _armList, _mainMips);
+        // The store is uploaded now; one emptied since holds other meshes there.
+        if (inst < 0 || f.Arm.MeshGen != _meshGen) { RetainedScene.ArmMissed++; return false; }
+
+        uint query = BeginGpuTimer();
+        if (_wOpen) BindWorldMain(rt, _mainMips);
+        else
+        {
+            BeginWorldMain(f, rt, offX, offY, _mainMips);
+            _wOpen = true;
+        }
+        _gl.Disable(EnableCap.CullFace);
+        _gl.Disable(EnableCap.Blend);
+        BeginInstances(inst, true);
+        SendInstance(f.Arm, true);
+        if (_armEbo == 0) _armEbo = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _armEbo);
+        if (first == 0)
+            _gl.BufferData<int>(BufferTargetARB.ElementArrayBuffer, new ReadOnlySpan<int>(f.ArmOrder, 0, f.ArmOrderCount),
+                                BufferUsageARB.StreamDraw);
+        int from = f.ArmRunAt[first], to = last < f.ArmRuns ? f.ArmRunAt[last] : f.ArmOrderCount;
+        _gl.DepthMask(true);
+        _gl.DepthFunc(DepthFunction.Always);
+        _gl.Uniform1(_uwFarPlane, 1);
+        _gl.DrawElements(PrimitiveType.Triangles, (uint)(to - from), DrawElementsType.UnsignedInt, (void*)(from * 4L));
+        _gl.Uniform1(_uwFarPlane, 0);
+        _gl.DepthFunc(DepthFunction.Lequal);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
+        EndInstances(true);
+        EndWorldState();
+        EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
+        RetainedScene.InstanceCorners += to - from;
+        RetainedScene.ArmCalls++;
+        MarkDrawn(rt);
+        // The normal pass puts it in as an overlay where the list had its first run
+        // (DrawArmNormals).
+        if (AoGeometry.Active && first == 0)
+        {
+            rt.Geo.Frame(_frame, GteDepth.Generation);
+            rt.Geo.ArmAt = rt.Geo.Count;
+            rt.Geo.ArmSerial = f.Serial;
+        }
+        if (first == 0) RetainedScene.ArmDraws++;
+        return last < f.ArmRuns;
+    }
+
+    /// <summary>The arm into the normal and surface buffers as an overlay, at its place
+    /// in the list: the surface under it is then no surface for the passes, as its
+    /// packets made it, and nothing is murked or reflected over it.</summary>
+    void DrawArmNormals(GlDisplayRt src)
+    {
+        var f = RetainedScene.Find(src.Geo.ArmSerial);
+        int slot = src.Geo.ArmSerial & (ModelRing - 1);
+        if (f == null || !f.HasArm || !_wnReady || _uwnModel < 0 || f.Arm.MeshGen != _meshGen
+            || _mvSerial[slot] != f.Serial || _mvGen[slot] != _meshGen) return;
+        _gl.UseProgram(_progWorldNrm);
+        if (_uwnDepthCull >= 0) _gl.Uniform1(_uwnDepthCull, 0);
+        BeginInstances(slot, false);
+        var m = f.Arm;
+        m.Material = SurfaceMaterial.Overlay;
+        SendInstance(m, false);
+        _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
+        EndInstances(false);
+        if (_uwnDepthCull >= 0) _gl.Uniform1(_uwnDepthCull, 1);
     }
 
     /// <summary>The frame's instances into the normal and surface buffers, through the

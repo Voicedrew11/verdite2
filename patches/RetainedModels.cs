@@ -137,7 +137,7 @@ static class RetainedModels
     /// <summary>Whether the lit assembler's opaque models are taken off the packets and
     /// drawn by the GPU world renderer: the object walk's own submits only, with
     /// per-pixel lighting on and the far colour black, as the packets' records need.</summary>
-    public static bool MainCapturing => GpuWorld.ModelsActive && ModelWalk.InWalk && !PolyAssembler.Verifying
+    public static bool MainCapturing => GpuWorld.ModelsActive && (ModelWalk.InWalk || ModelWalk.InArm && Instanced) && !PolyAssembler.Verifying
                                         && Gte.ReadControl(21) == 0 && Gte.ReadControl(22) == 0 && Gte.ReadControl(23) == 0;
 
     /// <summary>The same for the planar walk's replay of the walk's submits, into the
@@ -365,12 +365,153 @@ static class RetainedModels
     /// instance placed and lit from the GTE as the submitter left it. True when the model
     /// has no blended face, so neither the transform nor the assembler need run.
     /// </summary>
-    public static bool TryInstance(PSMemory mem, uint sub, uint bias, uint vertices)
+    public static bool TryInstance(PSMemory mem, uint sub, uint bias, uint vertices) => Instance(mem, sub, bias, vertices, arm: false);
+
+    /// <summary>The first-person arm (<c>func_80032400</c>: sub-model 0, slot bias 100)
+    /// drawn from its mesh as <see cref="TryInstance"/> draws a model. Stage 13 draws
+    /// it before the tile walk begins the frame, so the instance is held, in view space,
+    /// until <see cref="AtFrame"/>, and placed in the world with that frame's camera;
+    /// it is never in the mirror.</summary>
+    public static bool TryArm(PSMemory mem, uint vertices) => Instance(mem, 0u, 0x64u, vertices, arm: true);
+
+    /// <summary>Whether the arm about to be posed may be drawn from its mesh: the
+    /// models on the GPU in the frame about to begin, and the far colour black as their
+    /// records need.</summary>
+    public static bool ArmWanted => MeshesOn && ArmOn && GpuWorld.ModelsReady && !PolyAssembler.Verifying
+                                    && Gte.ReadControl(21) == 0 && Gte.ReadControl(22) == 0 && Gte.ReadControl(23) == 0;
+
+    /// <summary>The arm drawn from its mesh; off, on the packets (<c>KF2_GPUWORLD_ARM=0</c>).</summary>
+    public static bool ArmOn = true;
+
+    /// <summary>An arm instance waiting for its frame; cleared by the arm routine on entry.</summary>
+    public static bool ArmPending;
+    static RetainedScene.ModelInstance _arm;
+    static Transform _armXf;
+    static int _armSerial, _armMeshGen, _armVertCount;
+    static short[] _armVerts = new short[4096];
+
+    /// <summary>Arm instances made, and those whose frame never took them (the arm then
+    /// missing its opaque faces for a frame); never reset.</summary>
+    public static long ArmInstances, ArmLost;
+
+    /// <summary>From <see cref="GpuWorld.AtFrame"/>, once the frame has begun: the held
+    /// arm, placed with the frame's camera, which is the one it was drawn under.</summary>
+    public static void AtFrame()
+    {
+        if (!ArmPending) return;
+        ArmPending = false;
+        var f = RetainedScene.Find(RetainedScene.Serial);
+        if (f == null || _armSerial != RetainedScene.Serial - 1 || !GpuWorld.ModelsActive
+            || _armMeshGen != RetainedScene.MeshGeneration)
+        { ArmLost++; return; }
+        var m = _arm;
+        if (m.Pose == 0)
+        {
+            m.VertBase = RetainedScene.AddModelVertices(_armVerts.AsSpan(0, _armVertCount * 4));
+            if (m.VertBase < 0) { ArmLost++; return; }
+        }
+        _armXf.ToWorld(f.View, _ins);
+        Place(ref m, _ins);
+        RetainedScene.SetArm(m, _armIndices.AsSpan(0, _armIndexCount), _armRunKey.AsSpan(0, _armRuns), _armRunAt.AsSpan(0, _armRuns), _armBox);
+        ArmInstances++;
+    }
+
+    static int _armIndexCount, _armRuns;
+    static int[] _armRunKey = new int[64], _armRunAt = new int[64];
+    static int[] _armIndices = new int[1024];
+    static (int Key, int Face, int Corner, int Corners)[] _armFaces = new (int, int, int, int)[256];
+
+    /// <summary>
+    /// The arm's faces in the order the table walks its packets, as corner indices into
+    /// the mesh store, in runs of one key. The lit assembler
+    /// links a face at the mean of its corners' SZ over four plus the bias; the walk
+    /// takes the table from the far end (slot 0x1FFF less the key), and within a key
+    /// the face linked last first. The corners from the posed vertices as the shader
+    /// will have them (the store's blend, or the copy), each SZ as the GTE makes it,
+    /// (R v &gt;&gt; 12) + T in integers: a float depth swaps two faces whose keys differ
+    /// by one. A face the assembler drops by its depth has no packet; one turned away
+    /// is left for the shader to drop, as the assembler drops it. Also the box on the
+    /// screen its corners reach, as RTPS places them, which the walk tests a packet
+    /// against before it stops to draw the arm.
+    /// </summary>
+    static void ArmOrder(Mesh mesh, in RetainedScene.ModelInstance ins, int pose, bool morph, int weight, int bias)
+    {
+        int r0 = ins.V20, r1 = ins.V21, r2 = ins.V22, tz = ins.Vtz;
+        int a0 = ins.V00, a1 = ins.V01, a2 = ins.V02, tx = ins.Vtx, b0 = ins.V10, b1 = ins.V11, b2 = ins.V12, ty = ins.Vty;
+        float h = Gte.ReadControl(26) & 0xFFFF, ofx = (int)Gte.ReadControl(24) / 65536f, ofy = (int)Gte.ReadControl(25) / 65536f;
+        float bx0 = float.MaxValue, by0 = float.MaxValue, bx1 = float.MinValue, by1 = float.MinValue;
+        var store = RetainedScene.PoseStore;
+        var corners = RetainedScene.MeshCorners;
+        int Z(uint i)
+        {
+            int x, y, z;
+            if (pose == 0) { int a = (int)i * 4; x = _armVerts[a]; y = _armVerts[a + 1]; z = _armVerts[a + 2]; }
+            else if (!morph) { int a = (pose - 1 + (int)i) * 4; x = store[a]; y = store[a + 1]; z = store[a + 2]; }
+            else
+            {
+                int k = (pose - 1 + 2 * (int)i) * 4, d = k + 4;
+                x = (short)(store[k] + (short)((store[d] * weight) >> 12));
+                y = (short)(store[k + 1] + (short)((store[d + 1] * weight) >> 12));
+                z = (short)(store[k + 2] + (short)((store[d + 2] * weight) >> 12));
+            }
+            int vz = ((r0 * x + r1 * y + r2 * z) >> 12) + tz;
+            int vx = Math.Clamp(((a0 * x + a1 * y + a2 * z) >> 12) + tx, -32768, 32767);
+            int vy = Math.Clamp(((b0 * x + b1 * y + b2 * z) >> 12) + ty, -32768, 32767);
+            float q = h / Math.Max(Math.Clamp(vz, 0, 65535), h * 0.5f);
+            float sx = Math.Clamp(ofx + vx * q, -1024f, 1023f), sy = Math.Clamp(ofy + vy * q, -1024f, 1023f);
+            bx0 = Math.Min(bx0, sx); bx1 = Math.Max(bx1, sx); by0 = Math.Min(by0, sy); by1 = Math.Max(by1, sy);
+            return vz;
+        }
+        int n = 0, face = 0;
+        for (int c = mesh.Start; c + 2 < mesh.Start + mesh.Count; c += 3)
+        {
+            ref var k = ref corners[c];
+            if ((k.Flags & RetainedScene.FlagQuadTail) != 0) continue;
+            bool quad = k.Rgbc != uint.MaxValue;
+            int sum = (int)Math.Clamp(Z((uint)k.Dqa), 0, 65535) >> 2;
+            sum += (int)Math.Clamp(Z((uint)k.Dqb), 0, 65535) >> 2;
+            sum += (int)Math.Clamp(Z((uint)k.Curve), 0, 65535) >> 2;
+            int zz = quad ? (sum + ((int)Math.Clamp(Z(k.Rgbc), 0, 65535) >> 2)) >> 2 : sum / 3;
+            face++;
+            if (zz <= 0 || (uint)(zz + bias) >= 0x2000u) continue;
+            if (n == _armFaces.Length) Array.Resize(ref _armFaces, n * 2);
+            _armFaces[n++] = (zz + bias, face, c, quad ? 6 : 3);
+        }
+        // Far to near; within a key, the last linked first.
+        Array.Sort(_armFaces, 0, n, Comparer<(int Key, int Face, int Corner, int Corners)>.Create(
+            (a, b) => a.Key != b.Key ? b.Key.CompareTo(a.Key) : b.Face.CompareTo(a.Face)));
+        _armIndexCount = 0;
+        _armRuns = 0;
+        for (int i = 0; i < n; i++)
+        {
+            var (key, _, c, m) = _armFaces[i];
+            if (i == 0 || key != _armFaces[i - 1].Key)
+            {
+                if (_armRuns == _armRunKey.Length) { Array.Resize(ref _armRunKey, _armRuns * 2); Array.Resize(ref _armRunAt, _armRuns * 2); }
+                _armRunKey[_armRuns] = key;
+                _armRunAt[_armRuns++] = _armIndexCount;
+            }
+            if (_armIndexCount + m > _armIndices.Length) Array.Resize(ref _armIndices, _armIndices.Length * 2);
+            for (int j = 0; j < m; j++) _armIndices[_armIndexCount++] = c + j;
+        }
+        // A pixel over, for the sub-pixel positions and the rasterizer's edges.
+        _armBox[0] = bx0 - 1f; _armBox[1] = by0 - 1f; _armBox[2] = bx1 + 1f; _armBox[3] = by1 + 1f;
+    }
+
+    static readonly float[] _armBox = new float[4];
+
+    static void Place(ref RetainedScene.ModelInstance m, float[] o)
+    {
+        m.R00 = o[0]; m.R01 = o[1]; m.R02 = o[2]; m.R10 = o[3]; m.R11 = o[4]; m.R12 = o[5];
+        m.R20 = o[6]; m.R21 = o[7]; m.R22 = o[8]; m.Tx = o[9]; m.Ty = o[10]; m.Tz = o[11];
+    }
+
+    static bool Instance(PSMemory mem, uint sub, uint bias, uint vertices, bool arm)
     {
         Instanced = false;
-        bool mirror = MirrorCapturing;
+        bool mirror = !arm && MirrorCapturing;
         var frame = RetainedScene.Find(RetainedScene.Serial);
-        if (frame == null || mirror && !frame.MirrorOn) return false;
+        if (!arm && (frame == null || mirror && !frame.MirrorOn)) return false;
 
         uint table = mem.ReadU32(PolyModelTable);
         uint header = (sub & 0xFFFFu) * 28u + 0xCu + table;
@@ -418,16 +559,25 @@ static class RetainedModels
         if (!whole || pose == 0 || MoPose.Checking) MoPose.Materialize(null, mem);
         if (pose != 0 && MoPose.Checking) MoPose.Check(mem, pose, morph, weight, verts, vertices);
         int vb = 0;
-        if (pose == 0)
+        var posed = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(
+            ram.Slice((int)(verts & (Runtime.RamSize - 1)), (int)vertices * 8));
+        if (pose == 0 && arm)
         {
-            vb = RetainedScene.AddModelVertices(System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(
-                ram.Slice((int)(verts & (Runtime.RamSize - 1)), (int)vertices * 8)));
+            // Into the frame when it begins.
+            if (_armVerts.Length < posed.Length) _armVerts = new short[posed.Length];
+            posed.CopyTo(_armVerts);
+            _armVertCount = (int)vertices;
+        }
+        else if (pose == 0)
+        {
+            vb = RetainedScene.AddModelVertices(posed);
             if (vb < 0) return false;
         }
         else if (morph) InstancesPosed++;
         else InstancesRigid++;
 
-        var v = mirror ? frame.MirrorView : frame.View;
+        // The arm's frame has not begun: its camera is read now only for the check.
+        var v = arm ? RetainedMap.ReadView(mem) : mirror ? frame!.MirrorView : frame!.View;
         var xf = Transform.Read(v);
         xf.ToWorld(v, _ins);
         int mode = (int)mem.ReadU32(FogMode);
@@ -435,8 +585,6 @@ static class RetainedModels
         {
             MeshStart = mesh.Start, MeshCount = mesh.Count, VertBase = vb,
             Pose = pose, PoseWeight = weight, PoseMorph = morph,
-            R00 = _ins[0], R01 = _ins[1], R02 = _ins[2], R10 = _ins[3], R11 = _ins[4], R12 = _ins[5],
-            R20 = _ins[6], R21 = _ins[7], R22 = _ins[8], Tx = _ins[9], Ty = _ins[10], Tz = _ins[11],
             Dqa = (short)Gte.ReadControl(27), Dqb = (int)Gte.ReadControl(28),
             Curve = mode >= 32000 ? 0f : (mode & 0x8000) != 0 ? 1f : 2f,
             // The table's test is (uint)(z + bias) >= 0x2000: a negative bias wraps it.
@@ -444,8 +592,9 @@ static class RetainedModels
             Near = RenderDistance.Any ? 0f : -(int)bias,
             Rgbc = mem.ReadU32(LightColour) & 0xFFFFFFu,
             Material = PolyAssembler.TileMaterial,
-            Mirrored = !mirror && whole,
+            Mirrored = !mirror && whole && !arm,
         };
+        Place(ref m, _ins);
         uint l0 = Gte.ReadControl(8), l1 = Gte.ReadControl(9), l2 = Gte.ReadControl(10), l3 = Gte.ReadControl(11);
         m.Llm0 = (short)l0 / 4096f; m.Llm1 = (short)(l0 >> 16) / 4096f; m.Llm2 = (short)l1 / 4096f;
         m.Llm3 = (short)(l1 >> 16) / 4096f; m.Llm4 = (short)l2 / 4096f; m.Llm5 = (short)(l2 >> 16) / 4096f;
@@ -455,8 +604,24 @@ static class RetainedModels
         m.L0 = (short)c0; m.L1 = (short)(c0 >> 16); m.L2 = (short)c1; m.L3 = (short)(c1 >> 16);
         m.L4 = (short)c2; m.L5 = (short)(c2 >> 16); m.L6 = (short)c3; m.L7 = (short)(c3 >> 16);
         m.L8 = (short)Gte.ReadControl(20);
-        RetainedScene.AddInstance(m, mirror);
-        if (Checking) { _last = m; _lastMirror = mirror; _lastFace = face; _lastCount = count; _lastBias = bias; _lastVerts = vertices; }
+        if (arm)
+        {
+            // The GTE's own matrix, as RTPS will place each corner.
+            uint r0 = Gte.ReadControl(0), r1 = Gte.ReadControl(1), r2 = Gte.ReadControl(2), r3 = Gte.ReadControl(3);
+            m.ViewSpace = true;
+            m.V00 = (short)r0; m.V01 = (short)(r0 >> 16); m.V02 = (short)r1; m.V10 = (short)(r1 >> 16);
+            m.V11 = (short)r2; m.V12 = (short)(r2 >> 16); m.V20 = (short)r3; m.V21 = (short)(r3 >> 16);
+            m.V22 = (short)Gte.ReadControl(4);
+            m.Vtx = (int)Gte.ReadControl(5); m.Vty = (int)Gte.ReadControl(6); m.Vtz = (int)Gte.ReadControl(7);
+            _arm = m;
+            _armXf = xf;
+            ArmOrder(mesh, m, pose, morph, weight, (int)bias);
+            _armSerial = RetainedScene.Serial;
+            _armMeshGen = RetainedScene.MeshGeneration;
+            ArmPending = true;
+        }
+        else RetainedScene.AddInstance(m, mirror);
+        if (Checking) { _last = m; _lastView = v; _lastMirror = mirror; _lastFace = face; _lastCount = count; _lastBias = bias; _lastVerts = vertices; }
         Instanced = true;
         Instances++;
         if (whole) InstancesWhole++;
@@ -495,11 +660,12 @@ static class RetainedModels
     /// each of its faces is kept or dropped by a replica of the shader's test and by the
     /// lit assembler's own, on the vertex cache; the disagreements are counted.</summary>
     public static bool Checking;
-    public static long CheckFaces, CheckDiffer, CheckPlaced, CheckLarge;
+    public static long CheckFaces, CheckDiffer, CheckPlaced, CheckLarge, CheckArm;
     /// <summary>The disagreements by twice the face's area on the screen, ours: under
     /// 0.01, 0.1, 1 and 10 square pixels, and more.</summary>
     public static readonly long[] CheckArea = new long[5];
     static RetainedScene.ModelInstance _last;
+    static RetainedScene.View _lastView;
     static bool _lastMirror;
     static uint _lastFace, _lastCount, _lastBias, _lastVerts;
 
@@ -507,9 +673,7 @@ static class RetainedModels
     /// decision both ways.</summary>
     public static void Check(PSMemory mem)
     {
-        var frame = RetainedScene.Find(RetainedScene.Serial);
-        if (frame == null) return;
-        var v = _lastMirror ? frame.MirrorView : frame.View;
+        var v = _lastView;
         var m = _last;
         uint face = _lastFace;
         {
@@ -562,12 +726,24 @@ static class RetainedModels
             {
                 uint p = verts + mem.ReadU16(f + idx[k]);
                 double x = (short)mem.ReadU16(p), y = (short)mem.ReadU16(p + 2u), z = (short)mem.ReadU16(p + 4u);
-                double wx = m.R00 * x + m.R01 * y + m.R02 * z + m.Tx - v.CamX;
-                double wy = m.R10 * x + m.R11 * y + m.R12 * z + m.Ty - v.CamY;
-                double wz = m.R20 * x + m.R21 * y + m.R22 * z + m.Tz - v.CamZ;
-                double vx = v.R00 * wx + v.R01 * wy + v.R02 * wz + v.Tx;
-                double vy = v.R10 * wx + v.R11 * wy + v.R12 * wz + v.Ty;
-                double vz = v.R20 * wx + v.R21 * wy + v.R22 * wz + v.Tz;
+                double vx, vy, vz;
+                if (m.ViewSpace)
+                {
+                    // The shader's integer path (modelEye).
+                    int ix = (int)x, iy = (int)y, iz = (int)z;
+                    vx = Math.Clamp(((m.V00 * ix + m.V01 * iy + m.V02 * iz) >> 12) + m.Vtx, -32768, 32767);
+                    vy = Math.Clamp(((m.V10 * ix + m.V11 * iy + m.V12 * iz) >> 12) + m.Vty, -32768, 32767);
+                    vz = ((m.V20 * ix + m.V21 * iy + m.V22 * iz) >> 12) + m.Vtz;
+                }
+                else
+                {
+                    double wx = m.R00 * x + m.R01 * y + m.R02 * z + m.Tx - v.CamX;
+                    double wy = m.R10 * x + m.R11 * y + m.R12 * z + m.Ty - v.CamY;
+                    double wz = m.R20 * x + m.R21 * y + m.R22 * z + m.Tz - v.CamZ;
+                    vx = v.R00 * wx + v.R01 * wy + v.R02 * wz + v.Tx;
+                    vy = v.R10 * wx + v.R11 * wy + v.R12 * wz + v.Ty;
+                    vz = v.R20 * wx + v.R21 * wy + v.R22 * wz + v.Tz;
+                }
                 zs += (int)Math.Clamp(vz, 0, 65535) >> 2;
                 double q = Math.Max(Math.Clamp(vz, 0, 65535), v.H * 0.5);
                 sx[k] = Math.Clamp(v.Cx + v.H * Math.Clamp(vx, -32768, 32767) / q, -1024, 1023);
@@ -580,7 +756,7 @@ static class RetainedModels
             if (ours == game) continue;
             double ac = Math.Abs(cross);
             CheckArea[ac < 0.01 ? 0 : ac < 0.1 ? 1 : ac < 1 ? 2 : ac < 10 ? 3 : 4]++;
-            if (CheckDiffer++ < 12 || ac >= 10 && CheckLarge++ % 500 == 0)
+            if (CheckDiffer++ < 12 || ac >= 10 && CheckLarge++ % 500 == 0 || m.ViewSpace && CheckArm++ < 40)
                 Console.WriteLine($"[KF2] mesh check: face {i} game {(game ? "kept" : "dropped")} (z {gz}, " +
                                   $"screen {(short)mem.ReadU16(p0)},{(short)mem.ReadU16(p0 + 2u)} {(short)mem.ReadU16(p1)},{(short)mem.ReadU16(p1 + 2u)} {(short)mem.ReadU16(p2)},{(short)mem.ReadU16(p2 + 2u)}), " +
                                   $"ours {(ours ? "kept" : "dropped")} (z {mz}, screen {sx[0]:F1},{sy[0]:F1} {sx[1]:F1},{sy[1]:F1} {sx[2]:F1},{sy[2]:F1}); " +

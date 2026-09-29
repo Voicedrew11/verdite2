@@ -54,6 +54,13 @@ public static class LibGpu
         var slot = -1;
         // 0085. The map's water, drawn by the backend where its packets would be sent.
         var water = false;
+        // 0085. The first-person arm, drawn by the backend face by face where the walk
+        // would have sent its packets: the runs it has passed go in together before the
+        // next packet the walk sends that draws where the arm does, since nothing between
+        // them shares a pixel with it.
+        var arm = RetainedScene.ArmSerial > 0 && RetainedScene.ArmSerial == RetainedScene.MainSerial
+                  && !custom && !PlanarReflections.Capturing;
+        var armDue = false;
         for (var guard = 0; guard < 0x100000; guard++)
         {
             // Where in the table this primitive was linked, counted from the head —
@@ -83,11 +90,20 @@ public static class LibGpu
                     else water = RetainedScene.WaterPending && reorder;
                     RetainedScene.MainSerial = 0;
                 }
+                armDue |= arm && slot >= RetainedScene.ArmSlot && slot >= 1;
             }
             GteDepth.OtSlot = slot;
 
             if (count > 0)
             {
+                // The arm is a barrier, as its packets were: what the walk holds goes first.
+                if (armDue && Draws(m, addr) && ArmMeets(m, addr, count))
+                {
+                    if (BlendOrder.Queued > 0) SendHeld(gpu, m, onEntry, probe, guard, slot, ref water);
+                    if (water) water = gpu.DrawRetainedWater(WaterCut(slot));
+                    arm = DrawArm(gpu, slot);
+                    armDue = false;
+                }
                 // Slot 0 (the skybox) is never depth-tested, whatever it recorded.
                 var kind = (reorder || probe) && slot != 0 ? BlendOrder.Classify(m, addr, count, out _) : BlendOrder.Kind.Barrier;
                 if (reorder && kind == BlendOrder.Kind.Deferred)
@@ -115,6 +131,7 @@ public static class LibGpu
         }
         if (BlendOrder.Queued > 0) SendHeld(gpu, m, onEntry, probe, GteDepth.OtEntry, GteDepth.OtSlot, ref water);
         if (water) gpu.DrawRetainedWater(float.NegativeInfinity);
+        if (arm) DrawArm(gpu, int.MaxValue);
 
         // The length is only known once the walk ends, so it is published for the
         // next one. An entry is readable as an OTZ against it: the walk starts at
@@ -123,6 +140,22 @@ public static class LibGpu
         GteDepth.OtEntry = -1;
         GteDepth.OtSlot = -1;
         if (custom) GpuPrims.Clear();
+    }
+
+    /// <summary>0085. The arm's runs the walk has reached at <paramref name="slot"/>;
+    /// false once none is left.</summary>
+    private static bool DrawArm(Gpu gpu, int slot)
+    {
+        RetainedScene.ArmCut = slot;
+        if (gpu.DrawRetainedArm()) return true;
+        RetainedScene.ArmSerial = 0;
+        return false;
+    }
+
+    private static bool ArmMeets(IMemory m, uint addr, int count)
+    {
+        var (x0, y0, x1, y1) = PacketBox(m, addr, count);
+        return RetainedScene.ArmMeets(x0, y0, x1, y1);
     }
 
     /// <summary>0085. Whether a packet draws: a polygon, a line or a rectangle.</summary>

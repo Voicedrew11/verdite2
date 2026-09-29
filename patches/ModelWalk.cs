@@ -33,12 +33,14 @@ public readonly struct ModelDraw
 
 /// <summary>
 /// The object and creature walk in C#: `func_800331B4` (the four table walks) and
-/// `func_80032588` (the model submitter it dispatches to).
+/// `func_80032588` (the model submitter it dispatches to); and `func_80032400`, the
+/// first-person arm, which stage 13 draws before either.
 ///
-///     KF2_MODELWALK=0        both recompiled
-///     KF2_MODELWALK=verify   run both on every call and compare RAM, registers and the GTE
+///     KF2_MODELWALK=0        all three recompiled
+///     KF2_MODELWALK=verify   run each on every call and compare RAM, registers and the GTE
 ///     KF2_MODELWALK_WALK=0   func_800331B4 recompiled, the submitter still C#
 ///     KF2_MODELWALK_SUBMIT=0 func_80032588 recompiled, the walk still C#
+///     KF2_MODELWALK_ARM=0    func_80032400 recompiled
 ///     KF2_MODELWALK_PROBE=1  a line every two seconds: what each table submitted
 ///
 /// **Why this routine.** `TileWalk` taught the port the static world; this is
@@ -71,6 +73,7 @@ public static class ModelWalk
 {
     const uint Walk = 0x800331B4;    // the four table walks
     const uint Submit = 0x80032588;  // one model: matrices, light, assembler
+    const uint Arm = 0x80032400;     // the first-person arm, in view space
 
     // ---- the four tables ----------------------------------------------------
 
@@ -116,13 +119,14 @@ public static class ModelWalk
 
     enum Mode { Off, On, Verify }
     static Mode _mode = Mode.On;
-    static bool _queuedWalk, _queuedSubmit;
+    static bool _queuedWalk, _queuedSubmit, _queuedArm;
 
     /// <summary>Off hands every call to the recompiled routine.</summary>
     public static bool Enabled { get; set; } = true;
 
     public static bool WalkEnabled { get; set; } = true;
     public static bool SubmitEnabled { get; set; } = true;
+    public static bool ArmEnabled { get; set; } = true;
     public static bool Verifying => _mode == Mode.Verify;
 
     static bool _probe;
@@ -211,7 +215,7 @@ public static class ModelWalk
     /// anywhere inside stage 13 after it.</summary>
     public static ReadOnlySpan<ModelDraw> Scene => _scene.AsSpan(0, _lastCount);
 
-    static long _creatures, _objects, _effects, _sprites, _lit, _flat, _semi, _ambients;
+    static long _creatures, _objects, _effects, _sprites, _lit, _flat, _semi, _ambients, _arms;
     // Live slots this frame, so "0 submitted" is told from "nothing there".
     static int _liveCreatures, _liveObjects, _liveEffects, _liveSprites;
     static double _probeAt;
@@ -230,6 +234,7 @@ public static class ModelWalk
         Enabled = mode?.Trim().ToLowerInvariant() is not ("0" or "off");
         WalkEnabled = walk?.Trim() != "0";
         SubmitEnabled = submit?.Trim() != "0";
+        ArmEnabled = Environment.GetEnvironmentVariable("KF2_MODELWALK_ARM")?.Trim() != "0";
         _probe = probe?.Trim() is not (null or "" or "0");
     }
 
@@ -239,18 +244,20 @@ public static class ModelWalk
     {
         var walk = SymbolRegistry.Resolve("game", null, Walk);
         var submit = SymbolRegistry.Resolve("game", null, Submit);
-        if (walk == null || submit == null) return false;
+        var arm = SymbolRegistry.Resolve("game", null, Arm);
+        if (walk == null || submit == null || arm == null) return false;
 
         if (!Queue(ref _queuedWalk, walk, nameof(ReplaceWalk))) return false;
         if (!Queue(ref _queuedSubmit, submit, nameof(ReplaceSubmit))) return false;
+        if (!Queue(ref _queuedArm, arm, nameof(ReplaceArm))) return false;
 
         HookManager.Commit();
-        bool ok = HookAttach.Installed(walk) && HookAttach.Installed(submit);
+        bool ok = HookAttach.Installed(walk) && HookAttach.Installed(submit) && HookAttach.Installed(arm);
         string State(bool on) => !on ? "off" : _mode.ToString().ToLowerInvariant();
         Console.WriteLine(!ok
             ? "[KF2] modelwalk: not installed"
             : $"[KF2] modelwalk: walk {State(Enabled && WalkEnabled)}, " +
-              $"submit {State(Enabled && SubmitEnabled)}");
+              $"submit {State(Enabled && SubmitEnabled)}, arm {State(Enabled && ArmEnabled)}");
         return ok;
     }
 
@@ -278,6 +285,135 @@ public static class ModelWalk
         if (Recompiled(Enabled && SubmitEnabled) || m is not PSMemory mem) { orig(c, m); return; }
         if (_mode == Mode.Verify) Verify(_submitCheck, orig, c, mem, RunSubmit);
         else RunSubmit(c, mem);
+    }
+
+    static void ReplaceArm(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
+    {
+        if (Recompiled(Enabled && ArmEnabled) || m is not PSMemory mem) { orig(c, m); return; }
+        if (_mode == Mode.Verify) Verify(_armCheck, orig, c, mem, RunArm);
+        else RunArm(c, mem);
+    }
+
+    // ---- func_80032400: the first-person arm ------------------------------------
+
+    const uint SwingClock = 0x801994A4, SwingClip = 0x801994AE, ArmSlot = 0x8019949C;
+    const uint Weapon = 0x80199494, PlayerZ = 0x801994F4;
+
+    /// <summary>Inside the C# arm routine.</summary>
+    public static bool InArm { get; private set; }
+
+    /// <summary>
+    /// The arm: nothing while the swing clock reads -1; else lit from the light record
+    /// of the half the player stands on, placed by the equipped weapon's record with no
+    /// camera composed in, posed by the MO blender (model 0x20) and assembled by the lit
+    /// assembler at slot bias 100. 0085: with the GPU world renderer's models on, it is
+    /// drawn from its mesh as an instance (<see cref="RetainedModels.TryArm"/>); the
+    /// frame has not begun yet (the tile walk begins it), so the instance is held until
+    /// it does. See "Step 3, the fourth slice" in docs/GPU_RENDERER.md.
+    /// </summary>
+    static void RunArm(CpuContext c, PSMemory mem)
+    {
+        uint entry = c.SP, sp = entry - 0x48u;
+        c.SP = sp;
+        mem.WriteU32(sp + 0x40u, c.RA);
+        mem.WriteU32(sp + 0x3Cu, c.S1);
+        mem.WriteU32(sp + 0x38u, c.S0);
+        RetainedModels.ArmPending = false;
+
+        if ((short)mem.ReadU16(SwingClock) != -1)
+        {
+            _arms++;
+            InArm = true;
+            try { ArmBody(c, mem, sp); }
+            finally { InArm = false; }
+        }
+
+        c.RA = mem.ReadU32(sp + 0x40u);
+        c.S1 = mem.ReadU32(sp + 0x3Cu);
+        c.S0 = mem.ReadU32(sp + 0x38u);
+        c.SP = entry;
+    }
+
+    static void ArmBody(CpuContext c, PSMemory mem, uint sp)
+    {
+        // The light record of the player's own half: tile (x >> 11, z >> 11) of the
+        // 80-wide map, ten bytes a tile, the half's offset from HalfSelect.
+        int z = (int)mem.ReadU32(PlayerZ) >> 11, x = (int)mem.ReadU32(PlayerPos) >> 11;
+        uint cell = (uint)(z * 800 + x * 10) + mem.ReadU16(HalfSelect);
+        uint light = (mem.ReadU8(MapBase + 4u + cell) & 0x3Fu) * 0x68u + LightBase;
+
+        c.S1 = SwingClock;
+        c.S0 = light;
+        c.A0 = light + 0x50u;
+        c.RA = 0x800324B0u;
+        KingsField2.SetColorMatrix(c, mem);
+        c.A0 = light;
+        c.RA = 0x800324B8u;
+        KingsField2.SetLightMatrix(c, mem);
+        c.A0 = (uint)(short)mem.ReadU16(light + 0x66u);
+        c.RA = 0x800324C4u;
+        KingsField2.func_8002DDDC(c, mem);
+        c.A0 = mem.ReadU8(light + 0x62u);
+        c.A1 = mem.ReadU8(light + 0x63u);
+        c.A2 = mem.ReadU8(light + 0x64u);
+        c.RA = 0x800324D8u;
+        KingsField2.SetBackColor_game(c, mem);
+
+        uint weapon = mem.ReadU32(Weapon);
+        mem.WriteU32(sp + 0x2Cu, (uint)(short)mem.ReadU16(weapon + 0x34u));
+        mem.WriteU32(sp + 0x30u, (uint)(short)mem.ReadU16(weapon + 0x36u));
+        mem.WriteU32(sp + 0x34u, (uint)(short)mem.ReadU16(weapon + 0x38u));
+        c.A0 = weapon + 0x3Cu;
+        c.A1 = sp + 0x18u;
+        c.RA = 0x80032510u;
+        KingsField2.RotMatrix(c, mem);
+        c.A0 = sp + 0x18u;
+        c.RA = 0x80032518u;
+        KingsField2.SetRotMatrix(c, mem);
+        c.A0 = sp + 0x18u;
+        c.RA = 0x80032520u;
+        KingsField2.SetTransMatrix(c, mem);
+        c.A0 = 0x20u;
+        c.RA = 0x80032528u;
+        KingsField2.func_80034834(c, mem);
+        c.A0 = 0u;
+        c.RA = 0x80032530u;
+        KingsField2.func_8002E1BC(c, mem);
+        uint mesh = c.V0;
+        c.S0 = mesh;
+        uint vertices = mem.ReadU32(mesh + 4u);
+
+        mem.WriteU32(sp + 0x10u, vertices);
+        c.A0 = ArmSlot;
+        c.A1 = 0x20u;
+        c.A2 = mem.ReadU8(SwingClip);
+        c.A3 = (uint)(short)mem.ReadU16(SwingClock);
+        c.RA = 0x80032554u;
+        // 0085. The arm drawn from the pose store, as a lit model in the world is.
+        bool gpu = RetainedModels.ArmWanted && !Verifying;
+        MoPose.Defer = gpu && MoPose.Active && RetainedModels.PosesOn && !RetainedModels.Checking;
+        KingsField2.func_80034DA8(c, mem);
+        MoPose.Defer = false;
+        if (c.V0 == 0u) { MoPose.Materialize(c, mem); return; }
+
+        bool whole = gpu && RetainedModels.TryArm(mem, vertices);
+        if (!whole) MoPose.Materialize(c, mem);
+        if (whole && !RetainedModels.Checking) RetainedModels.NoteSkippedTransform();
+        else
+        {
+            c.A0 = vertices;
+            c.RA = 0x80032568u;
+            KingsField2.func_8002E650(c, mem);
+            if (RetainedModels.Instanced && RetainedModels.Checking) RetainedModels.Check(mem);
+        }
+        if (!whole)
+        {
+            c.A0 = 0u;
+            c.A1 = 0x64u;
+            c.RA = 0x80032574u;
+            KingsField2.func_8002F214(c, mem);
+        }
+        RetainedModels.Instanced = false;
     }
 
     // ---- func_800331B4: the four table walks --------------------------------
@@ -1177,8 +1313,8 @@ public static class ModelWalk
                           $"{_lastCount} model(s) submitted; a second: {_creatures / span:F0} creature, " +
                           $"{_objects / span:F0} object, {_effects / span:F0} effect, {_sprites / span:F0} sprite; " +
                           $"{_lit / span:F0} lit, {_flat / span:F0} flat, {_semi / span:F0} semi-transparent; " +
-                          $"{_ambients} ambient sound(s) played in all");
-        _creatures = _objects = _effects = _sprites = _lit = _flat = _semi = 0;
+                          $"{_ambients} ambient sound(s) played in all; the arm drawn {_arms / span:F0} time(s) a second");
+        _creatures = _objects = _effects = _sprites = _lit = _flat = _semi = _arms = 0;
     }
 
     // ---- KF2_MODELWALK=verify -----------------------------------------------
@@ -1200,6 +1336,7 @@ public static class ModelWalk
 
     static readonly Check _walkCheck = new("func_800331B4");
     static readonly Check _submitCheck = new("func_80032588");
+    static readonly Check _armCheck = new("func_80032400");
 
     static void Verify(Check k, Action<CpuContext, IMemory> orig, CpuContext c, PSMemory mem,
                        Action<CpuContext, PSMemory> run)

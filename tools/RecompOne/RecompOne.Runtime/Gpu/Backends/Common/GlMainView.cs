@@ -45,8 +45,12 @@ public sealed partial class GlCore
         _gl.UseProgram(0);
         RetainedScene.MainDrawer = DrawWorldMain;
         RetainedScene.WaterDrawer = DrawWorldWater;
+        RetainedScene.ArmDrawer = DrawWorldArm;
         InitModelMeshes();
     }
+
+    // Whether the main view drew with the mip atlas, for the arm the walk draws later.
+    bool _mainMips;
 
     // The main view's frame, for the water slices the same walk draws after it.
     RetainedScene.Frame? _wFrame;
@@ -79,6 +83,7 @@ public sealed partial class GlCore
         UploadStatic();
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         bool mips = UpdateWorldMips(f, f.MainHalves);
+        _mainMips = mips;
         int models = UploadModels(f.Models, f.Serial & (ModelRing - 1), f.Serial, mips);
         int inst = PrepareInstances(f, f.Instances, mips);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();

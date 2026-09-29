@@ -34,9 +34,11 @@ namespace Kf2;
 /// Those placed in the world are drawn from meshes kept on the GPU, an instance each
 /// (<see cref="RetainedModels.TryInstance"/>; <c>KF2_GPUWORLD_MESHES=0</c> to compare,
 /// <c>KF2_GPUWORLD_MESHCHECK=1</c> checks the shader's cull against the assembler's).
+/// The first-person arm is drawn from its mesh too, in the game's painter's order
+/// (<see cref="RetainedModels.TryArm"/>; <c>KF2_GPUWORLD_ARM=0</c> to compare).
 ///
-/// See "Step 1, the first slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice"
-/// and "Step 5, the first slice" in docs/GPU_RENDERER.md.
+/// See "Step 1, the first slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice",
+/// "Step 3, the fourth slice" and "Step 5, the first slice" in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
 {
@@ -74,6 +76,7 @@ public static class GpuWorld
         RetainedModels.MeshesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHES")?.Trim() != "0";
         RetainedModels.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHCHECK")?.Trim() is "1";
         RetainedModels.PosesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSES")?.Trim() != "0";
+        RetainedModels.ArmOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_ARM")?.Trim() != "0";
         MoPose.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSECHECK")?.Trim() is "1";
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
@@ -131,23 +134,17 @@ public static class GpuWorld
     /// <summary>From <see cref="RetainedMap.AtWalk"/>, once the frame has begun.</summary>
     public static void AtFrame()
     {
-        Active = Wanted && Blocker == null && RetainedScene.StaticCount[0] > 0
-              && TileWalk.Enabled && TileWalk.CellEnabled && TileWalk.TileEnabled && !TileWalk.Verifying
-              && PolyAssembler.Enabled && PolyAssembler.UnclippedEnabled && !PolyAssembler.Verifying
-              && !RecompOne.Runtime.Pgxp.Pgxp.CpuTracking;
+        Active = ActiveNow;
         RetainedScene.MainView = Active;
         RetainedScene.MainSerial = Active ? RetainedScene.Serial : 0;
         WaterActive = Active && _water && BlendOrder.Active;
-        // The models' packets carry per-pixel lighting records; the GPU draws them only
-        // in that mode, and only from the C# walk, submitter and lit assembler.
-        ModelsActive = Active && _models && GteLightMap.Active
-                    && ModelWalk.Enabled && ModelWalk.WalkEnabled && ModelWalk.SubmitEnabled && !ModelWalk.Verifying
-                    && PolyAssembler.LitEnabled;
+        ModelsActive = ModelsNow(Active);
         RetainedScene.MainWater = WaterActive;
         MirrorActive = Active && _mirror && PlanarReflections.Enabled;
         MirrorModelsActive = MirrorActive && ModelsActive;
         MirrorWaterActive = MirrorActive && _water;
         RetainedScene.MirrorWater = MirrorWaterActive;
+        RetainedModels.AtFrame();
         if (_probe)
         {
             // BK and LCM generations the last frame started (GteLightMap keeps eight).
@@ -157,6 +154,22 @@ public static class GpuWorld
             Report();
         }
     }
+
+    static bool ActiveNow => Wanted && Blocker == null && RetainedScene.StaticCount[0] > 0
+        && TileWalk.Enabled && TileWalk.CellEnabled && TileWalk.TileEnabled && !TileWalk.Verifying
+        && PolyAssembler.Enabled && PolyAssembler.UnclippedEnabled && !PolyAssembler.Verifying
+        && !RecompOne.Runtime.Pgxp.Pgxp.CpuTracking;
+
+    // The models' packets carry per-pixel lighting records; the GPU draws them only
+    // in that mode, and only from the C# walk, submitter and lit assembler.
+    static bool ModelsNow(bool active) => active && _models && GteLightMap.Active
+        && ModelWalk.Enabled && ModelWalk.WalkEnabled && ModelWalk.SubmitEnabled && !ModelWalk.Verifying
+        && PolyAssembler.LitEnabled;
+
+    /// <summary>Whether the models will be drawn on the GPU in the frame about to begin,
+    /// by the switches as they are now: the arm is drawn before the frame begins, and a
+    /// switch thrown between the two must not leave it with neither path.</summary>
+    public static bool ModelsReady => ModelsNow(ActiveNow);
 
     // ---- which halves still need the game's assembler -------------------------------
 
@@ -221,6 +234,8 @@ public static class GpuWorld
             case "meshes off": RetainedModels.MeshesOn = false; break;
             case "poses on": RetainedModels.PosesOn = true; break;
             case "poses off": RetainedModels.PosesOn = false; break;
+            case "arm on": RetainedModels.ArmOn = true; break;
+            case "arm off": RetainedModels.ArmOn = false; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
             case "models show": RetainedScene.MainModelsShown = true; break;
             case "perpixel on": GteLightMap.Enabled = true; break;
@@ -245,11 +260,11 @@ public static class GpuWorld
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
             case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|arm on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
-               $"\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -259,7 +274,7 @@ public static class GpuWorld
     static long _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
     static long _gensMax, _gensAt, _builds;
     static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
-    static long _iIns, _iWhole, _iMir, _iDrawn, _iCorners, _iVerts, _iMirDrawn;
+    static long _iIns, _iWhole, _iMir, _iDrawn, _iCorners, _iVerts, _iMirDrawn, _iArm, _iArmDrawn, _iArmCalls;
     static long _pPosed, _pRigid, _pDeferred, _pMat, _pTexels;
     static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
 
@@ -311,15 +326,20 @@ public static class GpuWorld
                           $"{(d == 0 ? 0 : mn / d)} into the normal pass");
         long ins = RetainedModels.Instances - _iIns, iw = RetainedModels.InstancesWhole - _iWhole, im = RetainedModels.InstancesMirror - _iMir;
         long idr = RetainedScene.InstancesDrawn - _iDrawn, ic = RetainedScene.InstanceCorners - _iCorners, iv = RetainedScene.InstanceVertices - _iVerts;
-        long imd = RetainedScene.MirrorInstancesDrawn - _iMirDrawn;
+        long imd = RetainedScene.MirrorInstancesDrawn - _iMirDrawn, ia = RetainedModels.ArmInstances - _iArm, iad = RetainedScene.ArmDraws - _iArmDrawn, iac = RetainedScene.ArmCalls - _iArmCalls;
         _iIns = RetainedModels.Instances; _iWhole = RetainedModels.InstancesWhole; _iMir = RetainedModels.InstancesMirror;
         _iDrawn = RetainedScene.InstancesDrawn; _iCorners = RetainedScene.InstanceCorners; _iVerts = RetainedScene.InstanceVertices;
         _iMirDrawn = RetainedScene.MirrorInstancesDrawn;
+        _iArm = RetainedModels.ArmInstances;
+        _iArmDrawn = RetainedScene.ArmDraws;
+        _iArmCalls = RetainedScene.ArmCalls;
         Console.WriteLine($"[KF2] gpu world: meshes {(RetainedModels.MeshesOn ? "on" : "off")}; a draw: " +
                           $"{(d == 0 ? 0 : (double)ins / d):F1} instance(s) made ({(d == 0 ? 0 : (double)iw / d):F1} whole, {(d == 0 ? 0 : (double)im / d):F1} in the mirror's replay), " +
                           $"{(d == 0 ? 0 : (double)idr / d):F1} drawn with {(d == 0 ? 0 : ic / d)} corner(s), {(d == 0 ? 0 : iv / d)} posed vert(ices) uploaded, " +
                           $"{(d == 0 ? 0 : (double)imd / d):F1} in the mirror; store {RetainedScene.MeshCornerCount} corner(s), " +
-                          $"{RetainedModels.MeshBuilds} mesh(es) built, {RetainedModels.MeshStale} found changed, {RetainedModels.InstanceRefused} refused in all" +
+                          $"{RetainedModels.MeshBuilds} mesh(es) built, {RetainedModels.MeshStale} found changed, {RetainedModels.InstanceRefused} refused in all; " +
+                          $"arm {(RetainedModels.ArmOn ? "on" : "off")}, {ia} placed, {iad} drawn in {iac} call(s), " +
+                          $"{RetainedModels.ArmLost} lost and {RetainedScene.ArmMissed} missed in all" +
                           (RetainedModels.Checking ? $"; checked {RetainedModels.CheckFaces} face(s), {RetainedModels.CheckDiffer} kept or dropped differently " +
                                                        $"(by twice their area, under 0.01/0.1/1/10 px² and more: {string.Join("/", RetainedModels.CheckArea)})" : ""));
         long pp = RetainedModels.InstancesPosed - _pPosed, pr = RetainedModels.InstancesRigid - _pRigid;
