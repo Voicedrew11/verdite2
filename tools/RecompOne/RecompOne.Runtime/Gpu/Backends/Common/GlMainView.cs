@@ -36,6 +36,7 @@ public sealed partial class GlCore
         _uwWaveOn = L("uWaveOn"); _uwWaveN = L("uWaveN"); _uwWaveRect = L("uWaveRect"); _uwWaveR = L("uWaveR");
         _uwWaveCam = L("uWaveCam"); _uwWaveT = L("uWaveT"); _uwWaveCentre = L("uWaveCentre"); _uwWaveH = L("uWaveH");
         _uwWaveTime = L("uWaveTime"); _uwWaveParams = L("uWaveParams");
+        _uwBk = L("uLightBk"); _uwLcmR = L("uLcmR"); _uwLcmG = L("uLcmG"); _uwLcmB = L("uLcmB");
         _gl.UseProgram(_progWorld);
         if (_uwSwellOn >= 0) _gl.Uniform1(_uwSwellOn, 0);
         if (_uwWaveOn >= 0) _gl.Uniform1(_uwWaveOn, 0);
@@ -74,6 +75,7 @@ public sealed partial class GlCore
         UploadStatic();
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         bool mips = UpdateWorldMips(f, f.MainHalves);
+        int models = UploadModels(f, mips);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         var (cx, cy) = BeginWorldMain(f, rt, offX, offY, mips);
         ClearStaleDepth(rt);
@@ -83,6 +85,7 @@ public sealed partial class GlCore
         _gl.DepthMask(true);
         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
         int drawn = DrawRange(0, null);
+        if (models >= 0 && RetainedScene.MainModelsShown) DrawWorldModels(f, models);
         EndWorldState();
         EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
 
@@ -630,6 +633,108 @@ public sealed partial class GlCore
             }
     }
 
+    // ---- the models ---------------------------------------------------------------
+
+    // The frames' models, one buffer per frame in the ring, so the normal pass at
+    // present still finds the models of the frame the presented target holds.
+    const int ModelRing = 4;
+    readonly uint[] _mdlVbo = new uint[ModelRing], _mdlMipVbo = new uint[ModelRing], _mdlVao = new uint[ModelRing];
+    readonly int[] _mdlSerial = new int[ModelRing], _mdlCap = new int[ModelRing];
+    uint[] _mdlMip = [];
+    int _uwBk, _uwLcmR, _uwLcmG, _uwLcmB;
+
+    /// <summary>The frame's models into their buffer, with their mip-atlas entries
+    /// looked up and decoded; the buffer's slot, or -1 for none. Before the target is
+    /// bound, since the decode draws.</summary>
+    unsafe int UploadModels(RetainedScene.Frame f, bool mips)
+    {
+        int n = f.ModelCount;
+        if (n == 0) return -1;
+        int slot = f.Serial & (ModelRing - 1);
+        if (_mdlVao[slot] == 0)
+        {
+            _mdlVbo[slot] = _gl.GenBuffer();
+            _mdlMipVbo[slot] = _gl.GenBuffer();
+            _mdlVao[slot] = MakeWorldVao(_mdlVbo[slot], _mdlMipVbo[slot]);
+        }
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlVbo[slot]);
+        if (n > _mdlCap[slot])
+        {
+            _mdlCap[slot] = Math.Max(n, _mdlCap[slot] * 2);
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_mdlCap[slot] * sizeof(RetainedScene.Vertex)), null, BufferUsageARB.StreamDraw);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlMipVbo[slot]);
+            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_mdlCap[slot] * 4), null, BufferUsageARB.StreamDraw);
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlVbo[slot]);
+        }
+        _gl.BufferSubData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, 0, new ReadOnlySpan<RetainedScene.Vertex>(f.Models, 0, n));
+        if (_mdlMip.Length < n) _mdlMip = new uint[Math.Max(n, _mdlMip.Length * 2)];
+        for (int i = 0; i + 2 < n; i += 3)
+        {
+            uint e = mips ? DynMip(f.Models[i]) : 0u;
+            _mdlMip[i] = _mdlMip[i + 1] = _mdlMip[i + 2] = e;
+        }
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlMipVbo[slot]);
+        _gl.BufferSubData<uint>(BufferTargetARB.ArrayBuffer, 0, new ReadOnlySpan<uint>(_mdlMip, 0, n));
+        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        if (mips && _mip!.HasPending) _mip.Process(_vram.SampleTexture);
+        _mdlSerial[slot] = f.Serial;
+        return slot;
+    }
+
+    /// <summary>
+    /// The frame's models after the map, in the state the map left: tested and written,
+    /// with 0051's tolerance as their packets had it (true depth first with colour off,
+    /// then colour against it, pulled towards the camera), so a model flush with the
+    /// floor wins as the later table entry did. Not culled: the port kept only the faces
+    /// the game's own facing test kept. A run per BK and LCM, which light the dots.
+    /// </summary>
+    void DrawWorldModels(RetainedScene.Frame f, int slot)
+    {
+        _gl.Disable(EnableCap.CullFace);
+        _gl.BindVertexArray(_mdlVao[slot]);
+        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+        bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
+        if (bias)
+        {
+            _gl.ColorMask(false, false, false, false);
+            DrawModelRuns(f);
+            _gl.ColorMask(true, true, true, true);
+            _gl.DepthMask(false);
+            if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
+            if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);
+        }
+        foreach (var g in f.Groups)
+        {
+            if (_uwBk >= 0) _gl.Uniform3(_uwBk, g.Bk0, g.Bk1, g.Bk2);
+            if (_uwLcmR >= 0) _gl.Uniform3(_uwLcmR, g.L0, g.L1, g.L2);
+            if (_uwLcmG >= 0) _gl.Uniform3(_uwLcmG, g.L3, g.L4, g.L5);
+            if (_uwLcmB >= 0) _gl.Uniform3(_uwLcmB, g.L6, g.L7, g.L8);
+            if (g.Cull) _gl.Enable(EnableCap.CullFace);
+            _gl.DrawArrays(PrimitiveType.Triangles, g.Start, (uint)g.Count);
+            if (g.Cull) _gl.Disable(EnableCap.CullFace);
+        }
+        if (bias)
+        {
+            if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+            if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+            _gl.DepthMask(true);
+        }
+        RetainedScene.MainModelTriangles += f.ModelCount / 3;
+        RetainedScene.MainModelGroups += f.Groups.Count;
+    }
+
+    /// <summary>Every run of the frame's models through the bound program, culled
+    /// where the port could not cull (the facing set up as the map's).</summary>
+    void DrawModelRuns(RetainedScene.Frame f)
+    {
+        foreach (var g in f.Groups)
+        {
+            if (g.Cull) _gl.Enable(EnableCap.CullFace);
+            _gl.DrawArrays(PrimitiveType.Triangles, g.Start, (uint)g.Count);
+            if (g.Cull) _gl.Disable(EnableCap.CullFace);
+        }
+    }
+
     // ---- the normal and surface buffers ------------------------------------------
 
     void InitWorldNormals()
@@ -714,6 +819,13 @@ public sealed partial class GlCore
             }
             RetainedScene.MainNormalTriangles += DrawStaticChunks(0) / 3;
             _gl.Disable(EnableCap.CullFace);
+            int ms = f.Serial & (ModelRing - 1);
+            if (f.ModelCount > 0 && _mdlSerial[ms] == f.Serial && RetainedScene.MainModelsShown)
+            {
+                _gl.BindVertexArray(_mdlVao[ms]);
+                DrawModelRuns(f);
+                RetainedScene.MainModelNormalTriangles += f.ModelCount / 3;
+            }
             _gl.BindVertexArray(0);
         }
 

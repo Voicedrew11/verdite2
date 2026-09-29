@@ -71,6 +71,10 @@ public static class RetainedScene
     /// as one packet.</summary>
     public const uint FlagQuadTail = 0x20000000u;
 
+    /// <summary>0085. A model corner whose colour is the three light dots of its normal
+    /// (a gouraud face), lit per pixel with its group's BK and LCM, not a lit colour.</summary>
+    public const uint FlagDots = 0x40000000u;
+
     public static uint HalfFlag(int tx, int tz, int upper) => (uint)((tz * 80 + tx) * 2 + upper + 1) << HalfShift;
 
     /// <summary>Reflect only the halves the game drew in the frame. Off, every half on
@@ -377,6 +381,11 @@ public static class RetainedScene
         /// wavenumber along X and Z, its height and its phase; and whether it is on.</summary>
         public readonly float[] Swell = new float[12];
         public bool SwellOn;
+        /// <summary>0085. The opaque faces of the models the frame's object walk took
+        /// off the packets, in world space, in runs lit by one BK and LCM.</summary>
+        public Vertex[] Models = new Vertex[1024];
+        public int ModelCount;
+        public readonly List<ModelGroup> Groups = new();
 
         public ReadOnlySpan<Vertex> SortedDynamic()
         {
@@ -412,6 +421,8 @@ public static class RetainedScene
         f.SortedValid = false;
         f.PlaneCount = 0;
         f.SwellOn = false;
+        f.ModelCount = 0;
+        f.Groups.Clear();
         Array.Clear(f.Halves);
         Array.Clear(f.MainHalves);
     }
@@ -453,6 +464,50 @@ public static class RetainedScene
         f.DynamicCount += n;
         f.SortedValid = false;
     }
+
+    /// <summary>0085. A run of <see cref="Frame.Models"/> lit with one back colour and
+    /// light colour matrix, as the GTE held them (BK, then LCM row by row).</summary>
+    public struct ModelGroup
+    {
+        public int Start, Count;
+        /// <summary>Faces the port could not cull as the game does (those its clipper
+        /// took), left to the GPU's facing cull.</summary>
+        public bool Cull;
+        public float Bk0, Bk1, Bk2, L0, L1, L2, L3, L4, L5, L6, L7, L8;
+    }
+
+    /// <summary>0085. One model's opaque triangles to the current frame's main view,
+    /// with the BK and LCM its light dots are lit by (<paramref name="light"/>, 12).</summary>
+    public static void AddMainModel(ReadOnlySpan<Vertex> tris, ReadOnlySpan<float> light, bool cull = false)
+    {
+        var f = Current;
+        int n = tris.Length / 3 * 3;
+        if (f.Serial != _serial || n == 0) return;
+        if (f.ModelCount + n > f.Models.Length)
+            Array.Resize(ref f.Models, Math.Max(f.Models.Length * 2, f.ModelCount + n));
+        tris[..n].CopyTo(f.Models.AsSpan(f.ModelCount));
+        var g = f.Groups.Count > 0 ? f.Groups[^1] : default;
+        bool same = f.Groups.Count > 0 && g.Start + g.Count == f.ModelCount && g.Cull == cull
+                    && g.Bk0 == light[0] && g.Bk1 == light[1] && g.Bk2 == light[2]
+                    && g.L0 == light[3] && g.L1 == light[4] && g.L2 == light[5] && g.L3 == light[6]
+                    && g.L4 == light[7] && g.L5 == light[8] && g.L6 == light[9] && g.L7 == light[10] && g.L8 == light[11];
+        if (same) { g.Count += n; f.Groups[^1] = g; }
+        else f.Groups.Add(new ModelGroup
+        {
+            Start = f.ModelCount, Count = n, Cull = cull, Bk0 = light[0], Bk1 = light[1], Bk2 = light[2],
+            L0 = light[3], L1 = light[4], L2 = light[5], L3 = light[6], L4 = light[7], L5 = light[8],
+            L6 = light[9], L7 = light[10], L8 = light[11],
+        });
+        f.ModelCount += n;
+    }
+
+    /// <summary>0085. Models' triangles drawn in the main view, draws, and the models'
+    /// triangles the normal pass drew.</summary>
+    public static long MainModelTriangles, MainModelGroups, MainModelNormalTriangles;
+
+    /// <summary>0085. Off, the models taken off the packets are not drawn either: the
+    /// probe's way to see what they cover.</summary>
+    public static bool MainModelsShown = true;
 
     /// <summary>The planes the current frame mirrors in, nearest-first by the
     /// port's own ranking; at most <see cref="MaxPlanes"/>.</summary>

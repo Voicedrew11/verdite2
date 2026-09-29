@@ -376,6 +376,9 @@ public static partial class PolyAssembler
         uint total = count;
         // 0072. A model the object walk submitted, every face, for the retained scene.
         if (mesh == 0 && RetainedModels.Capturing) RetainedModels.CaptureFlat(mem, header, normals, face, count, true);
+        // 0085. An object's opaque faces drawn by the GPU world renderer; only the blended ones built here.
+        bool gpu = mesh == 0 && RetainedModels.MainCapturing;
+        if (gpu) RetainedModels.CaptureMain(mem, normals, face, count, bias, tile: true);
 
         var fr = new Frame(mem);
         for (; count != 0; count--)
@@ -386,7 +389,7 @@ public static partial class PolyAssembler
             uint word = mem.ReadU32(face);
             face += 4u;
             uint cmd = word >> 24;
-            uint type = BlendedOnly && (cmd & 2u) == 0u ? 0u : cmd & 0xFDu;
+            uint type = (BlendedOnly || gpu) && (cmd & 2u) == 0u ? 0u : cmd & 0xFDu;
 
             if (type == 0x2Cu)
             {
@@ -870,6 +873,30 @@ public static partial class PolyAssembler
             face += (word >> 6) & 0x3FCu;
         }
     }
+
+    /// <summary>The assemblers' facing test, for a capture that must keep what they keep.</summary>
+    internal static bool FaceKept(PSMemory mem, uint p0, uint p1, uint p2) => Facing(mem, p0, p1, p2);
+
+    /// <summary>func_80030540's: whether a face goes to the clipper (a corner the near
+    /// transform refused, or an edge too long for the GPU), as Quad and Triangle test it.</summary>
+    internal static bool TileFaceClips(PSMemory mem, int corners, uint p0, uint p1, uint p2, uint p3)
+    {
+        int x0 = (short)mem.ReadU16(p0), y0 = (short)mem.ReadU16(p0 + 2u);
+        int x1 = (short)mem.ReadU16(p1), y1 = (short)mem.ReadU16(p1 + 2u);
+        int x2 = (short)mem.ReadU16(p2), y2 = (short)mem.ReadU16(p2 + 2u);
+        if (corners == 3)
+            return (short)(mem.ReadU16(p0 + 4u) | mem.ReadU16(p1 + 4u) | mem.ReadU16(p2 + 4u)) == -1
+                || !FitsY(y0 - y1) || !FitsY(y1 - y2) || !FitsY(y2 - y0)
+                || !FitsX(x0 - x1) || !FitsX(x1 - x2) || !FitsX(x2 - x0);
+        int x3 = (short)mem.ReadU16(p3), y3 = (short)mem.ReadU16(p3 + 2u);
+        return (short)(mem.ReadU16(p0 + 4u) | mem.ReadU16(p1 + 4u) | mem.ReadU16(p2 + 4u) | mem.ReadU16(p3 + 4u)) == -1
+            || !FitsY(y0 - y1) || !FitsY(y1 - y3) || !FitsY(y3 - y2) || !FitsY(y2 - y0) || !FitsY(y1 - y2)
+            || !FitsX(x0 - x1) || !FitsX(x1 - x3) || !FitsX(x3 - x2) || !FitsX(x2 - x0) || !FitsX(x1 - x2);
+    }
+
+    /// <summary>func_80030540's facing for a face that fits: a quad on its whole loop.</summary>
+    internal static bool TileFaceKept(PSMemory mem, int corners, uint p0, uint p1, uint p2, uint p3)
+        => corners == 4 ? QuadFaces(mem, Visible(mem, p0, p1, p2), p0, p1, p2, p3) : Visible(mem, p0, p1, p2);
 
     /// <summary>NormalClip as this routine loads it: the third vertex before the second.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

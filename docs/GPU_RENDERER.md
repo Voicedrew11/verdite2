@@ -5,8 +5,10 @@ triangles the game's code builds every frame, and the record of the work against
 it. Started 2026-09-28 on the branch `retained-world`. **Step 0 is in, the
 first slice of Step 1 (the map's opaque faces drawn by the GPU in the main view,
 off by default, `KF2_GPUWORLD=1`, measured and not judged), and two slices of
-Step 2: that map in the occlusion's normals and the surface buffer, and each map
-feature checked against the packet path. Water is still on packets.**
+Step 2: that map in the occlusion's normals and the surface buffer, each map
+feature checked against the packet path, and the map's water drawn in the table's
+order. Step 3's first slice draws the object walk's opaque models on the GPU;
+their blended faces, the effects, the billboards and the arm are still on packets.**
 
 ## Why: the frame is the game's geometry, done on one CPU thread
 
@@ -261,6 +263,14 @@ come after (decided 2026-09-28), unless an issue is something a later step build
    near is placed on screen where its true projection is not, and the shadow lookup
    rebuilds the surface's position from the screen. The GPU's position is then the
    true one. If so, this is the packet path's error, not the GPU's.
+4. **The map is rebuilt whole whenever the game rewrites a light record** (measured,
+   2026-09-29). For about 40 s after a warp into area 7 the effects there rewrite
+   the tiles' light records, and the retained map, whose corners carry their lit
+   colours, is rebuilt each time: up to 18 builds in 2 s at 7.2-7.7 ms each, which
+   takes 144 fps down to 130-137 in those seconds. It happens with the models on
+   the packets too (`KF2_GPUWORLD_MODELS=0`), so it is Step 1's, not Step 3's; the
+   plan's answer is the instanced map, lit in the shader from a record per half.
+   `KF2_GPUWORLD_PROBE=1` prints the builds and what changed for the last.
 
 ### Step 2: every map feature in the renderer
 
@@ -493,6 +503,119 @@ record per live model: matrix, light matrix, depth cue, blend, pose. First the
 pose stays the game's (the posed vertex base is uploaded); blending the keyframes
 on the GPU follows, and `AnimSmoothing`'s in-between poses then cost nothing. The
 arm and view-space models are models too.
+
+#### Step 3, the first slice
+
+**The object walk's opaque models drawn on the GPU, after the map. Mechanism
+measured, and judged by eye from play (2026-09-29): no issue found.** `KF2_GPUWORLD_MODELS=0` or `gpuworld models off` is
+the comparison. The runtime half amends `0085` (its fifth diff); the port half is
+`RetainedModels.CaptureMain`, called from the lit assembler and from the clipped map
+assembler for a model, which then build only the model's blended faces.
+
+**Two departures from the plan above, both for this slice only**, as in Step 1:
+
+- **No mesh cache yet.** Each model's corners are taken to world space on the CPU
+  every frame, from the vertex base its transform just read (so the pose is the
+  pose drawn), once per vertex. Instancing the meshes is the next slice, and the
+  one that takes the models out of the mirror's replay.
+- **Only opaque faces.** The blended assembler (`func_8002EAEC`: the effects, the
+  billboards, the doors) and the blended faces of an opaque model stay on the
+  packets, among 0079's held packets as before. The arm is not in the object walk
+  and stays too.
+
+**Which models.** Every submit of the C# object walk that reaches the lit assembler
+(`func_8002F214`: creatures, and objects away from the camera) or the clipped map
+assembler (`func_80030540` with no mesh: objects near it). The walk picks the second
+by the visibility byte's `0x80` bit each frame, so an object moves from one to the
+other as the camera approaches, and both had to be taken. Area 1's census: 142 lit
+and 210 flat submits a second.
+
+**Which faces: the ones the game would have drawn**, by each assembler's own tests
+on the screen corners its transform just cached. The lit assembler: its facing test,
+fractional corners and all, and the face's mean depth inside the table (at or below
+0, or past the table's end without render distance, and the packet was never
+linked). The clipped assembler: a face that fits the screen, by its facing, a quad
+on its whole loop; a face it would hand the clipper (a corner the near transform
+refused, or an edge too long for the GPU) is left to the GPU's own near clip and
+facing cull, in a run of its own. The rest is drawn with no cull.
+
+**Lit as the packets' records light them per pixel** (`0048`). A flat face carries
+its lit colour before it saturates (`Gte.LightProducts`); a gouraud corner carries
+its normal's three light dots (`Gte.LightDots`, `RetainedScene.FlagDots`), lit in
+`WorldVs` and `PrimFs` with the BK and LCM the model was set up with. Every model
+sets its own from its tile's light record, so the frame's models go in runs of one
+BK and LCM, each a draw with the pair as uniforms (0.7-3 runs a frame measured). A
+clipped-assembler face carries its `NormalColorCol` colour and that assembler's two
+fog curves. The depth cue is the model's DQA and DQB, at each pixel's depth. The
+GPU draws models only while per-pixel lighting is on, which is what its records
+describe; off, they stay on the packets.
+
+**Drawn after the map, as 0051 draws a tested batch**: the true depth with colour
+off, then the colour against it pulled towards the camera, so a model flush with the
+floor wins as the later table entry did. Into the normal and surface pass after the
+map. The frame's models are kept in a buffer per frame, in a ring of four, since the
+normal pass runs at present for the frame the presented target holds.
+
+**Found on the way: 0048's generations wrapped.** A packet's record names the BK
+and LCM it was lit with by a generation in a ring of eight, and a new generation
+starts whenever the constants change. Every model sets its own, and the planar
+walk replays them all: area 7 after a warp starts up to 11 in a frame. When the ring
+wraps before the table is drawn, the first models' packets upload a later model's BK,
+and come out darker by a constant: 22-33 levels in every channel under the
+teleport effect, where it was first seen as the GPU and the packets disagreeing.
+Forced with a ring of two, the models' pixels read 44.9/44.5/53.3 on the packets,
+64.3/64.8/72.4 on the GPU and 69.6/70.4/77.7 from the GTE's own corner colours
+(per-pixel lighting reads about 5 below those everywhere). So it was the packets,
+and it was visible without the GPU renderer: a busy frame lit some of its models
+wrong. The ring is 64 now (`0048` amended).
+
+**Measured.** The harness is Step 2's second slice's, with a third snap: the models
+taken off the packets and not drawn (`gpuworld models hide`), whose difference from
+the packets is the pixels the models cover. Views aimed at every opaque model a
+spawn submits (`gpuworld scene` lists them, with the camera's forward), from the
+spawn and from 1,500 units away. Render scale 5, 16:9, paused:
+
+| area | models | views | worst block | the models' pixels |
+|---|---|---|---|---|
+| 1 | objects 385, 445, 486 (clipped assembler) | 7 | 0.10-0.25, one 0.93 | equal, or within 7 |
+| 3 | creature 149, objects 376, 377 | 3 | 0.35-0.36 | within 1 |
+| 6 | creatures 149 (2), objects 381, 382, 521 | 14 | 0.02-0.48, one 1.00 | within 2.2 |
+| 7 | creatures 174 (4), object 487 | 9, and 8 headings | 0.13-0.41 | within 0.4 |
+
+Where the models cover something, 1-8% of their pixels differ past 16 levels,
+none of it surviving a 2-pixel erosion in area 7: texel edges, as the map's. The
+surface buffer read back against the frame's depth: 0.00-0.01% behind it, none
+missing.
+
+**The two outliers are the game's clipper.** Area 6's model 382 is a door, and from
+1,500 units it fills the picture through the clipped assembler (405 faces a frame
+it would clip): 1,951 bad blocks, 74% of the pixels surviving the erosion, block
+means up to 47 apart, and the two pictures' means 49.3 and 49.5. On the packets the
+wood's texels jump along the edges of the clipper's fan; on the GPU they do not.
+The clipper's new corners carry whole-texel UVs, since a packet holds a byte for
+each, so the game's own picture has the seam and the GPU clips exactly. Area 1's
+model 385 from 1,500 units (42 bad blocks, 18% surviving) is the same assembler and
+is taken to be the same; not checked. None of the lit assembler's faces in these
+views had a corner nearer than H/2, where the GTE's divide saturates (the probe
+counts them), so that case, which the lit assembler does not clip, is not measured.
+
+Cost, uncapped (`KF2_FPS=1000 KF2_PROFILE=1`), planar reflections on (the saved
+setting, whose mirror still replays the models through the game's code), models on
+the packets against on the GPU:
+
+| view | frame work | fps | `DrawOTag` | GPU per present |
+|---|---|---|---|---|
+| area 7, four creatures and an object | 5.19 to 3.26 ms | 190 to 299 | 1.80 to 0.65 ms | 2.34 to 2.29 ms |
+| area 6, the door | 1.63 to 1.26 ms | 570 to 721 | 0.38 to 0.17 ms | 1.16 to 0.90 ms |
+
+At 144 fps: 144.0 drawn at 19.9-20.0 ticks/s, `[present] wide 288`, and no GL error
+under `KF2_GLDEBUG=1`, apart from the seconds of known issue 4.
+
+**Not checked** on purpose: a menu, shop or message over it (`MenuWorld`)
+and `LoopPacing`'s redraws, which run the same walk; the remaster editor's pick of
+a model, which reads the frame's triangles, among which the models no longer are;
+the frame viewer, which no longer sees them; a lit face with a corner nearer than
+H/2.
 
 ### Step 4: the old world path off
 

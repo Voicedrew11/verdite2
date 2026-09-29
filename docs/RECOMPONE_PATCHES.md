@@ -600,6 +600,14 @@ Four files in the directory have no entry below:
   `Gte.LightDots` give the port a normal's lighting without touching a register.
   GL core backend only. **No recompile.** See "Per-pixel lighting" in
   `docs/RENDERING.md`.
+  Since amended: the BK and LCM were kept in a ring of eight generations, and a
+  generation starts whenever the constants change. Every model sets its own from its
+  tile's light record and the planar walk replays them, so area 7 starts up to 11 in
+  a frame, and when the ring wrapped before the table was drawn, the first models'
+  packets uploaded a later model's BK: darker by a constant, 22-33 levels. The ring is
+  64 now, and `GteLightMap.Generations` counts them for `0085`'s probe. The amendment
+  is the second diff in the patch file. See "Step 3, the first slice" in
+  `docs/GPU_RENDERER.md`.
 
 - `0049-gte-depth-quotient.patch` — `Gte.DepthQuotient(sz3)`, the `H/SZ3` divide
   `Rtp` feeds its depth cue, split out of `Divide` with no flag raised and no
@@ -1423,6 +1431,19 @@ Four files in the directory have no entry below:
   (`BindWorldMain`, `CloseWorldMain` before a shadow or reflection draw). With
   `RetainedScene.MainWater` off, the water stays on the packets as before. The fourth
   diff in the patch file. See "Step 2, the third slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the object walk's opaque models are drawn by the backend too, after
+  the map. The port adds each model's opaque faces to the frame
+  (`RetainedScene.AddMainModel`, `Frame.Models`), in runs lit by one BK and LCM
+  (`ModelGroup`); a gouraud corner carries its normal's three light dots
+  (`FlagDots`), which `WorldVs` lights with `uLightBk` and `uLcmR/G/B` as `PrimFs`
+  lights a directional record, and a run may ask for the facing cull (`Cull`, faces
+  the port could not cull as the game does). `GlMainView.DrawWorldModels` draws them
+  after the map with 0051's depth prepass and bias, uncapped by chunks or the half
+  gate; the normal pass draws them after the map. Each frame's models are uploaded
+  once, to a buffer in a ring of four keyed by serial, with their mip-atlas entries,
+  so the normal pass at present finds the presented frame's. `MainModelsShown` off
+  leaves them undrawn, the probe's measure of what they cover. The fifth diff in the
+  patch file. See "Step 3, the first slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

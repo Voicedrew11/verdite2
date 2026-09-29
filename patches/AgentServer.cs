@@ -114,7 +114,7 @@ public static class AgentServer
         "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
         "view [<x> <y> <z> <pitch> <yaw> <roll> | off] - the camera the last frame was drawn from, a digest of its cull grid and the cells it draws; with a camera, draw every frame from it until 'view off'",
         "waves [on|off | swell|swellsize|ripple|ripplesize|shade|speed <value>] - the water waves: their state, the switch, or one setting (not saved)",
-        "gpuworld [on|off | surfaces on|off | water on|off] - the map drawn on the GPU (0085): its state, the switch, whether it reaches the normal and surface buffers, or whether its water is drawn there too (not saved)",
+        "gpuworld [on|off | surfaces on|off | water on|off | models on|off|hide|show | scene | perpixel on|off] - the world drawn on the GPU (0085): its state, the switch, whether the map reaches the normal and surface buffers, whether its water and the object walk's models are drawn there too, models taken and not drawn (what they cover), the last walk's models and the camera's forward, or per-pixel lighting (not saved)",
         "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
     ];
 

@@ -203,6 +203,11 @@ public static class RetainedMap
     static double _buildMs;
     static long _builds;
 
+    /// <summary>Map builds, and what changed for the last; for the GPU world's probe.</summary>
+    public static long Builds => _builds;
+    public static string LastWhy => _lastWhy;
+    public static double LastBuildMs => _buildMs;
+
     static void Build(CpuContext c, PSMemory mem)
     {
         _n = 0;

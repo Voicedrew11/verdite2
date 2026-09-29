@@ -132,6 +132,191 @@ static class RetainedModels
         if (Remaster.Props.NameOf(ModelWalk.SubmitRecord) != null) Props++;
     }
 
+    // ---- 0085: the main view --------------------------------------------------------
+
+    /// <summary>Whether the lit assembler's opaque models are taken off the packets and
+    /// drawn by the GPU world renderer: the object walk's own submits only, with
+    /// per-pixel lighting on and the far colour black, as the packets' records need.</summary>
+    public static bool MainCapturing => GpuWorld.ModelsActive && ModelWalk.InWalk && !PolyAssembler.Verifying
+                                        && Gte.ReadControl(21) == 0 && Gte.ReadControl(22) == 0 && Gte.ReadControl(23) == 0;
+
+    /// <summary>Models and faces taken, faces the facing test dropped and faces the
+    /// table's range dropped; never reset.</summary>
+    public static long MainModels, MainFaces, MainCulled, MainOutOfTable;
+
+    static RetainedScene.Vertex[] _main = new RetainedScene.Vertex[1024], _mainClip = new RetainedScene.Vertex[256];
+    // Per model: each vertex's world position and each normal's light dots, by offset / 8.
+    static readonly float[] _vx = new float[8192 * 3], _nd = new float[8192 * 3];
+    static readonly int[] _vAt = new int[8192], _nAt = new int[8192];
+    static int _stamp;
+    static readonly float[] _light = new float[12];
+
+    /// <summary>
+    /// A model an assembler is about to assemble, its opaque faces taken to the frame's
+    /// main view instead (<see cref="RetainedScene.AddMainModel"/>); the assembler then
+    /// builds only its blended faces. A face is taken only if the game would have drawn
+    /// it, by the assembler's own tests on the screen corners its transform just cached.
+    /// The lit assembler (`func_8002F214`): the facing, fractional corners and all, and
+    /// the mean depth inside the table; each corner as its packet's record has it for
+    /// per-pixel lighting, a flat face's lit colour before its saturation and a gouraud
+    /// corner's three light dots with the BK and LCM they are lit by. The clipped map
+    /// assembler (<paramref name="tile"/>, `func_80030540`, which draws an object near
+    /// the camera): the facing of a face that fits the screen, and a face it hands the
+    /// clipper left to the GPU's own cull; the face's NormalColorCol colour, fogged on
+    /// its two curves.
+    /// </summary>
+    public static void CaptureMain(PSMemory mem, uint normals, uint face, uint count, uint bias, bool tile = false)
+    {
+        var frame = RetainedScene.Find(RetainedScene.Serial);
+        if (frame == null || count > 4096) return;
+        var v = frame.View;
+        var xf = Transform.Read(v);
+        float dqa = (short)Gte.ReadControl(27), dqb = (int)Gte.ReadControl(28);
+        int mode = (int)mem.ReadU32(FogMode);
+        float curve = mode >= 32000 ? 0f : tile ? 2f : (mode & 0x8000) != 0 ? 1f : 2f;
+        uint rgbc = mem.ReadU32(LightColour) & 0xFFFFFFu;
+        uint verts = mem.ReadU32(VertexBase);
+        byte mat = PolyAssembler.TileMaterial;
+        for (int i = 0; i < 3; i++) _light[i] = (int)Gte.ReadControl(13 + i);
+        for (int i = 0; i < 9; i++)
+            _light[3 + i] = i == 8 ? (short)Gte.ReadControl(20) : (short)(Gte.ReadControl(16 + i / 2) >> ((i & 1) * 16));
+        if (++_stamp == int.MaxValue) { _stamp = 1; Array.Clear(_vAt); Array.Clear(_nAt); }
+
+        int n = 0, nc = 0;
+        Span<uint> idx = stackalloc uint[4], nrm = stackalloc uint[4], uv = stackalloc uint[4];
+        Span<float> wx = stackalloc float[4], wy = stackalloc float[4], wz = stackalloc float[4];
+        Span<float> cr = stackalloc float[4], cg = stackalloc float[4], cb = stackalloc float[4];
+        for (uint i = 0; i < count; i++)
+        {
+            uint word = mem.ReadU32(face);
+            uint f = face + 4u;
+            uint cmd = word >> 24;
+            face = f + ((word >> 6) & 0x3FCu);
+            if ((cmd & 2u) != 0) continue;
+            int corners;
+            bool gouraud;
+            switch (cmd & 0xFDu)
+            {
+                case 0x24u: corners = 3; gouraud = false; idx[0] = 0x0E; idx[1] = 0x10; idx[2] = 0x12; nrm[0] = 0x0C; break;
+                case 0x2Cu: corners = 4; gouraud = false; idx[0] = 0x12; idx[1] = 0x14; idx[2] = 0x16; idx[3] = 0x18; nrm[0] = 0x10; break;
+                case 0x34u when !tile: corners = 3; gouraud = true; idx[0] = 0x0E; idx[1] = 0x12; idx[2] = 0x16; nrm[0] = 0x0C; nrm[1] = 0x10; nrm[2] = 0x14; break;
+                case 0x3Cu when !tile: corners = 4; gouraud = true; idx[0] = 0x12; idx[1] = 0x16; idx[2] = 0x1A; idx[3] = 0x1E; nrm[0] = 0x10; nrm[1] = 0x14; nrm[2] = 0x18; nrm[3] = 0x1C; break;
+                default: continue;
+            }
+
+            // The assembler's own tests, on the vertex cache its transform filled.
+            uint p0 = VertexCache + mem.ReadU16(f + idx[0]), p1 = VertexCache + mem.ReadU16(f + idx[1]);
+            uint p2 = VertexCache + mem.ReadU16(f + idx[2]);
+            uint p3 = corners == 4 ? VertexCache + mem.ReadU16(f + idx[3]) : 0u;
+            bool clip = false;
+            if (tile)
+            {
+                clip = PolyAssembler.TileFaceClips(mem, corners, p0, p1, p2, p3);
+                if (!clip && !PolyAssembler.TileFaceKept(mem, corners, p0, p1, p2, p3)) { MainCulled++; continue; }
+            }
+            else
+            {
+                if (!PolyAssembler.FaceKept(mem, p0, p1, p2)) { MainCulled++; continue; }
+                int z = (short)mem.ReadU16(p0 + 4u) + (short)mem.ReadU16(p1 + 4u) + (short)mem.ReadU16(p2 + 4u);
+                z = corners == 4 ? (z + (short)mem.ReadU16(p3 + 4u)) >> 2 : z / 3;
+                if (z <= 0 || (uint)z + bias >= 0x2000u && !RenderDistance.Any) { MainOutOfTable++; continue; }
+                // A corner nearer than H/2, where the GTE's divide saturates: its packet
+                // was placed where the corner's projection is not.
+                int near = (int)(GteDepth.ProjH / 8f);
+                if ((short)mem.ReadU16(p0 + 4u) < near || (short)mem.ReadU16(p1 + 4u) < near || (short)mem.ReadU16(p2 + 4u) < near
+                    || corners == 4 && (short)mem.ReadU16(p3 + 4u) < near)
+                    MainSaturated++;
+            }
+
+            for (int k = 0; k < corners; k++)
+            {
+                uint off = mem.ReadU16(f + idx[k]);
+                int s = (int)(off >> 3) & 8191;
+                if (_vAt[s] != _stamp)
+                {
+                    uint p = verts + off;
+                    xf.World(v, (short)mem.ReadU16(p), (short)mem.ReadU16(p + 2u), (short)mem.ReadU16(p + 4u),
+                             out _vx[s * 3], out _vx[s * 3 + 1], out _vx[s * 3 + 2]);
+                    _vAt[s] = _stamp;
+                }
+                wx[k] = _vx[s * 3]; wy[k] = _vx[s * 3 + 1]; wz[k] = _vx[s * 3 + 2];
+                if (gouraud)
+                {
+                    uint no = mem.ReadU16(f + nrm[k]);
+                    int t = (int)(no >> 3) & 8191;
+                    if (_nAt[t] != _stamp)
+                    {
+                        uint q = normals + no;
+                        Gte.LightDots((short)mem.ReadU16(q), (short)mem.ReadU16(q + 2u), (short)mem.ReadU16(q + 4u),
+                                      out _nd[t * 3], out _nd[t * 3 + 1], out _nd[t * 3 + 2]);
+                        _nAt[t] = _stamp;
+                    }
+                    cr[k] = _nd[t * 3]; cg[k] = _nd[t * 3 + 1]; cb[k] = _nd[t * 3 + 2];
+                }
+            }
+            if (tile)
+            {
+                uint lit = Light(mem, normals + mem.ReadU16(f + nrm[0]), rgbc);
+                for (int k = 0; k < corners; k++) { cr[k] = lit & 0xFF; cg[k] = (lit >> 8) & 0xFF; cb[k] = (lit >> 16) & 0xFF; }
+            }
+            else if (!gouraud)
+            {
+                uint q = normals + mem.ReadU16(f + nrm[0]);
+                Gte.LightProducts((short)mem.ReadU16(q), (short)mem.ReadU16(q + 2u), (short)mem.ReadU16(q + 4u),
+                                  out int i1, out int i2, out int i3);
+                cr[0] = (rgbc & 0xFF) * i1 / 4096f; cg[0] = ((rgbc >> 8) & 0xFF) * i2 / 4096f; cb[0] = ((rgbc >> 16) & 0xFF) * i3 / 4096f;
+                for (int k = 1; k < corners; k++) { cr[k] = cr[0]; cg[k] = cg[0]; cb[k] = cb[0]; }
+            }
+            uv[0] = mem.ReadU16(f);
+            uv[1] = mem.ReadU16(f + 4u);
+            uv[2] = mem.ReadU16(f + 8u);
+            uv[3] = corners == 4 ? mem.ReadU16(f + 0xCu) : 0u;
+            uint clut = mem.ReadU16(f + 2u), tpage = mem.ReadU16(f + 6u) & 0x1FFu;
+            int u0 = 255, v0 = 255, u1 = 0, v1 = 0;
+            for (int k = 0; k < corners; k++)
+            {
+                int u = (int)(uv[k] & 0xFF), vv = (int)(uv[k] >> 8);
+                u0 = Math.Min(u0, u); v0 = Math.Min(v0, vv); u1 = Math.Max(u1, u); v1 = Math.Max(v1, vv);
+            }
+            var t0 = new RetainedScene.Vertex
+            {
+                Clut = clut & 0x7FFF, Texpage = tpage, Dqa = dqa, Dqb = dqb, Curve = curve,
+                Rect = (uint)u0 | (uint)v0 << 8 | (uint)u1 << 16 | (uint)v1 << 24,
+                Flags = RetainedScene.FlagRect | mat | (gouraud ? RetainedScene.FlagDots : 0u),
+                Rgbc = rgbc,
+            };
+            ref var dst = ref clip ? ref _mainClip : ref _main;
+            ref int at = ref clip ? ref nc : ref n;
+            if (at + 6 > dst.Length) Array.Resize(ref dst, dst.Length * 2);
+            PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 0); PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 1); PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 2);
+            if (corners == 4) { PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 1); PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 3); PutMain(dst, ref at, t0, wx, wy, wz, uv, cr, cg, cb, 2); }
+            MainFaces++;
+            if (clip) MainClipped++;
+        }
+        RetainedScene.AddMainModel(_main.AsSpan(0, n), _light);
+        RetainedScene.AddMainModel(_mainClip.AsSpan(0, nc), _light, cull: true);
+        MainModels++;
+        if (tile) MainTileModels++;
+    }
+
+    /// <summary>Of <see cref="MainModels"/>, those from the clipped map assembler, and of
+    /// <see cref="MainFaces"/>, those it would have clipped.</summary>
+    public static long MainTileModels, MainClipped;
+
+    /// <summary>Of <see cref="MainFaces"/>, the lit assembler's with a corner nearer than
+    /// the GTE's divide can place (H/2).</summary>
+    public static long MainSaturated;
+
+    static void PutMain(RetainedScene.Vertex[] dst, ref int n, in RetainedScene.Vertex t, Span<float> x, Span<float> y, Span<float> z,
+                        Span<uint> uv, Span<float> r, Span<float> g, Span<float> b, int k)
+    {
+        var v = t;
+        v.X = x[k]; v.Y = y[k]; v.Z = z[k];
+        v.U = uv[k] & 0xFF; v.V = uv[k] >> 8;
+        v.R = r[k]; v.G = g[k]; v.B = b[k];
+        dst[n++] = v;
+    }
+
     /// <summary>One model the object walk hands the tile assemblers
     /// (`func_80030540`, `func_8002FECC`): the map's face format, lit flat per face
     /// by whatever light matrix the submitter set. <paramref name="twoCurves"/> is

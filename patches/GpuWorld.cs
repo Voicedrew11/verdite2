@@ -14,6 +14,7 @@ namespace Kf2;
 ///     KF2_GPUWORLD_PROBE=1   a line every 2 s: draws, misses, halves skipped and kept,
 ///                            and the surface buffer read back against the frame's depth
 ///     KF2_GPUWORLD_SURFACES=0  leave the map out of the normal and surface buffers
+///     KF2_GPUWORLD_MODELS=0  leave the object walk's models on the packets
 ///
 /// The tile walk still decides: every half it visits is noted in the frame's gate
 /// (<see cref="RetainedScene.NoteHalf"/>), and the backend draws exactly those halves
@@ -25,7 +26,12 @@ namespace Kf2;
 /// A half with a subtractive face is the packets' whole. The mirrored walk
 /// (<see cref="PlanarWalk"/>) is untouched.
 ///
-/// See "Step 1, the first slice" and "Step 2, the third slice" in docs/GPU_RENDERER.md.
+/// The object walk's models lit by the models' assembler are drawn by the backend too,
+/// after the map, their opaque faces taken off the packets by <see cref="RetainedModels.CaptureMain"/>;
+/// their blended faces, and the models the other assemblers draw, stay on the packets.
+///
+/// See "Step 1, the first slice", "Step 2, the third slice" and "Step 3, the first slice"
+/// in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
 {
@@ -33,11 +39,14 @@ public static class GpuWorld
 
     public const string OnKey = "kf2.gpuworld.on";
 
-    static bool _on, _probe, _water = true;
+    static bool _on, _probe, _water = true, _models = true;
 
     /// <summary>Whether this frame's water is drawn on the GPU too: the switch, and
     /// 0079's reorder, whose barriers are where each slice goes.</summary>
     public static bool WaterActive { get; private set; }
+
+    /// <summary>Whether this frame's lit models are drawn on the GPU (Step 3).</summary>
+    public static bool ModelsActive { get; private set; }
     static bool? _forced;
 
     public static bool Enabled => _on;
@@ -45,6 +54,7 @@ public static class GpuWorld
     public static void Configure(string? on, string? probe, string? surfaces = null)
     {
         _water = Environment.GetEnvironmentVariable("KF2_GPUWORLD_WATER")?.Trim() != "0";
+        _models = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MODELS")?.Trim() != "0";
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
             RetainedScene.MainNear = Math.Max(near, 0.01f);
@@ -69,6 +79,7 @@ public static class GpuWorld
         _on = on;
         if (on) return;
         Active = false;
+        ModelsActive = false;
         RetainedScene.MainView = false;
         RetainedScene.MainSerial = 0;
     }
@@ -104,8 +115,20 @@ public static class GpuWorld
         RetainedScene.MainView = Active;
         RetainedScene.MainSerial = Active ? RetainedScene.Serial : 0;
         WaterActive = Active && _water && BlendOrder.Active;
+        // The models' packets carry per-pixel lighting records; the GPU draws them only
+        // in that mode, and only from the C# walk, submitter and lit assembler.
+        ModelsActive = Active && _models && GteLightMap.Active
+                    && ModelWalk.Enabled && ModelWalk.WalkEnabled && ModelWalk.SubmitEnabled && !ModelWalk.Verifying
+                    && PolyAssembler.LitEnabled;
         RetainedScene.MainWater = WaterActive;
-        if (_probe) Report();
+        if (_probe)
+        {
+            // BK and LCM generations the last frame started (GteLightMap keeps eight).
+            long g = GteLightMap.Generations - _gensAt;
+            _gensAt = GteLightMap.Generations;
+            _gensMax = Math.Max(_gensMax, g);
+            Report();
+        }
     }
 
     // ---- which halves still need the game's assembler -------------------------------
@@ -158,11 +181,26 @@ public static class GpuWorld
             case "surfaces off": RetainedScene.MainSurfaces = false; break;
             case "water on": _water = true; break;
             case "water off": _water = false; break;
+            case "models on": _models = true; break;
+            case "models off": _models = false; break;
+            case "models hide": RetainedScene.MainModelsShown = false; break;
+            case "models show": RetainedScene.MainModelsShown = true; break;
+            case "perpixel on": GteLightMap.Enabled = true; break;
+            case "perpixel off": GteLightMap.Enabled = false; break;
+            case "scene":
+            {
+                // The last walk's submits, and the frame's forward in world axes (row 2 of R).
+                var v = RetainedScene.Find(RetainedScene.Serial)?.View ?? default;
+                var items = string.Join(",", ModelWalk.Scene.ToArray().Select(m =>
+                    $"{{\"kind\":\"{m.Kind}\",\"model\":{m.Model},\"asm\":{m.Assembler},\"pos\":[{m.X},{m.Y},{m.Z}]}}"));
+                return $"{{\"ok\":true,\"forward\":[{v.R20:F3},{v.R21:F3},{v.R22:F3}],\"cam\":[{v.CamX},{v.CamY},{v.CamZ}],\"models\":[{items}]}}";
+            }
             case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|scene|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
+               $"\"models\":{(_models ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -170,6 +208,8 @@ public static class GpuWorld
 
     static double _reportAt;
     static long _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
+    static long _gensMax, _gensAt, _builds;
+    static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
 
     static void Report()
     {
@@ -200,6 +240,27 @@ public static class GpuWorld
         Array.Clear(RetainedScene.MipTicks);
         _uploads = RetainedScene.MipTableUploads;
         Array.Clear(RetainedScene.MainTicks);
+        long mm = RetainedModels.MainModels - _mModels, mf = RetainedModels.MainFaces - _mFaces;
+        long mc = RetainedModels.MainCulled - _mCulled, mo = RetainedModels.MainOutOfTable - _mOut;
+        long mt = RetainedScene.MainModelTriangles - _mTris, mg = RetainedScene.MainModelGroups - _mGroups;
+        long mn = RetainedScene.MainModelNormalTriangles - _mNrm;
+        _mModels = RetainedModels.MainModels; _mFaces = RetainedModels.MainFaces; _mCulled = RetainedModels.MainCulled;
+        _mOut = RetainedModels.MainOutOfTable; _mTris = RetainedScene.MainModelTriangles; _mGroups = RetainedScene.MainModelGroups;
+        _mNrm = RetainedScene.MainModelNormalTriangles;
+        long mtl = RetainedModels.MainTileModels - _mTile, mcl = RetainedModels.MainClipped - _mClip;
+        _mTile = RetainedModels.MainTileModels; _mClip = RetainedModels.MainClipped;
+        long msat = RetainedModels.MainSaturated - _mSat;
+        _mSat = RetainedModels.MainSaturated;
+        Console.WriteLine($"[KF2] gpu world: models {(ModelsActive ? "on the GPU" : "on the packets")}; a draw: " +
+                          $"{(d == 0 ? 0 : (double)mm / d):F1} model(s) ({(d == 0 ? 0 : (double)mtl / d):F1} from the clipped assembler), " +
+                          $"{(d == 0 ? 0 : mf / d)} face(s) taken ({(d == 0 ? 0 : mcl / d)} it would clip, culled by the GPU; {(d == 0 ? 0 : msat / d)} with a corner nearer than H/2), " +
+                          $"{(d == 0 ? 0 : mc / d)} facing away, {(d == 0 ? 0 : mo / d)} outside the table, " +
+                          $"{(d == 0 ? 0 : mt / d)} triangle(s) drawn in {(d == 0 ? 0 : (double)mg / d):F1} light group(s), " +
+                          $"{(d == 0 ? 0 : mn / d)} into the normal pass");
+        Console.WriteLine($"[KF2] gpu world: light generations: at most {_gensMax} in a frame; map builds {RetainedMap.Builds - _builds}, " +
+                          $"the last {RetainedMap.LastBuildMs:F2} ms for {RetainedMap.LastWhy}");
+        _builds = RetainedMap.Builds;
+        _gensMax = 0;
         long px = RetainedScene.SurfaceDepthPixels;
         Console.WriteLine($"[KF2] gpu world: surfaces: {RetainedScene.MainNormalTriangles - _nrmTris} map triangle(s) into the normal pass; " +
                           (RetainedScene.SurfaceChecks == 0 ? "no readback (needs the surface buffer: a reflection or the murk on)" :

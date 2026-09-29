@@ -1391,6 +1391,12 @@ internal static class GlShaders
                 h += uSwell[i].z * sin(uSwell[i].x * p.x + uSwell[i].y * p.z - uSwell[i].w);
             return floor(-h + 0.5);
         }
+        // 0085. A model's gouraud corner (bit 30) carries its normal's three light
+        // dots, lit by these as PrimFs's shade8 lights a directional record.
+        uniform vec3 uLightBk;
+        uniform vec3 uLcmR;
+        uniform vec3 uLcmG;
+        uniform vec3 uLcmB;
 
         float cueKeep(float z) {
             int curve = int(inCue.z + 0.5);
@@ -1427,7 +1433,14 @@ internal static class GlShaders
                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
 
-            vColor = vec4(inColorF * cueKeep(z), 0.0) / 255.0;
+            bool dots = (inFlags & 0x40000000u) != 0u;
+            vec3 lit = inColorF;
+            if (dots) {
+                vec3 a = clamp(inColorF, 0.0, 32767.0);
+                vec3 ir = clamp(uLightBk + vec3(dot(uLcmR, a), dot(uLcmG, a), dot(uLcmB, a)) / 4096.0, 0.0, 32767.0);
+                lit = vec3(uvec3(inRgbc, inRgbc >> 8u, inRgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
+            }
+            vColor = vec4(clamp(lit * cueKeep(z), 0.0, 255.0), 0.0) / 255.0;
             // Fogged per pixel as 0048 fogs the game's own faces: the raw IR0 is
             // affine on screen (it goes as 1/z), so interpolated it is exact, and
             // shade8 puts it through the curve at every pixel.
@@ -1447,6 +1460,11 @@ internal static class GlShaders
             if (uWorldLit != 0 && uWorldPerPixel != 0 && inRgbc != 0u) {
                 if (vLight == 0u) { vLit = inColorF; vFog = 0.0; }
                 vLight |= inRgbc & 0xFFFFFFu;
+            }
+            if (dots && uWorldPerPixel != 0) {
+                if (vLight == 0u) { vFog = 0.0; vCue = vec2(0.0); }
+                vLit = inColorF;
+                vLight = (vLight & 0x07000000u) | 0x80000000u | (inRgbc & 0xFFFFFFu);
             }
             uint mip = inMip;
             if (uMipIndirect != 0) mip = inMip == 0u ? 0u : texelFetch(uMipTable, int(inMip) - 1).r;

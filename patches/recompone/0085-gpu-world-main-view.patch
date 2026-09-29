@@ -2299,3 +2299,286 @@ index 54e0ad5..5c293b8 100644
              GteDepth.OtEntry = e.OtEntry;
              GteDepth.OtSlot = e.OtSlot;
              onEntry?.Invoke(e.OtEntry);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index f081592..c6e51df 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -36,6 +36,7 @@ public sealed partial class GlCore
+         _uwWaveOn = L("uWaveOn"); _uwWaveN = L("uWaveN"); _uwWaveRect = L("uWaveRect"); _uwWaveR = L("uWaveR");
+         _uwWaveCam = L("uWaveCam"); _uwWaveT = L("uWaveT"); _uwWaveCentre = L("uWaveCentre"); _uwWaveH = L("uWaveH");
+         _uwWaveTime = L("uWaveTime"); _uwWaveParams = L("uWaveParams");
++        _uwBk = L("uLightBk"); _uwLcmR = L("uLcmR"); _uwLcmG = L("uLcmG"); _uwLcmB = L("uLcmB");
+         _gl.UseProgram(_progWorld);
+         if (_uwSwellOn >= 0) _gl.Uniform1(_uwSwellOn, 0);
+         if (_uwWaveOn >= 0) _gl.Uniform1(_uwWaveOn, 0);
+@@ -74,6 +75,7 @@ public sealed partial class GlCore
+         UploadStatic();
+         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+         bool mips = UpdateWorldMips(f, f.MainHalves);
++        int models = UploadModels(f, mips);
+         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+         var (cx, cy) = BeginWorldMain(f, rt, offX, offY, mips);
+         ClearStaleDepth(rt);
+@@ -83,6 +85,7 @@ public sealed partial class GlCore
+         _gl.DepthMask(true);
+         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
+         int drawn = DrawRange(0, null);
++        if (models >= 0 && RetainedScene.MainModelsShown) DrawWorldModels(f, models);
+         EndWorldState();
+         EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
+ 
+@@ -630,6 +633,108 @@ public sealed partial class GlCore
+             }
+     }
+ 
++    // ---- the models ---------------------------------------------------------------
++
++    // The frames' models, one buffer per frame in the ring, so the normal pass at
++    // present still finds the models of the frame the presented target holds.
++    const int ModelRing = 4;
++    readonly uint[] _mdlVbo = new uint[ModelRing], _mdlMipVbo = new uint[ModelRing], _mdlVao = new uint[ModelRing];
++    readonly int[] _mdlSerial = new int[ModelRing], _mdlCap = new int[ModelRing];
++    uint[] _mdlMip = [];
++    int _uwBk, _uwLcmR, _uwLcmG, _uwLcmB;
++
++    /// <summary>The frame's models into their buffer, with their mip-atlas entries
++    /// looked up and decoded; the buffer's slot, or -1 for none. Before the target is
++    /// bound, since the decode draws.</summary>
++    unsafe int UploadModels(RetainedScene.Frame f, bool mips)
++    {
++        int n = f.ModelCount;
++        if (n == 0) return -1;
++        int slot = f.Serial & (ModelRing - 1);
++        if (_mdlVao[slot] == 0)
++        {
++            _mdlVbo[slot] = _gl.GenBuffer();
++            _mdlMipVbo[slot] = _gl.GenBuffer();
++            _mdlVao[slot] = MakeWorldVao(_mdlVbo[slot], _mdlMipVbo[slot]);
++        }
++        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlVbo[slot]);
++        if (n > _mdlCap[slot])
++        {
++            _mdlCap[slot] = Math.Max(n, _mdlCap[slot] * 2);
++            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_mdlCap[slot] * sizeof(RetainedScene.Vertex)), null, BufferUsageARB.StreamDraw);
++            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlMipVbo[slot]);
++            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_mdlCap[slot] * 4), null, BufferUsageARB.StreamDraw);
++            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlVbo[slot]);
++        }
++        _gl.BufferSubData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, 0, new ReadOnlySpan<RetainedScene.Vertex>(f.Models, 0, n));
++        if (_mdlMip.Length < n) _mdlMip = new uint[Math.Max(n, _mdlMip.Length * 2)];
++        for (int i = 0; i + 2 < n; i += 3)
++        {
++            uint e = mips ? DynMip(f.Models[i]) : 0u;
++            _mdlMip[i] = _mdlMip[i + 1] = _mdlMip[i + 2] = e;
++        }
++        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _mdlMipVbo[slot]);
++        _gl.BufferSubData<uint>(BufferTargetARB.ArrayBuffer, 0, new ReadOnlySpan<uint>(_mdlMip, 0, n));
++        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
++        if (mips && _mip!.HasPending) _mip.Process(_vram.SampleTexture);
++        _mdlSerial[slot] = f.Serial;
++        return slot;
++    }
++
++    /// <summary>
++    /// The frame's models after the map, in the state the map left: tested and written,
++    /// with 0051's tolerance as their packets had it (true depth first with colour off,
++    /// then colour against it, pulled towards the camera), so a model flush with the
++    /// floor wins as the later table entry did. Not culled: the port kept only the faces
++    /// the game's own facing test kept. A run per BK and LCM, which light the dots.
++    /// </summary>
++    void DrawWorldModels(RetainedScene.Frame f, int slot)
++    {
++        _gl.Disable(EnableCap.CullFace);
++        _gl.BindVertexArray(_mdlVao[slot]);
++        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
++        bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
++        if (bias)
++        {
++            _gl.ColorMask(false, false, false, false);
++            DrawModelRuns(f);
++            _gl.ColorMask(true, true, true, true);
++            _gl.DepthMask(false);
++            if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
++            if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);
++        }
++        foreach (var g in f.Groups)
++        {
++            if (_uwBk >= 0) _gl.Uniform3(_uwBk, g.Bk0, g.Bk1, g.Bk2);
++            if (_uwLcmR >= 0) _gl.Uniform3(_uwLcmR, g.L0, g.L1, g.L2);
++            if (_uwLcmG >= 0) _gl.Uniform3(_uwLcmG, g.L3, g.L4, g.L5);
++            if (_uwLcmB >= 0) _gl.Uniform3(_uwLcmB, g.L6, g.L7, g.L8);
++            if (g.Cull) _gl.Enable(EnableCap.CullFace);
++            _gl.DrawArrays(PrimitiveType.Triangles, g.Start, (uint)g.Count);
++            if (g.Cull) _gl.Disable(EnableCap.CullFace);
++        }
++        if (bias)
++        {
++            if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
++            if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
++            _gl.DepthMask(true);
++        }
++        RetainedScene.MainModelTriangles += f.ModelCount / 3;
++        RetainedScene.MainModelGroups += f.Groups.Count;
++    }
++
++    /// <summary>Every run of the frame's models through the bound program, culled
++    /// where the port could not cull (the facing set up as the map's).</summary>
++    void DrawModelRuns(RetainedScene.Frame f)
++    {
++        foreach (var g in f.Groups)
++        {
++            if (g.Cull) _gl.Enable(EnableCap.CullFace);
++            _gl.DrawArrays(PrimitiveType.Triangles, g.Start, (uint)g.Count);
++            if (g.Cull) _gl.Disable(EnableCap.CullFace);
++        }
++    }
++
+     // ---- the normal and surface buffers ------------------------------------------
+ 
+     void InitWorldNormals()
+@@ -714,6 +819,13 @@ public sealed partial class GlCore
+             }
+             RetainedScene.MainNormalTriangles += DrawStaticChunks(0) / 3;
+             _gl.Disable(EnableCap.CullFace);
++            int ms = f.Serial & (ModelRing - 1);
++            if (f.ModelCount > 0 && _mdlSerial[ms] == f.Serial && RetainedScene.MainModelsShown)
++            {
++                _gl.BindVertexArray(_mdlVao[ms]);
++                DrawModelRuns(f);
++                RetainedScene.MainModelNormalTriangles += f.ModelCount / 3;
++            }
+             _gl.BindVertexArray(0);
+         }
+ 
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 57b7a41..a9d2c0d 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -1391,6 +1391,12 @@ internal static class GlShaders
+                 h += uSwell[i].z * sin(uSwell[i].x * p.x + uSwell[i].y * p.z - uSwell[i].w);
+             return floor(-h + 0.5);
+         }
++        // 0085. A model's gouraud corner (bit 30) carries its normal's three light
++        // dots, lit by these as PrimFs's shade8 lights a directional record.
++        uniform vec3 uLightBk;
++        uniform vec3 uLcmR;
++        uniform vec3 uLcmG;
++        uniform vec3 uLcmB;
+ 
+         float cueKeep(float z) {
+             int curve = int(inCue.z + 0.5);
+@@ -1427,7 +1433,14 @@ internal static class GlShaders
+                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
+ 
+-            vColor = vec4(inColorF * cueKeep(z), 0.0) / 255.0;
++            bool dots = (inFlags & 0x40000000u) != 0u;
++            vec3 lit = inColorF;
++            if (dots) {
++                vec3 a = clamp(inColorF, 0.0, 32767.0);
++                vec3 ir = clamp(uLightBk + vec3(dot(uLcmR, a), dot(uLcmG, a), dot(uLcmB, a)) / 4096.0, 0.0, 32767.0);
++                lit = vec3(uvec3(inRgbc, inRgbc >> 8u, inRgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
++            }
++            vColor = vec4(clamp(lit * cueKeep(z), 0.0, 255.0), 0.0) / 255.0;
+             // Fogged per pixel as 0048 fogs the game's own faces: the raw IR0 is
+             // affine on screen (it goes as 1/z), so interpolated it is exact, and
+             // shade8 puts it through the curve at every pixel.
+@@ -1448,6 +1461,11 @@ internal static class GlShaders
+                 if (vLight == 0u) { vLit = inColorF; vFog = 0.0; }
+                 vLight |= inRgbc & 0xFFFFFFu;
+             }
++            if (dots && uWorldPerPixel != 0) {
++                if (vLight == 0u) { vFog = 0.0; vCue = vec2(0.0); }
++                vLit = inColorF;
++                vLight = (vLight & 0x07000000u) | 0x80000000u | (inRgbc & 0xFFFFFFu);
++            }
+             uint mip = inMip;
+             if (uMipIndirect != 0) mip = inMip == 0u ? 0u : texelFetch(uMipTable, int(inMip) - 1).r;
+             vTex = uvec2(inRect, (inFlags & 0x80000000u) | mip);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 99b56a6..901142f 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -71,6 +71,10 @@ public static class RetainedScene
+     /// as one packet.</summary>
+     public const uint FlagQuadTail = 0x20000000u;
+ 
++    /// <summary>0085. A model corner whose colour is the three light dots of its normal
++    /// (a gouraud face), lit per pixel with its group's BK and LCM, not a lit colour.</summary>
++    public const uint FlagDots = 0x40000000u;
++
+     public static uint HalfFlag(int tx, int tz, int upper) => (uint)((tz * 80 + tx) * 2 + upper + 1) << HalfShift;
+ 
+     /// <summary>Reflect only the halves the game drew in the frame. Off, every half on
+@@ -377,6 +381,11 @@ public static class RetainedScene
+         /// wavenumber along X and Z, its height and its phase; and whether it is on.</summary>
+         public readonly float[] Swell = new float[12];
+         public bool SwellOn;
++        /// <summary>0085. The opaque faces of the models the frame's object walk took
++        /// off the packets, in world space, in runs lit by one BK and LCM.</summary>
++        public Vertex[] Models = new Vertex[1024];
++        public int ModelCount;
++        public readonly List<ModelGroup> Groups = new();
+ 
+         public ReadOnlySpan<Vertex> SortedDynamic()
+         {
+@@ -412,6 +421,8 @@ public static class RetainedScene
+         f.SortedValid = false;
+         f.PlaneCount = 0;
+         f.SwellOn = false;
++        f.ModelCount = 0;
++        f.Groups.Clear();
+         Array.Clear(f.Halves);
+         Array.Clear(f.MainHalves);
+     }
+@@ -454,6 +465,50 @@ public static class RetainedScene
+         f.SortedValid = false;
+     }
+ 
++    /// <summary>0085. A run of <see cref="Frame.Models"/> lit with one back colour and
++    /// light colour matrix, as the GTE held them (BK, then LCM row by row).</summary>
++    public struct ModelGroup
++    {
++        public int Start, Count;
++        /// <summary>Faces the port could not cull as the game does (those its clipper
++        /// took), left to the GPU's facing cull.</summary>
++        public bool Cull;
++        public float Bk0, Bk1, Bk2, L0, L1, L2, L3, L4, L5, L6, L7, L8;
++    }
++
++    /// <summary>0085. One model's opaque triangles to the current frame's main view,
++    /// with the BK and LCM its light dots are lit by (<paramref name="light"/>, 12).</summary>
++    public static void AddMainModel(ReadOnlySpan<Vertex> tris, ReadOnlySpan<float> light, bool cull = false)
++    {
++        var f = Current;
++        int n = tris.Length / 3 * 3;
++        if (f.Serial != _serial || n == 0) return;
++        if (f.ModelCount + n > f.Models.Length)
++            Array.Resize(ref f.Models, Math.Max(f.Models.Length * 2, f.ModelCount + n));
++        tris[..n].CopyTo(f.Models.AsSpan(f.ModelCount));
++        var g = f.Groups.Count > 0 ? f.Groups[^1] : default;
++        bool same = f.Groups.Count > 0 && g.Start + g.Count == f.ModelCount && g.Cull == cull
++                    && g.Bk0 == light[0] && g.Bk1 == light[1] && g.Bk2 == light[2]
++                    && g.L0 == light[3] && g.L1 == light[4] && g.L2 == light[5] && g.L3 == light[6]
++                    && g.L4 == light[7] && g.L5 == light[8] && g.L6 == light[9] && g.L7 == light[10] && g.L8 == light[11];
++        if (same) { g.Count += n; f.Groups[^1] = g; }
++        else f.Groups.Add(new ModelGroup
++        {
++            Start = f.ModelCount, Count = n, Cull = cull, Bk0 = light[0], Bk1 = light[1], Bk2 = light[2],
++            L0 = light[3], L1 = light[4], L2 = light[5], L3 = light[6], L4 = light[7], L5 = light[8],
++            L6 = light[9], L7 = light[10], L8 = light[11],
++        });
++        f.ModelCount += n;
++    }
++
++    /// <summary>0085. Models' triangles drawn in the main view, draws, and the models'
++    /// triangles the normal pass drew.</summary>
++    public static long MainModelTriangles, MainModelGroups, MainModelNormalTriangles;
++
++    /// <summary>0085. Off, the models taken off the packets are not drawn either: the
++    /// probe's way to see what they cover.</summary>
++    public static bool MainModelsShown = true;
++
+     /// <summary>The planes the current frame mirrors in, nearest-first by the
+     /// port's own ranking; at most <see cref="MaxPlanes"/>.</summary>
+     public static void SetPlanes(ReadOnlySpan<float> worldY)
