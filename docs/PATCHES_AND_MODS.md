@@ -453,10 +453,12 @@ slider re-reads `FramePacing` on every frame it is not being held, parks the
 handle on the nearest position, and prints `Running at N fps, set outside this
 menu.` under it whenever the two disagree by more than half a frame. Nothing is
 written until the slider is moved. Pacing switched off entirely (`KF2_FPS=off`)
-has no position on the scale either, so the handle parks at the world's tick
-rate — 0 is not a rate any control here can express, and a handle at the far
-left claiming 20 fps while the port draws unbounded would be a lie about what it
-is doing.
+is the slider's last position, **Unlimited**, past 240: `TargetFps` 0, the
+picture drawn as fast as the host allows and the world still on its 20 Hz tick.
+It saves as 0. **Pacing off used to leave `FrameClock`'s host ceiling at 60**,
+which holds each `VSync` call to a vblank, so the first Unlimited drew exactly
+60; `ApplyHostCeiling` now turns the ceiling off with it. Measured after, area 1
+at the autostart position: 882-938 fps drawn at 20.0 ticks/s, `[present] wide`.
 
 ### One switch for all of the smoothing
 
@@ -1451,8 +1453,8 @@ skipping the game's gate left it as the only thing holding the world down:
 * At the render rate *equal* to the tick rate it ticks on every frame and nothing
   is skipped, because `Floor()` guarantees a frame is at least `1000/LogicHz` ms
   and the credit always reaches 1. Measured at `KF2_FPS=20`: 20.00 ticks/s.
-* **Uncapped no longer runs the game fast.** `KF2_FPS=off` draws flat out (60,
-  held there by `FrameClock`'s own ceiling) and still measures 19.99 ticks/s. The
+* **Uncapped no longer runs the game fast.** `KF2_FPS=off` draws flat out (once
+  held to 60 by `FrameClock`'s own ceiling, which it now turns off) and still measures 19.99 ticks/s. The
   settings label said "runs too fast" and no longer should.
 * Below the tick rate the world cannot catch up: a stage can be skipped but never
   run twice, so it ticks once per frame and the whole game plays slow. Measured at

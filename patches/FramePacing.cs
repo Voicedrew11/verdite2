@@ -803,15 +803,12 @@ public static class FramePacing
     /// stopped drawing -- a disc read, a menu -- from spinning. Never lowered below
     /// 60, which is what it was before patches/recompone/0025 made it settable.
     ///
-    /// **Uncapped leaves it at 60 rather than turning it off.** "Uncapped" has
-    /// always meant "the port's own floor is off", and what that produced was a
-    /// port topping out around 50 fps because FrameClock held each VSync call to a
-    /// vblank. Setting 0 here would mean something new -- present as fast as the
-    /// host can, with nothing between the loop and the GPU -- which is not the
-    /// diagnostic anyone asked for. The capability exists in 0025; nothing uses it.
+    /// **Unlimited turns it off.** It used to be left at 60, which held each
+    /// VSync call to a vblank and so capped an "unlimited" picture at 60 once the
+    /// settings slider offered one. Off is what the setting says.
     /// </summary>
     static void ApplyHostCeiling()
-        => RecompOne.Runtime.Runtime.TargetFps = Enabled ? Math.Max(60.0, TargetFps * 2.0) : 60.0;
+        => RecompOne.Runtime.Runtime.TargetFps = Enabled ? Math.Max(60.0, TargetFps * 2.0) : 0.0;
 
     /// <summary>The vblank floor this used to be expressed as, for the settings and
     /// for anything that still thinks in bands. 0 is uncapped.</summary>
