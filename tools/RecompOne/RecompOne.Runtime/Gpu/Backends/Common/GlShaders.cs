@@ -675,9 +675,25 @@ internal static class GlShaders
         uniform uint  uModelMat;
         // The GTE's own screen centre (OFX, OFY), for its saturated projection.
         uniform vec2  uModelGteC;
+        // The pose store: -1 takes the frame's vertices at uModelBase; otherwise the
+        // first texel of a rigid model's vertices (weight -1), or of an MO keyframe
+        // and its deltas, two texels a vertex, blended as the game's decoder blends
+        // them: key + (short)((delta * weight) >> 12), in 16 bits.
+        uniform isamplerBuffer uModelPoses;
+        uniform int   uModelPose;
+        uniform int   uModelPoseW;
+
+        ivec3 modelPosed(int i) {
+            if (uModelPose < 0) return texelFetch(uModelVerts, uModelBase + i).xyz;
+            if (uModelPoseW < 0) return texelFetch(uModelPoses, uModelPose + i).xyz;
+            ivec3 k = texelFetch(uModelPoses, uModelPose + 2 * i).xyz;
+            ivec3 d = texelFetch(uModelPoses, uModelPose + 2 * i + 1).xyz;
+            ivec3 s = (((d * uModelPoseW) >> 12) << 16) >> 16;
+            return ((k + s) << 16) >> 16;
+        }
 
         vec3 modelVertex(uint i) {
-            return uModelR * vec3(texelFetch(uModelVerts, uModelBase + int(i)).xyz) + uModelT;
+            return uModelR * vec3(modelPosed(int(i))) + uModelT;
         }
 
         // RTPS as the GTE takes it, which the facing test is taken on: the divide

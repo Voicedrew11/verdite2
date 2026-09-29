@@ -406,9 +406,26 @@ static class RetainedModels
         bool whole = !mesh.Blended;
         if (mesh.Count == 0) { Instanced = true; return whole; }
 
-        int vb = RetainedScene.AddModelVertices(System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(
-            ram.Slice((int)(verts & (Runtime.RamSize - 1)), (int)vertices * 8)));
-        if (vb < 0) return false;
+        // The vertices from the pose store (Step 3's third slice): an MO pose the blender
+        // left undecoded, or a rigid model's own; the posed buffer copied per frame else.
+        int pose = 0, weight = 0;
+        bool morph = false;
+        if (PosesOn)
+        {
+            if (MoPose.Pending) morph = (pose = MoPose.Store(mem, vertices, out weight)) != 0;
+            else if (verts != PosedBuffer) pose = MoPose.StoreRigid(mem, verts, vertices);
+        }
+        if (!whole || pose == 0 || MoPose.Checking) MoPose.Materialize(null, mem);
+        if (pose != 0 && MoPose.Checking) MoPose.Check(mem, pose, morph, weight, verts, vertices);
+        int vb = 0;
+        if (pose == 0)
+        {
+            vb = RetainedScene.AddModelVertices(System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(
+                ram.Slice((int)(verts & (Runtime.RamSize - 1)), (int)vertices * 8)));
+            if (vb < 0) return false;
+        }
+        else if (morph) InstancesPosed++;
+        else InstancesRigid++;
 
         var v = mirror ? frame.MirrorView : frame.View;
         var xf = Transform.Read(v);
@@ -417,6 +434,7 @@ static class RetainedModels
         var m = new RetainedScene.ModelInstance
         {
             MeshStart = mesh.Start, MeshCount = mesh.Count, VertBase = vb,
+            Pose = pose, PoseWeight = weight, PoseMorph = morph,
             R00 = _ins[0], R01 = _ins[1], R02 = _ins[2], R10 = _ins[3], R11 = _ins[4], R12 = _ins[5],
             R20 = _ins[6], R21 = _ins[7], R22 = _ins[8], Tx = _ins[9], Ty = _ins[10], Tz = _ins[11],
             Dqa = (short)Gte.ReadControl(27), Dqb = (int)Gte.ReadControl(28),
@@ -447,6 +465,18 @@ static class RetainedModels
     }
 
     const uint PolyModelTable = 0x8018E19C;
+
+    /// <summary>The MO blender's posed buffer: a model whose vertex base points here was
+    /// posed this frame, and is not a rigid model's own vertices.</summary>
+    const uint PosedBuffer = 0x80190AD8;
+
+    /// <summary>Draw instances' vertices from the pose store; off, every instance's posed
+    /// vertices are copied into the frame (<c>KF2_GPUWORLD_POSES=0</c>, the comparison).</summary>
+    public static bool PosesOn = true;
+
+    /// <summary>Instances drawn from an MO pose in the store, and from a rigid model's
+    /// vertices there; never reset.</summary>
+    public static long InstancesPosed, InstancesRigid;
 
     /// <summary>
     /// What a skipped transform would have left behind: each <c>Gte.Rtp</c> notes the
@@ -655,7 +685,7 @@ static class RetainedModels
         return mesh;
     }
 
-    static ulong Hash(ReadOnlySpan<byte> ram, uint a, uint bytes)
+    internal static ulong Hash(ReadOnlySpan<byte> ram, uint a, uint bytes)
     {
         var s = ram.Slice((int)(a & (Runtime.RamSize - 1)), (int)bytes);
         var w = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, ulong>(s);

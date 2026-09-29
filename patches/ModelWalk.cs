@@ -939,7 +939,12 @@ public static class ModelWalk
             c.A2 = clip;
             c.A3 = mem.ReadU16(sp + 0xA8u);
             c.RA = 0x800329E0u;
+            // 0085. A lit model placed in the world may be drawn from the pose store; the
+            // blender then leaves its pose undecoded until something needs it in RAM.
+            MoPose.Defer = (assembler & 0xFFu) == 0xFFu && matrix != 0u && MoPose.Active
+                           && RetainedModels.InstanceWanted && RetainedModels.PosesOn && !RetainedModels.Checking;
             KingsField2.func_80034DA8(c, mem);
+            MoPose.Defer = false;
             if (c.V0 == 0u)
             {
                 c.A0 = 0u;
@@ -972,6 +977,7 @@ public static class ModelWalk
         bool whole = pick == 0xFFu && matrix != 0u && RetainedModels.InstanceWanted
                      && RetainedModels.TryInstance(mem, sub, depth, mem.ReadU32(mesh + 4u));
         if (whole) PlanarWalk.TakenLast();
+        else MoPose.Materialize(c, mem);
 
         if (whole && !RetainedModels.Checking) RetainedModels.NoteSkippedTransform();
         else if (matrix != 0u)

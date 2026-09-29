@@ -608,7 +608,29 @@ public static class RetainedScene
     public static void ClearMeshes()
     {
         MeshCornerCount = 0;
+        PoseTexels = 0;
         MeshGeneration++;
+    }
+
+    /// <summary>0085. The models' vertices kept on the GPU, four shorts a texel (x, y, z
+    /// and a pad, as the game keeps them): a rigid model's vertices, one texel each; an
+    /// MO pose's keyframe and its delta to the segment's target, two texels a vertex,
+    /// which <c>ModelGlsl</c> blends by an instance's weight as the game's decoder
+    /// does. Appended to until <see cref="ClearMeshes"/>; the backend uploads what it
+    /// has not.</summary>
+    public static short[] PoseStore = new short[65536];
+    public static int PoseTexels;
+
+    /// <summary>Texels to the pose store; the index of the first.</summary>
+    public static int AddPose(ReadOnlySpan<short> texels)
+    {
+        int n = texels.Length / 4;
+        if ((PoseTexels + n) * 4 > PoseStore.Length)
+            Array.Resize(ref PoseStore, Math.Max(PoseStore.Length * 2, (PoseTexels + n) * 4));
+        texels[..(n * 4)].CopyTo(PoseStore.AsSpan(PoseTexels * 4));
+        int at = PoseTexels;
+        PoseTexels += n;
+        return at;
     }
 
     /// <summary>0085. One model drawn from a cached mesh: its corners in
@@ -629,6 +651,13 @@ public static class RetainedScene
         /// bias wraps the table's unsigned test, so it has a near end too.</summary>
         public float Near;
         public uint Rgbc, Material;
+        /// <summary>Where the vertices come from: 0, the frame's <see cref="Frame.Verts"/>
+        /// at <see cref="VertBase"/>; otherwise one past the first texel in
+        /// <see cref="PoseStore"/>, a rigid model's vertices, or with
+        /// <see cref="PoseMorph"/> an MO keyframe and its deltas, blended by
+        /// <see cref="PoseWeight"/> (12.12).</summary>
+        public int Pose, PoseWeight;
+        public bool PoseMorph;
         /// <summary>Drawn in the mirror too, when the frame has one.</summary>
         public bool Mirrored;
         /// <summary>The store's generation when it was added; the backend draws none
@@ -662,7 +691,7 @@ public static class RetainedScene
 
     /// <summary>0085. Instances drawn in the main view and the mirror, their corners,
     /// and the vertices uploaded; never reset.</summary>
-    public static long InstancesDrawn, InstanceCorners, MirrorInstancesDrawn, InstanceVertices;
+    public static long InstancesDrawn, InstanceCorners, MirrorInstancesDrawn, InstanceVertices, PoseTexelsUploaded;
 
     /// <summary>0085. Off, the models taken off the packets are not drawn either: the
     /// probe's way to see what they cover.</summary>

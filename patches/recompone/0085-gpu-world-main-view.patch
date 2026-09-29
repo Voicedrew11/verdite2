@@ -3857,3 +3857,260 @@ index b0057f3..378b7e8 100644
      /// <summary>0085. Off, the models taken off the packets are not drawn either: the
      /// probe's way to see what they cover.</summary>
      public static bool MainModelsShown = true;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+index 62d4acc..1fea675 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+@@ -8,10 +8,16 @@ namespace RecompOne.Runtime.Hle;
+ /// each frame only the posed vertices, into a buffer texture per frame of the ring, and
+ /// a record per model. The world programs place, light and cull every corner from
+ /// those (<c>ModelGlsl</c>). See "Step 3, the second slice" in docs/GPU_RENDERER.md.
++/// The third slice keeps the vertices too (<see cref="RetainedScene.PoseStore"/>): a
++/// rigid model's as they are, an MO pose's keyframe and deltas, blended in the shader,
++/// so an instance drawn from the store uploads nothing a frame.
+ /// </summary>
+ public sealed partial class GlCore
+ {
+-    const int ModelVertsUnit = 19;
++    const int ModelVertsUnit = 19, PoseUnit = 20;
++
++    uint _poseBuf, _poseTex;
++    int _poseUploaded, _poseCap;
+ 
+     uint _meshVbo, _meshMipVbo, _meshVao;
+     int _meshUploaded, _meshCap, _meshGen = -1;
+@@ -34,6 +40,7 @@ public sealed partial class GlCore
+ 
+     int _uwModel = -1, _uwModelBase, _uwModelR, _uwModelT, _uwModelFar, _uwModelNear, _uwModelLlm, _uwModelCue, _uwModelRgbc, _uwModelMat, _uwModelGteC = -1;
+     int _uwnModel = -1, _uwnModelBase, _uwnModelR, _uwnModelT, _uwnModelFar, _uwnModelNear, _uwnModelMat, _uwnModelGteC = -1;
++    int _uwModelPose = -1, _uwModelPoseW = -1, _uwnModelPose = -1, _uwnModelPoseW = -1;
+ 
+     void InitModelMeshes()
+     {
+@@ -42,19 +49,25 @@ public sealed partial class GlCore
+         _uwModel = L("uModel"); _uwModelBase = L("uModelBase"); _uwModelR = L("uModelR"); _uwModelT = L("uModelT");
+         _uwModelFar = L("uModelFar"); _uwModelNear = L("uModelNear"); _uwModelLlm = L("uModelLlm"); _uwModelCue = L("uModelCue");
+         _uwModelRgbc = L("uModelRgbc"); _uwModelMat = L("uModelMat"); _uwModelGteC = L("uModelGteC");
++        _uwModelPose = L("uModelPose"); _uwModelPoseW = L("uModelPoseW");
+         _gl.UseProgram(_progWorld);
+         if (_uwModel >= 0) _gl.Uniform1(_uwModel, 0);
+         int u = L("uModelVerts");
+         if (u >= 0) _gl.Uniform1(u, ModelVertsUnit);
++        u = L("uModelPoses");
++        if (u >= 0) _gl.Uniform1(u, PoseUnit);
+         if (_progWorldNrm != 0)
+         {
+             int N(string n) => _gl.GetUniformLocation(_progWorldNrm, n);
+             _uwnModel = N("uModel"); _uwnModelBase = N("uModelBase"); _uwnModelR = N("uModelR"); _uwnModelT = N("uModelT");
+             _uwnModelFar = N("uModelFar"); _uwnModelNear = N("uModelNear"); _uwnModelMat = N("uModelMat"); _uwnModelGteC = N("uModelGteC");
++            _uwnModelPose = N("uModelPose"); _uwnModelPoseW = N("uModelPoseW");
+             _gl.UseProgram(_progWorldNrm);
+             if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 0);
+             int v = N("uModelVerts");
+             if (v >= 0) _gl.Uniform1(v, ModelVertsUnit);
++            v = N("uModelPoses");
++            if (v >= 0) _gl.Uniform1(v, PoseUnit);
+         }
+         _gl.UseProgram(0);
+         _meshVbo = _gl.GenBuffer();
+@@ -69,6 +82,15 @@ public sealed partial class GlCore
+         _gl.BindTexture(TextureTarget.TextureBuffer, _mdlTableTex);
+         _gl.TexBuffer(TextureTarget.TextureBuffer, SizedInternalFormat.R32ui, _mdlTableBuf);
+         _gl.BindTexture(TextureTarget.TextureBuffer, 0);
++        // The pose store holds a texel before any pose is kept.
++        _poseBuf = _gl.GenBuffer();
++        _poseTex = _gl.GenTexture();
++        _gl.BindBuffer(BufferTargetARB.TextureBuffer, _poseBuf);
++        _gl.BufferData<short>(BufferTargetARB.TextureBuffer, [0, 0, 0, 0], BufferUsageARB.DynamicDraw);
++        _gl.BindBuffer(BufferTargetARB.TextureBuffer, 0);
++        _gl.BindTexture(TextureTarget.TextureBuffer, _poseTex);
++        _gl.TexBuffer(TextureTarget.TextureBuffer, SizedInternalFormat.Rgba16i, _poseBuf);
++        _gl.BindTexture(TextureTarget.TextureBuffer, 0);
+     }
+ 
+     /// <summary>Whether both programs can draw an instance.</summary>
+@@ -82,10 +104,12 @@ public sealed partial class GlCore
+         {
+             _meshGen = RetainedScene.MeshGeneration;
+             _meshUploaded = 0;
++            _poseUploaded = 0;
+             _mdlKeyAt.Clear();
+             _mdlKeys.Clear();
+             _meshKeys.Clear();
+         }
++        UploadPoses();
+         int n = RetainedScene.MeshCornerCount;
+         if (n <= _meshUploaded) return;
+         var all = RetainedScene.MeshCorners;
+@@ -119,6 +143,31 @@ public sealed partial class GlCore
+         }
+     }
+ 
++    /// <summary>The pose store's texels not yet on the GPU; all of them into a larger
++    /// buffer when it has outgrown its own.</summary>
++    unsafe void UploadPoses()
++    {
++        int n = RetainedScene.PoseTexels;
++        if (n <= _poseUploaded) return;
++        int from = _poseUploaded;
++        _gl.BindBuffer(BufferTargetARB.TextureBuffer, _poseBuf);
++        if (n > _poseCap)
++        {
++            _poseCap = Math.Max(n, _poseCap * 2);
++            from = 0;
++            _gl.BufferData(BufferTargetARB.TextureBuffer, (nuint)(_poseCap * 8), null, BufferUsageARB.DynamicDraw);
++            // The texture holds the buffer's storage, which BufferData replaced.
++            _gl.BindTexture(TextureTarget.TextureBuffer, _poseTex);
++            _gl.TexBuffer(TextureTarget.TextureBuffer, SizedInternalFormat.Rgba16i, _poseBuf);
++            _gl.BindTexture(TextureTarget.TextureBuffer, 0);
++        }
++        _gl.BufferSubData<short>(BufferTargetARB.TextureBuffer, from * 8,
++            new ReadOnlySpan<short>(RetainedScene.PoseStore, from * 4, (n - from) * 4));
++        _gl.BindBuffer(BufferTargetARB.TextureBuffer, 0);
++        RetainedScene.PoseTexelsUploaded += n - from;
++        _poseUploaded = n;
++    }
++
+     int ModelKey(in RetainedScene.Vertex v)
+     {
+         int tp = (int)(v.Texpage + 0.5f), cl = (int)(v.Clut + 0.5f);
+@@ -148,14 +197,15 @@ public sealed partial class GlCore
+     /// </summary>
+     unsafe int PrepareInstances(RetainedScene.Frame f, List<RetainedScene.ModelInstance> list, bool mips)
+     {
+-        if (list.Count == 0 || !InstancesReady || f.VertCount == 0) return -1;
++        if (list.Count == 0 || !InstancesReady) return -1;
+         UploadMeshes();
+         int slot = f.Serial & (ModelRing - 1);
+         if (_mvSerial[slot] != f.Serial || _mvGen[slot] != _meshGen)
+         {
+             if (_mvBuf[slot] == 0) { _mvBuf[slot] = _gl.GenBuffer(); _mvTex[slot] = _gl.GenTexture(); }
+             _gl.BindBuffer(BufferTargetARB.TextureBuffer, _mvBuf[slot]);
+-            int bytes = f.VertCount * 8;
++            // Every instance may come from the pose store; the buffer still needs storage.
++            int bytes = Math.Max(f.VertCount, 1) * 8;
+             if (bytes > _mvCap[slot])
+             {
+                 _mvCap[slot] = Math.Max(bytes, _mvCap[slot] * 2);
+@@ -204,6 +254,8 @@ public sealed partial class GlCore
+         _gl.BindVertexArray(_meshVao);
+         _gl.ActiveTexture(TextureUnit.Texture0 + ModelVertsUnit);
+         _gl.BindTexture(TextureTarget.TextureBuffer, _mvTex[slot]);
++        _gl.ActiveTexture(TextureUnit.Texture0 + PoseUnit);
++        _gl.BindTexture(TextureTarget.TextureBuffer, _poseTex);
+         _gl.ActiveTexture(TextureUnit.Texture0 + MipTableUnit);
+         _gl.BindTexture(TextureTarget.TextureBuffer, _mdlTableTex);
+         _gl.ActiveTexture(TextureUnit.Texture0);
+@@ -236,9 +288,13 @@ public sealed partial class GlCore
+     {
+         _m9[0] = m.R00; _m9[1] = m.R01; _m9[2] = m.R02; _m9[3] = m.R10; _m9[4] = m.R11; _m9[5] = m.R12;
+         _m9[6] = m.R20; _m9[7] = m.R21; _m9[8] = m.R22;
++        // The store's first texel, or -1 for the frame's vertices; -1 a rigid weight.
++        int pose = m.Pose - 1, weight = m.PoseMorph ? m.PoseWeight : -1;
+         if (!colour)
+         {
+             _gl.Uniform1(_uwnModelBase, m.VertBase);
++            if (_uwnModelPose >= 0) _gl.Uniform1(_uwnModelPose, pose);
++            if (_uwnModelPoseW >= 0) _gl.Uniform1(_uwnModelPoseW, weight);
+             _gl.UniformMatrix3(_uwnModelR, 1, true, _m9);
+             _gl.Uniform3(_uwnModelT, m.Tx, m.Ty, m.Tz);
+             _gl.Uniform1(_uwnModelFar, m.Far);
+@@ -247,6 +303,8 @@ public sealed partial class GlCore
+             return;
+         }
+         _gl.Uniform1(_uwModelBase, m.VertBase);
++        if (_uwModelPose >= 0) _gl.Uniform1(_uwModelPose, pose);
++        if (_uwModelPoseW >= 0) _gl.Uniform1(_uwModelPoseW, weight);
+         _gl.UniformMatrix3(_uwModelR, 1, true, _m9);
+         _gl.Uniform3(_uwModelT, m.Tx, m.Ty, m.Tz);
+         _gl.Uniform1(_uwModelFar, m.Far);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 32be2d5..c4f47d1 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -675,9 +675,25 @@ internal static class GlShaders
+         uniform uint  uModelMat;
+         // The GTE's own screen centre (OFX, OFY), for its saturated projection.
+         uniform vec2  uModelGteC;
++        // The pose store: -1 takes the frame's vertices at uModelBase; otherwise the
++        // first texel of a rigid model's vertices (weight -1), or of an MO keyframe
++        // and its deltas, two texels a vertex, blended as the game's decoder blends
++        // them: key + (short)((delta * weight) >> 12), in 16 bits.
++        uniform isamplerBuffer uModelPoses;
++        uniform int   uModelPose;
++        uniform int   uModelPoseW;
++
++        ivec3 modelPosed(int i) {
++            if (uModelPose < 0) return texelFetch(uModelVerts, uModelBase + i).xyz;
++            if (uModelPoseW < 0) return texelFetch(uModelPoses, uModelPose + i).xyz;
++            ivec3 k = texelFetch(uModelPoses, uModelPose + 2 * i).xyz;
++            ivec3 d = texelFetch(uModelPoses, uModelPose + 2 * i + 1).xyz;
++            ivec3 s = (((d * uModelPoseW) >> 12) << 16) >> 16;
++            return ((k + s) << 16) >> 16;
++        }
+ 
+         vec3 modelVertex(uint i) {
+-            return uModelR * vec3(texelFetch(uModelVerts, uModelBase + int(i)).xyz) + uModelT;
++            return uModelR * vec3(modelPosed(int(i))) + uModelT;
+         }
+ 
+         // RTPS as the GTE takes it, which the facing test is taken on: the divide
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 378b7e8..84ea9bc 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -608,9 +608,31 @@ public static class RetainedScene
+     public static void ClearMeshes()
+     {
+         MeshCornerCount = 0;
++        PoseTexels = 0;
+         MeshGeneration++;
+     }
+ 
++    /// <summary>0085. The models' vertices kept on the GPU, four shorts a texel (x, y, z
++    /// and a pad, as the game keeps them): a rigid model's vertices, one texel each; an
++    /// MO pose's keyframe and its delta to the segment's target, two texels a vertex,
++    /// which <c>ModelGlsl</c> blends by an instance's weight as the game's decoder
++    /// does. Appended to until <see cref="ClearMeshes"/>; the backend uploads what it
++    /// has not.</summary>
++    public static short[] PoseStore = new short[65536];
++    public static int PoseTexels;
++
++    /// <summary>Texels to the pose store; the index of the first.</summary>
++    public static int AddPose(ReadOnlySpan<short> texels)
++    {
++        int n = texels.Length / 4;
++        if ((PoseTexels + n) * 4 > PoseStore.Length)
++            Array.Resize(ref PoseStore, Math.Max(PoseStore.Length * 2, (PoseTexels + n) * 4));
++        texels[..(n * 4)].CopyTo(PoseStore.AsSpan(PoseTexels * 4));
++        int at = PoseTexels;
++        PoseTexels += n;
++        return at;
++    }
++
+     /// <summary>0085. One model drawn from a cached mesh: its corners in
+     /// <see cref="MeshCorners"/>, its posed vertices in the frame's
+     /// <see cref="Frame.Verts"/>, placed in the world by a rotation and a translation,
+@@ -629,6 +651,13 @@ public static class RetainedScene
+         /// bias wraps the table's unsigned test, so it has a near end too.</summary>
+         public float Near;
+         public uint Rgbc, Material;
++        /// <summary>Where the vertices come from: 0, the frame's <see cref="Frame.Verts"/>
++        /// at <see cref="VertBase"/>; otherwise one past the first texel in
++        /// <see cref="PoseStore"/>, a rigid model's vertices, or with
++        /// <see cref="PoseMorph"/> an MO keyframe and its deltas, blended by
++        /// <see cref="PoseWeight"/> (12.12).</summary>
++        public int Pose, PoseWeight;
++        public bool PoseMorph;
+         /// <summary>Drawn in the mirror too, when the frame has one.</summary>
+         public bool Mirrored;
+         /// <summary>The store's generation when it was added; the backend draws none
+@@ -662,7 +691,7 @@ public static class RetainedScene
+ 
+     /// <summary>0085. Instances drawn in the main view and the mirror, their corners,
+     /// and the vertices uploaded; never reset.</summary>
+-    public static long InstancesDrawn, InstanceCorners, MirrorInstancesDrawn, InstanceVertices;
++    public static long InstancesDrawn, InstanceCorners, MirrorInstancesDrawn, InstanceVertices, PoseTexelsUploaded;
+ 
+     /// <summary>0085. Off, the models taken off the packets are not drawn either: the
+     /// probe's way to see what they cover.</summary>

@@ -73,6 +73,8 @@ public static class GpuWorld
         _mirror = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MIRROR")?.Trim() != "0";
         RetainedModels.MeshesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHES")?.Trim() != "0";
         RetainedModels.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHCHECK")?.Trim() is "1";
+        RetainedModels.PosesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSES")?.Trim() != "0";
+        MoPose.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSECHECK")?.Trim() is "1";
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
             RetainedScene.MainNear = Math.Max(near, 0.01f);
@@ -217,6 +219,8 @@ public static class GpuWorld
             case "mirror show": RetainedScene.MirrorShown = true; break;
             case "meshes on": RetainedModels.MeshesOn = true; break;
             case "meshes off": RetainedModels.MeshesOn = false; break;
+            case "poses on": RetainedModels.PosesOn = true; break;
+            case "poses off": RetainedModels.PosesOn = false; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
             case "models show": RetainedScene.MainModelsShown = true; break;
             case "perpixel on": GteLightMap.Enabled = true; break;
@@ -241,11 +245,11 @@ public static class GpuWorld
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
             case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
-               $"\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -256,6 +260,7 @@ public static class GpuWorld
     static long _gensMax, _gensAt, _builds;
     static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
     static long _iIns, _iWhole, _iMir, _iDrawn, _iCorners, _iVerts, _iMirDrawn;
+    static long _pPosed, _pRigid, _pDeferred, _pMat, _pTexels;
     static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
 
     static void Report()
@@ -317,6 +322,16 @@ public static class GpuWorld
                           $"{RetainedModels.MeshBuilds} mesh(es) built, {RetainedModels.MeshStale} found changed, {RetainedModels.InstanceRefused} refused in all" +
                           (RetainedModels.Checking ? $"; checked {RetainedModels.CheckFaces} face(s), {RetainedModels.CheckDiffer} kept or dropped differently " +
                                                        $"(by twice their area, under 0.01/0.1/1/10 px² and more: {string.Join("/", RetainedModels.CheckArea)})" : ""));
+        long pp = RetainedModels.InstancesPosed - _pPosed, pr = RetainedModels.InstancesRigid - _pRigid;
+        long pd = MoPose.Deferred - _pDeferred, pm = MoPose.Materialized - _pMat, pt = RetainedScene.PoseTexelsUploaded - _pTexels;
+        _pPosed = RetainedModels.InstancesPosed; _pRigid = RetainedModels.InstancesRigid;
+        _pDeferred = MoPose.Deferred; _pMat = MoPose.Materialized; _pTexels = RetainedScene.PoseTexelsUploaded;
+        Console.WriteLine($"[KF2] gpu world: poses {(RetainedModels.PosesOn ? "on" : "off")}; a draw: " +
+                          $"{(d == 0 ? 0 : (double)pp / d):F1} instance(s) blended from an MO pose, {(d == 0 ? 0 : (double)pr / d):F1} from a rigid model's vertices, " +
+                          $"{(d == 0 ? 0 : (double)pd / d):F1} pose(s) left undecoded, {(d == 0 ? 0 : (double)pm / d):F1} decoded after all; " +
+                          $"{pt} texel(s) uploaded; store {RetainedScene.PoseTexels} texel(s), {MoPose.PoseBuilds} pose(s) and {MoPose.RigidBuilds} rigid model(s) kept, " +
+                          $"{MoPose.PoseRefused} pose(s) refused in all" +
+                          (MoPose.Checking ? $"; checked {MoPose.CheckVertices} vert(ices), {MoPose.CheckDiffer} placed differently" : ""));
         Console.WriteLine($"[KF2] gpu world: light generations: at most {_gensMax} in a frame; map builds {RetainedMap.Builds - _builds}, " +
                           $"the last {RetainedMap.LastBuildMs:F2} ms for {RetainedMap.LastWhy}");
         _builds = RetainedMap.Builds;

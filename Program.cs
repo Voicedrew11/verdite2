@@ -1323,6 +1323,15 @@ Kf2.ModelWalk.Configure(Environment.GetEnvironmentVariable("KF2_MODELWALK"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_PROBE"));
 Kf2.ModelWalk.Install();
 
+// The MO blender, func_80034DA8, in C#: the pose every animated model is drawn in. For
+// a lit model the GPU world renderer draws from its mesh, the keyframe copy and the
+// delta decode are left undone and the vertex shader blends the pose itself.
+//
+//     KF2_MOPOSE=0        the recompiled routine
+//     KF2_MOPOSE=verify   run both on every call and compare RAM, registers, GTE
+Kf2.MoPose.Configure(Environment.GetEnvironmentVariable("KF2_MOPOSE"));
+Kf2.MoPose.Install();
+
 // Stage 13 itself, func_800342D8, and the camera block it opens with, func_8002E22C,
 // in C#. The renderer is nineteen calls and one block of HUD arithmetic; with it here
 // the frame's view is a value (Stage13.ViewOverride), the drawing half is one call

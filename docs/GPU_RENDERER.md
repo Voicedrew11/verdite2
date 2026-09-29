@@ -11,7 +11,9 @@ order. Step 3's first slice draws the object walk's opaque models on the GPU;
 their blended faces, the effects, the billboards and the arm are still on packets.
 Its second slice keeps the lit models' meshes on the GPU, so a model with no blended
 face runs neither the game's transform nor its assembler, and the mirror's replay
-leaves it out (measured, not judged).
+leaves it out (measured, not judged). Its third keeps their vertices there too, and
+the vertex shader blends an animated model's pose (bit-identical to the packets'
+picture).
 Step 5's first slice draws the planar walk's mirror on the renderer: its map, its
 water and its opaque models, judged by eye.**
 
@@ -508,8 +510,8 @@ A mesh cache: each model uploaded once when it becomes resident, invalidated whe
 the loader evicts it (`PlanarWalk.Resident` is the test). Each frame an instance
 record per live model: matrix, light matrix, depth cue, blend, pose. First the
 pose stays the game's (the posed vertex base is uploaded); blending the keyframes
-on the GPU follows, and `AnimSmoothing`'s in-between poses then cost nothing. The
-arm and view-space models are models too.
+on the GPU follows (done: "Step 3, the third slice"), and `AnimSmoothing`'s
+in-between poses then cost nothing. The arm and view-space models are models too.
 
 #### Step 3, the first slice
 
@@ -724,6 +726,73 @@ the capture; a menu, shop or message over it and `LoopPacing`'s redraws; the rem
 model materials, which the instance carries but no pack was applied; the authored
 lights' shadows, whose casters are the retained reflections' capture, which stands the
 instances down (`RetainedModels.Capturing`).
+
+#### Step 3, the third slice
+
+**The instances' vertices kept on the GPU, and an animated model's pose blended in the
+vertex shader. Mechanism measured; the picture is bit-identical to the second slice's
+by snap, so there is nothing new to judge by eye.** On with the meshes
+(`KF2_GPUWORLD_POSES=0` or `gpuworld poses off` is the comparison: the frame's copy of
+the posed vertices, as before). The runtime half amends `0085` (its eighth diff: the
+pose store, `modelPosed` in `ModelGlsl`); the port half is `patches/MoPose.cs` and
+`RetainedModels.TryInstance`.
+
+**What the plan said comes next, and why it is small.** "First the pose stays the
+game's (the posed vertex base is uploaded); blending the keyframes on the GPU follows"
+(Step 3, above). The blender, `func_80034DA8`, keeps a keyframe per clip and segment
+in a buffer of the slot's record, rebuilt only when either moves, and on every call
+copies it to the posed buffer at `0x80190AD8` and decodes the segment's deltas into it
+at the clock's weight (`func_80034A74`). The decoder's arithmetic is per vertex and
+linear in the weight: `key + (short)(((short)(target - key) * weight) >> 12)`, in 16
+bits. It gathers three entries into a matrix for `ScaleMatrix`, but the three are
+consecutive vertices and each is read only for its own delta, so the matrix changes
+nothing. Only the renderer's routines read the posed buffer (the transforms, the
+clipped assembler and the blender itself reference it; no game logic does).
+
+**The blender in C#** (`KF2_MOPOSE=0` for the recompiled one, `KF2_MOPOSE=verify` to
+run both). Verified over 89,401 calls in areas 1, 7 and 6 with an arm swing: 0 RAM,
+register or GTE mismatches, through 11 record set-ups, 608 keyframe rebuilds and the
+rigid path. It keeps the routine's stack frame for the clock, whose
+`AnimSmoothing` hooks read the weight's address at `SP+0x10`: the carry reaches it
+as it reached the recompiled one (385 and 387 weights carried in the same window).
+Verify with `KF2_SMOOTH_ANIM=0`, since both runs call the clock and its hooks carry
+only the first.
+
+**The pose left for the GPU.** For a lit model placed in the world that the renderer
+may draw from its mesh, the submitter sets `MoPose.Defer`, and the blender does
+everything but the copy and the decode: the pose is kept (the keyframe's address, the
+stream's, the weight). `TryInstance` puts the keyframe and each vertex's delta to the
+segment's target in the pose store (`RetainedScene.PoseStore`, two texels a vertex),
+found again by a hash of the keyframe, the stream's address and the count, and
+checked every time by a hash of the stream; a stream that visits a vertex twice or
+leaves the model is refused and decoded as before (none seen). The instance carries
+the weight, and `modelPosed` blends. A rigid model's vertices go in the store once, a
+texel each. So **no instance uploads vertices a frame**, and a model that is not
+drawn whole (it has blended faces, or the store refused it) has its pose decoded into
+RAM before its transform runs (`MoPose.Materialize`). `KF2_GPUWORLD_POSECHECK=1`
+decodes every stored pose into RAM as well and compares each vertex with the shader's
+blend: 0 of 11,049,223 vertices apart in area 7, 0 of 4,568,342 at the `fdat02` pool
+with the planar walk.
+
+**Measured.** Paused, render scale 5, 16:9, poses off against on in the same frame:
+bit-identical in area 7 at the arrival view (three creatures, 1.5% of the picture) and
+from beside a creature at four headings (up to 22.1%), and at the `fdat02` spawn and
+pier with the planar walk on (the mirror 9.5% of the picture). Cost in area 7 beside
+a creature, uncapped (`KF2_FPS=1000 KF2_PROFILE=1`), 18 blender calls a frame, three
+of them MO:
+
+| | blender | submitter (incl.) | frame work |
+|---|---|---|---|
+| recompiled blender, poses off | 0.055 ms | 0.110 ms | 1.386 ms |
+| C# blender, poses off | 0.023 ms | 0.079 ms | 1.333 ms |
+| C# blender, poses on | 0.003 ms | 0.060 ms | 1.301 ms |
+
+At 144 fps: 144.0 drawn at 19.9-20.0 ticks/s, `[present] wide 288`, with the renderer
+off and on; no GL error under `KF2_GLDEBUG=1`.
+
+**Not checked:** the arm (outside the object walk; its blender call decodes as
+before); a pose stream that revisits a vertex, which the store refuses and none has
+been seen to use.
 
 ### Step 4: the old world path off
 

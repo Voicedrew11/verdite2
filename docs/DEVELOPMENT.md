@@ -522,6 +522,11 @@ morph is still the next largest thing here, and it is now the largest recompiled
 thing left inside a C# submit. See "The object and creature walk in C#" in
 `PATCHES_AND_MODS.md`.
 
+Done since, a third time: the morph is C# (`patches/MoPose.cs`), 0.055 to 0.023 ms
+a frame in area 7 beside a creature, and with the GPU world renderer a model drawn
+from its mesh skips the copy and the decode, 0.003 ms. See "Step 3, the third slice"
+in `GPU_RENDERER.md`.
+
 ### GPU time per present
 
 The sections above are CPU time on the game thread, and "buffer swap + driver" is

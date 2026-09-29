@@ -1473,6 +1473,15 @@ Four files in the directory have no entry below:
   `uModelGteC`; a negative bias wraps the test, `uModelNear`), and lights its normal to dots with the instance's LLM. With `uModel`
   0 the programs are the ones before. The seventh diff in the patch file. See
   "Step 3, the second slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the vertices are kept on the GPU too. `RetainedScene.PoseStore`
+  (`AddPose`, `PoseTexels`, emptied by `ClearMeshes`) holds a rigid model's vertices,
+  a texel each, and an MO pose's keyframe and its delta to the segment's target, two
+  texels a vertex; an instance names its first texel (`Pose`), and for a pose its
+  weight (`PoseMorph`, `PoseWeight`). `GlModelMeshes` uploads the store as it grows
+  into an RGBA16I buffer texture on unit 20, and `ModelGlsl`'s `modelPosed` blends a
+  pose as the game's decoder does, `key + (short)((delta * weight) >> 12)` in 16 bits.
+  An instance with no `Pose` reads the frame's vertices as before. The eighth diff in
+  the patch file. See "Step 3, the third slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
