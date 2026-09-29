@@ -3066,3 +3066,794 @@ index 5c293b8..42c0f26 100644
                  {
                      if (!gpu.DrawRetainedMain()) RetainedScene.MainMissed++;
                      else water = RetainedScene.WaterPending && reorder;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index 17796f5..3e2c27b 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -45,6 +45,7 @@ public sealed partial class GlCore
+         _gl.UseProgram(0);
+         RetainedScene.MainDrawer = DrawWorldMain;
+         RetainedScene.WaterDrawer = DrawWorldWater;
++        InitModelMeshes();
+     }
+ 
+     // The main view's frame, for the water slices the same walk draws after it.
+@@ -79,6 +80,7 @@ public sealed partial class GlCore
+         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
+         bool mips = UpdateWorldMips(f, f.MainHalves);
+         int models = UploadModels(f.Models, f.Serial & (ModelRing - 1), f.Serial, mips);
++        int inst = PrepareInstances(f, f.Instances, mips);
+         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+         var (cx, cy) = BeginWorldMain(f, rt, offX, offY, mips);
+         ClearStaleDepth(rt);
+@@ -94,6 +96,11 @@ public sealed partial class GlCore
+             RetainedScene.MainModelTriangles += f.Models.Count / 3;
+             RetainedScene.MainModelGroups += f.Models.Groups.Count;
+         }
++        if (inst >= 0 && RetainedScene.MainModelsShown)
++        {
++            DrawInstances(f.Instances, inst);
++            RetainedScene.InstancesDrawn += f.Instances.Count;
++        }
+         EndWorldState();
+         EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
+ 
+@@ -152,12 +159,18 @@ public sealed partial class GlCore
+         UploadStatic();
+         bool mips = UpdateWorldMips(f, f.MirrorHalves);
+         int models = UploadModels(f.MirrorModels, MirrorSlot, f.Serial, mips);
++        int inst = PrepareInstances(f, f.MirrorInstances, mips);
+         BeginWorldMain(f, p, offX, offY, mips, mirror: true);
+         ClearStaleDepth(p);
+         _gl.Disable(EnableCap.Blend);
+         _gl.DepthMask(true);
+         int drawn = DrawRange(0, null);
+         if (models >= 0) DrawWorldModels(f.MirrorModels, models);
++        if (inst >= 0)
++        {
++            DrawInstances(f.MirrorInstances, inst);
++            RetainedScene.MirrorInstancesDrawn += f.MirrorInstances.Count;
++        }
+         if (RetainedScene.MirrorWater && WaterInView()) DrawMirrorWater(f);
+         EndWorldState();
+         EndWorldUniforms();
+@@ -269,6 +282,7 @@ public sealed partial class GlCore
+             if (_uwClipDq >= 0) _gl.Uniform2(_uwClipDq, (float)GteDepth.ProjDqa, GteDepth.ProjDqb / 4096f);
+         }
+         SetWorldView(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, v.H, cx, cy, rt.Wide1x, rt.H, v.H, true, GlVram.Scale);
++        if (_uwModelGteC >= 0) _gl.Uniform2(_uwModelGteC, v.Cx, v.Cy);
+         if (_uwNear >= 0) _gl.Uniform1(_uwNear, RetainedScene.MainNear);
+         SendWorldLights(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, cx, cy, v.H, false, 0f);
+         CullChunks(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, v.H, cx, cy, rt.Wide1x, rt.H, false, 0f, v.H,
+@@ -901,6 +915,7 @@ public sealed partial class GlCore
+             if (_uwnT >= 0) _gl.Uniform3(_uwnT, (float)v.Tx, v.Ty, v.Tz);
+             if (_uwnH >= 0) _gl.Uniform1(_uwnH, v.H);
+             if (_uwnC >= 0) _gl.Uniform2(_uwnC, geo.WorldCx, geo.WorldCy);
++            if (_uwnModelGteC >= 0) _gl.Uniform2(_uwnModelGteC, v.Cx, v.Cy);
+             if (_uwnFb >= 0) _gl.Uniform2(_uwnFb, (float)src.Wide1x, src.H);
+             if (_uwnNear >= 0) _gl.Uniform1(_uwnNear, RetainedScene.MainNear);
+             if (_uwnHalfGate >= 0) _gl.Uniform1(_uwnHalfGate, 1);
+@@ -927,6 +942,7 @@ public sealed partial class GlCore
+                 DrawModelRuns(f.Models);
+                 RetainedScene.MainModelNormalTriangles += f.Models.Count / 3;
+             }
++            if (RetainedScene.MainModelsShown) DrawInstanceNormals(f);
+             _gl.BindVertexArray(0);
+         }
+ 
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+new file mode 100644
+index 0000000..62d4acc
+--- /dev/null
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+@@ -0,0 +1,323 @@
++using Silk.NET.OpenGL;
++
++namespace RecompOne.Runtime.Hle;
++
++/// <summary>
++/// 0085. The models drawn from meshes kept on the GPU (Step 3's second slice): each
++/// mesh's opaque faces uploaded once (<see cref="RetainedScene.MeshCorners"/>), and
++/// each frame only the posed vertices, into a buffer texture per frame of the ring, and
++/// a record per model. The world programs place, light and cull every corner from
++/// those (<c>ModelGlsl</c>). See "Step 3, the second slice" in docs/GPU_RENDERER.md.
++/// </summary>
++public sealed partial class GlCore
++{
++    const int ModelVertsUnit = 19;
++
++    uint _meshVbo, _meshMipVbo, _meshVao;
++    int _meshUploaded, _meshCap, _meshGen = -1;
++    uint[] _meshMip = [];
++
++    // The meshes' textures: a key each, and a table of their atlas entries the corners
++    // index (bound on the static map's unit while models draw).
++    readonly Dictionary<(int, int, uint), int> _mdlKeyAt = new();
++    readonly List<(int TPage, int Clut, uint Rect)> _mdlKeys = new();
++    readonly Dictionary<int, int[]> _meshKeys = new();
++    uint[] _mdlKeyEntry = [];
++    int[] _mdlKeyLooked = [];
++    int _mdlLookSerial;
++    bool _mdlTableDirty;
++    uint _mdlTableBuf, _mdlTableTex;
++
++    // The posed vertices, per frame of the ring, and the mesh store they were drawn with.
++    readonly uint[] _mvBuf = new uint[ModelRing], _mvTex = new uint[ModelRing];
++    readonly int[] _mvSerial = new int[ModelRing], _mvGen = new int[ModelRing], _mvCap = new int[ModelRing];
++
++    int _uwModel = -1, _uwModelBase, _uwModelR, _uwModelT, _uwModelFar, _uwModelNear, _uwModelLlm, _uwModelCue, _uwModelRgbc, _uwModelMat, _uwModelGteC = -1;
++    int _uwnModel = -1, _uwnModelBase, _uwnModelR, _uwnModelT, _uwnModelFar, _uwnModelNear, _uwnModelMat, _uwnModelGteC = -1;
++
++    void InitModelMeshes()
++    {
++        if (_progWorld == 0) return;
++        int L(string n) => _gl.GetUniformLocation(_progWorld, n);
++        _uwModel = L("uModel"); _uwModelBase = L("uModelBase"); _uwModelR = L("uModelR"); _uwModelT = L("uModelT");
++        _uwModelFar = L("uModelFar"); _uwModelNear = L("uModelNear"); _uwModelLlm = L("uModelLlm"); _uwModelCue = L("uModelCue");
++        _uwModelRgbc = L("uModelRgbc"); _uwModelMat = L("uModelMat"); _uwModelGteC = L("uModelGteC");
++        _gl.UseProgram(_progWorld);
++        if (_uwModel >= 0) _gl.Uniform1(_uwModel, 0);
++        int u = L("uModelVerts");
++        if (u >= 0) _gl.Uniform1(u, ModelVertsUnit);
++        if (_progWorldNrm != 0)
++        {
++            int N(string n) => _gl.GetUniformLocation(_progWorldNrm, n);
++            _uwnModel = N("uModel"); _uwnModelBase = N("uModelBase"); _uwnModelR = N("uModelR"); _uwnModelT = N("uModelT");
++            _uwnModelFar = N("uModelFar"); _uwnModelNear = N("uModelNear"); _uwnModelMat = N("uModelMat"); _uwnModelGteC = N("uModelGteC");
++            _gl.UseProgram(_progWorldNrm);
++            if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 0);
++            int v = N("uModelVerts");
++            if (v >= 0) _gl.Uniform1(v, ModelVertsUnit);
++        }
++        _gl.UseProgram(0);
++        _meshVbo = _gl.GenBuffer();
++        _meshMipVbo = _gl.GenBuffer();
++        _meshVao = MakeWorldVao(_meshVbo, _meshMipVbo);
++        // The table holds a word before any mesh has a texture.
++        _mdlTableBuf = _gl.GenBuffer();
++        _mdlTableTex = _gl.GenTexture();
++        _gl.BindBuffer(BufferTargetARB.TextureBuffer, _mdlTableBuf);
++        _gl.BufferData<uint>(BufferTargetARB.TextureBuffer, [0u], BufferUsageARB.DynamicDraw);
++        _gl.BindBuffer(BufferTargetARB.TextureBuffer, 0);
++        _gl.BindTexture(TextureTarget.TextureBuffer, _mdlTableTex);
++        _gl.TexBuffer(TextureTarget.TextureBuffer, SizedInternalFormat.R32ui, _mdlTableBuf);
++        _gl.BindTexture(TextureTarget.TextureBuffer, 0);
++    }
++
++    /// <summary>Whether both programs can draw an instance.</summary>
++    bool InstancesReady => _uwModel >= 0 && _meshVao != 0;
++
++    /// <summary>The store's corners not yet on the GPU, and their textures' keys; the
++    /// whole store again after it was emptied.</summary>
++    unsafe void UploadMeshes()
++    {
++        if (_meshGen != RetainedScene.MeshGeneration)
++        {
++            _meshGen = RetainedScene.MeshGeneration;
++            _meshUploaded = 0;
++            _mdlKeyAt.Clear();
++            _mdlKeys.Clear();
++            _meshKeys.Clear();
++        }
++        int n = RetainedScene.MeshCornerCount;
++        if (n <= _meshUploaded) return;
++        var all = RetainedScene.MeshCorners;
++        if (_meshMip.Length < n) Array.Resize(ref _meshMip, Math.Max(n, _meshMip.Length * 2));
++        for (int i = _meshUploaded; i + 2 < n; i += 3)
++            _meshMip[i] = _meshMip[i + 1] = _meshMip[i + 2] = (uint)(ModelKey(all[i]) + 1);
++
++        int from = _meshUploaded;
++        if (n > _meshCap)
++        {
++            // Grown: everything again, into a buffer with room.
++            _meshCap = Math.Max(n, _meshCap * 2);
++            from = 0;
++            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _meshVbo);
++            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_meshCap * sizeof(RetainedScene.Vertex)), null, BufferUsageARB.DynamicDraw);
++            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _meshMipVbo);
++            _gl.BufferData(BufferTargetARB.ArrayBuffer, (nuint)(_meshCap * 4), null, BufferUsageARB.DynamicDraw);
++        }
++        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _meshVbo);
++        _gl.BufferSubData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, from * sizeof(RetainedScene.Vertex),
++            new ReadOnlySpan<RetainedScene.Vertex>(all, from, n - from));
++        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _meshMipVbo);
++        _gl.BufferSubData<uint>(BufferTargetARB.ArrayBuffer, from * 4, new ReadOnlySpan<uint>(_meshMip, from, n - from));
++        _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
++        _meshUploaded = n;
++        if (_mdlKeyEntry.Length < _mdlKeys.Count)
++        {
++            Array.Resize(ref _mdlKeyEntry, Math.Max(_mdlKeys.Count, _mdlKeyEntry.Length * 2));
++            Array.Resize(ref _mdlKeyLooked, _mdlKeyEntry.Length);
++            _mdlTableDirty = true;
++        }
++    }
++
++    int ModelKey(in RetainedScene.Vertex v)
++    {
++        int tp = (int)(v.Texpage + 0.5f), cl = (int)(v.Clut + 0.5f);
++        if ((tp & 0x8000) != 0 || (v.Flags & RetainedScene.FlagRect) == 0) return -1;
++        var key = (tp & 0x1FF, cl, v.Rect);
++        if (_mdlKeyAt.TryGetValue(key, out int k)) return k;
++        _mdlKeyAt[key] = k = _mdlKeys.Count;
++        _mdlKeys.Add(key);
++        return k;
++    }
++
++    /// <summary>A mesh's distinct textures, by its first corner.</summary>
++    int[] MeshKeys(int start, int count)
++    {
++        if (_meshKeys.TryGetValue(start, out var keys)) return keys;
++        var set = new HashSet<int>();
++        for (int i = start; i < start + count && i < _meshUploaded; i += 3)
++            if (_meshMip[i] != 0) set.Add((int)_meshMip[i] - 1);
++        return _meshKeys[start] = set.ToArray();
++    }
++
++    /// <summary>
++    /// A view's instances ready to draw, before the target is bound (the atlas decode
++    /// draws): the store uploaded, the frame's posed vertices in its slot of the ring,
++    /// and the atlas entries of the textures these instances' meshes use. The slot, or
++    /// -1 with nothing to draw.
++    /// </summary>
++    unsafe int PrepareInstances(RetainedScene.Frame f, List<RetainedScene.ModelInstance> list, bool mips)
++    {
++        if (list.Count == 0 || !InstancesReady || f.VertCount == 0) return -1;
++        UploadMeshes();
++        int slot = f.Serial & (ModelRing - 1);
++        if (_mvSerial[slot] != f.Serial || _mvGen[slot] != _meshGen)
++        {
++            if (_mvBuf[slot] == 0) { _mvBuf[slot] = _gl.GenBuffer(); _mvTex[slot] = _gl.GenTexture(); }
++            _gl.BindBuffer(BufferTargetARB.TextureBuffer, _mvBuf[slot]);
++            int bytes = f.VertCount * 8;
++            if (bytes > _mvCap[slot])
++            {
++                _mvCap[slot] = Math.Max(bytes, _mvCap[slot] * 2);
++                _gl.BufferData(BufferTargetARB.TextureBuffer, (nuint)_mvCap[slot], null, BufferUsageARB.StreamDraw);
++            }
++            _gl.BufferSubData<short>(BufferTargetARB.TextureBuffer, 0, new ReadOnlySpan<short>(f.Verts, 0, f.VertCount * 4));
++            _gl.BindBuffer(BufferTargetARB.TextureBuffer, 0);
++            _gl.BindTexture(TextureTarget.TextureBuffer, _mvTex[slot]);
++            _gl.TexBuffer(TextureTarget.TextureBuffer, SizedInternalFormat.Rgba16i, _mvBuf[slot]);
++            _gl.BindTexture(TextureTarget.TextureBuffer, 0);
++            _mvSerial[slot] = f.Serial;
++            _mvGen[slot] = _meshGen;
++            RetainedScene.InstanceVertices += f.VertCount;
++        }
++
++        bool on = mips && _mip != null;
++        _mdlLookSerial++;
++        foreach (var m in list)
++            if (m.MeshGen == _meshGen)
++            foreach (int k in MeshKeys(m.MeshStart, m.MeshCount))
++            {
++                if (_mdlKeyLooked[k] == _mdlLookSerial) continue;
++                _mdlKeyLooked[k] = _mdlLookSerial;
++                var (tp, cl, rect) = _mdlKeys[k];
++                uint e = on ? MipOf(tp, cl, rect) : 0u;
++                if (e != _mdlKeyEntry[k]) { _mdlKeyEntry[k] = e; _mdlTableDirty = true; }
++            }
++        if (_mdlTableDirty)
++        {
++            _gl.BindBuffer(BufferTargetARB.TextureBuffer, _mdlTableBuf);
++            _gl.BufferData<uint>(BufferTargetARB.TextureBuffer, _mdlKeyEntry, BufferUsageARB.DynamicDraw);
++            _gl.BindBuffer(BufferTargetARB.TextureBuffer, 0);
++            _gl.BindTexture(TextureTarget.TextureBuffer, _mdlTableTex);
++            _gl.TexBuffer(TextureTarget.TextureBuffer, SizedInternalFormat.R32ui, _mdlTableBuf);
++            _gl.BindTexture(TextureTarget.TextureBuffer, 0);
++            _mdlTableDirty = false;
++        }
++        if (on && _mip!.HasPending) _mip.Process(_vram.SampleTexture);
++        return slot;
++    }
++
++    /// <summary>The instances' textures in place of the static map's, and the frame's
++    /// posed vertices; <see cref="EndInstances"/> puts the map's back.</summary>
++    void BeginInstances(int slot, bool colour)
++    {
++        _gl.BindVertexArray(_meshVao);
++        _gl.ActiveTexture(TextureUnit.Texture0 + ModelVertsUnit);
++        _gl.BindTexture(TextureTarget.TextureBuffer, _mvTex[slot]);
++        _gl.ActiveTexture(TextureUnit.Texture0 + MipTableUnit);
++        _gl.BindTexture(TextureTarget.TextureBuffer, _mdlTableTex);
++        _gl.ActiveTexture(TextureUnit.Texture0);
++        if (colour)
++        {
++            if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
++            _gl.Uniform1(_uwModel, 1);
++        }
++        else if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 1);
++    }
++
++    void EndInstances(bool colour)
++    {
++        if (colour)
++        {
++            if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
++            _gl.Uniform1(_uwModel, 0);
++        }
++        else if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 0);
++        _gl.ActiveTexture(TextureUnit.Texture0 + MipTableUnit);
++        _gl.BindTexture(TextureTarget.TextureBuffer, _mipTableTex);
++        _gl.ActiveTexture(TextureUnit.Texture0);
++    }
++
++    readonly float[] _m9 = new float[9];
++
++    /// <summary>One instance's record into the bound program's uniforms: the colour
++    /// program's, or the normal program's (placement, the cull and the material).</summary>
++    void SendInstance(in RetainedScene.ModelInstance m, bool colour)
++    {
++        _m9[0] = m.R00; _m9[1] = m.R01; _m9[2] = m.R02; _m9[3] = m.R10; _m9[4] = m.R11; _m9[5] = m.R12;
++        _m9[6] = m.R20; _m9[7] = m.R21; _m9[8] = m.R22;
++        if (!colour)
++        {
++            _gl.Uniform1(_uwnModelBase, m.VertBase);
++            _gl.UniformMatrix3(_uwnModelR, 1, true, _m9);
++            _gl.Uniform3(_uwnModelT, m.Tx, m.Ty, m.Tz);
++            _gl.Uniform1(_uwnModelFar, m.Far);
++            _gl.Uniform1(_uwnModelNear, m.Near);
++            if (_uwnModelMat >= 0) _gl.Uniform1(_uwnModelMat, m.Material);
++            return;
++        }
++        _gl.Uniform1(_uwModelBase, m.VertBase);
++        _gl.UniformMatrix3(_uwModelR, 1, true, _m9);
++        _gl.Uniform3(_uwModelT, m.Tx, m.Ty, m.Tz);
++        _gl.Uniform1(_uwModelFar, m.Far);
++        _gl.Uniform1(_uwModelNear, m.Near);
++        _m9[0] = m.Llm0; _m9[1] = m.Llm1; _m9[2] = m.Llm2; _m9[3] = m.Llm3; _m9[4] = m.Llm4; _m9[5] = m.Llm5;
++        _m9[6] = m.Llm6; _m9[7] = m.Llm7; _m9[8] = m.Llm8;
++        if (_uwModelLlm >= 0) _gl.UniformMatrix3(_uwModelLlm, 1, true, _m9);
++        if (_uwModelCue >= 0) _gl.Uniform3(_uwModelCue, m.Dqa, m.Dqb, m.Curve);
++        if (_uwModelRgbc >= 0) _gl.Uniform1(_uwModelRgbc, m.Rgbc);
++        if (_uwModelMat >= 0) _gl.Uniform1(_uwModelMat, m.Material);
++        if (_uwBk >= 0) _gl.Uniform3(_uwBk, m.Bk0, m.Bk1, m.Bk2);
++        if (_uwLcmR >= 0) _gl.Uniform3(_uwLcmR, m.L0, m.L1, m.L2);
++        if (_uwLcmG >= 0) _gl.Uniform3(_uwLcmG, m.L3, m.L4, m.L5);
++        if (_uwLcmB >= 0) _gl.Uniform3(_uwLcmB, m.L6, m.L7, m.L8);
++    }
++
++    /// <summary>
++    /// A view's instances after the map, as <see cref="DrawWorldModels"/> draws the
++    /// captured models: 0051's true depth first with colour off, then colour against
++    /// it pulled towards the camera. Not culled by GL: the shader keeps the faces the
++    /// lit assembler keeps.
++    /// </summary>
++    void DrawInstances(List<RetainedScene.ModelInstance> list, int slot)
++    {
++        _gl.Disable(EnableCap.CullFace);
++        BeginInstances(slot, true);
++        bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
++        if (bias)
++        {
++            _gl.ColorMask(false, false, false, false);
++            foreach (var m in list)
++            {
++                if (m.MeshGen != _meshGen) continue;
++                SendInstance(m, true);
++                _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
++            }
++            _gl.ColorMask(true, true, true, true);
++            _gl.DepthMask(false);
++            if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
++            if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);
++        }
++        foreach (var m in list)
++        {
++            // A store emptied since the instance was made holds other meshes there now.
++            if (m.MeshGen != _meshGen) continue;
++            SendInstance(m, true);
++            _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
++            RetainedScene.InstanceCorners += m.MeshCount;
++        }
++        if (bias)
++        {
++            if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
++            if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
++            _gl.DepthMask(true);
++        }
++        EndInstances(true);
++    }
++
++    /// <summary>The frame's instances into the normal and surface buffers, through the
++    /// world normal program; nothing if the frame's vertices have left their slot.</summary>
++    void DrawInstanceNormals(RetainedScene.Frame f)
++    {
++        int slot = f.Serial & (ModelRing - 1);
++        if (f.Instances.Count == 0 || _uwnModel < 0 || _mvSerial[slot] != f.Serial || _mvGen[slot] != _meshGen) return;
++        BeginInstances(slot, false);
++        foreach (var m in f.Instances)
++        {
++            if (m.MeshGen != _meshGen) continue;
++            SendInstance(m, false);
++            _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
++        }
++        EndInstances(false);
++    }
++}
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index a9d2c0d..32be2d5 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -651,10 +651,69 @@ internal static class GlShaders
+     /// position to the letter, for <c>NormalFs</c>. The material is the face's own,
+     /// or <c>Opaque</c>, as <c>SurfaceMaterial.Classify</c> gives an opaque packet.
+     /// </summary>
+-    public const string WorldNormalVs = """
++
++    /// <summary>
++    /// 0085. A model drawn from a cached mesh (Step 3's second slice), for <c>WorldVs</c>
++    /// and <c>WorldNormalVs</c>: a corner's <c>inWorld.x</c> is its vertex in the
++    /// instance's posed vertices, <c>inCue</c> its face's first three vertices and
++    /// <c>inRgbc</c> the fourth (all ones for a triangle). A face is dropped where the
++    /// lit assembler drops it: facing away on the screen, or its mean table depth at or
++    /// before 0, before <c>uModelNear</c> or at or past <c>uModelFar</c>. Every corner of a face computes the
++    /// same answer from the same four vertices.
++    /// </summary>
++    const string ModelGlsl = """
++        uniform int   uModel;
++        uniform isamplerBuffer uModelVerts;
++        uniform int   uModelBase;
++        uniform mat3  uModelR;
++        uniform vec3  uModelT;
++        uniform float uModelFar;
++        uniform float uModelNear;
++        uniform mat3  uModelLlm;
++        uniform vec3  uModelCue;
++        uniform uint  uModelRgbc;
++        uniform uint  uModelMat;
++        // The GTE's own screen centre (OFX, OFY), for its saturated projection.
++        uniform vec2  uModelGteC;
++
++        vec3 modelVertex(uint i) {
++            return uModelR * vec3(texelFetch(uModelVerts, uModelBase + int(i)).xyz) + uModelT;
++        }
++
++        // RTPS as the GTE takes it, which the facing test is taken on: the divide
++        // saturates below H/2 and the screen position at the ends of its range, so a
++        // face reaching behind the eye is kept or dropped as the game keeps it.
++        vec2 modelScreen(vec3 v) {
++            float z = max(clamp(v.z, 0.0, 65535.0), uH * 0.5);
++            vec2 s = clamp(uModelGteC + uH * clamp(v.xy, -32768.0, 32767.0) / z, -1024.0, 1023.0);
++            return uWorldSnap != 0 ? floor(s) : s;
++        }
++
++        bool modelFaceKept(vec3 f, uint f3) {
++            vec3 v0 = uR * (modelVertex(uint(f.x)) - uCam) + uT;
++            vec3 v1 = uR * (modelVertex(uint(f.y)) - uCam) + uT;
++            vec3 v2 = uR * (modelVertex(uint(f.z)) - uCam) + uT;
++            // The vertex cache holds each corner's SZ over four; the face sits at their mean.
++            int z0 = int(clamp(v0.z, 0.0, 65535.0)) >> 2;
++            int z1 = int(clamp(v1.z, 0.0, 65535.0)) >> 2;
++            int z2 = int(clamp(v2.z, 0.0, 65535.0)) >> 2;
++            int z;
++            if (f3 != 0xFFFFFFFFu) {
++                vec3 v3 = uR * (modelVertex(f3) - uCam) + uT;
++                z = (z0 + z1 + z2 + (int(clamp(v3.z, 0.0, 65535.0)) >> 2)) >> 2;
++            } else z = (z0 + z1 + z2) / 3;
++            if (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar) return false;
++            vec2 s0 = modelScreen(v0), s1 = modelScreen(v1), s2 = modelScreen(v2);
++            return (s1.x - s0.x) * (s2.y - s0.y) - (s1.y - s0.y) * (s2.x - s0.x) > 0.0;
++        }
++        """;
++
++    public static readonly string WorldNormalVs = """
+         #version 330 core
+         layout(location = 0) in vec3  inWorld;
++        layout(location = 5) in vec3  inCue;
+         layout(location = 7) in uint  inFlags;
++        layout(location = 8) in uint  inRgbc;
+ 
+         invariant gl_Position;
+ 
+@@ -684,9 +743,21 @@ internal static class GlShaders
+                 h += uSwell[i].z * sin(uSwell[i].x * p.x + uSwell[i].y * p.z - uSwell[i].w);
+             return floor(-h + 0.5);
+         }
++        //@model
+ 
+         void main() {
+-            uint hid = (inFlags >> 13) & 0x3FFFu;
++            uint flags = inFlags;
++            vec3 w = inWorld;
++            if (uModel != 0) {
++                if (!modelFaceKept(inCue, inRgbc)) {
++                    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
++                    vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
++                    return;
++                }
++                w = modelVertex(uint(inWorld.x));
++                flags = (inFlags & ~255u) | uModelMat;
++            }
++            uint hid = (flags >> 13) & 0x3FFFu;
+             if (uHalfGate != 0 && hid != 0u
+                 && texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r == 0u) {
+                 gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+@@ -695,26 +766,25 @@ internal static class GlShaders
+             }
+             // A blended face is kept only as water (bit 28), with 256 over its id
+             // as a blended packet carries it; any other blended face is no surface.
+-            bool semi = (inFlags & 0x400u) != 0u;
+-            if (semi && (inFlags & 0x10000000u) == 0u) {
++            bool semi = (flags & 0x400u) != 0u;
++            if (semi && (flags & 0x10000000u) == 0u) {
+                 gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                 vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
+                 return;
+             }
+-            vec3 w = inWorld;
+-            if (uSwellOn != 0 && (inFlags & 0x8000000u) != 0u) w.y += swellDy(w);
++            if (uSwellOn != 0 && (flags & 0x8000000u) != 0u) w.y += swellDy(w);
+             vec3 v = uR * (w - uCam) + uT;
+             float z = v.z;
+             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
+             if (uWorldSnap != 0 && z > 0.0)
+                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
+-            uint m = inFlags & 255u;
++            uint m = flags & 255u;
+             vM = semi ? 2.0 + 256.0 : float(m == 0u ? 1u : m);
+             vUv = vec2(0.0);
+             vTex = 0u;
+         }
+-        """;
++        """.Replace("//@model", ModelGlsl);
+ 
+     /// <summary>
+     /// 0067. Screen-space reflections. For each pixel whose surface reflects, the
+@@ -1316,7 +1386,7 @@ internal static class GlShaders
+     /// lines up with the picture pixel for pixel; what lies below the plane is
+     /// clipped away before it is mirrored.
+     /// </summary>
+-    public const string WorldVs = """
++    public static readonly string WorldVs = """
+         #version 330 core
+         layout(location = 0) in vec3  inWorld;
+         layout(location = 1) in vec3  inColorF;
+@@ -1397,19 +1467,35 @@ internal static class GlShaders
+         uniform vec3 uLcmR;
+         uniform vec3 uLcmG;
+         uniform vec3 uLcmB;
++        //@model
+ 
+-        float cueKeep(float z) {
+-            int curve = int(inCue.z + 0.5);
++        float cueKeep(vec3 cue, float z) {
++            int curve = int(cue.z + 0.5);
+             if (uFogOn == 0 || curve == 0) return 1.0;
+             float q = min(uCueH * 65536.0 / max(z, 1.0), 131071.0);
+-            float ir0 = clamp((inCue.x * q + inCue.y) / 4096.0, 0.0, 4096.0);
++            float ir0 = clamp((cue.x * q + cue.y) / 4096.0, 0.0, 4096.0);
+             float w = curve == 1 ? max(ir0 - 800.0, 0.0) * 2.0
+                     : (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0);
+             return clamp(1.0 - w / 4096.0, 0.0, 1.0);
+         }
+ 
+         void main() {
+-            uint hid = (inFlags >> 13) & 0x3FFFu;
++            vec3 w = inWorld, color = inColorF, cue = inCue;
++            uint flags = inFlags, rgbc = inRgbc;
++            if (uModel != 0) {
++                if (!modelFaceKept(inCue, inRgbc)) {
++                    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
++                    gl_ClipDistance[0] = -1.0;
++                    return;
++                }
++                // The corner's normal, lit to its three dots by the instance's LLM.
++                w = modelVertex(uint(inWorld.x));
++                color = uModelLlm * inColorF;
++                cue = uModelCue;
++                rgbc = uModelRgbc;
++                flags = (inFlags & ~255u) | uModelMat;
++            }
++            uint hid = (flags >> 13) & 0x3FFFu;
+             vFade = 1.0;
+             if (uHalfGate != 0) {
+                 uint weight = hid == 0u ? 255u
+@@ -1422,8 +1508,7 @@ internal static class GlShaders
+                     return;
+                 }
+             }
+-            vec3 w = inWorld;
+-            if (uSwellOn != 0 && (inFlags & 0x8000000u) != 0u) w.y += swellDy(w);
++            if (uSwellOn != 0 && (flags & 0x8000000u) != 0u) w.y += swellDy(w);
+             gl_ClipDistance[0] = (uPlaneY - uPlaneBias) - w.y;
+             if (uMirror != 0) w.y = 2.0 * uPlaneY - w.y;
+             vec3 v = uR * (w - uCam) + uT;
+@@ -1433,23 +1518,23 @@ internal static class GlShaders
+                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
+ 
+-            bool dots = (inFlags & 0x40000000u) != 0u;
+-            vec3 lit = inColorF;
++            bool dots = (flags & 0x40000000u) != 0u;
++            vec3 lit = color;
+             if (dots) {
+-                vec3 a = clamp(inColorF, 0.0, 32767.0);
++                vec3 a = clamp(color, 0.0, 32767.0);
+                 vec3 ir = clamp(uLightBk + vec3(dot(uLcmR, a), dot(uLcmG, a), dot(uLcmB, a)) / 4096.0, 0.0, 32767.0);
+-                lit = vec3(uvec3(inRgbc, inRgbc >> 8u, inRgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
++                lit = vec3(uvec3(rgbc, rgbc >> 8u, rgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
+             }
+-            vColor = vec4(clamp(lit * cueKeep(z), 0.0, 255.0), 0.0) / 255.0;
++            vColor = vec4(clamp(lit * cueKeep(cue, z), 0.0, 255.0), 0.0) / 255.0;
+             // Fogged per pixel as 0048 fogs the game's own faces: the raw IR0 is
+             // affine on screen (it goes as 1/z), so interpolated it is exact, and
+             // shade8 puts it through the curve at every pixel.
+-            int curve = int(inCue.z + 0.5);
++            int curve = int(cue.z + 0.5);
+             if (uFogOn != 0 && curve != 0 && uWorldPerPixel != 0) {
+                 float q = min(uCueH * 65536.0 / max(z, 1.0), 131071.0);
+-                vLit = inColorF;
+-                vFog = (inCue.x * q + inCue.y) / 4096.0;
+-                vCue = inCue.xy;
++                vLit = color;
++                vFog = (cue.x * q + cue.y) / 4096.0;
++                vCue = cue.xy;
+                 vLight = uint(curve) << 24;
+             } else {
+                 vLit = vec3(0.0);
+@@ -1457,19 +1542,19 @@ internal static class GlShaders
+                 vCue = vec2(0.0);
+                 vLight = 0u;
+             }
+-            if (uWorldLit != 0 && uWorldPerPixel != 0 && inRgbc != 0u) {
+-                if (vLight == 0u) { vLit = inColorF; vFog = 0.0; }
+-                vLight |= inRgbc & 0xFFFFFFu;
++            if (uWorldLit != 0 && uWorldPerPixel != 0 && rgbc != 0u) {
++                if (vLight == 0u) { vLit = color; vFog = 0.0; }
++                vLight |= rgbc & 0xFFFFFFu;
+             }
+             if (dots && uWorldPerPixel != 0) {
+                 if (vLight == 0u) { vFog = 0.0; vCue = vec2(0.0); }
+-                vLit = inColorF;
+-                vLight = (vLight & 0x07000000u) | 0x80000000u | (inRgbc & 0xFFFFFFu);
++                vLit = color;
++                vLight = (vLight & 0x07000000u) | 0x80000000u | (rgbc & 0xFFFFFFu);
+             }
+             uint mip = inMip;
+             if (uMipIndirect != 0) mip = inMip == 0u ? 0u : texelFetch(uMipTable, int(inMip) - 1).r;
+-            vTex = uvec2(inRect, (inFlags & 0x80000000u) | mip);
+-            vMat = inFlags & 255u;
++            vTex = uvec2(inRect, (flags & 0x80000000u) | mip);
++            vMat = flags & 255u;
+             vDither = uWorldDither;
+             vRepClut = 0;
+             vUV = inUV;
+@@ -1484,7 +1569,7 @@ internal static class GlShaders
+                 clutBase = ivec2((inClut & 0x3f) * 16, (inClut >> 6) & 0x1ff);
+             }
+         }
+-        """;
++        """.Replace("//@model", ModelGlsl);
+ 
+     public const string PrimVs = """
+         #version 330 core
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index b0057f3..378b7e8 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -391,6 +391,11 @@ public static class RetainedScene
+         public bool MirrorOn;
+         public readonly byte[] MirrorHalves = new byte[HalvesW * HalvesH];
+         public readonly ModelRuns MirrorModels = new();
++        /// <summary>0085. The models drawn from cached meshes, in the main view and the
++        /// mirror, and the posed vertices both read (four shorts a vertex).</summary>
++        public readonly List<ModelInstance> Instances = new(), MirrorInstances = new();
++        public short[] Verts = new short[4096];
++        public int VertCount;
+ 
+         public ReadOnlySpan<Vertex> SortedDynamic()
+         {
+@@ -428,6 +433,9 @@ public static class RetainedScene
+         f.SwellOn = false;
+         f.Models.Clear();
+         f.MirrorModels.Clear();
++        f.Instances.Clear();
++        f.MirrorInstances.Clear();
++        f.VertCount = 0;
+         f.MirrorOn = false;
+         MirrorSerial = 0;
+         Array.Clear(f.Halves);
+@@ -449,6 +457,10 @@ public static class RetainedScene
+         f.MirrorView = view;
+         f.MirrorOn = true;
+         f.MirrorModels.Clear();
++        // The main view's instances placed in the world are the mirror's too: the
++        // camera is the only thing that differs.
++        f.MirrorInstances.Clear();
++        foreach (var m in f.Instances) if (m.Mirrored) f.MirrorInstances.Add(m);
+         Array.Clear(f.MirrorHalves);
+         MirrorSerial = _serial;
+     }
+@@ -567,6 +579,91 @@ public static class RetainedScene
+     /// triangles the normal pass drew.</summary>
+     public static long MainModelTriangles, MainModelGroups, MainModelNormalTriangles;
+ 
++    // ---- 0085: the models' meshes, kept on the GPU ---------------------------------
++
++    /// <summary>0085. Every cached model mesh's opaque faces, in the model's own space,
++    /// as corners (two triangles a quad). A corner reuses <see cref="Vertex"/>: X is its
++    /// vertex's index in the model's vertex array, R G B its normal (the GTE's 4096
++    /// scale), Dqa Dqb Curve the indices of its face's first three vertices and Rgbc
++    /// the fourth's (<see cref="uint.MaxValue"/> for a triangle); the rest as a
++    /// packet has it, with <see cref="FlagDots"/> set. Appended to until
++    /// <see cref="ClearMeshes"/>; the backend uploads what it has not.</summary>
++    public static Vertex[] MeshCorners = new Vertex[16384];
++    public static int MeshCornerCount;
++
++    /// <summary>Bumped when the store is emptied, so the backend uploads it again.</summary>
++    public static int MeshGeneration { get; private set; }
++
++    /// <summary>A mesh's corners to the store; the index of its first.</summary>
++    public static int AddMesh(ReadOnlySpan<Vertex> corners)
++    {
++        if (MeshCornerCount + corners.Length > MeshCorners.Length)
++            Array.Resize(ref MeshCorners, Math.Max(MeshCorners.Length * 2, MeshCornerCount + corners.Length));
++        int at = MeshCornerCount;
++        corners.CopyTo(MeshCorners.AsSpan(at));
++        MeshCornerCount += corners.Length;
++        return at;
++    }
++
++    public static void ClearMeshes()
++    {
++        MeshCornerCount = 0;
++        MeshGeneration++;
++    }
++
++    /// <summary>0085. One model drawn from a cached mesh: its corners in
++    /// <see cref="MeshCorners"/>, its posed vertices in the frame's
++    /// <see cref="Frame.Verts"/>, placed in the world by a rotation and a translation,
++    /// and lit and fogged as its submit set the GTE up. <see cref="Far"/> is the mean
++    /// table depth at and past which the game drops a face (8192 less the bias).</summary>
++    public struct ModelInstance
++    {
++        public int MeshStart, MeshCount, VertBase;
++        public float R00, R01, R02, R10, R11, R12, R20, R21, R22, Tx, Ty, Tz;
++        /// <summary>The light matrix, divided by 4096; the back colour; the light colour
++        /// matrix row by row.</summary>
++        public float Llm0, Llm1, Llm2, Llm3, Llm4, Llm5, Llm6, Llm7, Llm8;
++        public float Bk0, Bk1, Bk2, L0, L1, L2, L3, L4, L5, L6, L7, L8;
++        public float Dqa, Dqb, Curve, Far;
++        /// <summary>The mean table depth below which the game drops a face: a negative
++        /// bias wraps the table's unsigned test, so it has a near end too.</summary>
++        public float Near;
++        public uint Rgbc, Material;
++        /// <summary>Drawn in the mirror too, when the frame has one.</summary>
++        public bool Mirrored;
++        /// <summary>The store's generation when it was added; the backend draws none
++        /// from an emptied store.</summary>
++        public int MeshGen;
++    }
++
++    /// <summary>0085. The current frame's posed vertices (x, y, z and a pad, as the
++    /// game keeps them), the index of the first.</summary>
++    public static int AddModelVertices(ReadOnlySpan<short> verts)
++    {
++        var f = Current;
++        if (f.Serial != _serial) return -1;
++        int n = verts.Length / 4 * 4;
++        if (f.VertCount * 4 + n > f.Verts.Length) Array.Resize(ref f.Verts, Math.Max(f.Verts.Length * 2, f.VertCount * 4 + n));
++        verts[..n].CopyTo(f.Verts.AsSpan(f.VertCount * 4));
++        int at = f.VertCount;
++        f.VertCount += n / 4;
++        return at;
++    }
++
++    /// <summary>0085. A model instance to the current frame's main view, or its mirror.</summary>
++    public static void AddInstance(in ModelInstance m, bool mirror = false)
++    {
++        var f = Current;
++        if (f.Serial != _serial || mirror && !f.MirrorOn) return;
++        var copy = m;
++        copy.MeshGen = MeshGeneration;
++        (mirror ? f.MirrorInstances : f.Instances).Add(copy);
++    }
++
++    /// <summary>0085. Instances drawn in the main view and the mirror, their corners,
++    /// and the vertices uploaded; never reset.</summary>
++    public static long InstancesDrawn, InstanceCorners, MirrorInstancesDrawn, InstanceVertices;
++
+     /// <summary>0085. Off, the models taken off the packets are not drawn either: the
+     /// probe's way to see what they cover.</summary>
+     public static bool MainModelsShown = true;

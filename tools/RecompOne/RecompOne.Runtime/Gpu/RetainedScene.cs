@@ -391,6 +391,11 @@ public static class RetainedScene
         public bool MirrorOn;
         public readonly byte[] MirrorHalves = new byte[HalvesW * HalvesH];
         public readonly ModelRuns MirrorModels = new();
+        /// <summary>0085. The models drawn from cached meshes, in the main view and the
+        /// mirror, and the posed vertices both read (four shorts a vertex).</summary>
+        public readonly List<ModelInstance> Instances = new(), MirrorInstances = new();
+        public short[] Verts = new short[4096];
+        public int VertCount;
 
         public ReadOnlySpan<Vertex> SortedDynamic()
         {
@@ -428,6 +433,9 @@ public static class RetainedScene
         f.SwellOn = false;
         f.Models.Clear();
         f.MirrorModels.Clear();
+        f.Instances.Clear();
+        f.MirrorInstances.Clear();
+        f.VertCount = 0;
         f.MirrorOn = false;
         MirrorSerial = 0;
         Array.Clear(f.Halves);
@@ -449,6 +457,10 @@ public static class RetainedScene
         f.MirrorView = view;
         f.MirrorOn = true;
         f.MirrorModels.Clear();
+        // The main view's instances placed in the world are the mirror's too: the
+        // camera is the only thing that differs.
+        f.MirrorInstances.Clear();
+        foreach (var m in f.Instances) if (m.Mirrored) f.MirrorInstances.Add(m);
         Array.Clear(f.MirrorHalves);
         MirrorSerial = _serial;
     }
@@ -566,6 +578,91 @@ public static class RetainedScene
     /// <summary>0085. Models' triangles drawn in the main view, draws, and the models'
     /// triangles the normal pass drew.</summary>
     public static long MainModelTriangles, MainModelGroups, MainModelNormalTriangles;
+
+    // ---- 0085: the models' meshes, kept on the GPU ---------------------------------
+
+    /// <summary>0085. Every cached model mesh's opaque faces, in the model's own space,
+    /// as corners (two triangles a quad). A corner reuses <see cref="Vertex"/>: X is its
+    /// vertex's index in the model's vertex array, R G B its normal (the GTE's 4096
+    /// scale), Dqa Dqb Curve the indices of its face's first three vertices and Rgbc
+    /// the fourth's (<see cref="uint.MaxValue"/> for a triangle); the rest as a
+    /// packet has it, with <see cref="FlagDots"/> set. Appended to until
+    /// <see cref="ClearMeshes"/>; the backend uploads what it has not.</summary>
+    public static Vertex[] MeshCorners = new Vertex[16384];
+    public static int MeshCornerCount;
+
+    /// <summary>Bumped when the store is emptied, so the backend uploads it again.</summary>
+    public static int MeshGeneration { get; private set; }
+
+    /// <summary>A mesh's corners to the store; the index of its first.</summary>
+    public static int AddMesh(ReadOnlySpan<Vertex> corners)
+    {
+        if (MeshCornerCount + corners.Length > MeshCorners.Length)
+            Array.Resize(ref MeshCorners, Math.Max(MeshCorners.Length * 2, MeshCornerCount + corners.Length));
+        int at = MeshCornerCount;
+        corners.CopyTo(MeshCorners.AsSpan(at));
+        MeshCornerCount += corners.Length;
+        return at;
+    }
+
+    public static void ClearMeshes()
+    {
+        MeshCornerCount = 0;
+        MeshGeneration++;
+    }
+
+    /// <summary>0085. One model drawn from a cached mesh: its corners in
+    /// <see cref="MeshCorners"/>, its posed vertices in the frame's
+    /// <see cref="Frame.Verts"/>, placed in the world by a rotation and a translation,
+    /// and lit and fogged as its submit set the GTE up. <see cref="Far"/> is the mean
+    /// table depth at and past which the game drops a face (8192 less the bias).</summary>
+    public struct ModelInstance
+    {
+        public int MeshStart, MeshCount, VertBase;
+        public float R00, R01, R02, R10, R11, R12, R20, R21, R22, Tx, Ty, Tz;
+        /// <summary>The light matrix, divided by 4096; the back colour; the light colour
+        /// matrix row by row.</summary>
+        public float Llm0, Llm1, Llm2, Llm3, Llm4, Llm5, Llm6, Llm7, Llm8;
+        public float Bk0, Bk1, Bk2, L0, L1, L2, L3, L4, L5, L6, L7, L8;
+        public float Dqa, Dqb, Curve, Far;
+        /// <summary>The mean table depth below which the game drops a face: a negative
+        /// bias wraps the table's unsigned test, so it has a near end too.</summary>
+        public float Near;
+        public uint Rgbc, Material;
+        /// <summary>Drawn in the mirror too, when the frame has one.</summary>
+        public bool Mirrored;
+        /// <summary>The store's generation when it was added; the backend draws none
+        /// from an emptied store.</summary>
+        public int MeshGen;
+    }
+
+    /// <summary>0085. The current frame's posed vertices (x, y, z and a pad, as the
+    /// game keeps them), the index of the first.</summary>
+    public static int AddModelVertices(ReadOnlySpan<short> verts)
+    {
+        var f = Current;
+        if (f.Serial != _serial) return -1;
+        int n = verts.Length / 4 * 4;
+        if (f.VertCount * 4 + n > f.Verts.Length) Array.Resize(ref f.Verts, Math.Max(f.Verts.Length * 2, f.VertCount * 4 + n));
+        verts[..n].CopyTo(f.Verts.AsSpan(f.VertCount * 4));
+        int at = f.VertCount;
+        f.VertCount += n / 4;
+        return at;
+    }
+
+    /// <summary>0085. A model instance to the current frame's main view, or its mirror.</summary>
+    public static void AddInstance(in ModelInstance m, bool mirror = false)
+    {
+        var f = Current;
+        if (f.Serial != _serial || mirror && !f.MirrorOn) return;
+        var copy = m;
+        copy.MeshGen = MeshGeneration;
+        (mirror ? f.MirrorInstances : f.Instances).Add(copy);
+    }
+
+    /// <summary>0085. Instances drawn in the main view and the mirror, their corners,
+    /// and the vertices uploaded; never reset.</summary>
+    public static long InstancesDrawn, InstanceCorners, MirrorInstancesDrawn, InstanceVertices;
 
     /// <summary>0085. Off, the models taken off the packets are not drawn either: the
     /// probe's way to see what they cover.</summary>

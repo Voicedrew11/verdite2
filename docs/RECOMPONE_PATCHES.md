@@ -1457,6 +1457,22 @@ Four files in the directory have no entry below:
   gate. `MirrorShown` off leaves it undrawn, the probe's measure of what it covers.
   The sixth diff in the patch file. See "Step 5, the first slice" in
   `docs/GPU_RENDERER.md`.
+  Since amended: models drawn from meshes kept on the GPU. `RetainedScene.MeshCorners`
+  holds each mesh's opaque faces in the model's own space (a corner's vertex index,
+  normal and its face's four vertex indices in `Vertex`'s fields), appended to and
+  emptied by the port (`AddMesh`, `ClearMeshes`, `MeshGeneration`); a frame carries
+  its posed vertices (`AddModelVertices`) and a `ModelInstance` per model, in the main
+  view and the mirror (`AddInstance`; `Mirrored` ones are copied at `BeginMirror`).
+  `GlModelMeshes.cs` uploads the store as it grows, the frame's vertices into an
+  RGBA16I buffer texture per frame of the ring (unit 19), and a table of the meshes'
+  atlas entries bound on unit 17 while they draw, and draws each instance after the
+  map (0051's prepass and bias) and into the normal pass. `ModelGlsl`, in `WorldVs`
+  and `WorldNormalVs` behind `uModel`: a corner fetches its vertex and its face's,
+  places them with the instance's rotation and translation, drops the face as the lit
+  assembler does (mean table depth, facing on the GTE's saturated projection,
+  `uModelGteC`; a negative bias wraps the test, `uModelNear`), and lights its normal to dots with the instance's LLM. With `uModel`
+  0 the programs are the ones before. The seventh diff in the patch file. See
+  "Step 3, the second slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

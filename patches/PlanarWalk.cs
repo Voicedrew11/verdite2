@@ -203,6 +203,7 @@ public static class PlanarWalk
     static ModelKind[] _kind = new ModelKind[128];
     static int[] _slot = new int[128];
     static uint[] _record = new uint[128];
+    static bool[] _taken = new bool[128];
 
     public static void BeforeWalk(CpuContext c, IMemory m)
     {
@@ -232,9 +233,17 @@ public static class PlanarWalk
         _kind[i] = ModelWalk.SubmitKind;
         _slot[i] = ModelWalk.SubmitSlot;
         _record[i] = ModelWalk.SubmitRecord;
+        _taken[i] = false;
     }
 
     static bool InFrame(uint a) => a >= _walkLo && a < _walkHi;
+
+    /// <summary>0085. The submit just recorded was drawn whole from its cached mesh: its
+    /// instance is the mirror's too, and the replay leaves it out.</summary>
+    public static void TakenLast()
+    {
+        if (_recording && !_replaying && _n > 0) _taken[_n - 1] = true;
+    }
 
     static void Grow()
     {
@@ -247,6 +256,7 @@ public static class PlanarWalk
         Array.Resize(ref _kind, n);
         Array.Resize(ref _slot, n);
         Array.Resize(ref _record, n);
+        Array.Resize(ref _taken, n);
     }
 
     // ---- the mirrored walk -----------------------------------------------------
@@ -353,6 +363,8 @@ public static class PlanarWalk
                 // Matrix 0 is a model placed in view space, already where it is
                 // drawn: it belongs to the real camera and has no mirror image.
                 if (_stack[i * StackWords + 2] == 0u) { _viewSpace++; continue; }
+                // 0085. Drawn whole from its mesh: the main view's instance is the mirror's.
+                if (_taken[i] && GpuWorld.MirrorModelsActive) { _instanced++; continue; }
                 // The walk polls interrupts, so the loader may have evicted the model
                 // since the walk tested it.
                 if (!Resident(mem, _regs[i * 4 + 1])) { _gone++; continue; }
@@ -436,6 +448,7 @@ public static class PlanarWalk
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt, _ms;
+    static long _instanced;
     static long _walks, _replayed, _props, _viewSpace, _gone, _noWater, _below, _mismatch, _overflows, _peak;
     static float _plane, _planeMin, _planeMax;
     static long _moves, _mirrorOnlyAt;
@@ -450,7 +463,7 @@ public static class PlanarWalk
 
         Console.WriteLine($"[KF2] planar: plane Y {_plane:F0} over {_area:F0} px of water (min {_planeMin:F0}, max {_planeMax:F0}, moved {_moves / dt:F1}/s); " +
                           $"{_walks / dt:F1} mirrored walks/s at {(_walks == 0 ? 0 : _ms / _walks):F3} ms, " +
-                          $"{_replayed / dt:F0} submits replayed/s ({_props / dt:F0} of them props, {_viewSpace / dt:F0} view-space skipped, {_gone} evicted before the replay in all), " +
+                          $"{_replayed / dt:F0} submits replayed/s ({_props / dt:F0} of them props, {_instanced / dt:F0} left to their instance, {_viewSpace / dt:F0} view-space skipped, {_gone} evicted before the replay in all), " +
                           $"{_noWater / dt:F1} frames/s with no water, {_below / dt:F1} under it; arena peak {_peak}/{PrimBuffer.MirrorArenaBytes} bytes, " +
                           $"{_overflows} overflow(s), {_mismatch} table mismatch(es); " +
                           $"its own cull {(PlanarCull.On ? $"{PlanarCull.Added / (double)Math.Max(PlanarCull.Frames, 1):F1} cells added a frame, " +
@@ -472,7 +485,7 @@ public static class PlanarWalk
         if (ScreenReflections.Map is { } map && !Reflections.Probing) Console.Write(map);
         ScreenReflections.WantMap = true;
 
-        _walks = _replayed = _props = _viewSpace = _noWater = _below = _mismatch = _overflows = _peak = _moves = 0;
+        _walks = _replayed = _props = _instanced = _viewSpace = _noWater = _below = _mismatch = _overflows = _peak = _moves = 0;
         _ms = 0;
         PlanarReflections.ResetCounters();
         PlanarReflections.WaterTris = PlanarReflections.WaterTilted = PlanarReflections.WaterRested = 0;

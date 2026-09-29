@@ -9,6 +9,9 @@ Step 2: that map in the occlusion's normals and the surface buffer, each map
 feature checked against the packet path, and the map's water drawn in the table's
 order. Step 3's first slice draws the object walk's opaque models on the GPU;
 their blended faces, the effects, the billboards and the arm are still on packets.
+Its second slice keeps the lit models' meshes on the GPU, so a model with no blended
+face runs neither the game's transform nor its assembler, and the mirror's replay
+leaves it out (measured, not judged).
 Step 5's first slice draws the planar walk's mirror on the renderer: its map, its
 water and its opaque models, judged by eye.**
 
@@ -620,6 +623,107 @@ and `LoopPacing`'s redraws, which run the same walk; the remaster editor's pick 
 a model, which reads the frame's triangles, among which the models no longer are;
 the frame viewer, which no longer sees them; a lit face with a corner nearer than
 H/2.
+
+#### Step 3, the second slice
+
+**The lit assembler's models drawn from meshes kept on the GPU. Mechanism measured;
+not judged by eye.** On with the models (`KF2_GPUWORLD_MESHES=0` or `gpuworld meshes
+off` is the comparison: the first slice's capture). The runtime half amends `0085`
+(its seventh diff: `GlModelMeshes.cs`, `ModelGlsl` in both world programs); the port
+half is `RetainedModels.TryInstance`, called from the C# submitter.
+
+**What it does.** Each model's opaque faces go to the GPU once, in the model's own
+space: per corner its vertex's index, its normal, its face's four vertex indices, UV,
+CLUT, texpage and texture rectangle (`RetainedScene.MeshCorners`, appended to and
+uploaded as they grow; emptied on every overlay load and past a million corners).
+A mesh is keyed by its face list, face count and normals, and checked every time
+by a hash of its face bytes and the normals they use, so a model bank reloaded at
+the same address is built again. Each frame a lit submit placed in the world adds
+only an instance: its posed vertices, copied as the game keeps them (four shorts a
+vertex, into a buffer texture per frame of the ring), a rotation and translation into
+the world (the first slice's `Transform`, composed once instead of applied per
+vertex), and the LLM, BK, LCM, RGBC, DQA, DQB, curve, material and far limit its submit
+set the GTE up with. A model with no blended face then runs **neither the transform
+nor the lit assembler**; one with blended faces runs both, and the assembler builds
+only those, as before. The planar walk's replay leaves out a submit drawn whole: the
+main view's instance is the mirror's too (`Mirrored`, copied at `BeginMirror`), and a
+mirror-only model is instanced by the replay itself.
+
+**The lit assembler's tests are in the vertex shader** (`modelFaceKept`). Every
+corner of a face fetches the face's three or four vertices, takes them to the view,
+and drops the face as the assembler does: its mean table depth (each corner's SZ over
+four, averaged as the game averages) at or before 0, or outside the table as the
+game's unsigned test puts it (`(uint)(z + bias) >= 0x2000`: past 8192 less the bias,
+and, for a negative bias, before its magnitude), and its facing, taken on the GTE's saturated projection (the divide held at H/2, the
+screen position clamped to ±1024, whole pixels without sub-pixel). Every corner reaches
+the same answer from the same four vertices, so a face goes whole. A flat face is lit
+from its normal's dots like a gouraud one; `Gte.LightProducts` is the same formula.
+
+**The check.** `KF2_GPUWORLD_MESHCHECK=1` runs the transform for every instance and
+compares, face by face, the lit assembler's own decision on the vertex cache with a
+C# replica of the shader's, and every vertex's placement with the first slice's
+capture. Placement: 0.0 units apart on every vertex. Decisions, paused at the `fdat02`
+spawn with the planar walk on: 0.6% of faces disagree, every one under 0.1 square
+pixels of twice its screen area (a quarter under 0.01). They are the slivers the
+fraction decides, the GTE's 16.16 against the shader's float, and draw nothing. The
+first frames after a boot disagree more: until the first `Gte.Rtp` is noted, the
+frame's view carries the default H of 320 against the game's 200, which misplaces the
+map the same way.
+
+**A negative bias.** The first version took the far limit as `8192 - bias` with the
+bias unsigned, and some `fdat02` objects are submitted with a negative one: the limit
+came out at -4.29e9, and every face was dropped. The game's test wraps and keeps them
+between the bias's magnitude and 8192 past it. It showed as thin lines on an object
+at the spawn (489 pixels, 43 levels at most), and the check sampled it.
+
+**Found on the way: a skipped transform still has to leave its projection behind.**
+The first measurements had instances matching the capture exactly in area 7 and a far
+band of `fdat02` 1.5-3 levels brighter, over the water, 8-11% of the picture with the
+planar walk on and 4% without. Not the mesh, the placement, the face test, the mips,
+the depth test or a leaked uniform: the capture's triangles expanded from the mesh on
+the CPU reproduced the instances, and the instances drawn with colour and depth masked
+left the picture identical to none. It went with the transform run (the check mode).
+`Gte.Rtp` notes the projection and the depth cue it ran under for the frame's screen
+passes (`GteDepth.NoteProjection`, `NoteDepthCue`), last writer wins, and the murk and
+the reflections fog with them: so the water fogged with the last model's DQA and DQB,
+and without the transform, with the map's. A model drawn whole now notes them as its
+transform would have (`RetainedModels.NoteSkippedTransform`). That the passes take
+a model's cue is the old behaviour, kept; the last writer being a model is arbitrary,
+and is recorded here rather than changed.
+
+**Measured**, render scale 5, 16:9, paused, the harness of Step 2's second slice
+(meshes off against on, and the models hidden for their pixels):
+
+| view | picture differs | the models' pixels |
+|---|---|---|
+| area 7, three creatures and an object | 0-51 px, max 29 | one view bit-identical |
+| `fdat02`, planar on, seven views over the pool and the pier | 0-49 px, four bit-identical | within 8 levels |
+| area 1, objects 385 and 486, from the spawn and 1,500 units off | 0.11% at most, one pixel past 16 | worst block 0.01 |
+| area 3, creature 149, objects 376 and 377, also from 800 units | worst block 0.01 | within 71 on 0.002% |
+| area 6, creatures 149, objects 381, 382, 521 | worst block 0.00 | within 12 |
+
+Cost, uncapped (`KF2_FPS=1000 KF2_PROFILE=1`), paused on one view, meshes off against
+on:
+
+| view | frame work | fps | lit assembler | GPU per present |
+|---|---|---|---|---|
+| area 7, a creature close, SSAO on | 1.69 to 1.32 ms | 571 to 722 | 0.338 to 0.063 ms (the arm) | 1.37 to 1.08 ms |
+| `fdat02` spawn, pitch 400, heading 2500, planar on | 1.69 to 1.35 ms | 571 to 708 | | 1.36 to 1.09 ms |
+
+In `fdat02` the mirrored walk went from 0.40 ms (Step 5's first slice) to 0.16 ms, and
+the GPU's capture from 0.148 to 0.101 ms: of
+a frame's five mirror instances, two are the main view's and three the replay's
+mirror-only models, and 1,432 of the 2,148 submits a second the replay made before are
+left to their instance. At 144 fps: 144.0 drawn at 19.9-20.0 ticks/s with the planar
+walk on, `[present] wide`, and no GL error under `KF2_GLDEBUG=1` in area 7 (whose map
+rebuilds after a warp, known issue 4, and the debug output itself hold it at 132-144).
+
+**Not checked:** any of it by eye; the arm and the view-space models (matrix 0), which
+stay on the capture; the clipped assembler's objects, near the camera, which stay on
+the capture; a menu, shop or message over it and `LoopPacing`'s redraws; the remaster's
+model materials, which the instance carries but no pack was applied; the authored
+lights' shadows, whose casters are the retained reflections' capture, which stands the
+instances down (`RetainedModels.Capturing`).
 
 ### Step 4: the old world path off
 

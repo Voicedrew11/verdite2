@@ -651,10 +651,69 @@ internal static class GlShaders
     /// position to the letter, for <c>NormalFs</c>. The material is the face's own,
     /// or <c>Opaque</c>, as <c>SurfaceMaterial.Classify</c> gives an opaque packet.
     /// </summary>
-    public const string WorldNormalVs = """
+
+    /// <summary>
+    /// 0085. A model drawn from a cached mesh (Step 3's second slice), for <c>WorldVs</c>
+    /// and <c>WorldNormalVs</c>: a corner's <c>inWorld.x</c> is its vertex in the
+    /// instance's posed vertices, <c>inCue</c> its face's first three vertices and
+    /// <c>inRgbc</c> the fourth (all ones for a triangle). A face is dropped where the
+    /// lit assembler drops it: facing away on the screen, or its mean table depth at or
+    /// before 0, before <c>uModelNear</c> or at or past <c>uModelFar</c>. Every corner of a face computes the
+    /// same answer from the same four vertices.
+    /// </summary>
+    const string ModelGlsl = """
+        uniform int   uModel;
+        uniform isamplerBuffer uModelVerts;
+        uniform int   uModelBase;
+        uniform mat3  uModelR;
+        uniform vec3  uModelT;
+        uniform float uModelFar;
+        uniform float uModelNear;
+        uniform mat3  uModelLlm;
+        uniform vec3  uModelCue;
+        uniform uint  uModelRgbc;
+        uniform uint  uModelMat;
+        // The GTE's own screen centre (OFX, OFY), for its saturated projection.
+        uniform vec2  uModelGteC;
+
+        vec3 modelVertex(uint i) {
+            return uModelR * vec3(texelFetch(uModelVerts, uModelBase + int(i)).xyz) + uModelT;
+        }
+
+        // RTPS as the GTE takes it, which the facing test is taken on: the divide
+        // saturates below H/2 and the screen position at the ends of its range, so a
+        // face reaching behind the eye is kept or dropped as the game keeps it.
+        vec2 modelScreen(vec3 v) {
+            float z = max(clamp(v.z, 0.0, 65535.0), uH * 0.5);
+            vec2 s = clamp(uModelGteC + uH * clamp(v.xy, -32768.0, 32767.0) / z, -1024.0, 1023.0);
+            return uWorldSnap != 0 ? floor(s) : s;
+        }
+
+        bool modelFaceKept(vec3 f, uint f3) {
+            vec3 v0 = uR * (modelVertex(uint(f.x)) - uCam) + uT;
+            vec3 v1 = uR * (modelVertex(uint(f.y)) - uCam) + uT;
+            vec3 v2 = uR * (modelVertex(uint(f.z)) - uCam) + uT;
+            // The vertex cache holds each corner's SZ over four; the face sits at their mean.
+            int z0 = int(clamp(v0.z, 0.0, 65535.0)) >> 2;
+            int z1 = int(clamp(v1.z, 0.0, 65535.0)) >> 2;
+            int z2 = int(clamp(v2.z, 0.0, 65535.0)) >> 2;
+            int z;
+            if (f3 != 0xFFFFFFFFu) {
+                vec3 v3 = uR * (modelVertex(f3) - uCam) + uT;
+                z = (z0 + z1 + z2 + (int(clamp(v3.z, 0.0, 65535.0)) >> 2)) >> 2;
+            } else z = (z0 + z1 + z2) / 3;
+            if (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar) return false;
+            vec2 s0 = modelScreen(v0), s1 = modelScreen(v1), s2 = modelScreen(v2);
+            return (s1.x - s0.x) * (s2.y - s0.y) - (s1.y - s0.y) * (s2.x - s0.x) > 0.0;
+        }
+        """;
+
+    public static readonly string WorldNormalVs = """
         #version 330 core
         layout(location = 0) in vec3  inWorld;
+        layout(location = 5) in vec3  inCue;
         layout(location = 7) in uint  inFlags;
+        layout(location = 8) in uint  inRgbc;
 
         invariant gl_Position;
 
@@ -684,9 +743,21 @@ internal static class GlShaders
                 h += uSwell[i].z * sin(uSwell[i].x * p.x + uSwell[i].y * p.z - uSwell[i].w);
             return floor(-h + 0.5);
         }
+        //@model
 
         void main() {
-            uint hid = (inFlags >> 13) & 0x3FFFu;
+            uint flags = inFlags;
+            vec3 w = inWorld;
+            if (uModel != 0) {
+                if (!modelFaceKept(inCue, inRgbc)) {
+                    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                    vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
+                    return;
+                }
+                w = modelVertex(uint(inWorld.x));
+                flags = (inFlags & ~255u) | uModelMat;
+            }
+            uint hid = (flags >> 13) & 0x3FFFu;
             if (uHalfGate != 0 && hid != 0u
                 && texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r == 0u) {
                 gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
@@ -695,26 +766,25 @@ internal static class GlShaders
             }
             // A blended face is kept only as water (bit 28), with 256 over its id
             // as a blended packet carries it; any other blended face is no surface.
-            bool semi = (inFlags & 0x400u) != 0u;
-            if (semi && (inFlags & 0x10000000u) == 0u) {
+            bool semi = (flags & 0x400u) != 0u;
+            if (semi && (flags & 0x10000000u) == 0u) {
                 gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
                 vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
                 return;
             }
-            vec3 w = inWorld;
-            if (uSwellOn != 0 && (inFlags & 0x8000000u) != 0u) w.y += swellDy(w);
+            if (uSwellOn != 0 && (flags & 0x8000000u) != 0u) w.y += swellDy(w);
             vec3 v = uR * (w - uCam) + uT;
             float z = v.z;
             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
             if (uWorldSnap != 0 && z > 0.0)
                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
-            uint m = inFlags & 255u;
+            uint m = flags & 255u;
             vM = semi ? 2.0 + 256.0 : float(m == 0u ? 1u : m);
             vUv = vec2(0.0);
             vTex = 0u;
         }
-        """;
+        """.Replace("//@model", ModelGlsl);
 
     /// <summary>
     /// 0067. Screen-space reflections. For each pixel whose surface reflects, the
@@ -1316,7 +1386,7 @@ internal static class GlShaders
     /// lines up with the picture pixel for pixel; what lies below the plane is
     /// clipped away before it is mirrored.
     /// </summary>
-    public const string WorldVs = """
+    public static readonly string WorldVs = """
         #version 330 core
         layout(location = 0) in vec3  inWorld;
         layout(location = 1) in vec3  inColorF;
@@ -1397,19 +1467,35 @@ internal static class GlShaders
         uniform vec3 uLcmR;
         uniform vec3 uLcmG;
         uniform vec3 uLcmB;
+        //@model
 
-        float cueKeep(float z) {
-            int curve = int(inCue.z + 0.5);
+        float cueKeep(vec3 cue, float z) {
+            int curve = int(cue.z + 0.5);
             if (uFogOn == 0 || curve == 0) return 1.0;
             float q = min(uCueH * 65536.0 / max(z, 1.0), 131071.0);
-            float ir0 = clamp((inCue.x * q + inCue.y) / 4096.0, 0.0, 4096.0);
+            float ir0 = clamp((cue.x * q + cue.y) / 4096.0, 0.0, 4096.0);
             float w = curve == 1 ? max(ir0 - 800.0, 0.0) * 2.0
                     : (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0);
             return clamp(1.0 - w / 4096.0, 0.0, 1.0);
         }
 
         void main() {
-            uint hid = (inFlags >> 13) & 0x3FFFu;
+            vec3 w = inWorld, color = inColorF, cue = inCue;
+            uint flags = inFlags, rgbc = inRgbc;
+            if (uModel != 0) {
+                if (!modelFaceKept(inCue, inRgbc)) {
+                    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                    gl_ClipDistance[0] = -1.0;
+                    return;
+                }
+                // The corner's normal, lit to its three dots by the instance's LLM.
+                w = modelVertex(uint(inWorld.x));
+                color = uModelLlm * inColorF;
+                cue = uModelCue;
+                rgbc = uModelRgbc;
+                flags = (inFlags & ~255u) | uModelMat;
+            }
+            uint hid = (flags >> 13) & 0x3FFFu;
             vFade = 1.0;
             if (uHalfGate != 0) {
                 uint weight = hid == 0u ? 255u
@@ -1422,8 +1508,7 @@ internal static class GlShaders
                     return;
                 }
             }
-            vec3 w = inWorld;
-            if (uSwellOn != 0 && (inFlags & 0x8000000u) != 0u) w.y += swellDy(w);
+            if (uSwellOn != 0 && (flags & 0x8000000u) != 0u) w.y += swellDy(w);
             gl_ClipDistance[0] = (uPlaneY - uPlaneBias) - w.y;
             if (uMirror != 0) w.y = 2.0 * uPlaneY - w.y;
             vec3 v = uR * (w - uCam) + uT;
@@ -1433,23 +1518,23 @@ internal static class GlShaders
                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
 
-            bool dots = (inFlags & 0x40000000u) != 0u;
-            vec3 lit = inColorF;
+            bool dots = (flags & 0x40000000u) != 0u;
+            vec3 lit = color;
             if (dots) {
-                vec3 a = clamp(inColorF, 0.0, 32767.0);
+                vec3 a = clamp(color, 0.0, 32767.0);
                 vec3 ir = clamp(uLightBk + vec3(dot(uLcmR, a), dot(uLcmG, a), dot(uLcmB, a)) / 4096.0, 0.0, 32767.0);
-                lit = vec3(uvec3(inRgbc, inRgbc >> 8u, inRgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
+                lit = vec3(uvec3(rgbc, rgbc >> 8u, rgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
             }
-            vColor = vec4(clamp(lit * cueKeep(z), 0.0, 255.0), 0.0) / 255.0;
+            vColor = vec4(clamp(lit * cueKeep(cue, z), 0.0, 255.0), 0.0) / 255.0;
             // Fogged per pixel as 0048 fogs the game's own faces: the raw IR0 is
             // affine on screen (it goes as 1/z), so interpolated it is exact, and
             // shade8 puts it through the curve at every pixel.
-            int curve = int(inCue.z + 0.5);
+            int curve = int(cue.z + 0.5);
             if (uFogOn != 0 && curve != 0 && uWorldPerPixel != 0) {
                 float q = min(uCueH * 65536.0 / max(z, 1.0), 131071.0);
-                vLit = inColorF;
-                vFog = (inCue.x * q + inCue.y) / 4096.0;
-                vCue = inCue.xy;
+                vLit = color;
+                vFog = (cue.x * q + cue.y) / 4096.0;
+                vCue = cue.xy;
                 vLight = uint(curve) << 24;
             } else {
                 vLit = vec3(0.0);
@@ -1457,19 +1542,19 @@ internal static class GlShaders
                 vCue = vec2(0.0);
                 vLight = 0u;
             }
-            if (uWorldLit != 0 && uWorldPerPixel != 0 && inRgbc != 0u) {
-                if (vLight == 0u) { vLit = inColorF; vFog = 0.0; }
-                vLight |= inRgbc & 0xFFFFFFu;
+            if (uWorldLit != 0 && uWorldPerPixel != 0 && rgbc != 0u) {
+                if (vLight == 0u) { vLit = color; vFog = 0.0; }
+                vLight |= rgbc & 0xFFFFFFu;
             }
             if (dots && uWorldPerPixel != 0) {
                 if (vLight == 0u) { vFog = 0.0; vCue = vec2(0.0); }
-                vLit = inColorF;
-                vLight = (vLight & 0x07000000u) | 0x80000000u | (inRgbc & 0xFFFFFFu);
+                vLit = color;
+                vLight = (vLight & 0x07000000u) | 0x80000000u | (rgbc & 0xFFFFFFu);
             }
             uint mip = inMip;
             if (uMipIndirect != 0) mip = inMip == 0u ? 0u : texelFetch(uMipTable, int(inMip) - 1).r;
-            vTex = uvec2(inRect, (inFlags & 0x80000000u) | mip);
-            vMat = inFlags & 255u;
+            vTex = uvec2(inRect, (flags & 0x80000000u) | mip);
+            vMat = flags & 255u;
             vDither = uWorldDither;
             vRepClut = 0;
             vUV = inUV;
@@ -1484,7 +1569,7 @@ internal static class GlShaders
                 clutBase = ivec2((inClut & 0x3f) * 16, (inClut >> 6) & 0x1ff);
             }
         }
-        """;
+        """.Replace("//@model", ModelGlsl);
 
     public const string PrimVs = """
         #version 330 core

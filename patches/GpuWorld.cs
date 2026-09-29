@@ -31,9 +31,12 @@ namespace Kf2;
 /// The object walk's models lit by the models' assembler are drawn by the backend too,
 /// after the map, their opaque faces taken off the packets by <see cref="RetainedModels.CaptureMain"/>;
 /// their blended faces, and the models the other assemblers draw, stay on the packets.
+/// Those placed in the world are drawn from meshes kept on the GPU, an instance each
+/// (<see cref="RetainedModels.TryInstance"/>; <c>KF2_GPUWORLD_MESHES=0</c> to compare,
+/// <c>KF2_GPUWORLD_MESHCHECK=1</c> checks the shader's cull against the assembler's).
 ///
-/// See "Step 1, the first slice", "Step 2, the third slice", "Step 3, the first slice" and "Step 5, the first slice"
-/// in docs/GPU_RENDERER.md.
+/// See "Step 1, the first slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice"
+/// and "Step 5, the first slice" in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
 {
@@ -68,6 +71,8 @@ public static class GpuWorld
         _water = Environment.GetEnvironmentVariable("KF2_GPUWORLD_WATER")?.Trim() != "0";
         _models = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MODELS")?.Trim() != "0";
         _mirror = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MIRROR")?.Trim() != "0";
+        RetainedModels.MeshesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHES")?.Trim() != "0";
+        RetainedModels.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHCHECK")?.Trim() is "1";
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
             RetainedScene.MainNear = Math.Max(near, 0.01f);
@@ -85,6 +90,8 @@ public static class GpuWorld
             Console.WriteLine($"[KF2] gpu world: {(_on ? "on (the map drawn from the retained scene)" : "off")}" +
                               (_on && Blocker is { } why ? $", standing down: {why}" : ""));
         });
+        // A model bank of the next area may put other meshes at the same addresses.
+        Event.AddListener<OverlayLoadedEvent>(_ => RetainedModels.ForgetMeshes());
     }
 
     public static void SetEnabled(bool on)
@@ -208,6 +215,8 @@ public static class GpuWorld
             case "mirror off": _mirror = false; break;
             case "mirror hide": RetainedScene.MirrorShown = false; break;
             case "mirror show": RetainedScene.MirrorShown = true; break;
+            case "meshes on": RetainedModels.MeshesOn = true; break;
+            case "meshes off": RetainedModels.MeshesOn = false; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
             case "models show": RetainedScene.MainModelsShown = true; break;
             case "perpixel on": GteLightMap.Enabled = true; break;
@@ -220,12 +229,23 @@ public static class GpuWorld
                     $"{{\"kind\":\"{m.Kind}\",\"model\":{m.Model},\"asm\":{m.Assembler},\"pos\":[{m.X},{m.Y},{m.Z}]}}"));
                 return $"{{\"ok\":true,\"forward\":[{v.R20:F3},{v.R21:F3},{v.R22:F3}],\"cam\":[{v.CamX},{v.CamY},{v.CamZ}],\"models\":[{items}]}}";
             }
+            case "instances":
+            {
+                // The last frame's instances: mesh range, placement, cue, the far test and the light.
+                var f = RetainedScene.Find(RetainedScene.Serial);
+                if (f == null) return "{\"ok\":false,\"error\":\"no frame\"}";
+                string One(RetainedScene.ModelInstance m) =>
+                    $"{{\"mesh\":[{m.MeshStart},{m.MeshCount}],\"verts\":{m.VertBase},\"t\":[{m.Tx:F0},{m.Ty:F0},{m.Tz:F0}]," +
+                    $"\"cue\":[{m.Dqa},{m.Dqb},{m.Curve}],\"range\":[{m.Near},{m.Far}],\"rgbc\":\"{m.Rgbc:x6}\",\"mat\":{m.Material}," +
+                    $"\"bk\":[{m.Bk0},{m.Bk1},{m.Bk2}],\"mirrored\":{(m.Mirrored ? "true" : "false")}}}";
+                return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
+            }
             case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|mirror on|off|hide|show|scene|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
-               $"\"models\":{(_models ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -235,6 +255,7 @@ public static class GpuWorld
     static long _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
     static long _gensMax, _gensAt, _builds;
     static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
+    static long _iIns, _iWhole, _iMir, _iDrawn, _iCorners, _iVerts, _iMirDrawn;
     static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
 
     static void Report()
@@ -283,6 +304,19 @@ public static class GpuWorld
                           $"{(d == 0 ? 0 : mc / d)} facing away, {(d == 0 ? 0 : mo / d)} outside the table, " +
                           $"{(d == 0 ? 0 : mt / d)} triangle(s) drawn in {(d == 0 ? 0 : (double)mg / d):F1} light group(s), " +
                           $"{(d == 0 ? 0 : mn / d)} into the normal pass");
+        long ins = RetainedModels.Instances - _iIns, iw = RetainedModels.InstancesWhole - _iWhole, im = RetainedModels.InstancesMirror - _iMir;
+        long idr = RetainedScene.InstancesDrawn - _iDrawn, ic = RetainedScene.InstanceCorners - _iCorners, iv = RetainedScene.InstanceVertices - _iVerts;
+        long imd = RetainedScene.MirrorInstancesDrawn - _iMirDrawn;
+        _iIns = RetainedModels.Instances; _iWhole = RetainedModels.InstancesWhole; _iMir = RetainedModels.InstancesMirror;
+        _iDrawn = RetainedScene.InstancesDrawn; _iCorners = RetainedScene.InstanceCorners; _iVerts = RetainedScene.InstanceVertices;
+        _iMirDrawn = RetainedScene.MirrorInstancesDrawn;
+        Console.WriteLine($"[KF2] gpu world: meshes {(RetainedModels.MeshesOn ? "on" : "off")}; a draw: " +
+                          $"{(d == 0 ? 0 : (double)ins / d):F1} instance(s) made ({(d == 0 ? 0 : (double)iw / d):F1} whole, {(d == 0 ? 0 : (double)im / d):F1} in the mirror's replay), " +
+                          $"{(d == 0 ? 0 : (double)idr / d):F1} drawn with {(d == 0 ? 0 : ic / d)} corner(s), {(d == 0 ? 0 : iv / d)} posed vert(ices) uploaded, " +
+                          $"{(d == 0 ? 0 : (double)imd / d):F1} in the mirror; store {RetainedScene.MeshCornerCount} corner(s), " +
+                          $"{RetainedModels.MeshBuilds} mesh(es) built, {RetainedModels.MeshStale} found changed, {RetainedModels.InstanceRefused} refused in all" +
+                          (RetainedModels.Checking ? $"; checked {RetainedModels.CheckFaces} face(s), {RetainedModels.CheckDiffer} kept or dropped differently " +
+                                                       $"(by twice their area, under 0.01/0.1/1/10 px² and more: {string.Join("/", RetainedModels.CheckArea)})" : ""));
         Console.WriteLine($"[KF2] gpu world: light generations: at most {_gensMax} in a frame; map builds {RetainedMap.Builds - _builds}, " +
                           $"the last {RetainedMap.LastBuildMs:F2} ms for {RetainedMap.LastWhy}");
         _builds = RetainedMap.Builds;

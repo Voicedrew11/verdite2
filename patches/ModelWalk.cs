@@ -960,11 +960,26 @@ public static class ModelWalk
             mesh = c.V0;
         }
 
-        if (matrix != 0u)
+        Record(mem, pos, model, (byte)(assembler & 0xFFu), light);
+
+        // The remaster's material for this model, sealed into every packet it makes.
+        _model = _walkOwns ? model : -1;
+        PolyAssembler.TileMaterial = _walkOwns ? Remaster.Surfaces.EnterModel(_kind, model) : (byte)0;
+
+        // 0085. A lit model placed in the world drawn from its cached mesh; with no
+        // blended face the transform and the assembler have nothing left to build.
+        uint pick = assembler & 0xFFu;
+        bool whole = pick == 0xFFu && matrix != 0u && RetainedModels.InstanceWanted
+                     && RetainedModels.TryInstance(mem, sub, depth, mem.ReadU32(mesh + 4u));
+        if (whole) PlanarWalk.TakenLast();
+
+        if (whole && !RetainedModels.Checking) RetainedModels.NoteSkippedTransform();
+        else if (matrix != 0u)
         {
             c.A0 = mem.ReadU32(mesh + 4u);
             c.RA = 0x80032A38u;
             KingsField2.func_8002E650(c, mem);
+            if (RetainedModels.Instanced && RetainedModels.Checking) RetainedModels.Check(mem);
         }
         else
         {
@@ -974,20 +989,13 @@ public static class ModelWalk
             KingsField2.func_8002E9B8(c, mem);
         }
 
-        Record(mem, pos, model, (byte)(assembler & 0xFFu), light);
-
-        // The remaster's material for this model, sealed into every packet it makes.
-        _model = _walkOwns ? model : -1;
-        PolyAssembler.TileMaterial = _walkOwns ? Remaster.Surfaces.EnterModel(_kind, model) : (byte)0;
-
-        uint pick = assembler & 0xFFu;
         if (pick == 0xFFu)
         {
             _lit++;
             c.A0 = sub;
             c.A1 = depth;
             c.RA = 0x80032A68u;
-            KingsField2.func_8002F214(c, mem);
+            if (!whole) KingsField2.func_8002F214(c, mem);
         }
         else if (pick == 0xFEu)
         {
@@ -1008,6 +1016,7 @@ public static class ModelWalk
             KingsField2.func_8002EAEC(c, mem);
         }
         PolyAssembler.TileMaterial = 0;
+        RetainedModels.Instanced = false;
         _model = -1;
         Placed = false;
 

@@ -45,6 +45,7 @@ public sealed partial class GlCore
         _gl.UseProgram(0);
         RetainedScene.MainDrawer = DrawWorldMain;
         RetainedScene.WaterDrawer = DrawWorldWater;
+        InitModelMeshes();
     }
 
     // The main view's frame, for the water slices the same walk draws after it.
@@ -79,6 +80,7 @@ public sealed partial class GlCore
         long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
         bool mips = UpdateWorldMips(f, f.MainHalves);
         int models = UploadModels(f.Models, f.Serial & (ModelRing - 1), f.Serial, mips);
+        int inst = PrepareInstances(f, f.Instances, mips);
         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
         var (cx, cy) = BeginWorldMain(f, rt, offX, offY, mips);
         ClearStaleDepth(rt);
@@ -93,6 +95,11 @@ public sealed partial class GlCore
             DrawWorldModels(f.Models, models);
             RetainedScene.MainModelTriangles += f.Models.Count / 3;
             RetainedScene.MainModelGroups += f.Models.Groups.Count;
+        }
+        if (inst >= 0 && RetainedScene.MainModelsShown)
+        {
+            DrawInstances(f.Instances, inst);
+            RetainedScene.InstancesDrawn += f.Instances.Count;
         }
         EndWorldState();
         EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
@@ -152,12 +159,18 @@ public sealed partial class GlCore
         UploadStatic();
         bool mips = UpdateWorldMips(f, f.MirrorHalves);
         int models = UploadModels(f.MirrorModels, MirrorSlot, f.Serial, mips);
+        int inst = PrepareInstances(f, f.MirrorInstances, mips);
         BeginWorldMain(f, p, offX, offY, mips, mirror: true);
         ClearStaleDepth(p);
         _gl.Disable(EnableCap.Blend);
         _gl.DepthMask(true);
         int drawn = DrawRange(0, null);
         if (models >= 0) DrawWorldModels(f.MirrorModels, models);
+        if (inst >= 0)
+        {
+            DrawInstances(f.MirrorInstances, inst);
+            RetainedScene.MirrorInstancesDrawn += f.MirrorInstances.Count;
+        }
         if (RetainedScene.MirrorWater && WaterInView()) DrawMirrorWater(f);
         EndWorldState();
         EndWorldUniforms();
@@ -269,6 +282,7 @@ public sealed partial class GlCore
             if (_uwClipDq >= 0) _gl.Uniform2(_uwClipDq, (float)GteDepth.ProjDqa, GteDepth.ProjDqb / 4096f);
         }
         SetWorldView(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, v.H, cx, cy, rt.Wide1x, rt.H, v.H, true, GlVram.Scale);
+        if (_uwModelGteC >= 0) _gl.Uniform2(_uwModelGteC, v.Cx, v.Cy);
         if (_uwNear >= 0) _gl.Uniform1(_uwNear, RetainedScene.MainNear);
         SendWorldLights(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, cx, cy, v.H, false, 0f);
         CullChunks(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, v.H, cx, cy, rt.Wide1x, rt.H, false, 0f, v.H,
@@ -901,6 +915,7 @@ public sealed partial class GlCore
             if (_uwnT >= 0) _gl.Uniform3(_uwnT, (float)v.Tx, v.Ty, v.Tz);
             if (_uwnH >= 0) _gl.Uniform1(_uwnH, v.H);
             if (_uwnC >= 0) _gl.Uniform2(_uwnC, geo.WorldCx, geo.WorldCy);
+            if (_uwnModelGteC >= 0) _gl.Uniform2(_uwnModelGteC, v.Cx, v.Cy);
             if (_uwnFb >= 0) _gl.Uniform2(_uwnFb, (float)src.Wide1x, src.H);
             if (_uwnNear >= 0) _gl.Uniform1(_uwnNear, RetainedScene.MainNear);
             if (_uwnHalfGate >= 0) _gl.Uniform1(_uwnHalfGate, 1);
@@ -927,6 +942,7 @@ public sealed partial class GlCore
                 DrawModelRuns(f.Models);
                 RetainedScene.MainModelNormalTriangles += f.Models.Count / 3;
             }
+            if (RetainedScene.MainModelsShown) DrawInstanceNormals(f);
             _gl.BindVertexArray(0);
         }
 
