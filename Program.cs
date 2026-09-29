@@ -764,6 +764,8 @@ Kf2.RetainedMap.Install();
 //     KF2_GPUWORLD=1          on; 0 never; unset, the saved setting
 //     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept; the surface buffer against the depth
 //     KF2_GPUWORLD_SURFACES=0 leave the map out of the normal and surface buffers (the comparison)
+//     KF2_GPUWORLD_FOGZ=0     the map's fog from the corners' screen-affine cue (the comparison)
+//     KF2_GPUWORLD_NEAR=16    the map's near plane
 Kf2.GpuWorld.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD"),
                        Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"),
                        Environment.GetEnvironmentVariable("KF2_GPUWORLD_SURFACES"));

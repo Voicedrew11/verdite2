@@ -11,7 +11,7 @@ namespace RecompOne.Runtime.Hle;
 /// </summary>
 public sealed partial class GlCore
 {
-    int _uwTrueColor, _uwPlainZ, _uwSnap, _uwPerPixel, _uwDither;
+    int _uwTrueColor, _uwPlainZ, _uwSnap, _uwPerPixel, _uwDither, _uwCueFromZ;
 
     // The map into the normal and surface buffers (WorldNormalVs, NormalFs).
     uint _progWorldNrm;
@@ -29,6 +29,7 @@ public sealed partial class GlCore
         _uwSnap = _gl.GetUniformLocation(_progWorld, "uWorldSnap");
         _uwPerPixel = _gl.GetUniformLocation(_progWorld, "uWorldPerPixel");
         _uwDither = _gl.GetUniformLocation(_progWorld, "uWorldDither");
+        _uwCueFromZ = _gl.GetUniformLocation(_progWorld, "uCueFromZ");
         RetainedScene.MainDrawer = DrawWorldMain;
     }
 
@@ -77,6 +78,9 @@ public sealed partial class GlCore
         if (_uwSnap >= 0) _gl.Uniform1(_uwSnap, GteDepth.Subpixel ? 0 : 1);
         if (_uwPerPixel >= 0) _gl.Uniform1(_uwPerPixel, GteLightMap.Enabled ? 1 : 0);
         if (_uwDither >= 0) _gl.Uniform1(_uwDither, _env.Dither ? 1 : 0);
+        // Fogged at each pixel's own depth: a face clipped at the eye has no corner
+        // whose screen-affine fog holds at the clip.
+        if (_uwCueFromZ >= 0) _gl.Uniform1(_uwCueFromZ, RetainedScene.MainFogFromZ ? Math.Max(1f, f.View.H) : 0f);
         SendWorldFluid();
         SendWorldAtmos();
 
@@ -86,6 +90,7 @@ public sealed partial class GlCore
         Span<float> r = [v.R00, v.R01, v.R02, v.R10, v.R11, v.R12, v.R20, v.R21, v.R22];
         float cx = v.Cx + offX - rt.X + rt.Margin, cy = v.Cy + offY - rt.Y;
         SetWorldView(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, v.H, cx, cy, rt.Wide1x, rt.H, v.H, true, GlVram.Scale);
+        if (_uwNear >= 0) _gl.Uniform1(_uwNear, RetainedScene.MainNear);
         SendWorldLights(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, cx, cy, v.H, false, 0f);
         CullChunks(r, v.CamX, v.CamY, v.CamZ, v.Tx, v.Ty, v.Tz, v.H, cx, cy, rt.Wide1x, rt.H, false, 0f, v.H,
                    float.PositiveInfinity);
@@ -126,6 +131,7 @@ public sealed partial class GlCore
         if (_uwSnap >= 0) _gl.Uniform1(_uwSnap, 0);
         if (_uwPerPixel >= 0) _gl.Uniform1(_uwPerPixel, 1);
         if (_uwDither >= 0) _gl.Uniform1(_uwDither, 0);
+        if (_uwCueFromZ >= 0) _gl.Uniform1(_uwCueFromZ, 0f);
         EndWorldLights();
         _gl.BindVertexArray(0);
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -213,7 +219,7 @@ public sealed partial class GlCore
             if (_uwnH >= 0) _gl.Uniform1(_uwnH, v.H);
             if (_uwnC >= 0) _gl.Uniform2(_uwnC, geo.WorldCx, geo.WorldCy);
             if (_uwnFb >= 0) _gl.Uniform2(_uwnFb, (float)src.Wide1x, src.H);
-            if (_uwnNear >= 0) _gl.Uniform1(_uwnNear, 16f);
+            if (_uwnNear >= 0) _gl.Uniform1(_uwnNear, RetainedScene.MainNear);
             if (_uwnHalfGate >= 0) _gl.Uniform1(_uwnHalfGate, 1);
             if (_uwnSnap >= 0) _gl.Uniform1(_uwnSnap, GteDepth.Subpixel ? 0 : 1);
             if (_uwnProjH >= 0) _gl.Uniform1(_uwnProjH, Math.Max(1f, v.H));

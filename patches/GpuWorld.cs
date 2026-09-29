@@ -39,6 +39,9 @@ public static class GpuWorld
     public static void Configure(string? on, string? probe, string? surfaces = null)
     {
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
+        if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
+            RetainedScene.MainNear = Math.Max(near, 0.01f);
+        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_FOGZ")?.Trim() == "0") RetainedScene.MainFogFromZ = false;
         if (!string.IsNullOrWhiteSpace(on)) _forced = on.Trim() is "1" or "on";
         _probe = probe?.Trim() is not (null or "" or "0");
     }
@@ -65,12 +68,15 @@ public static class GpuWorld
 
     /// <summary>Why the map cannot be drawn on the GPU with the settings as they are,
     /// or null. The renderer draws with perspective-correct textures only, and needs the
-    /// depth buffer and the C# assemblers; each of these is a setting the player sees.</summary>
+    /// depth buffer and the C# assemblers; each of these is a setting the player sees.
+    /// It has no texture replacement (0073), so a loaded texture pack stands it down.</summary>
     public static string? Blocker =>
         !RetainedScene.Supported ? "needs the OpenGL core renderer"
         : !PolyAssembler.FastGeometry ? "needs Fast geometry"
         : !GteDepth.ZBuffer ? "needs the Z-buffer"
         : !Perspective.Enabled ? "needs perspective-correct textures"
+        : RecompOne.Runtime.Assets.Textures.TextureResolver.Enabled && RecompOne.Runtime.Assets.AssetReplacerManager.Instance.HasTextures
+            ? "a texture pack is loaded, and the GPU map does not replace textures"
         : null;
 
     /// <summary>Whether the map is wanted on the GPU: the retained map is built for it.</summary>

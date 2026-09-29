@@ -4,8 +4,9 @@ The plan to draw the world from meshes kept on the GPU instead of from the
 triangles the game's code builds every frame, and the record of the work against
 it. Started 2026-09-28 on the branch `retained-world`. **Step 0 is in, the
 first slice of Step 1 (the map's opaque faces drawn by the GPU in the main view,
-off by default, `KF2_GPUWORLD=1`, measured and not judged), and the first slice of
-Step 2 (that map in the occlusion's normals and the surface buffer).**
+off by default, `KF2_GPUWORLD=1`, measured and not judged), and two slices of
+Step 2: that map in the occlusion's normals and the surface buffer, and each map
+feature checked against the packet path. Water is still on packets.**
 
 ## Why: the frame is the game's geometry, done on one CPU thread
 
@@ -233,8 +234,8 @@ come after (decided 2026-09-28), unless an issue is something a later step build
 
 1. **Fixed: the occlusion showed creatures and objects through walls** (reported
    from play, 2026-09-28, SSAO on). Fixed by Step 2's first slice (below), where the
-   cause is confirmed by measurement; the reading here was right. Only the shading shows, not the model. The likely cause, from
-   the code rather than a measurement: the occlusion pass takes its normals from a
+   cause is confirmed by measurement. Only the shading showed, not the model. The
+   cause: the occlusion pass takes its normals from a
    redraw of the frame's own triangles (`0058`, `AoGeometry`), drawn in table order
    with no depth test, so order is what hides a model behind a wall there. The
    GPU-drawn map never enters that list, so nothing drawn after a model covers it in
@@ -246,23 +247,45 @@ come after (decided 2026-09-28), unless an issue is something a later step build
    `fdat02` pool ledge). A straight-edged wedge of the floor at the bottom right of
    the picture, close to the camera, is missing and shows the background. The cut is
    smooth, a plane or a triangle's edge, unlike the cell-shaped holes the view cone
-   left before it was widened. Cause not found. To rule out first: the backface cull
-   (`CullFace` on the whole faces, where the game culls a quad on its whole area);
-   the half gate missing a half the old path draws there; the world program's near
-   plane at 16 units (`uNear`), which the game's clipper does not share.
+   left before it was widened. **Probably fixed by Step 2's second slice** (below):
+   a floor face clipped at the camera's feet fogged to black along the clip, in the
+   bottom corner of the picture, measured at the `fdat02` spawn looking down at the
+   pool. Neither the near plane, the backface cull nor the half gate was the cause.
+   Whether it is the wedge that was reported is for the eye.
+3. **A light's shadow differs on a wall right beside the eye** (measured,
+   2026-09-28). Area 1's spawn, heading 1024, an authored light with shadows: the
+   leftmost 13 game pixels of the picture, a wall about 19 units from the eye, are
+   in shadow on the GPU and lit on the packets. Without shadows the two match
+   exactly, and away from the wall every view matches. **Inferred**, not tested: the
+   game's GTE divide saturates below a view depth of 100, so a packet corner that
+   near is placed on screen where its true projection is not, and the shadow lookup
+   rebuilds the surface's position from the screen. The GPU's position is then the
+   true one. If so, this is the packet path's error, not the GPU's.
 
 ### Step 2: every map feature in the renderer
 
 What hooks the tile packets today, and has to work the new way first:
 
 - `EvenFog`: the fog and light blend between the records of neighbouring tiles.
-- Per-pixel lighting (`0048`): the records the lit colour is made from.
-- `WaterSwell`: moves the water's interior vertices; a vertex-shader function of the same field.
+  **Works**, computed once per corner on the CPU when the map is built; in the
+  shader only with instancing.
+- Per-pixel lighting (`0048`): the records the lit colour is made from. **Works**
+  (Step 1), and fogged at each pixel's depth (the second slice).
+- `WaterSwell`: moves the water's interior vertices; a vertex-shader function of the
+  same field. **Not done**: water stays on packets.
 - The remaster's materials per half and per face, lights, fog colour, sky, darkness.
-- `RenderDistance`: a larger mask, and no 15-tile cap (the s16 placement is the game's, not the GPU's).
-- AO and the reflection pass's surface buffer (`0058`, `0067`): fed from the renderer's draws, not `DrawTri`. **Done for the map** (the first slice, below).
-- `BlendOrder` (`0079`): an opaque pass, then the blended one.
-- `EnhancementDistance` (`0083`), the fluid scroll (`0053`), the mip atlas (`0060`), texture replacement (`0073`).
+  **Measured at parity** (the second slice), except known issue 3.
+- `RenderDistance`: a larger mask, and no 15-tile cap (the s16 placement is the
+  game's, not the GPU's). **Measured at parity** with the cap (the second slice).
+- AO and the reflection pass's surface buffer (`0058`, `0067`): fed from the
+  renderer's draws, not `DrawTri`. **Done for the map** (the first slice).
+- `BlendOrder` (`0079`): an opaque pass, then the blended one. **Not done**: water
+  stays on packets.
+- `EnhancementDistance` (`0083`): **measured at parity**. The fluid scroll (`0053`):
+  **on reading**, the main view is given the scroll regions and keeps those textures
+  out of the mip atlas; no opaque scrolling face was found to measure. The mip atlas
+  (`0060`): **works** (Step 1). Texture replacement (`0073`): **not done**; a loaded
+  texture pack stands the renderer down.
 
 Free with float vertices and a depth: perspective correction, sub-pixel,
 the Z-buffer and its records, the backface and facing culls.
@@ -323,6 +346,65 @@ picture took the pass's cheaper fallback, and the old path's composite measured
 through a wall. **Not checked**: the murk and the planar reflection's water over the map,
 which now have the map's surfaces under them (the water's own surfaces are
 unchanged).
+
+#### Step 2, the second slice
+
+**Each map feature checked against the packet path, and the fog at the camera's feet
+fixed. Mechanism measured; the fog fix not judged by eye.**
+
+**The harness.** The game paused on the stage gate and drawn from a pinned camera
+(`view`, or `goto` where a feature follows the player's own camera), snapped with
+`gpuworld off` and then `on`, and compared per pixel at render scale 5, 16:9. Step 1
+measured what "the same" looks like: texel edges one render pixel over, at most
+about 0.3% of pixels past 16 levels, spread thin. So the number that finds a real
+difference is the **worst 16x16 block**: the share of its pixels past 16 levels.
+Texel-edge noise stays under about 0.45; a missing or wrongly shaded piece reads
+1.0. The means of the two pictures are the second check.
+
+| feature | where | views | worst block | means |
+|---|---|---|---|---|
+| `RenderDistance` at 15 tiles (11-85 cells added a frame) | `fdat02` spawn, `goto` | 8 headings | 0.02-0.19 | equal |
+| `EnhancementDistance` at 2 tiles (it changes 12.7-17.5% of pixels in both paths alike) | area 1 spawn | 3 | 0.29-0.41 | equal |
+| a material on a mesh area-wide: glow, highlight, roughness | area 1 spawn | 4 | 0.25-0.41 | equal (74 to 107 in both) |
+| an authored light with shadows, in the open | area 1 | 8 | 0.08-0.46 | equal |
+| the same light beside a wall | area 1 spawn | 4 | 1.0 at one heading | known issue 3 |
+| fog colour, fog curve, sky, darkness 0.5 | area 1, two spots | 8 | 0.00-0.46 | equal |
+
+The remaster checks used a scratch copy of the working pack (`KF2_REMASTER_PACK`),
+authored through the shell verbs, so the real pack is untouched.
+
+**Texture replacement** (`0073`) is not in the world program: a replaced texture
+would be drawn as the original on the GPU-drawn map. The texture packs are deferred,
+so the renderer stands down while one is loaded (`GpuWorld.Blocker`, which the
+checkbox's tooltip gives as the reason). None is loaded today, so nothing changes.
+
+**The fog at the camera's feet.** At the `fdat02` spawn, pitched down 400 at
+heading 2500, a soft black smudge sat in the bottom-left corner of the GPU picture
+(2,891 pixels past 16 levels, mean 31 on the packets and 8 on the GPU). The frame
+viewer's capture of that view found nothing but the background clear drawn there,
+so it was the map itself. It went with per-pixel lighting off (`KF2_PERPIXEL=0`), and
+not with the occlusion off, the surface pass off, or the near plane at 1, 16 or 64
+(`KF2_GPUWORLD_NEAR`). **The cause, confirmed:** `0048` fogs a pixel from the raw
+depth cue, `DQA · H/z + DQB`, interpolated flat across the screen from the corners.
+That is exact while every corner is in front of the eye, and the game's clipper
+only ever hands the GPU corners that are. The GPU's own clipper cuts a floor face
+that runs under the camera at the near plane, and the value it interpolates to the
+clip comes from a corner behind the eye, where the formula means nothing. `WorldVs`
+now passes each corner's DQA and DQB perspective-correct, and `PrimFs` evaluates
+the cue at the pixel's own depth in the main view (`fogRaw()`, `uCueFromZ`; `0085`
+amended). For a face with one cue this is the screen-affine value exactly; with
+`EvenFog`'s blended corners it differs by a blend's curvature. After the fix:
+
+| view (`fdat02` spawn) | worst block, before | after |
+|---|---|---|
+| pitch 400, heading 2500 | 1.0 | 0.14 |
+| every other view of nine (pitch 0, 400, 700 at 2200, 2500, 2800) | 0.09-0.43 | the same, to the digit |
+
+Area 1's views read what they read before it, to the digit, and play holds 144.0
+fps drawn at 20.0 ticks/s. `KF2_GPUWORLD_FOGZ=0` is the comparison.
+
+**Not checked:** the fog fix by eye, and whether it is known issue 2's wedge; the
+fluid scroll on an opaque face.
 
 ### Step 3: models
 

@@ -414,7 +414,7 @@ The authoring tools (identity, packs, editor) and the engine work for a remaster
 
 ### [GPU_RENDERER.md](docs/GPU_RENDERER.md)
 
-The plan to draw the world from meshes kept on the GPU (retained-mode rendering), the steps, and where the planar reflections come in. Step 0 (GPU timers) is in, Step 1's first slice (the map's opaque faces drawn by the GPU, `KF2_GPUWORLD=1`, off, not judged) and Step 2's first slice (that map in the occlusion's normals and the surface buffer).
+The plan to draw the world from meshes kept on the GPU (retained-mode rendering), the steps, and where the planar reflections come in. Step 0 (GPU timers) is in, Step 1's first slice (the map's opaque faces drawn by the GPU, `KF2_GPUWORLD=1`, off, not judged) and two slices of Step 2 (that map in the occlusion's normals and the surface buffer; each map feature checked against the packets, and the fog at the camera's feet fixed).
 
 - Why: the frame is the game's geometry, done on one CPU thread
 - The target
@@ -422,6 +422,7 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 - Step 1, the first slice
 - Known issues
 - Step 2, the first slice
+- Step 2, the second slice
 - Where the reflections come in
 - The old path stays as the comparison
 - Rules this keeps

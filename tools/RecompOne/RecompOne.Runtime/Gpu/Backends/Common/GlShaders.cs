@@ -1320,6 +1320,8 @@ internal static class GlShaders
         flat out int   vRepClut;
         noperspective out vec3 vLit;
         noperspective out float vFog;
+        // 0085. The corner's DQA and DQB, for PrimFs to fog at the pixel's own depth.
+        out vec2 vCue;
         flat out uint vLight;
         flat out uvec2 vTex;
         flat out uint vMat;
@@ -1399,10 +1401,12 @@ internal static class GlShaders
                 float q = min(uCueH * 65536.0 / max(z, 1.0), 131071.0);
                 vLit = inColorF;
                 vFog = (inCue.x * q + inCue.y) / 4096.0;
+                vCue = inCue.xy;
                 vLight = uint(curve) << 24;
             } else {
                 vLit = vec3(0.0);
                 vFog = 0.0;
+                vCue = vec2(0.0);
                 vLight = 0u;
             }
             if (uWorldLit != 0 && uWorldPerPixel != 0 && inRgbc != 0u) {
@@ -1469,6 +1473,7 @@ internal static class GlShaders
         // 0048. Both are affine across the polygon on screen, as the colour was.
         noperspective out vec3 vLit;
         noperspective out float vFog;
+        out vec2 vCue;
         flat out uint vLight;
         flat out uvec2 vTex;
         flat out uint vMat;
@@ -1501,6 +1506,7 @@ internal static class GlShaders
             vColor = vec4(inColorF, 0.0) / 255.0;
             vLit = inLit;
             vFog = inFog;
+            vCue = vec2(0.0);
             vLight = inLight;
             vTex = inTex;
             vMat = inMat;
@@ -1537,6 +1543,12 @@ internal static class GlShaders
         flat in int   vRepClut;
         noperspective in vec3 vLit;
         noperspective in float vFog;
+        // 0085. With uCueFromZ set (the world program's main view, its H), the raw
+        // depth cue is DQA * H/z + DQB at this pixel's own depth, from the corners'
+        // DQA and DQB; screen-affine vFog is that only while no corner is behind the
+        // eye, and a floor clipped at the camera's feet fogged to black.
+        in vec2 vCue;
+        uniform float uCueFromZ;
         flat in uint vLight;
         flat in uvec2 vTex;
         flat in uint vMat;
@@ -1925,15 +1937,22 @@ internal static class GlShaders
         }
 
         // The depth cue's weight, 0..4096, from the raw MAC0 through the curve.
+        float fogRaw() {
+            if (uCueFromZ <= 0.0 || vDepth <= 0.0) return vFog;
+            float q = min(uCueFromZ / max(vDepth, 1.0 / 65536.0), 131071.0);
+            return (vCue.x * q + vCue.y) / 4096.0;
+        }
+
         float cueWeight() {
             uint curve = (vLight >> 24) & 7u;
             bool level = gCueScale < 1.0 && curve != 0u;
-            float raw = level ? levelCue(vFog, curve) : vFog;
+            float fog = fogRaw();
+            float raw = level ? levelCue(fog, curve) : fog;
             float ir0 = clamp(raw, 0.0, 4096.0);
             float w = curve == 1u ? max(ir0 - 800.0, 0.0) * 2.0
                  : curve == 2u ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0)
                  : curve == 3u ? ir0 * 0.5
-                 : curve == 4u ? (level ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0) : vFog)
+                 : curve == 4u ? (level ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0) : fog)
                  : 0.0;
             // 0074. The authored curve over the game's.
             if (uAtmosOn != 0 && uAtmosShape != vec2(1.0) && w > 0.0)

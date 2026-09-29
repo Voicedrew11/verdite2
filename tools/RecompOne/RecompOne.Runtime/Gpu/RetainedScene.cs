@@ -118,6 +118,12 @@ public static class RetainedScene
     /// <summary>Whether the map drawn on the GPU goes into the normal and surface
     /// buffers; off is the comparison (the map missing from both).</summary>
     public static bool MainSurfaces = true;
+    /// <summary>The main view's near plane, in view depth; the game's own clipper keeps
+    /// everything in front of 0.</summary>
+    public static float MainNear = 16f;
+    /// <summary>The main view's per-pixel fog from each pixel's own depth; off is the
+    /// screen-affine corner value, which a face clipped at the eye gets wrong.</summary>
+    public static bool MainFogFromZ = true;
     public static long SurfaceDepthPixels, SurfaceBehind, SurfaceMissing, SurfaceChecks;
 
     /// <summary>0085. Stopwatch ticks in the draw's parts: shadows and the static

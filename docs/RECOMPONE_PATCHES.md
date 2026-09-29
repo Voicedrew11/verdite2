@@ -1393,6 +1393,19 @@ Four files in the directory have no entry below:
   is the comparison, and `RetainedScene.SurfaceCheck` the probe's readback. The
   second diff in the patch file. See "Step 2, the first slice" in
   `docs/GPU_RENDERER.md`.
+  Since amended: the main view's per-pixel fog was the corners' raw depth cue
+  interpolated flat across the screen (`vFog`), which holds only while every corner
+  is in front of the eye. The game's clipper hands the GPU only such corners; the
+  GPU's own clipper does not, so a floor face clipped at the camera's feet took a
+  wrong value along the clip and fogged to black in the corner of the picture.
+  `WorldVs` now passes each corner's DQA and DQB perspective-correct (`vCue`), and
+  `PrimFs`'s `fogRaw()` takes `DQA · H/z + DQB` at the pixel's own depth while
+  `uCueFromZ` is set (the main view only, `RetainedScene.MainFogFromZ`,
+  `KF2_GPUWORLD_FOGZ=0` to compare); for a face with one cue that is the
+  screen-affine value exactly. The main view's near plane is
+  `RetainedScene.MainNear` (`KF2_GPUWORLD_NEAR`, 16), which the measurement ruled
+  out. The third diff in the patch file. See "Step 2, the second slice" in
+  `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a
