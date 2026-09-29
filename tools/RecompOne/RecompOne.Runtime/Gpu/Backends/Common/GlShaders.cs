@@ -558,6 +558,8 @@ internal static class GlShaders
         uniform sampler2D uFrameDepth;
         uniform int uDepthCull;
         uniform vec2 uDepthStep;
+        // The map's water, one slice of view depth, (x, y]; y 0 is none.
+        uniform vec2 uZSlice;
 
         vec4 vfetch(ivec2 c) { return texelFetch(uVram, c & ivec2(1023, 511), 0); }
         int vu5(float f) { return int(floor(f * 31.0 + 0.5)); }
@@ -617,6 +619,7 @@ internal static class GlShaders
             // fact that it covers what is under it.
             if (id > 2.5 && id < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, id); return; }
             if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
+            if (uZSlice.y > 0.0 && (z <= uZSlice.x || z > uZSlice.y)) discard;
             vec2 s = gl_FragCoord.xy / uScale;
             vec3 p = vec3((s - uCentre) * (z / uProjH), z);
             vec3 dpx = dFdx(p), dpy = dFdy(p);
@@ -670,6 +673,17 @@ internal static class GlShaders
         uniform usampler2D uHalves;
         uniform int uHalfGate;
         uniform int uWorldSnap;
+        // 0085. WaterSwell's field: a corner the port flagged free (bit 27) moves by
+        // it, rounded to the whole unit the packets move it by. Per wave: its
+        // wavenumber along X and Z, its height, its phase.
+        uniform int  uSwellOn;
+        uniform vec4 uSwell[3];
+        float swellDy(vec3 p) {
+            float h = 0.0;
+            for (int i = 0; i < 3; i++)
+                h += uSwell[i].z * sin(uSwell[i].x * p.x + uSwell[i].y * p.z - uSwell[i].w);
+            return floor(-h + 0.5);
+        }
 
         void main() {
             uint hid = (inFlags >> 13) & 0x3FFFu;
@@ -679,7 +693,16 @@ internal static class GlShaders
                 vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
                 return;
             }
+            // A blended face is kept only as water (bit 28), with 256 over its id
+            // as a blended packet carries it; any other blended face is no surface.
+            bool semi = (inFlags & 0x400u) != 0u;
+            if (semi && (inFlags & 0x10000000u) == 0u) {
+                gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
+                return;
+            }
             vec3 w = inWorld;
+            if (uSwellOn != 0 && (inFlags & 0x8000000u) != 0u) w.y += swellDy(w);
             vec3 v = uR * (w - uCam) + uT;
             float z = v.z;
             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
@@ -687,7 +710,7 @@ internal static class GlShaders
                 gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
             uint m = inFlags & 255u;
-            vM = float(m == 0u ? 1u : m);
+            vM = semi ? 2.0 + 256.0 : float(m == 0u ? 1u : m);
             vUv = vec2(0.0);
             vTex = 0u;
         }
@@ -1357,6 +1380,17 @@ internal static class GlShaders
         uniform int uWorldSnap;
         uniform int uWorldPerPixel;
         uniform int uWorldDither;
+        // 0085. WaterSwell's field: a corner the port flagged free (bit 27) moves by
+        // it, rounded to the whole unit the packets move it by. Per wave: its
+        // wavenumber along X and Z, its height, its phase.
+        uniform int  uSwellOn;
+        uniform vec4 uSwell[3];
+        float swellDy(vec3 p) {
+            float h = 0.0;
+            for (int i = 0; i < 3; i++)
+                h += uSwell[i].z * sin(uSwell[i].x * p.x + uSwell[i].y * p.z - uSwell[i].w);
+            return floor(-h + 0.5);
+        }
 
         float cueKeep(float z) {
             int curve = int(inCue.z + 0.5);
@@ -1383,6 +1417,7 @@ internal static class GlShaders
                 }
             }
             vec3 w = inWorld;
+            if (uSwellOn != 0 && (inFlags & 0x8000000u) != 0u) w.y += swellDy(w);
             gl_ClipDistance[0] = (uPlaneY - uPlaneBias) - w.y;
             if (uMirror != 0) w.y = 2.0 * uPlaneY - w.y;
             vec3 v = uR * (w - uCam) + uT;

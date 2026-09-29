@@ -365,15 +365,20 @@ public static class TileWalk
         uint rec = c.A0, pos = c.A1, flags = c.A2;
         uint rot = mem.ReadU8(rec + 2u) & 3u;
 
-        // 0085. A half the GPU draws whole needs none of the setup below.
+        // 0085. A half the GPU draws whole needs none of the setup below. With its
+        // water on the packets, a half with blended faces keeps only those; a half
+        // with a subtractive face is the packets' whole.
         bool gpu = GpuWorld.Active && !PlanarWalk.Mirroring;
-        if (gpu && !Beyond(mem, mem.ReadU8(rec)) && !GpuWorld.HasBlended(mem, mem.ReadU8(rec)))
+        var faces = gpu ? GpuWorld.KindOf(mem, mem.ReadU8(rec)) : GpuWorld.Faces.Opaque;
+        if (gpu && !Beyond(mem, mem.ReadU8(rec))
+            && (faces == GpuWorld.Faces.Opaque || faces == GpuWorld.Faces.Blended && GpuWorld.WaterActive))
         {
             NoteDrawn(rec);
             GpuWorld.Skipped++;
             Epilogue(c, mem, sp);
             return;
         }
+        if (faces == GpuWorld.Faces.Subtractive) gpu = false;
 
         c.A0 = ViewMatrix;
         c.RA = 0x80031988u;
@@ -418,9 +423,10 @@ public static class TileWalk
         if (Beyond(mem, model)) { _skipped++; Epilogue(c, mem, sp); return; }
         // What the frame drew is what its reflections may show (RetainedScene.HalfGate),
         // grown and held by ReflectionReach.
-        if (!PlanarWalk.Mirroring) NoteDrawn(rec);
+        if (!PlanarWalk.Mirroring) NoteDrawn(rec, main: faces != GpuWorld.Faces.Subtractive);
         // 0085. The GPU draws the half's opaque faces; only its water is assembled.
         if (gpu) GpuWorld.Kept++;
+        else if (faces == GpuWorld.Faces.Subtractive) GpuWorld.Whole++;
 
         // The half being assembled, for whatever the assemblers record per packet.
         CurrentRecord = rec;
@@ -483,11 +489,11 @@ public static class TileWalk
         Epilogue(c, mem, sp);
     }
 
-    static void NoteDrawn(uint rec)
+    static void NoteDrawn(uint rec, bool main = true)
     {
         uint off = rec - MapBase;
         int hx = (int)(off % 800u / 10u), hz = (int)(off / 800u), hu = (int)(off % 10u / 5u);
-        if (RetainedMap.Ready) RetainedScene.NoteHalf(hx, hz, hu);
+        if (RetainedMap.Ready) RetainedScene.NoteHalf(hx, hz, hu, main);
         ReflectionReach.NoteDrawn(hx, hz, hu);
     }
 

@@ -84,6 +84,10 @@ public sealed class AoGeometry
     public int WorldSerial;
     public float WorldCx, WorldCy;
 
+    /// <summary>0085. Where the map's water went in among the list's triangles: the
+    /// vertex count when the colour pass drew it, and its slice of view depth.</summary>
+    public readonly List<(int At, float Lo, float Hi)> Water = new();
+
     /// <summary>Start this target's list over when it is first drawn in a new frame,
     /// or when the depth generation moved under it.</summary>
     public void Frame(long frame, int gen)
@@ -93,6 +97,7 @@ public sealed class AoGeometry
         _gen = gen;
         _n = 0;
         WorldSerial = 0;
+        Water.Clear();
         _breaks.Clear();
         _inVeil = false;
     }

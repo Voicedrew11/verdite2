@@ -272,15 +272,16 @@ What hooks the tile packets today, and has to work the new way first:
 - Per-pixel lighting (`0048`): the records the lit colour is made from. **Works**
   (Step 1), and fogged at each pixel's depth (the second slice).
 - `WaterSwell`: moves the water's interior vertices; a vertex-shader function of the
-  same field. **Not done**: water stays on packets.
+  same field. **Measured at parity** (the third slice).
 - The remaster's materials per half and per face, lights, fog colour, sky, darkness.
   **Measured at parity** (the second slice), except known issue 3.
 - `RenderDistance`: a larger mask, and no 15-tile cap (the s16 placement is the
   game's, not the GPU's). **Measured at parity** with the cap (the second slice).
 - AO and the reflection pass's surface buffer (`0058`, `0067`): fed from the
   renderer's draws, not `DrawTri`. **Done for the map** (the first slice).
-- `BlendOrder` (`0079`): an opaque pass, then the blended one. **Not done**: water
-  stays on packets.
+- `BlendOrder` (`0079`): an opaque pass, then the blended one. **Measured at
+  parity** (the third slice): the map's blended faces are drawn among 0079's held
+  packets, in the table's order. A subtractive face keeps its half on the packets.
 - `EnhancementDistance` (`0083`): **measured at parity**. The fluid scroll (`0053`):
   **on reading**, the main view is given the scroll regions and keeps those textures
   out of the mip atlas; no opaque scrolling face was found to measure. The mip atlas
@@ -405,6 +406,84 @@ fps drawn at 20.0 ticks/s. `KF2_GPUWORLD_FOGZ=0` is the comparison.
 
 **Not checked:** the fog fix by eye, and whether it is known issue 2's wedge; the
 fluid scroll on an opaque face.
+
+#### Step 2, the third slice
+
+**The map's water drawn on the GPU, in the table's order. Mechanism measured; not
+judged by eye.** `KF2_GPUWORLD_WATER=0` or `gpuworld water off` is the comparison:
+a half with blended faces then keeps those on the packets, as before. The runtime
+half amends `0085`.
+
+**What it does.** A half with blended faces is now left to the GPU whole, like any
+other; one with a subtractive face is left to the packets whole (none is in the
+areas measured). After the opaque map, the backend sorts the frame's visible blended
+triangles far to near, per blend mode, by the key the game links a map face into its
+table with: the corners' mean view depth over four, a quad's two triangles one face,
+the last built first within a key (`SortWater`). The table's walk then draws them
+**whole, where their packets would have been sent**: before each of 0079's held
+packets and each barrier that draws, everything whose key the walk has passed, and
+the rest at the walk's end (`LibGpu.SendHeld`, `DrawWorldWater`). The swell moves
+the corners `WaterSwell` would move on the packets (flagged per corner when the map
+is built; the three waves are published per frame, `WaterSwell.Publish`, and
+evaluated in `WorldVs`, rounded as the packets are). The ripples take `0078`'s
+uniforms. The water goes into the normal and surface buffers per pixel, at the same
+cuts, where the list says the colour pass drew it, and it feeds `0068`'s plane
+finder from its visible triangles, cut at the near plane (`NoteWaterPlane`).
+
+**Why the order had to be the table's.** The first cut drew the water in slices of
+view depth, cut per pixel, only before barriers. `fdat02` read at parity, but area
+4 did not: pitched down at the crystals, up to 168 bad blocks (worst 1.00), the GPU
+darker. The frame viewer's capture of that view found, at one pixel, blended model
+triangles at table entries 7616-7735, the crystal's map face at 8123, and another
+model triangle at 8189, all in the averaging blend. The GPU drew the map face before
+every held model packet, so their averaging took the map's light layer away (178 to
+126 at that pixel). The crystals are double-sided (every face twice, wound both
+ways), which is why turning the facing cull off looked like a fix at some headings.
+Drawing the water before each held packet in key order fixed it: at most 0.11 over
+16 views.
+
+**What the order costs, and the box test.** Cut before every held packet, area 4's
+worst view took 99 slices a frame: frame work 3.9 to 6.5 ms and GPU time 1.16 to
+4.3 ms. Two things brought it back. The world program is set up once a frame and a
+slice only rebinds its textures, target and state (`BindWorldMain`); the half gate
+texture was being re-uploaded under the draws still reading it. Anything else that
+takes the program mid-walk (the shadow cubemaps, from `FlushCore`) puts its
+uniforms back first (`CloseWorldMain`). And water the walk has passed waits while no
+triangle of it shares a screen box with the packet about to be drawn (each face's
+box, grown by the swell's reach; everything once a corner nears the eye), since the
+order shows nowhere else: 99 slices to 39. A packet's box covers every primitive in
+it; the first version read only the first, and area 4's worst block went 0.07 to
+0.36 until it was fixed.
+
+**Measured**, render scale 5, 16:9, paused and drawn from a pinned camera, water on
+the packets against water on the GPU (the harness is Step 2's second slice's):
+
+| area | views | worst block | |
+|---|---|---|---|
+| `fdat02`, waves on (swell 338, ripples 139) | 6 | 0.00-0.41 | |
+| `fdat02`, murk and planar reflections on | 5 | 0.04-0.38 | the plane found, moved 0.0/s |
+| area 4 (the crystals) | 16 | 0.00-0.11 | was up to 1.00 |
+| area 7 | 4 | 0.37-0.72 | see below |
+
+Area 7 is 33,212 blended triangles against 3,792 opaque. Its differences are thin
+lines: 98% of the pixels past 16 levels vanish under a 2-pixel erosion, and their
+mean is the same in both pictures to 0.4 levels. That is Step 1's texel-edge noise,
+over a picture that is almost all blended geometry in a high-contrast texture. It
+is above the 0.45 ceiling the opaque map set, and it has not been looked at.
+
+Cost, uncapped (`KF2_FPS=1000 KF2_PROFILE=1`), water on the packets against on the
+GPU:
+
+| view | frame work | GPU per present |
+|---|---|---|
+| `fdat02` spawn, pitch 400, heading 2500 | 5.27 to 3.94 ms | 1.62 to 1.53 ms |
+| area 4, pitch 400, heading 3072 (39 slices) | 3.81 to 2.23 ms | 1.19 to 1.45 ms |
+
+At 144 fps: 144.0 drawn at 20.0 ticks/s, `[present] wide 288`, and no GL error under
+`KF2_GLDEBUG=1`. The probe line counts slices, empty calls and calls that waited.
+
+**Not checked:** any of it by eye, and a subtractive map face, which no area measured
+has.
 
 ### Step 3: models
 

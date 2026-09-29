@@ -63,6 +63,14 @@ public static class RetainedScene
     public const uint HalfBits = 0x3FFFu;
     public const int HalvesW = 160, HalvesH = 80;
 
+    /// <summary>0085. A corner the port's swell may move (WaterSwell's free positions),
+    /// and a blended face the surface buffer takes as water.</summary>
+    public const uint FlagSwell = 0x8000000u, FlagWater = 0x10000000u;
+
+    /// <summary>0085. The second triangle of a quad, which the game sorts with the first
+    /// as one packet.</summary>
+    public const uint FlagQuadTail = 0x20000000u;
+
     public static uint HalfFlag(int tx, int tz, int upper) => (uint)((tz * 80 + tx) * 2 + upper + 1) << HalfShift;
 
     /// <summary>Reflect only the halves the game drew in the frame. Off, every half on
@@ -126,6 +134,31 @@ public static class RetainedScene
     public static bool MainFogFromZ = true;
     public static long SurfaceDepthPixels, SurfaceBehind, SurfaceMissing, SurfaceChecks;
 
+    /// <summary>0085. The port's switch: the map's blended faces (water) are drawn by
+    /// the backend too, a slice of view depth at a time where the table's walk would
+    /// have drawn their packets (<see cref="WaterDrawer"/>).</summary>
+    public static bool MainWater = true;
+
+    /// <summary>0085. Set by the backend when the main view drew and the frame has
+    /// water to draw; the table walk then calls <see cref="WaterDrawer"/>.</summary>
+    public static bool WaterPending;
+
+    /// <summary>0085. The backend's water draw: the walk has passed view depth
+    /// <c>cut</c> and is about to draw what covers the screen box given (the GTE's
+    /// pixels); the water walked and not drawn goes in first if it meets that box.
+    /// False once no water is left.</summary>
+    public delegate bool WaterDraw(float cut, float x0, float y0, float x1, float y1);
+
+    public static WaterDraw? WaterDrawer;
+
+    /// <summary>0085. Water slices drawn, calls that found nothing in their slice,
+    /// water triangles submitted, and water triangles noted for the planar plane.</summary>
+    public static long MainWaterSlices, MainWaterEmpty, MainWaterTriangles, MainWaterNoted;
+    /// <summary>0085. Calls whose water waited, sharing no pixel with the packet next.</summary>
+    public static long MainWaterDeferred;
+    /// <summary>0085. Blended triangles sorted far to near for the main view's draws.</summary>
+    public static long MainWaterSorted, MainWaterSortTicks;
+
     /// <summary>0085. Stopwatch ticks in the draw's parts: shadows and the static
     /// upload, the mip entries, the uniforms and the cull, the draw and after.</summary>
     public static readonly long[] MainTicks = new long[4];
@@ -183,6 +216,10 @@ public static class RetainedScene
 
     /// <summary>Each chunk's bounds in world space, and whether it holds anything.</summary>
     public static readonly float[] ChunkMin = new float[Chunks * 3], ChunkMax = new float[Chunks * 3];
+
+    /// <summary>0085. Each chunk's bounds over its blended faces alone (min above max
+    /// for none).</summary>
+    public static readonly float[] ChunkBlendMin = new float[Chunks * 3], ChunkBlendMax = new float[Chunks * 3];
     public static readonly bool[] ChunkUsed = new bool[Chunks];
 
     /// <summary>Each chunk's latest fog: the depth-cue quotient (H*65536/z) at and
@@ -207,6 +244,8 @@ public static class RetainedScene
             ChunkFogQ[c] = float.MaxValue;
             ChunkMin[c * 3] = ChunkMin[c * 3 + 1] = ChunkMin[c * 3 + 2] = float.MaxValue;
             ChunkMax[c * 3] = ChunkMax[c * 3 + 1] = ChunkMax[c * 3 + 2] = float.MinValue;
+            ChunkBlendMin[c * 3] = ChunkBlendMin[c * 3 + 1] = ChunkBlendMin[c * 3 + 2] = float.MaxValue;
+            ChunkBlendMax[c * 3] = ChunkBlendMax[c * 3 + 1] = ChunkBlendMax[c * 3 + 2] = float.MinValue;
         }
         var key = new int[n / 3];
         for (int i = 0, t = 0; i < n; i += 3, t++)
@@ -223,6 +262,12 @@ public static class RetainedScene
                 ChunkMin[c * 3 + 2] = Math.Min(ChunkMin[c * 3 + 2], v.Z); ChunkMax[c * 3 + 2] = Math.Max(ChunkMax[c * 3 + 2], v.Z);
                 float q = BlackQuotient(v);
                 if (q < ChunkFogQ[c]) { ChunkFogQ[c] = q; ChunkFogOf[c] = v; }
+                if ((v.Flags & FlagSemi) != 0)
+                {
+                    ChunkBlendMin[c * 3] = Math.Min(ChunkBlendMin[c * 3], v.X); ChunkBlendMax[c * 3] = Math.Max(ChunkBlendMax[c * 3], v.X);
+                    ChunkBlendMin[c * 3 + 1] = Math.Min(ChunkBlendMin[c * 3 + 1], v.Y); ChunkBlendMax[c * 3 + 1] = Math.Max(ChunkBlendMax[c * 3 + 1], v.Y);
+                    ChunkBlendMin[c * 3 + 2] = Math.Min(ChunkBlendMin[c * 3 + 2], v.Z); ChunkBlendMax[c * 3 + 2] = Math.Max(ChunkBlendMax[c * 3 + 2], v.Z);
+                }
             }
         }
         int at = 0;
@@ -328,6 +373,10 @@ public static class RetainedScene
         /// <summary>0085. The halves the frame's own walk drew, 255 each: the main
         /// view's gate, which nothing grows or fades.</summary>
         public readonly byte[] MainHalves = new byte[HalvesW * HalvesH];
+        /// <summary>0085. The swell this frame was walked with: per wave, its
+        /// wavenumber along X and Z, its height and its phase; and whether it is on.</summary>
+        public readonly float[] Swell = new float[12];
+        public bool SwellOn;
 
         public ReadOnlySpan<Vertex> SortedDynamic()
         {
@@ -362,17 +411,29 @@ public static class RetainedScene
         f.DynamicCount = 0;
         f.SortedValid = false;
         f.PlaneCount = 0;
+        f.SwellOn = false;
         Array.Clear(f.Halves);
         Array.Clear(f.MainHalves);
     }
 
-    /// <summary>A map half the current frame's walk drew, at full weight.</summary>
-    public static void NoteHalf(int tx, int tz, int upper)
+    /// <summary>A map half the current frame's walk drew, at full weight; with
+    /// <paramref name="main"/> false, one the game's packets draw in the main view
+    /// (0085), so it is reflected but left out of the main view's gate.</summary>
+    public static void NoteHalf(int tx, int tz, int upper, bool main = true)
     {
         var f = Current;
         if (f.Serial != _serial || (uint)tx >= 80u || (uint)tz >= 80u) return;
         f.Halves[(tz * 80 + tx) * 2 + upper] = 255;
-        f.MainHalves[(tz * 80 + tx) * 2 + upper] = 255;
+        if (main) f.MainHalves[(tz * 80 + tx) * 2 + upper] = 255;
+    }
+
+    /// <summary>0085. The swell the current frame's water moves by (see <see cref="Frame.Swell"/>).</summary>
+    public static void SetSwell(ReadOnlySpan<float> waves)
+    {
+        var f = Current;
+        if (f.Serial != _serial) return;
+        waves[..Math.Min(waves.Length, 12)].CopyTo(f.Swell);
+        f.SwellOn = true;
     }
 
     /// <summary>The current frame's halves, for a port that weighs them itself: 0

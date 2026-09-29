@@ -1406,6 +1406,23 @@ Four files in the directory have no entry below:
   `RetainedScene.MainNear` (`KF2_GPUWORLD_NEAR`, 16), which the measurement ruled
   out. The third diff in the patch file. See "Step 2, the second slice" in
   `docs/GPU_RENDERER.md`.
+  Since amended: the map's blended faces (water) are drawn by the backend too.
+  `GlMainView.SortWater` sorts the frame's visible ones far to near per blend mode by
+  the key the game links a face at, and `LibGpu.WalkOTag` hands the backend each
+  point where the walk sends a packet that could cover them: before each of 0079's
+  held packets (`SendHeld`, with the packet's screen box, `PacketBox`), before each
+  barrier that draws, and at the walk's end (`Gpu.DrawRetainedWater`,
+  `RetainedScene.WaterDrawer`). The backend draws whole faces whose key the walk has
+  passed, unless none shares a screen box with that packet, in which case they wait.
+  `WorldVs` and `WorldNormalVs` move corners flagged `RetainedScene.FlagSwell` by the
+  frame's three swell waves (`uSwell`, `RetainedScene.SetSwell`); `FlagWater` marks
+  a face the surface buffer takes as water, and `FlagQuadTail` a quad's second
+  triangle. The normal pass draws the water per pixel at the same cuts
+  (`AoGeometry.Water`, `uZSlice` in `NormalFs`), and the plane finder is fed from it.
+  The world program's uniforms are set once a frame and kept between the slices
+  (`BindWorldMain`, `CloseWorldMain` before a shadow or reflection draw). With
+  `RetainedScene.MainWater` off, the water stays on the packets as before. The fourth
+  diff in the patch file. See "Step 2, the third slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

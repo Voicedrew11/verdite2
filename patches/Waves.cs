@@ -126,6 +126,7 @@ public static class Waves
         WaterWaves.Generation++;
 
         WaterSwell.AtWalk(mem);
+        WaterSwell.Publish();
         if (_probe) Report();
     }
 

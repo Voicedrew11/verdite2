@@ -137,7 +137,9 @@ public static class RetainedMap
         uint mask = (uint)ram.Length - 1u;
         ulong hm = MeshBytes(ram.Slice((int)(MapBase & mask), (int)MapBytes));
         ulong hl = Mix(0xCBF29CE484222325ul, ram.Slice((int)(LightBase & mask), (int)LightBytes));
-        Span<uint> extra = [mem.ReadU32(Banks), (uint)Remaster.Surfaces.Serial, (uint)SurfaceMaterial.RectN, 0u];
+        // 0085. The corners carry the water's rects and the swell's free positions.
+        Span<uint> extra = [mem.ReadU32(Banks), (uint)Remaster.Surfaces.Serial, (uint)SurfaceMaterial.RectN,
+                            (uint)WaterSwell.Generation];
         ulong he = Mix(0xCBF29CE484222325ul, MemoryMarshal.AsBytes(extra));
         _why = (hm != _hm ? "map " : "") + (hl != _hl ? "lights " : "") + (he != _he ? $"bank/materials/rects({extra[0]:X},{extra[1]},{extra[2]}) " : "");
         _hm = hm; _hl = hl; _he = he;
@@ -336,6 +338,12 @@ public static class RetainedMap
                     mat = Remaster.Surfaces.TextureId(tex);
                 uint flags = RetainedScene.FlagRect | mat | RetainedScene.HalfFlag(tx, tz, half)
                            | (semi ? RetainedScene.FlagSemi | ((tpage >> 5) & 3u) << 8 : 0u);
+                if (semi && SurfaceWater(tpage, u0, v0, u1, v1)) flags |= RetainedScene.FlagWater;
+                // 0085. The corners the swell moves on the packets.
+                uint swell = 0;
+                if (semi)
+                    for (int k = 0; k < corners; k++)
+                        if (WaterSwell.IsFree(px[k], py[k], pz[k])) swell |= 1u << k;
 
                 var t = new RetainedScene.Vertex
                 {
@@ -345,8 +353,13 @@ public static class RetainedMap
                     Rect = rect, Flags = flags, Rgbc = rgbc & 0xFFFFFFu,
                 };
                 // A quad is the strip 0,1,2 then 1,2,3, as the GPU draws it.
-                Emit(t, px, py, pz, uv, col, qa, qb, qc, 0, 1, 2);
-                if (corners == 4) Emit(t, px, py, pz, uv, col, qa, qb, qc, 1, 3, 2);
+                Emit(t, px, py, pz, uv, col, qa, qb, qc, swell, 0, 1, 2);
+                if (corners == 4)
+                {
+                    var tail = t;
+                    tail.Flags |= RetainedScene.FlagQuadTail;
+                    Emit(tail, px, py, pz, uv, col, qa, qb, qc, swell, 1, 3, 2);
+                }
                 RetainedPlanes.Note(px, py, pz, corners, semi, mat, tpage, rect);
                 _faces++;
             }
@@ -355,23 +368,43 @@ public static class RetainedMap
     }
 
     static void Emit(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
-                     Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, int a, int b, int c)
+                     Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, uint swell, int a, int b, int c)
     {
         if (_n + 3 > _tris.Length) Array.Resize(ref _tris, _tris.Length * 2);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, a);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, b);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, c);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, swell, a);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, swell, b);
+        Put(t, px, py, pz, uv, col, qa, qb, qc, swell, c);
     }
 
     static void Put(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
-                    Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, int k)
+                    Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, uint swell, int k)
     {
         var v = t;
+        if ((swell >> k & 1u) != 0) v.Flags |= RetainedScene.FlagSwell;
         v.X = px[k]; v.Y = py[k]; v.Z = pz[k];
         v.U = uv[k] & 0xFF; v.V = uv[k] >> 8;
         v.R = col[k] & 0xFF; v.G = (col[k] >> 8) & 0xFF; v.B = (col[k] >> 16) & 0xFF;
         v.Dqa = qa[k]; v.Dqb = qb[k]; v.Curve = qc[k];
         _tris[_n++] = v;
+    }
+
+    /// <summary>0085. A blended face the reflection pass takes as water: in an averaging
+    /// blend and on one of the water's rects, as SurfaceMaterial.Classify takes a packet.</summary>
+    static bool SurfaceWater(uint tpage, int u0, int v0, int u1, int v1)
+    {
+        uint blend = (tpage >> 5) & 3u;
+        if (blend is not (0u or 3u)) return false;
+        int mode = (int)(tpage >> 7) & 3;
+        int div = mode == 0 ? 4 : mode == 1 ? 2 : 1;
+        int x0 = (int)(tpage & 0xF) * 64 + u0 / div, x1 = (int)(tpage & 0xF) * 64 + u1 / div + 1;
+        int y0 = (int)((tpage >> 4) & 1) * 256 + v0, y1 = (int)((tpage >> 4) & 1) * 256 + v1 + 1;
+        for (int i = 0; i < SurfaceMaterial.RectN; i++)
+        {
+            ref var r = ref SurfaceMaterial.Rects[i];
+            if (x0 >= r.X + r.W || x1 <= r.X || y0 >= r.Y + r.H || y1 <= r.Y) continue;
+            if (r.Material == SurfaceMaterial.Water) return true;
+        }
+        return false;
     }
 
     /// <summary>A corner's depth cue, blended between the fog words of the tiles around

@@ -13,4 +13,15 @@ public sealed partial class Gpu
         GpuHle.Backend!.SetDrawEnv(CurEnv());
         return draw(_drawOffsetX, _drawOffsetY);
     }
+
+    /// <summary>0085. The map's water the table walk passed at view depth
+    /// <paramref name="cut"/>, drawn if it meets the box the walk draws next (all of it
+    /// by default); false once no water is left.</summary>
+    public bool DrawRetainedWater(float cut, float x0 = float.MinValue, float y0 = float.MinValue,
+                                  float x1 = float.MaxValue, float y1 = float.MaxValue)
+    {
+        if (!HleOn || RetainedScene.WaterDrawer is not { } draw) return false;
+        GpuHle.Backend!.SetDrawEnv(CurEnv());
+        return draw(cut, x0, y0, x1, y1);
+    }
 }

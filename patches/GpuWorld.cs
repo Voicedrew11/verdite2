@@ -18,12 +18,14 @@ namespace Kf2;
 /// The tile walk still decides: every half it visits is noted in the frame's gate
 /// (<see cref="RetainedScene.NoteHalf"/>), and the backend draws exactly those halves
 /// at the head of the ordering table's walk, past the sky. The half is then not
-/// assembled at all, or, when its mesh has semi-transparent faces (water), only those
-/// are (<see cref="PolyAssembler.BlendedOnly"/>): they stay on the game's packets so
-/// the blend order, the swell, the ripples and the surface buffer see them as before.
-/// The mirrored walk (<see cref="PlanarWalk"/>) is untouched.
+/// assembled at all. The map's water is drawn by the backend too, a slice of view
+/// depth at each point of the table's walk where 0079 would have sent its packets, with
+/// the swell and the ripples; with it off (<c>KF2_GPUWORLD_WATER=0</c>) a half with
+/// semi-transparent faces keeps only those (<see cref="PolyAssembler.BlendedOnly"/>).
+/// A half with a subtractive face is the packets' whole. The mirrored walk
+/// (<see cref="PlanarWalk"/>) is untouched.
 ///
-/// See "Step 1, the first slice" in docs/GPU_RENDERER.md.
+/// See "Step 1, the first slice" and "Step 2, the third slice" in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
 {
@@ -31,13 +33,18 @@ public static class GpuWorld
 
     public const string OnKey = "kf2.gpuworld.on";
 
-    static bool _on, _probe;
+    static bool _on, _probe, _water = true;
+
+    /// <summary>Whether this frame's water is drawn on the GPU too: the switch, and
+    /// 0079's reorder, whose barriers are where each slice goes.</summary>
+    public static bool WaterActive { get; private set; }
     static bool? _forced;
 
     public static bool Enabled => _on;
 
     public static void Configure(string? on, string? probe, string? surfaces = null)
     {
+        _water = Environment.GetEnvironmentVariable("KF2_GPUWORLD_WATER")?.Trim() != "0";
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
             RetainedScene.MainNear = Math.Max(near, 0.01f);
@@ -96,17 +103,22 @@ public static class GpuWorld
               && !RecompOne.Runtime.Pgxp.Pgxp.CpuTracking;
         RetainedScene.MainView = Active;
         RetainedScene.MainSerial = Active ? RetainedScene.Serial : 0;
+        WaterActive = Active && _water && BlendOrder.Active;
+        RetainedScene.MainWater = WaterActive;
         if (_probe) Report();
     }
 
     // ---- which halves still need the game's assembler -------------------------------
 
-    static readonly Dictionary<uint, bool> _blended = new();
+    public enum Faces { Opaque, Blended, Subtractive }
+
+    static readonly Dictionary<uint, Faces> _blended = new();
     static int _blendedGen = -1;
     static uint _blendedTable;
 
-    /// <summary>Whether the model's mesh has a semi-transparent face.</summary>
-    public static bool HasBlended(PSMemory mem, uint model)
+    /// <summary>Whether the model's mesh has a semi-transparent face, and whether one
+    /// of them subtracts, which the GPU's water draw leaves to the packets.</summary>
+    public static Faces KindOf(PSMemory mem, uint model)
     {
         uint table = mem.ReadU32(ModelTable);
         if (_blendedGen != RetainedScene.StaticGeneration || _blendedTable != table)
@@ -116,23 +128,24 @@ public static class GpuWorld
             _blendedTable = table;
         }
         uint header = table + model * 28u + 0xCu;
-        if (_blended.TryGetValue(header, out bool any)) return any;
+        if (_blended.TryGetValue(header, out var kind)) return kind;
         uint face = table + mem.ReadU32(header + 0x10u) + 0xCu;
         uint count = Math.Min(mem.ReadU32(header + 0x14u), 4096u);
-        for (uint i = 0; i < count && !any; i++)
+        for (uint i = 0; i < count && kind != Faces.Subtractive; i++)
         {
             uint word = mem.ReadU32(face);
             uint type = (word >> 24) & 0xFDu;
-            if ((type == 0x2Cu || type == 0x24u) && ((word >> 24) & 2u) != 0u) any = true;
+            if ((type == 0x2Cu || type == 0x24u) && ((word >> 24) & 2u) != 0u)
+                kind = ((mem.ReadU16(face + 4u + 6u) >> 5) & 3u) == 2u ? Faces.Subtractive : Faces.Blended;
             face += 4u + ((word >> 6) & 0x3FCu);
         }
-        _blended[header] = any;
-        return any;
+        _blended[header] = kind;
+        return kind;
     }
 
     /// <summary>The probe's: halves left to the GPU whole, and those whose water was
     /// still assembled.</summary>
-    public static long Skipped, Kept;
+    public static long Skipped, Kept, Whole;
 
     /// <summary>The `gpuworld` shell verb: the state, or the switch.</summary>
     public static string Shell(string arg)
@@ -143,18 +156,20 @@ public static class GpuWorld
             case "off": SetEnabled(false); break;
             case "surfaces on": RetainedScene.MainSurfaces = true; break;
             case "surfaces off": RetainedScene.MainSurfaces = false; break;
+            case "water on": _water = true; break;
+            case "water off": _water = false; break;
             case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
-               $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")}," +
+               $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
     // ---- the probe -----------------------------------------------------------------
 
     static double _reportAt;
-    static long _draws, _missed, _tris, _uploads, _nrmTris;
+    static long _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
 
     static void Report()
     {
@@ -165,7 +180,20 @@ public static class GpuWorld
         _draws = RetainedScene.MainDraws; _missed = RetainedScene.MainMissed; _tris = RetainedScene.MainTriangles;
         Console.WriteLine($"[KF2] gpu world: {(Active ? "active" : "standing down")}; {d} draw(s), {m} walk(s) missed, " +
                           $"{(d == 0 ? 0 : t / d)} static triangle(s) a draw; halves {Skipped} left whole to the GPU, " +
-                          $"{Kept} with their blended faces assembled");
+                          $"{Kept} with their blended faces assembled, {Whole} whole for a subtractive face");
+        long ws = RetainedScene.MainWaterSlices - _wSlices, we = RetainedScene.MainWaterEmpty - _wEmpty;
+        long wt = RetainedScene.MainWaterTriangles - _wTris, wn = RetainedScene.MainWaterNoted - _wNoted;
+        _wSlices = RetainedScene.MainWaterSlices; _wEmpty = RetainedScene.MainWaterEmpty;
+        _wTris = RetainedScene.MainWaterTriangles; _wNoted = RetainedScene.MainWaterNoted;
+        long wso = RetainedScene.MainWaterSorted - _wSorted, wd = RetainedScene.MainWaterDeferred - _wDeferred;
+        _wSorted = RetainedScene.MainWaterSorted; _wDeferred = RetainedScene.MainWaterDeferred;
+        double sortMs = d == 0 ? 0 : RetainedScene.MainWaterSortTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency / d;
+        RetainedScene.MainWaterSortTicks = 0;
+        Console.WriteLine($"[KF2] gpu world: water {(WaterActive ? "on the GPU" : "on the packets")}; " +
+                          $"{(d == 0 ? 0 : (double)ws / d):F2} slice(s) a draw, {(d == 0 ? 0 : (double)we / d):F2} empty, {(d == 0 ? 0 : (double)wd / d):F2} waited, " +
+                          $"{(ws == 0 ? 0 : wt / ws)} blended triangle(s) a slice, {(d == 0 ? 0 : wso / d)} sorted a draw in {sortMs:F3} ms, " +
+                          $"{(d == 0 ? 0 : wn / d)} noted for the plane a draw; " +
+                          $"static ranges {RetainedScene.StaticCount[0] / 3}/{RetainedScene.StaticCount[1] / 3}/{RetainedScene.StaticCount[2] / 3}/{RetainedScene.StaticCount[3] / 3}/{RetainedScene.StaticCount[4] / 3}");
         double ms2(int i) => d == 0 ? 0 : RetainedScene.MipTicks[i] * 1000.0 / System.Diagnostics.Stopwatch.Frequency / d;
         double ms(int i) => d == 0 ? 0 : RetainedScene.MainTicks[i] * 1000.0 / System.Diagnostics.Stopwatch.Frequency / d;
         Console.WriteLine($"[KF2] gpu world: CPU ms a draw: shadows+static {ms(0):F3}, mips {ms(1):F3}, setup {ms(2):F3}, draw {ms(3):F3}; mip table uploads {RetainedScene.MipTableUploads - _uploads}, keys {RetainedScene.MipsKeys} ({RetainedScene.MipsFound} found), lookups {ms2(0):F3}, decode {ms2(1):F3}");
@@ -180,6 +208,6 @@ public static class GpuWorld
         _nrmTris = RetainedScene.MainNormalTriangles;
         RetainedScene.SurfaceDepthPixels = RetainedScene.SurfaceBehind = RetainedScene.SurfaceMissing = RetainedScene.SurfaceChecks = 0;
         RetainedScene.SurfaceCheck = true;
-        Skipped = Kept = 0;
+        Skipped = Kept = Whole = 0;
     }
 }

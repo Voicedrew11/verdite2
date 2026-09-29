@@ -169,6 +169,7 @@ public sealed partial class GlCore
 
         UploadWorld(f);
         bool mips = UpdateWorldMips(f, RetainedScene.HalfGate ? f.Halves : null);
+        CloseWorldMain();
         _gl.UseProgram(_progWorld);
         if (_uwMipOn >= 0) _gl.Uniform1(_uwMipOn, mips ? 1f : 0f);
         if (mips)
@@ -715,6 +716,21 @@ public sealed partial class GlCore
         _gl.Uniform1(_uwShadowOffset, RemasterUniforms.ShadowOffset);
         _gl.Uniform1(_uwShadowBias, RemasterUniforms.ShadowBias);
         _gl.Uniform1(_uwShadowSoft, RemasterUniforms.ShadowSoft);
+        for (int sl = 0; sl < RemasterUniforms.MaxShadows; sl++)
+            if ((mask & (1 << sl)) != 0)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture0 + ShadowUnit + sl);
+                _gl.BindTexture(TextureTarget.TextureCubeMap, _shadowBind[sl]);
+            }
+        _gl.ActiveTexture(TextureUnit.Texture0);
+    }
+
+    /// <summary>BeginWorldLights' textures again, its uniforms left as they are.</summary>
+    void BindWorldLights()
+    {
+        if (RetainedScene.LitGlow) BindMaterials();
+        if (_wLightN == 0 || _uwLightShadow < 0) return;
+        int mask = Math.Max(_shadowReadyMask, 0);
         for (int sl = 0; sl < RemasterUniforms.MaxShadows; sl++)
             if ((mask & (1 << sl)) != 0)
             {

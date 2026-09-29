@@ -2827,27 +2827,43 @@ public sealed partial class GlCore : IGpuBackend
             _gl.ActiveTexture(TextureUnit.Texture0);
             _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
         }
-        int start = 0;
+        // 0085. The map's water goes in where the colour pass drew it among the list.
+        var water = world && _wnReady ? src.Geo.Water : null;
+        int start = 0, bi = 0, wi = 0;
         bool veil = false;
-        for (int i = 0; i <= breaks.Count; i++)
+        for (;;)
         {
-            int end = i < breaks.Count ? breaks[i] : verts.Length;
-            if (end > start)
+            for (; water != null && wi < water.Count && water[wi].At <= start; wi++)
             {
-                if (veil)
-                {
-                    if (src.Surface != 0) _gl.Enable(EnableCap.Blend, 1);
-                    _gl.BlendFuncSeparate(BlendingFactor.Zero, BlendingFactor.One, BlendingFactor.One, BlendingFactor.One);
-                    if (_uNrmVeilPass >= 0) _gl.Uniform1(_uNrmVeilPass, 1);
-                    _gl.DrawArrays(PrimitiveType.Triangles, start, (uint)(end - start));
-                }
                 if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
                 _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
-                if (_uNrmVeilPass >= 0) _gl.Uniform1(_uNrmVeilPass, veil ? 2 : 0);
+                DrawWorldWaterNormals(water[wi].Lo, water[wi].Hi);
+                _gl.UseProgram(_progNormal);
+                _gl.BindVertexArray(_nrmVao);
+                _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _nrmVbo);
+                if (breaks.Count > 0)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture0);
+                    _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
+                }
+            }
+            for (; bi < breaks.Count && breaks[bi] <= start; bi++) veil = !veil;
+            if (start >= verts.Length) break;
+            int end = verts.Length;
+            if (bi < breaks.Count) end = Math.Min(end, breaks[bi]);
+            if (water != null && wi < water.Count) end = Math.Min(end, water[wi].At);
+            if (veil)
+            {
+                if (src.Surface != 0) _gl.Enable(EnableCap.Blend, 1);
+                _gl.BlendFuncSeparate(BlendingFactor.Zero, BlendingFactor.One, BlendingFactor.One, BlendingFactor.One);
+                if (_uNrmVeilPass >= 0) _gl.Uniform1(_uNrmVeilPass, 1);
                 _gl.DrawArrays(PrimitiveType.Triangles, start, (uint)(end - start));
             }
+            if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
+            _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+            if (_uNrmVeilPass >= 0) _gl.Uniform1(_uNrmVeilPass, veil ? 2 : 0);
+            _gl.DrawArrays(PrimitiveType.Triangles, start, (uint)(end - start));
             start = end;
-            veil = !veil;
         }
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         _gl.Disable(EnableCap.Blend);
