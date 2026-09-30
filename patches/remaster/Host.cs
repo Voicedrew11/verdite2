@@ -25,7 +25,7 @@ public interface IRemasterFeature
 /// The remaster: authored data, applied over the game from a pack.
 ///
 ///     KF2_REMASTER=1         on (off by default; nothing is applied until it is)
-///     KF2_REMASTER_PACK=dir  the working pack (packs/working)
+///     KF2_REMASTER_PACK=dir  the working pack (remaster-packs/working, tracked)
 ///     KF2_REMASTER_PROBE=1   a line every two seconds: the area, its fingerprint, what applied
 ///     KF2_REMASTER_LIGHTS=0  leave the pack's lights out
 ///     KF2_REMASTER_ATMOS=0   leave the pack's light-record overrides out

@@ -34,6 +34,8 @@ interface.ini
 packs/
 # The remaster editor's pack exports
 exports/
+# The remaster editor's autosaves; remaster-packs/ itself is tracked
+*.autosave
 
 # Upstream's texture dumper writes the disc's textures here, and the census its reports.
 dump/

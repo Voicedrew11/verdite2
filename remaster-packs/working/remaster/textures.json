@@ -1,0 +1,13 @@
+{
+  "formatVersion": 1,
+  "textures": [
+    {
+      "index": "f279b6d646d62b45",
+      "material": "savepoint"
+    },
+    {
+      "index": "0fdd37c22f167870",
+      "material": "savepoint"
+    }
+  ]
+}

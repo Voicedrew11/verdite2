@@ -28,7 +28,7 @@ public static partial class Pack
     public const int FormatVersion = 1;
     public const string GameId = "SLUS-00158";
 
-    public static string Root { get; private set; } = Path.GetFullPath(Path.Combine("packs", "working"));
+    public static string Root { get; private set; } = Path.GetFullPath(Path.Combine("remaster-packs", "working"));
     static string RemasterDir => Path.Combine(Root, "remaster");
     static string MaterialsPath => Path.Combine(RemasterDir, "materials.json");
     static string TexturesPath => Path.Combine(RemasterDir, "textures.json");

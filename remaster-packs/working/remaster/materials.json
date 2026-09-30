@@ -1,0 +1,24 @@
+{
+  "formatVersion": 1,
+  "materials": {
+    "stone": {
+      "reflectivity": 0.511,
+      "f0": 0.786
+    },
+    "savepoint": {
+      "reflectivity": 1,
+      "f0": 1,
+      "emissiveStrength": 0.46,
+      "specular": 0,
+      "glowRadius": 8192,
+      "light": 1.004,
+      "pulseAmount": 0,
+      "emissive": [
+        1,
+        1,
+        1
+      ],
+      "glowMode": "lit"
+    }
+  }
+}

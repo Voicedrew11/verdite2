@@ -999,7 +999,7 @@ packs settings page and the camera-free parts of the editor's gizmos:
   and `SealDepth` writes it into `GtePacketDepth.Rec.Material` for every packet it
   seals, clipped fans included. A material therefore needs the C# half
   (`KF2_TILEWALK_TILE=0` authors nothing).
-- `patches/remaster/Pack.cs` — the working pack (`packs/working`, or
+- `patches/remaster/Pack.cs` — the working pack (`remaster-packs/working`, or
   `KF2_REMASTER_PACK`), `materials.json` and `areas/<n>/surfaces.json` kept as JSON
   trees so unknown fields survive, upstream's `pack.json` written once, a
   `FileSystemWatcher` whose parse is swapped in at the next VSync, and one undo stack.
