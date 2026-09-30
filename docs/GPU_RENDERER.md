@@ -970,14 +970,28 @@ comparison.
 
 #### Step 4, the census (2026-09-30)
 
-**The open question under "The target" is answered for stage 13: no `fdat` module draws
-3D through a routine of its own.** `KF2_DRAWCENSUS=1` with the renderer on, slot 2 and
-`warp` through areas 1-7, uncapped: stage 13's own body, the heads, the four overlay
-slots, the tail and the present draw 0 bytes in every area except two 2D things: the
-screen tint (21-35 bytes) and overlay d (26-40 bytes, one small packet, areas 2, 3, 4
-and 7). The map and the object walk read 0 because the GPU draws them. **Not covered:**
-modal loops that draw without stage 13 (the menu's item previews, shops, the death and
-ending sequences, `OPEN.EXE`, `END.EXE`), which this census cannot see.
+**The open question under "The target" is answered for stage 13: no `fdat` module draws 3D
+through a routine of its own.** `KF2_DRAWCENSUS=1` with the renderer on, slot 2, uncapped,
+`warp 0` to `warp 7` with `KF2_DEBUG_GODMODE=1` and `KF2_AUTORELOAD=0` (**both needed**:
+without them a warp kills the player and the game reloads area 1 or starts a new game, and
+the census reads that instead; the first run of this census did, and its numbers were
+discarded). Stage 13's own body, the heads, the overlay slots, the screen tint, the tail
+and the present draw 0 bytes in every area. What draws is the HUD (56.9 packets), the
+geometry submit and the object submit, the map reading 0 because the GPU draws it:
+
+| area | geometry submit | object submit |
+|---|---|---|
+| 0 | - | 25.4 |
+| 1 | 4.7 | - |
+| 2 | 29.6 | 25.4 |
+| 3 | 1.1 | - |
+| 4 | 261.3 | - |
+| 5 | - | - |
+| 6 | - | - |
+| 7 | 74.4 | 52.0 |
+
+**Not covered:** modal loops that draw without stage 13 (the menu's item previews, shops,
+the death and ending sequences, `OPEN.EXE`, `END.EXE`), which this census cannot see.
 
 **What blocks the switch-off.** The assembling halves still build what the GPU does not
 draw: the models' blended faces, effects and billboards (Step 3's remainder) and a map
