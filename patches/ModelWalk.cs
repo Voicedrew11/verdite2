@@ -222,7 +222,7 @@ public static class ModelWalk
     /// anywhere inside stage 13 after it.</summary>
     public static ReadOnlySpan<ModelDraw> Scene => _scene.AsSpan(0, _lastCount);
 
-    static long _creatures, _objects, _effects, _sprites, _lit, _flat, _semi, _ambients, _arms, _specials;
+    static long _creatures, _objects, _effects, _sprites, _lit, _flat, _semi, _ambients, _arms;
     // Live slots this frame, so "0 submitted" is told from "nothing there".
     static int _liveCreatures, _liveObjects, _liveEffects, _liveSprites;
     static double _probeAt;
@@ -462,7 +462,6 @@ public static class ModelWalk
             KingsField2.func_8002F918(c, mem);
         }
         RetainedModels.Instanced = false;
-        _specials++;
     }
 
     // ---- func_80032400: the first-person arm ------------------------------------
