@@ -196,6 +196,8 @@ public static class RetainedScene
     /// <summary>0085. Main-view draws made, walks that found no target or no frame,
     /// and static triangles submitted.</summary>
     public static long MainDraws, MainMissed, MainTriangles;
+    /// <summary>Map draws (main view and mirror) taken in two passes for 0051's tolerance.</summary>
+    public static long MainMapPrepasses;
     /// <summary>The map's triangles the normal pass drew for the surface buffers.</summary>
     public static long MainNormalTriangles;
     /// <summary>0085's probe: read the surface buffer back against the frame's depth

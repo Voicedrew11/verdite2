@@ -31,7 +31,7 @@ public sealed partial class GlCore
         _uwDither = _gl.GetUniformLocation(_progWorld, "uWorldDither");
         _uwCueFromZ = _gl.GetUniformLocation(_progWorld, "uCueFromZ");
         int L(string n) => _gl.GetUniformLocation(_progWorld, n);
-        _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope");
+        _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope"); _uwDepthOnly = L("uDepthOnly");
         _uwOpaqueDepth = L("uOpaqueDepth"); _uwSwellOn = L("uSwellOn"); _uwSwell = L("uSwell");
         _uwWaveOn = L("uWaveOn"); _uwWaveN = L("uWaveN"); _uwWaveRect = L("uWaveRect"); _uwWaveR = L("uWaveR");
         _uwWaveCam = L("uWaveCam"); _uwWaveT = L("uWaveT"); _uwWaveCentre = L("uWaveCentre"); _uwWaveH = L("uWaveH");
@@ -59,7 +59,7 @@ public sealed partial class GlCore
     bool _wMips;
     // The view depth the normal pass's last water slice reached.
     float _wDone;
-    int _uwDepthBias, _uwDepthSlope, _uwSwellOn, _uwSwell;
+    int _uwDepthBias, _uwDepthSlope, _uwDepthOnly, _uwSwellOn, _uwSwell;
     int _uwWaveOn, _uwWaveN, _uwWaveRect, _uwWaveR, _uwWaveCam, _uwWaveT, _uwWaveCentre, _uwWaveH, _uwWaveTime, _uwWaveParams;
     int _uwnSwellOn, _uwnSwell, _uwnZSlice;
     // The world normal program is set up for this pass's frame (DrawWorldNormals).
@@ -101,7 +101,7 @@ public sealed partial class GlCore
             if (RetainedScene.CullBack) _gl.Enable(EnableCap.CullFace);
         }
         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
-        int drawn = DrawRange(0, null);
+        int drawn = DrawMapOpaque();
         if (models >= 0 && RetainedScene.MainModelsShown)
         {
             DrawWorldModels(f.Models, models);
@@ -182,7 +182,7 @@ public sealed partial class GlCore
         ClearStaleDepth(p);
         _gl.Disable(EnableCap.Blend);
         _gl.DepthMask(true);
-        int drawn = DrawRange(0, null);
+        int drawn = DrawMapOpaque();
         if (models >= 0) DrawWorldModels(f.MirrorModels, models);
         if (inst >= 0)
         {
@@ -235,6 +235,41 @@ public sealed partial class GlCore
         // The main view sorts its own again.
         ClearWater();
         ClearBlend();
+    }
+
+    /// <summary>
+    /// The map's opaque range with 0051's tolerance, as its packets had it: true depth
+    /// first with colour off, then colour against it pulled towards the camera. Two
+    /// wall panels that overlap in one plane interpolate their depths differently
+    /// across different triangles, and drawn in one pass under a bare GL_LEQUAL they
+    /// took turns pixel by pixel; with the tolerance both pass and the later-drawn
+    /// one wins at every pixel of the overlap, in a draw order that does not move with
+    /// the camera. The vertices drawn.
+    /// </summary>
+    int DrawMapOpaque()
+    {
+        bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
+        if (!bias) return DrawRange(0, null);
+        DepthOnly(true);
+        DrawRange(0, null);
+        DepthOnly(false);
+        _gl.DepthMask(false);
+        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
+        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);
+        int drawn = DrawRange(0, null);
+        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+        _gl.DepthMask(true);
+        RetainedScene.MainMapPrepasses++;
+        return drawn;
+    }
+
+    /// <summary>The depth half of 0051's two passes: colour masked, and PrimFs making
+    /// only the decisions that say whether a fragment exists.</summary>
+    void DepthOnly(bool on)
+    {
+        _gl.ColorMask(!on, !on, !on, !on);
+        if (_uwDepthOnly >= 0) _gl.Uniform1(_uwDepthOnly, on ? 1 : 0);
     }
 
     void MarkDrawn(GlDisplayRt rt)
@@ -1042,9 +1077,9 @@ public sealed partial class GlCore
         bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
         if (bias)
         {
-            _gl.ColorMask(false, false, false, false);
+            DepthOnly(true);
             DrawModelRuns(f);
-            _gl.ColorMask(true, true, true, true);
+            DepthOnly(false);
             _gl.DepthMask(false);
             if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
             if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);

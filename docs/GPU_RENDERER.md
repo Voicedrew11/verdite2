@@ -615,6 +615,50 @@ At 144 fps: 144.0 drawn at 20.0 ticks/s, `[present] wide 288`, and no GL error u
 **Not checked:** any of it by eye, and a subtractive map face, which no area measured
 has.
 
+#### The map's seams fought again (2026-10-01)
+
+**Mechanism measured; judged by eye: the seams no longer fight.**
+
+Reported from play: with *GPU geometry* on, wall segments fight in their seams again,
+the defect `0051` fixed on the packet path ("Coplanar panels fought at the seam" in
+`docs/RENDERING.md`). Two panels that overlap in one plane interpolate their depths
+differently across different triangles, so a bare `GL_LEQUAL` gives each pixel to
+whichever is a hair nearer. The models the renderer draws (`DrawWorldModels`,
+`DrawInstances`) kept `0051`'s two passes, but the map's opaque range was one
+`DrawRange(0, …)` under a bare `GL_LEQUAL`, in the main view and in the mirror.
+The map's world-space corners are exact, so the tilt `PolyAssembler.Unrounded`
+removed was never the cause here; the missing tolerance is.
+
+`GlMainView.DrawMapOpaque` draws the range as the packets were drawn: true depth
+first with colour masked, then colour tested against a depth pulled towards the
+camera by `GteDepth.DepthBias` and `DepthSlope`, written by neither. Inside the
+tolerance the later-drawn face wins at every pixel of the overlap. **That is the
+map's build order, not the table's**, so where two overlapping panels carry
+different art the one shown can differ from the console's (the later table entry,
+which is the one with the nearer mean depth); it does not change as the camera
+moves, which is what the fight did.
+
+The first cut cost 17 fps of 94 (`KF2_FPS=144`, slot 2, the mirror on), because
+`PrimFs` writes `gl_FragDepth`, so a pass with colour masked still runs the whole
+shader, 16x filter and lighting included, and gets no early Z. `uDepthOnly` (in
+`PrimFs` and `WorldVs`, set by `GlMainView.DepthOnly`, which the models' depth passes
+now use too) makes the depth pass decide only whether a fragment exists: the clip,
+fade and mask discards, then the centre texel's hole as the colour pass decides it;
+`WorldVs` skips `recordLit`, which nothing that places a corner reads. GPU per present
+(`KF2_PROFILE=1`), world pass and mirror capture:
+
+| | world | capture | fps drawn |
+|---|---|---|---|
+| no tolerance (`KF2_ZBUFFER_BIAS=0 KF2_ZBUFFER_SLOPE=0`) | 4.48 ms | 1.09 ms | 90.6 |
+| depth pass, full shader | 5.16 ms | 1.57 ms | 76-77 |
+| depth pass, `uDepthOnly` | 5.04 ms | 1.40 ms | 84-86 |
+
+20 ticks/s throughout, `[present] wide`, no GL error under `KF2_GLDEBUG=1`; the probe
+line counts the map draws taken with the tolerance (two a frame with the mirror on).
+The colour pass still gets no early Z (the shader writes `gl_FragDepth`); a depth
+pass of its own program with the depth in `gl_FragCoord.z` would need the colour pass
+to agree on that depth, and was not tried. Judged from play: the seams are gone.
+
 ### Step 3: models
 
 A mesh cache: each model uploaded once when it becomes resident, invalidated when

@@ -381,7 +381,7 @@ public static class GpuWorld
     // ---- the probe -----------------------------------------------------------------
 
     static double _reportAt;
-    static long _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
+    static long _prepasses, _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
     static long _gensMax, _gensAt, _builds, _packs, _recUploads;
     static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
     static long _iTile, _bMirNoted, _bMirDrawn;
@@ -396,9 +396,11 @@ public static class GpuWorld
         if (now < _reportAt) return;
         _reportAt = now + 2.0;
         long d = RetainedScene.MainDraws - _draws, m = RetainedScene.MainMissed - _missed, t = RetainedScene.MainTriangles - _tris;
+        long mp = RetainedScene.MainMapPrepasses - _prepasses;
         _draws = RetainedScene.MainDraws; _missed = RetainedScene.MainMissed; _tris = RetainedScene.MainTriangles;
+        _prepasses = RetainedScene.MainMapPrepasses;
         Console.WriteLine($"[KF2] gpu world: {(Active ? "active" : "standing down")}; {d} draw(s), {m} walk(s) missed, " +
-                          $"{(d == 0 ? 0 : t / d)} static triangle(s) a draw; halves {Skipped} left whole to the GPU, " +
+                          $"{(d == 0 ? 0 : t / d)} static triangle(s) a draw, {mp} map draw(s) with the seam tolerance; halves {Skipped} left whole to the GPU, " +
                           $"{Kept} with their blended faces assembled");
         long ws = RetainedScene.MainWaterSlices - _wSlices, we = RetainedScene.MainWaterEmpty - _wEmpty;
         long wt = RetainedScene.MainWaterTriangles - _wTris, wn = RetainedScene.MainWaterNoted - _wNoted;

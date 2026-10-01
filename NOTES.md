@@ -429,6 +429,7 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 - Step 2, the first slice
 - Step 2, the second slice
 - Step 2, the third slice
+- The map's seams fought again
 - Step 3: models
 - Step 3, the first slice
 - Step 3, the second slice

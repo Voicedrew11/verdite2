@@ -369,14 +369,14 @@ public sealed partial class GlCore
         bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
         if (bias)
         {
-            _gl.ColorMask(false, false, false, false);
+            DepthOnly(true);
             foreach (var m in list)
             {
                 if (m.MeshGen != _meshGen) continue;
                 SendInstance(m, true);
                 _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
             }
-            _gl.ColorMask(true, true, true, true);
+            DepthOnly(false);
             _gl.DepthMask(false);
             if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
             if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);

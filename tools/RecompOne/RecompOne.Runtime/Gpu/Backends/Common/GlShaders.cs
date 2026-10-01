@@ -1674,10 +1674,13 @@ internal static class GlShaders
             return clamp(1.0 - w / 4096.0, 0.0, 1.0);
         }
 
+        // 0051's depth pass (PrimFs's uDepthOnly): no corner's light is read.
+        uniform int uDepthOnly;
+
         void main() {
             vec3 w = inWorld, color = inColorF, cue = inCue;
             uint flags = inFlags, rgbc = inRgbc;
-            if ((inLight & 0x80000000u) != 0u) recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue);
+            if (uDepthOnly == 0 && (inLight & 0x80000000u) != 0u) recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue);
             if (uModel != 0) {
                 if (!modelFaceKept(inCue, inRgbc)) {
                     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
@@ -2356,6 +2359,12 @@ internal static class GlShaders
         // draws, as its unrecorded packets leave it. 0 is off.
         uniform int uFarPlane;
 
+        // 0051, for a draw of the GPU world renderer's: the depth half of the two
+        // passes. Only what decides whether the fragment exists, as the colour pass
+        // decides it (the centre texel's hole), not the light or the filter, which
+        // a pass with colour masked would otherwise run in full. 0 is off.
+        uniform int uDepthOnly;
+
         void main() {
             // Written on every path so a 3D triangle's recovered SZ is the
             // window depth. Everything that recovered none writes the *far*
@@ -2396,6 +2405,32 @@ internal static class GlShaders
                 if (mz <= 1.0) discard;
                 vec3 mp = vec3((mq - uMaskCentre) * (mz / uMaskH), mz);
                 if (abs(dot(uMaskPlane.xyz, mp) + uMaskPlane.w) > uMaskTol) discard;
+            }
+            if (uDepthOnly != 0) {
+                FragColor = vec4(0.0);
+                BlendColor = vec4(0.0);
+                if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
+                if (texMode == 4) { if (uOpaqueDepth == 1) discard; return; }
+                if (texMode == 5) { if (texture(uExtTex, vUV).a < 0.5 || uOpaqueDepth == 1) discard; return; }
+                vec2 ddx = dFdx(vUV), ddy = dFdy(vUV);
+                if (texMode == 6) {
+                    vec2 fuv = mod(vUV, vec2(uTexWindow.xy) + 1.0) + vec2(uTexWindow.zw);
+                    vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
+                    if (uRepScroll >= 0.0) t.y = fract(t.y - uRepScroll / uRepRect.w);
+                    float a = textureGrad(uRepTex, t, ddx / uRepRect.zw, ddy / uRepRect.zw).a;
+                    if (a < 0.5 || uOpaqueDepth == 1 && a < 0.95) discard;
+                    return;
+                }
+                int du = ddx.x < 0.0 ? int(ceil(vUV.x - 0.0001)) : int(floor(vUV.x + 0.0001));
+                int dv = ddy.y < 0.0 ? int(ceil(vUV.y - 0.0001)) : int(floor(vUV.y + 0.0001));
+                vec4 dt = decodeFluid(waveWrap(ivec2(du, dv)));
+                if (vRepClut != 0 && texMode != 2) {
+                    if (dt.a < 0.5 || uOpaqueDepth == 1 && dt.a < 0.95) discard;
+                    return;
+                }
+                if (dt.rgb == vec3(0.0) && dt.a < 0.5) discard;
+                if (uOpaqueDepth == 1 && dt.a >= 0.5) discard;
+                return;
             }
             // 0071. Not into a planar reflection: its view is the mirrored camera's.
             vec3 extra = vec3(0.0);

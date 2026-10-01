@@ -1555,6 +1555,14 @@ Four files in the directory have no entry below:
   (`RetainedScene.SurfaceIds`). With `uModelTile` and `uModelBlend` 0 the programs are the ones
   before. The thirteenth diff in the patch file. See "Step 3, the seventh slice", "Step 3, the
   eighth slice" and "Step 3, the ninth slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the map's opaque range is drawn with `0051`'s tolerance, as the models
+  already were (`GlMainView.DrawMapOpaque`, main view and mirror): true depth first with
+  colour masked, then colour against it pulled towards the camera, so two wall panels
+  overlapping in one plane no longer fight. `PrimFs` and `WorldVs` gain `uDepthOnly`, set
+  for every such depth pass (`DepthOnly`): the fragment decides only whether it exists,
+  and the corner is not lit. With it 0 the programs are the ones before.
+  `RetainedScene.MainMapPrepasses` counts the map draws. The fourteenth diff in the patch
+  file. See "The map's seams fought again" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

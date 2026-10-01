@@ -6533,3 +6533,196 @@ index 4dab67f..1a39332 100644
      /// <summary>0085. A model instance to the current frame's main view, or its mirror.</summary>
      public static void AddInstance(in ModelInstance m, bool mirror = false)
      {
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index 76513a3..d689f12 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -31,7 +31,7 @@ public sealed partial class GlCore
+         _uwDither = _gl.GetUniformLocation(_progWorld, "uWorldDither");
+         _uwCueFromZ = _gl.GetUniformLocation(_progWorld, "uCueFromZ");
+         int L(string n) => _gl.GetUniformLocation(_progWorld, n);
+-        _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope");
++        _uwDepthBias = L("uDepthBias"); _uwDepthSlope = L("uDepthSlope"); _uwDepthOnly = L("uDepthOnly");
+         _uwOpaqueDepth = L("uOpaqueDepth"); _uwSwellOn = L("uSwellOn"); _uwSwell = L("uSwell");
+         _uwWaveOn = L("uWaveOn"); _uwWaveN = L("uWaveN"); _uwWaveRect = L("uWaveRect"); _uwWaveR = L("uWaveR");
+         _uwWaveCam = L("uWaveCam"); _uwWaveT = L("uWaveT"); _uwWaveCentre = L("uWaveCentre"); _uwWaveH = L("uWaveH");
+@@ -59,7 +59,7 @@ public sealed partial class GlCore
+     bool _wMips;
+     // The view depth the normal pass's last water slice reached.
+     float _wDone;
+-    int _uwDepthBias, _uwDepthSlope, _uwSwellOn, _uwSwell;
++    int _uwDepthBias, _uwDepthSlope, _uwDepthOnly, _uwSwellOn, _uwSwell;
+     int _uwWaveOn, _uwWaveN, _uwWaveRect, _uwWaveR, _uwWaveCam, _uwWaveT, _uwWaveCentre, _uwWaveH, _uwWaveTime, _uwWaveParams;
+     int _uwnSwellOn, _uwnSwell, _uwnZSlice;
+     // The world normal program is set up for this pass's frame (DrawWorldNormals).
+@@ -101,7 +101,7 @@ public sealed partial class GlCore
+             if (RetainedScene.CullBack) _gl.Enable(EnableCap.CullFace);
+         }
+         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
+-        int drawn = DrawRange(0, null);
++        int drawn = DrawMapOpaque();
+         if (models >= 0 && RetainedScene.MainModelsShown)
+         {
+             DrawWorldModels(f.Models, models);
+@@ -182,7 +182,7 @@ public sealed partial class GlCore
+         ClearStaleDepth(p);
+         _gl.Disable(EnableCap.Blend);
+         _gl.DepthMask(true);
+-        int drawn = DrawRange(0, null);
++        int drawn = DrawMapOpaque();
+         if (models >= 0) DrawWorldModels(f.MirrorModels, models);
+         if (inst >= 0)
+         {
+@@ -237,6 +237,41 @@ public sealed partial class GlCore
+         ClearBlend();
+     }
+ 
++    /// <summary>
++    /// The map's opaque range with 0051's tolerance, as its packets had it: true depth
++    /// first with colour off, then colour against it pulled towards the camera. Two
++    /// wall panels that overlap in one plane interpolate their depths differently
++    /// across different triangles, and drawn in one pass under a bare GL_LEQUAL they
++    /// took turns pixel by pixel; with the tolerance both pass and the later-drawn
++    /// one wins at every pixel of the overlap, in a draw order that does not move with
++    /// the camera. The vertices drawn.
++    /// </summary>
++    int DrawMapOpaque()
++    {
++        bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
++        if (!bias) return DrawRange(0, null);
++        DepthOnly(true);
++        DrawRange(0, null);
++        DepthOnly(false);
++        _gl.DepthMask(false);
++        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
++        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);
++        int drawn = DrawRange(0, null);
++        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
++        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
++        _gl.DepthMask(true);
++        RetainedScene.MainMapPrepasses++;
++        return drawn;
++    }
++
++    /// <summary>The depth half of 0051's two passes: colour masked, and PrimFs making
++    /// only the decisions that say whether a fragment exists.</summary>
++    void DepthOnly(bool on)
++    {
++        _gl.ColorMask(!on, !on, !on, !on);
++        if (_uwDepthOnly >= 0) _gl.Uniform1(_uwDepthOnly, on ? 1 : 0);
++    }
++
+     void MarkDrawn(GlDisplayRt rt)
+     {
+         rt.Dirty = true;
+@@ -1042,9 +1077,9 @@ public sealed partial class GlCore
+         bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
+         if (bias)
+         {
+-            _gl.ColorMask(false, false, false, false);
++            DepthOnly(true);
+             DrawModelRuns(f);
+-            _gl.ColorMask(true, true, true, true);
++            DepthOnly(false);
+             _gl.DepthMask(false);
+             if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
+             if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+index 2f61dd8..af77646 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+@@ -369,14 +369,14 @@ public sealed partial class GlCore
+         bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
+         if (bias)
+         {
+-            _gl.ColorMask(false, false, false, false);
++            DepthOnly(true);
+             foreach (var m in list)
+             {
+                 if (m.MeshGen != _meshGen) continue;
+                 SendInstance(m, true);
+                 _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart, (uint)m.MeshCount);
+             }
+-            _gl.ColorMask(true, true, true, true);
++            DepthOnly(false);
+             _gl.DepthMask(false);
+             if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, GteDepth.DepthBias / 65536f);
+             if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, GteDepth.DepthSlope);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 3d93f94..a96c90f 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -1674,10 +1674,13 @@ internal static class GlShaders
+             return clamp(1.0 - w / 4096.0, 0.0, 1.0);
+         }
+ 
++        // 0051's depth pass (PrimFs's uDepthOnly): no corner's light is read.
++        uniform int uDepthOnly;
++
+         void main() {
+             vec3 w = inWorld, color = inColorF, cue = inCue;
+             uint flags = inFlags, rgbc = inRgbc;
+-            if ((inLight & 0x80000000u) != 0u) recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue);
++            if (uDepthOnly == 0 && (inLight & 0x80000000u) != 0u) recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue);
+             if (uModel != 0) {
+                 if (!modelFaceKept(inCue, inRgbc)) {
+                     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+@@ -2356,6 +2359,12 @@ internal static class GlShaders
+         // draws, as its unrecorded packets leave it. 0 is off.
+         uniform int uFarPlane;
+ 
++        // 0051, for a draw of the GPU world renderer's: the depth half of the two
++        // passes. Only what decides whether the fragment exists, as the colour pass
++        // decides it (the centre texel's hole), not the light or the filter, which
++        // a pass with colour masked would otherwise run in full. 0 is off.
++        uniform int uDepthOnly;
++
+         void main() {
+             // Written on every path so a 3D triangle's recovered SZ is the
+             // window depth. Everything that recovered none writes the *far*
+@@ -2397,6 +2406,32 @@ internal static class GlShaders
+                 vec3 mp = vec3((mq - uMaskCentre) * (mz / uMaskH), mz);
+                 if (abs(dot(uMaskPlane.xyz, mp) + uMaskPlane.w) > uMaskTol) discard;
+             }
++            if (uDepthOnly != 0) {
++                FragColor = vec4(0.0);
++                BlendColor = vec4(0.0);
++                if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
++                if (texMode == 4) { if (uOpaqueDepth == 1) discard; return; }
++                if (texMode == 5) { if (texture(uExtTex, vUV).a < 0.5 || uOpaqueDepth == 1) discard; return; }
++                vec2 ddx = dFdx(vUV), ddy = dFdy(vUV);
++                if (texMode == 6) {
++                    vec2 fuv = mod(vUV, vec2(uTexWindow.xy) + 1.0) + vec2(uTexWindow.zw);
++                    vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
++                    if (uRepScroll >= 0.0) t.y = fract(t.y - uRepScroll / uRepRect.w);
++                    float a = textureGrad(uRepTex, t, ddx / uRepRect.zw, ddy / uRepRect.zw).a;
++                    if (a < 0.5 || uOpaqueDepth == 1 && a < 0.95) discard;
++                    return;
++                }
++                int du = ddx.x < 0.0 ? int(ceil(vUV.x - 0.0001)) : int(floor(vUV.x + 0.0001));
++                int dv = ddy.y < 0.0 ? int(ceil(vUV.y - 0.0001)) : int(floor(vUV.y + 0.0001));
++                vec4 dt = decodeFluid(waveWrap(ivec2(du, dv)));
++                if (vRepClut != 0 && texMode != 2) {
++                    if (dt.a < 0.5 || uOpaqueDepth == 1 && dt.a < 0.95) discard;
++                    return;
++                }
++                if (dt.rgb == vec3(0.0) && dt.a < 0.5) discard;
++                if (uOpaqueDepth == 1 && dt.a >= 0.5) discard;
++                return;
++            }
+             // 0071. Not into a planar reflection: its view is the mirrored camera's.
+             vec3 extra = vec3(0.0);
+             bool mat = uEmitOn != 0 && vMat != 0u && vLight != 0u;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 1a39332..f13d5a4 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -196,6 +196,8 @@ public static class RetainedScene
+     /// <summary>0085. Main-view draws made, walks that found no target or no frame,
+     /// and static triangles submitted.</summary>
+     public static long MainDraws, MainMissed, MainTriangles;
++    /// <summary>Map draws (main view and mirror) taken in two passes for 0051's tolerance.</summary>
++    public static long MainMapPrepasses;
+     /// <summary>The map's triangles the normal pass drew for the surface buffers.</summary>
+     public static long MainNormalTriangles;
+     /// <summary>0085's probe: read the surface buffer back against the frame's depth
