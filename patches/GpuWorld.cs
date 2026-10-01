@@ -41,11 +41,14 @@ namespace Kf2;
 /// <c>KF2_GPUWORLD_MESHCHECK=1</c> checks the shader's cull against the assembler's).
 /// The first-person arm is drawn from its mesh too, in the game's painter's order
 /// (<see cref="RetainedModels.TryArm"/>; <c>KF2_GPUWORLD_ARM=0</c> to compare), and so
-/// is the sky, before the map (<see cref="RetainedModels.TrySpecial"/>; <c>KF2_GPUWORLD_SKY=0</c>).
+/// is the sky, before the map (<see cref="RetainedModels.TrySpecial"/>; <c>KF2_GPUWORLD_SKY=0</c>),
+/// and the objects near the camera that the clipped map assembler would draw (<c>KF2_GPUWORLD_TILE=0</c>).
+/// The mirror's blended faces are drawn by the backend too (<c>KF2_GPUWORLD_MIRRORBLEND=0</c>), and a
+/// model's blended faces reach the surface buffer as their packets did (<c>KF2_GPUWORLD_BLENDSURFACES=0</c>).
 ///
 /// See "Step 1, the first slice", "Step 1, the second slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice",
-/// "Step 3, the fourth slice", "Step 3, the fifth slice", "Step 3, the sixth slice" and "Step 5, the first slice"
-/// in docs/GPU_RENDERER.md.
+/// "Step 3, the fourth slice", "Step 3, the fifth slice", "Step 3, the sixth slice", "Step 3, the seventh slice",
+/// "Step 3, the eighth slice", "Step 3, the ninth slice" and "Step 5, the first slice" in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
 {
@@ -86,6 +89,9 @@ public static class GpuWorld
         RetainedModels.ArmOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_ARM")?.Trim() != "0";
         RetainedModels.BlendOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_BLEND")?.Trim() != "0";
         RetainedModels.SkyOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_SKY")?.Trim() != "0";
+        RetainedModels.BlendSurfacesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_BLENDSURFACES")?.Trim() != "0";
+        RetainedModels.TileOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_TILE")?.Trim() != "0";
+        RetainedModels.MirrorBlendOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MIRRORBLEND")?.Trim() != "0";
         RetainedMap.RecordsOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDS")?.Trim() != "0";
         RetainedMap.RecordCheck = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDCHECK")?.Trim() is "1";
         MoPose.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSECHECK")?.Trim() is "1";
@@ -265,6 +271,12 @@ public static class GpuWorld
             case "sky off": RetainedModels.SkyOn = false; break;
             case "sky hide": RetainedScene.SkyShown = false; break;
             case "sky show": RetainedScene.SkyShown = true; break;
+            case "blend surfaces on": RetainedModels.BlendSurfacesOn = true; break;
+            case "blend surfaces off": RetainedModels.BlendSurfacesOn = false; break;
+            case "tile on": RetainedModels.TileOn = true; break;
+            case "tile off": RetainedModels.TileOn = false; break;
+            case "mirror blend on": RetainedModels.MirrorBlendOn = true; break;
+            case "mirror blend off": RetainedModels.MirrorBlendOn = false; break;
             case "arm on": RetainedModels.ArmOn = true; break;
             case "arm off": RetainedModels.ArmOn = false; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
@@ -279,6 +291,24 @@ public static class GpuWorld
                     $"{{\"kind\":\"{m.Kind}\",\"model\":{m.Model},\"asm\":{m.Assembler},\"pos\":[{m.X},{m.Y},{m.Z}]}}"));
                 return $"{{\"ok\":true,\"forward\":[{v.R20:F3},{v.R21:F3},{v.R22:F3}],\"cam\":[{v.CamX},{v.CamY},{v.CamZ}],\"models\":[{items}]}}";
             }
+            case "blended":
+            {
+                // The model bank's models a prop may use that have a blended face.
+                if (RecompOne.Runtime.Runtime.Mem is not PSMemory mem) return "{\"ok\":false,\"error\":\"not running\"}";
+                var ids = new List<string>();
+                for (uint id = 0; id < 1024; id++)
+                {
+                    // An id past the bank's end reads garbage, which may leave RAM.
+                    try
+                    {
+                        if (Remaster.Props.Unusable(mem, (int)id) != null) continue;
+                        var kind = KindOf(mem, id);
+                        if (kind != Faces.Opaque) ids.Add($"{id}{(kind == Faces.Subtractive ? "s" : "")}");
+                    }
+                    catch (Exception) { }
+                }
+                return $"{{\"ok\":true,\"blended\":\"{string.Join(" ", ids)}\"}}";
+            }
             case "instances":
             {
                 // The last frame's instances: mesh range, placement, cue, the far test and the light.
@@ -290,11 +320,11 @@ public static class GpuWorld
                     $"\"bk\":[{m.Bk0},{m.Bk1},{m.Bk2}],\"mirrored\":{(m.Mirrored ? "true" : "false")}}}";
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|records on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|scene|instances|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
-               $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"sky\":{(RetainedModels.SkyOn ? "true" : "false")},\"blend\":{(RetainedModels.BlendOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"tile\":{(RetainedModels.TileOn ? "true" : "false")},\"mirrorBlend\":{(RetainedModels.MirrorBlendOn ? "true" : "false")},\"sky\":{(RetainedModels.SkyOn ? "true" : "false")},\"blend\":{(RetainedModels.BlendOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -349,6 +379,7 @@ public static class GpuWorld
     static long _draws, _missed, _tris, _uploads, _nrmTris, _wSlices, _wEmpty, _wTris, _wNoted, _wSorted, _wDeferred;
     static long _gensMax, _gensAt, _builds, _packs, _recUploads;
     static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
+    static long _iTile, _bMirNoted, _bMirDrawn;
     static long _iIns, _iWhole, _iMir, _iDrawn, _iCorners, _iVerts, _iMirDrawn, _iArm, _iArmDrawn, _iArmCalls;
     static long _bNoted, _bSorted, _bDrawn, _bRuns, _sIns, _sDrawn, _sFaces, _wRuns;
     static long _pPosed, _pRigid, _pDeferred, _pMat, _pTexels;
@@ -405,6 +436,8 @@ public static class GpuWorld
         long ins = RetainedModels.Instances - _iIns, iw = RetainedModels.InstancesWhole - _iWhole, im = RetainedModels.InstancesMirror - _iMir;
         long idr = RetainedScene.InstancesDrawn - _iDrawn, ic = RetainedScene.InstanceCorners - _iCorners, iv = RetainedScene.InstanceVertices - _iVerts;
         long imd = RetainedScene.MirrorInstancesDrawn - _iMirDrawn, ia = RetainedModels.ArmInstances - _iArm, iad = RetainedScene.ArmDraws - _iArmDrawn, iac = RetainedScene.ArmCalls - _iArmCalls;
+        long itl = RetainedModels.TileInstances - _iTile;
+        _iTile = RetainedModels.TileInstances;
         _iIns = RetainedModels.Instances; _iWhole = RetainedModels.InstancesWhole; _iMir = RetainedModels.InstancesMirror;
         _iDrawn = RetainedScene.InstancesDrawn; _iCorners = RetainedScene.InstanceCorners; _iVerts = RetainedScene.InstanceVertices;
         _iMirDrawn = RetainedScene.MirrorInstancesDrawn;
@@ -412,7 +445,7 @@ public static class GpuWorld
         _iArmDrawn = RetainedScene.ArmDraws;
         _iArmCalls = RetainedScene.ArmCalls;
         Console.WriteLine($"[KF2] gpu world: meshes {(RetainedModels.MeshesOn ? "on" : "off")}; a draw: " +
-                          $"{(d == 0 ? 0 : (double)ins / d):F1} instance(s) made ({(d == 0 ? 0 : (double)iw / d):F1} whole, {(d == 0 ? 0 : (double)im / d):F1} in the mirror's replay), " +
+                          $"{(d == 0 ? 0 : (double)ins / d):F1} instance(s) made ({(d == 0 ? 0 : (double)iw / d):F1} whole, {(d == 0 ? 0 : (double)im / d):F1} in the mirror's replay, {(d == 0 ? 0 : (double)itl / d):F1} the clipped assembler's), " +
                           $"{(d == 0 ? 0 : (double)idr / d):F1} drawn with {(d == 0 ? 0 : ic / d)} corner(s), {(d == 0 ? 0 : iv / d)} posed vert(ices) uploaded, " +
                           $"{(d == 0 ? 0 : (double)imd / d):F1} in the mirror; store {RetainedScene.MeshCornerCount} corner(s), " +
                           $"{RetainedModels.MeshBuilds} mesh(es) built, {RetainedModels.MeshStale} found changed, {RetainedModels.InstanceRefused} refused in all; " +
@@ -437,7 +470,11 @@ public static class GpuWorld
         Console.WriteLine($"[KF2] gpu world: blend {(RetainedModels.BlendOn ? "on" : "off")}; a draw: " +
                           $"{(d == 0 ? 0 : (double)bn / d):F1} blended face(s) noted, {(d == 0 ? 0 : (double)bs / d):F1} sorted, " +
                           $"{(d == 0 ? 0 : (double)bd / d):F1} drawn in {(d == 0 ? 0 : (double)br / d):F1} run(s); " +
-                          $"{RetainedModels.Subtractive} subtractive submit(s) in all");
+                          $"{RetainedModels.Subtractive} subtractive submit(s) and {string.Join("/", ModelWalk.ViewSpaceSubmits)} in view space (lit/clipped/twin) in all; in the mirror " +
+                          $"{(d == 0 ? 0 : (double)(RetainedScene.MirrorBlendNoted - _bMirNoted) / d):F1} noted, " +
+                          $"{(d == 0 ? 0 : (double)(RetainedScene.MirrorBlendDrawn - _bMirDrawn) / d):F1} drawn; " +
+                          $"{RetainedScene.BlendNormalInstances} instance draw(s) into the surface buffer in all");
+        _bMirNoted = RetainedScene.MirrorBlendNoted; _bMirDrawn = RetainedScene.MirrorBlendDrawn;
         long sk = RetainedModels.SkyInstances - _sIns, sd = RetainedScene.SkyDrawn - _sDrawn, sf = RetainedScene.SkyFacesDrawn - _sFaces;
         _sIns = RetainedModels.SkyInstances; _sDrawn = RetainedScene.SkyDrawn; _sFaces = RetainedScene.SkyFacesDrawn;
         Console.WriteLine($"[KF2] gpu world: sky {(RetainedModels.SkyOn ? "on" : "off")}; a draw: {(d == 0 ? 0 : (double)sk / d):F1} object(s) placed, " +
@@ -461,7 +498,9 @@ public static class GpuWorld
         Console.WriteLine($"[KF2] gpu world: surfaces: {RetainedScene.MainNormalTriangles - _nrmTris} map triangle(s) into the normal pass; " +
                           (RetainedScene.SurfaceChecks == 0 ? "no readback (needs the surface buffer: a reflection or the murk on)" :
                            $"of {px} pixel(s) with a depth, {(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceBehind / px):F2}% whose surface lies behind it, " +
-                           $"{(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceMissing / px):F2}% with none"));
+                           $"{(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceMissing / px):F2}% with none; by id none/opaque/water/overlay/authored/blended " +
+                           string.Join("/", RetainedScene.SurfaceIds)));
+        Array.Clear(RetainedScene.SurfaceIds);
         _nrmTris = RetainedScene.MainNormalTriangles;
         long md = RetainedScene.MirrorDraws - _mDraws;
         Console.WriteLine($"[KF2] gpu world: mirror {(MirrorActive ? "on the GPU" : "on the packets")}; {md} draw(s), " +

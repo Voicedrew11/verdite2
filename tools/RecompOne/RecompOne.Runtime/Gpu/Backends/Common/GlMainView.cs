@@ -142,7 +142,7 @@ public sealed partial class GlCore
             long s0 = System.Diagnostics.Stopwatch.GetTimestamp();
             _bSlot = inst;
             bool sorted = water ? SortWater(f, f.View, f.MainHalves) : ClearWater();
-            bool faces = blend ? SortBlend(f) : ClearBlend();
+            bool faces = blend ? SortBlend(f.BlendFaces, f.Instances) : ClearBlend();
             RetainedScene.WaterPending = sorted || faces;
             RetainedScene.MainWaterSortTicks += System.Diagnostics.Stopwatch.GetTimestamp() - s0;
             if (water && PlanarReflections.Enabled) NoteWaterPlane(f, rt, cx, cy);
@@ -189,7 +189,8 @@ public sealed partial class GlCore
             DrawInstances(f.MirrorInstances, inst);
             RetainedScene.MirrorInstancesDrawn += f.MirrorInstances.Count;
         }
-        if (RetainedScene.MirrorWater && WaterInView()) DrawMirrorWater(f);
+        bool water = RetainedScene.MirrorWater && WaterInView();
+        if (water || inst >= 0 && f.MirrorBlendFaces.Count > 0) DrawMirrorWater(f, inst, water);
         EndWorldState();
         EndWorldUniforms();
         _gl.UseProgram(0);
@@ -202,32 +203,38 @@ public sealed partial class GlCore
         return true;
     }
 
-    /// <summary>The mirror's blended map faces, whole, far to near, after its opaque
-    /// ones and its models: tested and not written, and neither swollen nor rippled, as a
-    /// capture's water packets are. From below the plane, level water faces away and is
-    /// culled; what is left is water standing other than level.</summary>
-    void DrawMirrorWater(RetainedScene.Frame f)
+    /// <summary>The mirror's blended faces, after its opaque ones and its models: the
+    /// map's whole, and the models' (<see cref="RetainedScene.Frame.MirrorBlendFaces"/>),
+    /// merged in the order the mirrored table would walk their packets; tested and not
+    /// written, and neither swollen nor rippled, as a capture's blended packets are. From
+    /// below the plane, level water faces away and is culled; what is left is water
+    /// standing other than level.</summary>
+    void DrawMirrorWater(RetainedScene.Frame f, int inst, bool water)
     {
-        if (!SortWater(f, f.MirrorView, f.MirrorHalves)) return;
-        _gl.BindVertexArray(_worldVao);
-        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
-        bool bias = GteDepth.ZBuffer && (GteDepth.DepthBias > 0f || GteDepth.DepthSlope > 0f);
-        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, bias ? GteDepth.DepthBias / 65536f : 0f);
-        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, bias ? GteDepth.DepthSlope : 0f);
-        _gl.Enable(EnableCap.CullFace);
-        _gl.DepthMask(false);
-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
+        bool sorted = water ? SortWater(f, f.MirrorView, f.MirrorHalves) : ClearWater();
+        _bSlot = inst;
+        bool faces = inst >= 0 && f.MirrorBlendFaces.Count > 0 ? SortBlend(f.MirrorBlendFaces, f.MirrorInstances) : ClearBlend();
+        if (sorted || faces)
         {
-            int n = _wSortCount[range];
-            if (n == 0) continue;
-            DrawBlended(range - 1, n, _wSortStart[range] * 4L);
-            RetainedScene.MirrorWaterTriangles += n / 3;
+            for (int r = 1; r <= 4; r++)
+            {
+                _wAt[r] = 0;
+                _wWalk[r] = _wSortCount[r] / 3;
+                _wTake[r] = _wWalk[r];
+                _bAt[r - 1] = 0;
+                _bWalk[r - 1] = _bModeCount[r - 1];
+                _bTake[r - 1] = _bWalk[r - 1];
+                RetainedScene.MirrorWaterTriangles += _wTake[r];
+            }
+            _gl.Enable(EnableCap.CullFace);
+            DrawMerged(f, f.MirrorInstances, 0f, 0f, 0f, waves: false, opaqueDepth: false, _wTake, _bTake);
+            if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+            if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+            if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
         }
-        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
-        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
-        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
-        // The main view sorts its own water again.
-        Array.Clear(_wSortCount);
+        // The main view sorts its own again.
+        ClearWater();
+        ClearBlend();
     }
 
     void MarkDrawn(GlDisplayRt rt)
@@ -473,6 +480,45 @@ public sealed partial class GlCore
             (cx, cy) = BeginWorldMain(f, rt, _wOffX, _wOffY, _wMips);
             _wOpen = true;
         }
+        DrawMerged(f, f.Instances, cx, cy, f.View.H, waves: true, opaqueDepth: true, take, btake);
+        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
+        {
+            _wAt[range] += take[range];
+            _bAt[range - 1] += btake[range - 1];
+        }
+        _gl.BindVertexArray(_worldVao);
+        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+        EndWorldState();
+        if (!left) CloseWorldMain();
+        EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
+
+        // One entry for the normal pass per run of the list the water went in after.
+        if (AoGeometry.Active && rt.Geo.WorldSerial == f.Serial)
+        {
+            var w = rt.Geo.Water;
+            if (w.Count > 0 && w[^1].At == rt.Geo.Count) w[^1] = (w[^1].At, lo, w[^1].Hi);
+            else w.Add((rt.Geo.Count, lo, hi));
+        }
+        MarkDrawn(rt);
+        RetainedScene.MainWaterSlices++;
+        RetainedScene.MainWaterTriangles += any;
+        return left;
+    }
+
+    /// <summary>
+    /// The blended streams from their heads to where the walk has reached: the water's
+    /// four ranges (<see cref="_wAt"/> to <see cref="_wWalk"/>) and the models' four
+    /// modes (<see cref="_bAt"/> to <see cref="_bWalk"/>), in the order the table would
+    /// walk their packets, tested and not written; then, with <paramref name="opaqueDepth"/>,
+    /// the depth of their texels the GPU draws opaque. The world program is bound for
+    /// the view; <paramref name="take"/> and <paramref name="btake"/> are what each
+    /// stream draws. Leaves the world VAO bound.
+    /// </summary>
+    void DrawMerged(RetainedScene.Frame f, List<RetainedScene.ModelInstance> insts, float cx, float cy, float h,
+                    bool waves, bool opaqueDepth, int[] take, int[] btake)
+    {
         bool models = false;
         // The world VAO and the static map's textures, or the mesh VAO and the models'.
         void EnterWater()
@@ -499,7 +545,7 @@ public sealed partial class GlCore
         // A run of one instance's blended faces, entries a to b of the sorted list.
         void DrawFaces(int a, int b, int blend)
         {
-            var m = f.Instances[_bEnt[a].Inst];
+            var m = insts[_bEnt[a].Inst];
             if (m.MeshGen != _meshGen || !RetainedScene.BlendShown) return;
             EnterModels();
             SendInstance(m, true);
@@ -553,7 +599,7 @@ public sealed partial class GlCore
                 while (j < end[a] && (o < 0 || Before(a, j, o, head[o]))) j++;
                 int range = a + 1, mode = a;
                 EnterWater();
-                SendWorldWaves(mode == 0 || mode == 3, cx, cy, f.View.H);
+                SendWorldWaves(waves && (mode == 0 || mode == 3), cx, cy, h);
                 Draw(range, i, j, mode);
                 SendWorldWaves(false, 0f, 0f, 0f);
             }
@@ -562,7 +608,8 @@ public sealed partial class GlCore
                 int inst = _bEnt[i].Inst;
                 while (j < end[a] && _bEnt[j].Inst == inst && (o < 0 || Before(a, j, o, head[o]))) j++;
                 DrawFaces(i, j, a - 4);
-                RetainedScene.BlendDrawn += j - i;
+                if (insts == f.Instances) RetainedScene.BlendDrawn += j - i;
+                else RetainedScene.MirrorBlendDrawn += j - i;
             }
             RetainedScene.MainWaterRuns++;
             head[a] = j;
@@ -570,7 +617,7 @@ public sealed partial class GlCore
         // The texels without the semi-transparency bit draw opaque, so they hide what
         // is behind them from the occlusion pass, as a blended packet's do: their true
         // depth, after the colour.
-        if (GteDepth.SurfacesWanted && _uwOpaqueDepth >= 0)
+        if (opaqueDepth && GteDepth.SurfacesWanted && _uwOpaqueDepth >= 0)
         {
             _gl.Disable(EnableCap.Blend);
             _gl.ColorMask(false, false, false, false);
@@ -590,7 +637,7 @@ public sealed partial class GlCore
                     int j = i + 1, inst = _bEnt[i].Inst;
                     while (j < z && _bEnt[j].Inst == inst) j++;
                     // A solid model hides what is behind it with every texel.
-                    _gl.Uniform1(_uwOpaqueDepth, f.Instances[inst].Solid ? 2 : 1);
+                    _gl.Uniform1(_uwOpaqueDepth, insts[inst].Solid ? 2 : 1);
                     DrawFaces(i, j, -1);
                     i = j;
                 }
@@ -598,30 +645,7 @@ public sealed partial class GlCore
             _gl.Uniform1(_uwOpaqueDepth, 0);
         }
         if (models) EndInstances(true);
-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
-        {
-            _wAt[range] += take[range];
-            _bAt[range - 1] += btake[range - 1];
-        }
         _gl.BindVertexArray(_worldVao);
-        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
-        if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
-        if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
-        EndWorldState();
-        if (!left) CloseWorldMain();
-        EndGpuTimer(query, GpuWork.Batch, 0, Diagnostics.GpuTimes.Pass.World);
-
-        // One entry for the normal pass per run of the list the water went in after.
-        if (AoGeometry.Active && rt.Geo.WorldSerial == f.Serial)
-        {
-            var w = rt.Geo.Water;
-            if (w.Count > 0 && w[^1].At == rt.Geo.Count) w[^1] = (w[^1].At, lo, w[^1].Hi);
-            else w.Add((rt.Geo.Count, lo, hi));
-        }
-        MarkDrawn(rt);
-        RetainedScene.MainWaterSlices++;
-        RetainedScene.MainWaterTriangles += any;
-        return left;
     }
 
     // The models' blended faces of the main view, sorted by blend mode, then far to
@@ -665,10 +689,9 @@ public sealed partial class GlCore
     /// a slot the last built first. Their corners go to an element buffer on the mesh
     /// VAO. False when none is left to draw.
     /// </summary>
-    unsafe bool SortBlend(RetainedScene.Frame f)
+    unsafe bool SortBlend(List<RetainedScene.BlendFace> src, List<RetainedScene.ModelInstance> insts)
     {
         ClearBlend();
-        var src = f.BlendFaces;
         int n = src.Count;
         if (n == 0 || !InstancesReady || _bSlot < 0) return false;
         if (_bEnt.Length < n) { _bEnt = new RetainedScene.BlendFace[n * 2]; _bIdxAt = new int[n * 2]; }
@@ -676,7 +699,7 @@ public sealed partial class GlCore
         for (int i = 0; i < n; i++)
         {
             var e = src[i];
-            if (f.Instances[e.Inst].MeshGen != _meshGen || RetainedScene.BlendOnly >= 0 && e.Inst != RetainedScene.BlendOnly) continue;
+            if (insts[e.Inst].MeshGen != _meshGen || RetainedScene.BlendOnly >= 0 && e.Inst != RetainedScene.BlendOnly) continue;
             _bEnt[m++] = e;
         }
         if (m == 0) return false;
@@ -1080,7 +1103,7 @@ public sealed partial class GlCore
         _gl.UseProgram(_progWorldNrm);
         void Unit(string n, int v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
         Unit("uVram", 0); Unit("uHalves", HalvesUnit); Unit("uFrameDepth", FrameDepthUnit); Unit("uVeilPass", 0);
-        Unit("uSwellOn", 0);
+        Unit("uSwellOn", 0); Unit("uModelBlend", 0);
         _gl.UseProgram(0);
     }
 
@@ -1102,6 +1125,7 @@ public sealed partial class GlCore
 
         var f = RetainedScene.Find(geo.WorldSerial);
         _wnReady = false;
+        _wnFrame = f;
         if (_progWorldNrm != 0 && f != null && RetainedScene.StaticCount[0] > 0)
         {
             _wnReady = true;
@@ -1159,11 +1183,13 @@ public sealed partial class GlCore
     }
 
     /// <summary>The map's water into the normal and surface buffers, one slice of view
-    /// depth, where the list says the colour pass drew it. Only water: WorldNormalVs
-    /// drops every other blended face. The world normal program keeps what
-    /// <see cref="DrawWorldNormals"/> set.</summary>
+    /// depth, where the list says the colour pass drew it; and the models' blended faces
+    /// that are a surface (<see cref="RetainedScene.ModelInstance.BlendSurfaces"/>) in the
+    /// same slice. Only those: WorldNormalVs drops every other blended face. The world
+    /// normal program keeps what <see cref="DrawWorldNormals"/> set.</summary>
     void DrawWorldWaterNormals(float lo, float hi)
     {
+        DrawBlendNormals(lo, hi);
         _gl.UseProgram(_progWorldNrm);
         if (_uwnZSlice >= 0)
             _gl.Uniform2(_uwnZSlice, float.IsNegativeInfinity(lo) ? -1f : lo, float.IsPositiveInfinity(hi) ? 1e30f : hi);
@@ -1176,6 +1202,46 @@ public sealed partial class GlCore
         foreach (int range in (ReadOnlySpan<int>)[1, 4])
             if (RetainedScene.StaticCount[range] > 0) RetainedScene.MainNormalTriangles += DrawStaticChunks(range) / 3;
         _gl.Disable(EnableCap.CullFace);
+        if (_uwnZSlice >= 0) _gl.Uniform2(_uwnZSlice, 0f, 0f);
+    }
+
+    RetainedScene.Frame? _wnFrame;
+    int _uwnModelBlend = -2, _uwnModelSolid, _uwnModelTwin;
+
+    /// <summary>The frame's instances' blended faces that are a surface, in a slice of view
+    /// depth; each pixel's own depth decides, as for the water.</summary>
+    void DrawBlendNormals(float lo, float hi)
+    {
+        var f = _wnFrame;
+        int slot = f == null ? 0 : f.Serial & (ModelRing - 1);
+        if (f == null || _uwnModel < 0 || !RetainedScene.MainModelsShown || !RetainedScene.BlendShown
+            || _mvSerial[slot] != f.Serial || _mvGen[slot] != _meshGen) return;
+        bool any = false;
+        foreach (var m in f.Instances) any |= m.BlendSurfaces && m.MeshGen == _meshGen;
+        if (!any) return;
+        if (_uwnModelBlend == -2)
+        {
+            _uwnModelBlend = _gl.GetUniformLocation(_progWorldNrm, "uModelBlend");
+            _uwnModelSolid = _gl.GetUniformLocation(_progWorldNrm, "uModelSolid");
+            _uwnModelTwin = _gl.GetUniformLocation(_progWorldNrm, "uModelTwin");
+        }
+        if (_uwnModelBlend < 0) return;
+        _gl.UseProgram(_progWorldNrm);
+        if (_uwnZSlice >= 0)
+            _gl.Uniform2(_uwnZSlice, float.IsNegativeInfinity(lo) ? -1f : lo, float.IsPositiveInfinity(hi) ? 1e30f : hi);
+        BeginInstances(slot, false);
+        _gl.Uniform1(_uwnModelBlend, 1);
+        foreach (var m in f.Instances)
+        {
+            if (!m.BlendSurfaces || m.MeshGen != _meshGen) continue;
+            SendInstance(m, false);
+            _gl.Uniform1(_uwnModelSolid, m.Solid ? 1 : 0);
+            _gl.Uniform1(_uwnModelTwin, m.TwinMode - 1);
+            _gl.DrawArrays(PrimitiveType.Triangles, m.MeshStart + m.MeshCount, (uint)(m.MeshAll - m.MeshCount));
+            RetainedScene.BlendNormalInstances++;
+        }
+        _gl.Uniform1(_uwnModelBlend, 0);
+        EndInstances(false);
         if (_uwnZSlice >= 0) _gl.Uniform2(_uwnZSlice, 0f, 0f);
     }
 
@@ -1204,6 +1270,7 @@ public sealed partial class GlCore
             RetainedScene.SurfaceDepthPixels++;
             int i = (y * sw + x) * 4;
             float z = _chkSurf[i + 2] * 65536f, id = _chkSurf[i + 3], dz = d * 65536f;
+            RetainedScene.SurfaceIds[id < 0.5f ? 0 : id < 1.5f ? 1 : id < 2.5f ? 2 : id < 3.5f ? 3 : id < 255.5f ? 4 : 5]++;
             if (id < 0.5f || z <= 0f) { if (id < 2.5f || id > 3.5f) RetainedScene.SurfaceMissing++; continue; }
             if (z > dz + 64f + dz / 64f) RetainedScene.SurfaceBehind++;
         }

@@ -41,6 +41,7 @@ public sealed partial class GlCore
     int _uwModel = -1, _uwModelBase, _uwModelR, _uwModelT, _uwModelFar, _uwModelNear, _uwModelLlm, _uwModelCue, _uwModelRgbc, _uwModelMat, _uwModelGteC = -1;
     int _uwnModel = -1, _uwnModelBase, _uwnModelR, _uwnModelT, _uwnModelFar, _uwnModelNear, _uwnModelMat, _uwnModelGteC = -1;
     int _uwModelPose = -1, _uwModelPoseW = -1, _uwnModelPose = -1, _uwnModelPoseW = -1, _uwModelSky = -1;
+    int _uwModelTile = -1, _uwnModelTile = -1;
     // The view-space placement (the arm), per program: uModelView, then the three rows and T.
     readonly int[] _uwView = [-1, -1, -1, -1, -1], _uwnView = [-1, -1, -1, -1, -1];
     static readonly string[] ViewNames = ["uModelView", "uModelVR0", "uModelVR1", "uModelVR2", "uModelVT"];
@@ -53,9 +54,11 @@ public sealed partial class GlCore
         _uwModelFar = L("uModelFar"); _uwModelNear = L("uModelNear"); _uwModelLlm = L("uModelLlm"); _uwModelCue = L("uModelCue");
         _uwModelRgbc = L("uModelRgbc"); _uwModelMat = L("uModelMat"); _uwModelGteC = L("uModelGteC");
         _uwModelPose = L("uModelPose"); _uwModelPoseW = L("uModelPoseW"); _uwModelSky = L("uModelSky");
+        _uwModelTile = L("uModelTile");
         for (int i = 0; i < ViewNames.Length; i++) _uwView[i] = L(ViewNames[i]);
         _gl.UseProgram(_progWorld);
         if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, 0);
+        if (_uwModelTile >= 0) _gl.Uniform1(_uwModelTile, 0);
         if (_uwView[0] >= 0) _gl.Uniform1(_uwView[0], 0);
         if (_uwModel >= 0) _gl.Uniform1(_uwModel, 0);
         int u = L("uModelVerts");
@@ -67,10 +70,11 @@ public sealed partial class GlCore
             int N(string n) => _gl.GetUniformLocation(_progWorldNrm, n);
             _uwnModel = N("uModel"); _uwnModelBase = N("uModelBase"); _uwnModelR = N("uModelR"); _uwnModelT = N("uModelT");
             _uwnModelFar = N("uModelFar"); _uwnModelNear = N("uModelNear"); _uwnModelMat = N("uModelMat"); _uwnModelGteC = N("uModelGteC");
-            _uwnModelPose = N("uModelPose"); _uwnModelPoseW = N("uModelPoseW");
+            _uwnModelPose = N("uModelPose"); _uwnModelPoseW = N("uModelPoseW"); _uwnModelTile = N("uModelTile");
             for (int i = 0; i < ViewNames.Length; i++) _uwnView[i] = N(ViewNames[i]);
             _gl.UseProgram(_progWorldNrm);
             if (_uwnView[0] >= 0) _gl.Uniform1(_uwnView[0], 0);
+            if (_uwnModelTile >= 0) _gl.Uniform1(_uwnModelTile, 0);
             if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 0);
             int v = N("uModelVerts");
             if (v >= 0) _gl.Uniform1(v, ModelVertsUnit);
@@ -282,10 +286,15 @@ public sealed partial class GlCore
         if (colour)
         {
             if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, 0);
+            if (_uwModelTile >= 0) _gl.Uniform1(_uwModelTile, 0);
             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
             _gl.Uniform1(_uwModel, 0);
         }
-        else if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 0);
+        else
+        {
+            if (_uwnModelTile >= 0) _gl.Uniform1(_uwnModelTile, 0);
+            if (_uwnModel >= 0) _gl.Uniform1(_uwnModel, 0);
+        }
         _gl.ActiveTexture(TextureUnit.Texture0 + MipTableUnit);
         _gl.BindTexture(TextureTarget.TextureBuffer, _mipTableTex);
         _gl.ActiveTexture(TextureUnit.Texture0);
@@ -316,6 +325,7 @@ public sealed partial class GlCore
         if (!colour)
         {
             _gl.Uniform1(_uwnModelBase, m.VertBase);
+            if (_uwnModelTile >= 0) _gl.Uniform1(_uwnModelTile, m.Tile ? 1 : 0);
             if (_uwnModelPose >= 0) _gl.Uniform1(_uwnModelPose, pose);
             if (_uwnModelPoseW >= 0) _gl.Uniform1(_uwnModelPoseW, weight);
             _gl.UniformMatrix3(_uwnModelR, 1, true, _m9);
@@ -327,6 +337,7 @@ public sealed partial class GlCore
         }
         _gl.Uniform1(_uwModelBase, m.VertBase);
         if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, m.Sky ? 1 : 0);
+        if (_uwModelTile >= 0) _gl.Uniform1(_uwModelTile, m.Tile ? 1 : 0);
         if (_uwModelPose >= 0) _gl.Uniform1(_uwModelPose, pose);
         if (_uwModelPoseW >= 0) _gl.Uniform1(_uwModelPoseW, weight);
         _gl.UniformMatrix3(_uwModelR, 1, true, _m9);

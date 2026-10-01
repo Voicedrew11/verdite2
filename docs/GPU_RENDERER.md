@@ -15,6 +15,10 @@ leaves it out (measured, not judged). Its third keeps their vertices there too, 
 the vertex shader blends an animated model's pose (bit-identical to the packets'
 picture).
 Step 3's fifth slice draws a model's blended faces, effects and billboards in the table's order; its sixth draws the sky (the objects of kind `0xF0`) and subtractive faces, and puts every blend mode in one order.
+Its seventh draws the objects near the camera (the clipped assembler's) from their meshes, so the
+object walk draws 0 packets in every area at arrival; its eighth the mirror's blended faces; its
+ninth puts a model's blended faces in the surface buffer as their packets were. Step 3 is done but
+for the submits placed in view space, which none was seen to make.
 Step 5's first slice draws the planar walk's mirror on the renderer: its map, its
 water and its opaque models, judged by eye. Step 1's second slice lights the map in
 the vertex shader from the light records, so a record the game rewrites is an upload
@@ -377,6 +381,15 @@ come after (decided 2026-09-28), unless an issue is something a later step build
    of them, 16,000 units away). Not the facing cull, the depth test (off, it does not
    appear), the depth bias (400x, no change) nor the transform (kept running, no change);
    the blended draw issues and the faces are noted with boxes at the hexagon. Not found.
+8. **A creature at the eye lit brighter on the GPU** (measured, 2026-10-01). At area 1's warp
+   point, a minute after arriving, with 14 effects of model 70 in the walk, creature 144
+   standing at the camera read 18-20 levels brighter on the GPU on 0.4-1.5% of the picture
+   (worst block 1.0), with the in-game menu up and with it closed; the packets equal the GTE's
+   own corner colours there (`gpuworld perpixel off`). The first slice's capture (`gpuworld
+   meshes off`) reads the same as the instances, so it is not the mesh path, nor the blended
+   faces (`gpuworld blend off`). In a fresh run at the same spot, with the creature and the
+   effects in view and with the menu up, it did not come back (worst block 0.06-0.29). Not
+   found.
 
 ### Step 2: every map feature in the renderer
 
@@ -1028,11 +1041,14 @@ The census of packets left in the world (`KF2_DRAWCENSUS=1`): the geometry submi
   asked for it, stay on the packets whole. (Done: "Step 3, the sixth slice".)
 - **A twin placed in view space** (the screen-space effects, matrix 0) and **the clipped
   assembler's blended faces** (objects near the camera) stay on the packets; not counted.
-- **The mirror** still builds the models' blended packets.
+  (The clipped assembler's: done, "Step 3, the seventh slice". View space: counted there,
+  and none was seen.)
+- **The mirror** still builds the models' blended packets. (Done: "Step 3, the eighth
+  slice".)
 - **A blended face with an authored material** does not reach the surface buffer, nor does
   a solid model's reach the normal pass as the opaque it was; the packets' did, with a
-  material. Not measured.
-- Frame cost not measured.
+  material. Not measured. (Done: "Step 3, the ninth slice".)
+- Frame cost not measured. (Measured in "Step 3, the seventh slice".)
 
 #### Step 3, the sixth slice
 
@@ -1114,6 +1130,162 @@ and 4: 144.0 drawn at 20.0 ticks/s, `[present] wide 288`, no GL error under `KF2
 **Not checked:** any of it by eye; a sky object at another key, which stays on its packets; a
 real subtractive face.
 
+#### Step 3, the seventh slice
+
+**The objects near the camera drawn from their meshes: the clipped map assembler's models,
+their opaque faces and their blended ones. Mechanism measured; not judged by eye.**
+`KF2_GPUWORLD_TILE=0` or `gpuworld tile off` is the comparison (the first slice's capture,
+the blended faces on the packets). The runtime half amends `0085` (its thirteenth diff:
+`ModelInstance.Tile`, `uModelTile` and `modelTileKept` in `ModelGlsl`); the port half is
+`RetainedModels.TryInstance`'s `tile` and `ModelWalk.RunSubmit`.
+
+**What it does.** The object walk hands an object to `func_80030540` instead of the lit
+assembler when its visibility byte's `0x80` bit says it is near (assembler byte `0xFE`). That
+submit is now an instance like any other, from the same mesh the lit assembler's would use (the
+map's face format is the lit assembler's flat `0x24` and `0x2C`), so neither the submitter's
+transform, nor the assembler's own near transform (`func_8002E7CC`), nor the assembler runs.
+Three things differ from a lit instance, all from what that assembler does:
+
+- **No depth range.** It links every face at its mean SZ over four plus the bias, clamped to
+  slot 16 and wrapped at `0x2000`, and drops none for its depth. A blended face is keyed the
+  same way.
+- **The face test** (`modelTileKept`). A face whose corners the GTE projects without
+  saturating (in front of H/2, on the screen's range) keeps its facing on the screen, a quad
+  on its whole loop (the diagonals' cross), as `TileFaceKept` keeps it. Any other goes to the
+  game's clipper, which here is the GPU's near clip; its facing is its plane against the eye,
+  which is the facing of what the clip leaves. The transform's own refusal (its flag word not
+  exactly `0x1000`) also refuses a vertex whose depth cue does not saturate, far away; such a
+  face is clipped by the game to the same face, so the screen test serves.
+- **No saturated placement** (`modelPlace` stands down): the clipper hands the GPU corners at
+  their true projection.
+
+It fogs on the knee curve alone (`(mode & 0x8000)` does not pick the offset curve there), and
+is lit from its normals' dots as a flat lit face is. The MO blender may leave its pose to the
+store as it does for a lit model. In the mirror the main view's instance serves when the model
+has no blended face (its test is per view, in the shader).
+
+**Measured**, the harness of Step 2's second slice (render scale 5, 16:9, paused, pinned
+camera, each picture against the models on their packets):
+
+| view | the models cover | GPU | capture (`tile off`) | instances with `blend off` |
+|---|---|---|---|---|
+| area 1 spawn, objects 385 and 486, from the spawn and 1,500 units back, pitch 0 and 150 (8) | 3.2-11.5% | worst block 0.06-0.29, at most 0.33% past 16 levels | 0.11-0.27 | the capture's, to the digit |
+| area 6, objects 386, 382 and 381 near a door, near and 1,500 back (6) | 3.3-29.7% | 0.06-0.18, at most 0.34% | the same | |
+
+The opaque faces drawn from the mesh are the capture's, to the digit. What is left is object
+486's blended faces (it is almost all blended): 1.3-1.8% of pixels past 4 levels, 0.2% past 16,
+mixed in sign across the faces. The game sends those faces to its clipper (near, or far enough
+that the depth cue is not saturated), whose new corners carry whole-texel UVs (Step 3's first
+slice), and the GPU clips exactly.
+
+**The census** (`KF2_DRAWCENSUS=1`, slot 2, `warp 0` to `warp 7` with `KF2_DEBUG_GODMODE=1
+KF2_AUTORELOAD=0`, each warp read back from `state`): stage 13's object walk draws **0 packets
+in every area at arrival**, against area 1's 4.7 and area 3's 1.1 before (these objects' blended
+faces). What is left is the HUD (56.9) and the screen tint. `ModelWalk.ViewSpaceSubmits` counts
+the submits placed in view space (matrix 0, `func_8002E9B8`'s orthographic transform, the
+probe's "in view space" figure): none in any area. They stay on the packets, and are 2D in
+effect: the transform takes the position as the screen and writes a constant depth.
+
+**Cost**, uncapped (`KF2_FPS=off KF2_PROFILE=1`), paused at the area-1 spawn aimed at object
+486, render scale 5:
+
+| | frame work | fps | GPU per present |
+|---|---|---|---|
+| models on the packets | 0.96 ms | 977 | 0.77 ms |
+| the capture (`tile off`) | 0.89-0.92 ms | 1,010-1,048 | 0.71-0.74 ms |
+| instances | 0.85-0.86 ms | 1,083-1,093 | 0.68 ms |
+
+**The fifth slice's cost**, now measured: paused at area 4's arrival (the crystals, 1,150
+blended faces a frame), the models' blended faces on the packets against on the GPU: frame work
+2.06-2.10 to 1.73-1.76 ms, 461-470 to 547-557 fps, GPU per present 1.00 to 0.63 ms. At area 7's
+arrival no blended face is in view and the two read the same (1.04 ms); the models on the packets
+against on the GPU there: 2.70 to 1.04 ms, 361 to 910 fps.
+
+At 144 fps in areas 1, 4, 7 and `fdat02`: 144.0 drawn at 20.0 ticks/s, `[present] wide 285`, and
+no GL error under `KF2_GLDEBUG=1` (whose own alternate seconds read 140.8).
+
+**A menu over the GPU world** (`MenuWorld`), unchecked until now: in area 1 with the in-game
+menu up (Start), the models on the GPU against on the packets read worst block 0.11.
+
+**Not checked:** any of it by eye; `LoopPacing`'s redraws; a submit in view space, none having
+been seen.
+
+#### Step 3, the eighth slice
+
+**The mirror's blended faces drawn by the renderer: a model's translucent faces, effects and
+billboards in the planar walk's replay. Mechanism measured; not judged by eye.**
+`KF2_GPUWORLD_MIRRORBLEND=0` or `gpuworld mirror blend off` is the comparison (the mirrored
+table's packets). The runtime half amends `0085` (its thirteenth diff: `Frame.MirrorBlendFaces`,
+`DrawMirrorWater` merging, `DrawMerged` split out of `DrawWorldWater`); the port half is
+`RetainedModels.Instance`.
+
+**What it does.** A model with blended faces is not the mirror's copy of the main view's
+instance, since a blended face's key is the view's: the replay submits it again. That submit is
+now an instance too, its blended faces keyed from the mirrored GTE's matrix
+(`RetainedScene.AddBlendFace`'s `mirror`), so the replay runs neither the transform nor an
+assembler for it. The backend sorts them and merges them with the mirror's blended map faces in
+the order the mirrored table would walk them (`DrawMerged`, the main view's merge, which
+`DrawWorldWater` now also calls), drawn whole as the capture's table walk reaches slot 1. Before,
+the mirror's water was drawn at slot 1 and its models' blended packets after it, whatever their
+keys.
+
+**Measured.** `fdat02` has no blended model at the pool, so a prop was placed in a scratch pack:
+model 347 (an additive effect object of `fdat02`'s own bank, at scale 6) above the water. Four
+views from the spawn, pitch 300 and 500, the prop at two places; the reflection of its blended
+faces covers 0.35-0.65% of the picture:
+
+| | pixels past 4 levels | worst block |
+|---|---|---|
+| the mirror's blended faces on the GPU against on its packets | 0.0000-0.0001 | 0.00-0.02 |
+
+124-192 blended faces a frame noted in the mirror, as many drawn.
+
+**Not checked:** by eye; a mirror where water and a model's blended faces overlap, which no
+view had (from below the plane, level water faces away).
+
+#### Step 3, the ninth slice
+
+**A model's blended faces in the surface buffer, as their packets were. Mechanism measured;
+the picture does not move, so there is nothing new to judge by eye.**
+`KF2_GPUWORLD_BLENDSURFACES=0` or `gpuworld blend surfaces off` is the comparison (the faces left
+out). The runtime half amends `0085` (its thirteenth diff: `ModelInstance.BlendSurfaces` and
+`TwinMode`, `uModelBlend`, `uModelSolid`, `uModelTwin` in `WorldNormalVs`, `DrawBlendNormals`);
+the port half is `RetainedModels`.
+
+**What the packets did.** `GlCore.DrawTri` keeps a blended triangle for the normal and surface
+pass when it has a material: a solid model's (a door, `zMode` 4) as an opaque surface, so the
+occlusion sees all of it; any other with the packet's authored material, or the water's on one of
+the water's rects in an averaging blend, as a blended surface (its id plus 256), which keeps the
+normal under it. The GPU's blended faces reached neither.
+
+**What it does.** A mesh's faces on the water's rects carry `FlagWater` (classified when the mesh
+is built; the meshes are forgotten when the rects change). An instance whose blended faces are
+drawn by the backend and that is solid, or has a material, or has such faces, is marked
+`BlendSurfaces`, and the normal pass draws its blended faces through `WorldNormalVs` with
+`uModelBlend`: solid as the opaque surface (its material, else `Opaque`), otherwise with its
+material, or water where the face is on the water's rect in mode 0 or 3 (the twin's rate taken
+for the face's own), and nothing else. They go in with the map's water, in the same slices of view
+depth (`DrawWorldWaterNormals`), so a face in front of the water is drawn after it and one under
+it before, by each pixel's own depth.
+
+**Measured.** Area 6, a door (model 386, solid, the clipped assembler's, 70 blended faces), from
+1,500 units, the reflection pass on (`KF2_MURK=1`) and the probe's surface readback (now with a
+histogram by id):
+
+| | no surface | opaque | overlay | blended |
+|---|---|---|---|---|
+| the packets | 0 | 152,117 | 3,562 | 2,752 |
+| the GPU | 0 | 152,117 | 3,562 | 2,752 |
+| the GPU, the faces left out | 113,417 (73.3%) | 38,700 | 3,562 | 2,752 |
+
+Of 158,453 samples. The picture, with the occlusion on, reads worst block 0.00 against the
+packets either way (the door's blended faces cover 47-57% of it): the occlusion rebuilds a normal
+from the depth where the buffer has none, and a door is flat. What the surface buffer is for
+beyond that, the murk and a reflection on a blended model face, was not seen in a view.
+
+**Not checked:** an authored material on a model's blended face, and a model's face on the water's
+texture standing level in water.
+
 ### Step 4: the old world path off
 
 The walks stop building triangles. `PolyAssembler`, `TileWalk` and `ModelWalk`
@@ -1150,6 +1322,11 @@ draw: the models' blended faces, effects and billboards (Step 3's remainder) and
 half with a subtractive face. Until those are on the renderer, `PolyAssembler`,
 `TileWalk` and `ModelWalk` cannot drop their assembling halves; what they skip already
 (opaque map halves, opaque lit models) they skip now.
+
+**Since Step 3's seventh slice, nothing in stage 13 blocks it at arrival**: the object walk draws
+0 packets in every area (see that slice), so the only 3D the assembling halves still build is
+what a comparison switch puts back, a submit in view space (none seen), and the modal loops this
+census cannot see.
 
 ### Step 5: every extra view on the same renderer
 

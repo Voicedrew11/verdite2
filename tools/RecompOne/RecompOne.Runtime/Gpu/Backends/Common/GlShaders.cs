@@ -685,6 +685,11 @@ internal static class GlShaders
         // The sky (func_8002F918): a face is kept by its facing alone, on whole
         // pixels, whatever its depth; lit per corner, with no cue.
         uniform int   uModelSky;
+        // An object near the camera (func_80030540): no depth range; a face whose
+        // corners its transform projects keeps the facing on the screen, a quad on its
+        // whole loop, and any other goes to the game's clipper, which here is the GPU's
+        // near clip and the face's plane against the eye.
+        uniform int   uModelTile;
 
         ivec3 modelPosed(int i) {
             if (uModelPose < 0) return texelFetch(uModelVerts, uModelBase + i).xyz;
@@ -730,7 +735,7 @@ internal static class GlShaders
         // assembler clips nothing, so neither does the near plane here. Anywhere else
         // the projection is the ordinary one, unchanged.
         vec4 modelPlace(vec4 p, vec3 v) {
-            if (uModel == 0) return p;
+            if (uModel == 0 || uModelTile != 0) return p;
             if (v.z >= uH * 0.5) {
                 vec2 raw = uModelGteC + uH * v.xy / v.z;
                 if (all(greaterThanEqual(raw, vec2(-1024.0))) && all(lessThanEqual(raw, vec2(1023.0)))) return p;
@@ -739,10 +744,33 @@ internal static class GlShaders
             return vec4(((modelScreen(v) - uModelGteC + uC) * 2.0 / uFb - 1.0) * w, 0.0, w);
         }
 
+        // Whether the GTE projects a corner without saturating: in front of H/2 and on
+        // the screen's range, as the near transform's flag test keeps it.
+        bool modelProjects(vec3 v) {
+            if (v.z <= uH * 0.5 || v.z > 32767.0) return false;
+            vec2 raw = uModelGteC + uH * v.xy / v.z;
+            return all(greaterThanEqual(raw, vec2(-1024.0))) && all(lessThanEqual(raw, vec2(1023.0)));
+        }
+
+        bool modelTileKept(vec3 v0, vec3 v1, vec3 v2, uint f3) {
+            bool quad = f3 != 0xFFFFFFFFu;
+            vec3 v3 = quad ? modelEye(f3) : v2;
+            if (modelProjects(v0) && modelProjects(v1) && modelProjects(v2) && (!quad || modelProjects(v3))) {
+                vec2 s0 = modelScreen(v0), s1 = modelScreen(v1), s2 = modelScreen(v2), s3 = modelScreen(v3);
+                // A quad's loop 0, 1, 3, 2: its area is half the diagonals' cross.
+                vec2 a = quad ? s3 - s0 : s1 - s0, b = quad ? s2 - s1 : s2 - s0;
+                return a.x * b.y - a.y * b.x > 0.0;
+            }
+            // The plane against the eye: the facing of what the near clip leaves.
+            vec3 n = quad ? cross(v3 - v0, v2 - v1) : cross(v1 - v0, v2 - v0);
+            return dot(v0, n) > 0.0;
+        }
+
         bool modelFaceKept(vec3 f, uint f3) {
             vec3 v0 = modelEye(uint(f.x));
             vec3 v1 = modelEye(uint(f.y));
             vec3 v2 = modelEye(uint(f.z));
+            if (uModelTile != 0) return modelTileKept(v0, v1, v2, f3);
             // The vertex cache holds each corner's SZ over four; the face sits at their mean.
             int z0 = int(clamp(v0.z, 0.0, 65535.0)) >> 2;
             int z1 = int(clamp(v1.z, 0.0, 65535.0)) >> 2;
@@ -795,18 +823,32 @@ internal static class GlShaders
             return floor(-h + 0.5);
         }
         //@model
+        // A model's blended faces (uModelBlend 1), as their packets reached the surface
+        // list: a solid model's as the opaque surface it stands for; else one with a
+        // material, or on the water's texture in an averaging blend, as that blended
+        // surface; any other is no surface. uModelTwin is the forced rate, or -1.
+        uniform int uModelBlend;
+        uniform int uModelSolid;
+        uniform int uModelTwin;
 
         void main() {
             uint flags = inFlags;
             vec3 w = inWorld;
             if (uModel != 0) {
-                if (!modelFaceKept(inCue, inRgbc)) {
+                uint m = uModelMat;
+                if (uModelBlend != 0) {
+                    int mode = uModelTwin >= 0 ? uModelTwin : int((inFlags >> 8) & 3u);
+                    bool water = (inFlags & 0x10000000u) != 0u && (mode == 0 || mode == 3);
+                    if (m == 0u) m = water ? 2u : uModelSolid != 0 ? 1u : 0u;
+                }
+                if ((uModelBlend != 0 && m == 0u) || !modelFaceKept(inCue, inRgbc)) {
                     gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
                     vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
                     return;
                 }
                 w = modelVertex(uint(inWorld.x));
-                flags = (inFlags & ~255u) | uModelMat;
+                flags = (inFlags & ~(255u | 0x10000400u)) | m;
+                if (uModelBlend != 0 && uModelSolid == 0) flags |= 0x10000400u;
             }
             uint hid = (flags >> 13) & 0x3FFFu;
             if (uHalfGate != 0 && hid != 0u
@@ -833,7 +875,7 @@ internal static class GlShaders
             gl_Position = modelPlace(gl_Position, v);
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
             uint m = flags & 255u;
-            vM = semi ? 2.0 + 256.0 : float(m == 0u ? 1u : m);
+            vM = semi ? float(uModel != 0 ? m : 2u) + 256.0 : float(m == 0u ? 1u : m);
             vUv = vec2(0.0);
             vTex = 0u;
         }

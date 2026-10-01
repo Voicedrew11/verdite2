@@ -212,6 +212,9 @@ public static class RetainedScene
     /// screen-affine corner value, which a face clipped at the eye gets wrong.</summary>
     public static bool MainFogFromZ = true;
     public static long SurfaceDepthPixels, SurfaceBehind, SurfaceMissing, SurfaceChecks;
+    /// <summary>The probe's readback by surface id: none, opaque, water, overlay, an
+    /// authored id, a blended one.</summary>
+    public static readonly long[] SurfaceIds = new long[6];
 
     /// <summary>0085. The port's switch: the map's blended faces (water) are drawn by
     /// the backend too, a slice of view depth at a time where the table's walk would
@@ -494,6 +497,9 @@ public static class RetainedScene
         /// link it into its table at; the backend sorts them and draws them where the
         /// walk reaches them, among the map's water.</summary>
         public readonly List<BlendFace> BlendFaces = new();
+        /// <summary>0085. The same for the mirror's instances, keyed as the mirrored
+        /// table would link them.</summary>
+        public readonly List<BlendFace> MirrorBlendFaces = new();
         /// <summary>0085. The first-person arm, when it is drawn from its mesh this
         /// frame: at <see cref="ArmSlot"/> of the table's walk, in painter's order.</summary>
         public ModelInstance Arm;
@@ -549,6 +555,7 @@ public static class RetainedScene
         f.Instances.Clear();
         f.MirrorInstances.Clear();
         f.BlendFaces.Clear();
+        f.MirrorBlendFaces.Clear();
         f.VertCount = 0;
         f.HasArm = false;
         f.Sky.Clear();
@@ -578,6 +585,7 @@ public static class RetainedScene
         // The main view's instances placed in the world are the mirror's too: the
         // camera is the only thing that differs.
         f.MirrorInstances.Clear();
+        f.MirrorBlendFaces.Clear();
         foreach (var m in f.Instances) if (m.Mirrored) f.MirrorInstances.Add(m);
         Array.Clear(f.MirrorHalves);
         MirrorSerial = _serial;
@@ -797,6 +805,17 @@ public static class RetainedScene
         /// cue; an untextured face's colour its own (the corner's <see cref="Vertex.Light"/>
         /// with <see cref="FaceColour"/>).</summary>
         public bool Sky;
+        /// <summary>Assembled as <c>func_80030540</c> assembles an object near the camera:
+        /// no depth range, a face its near transform refuses left to the GPU's near clip
+        /// and facing, and no corner placed at the GTE's saturated projection.</summary>
+        public bool Tile;
+        /// <summary>Its blended faces drawn by the backend (<see cref="BlendFace"/>) reach the
+        /// surface buffer too: a solid one's as the opaque surface it stands for, one with a
+        /// material or on the water's texture with that material, as their packets did.</summary>
+        public bool BlendSurfaces;
+        /// <summary>The forced-blend twin's rate plus one, every face blended at it; 0 for
+        /// the faces' own.</summary>
+        public int TwinMode;
     }
 
     /// <summary>0085. A mesh corner's <see cref="Vertex.Light"/>: the low 24 bits are its
@@ -845,18 +864,30 @@ public static class RetainedScene
     /// <summary>0085. Blended faces noted, sorted for a draw, and drawn.</summary>
     public static long BlendNoted, BlendSorted, BlendDrawn, BlendRuns;
 
-    /// <summary>0085. A blended face of the last instance added to the main view.</summary>
-    public static void AddBlendFace(int key, int corner, int corners, int mode, float x0, float y0, float x1, float y1)
+    /// <summary>0085. A blended face of the last instance added to the main view, or to
+    /// the mirror.</summary>
+    public static void AddBlendFace(int key, int corner, int corners, int mode, float x0, float y0, float x1, float y1,
+                                    bool mirror = false)
     {
         var f = Current;
-        if (f.Serial != _serial || f.Instances.Count == 0) return;
-        f.BlendFaces.Add(new BlendFace
+        var list = mirror ? f.MirrorInstances : f.Instances;
+        if (f.Serial != _serial || list.Count == 0 || mirror && !f.MirrorOn) return;
+        var faces = mirror ? f.MirrorBlendFaces : f.BlendFaces;
+        faces.Add(new BlendFace
         {
-            Inst = f.Instances.Count - 1, Corner = corner, Corners = corners, Key = key, Mode = mode,
-            Seq = f.BlendFaces.Count, X0 = x0, Y0 = y0, X1 = x1, Y1 = y1,
+            Inst = list.Count - 1, Corner = corner, Corners = corners, Key = key, Mode = mode,
+            Seq = faces.Count, X0 = x0, Y0 = y0, X1 = x1, Y1 = y1,
         });
-        BlendNoted++;
+        if (mirror) MirrorBlendNoted++;
+        else BlendNoted++;
     }
+
+    /// <summary>0085. Instances whose blended faces went into the surface buffer, over
+    /// every slice of the normal pass; never reset.</summary>
+    public static long BlendNormalInstances;
+
+    /// <summary>0085. The mirror's blended faces noted, and drawn.</summary>
+    public static long MirrorBlendNoted, MirrorBlendDrawn;
 
     /// <summary>0085. A model instance to the current frame's main view, or its mirror.</summary>
     public static void AddInstance(in ModelInstance m, bool mirror = false)

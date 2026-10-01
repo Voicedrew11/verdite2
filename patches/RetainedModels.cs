@@ -350,6 +350,9 @@ static class RetainedModels
         public bool[] FaceSemi = [];
         /// <summary>Blended faces in the mesh, and those of them subtractive.</summary>
         public int SemiFaces, SubtractiveFaces;
+        /// <summary>Faces on one of the water's rects (their corners carry
+        /// <see cref="RetainedScene.FlagWater"/>), blended and in all.</summary>
+        public int WaterSemiFaces, WaterFaces;
     }
 
     static readonly Dictionary<(uint Face, uint Count, uint Normals), Mesh> _meshes = new();
@@ -376,8 +379,12 @@ static class RetainedModels
     /// instance placed and lit from the GTE as the submitter left it. True when the model
     /// has no blended face, so neither the transform nor the assembler need run.
     /// </summary>
-    public static bool TryInstance(PSMemory mem, uint sub, uint bias, uint vertices, int twin = -1) =>
-        Instance(mem, sub, bias, vertices, arm: false, twin);
+    public static bool TryInstance(PSMemory mem, uint sub, uint bias, uint vertices, int twin = -1, bool tile = false) =>
+        Instance(mem, sub, bias, vertices, arm: false, twin, tile);
+
+    /// <summary>Instances of objects near the camera, which the clipped map assembler
+    /// (<c>func_80030540</c>) would have assembled; never reset.</summary>
+    public static long TileInstances;
 
     /// <summary>Whether the last <see cref="TryInstance"/> made an instance the mirror
     /// draws too, so the planar walk's replay may leave the submit out.</summary>
@@ -386,6 +393,19 @@ static class RetainedModels
     /// <summary>A model's blended faces are drawn by the backend (<c>KF2_GPUWORLD_BLEND=0</c>
     /// puts them back on the packets).</summary>
     public static bool BlendOn = true;
+
+    /// <summary>A model's blended faces drawn by the backend reach the surface buffer as
+    /// their packets did (<c>KF2_GPUWORLD_BLENDSURFACES=0</c> leaves them out, the comparison).</summary>
+    public static bool BlendSurfacesOn = true;
+
+    /// <summary>Objects near the camera drawn from their meshes; off, the clipped map
+    /// assembler's faces are taken to world space on the CPU every frame
+    /// (<c>KF2_GPUWORLD_TILE=0</c>, the comparison).</summary>
+    public static bool TileOn = true;
+
+    /// <summary>The mirror's blended faces drawn by the backend too
+    /// (<c>KF2_GPUWORLD_MIRRORBLEND=0</c> leaves them on the mirrored table's packets).</summary>
+    public static bool MirrorBlendOn = true;
 
     /// <summary>Which routes the backend draws blended faces for: 1 the lit routine's
     /// blended faces, 2 the forced-blend twin's (effects, billboards). A comparison.</summary>
@@ -426,6 +446,9 @@ static class RetainedModels
     /// arm, placed with the frame's camera, which is the one it was drawn under.</summary>
     public static void AtFrame()
     {
+        // A mesh's faces on the water's rects are marked when it is built.
+        ulong rk = RectKey();
+        if (rk != _rectKey) { _rectKey = rk; ForgetMeshes(); }
         if (!ArmPending) return;
         ArmPending = false;
         var f = RetainedScene.Find(RetainedScene.Serial);
@@ -553,7 +576,7 @@ static class RetainedModels
     /// forced-blend routine) every face is blended, at that mode.
     /// </summary>
     static void NoteBlended(Mesh mesh, in RetainedScene.ModelInstance ins, ReadOnlySpan<short> posed, int pose, bool morph,
-                            int weight, int bias, int twin)
+                            int weight, int bias, int twin, bool tile, bool mirror)
     {
         if (pose == 0)
         {
@@ -602,9 +625,14 @@ static class RetainedModels
             sum += Math.Clamp(Z((uint)k.Dqb, false), 0, 65535) >> 2;
             sum += Math.Clamp(Z((uint)k.Curve, false), 0, 65535) >> 2;
             int zz = quad ? (sum + (Math.Clamp(Z(k.Rgbc, false), 0, 65535) >> 2)) >> 2 : sum / 3;
-            if (zz <= 0) continue;
             int key = zz + bias;
-            if ((uint)key >= 0x2000u) { if (!far) continue; key = 0x1FFE; }
+            // The clipped assembler links every face: at slot 16 at least, wrapped.
+            if (tile) key = Math.Max(key, 16) & 0x1FFF;
+            else
+            {
+                if (zz <= 0) continue;
+                if ((uint)key >= 0x2000u) { if (!far) continue; key = 0x1FFE; }
+            }
             if (n == _blendFaces.Length) Array.Resize(ref _blendFaces, n * 2);
             _blendFaces[n++] = (key, c, quad ? 6 : 3, twin >= 0 ? twin : mesh.FaceMode[i]);
             Z((uint)k.Dqa, true); Z((uint)k.Dqb, true); Z((uint)k.Curve, true);
@@ -616,7 +644,7 @@ static class RetainedModels
         for (int i = 0; i < n; i++)
         {
             var (key, c, m, mode) = _blendFaces[i];
-            RetainedScene.AddBlendFace(key, c, m, mode, bx0, by0, bx1, by1);
+            RetainedScene.AddBlendFace(key, c, m, mode, bx0, by0, bx1, by1, mirror);
         }
     }
 
@@ -857,7 +885,7 @@ static class RetainedModels
         m.R20 = o[6]; m.R21 = o[7]; m.R22 = o[8]; m.Tx = o[9]; m.Ty = o[10]; m.Tz = o[11];
     }
 
-    static bool Instance(PSMemory mem, uint sub, uint bias, uint vertices, bool arm, int twin = -1)
+    static bool Instance(PSMemory mem, uint sub, uint bias, uint vertices, bool arm, int twin = -1, bool tile = false)
     {
         Instanced = false;
         LastMirrored = false;
@@ -900,12 +928,13 @@ static class RetainedModels
         // else built as packets. The forced-blend twin (effects, billboards) draws every
         // face so.
         bool twinRoute = twin >= 0;
-        bool gpuBlend = !arm && !mirror && BlendOn && (BlendRoutes & (twinRoute ? 2 : 1)) != 0 && RetainedScene.MainBlend && RetainedScene.MainWater
+        bool gpuBlend = !arm && BlendOn && (BlendRoutes & (twinRoute ? 2 : 1)) != 0 && RetainedScene.MainBlend
+                        && (mirror ? RetainedScene.MirrorWater && MirrorBlendOn : RetainedScene.MainWater)
                         && (twinRoute ? mesh.FaceAt.Length > 0 : mesh.SemiFaces > 0);
         if (!arm && !mirror && (twin == 2 || !twinRoute && mesh.SubtractiveFaces > 0)) Subtractive++;
         if (twinRoute && !gpuBlend) return false;
         bool mirrorWhole = !twinRoute && !mesh.Blended;
-        bool whole = mirror ? mirrorWhole : twinRoute ? gpuBlend : mirrorWhole || gpuBlend;
+        bool whole = twinRoute ? gpuBlend : mirrorWhole || gpuBlend;
         if (mesh.Count == 0 && !gpuBlend) { Instanced = true; return whole; }
 
         // The vertices from the pose store (Step 3's third slice): an MO pose the blender
@@ -947,16 +976,22 @@ static class RetainedModels
             MeshStart = mesh.Start, MeshCount = twinRoute ? 0 : mesh.Count, MeshAll = mesh.Count + mesh.SemiCount, VertBase = vb,
             Pose = pose, PoseWeight = weight, PoseMorph = morph,
             Dqa = (short)Gte.ReadControl(27), Dqb = (int)Gte.ReadControl(28),
-            Curve = mode >= 32000 ? 0f : (mode & 0x8000) != 0 ? 1f : 2f,
+            // The clipped assembler's transform fogs on the knee alone.
+            Curve = mode >= 32000 ? 0f : (mode & 0x8000) != 0 && !tile ? 1f : 2f,
             // The table's test is (uint)(z + bias) >= 0x2000: a negative bias wraps it.
-            Far = RenderDistance.Any ? 1e30f : 8192f - (int)bias,
-            Near = RenderDistance.Any ? 0f : -(int)bias,
+            // The clipped assembler clamps and wraps its slot instead of dropping a face.
+            Far = RenderDistance.Any || tile ? 1e30f : 8192f - (int)bias,
+            Near = tile ? -1e30f : RenderDistance.Any ? 0f : -(int)bias,
+            Tile = tile,
             Rgbc = mem.ReadU32(LightColour) & 0xFFFFFFu,
             Material = PolyAssembler.TileMaterial,
             Mirrored = !mirror && mirrorWhole && !arm,
             Solid = gpuBlend && ModelWalk.SubmitKind == ModelKind.Object
                     && ModelWalk.SolidKind(ModelWalk.ObjectKind(mem, ModelWalk.SubmitRecord)),
+            TwinMode = twinRoute ? twin + 1 : 0,
         };
+        m.BlendSurfaces = gpuBlend && !mirror && BlendSurfacesOn
+                          && (m.Solid || m.Material != 0 || (twinRoute ? mesh.WaterFaces : mesh.WaterSemiFaces) > 0);
         Place(ref m, _ins);
         uint l0 = Gte.ReadControl(8), l1 = Gte.ReadControl(9), l2 = Gte.ReadControl(10), l3 = Gte.ReadControl(11);
         m.Llm0 = (short)l0 / 4096f; m.Llm1 = (short)(l0 >> 16) / 4096f; m.Llm2 = (short)l1 / 4096f;
@@ -987,10 +1022,12 @@ static class RetainedModels
         {
             if (gpuBlend) ReadGteMatrix(ref m);
             RetainedScene.AddInstance(m, mirror);
-            if (gpuBlend) NoteBlended(mesh, m, posed, pose, morph, weight, (int)bias, twin);
+            if (gpuBlend) NoteBlended(mesh, m, posed, pose, morph, weight, (int)bias, twin, tile, mirror);
         }
         LastMirrored = !mirror && mirrorWhole && !arm;
-        if (Checking) { _last = m; _lastView = v; _lastMirror = mirror; _lastFace = face; _lastCount = count; _lastBias = bias; _lastVerts = vertices; }
+        if (tile) TileInstances++;
+        _lastTile = tile;
+        if (Checking && !tile) { _last = m; _lastView = v; _lastMirror = mirror; _lastFace = face; _lastCount = count; _lastBias = bias; _lastVerts = vertices; }
         Instanced = true;
         Instances++;
         if (whole) InstancesWhole++;
@@ -1035,13 +1072,15 @@ static class RetainedModels
     public static readonly long[] CheckArea = new long[5];
     static RetainedScene.ModelInstance _last;
     static RetainedScene.View _lastView;
-    static bool _lastMirror;
+    static bool _lastMirror, _lastTile;
     static uint _lastFace, _lastCount, _lastBias, _lastVerts;
 
     /// <summary>After the transform of a model just instanced: each opaque face's keep
     /// decision both ways.</summary>
     public static void Check(PSMemory mem)
     {
+        // The clipped assembler's faces are tested otherwise; the check is the lit assembler's.
+        if (_lastTile) return;
         var v = _lastView;
         var m = _last;
         uint face = _lastFace;
@@ -1199,13 +1238,16 @@ static class RetainedModels
                 u0 = Math.Min(u0, u); v0 = Math.Min(v0, vv); u1 = Math.Max(u1, u); v1 = Math.Max(v1, vv);
             }
             uint mode = (tpage >> 5) & 3u;
+            bool water = OnWaterRect(tpage, u0, v0, u1, v1);
+            if (water) { mesh.WaterFaces++; if (semi) mesh.WaterSemiFaces++; }
             var t = new RetainedScene.Vertex
             {
                 Clut = clut & 0x7FFF, Texpage = tpage,
                 Dqa = vi[0], Dqb = vi[1], Curve = vi[2],
                 Rgbc = corners == 4 ? vi[3] : uint.MaxValue,
                 Rect = (uint)u0 | (uint)v0 << 8 | (uint)u1 << 16 | (uint)v1 << 24,
-                Flags = RetainedScene.FlagRect | RetainedScene.FlagDots | (semi ? RetainedScene.FlagSemi | mode << 8 : 0u),
+                Flags = RetainedScene.FlagRect | RetainedScene.FlagDots | (semi ? RetainedScene.FlagSemi | mode << 8 : 0u)
+                        | (water ? RetainedScene.FlagWater : 0u),
             };
             var dst = semi ? _semiCorners : _corners;
             int at = semi ? ns : n;
@@ -1262,6 +1304,39 @@ static class RetainedModels
     }
 
     static RetainedScene.Vertex[] _semiCorners = new RetainedScene.Vertex[1024], _both = new RetainedScene.Vertex[2048];
+
+    /// <summary>Whether a face's texels lie on one of the water's rects, whatever its
+    /// blend: the surface pass takes it as water in an averaging blend, as
+    /// <c>SurfaceMaterial.Classify</c> takes a packet.</summary>
+    static bool OnWaterRect(uint tpage, int u0, int v0, int u1, int v1)
+    {
+        int mode = (int)(tpage >> 7) & 3;
+        int div = mode == 0 ? 4 : mode == 1 ? 2 : 1;
+        int x0 = (int)(tpage & 0xF) * 64 + u0 / div, x1 = (int)(tpage & 0xF) * 64 + u1 / div + 1;
+        int y0 = (int)((tpage >> 4) & 1) * 256 + v0, y1 = (int)((tpage >> 4) & 1) * 256 + v1 + 1;
+        for (int i = 0; i < SurfaceMaterial.RectN; i++)
+        {
+            ref var r = ref SurfaceMaterial.Rects[i];
+            if (x0 >= r.X + r.W || x1 <= r.X || y0 >= r.Y + r.H || y1 <= r.Y) continue;
+            if (r.Material == SurfaceMaterial.Water) return true;
+        }
+        return false;
+    }
+
+    // The water's rects the cached meshes were classified against.
+    static ulong _rectKey;
+
+    static ulong RectKey()
+    {
+        ulong h = (ulong)SurfaceMaterial.RectN * 0x9E3779B97F4A7C15UL;
+        for (int i = 0; i < SurfaceMaterial.RectN; i++)
+        {
+            ref var r = ref SurfaceMaterial.Rects[i];
+            h = (h ^ (uint)(r.X | r.Y << 16)) * 0x100000001B3UL;
+            h = (h ^ (uint)(r.W | r.H << 16 | r.Material << 28)) * 0x100000001B3UL;
+        }
+        return h;
+    }
 
     internal static ulong Hash(ReadOnlySpan<byte> ram, uint a, uint bytes)
     {

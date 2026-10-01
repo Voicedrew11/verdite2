@@ -1539,6 +1539,22 @@ Four files in the directory have no entry below:
   and the models' four modes into the table's order instead of drawing one mode after another
   (`RetainedScene.MainWaterRuns` counts the runs). The twelfth diff in the patch file. See "Step 3,
   the sixth slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the objects near the camera, the mirror's blended faces, and blended faces in the
+  surface buffer. A `ModelInstance.Tile` is assembled as `func_80030540` assembles it: no depth range,
+  a face whose corners project without saturating kept by its facing on the screen (a quad on its
+  whole loop), any other by its plane against the eye and left to the GPU's near clip, and no corner
+  at the saturated projection (`uModelTile`, `modelTileKept`, `modelProjects` in `ModelGlsl`). A frame
+  carries the mirror's blended faces (`Frame.MirrorBlendFaces`, `AddBlendFace`'s `mirror`), which
+  `DrawMirrorWater` merges with the mirror's blended map faces in the table's order through
+  `DrawMerged`, the merge split out of `DrawWorldWater` (which now calls it too). An instance marked
+  `BlendSurfaces` has its blended faces drawn into the normal and surface buffers in the water's
+  slices (`DrawBlendNormals`): `WorldNormalVs`'s `uModelBlend` takes a solid one's as opaque, else one
+  with a material, or on the water's rect (`FlagWater` on a mesh corner) in an averaging blend
+  (`uModelTwin` the twin's rate), as a blended surface; and a blended model surface carries its own id
+  plus 256 rather than water's. The probe's surface readback counts samples by id
+  (`RetainedScene.SurfaceIds`). With `uModelTile` and `uModelBlend` 0 the programs are the ones
+  before. The thirteenth diff in the patch file. See "Step 3, the seventh slice", "Step 3, the
+  eighth slice" and "Step 3, the ninth slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

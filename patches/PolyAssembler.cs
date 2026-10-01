@@ -379,7 +379,7 @@ public static partial class PolyAssembler
         // 0085. An object's opaque faces drawn by the GPU world renderer; only the blended ones built here.
         bool mirror = mesh == 0 && RetainedModels.MirrorCapturing;
         bool gpu = mesh == 0 && (mirror || RetainedModels.MainCapturing);
-        if (gpu) RetainedModels.CaptureMain(mem, normals, face, count, bias, tile: true, mirror: mirror);
+        if (gpu && !RetainedModels.Instanced) RetainedModels.CaptureMain(mem, normals, face, count, bias, tile: true, mirror: mirror);
 
         var fr = new Frame(mem);
         for (; count != 0; count--)

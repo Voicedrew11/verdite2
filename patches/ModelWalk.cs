@@ -141,6 +141,10 @@ public static class ModelWalk
     /// <summary>Running totals; never reset.</summary>
     public static long WalkCalls, SubmitCalls;
 
+    /// <summary>Submits placed in view space (matrix 0), which stay on the packets: by the
+    /// lit assembler, the clipped one and the forced-blend twin; never reset.</summary>
+    public static readonly long[] ViewSpaceSubmits = new long[3];
+
     // What the last walk saw, which is the whole point of the routine being here.
     static ModelDraw[] _scene = new ModelDraw[64];
     static int _sceneCount, _lastCount;
@@ -1248,7 +1252,7 @@ public static class ModelWalk
             c.RA = 0x800329E0u;
             // 0085. A lit model placed in the world may be drawn from the pose store; the
             // blender then leaves its pose undecoded until something needs it in RAM.
-            MoPose.Defer = (assembler & 0xFFu) != 0xFEu && matrix != 0u && MoPose.Active
+            MoPose.Defer = matrix != 0u && MoPose.Active
                            && RetainedModels.InstanceWanted && RetainedModels.PosesOn && !RetainedModels.Checking;
             KingsField2.func_80034DA8(c, mem);
             MoPose.Defer = false;
@@ -1281,12 +1285,15 @@ public static class ModelWalk
         // 0085. A lit model placed in the world drawn from its cached mesh; with no
         // blended face the transform and the assembler have nothing left to build.
         // The forced-blend twin (effects, billboards) draws every face blended, and the
-        // backend draws those too (not at the subtractive rate, nor in view space).
+        // backend draws those too (not in view space). So does an object near the camera,
+        // which the clipped map assembler would have assembled.
         uint pick = assembler & 0xFFu;
         // KF2_GPUWORLD_SUBTEST=1: every forced-blend submit subtracts, on both paths.
         if (SubtractTest && pick < 0xFEu) pick = (pick & ~3u) | 2u;
-        bool whole = pick != 0xFEu && matrix != 0u && RetainedModels.InstanceWanted
-                     && RetainedModels.TryInstance(mem, sub, depth, mem.ReadU32(mesh + 4u), pick == 0xFFu ? -1 : (int)(pick & 3u));
+        if (matrix == 0u && _walkOwns) ViewSpaceSubmits[pick == 0xFFu ? 0 : pick == 0xFEu ? 1 : 2]++;
+        bool whole = matrix != 0u && RetainedModels.InstanceWanted && (pick != 0xFEu || RetainedModels.TileOn)
+                     && RetainedModels.TryInstance(mem, sub, depth, mem.ReadU32(mesh + 4u),
+                                                   pick >= 0xFEu ? -1 : (int)(pick & 3u), tile: pick == 0xFEu);
         if (whole && RetainedModels.LastMirrored) PlanarWalk.TakenLast();
         else if (!whole) MoPose.Materialize(c, mem);
 
@@ -1321,7 +1328,7 @@ public static class ModelWalk
             c.A1 = depth;
             c.A2 = 0u;
             c.RA = 0x80032A84u;
-            KingsField2.func_80030540(c, mem);
+            if (!whole) KingsField2.func_80030540(c, mem);
         }
         else
         {
