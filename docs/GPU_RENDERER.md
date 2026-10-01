@@ -136,7 +136,7 @@ eye.
 #### Step 1, the first slice
 
 **Mechanism measured; the picture has not been judged. Off by default**
-(Video ▸ Experimental ▸ *GPU world renderer*, `KF2_GPUWORLD=1`, or the `gpuworld
+(Video ▸ Frame pacing ▸ *GPU geometry*, `KF2_GPUWORLD=1`, or the `gpuworld
 on|off` shell verb). The runtime
 half is `0085` (`Gpu/Backends/Common/GlMainView.cs`, `Gpu/GpuRetainedMain.cs`, the
 hook in `LibGpu.WalkOTag`); the port half is `patches/GpuWorld.cs`, with the skip in
@@ -207,7 +207,7 @@ record is drawn; `uWorldDither` is the draw area's dither bit), measured above e
 the crosshatch, which has no switch but the saved setting. Affine textures would need
 a second program, so with perspective correction off the renderer stands down
 (`GpuWorld.Blocker`), as it does without Fast geometry, the Z-buffer or the GL core
-renderer. The checkbox is Video ▸ Experimental ▸ *GPU world renderer*
+renderer. The checkbox is Video ▸ Frame pacing ▸ *GPU geometry*
 (`kf2.gpuworld.on`); its tooltip says so while it stands down.
 
 **Measured.** RX 9070 XT, render scale 5, 16:9, `KF2_FPS=1000 KF2_PROFILE=1`, the

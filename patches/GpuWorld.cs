@@ -10,7 +10,7 @@ namespace Kf2;
 /// code every frame.
 ///
 ///     KF2_GPUWORLD=1         draw the map on the GPU (off: not judged); 0 never
-///                            (unset, Video ▸ Experimental ▸ GPU world renderer)
+///                            (unset, Video ▸ Frame pacing ▸ GPU geometry)
 ///     KF2_GPUWORLD_PROBE=1   a line every 2 s: draws, misses, halves skipped and kept,
 ///                            and the surface buffer read back against the frame's depth
 ///     KF2_GPUWORLD_SURFACES=0  leave the map out of the normal and surface buffers
