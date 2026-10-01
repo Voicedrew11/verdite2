@@ -415,17 +415,36 @@ The authoring tools (identity, packs, editor) and the engine work for a remaster
 
 ### [GPU_RENDERER.md](docs/GPU_RENDERER.md)
 
-The plan to draw the world from meshes kept on the GPU (retained-mode rendering), the steps, and where the planar reflections come in. Step 0 (GPU timers) is in, Step 1's first slice (the map's opaque faces drawn by the GPU, `KF2_GPUWORLD=1`, off, not judged), three slices of Step 2 (that map in the occlusion's normals and the surface buffer; each map feature checked against the packets, and the fog at the camera's feet fixed; the map's water in the table's order), and Step 3's first slice (the object walk's opaque models on the GPU).
+The plan to draw the world from meshes kept on the GPU (retained-mode rendering), the steps, and where the planar reflections come in. The renderer is off by default (`KF2_GPUWORLD=1`, Video ▸ Experimental), measured and not judged by eye except the mirror. Steps 1-3 draw the map, its water, every model with its blended faces, the arm and the sky on the GPU; Step 4's census finds the game's code building no 3D of the world anywhere it was driven, the menu's item preview aside; Step 5's first slice draws the planar mirror on the renderer.
 
 - Why: the frame is the game's geometry, done on one CPU thread
 - The target
 - The steps
+- Step 0: time the GPU
+- Step 1: the map, instanced, for the main view
 - Step 1, the first slice
+- Step 1, the second slice
 - Known issues
+- Step 2: every map feature in the renderer
 - Step 2, the first slice
 - Step 2, the second slice
 - Step 2, the third slice
+- Step 3: models
 - Step 3, the first slice
+- Step 3, the second slice
+- Step 3, the third slice
+- Step 3, the fourth slice
+- Step 3, the fifth slice
+- Step 3, the sixth slice
+- Step 3, the seventh slice
+- Step 3, the eighth slice
+- Step 3, the ninth slice
+- Step 4: the old world path off
+- Step 4, the census (2026-09-30)
+- Step 4, the fallback census (2026-10-01)
+- Step 5: every extra view on the same renderer
+- Step 5, the first slice
+- Step 6, if needed: culling on the GPU
 - Where the reflections come in
 - The old path stays as the comparison
 - Rules this keeps

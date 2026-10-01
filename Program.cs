@@ -770,6 +770,9 @@ Kf2.GpuWorld.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD"),
                        Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"),
                        Environment.GetEnvironmentVariable("KF2_GPUWORLD_SURFACES"));
 Kf2.GpuWorld.Install();
+//     KF2_GPUWORLD_CENSUS=1   what 3D the game's code still builds under the renderer, and where from
+Kf2.GpuWorldCensus.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD_CENSUS"));
+Kf2.GpuWorldCensus.Install();
 
 // The remaster (docs/REMASTER.md): authored data from a pack, applied over the
 // game: materials on tile faces, read by the reflection pass, and point and spot

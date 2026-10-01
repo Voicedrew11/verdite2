@@ -45,10 +45,12 @@ namespace Kf2;
 /// and the objects near the camera that the clipped map assembler would draw (<c>KF2_GPUWORLD_TILE=0</c>).
 /// The mirror's blended faces are drawn by the backend too (<c>KF2_GPUWORLD_MIRRORBLEND=0</c>), and a
 /// model's blended faces reach the surface buffer as their packets did (<c>KF2_GPUWORLD_BLENDSURFACES=0</c>).
+/// The cell walk notes a half the GPU draws whole without calling the half routine (<c>KF2_GPUWORLD_CELL=0</c>).
 ///
 /// See "Step 1, the first slice", "Step 1, the second slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice",
 /// "Step 3, the fourth slice", "Step 3, the fifth slice", "Step 3, the sixth slice", "Step 3, the seventh slice",
-/// "Step 3, the eighth slice", "Step 3, the ninth slice" and "Step 5, the first slice" in docs/GPU_RENDERER.md.
+/// "Step 3, the eighth slice", "Step 3, the ninth slice", "Step 4, the fallback census" and "Step 5, the first slice"
+/// in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
 {
@@ -92,6 +94,7 @@ public static class GpuWorld
         RetainedModels.BlendSurfacesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_BLENDSURFACES")?.Trim() != "0";
         RetainedModels.TileOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_TILE")?.Trim() != "0";
         RetainedModels.MirrorBlendOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MIRRORBLEND")?.Trim() != "0";
+        TileWalk.TakeInCell = Environment.GetEnvironmentVariable("KF2_GPUWORLD_CELL")?.Trim() != "0";
         RetainedMap.RecordsOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDS")?.Trim() != "0";
         RetainedMap.RecordCheck = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDCHECK")?.Trim() is "1";
         MoPose.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSECHECK")?.Trim() is "1";
@@ -277,6 +280,8 @@ public static class GpuWorld
             case "tile off": RetainedModels.TileOn = false; break;
             case "mirror blend on": RetainedModels.MirrorBlendOn = true; break;
             case "mirror blend off": RetainedModels.MirrorBlendOn = false; break;
+            case "cell on": TileWalk.TakeInCell = true; break;
+            case "cell off": TileWalk.TakeInCell = false; break;
             case "arm on": RetainedModels.ArmOn = true; break;
             case "arm off": RetainedModels.ArmOn = false; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
@@ -320,7 +325,7 @@ public static class GpuWorld
                     $"\"bk\":[{m.Bk0},{m.Bk1},{m.Bk2}],\"mirrored\":{(m.Mirrored ? "true" : "false")}}}";
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|cell on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|scene|instances|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +

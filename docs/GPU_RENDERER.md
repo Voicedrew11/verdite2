@@ -19,6 +19,8 @@ Its seventh draws the objects near the camera (the clipped assembler's) from the
 object walk draws 0 packets in every area at arrival; its eighth the mirror's blended faces; its
 ninth puts a model's blended faces in the surface buffer as their packets were. Step 3 is done but
 for the submits placed in view space, which none was seen to make.
+Step 4's census finds the game's code building no 3D of the world anywhere it was driven, the menu's
+item preview aside, and the cell walk stops calling the half routine for a half the GPU draws.
 Step 5's first slice draws the planar walk's mirror on the renderer: its map, its
 water and its opaque models, judged by eye. Step 1's second slice lights the map in
 the vertex shader from the light records, so a record the game rewrites is an upload
@@ -1327,6 +1329,88 @@ half with a subtractive face. Until those are on the renderer, `PolyAssembler`,
 0 packets in every area (see that slice), so the only 3D the assembling halves still build is
 what a comparison switch puts back, a submit in view space (none seen), and the modal loops this
 census cannot see.
+
+#### Step 4, the fallback census (2026-10-01)
+
+**With the renderer on, the game's code builds no 3D of the world anywhere it was driven: the old
+world path is off.** What it still builds is the HUD, which is 2D by design, and the item preview of
+the in-game menu and the shops. Mechanism measured; nothing here changes the picture, which
+`snap hash` reads identical to the bit.
+
+**The census** (`KF2_GPUWORLD_CENSUS=1`, `patches/GpuWorldCensus.cs`) answers the question the stage-13
+census could not: it counts the CPU's own perspective projections (`GteDepth.Recorded`, every
+vertex `Gte.Rtp` divides) and the 3D packets drawn (`GtePacketDepth.Hits`, a packet carrying an
+assembler's depth record), inside stage 13 and outside it, and every call into the transforms
+(`func_8002E650`, `func_8002E7CC`, `func_8002E9B8`) and assemblers (`func_8002F214`, `func_8002EAEC`,
+`func_80030540`, `func_8002FECC`, `func_8002F918`) with the bytes each added to the arena, by
+context: the main view's walks, the mirror's, the arm, the rest of stage 13, outside stage 13. It
+reports on every display flip, so a loop that never enters stage 13 is counted, `END.EXE` and
+`OPEN.EXE` included, and names the first caller in each context outside the walks. **The check
+that it can see anything**: in area 1 with `gpuworld off` it reads 255 projections and 119 3D
+packets a frame; with the renderer, 0 and 0.
+
+| driven | projections a frame | 3D packets a frame | what the game's code still calls |
+|---|---|---|---|
+| areas 0-7, each at arrival (`warp`, god mode) | 0 | 0 | the lit assembler 14 times from stage 13's HUD call: 2,960 bytes, orthographic, no divide |
+| the area loads between them | 0 | 0 | |
+| the in-game menu (Start), the world behind it (`MenuWorld`) | 0 | 0 | the cell walk from `MenuWorld.DrawWorld` |
+| a submenu showing an item | 50 | 47.2 | `func_800346CC`, once a frame: the transform and the lit assembler, 1,889 bytes |
+| weapon swings (Square) | 0 | 0 | |
+| a death (`warp 7` without god mode: the death clock to 65, the restart) | 0 | 0 | |
+| the final boss's death (`ending kill`) and the walk after it | 0 | 0 | |
+| `END.EXE` (the credits, "The End") | 0 | 0 | |
+| `OPEN.EXE` under `KF2_AUTOSTART` | 0 | 0 | |
+| `fdat02`'s pool with the planar mirror | 0 | 0 | the half routine 312 times (below) |
+
+**The item preview is left on the packets.** `func_800346CC` (from `func_8002156C`, called by the
+menu's `func_80019204`) draws one model with its own matrices and its own light into the menu's
+table, in front of the menu, once a frame: 47 packets. It is not the world, nothing reflects or
+shadows it, and the target puts the menus on the packets. A shop's preview is the same routine
+(`func_80022CAC`, see "Menus draw the world live" in `docs/PATCHES_AND_MODS.md`).
+
+**Not reached:** a spell (Triangle cast nothing at `fdat05`'s spawn, MP unchanged, likely no spell
+readied), using an item (the `press` verb cannot move the menu's cursor), a shop, NPC dialogue,
+and the attract demo. They are modal loops of the kinds above, drawing the world through stage 13
+or `MenuWorld`; **Inferred**, not measured, that they read the same.
+
+**What the old path still did under the renderer: the half routine was still called.** The cell
+routine (`TileWalk.RunCell`) called `func_80031950` for every half the sweep visits, through the
+dispatcher and every hook on it (the C# half, `EvenFog`'s pre and post, `PacketMatch`'s when it is
+on), and the C# half then noted the half for the GPU and returned. At the `fdat02` pool with the
+mirror on that is 145 calls in the main walk and 167 in the mirror's a frame. The cell now notes
+a half the GPU draws whole itself and does not call the routine (`TileWalk.TakenInCell`, the same
+test as the half's, `TakeWhole`). Nothing on the routine is needed for a half no assembler runs on:
+`EvenFog`'s hooks only prepare the assembler, and `PacketMatch` is a diagnostic. `KF2_GPUWORLD_CELL=0`
+or `gpuworld cell off` is the comparison.
+
+Uncapped, paused, the census off:
+
+| view | cell skip off | on | picture |
+|---|---|---|---|
+| `fdat02` pool, planar mirror on (two runs) | 1.24-1.27 ms | 1.15-1.16 ms | `445a26593ee6bb5a` both ways |
+| area 1, 4 and 7 at arrival | | | the same hash both ways in each (`f53ff05437b90de2`, `9faf11c48c87ce35`, `38a9c1c5e21c367d`) |
+
+At 144 fps: 144.0 drawn at 19.9-20.0 ticks/s, `[present] wide 288`.
+
+**The frame cost against the plan's estimate** ("world frame work from ~2.5 ms to well under 1").
+Uncapped, paused at arrival, render scale 5, the renderer against `gpuworld off` in the same
+session, before the cell skip:
+
+| area | renderer off | renderer on | fps on |
+|---|---|---|---|
+| 1 | 1.01 ms | 0.84 ms | 920 |
+| 4 (the crystals) | 2.52 ms | 1.72-1.96 ms | 456-505 |
+| 7 | 3.56-4.87 ms | 1.46 ms | 557-564 |
+| `fdat02` pool, mirror on | | 1.30 ms (1.16 with the cell skip) | |
+
+Met in area 1 and not in 4 or 7, and **what is left there is the renderer's, not the old path's**.
+`DrawOTag`'s section, which holds the backend's draws, is 0.80 ms in area 4 and 0.43 ms in 7 with
+no 3D packet sent: area 4's 1,268 blended faces go in 270 runs a frame, each a draw with its
+instance's uniforms (`DrawMerged`), and are sorted on the CPU in 0.21 ms. `GlCore.Flush` adds
+0.19-0.27 ms. The ordering table itself costs about 0.15 ms whatever is in it: the game's clear
+(`func_8002E064`, 0.055 ms), `NoDither`'s scan of every entry (0.045 ms) and the walk over the empty
+entries. Fewer runs for the blended faces (one draw per mesh and mode, the instance read from a
+buffer) is the next thing to take; it belongs to Step 3's draws, not to this step.
 
 ### Step 5: every extra view on the same renderer
 

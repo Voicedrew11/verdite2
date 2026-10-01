@@ -301,7 +301,7 @@ public static class TileWalk
         uint half = flags & 0xFFu;
         bool placed = false;
 
-        if ((flags & 1u) != 0u && mem.ReadU8(rec) < 240)
+        if ((flags & 1u) != 0u && mem.ReadU8(rec) < 240 && !TakenInCell(mem, rec))
         {
             Place(mem, pos, tx, tz);
             placed = true;
@@ -313,7 +313,7 @@ public static class TileWalk
             KingsField2.func_80031950(c, mem);
         }
 
-        if ((flags & 2u) != 0u && mem.ReadU8(rec + 5u) < 240)
+        if ((flags & 2u) != 0u && mem.ReadU8(rec + 5u) < 240 && !TakenInCell(mem, rec + 5u))
         {
             if (!placed) Place(mem, pos, tx, tz);
             Elevate(mem, pos, mem.ReadU8(rec + 6u));
@@ -369,13 +369,8 @@ public static class TileWalk
         // water on the packets, a half with blended faces keeps only those.
         bool mirror = PlanarWalk.Mirroring;
         bool gpu = mirror ? GpuWorld.MirrorActive : GpuWorld.Active;
-        var faces = gpu ? GpuWorld.KindOf(mem, mem.ReadU8(rec)) : GpuWorld.Faces.Opaque;
-        if (gpu && !Beyond(mem, mem.ReadU8(rec))
-            && (faces == GpuWorld.Faces.Opaque || (mirror ? GpuWorld.MirrorWaterActive : GpuWorld.WaterActive)))
+        if (gpu && TakeWhole(mem, rec, mirror))
         {
-            if (mirror) NoteMirrored(rec);
-            else NoteDrawn(rec);
-            if (mirror) GpuWorld.MirrorSkipped++; else GpuWorld.Skipped++;
             Epilogue(c, mem, sp);
             return;
         }
@@ -488,6 +483,35 @@ public static class TileWalk
         if (RetainedMap.Checking && !PlanarWalk.Mirroring && whole && !gpu) RetainedMap.CheckHalf(mem, rec, model);
         Epilogue(c, mem, sp);
     }
+
+    /// <summary>0085. Whether the GPU draws this half whole, noted for it if so: no
+    /// setup, transform or assembler is left for it.</summary>
+    static bool TakeWhole(PSMemory mem, uint rec, bool mirror)
+    {
+        uint model = mem.ReadU8(rec);
+        if (Beyond(mem, model)) return false;
+        if (GpuWorld.KindOf(mem, model) != GpuWorld.Faces.Opaque && !(mirror ? GpuWorld.MirrorWaterActive : GpuWorld.WaterActive))
+            return false;
+        if (mirror) { NoteMirrored(rec); GpuWorld.MirrorSkipped++; }
+        else { NoteDrawn(rec); GpuWorld.Skipped++; }
+        return true;
+    }
+
+    /// <summary>Step 4. A half the GPU draws whole is noted in the cell and the half routine
+    /// is not called. See "Step 4, the fallback census" in docs/GPU_RENDERER.md.</summary>
+    static bool TakenInCell(PSMemory mem, uint rec)
+    {
+        bool mirror = PlanarWalk.Mirroring;
+        if (!(mirror ? GpuWorld.MirrorActive : GpuWorld.Active) || !TakeInCell) return false;
+        if (!TakeWhole(mem, rec, mirror)) return false;
+        TileCalls++;
+        _halves++;
+        return true;
+    }
+
+    /// <summary>KF2_GPUWORLD_CELL=0: call the half routine for every half again, as the
+    /// game does, the half returning at once when the GPU draws it.</summary>
+    public static bool TakeInCell = true;
 
     /// <summary>0085. A half of the mirrored walk's the backend draws.</summary>
     static void NoteMirrored(uint rec)
