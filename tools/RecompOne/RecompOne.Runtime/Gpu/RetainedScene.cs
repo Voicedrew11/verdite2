@@ -486,6 +486,11 @@ public static class RetainedScene
         public readonly List<ModelInstance> Instances = new(), MirrorInstances = new();
         public short[] Verts = new short[4096];
         public int VertCount;
+        /// <summary>0085. The blended faces of the main view's instances (a model's
+        /// translucent faces, an effect, a billboard), each with the key the game would
+        /// link it into its table at; the backend sorts them and draws them where the
+        /// walk reaches them, among the map's water.</summary>
+        public readonly List<BlendFace> BlendFaces = new();
         /// <summary>0085. The first-person arm, when it is drawn from its mesh this
         /// frame: at <see cref="ArmSlot"/> of the table's walk, in painter's order.</summary>
         public ModelInstance Arm;
@@ -536,6 +541,7 @@ public static class RetainedScene
         f.MirrorModels.Clear();
         f.Instances.Clear();
         f.MirrorInstances.Clear();
+        f.BlendFaces.Clear();
         f.VertCount = 0;
         f.HasArm = false;
         ArmSerial = 0;
@@ -744,6 +750,9 @@ public static class RetainedScene
     public struct ModelInstance
     {
         public int MeshStart, MeshCount, VertBase;
+        /// <summary>The mesh's corners in all, opaque then blended: the textures its
+        /// draws need looked up.</summary>
+        public int MeshAll;
         public float R00, R01, R02, R10, R11, R12, R20, R21, R22, Tx, Ty, Tz;
         /// <summary>The light matrix, divided by 4096; the back colour; the light colour
         /// matrix row by row.</summary>
@@ -763,6 +772,9 @@ public static class RetainedScene
         public bool PoseMorph;
         /// <summary>Drawn in the mirror too, when the frame has one.</summary>
         public bool Mirrored;
+        /// <summary>A blended model that stands for something solid (a door): its blended
+        /// faces hide what is behind them from the occlusion pass with every texel.</summary>
+        public bool Solid;
         /// <summary>The store's generation when it was added; the backend draws none
         /// from an emptied store.</summary>
         public int MeshGen;
@@ -785,6 +797,47 @@ public static class RetainedScene
         int at = f.VertCount;
         f.VertCount += n / 4;
         return at;
+    }
+
+    /// <summary>0085. One blended face of a main-view instance: its corners in the store
+    /// (three, or six for a quad), the table slot the game links it at (the mean of its
+    /// corners' SZ over four, plus the slot bias), its blend mode and the order it was
+    /// built in (the last built goes first within a slot), and the screen box its
+    /// instance covers, in the GTE's pixels.</summary>
+    public struct BlendFace
+    {
+        public int Inst, Corner, Corners, Key, Mode, Seq;
+        public float X0, Y0, X1, Y1;
+    }
+
+    /// <summary>0085. The port's switch: a model's blended faces are drawn by the
+    /// backend, where the table's walk would have drawn their packets.</summary>
+    public static bool MainBlend = true;
+
+    /// <summary>0085. Off, the blended faces are taken off the packets and not drawn: the
+    /// probe's way to see what they cover.</summary>
+    public static bool BlendShown = true;
+
+    /// <summary>0085. The probe's: draw only this instance's blended faces (-1 all).</summary>
+    public static int BlendOnly = -1;
+
+    /// <summary>0085. The probe's: off, the blended faces skip the depth test.</summary>
+    public static bool BlendDepth = true;
+
+    /// <summary>0085. Blended faces noted, sorted for a draw, and drawn.</summary>
+    public static long BlendNoted, BlendSorted, BlendDrawn, BlendRuns;
+
+    /// <summary>0085. A blended face of the last instance added to the main view.</summary>
+    public static void AddBlendFace(int key, int corner, int corners, int mode, float x0, float y0, float x1, float y1)
+    {
+        var f = Current;
+        if (f.Serial != _serial || f.Instances.Count == 0) return;
+        f.BlendFaces.Add(new BlendFace
+        {
+            Inst = f.Instances.Count - 1, Corner = corner, Corners = corners, Key = key, Mode = mode,
+            Seq = f.BlendFaces.Count, X0 = x0, Y0 = y0, X1 = x1, Y1 = y1,
+        });
+        BlendNoted++;
     }
 
     /// <summary>0085. A model instance to the current frame's main view, or its mirror.</summary>

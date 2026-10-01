@@ -14,6 +14,7 @@ face runs neither the game's transform nor its assembler, and the mirror's repla
 leaves it out (measured, not judged). Its third keeps their vertices there too, and
 the vertex shader blends an animated model's pose (bit-identical to the packets'
 picture).
+Step 3's fifth slice draws a model's blended faces, effects and billboards in the table's order (kind `0xF0` objects and subtractive faces are still on packets).
 Step 5's first slice draws the planar walk's mirror on the renderer: its map, its
 water and its opaque models, judged by eye. Step 1's second slice lights the map in
 the vertex shader from the light records, so a record the game rewrites is an upload
@@ -363,6 +364,16 @@ come after (decided 2026-09-28), unless an issue is something a later step build
    not affected. **Inferred**, not tested: those faces have corners nearer than H/2,
    whose packets' records describe the saturated projection. Not fixed: the GPU draws
    the arm.
+7. **A small dark shape is missing from area 7** (measured, 2026-09-30; see "Step 3, the
+   fifth slice"). Warped into area 7 and looking down the tunnel at the left wall's edge, the
+   packets draw a hexagon about 10 game pixels across, dark and opaque over the teal wall,
+   and the blended-face draw does not: 0.15-0.7% of the picture, a 16x16 block wholly
+   different. It is the same with the game's own packets (`gpuworld off`), which match the
+   packet path there, so it is the game's picture and the renderer's that is missing it. It is
+   a face of the giant creature standing behind that wall (a lit model of blended faces, 150
+   of them, 16,000 units away). Not the facing cull, the depth test (off, it does not
+   appear), the depth bias (400x, no change) nor the transform (kept running, no change);
+   the blended draw issues and the faces are noted with boxes at the hexagon. Not found.
 
 ### Step 2: every map feature in the renderer
 
@@ -961,6 +972,63 @@ under `KF2_GLDEBUG=1`.
 **Not checked:** any of it by eye; weapons but the test save's; a menu over a swing,
 which the game does not open until the swing ends (the arm is not drawn behind it);
 `LoopPacing`'s redraws during a swing.
+
+#### Step 3, the fifth slice
+
+**A model's blended faces drawn by the renderer, in the table's order: the translucent
+faces of an opaque model, and the forced-blend twin's models (effects, billboards).
+Mechanism measured; not judged by eye.** `KF2_GPUWORLD_BLEND=0` or `gpuworld blend off`
+is the comparison (`blend lit|twin|both` picks the routes, `blend hide|show` leaves them
+undrawn, `blend only N` draws one instance's, `blend depth off` skips their depth test).
+The runtime half amends `0085` (its eleventh diff); the port half is `RetainedModels`
+(`Build`, `NoteBlended`) and `ModelWalk.RunSubmit`.
+
+**What it does.** A mesh keeps its blended faces' corners after its opaque ones, with a
+table of where each face's corners are. For a main-view instance the port notes each
+blended face with the slot the lit assembler would have linked it at: the mean of its
+corners' SZ over four, plus the slot bias, taken in integers from the GTE's own matrix and
+the posed vertices (the arm's method), so **neither the transform nor the assembler runs**
+for a model drawn this way, effects and billboards included. The backend sorts the faces by
+blend mode, slot and build order (`SortBlend`) and `DrawWorldWater` merges them with the
+map's water by key: a model first at one key, since it was built after the map. A run is
+one instance's faces through `SendInstance`; the opaque texels' depth follows (a door,
+`Solid`, hides what is behind it with every texel). The mirror's replay keeps building
+the blended packets for the mirror.
+
+**One bug the first run found.** The twin's assembler call in `RunSubmit` was not gated on
+the instance, so with the transform skipped it ran on a stale vertex cache: wedges across
+the picture in area 2, mean brightness 25 against 59. The lit routine's call was gated.
+
+**Measured** (render scale 5, 16:9, paused and drawn from a pinned camera, blend on against
+off, `KF2_DEBUG_GODMODE=1 KF2_AUTORELOAD=0`; a warp without them kills the player and the
+run measures a reload):
+
+| area | views | worst block | pixels >16 levels |
+|---|---|---|---|
+| 4 (the crystals, 1,150 faces a frame) | 10 headings | 0.03-0.13 | at most 0.07% (the faces cover up to 3.8%) |
+| 2 | 4 | 0.00 | 0 |
+| 6 | 4 | 0.00 | 0 |
+| 0 | 4 | 0.00-0.57 | at most 0.24% |
+| 7 | 6 | 0.92-1.00 | 0.15-0.69% (known issue 7) |
+
+The census of packets left in the world (`KF2_DRAWCENSUS=1`): the geometry submit, area 4
+261 a frame to 0, area 2 29.6 to 0, area 7 74 to 0. What remains is the object submit
+(kind `0xF0`), 25.4 in areas 0 and 2 and 52 in area 7, and the HUD.
+
+**Not done, and why.**
+
+- **Kind `0xF0` objects** go through `func_80032AC4` and `func_8002F918`, a second
+  assembler (`NormalColorCol3`, no depth cue, the rate from the stack) that has no C#
+  port; they are 25-52 packets a frame. Step 4 waits on them.
+- **Subtractive faces** (blend mode 2) read the target, so a model with one, and a twin
+  asked for it, stay on the packets whole.
+- **A twin placed in view space** (the screen-space effects, matrix 0) and **the clipped
+  assembler's blended faces** (objects near the camera) stay on the packets; not counted.
+- **The mirror** still builds the models' blended packets.
+- **A blended face with an authored material** does not reach the surface buffer, nor does
+  a solid model's reach the normal pass as the opaque it was; the packets' did, with a
+  material. Not measured.
+- Frame cost not measured.
 
 ### Step 4: the old world path off
 

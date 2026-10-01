@@ -212,6 +212,7 @@ KF2_GPUWORLD_MESHCHECK=1               # run the transform for every model drawn
 KF2_GPUWORLD_POSES=0                   # copy every instance's posed vertices into the frame, not blend them from the pose store kept on the GPU (a comparison; the `gpuworld poses off` verb)
 KF2_GPUWORLD_POSECHECK=1               # decode every pose drawn from the store into RAM as well, and compare each vertex with the shader's blend of its texels
 KF2_GPUWORLD_ARM=0                     # leave the first-person arm on its packets under the GPU world renderer (a comparison; the `gpuworld arm off` verb)
+KF2_GPUWORLD_BLEND=0                   # leave a model's blended faces (translucent parts, effects, billboards) on the packets under the GPU world renderer (a comparison; the `gpuworld blend off` verb; `blend lit|twin|both` picks the routes, `blend hide|show` leaves them undrawn, `blend only N` draws one instance's, `blend depth off` skips their depth test)
 KF2_GPUWORLD_RECORDS=0                 # carry each map corner's colour and cue from the CPU, rebuilt whenever a light record changes, not lit in the shader from the records (a comparison; the `gpuworld records off` verb)
 KF2_GPUWORLD_RECORDCHECK=1             # build the map's colours and cues on the CPU as well, and compare the shader's formula with them on every corner (slow builds)
 KF2_REMASTER=1                         # apply the working pack (off by default; the editor's checkbox saves it); Shift+E opens the editor

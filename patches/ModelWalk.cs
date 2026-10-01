@@ -1077,7 +1077,7 @@ public static class ModelWalk
             c.RA = 0x800329E0u;
             // 0085. A lit model placed in the world may be drawn from the pose store; the
             // blender then leaves its pose undecoded until something needs it in RAM.
-            MoPose.Defer = (assembler & 0xFFu) == 0xFFu && matrix != 0u && MoPose.Active
+            MoPose.Defer = (assembler & 0xFFu) != 0xFEu && matrix != 0u && MoPose.Active
                            && RetainedModels.InstanceWanted && RetainedModels.PosesOn && !RetainedModels.Checking;
             KingsField2.func_80034DA8(c, mem);
             MoPose.Defer = false;
@@ -1109,11 +1109,13 @@ public static class ModelWalk
 
         // 0085. A lit model placed in the world drawn from its cached mesh; with no
         // blended face the transform and the assembler have nothing left to build.
+        // The forced-blend twin (effects, billboards) draws every face blended, and the
+        // backend draws those too (not at the subtractive rate, nor in view space).
         uint pick = assembler & 0xFFu;
-        bool whole = pick == 0xFFu && matrix != 0u && RetainedModels.InstanceWanted
-                     && RetainedModels.TryInstance(mem, sub, depth, mem.ReadU32(mesh + 4u));
-        if (whole) PlanarWalk.TakenLast();
-        else MoPose.Materialize(c, mem);
+        bool whole = pick != 0xFEu && matrix != 0u && RetainedModels.InstanceWanted
+                     && RetainedModels.TryInstance(mem, sub, depth, mem.ReadU32(mesh + 4u), pick == 0xFFu ? -1 : (int)(pick & 3u));
+        if (whole && RetainedModels.LastMirrored) PlanarWalk.TakenLast();
+        else if (!whole) MoPose.Materialize(c, mem);
 
         if (whole && !RetainedModels.Checking) RetainedModels.NoteSkippedTransform();
         else if (matrix != 0u)
@@ -1155,7 +1157,7 @@ public static class ModelWalk
             c.A1 = depth;
             c.A2 = pick;
             c.RA = 0x80032A94u;
-            KingsField2.func_8002EAEC(c, mem);
+            if (!whole) KingsField2.func_8002EAEC(c, mem);
         }
         PolyAssembler.TileMaterial = 0;
         RetainedModels.Instanced = false;

@@ -124,15 +124,21 @@ public sealed partial class GlCore
         RetainedScene.MainDraws++;
         RetainedScene.MainTriangles += drawn / 3;
 
-        // The water, drawn slice by slice as the walk goes on.
-        if (RetainedScene.MainWater && WaterInView())
+        // The water, and the models' blended faces, drawn slice by slice as the walk goes on.
+        bool water = RetainedScene.MainWater && WaterInView();
+        bool blend = RetainedScene.MainWater && RetainedScene.MainBlend && inst >= 0 && f.BlendFaces.Count > 0
+                     && RetainedScene.MainModelsShown;
+        if (water || blend)
         {
             _wFrame = f; _wRt = rt; _wOffX = offX; _wOffY = offY; _wMips = mips;
             _wDone = float.PositiveInfinity;
             long s0 = System.Diagnostics.Stopwatch.GetTimestamp();
-            RetainedScene.WaterPending = SortWater(f, f.View, f.MainHalves);
+            _bSlot = inst;
+            bool sorted = water ? SortWater(f, f.View, f.MainHalves) : ClearWater();
+            bool faces = blend ? SortBlend(f) : ClearBlend();
+            RetainedScene.WaterPending = sorted || faces;
             RetainedScene.MainWaterSortTicks += System.Diagnostics.Stopwatch.GetTimestamp() - s0;
-            if (PlanarReflections.Enabled) NoteWaterPlane(f, rt, cx, cy);
+            if (water && PlanarReflections.Enabled) NoteWaterPlane(f, rt, cx, cy);
         }
         _wCx = cx; _wCy = cy;
         _wOpen = RetainedScene.WaterPending;
@@ -409,6 +415,7 @@ public sealed partial class GlCore
         if (f == null) return false;
         int cutKey = float.IsNegativeInfinity(cut) ? int.MinValue : (int)MathF.Floor(cut * 0.25f);
         var take = _wTake;
+        var btake = _bTake;
         int any = 0;
         bool left = false;
         foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
@@ -424,6 +431,20 @@ public sealed partial class GlCore
             take[range] = k - _wAt[range];
             any += take[range];
             left |= _wAt[range] < n;
+
+            // The models' blended faces the walk has passed, at the slot their packets
+            // would be linked: a table slot is the map's key plus the tile bias.
+            int mode = range - 1, bfirst = _bModeStart[mode], bn = _bModeCount[mode], bk = _bWalk[mode];
+            for (; bk < bn && _bEnt[bfirst + bk].Key - TileBias > cutKey; bk++)
+            {
+                ref var e = ref _bEnt[bfirst + bk];
+                _pX0 = Math.Min(_pX0, e.X0); _pY0 = Math.Min(_pY0, e.Y0);
+                _pX1 = Math.Max(_pX1, e.X1); _pY1 = Math.Max(_pY1, e.Y1);
+            }
+            _bWalk[mode] = bk;
+            btake[mode] = bk - _bAt[mode];
+            any += btake[mode];
+            left |= _bAt[mode] < bn;
         }
         if (any == 0) { RetainedScene.MainWaterEmpty++; return left; }
         // Water that shares no pixel with what comes next may wait: the order there
@@ -431,9 +452,15 @@ public sealed partial class GlCore
         if (!PendingMeets(bx0, by0, bx1, by1)) { RetainedScene.MainWaterDeferred++; return true; }
         ResetPending();
         left = false;
-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4]) left |= _wWalk[range] < _wSortCount[range] / 3;
+        bool leftWater = false;
+        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
+        {
+            leftWater |= _wWalk[range] < _wSortCount[range] / 3;
+            left |= _bWalk[range - 1] < _bModeCount[range - 1];
+        }
+        left |= leftWater;
         // The normal pass cuts per pixel at the same depths (DrawWorldWaterNormals).
-        float lo = left ? cutKey * 4f : float.NegativeInfinity, hi = _wDone;
+        float lo = leftWater ? cutKey * 4f : float.NegativeInfinity, hi = _wDone;
         _wDone = lo;
 
         Flush(FlushReason.Target);
@@ -447,12 +474,39 @@ public sealed partial class GlCore
             (cx, cy) = BeginWorldMain(f, rt, _wOffX, _wOffY, _wMips);
             _wOpen = true;
         }
-        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
-        _gl.BindVertexArray(_worldVao);
-        void Draw(int range)
+        bool models = false;
+        // The world VAO and the static map's textures, or the mesh VAO and the models'.
+        void EnterWater()
         {
-            long at = _wSortStart[range] + 3L * _wAt[range];
-            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(3 * take[range]), DrawElementsType.UnsignedInt, (void*)(at * 4L)); }
+            if (models) { EndInstances(true); models = false; }
+            if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
+            _gl.BindVertexArray(_worldVao);
+        }
+        void EnterModels()
+        {
+            if (models) return;
+            BeginInstances(_bSlot, true);
+            _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _bEbo);
+            models = true;
+        }
+        EnterWater();
+        void Draw(int range, int from, int to)
+        {
+            long at = _wSortStart[range] + 3L * from;
+            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(3 * (to - from)), DrawElementsType.UnsignedInt, (void*)(at * 4L)); }
+        }
+        // A run of one instance's blended faces, entries a to b of the sorted list.
+        void DrawFaces(int a, int b)
+        {
+            var m = f.Instances[_bEnt[a].Inst];
+            if (m.MeshGen != _meshGen || !RetainedScene.BlendShown) return;
+            EnterModels();
+            SendInstance(m, true);
+            if (!RetainedScene.BlendDepth) _gl.Disable(EnableCap.DepthTest);
+            int from = _bIdxAt[a], to = b < _bEntCount ? _bIdxAt[b] : _bIdxCount;
+            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(to - from), DrawElementsType.UnsignedInt, (void*)(from * 4L)); }
+            if (!RetainedScene.BlendDepth) _gl.Enable(EnableCap.DepthTest);
+            RetainedScene.BlendRuns++;
         }
         // Back to front, as the packets are, since an averaging blend depends on the
         // order (SortWater); tested and not written, as a blended packet is (GlCore's
@@ -467,15 +521,39 @@ public sealed partial class GlCore
         // Subtractive faces (range 3) stay on the packets, their halves whole.
         foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
         {
-            if (take[range] == 0) continue;
             int mode = range - 1;
+            if (take[range] == 0 && btake[mode] == 0) continue;
             float src = mode switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, dst = mode == 0 ? 0.5f : 1f;
             if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, src, src, src, dst);
             if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, mode == 0 ? 0 : 1);
-            SendWorldWaves(mode == 0 || mode == 3, cx, cy, f.View.H);
-            Draw(range);
+            // The water's faces and the models' in one order: by key, far first; at one
+            // key a model first, since it was built after the map.
+            int wi = _wAt[range], wEnd = _wWalk[range], wfirst = _wSortStart[range] / 3;
+            int bi = _bModeStart[mode] + _bAt[mode], bEnd = _bModeStart[mode] + _bWalk[mode];
+            while (wi < wEnd || bi < bEnd)
+            {
+                int wkey = wi < wEnd ? _wKeyAt[wfirst + wi] : int.MinValue;
+                if (bi < bEnd && _bEnt[bi].Key - TileBias >= wkey)
+                {
+                    int bj = bi + 1, inst = _bEnt[bi].Inst;
+                    while (bj < bEnd && _bEnt[bj].Inst == inst && _bEnt[bj].Key - TileBias >= wkey) bj++;
+                    DrawFaces(bi, bj);
+                    RetainedScene.BlendDrawn += bj - bi;
+                    bi = bj;
+                }
+                else
+                {
+                    int next = bi < bEnd ? _bEnt[bi].Key - TileBias : int.MinValue;
+                    int wj = wi + 1;
+                    while (wj < wEnd && _wKeyAt[wfirst + wj] > next) wj++;
+                    EnterWater();
+                    SendWorldWaves(mode == 0 || mode == 3, cx, cy, f.View.H);
+                    Draw(range, wi, wj);
+                    SendWorldWaves(false, 0f, 0f, 0f);
+                    wi = wj;
+                }
+            }
         }
-        SendWorldWaves(false, 0f, 0f, 0f);
         if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, 0);
         // The texels without the semi-transparency bit draw opaque, so they hide what
         // is behind them from the occlusion pass, as a blended packet's do: their true
@@ -488,11 +566,32 @@ public sealed partial class GlCore
             if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
             if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
             _gl.Uniform1(_uwOpaqueDepth, 1);
+            EnterWater();
             foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
-                if (take[range] > 0) Draw(range);
+                if (take[range] > 0) Draw(range, _wAt[range], _wWalk[range]);
+            foreach (int mode in (ReadOnlySpan<int>)[0, 1, 3])
+            {
+                if (btake[mode] == 0) continue;
+                int a = _bModeStart[mode] + _bAt[mode], z = _bModeStart[mode] + _bWalk[mode];
+                for (int i = a; i < z;)
+                {
+                    int j = i + 1, inst = _bEnt[i].Inst;
+                    while (j < z && _bEnt[j].Inst == inst) j++;
+                    // A solid model hides what is behind it with every texel.
+                    _gl.Uniform1(_uwOpaqueDepth, f.Instances[inst].Solid ? 2 : 1);
+                    DrawFaces(i, j);
+                    i = j;
+                }
+            }
             _gl.Uniform1(_uwOpaqueDepth, 0);
         }
-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4]) _wAt[range] += take[range];
+        if (models) EndInstances(true);
+        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
+        {
+            _wAt[range] += take[range];
+            _bAt[range - 1] += btake[range - 1];
+        }
+        _gl.BindVertexArray(_worldVao);
         if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
         if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
         if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
@@ -511,6 +610,87 @@ public sealed partial class GlCore
         RetainedScene.MainWaterSlices++;
         RetainedScene.MainWaterTriangles += any;
         return left;
+    }
+
+    // The models' blended faces of the main view, sorted by blend mode, then far to
+    // near by table slot, then the last built first. An element buffer of their corners
+    // in the mesh store, in that order, one run per face.
+    RetainedScene.BlendFace[] _bEnt = [];
+    int _bEntCount, _bIdxCount, _bSlot;
+    int[] _bIdxAt = [];
+    uint[] _bIdx = [];
+    uint _bEbo;
+    readonly int[] _bModeStart = new int[4], _bModeCount = new int[4], _bAt = new int[4], _bWalk = new int[4], _bTake = new int[4];
+    /// <summary>A tile is linked at its mean depth plus this many slots (PolyAssembler).</summary>
+    const int TileBias = 0xF0;
+
+    bool ClearBlend()
+    {
+        Array.Clear(_bModeCount);
+        Array.Clear(_bModeStart);
+        Array.Clear(_bAt);
+        Array.Clear(_bWalk);
+        _bEntCount = 0;
+        return false;
+    }
+
+    /// <summary>The water state of a frame that has none.</summary>
+    bool ClearWater()
+    {
+        Array.Clear(_wSortCount);
+        Array.Clear(_wSortStart);
+        Array.Clear(_wAt);
+        Array.Clear(_wWalk);
+        ResetPending();
+        return false;
+    }
+
+    /// <summary>
+    /// The frame's blended model faces, sorted as the table would walk their packets:
+    /// per blend mode (the order the water is drawn in), far to near by slot, and within
+    /// a slot the last built first. Their corners go to an element buffer on the mesh
+    /// VAO. False when none is left to draw.
+    /// </summary>
+    unsafe bool SortBlend(RetainedScene.Frame f)
+    {
+        ClearBlend();
+        var src = f.BlendFaces;
+        int n = src.Count;
+        if (n == 0 || !InstancesReady || _bSlot < 0) return false;
+        if (_bEnt.Length < n) { _bEnt = new RetainedScene.BlendFace[n * 2]; _bIdxAt = new int[n * 2]; }
+        int m = 0;
+        for (int i = 0; i < n; i++)
+        {
+            var e = src[i];
+            if (e.Mode == 2 || f.Instances[e.Inst].MeshGen != _meshGen || RetainedScene.BlendOnly >= 0 && e.Inst != RetainedScene.BlendOnly) continue;
+            _bEnt[m++] = e;
+        }
+        if (m == 0) return false;
+        Array.Sort(_bEnt, 0, m, Comparer<RetainedScene.BlendFace>.Create((a, b) =>
+            a.Mode != b.Mode ? a.Mode.CompareTo(b.Mode) : a.Key != b.Key ? b.Key.CompareTo(a.Key) : b.Seq.CompareTo(a.Seq)));
+        // Instances stay together where their faces are adjacent in the sorted order; the
+        // draws split a run wherever the instance changes.
+        int corners = 0;
+        for (int i = 0; i < m; i++) corners += _bEnt[i].Corners;
+        if (_bIdx.Length < corners) _bIdx = new uint[corners * 2];
+        int at = 0;
+        for (int i = 0; i < m; i++)
+        {
+            _bIdxAt[i] = at;
+            for (int j = 0; j < _bEnt[i].Corners; j++) _bIdx[at++] = (uint)(_bEnt[i].Corner + j);
+            _bModeCount[_bEnt[i].Mode]++;
+        }
+        for (int mode = 1; mode < 4; mode++) _bModeStart[mode] = _bModeStart[mode - 1] + _bModeCount[mode - 1];
+        _bEntCount = m;
+        _bIdxCount = at;
+        if (_bEbo == 0) _bEbo = _gl.GenBuffer();
+        _gl.BindVertexArray(_meshVao);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _bEbo);
+        fixed (uint* p = _bIdx)
+            _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(at * 4), p, BufferUsageARB.StreamDraw);
+        _gl.BindVertexArray(0);
+        RetainedScene.BlendSorted += m;
+        return true;
     }
 
     // The frame's visible blended triangles, far to near, as vertex indices into the
@@ -543,6 +723,13 @@ public sealed partial class GlCore
                 if (--budget < 0) return true;
                 int b = (first + k) * 4;
                 if (!(_wBox[b + 2] < x0 || x1 < _wBox[b] || _wBox[b + 3] < y0 || y1 < _wBox[b + 1])) return true;
+            }
+            int mode = range - 1;
+            for (int k = _bModeStart[mode] + _bAt[mode]; k < _bModeStart[mode] + _bWalk[mode]; k++)
+            {
+                if (--budget < 0) return true;
+                ref var e = ref _bEnt[k];
+                if (!(e.X1 < x0 || x1 < e.X0 || e.Y1 < y0 || y1 < e.Y0)) return true;
             }
         }
         return false;

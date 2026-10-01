@@ -336,10 +336,21 @@ static class RetainedModels
 
     sealed class Mesh
     {
-        public int Start, Count, MaxVertex;
+        /// <summary>The opaque faces' corners, then (at <c>Start + Count</c>) the blended
+        /// faces', in the store.</summary>
+        public int Start, Count, SemiCount, MaxVertex;
         public uint FaceBytes, NormalLo, NormalHi;
         public ulong FaceHash, NormalHash;
         public bool Blended;
+        /// <summary>Per face, in the game's order: its first corner in the store (-1 for a
+        /// face the assembler skips), its corner count (3 or 6), whether it is blended and
+        /// its blend mode (the face's own, bits 5-6 of its tpage word).</summary>
+        public int[] FaceAt = [];
+        public byte[] FaceN = [], FaceMode = [];
+        public bool[] FaceSemi = [];
+        /// <summary>Blended faces in the mesh, and those of them subtractive, which the
+        /// backend cannot draw (they read the target).</summary>
+        public int SemiFaces, SubtractiveFaces;
     }
 
     static readonly Dictionary<(uint Face, uint Count, uint Normals), Mesh> _meshes = new();
@@ -365,7 +376,20 @@ static class RetainedModels
     /// instance placed and lit from the GTE as the submitter left it. True when the model
     /// has no blended face, so neither the transform nor the assembler need run.
     /// </summary>
-    public static bool TryInstance(PSMemory mem, uint sub, uint bias, uint vertices) => Instance(mem, sub, bias, vertices, arm: false);
+    public static bool TryInstance(PSMemory mem, uint sub, uint bias, uint vertices, int twin = -1) =>
+        Instance(mem, sub, bias, vertices, arm: false, twin);
+
+    /// <summary>Whether the last <see cref="TryInstance"/> made an instance the mirror
+    /// draws too, so the planar walk's replay may leave the submit out.</summary>
+    public static bool LastMirrored;
+
+    /// <summary>A model's blended faces are drawn by the backend (<c>KF2_GPUWORLD_BLEND=0</c>
+    /// puts them back on the packets).</summary>
+    public static bool BlendOn = true;
+
+    /// <summary>Which routes the backend draws blended faces for: 1 the lit routine's
+    /// blended faces, 2 the forced-blend twin's (effects, billboards). A comparison.</summary>
+    public static int BlendRoutes = 3;
 
     /// <summary>The first-person arm (<c>func_80032400</c>: sub-model 0, slot bias 100)
     /// drawn from its mesh as <see cref="TryInstance"/> draws a model. Stage 13 draws
@@ -500,15 +524,108 @@ static class RetainedModels
 
     static readonly float[] _armBox = new float[4];
 
+    /// <summary>The GTE's own rotation and translation into the instance's view-space
+    /// fields, as RTPS will place each corner (the arm takes these too).</summary>
+    static void ReadGteMatrix(ref RetainedScene.ModelInstance m)
+    {
+        uint r0 = Gte.ReadControl(0), r1 = Gte.ReadControl(1), r2 = Gte.ReadControl(2), r3 = Gte.ReadControl(3);
+        m.V00 = (short)r0; m.V01 = (short)(r0 >> 16); m.V02 = (short)r1; m.V10 = (short)(r1 >> 16);
+        m.V11 = (short)r2; m.V12 = (short)(r2 >> 16); m.V20 = (short)r3; m.V21 = (short)(r3 >> 16);
+        m.V22 = (short)Gte.ReadControl(4);
+        m.Vtx = (int)Gte.ReadControl(5); m.Vty = (int)Gte.ReadControl(6); m.Vtz = (int)Gte.ReadControl(7);
+    }
+
+    static short[] _blendVerts = new short[4096];
+    static (int Key, int Corner, int Corners, int Mode)[] _blendFaces = new (int, int, int, int)[256];
+
+    /// <summary>
+    /// The instance just added's blended faces, each with the slot the lit assembler
+    /// would link it into the table at: the mean of its corners' SZ over four, averaged
+    /// as the game averages them, plus the slot bias. Taken with the GTE's own rotation
+    /// and translation in integers, from the posed vertices (the frame's copy, or the
+    /// pose store's blend), so no transform runs and no packet is built. A face the
+    /// assembler drops by its depth has no entry; one turned away is left for the
+    /// shader, which drops it as the assembler does. With <paramref name="twin"/> (the
+    /// forced-blend routine) every face is blended, at that mode.
+    /// </summary>
+    static void NoteBlended(Mesh mesh, in RetainedScene.ModelInstance ins, ReadOnlySpan<short> posed, int pose, bool morph,
+                            int weight, int bias, int twin)
+    {
+        if (pose == 0)
+        {
+            if (_blendVerts.Length < posed.Length) _blendVerts = new short[posed.Length];
+            posed.CopyTo(_blendVerts);
+        }
+        int r0 = ins.V20, r1 = ins.V21, r2 = ins.V22, tz = ins.Vtz;
+        int a0 = ins.V00, a1 = ins.V01, a2 = ins.V02, tx = ins.Vtx, b0 = ins.V10, b1 = ins.V11, b2 = ins.V12, ty = ins.Vty;
+        float h = Gte.ReadControl(26) & 0xFFFF, ofx = (int)Gte.ReadControl(24) / 65536f, ofy = (int)Gte.ReadControl(25) / 65536f;
+        float bx0 = float.MaxValue, by0 = float.MaxValue, bx1 = float.MinValue, by1 = float.MinValue;
+        var store = RetainedScene.PoseStore;
+        var corners = RetainedScene.MeshCorners;
+        var verts = _blendVerts;
+        bool far = RenderDistance.Any;
+        int Z(uint i, bool box)
+        {
+            int x, y, z;
+            if (pose == 0) { int a = (int)i * 4; x = verts[a]; y = verts[a + 1]; z = verts[a + 2]; }
+            else if (!morph) { int a = (pose - 1 + (int)i) * 4; x = store[a]; y = store[a + 1]; z = store[a + 2]; }
+            else
+            {
+                int k = (pose - 1 + 2 * (int)i) * 4, d = k + 4;
+                x = (short)(store[k] + (short)((store[d] * weight) >> 12));
+                y = (short)(store[k + 1] + (short)((store[d + 1] * weight) >> 12));
+                z = (short)(store[k + 2] + (short)((store[d + 2] * weight) >> 12));
+            }
+            int vz = ((r0 * x + r1 * y + r2 * z) >> 12) + tz;
+            if (box)
+            {
+                int vx = Math.Clamp(((a0 * x + a1 * y + a2 * z) >> 12) + tx, -32768, 32767);
+                int vy = Math.Clamp(((b0 * x + b1 * y + b2 * z) >> 12) + ty, -32768, 32767);
+                float q = h / Math.Max(Math.Clamp(vz, 0, 65535), h * 0.5f);
+                float sx = Math.Clamp(ofx + vx * q, -1024f, 1023f), sy = Math.Clamp(ofy + vy * q, -1024f, 1023f);
+                bx0 = Math.Min(bx0, sx); bx1 = Math.Max(bx1, sx); by0 = Math.Min(by0, sy); by1 = Math.Max(by1, sy);
+            }
+            return vz;
+        }
+        int n = 0;
+        for (int i = 0; i < mesh.FaceAt.Length; i++)
+        {
+            int c = mesh.FaceAt[i];
+            if (c < 0 || twin < 0 && !mesh.FaceSemi[i]) continue;
+            ref var k = ref corners[c];
+            bool quad = mesh.FaceN[i] == 6;
+            int sum = Math.Clamp(Z((uint)k.Dqa, false), 0, 65535) >> 2;
+            sum += Math.Clamp(Z((uint)k.Dqb, false), 0, 65535) >> 2;
+            sum += Math.Clamp(Z((uint)k.Curve, false), 0, 65535) >> 2;
+            int zz = quad ? (sum + (Math.Clamp(Z(k.Rgbc, false), 0, 65535) >> 2)) >> 2 : sum / 3;
+            if (zz <= 0) continue;
+            int key = zz + bias;
+            if ((uint)key >= 0x2000u) { if (!far) continue; key = 0x1FFE; }
+            if (n == _blendFaces.Length) Array.Resize(ref _blendFaces, n * 2);
+            _blendFaces[n++] = (key, c, quad ? 6 : 3, twin >= 0 ? twin : mesh.FaceMode[i]);
+            Z((uint)k.Dqa, true); Z((uint)k.Dqb, true); Z((uint)k.Curve, true);
+            if (quad) Z(k.Rgbc, true);
+        }
+        if (n == 0) return;
+        // A pixel over, for the sub-pixel positions and the rasterizer's edges.
+        bx0 -= 1f; by0 -= 1f; bx1 += 1f; by1 += 1f;
+        for (int i = 0; i < n; i++)
+        {
+            var (key, c, m, mode) = _blendFaces[i];
+            RetainedScene.AddBlendFace(key, c, m, mode, bx0, by0, bx1, by1);
+        }
+    }
+
     static void Place(ref RetainedScene.ModelInstance m, float[] o)
     {
         m.R00 = o[0]; m.R01 = o[1]; m.R02 = o[2]; m.R10 = o[3]; m.R11 = o[4]; m.R12 = o[5];
         m.R20 = o[6]; m.R21 = o[7]; m.R22 = o[8]; m.Tx = o[9]; m.Ty = o[10]; m.Tz = o[11];
     }
 
-    static bool Instance(PSMemory mem, uint sub, uint bias, uint vertices, bool arm)
+    static bool Instance(PSMemory mem, uint sub, uint bias, uint vertices, bool arm, int twin = -1)
     {
         Instanced = false;
+        LastMirrored = false;
         bool mirror = !arm && MirrorCapturing;
         var frame = RetainedScene.Find(RetainedScene.Serial);
         if (!arm && (frame == null || mirror && !frame.MirrorOn)) return false;
@@ -544,8 +661,17 @@ static class RetainedModels
             MeshBuilds++;
         }
         if (mesh.MaxVertex >= (int)vertices) { InstanceRefused++; return false; }
-        bool whole = !mesh.Blended;
-        if (mesh.Count == 0) { Instanced = true; return whole; }
+        // A model's blended faces: drawn by the backend in the main view when it can
+        // (not a subtractive one, which reads the target), else built as packets. The
+        // forced-blend twin (effects, billboards) draws every face so.
+        bool twinRoute = twin >= 0;
+        bool gpuBlend = !arm && !mirror && BlendOn && (BlendRoutes & (twinRoute ? 2 : 1)) != 0 && RetainedScene.MainBlend && RetainedScene.MainWater
+                        && (twinRoute ? twin != 2 && mesh.FaceAt.Length > 0
+                                      : mesh.SemiFaces > 0 && mesh.SubtractiveFaces == 0);
+        if (twinRoute && !gpuBlend) return false;
+        bool mirrorWhole = !twinRoute && !mesh.Blended;
+        bool whole = mirror ? mirrorWhole : twinRoute ? gpuBlend : mirrorWhole || gpuBlend;
+        if (mesh.Count == 0 && !gpuBlend) { Instanced = true; return whole; }
 
         // The vertices from the pose store (Step 3's third slice): an MO pose the blender
         // left undecoded, or a rigid model's own; the posed buffer copied per frame else.
@@ -583,7 +709,7 @@ static class RetainedModels
         int mode = (int)mem.ReadU32(FogMode);
         var m = new RetainedScene.ModelInstance
         {
-            MeshStart = mesh.Start, MeshCount = mesh.Count, VertBase = vb,
+            MeshStart = mesh.Start, MeshCount = twinRoute ? 0 : mesh.Count, MeshAll = mesh.Count + mesh.SemiCount, VertBase = vb,
             Pose = pose, PoseWeight = weight, PoseMorph = morph,
             Dqa = (short)Gte.ReadControl(27), Dqb = (int)Gte.ReadControl(28),
             Curve = mode >= 32000 ? 0f : (mode & 0x8000) != 0 ? 1f : 2f,
@@ -592,7 +718,9 @@ static class RetainedModels
             Near = RenderDistance.Any ? 0f : -(int)bias,
             Rgbc = mem.ReadU32(LightColour) & 0xFFFFFFu,
             Material = PolyAssembler.TileMaterial,
-            Mirrored = !mirror && whole && !arm,
+            Mirrored = !mirror && mirrorWhole && !arm,
+            Solid = gpuBlend && ModelWalk.SubmitKind == ModelKind.Object
+                    && ModelWalk.SolidKind(ModelWalk.ObjectKind(mem, ModelWalk.SubmitRecord)),
         };
         Place(ref m, _ins);
         uint l0 = Gte.ReadControl(8), l1 = Gte.ReadControl(9), l2 = Gte.ReadControl(10), l3 = Gte.ReadControl(11);
@@ -620,7 +748,13 @@ static class RetainedModels
             _armMeshGen = RetainedScene.MeshGeneration;
             ArmPending = true;
         }
-        else RetainedScene.AddInstance(m, mirror);
+        else
+        {
+            if (gpuBlend) ReadGteMatrix(ref m);
+            RetainedScene.AddInstance(m, mirror);
+            if (gpuBlend) NoteBlended(mesh, m, posed, pose, morph, weight, (int)bias, twin);
+        }
+        LastMirrored = !mirror && mirrorWhole && !arm;
         if (Checking) { _last = m; _lastView = v; _lastMirror = mirror; _lastFace = face; _lastCount = count; _lastBias = bias; _lastVerts = vertices; }
         Instanced = true;
         Instances++;
@@ -770,17 +904,24 @@ static class RetainedModels
         return a >= 0x80000000u && lo + bytes <= Runtime.RamSize && (a & 3u) == 0;
     }
 
-    /// <summary>A mesh's opaque faces as corners in the store (see
-    /// <see cref="RetainedScene.MeshCorners"/>), with the byte ranges its hashes cover.</summary>
+    /// <summary>A mesh's faces as corners in the store (see
+    /// <see cref="RetainedScene.MeshCorners"/>): the opaque faces', then the blended
+    /// faces', with a table of where each face's corners are; and the byte ranges its
+    /// hashes cover.</summary>
     static Mesh? Build(PSMemory mem, uint face, uint count, uint normals)
     {
         var mesh = new Mesh();
         uint start = face;
         uint nlo = uint.MaxValue, nhi = 0;
-        int n = 0, maxV = -1;
+        int n = 0, ns = 0, maxV = -1;
+        mesh.FaceAt = new int[count];
+        mesh.FaceN = new byte[count];
+        mesh.FaceMode = new byte[count];
+        mesh.FaceSemi = new bool[count];
         Span<uint> idx = stackalloc uint[4], nrm = stackalloc uint[4], uv = stackalloc uint[4], vi = stackalloc uint[4];
         for (uint i = 0; i < count; i++)
         {
+            mesh.FaceAt[i] = -1;
             if (!InRam(face, 4)) return null;
             uint word = mem.ReadU32(face);
             uint f = face + 4u;
@@ -796,7 +937,8 @@ static class RetainedModels
                 case 0x3Cu: corners = 4; gouraud = true; idx[0] = 0x12; idx[1] = 0x16; idx[2] = 0x1A; idx[3] = 0x1E; nrm[0] = 0x10; nrm[1] = 0x14; nrm[2] = 0x18; nrm[3] = 0x1C; break;
                 default: continue;
             }
-            if ((cmd & 2u) != 0) { mesh.Blended = true; continue; }
+            bool semi = (cmd & 2u) != 0;
+            if (semi) mesh.Blended = true;
 
             for (int k = 0; k < corners; k++)
             {
@@ -821,17 +963,29 @@ static class RetainedModels
                 int u = (int)(uv[k] & 0xFF), vv = (int)(uv[k] >> 8);
                 u0 = Math.Min(u0, u); v0 = Math.Min(v0, vv); u1 = Math.Max(u1, u); v1 = Math.Max(v1, vv);
             }
+            uint mode = (tpage >> 5) & 3u;
             var t = new RetainedScene.Vertex
             {
                 Clut = clut & 0x7FFF, Texpage = tpage,
                 Dqa = vi[0], Dqb = vi[1], Curve = vi[2],
                 Rgbc = corners == 4 ? vi[3] : uint.MaxValue,
                 Rect = (uint)u0 | (uint)v0 << 8 | (uint)u1 << 16 | (uint)v1 << 24,
-                Flags = RetainedScene.FlagRect | RetainedScene.FlagDots,
+                Flags = RetainedScene.FlagRect | RetainedScene.FlagDots | (semi ? RetainedScene.FlagSemi | mode << 8 : 0u),
             };
-            if (n + 6 > _corners.Length) Array.Resize(ref _corners, _corners.Length * 2);
+            var dst = semi ? _semiCorners : _corners;
+            int at = semi ? ns : n;
+            if (at + 6 > dst.Length)
+            {
+                Array.Resize(ref dst, dst.Length * 2);
+                if (semi) _semiCorners = dst; else _corners = dst;
+            }
             // Two triangles a quad, as the packets' are cut.
             ReadOnlySpan<int> order = corners == 4 ? [0, 1, 2, 1, 3, 2] : [0, 1, 2];
+            mesh.FaceAt[i] = at;
+            mesh.FaceN[i] = (byte)order.Length;
+            mesh.FaceSemi[i] = semi;
+            mesh.FaceMode[i] = (byte)mode;
+            if (semi) { mesh.SemiFaces++; if (mode == 2) mesh.SubtractiveFaces++; }
             for (int j = 0; j < order.Length; j++)
             {
                 int k = order[j];
@@ -841,8 +995,9 @@ static class RetainedModels
                 c.R = (short)mem.ReadU16(q); c.G = (short)mem.ReadU16(q + 2u); c.B = (short)mem.ReadU16(q + 4u);
                 c.U = uv[k] & 0xFF; c.V = uv[k] >> 8;
                 if (j >= 3) c.Flags |= RetainedScene.FlagQuadTail;
-                _corners[n++] = c;
+                dst[at + j] = c;
             }
+            if (semi) ns += order.Length; else n += order.Length;
         }
         mesh.FaceBytes = face - start;
         if (!InRam(start, mesh.FaceBytes)) return null;
@@ -856,10 +1011,22 @@ static class RetainedModels
         mesh.FaceHash = Hash(mem.Ram, start, mesh.FaceBytes);
         mesh.MaxVertex = maxV;
         mesh.Count = n;
+        mesh.SemiCount = ns;
 
-        mesh.Start = n > 0 ? RetainedScene.AddMesh(_corners.AsSpan(0, n)) : 0;
+        // The opaque corners, then the blended ones, in one run of the store.
+        if (n + ns > 0)
+        {
+            if (_both.Length < n + ns) _both = new RetainedScene.Vertex[Math.Max(n + ns, _both.Length * 2)];
+            Array.Copy(_corners, _both, n);
+            Array.Copy(_semiCorners, 0, _both, n, ns);
+            mesh.Start = RetainedScene.AddMesh(_both.AsSpan(0, n + ns));
+            for (int i = 0; i < mesh.FaceAt.Length; i++)
+                if (mesh.FaceAt[i] >= 0) mesh.FaceAt[i] += mesh.Start + (mesh.FaceSemi[i] ? n : 0);
+        }
         return mesh;
     }
+
+    static RetainedScene.Vertex[] _semiCorners = new RetainedScene.Vertex[1024], _both = new RetainedScene.Vertex[2048];
 
     internal static ulong Hash(ReadOnlySpan<byte> ram, uint a, uint bytes)
     {

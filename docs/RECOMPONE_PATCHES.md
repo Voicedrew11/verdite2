@@ -1510,6 +1510,18 @@ Four files in the directory have no entry below:
   (`ChunkFogQ`) is taken again from its records when they change. With `Light` 0 the
   program is the one before. The tenth diff in the patch file. See "Step 1, the second
   slice" in `docs/GPU_RENDERER.md`.
+  Since amended: a model's blended faces are drawn by the backend too. A mesh keeps its
+  blended faces' corners after its opaque ones, with a table of where each face's corners
+  are (`RetainedModels.Mesh.FaceAt`); the port notes each blended face of a main-view
+  instance with the table slot the lit assembler would link it at, taken from the GTE's own
+  matrix in integers (`RetainedScene.AddBlendFace`, `Frame.BlendFaces`), so no transform
+  and no assembler run. `GlMainView.SortBlend` sorts them by blend mode, slot and build
+  order into an element buffer on the mesh VAO, and `DrawWorldWater` merges them with the
+  map's water by key (a model first at one key, since it was built after the map), drawing
+  a run per instance through `SendInstance`, and their opaque texels' depth after. A
+  `ModelInstance` gains `MeshAll` and `Solid`. The forced-blend twin (effects, billboards)
+  takes the same route. Subtractive faces stay on the packets. The eleventh diff in the
+  patch file. See "Step 3, the fifth slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

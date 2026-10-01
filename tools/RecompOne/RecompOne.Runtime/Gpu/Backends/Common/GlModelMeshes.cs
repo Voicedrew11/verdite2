@@ -232,7 +232,7 @@ public sealed partial class GlCore
         _mdlLookSerial++;
         foreach (var m in list)
             if (m.MeshGen == _meshGen)
-            foreach (int k in MeshKeys(m.MeshStart, m.MeshCount))
+            foreach (int k in MeshKeys(m.MeshStart, Math.Max(m.MeshCount, m.MeshAll)))
             {
                 if (_mdlKeyLooked[k] == _mdlLookSerial) continue;
                 _mdlKeyLooked[k] = _mdlLookSerial;

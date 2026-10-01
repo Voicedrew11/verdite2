@@ -82,6 +82,7 @@ public static class GpuWorld
         RetainedModels.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHCHECK")?.Trim() is "1";
         RetainedModels.PosesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSES")?.Trim() != "0";
         RetainedModels.ArmOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_ARM")?.Trim() != "0";
+        RetainedModels.BlendOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_BLEND")?.Trim() != "0";
         RetainedMap.RecordsOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDS")?.Trim() != "0";
         RetainedMap.RecordCheck = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDCHECK")?.Trim() is "1";
         MoPose.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSECHECK")?.Trim() is "1";
@@ -223,8 +224,11 @@ public static class GpuWorld
     /// <summary>The `gpuworld` shell verb: the state, or the switch.</summary>
     public static string Shell(string arg)
     {
-        switch (arg.Trim().ToLowerInvariant())
+        var word = arg.Trim().ToLowerInvariant();
+        if (word.StartsWith("blend only ") && int.TryParse(word.AsSpan(11), out int only)) { RetainedScene.BlendOnly = only; word = ""; }
+        switch (word)
         {
+            case "": break;
             case "on": SetEnabled(true); break;
             case "off": SetEnabled(false); break;
             case "surfaces on": RetainedScene.MainSurfaces = true; break;
@@ -243,6 +247,16 @@ public static class GpuWorld
             case "poses off": RetainedModels.PosesOn = false; break;
             case "records on": RetainedMap.RecordsOn = true; break;
             case "records off": RetainedMap.RecordsOn = false; break;
+            case "blend on": RetainedModels.BlendOn = true; break;
+            case "blend off": RetainedModels.BlendOn = false; break;
+            case "blend lit": RetainedModels.BlendRoutes = 1; break;
+            case "blend twin": RetainedModels.BlendRoutes = 2; break;
+            case "blend both": RetainedModels.BlendRoutes = 3; break;
+            case "blend depth on": RetainedScene.BlendDepth = true; break;
+            case "blend depth off": RetainedScene.BlendDepth = false; break;
+            case "blend all": RetainedScene.BlendOnly = -1; break;
+            case "blend hide": RetainedScene.BlendShown = false; break;
+            case "blend show": RetainedScene.BlendShown = true; break;
             case "arm on": RetainedModels.ArmOn = true; break;
             case "arm off": RetainedModels.ArmOn = false; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
@@ -268,12 +282,11 @@ public static class GpuWorld
                     $"\"bk\":[{m.Bk0},{m.Bk1},{m.Bk2}],\"mirrored\":{(m.Mirrored ? "true" : "false")}}}";
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
-            case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|arm on|off|records on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|arm on|off|blend on|off|hide|show|records on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
-               $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"blend\":{(RetainedModels.BlendOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -284,6 +297,7 @@ public static class GpuWorld
     static long _gensMax, _gensAt, _builds, _packs, _recUploads;
     static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
     static long _iIns, _iWhole, _iMir, _iDrawn, _iCorners, _iVerts, _iMirDrawn, _iArm, _iArmDrawn, _iArmCalls;
+    static long _bNoted, _bSorted, _bDrawn, _bRuns;
     static long _pPosed, _pRigid, _pDeferred, _pMat, _pTexels;
     static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
 
@@ -361,6 +375,13 @@ public static class GpuWorld
                           $"{pt} texel(s) uploaded; store {RetainedScene.PoseTexels} texel(s), {MoPose.PoseBuilds} pose(s) and {MoPose.RigidBuilds} rigid model(s) kept, " +
                           $"{MoPose.PoseRefused} pose(s) refused in all" +
                           (MoPose.Checking ? $"; checked {MoPose.CheckVertices} vert(ices), {MoPose.CheckDiffer} placed differently" : ""));
+        long bn = RetainedScene.BlendNoted - _bNoted, bs = RetainedScene.BlendSorted - _bSorted;
+        long bd = RetainedScene.BlendDrawn - _bDrawn, br = RetainedScene.BlendRuns - _bRuns;
+        _bNoted = RetainedScene.BlendNoted; _bSorted = RetainedScene.BlendSorted;
+        _bDrawn = RetainedScene.BlendDrawn; _bRuns = RetainedScene.BlendRuns;
+        Console.WriteLine($"[KF2] gpu world: blend {(RetainedModels.BlendOn ? "on" : "off")}; a draw: " +
+                          $"{(d == 0 ? 0 : (double)bn / d):F1} blended face(s) noted, {(d == 0 ? 0 : (double)bs / d):F1} sorted, " +
+                          $"{(d == 0 ? 0 : (double)bd / d):F1} drawn in {(d == 0 ? 0 : (double)br / d):F1} run(s)");
         Console.WriteLine($"[KF2] gpu world: light generations: at most {_gensMax} in a frame; map builds {RetainedMap.Builds - _builds}, " +
                           $"the last {RetainedMap.LastBuildMs:F2} ms for {RetainedMap.LastWhy}; " +
                           (RetainedMap.RecordsOn
