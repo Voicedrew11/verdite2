@@ -21,4 +21,14 @@ public static class WaterMurk
     /// under it fades to 63% of <see cref="R"/>/G/B.</summary>
     public static float Distance = 2654f;
     public static float R = 0.03f, G = 0.05f, B = 0.06f;
+
+    /// <summary>The world's vertical in view space, published by the port from the
+    /// frame's camera. Water lies level, so only a surface within
+    /// <see cref="MaxTilt"/> of it is murked: a crystal in the water's texture is not
+    /// water, and with nothing behind it the run was endless.</summary>
+    public static float UpX, UpY = 1f, UpZ;
+
+    /// <summary>The cosine of the steepest a murked surface may lean (the swell tilts
+    /// water by about 20 degrees at its default).</summary>
+    public static float MaxTilt = 0.75f;
 }

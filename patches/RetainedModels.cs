@@ -348,8 +348,7 @@ static class RetainedModels
         public int[] FaceAt = [];
         public byte[] FaceN = [], FaceMode = [];
         public bool[] FaceSemi = [];
-        /// <summary>Blended faces in the mesh, and those of them subtractive, which the
-        /// backend cannot draw (they read the target).</summary>
+        /// <summary>Blended faces in the mesh, and those of them subtractive.</summary>
         public int SemiFaces, SubtractiveFaces;
     }
 
@@ -364,6 +363,7 @@ static class RetainedModels
     public static void ForgetMeshes()
     {
         _meshes.Clear();
+        _skyMeshes.Clear();
         RetainedScene.ClearMeshes();
         _meshGen = RetainedScene.MeshGeneration;
     }
@@ -390,6 +390,10 @@ static class RetainedModels
     /// <summary>Which routes the backend draws blended faces for: 1 the lit routine's
     /// blended faces, 2 the forced-blend twin's (effects, billboards). A comparison.</summary>
     public static int BlendRoutes = 3;
+
+    /// <summary>Main-view submits with a subtractive face (a model's own, or the twin's
+    /// rate); never reset.</summary>
+    public static long Subtractive;
 
     /// <summary>The first-person arm (<c>func_80032400</c>: sub-model 0, slot bias 100)
     /// drawn from its mesh as <see cref="TryInstance"/> draws a model. Stage 13 draws
@@ -616,6 +620,237 @@ static class RetainedModels
         }
     }
 
+    // ---- 0085: the sky (Step 3's sixth slice) ---------------------------------------
+
+    /// <summary>The objects of kind 0xF0 drawn from their meshes; off, on the packets
+    /// (<c>KF2_GPUWORLD_SKY=0</c>).</summary>
+    public static bool SkyOn = true;
+
+    /// <summary>Sky objects instanced, and those refused; never reset.</summary>
+    public static long SkyInstances, SkyRefused;
+
+    static readonly Dictionary<(uint Face, uint Count, uint Normals), Mesh> _skyMeshes = new();
+    static (int Corner, int Corners, int Key, int Mode)[] _skyFaces = new (int, int, int, int)[256];
+
+    /// <summary>
+    /// An object of kind 0xF0 (<c>func_80032AC4</c>), its sub-model 0 posed with
+    /// <paramref name="vertices"/> vertices, drawn from its mesh as the sky: in view space
+    /// with the GTE's own matrix (the camera's rotation and no translation), lit as
+    /// <c>func_8002F918</c> lights it, every face at slot <paramref name="key"/>, the
+    /// textured ones at blend rate <paramref name="rate"/> where they are blended. Only
+    /// the table's last two slots, which the walk reaches before the map, are taken. True
+    /// when the transform and the assembler need not run.
+    /// </summary>
+    public static bool TrySpecial(PSMemory mem, uint vertices, int key, int rate)
+    {
+        Instanced = false;
+        if (!SkyOn || !MainCapturing || key < 0x1FFE || key > 0x1FFF) return false;
+        var frame = RetainedScene.Find(RetainedScene.Serial);
+        if (frame == null) return false;
+
+        uint table = mem.ReadU32(PolyModelTable);
+        uint header = 0xCu + table;
+        uint count = mem.ReadU32(header + 0x14u);
+        uint normals = mem.ReadU32(header + 8u) + 0xCu + table;
+        uint face = mem.ReadU32(header + 0x10u) + 0xCu + table;
+        uint verts = mem.ReadU32(VertexBase);
+        if (count == 0 || count > 4096 || vertices == 0 || vertices > 8192
+            || !InRam(face, 4) || !InRam(normals, 8) || !InRam(verts, vertices * 8u)) { SkyRefused++; return false; }
+
+        if (_meshGen != RetainedScene.MeshGeneration) { _meshes.Clear(); _skyMeshes.Clear(); _meshGen = RetainedScene.MeshGeneration; }
+        var ram = mem.Ram;
+        var mkey = (face, count, normals);
+        if (_skyMeshes.TryGetValue(mkey, out var mesh)
+            && (Hash(ram, face, mesh.FaceBytes) != mesh.FaceHash
+                || mesh.NormalHi > mesh.NormalLo && Hash(ram, normals + mesh.NormalLo, mesh.NormalHi - mesh.NormalLo) != mesh.NormalHash))
+        { MeshStale++; mesh = null; }
+        if (mesh == null)
+        {
+            if (RetainedScene.MeshCornerCount > MeshStoreCap) ForgetMeshes();
+            mesh = BuildSky(mem, face, count, normals);
+            if (mesh == null) { SkyRefused++; return false; }
+            _skyMeshes[mkey] = mesh;
+            MeshBuilds++;
+        }
+        else MeshHits++;
+        if (mesh.MaxVertex >= (int)vertices) { SkyRefused++; return false; }
+
+        int pose = 0, weight = 0;
+        bool morph = false;
+        if (PosesOn)
+        {
+            if (MoPose.Pending) morph = (pose = MoPose.Store(mem, vertices, out weight)) != 0;
+            else if (verts != PosedBuffer) pose = MoPose.StoreRigid(mem, verts, vertices);
+        }
+        if (pose == 0 || MoPose.Checking) MoPose.Materialize(null, mem);
+        int vb = 0;
+        if (pose == 0)
+        {
+            var posed = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(
+                ram.Slice((int)(verts & (Runtime.RamSize - 1)), (int)vertices * 8));
+            vb = RetainedScene.AddModelVertices(posed);
+            if (vb < 0) return false;
+        }
+
+        var v = frame.View;
+        Transform.Read(v).ToWorld(v, _ins);
+        var m = new RetainedScene.ModelInstance
+        {
+            MeshStart = mesh.Start, MeshCount = mesh.Count, MeshAll = mesh.Count + mesh.SemiCount, VertBase = vb,
+            Pose = pose, PoseWeight = weight, PoseMorph = morph,
+            Far = 1e30f, Near = -1e30f,
+            Rgbc = mem.ReadU32(LightColour) & 0xFFFFFFu,
+            ViewSpace = true, Sky = true,
+        };
+        Place(ref m, _ins);
+        ReadGteMatrix(ref m);
+        uint l0 = Gte.ReadControl(8), l1 = Gte.ReadControl(9), l2 = Gte.ReadControl(10), l3 = Gte.ReadControl(11);
+        m.Llm0 = (short)l0 / 4096f; m.Llm1 = (short)(l0 >> 16) / 4096f; m.Llm2 = (short)l1 / 4096f;
+        m.Llm3 = (short)(l1 >> 16) / 4096f; m.Llm4 = (short)l2 / 4096f; m.Llm5 = (short)(l2 >> 16) / 4096f;
+        m.Llm6 = (short)l3 / 4096f; m.Llm7 = (short)(l3 >> 16) / 4096f; m.Llm8 = (short)Gte.ReadControl(12) / 4096f;
+        m.Bk0 = (int)Gte.ReadControl(13); m.Bk1 = (int)Gte.ReadControl(14); m.Bk2 = (int)Gte.ReadControl(15);
+        uint c0 = Gte.ReadControl(16), c1 = Gte.ReadControl(17), c2 = Gte.ReadControl(18), c3 = Gte.ReadControl(19);
+        m.L0 = (short)c0; m.L1 = (short)(c0 >> 16); m.L2 = (short)c1; m.L3 = (short)(c1 >> 16);
+        m.L4 = (short)c2; m.L5 = (short)(c2 >> 16); m.L6 = (short)c3; m.L7 = (short)(c3 >> 16);
+        m.L8 = (short)Gte.ReadControl(20);
+
+        // Every face, in the order the assembler links them; the shader drops one turned away.
+        int n = 0;
+        if (_skyFaces.Length < mesh.FaceAt.Length) _skyFaces = new (int, int, int, int)[mesh.FaceAt.Length];
+        for (int i = 0; i < mesh.FaceAt.Length; i++)
+        {
+            if (mesh.FaceAt[i] < 0) continue;
+            _skyFaces[n++] = (mesh.FaceAt[i], mesh.FaceN[i], key, mesh.FaceSemi[i] ? rate : -1);
+        }
+        RetainedScene.AddSky(m, _skyFaces.AsSpan(0, n));
+        Instanced = true;
+        SkyInstances++;
+        return true;
+    }
+
+    /// <summary>A sky mesh in <c>func_8002F918</c>'s four face types: gouraud triangles
+    /// and quads, textured (`0x34`, `0x3C`, blended with bit 1) or in the face's own colour
+    /// (`0x30`, `0x38`, never blended). The textured faces' blend rate is the record's, so
+    /// it is the instance's, not the mesh's.</summary>
+    static Mesh? BuildSky(PSMemory mem, uint face, uint count, uint normals)
+    {
+        var mesh = new Mesh();
+        uint start = face;
+        uint nlo = uint.MaxValue, nhi = 0;
+        int n = 0, ns = 0, maxV = -1;
+        mesh.FaceAt = new int[count];
+        mesh.FaceN = new byte[count];
+        mesh.FaceMode = new byte[count];
+        mesh.FaceSemi = new bool[count];
+        Span<uint> idx = stackalloc uint[4], nrm = stackalloc uint[4], uv = stackalloc uint[4], vi = stackalloc uint[4];
+        for (uint i = 0; i < count; i++)
+        {
+            mesh.FaceAt[i] = -1;
+            if (!InRam(face, 4)) return null;
+            uint word = mem.ReadU32(face);
+            uint f = face + 4u;
+            uint cmd = word >> 24;
+            face = f + ((word >> 6) & 0x3FCu);
+            int corners;
+            bool textured = true;
+            switch (cmd & 0xFDu)
+            {
+                case 0x34u: corners = 3; idx[0] = 0x0E; idx[1] = 0x12; idx[2] = 0x16; nrm[0] = 0x0C; nrm[1] = 0x10; nrm[2] = 0x14; break;
+                case 0x3Cu: corners = 4; idx[0] = 0x12; idx[1] = 0x16; idx[2] = 0x1A; idx[3] = 0x1E; nrm[0] = 0x10; nrm[1] = 0x14; nrm[2] = 0x18; nrm[3] = 0x1C; break;
+                case 0x30u: corners = 3; textured = false; idx[0] = 0x06; idx[1] = 0x0A; idx[2] = 0x0E; nrm[0] = 0x04; nrm[1] = 0x08; nrm[2] = 0x0C; break;
+                case 0x38u: corners = 4; textured = false; idx[0] = 0x06; idx[1] = 0x0A; idx[2] = 0x0E; idx[3] = 0x12; nrm[0] = 0x04; nrm[1] = 0x08; nrm[2] = 0x0C; nrm[3] = 0x10; break;
+                default: continue;
+            }
+            bool semi = textured && (cmd & 2u) != 0;
+            if (semi) mesh.Blended = true;
+            for (int k = 0; k < corners; k++)
+            {
+                uint off = mem.ReadU16(f + idx[k]);
+                if ((off & 7u) != 0) return null;
+                vi[k] = off >> 3;
+                maxV = Math.Max(maxV, (int)vi[k]);
+                uint no = mem.ReadU16(f + nrm[k]);
+                nlo = Math.Min(nlo, no); nhi = Math.Max(nhi, no + 8u);
+            }
+            var t = new RetainedScene.Vertex
+            {
+                Dqa = vi[0], Dqb = vi[1], Curve = vi[2],
+                Rgbc = corners == 4 ? vi[3] : uint.MaxValue,
+                Flags = RetainedScene.FlagDots | (semi ? RetainedScene.FlagSemi : 0u),
+            };
+            if (textured)
+            {
+                uv[0] = mem.ReadU16(f);
+                uv[1] = mem.ReadU16(f + 4u);
+                uv[2] = mem.ReadU16(f + 8u);
+                uv[3] = corners == 4 ? mem.ReadU16(f + 0xCu) : 0u;
+                int u0 = 255, v0 = 255, u1 = 0, v1 = 0;
+                for (int k = 0; k < corners; k++)
+                {
+                    int u = (int)(uv[k] & 0xFF), vv = (int)(uv[k] >> 8);
+                    u0 = Math.Min(u0, u); v0 = Math.Min(v0, vv); u1 = Math.Max(u1, u); v1 = Math.Max(v1, vv);
+                }
+                t.Clut = mem.ReadU16(f + 2u) & 0x7FFF;
+                t.Texpage = mem.ReadU16(f + 6u) & 0x19Fu;
+                t.Rect = (uint)u0 | (uint)v0 << 8 | (uint)u1 << 16 | (uint)v1 << 24;
+                t.Flags |= RetainedScene.FlagRect;
+            }
+            else
+            {
+                uv[0] = uv[1] = uv[2] = uv[3] = 0u;
+                t.Texpage = 0x8000;
+                t.Light = RetainedScene.FaceColour | (mem.ReadU32(f) & 0xFFFFFFu);
+            }
+            var dst = semi ? _semiCorners : _corners;
+            int at = semi ? ns : n;
+            if (at + 6 > dst.Length)
+            {
+                Array.Resize(ref dst, dst.Length * 2);
+                if (semi) _semiCorners = dst; else _corners = dst;
+            }
+            ReadOnlySpan<int> order = corners == 4 ? [0, 1, 2, 1, 3, 2] : [0, 1, 2];
+            mesh.FaceAt[i] = at;
+            mesh.FaceN[i] = (byte)order.Length;
+            mesh.FaceSemi[i] = semi;
+            if (semi) mesh.SemiFaces++;
+            for (int j = 0; j < order.Length; j++)
+            {
+                int k = order[j];
+                var c = t;
+                uint q = normals + mem.ReadU16(f + nrm[k]);
+                c.X = vi[k];
+                c.R = (short)mem.ReadU16(q); c.G = (short)mem.ReadU16(q + 2u); c.B = (short)mem.ReadU16(q + 4u);
+                c.U = uv[k] & 0xFF; c.V = uv[k] >> 8;
+                if (j >= 3) c.Flags |= RetainedScene.FlagQuadTail;
+                dst[at + j] = c;
+            }
+            if (semi) ns += order.Length; else n += order.Length;
+        }
+        mesh.FaceBytes = face - start;
+        if (!InRam(start, mesh.FaceBytes)) return null;
+        if (nhi > nlo)
+        {
+            mesh.NormalLo = nlo & ~3u;
+            mesh.NormalHi = (nhi + 3u) & ~3u;
+            if (!InRam(normals + mesh.NormalLo, mesh.NormalHi - mesh.NormalLo)) return null;
+            mesh.NormalHash = Hash(mem.Ram, normals + mesh.NormalLo, mesh.NormalHi - mesh.NormalLo);
+        }
+        mesh.FaceHash = Hash(mem.Ram, start, mesh.FaceBytes);
+        mesh.MaxVertex = maxV;
+        mesh.Count = n;
+        mesh.SemiCount = ns;
+        if (n + ns > 0)
+        {
+            if (_both.Length < n + ns) _both = new RetainedScene.Vertex[Math.Max(n + ns, _both.Length * 2)];
+            Array.Copy(_corners, _both, n);
+            Array.Copy(_semiCorners, 0, _both, n, ns);
+            mesh.Start = RetainedScene.AddMesh(_both.AsSpan(0, n + ns));
+            for (int i = 0; i < mesh.FaceAt.Length; i++)
+                if (mesh.FaceAt[i] >= 0) mesh.FaceAt[i] += mesh.Start + (mesh.FaceSemi[i] ? n : 0);
+        }
+        return mesh;
+    }
+
     static void Place(ref RetainedScene.ModelInstance m, float[] o)
     {
         m.R00 = o[0]; m.R01 = o[1]; m.R02 = o[2]; m.R10 = o[3]; m.R11 = o[4]; m.R12 = o[5];
@@ -639,7 +874,7 @@ static class RetainedModels
         if (count == 0 || count > 4096 || vertices == 0 || vertices > 8192
             || !InRam(face, 4) || !InRam(normals, 8) || !InRam(verts, vertices * 8u)) { InstanceRefused++; return false; }
 
-        if (_meshGen != RetainedScene.MeshGeneration) { _meshes.Clear(); _meshGen = RetainedScene.MeshGeneration; }
+        if (_meshGen != RetainedScene.MeshGeneration) { _meshes.Clear(); _skyMeshes.Clear(); _meshGen = RetainedScene.MeshGeneration; }
         var ram = mem.Ram;
         var key = (face, count, normals);
         if (_meshes.TryGetValue(key, out var mesh))
@@ -661,13 +896,13 @@ static class RetainedModels
             MeshBuilds++;
         }
         if (mesh.MaxVertex >= (int)vertices) { InstanceRefused++; return false; }
-        // A model's blended faces: drawn by the backend in the main view when it can
-        // (not a subtractive one, which reads the target), else built as packets. The
-        // forced-blend twin (effects, billboards) draws every face so.
+        // A model's blended faces: drawn by the backend in the main view when it can,
+        // else built as packets. The forced-blend twin (effects, billboards) draws every
+        // face so.
         bool twinRoute = twin >= 0;
         bool gpuBlend = !arm && !mirror && BlendOn && (BlendRoutes & (twinRoute ? 2 : 1)) != 0 && RetainedScene.MainBlend && RetainedScene.MainWater
-                        && (twinRoute ? twin != 2 && mesh.FaceAt.Length > 0
-                                      : mesh.SemiFaces > 0 && mesh.SubtractiveFaces == 0);
+                        && (twinRoute ? mesh.FaceAt.Length > 0 : mesh.SemiFaces > 0);
+        if (!arm && !mirror && (twin == 2 || !twinRoute && mesh.SubtractiveFaces > 0)) Subtractive++;
         if (twinRoute && !gpuBlend) return false;
         bool mirrorWhole = !twinRoute && !mesh.Blended;
         bool whole = mirror ? mirrorWhole : twinRoute ? gpuBlend : mirrorWhole || gpuBlend;

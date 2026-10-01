@@ -682,6 +682,9 @@ internal static class GlShaders
         uniform isamplerBuffer uModelPoses;
         uniform int   uModelPose;
         uniform int   uModelPoseW;
+        // The sky (func_8002F918): a face is kept by its facing alone, on whole
+        // pixels, whatever its depth; lit per corner, with no cue.
+        uniform int   uModelSky;
 
         ivec3 modelPosed(int i) {
             if (uModelPose < 0) return texelFetch(uModelVerts, uModelBase + i).xyz;
@@ -749,8 +752,9 @@ internal static class GlShaders
                 vec3 v3 = modelEye(f3);
                 z = (z0 + z1 + z2 + (int(clamp(v3.z, 0.0, 65535.0)) >> 2)) >> 2;
             } else z = (z0 + z1 + z2) / 3;
-            if (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar) return false;
+            if (uModelSky == 0 && (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar)) return false;
             vec2 s0 = modelScreen(v0), s1 = modelScreen(v1), s2 = modelScreen(v2);
+            if (uModelSky != 0) { s0 = floor(s0); s1 = floor(s1); s2 = floor(s2); }
             return (s1.x - s0.x) * (s2.y - s0.y) - (s1.y - s0.y) * (s2.x - s0.x) > 0.0;
         }
         """;
@@ -883,6 +887,8 @@ internal static class GlShaders
         // Murk: water thickens towards its colour with the distance the view ray
         // runs through it, surface to the opaque floor behind. 0 is off.
         uniform float uMurkDist;
+        // The world's vertical in view space, and the cosine a murked surface may lean to.
+        uniform vec4  uMurkUp;
         // 0083. Past this view depth the surface is left as the game drew it.
         uniform float uPlainZ;
         uniform vec3  uMurkColor;
@@ -1200,7 +1206,7 @@ internal static class GlShaders
             if (m <= 0 || m >= 256) return;
             vec4 mat = texelFetch(uMatTable, ivec2(m, 0), 0);
             float refl = mat.r;
-            bool murky = uMurkDist > 0.0 && m == 2;
+            bool murky = uMurkDist > 0.0 && m == 2 && abs(dot(octDecode(s.rg), uMurkUp.xyz)) >= uMurkUp.w;
             if (refl <= 0.0 && !murky) return;
             if (refl > 0.0) oInfo.a = 1.0 / 255.0;
 
@@ -1640,7 +1646,7 @@ internal static class GlShaders
                 w = modelVertex(uint(inWorld.x));
                 color = uModelLlm * inColorF;
                 cue = uModelCue;
-                rgbc = uModelRgbc;
+                rgbc = (inLight & 0x40000000u) != 0u ? inLight & 0xFFFFFFu : uModelRgbc;
                 flags = (inFlags & ~255u) | uModelMat;
             }
             uint hid = (flags >> 13) & 0x3FFFu;
@@ -1676,6 +1682,9 @@ internal static class GlShaders
                 lit = vec3(uvec3(rgbc, rgbc >> 8u, rgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
             }
             vColor = vec4(clamp(lit * cueKeep(cue, z), 0.0, 255.0), 0.0) / 255.0;
+            // The sky's packets carry no light record: the corner colour, and nothing
+            // an authored light or a glow adds.
+            if (uModel != 0 && uModelSky != 0) { dots = false; rgbc = 0u; cue = vec3(0.0); }
             // Fogged per pixel as 0048 fogs the game's own faces: the raw IR0 is
             // affine on screen (it goes as 1/z), so interpolated it is exact, and
             // shade8 puts it through the curve at every pixel.

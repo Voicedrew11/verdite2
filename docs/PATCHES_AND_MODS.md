@@ -5037,7 +5037,11 @@ pause [on|off]        hold the world on the stage gate (FramePacing.PauseWhen, a
                       by 0 pixels, so "snap" before and after a switch compares one
                       frame
 gpuworld [on|off]     the map drawn on the GPU (0085; see "Step 1, the first
-                      slice" in docs/GPU_RENDERER.md)
+                      slice" in docs/GPU_RENDERER.md); `gpuworld at X Y` lists
+                      the map's triangles over a game pixel in the last frame
+capture               arm the frame capture (FrameCapture.Arm) for the next run
+                      of stage 13; with KF2_FRAMEVIEW_OUT its CSVs are written
+murk [on|off|tilt X]  the murk, and the steepest a murked surface may lean
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the

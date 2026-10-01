@@ -40,7 +40,7 @@ public sealed partial class GlCore
 
     int _uwModel = -1, _uwModelBase, _uwModelR, _uwModelT, _uwModelFar, _uwModelNear, _uwModelLlm, _uwModelCue, _uwModelRgbc, _uwModelMat, _uwModelGteC = -1;
     int _uwnModel = -1, _uwnModelBase, _uwnModelR, _uwnModelT, _uwnModelFar, _uwnModelNear, _uwnModelMat, _uwnModelGteC = -1;
-    int _uwModelPose = -1, _uwModelPoseW = -1, _uwnModelPose = -1, _uwnModelPoseW = -1;
+    int _uwModelPose = -1, _uwModelPoseW = -1, _uwnModelPose = -1, _uwnModelPoseW = -1, _uwModelSky = -1;
     // The view-space placement (the arm), per program: uModelView, then the three rows and T.
     readonly int[] _uwView = [-1, -1, -1, -1, -1], _uwnView = [-1, -1, -1, -1, -1];
     static readonly string[] ViewNames = ["uModelView", "uModelVR0", "uModelVR1", "uModelVR2", "uModelVT"];
@@ -52,9 +52,10 @@ public sealed partial class GlCore
         _uwModel = L("uModel"); _uwModelBase = L("uModelBase"); _uwModelR = L("uModelR"); _uwModelT = L("uModelT");
         _uwModelFar = L("uModelFar"); _uwModelNear = L("uModelNear"); _uwModelLlm = L("uModelLlm"); _uwModelCue = L("uModelCue");
         _uwModelRgbc = L("uModelRgbc"); _uwModelMat = L("uModelMat"); _uwModelGteC = L("uModelGteC");
-        _uwModelPose = L("uModelPose"); _uwModelPoseW = L("uModelPoseW");
+        _uwModelPose = L("uModelPose"); _uwModelPoseW = L("uModelPoseW"); _uwModelSky = L("uModelSky");
         for (int i = 0; i < ViewNames.Length; i++) _uwView[i] = L(ViewNames[i]);
         _gl.UseProgram(_progWorld);
+        if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, 0);
         if (_uwView[0] >= 0) _gl.Uniform1(_uwView[0], 0);
         if (_uwModel >= 0) _gl.Uniform1(_uwModel, 0);
         int u = L("uModelVerts");
@@ -280,6 +281,7 @@ public sealed partial class GlCore
         if (view[0] >= 0) _gl.Uniform1(view[0], 0);
         if (colour)
         {
+            if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, 0);
             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
             _gl.Uniform1(_uwModel, 0);
         }
@@ -324,6 +326,7 @@ public sealed partial class GlCore
             return;
         }
         _gl.Uniform1(_uwModelBase, m.VertBase);
+        if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, m.Sky ? 1 : 0);
         if (_uwModelPose >= 0) _gl.Uniform1(_uwModelPose, pose);
         if (_uwModelPoseW >= 0) _gl.Uniform1(_uwModelPoseW, weight);
         _gl.UniformMatrix3(_uwModelR, 1, true, _m9);
@@ -385,6 +388,115 @@ public sealed partial class GlCore
     }
 
     int _uwFarPlane = -1;
+
+    // The frame's sky faces in the order the walk sends them, as corners in the store.
+    RetainedScene.SkyFace[] _skyEnt = [];
+    int[] _skyIdx = [];
+    uint _skyEbo;
+
+    /// <summary>
+    /// The frame's sky (<see cref="RetainedScene.AddSky"/>), into the bound target ahead
+    /// of the map, as the table walks its packets: far slot first, the last linked first
+    /// within a slot, with no depth test. An opaque face writes the far plane, as an
+    /// unrecorded packet does under the occlusion pass (zMode 3); a blended one writes no
+    /// depth (zMode 0). The world program is bound for the frame.
+    /// </summary>
+    unsafe void DrawSky(RetainedScene.Frame f, int slot)
+    {
+        var src = f.SkyFaces;
+        int n = src.Count;
+        if (n == 0 || slot < 0 || !RetainedScene.MainModelsShown || !RetainedScene.SkyShown) return;
+        if (_uwFarPlane < 0) _uwFarPlane = _gl.GetUniformLocation(_progWorld, "uFarPlane");
+        if (_skyEnt.Length < n) _skyEnt = new RetainedScene.SkyFace[n * 2];
+        int m = 0, corners = 0;
+        for (int i = 0; i < n; i++)
+        {
+            var e = src[i];
+            if (f.Sky[e.Inst].MeshGen != _meshGen) continue;
+            _skyEnt[m++] = e;
+            corners += e.Corners;
+        }
+        if (m == 0) { RetainedScene.SkyMissed++; return; }
+        Array.Sort(_skyEnt, 0, m, Comparer<RetainedScene.SkyFace>.Create((a, b) =>
+            a.Key != b.Key ? b.Key.CompareTo(a.Key) : b.Seq.CompareTo(a.Seq)));
+        if (_skyIdx.Length < corners) _skyIdx = new int[corners * 2];
+        int at = 0;
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < _skyEnt[i].Corners; j++) _skyIdx[at++] = _skyEnt[i].Corner + j;
+
+        _gl.Disable(EnableCap.CullFace);
+        BeginInstances(slot, true);
+        if (_skyEbo == 0) _skyEbo = _gl.GenBuffer();
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _skyEbo);
+        _gl.BufferData<int>(BufferTargetARB.ElementArrayBuffer, new ReadOnlySpan<int>(_skyIdx, 0, at), BufferUsageARB.StreamDraw);
+        _gl.DepthFunc(DepthFunction.Always);
+        bool far = GteDepth.SurfacesWanted;
+        int from = 0;
+        for (int i = 0; i < m;)
+        {
+            int j = i + 1, inst = _skyEnt[i].Inst, mode = _skyEnt[i].Mode;
+            int count = _skyEnt[i].Corners;
+            while (j < m && _skyEnt[j].Inst == inst && _skyEnt[j].Mode == mode) count += _skyEnt[j++].Corners;
+            SendInstance(f.Sky[inst], true);
+            if (mode < 0)
+            {
+                _gl.Disable(EnableCap.Blend);
+                _gl.DepthMask(far);
+                if (_uwFarPlane >= 0) _gl.Uniform1(_uwFarPlane, far ? 1 : 0);
+                _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)(from * 4L));
+            }
+            else
+            {
+                _gl.DepthMask(false);
+                if (_uwFarPlane >= 0) _gl.Uniform1(_uwFarPlane, 0);
+                DrawBlended(mode, count, from * 4L);
+            }
+            from += count;
+            i = j;
+        }
+        if (_uwFarPlane >= 0) _gl.Uniform1(_uwFarPlane, 0);
+        _gl.Disable(EnableCap.Blend);
+        _gl.DepthFunc(DepthFunction.Lequal);
+        _gl.DepthMask(true);
+        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
+        EndInstances(true);
+        RetainedScene.SkyDrawn += f.Sky.Count;
+        RetainedScene.SkyFacesDrawn += m;
+    }
+
+    /// <summary>
+    /// Elements of the bound VAO and element buffer, blended as GlCore blends a packet at
+    /// the console's rate <paramref name="mode"/>: dual-source, the texels without the
+    /// semi-transparency bit opaque. Mode 2 subtracts, which no one blend function does
+    /// for a face with opaque texels too: those first with the rest left as they are, then
+    /// the rest subtracted with the opaque ones left. The blend is left on.
+    /// </summary>
+    unsafe void DrawBlended(int mode, int count, long offset)
+    {
+        _gl.Enable(EnableCap.Blend);
+        _gl.BlendFuncSeparate(BlendingFactor.Src1Color, BlendingFactor.Src1Alpha, BlendingFactor.One, BlendingFactor.Zero);
+        if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, mode == 0 ? 0 : 1);
+        if (mode == 2)
+        {
+            _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, 0f, 0f, 0f, 1f);
+            _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)offset);
+            _gl.BlendEquationSeparate(BlendEquationModeEXT.FuncReverseSubtract, BlendEquationModeEXT.FuncAdd);
+            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, 1f, 1f, 1f, 1f);
+            if (_uwBlendOpaque >= 0) _gl.Uniform4(_uwBlendOpaque, 0f, 0f, 0f, 1f);
+            _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)offset);
+            if (_uwBlendOpaque >= 0) _gl.Uniform4(_uwBlendOpaque, 1f, 1f, 1f, 0f);
+            _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+        }
+        else
+        {
+            _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+            float a = mode switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, d = mode == 0 ? 0.5f : 1f;
+            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, a, a, a, d);
+            _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)offset);
+        }
+        if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, 0);
+    }
     readonly List<RetainedScene.ModelInstance> _armList = new(1);
 
     uint _armEbo;

@@ -984,6 +984,11 @@ Four files in the directory have no entry below:
   sample VRAM in `NormalFs`, its opaque texels an `Overlay` as before. The twelfth
   diff in the patch file. See "A see-through box showed the water unmurked" in
   `docs/RENDERING.md`.
+  Since amended: only a level surface is murked. `uMurkUp` carries the world's vertical in view
+  space (`WaterMurk.UpX/Y/Z`, which the port publishes) and the cosine a murked surface may lean
+  to (`WaterMurk.MaxTilt`, 0.75); a crystal in the water's texture, with nothing behind it, had
+  taken the sky's endless run and gone to the murk's colour. The thirteenth diff in the patch
+  file. See "Only level water is murked" in `docs/RENDERING.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
@@ -1522,6 +1527,18 @@ Four files in the directory have no entry below:
   `ModelInstance` gains `MeshAll` and `Solid`. The forced-blend twin (effects, billboards)
   takes the same route. Subtractive faces stay on the packets. The eleventh diff in the
   patch file. See "Step 3, the fifth slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the sky, subtractive faces, and every blend mode in one order. The objects of
+  kind 0xF0 go to the frame's sky (`RetainedScene.AddSky`, `Frame.Sky`, `SkyFaces`), instances
+  with `ModelInstance.Sky`, which `ModelGlsl` keeps by facing alone on whole pixels and `WorldVs`
+  lights per corner with no cue and no authored light (`uModelSky`); an untextured face carries
+  its own colour in `Vertex.Light` (`RetainedScene.FaceColour`). `GlModelMeshes.DrawSky` draws
+  them as the main view begins, before the map, far key first and the last linked first, untested,
+  an opaque face writing the far plane. `GlModelMeshes.DrawBlended` blends a draw at the console's
+  rate, mode 2 in GlCore's two passes, and every blended draw of the main view and the mirror goes
+  through it, so range 3 is drawn with the rest. `DrawWorldWater` merges the water's four ranges
+  and the models' four modes into the table's order instead of drawing one mode after another
+  (`RetainedScene.MainWaterRuns` counts the runs). The twelfth diff in the patch file. See "Step 3,
+  the sixth slice" in `docs/GPU_RENDERER.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

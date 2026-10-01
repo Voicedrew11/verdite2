@@ -316,6 +316,7 @@ public static class AgentServer
                      || parts[0].Equals("snap", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("waves", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("gpuworld", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("murk", StringComparison.OrdinalIgnoreCase)
                      || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
                           parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",
@@ -345,6 +346,8 @@ public static class AgentServer
             case "view":
             case "waves":
             case "gpuworld":
+            case "capture":
+            case "murk":
             case "pause":
                 Enqueue(_fast, cmd);
                 break;
@@ -433,6 +436,8 @@ public static class AgentServer
         "waves" => Waves.Shell(cmd.Arg1),
         "gpuworld" => GpuWorld.Shell(cmd.Arg1),
         "pause" => DoPause(cmd.Arg1),
+        "murk" => Murk.Shell(cmd.Arg1),
+        "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
         "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         "savecheck" => DoSaveCheck(),
         _ => Err($"unknown command '{cmd.Name}'; try help"),

@@ -9,6 +9,7 @@ namespace Kf2;
 ///
 ///     KF2_MURK=1              on (off by default)
 ///     KF2_MURK_DISTANCE=2654  the distance through water that takes 63% of the way to the murk
+///     KF2_MURK_TILT=0.75      the cosine a murked surface may lean to (0 murks any, as before)
 ///
 /// The distance and the colour are also sliders under the checkbox, saved.
 ///
@@ -36,6 +37,24 @@ public static class Murk
     {
         if (!string.IsNullOrWhiteSpace(on)) _forced = on != "0";
         if (float.TryParse(distance, out float d) && d > 0f) _forcedDistance = d;
+        // Only level water is murked: a crystal in the water's texture is not water.
+        if (float.TryParse(Environment.GetEnvironmentVariable("KF2_MURK_TILT"), System.Globalization.NumberStyles.Float,
+                           System.Globalization.CultureInfo.InvariantCulture, out float t))
+            WaterMurk.MaxTilt = Math.Clamp(t, 0f, 1f);
+    }
+
+    /// <summary>The `murk` shell verb: on, off, or `tilt X` (the cosine a murked
+    /// surface may lean to; 0 murks any).</summary>
+    public static string Shell(string arg)
+    {
+        var w = arg.Trim().ToLowerInvariant();
+        if (w == "on") WaterMurk.Enabled = true;
+        else if (w == "off") WaterMurk.Enabled = false;
+        else if (w.StartsWith("tilt ") && float.TryParse(w[5..], System.Globalization.NumberStyles.Float,
+                                                         System.Globalization.CultureInfo.InvariantCulture, out float t))
+            WaterMurk.MaxTilt = Math.Clamp(t, 0f, 1f);
+        else if (w != "") return "{\"ok\":false,\"error\":\"murk [on|off|tilt X]\"}";
+        return $"{{\"ok\":true,\"on\":{(WaterMurk.Enabled ? "true" : "false")},\"tilt\":{WaterMurk.MaxTilt.ToString(System.Globalization.CultureInfo.InvariantCulture)}}}";
     }
 
     public static void Install()
