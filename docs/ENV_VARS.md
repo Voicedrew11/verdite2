@@ -246,6 +246,8 @@ KF2_MOUSE_LEAD=0                         # mouse look waits for the tick, as wit
 KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
 KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
+KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
+KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second
 KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_AUTOSTART=new                        # the same, but stay in the New Game (fdat02, which has scrolling water)
