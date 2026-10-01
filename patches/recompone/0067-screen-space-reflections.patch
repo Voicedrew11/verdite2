@@ -3562,3 +3562,73 @@ index 5984ba9..83f6e29 100644
          Array.Clear(ByMaterial);
          Array.Clear(RefusedByBlend);
      }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index be5f3a0..e0c6e80 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -80,7 +80,7 @@ public sealed partial class GlCore : IGpuBackend
+     int _ssrW, _ssrH;
+     bool _ssrInfo;
+     int _uSsrOrigin, _uSsrSize, _uSsrTexSize, _uSsrProjH, _uSsrCentre;
+-    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrMarchOn, _uSsrMurkDist, _uSsrMurkColor;
++    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrMarchOn, _uSsrMurkDist, _uSsrMurkColor, _uSsrMurkUp;
+     int _uSsrDqa, _uSsrDqb, _uSsrFogCurve;
+     int _uPresentSsrOn;
+     int _uPresentAoMatOn;
+@@ -417,6 +417,7 @@ public sealed partial class GlCore : IGpuBackend
+                 _uSsrMurkDist = _gl.GetUniformLocation(_progSsr, "uMurkDist");
+                 _uSsrPlainZ = _gl.GetUniformLocation(_progSsr, "uPlainZ");
+                 _uSsrMurkColor = _gl.GetUniformLocation(_progSsr, "uMurkColor");
++                _uSsrMurkUp = _gl.GetUniformLocation(_progSsr, "uMurkUp");
+                 _uSsrSteps = _gl.GetUniformLocation(_progSsr, "uSteps");
+                 _uSsrDqa = _gl.GetUniformLocation(_progSsr, "uDqa");
+                 _uSsrDqb = _gl.GetUniformLocation(_progSsr, "uDqb");
+@@ -2949,6 +2950,7 @@ public sealed partial class GlCore : IGpuBackend
+         if (_uSsrMurkDist >= 0) _gl.Uniform1(_uSsrMurkDist, WaterMurk.Enabled ? Math.Max(1f, WaterMurk.Distance) : 0f);
+         if (_uSsrPlainZ >= 0) _gl.Uniform1(_uSsrPlainZ, GteDepth.PlainDepth);
+         if (_uSsrMurkColor >= 0) _gl.Uniform3(_uSsrMurkColor, WaterMurk.R, WaterMurk.G, WaterMurk.B);
++        if (_uSsrMurkUp >= 0) _gl.Uniform4(_uSsrMurkUp, WaterMurk.UpX, WaterMurk.UpY, WaterMurk.UpZ, WaterMurk.MaxTilt);
+         if (_uSsrSteps >= 0) _gl.Uniform1(_uSsrSteps, Math.Clamp(ScreenReflections.Steps, 1, 128));
+         if (_uSsrDqa >= 0) _gl.Uniform1(_uSsrDqa, (float)GteDepth.ProjDqa);
+         if (_uSsrDqb >= 0) _gl.Uniform1(_uSsrDqb, (float)GteDepth.ProjDqb);
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 6fdbbcd..0d265af 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -883,6 +887,8 @@ internal static class GlShaders
+         // Murk: water thickens towards its colour with the distance the view ray
+         // runs through it, surface to the opaque floor behind. 0 is off.
+         uniform float uMurkDist;
++        // The world's vertical in view space, and the cosine a murked surface may lean to.
++        uniform vec4  uMurkUp;
+         // 0083. Past this view depth the surface is left as the game drew it.
+         uniform float uPlainZ;
+         uniform vec3  uMurkColor;
+@@ -1200,7 +1206,7 @@ internal static class GlShaders
+             if (m <= 0 || m >= 256) return;
+             vec4 mat = texelFetch(uMatTable, ivec2(m, 0), 0);
+             float refl = mat.r;
+-            bool murky = uMurkDist > 0.0 && m == 2;
++            bool murky = uMurkDist > 0.0 && m == 2 && abs(dot(octDecode(s.rg), uMurkUp.xyz)) >= uMurkUp.w;
+             if (refl <= 0.0 && !murky) return;
+             if (refl > 0.0) oInfo.a = 1.0 / 255.0;
+ 
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/WaterMurk.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/WaterMurk.cs
+index 2d8f343..2881353 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/WaterMurk.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/WaterMurk.cs
+@@ -21,4 +21,14 @@ public static class WaterMurk
+     /// under it fades to 63% of <see cref="R"/>/G/B.</summary>
+     public static float Distance = 2654f;
+     public static float R = 0.03f, G = 0.05f, B = 0.06f;
++
++    /// <summary>The world's vertical in view space, published by the port from the
++    /// frame's camera. Water lies level, so only a surface within
++    /// <see cref="MaxTilt"/> of it is murked: a crystal in the water's texture is not
++    /// water, and with nothing behind it the run was endless.</summary>
++    public static float UpX, UpY = 1f, UpZ;
++
++    /// <summary>The cosine of the steepest a murked surface may lean (the swell tilts
++    /// water by about 20 degrees at its default).</summary>
++    public static float MaxTilt = 0.75f;
+ }

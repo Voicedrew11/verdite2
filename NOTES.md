@@ -322,6 +322,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Messages draw the world live
 - Drawing message text
 - Auto reload
+- Comparing gear on the equip prompt
 - A dynamic map
 - Five map controls that were not choices
 - What the Map page is down to

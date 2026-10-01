@@ -235,6 +235,9 @@ public static class RetainedScene
     public static long MainWaterSlices, MainWaterEmpty, MainWaterTriangles, MainWaterNoted;
     /// <summary>0085. Calls whose water waited, sharing no pixel with the packet next.</summary>
     public static long MainWaterDeferred;
+    /// <summary>0085. Runs the blended draws were cut into: one stream's faces, drawn
+    /// before anything of another stream comes first.</summary>
+    public static long MainWaterRuns;
     /// <summary>0085. Blended triangles sorted far to near for the main view's draws.</summary>
     public static long MainWaterSorted, MainWaterSortTicks;
 
@@ -486,6 +489,11 @@ public static class RetainedScene
         public readonly List<ModelInstance> Instances = new(), MirrorInstances = new();
         public short[] Verts = new short[4096];
         public int VertCount;
+        /// <summary>0085. The blended faces of the main view's instances (a model's
+        /// translucent faces, an effect, a billboard), each with the key the game would
+        /// link it into its table at; the backend sorts them and draws them where the
+        /// walk reaches them, among the map's water.</summary>
+        public readonly List<BlendFace> BlendFaces = new();
         /// <summary>0085. The first-person arm, when it is drawn from its mesh this
         /// frame: at <see cref="ArmSlot"/> of the table's walk, in painter's order.</summary>
         public ModelInstance Arm;
@@ -497,6 +505,10 @@ public static class RetainedScene
         public int ArmOrderCount;
         public int[] ArmRunKey = new int[64], ArmRunAt = new int[64];
         public int ArmRuns, ArmNext;
+        /// <summary>0085. The sky: the objects of kind 0xF0, drawn from their meshes
+        /// before the map, in painter's order (<see cref="AddSky"/>).</summary>
+        public readonly List<ModelInstance> Sky = new();
+        public readonly List<SkyFace> SkyFaces = new();
 
         public ReadOnlySpan<Vertex> SortedDynamic()
         {
@@ -536,8 +548,11 @@ public static class RetainedScene
         f.MirrorModels.Clear();
         f.Instances.Clear();
         f.MirrorInstances.Clear();
+        f.BlendFaces.Clear();
         f.VertCount = 0;
         f.HasArm = false;
+        f.Sky.Clear();
+        f.SkyFaces.Clear();
         ArmSerial = 0;
         f.MirrorOn = false;
         MirrorSerial = 0;
@@ -744,6 +759,9 @@ public static class RetainedScene
     public struct ModelInstance
     {
         public int MeshStart, MeshCount, VertBase;
+        /// <summary>The mesh's corners in all, opaque then blended: the textures its
+        /// draws need looked up.</summary>
+        public int MeshAll;
         public float R00, R01, R02, R10, R11, R12, R20, R21, R22, Tx, Ty, Tz;
         /// <summary>The light matrix, divided by 4096; the back colour; the light colour
         /// matrix row by row.</summary>
@@ -763,6 +781,9 @@ public static class RetainedScene
         public bool PoseMorph;
         /// <summary>Drawn in the mirror too, when the frame has one.</summary>
         public bool Mirrored;
+        /// <summary>A blended model that stands for something solid (a door): its blended
+        /// faces hide what is behind them from the occlusion pass with every texel.</summary>
+        public bool Solid;
         /// <summary>The store's generation when it was added; the backend draws none
         /// from an emptied store.</summary>
         public int MeshGen;
@@ -771,7 +792,16 @@ public static class RetainedScene
         /// what lights it; the eye's position is taken from these.</summary>
         public bool ViewSpace;
         public int V00, V01, V02, V10, V11, V12, V20, V21, V22, Vtx, Vty, Vtz;
+        /// <summary>Assembled as <c>func_8002F918</c> assembles the sky: every face kept by
+        /// its facing alone, on whole pixels, at no depth; lit per corner with no depth
+        /// cue; an untextured face's colour its own (the corner's <see cref="Vertex.Light"/>
+        /// with <see cref="FaceColour"/>).</summary>
+        public bool Sky;
     }
+
+    /// <summary>0085. A mesh corner's <see cref="Vertex.Light"/>: the low 24 bits are its
+    /// face's own colour, which the light scales in place of the instance's RGBC.</summary>
+    public const uint FaceColour = 0x40000000u;
 
     /// <summary>0085. The current frame's posed vertices (x, y, z and a pad, as the
     /// game keeps them), the index of the first.</summary>
@@ -787,6 +817,47 @@ public static class RetainedScene
         return at;
     }
 
+    /// <summary>0085. One blended face of a main-view instance: its corners in the store
+    /// (three, or six for a quad), the table slot the game links it at (the mean of its
+    /// corners' SZ over four, plus the slot bias), its blend mode and the order it was
+    /// built in (the last built goes first within a slot), and the screen box its
+    /// instance covers, in the GTE's pixels.</summary>
+    public struct BlendFace
+    {
+        public int Inst, Corner, Corners, Key, Mode, Seq;
+        public float X0, Y0, X1, Y1;
+    }
+
+    /// <summary>0085. The port's switch: a model's blended faces are drawn by the
+    /// backend, where the table's walk would have drawn their packets.</summary>
+    public static bool MainBlend = true;
+
+    /// <summary>0085. Off, the blended faces are taken off the packets and not drawn: the
+    /// probe's way to see what they cover.</summary>
+    public static bool BlendShown = true;
+
+    /// <summary>0085. The probe's: draw only this instance's blended faces (-1 all).</summary>
+    public static int BlendOnly = -1;
+
+    /// <summary>0085. The probe's: off, the blended faces skip the depth test.</summary>
+    public static bool BlendDepth = true;
+
+    /// <summary>0085. Blended faces noted, sorted for a draw, and drawn.</summary>
+    public static long BlendNoted, BlendSorted, BlendDrawn, BlendRuns;
+
+    /// <summary>0085. A blended face of the last instance added to the main view.</summary>
+    public static void AddBlendFace(int key, int corner, int corners, int mode, float x0, float y0, float x1, float y1)
+    {
+        var f = Current;
+        if (f.Serial != _serial || f.Instances.Count == 0) return;
+        f.BlendFaces.Add(new BlendFace
+        {
+            Inst = f.Instances.Count - 1, Corner = corner, Corners = corners, Key = key, Mode = mode,
+            Seq = f.BlendFaces.Count, X0 = x0, Y0 = y0, X1 = x1, Y1 = y1,
+        });
+        BlendNoted++;
+    }
+
     /// <summary>0085. A model instance to the current frame's main view, or its mirror.</summary>
     public static void AddInstance(in ModelInstance m, bool mirror = false)
     {
@@ -796,6 +867,38 @@ public static class RetainedScene
         copy.MeshGen = MeshGeneration;
         (mirror ? f.MirrorInstances : f.Instances).Add(copy);
     }
+
+    /// <summary>0085. One face of a sky object: its corners in the store (three, or six
+    /// for a quad), the table slot the game links it at, its blend mode (-1 opaque) and
+    /// the order it was linked in, across the frame's sky.</summary>
+    public struct SkyFace
+    {
+        public int Inst, Corner, Corners, Key, Mode, Seq;
+    }
+
+    /// <summary>0085. The objects of kind 0xF0 (<c>func_80032AC4</c>): the sky, centred
+    /// on the eye, linked at the far end of the table with no depth record, so drawn in
+    /// painter's order before everything else. <paramref name="faces"/> is the instance's
+    /// faces in the order the game links them, each its corner, corner count, slot and
+    /// blend mode; the backend draws them with the map, before it, far slot first and the
+    /// last linked first within a slot.</summary>
+    public static void AddSky(in ModelInstance m, ReadOnlySpan<(int Corner, int Corners, int Key, int Mode)> faces)
+    {
+        var f = Current;
+        if (f.Serial != _serial || faces.Length == 0) return;
+        var copy = m;
+        copy.MeshGen = MeshGeneration;
+        f.Sky.Add(copy);
+        foreach (var (corner, corners, key, mode) in faces)
+            f.SkyFaces.Add(new SkyFace { Inst = f.Sky.Count - 1, Corner = corner, Corners = corners, Key = key, Mode = mode, Seq = f.SkyFaces.Count });
+    }
+
+    /// <summary>0085. Off, the sky is taken off the packets and not drawn: the probe's
+    /// way to see what it covers.</summary>
+    public static bool SkyShown = true;
+
+    /// <summary>0085. Sky objects drawn, their faces, and draws that could not.</summary>
+    public static long SkyDrawn, SkyFacesDrawn, SkyMissed;
 
     /// <summary>0085. The first-person arm (<c>func_80032400</c>), drawn from its mesh:
     /// the game draws it in view space with no depth record, so it keeps painter's

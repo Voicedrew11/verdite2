@@ -80,7 +80,7 @@ public sealed partial class GlCore : IGpuBackend
     int _ssrW, _ssrH;
     bool _ssrInfo;
     int _uSsrOrigin, _uSsrSize, _uSsrTexSize, _uSsrProjH, _uSsrCentre;
-    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrMarchOn, _uSsrMurkDist, _uSsrMurkColor;
+    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrMarchOn, _uSsrMurkDist, _uSsrMurkColor, _uSsrMurkUp;
     int _uSsrDqa, _uSsrDqb, _uSsrFogCurve;
     int _uPresentSsrOn;
     int _uPresentAoMatOn;
@@ -417,6 +417,7 @@ public sealed partial class GlCore : IGpuBackend
                 _uSsrMurkDist = _gl.GetUniformLocation(_progSsr, "uMurkDist");
                 _uSsrPlainZ = _gl.GetUniformLocation(_progSsr, "uPlainZ");
                 _uSsrMurkColor = _gl.GetUniformLocation(_progSsr, "uMurkColor");
+                _uSsrMurkUp = _gl.GetUniformLocation(_progSsr, "uMurkUp");
                 _uSsrSteps = _gl.GetUniformLocation(_progSsr, "uSteps");
                 _uSsrDqa = _gl.GetUniformLocation(_progSsr, "uDqa");
                 _uSsrDqb = _gl.GetUniformLocation(_progSsr, "uDqb");
@@ -2949,6 +2950,7 @@ public sealed partial class GlCore : IGpuBackend
         if (_uSsrMurkDist >= 0) _gl.Uniform1(_uSsrMurkDist, WaterMurk.Enabled ? Math.Max(1f, WaterMurk.Distance) : 0f);
         if (_uSsrPlainZ >= 0) _gl.Uniform1(_uSsrPlainZ, GteDepth.PlainDepth);
         if (_uSsrMurkColor >= 0) _gl.Uniform3(_uSsrMurkColor, WaterMurk.R, WaterMurk.G, WaterMurk.B);
+        if (_uSsrMurkUp >= 0) _gl.Uniform4(_uSsrMurkUp, WaterMurk.UpX, WaterMurk.UpY, WaterMurk.UpZ, WaterMurk.MaxTilt);
         if (_uSsrSteps >= 0) _gl.Uniform1(_uSsrSteps, Math.Clamp(ScreenReflections.Steps, 1, 128));
         if (_uSsrDqa >= 0) _gl.Uniform1(_uSsrDqa, (float)GteDepth.ProjDqa);
         if (_uSsrDqb >= 0) _gl.Uniform1(_uSsrDqb, (float)GteDepth.ProjDqb);

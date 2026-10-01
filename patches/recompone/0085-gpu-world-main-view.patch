@@ -4980,3 +4980,968 @@ index 168a110..225a5c3 100644
          StaticGeneration++;
      }
  
+
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index d1ee2e4..6bbdf1e 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -124,15 +124,21 @@ public sealed partial class GlCore
+         RetainedScene.MainDraws++;
+         RetainedScene.MainTriangles += drawn / 3;
+ 
+-        // The water, drawn slice by slice as the walk goes on.
+-        if (RetainedScene.MainWater && WaterInView())
++        // The water, and the models' blended faces, drawn slice by slice as the walk goes on.
++        bool water = RetainedScene.MainWater && WaterInView();
++        bool blend = RetainedScene.MainWater && RetainedScene.MainBlend && inst >= 0 && f.BlendFaces.Count > 0
++                     && RetainedScene.MainModelsShown;
++        if (water || blend)
+         {
+             _wFrame = f; _wRt = rt; _wOffX = offX; _wOffY = offY; _wMips = mips;
+             _wDone = float.PositiveInfinity;
+             long s0 = System.Diagnostics.Stopwatch.GetTimestamp();
+-            RetainedScene.WaterPending = SortWater(f, f.View, f.MainHalves);
++            _bSlot = inst;
++            bool sorted = water ? SortWater(f, f.View, f.MainHalves) : ClearWater();
++            bool faces = blend ? SortBlend(f) : ClearBlend();
++            RetainedScene.WaterPending = sorted || faces;
+             RetainedScene.MainWaterSortTicks += System.Diagnostics.Stopwatch.GetTimestamp() - s0;
+-            if (PlanarReflections.Enabled) NoteWaterPlane(f, rt, cx, cy);
++            if (water && PlanarReflections.Enabled) NoteWaterPlane(f, rt, cx, cy);
+         }
+         _wCx = cx; _wCy = cy;
+         _wOpen = RetainedScene.WaterPending;
+@@ -409,6 +415,7 @@ public sealed partial class GlCore
+         if (f == null) return false;
+         int cutKey = float.IsNegativeInfinity(cut) ? int.MinValue : (int)MathF.Floor(cut * 0.25f);
+         var take = _wTake;
++        var btake = _bTake;
+         int any = 0;
+         bool left = false;
+         foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
+@@ -424,6 +431,20 @@ public sealed partial class GlCore
+             take[range] = k - _wAt[range];
+             any += take[range];
+             left |= _wAt[range] < n;
++
++            // The models' blended faces the walk has passed, at the slot their packets
++            // would be linked: a table slot is the map's key plus the tile bias.
++            int mode = range - 1, bfirst = _bModeStart[mode], bn = _bModeCount[mode], bk = _bWalk[mode];
++            for (; bk < bn && _bEnt[bfirst + bk].Key - TileBias > cutKey; bk++)
++            {
++                ref var e = ref _bEnt[bfirst + bk];
++                _pX0 = Math.Min(_pX0, e.X0); _pY0 = Math.Min(_pY0, e.Y0);
++                _pX1 = Math.Max(_pX1, e.X1); _pY1 = Math.Max(_pY1, e.Y1);
++            }
++            _bWalk[mode] = bk;
++            btake[mode] = bk - _bAt[mode];
++            any += btake[mode];
++            left |= _bAt[mode] < bn;
+         }
+         if (any == 0) { RetainedScene.MainWaterEmpty++; return left; }
+         // Water that shares no pixel with what comes next may wait: the order there
+@@ -431,9 +452,15 @@ public sealed partial class GlCore
+         if (!PendingMeets(bx0, by0, bx1, by1)) { RetainedScene.MainWaterDeferred++; return true; }
+         ResetPending();
+         left = false;
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4]) left |= _wWalk[range] < _wSortCount[range] / 3;
++        bool leftWater = false;
++        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        {
++            leftWater |= _wWalk[range] < _wSortCount[range] / 3;
++            left |= _bWalk[range - 1] < _bModeCount[range - 1];
++        }
++        left |= leftWater;
+         // The normal pass cuts per pixel at the same depths (DrawWorldWaterNormals).
+-        float lo = left ? cutKey * 4f : float.NegativeInfinity, hi = _wDone;
++        float lo = leftWater ? cutKey * 4f : float.NegativeInfinity, hi = _wDone;
+         _wDone = lo;
+ 
+         Flush(FlushReason.Target);
+@@ -447,12 +474,39 @@ public sealed partial class GlCore
+             (cx, cy) = BeginWorldMain(f, rt, _wOffX, _wOffY, _wMips);
+             _wOpen = true;
+         }
+-        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
+-        _gl.BindVertexArray(_worldVao);
+-        void Draw(int range)
++        bool models = false;
++        // The world VAO and the static map's textures, or the mesh VAO and the models'.
++        void EnterWater()
++        {
++            if (models) { EndInstances(true); models = false; }
++            if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
++            _gl.BindVertexArray(_worldVao);
++        }
++        void EnterModels()
++        {
++            if (models) return;
++            BeginInstances(_bSlot, true);
++            _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _bEbo);
++            models = true;
++        }
++        EnterWater();
++        void Draw(int range, int from, int to)
++        {
++            long at = _wSortStart[range] + 3L * from;
++            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(3 * (to - from)), DrawElementsType.UnsignedInt, (void*)(at * 4L)); }
++        }
++        // A run of one instance's blended faces, entries a to b of the sorted list.
++        void DrawFaces(int a, int b)
+         {
+-            long at = _wSortStart[range] + 3L * _wAt[range];
+-            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(3 * take[range]), DrawElementsType.UnsignedInt, (void*)(at * 4L)); }
++            var m = f.Instances[_bEnt[a].Inst];
++            if (m.MeshGen != _meshGen || !RetainedScene.BlendShown) return;
++            EnterModels();
++            SendInstance(m, true);
++            if (!RetainedScene.BlendDepth) _gl.Disable(EnableCap.DepthTest);
++            int from = _bIdxAt[a], to = b < _bEntCount ? _bIdxAt[b] : _bIdxCount;
++            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(to - from), DrawElementsType.UnsignedInt, (void*)(from * 4L)); }
++            if (!RetainedScene.BlendDepth) _gl.Enable(EnableCap.DepthTest);
++            RetainedScene.BlendRuns++;
+         }
+         // Back to front, as the packets are, since an averaging blend depends on the
+         // order (SortWater); tested and not written, as a blended packet is (GlCore's
+@@ -467,15 +521,39 @@ public sealed partial class GlCore
+         // Subtractive faces (range 3) stay on the packets, their halves whole.
+         foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
+         {
+-            if (take[range] == 0) continue;
+             int mode = range - 1;
++            if (take[range] == 0 && btake[mode] == 0) continue;
+             float src = mode switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, dst = mode == 0 ? 0.5f : 1f;
+             if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, src, src, src, dst);
+             if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, mode == 0 ? 0 : 1);
+-            SendWorldWaves(mode == 0 || mode == 3, cx, cy, f.View.H);
+-            Draw(range);
++            // The water's faces and the models' in one order: by key, far first; at one
++            // key a model first, since it was built after the map.
++            int wi = _wAt[range], wEnd = _wWalk[range], wfirst = _wSortStart[range] / 3;
++            int bi = _bModeStart[mode] + _bAt[mode], bEnd = _bModeStart[mode] + _bWalk[mode];
++            while (wi < wEnd || bi < bEnd)
++            {
++                int wkey = wi < wEnd ? _wKeyAt[wfirst + wi] : int.MinValue;
++                if (bi < bEnd && _bEnt[bi].Key - TileBias >= wkey)
++                {
++                    int bj = bi + 1, inst = _bEnt[bi].Inst;
++                    while (bj < bEnd && _bEnt[bj].Inst == inst && _bEnt[bj].Key - TileBias >= wkey) bj++;
++                    DrawFaces(bi, bj);
++                    RetainedScene.BlendDrawn += bj - bi;
++                    bi = bj;
++                }
++                else
++                {
++                    int next = bi < bEnd ? _bEnt[bi].Key - TileBias : int.MinValue;
++                    int wj = wi + 1;
++                    while (wj < wEnd && _wKeyAt[wfirst + wj] > next) wj++;
++                    EnterWater();
++                    SendWorldWaves(mode == 0 || mode == 3, cx, cy, f.View.H);
++                    Draw(range, wi, wj);
++                    SendWorldWaves(false, 0f, 0f, 0f);
++                    wi = wj;
++                }
++            }
+         }
+-        SendWorldWaves(false, 0f, 0f, 0f);
+         if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, 0);
+         // The texels without the semi-transparency bit draw opaque, so they hide what
+         // is behind them from the occlusion pass, as a blended packet's do: their true
+@@ -488,11 +566,32 @@ public sealed partial class GlCore
+             if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+             if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+             _gl.Uniform1(_uwOpaqueDepth, 1);
++            EnterWater();
+             foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
+-                if (take[range] > 0) Draw(range);
++                if (take[range] > 0) Draw(range, _wAt[range], _wWalk[range]);
++            foreach (int mode in (ReadOnlySpan<int>)[0, 1, 3])
++            {
++                if (btake[mode] == 0) continue;
++                int a = _bModeStart[mode] + _bAt[mode], z = _bModeStart[mode] + _bWalk[mode];
++                for (int i = a; i < z;)
++                {
++                    int j = i + 1, inst = _bEnt[i].Inst;
++                    while (j < z && _bEnt[j].Inst == inst) j++;
++                    // A solid model hides what is behind it with every texel.
++                    _gl.Uniform1(_uwOpaqueDepth, f.Instances[inst].Solid ? 2 : 1);
++                    DrawFaces(i, j);
++                    i = j;
++                }
++            }
+             _gl.Uniform1(_uwOpaqueDepth, 0);
+         }
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4]) _wAt[range] += take[range];
++        if (models) EndInstances(true);
++        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        {
++            _wAt[range] += take[range];
++            _bAt[range - 1] += btake[range - 1];
++        }
++        _gl.BindVertexArray(_worldVao);
+         if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+         if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+         if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+@@ -513,6 +612,87 @@ public sealed partial class GlCore
+         return left;
+     }
+ 
++    // The models' blended faces of the main view, sorted by blend mode, then far to
++    // near by table slot, then the last built first. An element buffer of their corners
++    // in the mesh store, in that order, one run per face.
++    RetainedScene.BlendFace[] _bEnt = [];
++    int _bEntCount, _bIdxCount, _bSlot;
++    int[] _bIdxAt = [];
++    uint[] _bIdx = [];
++    uint _bEbo;
++    readonly int[] _bModeStart = new int[4], _bModeCount = new int[4], _bAt = new int[4], _bWalk = new int[4], _bTake = new int[4];
++    /// <summary>A tile is linked at its mean depth plus this many slots (PolyAssembler).</summary>
++    const int TileBias = 0xF0;
++
++    bool ClearBlend()
++    {
++        Array.Clear(_bModeCount);
++        Array.Clear(_bModeStart);
++        Array.Clear(_bAt);
++        Array.Clear(_bWalk);
++        _bEntCount = 0;
++        return false;
++    }
++
++    /// <summary>The water state of a frame that has none.</summary>
++    bool ClearWater()
++    {
++        Array.Clear(_wSortCount);
++        Array.Clear(_wSortStart);
++        Array.Clear(_wAt);
++        Array.Clear(_wWalk);
++        ResetPending();
++        return false;
++    }
++
++    /// <summary>
++    /// The frame's blended model faces, sorted as the table would walk their packets:
++    /// per blend mode (the order the water is drawn in), far to near by slot, and within
++    /// a slot the last built first. Their corners go to an element buffer on the mesh
++    /// VAO. False when none is left to draw.
++    /// </summary>
++    unsafe bool SortBlend(RetainedScene.Frame f)
++    {
++        ClearBlend();
++        var src = f.BlendFaces;
++        int n = src.Count;
++        if (n == 0 || !InstancesReady || _bSlot < 0) return false;
++        if (_bEnt.Length < n) { _bEnt = new RetainedScene.BlendFace[n * 2]; _bIdxAt = new int[n * 2]; }
++        int m = 0;
++        for (int i = 0; i < n; i++)
++        {
++            var e = src[i];
++            if (e.Mode == 2 || f.Instances[e.Inst].MeshGen != _meshGen || RetainedScene.BlendOnly >= 0 && e.Inst != RetainedScene.BlendOnly) continue;
++            _bEnt[m++] = e;
++        }
++        if (m == 0) return false;
++        Array.Sort(_bEnt, 0, m, Comparer<RetainedScene.BlendFace>.Create((a, b) =>
++            a.Mode != b.Mode ? a.Mode.CompareTo(b.Mode) : a.Key != b.Key ? b.Key.CompareTo(a.Key) : b.Seq.CompareTo(a.Seq)));
++        // Instances stay together where their faces are adjacent in the sorted order; the
++        // draws split a run wherever the instance changes.
++        int corners = 0;
++        for (int i = 0; i < m; i++) corners += _bEnt[i].Corners;
++        if (_bIdx.Length < corners) _bIdx = new uint[corners * 2];
++        int at = 0;
++        for (int i = 0; i < m; i++)
++        {
++            _bIdxAt[i] = at;
++            for (int j = 0; j < _bEnt[i].Corners; j++) _bIdx[at++] = (uint)(_bEnt[i].Corner + j);
++            _bModeCount[_bEnt[i].Mode]++;
++        }
++        for (int mode = 1; mode < 4; mode++) _bModeStart[mode] = _bModeStart[mode - 1] + _bModeCount[mode - 1];
++        _bEntCount = m;
++        _bIdxCount = at;
++        if (_bEbo == 0) _bEbo = _gl.GenBuffer();
++        _gl.BindVertexArray(_meshVao);
++        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _bEbo);
++        fixed (uint* p = _bIdx)
++            _gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(at * 4), p, BufferUsageARB.StreamDraw);
++        _gl.BindVertexArray(0);
++        RetainedScene.BlendSorted += m;
++        return true;
++    }
++
+     // The frame's visible blended triangles, far to near, as vertex indices into the
+     // static map: an element buffer on the world VAO, a run per range.
+     uint _wEbo;
+@@ -544,6 +724,13 @@ public sealed partial class GlCore
+                 int b = (first + k) * 4;
+                 if (!(_wBox[b + 2] < x0 || x1 < _wBox[b] || _wBox[b + 3] < y0 || y1 < _wBox[b + 1])) return true;
+             }
++            int mode = range - 1;
++            for (int k = _bModeStart[mode] + _bAt[mode]; k < _bModeStart[mode] + _bWalk[mode]; k++)
++            {
++                if (--budget < 0) return true;
++                ref var e = ref _bEnt[k];
++                if (!(e.X1 < x0 || x1 < e.X0 || e.Y1 < y0 || y1 < e.Y0)) return true;
++            }
+         }
+         return false;
+     }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+index c3de55a..8b0abf1 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+@@ -232,7 +232,7 @@ public sealed partial class GlCore
+         _mdlLookSerial++;
+         foreach (var m in list)
+             if (m.MeshGen == _meshGen)
+-            foreach (int k in MeshKeys(m.MeshStart, m.MeshCount))
++            foreach (int k in MeshKeys(m.MeshStart, Math.Max(m.MeshCount, m.MeshAll)))
+             {
+                 if (_mdlKeyLooked[k] == _mdlLookSerial) continue;
+                 _mdlKeyLooked[k] = _mdlLookSerial;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 225a5c3..0173742 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -486,6 +486,11 @@ public static class RetainedScene
+         public readonly List<ModelInstance> Instances = new(), MirrorInstances = new();
+         public short[] Verts = new short[4096];
+         public int VertCount;
++        /// <summary>0085. The blended faces of the main view's instances (a model's
++        /// translucent faces, an effect, a billboard), each with the key the game would
++        /// link it into its table at; the backend sorts them and draws them where the
++        /// walk reaches them, among the map's water.</summary>
++        public readonly List<BlendFace> BlendFaces = new();
+         /// <summary>0085. The first-person arm, when it is drawn from its mesh this
+         /// frame: at <see cref="ArmSlot"/> of the table's walk, in painter's order.</summary>
+         public ModelInstance Arm;
+@@ -536,6 +541,7 @@ public static class RetainedScene
+         f.MirrorModels.Clear();
+         f.Instances.Clear();
+         f.MirrorInstances.Clear();
++        f.BlendFaces.Clear();
+         f.VertCount = 0;
+         f.HasArm = false;
+         ArmSerial = 0;
+@@ -744,6 +750,9 @@ public static class RetainedScene
+     public struct ModelInstance
+     {
+         public int MeshStart, MeshCount, VertBase;
++        /// <summary>The mesh's corners in all, opaque then blended: the textures its
++        /// draws need looked up.</summary>
++        public int MeshAll;
+         public float R00, R01, R02, R10, R11, R12, R20, R21, R22, Tx, Ty, Tz;
+         /// <summary>The light matrix, divided by 4096; the back colour; the light colour
+         /// matrix row by row.</summary>
+@@ -763,6 +772,9 @@ public static class RetainedScene
+         public bool PoseMorph;
+         /// <summary>Drawn in the mirror too, when the frame has one.</summary>
+         public bool Mirrored;
++        /// <summary>A blended model that stands for something solid (a door): its blended
++        /// faces hide what is behind them from the occlusion pass with every texel.</summary>
++        public bool Solid;
+         /// <summary>The store's generation when it was added; the backend draws none
+         /// from an emptied store.</summary>
+         public int MeshGen;
+@@ -787,6 +799,47 @@ public static class RetainedScene
+         return at;
+     }
+ 
++    /// <summary>0085. One blended face of a main-view instance: its corners in the store
++    /// (three, or six for a quad), the table slot the game links it at (the mean of its
++    /// corners' SZ over four, plus the slot bias), its blend mode and the order it was
++    /// built in (the last built goes first within a slot), and the screen box its
++    /// instance covers, in the GTE's pixels.</summary>
++    public struct BlendFace
++    {
++        public int Inst, Corner, Corners, Key, Mode, Seq;
++        public float X0, Y0, X1, Y1;
++    }
++
++    /// <summary>0085. The port's switch: a model's blended faces are drawn by the
++    /// backend, where the table's walk would have drawn their packets.</summary>
++    public static bool MainBlend = true;
++
++    /// <summary>0085. Off, the blended faces are taken off the packets and not drawn: the
++    /// probe's way to see what they cover.</summary>
++    public static bool BlendShown = true;
++
++    /// <summary>0085. The probe's: draw only this instance's blended faces (-1 all).</summary>
++    public static int BlendOnly = -1;
++
++    /// <summary>0085. The probe's: off, the blended faces skip the depth test.</summary>
++    public static bool BlendDepth = true;
++
++    /// <summary>0085. Blended faces noted, sorted for a draw, and drawn.</summary>
++    public static long BlendNoted, BlendSorted, BlendDrawn, BlendRuns;
++
++    /// <summary>0085. A blended face of the last instance added to the main view.</summary>
++    public static void AddBlendFace(int key, int corner, int corners, int mode, float x0, float y0, float x1, float y1)
++    {
++        var f = Current;
++        if (f.Serial != _serial || f.Instances.Count == 0) return;
++        f.BlendFaces.Add(new BlendFace
++        {
++            Inst = f.Instances.Count - 1, Corner = corner, Corners = corners, Key = key, Mode = mode,
++            Seq = f.BlendFaces.Count, X0 = x0, Y0 = y0, X1 = x1, Y1 = y1,
++        });
++        BlendNoted++;
++    }
++
+     /// <summary>0085. A model instance to the current frame's main view, or its mirror.</summary>
+     public static void AddInstance(in ModelInstance m, bool mirror = false)
+     {
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+index 6bbdf1e..186db3e 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlMainView.cs
+@@ -86,6 +86,7 @@ public sealed partial class GlCore
+         _mainMips = mips;
+         int models = UploadModels(f.Models, f.Serial & (ModelRing - 1), f.Serial, mips);
+         int inst = PrepareInstances(f, f.Instances, mips);
++        int sky = f.Sky.Count > 0 ? PrepareInstances(f, f.Sky, mips) : -1;
+         long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
+         var (cx, cy) = BeginWorldMain(f, rt, offX, offY, mips);
+         ClearStaleDepth(rt);
+@@ -93,6 +94,12 @@ public sealed partial class GlCore
+         // faces are counter-clockwise here.
+         _gl.Disable(EnableCap.Blend);
+         _gl.DepthMask(true);
++        // The sky, linked at the table's far end, goes first.
++        if (sky >= 0)
++        {
++            DrawSky(f, sky);
++            if (RetainedScene.CullBack) _gl.Enable(EnableCap.CullFace);
++        }
+         long t3 = System.Diagnostics.Stopwatch.GetTimestamp();
+         int drawn = DrawRange(0, null);
+         if (models >= 0 && RetainedScene.MainModelsShown)
+@@ -209,21 +216,13 @@ public sealed partial class GlCore
+         if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, bias ? GteDepth.DepthSlope : 0f);
+         _gl.Enable(EnableCap.CullFace);
+         _gl.DepthMask(false);
+-        _gl.Enable(EnableCap.Blend);
+-        _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+-        _gl.BlendFuncSeparate(BlendingFactor.Src1Color, BlendingFactor.Src1Alpha, BlendingFactor.One, BlendingFactor.Zero);
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
+         {
+             int n = _wSortCount[range];
+             if (n == 0) continue;
+-            int mode = range - 1;
+-            float src = mode switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, dst = mode == 0 ? 0.5f : 1f;
+-            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, src, src, src, dst);
+-            if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, mode == 0 ? 0 : 1);
+-            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)n, DrawElementsType.UnsignedInt, (void*)(_wSortStart[range] * 4L)); }
++            DrawBlended(range - 1, n, _wSortStart[range] * 4L);
+             RetainedScene.MirrorWaterTriangles += n / 3;
+         }
+-        if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, 0);
+         if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+         if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, 0f);
+         if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+@@ -397,7 +396,7 @@ public sealed partial class GlCore
+     {
+         for (int c = 0; c < RetainedScene.Chunks; c++)
+             if (_chunkVis[c] && RetainedScene.ChunkCount[RetainedScene.Chunks + c] + RetainedScene.ChunkCount[2 * RetainedScene.Chunks + c]
+-                                + RetainedScene.ChunkCount[4 * RetainedScene.Chunks + c] > 0)
++                                + RetainedScene.ChunkCount[3 * RetainedScene.Chunks + c] + RetainedScene.ChunkCount[4 * RetainedScene.Chunks + c] > 0)
+                 return true;
+         return false;
+     }
+@@ -418,7 +417,7 @@ public sealed partial class GlCore
+         var btake = _bTake;
+         int any = 0;
+         bool left = false;
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
+         {
+             int first = _wSortStart[range] / 3, n = _wSortCount[range] / 3, k = _wWalk[range];
+             for (; k < n && _wKeyAt[first + k] > cutKey; k++)
+@@ -453,7 +452,7 @@ public sealed partial class GlCore
+         ResetPending();
+         left = false;
+         bool leftWater = false;
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
+         {
+             leftWater |= _wWalk[range] < _wSortCount[range] / 3;
+             left |= _bWalk[range - 1] < _bModeCount[range - 1];
+@@ -490,13 +489,15 @@ public sealed partial class GlCore
+             models = true;
+         }
+         EnterWater();
+-        void Draw(int range, int from, int to)
++        // Blended at mode `blend`, or plain with -1 (the opaque texels' depth).
++        void Draw(int range, int from, int to, int blend)
+         {
+             long at = _wSortStart[range] + 3L * from;
+-            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(3 * (to - from)), DrawElementsType.UnsignedInt, (void*)(at * 4L)); }
++            if (blend >= 0) DrawBlended(blend, 3 * (to - from), at * 4L);
++            else unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(3 * (to - from)), DrawElementsType.UnsignedInt, (void*)(at * 4L)); }
+         }
+         // A run of one instance's blended faces, entries a to b of the sorted list.
+-        void DrawFaces(int a, int b)
++        void DrawFaces(int a, int b, int blend)
+         {
+             var m = f.Instances[_bEnt[a].Inst];
+             if (m.MeshGen != _meshGen || !RetainedScene.BlendShown) return;
+@@ -504,7 +505,8 @@ public sealed partial class GlCore
+             SendInstance(m, true);
+             if (!RetainedScene.BlendDepth) _gl.Disable(EnableCap.DepthTest);
+             int from = _bIdxAt[a], to = b < _bEntCount ? _bIdxAt[b] : _bIdxCount;
+-            unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(to - from), DrawElementsType.UnsignedInt, (void*)(from * 4L)); }
++            if (blend >= 0) DrawBlended(blend, to - from, from * 4L);
++            else unsafe { _gl.DrawElements(PrimitiveType.Triangles, (uint)(to - from), DrawElementsType.UnsignedInt, (void*)(from * 4L)); }
+             if (!RetainedScene.BlendDepth) _gl.Enable(EnableCap.DepthTest);
+             RetainedScene.BlendRuns++;
+         }
+@@ -515,46 +517,56 @@ public sealed partial class GlCore
+         if (_uwDepthBias >= 0) _gl.Uniform1(_uwDepthBias, bias ? GteDepth.DepthBias / 65536f : 0f);
+         if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, bias ? GteDepth.DepthSlope : 0f);
+         _gl.DepthMask(false);
+-        _gl.Enable(EnableCap.Blend);
+-        _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
+-        _gl.BlendFuncSeparate(BlendingFactor.Src1Color, BlendingFactor.Src1Alpha, BlendingFactor.One, BlendingFactor.Zero);
+-        // Subtractive faces (range 3) stay on the packets, their halves whole.
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        // The water's faces and the models', every blend mode, in one order: the order
++        // the table would walk their packets. By key, far first; at one key a model
++        // first, since it was built after the map, and of two models the last built.
++        // Blend modes do not commute (an average and an add), so a run is one stream's
++        // faces only while nothing in another stream comes before its next.
++        var head = _mHead; var end = _mEnd;
++        for (int r = 1; r <= 4; r++)
+         {
+-            int mode = range - 1;
+-            if (take[range] == 0 && btake[mode] == 0) continue;
+-            float src = mode switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, dst = mode == 0 ? 0.5f : 1f;
+-            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, src, src, src, dst);
+-            if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, mode == 0 ? 0 : 1);
+-            // The water's faces and the models' in one order: by key, far first; at one
+-            // key a model first, since it was built after the map.
+-            int wi = _wAt[range], wEnd = _wWalk[range], wfirst = _wSortStart[range] / 3;
+-            int bi = _bModeStart[mode] + _bAt[mode], bEnd = _bModeStart[mode] + _bWalk[mode];
+-            while (wi < wEnd || bi < bEnd)
++            head[r - 1] = _wAt[r]; end[r - 1] = _wWalk[r];
++            head[r + 3] = _bModeStart[r - 1] + _bAt[r - 1]; end[r + 3] = _bModeStart[r - 1] + _bWalk[r - 1];
++        }
++        // Whether entry i of stream a goes before entry j of stream b.
++        bool Before(int a, int i, int b, int j)
++        {
++            int ka = a < 4 ? _wKeyAt[_wSortStart[a + 1] / 3 + i] : _bEnt[i].Key - TileBias;
++            int kb = b < 4 ? _wKeyAt[_wSortStart[b + 1] / 3 + j] : _bEnt[j].Key - TileBias;
++            if (ka != kb) return ka > kb;
++            if (a < 4 != b < 4) return a >= 4;
++            return a < 4 ? a < b : _bEnt[i].Seq > _bEnt[j].Seq;
++        }
++        while (true)
++        {
++            int a = -1;
++            for (int b = 0; b < 8; b++)
++                if (head[b] < end[b] && (a < 0 || Before(b, head[b], a, head[a]))) a = b;
++            if (a < 0) break;
++            // The first of the other streams' heads, which do not move during the run.
++            int o = -1;
++            for (int b = 0; b < 8; b++)
++                if (b != a && head[b] < end[b] && (o < 0 || Before(b, head[b], o, head[o]))) o = b;
++            int i = head[a], j = i + 1;
++            if (a < 4)
+             {
+-                int wkey = wi < wEnd ? _wKeyAt[wfirst + wi] : int.MinValue;
+-                if (bi < bEnd && _bEnt[bi].Key - TileBias >= wkey)
+-                {
+-                    int bj = bi + 1, inst = _bEnt[bi].Inst;
+-                    while (bj < bEnd && _bEnt[bj].Inst == inst && _bEnt[bj].Key - TileBias >= wkey) bj++;
+-                    DrawFaces(bi, bj);
+-                    RetainedScene.BlendDrawn += bj - bi;
+-                    bi = bj;
+-                }
+-                else
+-                {
+-                    int next = bi < bEnd ? _bEnt[bi].Key - TileBias : int.MinValue;
+-                    int wj = wi + 1;
+-                    while (wj < wEnd && _wKeyAt[wfirst + wj] > next) wj++;
+-                    EnterWater();
+-                    SendWorldWaves(mode == 0 || mode == 3, cx, cy, f.View.H);
+-                    Draw(range, wi, wj);
+-                    SendWorldWaves(false, 0f, 0f, 0f);
+-                    wi = wj;
+-                }
++                while (j < end[a] && (o < 0 || Before(a, j, o, head[o]))) j++;
++                int range = a + 1, mode = a;
++                EnterWater();
++                SendWorldWaves(mode == 0 || mode == 3, cx, cy, f.View.H);
++                Draw(range, i, j, mode);
++                SendWorldWaves(false, 0f, 0f, 0f);
++            }
++            else
++            {
++                int inst = _bEnt[i].Inst;
++                while (j < end[a] && _bEnt[j].Inst == inst && (o < 0 || Before(a, j, o, head[o]))) j++;
++                DrawFaces(i, j, a - 4);
++                RetainedScene.BlendDrawn += j - i;
+             }
++            RetainedScene.MainWaterRuns++;
++            head[a] = j;
+         }
+-        if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, 0);
+         // The texels without the semi-transparency bit draw opaque, so they hide what
+         // is behind them from the occlusion pass, as a blended packet's do: their true
+         // depth, after the colour.
+@@ -567,9 +579,9 @@ public sealed partial class GlCore
+             if (_uwDepthSlope >= 0) _gl.Uniform1(_uwDepthSlope, 0f);
+             _gl.Uniform1(_uwOpaqueDepth, 1);
+             EnterWater();
+-            foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
+-                if (take[range] > 0) Draw(range, _wAt[range], _wWalk[range]);
+-            foreach (int mode in (ReadOnlySpan<int>)[0, 1, 3])
++            foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
++                if (take[range] > 0) Draw(range, _wAt[range], _wWalk[range], -1);
++            foreach (int mode in (ReadOnlySpan<int>)[0, 1, 2, 3])
+             {
+                 if (btake[mode] == 0) continue;
+                 int a = _bModeStart[mode] + _bAt[mode], z = _bModeStart[mode] + _bWalk[mode];
+@@ -579,14 +591,14 @@ public sealed partial class GlCore
+                     while (j < z && _bEnt[j].Inst == inst) j++;
+                     // A solid model hides what is behind it with every texel.
+                     _gl.Uniform1(_uwOpaqueDepth, f.Instances[inst].Solid ? 2 : 1);
+-                    DrawFaces(i, j);
++                    DrawFaces(i, j, -1);
+                     i = j;
+                 }
+             }
+             _gl.Uniform1(_uwOpaqueDepth, 0);
+         }
+         if (models) EndInstances(true);
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
+         {
+             _wAt[range] += take[range];
+             _bAt[range - 1] += btake[range - 1];
+@@ -621,6 +633,8 @@ public sealed partial class GlCore
+     uint[] _bIdx = [];
+     uint _bEbo;
+     readonly int[] _bModeStart = new int[4], _bModeCount = new int[4], _bAt = new int[4], _bWalk = new int[4], _bTake = new int[4];
++    // The merge's streams: the water's four ranges, then the models' four modes.
++    readonly int[] _mHead = new int[8], _mEnd = new int[8];
+     /// <summary>A tile is linked at its mean depth plus this many slots (PolyAssembler).</summary>
+     const int TileBias = 0xF0;
+ 
+@@ -662,7 +676,7 @@ public sealed partial class GlCore
+         for (int i = 0; i < n; i++)
+         {
+             var e = src[i];
+-            if (e.Mode == 2 || f.Instances[e.Inst].MeshGen != _meshGen || RetainedScene.BlendOnly >= 0 && e.Inst != RetainedScene.BlendOnly) continue;
++            if (f.Instances[e.Inst].MeshGen != _meshGen || RetainedScene.BlendOnly >= 0 && e.Inst != RetainedScene.BlendOnly) continue;
+             _bEnt[m++] = e;
+         }
+         if (m == 0) return false;
+@@ -715,7 +729,7 @@ public sealed partial class GlCore
+     {
+         if (_pX1 < x0 || x1 < _pX0 || _pY1 < y0 || y1 < _pY0) return false;
+         int budget = 256;
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
+         {
+             int first = _wSortStart[range] / 3;
+             for (int k = _wAt[range]; k < _wWalk[range]; k++)
+@@ -810,7 +824,7 @@ public sealed partial class GlCore
+         float reach = 0f;
+         if (f.SwellOn)
+             for (int w = 0; w < 3; w++) reach += Math.Abs(f.Swell[w * 4 + 2]);
+-        foreach (int range in (ReadOnlySpan<int>)[1, 2, 4])
++        foreach (int range in (ReadOnlySpan<int>)[1, 2, 3, 4])
+         {
+             _wSortStart[range] = total;
+             _wSortCount[range] = 0;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+index 8b0abf1..85116eb 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlModelMeshes.cs
+@@ -40,7 +40,7 @@ public sealed partial class GlCore
+ 
+     int _uwModel = -1, _uwModelBase, _uwModelR, _uwModelT, _uwModelFar, _uwModelNear, _uwModelLlm, _uwModelCue, _uwModelRgbc, _uwModelMat, _uwModelGteC = -1;
+     int _uwnModel = -1, _uwnModelBase, _uwnModelR, _uwnModelT, _uwnModelFar, _uwnModelNear, _uwnModelMat, _uwnModelGteC = -1;
+-    int _uwModelPose = -1, _uwModelPoseW = -1, _uwnModelPose = -1, _uwnModelPoseW = -1;
++    int _uwModelPose = -1, _uwModelPoseW = -1, _uwnModelPose = -1, _uwnModelPoseW = -1, _uwModelSky = -1;
+     // The view-space placement (the arm), per program: uModelView, then the three rows and T.
+     readonly int[] _uwView = [-1, -1, -1, -1, -1], _uwnView = [-1, -1, -1, -1, -1];
+     static readonly string[] ViewNames = ["uModelView", "uModelVR0", "uModelVR1", "uModelVR2", "uModelVT"];
+@@ -52,9 +52,10 @@ public sealed partial class GlCore
+         _uwModel = L("uModel"); _uwModelBase = L("uModelBase"); _uwModelR = L("uModelR"); _uwModelT = L("uModelT");
+         _uwModelFar = L("uModelFar"); _uwModelNear = L("uModelNear"); _uwModelLlm = L("uModelLlm"); _uwModelCue = L("uModelCue");
+         _uwModelRgbc = L("uModelRgbc"); _uwModelMat = L("uModelMat"); _uwModelGteC = L("uModelGteC");
+-        _uwModelPose = L("uModelPose"); _uwModelPoseW = L("uModelPoseW");
++        _uwModelPose = L("uModelPose"); _uwModelPoseW = L("uModelPoseW"); _uwModelSky = L("uModelSky");
+         for (int i = 0; i < ViewNames.Length; i++) _uwView[i] = L(ViewNames[i]);
+         _gl.UseProgram(_progWorld);
++        if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, 0);
+         if (_uwView[0] >= 0) _gl.Uniform1(_uwView[0], 0);
+         if (_uwModel >= 0) _gl.Uniform1(_uwModel, 0);
+         int u = L("uModelVerts");
+@@ -280,6 +281,7 @@ public sealed partial class GlCore
+         if (view[0] >= 0) _gl.Uniform1(view[0], 0);
+         if (colour)
+         {
++            if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, 0);
+             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
+             _gl.Uniform1(_uwModel, 0);
+         }
+@@ -324,6 +326,7 @@ public sealed partial class GlCore
+             return;
+         }
+         _gl.Uniform1(_uwModelBase, m.VertBase);
++        if (_uwModelSky >= 0) _gl.Uniform1(_uwModelSky, m.Sky ? 1 : 0);
+         if (_uwModelPose >= 0) _gl.Uniform1(_uwModelPose, pose);
+         if (_uwModelPoseW >= 0) _gl.Uniform1(_uwModelPoseW, weight);
+         _gl.UniformMatrix3(_uwModelR, 1, true, _m9);
+@@ -385,6 +388,115 @@ public sealed partial class GlCore
+     }
+ 
+     int _uwFarPlane = -1;
++
++    // The frame's sky faces in the order the walk sends them, as corners in the store.
++    RetainedScene.SkyFace[] _skyEnt = [];
++    int[] _skyIdx = [];
++    uint _skyEbo;
++
++    /// <summary>
++    /// The frame's sky (<see cref="RetainedScene.AddSky"/>), into the bound target ahead
++    /// of the map, as the table walks its packets: far slot first, the last linked first
++    /// within a slot, with no depth test. An opaque face writes the far plane, as an
++    /// unrecorded packet does under the occlusion pass (zMode 3); a blended one writes no
++    /// depth (zMode 0). The world program is bound for the frame.
++    /// </summary>
++    unsafe void DrawSky(RetainedScene.Frame f, int slot)
++    {
++        var src = f.SkyFaces;
++        int n = src.Count;
++        if (n == 0 || slot < 0 || !RetainedScene.MainModelsShown || !RetainedScene.SkyShown) return;
++        if (_uwFarPlane < 0) _uwFarPlane = _gl.GetUniformLocation(_progWorld, "uFarPlane");
++        if (_skyEnt.Length < n) _skyEnt = new RetainedScene.SkyFace[n * 2];
++        int m = 0, corners = 0;
++        for (int i = 0; i < n; i++)
++        {
++            var e = src[i];
++            if (f.Sky[e.Inst].MeshGen != _meshGen) continue;
++            _skyEnt[m++] = e;
++            corners += e.Corners;
++        }
++        if (m == 0) { RetainedScene.SkyMissed++; return; }
++        Array.Sort(_skyEnt, 0, m, Comparer<RetainedScene.SkyFace>.Create((a, b) =>
++            a.Key != b.Key ? b.Key.CompareTo(a.Key) : b.Seq.CompareTo(a.Seq)));
++        if (_skyIdx.Length < corners) _skyIdx = new int[corners * 2];
++        int at = 0;
++        for (int i = 0; i < m; i++)
++            for (int j = 0; j < _skyEnt[i].Corners; j++) _skyIdx[at++] = _skyEnt[i].Corner + j;
++
++        _gl.Disable(EnableCap.CullFace);
++        BeginInstances(slot, true);
++        if (_skyEbo == 0) _skyEbo = _gl.GenBuffer();
++        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, _skyEbo);
++        _gl.BufferData<int>(BufferTargetARB.ElementArrayBuffer, new ReadOnlySpan<int>(_skyIdx, 0, at), BufferUsageARB.StreamDraw);
++        _gl.DepthFunc(DepthFunction.Always);
++        bool far = GteDepth.SurfacesWanted;
++        int from = 0;
++        for (int i = 0; i < m;)
++        {
++            int j = i + 1, inst = _skyEnt[i].Inst, mode = _skyEnt[i].Mode;
++            int count = _skyEnt[i].Corners;
++            while (j < m && _skyEnt[j].Inst == inst && _skyEnt[j].Mode == mode) count += _skyEnt[j++].Corners;
++            SendInstance(f.Sky[inst], true);
++            if (mode < 0)
++            {
++                _gl.Disable(EnableCap.Blend);
++                _gl.DepthMask(far);
++                if (_uwFarPlane >= 0) _gl.Uniform1(_uwFarPlane, far ? 1 : 0);
++                _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)(from * 4L));
++            }
++            else
++            {
++                _gl.DepthMask(false);
++                if (_uwFarPlane >= 0) _gl.Uniform1(_uwFarPlane, 0);
++                DrawBlended(mode, count, from * 4L);
++            }
++            from += count;
++            i = j;
++        }
++        if (_uwFarPlane >= 0) _gl.Uniform1(_uwFarPlane, 0);
++        _gl.Disable(EnableCap.Blend);
++        _gl.DepthFunc(DepthFunction.Lequal);
++        _gl.DepthMask(true);
++        _gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, 0);
++        EndInstances(true);
++        RetainedScene.SkyDrawn += f.Sky.Count;
++        RetainedScene.SkyFacesDrawn += m;
++    }
++
++    /// <summary>
++    /// Elements of the bound VAO and element buffer, blended as GlCore blends a packet at
++    /// the console's rate <paramref name="mode"/>: dual-source, the texels without the
++    /// semi-transparency bit opaque. Mode 2 subtracts, which no one blend function does
++    /// for a face with opaque texels too: those first with the rest left as they are, then
++    /// the rest subtracted with the opaque ones left. The blend is left on.
++    /// </summary>
++    unsafe void DrawBlended(int mode, int count, long offset)
++    {
++        _gl.Enable(EnableCap.Blend);
++        _gl.BlendFuncSeparate(BlendingFactor.Src1Color, BlendingFactor.Src1Alpha, BlendingFactor.One, BlendingFactor.Zero);
++        if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, mode == 0 ? 0 : 1);
++        if (mode == 2)
++        {
++            _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
++            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, 0f, 0f, 0f, 1f);
++            _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)offset);
++            _gl.BlendEquationSeparate(BlendEquationModeEXT.FuncReverseSubtract, BlendEquationModeEXT.FuncAdd);
++            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, 1f, 1f, 1f, 1f);
++            if (_uwBlendOpaque >= 0) _gl.Uniform4(_uwBlendOpaque, 0f, 0f, 0f, 1f);
++            _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)offset);
++            if (_uwBlendOpaque >= 0) _gl.Uniform4(_uwBlendOpaque, 1f, 1f, 1f, 0f);
++            _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
++        }
++        else
++        {
++            _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
++            float a = mode switch { 0 => 0.5f, 3 => 0.25f, _ => 1f }, d = mode == 0 ? 0.5f : 1f;
++            if (_uwBlend >= 0) _gl.Uniform4(_uwBlend, a, a, a, d);
++            _gl.DrawElements(PrimitiveType.Triangles, (uint)count, DrawElementsType.UnsignedInt, (void*)offset);
++        }
++        if (_uwAtmosSkip >= 0) _gl.Uniform1(_uwAtmosSkip, 0);
++    }
+     readonly List<RetainedScene.ModelInstance> _armList = new(1);
+ 
+     uint _armEbo;
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+index 6fdbbcd..0d265af 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlShaders.cs
+@@ -682,6 +682,9 @@ internal static class GlShaders
+         uniform isamplerBuffer uModelPoses;
+         uniform int   uModelPose;
+         uniform int   uModelPoseW;
++        // The sky (func_8002F918): a face is kept by its facing alone, on whole
++        // pixels, whatever its depth; lit per corner, with no cue.
++        uniform int   uModelSky;
+ 
+         ivec3 modelPosed(int i) {
+             if (uModelPose < 0) return texelFetch(uModelVerts, uModelBase + i).xyz;
+@@ -749,8 +752,9 @@ internal static class GlShaders
+                 vec3 v3 = modelEye(f3);
+                 z = (z0 + z1 + z2 + (int(clamp(v3.z, 0.0, 65535.0)) >> 2)) >> 2;
+             } else z = (z0 + z1 + z2) / 3;
+-            if (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar) return false;
++            if (uModelSky == 0 && (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar)) return false;
+             vec2 s0 = modelScreen(v0), s1 = modelScreen(v1), s2 = modelScreen(v2);
++            if (uModelSky != 0) { s0 = floor(s0); s1 = floor(s1); s2 = floor(s2); }
+             return (s1.x - s0.x) * (s2.y - s0.y) - (s1.y - s0.y) * (s2.x - s0.x) > 0.0;
+         }
+         """;
+@@ -1640,7 +1646,7 @@ internal static class GlShaders
+                 w = modelVertex(uint(inWorld.x));
+                 color = uModelLlm * inColorF;
+                 cue = uModelCue;
+-                rgbc = uModelRgbc;
++                rgbc = (inLight & 0x40000000u) != 0u ? inLight & 0xFFFFFFu : uModelRgbc;
+                 flags = (inFlags & ~255u) | uModelMat;
+             }
+             uint hid = (flags >> 13) & 0x3FFFu;
+@@ -1676,6 +1682,9 @@ internal static class GlShaders
+                 lit = vec3(uvec3(rgbc, rgbc >> 8u, rgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
+             }
+             vColor = vec4(clamp(lit * cueKeep(cue, z), 0.0, 255.0), 0.0) / 255.0;
++            // The sky's packets carry no light record: the corner colour, and nothing
++            // an authored light or a glow adds.
++            if (uModel != 0 && uModelSky != 0) { dots = false; rgbc = 0u; cue = vec3(0.0); }
+             // Fogged per pixel as 0048 fogs the game's own faces: the raw IR0 is
+             // affine on screen (it goes as 1/z), so interpolated it is exact, and
+             // shade8 puts it through the curve at every pixel.
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+index 0173742..4dab67f 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/RetainedScene.cs
+@@ -235,6 +235,9 @@ public static class RetainedScene
+     public static long MainWaterSlices, MainWaterEmpty, MainWaterTriangles, MainWaterNoted;
+     /// <summary>0085. Calls whose water waited, sharing no pixel with the packet next.</summary>
+     public static long MainWaterDeferred;
++    /// <summary>0085. Runs the blended draws were cut into: one stream's faces, drawn
++    /// before anything of another stream comes first.</summary>
++    public static long MainWaterRuns;
+     /// <summary>0085. Blended triangles sorted far to near for the main view's draws.</summary>
+     public static long MainWaterSorted, MainWaterSortTicks;
+ 
+@@ -502,6 +505,10 @@ public static class RetainedScene
+         public int ArmOrderCount;
+         public int[] ArmRunKey = new int[64], ArmRunAt = new int[64];
+         public int ArmRuns, ArmNext;
++        /// <summary>0085. The sky: the objects of kind 0xF0, drawn from their meshes
++        /// before the map, in painter's order (<see cref="AddSky"/>).</summary>
++        public readonly List<ModelInstance> Sky = new();
++        public readonly List<SkyFace> SkyFaces = new();
+ 
+         public ReadOnlySpan<Vertex> SortedDynamic()
+         {
+@@ -544,6 +551,8 @@ public static class RetainedScene
+         f.BlendFaces.Clear();
+         f.VertCount = 0;
+         f.HasArm = false;
++        f.Sky.Clear();
++        f.SkyFaces.Clear();
+         ArmSerial = 0;
+         f.MirrorOn = false;
+         MirrorSerial = 0;
+@@ -783,8 +792,17 @@ public static class RetainedScene
+         /// what lights it; the eye's position is taken from these.</summary>
+         public bool ViewSpace;
+         public int V00, V01, V02, V10, V11, V12, V20, V21, V22, Vtx, Vty, Vtz;
++        /// <summary>Assembled as <c>func_8002F918</c> assembles the sky: every face kept by
++        /// its facing alone, on whole pixels, at no depth; lit per corner with no depth
++        /// cue; an untextured face's colour its own (the corner's <see cref="Vertex.Light"/>
++        /// with <see cref="FaceColour"/>).</summary>
++        public bool Sky;
+     }
+ 
++    /// <summary>0085. A mesh corner's <see cref="Vertex.Light"/>: the low 24 bits are its
++    /// face's own colour, which the light scales in place of the instance's RGBC.</summary>
++    public const uint FaceColour = 0x40000000u;
++
+     /// <summary>0085. The current frame's posed vertices (x, y, z and a pad, as the
+     /// game keeps them), the index of the first.</summary>
+     public static int AddModelVertices(ReadOnlySpan<short> verts)
+@@ -850,6 +868,38 @@ public static class RetainedScene
+         (mirror ? f.MirrorInstances : f.Instances).Add(copy);
+     }
+ 
++    /// <summary>0085. One face of a sky object: its corners in the store (three, or six
++    /// for a quad), the table slot the game links it at, its blend mode (-1 opaque) and
++    /// the order it was linked in, across the frame's sky.</summary>
++    public struct SkyFace
++    {
++        public int Inst, Corner, Corners, Key, Mode, Seq;
++    }
++
++    /// <summary>0085. The objects of kind 0xF0 (<c>func_80032AC4</c>): the sky, centred
++    /// on the eye, linked at the far end of the table with no depth record, so drawn in
++    /// painter's order before everything else. <paramref name="faces"/> is the instance's
++    /// faces in the order the game links them, each its corner, corner count, slot and
++    /// blend mode; the backend draws them with the map, before it, far slot first and the
++    /// last linked first within a slot.</summary>
++    public static void AddSky(in ModelInstance m, ReadOnlySpan<(int Corner, int Corners, int Key, int Mode)> faces)
++    {
++        var f = Current;
++        if (f.Serial != _serial || faces.Length == 0) return;
++        var copy = m;
++        copy.MeshGen = MeshGeneration;
++        f.Sky.Add(copy);
++        foreach (var (corner, corners, key, mode) in faces)
++            f.SkyFaces.Add(new SkyFace { Inst = f.Sky.Count - 1, Corner = corner, Corners = corners, Key = key, Mode = mode, Seq = f.SkyFaces.Count });
++    }
++
++    /// <summary>0085. Off, the sky is taken off the packets and not drawn: the probe's
++    /// way to see what it covers.</summary>
++    public static bool SkyShown = true;
++
++    /// <summary>0085. Sky objects drawn, their faces, and draws that could not.</summary>
++    public static long SkyDrawn, SkyFacesDrawn, SkyMissed;
++
+     /// <summary>0085. The first-person arm (<c>func_80032400</c>), drawn from its mesh:
+     /// the game draws it in view space with no depth record, so it keeps painter's
+     /// order, in front of whatever the table walked before it and behind whatever

@@ -28,7 +28,7 @@ namespace Kf2;
 /// depth at each point of the table's walk where 0079 would have sent its packets, with
 /// the swell and the ripples; with it off (<c>KF2_GPUWORLD_WATER=0</c>) a half with
 /// semi-transparent faces keeps only those (<see cref="PolyAssembler.BlendedOnly"/>).
-/// A half with a subtractive face is the packets' whole. The mirrored walk
+/// The mirrored walk
 /// (<see cref="PlanarWalk"/>) hands its halves and its replayed models to the backend
 /// the same way (<c>KF2_GPUWORLD_MIRROR=0</c> to compare), which draws them into the
 /// planar texture as the capture's table walk reaches slot 1.
@@ -40,10 +40,12 @@ namespace Kf2;
 /// (<see cref="RetainedModels.TryInstance"/>; <c>KF2_GPUWORLD_MESHES=0</c> to compare,
 /// <c>KF2_GPUWORLD_MESHCHECK=1</c> checks the shader's cull against the assembler's).
 /// The first-person arm is drawn from its mesh too, in the game's painter's order
-/// (<see cref="RetainedModels.TryArm"/>; <c>KF2_GPUWORLD_ARM=0</c> to compare).
+/// (<see cref="RetainedModels.TryArm"/>; <c>KF2_GPUWORLD_ARM=0</c> to compare), and so
+/// is the sky, before the map (<see cref="RetainedModels.TrySpecial"/>; <c>KF2_GPUWORLD_SKY=0</c>).
 ///
 /// See "Step 1, the first slice", "Step 1, the second slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice",
-/// "Step 3, the fourth slice" and "Step 5, the first slice" in docs/GPU_RENDERER.md.
+/// "Step 3, the fourth slice", "Step 3, the fifth slice", "Step 3, the sixth slice" and "Step 5, the first slice"
+/// in docs/GPU_RENDERER.md.
 /// </summary>
 public static class GpuWorld
 {
@@ -82,6 +84,8 @@ public static class GpuWorld
         RetainedModels.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MESHCHECK")?.Trim() is "1";
         RetainedModels.PosesOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSES")?.Trim() != "0";
         RetainedModels.ArmOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_ARM")?.Trim() != "0";
+        RetainedModels.BlendOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_BLEND")?.Trim() != "0";
+        RetainedModels.SkyOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_SKY")?.Trim() != "0";
         RetainedMap.RecordsOn = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDS")?.Trim() != "0";
         RetainedMap.RecordCheck = Environment.GetEnvironmentVariable("KF2_GPUWORLD_RECORDCHECK")?.Trim() is "1";
         MoPose.Checking = Environment.GetEnvironmentVariable("KF2_GPUWORLD_POSECHECK")?.Trim() is "1";
@@ -187,7 +191,7 @@ public static class GpuWorld
     static uint _blendedTable;
 
     /// <summary>Whether the model's mesh has a semi-transparent face, and whether one
-    /// of them subtracts, which the GPU's water draw leaves to the packets.</summary>
+    /// of them subtracts.</summary>
     public static Faces KindOf(PSMemory mem, uint model)
     {
         uint table = mem.ReadU32(ModelTable);
@@ -215,7 +219,7 @@ public static class GpuWorld
 
     /// <summary>The probe's: halves left to the GPU whole, and those whose water was
     /// still assembled.</summary>
-    public static long Skipped, Kept, Whole;
+    public static long Skipped, Kept;
 
     /// <summary>The same for the mirrored walk.</summary>
     public static long MirrorSkipped, MirrorKept;
@@ -223,8 +227,12 @@ public static class GpuWorld
     /// <summary>The `gpuworld` shell verb: the state, or the switch.</summary>
     public static string Shell(string arg)
     {
-        switch (arg.Trim().ToLowerInvariant())
+        var word = arg.Trim().ToLowerInvariant();
+        if (word.StartsWith("blend only ") && int.TryParse(word.AsSpan(11), out int only)) { RetainedScene.BlendOnly = only; word = ""; }
+        if (word.StartsWith("at ")) return At(word[3..]);
+        switch (word)
         {
+            case "": break;
             case "on": SetEnabled(true); break;
             case "off": SetEnabled(false); break;
             case "surfaces on": RetainedScene.MainSurfaces = true; break;
@@ -243,6 +251,20 @@ public static class GpuWorld
             case "poses off": RetainedModels.PosesOn = false; break;
             case "records on": RetainedMap.RecordsOn = true; break;
             case "records off": RetainedMap.RecordsOn = false; break;
+            case "blend on": RetainedModels.BlendOn = true; break;
+            case "blend off": RetainedModels.BlendOn = false; break;
+            case "blend lit": RetainedModels.BlendRoutes = 1; break;
+            case "blend twin": RetainedModels.BlendRoutes = 2; break;
+            case "blend both": RetainedModels.BlendRoutes = 3; break;
+            case "blend depth on": RetainedScene.BlendDepth = true; break;
+            case "blend depth off": RetainedScene.BlendDepth = false; break;
+            case "blend all": RetainedScene.BlendOnly = -1; break;
+            case "blend hide": RetainedScene.BlendShown = false; break;
+            case "blend show": RetainedScene.BlendShown = true; break;
+            case "sky on": RetainedModels.SkyOn = true; break;
+            case "sky off": RetainedModels.SkyOn = false; break;
+            case "sky hide": RetainedScene.SkyShown = false; break;
+            case "sky show": RetainedScene.SkyShown = true; break;
             case "arm on": RetainedModels.ArmOn = true; break;
             case "arm off": RetainedModels.ArmOn = false; break;
             case "models hide": RetainedScene.MainModelsShown = false; break;
@@ -268,13 +290,57 @@ public static class GpuWorld
                     $"\"bk\":[{m.Bk0},{m.Bk1},{m.Bk2}],\"mirrored\":{(m.Mirrored ? "true" : "false")}}}";
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
-            case "": break;
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|arm on|off|records on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|records on|off|mirror on|off|hide|show|scene|instances|perpixel on|off]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
-               $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"sky\":{(RetainedModels.SkyOn ? "true" : "false")},\"blend\":{(RetainedModels.BlendOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
+    }
+
+    /// <summary>`gpuworld at X Y`: the static map triangles that cover game pixel (X, Y)
+    /// in the last frame's view (X in the 320-wide picture, the margin left of 0), each
+    /// with its range, half, the frame's gate on it, its view depth and its table key.</summary>
+    static string At(string arg)
+    {
+        var parts = arg.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length < 2 || !float.TryParse(parts[0], System.Globalization.CultureInfo.InvariantCulture, out float px)
+            || !float.TryParse(parts[1], System.Globalization.CultureInfo.InvariantCulture, out float py))
+            return "{\"ok\":false,\"error\":\"gpuworld at X Y\"}";
+        var f = RetainedScene.Find(RetainedScene.Serial - 1) ?? RetainedScene.Find(RetainedScene.Serial);
+        if (f == null) return "{\"ok\":false,\"error\":\"no frame\"}";
+        var v = f.View;
+        var st = RetainedScene.Static;
+        var hits = new List<string>();
+        Span<float> sx = stackalloc float[3], sy = stackalloc float[3], sz = stackalloc float[3];
+        for (int r = 0; r < 5; r++)
+            for (int i = RetainedScene.StaticStart[r]; i + 2 < RetainedScene.StaticStart[r] + RetainedScene.StaticCount[r]; i += 3)
+            {
+                bool ok = true;
+                for (int k = 0; k < 3 && ok; k++)
+                {
+                    ref readonly var c = ref st[i + k];
+                    double dx = c.X - v.CamX, dy = c.Y - v.CamY, dz = c.Z - v.CamZ;
+                    float x = (float)(v.R00 * dx + v.R01 * dy + v.R02 * dz) + v.Tx;
+                    float y = (float)(v.R10 * dx + v.R11 * dy + v.R12 * dz) + v.Ty;
+                    float z = (float)(v.R20 * dx + v.R21 * dy + v.R22 * dz) + v.Tz;
+                    if (z < 1f) { ok = false; break; }
+                    sx[k] = v.Cx + v.H * x / z; sy[k] = v.Cy + v.H * y / z; sz[k] = z;
+                }
+                if (!ok) continue;
+                float d1 = (px - sx[1]) * (sy[0] - sy[1]) - (sx[0] - sx[1]) * (py - sy[1]);
+                float d2 = (px - sx[2]) * (sy[1] - sy[2]) - (sx[1] - sx[2]) * (py - sy[2]);
+                float d3 = (px - sx[0]) * (sy[2] - sy[0]) - (sx[2] - sx[0]) * (py - sy[0]);
+                if ((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0)) continue;
+                uint hid = (st[i].Flags >> RetainedScene.HalfShift) & RetainedScene.HalfBits;
+                int h = (int)hid - 1;
+                float area = (sx[1] - sx[0]) * (sy[2] - sy[0]) - (sy[1] - sy[0]) * (sx[2] - sx[0]);
+                float zm = (sz[0] + sz[1] + sz[2]) / 3f;
+                hits.Add($"{{\"range\":{r},\"tri\":{i},\"half\":[{(h >= 0 ? h / 2 % 80 : -1)},{(h >= 0 ? h / 160 : -1)},{(h >= 0 ? h & 1 : -1)}]," +
+                         $"\"gate\":{(h >= 0 ? f.MainHalves[h] : -1)},\"z\":{zm:F0},\"key\":{(int)(zm / 4f) + 0xF0},\"area\":{area:F1}," +
+                         $"\"flags\":\"{st[i].Flags:X8}\",\"rgb\":[{st[i].R:F0},{st[i].G:F0},{st[i].B:F0}]}}");
+            }
+        return $"{{\"ok\":true,\"serial\":{f.Serial},\"hits\":[{string.Join(",", hits)}]}}";
     }
 
     // ---- the probe -----------------------------------------------------------------
@@ -284,6 +350,7 @@ public static class GpuWorld
     static long _gensMax, _gensAt, _builds, _packs, _recUploads;
     static long _mDraws, _mMissed, _mStatic, _mModelTris, _mMirModels, _mWater;
     static long _iIns, _iWhole, _iMir, _iDrawn, _iCorners, _iVerts, _iMirDrawn, _iArm, _iArmDrawn, _iArmCalls;
+    static long _bNoted, _bSorted, _bDrawn, _bRuns, _sIns, _sDrawn, _sFaces, _wRuns;
     static long _pPosed, _pRigid, _pDeferred, _pMat, _pTexels;
     static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
 
@@ -296,17 +363,19 @@ public static class GpuWorld
         _draws = RetainedScene.MainDraws; _missed = RetainedScene.MainMissed; _tris = RetainedScene.MainTriangles;
         Console.WriteLine($"[KF2] gpu world: {(Active ? "active" : "standing down")}; {d} draw(s), {m} walk(s) missed, " +
                           $"{(d == 0 ? 0 : t / d)} static triangle(s) a draw; halves {Skipped} left whole to the GPU, " +
-                          $"{Kept} with their blended faces assembled, {Whole} whole for a subtractive face");
+                          $"{Kept} with their blended faces assembled");
         long ws = RetainedScene.MainWaterSlices - _wSlices, we = RetainedScene.MainWaterEmpty - _wEmpty;
         long wt = RetainedScene.MainWaterTriangles - _wTris, wn = RetainedScene.MainWaterNoted - _wNoted;
         _wSlices = RetainedScene.MainWaterSlices; _wEmpty = RetainedScene.MainWaterEmpty;
         _wTris = RetainedScene.MainWaterTriangles; _wNoted = RetainedScene.MainWaterNoted;
         long wso = RetainedScene.MainWaterSorted - _wSorted, wd = RetainedScene.MainWaterDeferred - _wDeferred;
         _wSorted = RetainedScene.MainWaterSorted; _wDeferred = RetainedScene.MainWaterDeferred;
+        long wr = RetainedScene.MainWaterRuns - _wRuns;
+        _wRuns = RetainedScene.MainWaterRuns;
         double sortMs = d == 0 ? 0 : RetainedScene.MainWaterSortTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency / d;
         RetainedScene.MainWaterSortTicks = 0;
         Console.WriteLine($"[KF2] gpu world: water {(WaterActive ? "on the GPU" : "on the packets")}; " +
-                          $"{(d == 0 ? 0 : (double)ws / d):F2} slice(s) a draw, {(d == 0 ? 0 : (double)we / d):F2} empty, {(d == 0 ? 0 : (double)wd / d):F2} waited, " +
+                          $"{(d == 0 ? 0 : (double)ws / d):F2} slice(s) a draw in {(d == 0 ? 0 : (double)wr / d):F1} run(s), {(d == 0 ? 0 : (double)we / d):F2} empty, {(d == 0 ? 0 : (double)wd / d):F2} waited, " +
                           $"{(ws == 0 ? 0 : wt / ws)} blended triangle(s) a slice, {(d == 0 ? 0 : wso / d)} sorted a draw in {sortMs:F3} ms, " +
                           $"{(d == 0 ? 0 : wn / d)} noted for the plane a draw; " +
                           $"static ranges {RetainedScene.StaticCount[0] / 3}/{RetainedScene.StaticCount[1] / 3}/{RetainedScene.StaticCount[2] / 3}/{RetainedScene.StaticCount[3] / 3}/{RetainedScene.StaticCount[4] / 3}");
@@ -361,6 +430,19 @@ public static class GpuWorld
                           $"{pt} texel(s) uploaded; store {RetainedScene.PoseTexels} texel(s), {MoPose.PoseBuilds} pose(s) and {MoPose.RigidBuilds} rigid model(s) kept, " +
                           $"{MoPose.PoseRefused} pose(s) refused in all" +
                           (MoPose.Checking ? $"; checked {MoPose.CheckVertices} vert(ices), {MoPose.CheckDiffer} placed differently" : ""));
+        long bn = RetainedScene.BlendNoted - _bNoted, bs = RetainedScene.BlendSorted - _bSorted;
+        long bd = RetainedScene.BlendDrawn - _bDrawn, br = RetainedScene.BlendRuns - _bRuns;
+        _bNoted = RetainedScene.BlendNoted; _bSorted = RetainedScene.BlendSorted;
+        _bDrawn = RetainedScene.BlendDrawn; _bRuns = RetainedScene.BlendRuns;
+        Console.WriteLine($"[KF2] gpu world: blend {(RetainedModels.BlendOn ? "on" : "off")}; a draw: " +
+                          $"{(d == 0 ? 0 : (double)bn / d):F1} blended face(s) noted, {(d == 0 ? 0 : (double)bs / d):F1} sorted, " +
+                          $"{(d == 0 ? 0 : (double)bd / d):F1} drawn in {(d == 0 ? 0 : (double)br / d):F1} run(s); " +
+                          $"{RetainedModels.Subtractive} subtractive submit(s) in all");
+        long sk = RetainedModels.SkyInstances - _sIns, sd = RetainedScene.SkyDrawn - _sDrawn, sf = RetainedScene.SkyFacesDrawn - _sFaces;
+        _sIns = RetainedModels.SkyInstances; _sDrawn = RetainedScene.SkyDrawn; _sFaces = RetainedScene.SkyFacesDrawn;
+        Console.WriteLine($"[KF2] gpu world: sky {(RetainedModels.SkyOn ? "on" : "off")}; a draw: {(d == 0 ? 0 : (double)sk / d):F1} object(s) placed, " +
+                          $"{(d == 0 ? 0 : (double)sd / d):F1} drawn with {(d == 0 ? 0 : sf / d)} face(s); {RetainedModels.SkyRefused} refused and " +
+                          $"{RetainedScene.SkyMissed} missed in all");
         Console.WriteLine($"[KF2] gpu world: light generations: at most {_gensMax} in a frame; map builds {RetainedMap.Builds - _builds}, " +
                           $"the last {RetainedMap.LastBuildMs:F2} ms for {RetainedMap.LastWhy}; " +
                           (RetainedMap.RecordsOn
@@ -395,6 +477,6 @@ public static class GpuWorld
         MirrorSkipped = MirrorKept = 0;
         RetainedScene.SurfaceDepthPixels = RetainedScene.SurfaceBehind = RetainedScene.SurfaceMissing = RetainedScene.SurfaceChecks = 0;
         RetainedScene.SurfaceCheck = true;
-        Skipped = Kept = Whole = 0;
+        Skipped = Kept = 0;
     }
 }

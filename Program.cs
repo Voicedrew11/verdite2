@@ -1144,6 +1144,17 @@ Kf2.MenuMouse.Configure(Environment.GetEnvironmentVariable("KF2_MENUMOUSE"),
                         Environment.GetEnvironmentVariable("KF2_MENUMOUSE_PROBE"));
 Kf2.MenuMouse.Install();
 
+// The equip prompt and the shops' buy prompt show every stat the item would
+// change, now and after, in the game's own font and window (patches/MenuDraw.cs
+// writes the same packets as the status screen's routines). It began as
+// mods/gearcompare. On by default; Gameplay ▸ Compare gear.
+//
+//     KF2_GEARCOMPARE=0       off
+//     KF2_GEARCOMPARE=verify  draw each panel through the recompiled routines too
+//                             and compare every byte
+Kf2.GearCompare.Configure(Environment.GetEnvironmentVariable("KF2_GEARCOMPARE"));
+Kf2.GearCompare.Install();
+
 // Widescreen. The runtime already renders a margin either side of the display
 // buffer and presents the whole thing at Display.WideAspect, so setting that one
 // number is the entire hookup; the replacement of DrawOTag here is only for the

@@ -4089,6 +4089,22 @@ Measured, with the fill, at the pier: 330 fps uncapped with the murk against 336
 without, and no GL errors. The two edge fixes without the fill: no GL errors, 144.0
 fps drawn at 20.0 ticks/s in `fdat02`; judged by eye at the pier, good.
 
+#### Only level water is murked
+
+**Mechanism measured; not judged by eye.** Reported from play: the murk "sees through"
+translucent textures. It found water by material, and material by texture, so anything in
+the water's texture was water: area 7's spinning crystals, area 4's. With nothing behind a
+crystal the run was the sky's, endless, and the crystal went to the murk's colour; area 7's
+dark hexagon (known issue 7 in `docs/GPU_RENDERER.md`) was one. Water lies level, so a
+surface is murked only while its normal (the surface buffer's) is within `WaterMurk.MaxTilt`
+of the world's vertical, cosine 0.75, about 41 degrees, which leaves room for the swell. The
+vertical is column 1 of the view matrix, published by stage 13 after its camera block
+(`Stage13.PublishUp`) and sent as `uMurkUp` (`0067`, amended). In `fdat02` the pool is murked
+exactly as before: 0.0000 of pixels differ by more than 8 levels in four pinned views, the GPU
+world renderer on and off, the swell on and off. `KF2_MURK_TILT=0` (or the `murk tilt 0` verb)
+murks any surface again; `murk on|off` switches it in play. The reflections still take a crystal
+as water; the planar walk's lookup only answers on its plane, so it shows nothing there.
+
 ### The reflection pass runs for each term on its own
 
 The pass at present used to be switched by the screen-space reflections, and the

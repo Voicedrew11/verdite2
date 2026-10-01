@@ -1097,6 +1097,57 @@ All seventeen are `u16`. The offense block has no poison or dark entry and the
 defense block has no holy one, which is why they are eight and nine rather than
 a matched pair.
 
+### The menu's primitives are `POLY_FT4`s out of a cursor, and the cursor is mirrored
+
+Built while replacing the `gearcompare` mod's draw path (which called the
+routines below through a faked stack frame) with plain C# writing the same
+packets byte for byte (now `patches/MenuDraw.cs`, checked by a one-boot
+harness against the recompiled routines: 1493 cases, 0 mismatches;
+`KF2_GEARCOMPARE=verify` repeats the check on every panel drawn).
+
+A template is 12 bytes: `u16 tpage` (+0), `u16 clut` (+2), `u8 u` (+4),
+`u8 v` (+6), `u16 w` (+8), `u16 h` (+0xA). Corners take `w`/`h` as **s16**;
+UVs take the same two fields as **u8**. The templates live beside the font
+table above: the label drawer reads `0x80064BF0`, the number drawer
+`0x80064BE4`, and the window drawer nine piece templates at `0x80064C68`,
+12 bytes each, row-major.
+
+Every packet is a `POLY_FT4`, `0x28` bytes: the tag at +0x00 (length 9 at +3),
+`r, g, b` at +0x04/05/06, code `0x2C` at +0x07 (`0x2E` with `SetSemiTrans(1)`),
+then four `(x, y, u, v)` corners at +0x08, +0x10, +0x18, +0x20 with `clut` at
++0x0E and `tpage` at +0x16. Bytes +0x26/+0x27 are never written.
+
+`func_800229D8` (`NewQuad`) reads the cursor at `0x8006E914`, writes length 9
+and code `0x2C` as two separate bytes, paints the colour `0x68` grey, and
+returns the old cursor. `func_80022A28` (`Link`) runs `AddPrim` onto the
+ordering-table slot (`*(u32*)0x8018E0A8 + slot*4`), then writes
+`cursor + 0x28` twice: to `0x8006E914` and to the `current` at
+`*(u32*)0x8017E0A4 + 8` (the descriptor `patches/PrimBuffer.cs` names). There
+is no overflow check; the rewrite has none either.
+
+`func_80021E10(template, rec)` draws the font-index text at `rec` (`s16 x`,
+`s16 y`, indices, `0xFF`-terminated): one quad per character at a 7 px step,
+spaces included (the cell at `0x7F`), stopping at the terminator or when the
+step reaches 168 (24 quads). The UV ignores the template's `u`/`v`:
+`u = (g & 15) * 8`, `v = (g >> 4) * 15`, with the template's `u8 w`/`h` added
+for the far corners. Colour stays grey, slot 10.
+
+`func_80022B20(value, width, zeroPad, mode)` formats into the caller's buffer
+(a `0xFF` terminator after it) and draws nothing: widen the width (modes 1/2/6
++1, modes 3/5 +2, mode 4 +3), fill with blanks (`10`) or zeroes, lay the mode's
+symbol (`0x13`; trailing `0x0D`/`0x0B` with the width shortened again; `0x0F
+0x10`; `0x0C 0x12 0x10`; `0x0E 0x11`), then digits right to left, one `0` for
+value 0. `func_80021FCC(template, rec)` draws that buffer with the same 7 px
+loop and slot: index `d < 11` reads the template's `u` with `v = d * 15`,
+`d >= 11` reads `u + 7` with `v = (d - 11) * 15`. `0xFF` ends the buffer.
+
+`func_800222B8(x, y, w, h, padW, padH)` is a 3x3 nine-slice from its nine
+templates: row 0 at `y`, row 1 at `y + 33` stretched by `h - 94 + padH`, row 2
+at `y + 61 + (h - 94)`; column 0 at `x`, column 1 at `x + 33` stretched by
+`w - 94 + padW`, column 2 at `x + 61 + (w - 94)`. Each piece is white with the
+semi-transparent bit set, its own template's UVs stretched, slot 20 — drawn
+after the text so the table puts it underneath.
+
 ### Nineteen of those words are a cache, and `func_800244CC` owns all of them
 
 The important finding is not the map but the **split inside it**, and it is

@@ -18,6 +18,7 @@ lives here — frame pacing and auto reload.
 | `DrawCensus.cs` | attributes the frame's primitives to the routine that drew them | [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | `PolyAssembler.cs`, `PolyAssemblerLit.cs` | `func_80030540`, the polygon assembler, `func_8002FECC`/`func_8002E650`, the far map tiles' assembler and its vertex transform, and `func_8002F214`/`func_8002EAEC`, the models' lit assembler, rewritten in C# as replace hooks | this file |
 | `AutoReload.cs` | reloads the last save on death | this file |
+| `GearCompare.cs`, `MenuDraw.cs` | shows the stats an equip or a purchase would change beside the prompt, drawn with the game's menu primitives in C# | this file |
 | `Map.cs`, `MapMarkers.cs`, `MapRender.cs`, `MapPanel.cs`, `MapOverlay.cs`, `MapFog.cs` | the area's floor plan, what is standing in it, and the tiles you have seen | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
 | `Perspective.cs`, `Subpixel.cs`, `ZBuffer.cs` | switches and probes over the GTE depth mechanisms | [RENDERING.md](RENDERING.md) |
@@ -3689,6 +3690,67 @@ and *Simulate death* from the new tab logged
 result the mod gave, so the hook, the config read and the reload path all survived
 the move.
 
+## Comparing gear on the equip prompt
+
+`patches/GearCompare.cs` shows every combat stat an item would change, now and
+after, beside the Yes/No prompt on the equipment page and on a shop's buy page,
+in the game's own font and window. It began as `mods/gearcompare`, by
+[@Acranon](https://github.com/Acranon), and became a
+patch for auto reload's reason: the game has no way to see what an equip does
+until it is done, and a mod defaults to off. On by default; Gameplay ▸ *Compare
+gear*, saved as `kf2.gearcompare.enabled`. `KF2_GEARCOMPARE=0` is off, and
+`KF2_GEARCOMPARE=verify` is the comparison below.
+
+**"After" is the game's own arithmetic, not a copy of it.** `func_800244CC`
+rebuilds STR POWER, MAG POWER and the seventeen offense and defense words
+(`0x8019943C`-`0x80199466`) from the equipment and reads nothing else a menu can
+change: the weapon's id at `0x801994AF` and seven armour ids at
+`0x801994D4`-`0x801994DA`. So a pre-hook on the prompt, `func_800206E0`, puts the
+candidate's id (its `A3`; `0xFF` is "take it off") into its slot byte, runs
+`func_800244CC`, reads the nineteen words, and puts the slot byte and all
+nineteen words back. The real equip calls (`func_80026210`, `func_80025FD0`) are
+never made; the weapon one also loads a model and plays a sound. See "Nineteen of
+those words are a cache, and `func_800244CC` owns all of them" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md).
+
+**Which slot** comes from the page. `func_8001A6E8(kind)` is the equipment page,
+and `kind` picks the slot through the jump table at `0x800110E0` (0 weapon, 3, 4,
+2, 5, 6 the armour, 7 and 8 the two rings). The three buy pages, `func_8001D6BC`,
+`func_8001DF5C` and `func_8001E45C`, open the same prompt with the item id in
+`A3`; the slot follows from the id's range, and a ring takes an empty ring slot
+first. The sell page, `func_8001DD34`, lists your own inventory and is left
+alone. Rows are only the stats that change, grouped under OFFENSE and DEFENSE,
+each group with a TOTAL of all its words: a rough guide, since a hit is scored
+per damage type against the target's defense in that type (`func_8003A94C`,
+summed in `func_8003A9CC`).
+
+**It draws with the game's primitives, written in C#.** A post on
+`func_80021478`, the prompt's own boxes, puts the panel into the prompt's frame.
+`patches/MenuDraw.cs` writes the same `POLY_FT4` packets as the status screen's
+`func_80021E10` (text), `func_80022B20`/`func_80021FCC` (numbers) and
+`func_800222B8` (the nine-slice window), out of the cursor at `0x8006E914` and
+into ordering-table slots 10 and 20, the window drawn last so it lands
+underneath. The mod first called those routines through a faked stack frame;
+that path is `MenuDraw.Reference`, kept as the comparison:
+`KF2_GEARCOMPARE=verify` draws each panel through it, rewinds the cursor, its
+mirror and the two slots, draws it through `MenuDraw`, and prints a line a second
+of panels and mismatches. The packet format is under "The menu's primitives are
+`POLY_FT4`s out of a cursor, and the cursor is mirrored" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md).
+
+**The layout is fixed.** The equipment panel sits at (99, 40) in the PS1's
+320x240, 13 px a row, and a panel that would reach the item list (about y 160)
+slides up toward the title (about y 36) first. A shop has about 80 lines free
+between GOLD and the stock list, so there the rows flow into two columns with
+three-letter names at (92, 78), and a lone group's heading is dropped. The mod's
+five position sliders did not come across: the place was settled by eye while it
+was a mod, and a position is not a choice a player should have to make.
+
+Measured on the move: `[KF2] gear compare: on, verify, 6/6 hooked`, booting into
+slot 2. The panel itself was judged by eye as the mod; the prompt is not reachable
+from the command channel (`press` does not reach the menu's Up/Down), so the
+patch's picture and its verify line on a real prompt are the user's to check.
+
 ## A dynamic map
 
 `patches/Map.cs`, `patches/MapMarkers.cs`, `patches/MapRender.cs`,
@@ -5037,7 +5099,11 @@ pause [on|off]        hold the world on the stage gate (FramePacing.PauseWhen, a
                       by 0 pixels, so "snap" before and after a switch compares one
                       frame
 gpuworld [on|off]     the map drawn on the GPU (0085; see "Step 1, the first
-                      slice" in docs/GPU_RENDERER.md)
+                      slice" in docs/GPU_RENDERER.md); `gpuworld at X Y` lists
+                      the map's triangles over a game pixel in the last frame
+capture               arm the frame capture (FrameCapture.Arm) for the next run
+                      of stage 13; with KF2_FRAMEVIEW_OUT its CSVs are written
+murk [on|off|tilt X]  the murk, and the steepest a murked surface may lean
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the

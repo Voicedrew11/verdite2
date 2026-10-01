@@ -14,6 +14,7 @@ face runs neither the game's transform nor its assembler, and the mirror's repla
 leaves it out (measured, not judged). Its third keeps their vertices there too, and
 the vertex shader blends an animated model's pose (bit-identical to the packets'
 picture).
+Step 3's fifth slice draws a model's blended faces, effects and billboards in the table's order; its sixth draws the sky (the objects of kind `0xF0`) and subtractive faces, and puts every blend mode in one order.
 Step 5's first slice draws the planar walk's mirror on the renderer: its map, its
 water and its opaque models, judged by eye. Step 1's second slice lights the map in
 the vertex shader from the light records, so a record the game rewrites is an upload
@@ -363,6 +364,19 @@ come after (decided 2026-09-28), unless an issue is something a later step build
    not affected. **Inferred**, not tested: those faces have corners nearer than H/2,
    whose packets' records describe the saturated projection. Not fixed: the GPU draws
    the arm.
+7. **Fixed: a small dark shape is missing from area 7** (measured, 2026-09-30; see "Step 3, the
+   fifth slice"). It was the murk, as reported from play: the spinning crystals there use the
+   water's texture, so the reflection pass murked them, and with nothing behind a crystal the
+   run through "water" was endless. Fixed by "Step 3, the sixth slice": only a level surface is
+   murked. The record as first written: Warped into area 7 and looking down the tunnel at the left wall's edge, the
+   packets draw a hexagon about 10 game pixels across, dark and opaque over the teal wall,
+   and the blended-face draw does not: 0.15-0.7% of the picture, a 16x16 block wholly
+   different. It is the same with the game's own packets (`gpuworld off`), which match the
+   packet path there, so it is the game's picture and the renderer's that is missing it. It is
+   a face of the giant creature standing behind that wall (a lit model of blended faces, 150
+   of them, 16,000 units away). Not the facing cull, the depth test (off, it does not
+   appear), the depth bias (400x, no change) nor the transform (kept running, no change);
+   the blended draw issues and the faces are noted with boxes at the hexagon. Not found.
 
 ### Step 2: every map feature in the renderer
 
@@ -962,11 +976,180 @@ under `KF2_GLDEBUG=1`.
 which the game does not open until the swing ends (the arm is not drawn behind it);
 `LoopPacing`'s redraws during a swing.
 
+#### Step 3, the fifth slice
+
+**A model's blended faces drawn by the renderer, in the table's order: the translucent
+faces of an opaque model, and the forced-blend twin's models (effects, billboards).
+Mechanism measured; not judged by eye.** `KF2_GPUWORLD_BLEND=0` or `gpuworld blend off`
+is the comparison (`blend lit|twin|both` picks the routes, `blend hide|show` leaves them
+undrawn, `blend only N` draws one instance's, `blend depth off` skips their depth test).
+The runtime half amends `0085` (its eleventh diff); the port half is `RetainedModels`
+(`Build`, `NoteBlended`) and `ModelWalk.RunSubmit`.
+
+**What it does.** A mesh keeps its blended faces' corners after its opaque ones, with a
+table of where each face's corners are. For a main-view instance the port notes each
+blended face with the slot the lit assembler would have linked it at: the mean of its
+corners' SZ over four, plus the slot bias, taken in integers from the GTE's own matrix and
+the posed vertices (the arm's method), so **neither the transform nor the assembler runs**
+for a model drawn this way, effects and billboards included. The backend sorts the faces by
+blend mode, slot and build order (`SortBlend`) and `DrawWorldWater` merges them with the
+map's water by key: a model first at one key, since it was built after the map. A run is
+one instance's faces through `SendInstance`; the opaque texels' depth follows (a door,
+`Solid`, hides what is behind it with every texel). The mirror's replay keeps building
+the blended packets for the mirror.
+
+**One bug the first run found.** The twin's assembler call in `RunSubmit` was not gated on
+the instance, so with the transform skipped it ran on a stale vertex cache: wedges across
+the picture in area 2, mean brightness 25 against 59. The lit routine's call was gated.
+
+**Measured** (render scale 5, 16:9, paused and drawn from a pinned camera, blend on against
+off, `KF2_DEBUG_GODMODE=1 KF2_AUTORELOAD=0`; a warp without them kills the player and the
+run measures a reload):
+
+| area | views | worst block | pixels >16 levels |
+|---|---|---|---|
+| 4 (the crystals, 1,150 faces a frame) | 10 headings | 0.03-0.13 | at most 0.07% (the faces cover up to 3.8%) |
+| 2 | 4 | 0.00 | 0 |
+| 6 | 4 | 0.00 | 0 |
+| 0 | 4 | 0.00-0.57 | at most 0.24% |
+| 7 | 6 | 0.92-1.00 | 0.15-0.69% (known issue 7) |
+
+The census of packets left in the world (`KF2_DRAWCENSUS=1`): the geometry submit, area 4
+261 a frame to 0, area 2 29.6 to 0, area 7 74 to 0. What remains is the object submit
+(kind `0xF0`), 25.4 in areas 0 and 2 and 52 in area 7, and the HUD.
+
+**Not done, and why.**
+
+- **Kind `0xF0` objects** go through `func_80032AC4` and `func_8002F918`, a second
+  assembler (`NormalColorCol3`, no depth cue, the rate from the stack) that has no C#
+  port; they are 25-52 packets a frame. Step 4 waits on them. (Done: "Step 3, the sixth
+  slice".)
+- **Subtractive faces** (blend mode 2) read the target, so a model with one, and a twin
+  asked for it, stay on the packets whole. (Done: "Step 3, the sixth slice".)
+- **A twin placed in view space** (the screen-space effects, matrix 0) and **the clipped
+  assembler's blended faces** (objects near the camera) stay on the packets; not counted.
+- **The mirror** still builds the models' blended packets.
+- **A blended face with an authored material** does not reach the surface buffer, nor does
+  a solid model's reach the normal pass as the opaque it was; the packets' did, with a
+  material. Not measured.
+- Frame cost not measured.
+
+#### Step 3, the sixth slice
+
+**The sky, subtractive faces, and every blend mode in one order; and the murk only on level
+water. Mechanism measured; not judged by eye.** `KF2_GPUWORLD_SKY=0` or `gpuworld sky off`
+is the sky's comparison (`gpuworld sky hide` leaves it undrawn), `KF2_MURK_TILT=0` or `murk
+tilt 0` the murk's. The runtime half amends `0085` (its twelfth diff) and `0067` (its
+thirteenth); the port half is `ModelWalk`'s C# `func_80032AC4` and `RetainedModels.TrySpecial`.
+
+**The objects of kind `0xF0` are the sky.** `func_80032AC4` is now C# (`KF2_MODELWALK_SPECIAL=0`
+for the recompiled one; verified over about 12,000 calls in areas 1, 2 and 7: 0 RAM, register
+or GTE mismatches). It turns the record's rotation by the camera's and loads no translation,
+so the model stands round the eye; it lights from light record `+0x3B & 0x7F`, whose light
+matrix is negated when bit 7 is set and is not turned with the model; and `func_8002F918`
+assembles it with `NormalColorCol3` (no depth cue), dropping a face only by its facing on whole
+pixels, every face at one key, `0x1FFF` less `+0x3A`. Three were seen: two domes (64 and 128
+gouraud faces, key 8191, walk slot 0) and a blended quad (key 8190, slot 1). They are drawn from
+cached meshes in that assembler's four face types (`0x34`, `0x3C`, and the untextured `0x30`
+and `0x38` in the face's own colour, `RetainedScene.FaceColour`), as instances placed with the
+GTE's own matrix in integers (the arm's `modelEye`), with `ModelInstance.Sky`: no depth range
+test, the facing on whole pixels, lit per corner with no cue and no authored light, since their
+packets carried no record. The backend draws them as the main view begins, before the map, far
+key first and the last linked first within a key, with no depth test: an opaque face writes the
+far plane (zMode 3), a blended one nothing (zMode 0). Only keys 8190 and 8191 are taken, the
+two slots the walk reaches before the map; none was seen elsewhere.
+
+**Found on the way: the sun quad was drawn over the map.** Its key, 8190, is walk slot 1, and
+the GPU map is drawn as the walk reaches slot 1, before slot 1's packets, so on the GPU world
+renderer the quad (blended, unrecorded, untested) went over the map. Drawn with the sky it goes
+first, as with the renderer off.
+
+**Subtractive faces** (blend mode 2) are drawn by the backend too: a map half with one is left to
+the GPU whole like any blended half, and a model's or a twin's go through the blended draw.
+GlCore draws a mode-2 packet in two passes (the opaque texels with the rest left alone, then the
+rest subtracted with the opaque ones left alone), and so does `GlCore.DrawBlended`, which every
+blended draw of the renderer now goes through. No area was seen to use mode 2 (a census of areas
+0-7 at arrival: no subtractive half and no subtractive submit), so it is measured with
+`KF2_GPUWORLD_SUBTEST=1`, which forces every forced-blend submit (effects, billboards) to mode 2
+on both paths.
+
+**Found on the way: blend modes were drawn one after the other.** At each point of the walk the
+backend drew the water and model faces the walk had passed one blend mode at a time: every mode-0
+face, then every mode-1 face. An average and an add do not commute, so where an averaging face
+(a crystal) and an additive one (an effect) interleave by key, the GPU picture differed by half
+the effect: area 4, aimed at the effects, worst block 1.0, with either alone on the GPU at 0.29
+and 0.32. The faces of all eight streams (the water's four ranges, the models' four modes) are
+now merged into the table's order: by key, a model before the map at one key, the last built
+first. One comparison per face against the first of the other streams' heads, which do not move
+during a run: area 7, 40 runs a frame, `DrawOTag` 0.35-0.39 ms (the first cut compared against
+all eight and took 1.4 ms).
+
+**The murk only murks level surfaces.** Not this renderer's, but found by its comparison, and
+known issue 7. The pass murked every pixel whose surface was water by material, and with
+nothing behind it took the run as endless: a crystal in the water's texture (area 7's spinning
+crystals, area 4's) went fully murky, and the two paths disagreed by what depth stood behind it.
+A surface is murked now only within `WaterMurk.MaxTilt` (0.75, about 41 degrees) of level, by
+its normal in the surface buffer against the world's vertical in view space, which stage 13
+publishes after its camera block. In `fdat02` the pool is murked as before: 0.0000 of pixels
+differ by more than 8 levels in four pinned views, with the renderer on and off, and with the
+swell on.
+
+**Measured.** Paused, render scale 5, 16:9, the harness of Step 2's second slice:
+
+| | where | views | result |
+|---|---|---|---|
+| the sky on the GPU against on its packets | area 7, pitch -500, eight headings (the sky covers 14-25%) | 8 | difference from the packets within 0.0002 of pixels of the packets' own, every heading |
+| the same | area 2, pitch -500 and 0 | 16 | the sky covers under 0.5%; equal to 0.0001 |
+| subtractive effects (`KF2_GPUWORLD_SUBTEST=1`) | area 4, aimed at five effects (they cover 4.6-6.8%) | 3 | worst block 0.25-0.41, means equal |
+| blend modes merged | area 4, two views, paused at 30 moments | 60 | worst block 0.25-0.38, once 0.64 |
+| murk on level water only | area 7, five views, four moments | 20 | worst block 0.29-0.57 (with `KF2_MURK_TILT=0`, 1.0 at the first) |
+
+**Not found:** one moment in area 4 read worst 0.97 with the models' blended faces on the
+packets too, and did not come back in 80 further views.
+
+Cost, area 7, pitch -300, uncapped (`KF2_FPS=1000 KF2_PROFILE=1`), the sky on its packets against
+on the GPU: frame work 1.32-1.35 to 1.24-1.26 ms, 586-599 to 624-633 fps. At 144 fps in areas 7
+and 4: 144.0 drawn at 20.0 ticks/s, `[present] wide 288`, no GL error under `KF2_GLDEBUG=1`.
+
+**Not checked:** any of it by eye; a sky object at another key, which stays on its packets; a
+real subtractive face.
+
 ### Step 4: the old world path off
 
 The walks stop building triangles. `PolyAssembler`, `TileWalk` and `ModelWalk`
 keep their enumerating halves; the assembling halves run only under the
 comparison.
+
+#### Step 4, the census (2026-09-30)
+
+**The open question under "The target" is answered for stage 13: no `fdat` module draws 3D
+through a routine of its own.** `KF2_DRAWCENSUS=1` with the renderer on, slot 2, uncapped,
+`warp 0` to `warp 7` with `KF2_DEBUG_GODMODE=1` and `KF2_AUTORELOAD=0` (**both needed**:
+without them a warp kills the player and the game reloads area 1 or starts a new game, and
+the census reads that instead; the first run of this census did, and its numbers were
+discarded). Stage 13's own body, the heads, the overlay slots, the screen tint, the tail
+and the present draw 0 bytes in every area. What draws is the HUD (56.9 packets), the
+geometry submit and the object submit, the map reading 0 because the GPU draws it:
+
+| area | geometry submit | object submit |
+|---|---|---|
+| 0 | - | 25.4 |
+| 1 | 4.7 | - |
+| 2 | 29.6 | 25.4 |
+| 3 | 1.1 | - |
+| 4 | 261.3 | - |
+| 5 | - | - |
+| 6 | - | - |
+| 7 | 74.4 | 52.0 |
+
+**Not covered:** modal loops that draw without stage 13 (the menu's item previews, shops,
+the death and ending sequences, `OPEN.EXE`, `END.EXE`), which this census cannot see.
+
+**What blocks the switch-off.** The assembling halves still build what the GPU does not
+draw: the models' blended faces, effects and billboards (Step 3's remainder) and a map
+half with a subtractive face. Until those are on the renderer, `PolyAssembler`,
+`TileWalk` and `ModelWalk` cannot drop their assembling halves; what they skip already
+(opaque map halves, opaque lit models) they skip now.
 
 ### Step 5: every extra view on the same renderer
 
