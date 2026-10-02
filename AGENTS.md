@@ -39,6 +39,7 @@ you would be doing when you need them:
 | `docs/PACKAGING.md` | the redistributable: the launcher, the first-run build, CI |
 | `docs/TODO.md` | next steps and open, undiagnosed questions |
 | `docs/GPU_RENDERER.md` | the GPU (retained-mode) world renderer: the plan and its work |
+| `docs/SHARING.md` | sharing with Verdite1 and Verdite3: the buckets and the progress log (plan in `SHARING_PLAN.md`, per-file detail in `SHARING_INVENTORY.md`) |
 
 Update the right document when you learn something — that is where findings
 belong, not in commit messages, and not in this file. Source comments still say

@@ -450,6 +450,23 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 - The old path stays as the comparison
 - Rules this keeps
 
+### [SHARING.md](docs/SHARING.md)
+
+Sharing this port's work with Verdite1 and Verdite3: what in the repository is the RecompOne fork, what is game-agnostic, what is a mechanism that might generalize and what is this game's alone, and the progress log of the program. The plan, its phases and its rules are [SHARING_PLAN.md](docs/SHARING_PLAN.md); the per-file detail is [SHARING_INVENTORY.md](docs/SHARING_INVENTORY.md). Phase 0, the inventory, is written and awaits review.
+
+- The buckets
+- The finding that shapes everything else: one per-game table removes most of the coupling
+- Bucket A: the RecompOne fork
+- What the fork knows about this game
+- Bucket B: game-agnostic infrastructure
+- Bucket C: patches whose mechanism might generalize
+- Bucket D: KF2-only
+- What is game-specific in the infrastructure
+- What a new repo's `.gitignore` must copy
+- What mods can see
+- Corrections to the plan's guesses
+- Progress log
+
 ## Where to write a new finding
 
 Same rule as before, one level down: **the finding goes in the document, not in
