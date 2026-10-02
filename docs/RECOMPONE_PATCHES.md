@@ -1563,6 +1563,13 @@ Four files in the directory have no entry below:
   and the corner is not lit. With it 0 the programs are the ones before.
   `RetainedScene.MainMapPrepasses` counts the map draws. The fourteenth diff in the patch
   file. See "The map's seams fought again" in `docs/GPU_RENDERER.md`.
+  Since amended: the main view latches the display target it draws into (`0024`'s
+  `MarginContentFlip`) once the map is drawn with the clip spanning the target. The
+  latch counted only packet vertices past the clip, and the map and models drawn here
+  are none, so a target built while the GPU drew the world (an aspect changed in
+  play) was refused by the present for good: the 4:3 VRAM fallback, and no pass that
+  needs a display target. The fifteenth diff in the patch file. See "A target made
+  under the GPU world renderer never latched" in `docs/WIDESCREEN.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

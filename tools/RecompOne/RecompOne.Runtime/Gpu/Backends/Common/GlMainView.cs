@@ -128,6 +128,14 @@ public sealed partial class GlCore
             rt.Geo.WorldCy = cy;
         }
         MarkDrawn(rt);
+        // The margin latch counts packet vertices past the game's clip (V), and the
+        // map and models drawn here are no packets, so a target made while this
+        // draws -- an aspect changed in play -- never latched and the present
+        // refused it for good: the 4:3 VRAM fallback, with every pass that needs a
+        // target off. This draw is a world across the margin by construction, once
+        // the clip spans the target as BeginWorldMain widens it.
+        if (rt.Margin > 0 && drawn > 0 && _env.ClipX0 <= rt.X && _env.ClipX1 >= rt.X + rt.W - 1)
+            rt.MarginContentFlip = GpuHle.DisplayFlip;
         RetainedScene.MainDraws++;
         RetainedScene.MainTriangles += drawn / 3;
 

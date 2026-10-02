@@ -5104,6 +5104,8 @@ gpuworld [on|off]     the map drawn on the GPU (0085; see "Step 1, the first
 capture               arm the frame capture (FrameCapture.Arm) for the next run
                       of stage 13; with KF2_FRAMEVIEW_OUT its CSVs are written
 murk [on|off|tilt X]  the murk, and the steepest a murked surface may lean
+aspect [4:3|16:9|R]   the widescreen aspect, through Widescreen.SetAspect as the
+                      settings window changes it (not saved)
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the
