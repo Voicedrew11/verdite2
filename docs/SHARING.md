@@ -407,6 +407,13 @@ surface.
 - `BindingTable` copies an internal fork type and will drift; exposing it from
   the fork would be cleaner than sharing the copy.
 - The env var count is 244 names in `docs/ENV_VARS.md`, not 216.
+- **Frame pacing is the same mechanism in Verdite3, and it is not data** (Phase 3,
+  2026-10-02). Verdite3's loop is also a stage loop with one drawing stage, but it
+  has fifteen stages, its gate asks for 4 vblanks, and its gated set is "every
+  stage but the last" chosen by call site and latched once per iteration rather
+  than a list of functions. The two `FramePacing`s stay per game; only the clock,
+  the floor and the boundary rule are line-for-line the same. See the progress
+  log.
 
 ## Progress log
 
@@ -723,3 +730,93 @@ outstanding for the done condition. The movies were seen only in passing, and
   it a program.
 - Launcher, packaging and CI stay out of Verdite Core: Verdite3 does not need
   them yet.
+
+### 2026-10-02: Phase 3 begun in Verdite3: the agent harness, then frame pacing
+
+**The unit you picked**: the scripted acceptance harness, then `FramePacing`,
+with your warning that this game's world clock is 15, not 20. **It is 15.**
+Verdite3 (`~/Desktop/verdite3`, `main`) commit `4f1299b`, local, not pushed.
+Nothing in Verdite2 changed but this file.
+
+**Pins, unchanged.** Verdite3: fork `a617cf8`, Verdite Core `a6c2434`. Verdite2:
+fork `a617cf8`, Verdite Core `536167a`. No shared-subtree commit was made.
+
+**Found in Verdite3** (written up in its `docs/GAME_INTERNALS.md`, "The session
+and the main loop", "The player", "Saves and the start menu"), all by behaviour,
+not by matching Verdite2's code:
+- The main loop at `0x80014F24`: fifteen stages; **only stage 15
+  (`func_800422B8`) writes the ordering table** (measured: stages 1-14 change 0 of
+  its 8192 words). Stage 15 ends in the swap `func_80035700` and **the frame gate
+  `func_80019614`, which waits for 4 vblanks: 15 frames, and so 15 world steps, a
+  second at most.** Its count comes from a vblank event handler
+  (`func_80019570`, RCntCNT3/EvSpINT), the same arrangement as Verdite2's
+  `func_80017850`/`func_80017880`, with 4 where Verdite2 has 2.
+- **The fork delivers that event twice a vblank** (measured 120.0/s), the row
+  already in this repo's `docs/TODO.md` ("RCNT3 is delivered twice per vblank").
+  In Verdite3 it is not academic: the gate passed every two vblanks, so **the port
+  had been running the world at 30, not the 60 its docs said** (1200 units of yaw
+  a second holding Left, against 600 at 15).
+- The player block at `0x801B24E4` (EXP, level, HP/MP and their maxima, position
+  `0x801B25F0`, heading `0x801B260A`), the area byte `0x8018FAE4`, the slot
+  `0x8009C2C0`; the card loader `func_8002860C(slot)` (returns 0/1/2, like
+  Verdite2's); the start menu `func_8001FA60`, which loads only if OPEN.EXE's
+  title left 1 in the stub's byte `0x800102FA`, through the slot chooser
+  `func_8001FC5C`.
+
+**Built in Verdite3** (its `docs/DEVELOPMENT.md`, "Driving the game without a
+person", "Frame pacing"): `KF3_AGENT` (the beacon, with a `loop` field: the main
+loop seen in the last second), `KF3_SHELL` (port 27903: `state`, `press`, `peek`,
+`dump`, `help`), `KF3_AUTOSTART=<slot>|new` (the title's byte set, the chooser
+replaced by the game's loader: no input needed in GAME.EXE), `KF3_AUTOPAD`, and
+`FramePacing` under `KF3_FPS` (**off unless set**), plus two diagnostics,
+`KF3_STAGEPROBE` and `KF3_RATECENSUS`.
+
+**Measured** (slot 1, `fdat02`, standing; yaw for 1 s of Left, three times):
+
+| `KF3_FPS` | drawn | ticks/s | yaw/s |
+|---|---|---|---|
+| unset | 30 | 30 | 1200 |
+| 15 | 15.0 | 15.0 | 600 |
+| 60 | 60.0 | 15.0 | 600 |
+| 144 | 144.0 | 15.0 | 600 |
+| off | 1225.5 | 15.0 | 600 |
+| 144, boundary removed (`KF3_PACING_NOBOUNDARY=1`) | - | 14.7-14.8, watchdog | 600 |
+
+Every hook reported installed; packets drawn per frame are the same on ticked and
+idle frames (418/418 at 144), so no skipped stage feeds the picture; no
+`unmapped call`. The scripted acceptance pass is `KF3_AUTOSTART=1 KF3_AGENT=1
+KF3_FPS=144 KF3_FPS_PROBE=1`: `open → game → fdat02`, slot 1, HP 50/50, LV 1,
+144.0 fps at 15.0 ticks/s.
+
+**The comparison, and why nothing was extracted.**
+- *Same mechanism, different data*: `HookAttach` (only the log prefix differs),
+  `AgentServer`'s transport (line cap, queue, vblank drain, `PAD_dr` injection,
+  JSON quoting; the verbs are the game's), the beacon's emitter, the autopad
+  parser. These are the extraction candidates.
+- *Different mechanism*: `AutoStart` (Verdite2 rides a New Game and loads over
+  it from stage 3; Verdite3 answers the start menu's own question), and
+  `FramePacing` (above, "Corrections"). They stay per game.
+- **Extracting the first group is the first C# Verdite Core would hold**, and
+  Verdite2 compiles its patches twice: in `KingsField2Recomp.csproj` and in the
+  launcher's first-run `GameCompile`, whose payload and `BuildKey` would have to
+  carry `tools/verdite-core` sources too. That is a launcher change, and
+  `Kf2.AgentServer` is mod-visible. I stopped there to ask rather than make it.
+
+**Needs your eyes** (Verdite3, `KF3_FPS=60` or `144`): the picture in an area
+(it changes 15 times a second: nothing is carried between ticks yet), the
+in-game menu and the opening movie under pacing, and whether the world's speed
+at 15 looks like the console's.
+
+**Open.**
+- **My scripted Cross presses saved over card A slot 1** in Verdite3 (it held a
+  new game's first save and still does, a few steps further on). Cross opens the
+  in-game menu; this is now written in its `docs/DEVELOPMENT.md`.
+- The double vblank delivery is a fork defect; fixing it changes Verdite2 when it
+  pulls (the title music question in its `docs/TODO.md` row). Your call.
+- Under pacing, what stage 15 advances runs at the render rate: billboard cels at
+  `0x80182964` (`func_80040AE4`), the `SpriteAnim` shape, and eight unidentified
+  words (`KF3_RATECENSUS`).
+- Still by hand in Verdite3: changing areas, saving, the title-screen load;
+  `load`/`warp` verbs; `KF3_PRESENT_PROBE` wiring.
+- Nothing pushed: Verdite3 `main` is one commit ahead of `origin/main`, and this
+  repo one ahead of `v0.4.0-staging`'s remote.
