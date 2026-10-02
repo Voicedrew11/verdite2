@@ -82,9 +82,8 @@ that way.
 
 ### Diagnostics
 
-The switches used most; the full list is `docs/ENV_VARS.md`, imported here.
-
-@docs/ENV_VARS.md
+The switches used most. The full list is `docs/ENV_VARS.md`; it is not imported
+(it is ~9k tokens), so grep it for the switch you need.
 
 ```bash
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
@@ -466,8 +465,9 @@ issues against it: a defect found here is recorded in `docs/` and fixed in the
 vendored tree, which is the whole point of vendoring it. If the user wants
 something reported upstream they will write it themselves.
 
-@docs/RECOMPONE_FORK.md
-@docs/RECOMPONE_PATCHES.md
+Read `docs/RECOMPONE_FORK.md` before merging from upstream, and grep
+`docs/RECOMPONE_PATCHES.md` for a patch number (`0047`) before changing that
+patch's code or amending it. Neither is imported, for size.
 
 ## Shipping it
 
