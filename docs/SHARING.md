@@ -650,3 +650,75 @@ and `NOTES.md` are new prose.
   start; ignore it. Verdite1 still waits.
 - `docs/RUNTIME.md` still opens by saying `tools/RecompOne/` is gitignored, which
   has been untrue since the vendoring. It predates this phase.
+
+### 2026-10-02: Verdite3 boots, plays, saves and loads
+
+**Done when, met** (the picture is yours to confirm). Verdite3 (`~/Desktop/verdite3`,
+`main`, local) recompiles `SLUS-00255` and runs it from boot through
+`OPEN.EXE`'s intro and title, the memory card screen, into `GAME.EXE` and an
+area, between areas, and saves to and loads from card A, in game and from the
+title. Its acceptance test is "The acceptance test" in its `docs/DEVELOPMENT.md`.
+Commits there: `acf4873` (Verdite Core, below), `9b137e8` (the recompile:
+`config/kf3.json`, the maps, `KingsField3Recomp.csproj`, `Program.cs`,
+`scripts/setup_tools.sh` ported from here), `a17c0fa` (docs).
+
+**Pins.** Verdite3: fork `a617cf8` (unchanged, no fork commit was needed),
+Verdite Core `acf4873`, which is `536167a` plus one commit, **not yet pushed**.
+Verdite2: fork `a617cf8`, Verdite Core `536167a`; nothing here changed but this
+entry.
+
+**What carried over from Verdite2, and what did not.**
+- The disc has this disc's shape: three executables at `0x80011000` as overlays,
+  per-area code in `CD/COM/FDAT.T` at entries `3n+2` (28 modules, all linked for
+  `0x801E8308`, a module pointer at `0x8018FAE0` dispatched through slot 8),
+  empty entry groups where areas were cut. The techniques (scoring a base by its
+  slot targets, the overlay delta, data-side search, constants as evidence)
+  all worked unchanged.
+- **The PSY-Q libraries are a newer build.** Not one of the routines identified
+  here matches there by `match_overlays`' normal form, not even the libcd thunks,
+  so every address was found again: 516 names from the signature bank, the
+  rest by hand. `CdControl`/`F`/`B` are full functions; `CdRead` is a retry
+  wrapper; libapi is the 4.x interrupt manager, whose callback table is
+  `intrEnv + 4` (the layout upstream's fallback assumes; `Program.cs` sets it per
+  executable anyway). The same 21 entry points are bound, 63 in all, and the
+  recompiler reports `applied 63 patches, 0 reimplementations`.
+- **The executables' text runs on into data, and the sweep makes functions of
+  it.** In `GAME.EXE` the data "functions" branch back into real code. The maps
+  are cut at the end of code before the `jal` harvest.
+
+**Verdite Core `acf4873`: three fixes to `merge_branch_spans`**, all found on
+Verdite3's `GAME.EXE`, where the old script would have merged half the
+executable into one function: a switch table is bounded by the `sltiu` guarding
+its index (a 17-entry table read on into a data pointer); `jal`s are counted
+only from inside known functions (the rule `add_call_targets` already had); an
+absorbed start reached by fallthrough is not reported as lost. **Measured on
+this repo:** the old and new script, run from Verdite2's pre-merge maps
+(`e41f53d^`) with `e41f53d`'s config, print the same output and write the same
+maps, which equal the ones `e41f53d` committed; `--dry-run` on today's maps is
+identical, all overlays and `fdat17` from `docs/`.
+
+**Measured** (Verdite3): the overlay sequence `open` → `game` → `fdat02` →
+`fdat14` in the log, each executable's callback table set as it loads, the title
+load as `game` → `open` → `game`; `carda.sav` holding `BASLUS-002551`, 3 blocks,
+titled `KING'S FIELD 2-1 EXP 0 LV 1`; no `unmapped call`.
+
+**Needs your eyes.** You played it: intro, title, the memory card screen, the
+short video, the first area and the next, a save and two loads. Nothing more is
+outstanding for the done condition. The movies were seen only in passing, and
+`END.EXE` has not been reached.
+
+**Open.**
+- **Push** Verdite Core `acf4873` (from Verdite3, `setup_tools.sh --push-core`)
+  and Verdite3's `main`. Waiting on your go-ahead. Verdite2 pulls the new Verdite
+  Core only when you decide; it changes no output here.
+- **The world runs at 60**, once per drawn frame. A world clock like
+  `FramePacing` needs this game's frame gate and stages found first.
+- **The fork reads seven `KF2_*` switches by name.** Verdite3 inherits them under
+  those names. Taking the prefix from the game is the first fork change Verdite3
+  will want; it must keep this repo's acceptance test passing.
+- Verdite3's acceptance test still needs a person at every step: it has no
+  scripted pad, auto start or state beacon yet. Those (`KF2_AUTOPAD`,
+  `KF2_AUTOSTART`, `KF2_AGENT` here) are the Phase 3 candidates that would make
+  it a program.
+- Launcher, packaging and CI stay out of Verdite Core: Verdite3 does not need
+  them yet.
