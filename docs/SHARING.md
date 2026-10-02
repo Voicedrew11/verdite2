@@ -1012,3 +1012,60 @@ frames/s, four 5-second windows), the assembler per call site, the front table.
   will differ elsewhere.
 - Verdite Core's `match_code.py` is a local commit in Verdite3's subtree; it goes
   to `Voicedrew11/verdite-core` with `--push-core` when you say so.
+
+#### Handoff: the next unit
+
+**State.** Verdite3 `main` is four commits ahead of `origin/main` (`498dbc9`
+Verdite Core's `match_code.py`, a subtree-only commit; `7d65a03` the probe and
+"The geometry path"; `0933ee2` entry registers, the scratchpad, the probe's
+artifacts), none pushed. Verdite2 `v0.4.0-staging` carries this entry. Nothing
+was built that changes a picture in either game. The survey is complete for what
+the build order's first steps need; the open items above do not block them.
+
+**The next piece of work (recommended; the plan says the user picks, so ask
+first): Verdite3's two bulk assemblers in C#, with a verify mode.**
+`func_80039D50` (the map's bulk) and `func_80035CA4` (the lit models and the
+HUD's), as replace hooks in a new `patches/PolyAssembler.cs` in Verdite3, under
+`KF3_POLYASM=0|1|verify`, **off by default** until verify reads zero mismatches
+over a session. Done when: verify reports 0 RAM, 0 scratchpad, 0 register and
+0 GTE mismatches across standing, turning and walking in `fdat02` (and a second
+area if one can be reached); `KF3_GEOPROBE`'s per-call packet counts are the same
+on and off; `KF3_FPS=144 KF3_FPS_PROBE=1` still reads 144.0 fps at 15.0 ticks/s.
+No picture feature in the same unit: Z-buffer and sub-pixel come after.
+
+How, in order:
+1. Read Verdite2's `patches/PolyAssembler.cs` (the `Frame`, `Allocate`, `Bump`,
+   `FillTriangle`, `FillQuad`, `Place`, `Visible` and the verify harness near
+   `c.Snapshot()`) and `PolyAssemblerLit.cs`, and "The polygon assembler in C#"
+   and "The lit model assembler" in `docs/PATCHES_AND_MODS.md`. Copy the fill
+   **textually close** to Verdite2's, because the unit after next diffs the two to
+   extract the shared one. Leave out what Verdite3 has no use for yet (the depth
+   and lighting records, `RenderDistance`, `Remaster`, `GteVertexMap` hoisting).
+2. The front ends from "How the assemblers are entered" and "The map" in
+   Verdite3's `docs/GAME_INTERNALS.md`: parameters from the scratchpad (through
+   `ReadU32`/`WriteU32`, never a direct `Ram` reference: the scratchpad is a
+   separate array), the vertex pass with Verdite3's fog weight, the near reject,
+   the clamp to `0x1F0F` (map) against the drop (models), the inline `addPrim`,
+   the counters at `+0x68..+0x70`. GTE ops as `Gte` calls in the order the MIPS
+   issues them, so the GTE state after the routine matches.
+3. Verify as Verdite2's does, plus **the scratchpad's 1 KB** in each snapshot
+   (`PSMemory`'s array is private: read it through the accessors, or add a fork
+   accessor in its own commit). The disassembly is the spec: `match_code.py show`
+   for the shape, and the instruction listings are quickly made with capstone
+   (Python, installed); a GTE command word is COP2 with bit 25 set, which
+   capstone does not decode.
+4. Write it up in Verdite3's `docs/GAME_INTERNALS.md` or a new patches document,
+   with the verify counts, and add `KF3_POLYASM` to `docs/ENV_VARS.md`.
+
+**The alternative unit**, if you would rather prove the plumbing first: move the
+four identical harness pieces into `tools/verdite-core/cs/` per the proposal
+above. It is low risk, but it changes Verdite2's csproj and launcher payload and
+`Kf2.AgentServer` is mod-visible, so it is yours to approve, and Verdite2's
+acceptance test must read the same before and after.
+
+**Don't**: push anything without asking; let an opencode agent share a checkout
+being edited (its wrapper ran `git stash -u` in Verdite3 this session; opencode's
+sandbox also could not read Verdite2 from a Verdite3 worktree, so cross-repo
+tasks need their inputs copied in); hook the libgte division routines expecting
+named symbols (they have none: `func_80074D88`, `func_80075188`,
+`func_800756A8`, `func_80075B48`).
