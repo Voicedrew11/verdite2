@@ -612,10 +612,10 @@ prefixes, so the subtree adds needed no `mainline` trailers: `git subtree split`
 in Verdite3 gives exactly `a617cf8` and `536167a`, and in Verdite2 `536167a`.
 
 **Pins.** Verdite2 and Verdite3: fork `a617cf8`, Verdite Core `536167a`.
-**Neither is pushed**: `a617cf8` exists only in `~/Desktop/verdite-recompone`,
-`536167a` only in `~/Desktop/verdite-core`, and Verdite3's commits only in its
-clone. Until the fork is pushed, `--pull-fork` from GitHub would find
-`bbbf56b`, an ancestor, and say so.
+
+**Pushed (2026-10-02, with your go-ahead).** The fork's `main` (`a617cf8`), Verdite
+Core's first `main` (`536167a`), Verdite3's `main`, and here `vendor-verditecore`
+and `v0.4.0-staging` (both `d03ac2c`, fast-forwards).
 
 **Measured.**
 - Old against new script, on this disc, from the repo root: `inspect_disc` (45
@@ -639,14 +639,14 @@ clone. Until the fork is pushed, `--pull-fork` from GitHub would find
 and `NOTES.md` are new prose.
 
 **Open.**
-- **Pushes, each waiting for your go-ahead:** the fork (`a617cf8`), Verdite Core
-  (`536167a`, its first commit), Verdite3's `main`, and here `vendor-verditecore`
-  and `v0.4.0-staging`.
-- **Verdite3 needs the disc**, at `~/Desktop/verdite3/disc/KingsField3.cue`.
-  Next: `inspect_disc`, `extract_file --header-only` for each executable,
-  `config/kf3.json`, the sweep, the signature bank. The launcher, packaging and
-  CI move into Verdite Core only once Verdite3 needs them.
-- `~/Desktop/verdite1` already holds a `kf1-port` branch of King's Field work
-  and a Japanese image. Verdite1 still waits, as decided; it was not touched.
+- **Verdite3's disc is in place and read** (`disc/KingsField3.cue`, volume
+  `SLUS-00255`; Verdite3 `6797f9f`, "What is on the disc" in its
+  `docs/RECOMPILATION.md`). It has Verdite2's shape: a 4 KiB boot stub and
+  `OPEN`/`GAME`/`END.EXE`, all at `0x80011000`; `GAME.EXE` is 0x8B800 bytes of
+  text against 0x5E000 here. Next, in Verdite3: `config/kf3.json`, the sweep,
+  the signature bank, recompile, boot. The launcher, packaging and CI move into
+  Verdite Core only once Verdite3 needs them.
+- `~/Desktop/verdite1`'s `kf1-port` branch was an experiment, not Verdite1's
+  start; ignore it. Verdite1 still waits.
 - `docs/RUNTIME.md` still opens by saying `tools/RecompOne/` is gitignored, which
   has been untrue since the vendoring. It predates this phase.
