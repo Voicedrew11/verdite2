@@ -118,7 +118,7 @@ something to say about *how* to use them:
   patches' own probes, which report a summary per window instead of a line per
   call.
 - **`KF2_CDTRACE=1`** puts a stack trace on the first CD register access
-  (`patches/recompone/0002`).
+  (`tools/RecompOne/patches/0002`).
 - **`KF2_AUTOPAD=8:Start:400,20:Circle:200`** replays scripted input, for
   reproducing an input-triggered bug with nobody at the keyboard. Its clock
   starts when the first area module loads, which is the only point in the boot
@@ -246,7 +246,7 @@ caveat about the widened render target under "Widescreen" in
 ## Profiling a frame
 
 `patches/FrameProfiler.cs`, `patches/ProfilerPanel.cs` and the runtime's
-`Diagnostics/Profiler.cs` (`patches/recompone/0045`) say where a frame's time
+`Diagnostics/Profiler.cs` (`tools/RecompOne/patches/0045`) say where a frame's time
 went, by section, on the game thread. **Shift+P** opens the panel, and recording runs
 while it is open; `KF2_PROFILE=1` records from boot and prints a summary every
 five seconds, and `KF2_PROFILE_OUT=profile.csv` writes every frame for
@@ -671,7 +671,7 @@ compiles on its first call, which is where it started.
 ## Watching a frame being built
 
 `patches/FrameCapture.cs`, `patches/FrameViewerPanel.cs` and the runtime's
-`Hle/GpuTrace.cs` (`patches/recompone/0046`) capture **one run of stage 13** whole
+`Hle/GpuTrace.cs` (`tools/RecompOne/patches/0046`) capture **one run of stage 13** whole
 and replay it a GP0 command at a time. The profiler says which section a frame's
 time went to; this says which *primitive*, which routine built it, and what it cost
 downstream. **Shift+F** opens the panel and *Capture next frame* arms it;

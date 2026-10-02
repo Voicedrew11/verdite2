@@ -375,7 +375,7 @@ Every `KF2_*` switch the port reads, in one list.
 
 How `tools/RecompOne`, a subtree of the fork, is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided.
 
-### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
+### [RECOMPONE_PATCHES.md](tools/RecompOne/docs/RECOMPONE_PATCHES.md)
 
 Every change the port made to RecompOne, `0001`-`0085`, one entry each.
 

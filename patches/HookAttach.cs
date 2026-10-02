@@ -29,14 +29,14 @@ namespace Kf2;
 /// <c>HookManager.AddPre</c>/<c>AddPost</c> only append a delegate to a dictionary
 /// and return <c>true</c> unless the *signature* is wrong. The detour is created
 /// later, in <c>HookManager.Commit()</c>, and since
-/// <c>patches/recompone/0027</c> that catches per function and prints
+/// <c>tools/RecompOne/patches/0027</c> that catches per function and prints
 /// <c>[Mods] could not hook ...</c> rather than throwing -- which is what makes a
 /// partial install possible at all. So counting <c>Add*</c> return values counts
 /// what was *queued*: a patch could print <c>boundary 3/3 DrawOTag</c> while no
 /// boundary existed, latch itself done, and never try again.
 ///
 /// <see cref="Installed"/> reads the answer back from <c>HookManager</c> after the
-/// commit (<c>patches/recompone/0028</c>), so a claim is a claim about a detour
+/// commit (<c>tools/RecompOne/patches/0028</c>), so a claim is a claim about a detour
 /// that exists. **A pre and a post on the same function share one detour**, so
 /// those two land or fail together; the case that needs the read-back is a patch
 /// whose sites are different functions -- <see cref="AnimSmoothing"/>'s five,

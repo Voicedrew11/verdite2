@@ -33,7 +33,7 @@ strips the header itself.)
 
 ## Two patches change the generated code, and only two
 
-Most of `patches/recompone/` is runtime: change it, rebuild the checkout, run.
+Most of `tools/RecompOne/patches/` is runtime: change it, rebuild the checkout, run.
 **Two patches change what the recompiler *emits*, so a stale `generated/` is a
 silent wrong answer rather than a build error.** Re-run the recompiler after
 touching either, and after any `setup_tools.sh` that reports them newly applied:

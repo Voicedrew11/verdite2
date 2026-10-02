@@ -226,7 +226,7 @@ draws after the section's whole body, so an option that is one of the section's
 *ordinary* options — an aspect ratio, which is the same kind of choice as the
 render scale — could only land in a block underneath everything, below the GPU
 backend combo, which reads as the port's box rather than as a picture setting.
-`patches/recompone/0013` is the fix and it is six lines:
+`tools/RecompOne/patches/0013` is the fix and it is six lines:
 `SettingsRegistry.DrawSlot(slotId)` walks the same `Extend` table by an arbitrary
 id, and `DisplaySettingsSection` calls it once, right after the render scale, as
 `"display.render_scale"`. `PatchSettings.RegisterSlot` is the port-side half; a
@@ -264,7 +264,7 @@ centre — without the readout that is a guess, checked by walking into a wall.
 "Display" is where the window lives; everything in that section is how the picture
 is made, and the port only adds to it — a frame rate and a dither switch beside
 vsync and render scale. Renaming it to **Video** turns out not to need
-`patches/recompone/` at all: `SettingsPopup` draws each tab from
+`tools/RecompOne/patches/` at all: `SettingsPopup` draws each tab from
 `Localization.T(section.TitleKey)`, and `Localization.Merge(json)` is public and
 overwrites by key, so `PatchSettings` merges one string for `settings.display` at
 the same `RuntimeReadyEvent` it registers the pages.
@@ -1170,7 +1170,7 @@ deliberately removed**.
   frames to one wait, the picture at the host ceiling (measured 483 presents a second
   at 240, 235 fresh decisions against 3144 held), and a tick decision run twice. A
   decision is now held only until the next present, read off `LibEtc.VSyncCalls`
-  (`patches/recompone/0042`) so it does not depend on the hook whose loss put pacing
+  (`tools/RecompOne/patches/0042`) so it does not depend on the hook whose loss put pacing
   here. Measured with GAME.EXE's `VSync` hook removed: 240.0 presents and 19.7-20.7
   ticks a second, 240 fresh against 1440 held. `KF2_FPS_PROBE=1` now prints a
   `no boundary` line from the vblank while this runs, since its usual line comes
@@ -1194,7 +1194,7 @@ deliberately removed**.
   permanent, the latch already set. `Attach()` now claims only what it **installed**
   (see "A registration is not a hook" below), returns whether it is complete, and is
   retried on the next overlay load up to `HookAttach.MaxTries`;
-  `patches/recompone/0027` commits each function on its own so one failure cannot
+  `tools/RecompOne/patches/0027` commits each function on its own so one failure cannot
   take the rest. The pacing line spells the boundary out as a pair rather than
   folding it into a total, because reading `15 hook(s)` and counting on your
   fingers is how this went unnoticed:
@@ -1278,12 +1278,12 @@ the keyboard; and `view carrying` from the first window in which `KF2_SHELL`'s
 |---|---|---|---|
 | logos (OPEN.EXE) | **15.0** | 15.0 | disc-paced STR stream, so not moved by `KF2_FPS` |
 | title menu (OPEN.EXE) | **60.0**, or the asked rate below it | same | no wait of its own; `LoopPacing` holds it to `InterfaceHz` — see "The title menu is an interface frame" |
-| the intro movie | **10.0** | 10.0 | disc-paced, `patches/recompone/0026` |
+| the intro movie | **10.0** | 10.0 | disc-paced, `tools/RecompOne/patches/0026` |
 | an area, attract demo or play | **165.0** | 20.0 | the render rate asked for, against `LogicHz` |
 
 **The title row was wrong for a long time, and it is the one worth knowing.** It used to read 15.0, "OPEN.EXE's own four-vblank wait" — but that is the logos' stream. The title menu's loop (`func_80011AE0`) has no wait of its own, one `VSync(0)` and one `DrawOTag` a picture, so it read whatever `KF2_FPS` asked until it was capped at 60 like the menus. A title menu at **twice** the asked rate is therefore not the game: it is `FramePacing.ApplyHostCeiling`'s `2×` ceiling with nothing of the port holding the picture, which is the boot the sentinel is for (see "The smoothing is sometimes dead for a whole session" in [TODO.md](TODO.md)).
 
-`present(s)/s` on the line is counted inside `LibEtc.VSync` (`patches/recompone/0042`), not by a hook, so it can disagree with `fps drawn`: legitimately in a fade, which `VSync`s without drawing (62-131 a second measured), and illegitimately when a pacing hook has stopped running. **The sentinel** reads the same counter from `VSyncEvent`, which fires whether or not a detour does; two seconds above `max(1.5×T, 90)` print one `[KF2] pacing sentinel:` block — hook fires, `Floor` calls and waits, `FallbackTick` fresh and held decisions, what is committed, a one-line reading, and the stack of one `VSync` call — once a session.
+`present(s)/s` on the line is counted inside `LibEtc.VSync` (`tools/RecompOne/patches/0042`), not by a hook, so it can disagree with `fps drawn`: legitimately in a fade, which `VSync`s without drawing (62-131 a second measured), and illegitimately when a pacing hook has stopped running. **The sentinel** reads the same counter from `VSyncEvent`, which fires whether or not a detour does; two seconds above `max(1.5×T, 90)` print one `[KF2] pacing sentinel:` block — hook fires, `Floor` calls and waits, `FallbackTick` fresh and held decisions, what is committed, a one-line reading, and the stack of one `VSync` call — once a session.
 
 Otherwise the probe names the cause: a low `fps drawn of` says the saved rate did not load, a `nothing to carry` says the rate itself leaves nothing to interpolate, a `tick(s)/s` far above `LogicHz` in an area is the lost-boundary failure the section above describes, and any health word other than `carrying` or `idle` in an area says which patch is inert whatever its checkbox reads.
 
@@ -1311,7 +1311,7 @@ since `0027` catches per function and prints `[Mods] could not hook …` rather 
 throwing — which is exactly what makes a partial install possible. So the port could
 print `boundary 3/3 DrawOTag + 3/3 VSync` while no boundary existed, latch itself
 done, and never try again — the uncapped-and-8×-speed failure this whole subsection
-is about, reported as a healthy session. `patches/recompone/0028` adds
+is about, reported as a healthy session. `tools/RecompOne/patches/0028` adds
 `HookManager.IsCommitted`, and every summary line here is now read back from it
 after the commit.
 
@@ -1395,7 +1395,7 @@ independently, always reach `Commit`, and name each role in the summary:
 | # | gate | where |
 |---|---|---|
 | 1 | **the game's own frame gate**, `func_80017880` — spins on the vblank credit at `0x801B6CA8` until it reaches **2**, then zeroes it. Called by stage 13 as its last act. | `GAME.EXE`; see "The loop's own rate gate" in [GAME_INTERNALS.md](GAME_INTERNALS.md) |
-| 2 | **`FrameClock`**, a hard-coded 60 Hz applied per `VSync` *call* inside `Runtime.PresentFrame` | `patches/recompone/0025` makes it settable |
+| 2 | **`FrameClock`**, a hard-coded 60 Hz applied per `VSync` *call* inside `Runtime.PresentFrame` | `tools/RecompOne/patches/0025` makes it settable |
 | 3 | **`FramePacing.Floor()`**, the port's own deadline at the frame boundary | `patches/FramePacing.cs` |
 
 Gate 1 is the one that was missing from the earlier write-up, and it is decisive:
@@ -3225,7 +3225,7 @@ Three details are load-bearing:
   added for this — it is an *identity*, not a rate.
 * **A hold fails closed, so it needs the watchdog the stage gate has.** Not
   hypothetical: the first measured run of this patch lost the frame boundary — the
-  failure `patches/recompone/0027` and `FramePacing.FallbackTick` exist for — and
+  failure `tools/RecompOne/patches/0027` and `FramePacing.FallbackTick` exist for — and
   with `Frames` frozen the identity test can never pass again, so every flame in
   the game stood still for the rest of the session while the world played on at the
   right speed. A frozen picture is worse than a fast one. When `Frames` has not
@@ -4081,7 +4081,7 @@ own chrome as well as the game, its floor plan was centred on the *window* rathe
 than on the picture, and its edges lined up with neither: a window over the port
 rather than a screen the game had put up.
 
-`patches/recompone/0029` publishes the rectangle from the one place that computes
+`tools/RecompOne/patches/0029` publishes the rectangle from the one place that computes
 it — a public `OutputView` set in `OutputPanel.Draw`, from `GetCursorScreenPos`
 and the fitted size, immediately before `ImGui.Image`. Ordering needs no care:
 `PanelManager.DrawPanels` walks its list in registration order, `HostWindow`
@@ -4282,7 +4282,7 @@ the pad button, and the Gameplay switch that turns the map off — and a latch
 missed by one of them is a game that never resumes. It is read once a frame, at the two places that already
 mean "a new frame" (the frame boundary, and `FallbackTick` when the boundary has
 been lost), because host input is polled from inside the game's own `VSync`
-(patches/recompone/0007) and a predicate read per stage could otherwise run half a
+(tools/RecompOne/patches/0007) and a predicate read per stage could otherwise run half a
 tick — a state machine stepped against an entity table that was not. It is gated
 on `Map.InGame` as well as on the panel, since the map can be opened at the title
 screen, where it draws nothing and where pausing would freeze the intro.
@@ -4481,7 +4481,7 @@ arithmetic that says 190 was never a visible set.
 The accumulator has to run with the map closed, so it cannot live in a panel's
 `Draw` the way every other read in `patches/Map.cs` does. The obvious seam is a
 post on `func_8002D3A8` — and that is the fallback — but `VSyncEvent` costs **no
-hook at all** and, since `patches/recompone/0021`, fires on a wall-clock 60 Hz grid
+hook at all** and, since `tools/RecompOne/patches/0021`, fires on a wall-clock 60 Hz grid
 rather than per rendered frame: 60 samples a second at 20 fps and at 144 fps
 alike. The grid is stable for the whole frame once built, so a vblank read gets a
 complete one. At the 20 fps default each grid is sampled three times, which the OR
@@ -5659,7 +5659,7 @@ call takes both answers again when the count moves, and after any recompiled cal
 
 ### The GTE fast path
 
-`patches/recompone/0047`. Every GTE op this game calls in these routines is the same
+`tools/RecompOne/patches/0047`. Every GTE op this game calls in these routines is the same
 form each time -- `NormalColorDpq`, `NormalColorDpq3` and `NormalColorCol` at `sf=12,
 lm=1`; `DpqColor`, `RotTrans` and `RotTransPers` at `sf=12, lm=0` -- and the
 runtime's general path takes `sf` and `lm` as arguments through `MatVec`, `SetMac`

@@ -58,7 +58,7 @@ if (Test-Path $stubConfig) {
 Remove-Item -Recurse -Force $stubOut
 
 # Third-party licences the artifact is obliged to carry. Noto Sans is embedded in
-# RecompOne.Runtime.dll (patches/recompone/0033, now upstream's own FontSet)
+# RecompOne.Runtime.dll (tools/RecompOne/patches/0033, now upstream's own FontSet)
 # and is SIL OFL 1.1, which
 # requires its licence to travel with the font; the port's own MIT terms go beside
 # it rather than only in the source tree.

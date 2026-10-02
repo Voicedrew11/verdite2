@@ -513,7 +513,7 @@ edge jumps by up to a pixel every time the winner changes, which is wobble that
 sub-pixel recovery cannot kill because the vertex is being given *someone else's*
 fraction.
 
-`patches/recompone/0011-gte-depth-collisions.patch` is the rest of the same
+`tools/RecompOne/patches/0011-gte-depth-collisions.patch` is the rest of the same
 mechanism, not a new one:
 
 - **Saturated vertices are recorded for their depth**, so a large nearby polygon
@@ -583,7 +583,7 @@ findable. What the disassembly says:
   `LibGpu.DrawOTag` and `Dma.TransferGpu` both do
   `gpu.WriteGp0(m.ReadU32(addr…))`.
 
-`patches/recompone/0012-exact-gte-vertex-map.patch` connects those four facts.
+`tools/RecompOne/patches/0012-exact-gte-vertex-map.patch` connects those four facts.
 `GteVertexMap` is a map from **RAM word address** to `(z, fx, fy, the packed XY
 word)`, filled by three exact hops:
 
@@ -634,7 +634,7 @@ nothing left to pick between.
 front of and behind each other. The map changes W and the sub-pixel position, and
 the draw order is the game's ordering table, which the GPU walks back to front with
 no depth buffer at all. Two coplanar surfaces the game sorted by a single OTZ per
-polygon will flicker on hardware too. `patches/recompone/0014` is a Z-buffer from
+polygon will flicker on hardware too. `tools/RecompOne/patches/0014` is a Z-buffer from
 the same recovered SZ; it is off by default until the picture has been looked at
 in that cave. See "Z-buffer".
 
@@ -717,7 +717,7 @@ The depth is the same SZ3 perspective correction already recovers. Nothing new i
 caught; the rasterizer is just allowed to test it per pixel instead of throwing
 it away after the texture divide. `GteVertexMap` already follows the word from
 `Gte.Rtp` into the packet, and `DrawPolygon` already asks by the address the
-coordinate was read from. `patches/recompone/0014` is the rest:
+coordinate was read from. `tools/RecompOne/patches/0014` is the rest:
 
 - **All-or-nothing per triangle**, same rule as W. A corner left without a depth
   among two real ones would punch a hole, so that triangle keeps painter's
@@ -766,7 +766,7 @@ this game submits, cannot produce a clean picture either, so offering a switch
 that only ever half-works is worse than not offering it. The mechanism stays for
 diagnosis, driven from the console alone: `KF2_ZBUFFER=1` forces it on for the
 run and `KF2_ZBUFFER_PROBE=2` takes the census below. `patches/ZBuffer.cs` and
-`patches/recompone/0014` are unchanged; only `patches/settings/ZBufferPage.cs`
+`tools/RecompOne/patches/0014` are unchanged; only `patches/settings/ZBufferPage.cs`
 and its registration are gone. That verdict was reached on the address map's depth,
 before the assemblers were in C#; "The assemblers write the depth" below is the
 reason to look again. **The switch is back** as `patches/settings/ZBufferPage.cs`
@@ -799,7 +799,7 @@ batch is usually the 2D HUD, which does not write depth — that case leaves the
 buffer wiped and looks correct, which is why the fault is intermittent. When the
 last batch is 3D it stamps *near* depths, and the next frame's geometry is
 rejected wherever they landed, leaving the earliest-drawn thing — the far
-background — on screen. `patches/recompone/0016` swaps the two statements.
+background — on screen. `tools/RecompOne/patches/0016` swaps the two statements.
 
 **The confirmation is a counter, not a screenshot.** `KF2_ZBUFFER_PROBE=2` reads
 the depth attachment of the target the frame's depth batches actually went to and
@@ -825,7 +825,7 @@ the table" fix sketched for this would have had nothing to act on. **Note the OT
 length varies per area** (8348, 8898, 9101, 9162, 9315 measured), so an `ot` is
 only comparable inside its own frame.
 
-`patches/recompone/0015` is the census itself: `GteDepth` keeps every polygon's
+`tools/RecompOne/patches/0015` is the census itself: `GteDepth` keeps every polygon's
 bbox, depth range, table position and flags for the window; `LibGpu.DrawOTag` and
 `Widescreen`'s replacement of it publish the walk position (`OtEntry`, counted
 from the far end); `GlCore` remembers which RT the depth batches went to, since
@@ -870,7 +870,7 @@ moved into C# (`PolyAssembler*.cs`). The port now *builds* nearly every packet
 that should occlude, so it knows two things the address map could only guess:
 every corner's depth, and which routine asked for the packet.
 
-`patches/recompone/0050` adds `GtePacketDepth`, a side table keyed by packet
+`tools/RecompOne/patches/0050` adds `GtePacketDepth`, a side table keyed by packet
 address in the same shape as `GteLightMap` (`0048`): four corner depths, checked
 against the command word and the first and last vertex words before they are
 believed. The assemblers fill it and `DrawPolygon` reads it. **While it is active
@@ -1112,7 +1112,7 @@ screen position and the view depth the GTE divided by — and carries them from
 (`GteVertexMap`, "Following the value through memory"). RecompOne grew a second
 answer to that after our pin: a full **PGXP**, in `39fb337a`, `91c20fcf`,
 `95f0585b` and `6aae910a` (2026-08-31 to 09-07). It is backported here as
-`patches/recompone/0034`-`0036`, and both mechanisms ship, chosen between by
+`tools/RecompOne/patches/0034`-`0036`, and both mechanisms ship, chosen between by
 `KF2_PGXP` — **and by nothing in the settings window**. See "PGXP has no control
 in the window" below.
 
@@ -1523,7 +1523,7 @@ still reported occlusion — just less of it, in the wrong places.
 ### The pass
 
 Two full-screen draws between the finished target and the present blit, in
-`patches/recompone/0040`:
+`tools/RecompOne/patches/0040`:
 
 - **Occlusion.** Reconstruct the view position, take the normal from the *nearer*
   neighbour on each axis (so a pixel on a silhouette takes the surface it belongs
@@ -2858,7 +2858,7 @@ in reach and 11,076 model triangles into its cubemap before, 21 and 2,916 after.
 
 **Mechanism measured; on by default.** One
 checkbox under Video ▸ Enhancements (`kf2.perpixel.on`), `KF2_PERPIXEL=0` off on the
-console. GL core backend only. The runtime half is `patches/recompone/0048`; the
+console. GL core backend only. The runtime half is `tools/RecompOne/patches/0048`; the
 port half is `patches/PerPixelLighting.cs` and `patches/PolyAssemblerLight.cs`.
 
 A packet's vertex colour is not a free number. The GTE made it in two steps, and
@@ -3226,7 +3226,7 @@ crosshatch. Two things enforce the five-bit truncation, and both have to give:
 
 - **The render-target format.** Geometry rasterises into a `GlDisplayRt` whose
   colour attachment is an `Rgb5A1` texture, so even a full-precision fragment is
-  crushed to five bits on write. `patches/recompone/0021` makes that attachment
+  crushed to five bits on write. `tools/RecompOne/patches/0021` makes that attachment
   `Rgba8` when `GteDepth.TrueColor` is set. The mask/STP bit rides the alpha either
   way — one bit in 1555, the top of an 8-bit alpha in RGBA8 — and reads back
   `>= 0.5` in both.
@@ -3282,7 +3282,7 @@ crawling, sparkling floor, and it is the artefact the port's own render scale
 makes more visible rather than less: more output pixels means more independently
 sparkling samples of the same sliver.
 
-`patches/recompone/0041` samples along the sliver instead, in both prim fragment
+`tools/RecompOne/patches/0041` samples along the sliver instead, in both prim fragment
 shaders, driven by `GteDepth.Anisotropy`, with `patches/Anisotropic.cs` as the
 switch (`KF2_ANISO=<1..16>`, `KF2_ANISO_PROBE=1`, and a combo under
 Video ▸ Enhancements).
@@ -3760,7 +3760,7 @@ choice. **Not looked at by eye** — what is measured is that the restore is ser
 from the scaled copy on every frame of a menu, not that the menu now looks like
 the world behind it.
 
-The mechanism is `patches/recompone/0039`. GL backend only: the software
+The mechanism is `tools/RecompOne/patches/0039`. GL backend only: the software
 rasterizer has a 1x VRAM and nothing to preserve.
 
 ## A shop overwrote the textures with the atlas's old texels

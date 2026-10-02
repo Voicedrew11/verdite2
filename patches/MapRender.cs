@@ -174,7 +174,7 @@ public static class MapRender
     /// on two sides. A full-screen map sized to the viewport therefore covered the
     /// chrome as well as the game and did not line up with either: it looked like
     /// a window over the port rather than a screen the game had put up.
-    /// <c>OutputView</c> (patches/recompone/0029) publishes the rectangle from the
+    /// <c>OutputView</c> (tools/RecompOne/patches/0029) publishes the rectangle from the
     /// one place that knows it, once per frame, before any floating panel draws —
     /// <c>PanelManager</c> draws in registration order and the Output panel is
     /// registered by <c>HostWindow</c> long before <c>Program.cs</c> adds these.

@@ -15,7 +15,7 @@ namespace Kf2;
 
 /// <summary>
 /// Where a frame's time goes: the port's half of the frame profiler
-/// (<c>RecompOne.Runtime.Diagnostics.Profiler</c>, patches/recompone/0045).
+/// (<c>RecompOne.Runtime.Diagnostics.Profiler</c>, tools/RecompOne/patches/0045).
 ///
 ///     KF2_PROFILE=1            record from boot; a summary on the console every 5 s
 ///     KF2_PROFILE=panel        record from boot and open the panel (Shift+P toggles it)

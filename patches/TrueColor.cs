@@ -22,7 +22,7 @@ namespace Kf2;
 /// stops banding where the console's precision was the framebuffer.
 ///
 /// Like the other picture switches this patch is only the switch; the work is in
-/// the runtime (<c>patches/recompone/0021</c>), because a pixel's precision is
+/// the runtime (<c>tools/RecompOne/patches/0021</c>), because a pixel's precision is
 /// decided in the render target's format and the fragment shader, far below
 /// anything <c>HookManager</c> can reach. On by default, as the Smooth entry of
 /// <see cref="Kf2.Settings.ShadingPage"/>'s combo. The software rasterizer is always 15-bit; this affects the GL

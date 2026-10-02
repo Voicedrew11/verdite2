@@ -24,7 +24,7 @@ namespace Kf2;
 /// side. Sized to the viewport instead, the map covered all of that — a scrim
 /// over the port's own chrome, with its floor plan centred on the window rather
 /// than on the game and its edges nowhere near the picture's. It now takes the
-/// rectangle <c>MapRender.Picture</c> publishes (patches/recompone/0029), which
+/// rectangle <c>MapRender.Picture</c> publishes (tools/RecompOne/patches/0029), which
 /// falls back to the viewport when no picture was drawn, so the map lands exactly
 /// over the game and nowhere else. Its margin and its header band are a share of
 /// that rectangle as well as of the interface scale, since the picture is the

@@ -18,8 +18,8 @@
 # (67fc37c, 23 files) cost 23 conflict hunks to take as a merge, against
 # hand-authoring a ~700 line patch to be carried for the life of the project.
 #
-# patches/recompone/*.patch is KEPT and is no longer replayed: the diffs stay
-# as the record of what the port changed and why.
+# The patches are KEPT and are no longer replayed: the diffs stay as the record
+# of what the port changed and why, in the fork, at tools/RecompOne/patches/.
 #
 # Harvesting upstream no longer happens here. It happens in a working clone of
 # the fork, where the fork's harvest_upstream.sh starts the merge; this checkout

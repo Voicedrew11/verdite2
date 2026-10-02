@@ -83,7 +83,7 @@ draws, so most presents found both targets stale, fell back to the plain VRAM
 texture, and returned it at 4:3: **the margins flashed black, rapidly, through
 whole sessions.** Any present rate more than about five times the game's does
 it — a 144 Hz monitor with VSync on as well as VSync off. The gate is gone
-(`patches/recompone/0022`): every present writes the targets' middle columns
+(`tools/RecompOne/patches/0022`): every present writes the targets' middle columns
 back to VRAM first and direct VRAM writes are synced into the targets, so a
 target that contains the display area is never staler than the fallback it
 replaces, and idle targets are destroyed after 300 frames anyway.
@@ -98,7 +98,7 @@ CPU, no log output, and it looks exactly like a hang; set `VSync=False` in
 
 A wide target whose margin columns have never carried a world would present
 invented picture at the sides, so `PresentDisplay` refuses any wide target that
-has not latched margin content (`patches/recompone/0023` supplies the display-
+has not latched margin content (`tools/RecompOne/patches/0023` supplies the display-
 flip counter, `0024` the latch). Latching is per target and lasts for the
 overlay session: a single display flip that delivers 32 game vertices past the
 game's own draw edge latches the target, a fill covering the widened target
@@ -359,7 +359,7 @@ under `KF2_WIDESCREEN_PROBE=1`, as the dither counters did.
 **The page is one combo, drawn directly under the render scale** —
 inside the runtime's own display section, not in a group of the port's below it.
 An aspect ratio is an ordinary picture option and belongs among the ordinary
-picture options; getting there is `patches/recompone/0013` and
+picture options; getting there is `tools/RecompOne/patches/0013` and
 `PatchSettings.RegisterSlot` (see "Patch settings" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)). There is no
 slider — the four presets are what a display actually is, an arbitrary ratio is a
@@ -370,7 +370,7 @@ instead of being rounded onto a preset.
 **The conversion found a bug the mod had: the replacement dropped the source
 address.** `LibGpu.DrawOTag` calls `gpu.WriteGp0(word, src)` — the address the word
 was read from, which is what `GteVertexMap` keys the recovered depth and sub-pixel
-fraction on (`patches/recompone/0012`). The mod's copy of that walk predates 0012
+fraction on (`tools/RecompOne/patches/0012`). The mod's copy of that walk predates 0012
 and called the one-argument `WriteGp0(word)`, i.e. `src = 0`, so **every frame with
 the HUD anchored would have quietly gone back to affine texturing** — perspective
 correction silently off, with nothing in any log to say so. Anything that mirrors a

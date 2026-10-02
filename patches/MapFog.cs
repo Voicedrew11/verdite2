@@ -70,7 +70,7 @@ namespace Kf2;
 /// The accumulator has to run **with the map closed**, so it cannot live in a
 /// panel's Draw the way every other read in patches/Map.cs does. The obvious seam
 /// is a post-hook on func_8002D3A8 — and it is the seam to fall back to — but
-/// <c>VSyncEvent</c> costs no hook at all, and since patches/recompone/0021 it
+/// <c>VSyncEvent</c> costs no hook at all, and since tools/RecompOne/patches/0021 it
 /// fires on a **wall-clock 60 Hz grid** rather than per rendered frame, so the
 /// sample rate is 60/s at 20 fps and 60/s at 144 fps. The grid is stable for the
 /// whole frame once built, so a vblank read gets a complete one.

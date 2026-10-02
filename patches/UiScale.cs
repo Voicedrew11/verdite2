@@ -17,7 +17,7 @@ namespace Kf2;
 /// scale and GLFW's Wayland path reports the integer <c>wl_output</c> scale: a
 /// display the compositor runs at 1.15 arrives as 2.
 ///
-/// `patches/recompone/0019` is the fix for that — a popup is clamped to the viewport,
+/// `tools/RecompOne/patches/0019` is the fix for that — a popup is clamped to the viewport,
 /// so an oversized scale now costs scrolling rather than costing the controls, and
 /// System > Settings > Interface stays reachable at any scale. This is the second
 /// way out, for a configuration that is already unusable and a build that predates

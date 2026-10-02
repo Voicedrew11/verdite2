@@ -42,7 +42,7 @@ namespace Kf2;
 /// palette lookup, which is inside the shader by construction.</item>
 /// </list>
 ///
-/// So <c>patches/recompone/0041</c> does the work — a <c>decode()</c> function
+/// So <c>tools/RecompOne/patches/0041</c> does the work — a <c>decode()</c> function
 /// holding the whole per-texel job (texture window, page wrap, nibble extract,
 /// CLUT lookup) and a kernel that calls it once per texel along the long axis and
 /// averages what comes back — and this patch is only the switch and the probe.

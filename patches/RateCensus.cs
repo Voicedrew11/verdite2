@@ -36,7 +36,7 @@ namespace Kf2;
 ///
 /// Sampling per rendered frame would be useless -- the sample rate would move
 /// with the thing being measured. <c>VSyncEvent</c> fires once per *emulated
-/// vblank*, and since patches/recompone/0021 that is a wall-clock 60 Hz grid, so
+/// vblank*, and since tools/RecompOne/patches/0021 that is a wall-clock 60 Hz grid, so
 /// the sample rate is 60/s at 20 fps and 60/s at 144 fps and the two runs are
 /// directly comparable.
 ///

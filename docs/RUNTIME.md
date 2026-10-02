@@ -2,7 +2,7 @@
 
 `tools/RecompOne/` is gitignored, so **any edit made inside it is lost on a fresh
 clone**. Changes to the recompiler or the runtime must be captured as a numbered
-patch in `patches/recompone/`, applied in order by `scripts/setup_tools.sh` (see
+patch in `patches/recompone/` (now `tools/RecompOne/patches/`), applied in order by `scripts/setup_tools.sh` (see
 "Setting up the tools" in [DEVELOPMENT.md](DEVELOPMENT.md) for why it peels the
 stack newest-first before applying it oldest-first).
 
@@ -55,7 +55,7 @@ identified by its DICR arithmetic: it indexes a callback table by channel,
 returns the previous entry, and on install ORs `0x00800000 | (0x01010000 << ch)`
 into DICR, clearing those bits again when passed null.
 
-`patches/recompone/0004-libapi-dma-callbacks.patch` adds
+`tools/RecompOne/patches/0004-libapi-dma-callbacks.patch` adds
 `RecompOne.Runtime.Sdk.LibApi`, which records the table and runs the callback
 from `Dma.Complete`. It is deliberately **not** gated on DICR: the routine that
 would have set those bits is the one being replaced, and a registered callback
@@ -185,7 +185,7 @@ with `0x7F000000`, walks seven channels, clears each flag and calls the
 channel's callback), and slot 0 is `0x8005F45C`, the vblank handler that bumps
 the frame counter and runs the registered `VSyncCallback`.
 
-`patches/recompone/0006-irq-callback-table.patch` adds
+`tools/RecompOne/patches/0006-irq-callback-table.patch` adds
 `Interrupts.CallbackTable` for a game to set, and — for the case where nothing
 has — makes the derived path refuse a handler that is not a word-aligned
 function the dispatcher knows, reporting it once instead of calling it. The
@@ -219,7 +219,7 @@ real drive speed by `LibCdStream.StreamLoop`, which stays. So on the title the
 whole vblank domain ran at ~15 Hz and the music played half speed; at
 `KF2_FPS=15` it ran at half that again.
 
-**Fix:** `patches/recompone/0021-vblank-wall-clock.patch` advances the vblank on
+**Fix:** `tools/RecompOne/patches/0021-vblank-wall-clock.patch` advances the vblank on
 a wall-clock 60 Hz grid. Each `VSync(mode >= 0)` call catches up every boundary
 missed since the last one — counter increment, RCNT3 event, `VSyncEvent`, IRQ 0
 — as a burst, which is what the hardware's interrupt effectively did across the
@@ -249,7 +249,7 @@ Worth keeping straight, because moving the wrong one speeds the music up:
 |---|---|---|
 | `LibEtc.VBlankMs` | **guest.** The emulated vblank grid: the counter, the RCNT3 event, `VSyncEvent`, IRQ 0 — and through IRQ 0 the game's own `0x801B6CA8`, the sound sequencer and every clock the game keeps in frames. | nothing. Deliberately left at 60. |
 | `FrameClock.FrameMs` | **guest since `d81dec8`.** Upstream made this the emulated vblank rate: `Interrupts.VBlankCount` is `FrameClock.Count`. Moving it now moves the grid. | nothing. |
-| `FrameClock.TargetFps` | **host.** How long `Runtime.PresentFrame` waits, applied per `VSync` *call*. All that is left of `patches/recompone/0025`, and a separate block at the foot of `FrameClock` with its own grid, since `FrameMs` above is no longer free to move. Exposed as `Runtime.TargetFps`, because `FrameClock` is `internal`. |
+| `FrameClock.TargetFps` | **host.** How long `Runtime.PresentFrame` waits, applied per `VSync` *call*. All that is left of `tools/RecompOne/patches/0025`, and a separate block at the foot of `FrameClock` with its own grid, since `FrameMs` above is no longer free to move. Exposed as `Runtime.TargetFps`, because `FrameClock` is `internal`. |
 | `FramePacing.VBlankMs` | **port.** The floor's own arithmetic. | gone — the floor is expressed in frames a second now. |
 
 Upstream throttles in `PresentLoop`, which this port never enters, so
@@ -298,7 +298,7 @@ deadline at `DrawOTag`, and `MenuPacing`, `LoadPacing` and `SpriteAnim` are each
 measured against a VSync that returns immediately.
 
 So both timelines ship and `LibEtc.BlockingVSync` chooses, defaulting to the
-port's own (`patches/recompone/0021-vblank-wall-clock`). `KF2_VSYNC=block` is the
+port's own (`tools/RecompOne/patches/0021-vblank-wall-clock`). `KF2_VSYNC=block` is the
 comparison. Measured at `KF2_FPS=144`, same save, same area:
 
 | | picture | world |
@@ -391,7 +391,7 @@ rendered frame. The two earlier movies are 9 sectors a frame, three fit, the lat
 tripped in the first few frames, and they were paced correctly — which is why the
 defect looked like it belonged to one movie rather than to the pacer.
 
-**Fix:** `patches/recompone/0026-str-pacing-without-a-latch.patch` deletes the
+**Fix:** `tools/RecompOne/patches/0026-str-pacing-without-a-latch.patch` deletes the
 latch and paces from the moment the stream starts. There is no free burst on
 hardware, and the burst bought nothing here: the first frame now waits the 13
 sectors it would have waited on a console, which is 87 ms.
@@ -448,7 +448,7 @@ On hardware the BIOS fills that buffer from its own VBlank interrupt, so
 `PAD_dr` is fresh whether or not the game vsyncs — the loop is perfectly
 reasonable code.
 
-`patches/recompone/0007-pad-poll-outside-frame-loop.patch` makes `PAD_dr` pump
+`tools/RecompOne/patches/0007-pad-poll-outside-frame-loop.patch` makes `PAD_dr` pump
 the host itself, rate-limited to 4 ms (a game in this loop calls it ~200,000
 times a second; a VBlank is 16 ms, so 4 ms is still fresher than hardware).
 `HostWindow.PumpInput` takes in events and re-polls input, and redraws at most
@@ -531,7 +531,7 @@ shape of bug, even though they were not what froze the window:
   `0x29000` at the same base, so GAME was not contained and stayed mapped —
   every `GAME.EXE` function past `0x8003A000` remained callable. The same hole
   hits a smaller FDAT module loading over a larger one, and quit-to-title
-  (`OPEN.EXE` over `GAME.EXE`). `patches/recompone/0008` unloads on any
+  (`OPEN.EXE` over `GAME.EXE`). `tools/RecompOne/patches/0008` unloads on any
   overlap.
 - The FDAT modules sit at `0x8019F07C`, which does not overlap any executable,
   so even with that fix they would survive into `END.EXE`. Its heap starts at
@@ -546,22 +546,22 @@ diagnostics, `0013` is a settings-placement hook, and `0014b` restores four
 comment lines whose presence `0015`'s context assumes. Several need **no recompile**
 — they change runtime behaviour only — and that is noted where it applies.
 
-**`patches/recompone/0001-bios-load-return-1.patch` is required to boot.** The
+**`tools/RecompOne/patches/0001-bios-load-return-1.patch` is required to boot.** The
 runtime's BIOS `Load` (A(42h)) returned the header pointer, but the real BIOS
 returns 1 on success. King's Field's boot stub compares the result against 1
 exactly and retries forever otherwise, so unpatched it spins in the loader
 (~12,900 `Load` calls in 30 seconds) and never reaches `Exec`.
 
-**`patches/recompone/0004-libapi-dma-callbacks.patch` is required for the intro
+**`tools/RecompOne/patches/0004-libapi-dma-callbacks.patch` is required for the intro
 movie.** It adds `RecompOne.Runtime.Sdk.LibApi` so DMA-completion callbacks are
 delivered at all; see "DMA callbacks" above for why nothing works without it.
 
-**`patches/recompone/0005-libcd-interrupt-driven-reads.patch` is required to get
+**`tools/RecompOne/patches/0005-libcd-interrupt-driven-reads.patch` is required to get
 past the title screen.** It gives `LibCd` a polled read path and makes it deliver
 CD-ROM kernel events, and gives `LibEtc.VSync` the vblank root-counter event. See
 "The three ways a CD read can hang" for what each one unblocks.
 
-**`patches/recompone/0006-irq-callback-table.patch` and
+**`tools/RecompOne/patches/0006-irq-callback-table.patch` and
 `0007-pad-poll-outside-frame-loop.patch` are required to open the menu.** The
 first lets a game point the runtime at PSY-Q's real interrupt-callback table
 instead of deriving one that lands in game data; the second lets `PAD_dr` poll
@@ -569,7 +569,7 @@ the host, so a game waiting on the pad without vsyncing is not waiting forever.
 See "The interrupt-callback table cannot be guessed" and "The menu deadlock"
 above.
 
-**`patches/recompone/0009-perspective-correct-textures.patch` is what stops the
+**`tools/RecompOne/patches/0009-perspective-correct-textures.patch` is what stops the
 textures swimming.** It adds `GteDepth`, a screen-position-keyed table the GTE
 fills as it projects and the GPU reads as it decodes a vertex word, and teaches
 both renderers to use the depth it recovers. Nothing depends on it to run — every
@@ -577,21 +577,21 @@ vertex it misses is drawn exactly as before — but it is the largest single cha
 to the picture in the port. See "Perspective correction" in
 [RENDERING.md](RENDERING.md).
 
-**`patches/recompone/0010-subpixel-vertex-positions.patch` is the other half of
+**`tools/RecompOne/patches/0010-subpixel-vertex-positions.patch` is the other half of
 that same recovered number** — the fraction of a pixel the GTE truncates off a
 projected vertex, which is what makes geometry twitch as it moves. It extends
 `GteDepth`'s slots rather than adding a table, and it is the reason `setup_tools.sh`
 peels the stack before applying it: two patches now edit the same file. Off by
 default. See "Sub-pixel vertex positioning" in [RENDERING.md](RENDERING.md).
 
-**`patches/recompone/0011-gte-depth-collisions.patch` is the rest of that table.**
+**`tools/RecompOne/patches/0011-gte-depth-collisions.patch` is the rest of that table.**
 Screen position is not a unique key, and dropping saturated vertices made every
 large nearby polygon fall back to affine. The table now keeps several samples per
 pixel, records the clamp, and picks per primitive; a leftover far Z is refused
 rather than applied. See "The table is not unique" in
 [RENDERING.md](RENDERING.md).
 
-**`patches/recompone/0014-gte-zbuffer.patch` is a depth buffer from that same
+**`tools/RecompOne/patches/0014-gte-zbuffer.patch` is a depth buffer from that same
 number.** The GPU walks the ordering table back to front with no per-pixel test,
 so two surfaces that actually interpenetrate take turns in front of each other.
 The recovered SZ is interpolated per pixel and tested; a miss is painter's order,
@@ -966,7 +966,7 @@ area, and passes `ImGuiDockNodeFlags` `1<<12` (the internal *no tab bar*) whenev
 one panel is open, so a solo Output panel has no tab strip either. The inset was
 entirely inside the panel that draws the picture.
 
-`patches/recompone/0031-output-panel-fills-its-dock-node.patch` pushes
+`tools/RecompOne/patches/0031-output-panel-fills-its-dock-node.patch` pushes
 `WindowPadding` to zero and `WindowBorderSize` to zero **around `Begin` only**,
 popping both on the line after it. `Begin` reads them when it computes the
 window's inner rect, so that is the whole window they need to be in force for, and
@@ -992,7 +992,7 @@ rather than resize it; and it has no glyphs outside its own small range, so a
 path or a mod name with an accent draws boxes.
 
 Upstream fixed this in `aaf7be0` ("improved font to use noto-sans"), which our
-pin `870c5ba` predates, so `patches/recompone/0033-sans-serif-interface-font.patch`
+pin `870c5ba` predates, so `tools/RecompOne/patches/0033-sans-serif-interface-font.patch`
 is that commit back-ported: `Icons` becomes `FontSet`, Noto Sans is embedded and
 added as the base face with Font Awesome merged over it in the private-use range
 the icons already used, and `HostWindow` asks for `16f * _dpiScale` where it asked
@@ -1012,7 +1012,7 @@ boxes.
 
 **The asset is a file in this repository, not a hunk in the patch.** A 569 KB TTF
 inside a `.patch` is a base85 blob that `setup_tools.sh`'s peel loop would
-reverse-check on every run; instead `patches/recompone/assets/NotoSans-Regular.ttf`
+reverse-check on every run; instead `tools/RecompOne/patches/assets/NotoSans-Regular.ttf`
 is copied into the checkout between `git clean -fd` and the apply loop, and the
 patch adds only the `<EmbeddedResource>` entry naming it. A missing asset stops
 the script there rather than failing the build minutes later with nothing pointing
@@ -1041,7 +1041,7 @@ The port read cue/bin and nothing else, at recompile time and at play time both,
 because `CueFs` was the only filesystem the runtime had. Upstream fixed that in
 `137a793` ("merge back experimental chd support, heavely based on libchd"), which
 our pin `870c5ba` predates by six commits, so
-`patches/recompone/0037-chd-disc-images.patch` is that commit back-ported.
+`tools/RecompOne/patches/0037-chd-disc-images.patch` is that commit back-ported.
 
 **What it changes is the shape rather than the format.** `CueFs` becomes `DiscFs`
 and `CueBin` becomes `CueBinImage`, both behind a new `IDiscImage` — track list,

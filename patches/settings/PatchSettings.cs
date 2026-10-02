@@ -154,7 +154,7 @@ public static class PatchSettings
     /// one of the section's ordinary options does not belong there: an aspect
     /// ratio is the same kind of choice as the render scale and wants to be next
     /// to it, above the backend combo, not in a block underneath the lot.
-    /// <c>SettingsRegistry.DrawSlot</c> is that — <c>patches/recompone/0013</c>,
+    /// <c>SettingsRegistry.DrawSlot</c> is that — <c>tools/RecompOne/patches/0013</c>,
     /// which is the only reason this needs the checkout patched at all.
     ///
     /// A slot page draws **bare**: no <c>SeparatorText</c>, no heading, so it sits

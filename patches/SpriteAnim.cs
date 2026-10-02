@@ -83,7 +83,7 @@ namespace Kf2;
 ///
 /// **And it needs the same watchdog the stage gate has, because a hold fails
 /// *closed*.** That is not hypothetical: the first measured run of this patch lost
-/// the frame boundary -- the failure `patches/recompone/0027` and
+/// the frame boundary -- the failure `tools/RecompOne/patches/0027` and
 /// <c>FramePacing.FallbackTick</c> exist for -- and with `Frames` frozen the
 /// identity test can never pass again, so every flame in the game stood still for
 /// the rest of the session while the world played on at the right speed. A frozen

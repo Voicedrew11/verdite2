@@ -58,7 +58,7 @@ namespace Kf2;
 /// in NOTES.md.
 ///
 /// This patch is only the console switch and the report;
-/// the work is in the runtime (<c>patches/recompone/0014</c>), because a pixel's
+/// the work is in the runtime (<c>tools/RecompOne/patches/0014</c>), because a pixel's
 /// depth is decided far below anything <c>HookManager</c> can reach. The one hook
 /// is on <c>DrawOTag</c>, purely to have a frame boundary to count against, and
 /// it is a post-hook so it composes with the widescreen patch's replacement of

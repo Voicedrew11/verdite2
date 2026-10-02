@@ -50,7 +50,7 @@ namespace Kf2;
 /// On hardware `VSync(0)` waits for the next vblank, so that spin costs **six
 /// vblanks -- 100 ms** whatever frame rate the game itself was achieving. Here
 /// `VSync(0)` presents and returns (see `Sdk.LibEtc.VSync`, and
-/// patches/recompone/0021, which puts the vblank on a wall-clock grid instead of
+/// tools/RecompOne/patches/0021, which puts the vblank on a wall-clock grid instead of
 /// on the call). The only thing pacing a VSync *call* is RecompOne's
 /// `FrameClock`, which <c>FramePacing.ApplyHostCeiling</c> deliberately sets
 /// permissive at `max(60, TargetFps * 2)`. Raising the render rate therefore
@@ -62,7 +62,7 @@ namespace Kf2;
 ///     60            41 ms        15.0          100.7 ms      8.5
 ///     144          1.2 ms        37.5          100.2 ms      9.5
 ///
-/// patches/recompone/0025 names the trap in its own comment: the ceiling is
+/// tools/RecompOne/patches/0025 names the trap in its own comment: the ceiling is
 /// permissive *because* it paces per call, and a caller that needs a rate should
 /// keep its own deadline. This delay is expressed in calls, so it inherited the
 /// ceiling -- and at 144 fps inherited nothing at all.

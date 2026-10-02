@@ -1,7 +1,7 @@
 # Audio
 
 The SPU mixer, its reverb and interpolation, XA resampling and the host output.
-Everything here is runtime code in the vendored tree (`patches/recompone/0043`, `0044`):
+Everything here is runtime code in the vendored tree (`tools/RecompOne/patches/0043`, `0044`):
 `Spu` is a hardware model, not a recompiled function, so `HookManager` cannot
 reach it. `patches/AudioQuality.cs` is the switch, `patches/AudioProbe.cs` the
 probe and dump, `patches/settings/AudioPage.cs` the two combos under Audio.

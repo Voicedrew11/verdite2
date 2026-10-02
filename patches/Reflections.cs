@@ -25,7 +25,7 @@ namespace Kf2;
 ///     KF2_SSR_PROBE=1        passes, water triangles, and a readback of what each
 ///                            reflective pixel found
 ///
-/// The work is in the runtime (<c>patches/recompone/0067</c>): a surface buffer beside
+/// The work is in the runtime (<c>tools/RecompOne/patches/0067</c>): a surface buffer beside
 /// the occlusion pass's normals, holding the last surface drawn at each pixel with
 /// its normal, depth and material, and a pass at present that marches each
 /// reflective pixel's reflected ray through the depth buffer. This patch is the

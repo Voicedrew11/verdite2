@@ -27,7 +27,7 @@ namespace Kf2;
 /// scale and read as part of a 1996 game rather than as desktop chrome.
 ///
 /// It is anchored to <c>MapRender.Picture</c> — the game picture, not the window
-/// — for the reason patches/recompone/0029 records: an overlay anchored to the
+/// — for the reason tools/RecompOne/patches/0029 records: an overlay anchored to the
 /// viewport sits over the port's own menu bar and the letterbox bars beside a 4:3
 /// picture, which reads as a window over the port rather than as part of the
 /// game.

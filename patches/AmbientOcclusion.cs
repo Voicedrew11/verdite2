@@ -79,7 +79,7 @@ namespace Kf2;
 /// under Video ▸ Enhancements with the others, and the tuning is on the console —
 /// a radius and a strength are the port's question to answer, not the player's.
 ///
-/// GL backend only. The work is in the runtime (<c>patches/recompone/0040</c>);
+/// GL backend only. The work is in the runtime (<c>tools/RecompOne/patches/0040</c>);
 /// this is the switch and the report, and the one hook is a post on
 /// <c>DrawOTag</c>, purely to have a frame boundary to count against.
 /// See "Ambient occlusion" in docs/RENDERING.md.

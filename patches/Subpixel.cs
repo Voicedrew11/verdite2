@@ -57,7 +57,7 @@ namespace Kf2;
 /// old whole-pixel behaviour. See "Sub-pixel vertex positioning" in NOTES.md.
 ///
 /// As with perspective correction this patch is only the switch and the report; the
-/// work is in the runtime (<c>patches/recompone/0010</c> and <c>0012</c>), because where a vertex
+/// work is in the runtime (<c>tools/RecompOne/patches/0010</c> and <c>0012</c>), because where a vertex
 /// lands is decided far below anything <c>HookManager</c> can reach. The one hook is
 /// on <c>DrawOTag</c>, purely to have a frame boundary to count against, and it is a
 /// post-hook so it composes with the widescreen patch's replacement of the same

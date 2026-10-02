@@ -400,13 +400,13 @@ useful than the question was.
    input polled only from `PresentFrame`, which deadlocks any game that waits on
    the pad without vsyncing, and `Interrupts.Deliver` deriving a callback-table
    address from the `HookEntryInt` jmp_buf, which calls whatever the resulting
-   game variable holds. Both are in `patches/recompone/0006` and `0007` with the
+   game variable holds. Both are in `tools/RecompOne/patches/0006` and `0007` with the
    reasoning; the second at minimum should refuse a handler that is not a known
    function. A third is `QueryDpiScale` taking the *primary* monitor's content
    scale once at startup, so the interface is scaled for a monitor the window may
    not be on and never follows it across; and a fourth is not RecompOne's at all
    but Silk.NET's — the integer division in
-   `ImGuiController.SetPerFrameImGuiData` that `patches/recompone/0018` works
+   `ImGuiController.SetPerFrameImGuiData` that `tools/RecompOne/patches/0018` works
    around, which breaks every fractionally scaled display and belongs in
    `dotnet/Silk.NET`; and the same controller trusting `Resize` alone for the
    window's size, which `0080` works around on Wayland.
@@ -429,7 +429,7 @@ useful than the question was.
    behind `KF2_ZBUFFER`/`KF2_ZBUFFER_PROBE`. See "Z-buffer" in
    [RENDERING.md](RENDERING.md).
 11. **Decide what the interface should be scaled by, and by eye.**
-   `patches/recompone/0018` fixed *where* the interface is drawn; how large it is
+   `tools/RecompOne/patches/0018` fixed *where* the interface is drawn; how large it is
    is a second defect and still ours. `QueryDpiScale` returns the primary
    monitor's integer `wl_output` scale — 2.0 for a monitor KDE runs at 1.15 — so
    `Theme.Scale` and the 26 px icon font are wrong on both screens at once, and

@@ -16,7 +16,7 @@ namespace Kf2.Mods.FrameStats;
 ///
 /// This is the measurement the pacing work is decided from. **The two counts are
 /// not the same number and used to be conflated.** Since
-/// patches/recompone/0021 the emulated vblank advances on a wall-clock 60 Hz grid
+/// tools/RecompOne/patches/0021 the emulated vblank advances on a wall-clock 60 Hz grid
 /// rather than once per VSync call, so:
 ///
 /// * **vblanks/frame** is how long the frame took -- 3 means 50 ms, i.e. the

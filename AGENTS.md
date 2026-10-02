@@ -27,9 +27,9 @@ you would be doing when you need them:
 | `docs/DEVELOPMENT.md` | build, run, diagnose, measure |
 | `docs/ENV_VARS.md` | every `KF2_*` switch, in one list |
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
-| `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
+| `docs/RUNTIME.md` | interrupts, HLE, the `tools/RecompOne/patches/` stack |
 | `docs/RECOMPONE_FORK.md` | the fork `tools/RecompOne` is a subtree of, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0085` |
+| `tools/RecompOne/docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0085` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -323,7 +323,7 @@ mcp/                     stdio MCP server exposing the KF2_SHELL command channel
 Verdite2.Launcher/       the SHIPPED executable; builds with no disc, and makes the
                          game at first run from the player's own image. See docs/PACKAGING.md
 packaging/               AppImage and Windows packaging, plus placeholder icons
-patches/recompone/*.patch  the record of the port's changes to RecompOne
+tools/RecompOne/patches/*.patch  the record of the port's changes to RecompOne
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection, address-hunting, and the rate tooling:
                          merge_sdk_names (write the PSY-Q names a signature
@@ -447,7 +447,7 @@ removed for the same reason.
 **`tools/RecompOne/` is a `git subtree` (taken with `--squash`) of the
 standalone fork `Voicedrew11/verdite-recompone` (`main`): its sources are tracked
 here, so a fresh clone builds with nothing fetched, and an edit inside it is a
-change to this repository like any other.** `patches/recompone/*.patch` are kept
+change to this repository like any other.** `tools/RecompOne/patches/*.patch` (the fork's own, since Phase 2) are kept
 as the record of what the port changed and why, and the numbers (`0001`-`0085`)
 are how the source refers to each change, but they are **no longer replayed**.
 The merge base is `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's
@@ -475,7 +475,7 @@ vendored tree, which is the whole point of vendoring it. If the user wants
 something reported upstream they will write it themselves.
 
 Read `docs/RECOMPONE_FORK.md` before merging from upstream, and grep
-`docs/RECOMPONE_PATCHES.md` for a patch number (`0047`) before changing that
+`tools/RecompOne/docs/RECOMPONE_PATCHES.md` for a patch number (`0047`) before changing that
 patch's code or amending it. Neither is imported, for size.
 
 ## Shipping it

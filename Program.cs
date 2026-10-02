@@ -161,7 +161,7 @@ if (!string.IsNullOrWhiteSpace(autopad))
 // 1.44 -- inside UiScale's own range, and reachable at a UiScale of 1 by itself,
 // since QueryDpiScale reads the primary monitor's GLFW content scale and GLFW's
 // Wayland path reports the integer wl_output scale (a 1.15 display arrives as 2).
-// patches/recompone/0019 clamps a popup to the viewport so the controls can no
+// tools/RecompOne/patches/0019 clamps a popup to the viewport so the controls can no
 // longer leave the window; this repairs a settings file that is already past that
 // point, by writing the value as well as applying it.
 Kf2.UiScale.Configure(Environment.GetEnvironmentVariable("KF2_UISCALE"));
@@ -368,7 +368,7 @@ Kf2.SpriteAnim.Install();
 // Which words of the game's memory change at the render rate rather than at the
 // tick rate -- the instrument that turns "something looks too fast" into an
 // address. Samples on the emulated vblank, which is a wall-clock 60 Hz grid since
-// patches/recompone/0021, so two runs at different render rates are directly
+// tools/RecompOne/patches/0021, so two runs at different render rates are directly
 // comparable. Off by default; it costs a compare over the game's data region
 // sixty times a second.
 //
@@ -677,7 +677,7 @@ Kf2.ZBuffer.Install();
 // not authentic. Installed after ZBuffer because it shares that patch's writes and
 // after Pgxp would be too late for nothing; its switch is under Video with the
 // others and the tuning is on the console. GL backend only; the work is
-// patches/recompone/0040.
+// tools/RecompOne/patches/0040.
 Kf2.AmbientOcclusion.Configure(Environment.GetEnvironmentVariable("KF2_AO"),
                                Environment.GetEnvironmentVariable("KF2_AO_RADIUS"),
                                Environment.GetEnvironmentVariable("KF2_AO_STRENGTH"),
@@ -694,7 +694,7 @@ Kf2.AoWorld.Configure(Environment.GetEnvironmentVariable("KF2_AO_WORLD"),
                       Environment.GetEnvironmentVariable("KF2_AO_WORLD_PROBE"));
 Kf2.AoWorld.Install();
 
-// Screen-space reflections on water (patches/recompone/0067): a pass at present
+// Screen-space reflections on water (tools/RecompOne/patches/0067): a pass at present
 // beside the occlusion pass, reading the same depth and a surface buffer that keeps
 // the water the depth buffer cannot (it is translucent). Off by default: the
 // mechanism is measured, the picture has not been judged. See "Screen-space
@@ -720,12 +720,12 @@ Kf2.Murk.Install();
 
 // Water waves: a slow swell moves the water's own vertices (the tile walk points each
 // water mesh at a moved copy), and ripples push and shade its texture per pixel
-// (patches/recompone/0078), on the world's clock. Off by default. See "Water waves" in docs/RENDERING.md.
+// (tools/RecompOne/patches/0078), on the world's clock. Off by default. See "Water waves" in docs/RENDERING.md.
 Kf2.Waves.Configure(Environment.GetEnvironmentVariable("KF2_WAVES"),
                     Environment.GetEnvironmentVariable("KF2_WAVES_PROBE"));
 Kf2.Waves.Install();
 
-// Planar reflections (patches/recompone/0068): the tile walk and the object walk's
+// Planar reflections (tools/RecompOne/patches/0068): the tile walk and the object walk's
 // submits run a second time from the camera mirrored in the water, into an ordering
 // table of the port's own, drawn into a texture the reflection pass reads. It is
 // the reflection: the march, the retained scene and the reflection reach are
@@ -741,7 +741,7 @@ Kf2.PlanarWalk.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR"),
 Kf2.PlanarCull.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR_CULL"));
 Kf2.PlanarWalk.Install();
 
-// The retained scene (patches/recompone/0072): the map kept on the GPU in world
+// The retained scene (tools/RecompOne/patches/0072): the map kept on the GPU in world
 // space, built from the map data, so the reflections draw the world again without
 // the game's walks: every water or authored plane, and a cubemap from the camera
 // in place of the screen-space march. Independent of KF2_SSR. Off by default:
@@ -757,7 +757,7 @@ Kf2.RetainedMap.Configure(Environment.GetEnvironmentVariable("KF2_RETAINED"),
                           Environment.GetEnvironmentVariable("KF2_RETAINED_MIPS"));
 Kf2.RetainedMap.Install();
 
-// The GPU world renderer (patches/recompone/0085): the map's opaque faces drawn
+// The GPU world renderer (tools/RecompOne/patches/0085): the map's opaque faces drawn
 // from the retained scene into the frame, and no longer assembled by the game's
 // code. On by default. See docs/GPU_RENDERER.md.
 //
@@ -804,7 +804,7 @@ Kf2.Remaster.LightCensus.Configure(Environment.GetEnvironmentVariable("KF2_LIGHT
 Kf2.Remaster.LightCensus.Install();
 
 // PGXP -- upstream RecompOne's own vertex tracking, backported as
-// patches/recompone/0034-0036, and the second mechanism the port has for the one
+// tools/RecompOne/patches/0034-0036, and the second mechanism the port has for the one
 // number everything above depends on. GteVertexMap pairs memory reads and writes
 // by value and cannot see a vertex the game computes; PGXP is told what every
 // register holds, by hooks the recompiler emits, so it does not have to guess.
@@ -840,7 +840,7 @@ Kf2.Pgxp.Install();
 //
 //     KF2_TRUECOLOR=1  on; 0 or unset keeps the 15-bit output
 //
-// The mechanism is patches/recompone/0021 (the render-target format and the
+// The mechanism is tools/RecompOne/patches/0021 (the render-target format and the
 // fragment shader). Its switch is under Video with the others.
 Kf2.TrueColor.Configure(Environment.GetEnvironmentVariable("KF2_TRUECOLOR"));
 Kf2.TrueColor.Install();
@@ -855,7 +855,7 @@ Kf2.TrueColor.Install();
 //     KF2_ANISO_PROBE=1     the level, and whether the uniform reaches the shader
 //
 // Off by default -- the mechanism is measured and the picture has not been looked
-// at. The mechanism is patches/recompone/0041 (a decode() holding the whole
+// at. The mechanism is tools/RecompOne/patches/0041 (a decode() holding the whole
 // per-texel job, and the kernel that calls it per tap); a paletted texel is a CLUT
 // index, so no filter can run before the lookup and none of this can be sampler
 // state. Its switch is under Video with the others.
@@ -869,7 +869,7 @@ Kf2.Anisotropic.Install();
 // Per-pixel lighting: the depth cue and the models' light evaluated per pixel from
 // what PolyAssembler recorded about each packet, instead of interpolated between
 // the corner colours. Off by default until the picture has been judged. GL core
-// backend only; the runtime half is patches/recompone/0048.
+// backend only; the runtime half is tools/RecompOne/patches/0048.
 //     KF2_PERPIXEL=1          on
 //     KF2_PERPIXEL_PROBE=1    packets recorded, polygons lit per pixel and not
 Kf2.PerPixelLighting.Configure(Environment.GetEnvironmentVariable("KF2_PERPIXEL"),
@@ -888,7 +888,7 @@ Kf2.EvenFog.Configure(Environment.GetEnvironmentVariable("KF2_EVENFOG"),
                       Environment.GetEnvironmentVariable("KF2_EVENLIGHT"));
 Kf2.EvenFog.Install();
 
-// Voice interpolation and reverb (patches/recompone/0043); see docs/AUDIO.md.
+// Voice interpolation and reverb (tools/RecompOne/patches/0043); see docs/AUDIO.md.
 //
 //     KF2_SPU_INTERP=gauss|cubic|sinc      KF2_REVERB=legacy|hardware|enhanced
 //     KF2_AUDIO_PROBE=1                    KF2_AUDIO_DUMP=dir
@@ -936,7 +936,7 @@ if (!RecompOne.Runtime.Hle.GlVram.Snapshots)
 // have that ceiling: FramePacing hands FrameClock a deliberately permissive rate
 // and keeps its own deadline at DrawOTag, and MenuPacing, LoadPacing and
 // SpriteAnim are each measured against a VSync that returns immediately. So the
-// port's own non-blocking grid (patches/recompone/0021-vblank-wall-clock) is the
+// port's own non-blocking grid (tools/RecompOne/patches/0021-vblank-wall-clock) is the
 // default and upstream's is the comparison:
 //
 //     KF2_VSYNC=block  upstream's blocking timeline; anything else keeps ours
@@ -1189,7 +1189,7 @@ Kf2.Widescreen.Install();
 // Present-path census. Counts, per two-second window, what PresentDisplay
 // picked: the widened render target, a plain one, or a fallback to raw VRAM.
 // The fallback presents at 4:3, so a high fallback rate is the flashing margin
-// -- see "Widescreen" in docs/WIDESCREEN.md and patches/recompone/0022:
+// -- see "Widescreen" in docs/WIDESCREEN.md and tools/RecompOne/patches/0022:
 //
 //     KF2_PRESENT_PROBE=1    the census, on the console
 //     KF2_PRESENT_PROBE=2    also name the verdict, and every live target, the

@@ -3,12 +3,12 @@
 How `tools/RecompOne/` is kept, why it is a subtree of a fork rather than
 patched, and what the two merges so far decided — `0409bc2` set the model and
 `d81dec8` followed it. The individual changes the port carries are catalogued in
-`docs/RECOMPONE_PATCHES.md`.
+`tools/RecompOne/docs/RECOMPONE_PATCHES.md`.
 
 **`tools/RecompOne/` is a git subtree of `Voicedrew11/verdite-recompone`: its
 sources are tracked here, so a fresh clone already has a working recompiler and
 an edit made inside it is a change to this repository like any other.** It used to
-be a gitignored clone of an upstream pin with `patches/recompone/*.patch`
+be a gitignored clone of an upstream pin with `tools/RecompOne/patches/*.patch`
 replayed over it on every run, and the patches are *kept* — they are no longer
 replayed. It used to be a tracked copy with a throwaway local fork repo
 (`tools/RecompOne.git/`) beside it; that repo is gone.
@@ -218,9 +218,11 @@ runs `--pull-fork` there, on that game's schedule. Every fork change has to keep
 Verdite2's acceptance test passing — one game is never allowed to break another
 because it needed something. That is Phase 2 of `docs/SHARING_PLAN.md`.
 
-`patches/recompone/*.patch` and `docs/RECOMPONE_PATCHES.md` stay in Verdite2 for
-now, and the `0001`-`0085` numbering is unchanged. They are the record of what the
-port changed and why, kept beside the code that reads them. The fork's history
+`patches/*.patch` and `docs/RECOMPONE_PATCHES.md` moved into the fork on
+2026-10-02 (Phase 2 of `docs/SHARING_PLAN.md`), so every game has them at
+`tools/RecompOne/patches/` and `tools/RecompOne/docs/RECOMPONE_PATCHES.md`; the
+`0001`-`0085` numbering is unchanged. They are the record of what the fork
+changed and why, kept beside the code that cites them, and nothing applies them. The fork's history
 starts at the vendoring import, which carries `0001`-`0039` folded into one
 commit; everything after it is a commit of its own.
 

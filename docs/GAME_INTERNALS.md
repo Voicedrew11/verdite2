@@ -102,7 +102,7 @@ frame costs two `VSync` calls: one to show the picture, and however many the gat
 needs to see two vblanks go by.
 
 The literal `2` at `0x800178A4` **is the frame rate the game asks for**, in
-software. Here, where `patches/recompone/0021-vblank-wall-clock.patch` advances
+software. Here, where `tools/RecompOne/patches/0021-vblank-wall-clock.patch` advances
 the emulated vblank on a wall-clock 60 Hz grid, it paces the port to exactly
 30 fps whatever the host is doing, and nothing above 30 is reachable while it
 runs — which is why `patches/FramePacing.cs` hooks it.

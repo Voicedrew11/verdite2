@@ -80,7 +80,7 @@ licenses/
 ```
 
 **And the licences the artifact is obliged to carry**, which until the interface
-font arrived it did not have: `patches/recompone/0033` embeds Noto Sans in
+font arrived it did not have: `tools/RecompOne/patches/0033` embeds Noto Sans in
 `RecompOne.Runtime.dll`, and SIL OFL 1.1 requires the licence to travel with the
 font. Both packaging scripts now stage `LICENSE` and `NotoSans-OFL.txt` — under
 `usr/share/doc/verdite2/` in the AppImage, under `licenses/` in the zip. Adding a
@@ -362,7 +362,7 @@ differently mastered dump is a scan rather than a miss. The pixels are in
 
 **The sizes are exact multiples.** 16, 32, 48, 64, 128 and 256, each a
 nearest-neighbour scale of the same 16 pixels, handed to GLFW together
-(`patches/recompone/0061`, which is what made `SetWindowIcon` take more than
+(`tools/RecompOne/patches/0061`, which is what made `SetWindowIcon` take more than
 one). A desktop asking for any of those gets pixel art it does not resample;
 before that, one image meant the window manager smoothing a 16×16 up or a 256×256
 down, which is exactly what makes this kind of icon look like a photograph of
@@ -390,7 +390,7 @@ on the wire, and two things have to be true.
 empty string. KWin therefore had nothing to match, and no icon could have appeared
 whatever the port did: not the card icon, and not the orb the AppImage installs
 either, which is a packaging bug that was invisible for as long as nobody looked.
-`patches/recompone/0061` hints `GLFW_WAYLAND_APP_ID` (and the X11 class beside it)
+`tools/RecompOne/patches/0061` hints `GLFW_WAYLAND_APP_ID` (and the X11 class beside it)
 from `Runtime.AppId`, which `Program.cs` and the launcher both set to `verdite2`
 before the window is made. After: `xdg_toplevel#45.set_app_id("verdite2")`.
 
@@ -421,7 +421,7 @@ either platform.
 
 ## The one patch this needed
 
-`patches/recompone/0030-expose-host-pump.patch` makes `HostWindow.Pump` public as
+`tools/RecompOne/patches/0030-expose-host-pump.patch` makes `HostWindow.Pump` public as
 `Runtime.Pump`. The build blocks for seconds and a window that stops pumping for
 seconds is one the desktop offers to force-quit; `WaitForValidDisc` already runs
 exactly that loop but only ever for its own condition. Everything else the

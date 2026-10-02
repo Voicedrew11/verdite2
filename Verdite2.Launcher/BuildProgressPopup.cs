@@ -9,7 +9,7 @@ namespace Verdite2.Launcher;
 ///
 /// Popup and PopupManager.Register are public, so this needed nothing from the
 /// runtime except a way to keep pumping the window while the work runs on another
-/// thread -- Runtime.Pump, added by patches/recompone/0030.
+/// thread -- Runtime.Pump, added by tools/RecompOne/patches/0030.
 ///
 /// Not closable: there is no game to fall back to yet. A failure replaces the
 /// progress line with the compiler's own message and leaves the popup up, which is
