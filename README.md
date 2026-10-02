@@ -1,5 +1,22 @@
 # RecompOne
 
+> **This is a fork.** `Voicedrew11/verdite-recompone` is the copy of
+> [RecompOne](https://github.com/BlackLabelHQ/RecompOne) that the Verdite ports
+> (King's Field recompilations) build on. It is consumed by each game repository
+> as a `git subtree` at `tools/RecompOne`, and carries the ports' runtime and
+> recompiler changes on top of upstream. `UPSTREAM` names the upstream commit
+> last merged; `harvest_upstream.sh` starts the next merge.
+>
+> Upstream does not accept AI-authored pull requests, and none are sent from
+> here: no pull requests and no issues are opened against upstream from this
+> fork. Anything worth reporting upstream is written up by a person.
+>
+> Upstream's `LICENSE` and copyright are unchanged. Two files upstream tracks
+> are left out on purpose: `RecompOne.Recompiler/AutoConfigure/signatures/psyq.json`
+> (15.7 MB, read only by `--autoconfigure`; fetch it from upstream) and
+> `RecompOne.Runtime/Host/Window/Assets/NotoSansCJK-Regular.otf` (16.5 MB, not
+> embedded; see `FontSet.cs`).
+
 <p align="center">
   <img src="https://github.com/user-attachments/assets/6d9a8f86-322c-4cd2-a3d3-ba68ba2d37e9" alt="logo" width="400">
 </p>
