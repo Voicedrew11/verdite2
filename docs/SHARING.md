@@ -1033,7 +1033,8 @@ area if one can be reached); `KF3_GEOPROBE`'s per-call packet counts are the sam
 on and off; `KF3_FPS=144 KF3_FPS_PROBE=1` still reads 144.0 fps at 15.0 ticks/s.
 No picture feature in the same unit: Z-buffer and sub-pixel come after.
 
-How, in order:
+The plan, with what the unit buys and does not, is Verdite3's
+`docs/GEOMETRY.md`. How, in order:
 1. Read Verdite2's `patches/PolyAssembler.cs` (the `Frame`, `Allocate`, `Bump`,
    `FillTriangle`, `FillQuad`, `Place`, `Visible` and the verify harness near
    `c.Snapshot()`) and `PolyAssemblerLit.cs`, and "The polygon assembler in C#"
