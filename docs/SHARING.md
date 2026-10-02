@@ -1015,7 +1015,7 @@ frames/s, four 5-second windows), the assembler per call site, the front table.
 
 #### Handoff: the next unit
 
-**State.** Verdite3 `main` is four commits ahead of `origin/main` (`498dbc9`
+**State.** Verdite3 `main` is three commits ahead of `origin/main` (`498dbc9`
 Verdite Core's `match_code.py`, a subtree-only commit; `7d65a03` the probe and
 "The geometry path"; `0933ee2` entry registers, the scratchpad, the probe's
 artifacts), none pushed. Verdite2 `v0.4.0-staging` carries this entry. Nothing
