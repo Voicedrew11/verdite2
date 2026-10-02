@@ -658,12 +658,12 @@ and `NOTES.md` are new prose.
 `OPEN.EXE`'s intro and title, the memory card screen, into `GAME.EXE` and an
 area, between areas, and saves to and loads from card A, in game and from the
 title. Its acceptance test is "The acceptance test" in its `docs/DEVELOPMENT.md`.
-Commits there: `acf4873` (Verdite Core, below), `9b137e8` (the recompile:
+Commits there: `acf4873` (Verdite Core, below; `a6c2434` in Verdite Core), `9b137e8` (the recompile:
 `config/kf3.json`, the maps, `KingsField3Recomp.csproj`, `Program.cs`,
 `scripts/setup_tools.sh` ported from here), `a17c0fa` (docs).
 
 **Pins.** Verdite3: fork `a617cf8` (unchanged, no fork commit was needed),
-Verdite Core `acf4873`, which is `536167a` plus one commit, **not yet pushed**.
+Verdite Core **`a6c2434`**, which is `536167a` plus one commit (`acf4873` in Verdite3).
 Verdite2: fork `a617cf8`, Verdite Core `536167a`; nothing here changed but this
 entry.
 
@@ -686,7 +686,7 @@ entry.
   it.** In `GAME.EXE` the data "functions" branch back into real code. The maps
   are cut at the end of code before the `jal` harvest.
 
-**Verdite Core `acf4873`: three fixes to `merge_branch_spans`**, all found on
+**Verdite Core `a6c2434`: three fixes to `merge_branch_spans`**, all found on
 Verdite3's `GAME.EXE`, where the old script would have merged half the
 executable into one function: a switch table is bounded by the `sltiu` guarding
 its index (a 17-entry table read on into a data pointer); `jal`s are counted
@@ -708,9 +708,10 @@ outstanding for the done condition. The movies were seen only in passing, and
 `END.EXE` has not been reached.
 
 **Open.**
-- **Push** Verdite Core `acf4873` (from Verdite3, `setup_tools.sh --push-core`)
-  and Verdite3's `main`. Waiting on your go-ahead. Verdite2 pulls the new Verdite
-  Core only when you decide; it changes no output here.
+- **Pushed (2026-10-02, with your go-ahead):** Verdite Core `main` `536167a..a6c2434`
+  (from Verdite3, `setup_tools.sh --push-core`; its tree equals Verdite3's
+  `tools/verdite-core`), Verdite3's `main`, and here `v0.4.0-staging`. Verdite2
+  pulls `a6c2434` only when you decide; it changes no output here.
 - **The world runs at 60**, once per drawn frame. A world clock like
   `FramePacing` needs this game's frame gate and stages found first.
 - **The fork reads seven `KF2_*` switches by name.** Verdite3 inherits them under
