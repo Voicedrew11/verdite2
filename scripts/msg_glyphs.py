@@ -19,7 +19,7 @@ import argparse, os, struct, subprocess, sys, tempfile
 from collections import Counter, defaultdict
 from multiprocessing import Pool
 
-sys.path.insert(0, os.path.dirname(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "tools", "verdite-core", "scripts"))
 from pathlib import Path  # noqa: E402
 from extract_file import find_entry  # noqa: E402
 from inspect_disc import open_disc, resolve_image  # noqa: E402
