@@ -91,6 +91,10 @@ public static partial class PolyAssembler
 
         // 0072. Every face, before a single one is culled, for the retained scene.
         if (RetainedModels.Capturing) RetainedModels.Capture(mem, header, normals, face, count, TB.On ? abr : uint.MaxValue);
+        // 0085. The opaque faces drawn by the GPU world renderer; only the blended ones built here.
+        bool mirror = RetainedModels.MirrorCapturing;
+        bool gpu = !TB.On && (mirror || RetainedModels.MainCapturing);
+        if (gpu && !RetainedModels.Instanced) RetainedModels.CaptureMain(mem, normals, face, count, bias, mirror: mirror);
 
         var fr = new Frame(mem);
         if (fr.Lighting) fr.LightGen = GteLightMap.NoteConstants();
@@ -102,7 +106,7 @@ public static partial class PolyAssembler
             face += 4u;
             uint cmd = word >> 24;
 
-            bool ok = (cmd & 0xFDu) switch
+            bool ok = (gpu && (cmd & 2u) == 0u ? 0u : cmd & 0xFDu) switch
             {
                 0x24u => FlatTriangle<TB>(ref fr, face, cmd, bias, normals, abr),
                 0x2Cu => FlatQuad<TB>(ref fr, face, cmd, bias, normals, abr),

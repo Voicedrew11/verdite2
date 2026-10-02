@@ -356,6 +356,7 @@ public sealed partial class GlCore
     /// mask, one tap, and the depth test and write on.</summary>
     void BeginShadowDraw()
     {
+        CloseWorldMain();
         _gl.UseProgram(_progWorld);
         _gl.Disable(EnableCap.ScissorTest);
         _gl.Disable(EnableCap.CullFace);

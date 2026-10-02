@@ -61,6 +61,42 @@ public static class WaterSwell
 
     public static void Forget() { _hash = 0; _ready = false; }
 
+    /// <summary>Bumped by every build: the retained map carries which of its corners
+    /// are free (0085), so a new set is a rebuild there.</summary>
+    public static int Generation { get; private set; }
+
+    /// <summary>Whether a world position is one the swell moves.</summary>
+    public static bool IsFree(float x, float y, float z)
+    {
+        if (!_ready) return false;
+        long key = ((long)((int)x + (1 << 19)) << 41) | ((long)((int)y + (1 << 20)) << 20) | (uint)((int)z + (1 << 19));
+        return _free.Contains(key);
+    }
+
+    /// <summary>0085. The swell this walk moves the water by, for the GPU-drawn map:
+    /// <see cref="Height"/>'s three waves as a wavenumber along X and Z, a height and a
+    /// phase each. Nothing while the swell does not move anything.</summary>
+    static readonly float[] _published = new float[12];
+
+    public static void Publish()
+    {
+        if (!_ready || !Waves.Enabled || Waves.Swell <= 0f) return;
+        double t = Waves.Time, len = Waves.SwellSize;
+        var p = _published;
+        void Wave(int i, double dx, double dz, double l, double amp)
+        {
+            double k = 2.0 * Math.PI / l;
+            p[i * 4] = (float)(k * dx);
+            p[i * 4 + 1] = (float)(k * dz);
+            p[i * 4 + 2] = (float)(Waves.Swell * amp);
+            p[i * 4 + 3] = (float)((2.0 * Math.PI / (7.0 * Math.Sqrt(l / 12000.0)) * t) % (2.0 * Math.PI));
+        }
+        Wave(0, 0.87, 0.50, len, 0.5);
+        Wave(1, -0.34, 0.94, len * 0.71, 0.3);
+        Wave(2, 0.60, -0.80, len * 0.53, 0.2);
+        RetainedScene.SetSwell(p);
+    }
+
     /// <summary>For <see cref="PlanarReflections.RestHeight"/>: where the water at a
     /// world position rests, of the two halves there the one nearer the height it
     /// was drawn at, within the swell's reach of it.</summary>
@@ -111,6 +147,7 @@ public static class WaterSwell
     {
         _meshes.Clear();
         _free.Clear();
+        Generation++;
         Array.Fill(_rest, float.NaN);
         _ready = false;
         _table = mem.ReadU32(Banks);

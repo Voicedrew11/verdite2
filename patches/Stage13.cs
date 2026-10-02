@@ -316,6 +316,7 @@ public static class Stage13
             c.A1 = 0u;
         }
         Call(c, mem, Site.View);
+        PublishUp(mem);
         Call(c, mem, Site.AnimatedTextures);
         Call(c, mem, Site.Fade);
         Call(c, mem, Site.CullGrid);
@@ -330,6 +331,17 @@ public static class Stage13
 
         c.RA = mem.ReadU32(sp + 0x10u);
         c.SP = sp + 0x18u;
+    }
+
+    /// <summary>The world's vertical in the frame's view space, for the murk (column 1
+    /// of the view matrix the camera block just built: world Y is down).</summary>
+    static void PublishUp(PSMemory mem)
+    {
+        float x = (short)mem.ReadU16(CameraBlock.ViewMatrix + 2u), y = (short)mem.ReadU16(CameraBlock.ViewMatrix + 8u);
+        float z = (short)mem.ReadU16(CameraBlock.ViewMatrix + 14u);
+        float len = MathF.Sqrt(x * x + y * y + z * z);
+        if (len < 1f) return;
+        WaterMurk.UpX = x / len; WaterMurk.UpY = y / len; WaterMurk.UpZ = z / len;
     }
 
     /// <summary>

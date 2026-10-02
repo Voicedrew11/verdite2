@@ -34,7 +34,7 @@ public static class Waves
     public const string RippleKey = "kf2.waves.ripple", RippleSizeKey = "kf2.waves.ripplesize";
     public const string ShadeKey = "kf2.waves.shade", SpeedKey = "kf2.waves.speed";
 
-    public const bool DefaultOn = false;
+    public const bool DefaultOn = true;
     public const float DefaultSwell = 338f, DefaultSwellSize = 6114f;
     public const float DefaultRipple = 139f, DefaultRippleSize = 700f, DefaultShade = 0.51f, DefaultSpeed = 1f;
 
@@ -71,12 +71,6 @@ public static class Waves
         {
             var view = RecompOne.Runtime.Runtime.View;
             Enabled = _forced ?? view.GetBool(OnKey, DefaultOn);
-            Swell = Math.Clamp(view.GetFloat(SwellKey, DefaultSwell), 0f, 512f);
-            SwellSize = Math.Clamp(view.GetFloat(SwellSizeKey, DefaultSwellSize), 2048f, 65536f);
-            WaterWaves.Distort = Math.Clamp(view.GetFloat(RippleKey, DefaultRipple), 0f, 200f);
-            WaterWaves.Scale = Math.Clamp(view.GetFloat(RippleSizeKey, DefaultRippleSize), 100f, 4096f);
-            WaterWaves.Shade = Math.Clamp(view.GetFloat(ShadeKey, DefaultShade), 0f, 1f);
-            Speed = Math.Clamp(view.GetFloat(SpeedKey, DefaultSpeed), 0f, 4f);
             Console.WriteLine($"[KF2] water waves: {(Enabled ? $"on, swell {Swell:F0} over {SwellSize:F0}, " +
                                                                $"ripples {WaterWaves.Distort:F0} over {WaterWaves.Scale:F0}, " +
                                                                $"shade {WaterWaves.Shade:F2}, speed {Speed:F2}" : "off")}");
@@ -126,6 +120,7 @@ public static class Waves
         WaterWaves.Generation++;
 
         WaterSwell.AtWalk(mem);
+        WaterSwell.Publish();
         if (_probe) Report();
     }
 

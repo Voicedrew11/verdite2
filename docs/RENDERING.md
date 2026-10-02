@@ -2488,6 +2488,39 @@ before each submit (`PlanarWalk.Resident`), and skips a model that fails;
 `KF2_PLANAR_PROBE=1` counts them (`evicted before the replay`). The crash itself
 was not reproduced: the eviction was measured, not the replay hitting it.
 
+### What the planar walk costs, and where
+
+Reported from play: planar reflections tank the frame rate. Measured 2026-09-28 at
+the `KF2_AUTOSTART=new` spot facing the pool, the user's settings (render scale 5,
+16:9, SSAO, waves, murk), `KF2_FPS=1000 KF2_PROFILE=1`, steady-state averages
+from `KF2_PROFILE_OUT`:
+
+| | fps | frame work |
+|---|---|---|
+| planar off | 290-292 | 3.30 ms |
+| planar on | 178-179 | 5.42 ms |
+| planar on, `KF2_PLANAR_CULL=0` | 187-193 | 5.00-5.13 ms |
+
+**It is CPU, not GPU**: buffer swap and driver 0.15 ms off, 0.17 on. Measured
+since with `0084` ("GPU time per present" in `docs/DEVELOPMENT.md`): the capture is
+0.18 ms of GPU a present, and the whole present 1.46 ms off and 1.50 ms on.
+
+Where the ~2.1 ms goes (a `KF2_PLANAR_PROBE=1` run, 2.5 ms in all; the probe's
+readbacks also add 66 KB/frame of allocation, 2 KB without it):
+
+1. **The mirrored tile walk, ~1.2 ms**: 167 halves against the eye's 145, so a
+   whole second walk: 140 more far-assembler calls, 109 more `Clip3FTP`, 27 more
+   clipped halves. About 0.35 ms of it is the mirror's own cull (24 cells a frame).
+   Halves wholly below the plane are walked, assembled and drawn, then discarded
+   per fragment by `uClipPlane`; how many that is was not counted.
+2. **The mirrored `DrawOTag`, 0.68 ms**: the runtime's packet walk and batching
+   for the capture, in proportion to what item 1 submits.
+3. **The model replays, ~0.36 ms**: 5 submits a frame (3 mirror-only). The lit
+   assembler took 0.28 ms for the mirror's 5 calls against 0.19 ms for the eye's
+   16; why a mirrored call costs about 4x is not diagnosed.
+4. The camera block, `ScenePass` and the plane: under 0.05 ms. The reflection
+   pass: 0.07 ms of CPU.
+
 ## The retained scene: the world kept on the GPU, so a reflection can draw it again
 
 **Mechanism measured; the picture has not been judged. Off by default**
@@ -4055,6 +4088,22 @@ pier (player `75773,-11520,83101`, yaw 1586, pitch 35; `view 75773 -13026 83101 
 Measured, with the fill, at the pier: 330 fps uncapped with the murk against 336
 without, and no GL errors. The two edge fixes without the fill: no GL errors, 144.0
 fps drawn at 20.0 ticks/s in `fdat02`; judged by eye at the pier, good.
+
+#### Only level water is murked
+
+**Mechanism measured; not judged by eye.** Reported from play: the murk "sees through"
+translucent textures. It found water by material, and material by texture, so anything in
+the water's texture was water: area 7's spinning crystals, area 4's. With nothing behind a
+crystal the run was the sky's, endless, and the crystal went to the murk's colour; area 7's
+dark hexagon (known issue 7 in `docs/GPU_RENDERER.md`) was one. Water lies level, so a
+surface is murked only while its normal (the surface buffer's) is within `WaterMurk.MaxTilt`
+of the world's vertical, cosine 0.75, about 41 degrees, which leaves room for the swell. The
+vertical is column 1 of the view matrix, published by stage 13 after its camera block
+(`Stage13.PublishUp`) and sent as `uMurkUp` (`0067`, amended). In `fdat02` the pool is murked
+exactly as before: 0.0000 of pixels differ by more than 8 levels in four pinned views, the GPU
+world renderer on and off, the swell on and off. `KF2_MURK_TILT=0` (or the `murk tilt 0` verb)
+murks any surface again; `murk on|off` switches it in play. The reflections still take a crystal
+as water; the planar walk's lookup only answers on its plane, so it shows nothing there.
 
 ### The reflection pass runs for each term on its own
 

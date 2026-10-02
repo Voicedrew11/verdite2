@@ -757,6 +757,23 @@ Kf2.RetainedMap.Configure(Environment.GetEnvironmentVariable("KF2_RETAINED"),
                           Environment.GetEnvironmentVariable("KF2_RETAINED_MIPS"));
 Kf2.RetainedMap.Install();
 
+// The GPU world renderer (patches/recompone/0085): the map's opaque faces drawn
+// from the retained scene into the frame, and no longer assembled by the game's
+// code. On by default. See docs/GPU_RENDERER.md.
+//
+//     KF2_GPUWORLD=1          on; 0 never; unset, the saved setting
+//     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept; the surface buffer against the depth
+//     KF2_GPUWORLD_SURFACES=0 leave the map out of the normal and surface buffers (the comparison)
+//     KF2_GPUWORLD_FOGZ=0     the map's fog from the corners' screen-affine cue (the comparison)
+//     KF2_GPUWORLD_NEAR=16    the map's near plane
+Kf2.GpuWorld.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD"),
+                       Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"),
+                       Environment.GetEnvironmentVariable("KF2_GPUWORLD_SURFACES"));
+Kf2.GpuWorld.Install();
+//     KF2_GPUWORLD_CENSUS=1   what 3D the game's code still builds under the renderer, and where from
+Kf2.GpuWorldCensus.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD_CENSUS"));
+Kf2.GpuWorldCensus.Install();
+
 // The remaster (docs/REMASTER.md): authored data from a pack, applied over the
 // game: materials on tile faces, read by the reflection pass, and point and spot
 // lights in the prim shader (0071). Off by default and nothing is authored until
@@ -1130,6 +1147,17 @@ Kf2.MenuMouse.Configure(Environment.GetEnvironmentVariable("KF2_MENUMOUSE"),
                         Environment.GetEnvironmentVariable("KF2_MENUMOUSE_PROBE"));
 Kf2.MenuMouse.Install();
 
+// The equip prompt and the shops' buy prompt show every stat the item would
+// change, now and after, in the game's own font and window (patches/MenuDraw.cs
+// writes the same packets as the status screen's routines). It began as
+// mods/gearcompare. On by default; Gameplay ▸ Compare gear.
+//
+//     KF2_GEARCOMPARE=0       off
+//     KF2_GEARCOMPARE=verify  draw each panel through the recompiled routines too
+//                             and compare every byte
+Kf2.GearCompare.Configure(Environment.GetEnvironmentVariable("KF2_GEARCOMPARE"));
+Kf2.GearCompare.Install();
+
 // Widescreen. The runtime already renders a margin either side of the display
 // buffer and presents the whole thing at Display.WideAspect, so setting that one
 // number is the entire hookup; the replacement of DrawOTag here is only for the
@@ -1302,12 +1330,22 @@ Kf2.TileWalk.Install();
 //     KF2_MODELWALK=verify   run both on every call and compare RAM, registers, GTE
 //     KF2_MODELWALK_WALK=0   func_800331B4 recompiled, the submitter still C#
 //     KF2_MODELWALK_SUBMIT=0 func_80032588 recompiled, the walk still C#
+//     KF2_MODELWALK_ARM=0    func_80032400 (the first-person arm) recompiled
 //     KF2_MODELWALK_PROBE=1  what each of the four tables submitted
 Kf2.ModelWalk.Configure(Environment.GetEnvironmentVariable("KF2_MODELWALK"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_WALK"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_SUBMIT"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_PROBE"));
 Kf2.ModelWalk.Install();
+
+// The MO blender, func_80034DA8, in C#: the pose every animated model is drawn in. For
+// a lit model the GPU world renderer draws from its mesh, the keyframe copy and the
+// delta decode are left undone and the vertex shader blends the pose itself.
+//
+//     KF2_MOPOSE=0        the recompiled routine
+//     KF2_MOPOSE=verify   run both on every call and compare RAM, registers, GTE
+Kf2.MoPose.Configure(Environment.GetEnvironmentVariable("KF2_MOPOSE"));
+Kf2.MoPose.Install();
 
 // Stage 13 itself, func_800342D8, and the camera block it opens with, func_8002E22C,
 // in C#. The renderer is nineteen calls and one block of HUD arithmetic; with it here

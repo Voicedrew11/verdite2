@@ -114,6 +114,9 @@ public static class AgentServer
         "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
         "view [<x> <y> <z> <pitch> <yaw> <roll> | off] - the camera the last frame was drawn from, a digest of its cull grid and the cells it draws; with a camera, draw every frame from it until 'view off'",
         "waves [on|off | swell|swellsize|ripple|ripplesize|shade|speed <value>] - the water waves: their state, the switch, or one setting (not saved)",
+        "gpuworld [on|off | surfaces on|off | water on|off | models on|off|hide|show | records on|off | scene | perpixel on|off] - the world drawn on the GPU (0085): its state, the switch, whether the map reaches the normal and surface buffers, whether its water and the object walk's models are drawn there too, models taken and not drawn (what they cover), whether the map is lit in the shader from the light records, the last walk's models and the camera's forward, or per-pixel lighting (not saved)",
+        "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
+        "aspect [4:3|16:9|<ratio>] - the widescreen aspect, as the settings window sets it (not saved)",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -148,6 +151,7 @@ public static class AgentServer
     public static void Install()
     {
         if (Port == 0) return;
+        FramePacing.PauseWhen(() => _paused);
 
         // Cheap commands: the VSync event fires on the game thread, the same
         // place the beacon reads memory, so no cross-thread access.
@@ -312,6 +316,8 @@ public static class AgentServer
                      || parts[0].Equals("view", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("snap", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("waves", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("gpuworld", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("murk", StringComparison.OrdinalIgnoreCase)
                      || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
                           parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",
@@ -340,6 +346,11 @@ public static class AgentServer
             case "snap":
             case "view":
             case "waves":
+            case "gpuworld":
+            case "capture":
+            case "murk":
+            case "pause":
+            case "aspect":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -401,6 +412,16 @@ public static class AgentServer
         queue.Enqueue(cmd);
     }
 
+    static bool _paused;
+
+    static string DoPause(string arg)
+    {
+        if (arg is "on" or "1") _paused = true;
+        else if (arg is "off" or "0") _paused = false;
+        else if (arg.Length > 0) return Err("pause [on|off]");
+        return "{\"ok\":true,\"cmd\":\"pause\",\"paused\":" + (_paused ? "true" : "false") + "}";
+    }
+
     static string Execute(Cmd cmd) => cmd.Name switch
     {
         "state" => DoState(),
@@ -415,6 +436,11 @@ public static class AgentServer
         "goto" => DoGoto(cmd.Arg1),
         "view" => DoView(cmd.Arg1),
         "waves" => Waves.Shell(cmd.Arg1),
+        "gpuworld" => GpuWorld.Shell(cmd.Arg1),
+        "pause" => DoPause(cmd.Arg1),
+        "aspect" => Widescreen.Shell(cmd.Arg1),
+        "murk" => Murk.Shell(cmd.Arg1),
+        "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
         "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         "savecheck" => DoSaveCheck(),
         _ => Err($"unknown command '{cmd.Name}'; try help"),

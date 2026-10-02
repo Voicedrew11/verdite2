@@ -334,6 +334,18 @@ public static class Widescreen
         Apply();
     }
 
+    /// <summary>The <c>aspect</c> shell verb: the state, or a change through
+    /// <see cref="SetAspect"/>, which is what the settings window calls.</summary>
+    public static string Shell(string arg)
+    {
+        if (arg.Length > 0)
+        {
+            if (Parse(arg) is not { } ratio) return "{\"ok\":false,\"error\":\"aspect [4:3|16:9|<ratio>]\"}";
+            SetAspect(ratio);
+        }
+        return $"{{\"ok\":true,\"cmd\":\"aspect\",\"aspect\":{Aspect.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)},\"margin\":{Margin}}}";
+    }
+
     static void Apply()
     {
         // 4:3 means off, and off is 0 rather than 1.333 -- WideMargin returns no

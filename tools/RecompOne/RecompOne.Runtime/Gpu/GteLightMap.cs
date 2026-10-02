@@ -96,8 +96,10 @@ public static class GteLightMap
     }
 
     // BK and LCM by generation, so a batch uploads the pair its primitives were built
-    // with. The game writes them per area, so a generation lasts minutes.
-    const int GenRing = 8;
+    // with. Every model sets its own from its tile's light record, and the planar walk
+    // replays them, so a frame starts several; one that started more than the ring holds
+    // lit its first models with a later model's BK (0048 amended).
+    const int GenRing = 64;
     static readonly int[] _bk = new int[GenRing * 3];
     static readonly short[] _lcm = new short[GenRing * 9];
     static int _gen;
@@ -112,6 +114,7 @@ public static class GteLightMap
         if (same && _gen != 0) return _gen;
 
         _gen++;
+        Generations++;
         o3 = (_gen & (GenRing - 1)) * 3;
         o9 = (_gen & (GenRing - 1)) * 9;
         for (int i = 0; i < 3; i++) _bk[o3 + i] = (int)Gte.ReadControl(13 + i);
@@ -121,6 +124,9 @@ public static class GteLightMap
 
     static short Lcm(int i) =>
         i == 8 ? (short)Gte.ReadControl(20) : (short)(Gte.ReadControl(16 + i / 2) >> ((i & 1) * 16));
+
+    /// <summary>Generations started; never reset.</summary>
+    public static long Generations;
 
     public static int Bk(int gen, int c) => _bk[(gen & (GenRing - 1)) * 3 + c];
     public static short LcmAt(int gen, int i) => _lcm[(gen & (GenRing - 1)) * 9 + i];

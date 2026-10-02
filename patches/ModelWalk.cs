@@ -33,12 +33,14 @@ public readonly struct ModelDraw
 
 /// <summary>
 /// The object and creature walk in C#: `func_800331B4` (the four table walks) and
-/// `func_80032588` (the model submitter it dispatches to).
+/// `func_80032588` (the model submitter it dispatches to); and `func_80032400`, the
+/// first-person arm, which stage 13 draws before either.
 ///
-///     KF2_MODELWALK=0        both recompiled
-///     KF2_MODELWALK=verify   run both on every call and compare RAM, registers and the GTE
+///     KF2_MODELWALK=0        all three recompiled
+///     KF2_MODELWALK=verify   run each on every call and compare RAM, registers and the GTE
 ///     KF2_MODELWALK_WALK=0   func_800331B4 recompiled, the submitter still C#
 ///     KF2_MODELWALK_SUBMIT=0 func_80032588 recompiled, the walk still C#
+///     KF2_MODELWALK_ARM=0    func_80032400 recompiled
 ///     KF2_MODELWALK_PROBE=1  a line every two seconds: what each table submitted
 ///
 /// **Why this routine.** `TileWalk` taught the port the static world; this is
@@ -71,6 +73,8 @@ public static class ModelWalk
 {
     const uint Walk = 0x800331B4;    // the four table walks
     const uint Submit = 0x80032588;  // one model: matrices, light, assembler
+    const uint Arm = 0x80032400;     // the first-person arm, in view space
+    const uint Special = 0x80032AC4; // an object of kind 0xF0, at a fixed slot
 
     // ---- the four tables ----------------------------------------------------
 
@@ -116,19 +120,30 @@ public static class ModelWalk
 
     enum Mode { Off, On, Verify }
     static Mode _mode = Mode.On;
-    static bool _queuedWalk, _queuedSubmit;
+    static bool _queuedWalk, _queuedSubmit, _queuedArm, _queuedSpecial;
 
     /// <summary>Off hands every call to the recompiled routine.</summary>
     public static bool Enabled { get; set; } = true;
 
     public static bool WalkEnabled { get; set; } = true;
     public static bool SubmitEnabled { get; set; } = true;
+    public static bool ArmEnabled { get; set; } = true;
+    public static bool SpecialEnabled { get; set; } = true;
+
+    /// <summary>A diagnostic: the forced-blend twin (effects, billboards) at the
+    /// subtractive rate, which no area was seen to use, so the GPU world renderer's mode 2
+    /// can be compared with the packets'.</summary>
+    public static bool SubtractTest = Environment.GetEnvironmentVariable("KF2_GPUWORLD_SUBTEST")?.Trim() == "1";
     public static bool Verifying => _mode == Mode.Verify;
 
     static bool _probe;
 
     /// <summary>Running totals; never reset.</summary>
     public static long WalkCalls, SubmitCalls;
+
+    /// <summary>Submits placed in view space (matrix 0), which stay on the packets: by the
+    /// lit assembler, the clipped one and the forced-blend twin; never reset.</summary>
+    public static readonly long[] ViewSpaceSubmits = new long[3];
 
     // What the last walk saw, which is the whole point of the routine being here.
     static ModelDraw[] _scene = new ModelDraw[64];
@@ -211,7 +226,7 @@ public static class ModelWalk
     /// anywhere inside stage 13 after it.</summary>
     public static ReadOnlySpan<ModelDraw> Scene => _scene.AsSpan(0, _lastCount);
 
-    static long _creatures, _objects, _effects, _sprites, _lit, _flat, _semi, _ambients;
+    static long _creatures, _objects, _effects, _sprites, _lit, _flat, _semi, _ambients, _arms;
     // Live slots this frame, so "0 submitted" is told from "nothing there".
     static int _liveCreatures, _liveObjects, _liveEffects, _liveSprites;
     static double _probeAt;
@@ -230,6 +245,8 @@ public static class ModelWalk
         Enabled = mode?.Trim().ToLowerInvariant() is not ("0" or "off");
         WalkEnabled = walk?.Trim() != "0";
         SubmitEnabled = submit?.Trim() != "0";
+        ArmEnabled = Environment.GetEnvironmentVariable("KF2_MODELWALK_ARM")?.Trim() != "0";
+        SpecialEnabled = Environment.GetEnvironmentVariable("KF2_MODELWALK_SPECIAL")?.Trim() != "0";
         _probe = probe?.Trim() is not (null or "" or "0");
     }
 
@@ -239,18 +256,24 @@ public static class ModelWalk
     {
         var walk = SymbolRegistry.Resolve("game", null, Walk);
         var submit = SymbolRegistry.Resolve("game", null, Submit);
-        if (walk == null || submit == null) return false;
+        var arm = SymbolRegistry.Resolve("game", null, Arm);
+        var special = SymbolRegistry.Resolve("game", null, Special);
+        if (walk == null || submit == null || arm == null || special == null) return false;
 
         if (!Queue(ref _queuedWalk, walk, nameof(ReplaceWalk))) return false;
         if (!Queue(ref _queuedSubmit, submit, nameof(ReplaceSubmit))) return false;
+        if (!Queue(ref _queuedArm, arm, nameof(ReplaceArm))) return false;
+        if (!Queue(ref _queuedSpecial, special, nameof(ReplaceSpecial))) return false;
 
         HookManager.Commit();
-        bool ok = HookAttach.Installed(walk) && HookAttach.Installed(submit);
+        bool ok = HookAttach.Installed(walk) && HookAttach.Installed(submit) && HookAttach.Installed(arm)
+                  && HookAttach.Installed(special);
         string State(bool on) => !on ? "off" : _mode.ToString().ToLowerInvariant();
         Console.WriteLine(!ok
             ? "[KF2] modelwalk: not installed"
             : $"[KF2] modelwalk: walk {State(Enabled && WalkEnabled)}, " +
-              $"submit {State(Enabled && SubmitEnabled)}");
+              $"submit {State(Enabled && SubmitEnabled)}, arm {State(Enabled && ArmEnabled)}, " +
+              $"special {State(Enabled && SpecialEnabled)}");
         return ok;
     }
 
@@ -278,6 +301,293 @@ public static class ModelWalk
         if (Recompiled(Enabled && SubmitEnabled) || m is not PSMemory mem) { orig(c, m); return; }
         if (_mode == Mode.Verify) Verify(_submitCheck, orig, c, mem, RunSubmit);
         else RunSubmit(c, mem);
+    }
+
+    static void ReplaceArm(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
+    {
+        if (Recompiled(Enabled && ArmEnabled) || m is not PSMemory mem) { orig(c, m); return; }
+        if (_mode == Mode.Verify) Verify(_armCheck, orig, c, mem, RunArm);
+        else RunArm(c, mem);
+    }
+
+    static void ReplaceSpecial(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
+    {
+        if (Recompiled(Enabled && SpecialEnabled) || m is not PSMemory mem) { orig(c, m); return; }
+        if (_mode == Mode.Verify) Verify(_specialCheck, orig, c, mem, RunSpecial);
+        else RunSpecial(c, mem);
+    }
+
+    // ---- func_80032AC4: an object of kind 0xF0 ------------------------------------
+
+    /// <summary>Inside the C# special-object routine.</summary>
+    public static bool InSpecial { get; private set; }
+
+    /// <summary>
+    /// An object of kind `0xF0` (<see cref="WalkObjects"/>): turned by its record's
+    /// rotation with the camera's composed in and no translation, so it stands round
+    /// the eye; lit from light record `+0x3B & 0x7F` (its light matrix negated with
+    /// `0x80`, and not turned with the model); posed by the MO blender; transformed by
+    /// `func_8002EA60` and assembled by `func_8002F918` with no depth cue, every face
+    /// at one slot (`0x1FFF` less `+0x3A`) and the record's blend rate on its textured
+    /// faces. 0085: with the GPU world renderer's models on, drawn from its mesh in the
+    /// table's order instead (<see cref="RetainedModels.TrySpecial"/>). See "Step 3, the
+    /// sixth slice" in docs/GPU_RENDERER.md.
+    /// </summary>
+    static void RunSpecial(CpuContext c, PSMemory mem)
+    {
+        uint entry = c.SP, sp = entry - 0x78u;
+        c.SP = sp;
+        mem.WriteU32(sp + 0x70u, c.RA);
+        mem.WriteU32(sp + 0x6Cu, c.S7);
+        mem.WriteU32(sp + 0x68u, c.S6);
+        mem.WriteU32(sp + 0x64u, c.S5);
+        mem.WriteU32(sp + 0x60u, c.S4);
+        mem.WriteU32(sp + 0x5Cu, c.S3);
+        mem.WriteU32(sp + 0x58u, c.S2);
+        mem.WriteU32(sp + 0x54u, c.S1);
+        mem.WriteU32(sp + 0x50u, c.S0);
+        InSpecial = true;
+        try { SpecialBody(c, mem, sp); }
+        finally { InSpecial = false; }
+        c.RA = mem.ReadU32(sp + 0x70u);
+        c.S7 = mem.ReadU32(sp + 0x6Cu);
+        c.S6 = mem.ReadU32(sp + 0x68u);
+        c.S5 = mem.ReadU32(sp + 0x64u);
+        c.S4 = mem.ReadU32(sp + 0x60u);
+        c.S3 = mem.ReadU32(sp + 0x5Cu);
+        c.S2 = mem.ReadU32(sp + 0x58u);
+        c.S1 = mem.ReadU32(sp + 0x54u);
+        c.S0 = mem.ReadU32(sp + 0x50u);
+        c.SP = entry;
+    }
+
+    static void SpecialBody(CpuContext c, PSMemory mem, uint sp)
+    {
+        uint rate = mem.ReadU32(sp + 0x8Cu);
+        uint lightByte = mem.ReadU32(sp + 0x90u);
+        uint clipTime = mem.ReadU16(sp + 0x88u);
+        uint slotWord = mem.ReadU16(sp + 0x94u);
+        uint model = c.A0, moRec = c.A2, clip = c.A3;
+        c.S7 = rate; c.S6 = clipTime; c.S5 = moRec; c.S3 = slotWord; c.S2 = model; c.S4 = clip;
+        mem.WriteU32(sp + 0x34u, 0u);
+        mem.WriteU32(sp + 0x30u, 0u);
+        mem.WriteU32(sp + 0x2Cu, 0u);
+
+        c.A0 = c.A1;
+        c.A1 = sp + 0x18u;
+        c.RA = 0x80032B20u;
+        KingsField2.func_80014FE0(c, mem);
+        c.A0 = ViewMatrix;
+        c.A1 = sp + 0x18u;
+        c.RA = 0x80032B30u;
+        KingsField2.MulMatrix2(c, mem);
+        c.A0 = sp + 0x18u;
+        c.RA = 0x80032B38u;
+        KingsField2.SetRotMatrix(c, mem);
+        c.A0 = sp + 0x18u;
+        c.RA = 0x80032B40u;
+        KingsField2.SetTransMatrix(c, mem);
+
+        uint light = LightBase + (lightByte & 0x7Fu) * 0x68u;
+        c.S1 = light;
+        c.A0 = light + 0x50u;
+        c.RA = 0x80032B6Cu;
+        KingsField2.SetColorMatrix(c, mem);
+        c.A0 = mem.ReadU8(light + 0x62u);
+        c.A1 = mem.ReadU8(light + 0x63u);
+        c.A2 = mem.ReadU8(light + 0x64u);
+        c.S0 = lightByte & 0x80u;
+        c.RA = 0x80032B80u;
+        KingsField2.SetBackColor_game(c, mem);
+        if (c.S0 != 0u)
+        {
+            // The record's light matrix, every entry negated.
+            for (uint i = 0; i < 9; i++)
+                mem.WriteU16(sp + 0x38u + i * 2u, (ushort)(0u - mem.ReadU16(light + i * 2u)));
+            c.A0 = sp + 0x38u;
+            c.RA = 0x80032C1Cu;
+        }
+        else
+        {
+            c.A0 = light;
+            c.RA = 0x80032C2Cu;
+        }
+        KingsField2.SetLightMatrix(c, mem);
+
+        uint id = model & 0xFFFFu;
+        c.S0 = id;
+        c.A0 = id;
+        c.RA = 0x80032C38u;
+        KingsField2.func_80034834(c, mem);
+        c.A0 = 0u;
+        c.RA = 0x80032C40u;
+        KingsField2.func_8002E1BC(c, mem);
+        uint mesh = c.V0;
+        c.S0 = mesh;
+        mem.WriteU32(sp + 0x10u, mem.ReadU32(mesh + 4u));
+        c.A0 = moRec;
+        c.A1 = id;
+        c.A2 = clip & 0xFFFFu;
+        c.A3 = clipTime;
+        c.RA = 0x80032C60u;
+        bool gpu = RetainedModels.InstanceWanted && !Verifying;
+        MoPose.Defer = gpu && MoPose.Active && RetainedModels.PosesOn && !RetainedModels.Checking;
+        KingsField2.func_80034DA8(c, mem);
+        MoPose.Defer = false;
+        bool rigid = c.V0 == 0u;
+        if (rigid)
+        {
+            c.A0 = 0u;
+            c.RA = 0x80032C70u;
+            KingsField2.func_8002E1F0(c, mem);
+            c.A0 = 0u;
+            c.RA = 0x80032C78u;
+            KingsField2.func_8002E1BC(c, mem);
+            mesh = c.V0;
+        }
+        uint vertices = mem.ReadU32(mesh + 4u);
+        int slot = (short)slotWord;
+
+        bool whole = gpu && RetainedModels.TrySpecial(mem, vertices, slot, (int)(rate & 3u));
+        if (!whole) MoPose.Materialize(c, mem);
+        if (whole && !RetainedModels.Checking) RetainedModels.NoteSkippedTransform();
+        else
+        {
+            c.A0 = vertices;
+            c.RA = rigid ? 0x80032C84u : 0x80032C98u;
+            KingsField2.func_8002EA60(c, mem);
+        }
+        if (!whole)
+        {
+            c.A0 = 0u;
+            c.A1 = rate;
+            c.A2 = (uint)slot;
+            c.RA = 0x80032CACu;
+            KingsField2.func_8002F918(c, mem);
+        }
+        RetainedModels.Instanced = false;
+    }
+
+    // ---- func_80032400: the first-person arm ------------------------------------
+
+    const uint SwingClock = 0x801994A4, SwingClip = 0x801994AE, ArmSlot = 0x8019949C;
+    const uint Weapon = 0x80199494, PlayerZ = 0x801994F4;
+
+    /// <summary>Inside the C# arm routine.</summary>
+    public static bool InArm { get; private set; }
+
+    /// <summary>
+    /// The arm: nothing while the swing clock reads -1; else lit from the light record
+    /// of the half the player stands on, placed by the equipped weapon's record with no
+    /// camera composed in, posed by the MO blender (model 0x20) and assembled by the lit
+    /// assembler at slot bias 100. 0085: with the GPU world renderer's models on, it is
+    /// drawn from its mesh as an instance (<see cref="RetainedModels.TryArm"/>); the
+    /// frame has not begun yet (the tile walk begins it), so the instance is held until
+    /// it does. See "Step 3, the fourth slice" in docs/GPU_RENDERER.md.
+    /// </summary>
+    static void RunArm(CpuContext c, PSMemory mem)
+    {
+        uint entry = c.SP, sp = entry - 0x48u;
+        c.SP = sp;
+        mem.WriteU32(sp + 0x40u, c.RA);
+        mem.WriteU32(sp + 0x3Cu, c.S1);
+        mem.WriteU32(sp + 0x38u, c.S0);
+        RetainedModels.ArmPending = false;
+
+        if ((short)mem.ReadU16(SwingClock) != -1)
+        {
+            _arms++;
+            InArm = true;
+            try { ArmBody(c, mem, sp); }
+            finally { InArm = false; }
+        }
+
+        c.RA = mem.ReadU32(sp + 0x40u);
+        c.S1 = mem.ReadU32(sp + 0x3Cu);
+        c.S0 = mem.ReadU32(sp + 0x38u);
+        c.SP = entry;
+    }
+
+    static void ArmBody(CpuContext c, PSMemory mem, uint sp)
+    {
+        // The light record of the player's own half: tile (x >> 11, z >> 11) of the
+        // 80-wide map, ten bytes a tile, the half's offset from HalfSelect.
+        int z = (int)mem.ReadU32(PlayerZ) >> 11, x = (int)mem.ReadU32(PlayerPos) >> 11;
+        uint cell = (uint)(z * 800 + x * 10) + mem.ReadU16(HalfSelect);
+        uint light = (mem.ReadU8(MapBase + 4u + cell) & 0x3Fu) * 0x68u + LightBase;
+
+        c.S1 = SwingClock;
+        c.S0 = light;
+        c.A0 = light + 0x50u;
+        c.RA = 0x800324B0u;
+        KingsField2.SetColorMatrix(c, mem);
+        c.A0 = light;
+        c.RA = 0x800324B8u;
+        KingsField2.SetLightMatrix(c, mem);
+        c.A0 = (uint)(short)mem.ReadU16(light + 0x66u);
+        c.RA = 0x800324C4u;
+        KingsField2.func_8002DDDC(c, mem);
+        c.A0 = mem.ReadU8(light + 0x62u);
+        c.A1 = mem.ReadU8(light + 0x63u);
+        c.A2 = mem.ReadU8(light + 0x64u);
+        c.RA = 0x800324D8u;
+        KingsField2.SetBackColor_game(c, mem);
+
+        uint weapon = mem.ReadU32(Weapon);
+        mem.WriteU32(sp + 0x2Cu, (uint)(short)mem.ReadU16(weapon + 0x34u));
+        mem.WriteU32(sp + 0x30u, (uint)(short)mem.ReadU16(weapon + 0x36u));
+        mem.WriteU32(sp + 0x34u, (uint)(short)mem.ReadU16(weapon + 0x38u));
+        c.A0 = weapon + 0x3Cu;
+        c.A1 = sp + 0x18u;
+        c.RA = 0x80032510u;
+        KingsField2.RotMatrix(c, mem);
+        c.A0 = sp + 0x18u;
+        c.RA = 0x80032518u;
+        KingsField2.SetRotMatrix(c, mem);
+        c.A0 = sp + 0x18u;
+        c.RA = 0x80032520u;
+        KingsField2.SetTransMatrix(c, mem);
+        c.A0 = 0x20u;
+        c.RA = 0x80032528u;
+        KingsField2.func_80034834(c, mem);
+        c.A0 = 0u;
+        c.RA = 0x80032530u;
+        KingsField2.func_8002E1BC(c, mem);
+        uint mesh = c.V0;
+        c.S0 = mesh;
+        uint vertices = mem.ReadU32(mesh + 4u);
+
+        mem.WriteU32(sp + 0x10u, vertices);
+        c.A0 = ArmSlot;
+        c.A1 = 0x20u;
+        c.A2 = mem.ReadU8(SwingClip);
+        c.A3 = (uint)(short)mem.ReadU16(SwingClock);
+        c.RA = 0x80032554u;
+        // 0085. The arm drawn from the pose store, as a lit model in the world is.
+        bool gpu = RetainedModels.ArmWanted && !Verifying;
+        MoPose.Defer = gpu && MoPose.Active && RetainedModels.PosesOn && !RetainedModels.Checking;
+        KingsField2.func_80034DA8(c, mem);
+        MoPose.Defer = false;
+        if (c.V0 == 0u) { MoPose.Materialize(c, mem); return; }
+
+        bool whole = gpu && RetainedModels.TryArm(mem, vertices);
+        if (!whole) MoPose.Materialize(c, mem);
+        if (whole && !RetainedModels.Checking) RetainedModels.NoteSkippedTransform();
+        else
+        {
+            c.A0 = vertices;
+            c.RA = 0x80032568u;
+            KingsField2.func_8002E650(c, mem);
+            if (RetainedModels.Instanced && RetainedModels.Checking) RetainedModels.Check(mem);
+        }
+        if (!whole)
+        {
+            c.A0 = 0u;
+            c.A1 = 0x64u;
+            c.RA = 0x80032574u;
+            KingsField2.func_8002F214(c, mem);
+        }
+        RetainedModels.Instanced = false;
     }
 
     // ---- func_800331B4: the four table walks --------------------------------
@@ -491,6 +801,7 @@ public static class ModelWalk
                     c.A2 = rec + 0x34u;
                     c.A3 = mem.ReadU8(rec + 1u);
                     c.RA = 0x8003356Cu;
+                    _kind = ModelKind.Object; _slot = i; _record = rec;
                     KingsField2.func_80032AC4(c, mem);
                     mem.WriteU8(rec + 3u, (byte)(mem.ReadU8(rec + 3u) | 0x80u));
                 }
@@ -939,7 +1250,12 @@ public static class ModelWalk
             c.A2 = clip;
             c.A3 = mem.ReadU16(sp + 0xA8u);
             c.RA = 0x800329E0u;
+            // 0085. A lit model placed in the world may be drawn from the pose store; the
+            // blender then leaves its pose undecoded until something needs it in RAM.
+            MoPose.Defer = matrix != 0u && MoPose.Active
+                           && RetainedModels.InstanceWanted && RetainedModels.PosesOn && !RetainedModels.Checking;
             KingsField2.func_80034DA8(c, mem);
+            MoPose.Defer = false;
             if (c.V0 == 0u)
             {
                 c.A0 = 0u;
@@ -960,11 +1276,34 @@ public static class ModelWalk
             mesh = c.V0;
         }
 
-        if (matrix != 0u)
+        Record(mem, pos, model, (byte)(assembler & 0xFFu), light);
+
+        // The remaster's material for this model, sealed into every packet it makes.
+        _model = _walkOwns ? model : -1;
+        PolyAssembler.TileMaterial = _walkOwns ? Remaster.Surfaces.EnterModel(_kind, model) : (byte)0;
+
+        // 0085. A lit model placed in the world drawn from its cached mesh; with no
+        // blended face the transform and the assembler have nothing left to build.
+        // The forced-blend twin (effects, billboards) draws every face blended, and the
+        // backend draws those too (not in view space). So does an object near the camera,
+        // which the clipped map assembler would have assembled.
+        uint pick = assembler & 0xFFu;
+        // KF2_GPUWORLD_SUBTEST=1: every forced-blend submit subtracts, on both paths.
+        if (SubtractTest && pick < 0xFEu) pick = (pick & ~3u) | 2u;
+        if (matrix == 0u && _walkOwns) ViewSpaceSubmits[pick == 0xFFu ? 0 : pick == 0xFEu ? 1 : 2]++;
+        bool whole = matrix != 0u && RetainedModels.InstanceWanted && (pick != 0xFEu || RetainedModels.TileOn)
+                     && RetainedModels.TryInstance(mem, sub, depth, mem.ReadU32(mesh + 4u),
+                                                   pick >= 0xFEu ? -1 : (int)(pick & 3u), tile: pick == 0xFEu);
+        if (whole && RetainedModels.LastMirrored) PlanarWalk.TakenLast();
+        else if (!whole) MoPose.Materialize(c, mem);
+
+        if (whole && !RetainedModels.Checking) RetainedModels.NoteSkippedTransform();
+        else if (matrix != 0u)
         {
             c.A0 = mem.ReadU32(mesh + 4u);
             c.RA = 0x80032A38u;
             KingsField2.func_8002E650(c, mem);
+            if (RetainedModels.Instanced && RetainedModels.Checking) RetainedModels.Check(mem);
         }
         else
         {
@@ -974,20 +1313,13 @@ public static class ModelWalk
             KingsField2.func_8002E9B8(c, mem);
         }
 
-        Record(mem, pos, model, (byte)(assembler & 0xFFu), light);
-
-        // The remaster's material for this model, sealed into every packet it makes.
-        _model = _walkOwns ? model : -1;
-        PolyAssembler.TileMaterial = _walkOwns ? Remaster.Surfaces.EnterModel(_kind, model) : (byte)0;
-
-        uint pick = assembler & 0xFFu;
         if (pick == 0xFFu)
         {
             _lit++;
             c.A0 = sub;
             c.A1 = depth;
             c.RA = 0x80032A68u;
-            KingsField2.func_8002F214(c, mem);
+            if (!whole) KingsField2.func_8002F214(c, mem);
         }
         else if (pick == 0xFEu)
         {
@@ -996,7 +1328,7 @@ public static class ModelWalk
             c.A1 = depth;
             c.A2 = 0u;
             c.RA = 0x80032A84u;
-            KingsField2.func_80030540(c, mem);
+            if (!whole) KingsField2.func_80030540(c, mem);
         }
         else
         {
@@ -1005,9 +1337,10 @@ public static class ModelWalk
             c.A1 = depth;
             c.A2 = pick;
             c.RA = 0x80032A94u;
-            KingsField2.func_8002EAEC(c, mem);
+            if (!whole) KingsField2.func_8002EAEC(c, mem);
         }
         PolyAssembler.TileMaterial = 0;
+        RetainedModels.Instanced = false;
         _model = -1;
         Placed = false;
 
@@ -1162,8 +1495,8 @@ public static class ModelWalk
                           $"{_lastCount} model(s) submitted; a second: {_creatures / span:F0} creature, " +
                           $"{_objects / span:F0} object, {_effects / span:F0} effect, {_sprites / span:F0} sprite; " +
                           $"{_lit / span:F0} lit, {_flat / span:F0} flat, {_semi / span:F0} semi-transparent; " +
-                          $"{_ambients} ambient sound(s) played in all");
-        _creatures = _objects = _effects = _sprites = _lit = _flat = _semi = 0;
+                          $"{_ambients} ambient sound(s) played in all; the arm drawn {_arms / span:F0} time(s) a second");
+        _creatures = _objects = _effects = _sprites = _lit = _flat = _semi = _arms = 0;
     }
 
     // ---- KF2_MODELWALK=verify -----------------------------------------------
@@ -1185,6 +1518,8 @@ public static class ModelWalk
 
     static readonly Check _walkCheck = new("func_800331B4");
     static readonly Check _submitCheck = new("func_80032588");
+    static readonly Check _armCheck = new("func_80032400");
+    static readonly Check _specialCheck = new("func_80032AC4");
 
     static void Verify(Check k, Action<CpuContext, IMemory> orig, CpuContext c, PSMemory mem,
                        Action<CpuContext, PSMemory> run)

@@ -77,7 +77,6 @@ public static class PlanarWalk
     const uint WalkFrame = 0x300;
 
     public const string OnKey = "kf2.ssr.planar";
-    public const string StrengthKey = "kf2.planar.strength";
     public const float DefaultStrength = 0.6f;
 
     /// <summary>How much water reflects at a grazing angle: the water material's
@@ -123,13 +122,13 @@ public static class PlanarWalk
 
     public static void Install()
     {
-        PlanarReflections.Enabled = _forced ?? false;
+        PlanarReflections.Enabled = _forced ?? true;
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            PlanarReflections.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            PlanarReflections.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             StandOthersDown();
             if (!Reflections.StrengthForced)
-                SetStrength(RecompOne.Runtime.Runtime.View.GetFloat(StrengthKey, DefaultStrength));
+                SetStrength(DefaultStrength);
             Console.WriteLine($"[KF2] planar reflections: {(Enabled ? "on" : "off")}" +
                               (Enabled ? $", strength {Strength:F2}, tolerance {PlanarReflections.Tolerance:F0}, ripple {PlanarReflections.Ripple:F1}, " +
                                          $"cull {(PlanarCull.On ? "its own" : "the eye's")}" : ""));
@@ -190,6 +189,9 @@ public static class PlanarWalk
 
     /// <summary>Set while the tile walk runs from the mirrored camera.</summary>
     public static bool Mirroring { get; private set; }
+
+    /// <summary>Set while the object walk's submits are made again from it.</summary>
+    public static bool Replaying => _replaying && !Mirroring;
     static uint _walkLo, _walkHi;
     static int _n;
     static uint[] _regs = new uint[4 * 128];
@@ -200,6 +202,7 @@ public static class PlanarWalk
     static ModelKind[] _kind = new ModelKind[128];
     static int[] _slot = new int[128];
     static uint[] _record = new uint[128];
+    static bool[] _taken = new bool[128];
 
     public static void BeforeWalk(CpuContext c, IMemory m)
     {
@@ -229,9 +232,17 @@ public static class PlanarWalk
         _kind[i] = ModelWalk.SubmitKind;
         _slot[i] = ModelWalk.SubmitSlot;
         _record[i] = ModelWalk.SubmitRecord;
+        _taken[i] = false;
     }
 
     static bool InFrame(uint a) => a >= _walkLo && a < _walkHi;
+
+    /// <summary>0085. The submit just recorded was drawn whole from its cached mesh: its
+    /// instance is the mirror's too, and the replay leaves it out.</summary>
+    public static void TakenLast()
+    {
+        if (_recording && !_replaying && _n > 0) _taken[_n - 1] = true;
+    }
 
     static void Grow()
     {
@@ -244,6 +255,7 @@ public static class PlanarWalk
         Array.Resize(ref _kind, n);
         Array.Resize(ref _slot, n);
         Array.Resize(ref _record, n);
+        Array.Resize(ref _taken, n);
     }
 
     // ---- the mirrored walk -----------------------------------------------------
@@ -335,6 +347,10 @@ public static class PlanarWalk
             _level[1] = (rm[3] * fx + rm[5] * fz) / 4096f;
             _level[2] = (rm[6] * fx + rm[8] * fz) / 4096f;
 
+            // 0085. The backend draws the mirror's opaque map and models; the walk and
+            // the replay below leave them off the mirrored table.
+            if (GpuWorld.MirrorActive) RetainedScene.BeginMirror(RetainedMap.ReadView(mem));
+
             c.SP = walkSp;
             c.RA = 0x80034684u;
             Mirroring = true;
@@ -346,6 +362,8 @@ public static class PlanarWalk
                 // Matrix 0 is a model placed in view space, already where it is
                 // drawn: it belongs to the real camera and has no mirror image.
                 if (_stack[i * StackWords + 2] == 0u) { _viewSpace++; continue; }
+                // 0085. Drawn whole from its mesh: the main view's instance is the mirror's.
+                if (_taken[i] && GpuWorld.MirrorModelsActive) { _instanced++; continue; }
                 // The walk polls interrupts, so the loader may have evicted the model
                 // since the walk tested it.
                 if (!Resident(mem, _regs[i * 4 + 1])) { _gone++; continue; }
@@ -429,6 +447,7 @@ public static class PlanarWalk
 
     static readonly Stopwatch _clock = Stopwatch.StartNew();
     static double _reportedAt, _ms;
+    static long _instanced;
     static long _walks, _replayed, _props, _viewSpace, _gone, _noWater, _below, _mismatch, _overflows, _peak;
     static float _plane, _planeMin, _planeMax;
     static long _moves, _mirrorOnlyAt;
@@ -443,7 +462,7 @@ public static class PlanarWalk
 
         Console.WriteLine($"[KF2] planar: plane Y {_plane:F0} over {_area:F0} px of water (min {_planeMin:F0}, max {_planeMax:F0}, moved {_moves / dt:F1}/s); " +
                           $"{_walks / dt:F1} mirrored walks/s at {(_walks == 0 ? 0 : _ms / _walks):F3} ms, " +
-                          $"{_replayed / dt:F0} submits replayed/s ({_props / dt:F0} of them props, {_viewSpace / dt:F0} view-space skipped, {_gone} evicted before the replay in all), " +
+                          $"{_replayed / dt:F0} submits replayed/s ({_props / dt:F0} of them props, {_instanced / dt:F0} left to their instance, {_viewSpace / dt:F0} view-space skipped, {_gone} evicted before the replay in all), " +
                           $"{_noWater / dt:F1} frames/s with no water, {_below / dt:F1} under it; arena peak {_peak}/{PrimBuffer.MirrorArenaBytes} bytes, " +
                           $"{_overflows} overflow(s), {_mismatch} table mismatch(es); " +
                           $"its own cull {(PlanarCull.On ? $"{PlanarCull.Added / (double)Math.Max(PlanarCull.Frames, 1):F1} cells added a frame, " +
@@ -465,7 +484,7 @@ public static class PlanarWalk
         if (ScreenReflections.Map is { } map && !Reflections.Probing) Console.Write(map);
         ScreenReflections.WantMap = true;
 
-        _walks = _replayed = _props = _viewSpace = _noWater = _below = _mismatch = _overflows = _peak = _moves = 0;
+        _walks = _replayed = _props = _instanced = _viewSpace = _noWater = _below = _mismatch = _overflows = _peak = _moves = 0;
         _ms = 0;
         PlanarReflections.ResetCounters();
         PlanarReflections.WaterTris = PlanarReflections.WaterTilted = PlanarReflections.WaterRested = 0;

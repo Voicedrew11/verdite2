@@ -3,7 +3,8 @@
 
 Reads the CSV that KF2_PROFILE_OUT writes (or the profiler panel's Save CSV):
 one row per section per frame, plus frame.total / frame.gc_pause / frame.alloc_kb /
-frame.jit pseudo-rows. See "Profiling a frame" in docs/DEVELOPMENT.md.
+frame.jit pseudo-rows, and gpu.* rows (GPU ms per present, runtime 0084). See
+"Profiling a frame" in docs/DEVELOPMENT.md.
 
     python3 scripts/profile_report.py profile.csv
     python3 scripts/profile_report.py profile.csv --skip 5 --worst 15 --top 25
@@ -41,6 +42,8 @@ def main():
     first_t = None
     with open(args.csv, newline="") as fh:
         for r in csv.DictReader(fh):
+            if not r.get("self_ms"):
+                continue                     # a row cut short by the process ending
             idx = int(r["frame"])
             t = float(r["time_ms"])
             if first_t is None or t < first_t:
@@ -55,6 +58,8 @@ def main():
                        "frame.alloc_kb": "alloc", "frame.jit": "jit"}.get(name)
                 if key:
                     f[key] = self_ms
+                elif name.startswith("gpu."):
+                    f.setdefault("gputime", {})[name[4:]] = self_ms
                 continue
             incl = float(r["incl_ms"]) if r["incl_ms"] else 0.0
             calls = int(r["calls"]) if r["calls"] else 0
@@ -88,6 +93,11 @@ def main():
           f"p99 {pct(works, .99):7.3f}  max {works[-1]:7.3f} ms")
     print(f"swap   avg {statistics.fmean(f['gpu'] for f in chosen):7.3f} ms   "
           f"wait avg {statistics.fmean(f['wait'] for f in chosen):7.3f} ms")
+    gpu_frames = [f["gputime"] for f in chosen if "gputime" in f]
+    if gpu_frames:
+        passes = [k for k in gpu_frames[0] if k != "total"]
+        print(f"GPU    avg {statistics.fmean(g.get('total', 0.0) for g in gpu_frames):7.3f} ms/present: " +
+              ", ".join(f"{k} {statistics.fmean(g.get(k, 0.0) for g in gpu_frames):.3f}" for k in passes))
     print(f"GC {sum(f['gc'] for f in chosen):.1f} ms paused, JIT {sum(f['jit'] for f in chosen):.1f} ms, "
           f"{statistics.fmean(f['alloc'] for f in chosen):.1f} KB/frame allocated")
 

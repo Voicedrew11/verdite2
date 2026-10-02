@@ -75,6 +75,7 @@ public sealed partial class GlCore
         void Unit(string n, int u) { int l = L(n); if (l >= 0) _gl.Uniform1(l, u); }
         Unit("uVram", 0); Unit("uDest", 1); Unit("uExtTex", 2); Unit("uRepTex", 3); Unit("uRepClut", 4);
         Unit("uMip", 5); Unit("uMatTable", MatUnit); Unit("uMaskSurface", MaskUnit); Unit("uHalves", HalvesUnit);
+        Unit("uRecords", RecordsUnit);
         void I(string n, int v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
         void F(string n, float v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
         int tw = L("uTexWindow");
@@ -82,6 +83,7 @@ public sealed partial class GlCore
         F("uSetMask", 0f); I("uCheckMask", 0); I("uOpaqueDepth", 0); F("uDepthBias", 0f); F("uDepthSlope", 0f);
         I("uClipOn", 0); I("uLightN", 0); I("uEmitOn", 0); F("uMipOn", 0f); F("uTrueColor", 1f); F("uFluidN", 0f);
         I("uMaskOn", 0); I("uHalfGate", 0); I("uAtmosOn", 0); I("uAtmosSkip", 0); I("uWorldLit", 0);
+        I("uWorldSnap", 0); I("uWorldPerPixel", 1); I("uWorldDither", 0);
         InitShadowUniforms(_progWorld, false);
         if (_uwBlendOpaque >= 0) _gl.Uniform4(_uwBlendOpaque, 1f, 1f, 1f, 0f);
         int pb = L("uPosBias");
@@ -94,6 +96,11 @@ public sealed partial class GlCore
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
         _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
         _gl.BindTexture(TextureTarget.Texture2D, 0);
+
+        _uwMipIndirect = L("uMipIndirect");
+        Unit("uMipTable", MipTableUnit);
+        _mipTableBuf = _gl.GenBuffer();
+        _mipTableTex = _gl.GenTexture();
 
         _worldVbo = _gl.GenBuffer();
         _worldDynVbo = _gl.GenBuffer();
@@ -131,6 +138,7 @@ public sealed partial class GlCore
         _gl.EnableVertexAttribArray(6); _gl.VertexAttribIPointer(6, 1, VertexAttribIType.UnsignedInt, st, (void*)52);
         _gl.EnableVertexAttribArray(7); _gl.VertexAttribIPointer(7, 1, VertexAttribIType.UnsignedInt, st, (void*)56);
         _gl.EnableVertexAttribArray(8); _gl.VertexAttribIPointer(8, 1, VertexAttribIType.UnsignedInt, st, (void*)60);
+        _gl.EnableVertexAttribArray(10); _gl.VertexAttribIPointer(10, 1, VertexAttribIType.UnsignedInt, st, (void*)64);
         // The mip entries are the backend's, not the port's: a buffer of their own. A
         // shadow's casters have none, and read the attribute's constant 0.
         if (mipVbo != 0)
@@ -162,7 +170,8 @@ public sealed partial class GlCore
         _chunksDrawn = _chunksTested = 0;
 
         UploadWorld(f);
-        bool mips = UpdateWorldMips(f);
+        bool mips = UpdateWorldMips(f, RetainedScene.HalfGate ? f.Halves : null);
+        CloseWorldMain();
         _gl.UseProgram(_progWorld);
         if (_uwMipOn >= 0) _gl.Uniform1(_uwMipOn, mips ? 1f : 0f);
         if (mips)
@@ -228,9 +237,38 @@ public sealed partial class GlCore
         _gl.Uniform2(_uwAtmosShape, RemasterUniforms.FogPower, RemasterUniforms.FogMax);
     }
 
+    // 0085. The light records the static map is lit from, 13 RGBA32I texels a record.
+    const int RecordsUnit = 21;
+    uint _recordsTex;
+    int _recordsGen = -1;
+
+    unsafe void UploadRecords()
+    {
+        if (_recordsGen == RetainedScene.RecordGeneration) return;
+        _recordsGen = RetainedScene.RecordGeneration;
+        _gl.ActiveTexture(TextureUnit.Texture0 + RecordsUnit);
+        if (_recordsTex == 0)
+        {
+            _recordsTex = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, _recordsTex);
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Rgba32i, RetainedScene.RecordInts / 4,
+                RetainedScene.RecordCount, 0, PixelFormat.RgbaInteger, PixelType.Int, null);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        }
+        else _gl.BindTexture(TextureTarget.Texture2D, _recordsTex);
+        fixed (int* p = RetainedScene.Records)
+            _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, RetainedScene.RecordInts / 4, RetainedScene.RecordCount,
+                PixelFormat.RgbaInteger, PixelType.Int, p);
+        // Nothing else takes this unit, so the records stay bound for every world draw.
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        RetainedScene.RecordUploads++;
+    }
+
     /// <summary>The static map, when it was rebuilt since the last upload.</summary>
     void UploadStatic()
     {
+        UploadRecords();
         if (_worldGen == RetainedScene.StaticGeneration) return;
         var s = RetainedScene.Static;
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldVbo);
@@ -367,29 +405,40 @@ public sealed partial class GlCore
         int drawn = 0;
         if (RetainedScene.StaticCount[r] > 0)
         {
-            _gl.BindVertexArray(_worldVao);
-            // Runs of neighbouring visible chunks are one draw.
-            int first = -1, count = 0;
-            for (int c = 0; c <= RetainedScene.Chunks; c++)
-            {
-                int k = r * RetainedScene.Chunks + c;
-                bool take = c < RetainedScene.Chunks && _chunkVis[c] && RetainedScene.ChunkCount[k] > 0;
-                if (take && first >= 0 && RetainedScene.ChunkStart[k] == first + count) { count += RetainedScene.ChunkCount[k]; continue; }
-                if (first >= 0 && count > 0)
-                {
-                    _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)count);
-                    drawn += count;
-                }
-                first = take ? RetainedScene.ChunkStart[k] : -1;
-                count = take ? RetainedScene.ChunkCount[k] : 0;
-            }
+            if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
+            drawn = DrawStaticChunks(r);
         }
+        if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 0);
         int dn = f?.DynCount[r] ?? 0;
         if (dn > 0)
         {
             _gl.BindVertexArray(_worldDynVao);
             _gl.DrawArrays(PrimitiveType.Triangles, f!.DynStart[r], (uint)dn);
             RetainedScene.Triangles += dn / 3;
+        }
+        return drawn;
+    }
+
+    /// <summary>Range <paramref name="r"/> of the visible static chunks through
+    /// whatever program is bound; the vertices drawn.</summary>
+    int DrawStaticChunks(int r)
+    {
+        int drawn = 0;
+        _gl.BindVertexArray(_worldVao);
+        // Runs of neighbouring visible chunks are one draw.
+        int first = -1, count = 0;
+        for (int c = 0; c <= RetainedScene.Chunks; c++)
+        {
+            int k = r * RetainedScene.Chunks + c;
+            bool take = c < RetainedScene.Chunks && _chunkVis[c] && RetainedScene.ChunkCount[k] > 0;
+            if (take && first >= 0 && RetainedScene.ChunkStart[k] == first + count) { count += RetainedScene.ChunkCount[k]; continue; }
+            if (first >= 0 && count > 0)
+            {
+                _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)count);
+                drawn += count;
+            }
+            first = take ? RetainedScene.ChunkStart[k] : -1;
+            count = take ? RetainedScene.ChunkCount[k] : 0;
         }
         return drawn;
     }
@@ -707,6 +756,21 @@ public sealed partial class GlCore
         _gl.ActiveTexture(TextureUnit.Texture0);
     }
 
+    /// <summary>BeginWorldLights' textures again, its uniforms left as they are.</summary>
+    void BindWorldLights()
+    {
+        if (RetainedScene.LitGlow) BindMaterials();
+        if (_wLightN == 0 || _uwLightShadow < 0) return;
+        int mask = Math.Max(_shadowReadyMask, 0);
+        for (int sl = 0; sl < RemasterUniforms.MaxShadows; sl++)
+            if ((mask & (1 << sl)) != 0)
+            {
+                _gl.ActiveTexture(TextureUnit.Texture0 + ShadowUnit + sl);
+                _gl.BindTexture(TextureTarget.TextureCubeMap, _shadowBind[sl]);
+            }
+        _gl.ActiveTexture(TextureUnit.Texture0);
+    }
+
     /// <summary>Back to the program as the shadow cubemaps draw with it: no light, no
     /// glow, nothing shadowed.</summary>
     void EndWorldLights()
@@ -758,19 +822,33 @@ public sealed partial class GlCore
     }
 
     // The mip atlas entries of the static map, by distinct texture, and the frame's models.
+    // 0085: a static corner carries its texture's index (plus one) and the world
+    // program looks the entry up in a table of one word per texture, so an entry that
+    // moves costs a word, not the map's vertex buffer.
     readonly Dictionary<(int, int, uint), int> _mipKeyAt = new();
     readonly List<(int TPage, int Clut, uint Rect)> _mipKeys = new();
     uint[] _mipKeyEntry = [];
-    int[] _staticMipKey = [];
-    uint[] _staticMip = [], _dynMip = [];
+    uint[] _dynMip = [];
     int _mipKeysGen = -1;
-    bool _staticMipUploaded;
+    bool _mipTableDirty;
+    uint _mipTableBuf, _mipTableTex;
+    int _uwMipIndirect = -1;
+    const int MipTableUnit = 17;
 
     /// <summary>The atlas entry of every retained texture, looked up each present so the
     /// entries the reflections use stay in the atlas and are rebuilt when VRAM under them
-    /// changes; the static buffer is uploaded again only when one moved. False when
-    /// mipmaps are off, and every entry then reads 0.</summary>
-    unsafe bool UpdateWorldMips(RetainedScene.Frame f)
+    /// changes; the table is uploaded again only when one moved. False when mipmaps are
+    /// off, and every entry then reads 0.</summary>
+    // Each map half's distinct textures, by half id less one: _halfKeyAt[h].._halfKeyAt[h+1]
+    // in _halfKeys. A key no half owns (none on the map today) is looked up every time.
+    int[] _halfKeyAt = [], _halfKeys = [], _mipLooked = [], _loneKeys = [];
+    int _mipLookSerial;
+
+    /// <summary>With <paramref name="halves"/>, only the textures of the halves it
+    /// weighs above zero are looked up: the atlas holds what is drawn, as it does for
+    /// the frame's own packets, and a key left out keeps its last entry, which no
+    /// drawn corner reads.</summary>
+    unsafe bool UpdateWorldMips(RetainedScene.Frame f, byte[]? halves = null)
     {
         bool on = RetainedScene.Mips && GteDepth.Mipmaps && _mip != null && _uwMipOn >= 0;
         var st = RetainedScene.Static;
@@ -779,37 +857,56 @@ public sealed partial class GlCore
             _mipKeysGen = RetainedScene.StaticGeneration;
             _mipKeyAt.Clear();
             _mipKeys.Clear();
-            if (_staticMipKey.Length < st.Length) _staticMipKey = new int[st.Length];
+            var index = new uint[Math.Max(st.Length, 1)];
             for (int i = 0; i + 2 < st.Length; i += 3)
             {
-                int k = MipKey(st[i]);
-                _staticMipKey[i] = _staticMipKey[i + 1] = _staticMipKey[i + 2] = k;
+                uint k = (uint)(MipKey(st[i]) + 1);
+                index[i] = index[i + 1] = index[i + 2] = k;
             }
-            _mipKeyEntry = new uint[_mipKeys.Count];
-            if (_staticMip.Length < st.Length) _staticMip = new uint[st.Length];
-            Array.Clear(_staticMip);
-            _staticMipUploaded = false;
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldMipVbo);
+            _gl.BufferData<uint>(BufferTargetARB.ArrayBuffer, index, BufferUsageARB.StaticDraw);
+            _mipKeyEntry = new uint[Math.Max(_mipKeys.Count, 1)];
+            _mipLooked = new int[Math.Max(_mipKeys.Count, 1)];
+            _mipTableDirty = true;
+            IndexHalfKeys(st, index);
         }
-        bool moved = !_staticMipUploaded;
-        for (int k = 0; k < _mipKeys.Count; k++)
+        long l0 = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (halves == null)
+            for (int k = 0; k < _mipKeys.Count; k++) LookKey(k, on);
+        else
         {
-            var (tp, cl, rect) = _mipKeys[k];
-            uint e = on ? MipOf(tp, cl, rect) : 0u;
-            if (e != _mipKeyEntry[k]) { _mipKeyEntry[k] = e; moved = true; }
+            _mipLookSerial++;
+            foreach (int k in _loneKeys) LookKey(k, on);
+            for (int h = 0; h + 1 < _halfKeyAt.Length && h < halves.Length; h++)
+            {
+                if (halves[h] == 0) continue;
+                for (int i = _halfKeyAt[h]; i < _halfKeyAt[h + 1]; i++)
+                {
+                    int k = _halfKeys[i];
+                    if (_mipLooked[k] == _mipLookSerial) continue;
+                    _mipLooked[k] = _mipLookSerial;
+                    LookKey(k, on);
+                }
+            }
         }
         int found = 0;
         foreach (var e in _mipKeyEntry) if (e != 0) found++;
         RetainedScene.MipsFound = found;
         RetainedScene.MipsKeys = _mipKeys.Count;
-        if (moved)
+        if (_mipTableDirty)
         {
-            for (int i = 0; i < st.Length; i++)
-                _staticMip[i] = _staticMipKey[i] >= 0 ? _mipKeyEntry[_staticMipKey[i]] : 0u;
-            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldMipVbo);
-            if (_staticMip.Length == 0) _staticMip = new uint[1];
-            _gl.BufferData<uint>(BufferTargetARB.ArrayBuffer, new ReadOnlySpan<uint>(_staticMip, 0, Math.Max(st.Length, 1)), BufferUsageARB.StaticDraw);
-            _staticMipUploaded = true;
+            _gl.BindBuffer(BufferTargetARB.TextureBuffer, _mipTableBuf);
+            _gl.BufferData<uint>(BufferTargetARB.TextureBuffer, _mipKeyEntry, BufferUsageARB.DynamicDraw);
+            _gl.BindBuffer(BufferTargetARB.TextureBuffer, 0);
+            _gl.BindTexture(TextureTarget.TextureBuffer, _mipTableTex);
+            _gl.TexBuffer(TextureTarget.TextureBuffer, SizedInternalFormat.R32ui, _mipTableBuf);
+            _gl.BindTexture(TextureTarget.TextureBuffer, 0);
+            _mipTableDirty = false;
+            RetainedScene.MipTableUploads++;
         }
+        _gl.ActiveTexture(TextureUnit.Texture0 + MipTableUnit);
+        _gl.BindTexture(TextureTarget.TextureBuffer, _mipTableTex);
+        _gl.ActiveTexture(TextureUnit.Texture0);
         var d = f.SortedDynamic();
         if (_dynMip.Length < Math.Max(d.Length, 1)) _dynMip = new uint[Math.Max(Math.Max(d.Length, 1), _dynMip.Length * 2)];
         for (int i = 0; i + 2 < d.Length; i += 3)
@@ -820,9 +917,50 @@ public sealed partial class GlCore
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldDynMipVbo);
         _gl.BufferData<uint>(BufferTargetARB.ArrayBuffer, new ReadOnlySpan<uint>(_dynMip, 0, Math.Max(d.Length, 1)), BufferUsageARB.StreamDraw);
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        long l1 = System.Diagnostics.Stopwatch.GetTimestamp();
         // Decode what the lookups queued before anything reads the atlas.
         if (on && _mip!.HasPending) _mip.Process(_vram.SampleTexture);
+        RetainedScene.MipTicks[0] += l1 - l0;
+        RetainedScene.MipTicks[1] += System.Diagnostics.Stopwatch.GetTimestamp() - l1;
         return on;
+    }
+
+    void LookKey(int k, bool on)
+    {
+        var (tp, cl, rect) = _mipKeys[k];
+        uint e = on ? MipOf(tp, cl, rect) : 0u;
+        if (e != _mipKeyEntry[k]) { _mipKeyEntry[k] = e; _mipTableDirty = true; }
+    }
+
+    /// <summary>Which textures each half's corners carry, from the key indices just
+    /// built (one plus the key, 0 for none) and the half in each corner's flags.</summary>
+    void IndexHalfKeys(ReadOnlySpan<RetainedScene.Vertex> st, uint[] index)
+    {
+        int halves = RetainedScene.HalvesW * RetainedScene.HalvesH;
+        var pairs = new List<long>();
+        var lone = new HashSet<int>();
+        for (int i = 0; i + 2 < st.Length; i += 3)
+        {
+            if (index[i] == 0) continue;
+            int key = (int)index[i] - 1;
+            uint hid = (st[i].Flags >> RetainedScene.HalfShift) & RetainedScene.HalfBits;
+            if (hid == 0) lone.Add(key);
+            else pairs.Add((long)(hid - 1) << 32 | (uint)key);
+        }
+        pairs.Sort();
+        _halfKeyAt = new int[halves + 1];
+        var keys = new List<int>();
+        int p = 0;
+        for (int h = 0; h < halves; h++)
+        {
+            _halfKeyAt[h] = keys.Count;
+            long last = -1;
+            for (; p < pairs.Count && (pairs[p] >> 32) == h; p++)
+                if (pairs[p] != last) { keys.Add((int)(pairs[p] & 0xFFFFFFFF)); last = pairs[p]; }
+        }
+        _halfKeyAt[halves] = keys.Count;
+        _halfKeys = keys.ToArray();
+        _loneKeys = lone.ToArray();
     }
 
     int MipKey(in RetainedScene.Vertex v)
@@ -860,7 +998,7 @@ public sealed partial class GlCore
     uint BeginRetainedTimer()
     {
         // Queries do not nest, and a frame capture's are running around the pass.
-        if (!RetainedScene.Probe || !_timerQueries || GpuTrace.Sink != null) return 0;
+        if (!RetainedScene.Probe || !_timerQueries || GpuTrace.Sink != null || Diagnostics.GpuTimes.Enabled) return 0;
         var q = _gl.GenQuery();
         _gl.BeginQuery(QueryTarget.TimeElapsed, q);
         return q;

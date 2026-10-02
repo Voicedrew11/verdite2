@@ -80,7 +80,7 @@ public sealed partial class GlCore : IGpuBackend
     int _ssrW, _ssrH;
     bool _ssrInfo;
     int _uSsrOrigin, _uSsrSize, _uSsrTexSize, _uSsrProjH, _uSsrCentre;
-    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrMarchOn, _uSsrMurkDist, _uSsrMurkColor;
+    int _uSsrMaxDist, _uSsrThickness, _uSsrSky, _uSsrSteps, _uSsrMarchOn, _uSsrMurkDist, _uSsrMurkColor, _uSsrMurkUp;
     int _uSsrDqa, _uSsrDqb, _uSsrFogCurve;
     int _uPresentSsrOn;
     int _uPresentAoMatOn;
@@ -195,6 +195,7 @@ public sealed partial class GlCore : IGpuBackend
         _vram.Init();
         // 0046. Core since 3.3; the 2.1 context needs the extension.
         _timerQueries = !_legacy || _gl.IsExtensionPresent("ARB_timer_query");
+        Diagnostics.GpuTimes.Supported = _timerQueries;
 
         string primVs = _legacy ? GlShaders.PrimVs120 : GlShaders.PrimVs;
         string primFs = _legacy ? GlShaders.PrimFs120 : GlShaders.PrimFs;
@@ -416,6 +417,7 @@ public sealed partial class GlCore : IGpuBackend
                 _uSsrMurkDist = _gl.GetUniformLocation(_progSsr, "uMurkDist");
                 _uSsrPlainZ = _gl.GetUniformLocation(_progSsr, "uPlainZ");
                 _uSsrMurkColor = _gl.GetUniformLocation(_progSsr, "uMurkColor");
+                _uSsrMurkUp = _gl.GetUniformLocation(_progSsr, "uMurkUp");
                 _uSsrSteps = _gl.GetUniformLocation(_progSsr, "uSteps");
                 _uSsrDqa = _gl.GetUniformLocation(_progSsr, "uDqa");
                 _uSsrDqb = _gl.GetUniformLocation(_progSsr, "uDqb");
@@ -452,6 +454,8 @@ public sealed partial class GlCore : IGpuBackend
             PlanarReflections.Supported = _progSsr != 0 && _uClipOn >= 0 && _uSsrPlanarOn >= 0;
             // 0072.
             InitRetained(_progSsr);
+            // 0085.
+            InitMainView();
         }
 
         _uPresent24Origin = _gl.GetUniformLocation(_progPresent24, "uOrigin");
@@ -1524,8 +1528,9 @@ public sealed partial class GlCore : IGpuBackend
         //0045.
         var profile = Diagnostics.Profiler.Begin(Diagnostics.Profiler.GlFlush);
         var query = BeginGpuTimer();
+        var pass = _kTarget is { IsPlanar: true } ? Diagnostics.GpuTimes.Pass.Capture : Diagnostics.GpuTimes.Pass.Scene;
         FlushCore();
-        EndGpuTimer(query, GpuWork.Batch, 0);
+        EndGpuTimer(query, GpuWork.Batch, 0, pass);
         Diagnostics.Profiler.End(profile);
         trace?.Flushed();
     }
@@ -1538,18 +1543,63 @@ public sealed partial class GlCore : IGpuBackend
 
     uint BeginGpuTimer()
     {
-        if (!_timerQueries || GpuTrace.Sink == null) return 0;
+        if (!_timerQueries || (GpuTrace.Sink == null && !Diagnostics.GpuTimes.Enabled)) return 0;
         var q = _gl.GenQuery();
         _gl.BeginQuery(QueryTarget.TimeElapsed, q);
         return q;
     }
 
-    void EndGpuTimer(uint query, GpuWork what, long start)
+    void EndGpuTimer(uint query, GpuWork what, long start, Diagnostics.GpuTimes.Pass pass)
     {
         if (query != 0) _gl.EndQuery(QueryTarget.TimeElapsed);
         if (GpuTrace.Sink is { } t)
             t.Work(what, start, what == GpuWork.Batch ? 0 : System.Diagnostics.Stopwatch.GetTimestamp(), query);
-        else if (query != 0) _gl.DeleteQuery(query);
+        else if (query != 0)
+        {
+            // 0084. Read back presents later, oldest first; the GPU finishes in order.
+            if (_gpuPending.Count >= 1024)
+            {
+                _gl.DeleteQuery(_gpuPending.Dequeue().Query);
+                Diagnostics.GpuTimes.Dropped++;
+            }
+            _gpuPending.Enqueue((query, pass, _gpuPresent));
+        }
+    }
+
+    // 0084. The profiler's GPU times: queries waiting for the GPU, and the present
+    // each was issued in.
+    readonly Queue<(uint Query, Diagnostics.GpuTimes.Pass Pass, long Present)> _gpuPending = new();
+    long _gpuPresent, _gpuResolved = -1;
+
+    void ResolveGpuTimes()
+    {
+        while (_gpuPending.Count > 0)
+        {
+            var (q, pass, present) = _gpuPending.Peek();
+            if (!Diagnostics.GpuTimes.Enabled)
+            {
+                _gl.DeleteQuery(_gpuPending.Dequeue().Query);
+                Diagnostics.GpuTimes.Dropped++;
+                continue;
+            }
+            _gl.GetQueryObject(q, QueryObjectParameterName.ResultAvailable, out int ready);
+            if (ready == 0) break;
+            _gl.GetQueryObject(q, QueryObjectParameterName.Result, out long ns);
+            _gl.DeleteQuery(q);
+            _gpuPending.Dequeue();
+            if (present != _gpuResolved)
+            {
+                if (_gpuResolved >= 0)
+                {
+                    Diagnostics.GpuTimes.Presents++;
+                    Diagnostics.GpuTimes.Complete = _gpuResolved;
+                }
+                _gpuResolved = present;
+            }
+            Diagnostics.GpuTimes.Resolve(present, pass, ns);
+        }
+        // Called after the present's last query: nothing left means it is done too.
+        if (_gpuPending.Count == 0 && _gpuResolved >= 0) Diagnostics.GpuTimes.Complete = _gpuResolved;
     }
 
     /// <summary>0046. A timer query's result in nanoseconds, deleting it; -1 while the
@@ -1621,14 +1671,10 @@ public sealed partial class GlCore : IGpuBackend
         // — or after the setting was flipped — clears the attachment so last
         // frame's depths cannot occlude this one. The clear is not gated on this
         // batch's mode, so a 2D primitive arriving first cannot skip it.
-        if (rt != null && GteDepth.DepthWanted && (rt.LastDrawFrame != _frame || rt.ZGen != GteDepth.Generation))
+        if (rt != null)
         {
-            _gl.Disable(EnableCap.ScissorTest);
-            _gl.DepthMask(true);
-            _gl.ClearDepth(1.0);
-            _gl.Clear(ClearBufferMask.DepthBufferBit);
+            ClearStaleDepth(rt);
             _gl.Enable(EnableCap.ScissorTest);
-            rt.ZGen = GteDepth.Generation;
         }
         if (_kZMode == 3)
         {
@@ -2040,6 +2086,18 @@ public sealed partial class GlCore : IGpuBackend
         _texFilled = 0;
     }
 
+    /// <summary>The target's depth cleared on its first draw of a frame, or after the
+    /// depth setting moved, with its framebuffer bound; leaves the scissor off.</summary>
+    void ClearStaleDepth(GlDisplayRt rt)
+    {
+        if (!GteDepth.DepthWanted || (rt.LastDrawFrame == _frame && rt.ZGen == GteDepth.Generation)) return;
+        _gl.Disable(EnableCap.ScissorTest);
+        _gl.DepthMask(true);
+        _gl.ClearDepth(1.0);
+        _gl.Clear(ClearBufferMask.DepthBufferBit);
+        rt.ZGen = GteDepth.Generation;
+    }
+
     unsafe void Orphan(uint buffer, int bytes)
     {
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, buffer);
@@ -2340,7 +2398,7 @@ public sealed partial class GlCore : IGpuBackend
             var aoQuery = BeginGpuTimer();
             surfaces = DrawSurfaces(src!, gScale);
             RunAo(src!, dispX - src!.X, dispY - src.Y, w1x, h1x, fbW, fbH, surfaces && GteDepth.AoNormals);
-            EndGpuTimer(aoQuery, GpuWork.AmbientOcclusion, aoStart);
+            EndGpuTimer(aoQuery, GpuWork.AmbientOcclusion, aoStart, Diagnostics.GpuTimes.Pass.Ao);
             Diagnostics.Profiler.End(aoProfile);
         }
         else if (GteDepth.AmbientOcclusion && !rgb24)
@@ -2358,7 +2416,7 @@ public sealed partial class GlCore : IGpuBackend
                 DrawRetained(src!);
                 RunSsr(src!, dispX - src!.X, dispY - src.Y, w1x, h1x);
             }
-            EndGpuTimer(ssrQuery, GpuWork.Reflections, ssrStart);
+            EndGpuTimer(ssrQuery, GpuWork.Reflections, ssrStart, Diagnostics.GpuTimes.Pass.Reflections);
             Diagnostics.Profiler.End(ssrProfile);
         }
         else if (GteDepth.Reflections && !rgb24)
@@ -2439,7 +2497,9 @@ public sealed partial class GlCore : IGpuBackend
         }
 
         uint outTex = ApplyPostFx(_presentTex, fbW, fbH);
-        EndGpuTimer(compQuery, GpuWork.Composite, compStart);
+        EndGpuTimer(compQuery, GpuWork.Composite, compStart, Diagnostics.GpuTimes.Pass.Composite);
+        ResolveGpuTimes();
+        Diagnostics.GpuTimes.Issued = ++_gpuPresent;
         Diagnostics.Profiler.End(compProfile);
         if (PresentSnap.Due(dispY)) SnapPresent(outTex == _postTex ? _postFbo : _presentFbo, fbW, fbH, dispX, dispY);
 
@@ -2713,7 +2773,8 @@ public sealed partial class GlCore : IGpuBackend
     /// reads; see NormalFs.
     unsafe bool RenderSurfaces(GlDisplayRt src, int scale)
     {
-        if ((!GteDepth.AoNormals && !GteDepth.Reflections) || _progNormal == 0 || src.Geo.Count == 0) return false;
+        if ((!GteDepth.AoNormals && !GteDepth.Reflections) || _progNormal == 0
+            || src.Geo.Count == 0 && src.Geo.WorldSerial == 0) return false;
         EnsureNormalTarget(src, scale);
         if (src.Normal == 0) return false;
 
@@ -2733,6 +2794,9 @@ public sealed partial class GlCore : IGpuBackend
         _gl.BlendEquation(BlendEquationModeEXT.FuncAdd);
         _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
 
+        // 0085. The map the GPU drew goes in first, and the rest is tested against
+        // the frame's depth.
+        bool world = DrawWorldNormals(src, scale);
         _gl.UseProgram(_progNormal);
         // The same transform the colour pass used on this target, so a triangle
         // lands on the pixels it landed on there.
@@ -2764,30 +2828,66 @@ public sealed partial class GlCore : IGpuBackend
             _gl.ActiveTexture(TextureUnit.Texture0);
             _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
         }
-        int start = 0;
+        // 0085. The map's water goes in where the colour pass drew it among the list.
+        var water = world && _wnReady ? src.Geo.Water : null;
+        int start = 0, bi = 0, wi = 0;
+        int armAt = world && _wnReady ? src.Geo.ArmAt : -1;
         bool veil = false;
-        for (int i = 0; i <= breaks.Count; i++)
+        for (;;)
         {
-            int end = i < breaks.Count ? breaks[i] : verts.Length;
-            if (end > start)
+            for (; water != null && wi < water.Count && water[wi].At <= start; wi++)
             {
-                if (veil)
-                {
-                    if (src.Surface != 0) _gl.Enable(EnableCap.Blend, 1);
-                    _gl.BlendFuncSeparate(BlendingFactor.Zero, BlendingFactor.One, BlendingFactor.One, BlendingFactor.One);
-                    if (_uNrmVeilPass >= 0) _gl.Uniform1(_uNrmVeilPass, 1);
-                    _gl.DrawArrays(PrimitiveType.Triangles, start, (uint)(end - start));
-                }
                 if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
                 _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
-                if (_uNrmVeilPass >= 0) _gl.Uniform1(_uNrmVeilPass, veil ? 2 : 0);
+                DrawWorldWaterNormals(water[wi].Lo, water[wi].Hi);
+                _gl.UseProgram(_progNormal);
+                _gl.BindVertexArray(_nrmVao);
+                _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _nrmVbo);
+                if (breaks.Count > 0)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture0);
+                    _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
+                }
+            }
+            // After the water the walk drew before it.
+            if (armAt >= 0 && armAt <= start)
+            {
+                armAt = -1;
+                if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
+                _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+                DrawArmNormals(src);
+                _gl.UseProgram(_progNormal);
+                _gl.BindVertexArray(_nrmVao);
+                _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _nrmVbo);
+                if (breaks.Count > 0)
+                {
+                    _gl.ActiveTexture(TextureUnit.Texture0);
+                    _gl.BindTexture(TextureTarget.Texture2D, _vram.SampleTexture);
+                }
+            }
+            for (; bi < breaks.Count && breaks[bi] <= start; bi++) veil = !veil;
+            if (start >= verts.Length) break;
+            int end = verts.Length;
+            if (bi < breaks.Count) end = Math.Min(end, breaks[bi]);
+            if (water != null && wi < water.Count) end = Math.Min(end, water[wi].At);
+            if (armAt > start) end = Math.Min(end, armAt);
+            if (veil)
+            {
+                if (src.Surface != 0) _gl.Enable(EnableCap.Blend, 1);
+                _gl.BlendFuncSeparate(BlendingFactor.Zero, BlendingFactor.One, BlendingFactor.One, BlendingFactor.One);
+                if (_uNrmVeilPass >= 0) _gl.Uniform1(_uNrmVeilPass, 1);
                 _gl.DrawArrays(PrimitiveType.Triangles, start, (uint)(end - start));
             }
+            if (src.Surface != 0) _gl.Disable(EnableCap.Blend, 1);
+            _gl.BlendFunc(BlendingFactor.One, BlendingFactor.OneMinusSrcAlpha);
+            if (_uNrmVeilPass >= 0) _gl.Uniform1(_uNrmVeilPass, veil ? 2 : 0);
+            _gl.DrawArrays(PrimitiveType.Triangles, start, (uint)(end - start));
             start = end;
-            veil = !veil;
         }
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
         _gl.Disable(EnableCap.Blend);
+        if (world && _uNrmDepthCull >= 0) _gl.Uniform1(_uNrmDepthCull, 0);
+        if (RetainedScene.SurfaceCheck && src.Surface != 0) CheckSurfaces(src);
         AoGeometry.Passes++;
         return true;
     }
@@ -2850,6 +2950,7 @@ public sealed partial class GlCore : IGpuBackend
         if (_uSsrMurkDist >= 0) _gl.Uniform1(_uSsrMurkDist, WaterMurk.Enabled ? Math.Max(1f, WaterMurk.Distance) : 0f);
         if (_uSsrPlainZ >= 0) _gl.Uniform1(_uSsrPlainZ, GteDepth.PlainDepth);
         if (_uSsrMurkColor >= 0) _gl.Uniform3(_uSsrMurkColor, WaterMurk.R, WaterMurk.G, WaterMurk.B);
+        if (_uSsrMurkUp >= 0) _gl.Uniform4(_uSsrMurkUp, WaterMurk.UpX, WaterMurk.UpY, WaterMurk.UpZ, WaterMurk.MaxTilt);
         if (_uSsrSteps >= 0) _gl.Uniform1(_uSsrSteps, Math.Clamp(ScreenReflections.Steps, 1, 128));
         if (_uSsrDqa >= 0) _gl.Uniform1(_uSsrDqa, (float)GteDepth.ProjDqa);
         if (_uSsrDqb >= 0) _gl.Uniform1(_uSsrDqb, (float)GteDepth.ProjDqb);

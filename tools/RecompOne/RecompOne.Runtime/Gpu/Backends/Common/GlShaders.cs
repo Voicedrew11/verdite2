@@ -552,6 +552,14 @@ internal static class GlShaders
         // 2 a textured one's opaque texels, 0 is no veil.
         uniform sampler2D uVram;
         uniform int uVeilPass;
+        // 0085. The frame's own depth, when the map was drawn on the GPU: the map is
+        // drawn here first and the table's triangles after it, so order no longer
+        // says which surface is in front, and a fragment behind the depth is dropped.
+        uniform sampler2D uFrameDepth;
+        uniform int uDepthCull;
+        uniform vec2 uDepthStep;
+        // The map's water, one slice of view depth, (x, y]; y 0 is none.
+        uniform vec2 uZSlice;
 
         vec4 vfetch(ivec2 c) { return texelFetch(uVram, c & ivec2(1023, 511), 0); }
         int vu5(float f) { return int(floor(f * 31.0 + 0.5)); }
@@ -611,9 +619,17 @@ internal static class GlShaders
             // fact that it covers what is under it.
             if (id > 2.5 && id < 3.5) { oColor = vec4(0.0); oSurface = vec4(0.0, 0.0, 0.0, id); return; }
             if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
+            if (uZSlice.y > 0.0 && (z <= uZSlice.x || z > uZSlice.y)) discard;
             vec2 s = gl_FragCoord.xy / uScale;
             vec3 p = vec3((s - uCentre) * (z / uProjH), z);
-            vec3 n = cross(dFdx(p), dFdy(p));
+            vec3 dpx = dFdx(p), dpy = dFdy(p);
+            if (uDepthCull != 0) {
+                float d = texelFetch(uFrameDepth, ivec2(gl_FragCoord.xy * uDepthStep), 0).r;
+                float dz = d * 65536.0;
+                // The depth texel may sit up to a pixel off this one's centre.
+                if (d < 0.99999 && z > dz + 16.0 + dz / 128.0 + abs(dpx.z) + abs(dpy.z)) discard;
+            }
+            vec3 n = cross(dpx, dpy);
             // A polygon edge-on to the camera, or one degenerate after projection:
             // no plane to report. The zero vector leaves the occlusion pass its own
             // answer, and material None leaves this pixel out of the reflections.
@@ -629,6 +645,241 @@ internal static class GlShaders
             oSurface = vec4(octEncode(n), vDepth, id);
         }
         """;
+
+    /// <summary>
+    /// 0085. The retained map into the normal and surface buffers: <c>WorldVs</c>'s
+    /// position to the letter, for <c>NormalFs</c>. The material is the face's own,
+    /// or <c>Opaque</c>, as <c>SurfaceMaterial.Classify</c> gives an opaque packet.
+    /// </summary>
+
+    /// <summary>
+    /// 0085. A model drawn from a cached mesh (Step 3's second slice), for <c>WorldVs</c>
+    /// and <c>WorldNormalVs</c>: a corner's <c>inWorld.x</c> is its vertex in the
+    /// instance's posed vertices, <c>inCue</c> its face's first three vertices and
+    /// <c>inRgbc</c> the fourth (all ones for a triangle). A face is dropped where the
+    /// lit assembler drops it: facing away on the screen, or its mean table depth at or
+    /// before 0, before <c>uModelNear</c> or at or past <c>uModelFar</c>. Every corner of a face computes the
+    /// same answer from the same four vertices.
+    /// </summary>
+    const string ModelGlsl = """
+        uniform int   uModel;
+        uniform isamplerBuffer uModelVerts;
+        uniform int   uModelBase;
+        uniform mat3  uModelR;
+        uniform vec3  uModelT;
+        uniform float uModelFar;
+        uniform float uModelNear;
+        uniform mat3  uModelLlm;
+        uniform vec3  uModelCue;
+        uniform uint  uModelRgbc;
+        uniform uint  uModelMat;
+        // The GTE's own screen centre (OFX, OFY), for its saturated projection.
+        uniform vec2  uModelGteC;
+        // The pose store: -1 takes the frame's vertices at uModelBase; otherwise the
+        // first texel of a rigid model's vertices (weight -1), or of an MO keyframe
+        // and its deltas, two texels a vertex, blended as the game's decoder blends
+        // them: key + (short)((delta * weight) >> 12), in 16 bits.
+        uniform isamplerBuffer uModelPoses;
+        uniform int   uModelPose;
+        uniform int   uModelPoseW;
+        // The sky (func_8002F918): a face is kept by its facing alone, on whole
+        // pixels, whatever its depth; lit per corner, with no cue.
+        uniform int   uModelSky;
+        // An object near the camera (func_80030540): no depth range; a face whose
+        // corners its transform projects keeps the facing on the screen, a quad on its
+        // whole loop, and any other goes to the game's clipper, which here is the GPU's
+        // near clip and the face's plane against the eye.
+        uniform int   uModelTile;
+
+        ivec3 modelPosed(int i) {
+            if (uModelPose < 0) return texelFetch(uModelVerts, uModelBase + i).xyz;
+            if (uModelPoseW < 0) return texelFetch(uModelPoses, uModelPose + i).xyz;
+            ivec3 k = texelFetch(uModelPoses, uModelPose + 2 * i).xyz;
+            ivec3 d = texelFetch(uModelPoses, uModelPose + 2 * i + 1).xyz;
+            ivec3 s = (((d * uModelPoseW) >> 12) << 16) >> 16;
+            return ((k + s) << 16) >> 16;
+        }
+
+        vec3 modelVertex(uint i) {
+            return uModelR * vec3(modelPosed(int(i))) + uModelT;
+        }
+
+        // A model placed in view space (the first-person arm), with the GTE's own
+        // rotation (4.12) and translation: taken to the eye as RTPS takes it, in
+        // integers, (R v >> 12) + T, IR saturated. Near the eye the divide magnifies a
+        // unit into pixels, and a float transform there flips an edge-on face.
+        uniform int   uModelView;
+        uniform ivec3 uModelVR0, uModelVR1, uModelVR2, uModelVT;
+        vec3 modelEye(uint i) {
+            if (uModelView == 0) return uR * (modelVertex(i) - uCam) + uT;
+            ivec3 p = modelPosed(int(i));
+            ivec3 m = ivec3(uModelVR0.x * p.x + uModelVR0.y * p.y + uModelVR0.z * p.z,
+                            uModelVR1.x * p.x + uModelVR1.y * p.y + uModelVR1.z * p.z,
+                            uModelVR2.x * p.x + uModelVR2.y * p.y + uModelVR2.z * p.z);
+            ivec3 v = (m >> 12) + uModelVT;
+            return vec3(clamp(v.xy, ivec2(-32768), ivec2(32767)), v.z);
+        }
+
+        // RTPS as the GTE takes it, which the facing test is taken on: the divide
+        // saturates below H/2 and the screen position at the ends of its range, so a
+        // face reaching behind the eye is kept or dropped as the game keeps it.
+        vec2 modelScreen(vec3 v) {
+            float z = max(clamp(v.z, 0.0, 65535.0), uH * 0.5);
+            vec2 s = clamp(uModelGteC + uH * clamp(v.xy, -32768.0, 32767.0) / z, -1024.0, 1023.0);
+            return uWorldSnap != 0 ? floor(s) : s;
+        }
+
+        // Where the packets put a corner the GTE's divide saturates for (nearer than
+        // H/2) or whose screen position it clamps: modelScreen's place, taken to the
+        // target's pixels, W the true depth as the packets' is (at least 1). The lit
+        // assembler clips nothing, so neither does the near plane here. Anywhere else
+        // the projection is the ordinary one, unchanged.
+        vec4 modelPlace(vec4 p, vec3 v) {
+            if (uModel == 0 || uModelTile != 0) return p;
+            if (v.z >= uH * 0.5) {
+                vec2 raw = uModelGteC + uH * v.xy / v.z;
+                if (all(greaterThanEqual(raw, vec2(-1024.0))) && all(lessThanEqual(raw, vec2(1023.0)))) return p;
+            }
+            float w = max(v.z, 1.0);
+            return vec4(((modelScreen(v) - uModelGteC + uC) * 2.0 / uFb - 1.0) * w, 0.0, w);
+        }
+
+        // Whether the GTE projects a corner without saturating: in front of H/2 and on
+        // the screen's range, as the near transform's flag test keeps it.
+        bool modelProjects(vec3 v) {
+            if (v.z <= uH * 0.5 || v.z > 32767.0) return false;
+            vec2 raw = uModelGteC + uH * v.xy / v.z;
+            return all(greaterThanEqual(raw, vec2(-1024.0))) && all(lessThanEqual(raw, vec2(1023.0)));
+        }
+
+        bool modelTileKept(vec3 v0, vec3 v1, vec3 v2, uint f3) {
+            bool quad = f3 != 0xFFFFFFFFu;
+            vec3 v3 = quad ? modelEye(f3) : v2;
+            if (modelProjects(v0) && modelProjects(v1) && modelProjects(v2) && (!quad || modelProjects(v3))) {
+                vec2 s0 = modelScreen(v0), s1 = modelScreen(v1), s2 = modelScreen(v2), s3 = modelScreen(v3);
+                // A quad's loop 0, 1, 3, 2: its area is half the diagonals' cross.
+                vec2 a = quad ? s3 - s0 : s1 - s0, b = quad ? s2 - s1 : s2 - s0;
+                return a.x * b.y - a.y * b.x > 0.0;
+            }
+            // The plane against the eye: the facing of what the near clip leaves.
+            vec3 n = quad ? cross(v3 - v0, v2 - v1) : cross(v1 - v0, v2 - v0);
+            return dot(v0, n) > 0.0;
+        }
+
+        bool modelFaceKept(vec3 f, uint f3) {
+            vec3 v0 = modelEye(uint(f.x));
+            vec3 v1 = modelEye(uint(f.y));
+            vec3 v2 = modelEye(uint(f.z));
+            if (uModelTile != 0) return modelTileKept(v0, v1, v2, f3);
+            // The vertex cache holds each corner's SZ over four; the face sits at their mean.
+            int z0 = int(clamp(v0.z, 0.0, 65535.0)) >> 2;
+            int z1 = int(clamp(v1.z, 0.0, 65535.0)) >> 2;
+            int z2 = int(clamp(v2.z, 0.0, 65535.0)) >> 2;
+            int z;
+            if (f3 != 0xFFFFFFFFu) {
+                vec3 v3 = modelEye(f3);
+                z = (z0 + z1 + z2 + (int(clamp(v3.z, 0.0, 65535.0)) >> 2)) >> 2;
+            } else z = (z0 + z1 + z2) / 3;
+            if (uModelSky == 0 && (z <= 0 || float(z) < uModelNear || float(z) >= uModelFar)) return false;
+            vec2 s0 = modelScreen(v0), s1 = modelScreen(v1), s2 = modelScreen(v2);
+            if (uModelSky != 0) { s0 = floor(s0); s1 = floor(s1); s2 = floor(s2); }
+            return (s1.x - s0.x) * (s2.y - s0.y) - (s1.y - s0.y) * (s2.x - s0.x) > 0.0;
+        }
+        """;
+
+    public static readonly string WorldNormalVs = """
+        #version 330 core
+        layout(location = 0) in vec3  inWorld;
+        layout(location = 5) in vec3  inCue;
+        layout(location = 7) in uint  inFlags;
+        layout(location = 8) in uint  inRgbc;
+
+        invariant gl_Position;
+
+        out float vDepth;
+        flat out float vM;
+        out vec2 vUv;
+        flat out uint vTex;
+
+        uniform mat3  uR;
+        uniform vec3  uCam;
+        uniform vec3  uT;
+        uniform float uH;
+        uniform vec2  uC;
+        uniform vec2  uFb;
+        uniform float uNear;
+        uniform usampler2D uHalves;
+        uniform int uHalfGate;
+        uniform int uWorldSnap;
+        // 0085. WaterSwell's field: a corner the port flagged free (bit 27) moves by
+        // it, rounded to the whole unit the packets move it by. Per wave: its
+        // wavenumber along X and Z, its height, its phase.
+        uniform int  uSwellOn;
+        uniform vec4 uSwell[3];
+        float swellDy(vec3 p) {
+            float h = 0.0;
+            for (int i = 0; i < 3; i++)
+                h += uSwell[i].z * sin(uSwell[i].x * p.x + uSwell[i].y * p.z - uSwell[i].w);
+            return floor(-h + 0.5);
+        }
+        //@model
+        // A model's blended faces (uModelBlend 1), as their packets reached the surface
+        // list: a solid model's as the opaque surface it stands for; else one with a
+        // material, or on the water's texture in an averaging blend, as that blended
+        // surface; any other is no surface. uModelTwin is the forced rate, or -1.
+        uniform int uModelBlend;
+        uniform int uModelSolid;
+        uniform int uModelTwin;
+
+        void main() {
+            uint flags = inFlags;
+            vec3 w = inWorld;
+            if (uModel != 0) {
+                uint m = uModelMat;
+                if (uModelBlend != 0) {
+                    int mode = uModelTwin >= 0 ? uModelTwin : int((inFlags >> 8) & 3u);
+                    bool water = (inFlags & 0x10000000u) != 0u && (mode == 0 || mode == 3);
+                    if (m == 0u) m = water ? 2u : uModelSolid != 0 ? 1u : 0u;
+                }
+                if ((uModelBlend != 0 && m == 0u) || !modelFaceKept(inCue, inRgbc)) {
+                    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                    vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
+                    return;
+                }
+                w = modelVertex(uint(inWorld.x));
+                flags = (inFlags & ~(255u | 0x10000400u)) | m;
+                if (uModelBlend != 0 && uModelSolid == 0) flags |= 0x10000400u;
+            }
+            uint hid = (flags >> 13) & 0x3FFFu;
+            if (uHalfGate != 0 && hid != 0u
+                && texelFetch(uHalves, ivec2(int((hid - 1u) % 160u), int((hid - 1u) / 160u)), 0).r == 0u) {
+                gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
+                return;
+            }
+            // A blended face is kept only as water (bit 28), with 256 over its id
+            // as a blended packet carries it; any other blended face is no surface.
+            bool semi = (flags & 0x400u) != 0u;
+            if (semi && (flags & 0x10000000u) == 0u) {
+                gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                vDepth = 0.0; vM = 0.0; vUv = vec2(0.0); vTex = 0u;
+                return;
+            }
+            if (uSwellOn != 0 && (flags & 0x8000000u) != 0u) w.y += swellDy(w);
+            vec3 v = uR * (w - uCam) + uT;
+            if (uModel != 0 && uModelView != 0) v = modelEye(uint(inWorld.x));
+            float z = v.z;
+            gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
+            if (uWorldSnap != 0 && z > 0.0)
+                gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+            gl_Position = modelPlace(gl_Position, v);
+            vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
+            uint m = flags & 255u;
+            vM = semi ? float(uModel != 0 ? m : 2u) + 256.0 : float(m == 0u ? 1u : m);
+            vUv = vec2(0.0);
+            vTex = 0u;
+        }
+        """.Replace("//@model", ModelGlsl);
 
     /// <summary>
     /// 0067. Screen-space reflections. For each pixel whose surface reflects, the
@@ -678,6 +929,8 @@ internal static class GlShaders
         // Murk: water thickens towards its colour with the distance the view ray
         // runs through it, surface to the opaque floor behind. 0 is off.
         uniform float uMurkDist;
+        // The world's vertical in view space, and the cosine a murked surface may lean to.
+        uniform vec4  uMurkUp;
         // 0083. Past this view depth the surface is left as the game drew it.
         uniform float uPlainZ;
         uniform vec3  uMurkColor;
@@ -995,7 +1248,7 @@ internal static class GlShaders
             if (m <= 0 || m >= 256) return;
             vec4 mat = texelFetch(uMatTable, ivec2(m, 0), 0);
             float refl = mat.r;
-            bool murky = uMurkDist > 0.0 && m == 2;
+            bool murky = uMurkDist > 0.0 && m == 2 && abs(dot(octDecode(s.rg), uMurkUp.xyz)) >= uMurkUp.w;
             if (refl <= 0.0 && !murky) return;
             if (refl > 0.0) oInfo.a = 1.0 / 255.0;
 
@@ -1230,7 +1483,7 @@ internal static class GlShaders
     /// lines up with the picture pixel for pixel; what lies below the plane is
     /// clipped away before it is mirrored.
     /// </summary>
-    public const string WorldVs = """
+    public static readonly string WorldVs = """
         #version 330 core
         layout(location = 0) in vec3  inWorld;
         layout(location = 1) in vec3  inColorF;
@@ -1244,6 +1497,9 @@ internal static class GlShaders
         // its mip atlas entry (0060), 0 for none.
         layout(location = 8) in uint  inRgbc;
         layout(location = 9) in uint  inMip;
+        // 0085. A static map corner lit here from the light records (bit 31): see
+        // RetainedScene.Vertex.Light.
+        layout(location = 10) in uint inLight;
 
         invariant gl_Position;
 
@@ -1257,6 +1513,8 @@ internal static class GlShaders
         flat out int   vRepClut;
         noperspective out vec3 vLit;
         noperspective out float vFog;
+        // 0085. The corner's DQA and DQB, for PrimFs to fog at the pixel's own depth.
+        out vec2 vCue;
         flat out uint vLight;
         flat out uvec2 vTex;
         flat out uint vMat;
@@ -1282,19 +1540,161 @@ internal static class GlShaders
         uniform int uHalfGate;
         // Authored lights or a glow are drawn: the corner carries its RGBC to them.
         uniform int uWorldLit;
+        // 0085. inMip is a texture's index plus one into this table of atlas
+        // entries (the static map), not the entry itself (the frame's models).
+        uniform usamplerBuffer uMipTable;
+        uniform int uMipIndirect;
+        // 0085. The main view follows the frame's settings: corner positions on whole
+        // pixels (sub-pixel off), the depth cue at the corners (per-pixel lighting
+        // off), and the crosshatch. The reflections leave all three at their defaults.
+        uniform int uWorldSnap;
+        uniform int uWorldPerPixel;
+        uniform int uWorldDither;
+        // 0085. WaterSwell's field: a corner the port flagged free (bit 27) moves by
+        // it, rounded to the whole unit the packets move it by. Per wave: its
+        // wavenumber along X and Z, its height, its phase.
+        uniform int  uSwellOn;
+        uniform vec4 uSwell[3];
+        float swellDy(vec3 p) {
+            float h = 0.0;
+            for (int i = 0; i < 3; i++)
+                h += uSwell[i].z * sin(uSwell[i].x * p.x + uSwell[i].y * p.z - uSwell[i].w);
+            return floor(-h + 0.5);
+        }
+        // 0085. A model's gouraud corner (bit 30) carries its normal's three light
+        // dots, lit by these as PrimFs's shade8 lights a directional record.
+        uniform vec3 uLightBk;
+        uniform vec3 uLcmR;
+        uniform vec3 uLcmG;
+        uniform vec3 uLcmB;
+        //@model
 
-        float cueKeep(float z) {
-            int curve = int(inCue.z + 0.5);
+        // 0085. The area's light records, 52 ints each in 13 texels (RetainedScene.Records):
+        // the light matrix per quarter turn, the colour matrix, the back colour, the fog
+        // word, its DQA and DQB, and its curve. A corner is lit as the tile assembler
+        // lights its face (NormalColorCol) and blended as EvenFog blends it, in the
+        // same integers, so a record the game rewrites is an upload and not a rebuild.
+        uniform isampler2D uRecords;
+        int recInt(int r, int i) { return texelFetch(uRecords, ivec2(i >> 2, r), 0)[i & 3]; }
+
+        // Round half away from zero of (k . v) / t, exactly, as the CPU's double does:
+        // k up to 4096^2 and v a short do not fit an int product, so k is split in two
+        // and a float guess is corrected by an exact test of the half-way bounds.
+        int mixExact(ivec4 k, ivec4 v, int t) {
+            ivec4 kh = k >> 12, kl = k & 4095;
+            int hi = kh.x * v.x + kh.y * v.y + kh.z * v.z + kh.w * v.w;
+            int lo = kl.x * v.x + kl.y * v.y + kl.z * v.z + kl.w * v.w;
+            float q = (float(hi) * 4096.0 + float(lo)) / float(t);
+            int sgn = q < 0.0 ? -1 : 1;
+            hi *= sgn; lo *= sgn;
+            int c = int(floor(abs(q) + 0.5));
+            // D = 2S - (2c-1)t, in [0, 2t) when c is right.
+            int m = 2 * c - 1;
+            int d = (2 * hi - m * (t >> 12)) * 4096 + (2 * lo - m * (t & 4095));
+            if (d < 0) c--;
+            else if (d >= 2 * t) c++;
+            return sgn * c;
+        }
+
+        bool sameLight(int a, int b) {
+            for (int i = 9; i < 12; i++)
+                if (texelFetch(uRecords, ivec2(i, a), 0) != texelFetch(uRecords, ivec2(i, b), 0)) return false;
+            return true;
+        }
+
+        void recordLit(uint l, vec3 normal, float ax, float az, uint rgbc, out vec3 color, out vec3 cue) {
+            int own = int(l & 63u), rot = int((l >> 6) & 3u);
+            ivec3 nb = ivec3(int((l >> 8) & 63u), int((l >> 14) & 63u), int((l >> 20) & 63u));
+            // TileWeights: own, along X, along Z, the diagonal; 0 where there is no half.
+            int iax = int(ax + 0.5), iaz = int(az + 0.5);
+            ivec4 k = ivec4((4096 - iax) * (4096 - iaz),
+                            (l & (1u << 26)) != 0u ? iax * (4096 - iaz) : 0,
+                            (l & (1u << 27)) != 0u ? (4096 - iax) * iaz : 0,
+                            (l & (1u << 28)) != 0u ? iax * iaz : 0);
+            ivec4 rec = ivec4(own, nb);
+            int t = k.x + k.y + k.z + k.w;
+
+            // The light: the own record's light matrix; the colour matrix and back
+            // colour blended where a neighbour weighing in lights otherwise.
+            bool mixL = (l & 0x40000000u) != 0u
+                && ((k.y != 0 && !sameLight(nb.x, own)) || (k.z != 0 && !sameLight(nb.y, own))
+                    || (k.w != 0 && !sameLight(nb.z, own)));
+            ivec3 n = ivec3(normal);
+            ivec3 a;
+            for (int j = 0; j < 3; j++) {
+                int v = recInt(own, rot * 9 + 3 * j) * n.x + recInt(own, rot * 9 + 3 * j + 1) * n.y
+                      + recInt(own, rot * 9 + 3 * j + 2) * n.z;
+                a[j] = clamp(v >> 12, 0, 0x7FFF);
+            }
+            for (int c = 0; c < 3; c++) {
+                int bk = recInt(own, 45 + c);
+                if (mixL) bk = mixExact(k, ivec4(bk, recInt(rec.y, 45 + c), recInt(rec.z, 45 + c), recInt(rec.w, 45 + c)), t);
+                int v = bk << 12;
+                for (int j = 0; j < 3; j++) {
+                    int i = 36 + 3 * c + j;
+                    int m = recInt(own, i);
+                    if (mixL) m = mixExact(k, ivec4(m, recInt(rec.y, i), recInt(rec.z, i), recInt(rec.w, i)), t);
+                    v += m * a[j];
+                }
+                int ir = clamp(v >> 12, 0, 0x7FFF);
+                int mac = ((int((rgbc >> uint(8 * c)) & 255u) * ir) << 4) >> 12;
+                color[c] = float(clamp(mac >> 4, 0, 255));
+            }
+
+            // The fog: the words' DQA and DQB blended where a neighbour weighing in
+            // has another word; a word with no fog weighs in as no cue.
+            int word = recInt(own, 48);
+            cue = vec3(float(recInt(own, 49)), float(recInt(own, 50)), float(recInt(own, 51)));
+            bool mixF = (l & 0x20000000u) != 0u
+                && ((k.y != 0 && recInt(nb.x, 48) != word) || (k.z != 0 && recInt(nb.y, 48) != word)
+                    || (k.w != 0 && recInt(nb.z, 48) != word));
+            if (mixF) {
+                float qa = 0.0, qb = 0.0, bent = cue.z;
+                int most = 0;
+                for (int i = 0; i < 4; i++) {
+                    if (k[i] == 0) continue;
+                    int w = recInt(rec[i], 48);
+                    if (w >= 32000) continue;
+                    float f = float(k[i]) / float(t);
+                    qa += f * float(recInt(rec[i], 49));
+                    qb += f * float(recInt(rec[i], 50));
+                    if (k[i] > most) { most = k[i]; bent = w < 0 ? 1.0 : 2.0; }
+                }
+                cue = vec3(qa, qb, bent);
+            }
+        }
+
+        float cueKeep(vec3 cue, float z) {
+            int curve = int(cue.z + 0.5);
             if (uFogOn == 0 || curve == 0) return 1.0;
             float q = min(uCueH * 65536.0 / max(z, 1.0), 131071.0);
-            float ir0 = clamp((inCue.x * q + inCue.y) / 4096.0, 0.0, 4096.0);
+            float ir0 = clamp((cue.x * q + cue.y) / 4096.0, 0.0, 4096.0);
             float w = curve == 1 ? max(ir0 - 800.0, 0.0) * 2.0
                     : (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0);
             return clamp(1.0 - w / 4096.0, 0.0, 1.0);
         }
 
+        // 0051's depth pass (PrimFs's uDepthOnly): no corner's light is read.
+        uniform int uDepthOnly;
+
         void main() {
-            uint hid = (inFlags >> 13) & 0x3FFFu;
+            vec3 w = inWorld, color = inColorF, cue = inCue;
+            uint flags = inFlags, rgbc = inRgbc;
+            if (uDepthOnly == 0 && (inLight & 0x80000000u) != 0u) recordLit(inLight, inColorF, inCue.x, inCue.y, inRgbc, color, cue);
+            if (uModel != 0) {
+                if (!modelFaceKept(inCue, inRgbc)) {
+                    gl_Position = vec4(0.0, 0.0, 2.0, 1.0);
+                    gl_ClipDistance[0] = -1.0;
+                    return;
+                }
+                // The corner's normal, lit to its three dots by the instance's LLM.
+                w = modelVertex(uint(inWorld.x));
+                color = uModelLlm * inColorF;
+                cue = uModelCue;
+                rgbc = (inLight & 0x40000000u) != 0u ? inLight & 0xFFFFFFu : uModelRgbc;
+                flags = (inFlags & ~255u) | uModelMat;
+            }
+            uint hid = (flags >> 13) & 0x3FFFu;
             vFade = 1.0;
             if (uHalfGate != 0) {
                 uint weight = hid == 0u ? 255u
@@ -1307,36 +1707,59 @@ internal static class GlShaders
                     return;
                 }
             }
-            vec3 w = inWorld;
+            if (uSwellOn != 0 && (flags & 0x8000000u) != 0u) w.y += swellDy(w);
             gl_ClipDistance[0] = (uPlaneY - uPlaneBias) - w.y;
             if (uMirror != 0) w.y = 2.0 * uPlaneY - w.y;
             vec3 v = uR * (w - uCam) + uT;
+            if (uModel != 0 && uModelView != 0) v = modelEye(uint(inWorld.x));
             float z = v.z;
             gl_Position = vec4((uC * z + uH * v.xy) * 2.0 / uFb - z, z - 2.0 * uNear, z);
+            if (uWorldSnap != 0 && z > 0.0)
+                gl_Position.xy = (floor(uC + uH * v.xy / z) * 2.0 / uFb - 1.0) * z;
+            gl_Position = modelPlace(gl_Position, v);
             vDepth = z > 0.0 ? z * (1.0 / 65536.0) : 0.0;
 
-            vColor = vec4(inColorF * cueKeep(z), 0.0) / 255.0;
+            bool dots = (flags & 0x40000000u) != 0u;
+            vec3 lit = color;
+            if (dots) {
+                vec3 a = clamp(color, 0.0, 32767.0);
+                vec3 ir = clamp(uLightBk + vec3(dot(uLcmR, a), dot(uLcmG, a), dot(uLcmB, a)) / 4096.0, 0.0, 32767.0);
+                lit = vec3(uvec3(rgbc, rgbc >> 8u, rgbc >> 16u) & uvec3(255u)) * ir / 4096.0;
+            }
+            vColor = vec4(clamp(lit * cueKeep(cue, z), 0.0, 255.0), 0.0) / 255.0;
+            // The sky's packets carry no light record: the corner colour, and nothing
+            // an authored light or a glow adds.
+            if (uModel != 0 && uModelSky != 0) { dots = false; rgbc = 0u; cue = vec3(0.0); }
             // Fogged per pixel as 0048 fogs the game's own faces: the raw IR0 is
             // affine on screen (it goes as 1/z), so interpolated it is exact, and
             // shade8 puts it through the curve at every pixel.
-            int curve = int(inCue.z + 0.5);
-            if (uFogOn != 0 && curve != 0) {
+            int curve = int(cue.z + 0.5);
+            if (uFogOn != 0 && curve != 0 && uWorldPerPixel != 0) {
                 float q = min(uCueH * 65536.0 / max(z, 1.0), 131071.0);
-                vLit = inColorF;
-                vFog = (inCue.x * q + inCue.y) / 4096.0;
+                vLit = color;
+                vFog = (cue.x * q + cue.y) / 4096.0;
+                vCue = cue.xy;
                 vLight = uint(curve) << 24;
             } else {
                 vLit = vec3(0.0);
                 vFog = 0.0;
+                vCue = vec2(0.0);
                 vLight = 0u;
             }
-            if (uWorldLit != 0 && inRgbc != 0u) {
-                if (vLight == 0u) { vLit = inColorF; vFog = 0.0; }
-                vLight |= inRgbc & 0xFFFFFFu;
+            if (uWorldLit != 0 && uWorldPerPixel != 0 && rgbc != 0u) {
+                if (vLight == 0u) { vLit = color; vFog = 0.0; }
+                vLight |= rgbc & 0xFFFFFFu;
             }
-            vTex = uvec2(inRect, (inFlags & 0x80000000u) | inMip);
-            vMat = inFlags & 255u;
-            vDither = 0;
+            if (dots && uWorldPerPixel != 0) {
+                if (vLight == 0u) { vFog = 0.0; vCue = vec2(0.0); }
+                vLit = color;
+                vLight = (vLight & 0x07000000u) | 0x80000000u | (rgbc & 0xFFFFFFu);
+            }
+            uint mip = inMip;
+            if (uMipIndirect != 0) mip = inMip == 0u ? 0u : texelFetch(uMipTable, int(inMip) - 1).r;
+            vTex = uvec2(inRect, (flags & 0x80000000u) | mip);
+            vMat = flags & 255u;
+            vDither = uWorldDither;
             vRepClut = 0;
             vUV = inUV;
 
@@ -1350,7 +1773,7 @@ internal static class GlShaders
                 clutBase = ivec2((inClut & 0x3f) * 16, (inClut >> 6) & 0x1ff);
             }
         }
-        """;
+        """.Replace("//@model", ModelGlsl);
 
     public const string PrimVs = """
         #version 330 core
@@ -1392,6 +1815,7 @@ internal static class GlShaders
         // 0048. Both are affine across the polygon on screen, as the colour was.
         noperspective out vec3 vLit;
         noperspective out float vFog;
+        out vec2 vCue;
         flat out uint vLight;
         flat out uvec2 vTex;
         flat out uint vMat;
@@ -1424,6 +1848,7 @@ internal static class GlShaders
             vColor = vec4(inColorF, 0.0) / 255.0;
             vLit = inLit;
             vFog = inFog;
+            vCue = vec2(0.0);
             vLight = inLight;
             vTex = inTex;
             vMat = inMat;
@@ -1460,6 +1885,12 @@ internal static class GlShaders
         flat in int   vRepClut;
         noperspective in vec3 vLit;
         noperspective in float vFog;
+        // 0085. With uCueFromZ set (the world program's main view, its H), the raw
+        // depth cue is DQA * H/z + DQB at this pixel's own depth, from the corners'
+        // DQA and DQB; screen-affine vFog is that only while no corner is behind the
+        // eye, and a floor clipped at the camera's feet fogged to black.
+        in vec2 vCue;
+        uniform float uCueFromZ;
         flat in uint vLight;
         flat in uvec2 vTex;
         flat in uint vMat;
@@ -1848,15 +2279,22 @@ internal static class GlShaders
         }
 
         // The depth cue's weight, 0..4096, from the raw MAC0 through the curve.
+        float fogRaw() {
+            if (uCueFromZ <= 0.0 || vDepth <= 0.0) return vFog;
+            float q = min(uCueFromZ / max(vDepth, 1.0 / 65536.0), 131071.0);
+            return (vCue.x * q + vCue.y) / 4096.0;
+        }
+
         float cueWeight() {
             uint curve = (vLight >> 24) & 7u;
             bool level = gCueScale < 1.0 && curve != 0u;
-            float raw = level ? levelCue(vFog, curve) : vFog;
+            float fog = fogRaw();
+            float raw = level ? levelCue(fog, curve) : fog;
             float ir0 = clamp(raw, 0.0, 4096.0);
             float w = curve == 1u ? max(ir0 - 800.0, 0.0) * 2.0
                  : curve == 2u ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0)
                  : curve == 3u ? ir0 * 0.5
-                 : curve == 4u ? (level ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0) : vFog)
+                 : curve == 4u ? (level ? (ir0 < 2800.0 ? ir0 : 3.0 * ir0 - 5600.0) : fog)
                  : 0.0;
             // 0074. The authored curve over the game's.
             if (uAtmosOn != 0 && uAtmosShape != vec2(1.0) && w > 0.0)
@@ -1917,6 +2355,16 @@ internal static class GlShaders
             return vec3(min(c8 >> 3, 31)) / 31.0;
         }
 
+        // 0085. The first-person arm, drawn in painter's order: the far plane where it
+        // draws, as its unrecorded packets leave it. 0 is off.
+        uniform int uFarPlane;
+
+        // 0051, for a draw of the GPU world renderer's: the depth half of the two
+        // passes. Only what decides whether the fragment exists, as the colour pass
+        // decides it (the centre texel's hole), not the light or the filter, which
+        // a pass with colour masked would otherwise run in full. 0 is off.
+        uniform int uDepthOnly;
+
         void main() {
             // Written on every path so a 3D triangle's recovered SZ is the
             // window depth. Everything that recovered none writes the *far*
@@ -1931,6 +2379,7 @@ internal static class GlShaders
             // 0051. The tolerance is on the test only; GlCore draws the true depth first.
             float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
             gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
+            if (uFarPlane != 0) gl_FragDepth = 1.0;
             if (uClipOn != 0 && vDepth > 0.0) {
                 float cz = vDepth * 65536.0;
                 vec3 cp = vec3((gl_FragCoord.xy / float(uScale) - uClipCentre) * (cz / uClipH), cz);
@@ -1956,6 +2405,32 @@ internal static class GlShaders
                 if (mz <= 1.0) discard;
                 vec3 mp = vec3((mq - uMaskCentre) * (mz / uMaskH), mz);
                 if (abs(dot(uMaskPlane.xyz, mp) + uMaskPlane.w) > uMaskTol) discard;
+            }
+            if (uDepthOnly != 0) {
+                FragColor = vec4(0.0);
+                BlendColor = vec4(0.0);
+                if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
+                if (texMode == 4) { if (uOpaqueDepth == 1) discard; return; }
+                if (texMode == 5) { if (texture(uExtTex, vUV).a < 0.5 || uOpaqueDepth == 1) discard; return; }
+                vec2 ddx = dFdx(vUV), ddy = dFdy(vUV);
+                if (texMode == 6) {
+                    vec2 fuv = mod(vUV, vec2(uTexWindow.xy) + 1.0) + vec2(uTexWindow.zw);
+                    vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
+                    if (uRepScroll >= 0.0) t.y = fract(t.y - uRepScroll / uRepRect.w);
+                    float a = textureGrad(uRepTex, t, ddx / uRepRect.zw, ddy / uRepRect.zw).a;
+                    if (a < 0.5 || uOpaqueDepth == 1 && a < 0.95) discard;
+                    return;
+                }
+                int du = ddx.x < 0.0 ? int(ceil(vUV.x - 0.0001)) : int(floor(vUV.x + 0.0001));
+                int dv = ddy.y < 0.0 ? int(ceil(vUV.y - 0.0001)) : int(floor(vUV.y + 0.0001));
+                vec4 dt = decodeFluid(waveWrap(ivec2(du, dv)));
+                if (vRepClut != 0 && texMode != 2) {
+                    if (dt.a < 0.5 || uOpaqueDepth == 1 && dt.a < 0.95) discard;
+                    return;
+                }
+                if (dt.rgb == vec3(0.0) && dt.a < 0.5) discard;
+                if (uOpaqueDepth == 1 && dt.a >= 0.5) discard;
+                return;
             }
             // 0071. Not into a planar reflection: its view is the mirrored camera's.
             vec3 extra = vec3(0.0);

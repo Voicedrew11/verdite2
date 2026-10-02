@@ -150,6 +150,31 @@ contains the current display area, on the same reasoning `0022` used, but nobody
 has yet seen bars that outlast the latch fix, so it is written down rather than
 written.
 
+### A target made under the GPU world renderer never latched
+
+Reported from play: **changing the aspect in game put the window back to 4:3 and
+switched off most of the enhancements.** Both were one thing. A new aspect changes
+the margin, so `GetOrCreateRt` builds both display targets again, each unlatched;
+with *GPU geometry* on the map and the models are drawn by `GlMainView` and never
+pass through `V()`, which is the only place the 32-vertex rule counts, so neither
+target ever latched and the present refused them for good. The picture was then
+the 1x VRAM fallback at the source aspect, and every pass that runs on a display
+target — the occlusion, the reflections, the render scale — had none to run on.
+At boot the targets latch in the first frames of an area, before the GPU draws
+anything, which is why only a change *in play* showed it.
+
+Measured with the `aspect` shell verb in `fdat02`: after `4:3` then `16:9`,
+`[present] wide 0, plain 0, vram fallback 252` and `[KF2] ao: … 0.0 passes/s,
+125.8 no target/s`, for as long as it was left; with `gpuworld off` the same
+target latched from packets within the second (`wide 161`). The GPU main view
+now latches the target it draws into (`DrawWorldMain`, `0085` amended) once it
+has drawn the map with the clip spanning the target, which is a world across the
+margin by construction. After: 4:3, 16:9, 21:9, 16:10 and 16:9 again each present
+`wide` (or `plain` at 4:3) in the first probe window, the occlusion at `0.0 no
+target/s` throughout. The same route covers the idle-target case above whenever
+the GPU is drawing the world. Mechanism measured; the picture after a switch is
+for a person to look at.
+
 ### The margin's only clear is the game's own, and the merge narrowed it
 
 **The `isbg` background clear in `LibGpu.PutDrawEnv` is the one thing that paints

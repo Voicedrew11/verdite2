@@ -8,7 +8,9 @@ everything else lives in `docs/`, split by what you would be doing when you need
 it. **Nine documents became ten**: `docs/PACKAGING.md` is how the port becomes
 something a person can download, which is a different job from building it. The
 eleventh, `docs/REMASTER.md`, is the design for a remaster's authoring tools,
-and the record of the work against it; Phase 1 is in, in two slices.
+and the record of the work against it; Phase 1 is in, in two slices. The twelfth,
+`docs/GPU_RENDERER.md`, is the plan to draw the world from meshes kept on the
+GPU instead of from the triangles the game's code builds each frame.
 
 **Source comments still say `See "X" in NOTES.md`, and the text they mean is no
 longer in this file.** The section titles are unchanged, so the map below resolves
@@ -320,6 +322,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Messages draw the world live
 - Drawing message text
 - Auto reload
+- Comparing gear on the equip prompt
 - A dynamic map
 - Five map controls that were not choices
 - What the Map page is down to
@@ -409,6 +412,43 @@ The authoring tools (identity, packs, editor) and the engine work for a remaster
 - Phase 7, the first slice
 - Phase 8, the first slice
 - Open decisions
+
+### [GPU_RENDERER.md](docs/GPU_RENDERER.md)
+
+The plan to draw the world from meshes kept on the GPU (retained-mode rendering), the steps, and where the planar reflections come in. The renderer is off by default (`KF2_GPUWORLD=1`, Video ▸ Experimental), measured and not judged by eye except the mirror. Steps 1-3 draw the map, its water, every model with its blended faces, the arm and the sky on the GPU; Step 4's census finds the game's code building no 3D of the world anywhere it was driven, the menu's item preview aside; Step 5's first slice draws the planar mirror on the renderer.
+
+- Why: the frame is the game's geometry, done on one CPU thread
+- The target
+- The steps
+- Step 0: time the GPU
+- Step 1: the map, instanced, for the main view
+- Step 1, the first slice
+- Step 1, the second slice
+- Known issues
+- Step 2: every map feature in the renderer
+- Step 2, the first slice
+- Step 2, the second slice
+- Step 2, the third slice
+- The map's seams fought again
+- Step 3: models
+- Step 3, the first slice
+- Step 3, the second slice
+- Step 3, the third slice
+- Step 3, the fourth slice
+- Step 3, the fifth slice
+- Step 3, the sixth slice
+- Step 3, the seventh slice
+- Step 3, the eighth slice
+- Step 3, the ninth slice
+- Step 4: the old world path off
+- Step 4, the census (2026-09-30)
+- Step 4, the fallback census (2026-10-01)
+- Step 5: every extra view on the same renderer
+- Step 5, the first slice
+- Step 6, if needed: culling on the GPU
+- Where the reflections come in
+- The old path stays as the comparison
+- Rules this keeps
 
 ## Where to write a new finding
 
