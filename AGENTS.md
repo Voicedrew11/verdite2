@@ -68,7 +68,8 @@ dotnet run --project KingsField2Recomp.csproj -- disc/KingsField2.cue
 to `main`), `--push-fork` sends this repo's `tools/RecompOne` commits to it, and `--signatures` fetches
 the 15.7 MB PSY-Q bank from upstream at the `UPSTREAM` pin (gitignored, read only
 by the standalone `--autoconfigure`). The cue path is needed at *play* time as
-well as at recompile time.
+well as at recompile time. `--pull-core [ref]` and `--push-core` do the same for
+`tools/verdite-core`.
 
 There are no tests. Verification is empirical: run the game with log channels on
 and check the trace against what the SDK sequence should look like (see the
@@ -324,6 +325,8 @@ Verdite2.Launcher/       the SHIPPED executable; builds with no disc, and makes 
                          game at first run from the player's own image. See docs/PACKAGING.md
 packaging/               AppImage and Windows packaging, plus placeholder icons
 tools/RecompOne/patches/*.patch  the record of the port's changes to RecompOne
+tools/verdite-core/       Verdite Core, the game-agnostic code shared with Verdite3 (a subtree)
+config/verdite.json      this game's values for Verdite Core's scripts
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection, address-hunting, and the rate tooling:
                          merge_sdk_names (write the PSY-Q names a signature
@@ -459,6 +462,13 @@ working clone of the fork.
   is pushed to the fork soon after with `--push-fork`, and this repo's copy must
   always equal some commit of the fork. Upstream harvests happen in the fork, not
   here; see `docs/RECOMPONE_FORK.md`.
+- **`tools/verdite-core/` is the second subtree**, of `Voicedrew11/verdite-core`:
+  the game-agnostic code the Verdite games share, under the same rules
+  (`--pull-core`, `--push-core`). Nothing in it may know this game; it reads
+  this game's values from `config/verdite.json`. The bring-up scripts
+  (`inspect_disc`, `extract_file`, `add_call_targets`, `merge_branch_spans`,
+  `merge_sdk_names`) live there, and `scripts/` keeps a wrapper of each name, so
+  the commands in this file are unchanged. See `docs/SHARING.md`.
 - **Three changes force a recompile**: `0004`, `0035` and `0037`. Everything else
   is runtime-only.
 - **The acceptance test for a merge** is `open → game → fdat02 → fdat05`, slot 2

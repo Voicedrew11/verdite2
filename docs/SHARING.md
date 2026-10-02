@@ -218,9 +218,9 @@ needs a frame boundary.
 
 | script | bucket | what it hardcodes |
 |---|---|---|
-| `inspect_disc.py`, `extract_file.py`, `add_call_targets.py` | B | docstring examples only |
-| `merge_branch_spans.py` | B | `disc/KingsField2.cue` and `config/kf2.json` as defaults: should be flags |
-| `merge_sdk_names.py` | B | `OVERLAYS = ("open", "game", "end")` |
+| `inspect_disc.py`, `extract_file.py`, `add_call_targets.py` | B | docstring examples only; **moved to Verdite Core in Phase 2** |
+| `merge_branch_spans.py` | B | `disc/KingsField2.cue` and `config/kf2.json` as defaults: now from `config/verdite.json`; **moved to Verdite Core in Phase 2** |
+| `merge_sdk_names.py` | B | `OVERLAYS = ("open", "game", "end")`, now `sdkOverlays` in `config/verdite.json`; **moved to Verdite Core in Phase 2** |
 | `callgraph.py` | B | the generated class prefix `KingsField2(_\w+)?`, `generated/`, `config/funcmaps/` |
 | `kf2run.py` | B | `KingsField2Recomp.csproj`, `bin/Release/net10.0/KingsField2`, `disc/KingsField2.cue` |
 | `profile_report.py`, `audio_spectrum.py` | B | none of substance |
@@ -563,3 +563,90 @@ merged to `main`.
   go now.
 - `git subtree` is a separate package on Fedora (`git-subtree`), so a new machine
   needs it before `--pull-fork`/`--push-fork`. The build does not need it.
+
+### 2026-10-02: Phase 2 begun, Verdite3 laid out
+
+**Decided (2026-10-02).** Phase 1 lands in `v0.4.0-staging`, which is
+fast-forwarded to `vendor-verditecore` (locally; not pushed). Verdite3 targets
+**`SLUS-00255`** (the US "King's Field II", the Japanese *King's Field III*).
+Its names: assembly `KingsField3`, env prefix `KF3_`, MCP project
+`KingsField3Mcp`, disc `disc/KingsField3.cue`. Its working clone is
+`~/Desktop/verdite3`. Verdite Core is subtree'd at **`tools/verdite-core`** in
+every game, beside `tools/RecompOne`. The patch record moves into the fork.
+
+**The patch record is the fork's.** Fork `a617cf8` adds `patches/` (the 85
+diffs and `assets/`) and `docs/RECOMPONE_PATCHES.md`, with a note that the other
+`docs/` it names are Verdite2's. Here: `fd1d200` pulls it, `2852ed5` deletes
+`patches/recompone/` and `docs/RECOMPONE_PATCHES.md` and repoints 43 files at
+`tools/RecompOne/patches/` and `tools/RecompOne/docs/RECOMPONE_PATCHES.md`
+(source comments, docs, and the AppImage and Windows scripts, which ship
+`NotoSans-OFL.txt` from there). Sentences that describe the old replay keep the
+old path, since they describe history.
+
+**Verdite Core started.** `Voicedrew11/verdite-core` `536167a` (local clone
+`~/Desktop/verdite-core`): `LICENSE` (Verdite2's MIT), a README, and the five
+scripts a bring-up uses, `inspect_disc`, `extract_file`, `add_call_targets`,
+`merge_branch_spans` and `merge_sdk_names`, plus `verdite_game.py`, which finds
+the game's root (`VERDITE_GAME_ROOT`, else the first directory up holding
+`config/verdite.json`) and reads it. What became game input: the disc path,
+the recompiler config (`merge_branch_spans` now resolves each `funcMap`
+relative to that config's directory, as the recompiler does, not `REPO/config`),
+the funcmap directory, and `merge_sdk_names`' overlay list (`sdkOverlays`).
+`inspect_disc` and `extract_file` need no config, so they run in a game that has
+none yet. Here: `08447b9` adds the subtree (squash `2254b03`); `f803010` makes
+`scripts/<name>.py` a wrapper of each that runs the shared one with
+`VERDITE_GAME_ROOT` set, adds `config/verdite.json`, and points
+`match_overlays.py` and `msg_glyphs.py` at the shared modules. `setup_tools.sh`
+gained `--pull-core`/`--push-core` (`9931313`), the URL defined beside the
+fork's.
+
+**Verdite3 laid out** (`~/Desktop/verdite3`, branch `main`, local only):
+`4f809d6` adds `tools/RecompOne` at fork `a617cf8` (its tree equals Verdite2's
+copy exactly), `bb1290a` the skeleton (`.gitignore` with every protection
+Verdite2's has, `README.md`, `AGENTS.md`, `NOTES.md`, `disc/README.md`, and
+`docs/` with `DEVELOPMENT`, `RECOMPILATION`, `GAME_INTERNALS`, `ENV_VARS` and
+`TODO`, which holds the bring-up order), `4a3f4af` adds `tools/verdite-core` at
+`536167a`, and `d9c34bf` its `config/verdite.json` (`sdkOverlays` empty until
+the disc says which executables link PSY-Q). Neither game ever had these
+prefixes, so the subtree adds needed no `mainline` trailers: `git subtree split`
+in Verdite3 gives exactly `a617cf8` and `536167a`, and in Verdite2 `536167a`.
+
+**Pins.** Verdite2 and Verdite3: fork `a617cf8`, Verdite Core `536167a`.
+**Neither is pushed**: `a617cf8` exists only in `~/Desktop/verdite-recompone`,
+`536167a` only in `~/Desktop/verdite-core`, and Verdite3's commits only in its
+clone. Until the fork is pushed, `--pull-fork` from GitHub would find
+`bbbf56b`, an ancestor, and say so.
+
+**Measured.**
+- Old against new script, on this disc, from the repo root: `inspect_disc` (45
+  lines), `extract_file --header-only GAME.EXE`, a full `OPEN.EXE` extract
+  (`cmp`), `merge_branch_spans --dry-run` (all overlays, and `fdat17`; the same
+  again from `docs/`), `add_call_targets` on a copy of `open.json` (the map
+  written is identical; the one line differing is the scratch path it names),
+  `merge_sdk_names` against copies of the maps with a synthetic autoconfigure
+  directory (162 renames, the same maps), and `match_overlays --libgpu` (60
+  lines): **identical**. `add_call_targets --help` differs only in its
+  docstring's example disc name. `msg_glyphs` stops at the missing `tesseract`
+  binary in both versions, so only its imports are shown to resolve. Nothing
+  wrote to `config/funcmaps`.
+- `--push-fork` against a scratch bare copy of the fork: "Everything up-to-date",
+  so the split from this branch is `a617cf8` and carries no game commit.
+- `dotnet build KingsField2Recomp.csproj -c Release`: 0 errors;
+  `packaging/linux/build-appimage.sh`: exit 0. The game was not run: the only
+  runtime change is comments and the patch record's location.
+
+**Needs your eyes.** Nothing on screen. Verdite3's `README.md`, `AGENTS.md`
+and `NOTES.md` are new prose.
+
+**Open.**
+- **Pushes, each waiting for your go-ahead:** the fork (`a617cf8`), Verdite Core
+  (`536167a`, its first commit), Verdite3's `main`, and here `vendor-verditecore`
+  and `v0.4.0-staging`.
+- **Verdite3 needs the disc**, at `~/Desktop/verdite3/disc/KingsField3.cue`.
+  Next: `inspect_disc`, `extract_file --header-only` for each executable,
+  `config/kf3.json`, the sweep, the signature bank. The launcher, packaging and
+  CI move into Verdite Core only once Verdite3 needs them.
+- `~/Desktop/verdite1` already holds a `kf1-port` branch of King's Field work
+  and a Japanese image. Verdite1 still waits, as decided; it was not touched.
+- `docs/RUNTIME.md` still opens by saying `tools/RecompOne/` is gitignored, which
+  has been untrue since the vendoring. It predates this phase.
