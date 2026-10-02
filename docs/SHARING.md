@@ -852,3 +852,163 @@ and `ModelWalk`): about twice as long as now. An ear question, yours.
 `tools/RecompOne`), Verdite Core `a6c2434`. Verdite2: fork `a617cf8`, Verdite Core
 `536167a`; it pulls `2013e51` only when you decide. Pushed with your go-ahead:
 the fork, Verdite3's `main` and this branch.
+
+### 2026-10-02: Phase 3 in Verdite3: the geometry path surveyed
+
+**The unit you picked**: survey Verdite3's geometry path against what Verdite2
+rewrote in C#, routine by routine, and build nothing yet. Done in Verdite3
+(`~/Desktop/verdite3`, `main`), local commits only. The findings are its
+`docs/GAME_INTERNALS.md`, "The geometry path"; this entry is the comparison, the
+recommendation and the proposal for shared C#.
+
+**Pins, unchanged.** Verdite3: fork `2013e51`, Verdite Core `a6c2434` plus one
+local commit (`match_code.py`, below; not pushed). Verdite2: fork `a617cf8`,
+Verdite Core `536167a`. Nothing in Verdite2 changed but this file.
+
+**Built in Verdite3** (diagnostics and tooling, no game change):
+- `KF3_GEOPROBE=1` (`patches/GeometryProbe.cs`): hooks each of stage 15's 22
+  calls, walks the ordering table and the 8-entry front table before and after,
+  and reports the packets each call added by GPU command, size, slot and address;
+  `KF3_GEOPROBE_FUNCS=` adds any function, per call site. Stage 15's call table in
+  Verdite3's doc is its reading, not a guess.
+- `tools/verdite-core/scripts/match_code.py`, the structural matcher: the nearest
+  counterparts of a function in *another game's* executable (opcode classes, GTE
+  commands, field offsets loaded and stored through a pointer, small constants,
+  size, calls; each scored on its own), `tree` (two routines' calls aligned in
+  order, recursively), `pairs` (score and rank known pairs), `show`. It reads each
+  game's `config/verdite.json`, so it is game-agnostic; a call to a named libgte
+  routine counts as the GTE commands it runs, because Verdite3 inlines what
+  Verdite2 calls. Its weak spot is small functions (a 30-instruction routine
+  ranks its counterpart 111th-237th of 1155 on its own); `tree` is what finds
+  those, by their place among their siblings. It found every pairing below that
+  says "ranked first" or gives a score.
+
+**The headline**: **Verdite3's engine is Verdite2's**, a year on. Stage 15 is
+stage 13 in the same order (one call inserted, two more full-screen quads); the
+map has the same 80x80 10-byte-tile format; the object walk has the same four
+tables, the same liveness tests and the same record field offsets (two strides
+differ); the MO pose blender's decoders match instruction for instruction or
+nearly; and **the bulk map assembler and the lit model assembler write the same
+packets Verdite2's `FillTriangle`/`FillQuad` write, offset for offset, from the
+same face-record fields, with the same GTE operations, and link them at the same
+`otz + 0xF0` slot.** What changed is mechanical and structural: the GTE is
+inlined (`RTPS`, `NCLIP`, `NCCS`, `DPCS`, `NCDS`, `NCDT` as instructions) where
+Verdite2 calls libgte; parameters pass through a block in the scratchpad
+(`0x1F800000`) instead of arguments and the stack; the fog weight is computed by
+the CPU from otz instead of read from `IR0`; and **there is no clipper**:
+Verdite3 subdivides near map tiles and near models with libgte's polygon division
+routines (library code that writes its own packets, `POLY_FT3`/`FT4` with one
+colour a face), where Verdite2 clips (`Clip3FTP`/`Clip4FTP`) and subdivides with
+its own routine before its own assembler.
+
+**Routine by routine** (Verdite2 → Verdite3; scores from `match_code.py`):
+
+| Verdite2 | Verdite3 | verdict | evidence |
+|---|---|---|---|
+| `func_800342D8` stage 13 | `func_800422B8` stage 15 | same shape, different data | 22 calls against 19; `tree` pairs 15 in order, two of them instruction for instruction, seven more at 0.79-0.91 and the rest at 0.46-0.79; inline HUD block in the same place (after the angle difference); probe: only #9 (HUD, 16 packets), #10 (overlays, 30), #12 (map, 60-358), #13 (models, 243-370) add packets, #20 splices the front table |
+| `func_8002E22C` camera block | `func_800357E8` | same shape | same reads of `a0`/`a1`, same `>> 11` tile, 0.70; Verdite3 also precomposes four view-times-rotation matrices for the map's halves |
+| `func_80031C94` 24x24 sweep | `func_8003BFD0` | same shape, different data | 25x25, grid in the scratchpad (`0x1F800120`), bit `0x02` gates both halves where Verdite2 has bits 0/1; same map format and bounds (0x50), same tile placement |
+| `func_80031B1C` a cell's halves | inline in `func_8003BFD0` | merged | (`func_8003BE34`, 0.71 by shape, is a second caller of the half routine, not on this path) |
+| `func_80031950` a half | `func_8003BB04` | same job, different data | light record by index (`0x6C` bytes against `0x68`, same layout to `+0x50`), LLM by rotation, LCM, BK, depth cue; same far-model gate; picks the assembler on grid bit `0x04` and the buffer's room (10 KB) |
+| `func_8002E650` / `func_8002E7CC` vertex transforms | inline `RTPS` loops in each assembler and twice in the submitter | different | same 8-byte cache entry (screen word, otz `SZ3 >> 2`, fog weight); the weight is `((otz - near/4) << 14) / (far - near)`, clamped `0..0x1F0F`, not `IR0` on three curves (the same 32000 cut-off) |
+| `func_8002FECC` far unclipped assembler | `func_80039D50` (the map's bulk, 147 calls, ~285 packets a frame) | **same packets**, different front end | identical `POLY_GT3`/`GT4` fill and slot (`otz + 0xF0`); a near reject (all corners' otz < 100) Verdite2 does not have; out-of-range otz clamped to `0x1F0F` where Verdite2 drops |
+| `func_80030540` clipped assembler | `func_8003AB04` (near map, 8 calls, ~72 packets) | **different mechanism** | no clipper; libgte division (`func_80074D88`/`func_80075188`/`func_800756A8`/`func_80075B48`, `RTPT` inside) writes flat-coloured `POLY_FT3`/`FT4` |
+| `Clip4FTP` / `Clip3FTP` | none | absent | not linked; nothing in `GAME.EXE` clips to the near plane |
+| `func_8002F214` lit assembler | `func_80035CA4` | **same packets**, inline GTE | ranked first, 0.65: GTE identical (`NCLIP`/`NCDS`/`NCDT`), field sets 0.92 alike; also draws the HUD's models (#9) |
+| `func_8002EAEC` forced blend | `func_80037BEC` | same shape | forces the blend bit and writes a blend rate into the page from the submit flag |
+| (none) | `func_80038844`, `func_80039428` | variants | the lit assembler into the front table; the sky's, lit `NCCT`/`NCCS` without depth cue |
+| `func_8002E910` HUD transform | inline orthographic `MVMVA` loops (`func_8003C35C`, the submitter's `fp` = 0 path) | same job, inline | same cache entry, fixed depth |
+| `func_800331B4` object walk | `func_80040AE4` | same shape, different data | ranked first; creatures 200 x `0x88` (`0x7C`), objects 396 x `0x44` (same), effects 128 x `0x4C` (`0x48`), billboards 128 x `0x18` (same); the same liveness tests and record fields; helpers 0.92-1.00; extra object kinds `0xF2`/`0xE5`/`0xE9`; page bitmaps in the scratchpad |
+| `func_80032588` submitter | `func_8003E34C` (and `func_8003F304` into the front table) | same job, different shape | ranked first once libgte calls count as GTE; matrices by inline `MVMVA`; three assembler paths on a flag (near/blend/lit) where Verdite2 has an assembler byte |
+| `func_80032400` arm | `func_8003DF50` | same job | same position in the stage; lit from the player's tile's record; returns while `0x801B25A4` is -1 (so not seen drawing in this save) |
+| `func_80032AC4` sky (kind `0xF0`) | `func_800400AC` | same job, same arguments | the same seven arguments from the same record fields; draws 45 packets into the front table, which the swap puts behind everything |
+| `func_80034DA8` MO blender | `func_800431E8` | **same routine** | 0.77, identical field offsets; decoders 0.95, 0.98, 1.00, 0.98; three small Verdite2 helpers not called |
+
+**Recommendation per routine.**
+- **Port Verdite2's C# with a data table, then share**: the MO pose blender
+  (`MoPose`), and inside the assemblers **the packet fill** (`FillTriangle`,
+  `FillQuad`, `Place`, the allocator, and the depth/lighting records `0050`
+  added). The fill is where 0050's per-packet depth, fractional corners and
+  lighting are recorded, so sharing it is what makes Z-buffer, sub-pixel and
+  per-pixel lighting one implementation in both games.
+- **Rewrite for Verdite3 with Verdite2's as the template**: the face loops of
+  `func_80039D50` and `func_80035CA4` (and its three variants as parameters of one
+  loop), the vertex passes, `func_8003BB04`, the two walks, the submitter, stage
+  15, the camera block. Same algorithms; the front ends differ (scratchpad block,
+  inline GTE, fog formula, near reject, clamp versus drop).
+- **New, no template**: the near path, `func_8003AB04` and `func_800366A8` with
+  libgte's four division routines. Leaving them recompiled leaves the near
+  geometry (where a Z-buffer matters most) on the weak address-matching path;
+  rewriting them is the price of owning the near map.
+- **Leave recompiled**: the overlays (`SPRT`, #10), the full-screen quads, the
+  fade and texture steppers.
+
+**Proposed build order** (yours, adjusted where the evidence says so):
+1. `func_80039D50` and `func_80035CA4` in C# with a verify mode (RAM, registers,
+   GTE, **and the scratchpad**, which every one of these routines reads and
+   writes). Together they write about three quarters of the frame's packets here. Build them
+   on a copy of Verdite2's fill, kept textually close so step 4 is a diff.
+2. The near path: `func_8003AB04`, `func_800366A8` and the four division
+   routines, verified the same way. Without it the near map has no depth record.
+3. Z-buffer and sub-pixel on top (0050's records from the C# fill).
+4. **Then compare the two games' fills** and extract the shared one (the plan's
+   step 4), with Verdite2's acceptance test and `KF2_POLYASM=verify` as the proof
+   that Verdite2 did not move.
+5. The walks and stage 15 in C#. **One correction**: the billboard clock at
+   `0x80182964` is bumped by the model walk `func_80040AE4`, not by stage 15's own
+   body, exactly as Verdite2's `0x80195170` is by `func_800331B4`; Verdite2 fixed
+   that with `SpriteAnim` (a hold keyed on the frame), which ports without stage 15
+   in C#. The other render-rate words are not identified yet.
+
+**A proposal for shared C#** (nothing built; Verdite Core holds only Python).
+- **Where**: `tools/verdite-core/cs/`, namespace `Verdite.Core`, as **source
+  files compiled into each game's own assembly**, not a library of its own. That
+  keeps one assembly per game (the launcher, mods and `AutoStart`'s reflection
+  all assume one), and lets core code bind recompiled functions by address the
+  way patches do.
+- **The csprojs**: both already `Remove` `tools/**` from the default globs (the
+  CS0579 trap), so each adds one explicit `<Compile Include="tools/verdite-core/cs/**/*.cs" />`
+  after the removes; that is not the NETSDK1022 case, which is a duplicate of a
+  default glob.
+- **Verdite2's launcher**: stage the same files as payload,
+  `<Content Include="../tools/verdite-core/cs/**/*.cs" LinkBase="content/src/verdite-core" />`
+  beside `content/src/patches`. `Sources.All()` already takes every `*.cs` under
+  `content/src` recursively, so `GameCompile` compiles them in its one Roslyn
+  pass and `BuildKey` hashes them with no code change; a core update therefore
+  rebuilds the game at the next start, as a patch change does. The launcher's own
+  `<Compile Remove="content/**" />` keeps them out of the launcher. The CI check
+  that the launcher compiles neither `generated/` nor `patches/` gains the core
+  path as a third assertion, because core code is game-side code (it binds
+  recompiled functions) and would not link into the launcher anyway.
+- **Mods keep `Kf2.*`**: `[TypeForwardedTo]` only redirects across assemblies,
+  and here the core compiles into the same one, so forwarding is not the tool.
+  A mod-visible type that moves keeps a thin `Kf2.` class delegating to the core
+  (static members forwarded one by one; the public surface listed in "What mods
+  can see" above stays as it is). Types no mod can see move without a wrapper.
+- **Game data**: a per-game C# class in the game's `patches/` that fills the
+  core's layout records (addresses, strides, field offsets, sentinels) and its
+  prefixes (`KF2`/`KF3` for env vars and log lines), set once in `Program.cs`
+  before any `Install()`. C# rather than JSON: the values are read in hot paths,
+  are checked at compile time, and sit beside the patch that documents them.
+  `config/verdite.json` stays the Python tools' input.
+- **The first candidates**, low risk because they touch no picture: the four
+  identical harness pieces from the last unit, `HookAttach` (only the log prefix
+  differs), the command channel's transport (line cap, queue, vblank drain,
+  `PAD_dr` injection, JSON quoting; each game registers its verbs), the beacon's
+  emitter and the autopad parser. `Kf2.AgentServer` is mod-visible, so it keeps a
+  wrapper. Verdite2's proof: its scripted acceptance run and the `[KF2]` lines of
+  `KF2_AGENT`/`KF2_SHELL` unchanged before and after.
+
+**Measured**: stage 15's per-call packets (Verdite3 slot 1, `fdat02`, 15.0
+frames/s, four 5-second windows), the assembler per call site, the front table.
+**Nothing to judge by eye this unit**: no picture changed.
+
+**Open.**
+- `func_80041D9C` (stage 15 #11), `func_8003D280` and `func_8003D79C` (the extra
+  quads) have no counterpart and drew nothing here.
+- The submit flag's source (which record field picks the near, blended or lit
+  path in `func_8003E34C`) is not traced, nor what `func_8003F304` draws.
+- Only one area was measured (the only save on the card); the near path's share
+  will differ elsewhere.
+- Verdite Core's `match_code.py` is a local commit in Verdite3's subtree; it goes
+  to `Voicedrew11/verdite-core` with `--push-core` when you say so.
