@@ -1070,3 +1070,83 @@ sandbox also could not read Verdite2 from a Verdite3 worktree, so cross-repo
 tasks need their inputs copied in); hook the libgte division routines expecting
 named symbols (they have none: `func_80074D88`, `func_80075188`,
 `func_800756A8`, `func_80075B48`).
+
+### 2026-10-02: Phase 3 in Verdite3: the bulk assemblers in C#
+
+**The unit you picked**: Verdite3's two bulk polygon assemblers in C# with a
+verify mode, as planned in Verdite3's `docs/GEOMETRY.md`. Done in Verdite3
+(`~/Desktop/verdite3`, `main`, local commit `52ecf93`, not pushed). The numbers
+are its `docs/GEOMETRY.md`, "The first unit: the bulk assemblers"; this entry is
+the summary and what it means for the shared fill. Nothing in Verdite2 changed
+but this file.
+
+**Built**: `func_80039D50` (the map's bulk) and `func_80035CA4` (the lit models
+and the HUD's) as replace hooks in `patches/PolyAssembler.cs`,
+`PolyAssemblerFill.cs` and `PolyAssemblerLit.cs`, under `KF3_POLYASM` (on by
+default now that verify read clean; `0` to compare, `verify`), `KF3_POLYASM_MAP=0`
+and `KF3_POLYASM_LIT=0`. Verify is Verdite2's harness plus the scratchpad's 1 KB
+(256 `ReadU32`s; no fork change) and `LO`/`HI`.
+
+**Measured** (slot 1, `fdat02`):
+- Verify: **0 mismatches** in RAM, scratchpad, registers and GTE over 153,278 map
+  and 13,337 lit calls, standing, turning, walking, the menu opened and closed.
+  The map's `0x34` kind (never met in `fdat02`) and the buffer-exhaustion return
+  (never reached) were forced under verify by temporary edits: 0 mismatches.
+- `KF3_GEOPROBE=1`: all 206 per-call lines identical with the C# on and off.
+- `KF3_FPS=144 KF3_FPS_PROBE=1`: 144.0 fps at 15.0 ticks/s.
+- Uncapped: **793 → 1,171 fps** where the map's bulk runs (147 calls a frame;
+  1.26 → 0.85 ms), 1,235 → 1,324 at the start position. The plan expected
+  10-20%: Verdite3's recompiled routines reach the scratchpad through `PSMemory`
+  on almost every instruction, so locals buy more than in Verdite2.
+
+**For the shared fill (the plan's step 4), the differences between the two
+games' fills as they now stand**, each a parameter or a hook point:
+- Verdite3 computes and clamps the otz **before** allocating; Verdite2's
+  `FillTriangle`/`FillQuad` return the otz sum after filling. Verdite3's fills
+  return nothing.
+- Verdite3's `0x24` triangle runs `NCCS` twice on the same normal.
+- The light colour: Verdite2 reads `LightColour` (`0x8006E604`); Verdite3 a
+  scratchpad word (`+0x54` map, `+0x64` models), kept in `Frame.Colour`.
+- The link: Verdite2's `Link` floors the slot at 16 and masks it; Verdite3's
+  takes the clamped otz and drops a negative one. `Place` and `AddPrim` are the
+  same text (Verdite3's `Place` without `RenderDistance`).
+- The allocator: Verdite2 bumps the descriptor in RAM; Verdite3 the scratchpad's
+  cursor (`Frame.Cursor`), and counts packets and links in the scratchpad.
+- The models: Verdite3 adds the scratchpad's CLUT offset (`+0x84`) to every
+  packet's `+0xE`, and takes the cull through `Visible` (corners read p0, p1, p2)
+  where Verdite2's lit assembler uses `Facing` (p0, p2, p1).
+- The map's third kind (`0x34`, an `NCDS` per corner on three normals) has no
+  Verdite2 counterpart: `FillGouraudTriangle` is Verdite3's alone.
+- Verdite3's `Frame` carries the scratchpad's working state and has no
+  `Hoisted`, lighting or depth fields yet; those come with the records.
+
+**A correction to the plan**: the three variants are not "the lit loop with other
+parameters". `func_80037BEC` nearly is (blend rate into the page, forced code,
+spills to `+0x2C..+0x3C`); `func_80038844` always shifts the fog weight by
+`3 - a2` and links into the front table; `func_80039428`, the sky's, has two kinds
+of its own and lights without the depth cue. Only the sky's runs in `fdat02`, so
+all three stay recompiled. Read with an opencode agent (DeepSeek, read-only, on
+copies of the routines) and checked by hand.
+
+**Nothing to judge by eye**: the packets are identical by verify and by the
+probe.
+
+#### Handoff: the next unit
+
+**State.** Verdite3 `main` is five commits ahead of `origin/main` (the four
+before, plus `52ecf93`), none pushed; Verdite Core's `match_code.py` is still a
+local subtree commit there. Verdite2 `v0.4.0-staging` carries this entry.
+
+**The next piece of work (recommended; the user picks): the near path** in C#,
+`func_8003AB04` (the near map, about 72 packets a frame here) and
+`func_800366A8` (the near models), with libgte's four division routines
+(`func_80074D88`, `func_80075188`, `func_800756A8`, `func_80075B48`), verified
+the same way. New code with no Verdite2 template; without it the near map, where
+interpenetration is closest to the eye, has no depth record. **The alternative**
+is the Z-buffer over what is C# now (records `0050` from the fills, about three
+quarters of the frame), which can be tried before the near path but not finished
+without it.
+
+**Don't**: push anything without asking; let an opencode agent share a checkout
+being edited (inputs for a read-only agent go into a scratch directory of their
+own); drive menus without a copy of `carda.sav` (Cross saves over slot 1).
