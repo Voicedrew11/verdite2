@@ -437,8 +437,9 @@ rebased in.
 network-linked GitHub fork of `BlackLabelHQ/RecompOne`, so nothing offers a
 one-click PR upstream) named **`Voicedrew11/verdite-recompone`**. It does not
 exist yet; Phase 1 creates it, with your go-ahead. **Verdite Core is
-`Voicedrew11/verdite_core`** (underscore), which already exists and is empty; it
-stays for Phase 2, apart from the fork, as the plan says.
+`Voicedrew11/verdite-core`** (renamed from `verdite_core` on 2026-10-02), which
+already exists and is empty; it stays for Phase 2, apart from the fork, as the
+plan says.
 
 **Seen on GitHub, to confirm in Phase 2.** The repo descriptions name the discs:
 `verdite1` is King's Field `SLPS-00017`, `verdite3` is King's Field II
