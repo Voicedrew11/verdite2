@@ -820,3 +820,33 @@ at 15 looks like the console's.
   `load`/`warp` verbs; `KF3_PRESENT_PROBE` wiring.
 - Nothing pushed: Verdite3 `main` is one commit ahead of `origin/main`, and this
   repo one ahead of `v0.4.0-staging`'s remote.
+
+### 2026-10-02: the double vblank event, measured in both games and fixed in the fork
+
+**Fork commit `0825391`, made in Verdite3** (its own commit, amending `0021`; not
+pushed). `LibEtc.TickVBlank` delivered the vblank root counter's event
+(`0xF2000003`) and then raised IRQ 0, whose service delivered it again, so every
+handler on it ran twice a vblank. IRQ 0 alone delivers it now, as on upstream's
+blocking timeline.
+
+**Measured**, before → after:
+
+| | before | after |
+|---|---|---|
+| Verdite2, `func_80017850`'s clock `0x801B6CAC` in an area | 120.0/s | 60.0/s |
+| Verdite2 acceptance (slot 2, `KF2_FPS=144`, presents, perspective) | fdat05, HP 46/86, 144.0 fps, 20.0 ticks/s, wide 288, 100% hit, no failed hook | the same |
+| Verdite3, `func_80019570`'s count `0x801C12E8` | 120.1/s | 60.0/s |
+| Verdite3 unpaced: yaw a second holding Left (world rate) | 1200 (30 Hz) | 600 (15 Hz) |
+| Verdite3 at `KF3_FPS=144` | 144.0 fps, 15.0 ticks/s, 600 | 144.0 fps, 14.9 ticks/s, 600 |
+
+During OPEN.EXE no handler on that event ran in Verdite2, so the title-music
+question in its `docs/TODO.md` did not arise in that run.
+
+**Verdite2 is unchanged**: the fix was applied to its working tree only for the
+"after" run, then reverted and rebuilt. **What pulling it would change** is
+`0x801B6CAC` at the console's 60/s, and so the interval at which per-object
+ambient sounds retrigger (`vbl + 6 * (u16 at rec+0x3E)`, stage 13's object pass
+and `ModelWalk`): about twice as long as now. An ear question, yours.
+
+**Pins.** Verdite3's `tools/RecompOne` is `a617cf8` plus `0825391`, ahead of every
+fork commit until pushed. Verdite2: fork `a617cf8`, Verdite Core `536167a`.
