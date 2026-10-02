@@ -24,8 +24,8 @@ public static class Murk
     public const string DistanceKey = "kf2.murk.distance";
     public const string RKey = "kf2.murk.r", GKey = "kf2.murk.g", BKey = "kf2.murk.b";
 
-    public const float DefaultDistance = 2654f;
-    public const bool DefaultOn = false;
+    public const float DefaultDistance = 1886f;
+    public const bool DefaultOn = true;
     public const float DefaultR = 0.03f, DefaultG = 0.05f, DefaultB = 0.06f;
 
     static bool? _forced;
@@ -64,10 +64,7 @@ public static class Murk
         {
             var view = RecompOne.Runtime.Runtime.View;
             WaterMurk.Enabled = _forced ?? view.GetBool(OnKey, DefaultOn);
-            WaterMurk.Distance = _forcedDistance ?? view.GetFloat(DistanceKey, DefaultDistance);
-            WaterMurk.R = Math.Clamp(view.GetFloat(RKey, DefaultR), 0f, 1f);
-            WaterMurk.G = Math.Clamp(view.GetFloat(GKey, DefaultG), 0f, 1f);
-            WaterMurk.B = Math.Clamp(view.GetFloat(BKey, DefaultB), 0f, 1f);
+            WaterMurk.Distance = _forcedDistance ?? DefaultDistance;
             Console.WriteLine($"[KF2] murky water: {(Enabled ? $"on, {WaterMurk.Distance:F0} units to " +
                                                               $"{WaterMurk.R:F2},{WaterMurk.G:F2},{WaterMurk.B:F2}" : "off")}");
         });

@@ -5,13 +5,13 @@ namespace Kf2.Settings;
 
 /// <summary>
 /// The render distance and the enhancement distance, at the head of Video ▸
-/// Experimental. Sorted before <see cref="ReflectionsPage"/> by id.
+/// Experimental. Last in the pane, after the remaster.
 /// </summary>
 public sealed class DistancePage : IPatchPage
 {
     public string Id => "distance";
     public string Title => "Experimental";
-    public int Order => 28;
+    public int Order => 31;
 
     const string Strings = """
     {

@@ -111,7 +111,7 @@ public static class GpuWorld
         _on = _forced ?? false;
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            _on = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            _on = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             Console.WriteLine($"[KF2] gpu world: {(_on ? "on (the map drawn from the retained scene)" : "off")}" +
                               (_on && Blocker is { } why ? $", standing down: {why}" : ""));
         });

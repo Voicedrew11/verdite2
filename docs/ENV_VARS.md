@@ -174,9 +174,9 @@ KF2_AO_WORLD_STRENGTH=0.6 KF2_AO_WORLD_RADIUS=3072   # how dark that term goes, 
 KF2_AO_WORLD_PROBE=1                   # the transform, the grid, and whether either is missing; =2 the camera's own tile
 KF2_AO_PROBE=1                         # coverage, the projection read off the GTE, passes run
 KF2_AO_PROBE=2                         # also read the occlusion back: how dark, how much, and where
-KF2_MURK=1 KF2_MURK_DISTANCE=2654      # murky water: a dark murk by the distance the view ray runs through water, surface to floor, 63% at the distance (off by default; independent of any reflection; GL core only; depth and colour are also sliders under Video ▸ Experimental ▸ Murky water)
+KF2_MURK=0 KF2_MURK_DISTANCE=1886      # murky water: a dark murk by the distance the view ray runs through water, surface to floor, 63% at the distance (on by default; independent of any reflection; GL core only; no sliders, so the depth and colour are this and the constants in Murk.cs)
 KF2_MURK_TILT=0.75                     # murk only a surface within this cosine of level (0.75 by default; 0 murks anything in the water's texture, as before; the `murk on|off|tilt X` verb)
-KF2_WAVES=1                            # water waves: a swell moves the water's vertices, ripples push and shade its texture (off by default; GL core only for the ripples; the settings are sliders under Video ▸ Experimental ▸ Water waves, and the `waves` shell verb)
+KF2_WAVES=0                            # water waves: a swell moves the water's vertices, ripples push and shade its texture (on by default; GL core only for the ripples; the tuning is the `waves` shell verb)
 KF2_WAVES_PROBE=1                      # a line every 2 s: rects, the clock, rippled batches, water positions free/rim/shared, halves and vertices moved
 KF2_SSR=1                              # screen-space reflections on water (off by default; no longer a setting, a comparison only; never marches a pixel the planar walk answers; GL core only)
 KF2_SSR_STRENGTH=0.6 KF2_SSR_F0=0.12   # how much water reflects at a grazing angle, and looking straight down (the strength overrides the Reflection strength slider)
@@ -185,7 +185,7 @@ KF2_SSR_SKY=1                          # a miss takes the last background pixel 
 KF2_SSR_FOGCURVE=2                     # the depth-cue curve a reflection's longer path is fogged on: 0 none, 1 offset, 2 knee (default), 3 half, 4 linear
 KF2_SSR_RESOLUTION=2                   # the pass at this multiple of the game's pixels; 0 the render scale
 KF2_SSR_PROBE=1                        # passes, water rects and triangles, 2D overlays, refusals by blend, the fog curve, a readback of what each reflective pixel found, and a material map
-KF2_PLANAR=1                           # planar reflections: the world walked again from a camera mirrored in the water (off by default; GL core only)
+KF2_PLANAR=0                           # planar reflections: the world walked again from a camera mirrored in the water (on by default; GL core only)
 KF2_PLANAR_TOLERANCE=48 KF2_PLANAR_BIAS=8   # how far off the plane a surface may be and take it; how far above it geometry must be to be reflected
 KF2_PLANAR_RIPPLE=4                    # how far the water's own texture bends the reflection, game pixels per unit of brightness change; 0 a flat mirror
 KF2_PLANAR_PROBE=1                     # the plane and how far it moved, the mirrored walk and its arena, captures, binned water (at rest, not level), and the readback with its check on the mirror
@@ -201,7 +201,7 @@ KF2_REFLECT_REACH_PROBE=1              # a line every 2 s: halves drawn, grown, 
 KF2_RETAINED_PROBE=1                   # the mesh and its check against the GTE's own vertices, the planes, GPU time per draw, chunks culled, and (with KF2_SSR_PROBE=1) the planar-vs-cubemap agreement
 KF2_RETAINED_LIT=0                     # leave authored lights and glows out of the reflections (in by default)
 KF2_RETAINED_MIPS=0                    # no mip atlas in the reflections, only the anisotropic taps (on by default)
-KF2_GPUWORLD=1                         # the map's opaque faces drawn on the GPU from the retained scene, not assembled by the game's code (off by default; 0 never; unset, Video ▸ Frame pacing ▸ GPU geometry; the `gpuworld on|off` shell verb; GL core only; 0085)
+KF2_GPUWORLD=0                         # the map's opaque faces drawn on the GPU from the retained scene, not assembled by the game's code (on by default; 0 never; unset, Video ▸ Frame pacing ▸ GPU geometry; the `gpuworld on|off` shell verb; GL core only; 0085)
 KF2_GPUWORLD_PROBE=1                   # a line every 2 s: draws, walks that missed the map, triangles a draw, halves left whole and kept for their water, the water's slices, empty calls and calls that waited, and the draw's CPU time by part; the models taken, culled and drawn, and their light runs; light generations a frame and map builds; the surface buffer read back against the frame's depth (needs a reflection or the murk on)
 KF2_GPUWORLD_SURFACES=0                # leave the GPU-drawn map out of the occlusion's normals and the surface buffer (a comparison; the `gpuworld surfaces off` verb)
 KF2_GPUWORLD_FOGZ=0                    # fog the GPU-drawn map from the corners' screen-affine cue again, not each pixel's depth (a comparison: a floor clipped at the eye fogs to black)

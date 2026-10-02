@@ -77,7 +77,6 @@ public static class PlanarWalk
     const uint WalkFrame = 0x300;
 
     public const string OnKey = "kf2.ssr.planar";
-    public const string StrengthKey = "kf2.planar.strength";
     public const float DefaultStrength = 0.6f;
 
     /// <summary>How much water reflects at a grazing angle: the water material's
@@ -123,13 +122,13 @@ public static class PlanarWalk
 
     public static void Install()
     {
-        PlanarReflections.Enabled = _forced ?? false;
+        PlanarReflections.Enabled = _forced ?? true;
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            PlanarReflections.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            PlanarReflections.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             StandOthersDown();
             if (!Reflections.StrengthForced)
-                SetStrength(RecompOne.Runtime.Runtime.View.GetFloat(StrengthKey, DefaultStrength));
+                SetStrength(DefaultStrength);
             Console.WriteLine($"[KF2] planar reflections: {(Enabled ? "on" : "off")}" +
                               (Enabled ? $", strength {Strength:F2}, tolerance {PlanarReflections.Tolerance:F0}, ripple {PlanarReflections.Ripple:F1}, " +
                                          $"cull {(PlanarCull.On ? "its own" : "the eye's")}" : ""));

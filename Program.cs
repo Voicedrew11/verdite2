@@ -759,7 +759,7 @@ Kf2.RetainedMap.Install();
 
 // The GPU world renderer (patches/recompone/0085): the map's opaque faces drawn
 // from the retained scene into the frame, and no longer assembled by the game's
-// code. Off by default: measured, not judged. See docs/GPU_RENDERER.md.
+// code. On by default. See docs/GPU_RENDERER.md.
 //
 //     KF2_GPUWORLD=1          on; 0 never; unset, the saved setting
 //     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept; the surface buffer against the depth
