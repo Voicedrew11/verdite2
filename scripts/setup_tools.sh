@@ -35,11 +35,15 @@ TOOLS="$ROOT/tools/RecompOne"
 # path is handy while testing).
 FORK_URL="${VERDITE_FORK_URL:-https://github.com/Voicedrew11/verdite-recompone.git}"
 FORK_BRANCH="${VERDITE_FORK_BRANCH:-main}"
+# Verdite Core, the game-agnostic tooling, is the second subtree; same rules.
+CORE_URL="${VERDITE_CORE_URL:-https://github.com/Voicedrew11/verdite-core.git}"
+CORE_BRANCH="${VERDITE_CORE_BRANCH:-main}"
 SIGS="$TOOLS/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json"
 
 usage() {
     cat <<'USAGE'
-usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork] [--no-build]
+usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork]
+                      [--pull-core [ref]] [--push-core] [--no-build]
 
   (no flags)        build the recompiler
   --signatures      fetch AutoConfigure/signatures/psyq.json (15.7 MB, gitignored;
@@ -48,6 +52,8 @@ usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork] [--no-bui
                     subtree commit; ref defaults to main
   --push-fork       push tools/RecompOne's subtree commits to the RecompOne fork;
                     refuses if one of them also touches files outside it
+  --pull-core [ref] the same for Verdite Core into tools/verdite-core
+  --push-core       the same for Verdite Core
   --sync-upstream   removed; prints where harvesting moved and exits 2
   --no-build        skip the build
 USAGE
@@ -66,6 +72,7 @@ require_subtree() {
 }
 
 SYNC=0 SIGNATURES=0 BUILD=1 PULL=0 PUSH=0 PULL_REF="$FORK_BRANCH"
+CORE_PULL=0 CORE_PUSH=0 CORE_REF="$CORE_BRANCH"
 while [ $# -gt 0 ]; do
     case "$1" in
         --signatures)    SIGNATURES=1 ;;
@@ -77,6 +84,14 @@ while [ $# -gt 0 ]; do
             esac
             ;;
         --push-fork)     PUSH=1 ;;
+        --pull-core)
+            CORE_PULL=1
+            case "${2:-}" in
+                ""|-*) ;;
+                *) CORE_REF="$2"; shift ;;
+            esac
+            ;;
+        --push-core)     CORE_PUSH=1 ;;
         --sync-upstream) SYNC=1 ;;
         --no-build)      BUILD=0 ;;
         -h|--help)       usage; exit 0 ;;
@@ -113,48 +128,54 @@ if [ "$SIGNATURES" = 1 ]; then
     echo "    $(du -h "$SIGS" | cut -f1) -> ${SIGS#$ROOT/}"
 fi
 
-if [ "$PULL" = 1 ]; then
+# pull_subtree PREFIX URL REF NAME
+pull_subtree() {
     require_subtree
     if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ]; then
-        echo "working tree is dirty; commit or stash before --pull-fork." >&2
+        echo "working tree is dirty; commit or stash before pulling $1." >&2
         exit 1
     fi
-    echo "==> pulling $FORK_URL $PULL_REF into tools/RecompOne (squash)"
-    git -C "$ROOT" subtree pull --prefix=tools/RecompOne --squash "$FORK_URL" "$PULL_REF" \
-        -m "Pull tools/RecompOne from the fork at $PULL_REF"
-fi
+    echo "==> pulling $2 $3 into $1 (squash)"
+    git -C "$ROOT" subtree pull --prefix="$1" --squash "$2" "$3" \
+        -m "Pull $1 from $4 at $3"
+}
 
-if [ "$PUSH" = 1 ]; then
+# push_subtree PREFIX URL BRANCH
+push_subtree() {
     require_subtree
-    # A commit that touches tools/RecompOne must touch nothing else, or the
-    # split carries a half-commit to the fork. Check every one since the last join.
-    # The last join is the newest add/pull merge on the first-parent line: its
-    # second parent is a squash commit naming tools/RecompOne.
+    # A commit that touches the prefix must touch nothing else, or the split
+    # carries a half-commit to the shared repo. Check every one since the last
+    # join. The last join is the newest add/pull merge on the first-parent line:
+    # its second parent is a squash commit naming the prefix.
     join=""
     while read -r c _ p2; do
-        if git -C "$ROOT" log -1 --format=%B "$p2" | grep -q '^git-subtree-dir: tools/RecompOne/*$'; then
+        if git -C "$ROOT" log -1 --format=%B "$p2" | grep -q "^git-subtree-dir: $1/*\$"; then
             join="$c"; break
         fi
     done < <(git -C "$ROOT" log --first-parent --merges --format='%H %P' HEAD)
     if [ -z "$join" ]; then
-        echo "no subtree join found on the first-parent line; refusing to push." >&2
+        echo "no $1 subtree join found on the first-parent line; refusing to push." >&2
         exit 1
     fi
     mixed=0
-    for c in $(git -C "$ROOT" rev-list --no-merges "$join..HEAD" -- tools/RecompOne); do
-        if git -C "$ROOT" diff-tree --no-commit-id --name-only -r "$c" | grep -qv '^tools/RecompOne/'; then
+    for c in $(git -C "$ROOT" rev-list --no-merges "$join..HEAD" -- "$1"); do
+        if git -C "$ROOT" diff-tree --no-commit-id --name-only -r "$c" | grep -qv "^$1/"; then
             echo "mixed commit: $(git -C "$ROOT" log -1 --format='%h %s' "$c")" >&2
             mixed=1
         fi
     done
     if [ "$mixed" = 1 ]; then
-        echo "split those into a tools/RecompOne commit and a game commit, then push." >&2
+        echo "split those into a $1 commit and a game commit, then push." >&2
         exit 1
     fi
-    echo "==> pushing tools/RecompOne to $FORK_URL $FORK_BRANCH (this publishes to the fork)"
-    git -C "$ROOT" subtree push --prefix=tools/RecompOne "$FORK_URL" "$FORK_BRANCH"
-fi
+    echo "==> pushing $1 to $2 $3 (this publishes to the shared repo)"
+    git -C "$ROOT" subtree push --prefix="$1" "$2" "$3"
+}
 
+[ "$PULL" = 1 ] && pull_subtree tools/RecompOne "$FORK_URL" "$PULL_REF" "the fork"
+[ "$PUSH" = 1 ] && push_subtree tools/RecompOne "$FORK_URL" "$FORK_BRANCH"
+[ "$CORE_PULL" = 1 ] && pull_subtree tools/verdite-core "$CORE_URL" "$CORE_REF" "Verdite Core"
+[ "$CORE_PUSH" = 1 ] && push_subtree tools/verdite-core "$CORE_URL" "$CORE_BRANCH"
 
 if [ "$BUILD" = 1 ]; then
     echo "==> building recompiler"
