@@ -463,13 +463,12 @@ upstream's and not this game's link; `FramePacing`'s tick contract is a patch
 (C), not runtime infrastructure; and the settings pane `InputSection` replaces
 lives in the vendored tree, not a gitignored checkout.
 
-### 2026-10-02: Phase 1, the fork extracted (local; nothing pushed)
+### 2026-10-02: Phase 1, the fork extracted
 
 **Done, locally.** The fork's history is built and Verdite2 takes `tools/RecompOne`
 from it as a `git subtree --squash`. The working clone of the fork is
 `~/Desktop/verdite-recompone` (branch `main`, remote `upstream` =
-`BlackLabelHQ/RecompOne`). **The GitHub repo `Voicedrew11/verdite-recompone` does
-not exist yet and nothing has been pushed anywhere**, Verdite2's branch included.
+`BlackLabelHQ/RecompOne`, `origin` = `Voicedrew11/verdite-recompone`).
 
 **How the history was built: the preferred approach, and it worked.** `git subtree
 split --prefix=tools/RecompOne` of this branch gives 89 commits with one root (the
@@ -549,12 +548,11 @@ starts" in `RECOMPONE_FORK.md`. `--push-fork` also refuses a commit that touches
 in particular. The binaries are the same bytes, so this is only the plan's
 belt-and-braces check.
 
-**Waiting on you.**
-1. Create `Voicedrew11/verdite-recompone` (standalone, empty, no README) and say
-   go. Then: `git -C ~/Desktop/verdite-recompone remote add origin <url>`, push
-   `main` (its pack carries upstream's history, 16 MiB), then a no-op `bash
-   scripts/setup_tools.sh --pull-fork` here, which should say it is up to date.
-2. Push `vendor-verditecore` to Verdite2's origin, and merge it when you choose.
+**Pushed (2026-10-02, with your go-ahead).** The fork's `main` (`bbbf56b`) to
+`Voicedrew11/verdite-recompone`, a standalone repo; then `bash
+scripts/setup_tools.sh --pull-fork` here, from GitHub, reported the subtree
+already at `bbbf56b`. This branch, `vendor-verditecore`, to Verdite2's origin. Not
+merged to `main`.
 
 **Open.**
 - `patches/recompone/*.patch` and `docs/RECOMPONE_PATCHES.md` stayed here. They
