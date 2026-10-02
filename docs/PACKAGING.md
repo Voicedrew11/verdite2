@@ -305,7 +305,7 @@ play until the title, and the badge holding still as the counter changes width.
 ## Building a release
 
 ```bash
-bash scripts/setup_tools.sh          # RecompOne at its pin, patches applied
+bash scripts/setup_tools.sh          # builds the RecompOne subtree, tracked here
 
 bash packaging/linux/build-appimage.sh      # dist/Verdite2-<v>-x86_64.AppImage
 pwsh packaging/windows/build-windows.ps1    # dist/…-win-x64.zip and the installer

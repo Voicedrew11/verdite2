@@ -5,9 +5,10 @@ The recompiler's own quirks are in [RECOMPILATION.md](RECOMPILATION.md); the
 patches to the RecompOne checkout are in [RUNTIME.md](RUNTIME.md).
 
 **Nothing here builds without the disc** (gitignored, `disc/KingsField2.cue`) or
-without `tools/RecompOne` (a gitignored checkout, not a submodule). A `.chd` works
-everywhere a `.cue` does — `DiscImage.Open` picks by extension — see "CHD disc
-images" in [RUNTIME.md](RUNTIME.md).
+without `tools/RecompOne` (a `--squash` git subtree of the fork
+`Voicedrew11/verdite-recompone`, tracked here). A `.chd` works everywhere a `.cue`
+does — `DiscImage.Open` picks by extension — see "CHD disc images" in
+[RUNTIME.md](RUNTIME.md).
 
 ## Prerequisites
 
@@ -56,12 +57,14 @@ of the overlay list and are read by the runtime through the CD interface.
 bash scripts/setup_tools.sh
 ```
 
-Clones RecompOne, applies everything in `patches/recompone/`, and builds the
-recompiler. Idempotent, so it is also the way to re-apply local fixes after
-pulling upstream.
+Builds the recompiler from the fork's sources, which are tracked here as a git
+subtree. `--pull-fork [ref]` takes the fork's changes, `--push-fork` sends this
+repo's `tools/RecompOne` commits to it, and harvesting upstream happens in the
+fork; see [RECOMPONE_FORK.md](RECOMPONE_FORK.md).
 
-It gets that idempotency by **peeling the stack off newest-first and then applying
-it oldest-first**. Asking each patch on its own "are you already applied?" — which
+What follows is history, from before the checkout was vendored, when the script
+replayed `patches/recompone/` over an upstream clone. It got its idempotency by
+**peeling the stack off newest-first and then applying it oldest-first**. Asking each patch on its own "are you already applied?" — which
 is what it used to do — only works while no patch touches lines another one added,
 and `0010` edits the `GteDepth.cs` that `0009` creates. The symptom was `0009`
 reverse-checking against text `0010` had since changed, failing, and being reported

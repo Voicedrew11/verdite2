@@ -159,7 +159,7 @@ scripts/extract_file.py  extract a disc file and dump its PS-X EXE header
 scripts/match_overlays.py  carry a function identified in one overlay to the other two
 disc/                    your own dump (gitignored)
 generated/               recompiler output (gitignored, derived from the disc)
-tools/RecompOne/         upstream tool checkout (gitignored)
+tools/RecompOne/         RecompOne, a subtree of the fork Voicedrew11/verdite-recompone
 Program.cs               hand-owned entry point
 KingsField2Recomp.csproj
 ```
@@ -373,11 +373,11 @@ Every `KF2_*` switch the port reads, in one list.
 
 ### [RECOMPONE_FORK.md](docs/RECOMPONE_FORK.md)
 
-How the vendored RecompOne checkout is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided.
+How `tools/RecompOne`, a subtree of the fork, is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided.
 
 ### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0080`, one entry each.
+Every change the port made to RecompOne, `0001`-`0085`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 

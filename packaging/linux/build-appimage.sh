@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Linux AppImage.
 #
-# Needs the vendored RecompOne built (scripts/setup_tools.sh) and the .NET 10 SDK. It
+# Needs the RecompOne subtree built (scripts/setup_tools.sh) and the .NET 10 SDK. It
 # does NOT need the disc: the launcher carries the inputs to a build and makes
 # the game on the player's machine, which is what lets this run in CI at all.
 set -euo pipefail

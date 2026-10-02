@@ -28,8 +28,8 @@ you would be doing when you need them:
 | `docs/ENV_VARS.md` | every `KF2_*` switch, in one list |
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
-| `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0080` |
+| `docs/RECOMPONE_FORK.md` | the fork `tools/RecompOne` is a subtree of, and merging from upstream |
+| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0085` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -50,11 +50,12 @@ rather than a direct hit. Grep `docs/` for the title, not `NOTES.md`.
 ## Build and run
 
 Nothing here builds without the disc (gitignored, `disc/KingsField2.cue`).
-`tools/RecompOne` is **vendored** — its sources are tracked here, so a fresh
-clone already has it and nothing needs cloning.
+`tools/RecompOne` is a **subtree** of the standalone fork
+`Voicedrew11/verdite-recompone` — its sources are tracked here, so a fresh clone
+already has them and nothing needs cloning or fetching.
 
 ```bash
-bash scripts/setup_tools.sh          # build the vendored recompiler
+bash scripts/setup_tools.sh          # build the recompiler (tools/RecompOne)
 
 # recompile MIPS -> C# into generated/ (~2234 functions, ~182k lines)
 dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build -- config/kf2.json
@@ -63,10 +64,11 @@ dotnet build KingsField2Recomp.csproj -c Release
 dotnet run --project KingsField2Recomp.csproj -- disc/KingsField2.cue
 ```
 
-`setup_tools.sh` builds; `--sync-upstream` starts the next three-way merge from
-upstream, and `--signatures` fetches the 15.7 MB PSY-Q bank (gitignored, read
-only by the standalone `--autoconfigure`). The cue path is needed at *play* time
-as well as at recompile time.
+`setup_tools.sh` builds; `--pull-fork [ref]` takes the fork's changes (ref defaults
+to `main`), `--push-fork` sends this repo's `tools/RecompOne` commits to it, and `--signatures` fetches
+the 15.7 MB PSY-Q bank from upstream at the `UPSTREAM` pin (gitignored, read only
+by the standalone `--autoconfigure`). The cue path is needed at *play* time as
+well as at recompile time.
 
 There are no tests. Verification is empirical: run the game with log channels on
 and check the trace against what the SDK sequence should look like (see the
@@ -321,7 +323,7 @@ mcp/                     stdio MCP server exposing the KF2_SHELL command channel
 Verdite2.Launcher/       the SHIPPED executable; builds with no disc, and makes the
                          game at first run from the player's own image. See docs/PACKAGING.md
 packaging/               AppImage and Windows packaging, plus placeholder icons
-patches/recompone/*.patch  the record of the port's changes to the vendored RecompOne
+patches/recompone/*.patch  the record of the port's changes to RecompOne
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection, address-hunting, and the rate tooling:
                          merge_sdk_names (write the PSY-Q names a signature
@@ -442,14 +444,21 @@ removed for the same reason.
 
 ## The RecompOne checkout
 
-**`tools/RecompOne/` is vendored: an edit inside it is a change to this
-repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0080`) are how the source
-refers to each change, but they are **no longer replayed**. The merge base is
-`tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
-gitignored `tools/RecompOne.git/`, reached with
-`git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne <cmd>`.
+**`tools/RecompOne/` is a `git subtree` (taken with `--squash`) of the
+standalone fork `Voicedrew11/verdite-recompone` (`main`): its sources are tracked
+here, so a fresh clone builds with nothing fetched, and an edit inside it is a
+change to this repository like any other.** `patches/recompone/*.patch` are kept
+as the record of what the port changed and why, and the numbers (`0001`-`0085`)
+are how the source refers to each change, but they are **no longer replayed**.
+The merge base is `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's
+history descends from upstream, so a harvest is an ordinary merge, made in a
+working clone of the fork.
 
+- **Shared-subtree edits go in their own commits.** A commit that touches
+  `tools/RecompOne/` touches nothing else (`--push-fork` refuses a mixed one), it
+  is pushed to the fork soon after with `--push-fork`, and this repo's copy must
+  always equal some commit of the fork. Upstream harvests happen in the fork, not
+  here; see `docs/RECOMPONE_FORK.md`.
 - **Three changes force a recompile**: `0004`, `0035` and `0037`. Everything else
   is runtime-only.
 - **The acceptance test for a merge** is `open → game → fdat02 → fdat05`, slot 2
@@ -474,7 +483,7 @@ patch's code or amending it. Neither is imported, for size.
 **The port cannot ship a playable binary.** `generated/` is a translation of
 FromSoftware's code, so the assembly that plays the game has to be built on the
 machine of somebody who owns the disc. The release ships every **input** —
-`config/`, `patches/**`, `Program.cs`, the vendored RecompOne — and makes the
+`config/`, `patches/**`, `Program.cs`, the RecompOne subtree — and makes the
 output at first run. That is also a correctness win: the generated dispatch tables
 bake **absolute LBAs from one mastering**, so a prebuilt binary would silently
 fail to load area modules on a differently mastered dump.
