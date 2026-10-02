@@ -1137,7 +1137,13 @@ probe.
 before, plus `52ecf93`), none pushed; Verdite Core's `match_code.py` is still a
 local subtree commit there. Verdite2 `v0.4.0-staging` carries this entry.
 
-**The next piece of work (recommended; the user picks): the near path** in C#,
+**Superseded the same day: the user put smoothing first.** The next work is
+stage 15 and the camera block in C# with a view override, then the camera carried
+between ticks; planned, with its handoff, in Verdite3's `docs/SMOOTHING.md`. The
+near path below is deferred behind it, and `SHARING.md` stays here (Verdite3's
+`NOTES.md`, "Sharing with Verdite2", says why).
+
+**The next piece of work on the geometry path: the near path** in C#,
 `func_8003AB04` (the near map, about 72 packets a frame here) and
 `func_800366A8` (the near models), with libgte's four division routines
 (`func_80074D88`, `func_80075188`, `func_800756A8`, `func_80075B48`), verified
