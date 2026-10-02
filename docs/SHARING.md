@@ -462,3 +462,105 @@ in `docs/SHARING_INVENTORY.md`: the `LibCd`/`LibDs` scratch addresses are
 upstream's and not this game's link; `FramePacing`'s tick contract is a patch
 (C), not runtime infrastructure; and the settings pane `InputSection` replaces
 lives in the vendored tree, not a gitignored checkout.
+
+### 2026-10-02: Phase 1, the fork extracted (local; nothing pushed)
+
+**Done, locally.** The fork's history is built and Verdite2 takes `tools/RecompOne`
+from it as a `git subtree --squash`. The working clone of the fork is
+`~/Desktop/verdite-recompone` (branch `main`, remote `upstream` =
+`BlackLabelHQ/RecompOne`). **The GitHub repo `Voicedrew11/verdite-recompone` does
+not exist yet and nothing has been pushed anywhere**, Verdite2's branch included.
+
+**How the history was built: the preferred approach, and it worked.** `git subtree
+split --prefix=tools/RecompOne` of this branch gives 89 commits with one root (the
+vendoring import, `7c198b5` here) and one merge of our own. Two grafts, baked in
+with `git replace --graft` and `git filter-branch` over the split range only (a
+whole-history rewrite re-hashed upstream's signed merge commits too and moved the
+merge base, so the range is `main ^upstream/master`): the import onto upstream
+`0409bc2` (the `UPSTREAM` it was vendored at), and the `d81dec8` harvest
+(`1138329` here) as a real merge with upstream `d81dec8` as its second parent.
+That was the only other commit that changed `UPSTREAM`. Checked:
+`git merge-base main upstream/master` is `d81dec8`, the `UPSTREAM` sha; the
+fork's `07f6537` has the tree of this branch's `tools/RecompOne` at `ea10fb6`
+(`dd9c56b`), exactly.
+
+**What upstream tracks that the fork does not.** Two files, both deliberate:
+`RecompOne.Recompiler/AutoConfigure/signatures/psyq.json` (15.7 MB; gitignored
+here, now gitignored in the fork too) and
+`RecompOne.Runtime/Host/Window/Assets/NotoSansCJK-Regular.otf` (16.5 MB; left out
+by `0033`, see `FontSet.cs`). The fork tracks 33 files upstream lacks: `UPSTREAM`
+and the port's `.cs` additions.
+
+**The fork's commits.** `07f6537` is the move (the tree above). `bbbf56b` adds what
+is the fork's own: a fork section at the top of `README.md` (what it is, no
+pull requests or issues upstream, the two files left out; upstream's `LICENSE`
+untouched), `psyq.json` in its `.gitignore` (its `bin/`/`obj/` lines were already
+there), and `harvest_upstream.sh`, which replaces `--sync-upstream` and carries
+its acceptance-check text word for word.
+
+**Verdite2's commits on `vendor-verditecore`.** `f4ee759` removes the tracked
+tree; `8698a4d` adds it back as a subtree of `07f6537` (squash `b64c50f`).
+`git diff ea10fb6 8698a4d` is **empty**, the whole repository and not only
+`tools/RecompOne`. `50ac62e` is the game side: `setup_tools.sh`, `.gitignore`,
+the docs, the CI and packaging wording. `8c000de` pulls `bbbf56b` through the new
+`--pull-fork` (squash `6819790`); after it the subtree's tree equals the fork's
+`main`. `tools/RecompOne.git/` is out of the repository: moved to
+`~/Desktop/RecompOne.git.old`, not deleted, because its `kf2` branches (the
+39-patch stack as commits) exist nowhere else. Delete it when you like.
+
+**Pins.** Verdite2 is at fork `bbbf56b`. No other game exists yet.
+
+**`--squash`, from the round-trip test.** With squash, push, pull and a second
+push each came out as one linear commit (see "Why `--squash`" in
+`RECOMPONE_FORK.md`). Full history would put the fork's 16 MiB pack, nearly all
+of it upstream's, into every game. **The first push carried this repository's
+whole history into the fork**: `git subtree split` maps the `git rm` commit to
+itself. The add commit now carries `git-subtree-mainline`/`git-subtree-split`
+trailers, which fixed it; the test branches were deleted and the fork's objects
+pruned (`f4ee759` is not in it). See "The add commit says where the split
+starts" in `RECOMPONE_FORK.md`. `--push-fork` also refuses a commit that touches
+`tools/RecompOne` and anything else.
+
+**Measured.**
+- **Hashes.** As built, all four assemblies differ before and after, and **only
+  because the commit is stamped into them**: the SDK writes `1.0.0+<HEAD sha>`
+  into the informational version and SourceLink writes it into the PDB, whose
+  id and checksum the DLL records (72 bytes differ, same size); the launcher
+  also writes `git rev-parse` into its own version on purpose (`VERDITE2_BUILD`).
+  Built with that held fixed
+  (`-p:IncludeSourceRevisionInInformationalVersion=false
+  -p:EnableSourceControlManagerQueries=false -p:VERDITE2_BUILD=pinned`), `ea10fb6`
+  and the final HEAD give the same bytes: `RecompOne.Runtime.dll` `11acf1a5…`,
+  `recompone.dll` `0bb5abaa…`, `KingsField2.dll` `8e83a91a…`, `Verdite2.dll`
+  `a53e5769…`. Plain builds before, for the record: `91fe4123…`, `83581ff6…`,
+  `3720d153…`, `a7fb546d…`.
+- **Fresh clone.** Cloned with `origin` removed and `VERDITE_FORK_URL` pointed at
+  an unresolvable host: `setup_tools.sh` and the launcher build, 0 errors.
+- **Packaging.** `packaging/linux/build-appimage.sh` makes
+  `Verdite2-0.3.3-x86_64.AppImage` (44 MB).
+- **Acceptance.** `open → game → fdat02 → fdat05`, slot 2 at hp 46/86 in area 1,
+  144.0 fps drawn at 19.9-20.8 ticks/s, `[present] wide 288, plain 0, vram
+  fallback 0`, the vertex map at 18720 caught/s and 100.0% hit (standing, not
+  moving: the scripted walk did not move the player), pacing at 15 hooks with the
+  boundary 3/3 and 7/7 stages, no exceptions; `scripts/check_gate.py` 0
+  violations.
+
+**Needs your eyes.** The picture in a normal run, the widescreen margin's clear
+in particular. The binaries are the same bytes, so this is only the plan's
+belt-and-braces check.
+
+**Waiting on you.**
+1. Create `Voicedrew11/verdite-recompone` (standalone, empty, no README) and say
+   go. Then: `git -C ~/Desktop/verdite-recompone remote add origin <url>`, push
+   `main` (its pack carries upstream's history, 16 MiB), then a no-op `bash
+   scripts/setup_tools.sh --pull-fork` here, which should say it is up to date.
+2. Push `vendor-verditecore` to Verdite2's origin, and merge it when you choose.
+
+**Open.**
+- `patches/recompone/*.patch` and `docs/RECOMPONE_PATCHES.md` stayed here. They
+  belong in the fork, in Phase 2: the fork's own source names these patch
+  numbers, and points at this repo's `docs/` in 9 places, and a second game's
+  copy would cite a record it does not have. Phase 1 is a move, so they did not
+  go now.
+- `git subtree` is a separate package on Fedora (`git-subtree`), so a new machine
+  needs it before `--pull-fork`/`--push-fork`. The build does not need it.
