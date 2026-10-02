@@ -16,6 +16,10 @@
 > (15.7 MB, read only by `--autoconfigure`; fetch it from upstream) and
 > `RecompOne.Runtime/Host/Window/Assets/NotoSansCJK-Regular.otf` (16.5 MB, not
 > embedded; see `FontSet.cs`).
+>
+> `docs/RECOMPONE_PATCHES.md` is the record of every change the fork makes to
+> upstream, numbered `0001` onward; the source cites those numbers. `patches/`
+> holds each change's diff as it was first made. Neither is applied by anything.
 
 <p align="center">
   <img src="https://github.com/user-attachments/assets/6d9a8f86-322c-4cd2-a3d3-ba68ba2d37e9" alt="logo" width="400">
