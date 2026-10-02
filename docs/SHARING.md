@@ -1137,6 +1137,12 @@ probe.
 before, plus `52ecf93`), none pushed; Verdite Core's `match_code.py` is still a
 local subtree commit there. Verdite2 `v0.4.0-staging` carries this entry.
 
+**Superseded again, 2026-10-02: smoothing is done and judged** (Verdite3's
+`docs/SMOOTHING.md`, units 1-3, on under pacing, with a Testing tab in Settings).
+**The next work is Verdite3's `docs/PICTURE.md`**: 24-bit colour and no dither,
+perspective and sub-pixel on the shared fork's address map, then the Z-buffer from
+the C# assemblers' packet records (`0050`), then the near path below, recorded.
+
 **Superseded the same day: the user put smoothing first.** The next work is
 stage 15 and the camera block in C# with a view override, then the camera carried
 between ticks; planned, with its handoff, in Verdite3's `docs/SMOOTHING.md`. The
