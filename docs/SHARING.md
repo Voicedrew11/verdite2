@@ -823,8 +823,8 @@ at 15 looks like the console's.
 
 ### 2026-10-02: the double vblank event, measured in both games and fixed in the fork
 
-**Fork commit `0825391`, made in Verdite3** (its own commit, amending `0021`; not
-pushed). `LibEtc.TickVBlank` delivered the vblank root counter's event
+**Fork commit `2013e51`, made in Verdite3 as `0825391`** (its own commit,
+amending `0021`; pushed 2026-10-02 with your go-ahead, `a617cf8..2013e51`). `LibEtc.TickVBlank` delivered the vblank root counter's event
 (`0xF2000003`) and then raised IRQ 0, whose service delivered it again, so every
 handler on it ran twice a vblank. IRQ 0 alone delivers it now, as on upstream's
 blocking timeline.
@@ -848,5 +848,7 @@ question in its `docs/TODO.md` did not arise in that run.
 ambient sounds retrigger (`vbl + 6 * (u16 at rec+0x3E)`, stage 13's object pass
 and `ModelWalk`): about twice as long as now. An ear question, yours.
 
-**Pins.** Verdite3's `tools/RecompOne` is `a617cf8` plus `0825391`, ahead of every
-fork commit until pushed. Verdite2: fork `a617cf8`, Verdite Core `536167a`.
+**Pins.** Verdite3: fork **`2013e51`** (its tree equals Verdite3's
+`tools/RecompOne`), Verdite Core `a6c2434`. Verdite2: fork `a617cf8`, Verdite Core
+`536167a`; it pulls `2013e51` only when you decide. Pushed with your go-ahead:
+the fork, Verdite3's `main` and this branch.
