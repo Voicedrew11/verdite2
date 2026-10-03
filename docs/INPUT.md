@@ -396,7 +396,9 @@ fix, and whether the action column is worth its width.
 
 ## The keyboard layout, and changing a default RecompOne provides
 
-`patches/KeyLayout.cs`. RecompOne's default keyboard bindings are a *console's*
+`patches/KeyLayout.cs` (the table, `Version`, `Superseded` and the store) and, since
+2026-10-02, Verdite Core's `KeyLayoutApply` (the default, the migration and the
+arrows' second key, shared with Verdite3). RecompOne's default keyboard bindings are a *console's*
 defaults spelled on a keyboard — face buttons on Z X A S, shoulders on Q W E R,
 the D-pad on the arrows. That is the right generic answer for a runtime that has
 to run any PS1 game and the wrong one for this one, because King's Field walks

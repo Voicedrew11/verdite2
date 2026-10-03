@@ -1388,3 +1388,14 @@ Doing the plan above, in its order.
   `Kf2.MouseIndicator` names became `Verdite.Core.MouseIndicator`, and the mod
   builds and loads with it enabled. Both boots print the same lines as before. The
   glyph itself is for the user's eye (Escape, in both games).
+- **Step 4, `KeyLayout`**: Verdite Core `cdb19ac`, `KeyLayoutApply`: the env switch
+  (`{Tag}_KEYS`), the fresh-install default, the once-per-version migration, the
+  arrows' second key in `PAD_dr`, `Apply`/`ApplyStock`/`IsApplied`, all of which
+  were the same code in both games. Each game's `patches/KeyLayout.cs` keeps its
+  table, `Version`, `Superseded`, the line announcing it and its store (Verdite2
+  `PatchSettings`, Verdite3 `Rt.View` with `SaveView`), behind the same public
+  API; the applied key (`kf2.keys.layout`, `kf3.keys.layout`) is unchanged.
+  Measured in each game: a boot leaves a real `settings.json` and `interface.ini`
+  byte-identical; a boot with neither writes the game's layout and its `Version`
+  (2, 1); and an old layout with no marker is migrated with the same line
+  (Verdite2's superseded version 1, Verdite3's stock keys).
