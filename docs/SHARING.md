@@ -1602,3 +1602,34 @@ one clip slot.
   primes), 0 re-seeks or backward steps over six swings. Picture not judged.
   Four opencode agents (the patch, two surveys, the doc); merged and measured by
   hand.
+
+### 2026-10-03: Verdite3's twin-stick control and Input pane
+
+**Done in Verdite3** (`main`, local commit `bf66ee1`, not pushed), written up in
+its `docs/INPUT.md`, "Analog twin-stick control" and "The Input pane is the
+port's". `Analog`, `AnalogProbe`, `InputSection`, `BindingTable`, `AnalogPage`,
+`MousePage` and `KeyLayoutPage` ported; `MapButtonPage` has no counterpart.
+
+- **The walk routine is Verdite2's shape with one asymmetry.** `func_8002F9BC`'s
+  button branches add `max>>2` and clamp at `±max` on both axes, but with no
+  button forward decays by `max>>3` and strafe by `max>>2`. Harmless: the stick's
+  walk step is clamped to `max`, so it always takes a button branch.
+- **Verdite3's base yaw is a quarter turn behind the heading**: forward moves along
+  `yaw + 0x400`. `Analog` never does heading arithmetic, so it did not matter; a
+  shared helper that does would.
+- **The look hook is MouseLook's, not Analog's.** Verdite3's mouse already owned a
+  replace on `func_8002F5C0`; the sticks were added inside it
+  (`Analog.BeforeLook`), the inverse of Verdite2, where `Analog` owns the hook
+  and the mouse rides it. Both put one step through one routine.
+- **The pad word is put back after each call** (Verdite2 leaves it changed):
+  stage 4 copies it to the previous-frame word after the calls.
+- **Shared candidates for Verdite Core**: `Shape`, `RawMag`, `Step`,
+  `Accelerate` and `Drive` are identical bar the masks' width (u32 in Verdite2,
+  u16 in Verdite3); `BindingTable` and `InputSection` differ only in the action
+  column's verbs and the pages they call.
+- Measured with a synthesised stick (no pad attached): full right steps the yaw
+  88 a tick (the overspeed path), the left stick drives the walk velocities to
+  the expected fraction of 200, the D-pad turns as before with the sticks centred,
+  144.0 fps at 15 ticks/s. Not judged: the pitch direction, the leak on a real
+  pad, the feel. Five opencode agents (the patch, the probe, the pane, the pages,
+  an independent read of the walk routine); merged and measured by hand.
