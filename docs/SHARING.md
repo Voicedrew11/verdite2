@@ -1633,3 +1633,11 @@ port's". `Analog`, `AnalogProbe`, `InputSection`, `BindingTable`, `AnalogPage`,
   144.0 fps at 15 ticks/s. Not judged: the pitch direction, the leak on a real
   pad, the feel. Five opencode agents (the patch, the probe, the pane, the pages,
   an independent read of the walk routine); merged and measured by hand.
+- **Correction, the same day: Verdite3's face verbs.** The layout was built on the
+  action-mask table as RAM holds it before a save loads (the game's preset 0),
+  but a New Game sets preset 3 (`func_8002B64C`), and the verbs read from the
+  code had attack and magic the wrong way round. Settled in play: Square swings,
+  Triangle casts, Circle opens the menu, Cross examines, which is Verdite2's
+  physical layout, so the keys and mouse now match Verdite2's. Read a game's
+  action table from a loaded save, and settle verbs by pressing buttons
+  (Verdite3 `8c84eb0`, superseded by the next commit there).
