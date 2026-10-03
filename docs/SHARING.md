@@ -1418,3 +1418,123 @@ Doing the plan above, in its order.
   same lines and leave `settings.json` and `interface.ini` unchanged; pacing held at
   144.0 fps, 20.0 and 15.0 ticks/s. How it feels to turn and look is for the
   user's hand, in both games.
+
+### 2026-10-02: Plan: `core_check`, one command for "nothing regressed"
+
+**Not started.** Moving five files into Verdite Core took about a dozen hand-run
+commands per step and per game, the same ones each time: build, boot before, boot
+after, diff the tagged lines, read the pacing line, check the overlays and the
+beacon. This plan makes that one command, written once in Verdite Core and run in
+either game. What it cannot replace is each move's own check (a verify mode, the
+settings files, a synthetic input); it carries those as options so they are not
+re-derived either.
+
+#### What it is
+
+`tools/verdite-core/scripts/core_check.py`, with a `scripts/core_check.py` wrapper
+in each game like the other bring-up scripts. Python, reading the game through
+`verdite_game.py`. **It knows no game**: everything game-specific is a new
+`"check"` block in `config/verdite.json`.
+
+```json
+"check": {
+  "tag": "KF2",
+  "project": "KingsField2Recomp.csproj",
+  "binary": "bin/Release/net10.0/KingsField2",
+  "env": { "KF2_AUTOSTART": "2", "KF2_AGENT": "1", "KF2_FPS": "144",
+           "KF2_FPS_PROBE": "1", "KF2_PRESENT_PROBE": "1" },
+  "seconds": 70,
+  "fps": 144.0, "ticks": 20.0,
+  "overlays": ["open", "game", "fdat02", "fdat05"],
+  "beacon": { "overlay": "fdat05", "hp": 46, "maxHp": 86, "area": 1 },
+  "state": ["settings.json", "interface.ini", "carda.sav", "cardb.sav", "carda.fog"],
+  "ignore": ["remaster: off, pack ", "icon: "],
+  "package": { "script": "packaging/linux/build-appimage.sh",
+               "image": "dist/Verdite2-*-x86_64.AppImage", "dataEnv": "VERDITE2_DATA" }
+}
+```
+
+Verdite3's: tag `KF3`, `KingsField3Recomp.csproj`, `KF3_AUTOSTART=1`, 15.0
+ticks, overlays `open, game, fdat02`, beacon `fdat02`, hp 50/50, area 0, no
+`carda.fog`, no `package`.
+
+#### What a run does
+
+`core_check.py [--before REF] [--env K=V ...] [--verify] [--settings] [--fresh]
+[--package] [--keep]`
+
+1. **Two builds.** "After" is the working tree. "Before" is `REF` (default
+   `HEAD`, or the last commit not touching the moved file with `--before auto`),
+   checked out with `git worktree add --detach` under `scratch/corecheck/`, and
+   removed afterwards unless `--keep`. Each worktree gets `generated/` symlinked,
+   **each disc file symlinked into the tracked `disc/`** (a symlink of the
+   directory lands inside it as `disc/disc`), and copies of `state` from the main
+   checkout (without `interface.ini` and `settings.json`, a worktree boots with other
+   enhancements and differs for that reason alone). It builds each with
+   `dotnet build -c Release`.
+2. **Two boots**, one at a time, never concurrently (one shell port, one
+   window): `pkill -x` the binary's name (never `pkill -f`, which matches the
+   calling shell), run under `timeout seconds` with `env` and any `--env`, log to
+   `scratch/corecheck/{before,after}.log`, `pkill -x` again.
+3. **Checks**, each PASS or FAIL on one line:
+   - *lines*: the set of `[TAG]` lines, numbers replaced by `N`, `pacing:` and
+     `ignore` lines dropped, is the same before and after; a difference prints the
+     lines;
+   - *pacing*: the last `pacing:` line of the after run is within 0.5 of `fps`
+     drawn and 0.2 of `ticks`;
+   - *overlays*: the `KF_AGENT` overlay sequence equals `overlays`;
+   - *beacon*: the last beacon matches `beacon`;
+   - *present*: a `[present]` line was printed (the black-window failure);
+   - *faults*: no `Unhandled exception`, `could not hook`, `attach failed` or
+     `giving up` in the after run that the before run did not have.
+4. **Exit** 0 only if every check passed; the verdict block is at most about 15
+   lines, so an agent can run it and read only that.
+
+#### The options a move needs
+
+- `--verify`: set every `*=verify` the game lists in a `"verify"` array in the
+  config (Verdite2: `KF2_CAMERABLOCK`, `KF2_MOPOSE` with `KF2_SMOOTH_ANIM=0`,
+  `KF2_STAGE13`; Verdite3: the six in the Differential step), and compare each
+  routine's summed mismatch counts before and after, by kind (RAM, scratchpad,
+  register, GTE). A count that rises is a FAIL with the first two samples
+  printed; one already nonzero before is reported, not failed.
+- `--settings`: hash every `state` file before and after each boot; any change is
+  a FAIL (Step 4's check).
+- `--fresh`: one more after-boot with no `settings.json` and no `interface.ini`,
+  printing the keys it wrote that the config's `"fresh"` list names (Verdite2:
+  `Keys`, `kf2.keys.layout`), for the reader to compare with what is expected.
+- `--package` (only where `package` is set): run the script, point a
+  `settings.json` copy's `CdPath` at the game's own disc (a stale path stops
+  the launcher at its picker), run the image on an empty data folder under
+  `dataEnv` long enough to build and boot, and apply the same *lines*, *pacing*,
+  *overlays* and *beacon* checks to it. Slow (minutes); for a change to the
+  wiring, not for every move.
+
+#### Steps
+
+1. The script with *lines*, *pacing*, *overlays*, *beacon*, *present*, *faults*,
+   and Verdite2's `check` block. **Done when** `core_check.py --before HEAD` on a
+   clean tree passes, and a deliberate regression fails it: `--env
+   KF2_STAGE13=0` on the after run only (a hook line goes missing), and a
+   `KF2_FPS=60` after run (pacing).
+2. Verdite3's block. Done when the same two hold there.
+3. `--verify`. Done when Verdite2 reproduces today's numbers: 0 for camerablock
+   and stage13, and `mopose`'s LO/HI counts reported as pre-existing with
+   `--before` at a commit after `Differential` moved.
+4. `--settings` and `--fresh`. Done when they reproduce Step 4's results in both
+   games.
+5. `--package`. Done when it reproduces the Step 1 AppImage result.
+6. Write it into Verdite Core's README, and point each game's `AGENTS.md`
+   "Build and run" and `docs/DEVELOPMENT.md` at it; replace the hand-run steps in
+   this log's next plan with a `core_check` line per unit.
+
+#### Rules
+
+- Each core commit touches only `tools/verdite-core/` and goes through
+  `--push-core`/`--pull-core`; each game's block and wrapper is that game's
+  commit.
+- It never pushes, never commits, and never touches the main checkout's own
+  files except to read the `state` it copies.
+- It is a check for moves and wiring, not a replacement for a judgement by eye:
+  it says so in its verdict when every check passed ("mechanism unchanged; nothing
+  here looks at the picture").
