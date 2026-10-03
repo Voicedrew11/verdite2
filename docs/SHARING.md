@@ -1373,3 +1373,11 @@ Doing the plan above, in its order.
   boots with other enhancements and the lines differ for that reason alone, and a
   `settings.json` whose `CdPath` names another image stops a launcher run at the
   disc picker.
+- **Step 2, `Differential`**: Verdite Core `19c86a3`, Verdite3's file (the
+  scratchpad, LO/HI, the `extra` callback). Verdite3: every verify mode in the plan
+  reads 0, as before. Verdite2: `KF2_CAMERABLOCK=verify` and `KF2_STAGE13=verify`
+  read 0 and the scratchpad reads 0 everywhere; `KF2_MOPOSE=verify` (with
+  `KF2_SMOOTH_ANIM=0`, which `MoPose`'s own write-up requires; without it the RAM
+  differs before and after alike) now reports LO/HI mismatches on one model's blend,
+  a finding about Verdite2's `MoPose` written up under "The blender in C#" in
+  `docs/GPU_RENDERER.md`. The check stays on.
