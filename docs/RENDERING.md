@@ -2032,6 +2032,30 @@ KF2_SSR_PROBE=1 KF2_GLDEBUG=1`: 8,580 textured see-through 2D triangles a second
 (the HUD panel) now go in as veils, no GL error, the probe's map unchanged. The
 name box itself was not measured. Judged by eye: fixed.
 
+### Water murk erased dialogue ink
+
+**Mechanism measured; confirmed from play.** NPC dialogue over water was readable
+in 0.3.3 but lost parts of its lower lines in 0.4.0 staging. The message's
+subtractive/additive text quads had not changed. Their nonzero ink has the STP
+bit set, so the newer veil path retained the water material under the letters
+and composited murk over the finished text.
+
+`NormalFs` now treats nonzero textured 2D ink in blend modes 1 and 2 as
+`Overlay`, even with STP set. Transparent zero and neutral STP-black texels
+still write nothing. Averaging boxes keep their veil behavior. Both `SsrFs`
+and `PresentFs.ssrKey` reject explicit overlays before filling gaps from
+neighboring water, which otherwise turns thin text strokes back into water.
+This also protects other small textured 2D additive/subtractive overlays; it
+does not change depth-bearing geometry or fullscreen fades.
+
+Measured with a synthetic fixture using the actual `GlCore` on native Windows,
+RTX 4090: murk reduced glyph red from 224 to 8-20 over water while glyphs over
+solid geometry stayed 224. After the fix, all 12 thick/thin ink samples retain
+224, and all 8 transparent/neutral-black samples match the water-only control,
+with and without an averaging box. No GL errors. AO-only results are unchanged.
+The original NPC dialogue was then checked in-game and reported fixed. Other
+platforms have not been tested.
+
 ### Reflections popped in, because the path is longer than the direct distance
 
 Also reported from play: pop-in in the reflection, of things the fog should have
