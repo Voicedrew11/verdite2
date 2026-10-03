@@ -1560,3 +1560,23 @@ the patch, a probe), then the cone from the survey; merged and measured by hand.
 - **No clipper there**, so `ViewClip` has no counterpart; **the primitive buffer
   did not run out** (66% at 16:9 with the cone widened), so `PrimBuffer` was not
   needed in `fdat02`.
+
+### 2026-10-03: Verdite3's near path had a screen test after all
+
+**Done in Verdite3** (`main`, local commit `08df4c5`, not pushed), written up in
+its `docs/WIDESCREEN.md`, "The near path's screen test". The user saw pop-in at
+the bottom corners and on near walls at 16:9, untouched by a wider cone.
+
+- **The "no clipper, nothing to port" entry above was wrong.** Verdite3 links no
+  `Clip3FTP`/`Clip4FTP`, but its near faces go through libgte's polygon division,
+  whose entry test drops a face wholly past `OFX ± pih/2`, and the near
+  assemblers store `pih = 320` as an immediate per face. `NearScreen.cs` widens
+  it at the four division entries (428 at 16:9, 560 at 21:9): 19% and 34% of the
+  side rejects kept, verify clean, 4:3 unchanged. The counterpart of `ViewClip`
+  is this, not nothing.
+- **Verdite2's near-camera rescue does not carry over.** Verdite3's window is
+  centred on the camera and its flood starts there; the wedge's apex sits about
+  four cells behind it. A port of `RescueNearCamera` lit 33-35 flood-cleared
+  cells a frame and changed nothing drawn, so it was dropped.
+- Three opencode agents (the fix and probe, the cone, the doc); merged and
+  measured by hand. Picture not judged.
