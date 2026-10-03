@@ -52,6 +52,8 @@ internal static class GlShaders
             vec4 s = texture(uSurface, tt);
             // Above 511 is a see-through 2D box's mark over the surface (SsrFs).
             int m = int(s.a + 0.5) & 511;
+            // UI ink is an intentional cover, never a crack between water texels.
+            if (m == 3) return vec2(0.0);
             if (m != 2) {
                 vec2 tx = 1.0 / uTexSize;
                 vec4 a0 = texture(uSurface, tt - vec2(tx.x, 0.0)), a1 = texture(uSurface, tt + vec2(tx.x, 0.0));
@@ -605,6 +607,14 @@ internal static class GlShaders
                     vec4 t = veilTexel(ivec2(floor(vUv)));
                     if (t.rgb == vec3(0.0) && t.a < 0.5) discard;
                     see = t.a >= 0.5;
+                    // Add/subtract text uses STP ink too. It must cover the water
+                    // effect rather than letting that effect erase the letters.
+                    // Black STP texels are neutral in both modes: keep their holes.
+                    uint blend = (vTex >> 5u) & 3u;
+                    if (see && (blend == 1u || blend == 2u)) {
+                        if (t.rgb == vec3(0.0)) discard;
+                        see = false;
+                    }
                 }
                 if (see != (uVeilPass == 1)) discard;
                 oColor = vec4(0.0);
@@ -1233,6 +1243,9 @@ internal static class GlShaders
             vec4 s = texture(uSurface, tc(vUv));
             gShare = veilShare(s.a);
             int m = surfId(s.a);
+            // Preserve explicit UI coverage even for a one-pixel stroke between
+            // water texels; crack repair below is only for the scene underneath.
+            if (m == 3) return;
             // A texel the water's triangles left uncovered between two that are
             // water is water: the tiles meet with hairline cracks, and the murk
             // made each one a line.
