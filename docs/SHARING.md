@@ -1580,3 +1580,25 @@ the bottom corners and on near walls at 16:9, untouched by a wider cone.
   cells a frame and changed nothing drawn, so it was dropped.
 - Three opencode agents (the fix and probe, the cone, the doc); merged and
   measured by hand. Picture not judged.
+
+### 2026-10-03: Verdite3's arm smoothing
+
+**Done in Verdite3** (`main`, local commit `b9c89b2`, not pushed), written up in
+its `docs/SMOOTHING.md`, "3d. The clip time carried". Verdite2's arm front-end in
+`AnimSmoothing` (`func_80032400`, the swing clock `0x801994A4`) carried over as
+one clip slot.
+
+- **The same shape in both games.** Verdite3's arm, `func_8003DF50`, hands the MO
+  blender a fixed slot (`0x801B259C`, the clock's address minus 8, as in
+  Verdite2), model `0x20`, the clip byte `u8[0x801B25AE]` and the swing clock
+  `s16[0x801B25A4]` as the clip time; its placement record does not move during a
+  swing, so the clip is the whole motion. Square swings on the pad, not Triangle.
+- **The "no arm in this save" reading was wrong**: the -1 is the idle clock.
+- **Verdite2's idle latch was not needed.** Verdite3's carry already primes a slot
+  that missed a tick, and the arm never reaches the blender while idle. The
+  scope fence is `Enter`/`Leave` round stage 15's arm call in C#, not a pre/post
+  pair on the arm and the blender.
+- Measured at 144 fps: a swing drew 93 frames, 87 carried (the first tick
+  primes), 0 re-seeks or backward steps over six swings. Picture not judged.
+  Four opencode agents (the patch, two surveys, the doc); merged and measured by
+  hand.
