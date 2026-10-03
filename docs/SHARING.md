@@ -1399,3 +1399,22 @@ Doing the plan above, in its order.
   byte-identical; a boot with neither writes the game's layout and its `Version`
   (2, 1); and an old layout with no marker is migrated with the same line
   (Verdite2's superseded version 1, Verdite3's stock keys).
+- **Step 5, `Mouse`**: Verdite Core `0df259d`: `Mouse`, configured with one
+  `MouseGame` record (units per degree, degrees per pixel, the step cap, the pitch
+  limit, the base yaw and pitch addresses, the default buttons, `TextEditing`, the
+  frame clock `Frames` and `LogicHz`, and an optional `Paused`, which only
+  Verdite2's stale rule had), and `Kept`, the env-then-saved helpers. One real
+  difference was kept per game: Verdite2 stores a saved bool as `True`/`False`,
+  Verdite3 as 0/1, so `Kept.BoolsAsInts` is set by Verdite3. The settings keys are
+  properties built from `Game.Id`, not fields, so no early type initialisation can
+  fix them to another game's name. Verdite2's record is `Analog.MouseValues`,
+  `Analog.Env/Saved` call `Kept`, and `MouseIndicator.Picture` moved to
+  `Program.cs`; Verdite3's record is `MouseLook.Game`. Measured, with a synthetic
+  hand (400 px/s in 400 ms bursts, fed through `Mouse.Poll`, the real mouse's
+  motion discarded; a local hack, not committed) at 144 fps, 75 s a run, before
+  and after: Verdite2 led 160.4 and 169.4 frames per 2 s window, 12.0 and 12.1
+  units ahead, |applied − asked| 0.40 and 0.35; Verdite3 led 79.7 and 80.6 frames
+  a second, |applied − asked| 0.00 in every window of both. Both boots print the
+  same lines and leave `settings.json` and `interface.ini` unchanged; pacing held at
+  144.0 fps, 20.0 and 15.0 ticks/s. How it feels to turn and look is for the
+  user's hand, in both games.

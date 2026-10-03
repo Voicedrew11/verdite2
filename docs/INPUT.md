@@ -508,7 +508,7 @@ it for this pair specifically: `0x8006E590` reads `0x1000`, which is
 
 ## Mouse look
 
-`patches/Mouse.cs` steers with the mouse, and presses pad buttons with its
+Verdite Core's Mouse steers with the mouse, and presses pad buttons with its
 buttons. It is **on by default** and its knobs are under Input, below the stick
 ones. Capture is still Escape, so the pointer does not disappear into the game
 until the player asks.

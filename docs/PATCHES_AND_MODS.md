@@ -5008,7 +5008,7 @@ menu. It cannot, and the reason took several runs to pin down:
 - **Writing `Controller.State` does not reach the boot menus.** It advanced
   OPEN.EXE's title but did nothing at GAME.EXE's menu. The path that reaches the
   game *wherever it is* is `PAD_dr` — a `PadReadEvent` listener, exactly what
-  `patches/Mouse.cs` uses "so the buttons work in its menus". The buffer is
+  Verdite Core's Mouse uses "so the buttons work in its menus". The buffer is
   active-low and its two button bytes are swapped against `Controller`'s layout,
   so a pressed `Controller` bit is injected as `e.Buttons &= ~((b>>8)|(b<<8))`.
 - **The start menu (`func_8001B35C`) is a blocking poll loop**, so the per-frame

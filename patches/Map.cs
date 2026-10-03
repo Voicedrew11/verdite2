@@ -463,7 +463,7 @@ public static class Map
         Event.AddListener<OverlayLoadedEvent>(_ => Invalidate());
 
         // The hotkeys come off the event bus rather than being polled, for the
-        // reason patches/Mouse.cs records: every hook this port owns is in the
+        // reason Verdite Core's Mouse records: every hook this port owns is in the
         // walking-around part of the game, so a polled toggle would be dead in the
         // in-game menu, on the title screen and through a load. PadReadEvent is
         // emphatically not the bus for this — that call is polled hundreds of

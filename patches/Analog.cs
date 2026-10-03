@@ -217,6 +217,27 @@ public static class Analog
     };
 
     /// <summary>
+    /// This game's values for Verdite Core's mouse look
+    /// (<see cref="Verdite.Core.Mouse"/>); core owns the mechanism, this is the
+    /// data. The angles are <see cref="Yaw"/>/<see cref="Pitch"/>, and the frame
+    /// clock is the one core's stale-motion test keys off.
+    /// </summary>
+    public static readonly MouseGame MouseValues = new(
+        UnitsPerDegree: 4096f / 360f,   // 12 bits to the circle (`yaw & 0xFFF`)
+        DegreesPerPixel: 0.15f,         // a 90-degree turn is 600 pixels of desk
+        StepCap: 1024,                  // the most one frame may turn: a quarter turn
+        PitchLimit: 0x2BC,              // about 62 degrees either side of level
+        YawAddress: Yaw,
+        PitchAddress: Pitch,
+        DefaultLeftButton: 3,           // Square swings
+        DefaultRightButton: 4,          // Triangle casts
+        DefaultMiddleButton: 1,         // Cross is the action button
+        TextEditing: () => HotkeyGate.Editing,
+        Frames: () => FramePacing.Frames,
+        LogicHz: () => FramePacing.LogicHz,
+        Paused: () => FramePacing.Paused);
+
+    /// <summary>
     /// The environment variables, read before anything else. This one reads them
     /// itself rather than being handed their values by Program.cs the way
     /// <see cref="NoDither"/> and <see cref="AutoReload"/> are: there are eighteen
@@ -594,23 +615,10 @@ public static class Analog
     internal static void Env(string name, string key, ref float value) => Env(name, key, ref value, _fromEnv);
 
     internal static void Env(string name, string key, ref bool value, HashSet<string> from)
-    {
-        string? v = Environment.GetEnvironmentVariable(name);
-        if (string.IsNullOrWhiteSpace(v)) return;
-        value = v.Trim().ToLowerInvariant() is "1" or "on" or "true" or "yes";
-        from.Add(key);
-    }
+        => Kept.Env(name, key, ref value, from);
 
     internal static void Env(string name, string key, ref float value, HashSet<string> from)
-    {
-        string? v = Environment.GetEnvironmentVariable(name);
-        if (string.IsNullOrWhiteSpace(v)) return;
-        if (!float.TryParse(v, System.Globalization.NumberStyles.Float,
-                            System.Globalization.CultureInfo.InvariantCulture, out float f))
-            throw new ArgumentException($"{name}: cannot read '{v}'");
-        value = f;
-        from.Add(key);
-    }
+        => Kept.Env(name, key, ref value, from);
 
     /// <summary>The saved value, unless the environment already set this key.</summary>
     internal static void Saved(string key, ref bool value) => Saved(key, ref value, _fromEnv);
@@ -618,17 +626,11 @@ public static class Analog
     internal static void Saved(string key, ref float value) => Saved(key, ref value, _fromEnv);
 
     internal static void Saved(string key, ref bool value, HashSet<string> from)
-    {
-        if (!from.Contains(key)) value = RecompOne.Runtime.Runtime.View.GetBool(key, value);
-    }
+        => Kept.Saved(key, ref value, from);
 
     internal static void Saved(string key, ref float value, HashSet<string> from)
-    {
-        if (!from.Contains(key)) value = RecompOne.Runtime.Runtime.View.GetFloat(key, value);
-    }
+        => Kept.Saved(key, ref value, from);
 
     internal static void Saved(string key, ref int value, HashSet<string> from)
-    {
-        if (!from.Contains(key)) value = RecompOne.Runtime.Runtime.View.GetInt(key, value);
-    }
+        => Kept.Saved(key, ref value, from);
 }
