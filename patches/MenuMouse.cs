@@ -592,7 +592,7 @@ public static class MenuMouse
     /// `CursorMode.Raw` GLFW reports an unbounded virtual position, so there is
     /// no "over the picture" while it is locked, and there is no visible cursor
     /// to point with either. <see cref="Mouse.SetCaptured"/> announces both ends
-    /// of that through the glyph in patches/MouseIndicator.cs.
+    /// of that through the MouseIndicator glyph (Verdite Core's).
     /// </summary>
     public static bool BeforeMenu(CpuContext c, IMemory m)
     {

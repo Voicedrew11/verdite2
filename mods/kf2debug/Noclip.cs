@@ -157,7 +157,7 @@ internal static class Noclip
             // the picture: the hotkey toasts go quiet in Hotkeys.Notify, and
             // the pointer-capture glyph here. (Precedent for a mod driving a
             // host type: Warp calls Kf2.AreaWarp.)
-            Kf2.MouseIndicator.Suppressed = value;
+            Verdite.Core.MouseIndicator.Suppressed = value;
         }
     }
 
@@ -573,6 +573,6 @@ internal static class Noclip
         _lookPrimed = false;
         // The host outlives the mod: unloading mid-filming must not leave its
         // capture glyph muted for the rest of the session.
-        Kf2.MouseIndicator.Suppressed = false;
+        Verdite.Core.MouseIndicator.Suppressed = false;
     }
 }

@@ -662,7 +662,8 @@ and come back, so the notification fires often and every firing is a modal-looki
 card reporting a state the player has just this moment asked for. There is nothing
 in it to read.
 
-`patches/MouseIndicator.cs` is what replaced it: a white pixel-art mouse in the
+`MouseIndicator` (Verdite Core's since 2026-10-02, `tools/verdite-core/src/`,
+its rectangle set to `MapRender.Picture` by `Mouse.Install`) is what replaced it: a white pixel-art mouse in the
 top right of the game picture, faded in over 140 ms, held for 1.1 s and faded out
 over 420 ms. **The glyph carries the state and the fade carries the change** —
 captured is a solid mouse, released is the same silhouette with a two-cell
@@ -1140,7 +1141,7 @@ Opening the menu also **gives the pointer back** if mouse look had it: under
 `CursorMode.Raw` GLFW reports an unbounded virtual position, so there is no "over
 the picture" while it is locked, and no visible cursor to point with either. It
 is retaken on the way out. Both ends go through `Mouse.SetCaptured`, so the glyph
-in `patches/MouseIndicator.cs` announces them, and the `PadReadEvent` button
+in `MouseIndicator` (Verdite Core's) announces them, and the `PadReadEvent` button
 listener detaches with the capture — which is what keeps a menu click from also
 arriving as a Square.
 

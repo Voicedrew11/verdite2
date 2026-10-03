@@ -1381,3 +1381,10 @@ Doing the plan above, in its order.
   differs before and after alike) now reports LO/HI mismatches on one model's blend,
   a finding about Verdite2's `MoPose` written up under "The blender in C#" in
   `docs/GPU_RENDERER.md`. The check stays on.
+- **Step 3, `MouseIndicator`**: Verdite Core `7f62bc9`. `Picture` is a
+  `Func<(Vector2 Min, Vector2 Max)?>`, `OutputView` by default (Verdite3); Verdite2
+  sets it to `MapRender.Picture` in `Mouse.Install`, before registering the panel.
+  The panel id is `{Game.Id}mouseind`, unchanged in both. `kf2debug`'s two
+  `Kf2.MouseIndicator` names became `Verdite.Core.MouseIndicator`, and the mod
+  builds and loads with it enabled. Both boots print the same lines as before. The
+  glyph itself is for the user's eye (Escape, in both games).

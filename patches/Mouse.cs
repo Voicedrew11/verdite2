@@ -248,6 +248,11 @@ public static class Mouse
             // map's three viewports: PanelManager draws in registration order,
             // and a capture announcement belongs over the map rather than under
             // it. It is never persisted -- see MouseIndicator.IsOpen.
+            MouseIndicator.Picture = () =>
+            {
+                MapRender.Picture(out var p0, out var p1);
+                return (p0, p1);
+            };
             PanelManager.Register(MouseIndicator.Instance);
 
             Analog.Saved(OnKey, ref Enabled, _fromEnv);
@@ -475,7 +480,7 @@ public static class Mouse
     }
 
     /// <summary>
-    /// Lock or release, and say so on screen -- through patches/MouseIndicator.cs
+    /// Lock or release, and say so on screen -- through Verdite Core's MouseIndicator
     /// rather than through a toast, since this is a state a player changes while
     /// playing and a titled card over the game every time is an interruption
     /// reporting something they just asked for. The failure below keeps its
