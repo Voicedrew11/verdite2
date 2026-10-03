@@ -1538,3 +1538,25 @@ ticks, overlays `open, game, fdat02`, beacon `fdat02`, hp 50/50, area 0, no
 - It is a check for moves and wiring, not a replacement for a judgement by eye:
   it says so in its verdict when every check passed ("mechanism unchanged; nothing
   here looks at the picture").
+
+### 2026-10-02: Verdite3's widescreen
+
+**Done in Verdite3** (`main`, local commits `36adeb0`, `52f9047`, `e2c6711`, not
+pushed), written up in its `docs/WIDESCREEN.md`. Three opencode agents (a survey,
+the patch, a probe), then the cone from the survey; merged and measured by hand.
+
+- **`Widescreen.cs` carried over almost unchanged**: the aspect, the latch clear
+  on an executable load, the tint stretch by shape, the census. At 16:9 13-35% of
+  an area's primitives reach the margin and the fade-in's tints were stretched,
+  none in play. The HUD anchoring and the `DrawOTag` replacement were left behind
+  (off in Verdite2; Verdite3's HUD is models and sprites anyway). A candidate for
+  Verdite Core: only the overlay names, the tag and the store are the game's.
+- **The cone is not Verdite2's.** Verdite3's `func_80034BF4` classifies every
+  cell of a 25×25 grid by distance and two half-planes at yaw ± a half-angle of
+  440/4096 (atan 160/200), so there is no table to scale and no dropped-row
+  failure. The widening re-runs the classifier in C# at a wider angle with the
+  stock radius and adds cells before the flood; the stock-angle C# matches the
+  game's grid on every cell (after fixing two transcription bugs the agent made).
+- **No clipper there**, so `ViewClip` has no counterpart; **the primitive buffer
+  did not run out** (66% at 16:9 with the cone widened), so `PrimBuffer` was not
+  needed in `fdat02`.
