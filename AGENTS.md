@@ -202,9 +202,9 @@ what it is) live there, not here.
 | `GearCompare`, `MenuDraw` | the equip and buy prompts show every stat the item would change, now and after (`func_800244CC` run on the candidate and put back), drawn with the status screen's menu primitives rewritten in C# (`KF2_GEARCOMPARE=verify` diffs them against the recompiled routines); was `mods/gearcompare` | on | PATCHES_AND_MODS, "Comparing gear on the equip prompt"; GAME_INTERNALS, "The menu's primitives are `POLY_FT4`s out of a cursor, and the cursor is mirrored" |
 | `Map*` | full-screen map (touchpad / `M`), minimap (`N`), fog of war, markers; full map pauses the world | map on; fog on; minimap, markers off | PATCHES_AND_MODS, "A dynamic map", "What the Map page is down to" |
 | `Analog` | twin-stick control | on | INPUT, "Analog twin-stick control" |
-| `Mouse` | mouse look, spent inside `Analog.BeforeLook`; the view shows motion the tick has not spent yet (`FrameSmoothing.MouseLead`; Gameplay ▸ *Instant mouse look*, `KF2_MOUSE_LEAD`) | on; lead on (judged) | INPUT, "Mouse look", "The mouse leads the tick" |
+| `Mouse` | mouse look (Verdite Core's, this game's values in `Analog.MouseValues`), spent inside `Analog.BeforeLook`; the view shows motion the tick has not spent yet (`FrameSmoothing.MouseLead`; Gameplay ▸ *Instant mouse look*, `KF2_MOUSE_LEAD`) | on; lead on (judged) | INPUT, "Mouse look", "The mouse leads the tick" |
 | `MenuMouse` | point-and-click in the in-game menus | on | INPUT, "The menu pointer" |
-| `KeyLayout` | the port's WASD layout | on | INPUT, "The keyboard layout" |
+| `KeyLayout` | the port's WASD layout; the table and store here, the mechanism Verdite Core's `KeyLayoutApply` | on | INPUT, "The keyboard layout" |
 | `CardIcon`, `DesktopEntry` | the window icon is the game's own memory-card icon, read off the player's disc at boot; the shipped orb is the fallback. On Linux the same pixels go into the icon theme under the app id, which is the only way a Wayland compositor can show one (`0061`) | on | PACKAGING, "The icon comes off the disc", "Wayland takes the icon from the desktop entry" |
 | `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |
 | `HitGuard` | fences the final-boss hit-path fault | on | TODO, "The crash on the final boss's last hit" |
