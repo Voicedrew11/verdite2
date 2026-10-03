@@ -1162,3 +1162,29 @@ without it.
 **Don't**: push anything without asking; let an opencode agent share a checkout
 being edited (inputs for a read-only agent go into a scratch directory of their
 own); drive menus without a copy of `carda.sav` (Cross saves over slot 1).
+
+### 2026-10-02: Verdite3's keyboard and mouse, with the mouse lead
+
+**Done in Verdite3** (`main`, local commit `afeb187`, not pushed): Verdite2's
+`KeyLayout`, `Mouse`, `MouseIndicator` and `MouseLead` ported, the look hook
+written for that game's routine. Written up in Verdite3's `docs/INPUT.md`.
+
+- **The look routine is the same three branches.** Verdite3's `func_8002F5C0` is
+  `func_80028DB8`'s shape on both axes, so `Analog.Drive`'s pre-load carries over
+  unchanged; the one difference is that **L2 and R2 together recentre the pitch**
+  there, so a mouse pitch masks both buttons. The pitch limit is `0x2BC`/`0xD44`
+  at 12 bits in both games. The mouse drive is a replace hook of its own
+  (`MouseLook`), not inside a ported `Analog`: twin-stick analog was not ported.
+- **The lead fits Verdite3's view override better than Verdite2's stage-8
+  pair**: it is a few lines in `ViewSmoothing.OnHanded` adding to the
+  interpolated `Camera`, nothing written into the game's state. Measured with a
+  synthetic hand at 144 fps: the view starts 6.9 ms after the hand against
+  52.4 ms off, stops 4.0 ms after against 95.2 ms, and tracks it to 1-2 units.
+- **Shared candidates for Verdite Core's first C#**: `KeyLayout`'s mechanism
+  (`Configure` before the load, the once-only migration, `Superseded`),
+  `Mouse`'s capture, poll and stale handling, and `MouseIndicator` are
+  game-agnostic as ported; only the constants block, the layout table and the
+  look hook are each game's.
+- **Not ported**: the menu pointer (`MenuMouse`, 1.4k lines of this game's menu
+  internals; Verdite3's menus read the pad through their own `PadRead` calls,
+  per its survey) and `Analog`.
