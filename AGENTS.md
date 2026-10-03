@@ -216,7 +216,7 @@ judged by eye; say which of the two a change has when you write it up.
 
 ### Rules that bite when you change a patch
 
-- **Attach through `patches/HookAttach.cs`, and read back what committed.**
+- **Attach through `HookAttach` (`tools/verdite-core/src/HookAttach.cs`), and read back what committed.**
   `AddPre`/`AddPost` only queue a delegate; the detour is made later in
   `HookManager.Commit`, which fails per function without throwing (`0027`), so
   counting `Add*` returns claims what was *queued*. Use `HookManager.IsCommitted`
@@ -468,7 +468,12 @@ working clone of the fork.
   this game's values from `config/verdite.json`. The bring-up scripts
   (`inspect_disc`, `extract_file`, `add_call_targets`, `merge_branch_spans`,
   `merge_sdk_names`) live there, and `scripts/` keeps a wrapper of each name, so
-  the commands in this file are unchanged. See `docs/SHARING.md`.
+  the commands in this file are unchanged. Its C# (`src/`, namespace
+  `Verdite.Core`) compiles into this assembly as source, through a `Compile
+  Include` after the `tools/**` remove and a global using (stated twice: the
+  csproj and `GameCompile.GlobalUsings`), and the launcher ships it under
+  `content/src/verdite-core/`; `Program.cs` sets the game's tag first
+  (`Game.Configure(tag: "KF2")`). See `docs/SHARING.md`.
 - **Three changes force a recompile**: `0004`, `0035` and `0037`. Everything else
   is runtime-only.
 - **The acceptance test for a merge** is `open → game → fdat02 → fdat05`, slot 2

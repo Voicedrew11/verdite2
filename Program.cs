@@ -8,6 +8,8 @@ using Recompiled;
 // file takes that role instead so startup stays hand-editable. Custom init and
 // patching hooks go here, before Entry.Run.
 
+Verdite.Core.Game.Configure(tag: "KF2");
+
 // Diagnostics. The runtime's log channels are plain static bools with no CLI of
 // their own, so expose them through an env var:
 //     KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec   (or KF2_LOG=all)

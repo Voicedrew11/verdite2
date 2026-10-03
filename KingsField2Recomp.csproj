@@ -46,6 +46,18 @@
     </ItemGroup>
 
     <!--
+      Verdite Core's C# compiles into this assembly as source, like patches/. The
+      include comes after the tools/** remove above, which still keeps RecompOne's
+      own sources out. Its namespace is a global using, so callers name its types
+      as they named the port's own copies; GameCompile.GlobalUsings must say the
+      same, or the difference exists only in the release.
+    -->
+    <ItemGroup>
+        <Compile Include="tools/verdite-core/src/**/*.cs" />
+        <Using Include="Verdite.Core" />
+    </ItemGroup>
+
+    <!--
       mods/ is RecompOne's ModLoader root, not project source. Its .cs files are
       read from disk and compiled by Roslyn at run time, so the default glob must
       not also compile them into this assembly: that would produce a second, inert

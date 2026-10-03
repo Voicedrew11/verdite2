@@ -1320,7 +1320,7 @@ together and the read-back cannot separate them; what it is for is a patch whose
 sites are *different functions* — `AnimSmoothing`'s five, `FramePacing`'s
 per-overlay roles — and every claim printed to the console.
 
-`patches/HookAttach.cs` holds both halves: `OnOverlayLoad(label, attach, hint)` is
+`HookAttach` (Verdite Core's, `tools/verdite-core/src/HookAttach.cs`, since 2026-10-02) holds both halves: `OnOverlayLoad(label, attach, hint)` is
 the retry latch set from the pass's own success and capped at `MaxTries` (3 — a
 miss is nearly always a miss for good, since every overlay is registered before the
 first load, so this only has to cover a transient), and `Installed(target)` is the

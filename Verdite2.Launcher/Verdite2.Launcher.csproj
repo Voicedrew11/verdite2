@@ -114,9 +114,10 @@
       Nothing here contains a byte of disc data:
         config/    addresses, names and sizes swept from the disc, plus the SDK
                    address map. Metadata about the code, not the code.
-        src/       the port's own C# - Program.cs and patches/**, MIT and already
-                   public in this repository - compiled at first run together with
-                   the recompiler's output. See GameCompile.cs for why they are
+        src/       the port's own C# - Program.cs, patches/** and Verdite Core's
+                   src/ (tools/verdite-core/src) - MIT and already public in this
+                   repository - compiled at first run together with the
+                   recompiler's output. See GameCompile.cs for why they are
                    compiled together rather than precompiled.
         mods/      seeded into the data directory on first run.
     -->
@@ -124,17 +125,18 @@
         <Content Include="../config/**/*.json" LinkBase="content/config" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="../Program.cs" Link="content/src/Program.cs" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="../patches/**/*.cs" LinkBase="content/src/patches" CopyToOutputDirectory="PreserveNewest" />
+        <Content Include="../tools/verdite-core/src/**/*.cs" LinkBase="content/src/verdite-core" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="../mods/**/*" Exclude="../mods/.cache/**" LinkBase="content/mods" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="../LICENSE" Link="LICENSE" CopyToOutputDirectory="PreserveNewest" />
         <Content Include="../packaging/shared/verdite2.png" Link="verdite2.png" CopyToOutputDirectory="PreserveNewest" />
     </ItemGroup>
 
     <!--
-      ../Program.cs and ../patches/** are payload, NOT sources of this assembly:
-      they call into Recompiled.KingsField2, which does not exist until a disc has
-      been recompiled. Without these removes the SDK's default globs would try to
-      compile them here and the launcher would stop building without the disc,
-      which is the one property it exists to have.
+      ../Program.cs, ../patches/** and ../tools/verdite-core/src/** are payload,
+      NOT sources of this assembly: they call into Recompiled.KingsField2, which
+      does not exist until a disc has been recompiled. Without these removes the
+      SDK's default globs would try to compile them here and the launcher would
+      stop building without the disc, which is the one property it exists to have.
     -->
     <ItemGroup>
         <Compile Remove="content/**" />

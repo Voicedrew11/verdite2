@@ -1351,3 +1351,25 @@ that exercises it everywhere.
 - Findings go in the docs that own them: this log for the program, each game's
   `docs/` for what it changed in that game, Verdite Core's README for what core
   now holds.
+
+### 2026-10-02: Verdite Core's first C#, step by step
+
+Doing the plan above, in its order.
+
+- **Step 0**: Verdite3's `498dbc9` (`match_code.py`) pushed to Verdite Core
+  (`165d748`).
+- **Step 1, the wiring and `HookAttach`**: Verdite Core `a238227` adds `src/Game.cs`
+  and `src/HookAttach.cs`; both games compile `tools/verdite-core/src/**/*.cs`
+  with `Verdite.Core` as a global using and set their tag first in `Program.cs`.
+  Verdite2's launcher ships core under `content/src/verdite-core/`, and
+  `GameCompile.GlobalUsings` names the namespace. Measured: each game's boot prints
+  the same set of `[KF2]`/`[KF3]` lines as before (numbers and paths normalised);
+  Verdite2's acceptance run (`open → game → fdat02 → fdat05`, hp 46/86 in area 1,
+  144.0 fps at 20.0 ticks/s, `[present] wide 288`); Verdite3 at 144.0 fps and 15.0
+  ticks/s; and an AppImage built from the change, run on an empty data folder,
+  recompiled, compiled the game with core in its one Roslyn pass, and reached
+  `fdat05` with the same lines. A comparison needs the main checkout's
+  `interface.ini` and `settings.json` beside the build: without them a worktree
+  boots with other enhancements and the lines differ for that reason alone, and a
+  `settings.json` whose `CdPath` names another image stops a launcher run at the
+  disc picker.
