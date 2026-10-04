@@ -355,7 +355,7 @@ static class RetainedModels
         public int WaterSemiFaces, WaterFaces;
     }
 
-    static readonly Dictionary<(uint Face, uint Count, uint Normals), Mesh> _meshes = new();
+    static readonly Dictionary<(uint Face, uint Count, uint Normals, bool Water), Mesh> _meshes = new();
     static int _meshGen = -1;
     static RetainedScene.Vertex[] _corners = new RetainedScene.Vertex[1024];
     static readonly float[] _ins = new float[12];
@@ -904,7 +904,9 @@ static class RetainedModels
 
         if (_meshGen != RetainedScene.MeshGeneration) { _meshes.Clear(); _skyMeshes.Clear(); _meshGen = RetainedScene.MeshGeneration; }
         var ram = mem.Ram;
-        var key = (face, count, normals);
+        // A model's faces in the water's texture are water only if ModelWater says so.
+        bool waterOk = !arm && !PolyAssembler.NotWater;
+        var key = (face, count, normals, waterOk);
         if (_meshes.TryGetValue(key, out var mesh))
         {
             if (Hash(ram, face, mesh.FaceBytes) != mesh.FaceHash
@@ -918,7 +920,7 @@ static class RetainedModels
         if (mesh == null)
         {
             if (RetainedScene.MeshCornerCount > MeshStoreCap) ForgetMeshes();
-            mesh = Build(mem, face, count, normals);
+            mesh = Build(mem, face, count, normals, waterOk);
             if (mesh == null) { InstanceRefused++; return false; }
             _meshes[key] = mesh;
             MeshBuilds++;
@@ -1182,7 +1184,7 @@ static class RetainedModels
     /// <see cref="RetainedScene.MeshCorners"/>): the opaque faces', then the blended
     /// faces', with a table of where each face's corners are; and the byte ranges its
     /// hashes cover.</summary>
-    static Mesh? Build(PSMemory mem, uint face, uint count, uint normals)
+    static Mesh? Build(PSMemory mem, uint face, uint count, uint normals, bool waterOk)
     {
         var mesh = new Mesh();
         uint start = face;
@@ -1238,7 +1240,7 @@ static class RetainedModels
                 u0 = Math.Min(u0, u); v0 = Math.Min(v0, vv); u1 = Math.Max(u1, u); v1 = Math.Max(v1, vv);
             }
             uint mode = (tpage >> 5) & 3u;
-            bool water = OnWaterRect(tpage, u0, v0, u1, v1);
+            bool water = waterOk && OnWaterRect(tpage, u0, v0, u1, v1);
             if (water) { mesh.WaterFaces++; if (semi) mesh.WaterSemiFaces++; }
             var t = new RetainedScene.Vertex
             {

@@ -208,7 +208,8 @@ public static class Reflections
                           $"{SurfaceMaterial.RectN} water rect(s), " +
                           $"{SurfaceMaterial.ByMaterial[SurfaceMaterial.Water] / dt:F0} water tris/s " +
                           $"of {SurfaceMaterial.Blended / dt:F0} blended with a depth, " +
-                          $"refused by blend {refused[0] / dt:F0}/{refused[1] / dt:F0}/{refused[2] / dt:F0}/{refused[3] / dt:F0}; " +
+                          $"refused by blend {refused[0] / dt:F0}/{refused[1] / dt:F0}/{refused[2] / dt:F0}/{refused[3] / dt:F0}, " +
+                          $"not water {SurfaceMaterial.RefusedByPort / dt:F0} (models {ModelWater.Water} water of {ModelWater.Decided}); " +
                           $"{AoGeometry.Triangles / dt:F0} surface tris/s, {SurfaceMaterial.Overlays / dt:F0} of them 2D overlay, " +
                           $"{SurfaceMaterial.Veils / dt:F0} 2D veil ({SurfaceMaterial.TexturedVeils / dt:F0} textured)");
         Console.WriteLine($"[KF2] reflections: fog curve {ScreenReflections.FogCurve}, DQA {GteDepth.ProjDqa}, DQB {GteDepth.ProjDqb}, H {GteDepth.ProjH:F0}; " +

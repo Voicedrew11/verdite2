@@ -610,8 +610,9 @@ useful than the question was.
    pop-in past the fog) are fixed by mechanism and not yet looked at again. Still to
    judge: strength, F0, the edge fade, and how a flat mirror sits on the scrolling
    water. Not yet measured: the main-hall fire (it
-   should be refused as additive; the probe counts refusals by blend) and blended
-   slime skins, which would reflect if they average. After that, in order of
+   should be refused as additive; the probe counts refusals by blend). The slime
+   skins did average, and are no longer water (RENDERING, "A model is water only if
+   it is a sheet of it"). After that, in order of
    payoff: a ripple on the water's normal, driven by the fluid slot's own phase so
    it moves with the scroll; a blur by hit distance for rougher surfaces; and a
    material from the port (`GtePacketDepth.Rec.Material`, set in `SealDepth`) for

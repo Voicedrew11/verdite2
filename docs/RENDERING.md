@@ -2132,8 +2132,8 @@ The same slots hold the main-hall fire and the creatures' skins, so a slot rect 
 **translucent-only**: it applies only to a semi-transparent polygon in an averaging
 blend (modes 0 and 3). An opaque skin and an additive fire are refused, and the
 probe counts refusals by blend mode. **The fire has not been measured**; the census
-below is `fdat02`'s water alone. The slime skins, if any are blended at mode 0,
-would reflect.
+below is `fdat02`'s water alone. The slime skins were water by this rule; a model is
+now water only if it is a sheet of it (see "A model is water only if it is a sheet of it").
 
 ### What is measured
 
@@ -4128,6 +4128,47 @@ exactly as before: 0.0000 of pixels differ by more than 8 levels in four pinned 
 world renderer on and off, the swell on and off. `KF2_MURK_TILT=0` (or the `murk tilt 0` verb)
 murks any surface again; `murk on|off` switches it in play. The reflections still take a crystal
 as water; the planar walk's lookup only answers on its plane, so it shows nothing there.
+
+#### A model is water only if it is a sheet of it
+
+**Mechanism measured; the slimes judged by eye** (with GPU geometry on and off). Reported from
+play: the murk still darkened the slimes. The tilt test above was a guard on the symptom: a
+slime's top is level, so it passed. The cause is the classification itself: the water's rects
+are the fluid slots, and the slots hold the creatures' skins too (see "Screen-space
+reflections"), so any averaging face drawn from a slot was water, to the murk and to the
+reflections alike.
+
+Water is now decided per model, not per texel. `ModelWalk`'s submitter asks `ModelWater.Is`
+before the assemblers run: a creature, an effect, a billboard, the arm and an MO-animated model
+are never water; a rigid object is water only if every averaging face of it on the water's
+rects lies at one height in model space, within 8 units -- a sheet of water is flat, a crystal
+and a slime are not. Measured once per model (keyed by its face list and vertices, cleared when
+the rects change or an area loads). The answer goes two ways: `PolyAssembler.NotWater` seals
+`GtePacketDepth.Rec.NotRect` into each packet, which `SurfaceMaterial.Classify` honours
+(`0067`, amended); and `RetainedModels` builds a GPU-drawn mesh without `FlagWater` (the
+mesh cache keyed on the answer), so its blended faces stay out of the surface buffer as their
+packets' do. The map's water is untouched: the tile walk is not a model. With `ModelWalk`'s
+walk off (`KF2_MODELWALK=0`) nothing is decided and the old classification holds.
+
+`KF2_MODELWATER_PROBE=1` prints each model with faces in the water's texture, once per area,
+with its kind, model id, face count, height spread and verdict; the reflections probe
+(`KF2_SSR_PROBE=1`) counts the refused triangles as `not water`. A census of areas 0-7 from
+their warp points, the packet path (`KF2_GPUWORLD=0`):
+
+| area | model | faces in the water's texture | spread | verdict |
+|---|---|---|---|---|
+| 0, 2 | creature 128 (animated), the slime | 39 | 261-266 | not water |
+| 0 | object 460 (animated) | 22 | 2560 | not water |
+| 6 | object 487 (animated) | 192 | 1109 | not water |
+| 7 | effect 49 | 160 | 512 | not water |
+| 7 | effect 88 | 96 | 32768 | not water |
+
+No model on this disc is water by the rule; it is there for one that would be. Area 2 refused
+about 1,800 triangles a second at its warp point. Area 0's flooded cave
+(`158821, -11520, 149415`), whose near water is two objects (models 204, 185), refused none
+and was 26% reflective: those objects do not sample a fluid slot, so its water was never
+theirs. `fdat02`'s pool: 36.4% of the picture reflective, as before (36.3%). The tilt test
+stays as a guard for the map. Not judged by eye since: the crystals of areas 4 and 7.
 
 ### The reflection pass runs for each term on its own
 

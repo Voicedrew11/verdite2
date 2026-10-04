@@ -29,6 +29,10 @@ public static partial class PolyAssembler
     /// other blended model, the water and the glows included, is not.</summary>
     public static bool InModel;
 
+    /// <summary>Set by <see cref="ModelWalk"/> for a model whose faces in the water's
+    /// texture are not water (<see cref="ModelWater"/>): a slime, a crystal.</summary>
+    public static bool NotWater;
+
     /// <summary>The authored material of the tile half being assembled, or 0; set by
     /// <see cref="TileWalk"/> around each half (docs/REMASTER.md).</summary>
     public static byte TileMaterial;
@@ -128,6 +132,7 @@ public static partial class PolyAssembler
         if (r.Material != 0) Remaster.Surfaces.Packets++;
         if (Remaster.Faces.Recording) Remaster.Faces.Seal(mem, pkt, last, r);
         r.Model = InModel;
+        r.NotRect = InModel && NotWater;
         // Bit 25 of the command word: semi-transparent.
         r.Solid = false;
         if (InModel && (r.Cmd & (1u << 25)) != 0)
