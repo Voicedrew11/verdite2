@@ -65,7 +65,7 @@ Remove-Item -Recurse -Force $stubOut
 $licenses = Join-Path $stage 'licenses'
 New-Item -ItemType Directory -Force -Path $licenses | Out-Null
 Copy-Item (Join-Path $root 'LICENSE') (Join-Path $licenses 'LICENSE')
-Copy-Item (Join-Path $root 'patches\recompone\assets\NotoSans-OFL.txt') `
+Copy-Item (Join-Path $root 'tools\RecompOne\patches\assets\NotoSans-OFL.txt') `
     (Join-Path $licenses 'NotoSans-OFL.txt')
 
 $zip = Join-Path $dist "Verdite2-$version-win-x64.zip"
