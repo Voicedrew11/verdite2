@@ -30,7 +30,7 @@ import struct
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools" / "verdite-core" / "scripts"))
 from extract_file import find_entry
 from inspect_disc import open_disc, resolve_image
 

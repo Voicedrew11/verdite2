@@ -169,7 +169,7 @@ namespace Kf2;
 /// would be back to fighting the pointer for it.
 ///
 /// The notch is **taken from the host, not listened for**
-/// (`HostWindow.TakeMouseWheel`, patches/recompone/0038), which is the shape
+/// (`HostWindow.TakeMouseWheel`, tools/RecompOne/patches/0038), which is the shape
 /// `TakeMouseMotion` already had and which matters twice here. A drained
 /// accumulator cannot miss a notch that arrived between two iterations of a
 /// menu loop, where ImGui's per-frame `MouseWheel` would lose one whenever two

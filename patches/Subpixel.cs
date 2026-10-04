@@ -57,7 +57,7 @@ namespace Kf2;
 /// old whole-pixel behaviour. See "Sub-pixel vertex positioning" in NOTES.md.
 ///
 /// As with perspective correction this patch is only the switch and the report; the
-/// work is in the runtime (<c>patches/recompone/0010</c> and <c>0012</c>), because where a vertex
+/// work is in the runtime (<c>tools/RecompOne/patches/0010</c> and <c>0012</c>), because where a vertex
 /// lands is decided far below anything <c>HookManager</c> can reach. The one hook is
 /// on <c>DrawOTag</c>, purely to have a frame boundary to count against, and it is a
 /// post-hook so it composes with the widescreen patch's replacement of the same
@@ -192,8 +192,12 @@ public static class Subpixel
                           $"({GteDepth.CensusTiny / window:F0} under 1 px^2), {GteDepth.CensusMixed / window:F0} mixed, " +
                           $"{GteDepth.CensusFlipped / window:F0}/s drawn back to front; cull {(Cull ? "fractional" : "whole pixels")}, " +
                           $"whole pixels would have culled {PolyAssembler.CullKept / window:F0}/s kept and kept {PolyAssembler.CullDropped / window:F0}/s dropped");
+        Console.WriteLine($"[KF2] subpixel: HUD {PolyAssembler.ScreenVertices / window:F0} vertices/s placed on the screen, " +
+                          $"{PolyAssembler.ScreenFractional / window:F0} with a fraction, " +
+                          $"{PolyAssembler.ScreenAligned / window:F0} on unturned pieces kept whole");
         GteDepth.CensusPolys = GteDepth.CensusTiny = GteDepth.CensusMixed = GteDepth.CensusFlipped = 0;
         PolyAssembler.CullKept = PolyAssembler.CullDropped = 0;
+        PolyAssembler.ScreenVertices = PolyAssembler.ScreenFractional = PolyAssembler.ScreenAligned = 0;
 
         GteDepth.ResetOffsets();
         _frames = 0;

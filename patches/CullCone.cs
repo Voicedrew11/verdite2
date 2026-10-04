@@ -170,6 +170,14 @@ public static class CullCone
     /// it.</summary>
     public static bool Enabled { get; private set; } = true;
 
+    /// <summary>The last build's stock trapezoid as the game drew it, in 1/4096 of a
+    /// tile: far-left, far-right, near-right, near-left, x then z. Not widened.
+    /// <see cref="RenderDistance"/> extends it.</summary>
+    public static readonly int[] StockCorners = new int[8];
+
+    /// <summary>Builds whose corners were recorded; never reset.</summary>
+    public static long StockBuilds;
+
     /// <summary>The factor in force, 1 when the cone is the game's own.</summary>
     public static float Factor { get; private set; } = 1f;
 
@@ -451,6 +459,14 @@ public static class CullCone
         int edges = _edges;
         _edges = 0;
         _frames++;
+        if (edges == 4)
+        {
+            StockCorners[0] = _ex0[0]; StockCorners[1] = _ez0[0];
+            StockCorners[2] = _ex1[0]; StockCorners[3] = _ez1[0];
+            StockCorners[4] = _ex1[1]; StockCorners[5] = _ez1[1];
+            StockCorners[6] = _ex1[2]; StockCorners[7] = _ez1[2];
+            StockBuilds++;
+        }
 
         if (edges != 4 || Factor <= 1f || _refused || !_resident) { Report(m); return; }
 

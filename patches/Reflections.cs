@@ -25,12 +25,14 @@ namespace Kf2;
 ///     KF2_SSR_PROBE=1        passes, water triangles, and a readback of what each
 ///                            reflective pixel found
 ///
-/// The work is in the runtime (<c>patches/recompone/0067</c>): a surface buffer beside
+/// The work is in the runtime (<c>tools/RecompOne/patches/0067</c>): a surface buffer beside
 /// the occlusion pass's normals, holding the last surface drawn at each pixel with
 /// its normal, depth and material, and a pass at present that marches each
 /// reflective pixel's reflected ray through the depth buffer. This patch is the
 /// switch, the material table and the one fact the runtime cannot know: **which VRAM
-/// rectangles hold water.**
+/// rectangles hold water.** The rectangles are published whenever the pass runs,
+/// which is for any of its terms: this march, <see cref="Murk"/>, <see cref="PlanarWalk"/>
+/// or <see cref="RetainedMap"/>, each on its own switch.
 ///
 /// The game keeps its scrolling textures in eight slots at <c>0x80192D58</c>
 /// (<see cref="FluidSmoothing"/>), each re-uploaded every tick into a fixed dest
@@ -70,6 +72,14 @@ public static class Reflections
 
     public static bool Enabled => ScreenReflections.Enabled;
 
+    /// <summary>Whether anything reflects: the march or either planar source. The
+    /// murk alone runs the pass and reflects nothing.</summary>
+    public static bool AnySource => ScreenReflections.Enabled || PlanarReflections.Enabled || RetainedScene.Enabled;
+
+    /// <summary>KF2_SSR_STRENGTH was given, so the planar walk's slider does not
+    /// replace it.</summary>
+    public static bool StrengthForced;
+
     /// <summary>Whether this patch prints the readback's map itself.</summary>
     public static bool Probing => _probe;
 
@@ -80,10 +90,11 @@ public static class Reflections
         if (!string.IsNullOrWhiteSpace(on)) _forced = on != "0";
 
         float s = 0.6f, f = 0.12f;
-        if (float.TryParse(strength, out float st) && st >= 0f) s = Math.Clamp(st, 0f, 1f);
+        if (float.TryParse(strength, out float st) && st >= 0f) { s = Math.Clamp(st, 0f, 1f); StrengthForced = true; }
         if (float.TryParse(f0, out float ff) && ff >= 0f) f = Math.Clamp(ff, 0f, 1f);
         SurfaceMaterial.Reflectivity[SurfaceMaterial.Water] = s;
         SurfaceMaterial.F0[SurfaceMaterial.Water] = f;
+        SurfaceMaterial.Changed();
 
         if (float.TryParse(distance, out float d) && d > 0f) ScreenReflections.MaxDistance = d;
         if (int.TryParse(steps, out int n) && n > 0) ScreenReflections.Steps = Math.Clamp(n, 1, 128);
@@ -104,7 +115,8 @@ public static class Reflections
         // config; see AmbientOcclusion.Install.
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            ScreenReflections.Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, false);
+            // The march is no longer a setting; KF2_SSR=1 is the comparison.
+            ScreenReflections.Enabled = _forced ?? false;
             Console.WriteLine($"[KF2] reflections: {(Enabled ? "on" : "off")}" +
                               (Enabled ? $", water {SurfaceMaterial.Reflectivity[SurfaceMaterial.Water]:F2} " +
                                          $"(F0 {SurfaceMaterial.F0[SurfaceMaterial.Water]:F2}), " +
@@ -122,7 +134,7 @@ public static class Reflections
     public static void SetEnabled(bool on)
     {
         ScreenReflections.Enabled = on;
-        if (!on) SurfaceMaterial.RectN = 0;
+        if (!GteDepth.Reflections) SurfaceMaterial.RectN = 0;
     }
 
     static bool Attach()
@@ -146,7 +158,7 @@ public static class Reflections
     /// <summary>The water's dest rects, before the walk that draws with them.</summary>
     public static void BeforeDrawOTag(CpuContext c, IMemory m)
     {
-        if (!ScreenReflections.Enabled) return;
+        if (!GteDepth.Reflections) return;
 
         int n = 0;
         for (int i = 0; i < Count && n < SurfaceMaterial.RectSlots; i++)
@@ -196,8 +208,10 @@ public static class Reflections
                           $"{SurfaceMaterial.RectN} water rect(s), " +
                           $"{SurfaceMaterial.ByMaterial[SurfaceMaterial.Water] / dt:F0} water tris/s " +
                           $"of {SurfaceMaterial.Blended / dt:F0} blended with a depth, " +
-                          $"refused by blend {refused[0] / dt:F0}/{refused[1] / dt:F0}/{refused[2] / dt:F0}/{refused[3] / dt:F0}; " +
-                          $"{AoGeometry.Triangles / dt:F0} surface tris/s, {SurfaceMaterial.Overlays / dt:F0} of them 2D overlay");
+                          $"refused by blend {refused[0] / dt:F0}/{refused[1] / dt:F0}/{refused[2] / dt:F0}/{refused[3] / dt:F0}, " +
+                          $"not water {SurfaceMaterial.RefusedByPort / dt:F0} (models {ModelWater.Water} water of {ModelWater.Decided}); " +
+                          $"{AoGeometry.Triangles / dt:F0} surface tris/s, {SurfaceMaterial.Overlays / dt:F0} of them 2D overlay, " +
+                          $"{SurfaceMaterial.Veils / dt:F0} 2D veil ({SurfaceMaterial.TexturedVeils / dt:F0} textured)");
         Console.WriteLine($"[KF2] reflections: fog curve {ScreenReflections.FogCurve}, DQA {GteDepth.ProjDqa}, DQB {GteDepth.ProjDqb}, H {GteDepth.ProjH:F0}; " +
                           $"black at {ScreenReflections.FogBlackDepth():F0}, marching {ScreenReflections.March():F0}; " +
                           $"a colour keeps {FogKeep(2048):F2} at one tile, {FogKeep(4096):F2} at two, {FogKeep(8192):F2} at four, {FogKeep(16384):F2} at eight");

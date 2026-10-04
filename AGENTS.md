@@ -27,9 +27,9 @@ you would be doing when you need them:
 | `docs/DEVELOPMENT.md` | build, run, diagnose, measure |
 | `docs/ENV_VARS.md` | every `KF2_*` switch, in one list |
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
-| `docs/RUNTIME.md` | interrupts, HLE, the `patches/recompone/` stack |
-| `docs/RECOMPONE_FORK.md` | the vendored checkout, and merging from upstream |
-| `docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0069` |
+| `docs/RUNTIME.md` | interrupts, HLE, the `tools/RecompOne/patches/` stack |
+| `docs/RECOMPONE_FORK.md` | the fork `tools/RecompOne` is a subtree of, and merging from upstream |
+| `tools/RecompOne/docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0085` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -38,6 +38,8 @@ you would be doing when you need them:
 | `docs/INPUT.md` | pad, sticks, keyboard, mouse, the menu pointer |
 | `docs/PACKAGING.md` | the redistributable: the launcher, the first-run build, CI |
 | `docs/TODO.md` | next steps and open, undiagnosed questions |
+| `docs/GPU_RENDERER.md` | the GPU (retained-mode) world renderer: the plan and its work |
+| `docs/SHARING.md` | sharing with Verdite1 and Verdite3: the buckets and the progress log (plan in `SHARING_PLAN.md`, per-file detail in `SHARING_INVENTORY.md`) |
 
 Update the right document when you learn something — that is where findings
 belong, not in commit messages, and not in this file. Source comments still say
@@ -48,11 +50,12 @@ rather than a direct hit. Grep `docs/` for the title, not `NOTES.md`.
 ## Build and run
 
 Nothing here builds without the disc (gitignored, `disc/KingsField2.cue`).
-`tools/RecompOne` is **vendored** — its sources are tracked here, so a fresh
-clone already has it and nothing needs cloning.
+`tools/RecompOne` is a **subtree** of the standalone fork
+`Voicedrew11/verdite-recompone` — its sources are tracked here, so a fresh clone
+already has them and nothing needs cloning or fetching.
 
 ```bash
-bash scripts/setup_tools.sh          # build the vendored recompiler
+bash scripts/setup_tools.sh          # build the recompiler (tools/RecompOne)
 
 # recompile MIPS -> C# into generated/ (~2234 functions, ~182k lines)
 dotnet run --project tools/RecompOne/RecompOne.Recompiler -c Release --no-build -- config/kf2.json
@@ -61,10 +64,12 @@ dotnet build KingsField2Recomp.csproj -c Release
 dotnet run --project KingsField2Recomp.csproj -- disc/KingsField2.cue
 ```
 
-`setup_tools.sh` builds; `--sync-upstream` starts the next three-way merge from
-upstream, and `--signatures` fetches the 15.7 MB PSY-Q bank (gitignored, read
-only by the standalone `--autoconfigure`). The cue path is needed at *play* time
-as well as at recompile time.
+`setup_tools.sh` builds; `--pull-fork [ref]` takes the fork's changes (ref defaults
+to `main`), `--push-fork` sends this repo's `tools/RecompOne` commits to it, and `--signatures` fetches
+the 15.7 MB PSY-Q bank from upstream at the `UPSTREAM` pin (gitignored, read only
+by the standalone `--autoconfigure`). The cue path is needed at *play* time as
+well as at recompile time. `--pull-core [ref]` and `--push-core` do the same for
+`tools/verdite-core`.
 
 There are no tests. Verification is empirical: run the game with log channels on
 and check the trace against what the SDK sequence should look like (see the
@@ -80,9 +85,8 @@ that way.
 
 ### Diagnostics
 
-The switches used most; the full list is `docs/ENV_VARS.md`, imported here.
-
-@docs/ENV_VARS.md
+The switches used most. The full list is `docs/ENV_VARS.md`; it is not imported
+(it is ~9k tokens), so grep it for the switch you need.
 
 ```bash
 KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
@@ -137,7 +141,7 @@ Start the game from the same shell you run that in, or the diagnostic socket in
 - **`KF2_SHELL=1`** — one request per line on TCP 127.0.0.1:27900, one
   single-line JSON response back: `state`, `nearby`, `load <slot>`,
   `warp <area>`, `press <button> [ms]`, `kill`, `ending [boss|kill]`,
-  `map [on|off|toggle]`, `goto <x> <y> <z> [yaw [pitch]]`. The `kf2` MCP server in `mcp/` exposes the same channel.
+  `map [on|off|toggle]`, `waves [on|off|<setting> <value>]`, `savecheck`, `prop`, `goto <x> <y> <z> [yaw [pitch]]`, `view [<x> <y> <z> <pitch> <yaw> <roll> | off]` (the frame's camera and a cull-grid digest; with a camera, draw from it), and the remaster editor's `edit`, `select`, `set`, `pack`, `remaster`, `textures`, `level`, `camera`, plus `snap [hash|PATH.png]`, which reads the presented picture back and hashes it, `pause [on|off]`, which holds the world on the stage gate so two snaps compare one frame, `gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|arm on|off|sky on|off|hide|show|mirror on|off|hide|show|scene|at X Y|perpixel on|off]` (see `help`), `capture` (arms the frame capture; `KF2_FRAMEVIEW_OUT` writes it), `murk [on|off|tilt X]` and `aspect [4:3|16:9|<ratio>]`. The `kf2` MCP server in `mcp/` exposes the same channel.
   `ending kill` is the form that reproduces the final-boss crash; reaching it
   needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the player on the way in.
   `press` reaches Cross but not the in-game menu's Up/Down.
@@ -156,7 +160,7 @@ what it is) live there, not here.
 | patch | what | default | doc, section |
 |---|---|---|---|
 | `FramePacing` | skips the game's frame gate `func_80017880`, paces frames itself, runs the gated stages on a 20 Hz world clock | 60 fps drawn, 20 ticks/s | PATCHES_AND_MODS, "Any frame rate" |
-| `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing`, `FluidSmoothing` | carry the camera, the four world tables, MO pose and the scrolling textures between ticks | on; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing" |
+| `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing`, `FluidSmoothing` | carry the camera (and the compass needle and the HP/MP gauges with it, bracketing the HUD builder), the four world tables, MO pose and the scrolling textures between ticks | on; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing", "The compass is carried with the view", "The gauges are carried like the needle" |
 | `LoopPacing` | modal loops (fades, cutscenes, item/spell animations) run once per tick, gaps filled with stage-13 redraws | on | PATCHES_AND_MODS, "Loops that render their own frames" |
 | `MenuPacing` | menu cursor repeat and blink held to the 60 Hz grid | on | PATCHES_AND_MODS, "The menu's cursor repeat" |
 | `MenuWorld` | replaces the menu presenter `func_800226A8` and the message fade `func_800356F4`: the world is redrawn live behind menus, shops, signs and dialogue (full width, AO, Z) instead of the frozen 320-wide copy | on | PATCHES_AND_MODS, "Menus draw the world live", "Messages draw the world live" |
@@ -168,23 +172,34 @@ what it is) live there, not here.
 | `Prejit` | compiles the recompiled code, the patches and the runtime on a background thread at boot, so walking into an area does not stop to JIT it (QuickJit is off, so a first call is a full JIT: 234 methods and 297.87 ms in one frame without it) | on | DEVELOPMENT, "The first frame of an area was the JIT" |
 | `FrameProfiler` | per-frame time by section: every hook, the present path, the waits (`0045`); Shift+P | records while its panel is open | DEVELOPMENT, "Profiling a frame" |
 | `FrameCapture`, `FrameViewerPanel` | capture one run of stage 13 and scrub it GP0 command by command on a detached software GPU: owner routine, send cost, fragments, GL batch submits and why, GPU time per batch and for AO, every runtime section, vertex-map work per routine (`0046`); Shift+F | idle until a capture; routines hooked from the first | DEVELOPMENT, "Watching a frame being built" |
-| `PolyAssembler` | `func_80030540` in C# as a replace hook, rejecting polygons the view-space clipper would clip to nothing; also `func_8002FECC` (the far map tiles' unclipped assembler), the vertex transforms `func_8002E650`/`func_8002E7CC`, `func_8002F214`/`func_8002EAEC` (the models' lit assembler) and the clipper `Clip4FTP`/`Clip3FTP`; the GTE ops they call have a fast path in the runtime (`0047`); `KF2_POLYASM=verify` diffs each against the recompiled routine, GTE included; a clipped polygon or quad is culled on its whole area at the fractional corners, not its first three corners, through a hook on `NormalClip` (`KF2_POLYASM_FACING=0` to compare); Video ▸ Fast geometry switches them all, with the GTE fast path | on | PATCHES_AND_MODS, "The polygon assembler in C#", "The lit model assembler", "The clipper in C#", "The GTE fast path"; RENDERING, "A floor quarter missing at a short edge", "An edge-on wall lost its strips" |
+| `PolyAssembler` | `func_80030540` in C# as a replace hook, rejecting polygons the view-space clipper would clip to nothing; also `func_8002FECC` (the far map tiles' unclipped assembler), the vertex transforms `func_8002E650`/`func_8002E7CC` and the HUD's `func_8002E910` (orthographic, so it publishes each vertex's fraction to the vertex map itself, and only for pieces the matrix turns), `func_8002F214`/`func_8002EAEC` (the models' lit assembler) and the clipper `Clip4FTP`/`Clip3FTP`; the GTE ops they call have a fast path in the runtime (`0047`); `KF2_POLYASM=verify` diffs each against the recompiled routine, GTE included; a clipped polygon or quad is culled on its whole area at the fractional corners, not its first three corners, through a hook on `NormalClip` (`KF2_POLYASM_FACING=0` to compare); Video ▸ Fast geometry switches them all, with the GTE fast path | on | PATCHES_AND_MODS, "The polygon assembler in C#", "The lit model assembler", "The HUD's transform in C#", "The clipper in C#", "The GTE fast path"; RENDERING, "A floor quarter missing at a short edge", "An edge-on wall lost its strips" |
 | `TileWalk` | the map tile walk in C#: `func_80031C94` (the 24×24 cell sweep), `func_80031B1C` (a cell's two halves) and `func_80031950` (a half, set up and assembled). Taken for the scene it enumerates, not for time (0.013 ms a frame); `KF2_TILEWALK=verify` diffs each against the recompiled routine | on | PATCHES_AND_MODS, "The map tile walk in C#" |
-| `ModelWalk` | the object and creature walk in C#: `func_800331B4` (the creature, object, effect and billboard tables) and `func_80032588` (the model submitter). Taken for the scene it enumerates, not for time (3 us a frame); `ModelWalk.Scene` publishes each submit's record, model, position and assembler; `KF2_MODELWALK=verify` diffs both against the recompiled routines | on | PATCHES_AND_MODS, "The object and creature walk in C#" |
+| `ModelWalk` | the object and creature walk in C#: `func_800331B4` (the creature, object, effect and billboard tables) and `func_80032588` (the model submitter); and `func_80032400`, the first-person arm (`KF2_MODELWALK_ARM=0`), and `func_80032AC4`, an object of kind `0xF0`: the sky (`KF2_MODELWALK_SPECIAL=0`). Taken for the scene it enumerates, not for time (3 us a frame); `ModelWalk.Scene` publishes each submit's record, model, position and assembler; `KF2_MODELWALK=verify` diffs both against the recompiled routines | on | PATCHES_AND_MODS, "The object and creature walk in C#" |
+| `MoPose` | the MO blender `func_80034DA8` in C#: the keyframe per (clip, segment) and the per-frame copy and delta decode into `0x80190AD8`; for a model the GPU world renderer draws from its mesh the copy and decode are left undone (`MoPose.Defer`) and the vertex shader blends the pose from the pose store; `KF2_MOPOSE=verify` diffs it against the recompiled routine | on | GPU_RENDERER, "Step 3, the third slice" |
+| `Stage13`, `CameraBlock` | stage 13 `func_800342D8` and its camera block `func_8002E22C` in C#: nineteen calls, each through its hooks, and the HUD block, with the compass needle's spring at `0x8006E608` stepped on the tick (`KF2_STAGE13_NEEDLE=0` to compare); `Stage13.HookOrder` orders the hooks on it (`0070`); `Stage13.ViewOverride` draws the frame from a `Camera` of the port's, the cull grid following (`HideArmOnOverride` leaves the arm out; `Handed` is the player's camera); `Stage13.DrawScene` is the drawing half (`MenuWorld`); `CameraBlock.Build` (`PlanarWalk`); `ScenePass` points the frame at a table and arena of the port's and puts everything back (both); `KF2_STAGE13=verify` records the recompiled routine's calls and replays ours against them, `KF2_CAMERABLOCK=verify` diffs both | on; no override | PATCHES_AND_MODS, "Stage 13 in C#", "Drawing the frame from another camera", "The compass needle is held to the tick", "The hooks on stage 13 are ordered by what they need", "A pass of the port's own"; GAME_INTERNALS, "Stage 13's HUD block, and the compass needle" |
 | `Perspective` | perspective-correct textures (`0009`, `0012`) | on | RENDERING, "Perspective correction" |
 | `Subpixel` | sub-pixel vertex positions (`0010`); under it, the C# assemblers' backface cull is taken at the fractional corners (`0052`, `KF2_SUBPIXEL_CULL=0` to compare) | on | RENDERING, "Sub-pixel vertex positioning", "A thin face was culled on whole pixels" |
-| `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); Video ▸ Enhancements, with two tolerance sliders | on | RENDERING, "Z-buffer", "The assemblers write the depth" |
+| `ZBuffer` | per-pixel occlusion; depth from the C# assemblers' packet records (`0050`), coplanar tolerance on the test (`0051`), the address map without Fast geometry (`0014`, `0036`); blended surfaces drawn after the opaque ones the table put behind them, so a fish or the floor under the water no longer paints over it (`0079`, `KF2_BLENDORDER=0` to compare); Video ▸ Enhancements, a checkbox (the tolerance has no sliders) | on | RENDERING, "Z-buffer", "The assemblers write the depth", "Water was painted over by what lay under it" |
 | `Pgxp` | upstream's PGXP as the vertex source (`0034`-`0036`); env only | off | RENDERING, "PGXP has no control in the window" |
 | `AmbientOcclusion` | SSAO from painter's-order depth (`0040`), normals from the frame's own geometry redrawn into a G-buffer (`0058`); optional world-space term marching the area's tile grid, so off-screen geometry occludes (`0059`, off); the *SSAO* slider is Off/Low/Medium/High, and the three qualities cap the pass at 1x/2x the game's pixels or runs it at the render scale | on, Medium | RENDERING, "Ambient occlusion", "The normal was the guess", "Occluders the camera cannot see", "What the pass costs" |
-| `Reflections` | screen-space reflections on water (`0067`): the normal pass gains a surface buffer (normal, depth, material per pixel) that keeps the translucent water the depth buffer cannot; water found by the fluid slots' VRAM rects, translucent in an averaging blend; the material id is there for lighting later | off (not judged) | RENDERING, "Screen-space reflections" |
-| `PlanarWalk` | planar reflections (`0068`): after the object walk, the tile walk runs again and the walk's model submits are replayed from a camera mirrored in the water, into an arena and ordering table `PrimBuffer` keeps past its buffers; drawn at the frame's `DrawOTag` into a planar texture per target, fragments under the water discarded; the reflection pass takes it where a surface lies on the plane and marches elsewhere; the plane is binned from the water the backend classifies | off (not judged); needs `Reflections` | RENDERING, "Planar reflections" |
+| `Reflections` | screen-space reflections on water (`0067`): the normal pass gains a surface buffer (normal, depth, material per pixel) that keeps the translucent water the depth buffer cannot; water found by the fluid slots' VRAM rects, translucent in an averaging blend; the material id is there for lighting later; the pass runs for any of the march, `Murk`, `PlanarWalk` or `RetainedMap`, each on its own switch; the march is no longer a setting (`KF2_SSR=1`, a comparison) | off (not judged) | RENDERING, "Screen-space reflections", "The reflection pass runs for each term on its own" |
+| `Murk` | murky water: the reflection pass darkens water by the view ray's run through it to the floor (`WaterMurk`, `0067` amended); needs no reflection on; only a level surface is murked (`KF2_MURK_TILT`), and a model is water only if it is a rigid, flat object (`ModelWater`), so a slime or a crystal in the water's texture is not | on; depth 1886, no sliders (tuning judged) | RENDERING, "Murky water", "Only level water is murked", "A model is water only if it is a sheet of it" |
+| `Waves`, `WaterSwell` | water waves: a swell moves the water's interior vertices (the tile walk points each water mesh's bank header at a moved copy in `PrimBuffer.WaveScratch`, so the transforms, clipper and subdivider all read it; rims and vertices shared with other geometry held), and ripples push and shade the water's texture per pixel from a world-space wave field (`0078`, `WaterWaves`); one world clock; six sliders and the `waves` shell verb | on; swell 338/6114, ripples 139/700, shade 0.51, no sliders (tuning judged) | RENDERING, "Water waves" |
+| `PlanarWalk` | planar reflections (`0068`): after the object walk, the tile walk runs again and the walk's model submits are replayed from a camera mirrored in the water, into an arena and ordering table `PrimBuffer` keeps past its buffers; drawn at the frame's `DrawOTag` into a planar texture per target, fragments under the water discarded; the reflection pass takes it where a surface lies on the plane, and there its answer is final (an empty texel is the background, never a march); the plane is binned from the water the backend classifies; **it is the reflection**: the world reflections stand down for it, and the mirror walks a cull of its own (`PlanarCull`: the cone without the eye's occlusion flood, and the models there drawn only in the mirror; `KF2_PLANAR_CULL=0`); a *Reflection strength* slider | on; Video ▸ Enhancements, no slider (strength 0.6) | RENDERING, "Planar reflections", "The planar walk is the reflection, with a cull of its own" |
+| `RetainedMap`, `RetainedPlanes`, `RetainedModels` | the retained scene (`0072`): the map built into world-space triangles on the GPU from the map data (each corner within 1 px of the GTE's own), the object walk's models captured each frame before culling, drawn at present for the presented frame through `WorldVs` in front of the unchanged `PrimFs`: up to four planes (water, authored reflective floors, ranked on the frame's own camera) mirrored straight into one planar texture, and a camera cubemap with depth marched in world space in place of the screen march; chunk-culled per view; `KF2_RETAINED_PROBE=1` the check, the planes, GPU time and the planar-vs-cubemap agreement | off (not judged); reflections no longer a setting (`KF2_RETAINED=1`), and stand down for the planar walk | RENDERING, "The retained scene: the world kept on the GPU, so a reflection can draw it again" |
+| `Remaster.*` (`patches/remaster/`) | authored data from a pack: area identity and fingerprint, the working pack (JSON, watched, undo), a material per tile half written into the packet's depth record for the reflection pass, the editor (Shift+E, pauses the world, picks the faces under a click from the frame's own triangles, or a whole half from the docked map); materials per face of a half or of a mesh area-wide, gated on a hash of the mesh; authored point and spot lights added to the lit colour in `shade8` before the depth cue (`0071`, `RemasterUniforms`; needs per-pixel lighting and Fast geometry; `KF2_REMASTER_LIGHTS=0`), placed at the eye or on a click, dragged over the picture; materials on a model wherever the area draws it (kind and id, picked from the frame), with roughness (a blur of the reflection, from a mip chain), metalness, a highlight, an occlusion strength, and a glow, added over the texture by default, pulsing if asked, and giving off a light of its own that leaves its material alone, from a 256-id table on the GPU (`0067`, `0071` amended); the `edit`/`select`/`set`/`pack`/`remaster`/`light` shell verbs; upstream's texture packs on the port's path (`0073`): a key per uploaded image, filtered by the port's slider, and the `textures` census verb (`KF2_TEXCENSUS=1`); materials by texture, in every area (`TextureKeys`, `remaster/textures.json`, the least specific rule; a scrolling texture keyed on its source image), set from the editor's pick or `set texture material NAME`; `snap` hashes the presented picture (`0069`); the game's own light records (back colour, the three lights, the fog word) overridden after stage 1's copy, gated on each record's hash (`Atmosphere`, `atmosphere.json`, the `atmos` verb, `KF2_REMASTER_ATMOS=0`), once a census (`KF2_LIGHTCENSUS=1`) showed only the renderer reads them, and the area's *Darkness* slider over them (`"record": "all"`, `"darkness"`: a scale on records 0-63's back colour and light colours, computed from the source every pass; `atmos darkness`); shadows from the authored lights (`0077`): a depth cubemap per light, up to four, drawn from the retained map with the light at its centre, again only when the light or the map changes, sampled in `authored()` along the receiving surface (`KF2_REMASTER_SHADOWS=0`, `light shadows tune`); creatures and objects cast too, the frame's captured models drawn over a copy of the map's cubemap, again only while one in reach moves, a blended face with its opaque texels, effects not at all (`KF2_REMASTER_SHADOW_MODELS=0`, `light shadows models off`); the area's fog colour and curve (`fogColour`, `fogPower`, `fogMax` on the `"all"` entry), added past the texture by the packet's own depth-cue weight so a surface fades into the colour instead of black (`0074`; needs per-pixel lighting and Fast geometry; a face fogged to black keeps its record while one is set), and a `sky` the game's own background clear draws, the fog's colour by default (a pre and post on `PutDrawEnv`; `atmos fog|curve|sky`); tile edits (`Level`, `level.json`: a half's mesh, height, collision bits, shape, light record and flood bit, each field owning only its bits; applied whole per area and per half behind the fingerprint, never over a half the game rewrote, every write put back only if it still reads as written; the `level` verb), behind a switch of their own because they change gameplay (`KF2_REMASTER_LEVEL=1`); the rewrite census of halves the game rewrites itself (`TileRewrites`, `dump/GAME/census/rewrites.json`); `savecheck`, which proves the tile block never reaches a save; the editor's free camera (`EditorCamera`: `Stage13.ViewOverride` from the player's eye, right mouse to look, WASD/Q/E to fly, the arm left out; the `camera` verb); the compatibility report (`Compat`: per area, each document matches, differs or is unseen against a census of fingerprints this disc has loaded, `dump/GAME/census/areas.json`, with what resolved there last; `pack report`) and the export (`pack export`, upstream's zip layout, into `exports/`); props (`Props`, `props.json`: an object model the area already has, placed, turned and scaled, as an object record of the port's own above 2 MB that the C# object walk submits after the game's, so it is culled, lit and drawn by the game's own path; no collision, never saved; the `prop` verb, `KF2_REMASTER_PROPS=0`); Video ▸ Enhancements ▸ Remaster packs, with the packs listed under their own heading | off; nothing authored; level edits off | REMASTER, "Phase 1, the first slice", "Phase 1, the second slice", "Faces, picked from the frame", "Phase 2, the first slice", "Phase 3, the first slice", "The glow is a light source", "Phase 3, the second slice", "Phase 4, the first slice", "Phase 4, the second slice", "Metal is a tinted mirror", "The light records are read only by the renderer", "Phase 5, the first slice", "The area's darkness", "Shadows, the first slice", "Shadows, the second slice", "Phase 5, the second slice", "Phase 6, the first slice", "Phase 7, the first slice", "Phase 8, the first slice" |
 | `Anisotropic` | post-CLUT footprint supersampling (`0041`), every tap held inside the polygon's texture rectangle; one *Texture filtering* slider, Off / Trilinear / 2x-16x, every position past Off with mipmaps: minified textures decoded into an atlas with a mip chain each (`0060`, `KF2_MIPMAPS`) | 16x, mipmaps on | RENDERING, "Anisotropic filtering", "Mipmaps where the texture is decoded" |
 | `PerPixelLighting` | the depth cue and the models' light evaluated per pixel from what `PolyAssembler` recorded per packet (`0048`) | on | RENDERING, "Per-pixel lighting" |
 | `EvenFog` | clipped map tiles refogged on the tiles' curve instead of `func_800302E8`'s `IR0 >> 1`, and each tile vertex's fog blended between the light records of the tiles around it (hooks `func_80031950`; `0049`); and the records' colour matrix and back colour the same way; one *Even fog and lighting* checkbox, dimmed without Fast geometry (`KF2_EVENFOG_BLEND=0`, `KF2_EVENLIGHT=0` drop a part); stands down under verify | on | RENDERING, "A clipped tile is fogged at half, and that is the block on the floor", "Fog changes at a tile edge" |
 | `NoDither`, `TrueColor` | one *Shading* slider: Dither / None / Smooth (24-bit, `0021`) | Smooth | PATCHES_AND_MODS, "Two shading checkboxes were one question asked twice" |
 | `Widescreen`, `CullCone` | aspect ratio; widened view cone and screen tints follow it | 16:9 | WIDESCREEN, "Widescreen", "The cull the margin runs into" |
+| `RenderDistance` | cells added past the game's 24x24 visibility window, out to a slider's distance (at most 15 tiles, the s16 a tile is placed with): the game's flood continued outward on the eye's level from what it lit, walked after the game's own through the far assembler, answered by the object walk's queries, and a far packet placed at the table's last slot but one instead of dropped; the fog is the game's | off (not judged) | WIDESCREEN, "Render distance: the game's flood carried past its window" |
+| `ReflectionReach` | what the retained scene's reflections may show is the frame's halves grown by `KF2_REFLECT_REACH` cells on their own level, held 0.75 s and dither-faded (`0072` amended), so what the mirror sees and the eye's flood culled (a cavern round a cliff, a creature) stops popping into the water; the object walk's queries let models in them through; no longer a setting, and not read by the planar walk | off (not judged) | RENDERING, "The reflections see past the camera's cull" |
+| `GpuWorld` | the map's opaque faces drawn on the GPU from the retained scene's static mesh into the frame, at the table walk's slot 1, gated to the halves the tile walk visited; a half is then not assembled (`0085`); the map lit and fogged in the vertex shader from the area's 64 light records, EvenFog's blends and all, so a record the game rewrites is an upload and not a rebuild (`KF2_GPUWORLD_RECORDS=0` to compare, `KF2_GPUWORLD_RECORDCHECK=1` the check); its water is drawn by the backend too, whole faces sorted by the table's key and put among 0079's held packets where their packets would have gone, with the swell and the ripples (a half with a subtractive face stays on the packets; `KF2_GPUWORLD_WATER=0` puts the water back on them, `PolyAssembler.BlendedOnly`); follows sub-pixel, per-pixel lighting and the crosshatch, stands down without Fast geometry, the Z-buffer or perspective correction; the map drawn first into the occlusion's normals and the surface buffer, the rest tested there against the frame's depth (`KF2_GPUWORLD_SURFACES=0` to compare); fogged at each pixel's depth (`KF2_GPUWORLD_FOGZ=0`); stands down while a texture pack is loaded; the sky (the objects of kind `0xF0`) drawn from its meshes before the map, in painter's order (`KF2_GPUWORLD_SKY=0`); every blend mode, subtractive too, in one key order with the water; the object walk's opaque models drawn after the map from their posed corners, taken off the lit and clipped assemblers by those assemblers' own tests, lit per pixel from light dots with each run's BK and LCM (`RetainedModels.CaptureMain`; blended faces, effects, billboards and the arm stay on the packets; per-pixel lighting needed; `KF2_GPUWORLD_MODELS=0` to compare); the lit models placed in the world drawn from meshes kept on the GPU, an instance a frame (posed vertices, placement, light), the lit assembler's cull in the vertex shader, and a model with no blended face running neither the transform nor the assembler, nor the mirror's replay (`RetainedModels.TryInstance`; `KF2_GPUWORLD_MESHES=0` to compare, `KF2_GPUWORLD_MESHCHECK=1` the check); their vertices kept on the GPU too, a rigid model's as they are and an animated one's keyframe and deltas, blended in the vertex shader by the instance's weight, so no instance uploads vertices a frame (`MoPose`; `KF2_GPUWORLD_POSES=0` to compare, `KF2_GPUWORLD_POSECHECK=1` the check); the first-person arm drawn from its mesh in the game's painter's order, a run of faces per key where the table walk reached its packets, placed by the GTE's integer transform, the far plane left under it (`RetainedModels.TryArm`; `KF2_GPUWORLD_ARM=0` to compare); a model corner nearer than H/2 placed where the GTE's saturated divide puts it; the planar walk's mirror drawn the same way into the planar texture, from the mirrored camera with its own cull: its opaque map, its water and the models its replay takes off the packets, clipped and fogged level as a capture's packets are (`KF2_GPUWORLD_MIRROR=0` to compare); the objects near the camera (the clipped map assembler's) drawn from their meshes too, with that assembler's tests in the vertex shader, so stage 13's object walk draws 0 packets in every area at arrival (`KF2_GPUWORLD_TILE=0` to compare); the mirror's blended model faces keyed from the mirrored camera and merged with its water in the table's order (`KF2_GPUWORLD_MIRRORBLEND=0`); a model's blended faces in the normal and surface buffers as their packets were: a solid door as opaque, an authored material or the water's texture as a blended surface (`KF2_GPUWORLD_BLENDSURFACES=0`); the cell walk notes a half the GPU draws whole without calling the half routine (`KF2_GPUWORLD_CELL=0`); `KF2_GPUWORLD_CENSUS=1` counts what 3D the game's code still builds, by context (only the menu's item preview); Video ▸ Frame pacing ▸ *GPU geometry*, `KF2_GPUWORLD`, the `gpuworld` verb | on (measured; not all judged by eye) | GPU_RENDERER, "Step 1, the first slice", "Step 1, the second slice", "Step 2, the first slice", "Step 2, the second slice", "Step 2, the third slice", "Step 3, the first slice", "Step 3, the second slice", "Step 3, the third slice", "Step 3, the fourth slice", "Step 3, the fifth slice", "Step 3, the sixth slice", "Step 3, the seventh slice", "Step 3, the eighth slice", "Step 3, the ninth slice", "Step 4, the fallback census", "Step 5, the first slice" |
+| `EnhancementDistance` | past a view depth, the game's own look: corner colours, no authored light, one texel, no ripple, occlusion or reflection, faded over a tile (`0083`) | off (not judged) | RENDERING, "The enhancement distance: past it, the game's own look" |
 | `PrimBuffer` | the frame's primitive buffers moved above 2 MB into 4 MB of guest RAM, 4× as large, so a wide view no longer runs out and drops geometry (`0056`); `KF2_PRIMBUF=1` is the comparison, `KF2_PRIMBUF_PROBE=1` the measurement | on | WIDESCREEN, "The primitive buffer ran out" |
 | `AutoReload` | reload the last save on death, fixed 2 s delay | on | PATCHES_AND_MODS, "Auto reload" |
+| `GearCompare`, `MenuDraw` | the equip and buy prompts show every stat the item would change, now and after (`func_800244CC` run on the candidate and put back), drawn with the status screen's menu primitives rewritten in C# (`KF2_GEARCOMPARE=verify` diffs them against the recompiled routines); was `mods/gearcompare` | on | PATCHES_AND_MODS, "Comparing gear on the equip prompt"; GAME_INTERNALS, "The menu's primitives are `POLY_FT4`s out of a cursor, and the cursor is mirrored" |
 | `Map*` | full-screen map (touchpad / `M`), minimap (`N`), fog of war, markers; full map pauses the world | map on; fog on; minimap, markers off | PATCHES_AND_MODS, "A dynamic map", "What the Map page is down to" |
 | `Analog` | twin-stick control | on | INPUT, "Analog twin-stick control" |
 | `Mouse` | mouse look, spent inside `Analog.BeforeLook`; the view shows motion the tick has not spent yet (`FrameSmoothing.MouseLead`; Gameplay ▸ *Instant mouse look*, `KF2_MOUSE_LEAD`) | on; lead on (judged) | INPUT, "Mouse look", "The mouse leads the tick" |
@@ -224,8 +239,12 @@ judged by eye; say which of the two a change has when you write it up.
 - **`Widescreen` owns the one `Replace` of `DrawOTag`**, so every other `DrawOTag`
   hook must be a pre or a post, and a replacement must pass the source address to
   `WriteGp0` or perspective correction silently turns off.
-- **`LoopPacing` is installed last in `Program.cs`** — its post on stage 13 must run
-  after the smoothers'.
+- **A hook whose place among the others matters declares it** (`order` on
+  `AddPre`/`AddPost`, `0070`), never by where its `Install()` sits in `Program.cs`.
+  On stage 13 the orders are `Stage13.HookOrder`: `LoopPacing`'s redraw post is
+  `Redraw`, after every smoother's restore.
+- **A pass that draws into a table of the port's own goes through `ScenePass`**, so
+  it puts back everything any pass moves.
 - **A liveness test is the renderer's, not the owning stage's**: an object is drawn
   when `u16[+0x6] != 0xFF`, a creature when `u8[+0x9] == 1`.
 - **Settings**: a page registers against a runtime section with
@@ -305,7 +324,9 @@ mcp/                     stdio MCP server exposing the KF2_SHELL command channel
 Verdite2.Launcher/       the SHIPPED executable; builds with no disc, and makes the
                          game at first run from the player's own image. See docs/PACKAGING.md
 packaging/               AppImage and Windows packaging, plus placeholder icons
-patches/recompone/*.patch  the record of the port's changes to the vendored RecompOne
+tools/RecompOne/patches/*.patch  the record of the port's changes to RecompOne
+tools/verdite-core/       Verdite Core, the game-agnostic code shared with Verdite3 (a subtree)
+config/verdite.json      this game's values for Verdite Core's scripts
 generated/               recompiler output (gitignored — derived from copyrighted disc data)
 scripts/*.py             disc inspection, address-hunting, and the rate tooling:
                          merge_sdk_names (write the PSY-Q names a signature
@@ -426,14 +447,28 @@ removed for the same reason.
 
 ## The RecompOne checkout
 
-**`tools/RecompOne/` is vendored: an edit inside it is a change to this
-repository like any other.** `patches/recompone/*.patch` are kept as the record of
-what the port changed and why, and the numbers (`0001`-`0069`) are how the source
-refers to each change, but they are **no longer replayed**. The merge base is
-`tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's history is the
-gitignored `tools/RecompOne.git/`, reached with
-`git --git-dir=tools/RecompOne.git --work-tree=tools/RecompOne <cmd>`.
+**`tools/RecompOne/` is a `git subtree` (taken with `--squash`) of the
+standalone fork `Voicedrew11/verdite-recompone` (`main`): its sources are tracked
+here, so a fresh clone builds with nothing fetched, and an edit inside it is a
+change to this repository like any other.** `tools/RecompOne/patches/*.patch` (the fork's own, since Phase 2) are kept
+as the record of what the port changed and why, and the numbers (`0001`-`0085`)
+are how the source refers to each change, but they are **no longer replayed**.
+The merge base is `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's
+history descends from upstream, so a harvest is an ordinary merge, made in a
+working clone of the fork.
 
+- **Shared-subtree edits go in their own commits.** A commit that touches
+  `tools/RecompOne/` touches nothing else (`--push-fork` refuses a mixed one), it
+  is pushed to the fork soon after with `--push-fork`, and this repo's copy must
+  always equal some commit of the fork. Upstream harvests happen in the fork, not
+  here; see `docs/RECOMPONE_FORK.md`.
+- **`tools/verdite-core/` is the second subtree**, of `Voicedrew11/verdite-core`:
+  the game-agnostic code the Verdite games share, under the same rules
+  (`--pull-core`, `--push-core`). Nothing in it may know this game; it reads
+  this game's values from `config/verdite.json`. The bring-up scripts
+  (`inspect_disc`, `extract_file`, `add_call_targets`, `merge_branch_spans`,
+  `merge_sdk_names`) live there, and `scripts/` keeps a wrapper of each name, so
+  the commands in this file are unchanged. See `docs/SHARING.md`.
 - **Three changes force a recompile**: `0004`, `0035` and `0037`. Everything else
   is runtime-only.
 - **The acceptance test for a merge** is `open → game → fdat02 → fdat05`, slot 2
@@ -449,15 +484,16 @@ issues against it: a defect found here is recorded in `docs/` and fixed in the
 vendored tree, which is the whole point of vendoring it. If the user wants
 something reported upstream they will write it themselves.
 
-@docs/RECOMPONE_FORK.md
-@docs/RECOMPONE_PATCHES.md
+Read `docs/RECOMPONE_FORK.md` before merging from upstream, and grep
+`tools/RecompOne/docs/RECOMPONE_PATCHES.md` for a patch number (`0047`) before changing that
+patch's code or amending it. Neither is imported, for size.
 
 ## Shipping it
 
 **The port cannot ship a playable binary.** `generated/` is a translation of
 FromSoftware's code, so the assembly that plays the game has to be built on the
 machine of somebody who owns the disc. The release ships every **input** —
-`config/`, `patches/**`, `Program.cs`, the vendored RecompOne — and makes the
+`config/`, `patches/**`, `Program.cs`, the RecompOne subtree — and makes the
 output at first run. That is also a correctness win: the generated dispatch tables
 bake **absolute LBAs from one mastering**, so a prebuilt binary would silently
 fail to load area modules on a differently mastered dump.

@@ -40,13 +40,13 @@ namespace Kf2;
 ///    ends by calling it. It spins on a vblank credit at 0x801B6CA8 -- bumped by
 ///    the game's own vblank callback, `func_80017850` -- until the credit reaches
 ///    **2**, then zeroes it. That literal 2 is the game's frame rate, in software.
-///    Since patches/recompone/0021 ticks the emulated vblank on a wall-clock 60 Hz
+///    Since tools/RecompOne/patches/0021 ticks the emulated vblank on a wall-clock 60 Hz
 ///    grid, this alone paces the port to exactly 30 fps whatever the host does.
 ///    **<see cref="BeforeFrameGate"/> now skips it at every rate, not only above
 ///    30**, because the rate the world is held to is no longer the rate that
 ///    literal asks for -- see below.
 /// 2. **RecompOne's FrameClock**, which used to be a hard-coded 60 Hz applied per
-///    *VSync call*. patches/recompone/0025 makes it settable; this class sets it
+///    *VSync call*. tools/RecompOne/patches/0025 makes it settable; this class sets it
 ///    as a permissive ceiling rather than as the pacer, because a frame can carry
 ///    more than one VSync call and a per-call throttle therefore cannot express a
 ///    frame rate.
@@ -132,10 +132,9 @@ namespace Kf2;
 /// version of the stage 3 sentence was wrong.)
 ///
 /// **What this still does not cover, stated rather than discovered later.**
-/// Stage 13's **jitter accumulator at 0x8006E608** is in stage 13's own body
-/// rather than in a callee, so no hook can reach it -- it is a damped accumulator
-/// (decayed by an eighth a call) driving the screen shake, so above the tick rate
-/// it settles faster and smaller. **The modal loops are covered, and not by this
+/// The **compass needle's spring at 0x8006E608** is in stage 13's own body rather
+/// than in a callee, so a gate cannot reach it; above the tick rate the needle
+/// settles sooner. Stage 13 is C# now (<see cref="Stage13"/>), so it is one line. **The modal loops are covered, and not by this
 /// class**: `func_80037B5C` (the transition fade), the item-use and spell-cast
 /// animations and the menu all step once per *rendered* frame inside a loop of
 /// their own, which a gate cannot reach because it decides only whether such a
@@ -498,7 +497,7 @@ public static class FramePacing
     ///
     /// **Latched once a frame rather than read per call**, for the reason
     /// <see cref="_tickThisFrame"/> is: host input is polled from inside the
-    /// game's own <c>VSync</c> (patches/recompone/0007), so the key that opens the
+    /// game's own <c>VSync</c> (tools/RecompOne/patches/0007), so the key that opens the
     /// map can arrive between two stages of one main-loop iteration, and a
     /// predicate read per stage would then run half a tick -- a state machine
     /// stepped against an entity table that was not. The latch is taken at the two
@@ -802,17 +801,14 @@ public static class FramePacing
     /// It paces per <c>VSync</c> *call* and a frame can carry more than one, so it
     /// cannot express a frame rate; its job here is only to stop a loop that has
     /// stopped drawing -- a disc read, a menu -- from spinning. Never lowered below
-    /// 60, which is what it was before patches/recompone/0025 made it settable.
+    /// 60, which is what it was before tools/RecompOne/patches/0025 made it settable.
     ///
-    /// **Uncapped leaves it at 60 rather than turning it off.** "Uncapped" has
-    /// always meant "the port's own floor is off", and what that produced was a
-    /// port topping out around 50 fps because FrameClock held each VSync call to a
-    /// vblank. Setting 0 here would mean something new -- present as fast as the
-    /// host can, with nothing between the loop and the GPU -- which is not the
-    /// diagnostic anyone asked for. The capability exists in 0025; nothing uses it.
+    /// **Unlimited turns it off.** It used to be left at 60, which held each
+    /// VSync call to a vblank and so capped an "unlimited" picture at 60 once the
+    /// settings slider offered one. Off is what the setting says.
     /// </summary>
     static void ApplyHostCeiling()
-        => RecompOne.Runtime.Runtime.TargetFps = Enabled ? Math.Max(60.0, TargetFps * 2.0) : 60.0;
+        => RecompOne.Runtime.Runtime.TargetFps = Enabled ? Math.Max(60.0, TargetFps * 2.0) : 0.0;
 
     /// <summary>The vblank floor this used to be expressed as, for the settings and
     /// for anything that still thinks in bands. 0 is uncapped.</summary>
@@ -1034,7 +1030,7 @@ public static class FramePacing
     ///
     /// **This used to be keyed on the vblank instead, and that was the bug that
     /// made every rate above 30 run the game fast.** Since
-    /// patches/recompone/0021 the emulated vblank is a wall-clock 60 Hz grid, so
+    /// tools/RecompOne/patches/0021 the emulated vblank is a wall-clock 60 Hz grid, so
     /// once the port draws faster than 60 most frames reach here with no vblank
     /// elapsed. They were discarded: no <see cref="Floor"/>, no
     /// <see cref="AdvanceLogicClock"/> -- which left <c>_tickThisFrame</c> at the

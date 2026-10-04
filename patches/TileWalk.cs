@@ -104,6 +104,11 @@ public static class TileWalk
     /// <inheritdoc cref="CellsWalked"/>
     public static long CellsDrawn => _cellsDrawn;
 
+    /// <summary>The map record of the half `func_80031950` is assembling, or 0 outside
+    /// one -- the tile-side counterpart of <c>ModelWalk.SetSubmit</c>.
+    /// <c>Remaster.Identity.FromRecord</c> turns it into a tile and a half.</summary>
+    public static uint CurrentRecord { get; private set; }
+
     // What the last walk saw, which is the whole point of the routine being here.
     static long _cellsWalked, _cellsDrawn, _halves, _unclipped, _plain, _subdivided, _skipped;
     static double _probeAt;
@@ -201,6 +206,8 @@ public static class TileWalk
         mem.WriteU32(sp + 0x14u, c.S1);
         mem.WriteU32(sp + 0x10u, c.S0);
 
+        if (Remaster.Faces.Recording) Remaster.Faces.FrameStart();
+        if (!PlanarWalk.Mirroring) { RetainedMap.AtWalk(c, mem); Waves.AtWalk(c, mem); RenderDistance.Build(mem); }
         c.A0 = 0u;
         c.RA = 0x80031CBCu;
         KingsField2.func_8002E190(c, mem);
@@ -241,6 +248,20 @@ public static class TileWalk
             else cell += GridSpan;
             z++;
         }
+        // The mirror walks a cull of its own (PlanarCull), which covers the render
+        // distance's cells; without it, the eye's.
+        if (PlanarWalk.Mirroring)
+        {
+            if (PlanarCull.Any) PlanarCull.Walk(c, mem);
+            else if (RenderDistance.Any) RenderDistance.Walk(c, mem);
+        }
+        else
+        {
+            if (RenderDistance.Any) RenderDistance.Walk(c, mem);
+            RenderDistance.Report();
+            ReflectionReach.Build(mem);
+            PlanarCull.Build(mem);
+        }
 
         c.RA = mem.ReadU32(sp + 0x28u);
         c.S5 = mem.ReadU32(sp + 0x24u);
@@ -280,7 +301,7 @@ public static class TileWalk
         uint half = flags & 0xFFu;
         bool placed = false;
 
-        if ((flags & 1u) != 0u && mem.ReadU8(rec) < 240)
+        if ((flags & 1u) != 0u && mem.ReadU8(rec) < 240 && !TakenInCell(mem, rec))
         {
             Place(mem, pos, tx, tz);
             placed = true;
@@ -292,7 +313,7 @@ public static class TileWalk
             KingsField2.func_80031950(c, mem);
         }
 
-        if ((flags & 2u) != 0u && mem.ReadU8(rec + 5u) < 240)
+        if ((flags & 2u) != 0u && mem.ReadU8(rec + 5u) < 240 && !TakenInCell(mem, rec + 5u))
         {
             if (!placed) Place(mem, pos, tx, tz);
             Elevate(mem, pos, mem.ReadU8(rec + 6u));
@@ -344,6 +365,16 @@ public static class TileWalk
         uint rec = c.A0, pos = c.A1, flags = c.A2;
         uint rot = mem.ReadU8(rec + 2u) & 3u;
 
+        // 0085. A half the GPU draws whole needs none of the setup below. With its
+        // water on the packets, a half with blended faces keeps only those.
+        bool mirror = PlanarWalk.Mirroring;
+        bool gpu = mirror ? GpuWorld.MirrorActive : GpuWorld.Active;
+        if (gpu && TakeWhole(mem, rec, mirror))
+        {
+            Epilogue(c, mem, sp);
+            return;
+        }
+
         c.A0 = ViewMatrix;
         c.RA = 0x80031988u;
         KingsField2.SetRotMatrix(c, mem);
@@ -385,42 +416,116 @@ public static class TileWalk
 
         uint model = mem.ReadU8(rec);
         if (Beyond(mem, model)) { _skipped++; Epilogue(c, mem, sp); return; }
+        // What the frame drew is what its reflections may show (RetainedScene.HalfGate),
+        // grown and held by ReflectionReach.
+        if (!mirror) NoteDrawn(rec);
+        else if (gpu) NoteMirrored(rec);
+        // 0085. The GPU draws the half's opaque faces; only its water is assembled.
+        if (gpu) { if (mirror) GpuWorld.MirrorKept++; else GpuWorld.Kept++; }
+
+        // The half being assembled, for whatever the assemblers record per packet.
+        CurrentRecord = rec;
+        PolyAssembler.TileMaterial = Remaster.Surfaces.EnterHalf(rec, (int)model);
 
         c.A0 = model;
         c.RA = 0x80031A84u;
         KingsField2.func_8002E1F0(c, mem);
+        Remaster.Faces.NoteTable(mem.ReadU32(ModelTable));
+        // The water's moved copy, for every reader of the mesh below; put back after.
+        WaterSwell.Enter(mem, rec, model);
 
-        if ((flags & 0x80u) == 0u)
+        // A subdivided mesh leaves the subdivider's corners in the vertex cache.
+        bool whole = true;
+        PolyAssembler.BlendedOnly = gpu;
+        try
         {
-            _unclipped++;
-            c.A0 = model;
-            c.RA = 0x80031B00u;
-            KingsField2.func_8002FECC(c, mem);
-        }
-        else if ((flags & 0x40u) == 0u) Plain(c, mem, model);
-        else
-        {
-            c.A0 = model;
-            c.RA = 0x80031AA0u;
-            KingsField2.func_8002E1BC(c, mem);
-            if (mem.ReadU32(c.V0 + 0x14u) < 0x10u)
+            if ((flags & 0x80u) == 0u)
             {
-                _subdivided++;
-                c.A0 = mem.ReadU32(ModelTable);
-                c.A1 = model;
-                c.A2 = sp + 0x38u;
-                c.RA = 0x80031AC8u;
-                KingsField2.func_80030C94(c, mem);
+                _unclipped++;
                 c.A0 = model;
-                c.A1 = 0xF0u;
-                c.A2 = sp + 0x38u;
-                c.RA = 0x80031AD8u;
-                KingsField2.func_80030540(c, mem);
+                c.RA = 0x80031B00u;
+                KingsField2.func_8002FECC(c, mem);
             }
-            else Plain(c, mem, model);
+            else if ((flags & 0x40u) == 0u) Plain(c, mem, model);
+            else
+            {
+                c.A0 = model;
+                c.RA = 0x80031AA0u;
+                KingsField2.func_8002E1BC(c, mem);
+                if (mem.ReadU32(c.V0 + 0x14u) < 0x10u)
+                {
+                    _subdivided++;
+                    whole = false;
+                    uint srcVerts = mem.ReadU32(0x8018EAA0u);
+                    c.A0 = mem.ReadU32(ModelTable);
+                    c.A1 = model;
+                    c.A2 = sp + 0x38u;
+                    c.RA = 0x80031AC8u;
+                    KingsField2.func_80030C94(c, mem);
+                    if (Remaster.Faces.Wanted) Remaster.Faces.Subdivided(mem, model, sp + 0x38u);
+                    if (Remaster.FaceProbe.On) Remaster.FaceProbe.Subdivided(mem, model, sp + 0x38u, srcVerts);
+                    c.A0 = model;
+                    c.A1 = 0xF0u;
+                    c.A2 = sp + 0x38u;
+                    c.RA = 0x80031AD8u;
+                    KingsField2.func_80030540(c, mem);
+                    if (Remaster.Faces.Wanted) Remaster.Faces.SubdividedDone();
+                }
+                else Plain(c, mem, model);
+            }
+        }
+        finally
+        {
+            PolyAssembler.BlendedOnly = false;
+            WaterSwell.Leave(mem);
         }
 
+        if (RetainedMap.Checking && !PlanarWalk.Mirroring && whole && !gpu) RetainedMap.CheckHalf(mem, rec, model);
         Epilogue(c, mem, sp);
+    }
+
+    /// <summary>0085. Whether the GPU draws this half whole, noted for it if so: no
+    /// setup, transform or assembler is left for it.</summary>
+    static bool TakeWhole(PSMemory mem, uint rec, bool mirror)
+    {
+        uint model = mem.ReadU8(rec);
+        if (Beyond(mem, model)) return false;
+        if (GpuWorld.KindOf(mem, model) != GpuWorld.Faces.Opaque && !(mirror ? GpuWorld.MirrorWaterActive : GpuWorld.WaterActive))
+            return false;
+        if (mirror) { NoteMirrored(rec); GpuWorld.MirrorSkipped++; }
+        else { NoteDrawn(rec); GpuWorld.Skipped++; }
+        return true;
+    }
+
+    /// <summary>Step 4. A half the GPU draws whole is noted in the cell and the half routine
+    /// is not called. See "Step 4, the fallback census" in docs/GPU_RENDERER.md.</summary>
+    static bool TakenInCell(PSMemory mem, uint rec)
+    {
+        bool mirror = PlanarWalk.Mirroring;
+        if (!(mirror ? GpuWorld.MirrorActive : GpuWorld.Active) || !TakeInCell) return false;
+        if (!TakeWhole(mem, rec, mirror)) return false;
+        TileCalls++;
+        _halves++;
+        return true;
+    }
+
+    /// <summary>KF2_GPUWORLD_CELL=0: call the half routine for every half again, as the
+    /// game does, the half returning at once when the GPU draws it.</summary>
+    public static bool TakeInCell = true;
+
+    /// <summary>0085. A half of the mirrored walk's the backend draws.</summary>
+    static void NoteMirrored(uint rec)
+    {
+        uint off = rec - MapBase;
+        RetainedScene.NoteMirrorHalf((int)(off % 800u / 10u), (int)(off / 800u), (int)(off % 10u / 5u));
+    }
+
+    static void NoteDrawn(uint rec, bool main = true)
+    {
+        uint off = rec - MapBase;
+        int hx = (int)(off % 800u / 10u), hz = (int)(off / 800u), hu = (int)(off % 10u / 5u);
+        if (RetainedMap.Ready) RetainedScene.NoteHalf(hx, hz, hu, main);
+        ReflectionReach.NoteDrawn(hx, hz, hu);
     }
 
     static void Plain(CpuContext c, PSMemory mem, uint model)
@@ -444,6 +549,9 @@ public static class TileWalk
 
     static void Epilogue(CpuContext c, PSMemory mem, uint sp)
     {
+        if (Remaster.Faces.Wanted) Remaster.Faces.LeaveHalf();
+        CurrentRecord = 0;
+        PolyAssembler.TileMaterial = 0;
         c.RA = mem.ReadU32(sp + 0x1048u);
         c.S3 = mem.ReadU32(sp + 0x1044u);
         c.S2 = mem.ReadU32(sp + 0x1040u);

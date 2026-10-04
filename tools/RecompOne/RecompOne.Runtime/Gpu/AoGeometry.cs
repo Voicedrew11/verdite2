@@ -38,6 +38,10 @@ public sealed class AoGeometry
         // 0067. The surface's material (SurfaceMaterial); every opaque triangle is
         // at least Opaque, and a translucent one is kept only when it has one.
         public float M;
+        // A veil's texel, for its semi-transparency bit: the UV, and the texpage
+        // and CLUT with bit 31 set when it is textured.
+        public float Tu, Tv;
+        public uint Tex;
     }
 
     /// <summary>The port's switch.</summary>
@@ -67,6 +71,27 @@ public sealed class AoGeometry
 
     public ReadOnlySpan<V> Verts => _v.AsSpan(0, _n);
 
+    // Where the list turns from surfaces to veils and back (SurfaceMaterial.VeilHalf),
+    // as vertex indices, starting with surfaces: the normal pass blends a veil.
+    readonly List<int> _breaks = new();
+    bool _inVeil;
+
+    public List<int> Breaks => _breaks;
+
+    /// <summary>0085. The retained scene's frame whose map the GPU drew into this
+    /// target this frame (0 for none), and the projection centre it was drawn with,
+    /// in the target's 1x pixels. The normal pass draws that map first.</summary>
+    public int WorldSerial;
+    public float WorldCx, WorldCy;
+
+    /// <summary>0085. Where the map's water went in among the list's triangles: the
+    /// vertex count when the colour pass drew it, and its slice of view depth.</summary>
+    public readonly List<(int At, float Lo, float Hi)> Water = new();
+
+    /// <summary>0085. Where the first-person arm went in among the list's triangles
+    /// (-1 for nowhere), and the frame it was drawn from.</summary>
+    public int ArmAt = -1, ArmSerial;
+
     /// <summary>Start this target's list over when it is first drawn in a new frame,
     /// or when the depth generation moved under it.</summary>
     public void Frame(long frame, int gen)
@@ -75,12 +100,19 @@ public sealed class AoGeometry
         _frame = frame;
         _gen = gen;
         _n = 0;
+        WorldSerial = 0;
+        Water.Clear();
+        ArmAt = -1;
+        _breaks.Clear();
+        _inVeil = false;
     }
 
     public void Add(in V a, in V b, in V c)
     {
         if (_n + 3 > MaxVerts) { Dropped++; return; }
         if (_n + 3 > _v.Length) Array.Resize(ref _v, Math.Min(MaxVerts, _v.Length * 2));
+        bool veil = a.M >= SurfaceMaterial.VeilHalf;
+        if (veil != _inVeil) { _breaks.Add(_n); _inVeil = veil; }
         _v[_n++] = a;
         _v[_n++] = b;
         _v[_n++] = c;

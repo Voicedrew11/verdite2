@@ -470,7 +470,7 @@ public static class Map
         // thousands of times a second.
         Event.AddListener<KeyboardEvent>(e =>
         {
-            if (!Enabled || !e.Pressed || PopupManager.AnyOpen) return;
+            if (!Enabled || !e.Pressed || PopupManager.AnyOpen || HotkeyGate.Editing) return;
 
             // M is the *player's* map -- the full-screen one -- and Shift+M is the
             // docked instrument with the ten-byte hover readout. They were one key

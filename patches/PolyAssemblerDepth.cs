@@ -29,6 +29,14 @@ public static partial class PolyAssembler
     /// other blended model, the water and the glows included, is not.</summary>
     public static bool InModel;
 
+    /// <summary>Set by <see cref="ModelWalk"/> for a model whose faces in the water's
+    /// texture are not water (<see cref="ModelWater"/>): a slime, a crystal.</summary>
+    public static bool NotWater;
+
+    /// <summary>The authored material of the tile half being assembled, or 0; set by
+    /// <see cref="TileWalk"/> around each half (docs/REMASTER.md).</summary>
+    public static byte TileMaterial;
+
     /// <summary>Blended model packets by the table they came from (ModelKind).</summary>
     public static readonly long[] BlendedByKind = new long[4];
 
@@ -53,7 +61,9 @@ public static partial class PolyAssembler
         ref var e = ref _cacheDepth[i];
         e.W0 = sxy;
         e.W1 = Peek32(mem, dst + 4u);
-        e.Z = Unrounded(mem, src, (int)Gte.Read(19));
+        // A corner at or behind the camera saturates to 0; recorded at the nearest
+        // depth, so its polygon is ordered rather than a barrier (docs/RENDERING.md).
+        e.Z = MathF.Max(Unrounded(mem, src, (int)Gte.Read(19)), 1f);
     }
 
     /// <summary>
@@ -116,6 +126,13 @@ public static partial class PolyAssembler
         r.Cmd = Peek32(mem, pkt + 4u);
         r.Xy0 = Peek32(mem, pkt + 8u);
         r.XyLast = Peek32(mem, pkt + last);
+        // Nothing more specific named it: the art it draws may have a material.
+        r.Material = TileMaterial != 0 || !Remaster.Surfaces.ByTexture ? TileMaterial
+                   : Remaster.Surfaces.PacketMaterial(mem, pkt, r.Cmd);
+        if (r.Material != 0) Remaster.Surfaces.Packets++;
+        if (Remaster.Faces.Recording) Remaster.Faces.Seal(mem, pkt, last, r);
+        r.Model = InModel;
+        r.NotRect = InModel && NotWater;
         // Bit 25 of the command word: semi-transparent.
         r.Solid = false;
         if (InModel && (r.Cmd & (1u << 25)) != 0)
@@ -155,6 +172,7 @@ public static partial class PolyAssembler
             r.Z1 = Unrounded(mem, ra, (int)Peek32(mem, ra + 0x10u));
             r.Z2 = Unrounded(mem, rb, (int)Peek32(mem, rb + 0x10u));
             if (r.Z0 <= 0f || r.Z1 <= 0f || r.Z2 <= 0f) { r.Cmd = 0; continue; }
+            if (Remaster.Faces.Recording) r.Z3 = 0f;
             SealDepth(mem, ref r, pkt, 0x20u);
         }
     }

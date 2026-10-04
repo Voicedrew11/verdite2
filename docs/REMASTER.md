@@ -1,0 +1,2801 @@
+# The remaster: authoring tools first, effects second
+
+**A design document, and from Phase 1 on a record of the work done against it.**
+Phase 1 is in, in two slices (see "Phase 1, the first slice" and "Phase 1, the
+second slice" under the roadmap), with materials since keyed by face ("Faces, picked
+from the frame"); Phase 2 has its first slice ("Phase 2, the first slice"), and so
+does Phase 3 ("Phase 3, the first slice"); Phase 4 is in, rescoped to materials
+by texture ("Phase 4, the second slice"), and metalness made a tinted mirror
+("Metal is a tinted mirror"); Phase 5 is in: overrides of the game's own light
+records ("Phase 5, the first slice"), after a census showed only the renderer reads
+them, the area's darkness, shadows, and the fog's colour and the sky ("Phase 5, the
+second slice"); Phase 6 has its first slice, tile edits behind their own switch
+("Phase 6, the first slice"); Phase 7 has its first slice, the free camera, the
+compatibility report and the export ("Phase 7, the first slice"); Phase 8 has its
+first slice, props drawn from the area's own object models ("Phase 8, the first
+slice"). The
+stretch goal is a full visual remaster the user authors themselves: placing lights,
+assigning materials, tuning reflections, editing levels. **An effect is worth
+nothing to that goal until it can be placed, tuned, saved and shared**, so this
+document plans the authoring tools and the data they write first, and treats each
+rendering feature as something those tools drive.
+
+Every claim about the existing port is marked the way the rest of `docs/` marks
+them: **Confirmed** (measured, or read from the code), **Inferred** (fits the
+evidence, not tested) and **Open** (not known). Every planned feature keeps
+"mechanism measured" apart from "picture judged". Features ship **off**, and off
+must be bit-identical to the picture the port draws today.
+
+The request this answers arrived with some lines cut off. It was read as asking
+for:
+- each phase's measurement that proves it works;
+- the cost of each feature, on and off;
+- the remaster being off by default;
+- the seams between the layers;
+- versioning, and how a pack layers over the base game and over other packs;
+- in-game or external editing;
+- driving the game with `KF2_SHELL`, `goto`, a free camera and pause;
+- forward or deferred lighting.
+
+If one of those readings is wrong, the section built on it is the one to revisit.
+
+## What this is, and what it is not
+
+**"Full visual remaster" needs a target before it needs a renderer.** Two
+remasters could come out of this port. One keeps the game's look and adds light,
+material and surface detail to it. The other replaces the art. The tools are the
+same for both, but the order of the phases is not, and neither is what "done"
+means. **Recommendation:** take one area from start to finish before spreading
+across all of them. `fdat02` is the obvious one:
+- it is where `KF2_AUTOSTART=new` stands, so the spawn is fixed;
+- it has water, so the reflection passes were measured there;
+- the SSR and planar readbacks already have numbers for it.
+
+Area 1 with save slot 2 (`KF2_AUTOSTART=2`) is the second test scene, as it is
+for everything else.
+
+**What this document deliberately does not do:**
+- It does not design a new renderer. Everything here extends the passes the port
+  already has.
+- It does not replace creature meshes.
+- It does not add walkable geometry beyond what the tile grid can already express.
+
+Each of those gets a paragraph below saying why.
+
+## What exists, and what each piece gives the remaster
+
+**Most of the machinery a remaster needs is already in the tree, because the
+port learned to name its geometry before it had a reason to.** The C# assemblers
+know which routine built each packet. The two walks know which tile and which
+model. The surface buffer already stores a material per pixel. What is missing
+is anything authored, and anything that remembers it.
+
+| piece | what it is | what it gives the remaster |
+|---|---|---|
+| `Gpu/SurfaceMaterial.cs` (`0067`) | a per-pixel material id stored in the surface buffer's alpha, 8 slots, with a `Reflectivity`/`F0` table the port fills | **The material channel.** The id already reaches the reflection pass, and "What a surface is made of" in `RENDERING.md` names lighting as its next reader. Eight ids is too few to author with, so widening it is an amendment to `0067` |
+| `GtePacketDepth` (`0050`) | per-packet corner depths, `Solid` and **`Material`**, written by the C# assemblers | **Where authored per-tile and per-model materials are written.** `SurfaceMaterial.Classify` already prefers the packet's material. **Confirmed**: `PolyAssemblerDepth.SealDepth` is the one place a record is sealed, and it never sets `Material` |
+| `GteLightMap` (`0048`) | per-corner lit colour or light dots and the raw depth cue; `BK`/`LCM` by generation | **The chain authored lights join.** `shade8` rebuilds the game's colour per pixel from these inputs; an authored light adds a term to it |
+| `GteTexRect` (`0060`) | the texture rectangle of a face, for clipped fans | **A stable rectangle for a texture key**, where a clipped fan's own UVs would give a different rectangle every frame |
+| `patches/TileWalk.cs` | the 24×24 cell sweep, a cell's two halves, one half set up and assembled | **Tiles, by coordinate, as they are drawn.** It knows `(x, z, half)`, the world position and the assembler. It does not *publish* the current tile yet, the way `ModelWalk.SetSubmit` publishes the current model |
+| `ModelWalk.Scene` | a `ModelDraw` per submit: kind, slot, record, model id, world position, assembler, light record | **Models and instances, by table and slot, with a world position.** Used for picking, per-model materials and light receivers. `SubmitKind`/`SubmitRecord`/`SubmitSlot` are live while a packet is being built |
+| `patches/PlanarWalk.cs` (`0068`) | the tile walk run again, and the model submits replayed, from a camera mirrored in the water, with every piece of state saved and restored | **Proof that the scene can be drawn from a second camera without disturbing the first.** It is the template for the editor's free camera, and for any later pass drawn from a light's point of view |
+| `patches/AoWorld.cs` (`0059`) | the area's 80×80 tile grid as a GPU texture, and the camera's rotation and world position as uniforms | **World space inside a shader.** It turns a fragment's view position into a world one, and it is a grid a shader can march, which gives coarse shadows for authored lights |
+| `patches/Map*.cs` | the full-screen plan, the docked panel with a readout of all ten tile bytes under the cursor, fog of war, markers | **The editor's top-down view and tile picker, mostly written.** It also holds the one invariant that proves the tile addressing: the player stands on a drawn half with a floor-height gap of 0 |
+| upstream `Assets/` | texture and XA replacement packs: `pack.json`, content-hashed texture keys, `TextureDumper`, a Texture Inspector panel | **Texture identity and replacement images, already built.** See below |
+| `FrameCapture` (`0046`) | one run of stage 13, scrubbed GP0 command by command, with an owner routine for each command | **Picking a texture on demand**: which command drew this pixel, and so which texture page, CLUT and UVs |
+| `OutputView` (`0029`) | where the game picture sits in the window, in window pixels and in game pixels | **Where the editor draws its gizmos** |
+| `KF2_SHELL` and `mcp/` | `goto`, `state`, `nearby`, `load`, `warp`, `press` over TCP | **How an agent drives every measurement below without seeing the window** |
+| `scripts/shader_probe.c`, `scripts/light_probe.c` | the real fragment shaders run headless over known inputs, read back | **The bit-identical proof for a shader branch that is switched off** |
+
+### Upstream already has a texture pack system, and the port's docs never mention it
+
+**Confirmed, read from the vendored tree.** `tools/RecompOne/RecompOne.Runtime/Assets/`
+holds:
+- `AssetReplacerManager`, which loads `./packs/` as folders or zips at startup;
+- `AssetPack` and `PackManifest`: `pack.json` with `id`, `name`, `author`,
+  `version`, `priority`, a `game` id (strict by default), and lists of textures,
+  CLUTs, texture rules and XA replacements;
+- `TextureTile.Hash`: an FNV-64 hash of the texel indices plus a separate hash
+  of only the CLUT entries those indices use;
+- `TextureResolver`, `TextureDumper` and `TextureRegistry`;
+- a Texture Inspector panel with tile and page dumping.
+
+`GlCore.ResolveReplacement` binds the replacement as `uRepTex`/`uRepClut` in
+`PrimFs`.
+
+That is the right identity for a texture and the right home for replacement
+images, and the remaster should use it rather than build a second one. **What has
+not been measured is how it behaves on the port's own texture path.** That path
+has three pieces:
+- the anisotropic kernel (`0041`) in `decode()`;
+- the texture-rectangle clamp and the mip atlas (`0060`);
+- the fluid scroll (`0053`).
+
+The replacement branch in `PrimFs` sits beside all three. **Inferred**: a
+replaced texture skips the mip atlas and the rectangle clamp. That is the first
+thing Phase 4 measures. **Answered by reading `PrimFs`** (see "Phase 4, the first
+slice"): a replaced texture (`texMode` 6) was one bilinear `texture()` with no
+mips and no anisotropy; a replaced CLUT skipped both the anisotropic taps and the
+mip atlas. The rectangle clamp holds by construction, since the replacement is its
+own texture clamped at its edge. Neither goes through `0053`'s scroll.
+
+## Identity: what authored data attaches to
+
+**Everything else in this document depends on this section, so it comes first.**
+Authored data has to stay attached to the same thing across frames, sessions,
+save files, the port's own settings, and differently mastered discs. Packet
+addresses change every frame. LBAs change between masterings. Screen positions
+change with the render scale and the aspect.
+
+### The rule for what an authored file may hold
+
+**Identifiers the game defines, and the author's own values. Never the game's
+payload.** Allowed:
+- area numbers, tile coordinates, table indices and model ids;
+- content hashes;
+- colours, positions, intensities and file names the author chose.
+
+Never allowed: bytes, texels, vertices, text or any other copy of disc content.
+A hash is a fingerprint, not a copy: it cannot be turned back into the texture
+or the tile block it was taken from. This rule is what lets a pack sit in the
+repository and be shared between players who each own the disc.
+
+### The keys, and what breaks each one
+
+| key | names | what breaks it | how the design survives it |
+|---|---|---|---|
+| **Game**: the disc serial `SLUS-00158`, as upstream's strict `PackGame.Id` | the whole pack | a different game, above all the US-boxed *King's Field II* (`SLUS-00255`) | already refused twice: by `DiscCheck.Validate` and by a strict pack game id |
+| **Area**: the area byte at `0x8017E060` **plus an area fingerprint**, an FNV-64 of the 64,000-byte tile block **less each half's `+2`** and the first `0x600` bytes of the collision-shape block, **taken from the loader's source buffer** as `func_80017244` copies each into `0x801C8484` and `0x801D8484` — the disc's bytes, before the game rewrites any. `+2` is out because the game writes a moving footprint into it (**Confirmed**, see "Phase 1, the first slice"); the live block is out because doors and lifts rewrite `+3` and `+4` and a save keeps them (**Confirmed**, see "The fingerprint moved with the game's progress") | everything authored in that area | a different revision or region of the same game | the fingerprint is taken before the remaster's own edits and before the game's. **On a mismatch the area's layers are switched off whole, and the editor says why**; they are never half-applied |
+| **Tile half**: `(area, x, z, lower \| upper)` | the mesh instance the tile draws, whole (a cave tile's floor, ceiling and rock together; see "A tile half is a whole mesh"); a face of it is `(tile half, mesh, face index)`; its collision cell; its light record (`+4 & 0x3F`) | the game rewriting tiles at run time: the drawbridge and the minecart are tiles, not models (see "The map is an 80x80 tile grid" in `GAME_INTERNALS.md`) | the key stays valid, but what it names can change under it. An entry may carry a condition on the tile's current model index, which is an index and not payload |
+| **Tile mesh**: `(area, model index at half +0)` | every instance of that mesh in the area | nothing known. **Open**: where the area's model bank lives, and so whether two areas share a mesh | once the bank is found, a content hash of the mesh gives an identity across areas |
+| **Model**: `ModelDraw.Model` (the model id), and for objects `(area, definition index at rec +0x6)` | "every creature of this kind", "every torch" | an MO morph changes a model's vertices, not its identity | a kind is the natural key for materials and for lights attached to a model |
+| **Instance**: `(area, table, spawn ordinal)`, where the ordinal is the slot the area loader filled | one placed prop or creature | dynamic slots (drops, projectiles, respawns); saved state (a killed creature, a picked-up item) | **Inferred**, not measured, that static props land in the same slot on every load. Fallback: `(area, definition index, spawn position rounded to 64 units)`, matched to the nearest live record at load |
+| **Texture**: upstream's `(index hash, CLUT hash, bpp, w, h)` | a piece of art, wherever VRAM puts it | (a) the key hashes the **polygon's UV bounds**, so one piece of art can have several keys; (b) the scrolling textures are re-uploaded every tick, so their content, and their hash, changes every tick; (c) a CLUT that cycles; (d) a region the GPU drew into is rejected as dirty; (e) a port patch that changes a palette (`MessageText` zeroes one) | (a) key a face on its `GteTexRect` rectangle, and measure whether the game uploads per texture or per page (**Open**); (b) key a fluid slot's face on the slot's source image in RAM, which does not scroll (see "Phase 4, the second slice"); (c, e) a material keys on the **index hash alone**, with the CLUT hash as an optional narrowing |
+| **Face**: `(mesh key, primitive index)` | one polygon of one mesh | nothing, provided the assembler can expose the index | only needed for per-face materials, late in the roadmap |
+
+### What the keys survive by construction
+
+- **Render scale and widescreen.** Every key is in world space or VRAM space, and
+  VRAM is always the console's 1× (`0054`). Nothing is keyed on a screen position.
+- **A mod or patch being toggled.** The area fingerprint is taken before edits.
+  Materials key on the texel indices, not the palette, so a patch that zeroes a
+  palette leaves the key alone. `kf2debug`'s noclip moves the player, not the map.
+- **A different mastering.** No LBA, file offset or `fdat` sector appears in any
+  key. The generated dispatch tables bake LBAs (see `PACKAGING.md`); the remaster
+  must never read them.
+- **A save file.** Tile, model, texture and area keys are all re-resolved when an
+  area settles. Instance keys are the weak ones, and their edits are the ones that
+  can leak into a save (see "Level editing").
+
+**Forbidden as keys:** a packet address, an ordering-table position, a screen
+position, a VRAM position on its own, an LBA, and a slot number for anything that
+can be spawned.
+
+### When an area has settled
+
+**Confirmed in Phase 1, with two additions the design did not have.** A New Game
+passed the floor test once *before* `fdat02` loaded, on the block the last area
+left, so an area can settle only after an `fdat` module has loaded since the last
+executable did. And the fingerprint must read the same twice 200 ms apart, so a
+block still being copied in cannot settle.
+
+**The loader is not the signal.** `func_8001689C` is called every frame with the
+load inside a branch (see "The area loader looks like the right hook and is not"
+in `PATCHES_AND_MODS.md`), and `OverlayLoadedEvent` fires before the tile block
+is copied. The map patches wait for the invariant instead: the player stands on a
+drawn half whose floor height matches their own Y exactly. The identity layer
+uses the same test, plus the area byte changing. It settles on the first frame
+both hold, and only then applies the area's layers. The fingerprint it settles on
+is the one hashed as the loader copied the block in; only if that copy was never
+seen does it fall back to the live block, and the probe line says `LIVE` when it
+does.
+
+### What has to be measured before the keys are trusted
+
+1. **Instance stability.** Load an area twice, reload a save, and compare
+   `slot → (definition index, position)` for the object and creature tables.
+2. **The model bank's address**, for mesh identity across areas.
+3. **Texture upload granularity.** Do `LoadImage` calls carry one texture each,
+   or whole pages? That decides whether key (a) needs normalising. **Measured**
+   (see "Phase 4, the first slice" and "the second slice"): one texture each --
+   the map's as 128x128 images (`32x128` words at 4 bpp), sometimes in two
+   pieces, the models' as 64x64, 32x32 and 16x16 -- and the scrolling textures in
+   strips every tick. Keys are normalised to the upload, pieces joined, and a
+   scrolling texture is keyed on its source image.
+4. **Which tile bytes the game rewrites at run time, and when.** **Measured** by the
+   rewrite census (see "Phase 6, the first slice"): in area 1, 100 upper halves, in
+   `+0`, `+3` and `+4`, all of them within seconds of the settle.
+
+## Architecture: five layers and the seams between them
+
+**A new feature must be a new file, not an edit to five.** The port's patches have
+so far each been a vertical slice: hooks, state, settings page, probe, shader.
+That works for one feature and does not work for twenty, because each one edits
+`GlCore`, `GlShaders`, `Program.cs` and a settings page. The remaster splits the
+work into layers, and each layer has one owner.
+
+```
+  editor UI (patches/editor/)     picks, gizmos, inspectors, undo
+        |  edits documents only
+  data model (patches/remaster/)  packs, documents, layering, versions, file watch
+        |  change events, on the game thread
+  application (one IRemasterFeature per layer)
+        |  writes side tables and uniforms, hooks through HookAttach
+  render features (vendored runtime, 0071+)   one uniform block, shader terms
+        |
+  identity (patches/remaster/Identity.cs)     area, fingerprint, keys, resolvers
+```
+
+1. **Identity** (`patches/remaster/Identity.cs`). This layer:
+   - detects when an area has settled and takes the fingerprint;
+   - defines the key types;
+   - resolves a world position to a tile half, a `ModelDraw` to an instance or a
+     model, and a texture to its key through upstream's `TextureTile`.
+
+   It reads guest memory and writes nothing.
+2. **Data model** (`patches/remaster/Pack*.cs`). This layer:
+   - reads and writes documents as JSON;
+   - migrates versions and layers packs;
+   - watches the pack directory. A change on disk is parsed on a worker thread
+     and swapped in at the next `VSyncEvent`, the same marshal point `KF2_SHELL`
+     uses for its light commands.
+3. **Application**. One `IRemasterFeature` per layer:
+
+   ```csharp
+   interface IRemasterFeature
+   {
+       string Id { get; }                       // "lights", "surfaces", "level", ...
+       bool Enabled { get; set; }               // KF2_REMASTER_<ID>, and a setting
+       void Attach();                           // through HookAttach; read back IsCommitted
+       void Detach();                           // puts back everything it changed
+       void OnAreaSettled(AreaContext area);    // resolve keys, apply edits
+       void OnDocumentChanged(DocumentChange c);
+       void OnTick();  void OnFrame();
+       void DrawInspector(Selection s);         // the editor's panel for this layer
+       string Probe();                          // the KF2_REMASTER_PROBE line
+   }
+   ```
+
+   The features are registered in one list in `patches/remaster/Remaster.cs`,
+   which `Program.cs` installs **before `LoopPacing`**. `LoopPacing` has to stay
+   last, because its post on stage 13 must run after the smoothers'. `Detach` is
+   what makes off bit-identical: a feature that cannot put something back does not
+   change it.
+4. **Render features** (the vendored runtime). One new runtime file owns a single
+   `RemasterUniforms` block: the material table, the light list, the fog colour
+   and the sky. `GlCore` uploads it by generation, and the shaders read it. Once
+   that block exists, a later render feature adds fields to it and a term to a
+   shader, without editing `GlCore` again. Numbering follows the rule in
+   `RECOMPONE_PATCHES.md`, where a new number is for a new mechanism:
+   - widening the material ids and moving their table into the block **amends
+     `0067`**;
+   - authored lights are `0071`;
+   - replacement textures on the port's path are `0073` (see "Phase 4, the first
+     slice");
+   - fog colour and the sky fill are `0074`;
+   - normal and roughness maps are `0075`;
+   - a GPU id buffer for picking would be `0076`, and only if it turns out to be
+     needed;
+   - shadows for the authored lights are `0077` (see "Shadows, the first slice"),
+     numbered past the three held above.
+
+   `snap`'s readback of the presented picture took `0069` and the hook order
+   `0070`, so each planned number moved along from what this plan first said.
+   `0071` is in (see "Phase 2, the first slice"); the block holds the light list
+   only. **The material table did not move into it**: it stays `SurfaceMaterial`'s,
+   widened by the `0067` amendment and uploaded as a 256×2 texture that the prim and
+   reflection shaders both read, because 256 ids of reflectivity, F0, roughness and
+   an emissive colour as uniform arrays would pass the fragment stage's uniform
+   minimum (see "Phase 3, the first slice").
+
+   All of it is **GL core only**; the 2.1 path and the software rasterizer ignore
+   it, as they do `0048` and `0067`.
+5. **Editor UI** (`patches/editor/`). ImGui panels, with gizmos drawn over
+   `OutputView`. It reads the data model, the identity resolvers and the scene
+   the walks publish. **It writes only documents**, never a side table or a
+   uniform. That keeps undo, saving and live reload the same operation.
+
+**The seam that matters most is between the editor and the application.** An
+edit is a document change. The feature hears about it on the game thread and
+re-applies. Nothing in the editor can put the game into a state the saved file
+cannot reproduce.
+
+## Data model and file format
+
+### A remaster pack is an upstream asset pack with a `remaster/` directory
+
+**Recommendation: do not invent a second pack format.** A remaster pack is a
+folder or zip under `packs/`, with upstream's `pack.json` at its root. That gives
+it for free:
+- a game-id check;
+- a priority order;
+- enable and disable;
+- loading from a zip;
+- replacement textures and XA.
+
+The port's own data sits next to `pack.json`, in `remaster/`, as one JSON file
+**per layer per area**, so that a diff is small and two people editing different
+areas never touch the same file:
+
+```
+packs/verdite-stone/
+  pack.json                        upstream's manifest: id, name, author, version, game, priority
+  textures/...                     upstream replacement images (the author's own art)
+  remaster/
+    pack.remaster.json             formatVersion, the features the pack uses, a gameplay-changing flag
+    materials.json                 the material library, referred to by name
+    textures.json                  per-texture: material, normal/roughness map, emissive
+    areas/1/lights.json
+    areas/1/surfaces.json          tile, mesh and model -> material
+    areas/1/atmosphere.json        fog colour and curve, sky, light-record overrides
+    areas/1/level.json             tile byte edits
+    areas/1/props.json             props: the area's object models, placed
+```
+
+Every area file carries its gate:
+
+```json
+{ "formatVersion": 1, "area": 1, "fingerprint": "9f3c1a0be4d27765" }
+```
+
+### The documents, by example
+
+A material is named, and packs refer to it by name, so ids are allocated at load
+time and two packs cannot collide on a number:
+
+```json
+// materials.json
+{ "formatVersion": 1,
+  "materials": {
+    "polished-stone": { "reflectivity": 0.35, "f0": 0.04, "roughness": 0.3 },
+    "wet-rock":       { "reflectivity": 0.2,  "f0": 0.03, "roughness": 0.6 },
+    "brazier-coal":   { "emissive": [1.0, 0.45, 0.1], "emissiveStrength": 0.8,
+                        "light": 1.0, "lightColour": [1.0, 0.6, 0.3] } } }
+```
+
+Surfaces assign materials, and the most specific key wins: a face of a half, the
+whole half, a face of a mesh anywhere in the area, the whole mesh. A face list names
+the mesh it was authored on and that mesh's hash, and applies only while both still
+hold (see "Faces, picked from the frame"). A model is named by the table it comes
+out of and its model id, since a creature and an object may share an id and not a
+mesh:
+
+```json
+// areas/1/surfaces.json
+{ "formatVersion": 1, "area": 1, "fingerprint": "9f3c1a0be4d27765",
+  "tiles":  [ { "x": 35, "z": 36, "half": "upper", "material": "polished-stone" },
+              { "x": 36, "z": 36, "half": "upper",
+                "mesh": 1, "meshHash": "8613becbcde29491", "faces": { "1": "mirror" } } ],
+  "meshes": [ { "mesh": 12, "meshHash": "0c41d9e2a7b3f865", "material": "wet-rock",
+                "faces": { "3": "polished-stone" } } ],
+  "models": [ { "kind": "object", "model": 486, "material": "brazier-coal" } ] }
+```
+
+Lights are world positions in the game's own units: a tile is 2048, a height step
+is 128, and up is **−Y**. Built so far: `type`, `position`, `colour`, `intensity`,
+`radius`, `direction`, `cone`, `flicker` and `enabled`; `falloff` is always the
+smooth window, and `affects` and `shadow` are kept on a round trip and read by
+nothing:
+
+```json
+// areas/1/lights.json
+{ "formatVersion": 1, "area": 1, "fingerprint": "9f3c1a0be4d27765",
+  "lights": [
+    { "name": "hall brazier", "type": "point",
+      "position": [72704, -15360, 73728], "colour": [1.0, 0.62, 0.3],
+      "intensity": 1.2, "radius": 4096, "falloff": "smooth",
+      "affects": "both", "shadow": "none",
+      "flicker": { "amount": 0.15, "hz": 7 } },
+    { "name": "shaft", "type": "spot", "position": [70000, -18000, 70000],
+      "direction": [0, 1, 0], "cone": [20, 35], "colour": [0.7, 0.8, 1.0],
+      "intensity": 0.6, "radius": 6144 } ] }
+```
+
+Textures use upstream's key string for the art, so a key read off
+`TextureDumper` or the Inspector can be pasted in as it is:
+
+```json
+// textures.json
+{ "formatVersion": 1,
+  "textures": [
+    { "index": "5b1e0c2a9d7f3e41", "material": "polished-stone",
+      "normal": "maps/floor01_n.png", "roughness": "maps/floor01_r.png" } ] }
+```
+
+Atmosphere and level edits are covered in their own sections below.
+
+### Versions, layers and removal
+
+- **A version per file.** `formatVersion` is an integer, bumped when a field
+  changes meaning. `PackMigrations.cs` holds one function per step. **Unknown
+  fields are kept on a round trip**, so a newer pack opened in an older editor
+  loses nothing. The editor always writes the current version.
+- **Layering.** From bottom to top:
+  1. the base game (no packs);
+  2. packs, in upstream's priority order;
+  3. the user's working pack, always on top.
+
+  Each layer overrides the ones below it **per key**, not per file. An explicit
+  `null` for a key removes it, which is how one pack turns off a light another
+  pack placed.
+
+  **Built** (`patches/remaster/Pack.Layers.cs`). A layer is any pack under
+  `packs/` -- folder or zip, upstream's `pack.json`, its game id checked -- with a
+  `remaster/` directory, read by the port itself rather than from upstream's list,
+  which is filled when the CD comes up and keeps no enable state. Lowest priority is
+  lowest; the working pack is always on top and never listed as a layer. The keys:
+  a material by name; a tile half or a level edit by `x`, `z` and `half`; a mesh by
+  its index; a model rule by `kind` and `model`; a light or a prop by `name`; a
+  record override by `record`; a texture rule by `index` and `clut`. A removal is an
+  entry of those key fields with `"removed": true`, and for a material the name
+  mapped to `null`. **Every edit works as it did**, because the documents the
+  features and the editor read are the merge: `Save` writes only what differs from
+  the layers below (a changed entry whole, a new one, and a removal for every key the
+  author took away), so the working pack holds the author's changes and nothing
+  inherited. A removal is kept while nothing below holds its key, so switching a
+  layer off and on again does not lose it; putting an entry of that key back
+  replaces it. Each layer has a switch on the Remaster packs page (and `pack layer
+  ID on|off`), saved per pack id and on by default, since a pack in `packs/` was put
+  there to be used and nothing applies until the remaster is on; switching one keeps
+  the working pack's unsaved edits, but not their undo.
+- **The fingerprint gate applies per pack.** A pack whose area fingerprint does
+  not match is off for that area only, and the Remaster packs page lists it with
+  the reason. **Built** as: where two layers both hold a document for an area and
+  kind, and their fingerprints differ, the upper one stands alone and the lower is
+  set aside for that area and kind, named on the page (and in `pack layers`). The
+  merged document then carries the upper fingerprint, which the features gate on as
+  before.
+
+  **Measured** with three packs over area 1 (slot 2): a folder pack at priority 10
+  holding a torch light, two props and two materials; a zip at priority 5 holding
+  area 1's lights against another fingerprint; the working pack holding one of the
+  props. `pack layers` listed the zip's area-1 lights as set aside under the folder
+  pack's fingerprint; the effective area held the folder pack's torch, its second
+  prop, and the working pack's version of the prop both named. Changing the
+  inherited torch's intensity, removing the inherited prop and adding a material
+  then saving wrote `lights.json` with the torch alone, `props.json` with the
+  working prop and `{"name": "pillar", "removed": true}`, and `materials.json` with
+  the new material alone; `pack reload` gave back the same effective set. Switching
+  the folder pack off and on (`pack layer base off|on`) with an unsaved light kept
+  the light and the removal; re-adding a prop of the removed name took its place.
+- **Sharing is a zip of the working pack.** By the rule in "Identity" it contains
+  no disc data, so it can be committed to this repository and handed to another
+  player. Replacement images are the author's own art.
+
+### Settings
+
+- One **Remaster packs** page lists the packs found, whether each is enabled,
+  which features each uses, and every load or fingerprint error.
+- Each render feature gets one switch under Video ▸ Enhancements, beside the
+  existing ones.
+- Nothing is enabled on a first run, and the repository ships no pack switched on.
+- A pack that changes collision or placement says so on that page, in plain
+  words; see "Level editing".
+
+## The editor
+
+**Recommendation: in the game, in ImGui, not an external tool.** The scene exists
+only in the running process:
+- which tile the cursor is over;
+- which model is where this tick;
+- which texture a pixel came from;
+- the camera block.
+
+A tool outside the process would need all of that sent over a socket every frame,
+and could still never show the result as the renderer draws it. In the game,
+live reload comes free, and so do `PanelManager`, the map panels, the frame
+viewer and `OutputView`.
+
+**External tools keep the jobs they are good at.** The JSON is meant to be edited
+by hand and is watched, so a text editor is a first-class tool. Images are drawn
+in an image editor. A mesh importer for port-drawn props, if one is ever built,
+is a command-line converter.
+
+### Modes
+
+- **Play.** The editor is closed and costs one bool a frame.
+- **Edit.** The world is paused through `FramePacing.PauseWhen`, the mechanism the
+  full-screen map already uses. Stage gating holds and the renderer keeps
+  drawing, so lights and materials update live on a frozen scene. The editor
+  camera takes over, and the panels open.
+
+  **Shift+E** is proposed as the hotkey. It has to be checked against
+  `KeyLayout` and the existing Shift+P, Shift+F and Shift+M, M and N.
+
+  The panel opens docked at the right edge of the picture. On an opening where
+  ImGui has not already put it in a dock node, it splits the Output panel's node
+  (`OutputView.DockId`, `0029`) and takes the right side, about 440 base-font
+  pixels wide; a docked panel closed keeps its node, hidden, and reopens there, so
+  wherever the user moves it after, it stays. `edit` reports `docked` and the
+  panel's rectangle. Measured with no saved layout: first open docked at
+  x 1347-2226 of a 2226-wide viewport, and at the same place after closing and
+  reopening.
+
+  Opening it releases the pointer from mouse look, and closing it captures the
+  pointer again if opening took it -- `MenuMouse`'s shape, in the panel's `IsOpen`
+  setter, so Shift+E, the close button and `edit` all go through it. **Closing it
+  with Shift+E always captures the pointer** (with mouse look on), even if it was
+  free when the editor opened: that key is how a player goes back to playing. The
+  close button and `edit off` keep the rule above, so a click on the panel or an
+  agent's session does not grab the pointer.
+
+### The panel's layout
+
+The panel is laid out for a narrow dock beside the picture: a header that never
+scrolls, then six tabs, each with a body that scrolls on its own
+(`InputSection.Tab`'s shape). Nothing is a separate section below the rest.
+
+- **The header** (`Editor.Header.cs`) has four parts:
+  - The remaster's switch, Save, Undo and Redo (each button's tooltip names what it
+    would undo), and "unsaved" or the time of the last save.
+  - The area and the selection in a few words, with the fingerprint on hover.
+  - Three toggles: the selection's tint, the player's tile, and the free camera,
+    whose speed and "back to the player" appear as one row under it while it is
+    on.
+  - What stops the pack applying: one warning inline, several as a count with the
+    list on hover. A failed pick's reason stays here until the next pick.
+- **The tabs** are an icon (Font Awesome solid, which `FontSet` already merges)
+  and a word. The bar shrinks the words when the panel is narrow.
+  - **Material:** the selection card (what is picked, *Select more*, *Assign to*,
+    the material that rule names, and the *Result*), then *Edit material*: one
+    library entry at a time, which moves to the selection's material whenever that
+    changes, so pick, assign and tweak happen on one tab. See "The Material tab".
+  - **Lights:** add at the eye or Place, the list, the selected light's fields.
+  - **Atmos:** one light record, followed or chosen, over two groups, *Light* and
+    *Fog*, each with the whole area's settings above the record's. See "The
+    Atmosphere tab".
+  - **Level:** the selected half's tile fields, behind *Apply level edits*.
+  - **Props:** add here or Place, the list, the selected prop's fields.
+  - **Pack:** the working pack's path, save, reload and export, the packs layered
+    under it (a checkbox each), and the compatibility report as one tree node per
+    area.
+- **Fields are a two-column grid** (`Editor.Layout.cs`): the label takes a fixed
+  share of the width and the control fills the rest. A narrow panel shortens the
+  controls rather than cutting off labels.
+- **An override shows the game's value until it is edited.** In Atmos and Level, a
+  field the pack does not override shows the game's value under a plain label.
+  Editing it writes the override: the label turns the accent colour with a dot after
+  it, and the row gets a button at its end that puts the game's value back. That
+  replaced a leading checkbox per field in Atmos and a "game's" button in Level.
+  Until 2026-09-28 it was the other way round, the game's values dimmed, which read
+  as disabled (a dimmed label means that everywhere else in ImGui) and needed a line
+  at the top of the tab to explain itself; a dimmed label now means only that the
+  control does nothing at the moment.
+- **A slider's grab is see-through in the editor**, so the value centred over it
+  stays readable: at 1.00 of a 0.25-4 logarithmic slider the grab sat on the number.
+- **A click on the picture does what the open tab is for.**
+  - On every tab it picks the faces under it, or the model.
+  - On Lights it first grabs a light's arrow or dot. The light gizmos are drawn
+    only while that tab is open.
+  - A Place button (Lights, Props) arms the next click instead. The armed state
+    shows as a hint by the pointer, Esc disarms it, and switching tabs drops it.
+
+  The *Pick on the picture* and *Place on the picture* checkboxes this replaced
+  are gone.
+- **Ctrl+Z undoes, and Ctrl+Y or Ctrl+Shift+Z redoes. Ctrl+S saves.** They work
+  while the panel is open, and not while typing, looking with the free camera, or
+  holding a control or a light. That last condition matters because such an edit
+  is still a preview and not yet an undo entry.
+- **`edit tab NAME` opens a tab from the shell, and `edit` reports the one that
+  is open.** The gizmos are ImGui drawing over the picture, not part of the
+  presented frame, so `snap` cannot see them. Whether they show on the right tab
+  has to be checked by eye.
+
+### The Material tab
+
+Reworked 2026-09-28, because the tab mixed two jobs that looked alike: choosing
+which material the selection uses, and editing a material in the library. The
+screenshot that prompted it read `Material: (none)` over sliders editing `stone`.
+None of it changes what a pack means; the one new field is `lightColour`.
+
+- **One *Assign to* list for every rule**, most specific first, as they win: these
+  faces (or this half, or this model), the same faces or the whole mesh on every use
+  of it in the area, and the picked art in every area (with *Any palette* under it).
+  The texture rule was a collapsing header of its own. It is dropped on every new
+  pick, since it reaches every area. *Material* names what that one rule says, and
+  *Result* what the selection draws with and which rule gave it
+  (`Editor.Effective`, `Surfaces`' order read off the pack, gates ignored).
+- **The editor says what it is editing.** *Edit material* shows what names the
+  entry across the pack (`Pack.UsesOf`: faces, halves, meshes, models, textures) and
+  says so when the selection has no material, has several, or draws with another
+  one (with a button to edit that). The id moved to the combo's tooltip. The editor
+  follows the selection's *effective* material now, not the one at the chosen scope.
+- **Grouped by what is seen.** *Finish*: Roughness, Metal. *Reflection*: Edge
+  reflection (`reflectivity`) and F0, greyed out with a *Turn on world reflections*
+  button (the retained scene, saved as the setting is) while no reflection is on.
+  *Shading*: Shine from lights (`specular`), Ambient occlusion. *Glow (the surface
+  itself)*: Colour, Brightness, a Blend radio (*Add over texture* / *Brighten
+  texture*, which was the *Light source* checkbox), Fades in fog. *Gives off light*:
+  Strength, Reach in tiles, and its colour, the glow's or its own
+  (`"lightColour"`; `set material:NAME lightColour R G B|glow`). *Pulse* shows only
+  while the material glows or gives light.
+- **The grow buttons are *Select more*** and *Whole mesh* is gone from the panel:
+  it selected every face of the mesh one by one, which *Whole half* already covers.
+  The shell's `select grow mesh` keeps it.
+
+Measured: `lightColour` reaches the glow's light (`light` reports `[1,0,0]` for a
+red light on a white glow, and white again after `lightColour glow`), with no
+exception over a session of the tab open. The layout itself is for the eye.
+
+### The Atmosphere tab
+
+Reworked 2026-09-28, from a critique of the tab as it was: it was laid out like the
+record's bytes rather than the way a room is lit. Nothing a pack means changed.
+
+- **The record comes first**, then two groups. The combo keeps the halves count
+  and *edited* while following. *On the picture* has two checkboxes: *Halves* tints
+  the frame's triangles whose half names the record (`Faces.Last`, the half's
+  `+4 & 0x3F`), and *Light directions* draws the record's three lights as arrows
+  from a point 1,800 units ahead of the eye, each in its light's colour (grey when
+  dark) and numbered, over a level ring so the elevation reads. Then *Copy to...*,
+  *Reset record*, and the count of the record's own overridden fields; the area's
+  written and refused counts, which the old footer showed as if they were the
+  record's, are its tooltip.
+- **Light**: the area's *Darkness*, then the record's back colour and three lights.
+  **Fog**: the area's colour, curve, most and sky, then the record's start and
+  shape. The two scopes are separated by a heading in each group ("Whole area",
+  "Record N"). Fog's start and shape had been in a different section from its colour.
+- **A light is a colour, a direction and a strength.** The direction was three
+  floats whose length was also the light's strength, so no drag changed one without
+  the other. It is a compass bearing (0 faces +Z, 90 faces +X) and an elevation (90
+  from straight above), and the strength is the vector's length, 0-2; each has its
+  own reset, which keeps the other. A vector that comes back to the game's
+  removes the override.
+- **One scale for every colour.** The back colour is bytes (`BK = b * 16`, so 256
+  is full light) and a light's colour 4.12, so the light's is shown times 256: the
+  game's 0.575 reads 147 beside a back colour of 120.
+- **The fog's start is in tiles** (2048 view units). *Shape* is one combo, *Knee*,
+  *Linear* or *None*, where it was two checkboxes, and start and shape reset
+  separately. The old *Linear* ticked over *No fog* wrote a linear fog starting at
+  16000, past the slider's end; a start is held to 15999 now.
+- **Copy to...** puts the record's overrides on the records ticked, as one undo
+  entry (`Pack.CopyRecord`): each part set on the source replaces the target's (per
+  light, per field), the target keeps the rest, and a new override takes the target's
+  own hash. Shell: `atmos copy N M[,M...]|used`.
+
+Measured (`KF2_AUTOSTART=2`, area 1, a scratch pack, the tab open): with record 16's
+fog at 6000 and record 15's back colour and light 2 colour overridden, `atmos copy 15
+16,23` gave record 16 back `200 60 40` and light 2 `1.2 0.7 0.4`, kept its fog 6000
+and its own hash `8aed2ed9dca6ad04`; one `pack undo` left only the fog. No exception
+with the tab and its overlay drawn.
+
+**Not judged.** The layout, and whether the direction arrows point where the light
+visibly comes from. The bearing takes the record's light vector as a world
+direction with up at -Y; that holds for floors whatever the tile's turn, but stage 10
+turns each matrix through quarter-turns for the tile and model walks, so on a turned
+mesh the horizontal part may read rotated.
+
+### Picking
+
+- **Tiles:** the faces under the cursor, from the frame's own triangles. While the
+  editor is open every sealed packet is recorded with its face key, its screen
+  corners and its depths, and a click takes the nearest, with every other face
+  within the coplanar tolerance of it. That is what the depth buffer drew, walls
+  and ceilings included. It replaced a ray through the 80×80 grid, which could see
+  only floors (see "Faces, picked from the frame").
+- **Models:** the same triangles. A model's are recorded with the kind and model
+  id the object walk was submitting, so a click whose nearest triangle is a model's
+  selects that model (`model:1:object:486`) rather than refusing. Instances are not
+  told apart: a material on a model is on every draw of it in the area.
+- **Textures:** on a click, a one-frame `FrameCapture`, which already answers
+  which GP0 command and owner routine drew a pixel. The command gives the page,
+  the CLUT and the UVs, and from those upstream's key. It is only needed on a
+  click, so its cost does not matter.
+- **The map panel** doubles as a top-down tile picker: it already reads all ten
+  bytes under the cursor.
+- **No GPU id buffer at first.** It would be a render-target attachment and a
+  per-triangle id, which is a new runtime mechanism (`0076`). The CPU paths
+  answer everything the first phases need.
+
+### Gizmos
+
+Gizmos are a move handle on each of the three axes, a radius sphere and a
+direction arrow for a spot light. They are drawn in the ImGui draw list over
+`OutputView`'s rectangle and projected the same way the AO and SSR passes
+reconstruct positions: the view matrix at `0x80192E18`, H, and OFX/OFY. Snapping
+is to 128 units in Y, the height step, and to tile centres in X and Z.
+
+### The editor camera
+
+**`Stage13.ViewOverride`.** Stage 13 is C# (`patches/Stage13.cs`), so the view
+a frame is drawn from is a value: set a `Camera` and every frame is drawn from it,
+with no camera block to save and put back. See "Drawing the frame from another
+camera" in `docs/PATCHES_AND_MODS.md`.
+
+**The visibility grid follows, measured.** The 24×24 window is built by the game's
+own `func_8002D3A8`, which reads its eye from the camera block and nothing else of
+the player's. So the grid is right for a free eye by construction. The `view` shell
+verb tests it: the grid built from an override camera is byte-identical to the grid
+built with the player standing there, with the player 3 to 20 tiles away in six
+directions. (`patches/CullGrid.cs` was not the route: it is off by default and does
+not match the game's build.)
+
+**The arm and the object walk read the player's position, and it does not matter**:
+the arm only for its tile's light record (and the free camera leaves it out), the walk
+only to range an ambient sound. A frame drawn from the free camera hashed the same with
+the player far away and standing under it; see "Phase 7, the first slice".
+
+**A second view drawn beside the game's**, such as a picture-in-picture preview or
+a shadow map's light view, is a `ScenePass` around `Stage13.DrawScene(c, mem,
+camera)`: the pass points the frame at a table and arena of its own and puts back
+everything any pass moves. See "A pass of the port's own" in
+`docs/PATCHES_AND_MODS.md`.
+
+### Undo, save, autosave
+
+- **Undo** is a stack of document diffs, each able to apply and revert, kept per
+  session. An edit made through a gizmo drag is one entry, not one per frame.
+- **Save** is explicit, and writes the working pack's files.
+- **Autosave** writes a `.autosave` file next to each changed document every 30
+  seconds. On startup, the editor offers to restore it.
+
+### Driving it without a window
+
+New `KF2_SHELL` verbs, also exposed through `mcp/`, so an agent can run every
+measurement in the roadmap:
+
+```
+edit on|off|tab NAME               enter or leave Edit mode (pause, editor camera); open a tab
+select <key>                       select by key: tile:1:35:36:upper, model:41, tex:5b1e..., light:1:"hall brazier"
+set <key> <field> <value>          change one field through the same undo stack the panels use
+pack save|reload|list              the working pack
+pack report|export [PATH]          the compatibility report per area; the saved pack as a zip
+camera on|off|move|turn|at         the editor's free camera
+snap [hash|PATH] [after N] [buffer Y|any]   the presented picture: its hash, what changed, a PNG
+```
+
+**`snap` is the tool the whole "off is bit-identical" rule depends on.** It is
+built from what "Getting pixels out without a screenshot" in `DEVELOPMENT.md`
+already does: the presented target read back from a `DrawOTag` post and written
+with `PngWriter`. With the world paused and the view pinned by `goto x y z yaw
+pitch`, two runs give comparable frames.
+
+## Lighting: authored lights beside the game's own
+
+**The game's lighting is a known chain, and the port already rebuilds it per
+pixel.** A packet's colour is:
+
+    RGBC * (BK + LCM * max(0, LLM · N))
+
+followed by the depth cue, a darkening towards the far colour, which is 0 here.
+Map tiles take one `NormalColorCol` per face, so **the depth cue is all of a
+tile's shading**. `0048` records the chain's inputs per corner and `shade8`
+evaluates it per pixel; `light_probe.c` measured the shader against the formula
+with a worst difference of 0. See "Per-pixel lighting" in `RENDERING.md`.
+
+### Recommendation: forward, inside `shade8`
+
+**An authored light is one more term in the lit colour, added before the depth
+cue and before the texture is modulated.** So:
+- it is fogged by the game's own curve;
+- it is textured exactly as the game's own light is;
+- it saturates where the game's light saturates.
+
+Every other placement gets at least one of those three wrong.
+
+- **Position per fragment:** the view position rebuilt from the recovered depth,
+  exactly as `NormalFs` rebuilds it, then turned into world space with the
+  camera rotation and position `AoWorld` already uploads. No new vertex
+  attribute.
+- **Normal per fragment:** the plane from the view position's screen
+  derivatives, as `0058` takes it. It is exact for the flat faces the tiles are.
+  Gouraud normals for models are a later refinement: the light-dot record would
+  also carry the normal.
+- **The light list** is culled on the CPU against the camera and the 24×24 window
+  every frame, capped at 16, and sent in `RemasterUniforms` by generation, so an
+  unchanged list is not re-sent.
+- **Receivers:** tiles and models. The first-person arm and anything placed in
+  view space (a matrix of 0 in the submitter) are left out unless a light is
+  flagged to reach them, because their positions are not in world space.
+- **Off is a branch on a count of zero**, so the shader's output with no lights
+  is the output it has today. That is proved headless: `light_probe.c` run with
+  and without the uniform block, worst difference 0.
+
+### Why not deferred
+
+The surface buffer (`0067`) already holds a normal, a depth and a material at
+every pixel, so deferred looks free. **It is not, because the colour it would
+relight is final.** The texture has already been multiplied by the lit colour,
+clamped and fogged, and water and the other translucents are drawn over it. A
+deferred light would have to divide the game's lit term back out per pixel, and
+that term saturates. Deferred stays the right place for terms that apply to the
+finished picture: a specular highlight along the SSR path, light shafts, bloom.
+
+### Shadows
+
+- **None in the first version.** An authored light lights everything inside its
+  radius, which is how the game's own light records behave.
+- **What was planned next was a march through the tile grid**, and shadow maps
+  were pushed back because drawing the scene from a light meant walking it again:
+  the mirrored walk alone costs 1.09–1.12 ms of CPU a frame ("Planar reflections"),
+  and the port is CPU-bound.
+- **The retained scene (`0072`) removed that cost**, so what shipped is shadow
+  maps after all: a depth cubemap per light, drawn on the GPU from the retained map
+  with no walk, and drawn again only when the light or the map changes. Exact to
+  the mesh, where a grid march would have been whole tiles. See "Shadows, the first
+  slice". Creatures and objects cast too, from the models the retained scene
+  captures each frame, drawn over a copy of the map's cubemap only while one in
+  reach moves; see "Shadows, the second slice".
+
+### The game's own light and fog, authored through the game
+
+**The cheapest and most faithful remaster edit is to the game's own lighting
+data.** Stage 1 copies the area's 80 light records from `0x800679A0` into
+`0x801930F0` every frame; `TintHold`'s C# stage 1 does the copy (see "The tints
+strobed between ticks" in `PATCHES_AND_MODS.md`). Each 104-byte record carries
+the light matrix, the colour matrix, the back colour and the depth cue, and
+`func_80031950` picks one per tile by `+4 & 0x3F`.
+
+An override applied right after that copy runs through the game's own code, and
+through `0048` unchanged, so it is exact whether per-pixel lighting is on or off.
+**Inferred**: nothing but rendering reads those records. That has to be confirmed
+with `scripts/find_writers.py` and a read census before an override ships.
+
+Fog colour is the GTE's far colour, measured at 0, which is why the fog darkens
+to black rather than fading to a colour. A fog colour is one term in `shade8`'s
+output, added past the texture by the depth cue's own weight, so the result is a
+`mix` towards the colour instead of a multiply towards black. See "Phase 5, the
+second slice".
+
+## Level editing: what can be edited and what can only be decorated
+
+**The split is whether the game's own logic reads it.** If the game reads it, an
+edit changes gameplay, and it is a level edit. If only the renderer reads it, it
+is decoration.
+
+### Edited: the tile bytes, because the game reads them
+
+The 80×80 block at `0x801C8484`, applied when the area settles, after the
+fingerprint is taken, and applied again whenever the area is entered.
+
+| byte of a half | what | read by |
+|---|---|---|
+| `+0` | model index; `0xFF` empty, drawn below 240 | `func_80031B1C` (the renderer), `CullGrid` |
+| `+1` | height; the floor is `-(h) << 7` | `func_80031B1C`, the floor queries `func_8002B6B4` and `func_8002C3A8` |
+| `+2` | collision flags, `& 0xFC` | `func_8002C700` |
+| `+3` | collision-shape index into `0x801D8484` | `func_8002B7D0` |
+| `+4` | flags: bit `0x80` stops the visibility flood; the low six bits pick the light record | `CullGrid`, `func_80031950` |
+
+Limits that follow from the format and cannot be designed away:
+- **Heights move in steps of 128 units.**
+- **A tile can only show a mesh the area already has.**
+- **Collision shapes come from a 0x600-byte block**, so a new shape is a slot
+  in that block, if one is free.
+- **The game's own tile rewrites win.** A door, the drawbridge or the minecart
+  rewrites its tiles at run time, so an edit to one of those tiles is undone by
+  the game. The editor flags such tiles from the rewrite census.
+- **Confirmed: none of the tile block is written into a save, and it is re-read
+  from the disc on every area load** (see "The tile block never reaches a save").
+  Level edits are still marked gameplay-changing, because they are.
+
+The test for an edit is the invariant the map already prints. Stand on the edited
+tile with `goto`; `state` must give a floor gap of 0 at the new height. Walk into
+an edited wall with `press`; the position must not cross it.
+
+### Edited with a warning: placement of objects and creatures
+
+**Dropped (2026-09-28).** Not built, and not in the roadmap: a remaster pack does
+not move the game's own objects or creatures. Props cover placing a model for its
+look without touching a record the game reads or saves. What follows is kept as
+the reason, should it ever come back.
+
+Objects at `rec+0x14` in the table at `0x80177714`; creatures at `rec+0x2C` in the
+table at `0x8016C544`. **`func_800492B8` packs the 200-slot creature table into
+the save buffer** when the player saves. A moved creature is therefore written
+into the player's save, where it outlives the pack and stays after the pack is
+switched off. That is the one kind of edit that can change a player's game
+permanently. It is last in the roadmap, opt-in per pack, and labelled on the
+Remaster packs page.
+
+### Decorated: everything only the renderer reads
+
+- materials, lights, fog, sky, and the light-record overrides;
+- **port-drawn props**: submitted through the game's own model submitter into the
+  frame's ordering table, so they get depth, fog, per-pixel lighting and
+  reflections the same way the game's own models do. They have no collision, and
+  are said to have none. This is the only way to add geometry. The first slice
+  places the area's own object models ("Phase 8, the first slice"); meshes the
+  author supplies are later.
+
+### Pushed back
+
+- **Replacing creature meshes.** A creature is an MO morph, a base TMD plus
+  packed vertex deltas per clip (see "The model pipeline has no skeleton" in
+  `GAME_INTERNALS.md`). A replacement would have to carry matching morph targets
+  for every clip. That is a modelling pipeline, not an authoring tool.
+- **New walkable geometry** beyond what tiles and collision shapes can express.
+- **Lifting the 24-tile draw window.** Already measured as binding and barely
+  worth it; see "Is the 24-tile window worth lifting?" in `WIDESCREEN.md`.
+
+## Rules every phase keeps
+
+- **Off is bit-identical, and it is proved three ways**, depending on what the
+  feature touches:
+  1. `snap … hash`, feature off, against a build without the feature, at a pinned
+     view: the world paused, `goto x y z yaw pitch`, at `KF2_AUTOSTART=new` and
+     at `KF2_AUTOSTART=2`;
+  2. `shader_probe.c` or `light_probe.c` for any shader branch;
+  3. `KF2_*=verify` for any C# routine a feature adds to (`KF2_POLYASM`,
+     `KF2_TILEWALK`, `KF2_MODELWALK`), with 0 RAM, register and GTE mismatches.
+- **144.0 fps drawn at 20.0 ticks/s**, measured with
+  `KF2_FPS=144 KF2_FPS_PROBE=1 KF2_PRESENT_PROBE=1`. Each feature's cost is taken
+  from the frame profiler, on and off. GPU time comes from a frame capture's
+  `GL_TIME_ELAPSED` queries, since frame rate cannot see GPU cost on a CPU-bound
+  port.
+- **Features ship off; no pack is enabled by default; the repository ships none
+  switched on.** The remaster never breaks faithfulness by default.
+- **Every feature has a `KF2_REMASTER_<ID>` switch and a probe line**, both listed
+  in `ENV_VARS.md`.
+- **Hooks attach through `HookAttach`** and read back `IsCommitted`, as every patch
+  does (see "A registration is not a hook" in `PATCHES_AND_MODS.md`).
+
+## The phased roadmap
+
+Each phase is usable on its own. For each one this lists what ships, what it
+depends on, the risks, the counter that proves the mechanism, and what the user
+has to look at, because nobody else can.
+
+### Phase 1: an authored material on a floor, end to end
+
+**The smallest slice that exercises every layer:** one material placed in the
+editor, saved, reloaded and rendered. A material, not a light, because the
+reflection pass already reads `SurfaceMaterial` and `GtePacketDepth.Rec.Material`
+already exists, so **no new runtime patch is needed**. The whole slice is
+port-side. (Wrong by one amendment to `0067`; see "Phase 1, the first slice".)
+
+**Status:** [x] done and measured, [~] done in part, [ ] not started.
+
+- **Ships:**
+  - [x] `Identity` with area, fingerprint and tile half only;
+  - [x] `TileWalk` publishing the half it is assembling (`x, z, half`), the way
+    `ModelWalk.SetSubmit` publishes a model;
+  - [x] `PolyAssemblerDepth.SealDepth` writing `Rec.Material` from a table the
+    surfaces feature fills;
+  - [x] `SurfaceMaterial.Reflectivity`/`F0` filled from `materials.json`;
+  - [x] the pack loader (the working pack only);
+  - [~] a minimal editor: tile pick by ray and from the map panel, a material
+    inspector, save, reload, live reload, undo -- all in, driven over the shell
+    and used by hand to place the first mirror floor;
+  - [x] the `edit`, `select`, `set`, `pack` and `snap` shell verbs (`snap` in the
+    second slice, reading the presented target through `0069`);
+  - [x] the Remaster packs settings page, and the switch under Video ▸
+    Enhancements (the second slice).
+- **Depends on:** reflections being switched on (`KF2_SSR=1`), since that is the
+  only reader of a material today.
+- **Risks:**
+  - the eight material ids. The slice needs one; if it needs more, the `0067`
+    amendment moves into this phase;
+  - SSR's water assumptions (the fog curve, the sky fallback) may look wrong on
+    a floor. That is for the eye to judge, and it is useful to learn early.
+- **Mechanism measured by:**
+  - [x] `SurfaceMaterial.FromPacket` and `ByMaterial[id]` rising for the authored id;
+  - [~] the SSR readback's reflective share with the tile in view -- the id shows
+    in the readback's map, but the only tile tried was the water surface, so the
+    share could not move;
+  - [x] the same tile key resolving after a `warp` out and back, after `load 2`, and
+    after a restart;
+  - [x] the fingerprint identical across those -- once `+2` was left out of it;
+  - [x] `snap` identical to baseline with the pack disabled (the second slice);
+  - [x] `KF2_POLYASM=verify` and `KF2_TILEWALK=verify` clean;
+  - [x] 144.0 at 20.0.
+- **You look at** (the first judged: a dry tile at reflectivity 1 reads as a
+  mirror, placed correctly):
+  - whether the floor reads as polished stone or as a mirror;
+  - whether the reflection's fog and sky fallback look wrong on something that
+    is not water;
+  - whether the editor is usable: picking, the inspector, the save round trip;
+  - [ ] a floor at a partial reflectivity, and a larger area of floor.
+- **Cost:** one table read per sealed tile packet while on, one bool while off.
+
+### Phase 1, the first slice
+
+**What is in.** Everything in the Ships list above except `snap`, the Remaster
+packs settings page and the camera-free parts of the editor's gizmos:
+
+- `patches/remaster/Identity.cs` — area, fingerprint, the settle test, `TileKey`
+  (`tile:A:X:Z:lower|upper`), record address to key and back.
+- `TileWalk.CurrentRecord` — the half `func_80031950` is assembling, set around the
+  assembler call. `PolyAssembler.TileMaterial` is what `Surfaces` resolved for it,
+  and `SealDepth` writes it into `GtePacketDepth.Rec.Material` for every packet it
+  seals, clipped fans included. A material therefore needs the C# half
+  (`KF2_TILEWALK_TILE=0` authors nothing).
+- `patches/remaster/Pack.cs` — the working pack (`packs/working`, or
+  `KF2_REMASTER_PACK`), `materials.json` and `areas/<n>/surfaces.json` kept as JSON
+  trees so unknown fields survive, upstream's `pack.json` written once, a
+  `FileSystemWatcher` whose parse is swapped in at the next VSync, and one undo stack.
+- `patches/remaster/Surfaces.cs` — the one `IRemasterFeature` so far: names to ids
+  from `SurfaceMaterial.FirstAuthored`, the fingerprint gate, an 80×80×2 id table.
+- `patches/remaster/Pick.cs` — the game's projection both ways: the view matrix at
+  `0x80192E18` less the camera (whose 16-bit X and Z are unwrapped against the
+  player's), and `GteDepth.ProjH`/`ProjCx`/`ProjCy`. A floor ray is walked cell by
+  cell through the grid; walls are not read, so a ray can pass through one.
+- `patches/remaster/Editor.cs` — Shift+E; pauses the world; picks by a click on the
+  picture, by right-click in the docked map, or as the player's tile; outlines the
+  selection; a material library with reflectivity and F0 sliders (one undo entry per
+  drag); Save, Reload, Undo, Redo.
+- `patches/remaster/Shell.cs` — `edit`, `select`, `set`, `pack`, `remaster` on
+  `KF2_SHELL`, through the same calls the panel makes.
+
+**The runtime needed one change after all, an amendment to `0067`.** `NormalFs`
+decided opacity from the id (`vM < 1.5`), so any authored id on an opaque floor
+would have taken that floor out of the occlusion pass's normals. Opacity now
+travels with the triangle; every existing id is drawn as before. The design's claim
+that Phase 1 needs no runtime patch was wrong by exactly this.
+
+**Measured** (`KF2_AUTOSTART=new`, `KF2_SSR=1`, area 0 in `fdat02`):
+- The authored id reaches the classifier and the surface buffer:
+  `SurfaceMaterial.ByMaterial[4]` and `FromPacket` rise together (4,032 in one
+  window), about 4,600 authored packets a second for two tiles in view.
+- The pick and the projection agree with the picture: `select pick 160 200` chose
+  tile 37,45, and the SSR readback's material map then showed the new id in the
+  cells covering game pixels 115-169 by 195-210. Picks follow the player's heading.
+- Tile 37,45 is **the water surface itself** — the water is a tile, drawn blended by
+  the tile assembler — so a packet material there replaces `Water` and the pixels
+  stay reflective (the readback's reflective share did not move, 36.3%). It is also
+  the amendment's test: a blended tile with an authored id stays translucent.
+- **The first fingerprint was too strict.** Area 0 read `75069e…` from a New Game
+  and `fab65f…` entered from save slot 2. The probe's diff: 32 empty lower halves
+  (model `FF`) in two 4×4 blocks, `+2` bit `0x04` set in one and cleared in the
+  other, nothing else different. Something four tiles square moves between the two
+  saves and stamps its footprint into the collision flags; the ship by the shore is
+  the obvious candidate (**Inferred**). With `+2` left out, area 0 reads
+  `3f7d7b45edcbda59` from both, and area 1 `49930d41f830e0a3` across two loads and
+  an auto-reload.
+- **The fingerprint moved with the game's progress.** Reported from play: area 1
+  refused a pack authored against `b6770a…` once the player had been elsewhere,
+  reading `5056f1…`. Measured from slot 2: area 1 read `49930d…` on entry and
+  `49787d…` after leaving for area 2 and coming back, and flipped back again on a
+  reload. The probe's diff, with the ignored `+2` taken out: 12 upper halves at
+  10-13 × 47-49, `+3` (the collision shape) `75` → `32`/`33` and `+4` losing bit
+  `0x40`, and no collision-shape byte. The game rewrites a door's or a lift's tiles
+  as it plays, and that state travels with the save, so **no live reading is the
+  area's identity**. The fingerprint is now taken from `func_8001689C`'s source
+  buffer as `func_80017244` copies it (a pre-hook matching the destination and the
+  word count). Measured after: area 1 `be64c93e02071c09` on entry, after areas 2
+  and 3, and after reloads from slots 1, 3 and 2, while the live block went on
+  flipping; area 0 `58d4e515d1aea80a`, area 2 `f6f8cec2c5dc7135`, area 3
+  `370ef222844b0ee9`. The values below are the old live readings and no longer
+  match anything.
+- A pack authored against the old fingerprint was refused whole, with the reason on
+  the panel and in `remaster`; editing the file's fingerprint by hand applied it
+  through the watcher with no restart.
+- A hand edit adding a material with an unknown field (`roughness`) and a root field
+  reloaded live and survived the next save.
+- `KF2_TILEWALK=verify KF2_POLYASM=verify` with materials applied: 1,297 reports,
+  all 0 RAM, register and GTE mismatches.
+- 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288`, vertex map 97.1% hit, with
+  the remaster on. `set remaster off` in the same run: sealed packets stop, the
+  authored id's count stops growing.
+- **Off costs one test a frame** (`Host.Frame` returns before reading anything) and
+  one byte store per sealed packet, which writes the `None` the record always held.
+
+**Not measured, and why** (at the time; the second slice built `snap`). `snap` is not built: `GpuHle.Backend.ReadVram` reads 1×
+VRAM, and the reflection pass composites at present, after VRAM, so a VRAM hash
+cannot see what a material changes. `snap` has to read the presented target, which
+is a runtime hook (`GlCore.PresentDisplay`) — next. Until then "off is
+bit-identical" rests on the record holding `None` with the switch off and on the
+amendment keeping every existing id's opacity, both read from the code.
+
+**Looked at.** One dry floor tile in area 0, set to reflectivity 1 through the
+editor, judged good as a first step: it reads as a mirror of the doorway and the
+wall above it, in the right place and the right way up. The editor was used end to
+end to get there (pick, material, sliders). Still to judge: a floor at a *partial*
+reflectivity (does it read as polished stone), and a larger area of floor. The
+same screenshot shows a speckled fringe along the reflected wall edge; that is the
+reflection pass's march, not the material, and is in `docs/TODO.md`'s open
+questions.
+
+**Next.** Taken in the second slice, below: `snap`, the settings, and picks that
+stop.
+
+### Phase 1, the second slice
+
+**What is in.** The three things the first slice left for next:
+
+- **`snap`** (`patches/remaster/Snap.cs`, runtime `0069`). `snap [hash | PATH.png]
+  [after N] [buffer Y|any]` reads the picture the window is drawn from -- after the
+  occlusion, the reflections and any post shader, at the render scale -- hashes it
+  (SHA-256, the first sixteen hex digits), counts the pixels that differ from the
+  previous snap with their largest channel difference and bounding rectangle, and
+  writes a PNG when given a path. It waits two presents by default, so an edit made
+  by the command before it has been drawn and presented. The reply is sent from the
+  present that was read, so `AgentServer` hands `snap` its reply rather than
+  answering it at the VSync drain.
+- **The settings.** Video ▸ Enhancements gains *Remaster packs*, the saved switch
+  (`kf2.remaster.on`, the same key the editor's checkbox writes; `KF2_REMASTER`
+  still overrides it). Under it a *Remaster packs* heading lists the working pack:
+  its root, its materials, every area it holds with the fingerprint that area was
+  authored against, and for the area now loaded whether it applies or why not.
+  Only the working pack exists, so the list is one entry; layering is Phase 7's.
+- **Picks that stop** (since replaced by a pick from the frame's triangles; see
+  "Faces, picked from the frame"). `Pick.Floor` now stops a ray at a tile with no drawn floor
+  (rock) and at a tile whose lowest floor is above the ray where it enters (a step
+  up), and says which: `select pick` answers `no floor under that pixel: a step up
+  at 44,47`. The eye's own tile is never a stop.
+
+**The wall flag is not a wall.** The plan was to stop at `+4` bit `0x80`, which
+`AoWorld` and `CullGrid` read as the tile that stops the visibility flood. Measured
+over the 12×12 tiles around the New Game spawn in area 0: **every one** of them
+carries it, on both halves, water, shore and sea floor alike. Stopping on it
+stopped every pick at the tile next to the player. So the grid has no wall a ray
+can read here, only floors, and a real wall -- one standing on a floor, with floor
+beyond it at the same height -- still lets a pick through. The depth buffer is the
+exact answer (the picture's own nearest surface under the cursor), and it is
+where picking goes if this is not enough; `AoWorld`'s comment calling the bit a
+wall is **Open** for the same reason.
+
+**Measured** (`KF2_AUTOSTART=new`, `KF2_SSR=1`, area 0 in `fdat02`, 144 fps,
+render scale 5, 16:9: a 2140×1200 picture):
+- **A paused frame is repeatable.** Three snaps in a row, same hash. The two
+  display buffers are not: at `0,0` and `0,240` the same paused frame differed in
+  4 pixels by up to 3 levels, so a snap takes the buffer the last one took (the one
+  at row 0 first) and says which in `buffer`.
+- **Off is bit-identical.** With nothing authored, `set remaster off` and `set
+  remaster on` gave the same hash (`8661b58c3cd089e9`). With a mirror on the tile
+  a pick chose, off went back to the unauthored hash and on to the authored one,
+  both ways round.
+- **A pick lands where it was clicked.** `select pick 140 238` chose
+  `tile:0:35:47:upper`; a mirror there changed 3,881 pixels (0.15%) by up to 3
+  levels, all inside render pixels 900-1069 by 1151-1199 -- game pixels 126-160
+  by 230-240, around the click. A mirror on the water tile under `200 238`
+  changed 46,874 pixels in a rectangle round that one.
+- **A mirror can change nothing, and that is not the pack failing.** In one view
+  straight after the area loaded the same mirror on 35,47 moved no pixel at all,
+  while its packets rose (2,072 in two seconds, `ByMaterial[4]` with them). A
+  floor at the bottom edge reflects upwards and out of the picture; a ray that
+  finds nothing and crosses no background pixel adds nothing. The SSR readback
+  (`KF2_SSR_PROBE=1`) is what tells "not applied" from "nothing to reflect".
+- 144.0 fps drawn at 20.0 ticks/s, `[present] wide 288, plain 0, vram fallback 0`,
+  with the remaster on and after a dozen snaps. **Off costs one null test a
+  present**; a snap costs one `glReadPixels` of the picture and a hash, once.
+
+**Not judged.** The settings page and the editor's new "No floor there" line have
+not been looked at. The pick's stops are checked against the grid only: whether a
+click on a cliff face or a bank reads as "nothing picked" rather than "wrong tile"
+is for the eye.
+
+**Next.** The texture-key census (Phase 4) can start independently; Phase 2's
+light term is next on the main line and needs nothing more from Phase 1.
+
+### A tile half is a whole mesh, and a face is the key under it
+
+**Reported from play: a material on a floor tile put the ceiling above it in the
+mirror too.** Nothing is wrong with the pick. A tile half draws one mesh, and in a
+cave that mesh is the tile's whole column: floor, ceiling and the rock between.
+`TileWalk` sets the half's material around the assembler call, so every packet the
+mesh makes carries it. The key table's "one floor or ceiling surface" was never
+what the code did.
+
+**Neither facing nor texture separates them.** Faceted rock points every way, so
+a normal threshold cuts it at arbitrary seams, and nothing promises that a floor
+and a wall use different textures. The face itself does: a mesh is a fixed list
+of polygons, and `func_80030540`, `func_8002FECC` and the clipped fans all walk it
+in order, so `(tile half, mesh, face index)` names one polygon on every path.
+
+**The subdivider keeps the order.** Read from `func_80030C94`: it walks the
+source faces in order and writes each one's pieces contiguously. A quad or a
+triangle (`0x2C`, `0x2E`, `0x24`, `0x26`) becomes four, and anything else is
+copied as one. So an output face maps back to its source face by counting.
+
+**Measured** (`KF2_FACE_PROBE=1`, `patches/remaster/FaceProbe.cs`; `KF2_AUTOSTART=2`, area 1 in
+`fdat05`, `KF2_SSR=1`, eight cameras through `view`). Every tile face was given one
+of the ids 4-7 by a hash of its key, and the reflection probe's readback holds the
+id per pixel:
+- **The mapping.** 763k source faces over 15 meshes, 11.9M output vertices: 0
+  count, command, CLUT or tpage mismatches. Every output vertex lies inside its
+  source face's box, and every source corner reappears in its four pieces. No
+  copied (non-splitting) face occurred, so that branch is read from the code only.
+- **A pick from the frame's own triangles.** Every sealed packet was recorded
+  with its key, its screen corners and its depths. The nearest triangle under a
+  point was then compared with the GPU's id at that pixel. At face centroids it
+  agreed 100% once the view had settled. On a 6-pixel grid it agreed 98-100%, and
+  almost every disagreement lay within 2 px of the picked triangle's edge.
+- **The one interior disagreement is overlapping geometry.** In one view, a band
+  near the camera went to a different face than the nearest one. Two neighbouring
+  tiles' meshes overlap there: face 1 of `801CF667` and face 1 of `801CF671` cover
+  the same pixels 1 unit of depth apart. With the depth tolerance off
+  (`KF2_ZBUFFER_BIAS=0 KF2_ZBUFFER_SLOPE=0`) the band stays, so the depth test's
+  own fight decides it, not the tolerance.
+
+**What follows for the design.** Key materials by face. Pick by the frame's
+triangles, and when faces lie within the depth tolerance under the cursor, select
+all of them: which one wins there changes per pixel and per angle, so an author
+cannot see one without the other anyway.
+
+### Faces, picked from the frame
+
+**What is in.** Materials are authored per face, and a click picks faces:
+
+- `patches/remaster/Faces.cs` -- the face being assembled (`Faces.Enter`, from
+  both of `PolyAssembler`'s face loops), the subdivider's output mapped back by
+  counting (`Faces.Subdivided`, refused whole if the count does not come out), the
+  frame's triangles recorded at `SealDepth` while the editor is open, the pick,
+  and the meshes: faces, a structural hash, and the grow queries.
+- `Surfaces` resolves four levels per face: the half's face list, the whole half,
+  the mesh's face list, the whole mesh. `TileWalk` asks for the half
+  (`Surfaces.EnterHalf`) and `Faces` for each face, and only while something
+  below the whole half is authored (`Surfaces.PerFace`).
+- `Pack` keeps face lists on tile entries and area-wide rules under `meshes`, each
+  with `mesh` and `meshHash`. A face edit is one undo entry, undone by putting the
+  area's document back.
+- The editor picks faces on a click (Shift+click adds or removes), grows a
+  selection (*Connected*: joined by an edge and the same texture; *Same texture*;
+  *Whole mesh*), selects the whole half, assigns at the half or, with *Every tile
+  with this mesh*, at the mesh, and tints the selection's triangles over the
+  picture. The map panel and the player's tile still select a whole half.
+- Shell: `select pick GX GY [add]`, `select faces F,F,...`,
+  `select grow connected|texture|mesh`, `set selected material NAME|none [tile|mesh]`;
+  a selection's reply carries `sealedIds`, what the last frame sealed each of the
+  half's faces with.
+- `Pick.cs` is gone, and with it the second slice's picks that stop at rock.
+
+**The mesh table pointer moves within a frame.** `0x8018E19C` points at the tile
+meshes only while the tile walk runs; the object walk repoints it at the models',
+so read at VSync it named nonsense (mesh 1's face count `0x00100008`). The walk
+notes it for every half (`Faces.TileTable`), meshes are read from that, and
+`Surfaces` re-applies when it moves. Its `+4` word is the far-model limit, not a
+count.
+
+**The mesh hash** is the face count and each face's command, length and corners:
+the structure a face index means, not its texture or where its vertices are, so
+a scrolling UV cannot move it. A face list whose mesh no longer hashes the same is
+dropped whole, and the editor says so.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, `KF2_SSR=1`):
+- A click on the floor in front of the player picked `tile:1:36:36:upper:1`
+  (mesh 1, four faces). Authored as a mirror, the last frame sealed face 1 with id 4
+  and faces 0, 2 and 3 with 0, and the picture changed in rows 559-1117 of 1200
+  only. The same material on the whole half sealed all four faces and reached row
+  35, the ceiling. Undo returned the face-only picture to the same hash.
+- *Connected* grew face 1 to faces 1 and 3.
+- A mesh rule on face 1 of mesh 1 reached the two other mesh-1 tiles in view and
+  left a mesh-27 tile alone.
+- After a restart the saved pack sealed the same ids. A hand-edited `meshHash`
+  dropped that face list (`meshRefused: 1`) through the watcher, and the mesh rule
+  still covered the face.
+- The pick against the GPU (`KF2_FACE_PROBE=1`, nine cameras through `view`):
+  about 20,200 grid samples, no interior disagreement, and 46 (0.23%) within 2 px
+  of a triangle edge. Selecting the coplanar faces too took the overlapping view
+  from 56 disagreements to 3.
+- `KF2_TILEWALK=verify KF2_POLYASM=verify` with face lists applied: 162 reports, all
+  0 RAM, register and GTE mismatches. 144.0 fps drawn at 20.0 ticks/s,
+  `[present] wide 288, plain 0, vram fallback 0`.
+- **Cost:** nothing authored below the half, one bool per face. Authored, a few
+  array reads per face. Recording runs only while the editor or the probe is open.
+
+**Not judged.** The editor's new controls and the selection tint have not been
+looked at, and neither has whether *Connected* grows to what an author means on
+faceted rock.
+
+**Every "click" above was the shell's `select pick`, and the window's own click
+never worked.** Reported from play: neither *Pick on the picture* nor *Place on the
+picture* did anything. The editor gated a click on `!io.WantCaptureMouse`, but the
+picture is drawn inside the Output panel, an ImGui window, so ImGui wants the mouse
+whenever the pointer is over it: the gate was shut exactly where it should open.
+`OutputView.Hovered` (`0029`, amended) is the picture's own `IsItemHovered`, which
+is also false when another panel or a popup is in front of it. The click through
+the window is **not yet confirmed by hand**.
+
+**Typing reached the hotkeys.** A key typed into a text field (a material's name)
+also arrives on the `KeyboardEvent` bus, so an `m` opened the map. The port's
+hotkeys now ask `patches/HotkeyGate.cs`: Shift+E, Shift+P and Shift+F wait while
+ImGui has a text field focused, and M, N and the mouse-capture key also wait while
+the editor is open. `mods/kf2debug`'s F-keys are left alone, since nothing types
+them.
+
+### Phase 2: authored point and spot lights (`0071`)
+
+- **Ships:**
+  - [x] `RemasterUniforms` and the light list;
+  - [x] the light term in `shade8` (core `PrimFs`);
+  - [x] the light gizmo and inspector: a dot and a reach ring per light, a drag
+    across the screen at the light's depth (Shift: up and down in height steps),
+    axis arrows on the selected light, depth cues drawn in the world (see "The
+    light gizmo is drawn in the world"), and the inspector;
+  - [x] `lights.json`;
+  - [x] flicker, evaluated on the world tick so it holds with the world;
+  - [~] a probe counting lights culled, uploaded and lit batches (not fragments).
+- **Depends on:** Phase 1's pack, editor and `snap`; per-pixel lighting on
+  (`0048`), since the term lives in `shade8`.
+- **Risks:**
+  - fragment cost at high render scales. `PrimFs` runs for overdraw too, under
+    painter's order;
+  - the derivative normal at silhouettes;
+  - light on the first-person arm.
+- **Mechanism measured by:**
+  - `light_probe.c` extended with a light: the term against a C reference, and 0
+    lights bit-identical to today;
+  - the probe's light and receiver counts;
+  - frame profiler and GPU timers at 0, 1, 4 and 16 lights, at render scale 1
+    and 5.
+- **You look at:** falloff and colour; how a light reads through the fog; a
+  creature walking through a light; the look at the edge of the radius.
+
+### Phase 2, the first slice
+
+**What is in.** Point and spot lights, authored per area, drawn by the game's own
+lighting chain:
+
+- **Runtime `0071`**: `Gpu/RemasterUniforms.cs` holds up to 16 lights already in
+  the GTE's view space, with a generation; `GlCore` uploads the list when the
+  generation moves and flushes a batch built under the previous one. `PrimFs`
+  gains `authored()`: the fragment's view position rebuilt from its recovered
+  depth, H and the centre exactly as `NormalFs` does, its normal from that
+  position's screen derivatives, and per light `colour * max(N·L, 0) * (1 -
+  d²/r²)² * spot`, the spot a smoothstep between the cone's two cosines. `shade8`
+  adds it times the packet's RGBC to the lit colour, **before** the depth cue, so
+  the game's fog darkens it, the texture is modulated by it and it saturates
+  where the game's light does. Not drawn into a planar reflection's texture, whose
+  view is the mirrored camera's.
+- **What a light reaches**: a packet with a `0048` record and a recovered depth.
+  So map tiles, clipped fans and models, including the first-person arm (its
+  position is rebuilt in view space like everything else, so the design's worry
+  about view-space receivers does not arise). The HUD and anything unrecorded keep
+  their vertex colour. Per-pixel lighting and Fast geometry must be on.
+- **The record carries RGBC now.** A tile's, a clipped fan's and a flat model
+  face's record had `0` in the low bytes, which only a directional record read;
+  they carry the light colour word at `0x8006E604` that `NormalColorCol` lit them
+  with. And with lights applied, a face drawn with no fog at all keeps its record
+  (`PolyAssembler.KeepUnfogged`), where before it was dropped as interpolating
+  the same; without a record it could not be lit.
+- `patches/remaster/Lights.cs`: the area's `lights.json` behind the fingerprint;
+  before each `DrawOTag` (the camera block then holds the view the table was
+  built with) every light goes to view space as `R (w - cam) + T`, is culled
+  behind the eye and past twelve tiles, and the nearest 16 are published. Flicker
+  is value noise on a tick count taken with `FramePacing.FirstWalkOfTick`.
+- The editor gains a Lights section: *Add at eye*, *Place on the picture* (the
+  next click adds one 192 units short of the nearest surface the last frame drew
+  there, from `Faces`' triangles), a list, and the inspector: type, position,
+  colour, intensity, radius, direction and cones, flicker, on, move to eye,
+  delete. Each light is drawn over the picture; a click on its dot selects it and
+  a drag moves it. A held slider or drag is one undo entry.
+- Shell: `light list | add NAME [here | pick GX GY | X Y Z] | remove | select |
+  set NAME FIELD V...`; `list` gives each light's projected pixel and depth, and
+  the counters. `KF2_REMASTER_LIGHTS=0` leaves the pack's lights out.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, 144 fps,
+render scale 5, 16:9):
+- **The term is the formula.** `scripts/light_probe.c` runs the real `PrimFs`
+  with three lights (two points and a spot) over a wall at a known depth and
+  compares every pixel with the same formula in C: worst difference **0** over
+  all nine strips. With no light uploaded, and with lights uploaded but no depth,
+  the strips are 0 from 0048's formula as before.
+- **Off is the picture it was.** At a pinned view, `set remaster off` gave the
+  hash of the frame before any light was added (`210d55698c875fb8`), and so did
+  switching the light off with `light set ... enabled off`; undo went back to the
+  earlier lit hash.
+- **A pick places the light where it was clicked**: `light add warm pick 160 170`
+  projected back to game pixel `160.1,170.1` at depth 1447. The brightest changed
+  pixel was at `170,172`, and it followed the light through four more cameras
+  through `view` -- yaw ±100, pitch 150, and the eye moved 800 units -- at 9-19
+  pixels from the light's own projection, the offset the surface's slope gives.
+  No pixel ever got darker.
+- Radius 1024 changed 27.9% of the picture inside one rectangle round the light;
+  4096 changed 97.9%.
+- Flicker ran at 20 steps a second with the world, and three snaps with the
+  editor open were identical.
+- A restart read the saved `lights.json` and sent both lights. Under
+  `KF2_POLYASM=verify KF2_TILEWALK=verify` with them applied: 2,517 reports, all 0
+  RAM, register and GTE mismatches.
+- **Cost**, 16 lights against none at render scale 5 (2140×1200): the frame's GPU
+  batches 0.51 → 0.69 ms by the frame capture's timers (0.97 in a noisier first
+  capture), CPU work 0.96 → 0.99 ms a frame, 144.0 fps drawn at 20.0 ticks/s
+  either way, `[present] wide 288`. Off, one test a frame and one `int` compare
+  per triangle.
+
+**Not judged.** Nothing about the look: falloff, colour, how a light reads in the
+fog, the edge of the radius, a creature walking through one. Nor the editor's
+Lights section, the gizmos and the drag. Render scale 1 was not measured, and
+neither was a light on the arm.
+
+### The light gizmo is drawn in the world
+
+A dot and a screen-facing ring said where a light was on the screen and nothing
+about how far away it was, so placing one meant moving it and looking for where the
+light landed. The gizmo is drawn in the world now, projected through the frame's own
+view (`Lights.View`) and cut at the near plane, so perspective carries the depth:
+
+- every light's reach is a ring flat at its own height, and a line drops from it to
+  the floor below with a small ring where it lands -- the nearer below it of its
+  tile's two halves' floors (`-(h << 7)`, the height `PropPlaceAt` stands a prop
+  on); the selected light's label gives its height above that floor;
+- the dot is 96 world units across, held to 3-9 pixels, so a far light is small;
+- a spot is its outer cone, to its reach when selected and 1024 units otherwise,
+  and the inner cone's rim;
+- the selected light's reach is a sphere of three rings, and it has an arrow per
+  world axis (X red, Y green and pointing up, which is -Y, Z blue), 70 window pixels
+  long at any distance. An arrow drags the light along its axis: the point on the
+  axis nearest the mouse's ray from the eye, less where it was grabbed, so the light
+  stays under the cursor; Ctrl snaps to a height step. The dot inside 12 pixels of
+  the centre is still the drag across the screen.
+
+**Judged** in play: it looks right. Nothing about it is measured, since it is
+the editor's overlay and reaches no frame the game draws.
+
+### Phase 3: the material system proper
+
+- **Ships:**
+  - [x] the `0067` amendment: ids widened to 256 (the `RGBA16F` alpha holds them
+    exactly); the table stayed `SurfaceMaterial`'s, as a texture, not in
+    `RemasterUniforms`;
+  - [~] materials keyed by tile mesh (Phase 1's faces), model (in) and texture
+    index hash (not started: it waits on Phase 4's key census);
+  - [x] emissive, which adds to the lit term the way a light does, and roughness,
+    which only SSR reads, as a blur of its hit;
+  - [x] metalness, specular, occlusion, a light of its own, pulse and unfogged glow
+    (the second slice).
+- **Mechanism measured by:** the `ByMaterial` census for every source; the
+  reflection census identical with no pack; `shader_probe.c` for emissive
+  (`light_probe.c` in the event, since the term is `0071`'s).
+- **You look at:** emissive surfaces in the dark areas; how roughness looks on
+  SSR.
+
+### Phase 3, the first slice
+
+**What is in.** Two material properties, a key, and the table they need:
+
+- **Runtime, `0067` amended**: `SurfaceMaterial.Count` 256, `BlendedFlag` 256,
+  `Roughness`, `Emissive`, `Generation` and `Changed()`. `GlCore` uploads the table
+  as a 256×2 RGBA32F texture when the generation moves: row 0 reflectivity, F0 and
+  roughness for `SsrFs`, row 1 the emissive colour for `PrimFs`.
+- **Roughness** is a blur of the reflection, not a jittered ray: nine taps over the
+  footprint of the cone the reflected ray stands for, `roughness × distance`
+  across at the hit's depth, skipping taps under the HUD or off the picture. A
+  planar lookup takes its distance from the planar texture's depth. 0 is the single
+  read it was.
+- **Emissive, `0071` amended**: the packet's material rides in the light buffer
+  (attribute 11), and `PrimFs` adds its row-1 colour to the authored term, before
+  the depth cue and times the packet's RGBC, so a glow is fogged and textured like
+  the game's own light and strength 1 shows the texture at full. It needs no depth,
+  so it is drawn into a planar reflection too. Only a packet with a `0048` record
+  glows, which needs per-pixel lighting and Fast geometry.
+- **The first thing that did not work**: a glowing model changed no pixel. A face
+  with no fog at all keeps no light record (it interpolates the same per pixel), and
+  near the eye that is every face; only authored lights kept them
+  (`PolyAssembler.KeepUnfogged`). It is now kept for either reason, each owned by
+  its feature (`KeepForLights`, `KeepForGlow`), and only while the area has a
+  glowing material applied.
+- **Models**: `ModelWalk`'s submitter asks `Surfaces.EnterModel(kind, model)` before
+  the assembler call and `SealDepth` writes the id as it does for a tile.
+  `surfaces.json` gains `models`, keyed by kind and model id. `Faces` records a
+  model's triangles with both, so a click on a model selects it; the editor tints
+  its triangles and gives it the material combo. Nothing is keyed by instance.
+- The editor's library gains *Roughness*, *Emissive* (a colour) and *Glow* (0-4);
+  a colour held is one undo entry. Shell: `select model:A:KIND:ID`, `select pick`
+  answering a model, `set model:... material NAME`, `set material:NAME
+  roughness|emissiveStrength V` and `emissive R G B`; `pack list` shows models and
+  the new fields; `remaster` gives `byMaterial` as only the ids drawn, the table's
+  uploads and whether anything glows.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, `KF2_SSR=1`, a scratch pack,
+144 fps, render scale 5, 16:9, the view pinned with the editor open):
+- **The formula.** `light_probe.c` adds three passes: glow on with material 0,
+  glow on with a glowing material and no depth, glow off with the same material.
+  Worst difference from the formula 0 in all six passes; the first and third new
+  ones are the program as `0071` left it, to the bit.
+- **Off is the picture it was.** With nothing authored, remaster on and off gave
+  `210d55698c875fb8`, the hash Phase 2 recorded at this view before this change, so
+  moving the table into a texture moved no pixel.
+- **A model glows, and only it.** `select pick 180 100` chose
+  `model:1:object:486` (63 triangles). At glow 1.5 the picture changed in 11.1% of
+  its pixels, by up to 153 levels, all inside render pixels 930-1378 by 0-912, the
+  model's rectangle; at 0.5, by up to 94. At glow 0 -- the records kept, the term
+  zero -- and with the remaster off, the hash was the baseline's.
+- A face of a floor half in area 0 at glow 1.5 changed 3.2% of the picture, all in
+  the bottom rows where it lies.
+- **Roughness moves only the reflection.** A mirror (reflectivity 1, F0 0.5) on a
+  floor face; roughness 0.3 and 1 changed 3.6-3.9% of the picture, inside the
+  floor's rectangle, by up to 15-24 levels. Back at 0 the hash was the mirror's own
+  again.
+- **The saved pack reproduces it.** After a restart, the same view's hash was the
+  one before (`22f23314bc315e90`).
+- **Verify.** `KF2_POLYASM=verify KF2_TILEWALK=verify` in area 0 with the glowing
+  face applied and sealed: 899 reports over the nine routines, all 0 RAM, register
+  and GTE mismatches. `KF2_MODELWALK=verify` into area 1 with the glowing model: 72
+  reports, one of them 1 RAM mismatch in `func_800331B4`, in area 0 before the save
+  loaded (a word at `0x80073DF4`), which is the ambient-sound key-on the walk's
+  verify is documented to show ("A verify pass replays, it does not re-run" in
+  `PATCHES_AND_MODS.md`) -- **Inferred**, since the probe that counts key-ons was
+  not on. The picture under that verify was the normal run's hash. All three
+  verifiers together run at 0.2 fps in area 0, too slow to reach a save.
+- 144.0 fps drawn at 19.9-20.0 ticks/s in area 1 with the pack applied, and in
+  area 0 with the glow on and with the remaster off; `[present] wide 288, plain 0,
+  vram fallback 0`. One view in area 0 facing the sea, editor open, read 114 fps;
+  it was not compared with the build before this and is not explained.
+- **Cost:** nothing glowing, one bool a batch. Glowing, one texel fetch per
+  fragment of a recorded packet, and the records of unfogged faces kept, as authored
+  lights already do. Roughness 0 costs nothing; above it, eight more reads per
+  reflective pixel.
+
+**Not judged.** Most of the look: how a glow reads through the fog, roughness on a
+floor mirror and on water, the editor's new controls and the model tint. One glow
+was looked at; see below. Under `KF2_MODELWALK=verify` a click cannot pick a model (the last
+submit recorded is the recompiled pass's, which names nothing).
+
+**Looked at: glow reads as lit, not glowing.** Judged from play (area 0, a wall
+panel at glow 4.0, roughness 1): "it kinda looks like it's glowing, but not quite".
+Two causes in the design, neither of them the missing bloom:
+- **It multiplies the texture.** The term is added to the lit colour *before*
+  the texture is modulated, so glow 4 is "the texture at twice full, clipped": the
+  texture's dark blotches stay dark and the panel reads as overexposed stone. Right
+  for a lit window; wrong for a light source.
+- **Nothing around it is lit.** The floor in front of the panel is as dark as
+  anywhere else, and that is the strongest glow cue there is.
+- Roughness did nothing in that shot, correctly: it only blurs a reflection, and
+  the panel had reflectivity 0.
+
+**Next, for glow** (agreed with the user; 2 and 3 are built, see "The glow is a
+light source" below):
+1. **Try by hand first**: an authored point light just in front of the panel, the
+   glow's colour, radius 1500-3000. The user was to say whether that is much
+   closer; if so, build 2 and 3 together.
+2. **A glowing material gives off a light.** `Lights` builds the frame's list from
+   `Pack.Lights(area)` (`patches/remaster/Lights.cs`, `Resolve` and the publish
+   before `DrawOTag`); add derived lights for the area's glowing faces and models.
+   A tile face's world position comes from its half (`Identity`: tile X, Z at 2048
+   units, the floor at `-(h) << 7`) and the mesh's vertices (`Faces.Mesh`); a
+   model's from `ModelWalk.Scene`. The cap is 16 lights, nearest first, so derived
+   ones compete with authored ones; decide which wins. Keep it off with no glowing
+   material, so off stays bit-identical.
+3. **An additive glow mode**: add the emissive colour *after* the texture is
+   modulated, so dark texels light too. The term is in `PrimFs`
+   (`GlShaders.cs`: `extra += texelFetch(uMatTable, ivec2(int(vMat), 1), 0).rgb`
+   in `main`, applied in `shade8`); row 1's alpha of the material table is free for
+   a mode flag (`GlCore.BindMaterials`, `SurfaceMaterial.Emissive`). Keep the
+   current mode as the other choice, extend `scripts/light_probe.c` for the new
+   one, and amend `0071` (a correction to its own term, not a new mechanism).
+4. Bloom is a pass on the finished picture, a separate feature, later.
+
+**Next, otherwise.** The texture key needs Phase 4's census before anything is keyed
+by it, so this phase's third key waits for that. Instances (one door, not every
+door) need the slot measurement "Identity" asks for. Roughness on a mirror floor and
+on water has still not been looked at.
+
+### The glow is a light source
+
+Items 2 and 3 above, built together.
+
+- **An additive glow, the new default** (`0071`, amended again). Row 1's alpha of
+  the material table says how an id glows (`SurfaceMaterial.EmissiveAdditive`):
+  additive adds RGBC times the glow *after* the texture is modulated, so a dark
+  texel lights as much as a bright one; the old mode (`"glowMode": "lit"`) is kept.
+  The additive term is fogged on the packet's own depth-cue curve, like everything
+  else the game draws: an unfogged glow would pop out of the black at the draw
+  window's edge, where the tiles themselves are cut. `PrimFs` splits the curve out of
+  `shade8` as `cueWeight()` and adds the fogged glow, `gGlow8`, to the modulated colour
+  on every output path (flat, texture, replacement texture, replacement CLUT). Zero
+  on every packet without an additive glow, so the other programs are unchanged.
+- **A glowing material gives off a light** (`Lights`). When the area applies, every
+  tile half with a glowing face gets one point light per material: the glowing
+  faces' area-weighted centroid, 192 units out along their summed normal. A face's
+  world corners are the half's placement (the tile centre, the floor at `-(h << 7)`)
+  plus its mesh vertex (`table + 0xC + header[+0]`, 8 bytes a vertex, indexed by byte
+  offset), turned by the record's quarter turn as `func_80014B88` turns the matrix:
+  1 is `(z, y, -x)`, 2 `(-x, y, -z)`, 3 `(-z, y, x)`. Its normal is the one the game
+  lights it with (`header[+8]`, indexed from the face), turned the same way. A
+  glowing model gets a light 384 units above its origin, per draw, from
+  `ModelWalk.Scene`. The light's colour is the glow's, times *Glow light*
+  (`glowLight`, 0.5 by default); its radius is *Glow reach* (`glowRadius`, 2048;
+  0 gives no light).
+- **Authored lights win the 16 slots.** Every derived light ranks after every
+  authored one, then nearest first. They were placed by hand; a derived light
+  comes from any glowing face, however many there are.
+- Editor: *Light source* (the mode), *Glow light*, *Glow reach* under each material.
+  Shell: `set material:NAME glowMode additive|lit`, `glowLight V`, `glowRadius V`;
+  `light list` gives each derived light (`glow`) with its normal and projection,
+  and `modelGlow`.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 in `fdat05`, a scratch pack, 144 fps,
+render scale 5, 16:9, reflections on, the view pinned with the editor open: camera
+`73709,-16448,74986`, pitch 26, yaw 2639, the same view as Phase 2's hash):
+- **The formula.** `light_probe.c` gains four passes on a strip textured with a
+  known 15-bit texel: no glow, the lit glow, the additive glow, and the additive
+  glow untextured. Worst difference from the formula **0** in all ten passes; the
+  first six read as before, to the line.
+- **Off is the picture it was**: `210d55698c875fb8` with nothing authored, remaster
+  on or off, and again after every glow was set back to 0. A zero-glow material that
+  keeps its default reflectivity 0.3 is not the baseline with reflections on, which
+  is its reflection and not the glow: at reflectivity 0 it is.
+- **A wall panel** (`tile:1:37:36:upper`, face 2, colour 1,0.6,0.25, glow 1.5): the
+  panel's darkest tenth of pixels had a mean luminance of 54 unglowing, **98 lit**
+  and **179 additive**; the median 73, 135, 196. Only the panel's own rectangle
+  changed in either mode (12.1% of the picture).
+- **Its light** sits at `77376,-17248,74885` with the normal `(-1,0,0)`, towards
+  the camera at X 73709, so the lit side is the side the camera can see (it would be
+  backface-culled from the other). It projects inside the panel, at depth 2914. At
+  glow light 0.5 and reach 2048 it changed 336,078 more pixels outside the panel, by
+  up to 29 levels, and **darkened none**. A second face, a wall facing +Z, got a
+  normal of `(0,0,1)` with the camera on that side too.
+- A glowing model (`model:1:object:486`) got its light (`modelGlow 1`, three sent).
+- The saved pack reproduced the same hash after a restart (`d8c08a2ca30faedc`).
+- 144.0 fps drawn at 20.0 ticks/s with the panel's glow and light, editor closed;
+  `[present] wide 288, plain 0, vram fallback 0`.
+- **Cost**: a half is looked at only if something is authored on it, once per apply;
+  a model's light is one dictionary lookup per model drawn, only while a model
+  material gives light.
+
+**Changed for an existing pack.** A material without `glowMode` is now additive,
+so a pack saved in Phase 3 draws its glows differently, and gives off light unless
+its reach is set to 0. The Phase 3 hashes above are of the old mode.
+
+**Not judged.** The whole look: whether the additive glow and the spill now read as
+a light source, the defaults (glow light 0.5, reach 2048), a model's light at 384
+above its origin (a guess at the middle of a figure; a view-space model such as the
+arm would get one at a meaningless position), several adjacent halves each giving
+a light (they add), and fog on the glow. Bloom is still item 4.
+
+**Looked at: glow.** "It looks pretty good." The same judgement asked for a light
+that leaves the texture alone, which the second slice below adds.
+
+**Looked at: roughness.** At 1.0 the reflection on a mirror floor turned into a
+fine woven crosshatch rather than a smear; see the second slice.
+
+### Phase 3, the second slice
+
+**What is in.** Everything a material could still say without a texture key:
+
+- **Roughness, without the weave** (`0067`, amended). The blur now reads a half-size
+  mip chain of the picture (and of the planar texture) at the level whose texel
+  spans the blur, instead of eight sparse taps turned per pixel. Roughness is
+  squared before use, so the slider's lower half is the useful range.
+- **Metalness** (`0067`): the reflection takes the surface's hue at full value, so a
+  dark bronze tints what it reflects without darkening it.
+- **Specular** (`0071`, amended): the highlight an authored light, or a glow's own
+  light, leaves. Normalised Blinn-Phong, its size from roughness, added past the
+  texture, fogged, and tinted by the texel on a metal.
+- **Occlusion** (`0067`): how much the occlusion pass darkens a material, applied at
+  the present from the surface buffer's id. A glowing material defaults to 0.
+- **Light without glow**: `"light"` is the material's own light intensity, in its
+  emissive colour, whether or not the surface glows; without it, a material reads as
+  it did (`glowLight`, 0.5, times the glow). **A material's light does not light that
+  material** (a point's outer cosine carries the id, `0071`), so a lamp with no glow
+  keeps its texture exactly and a glowing panel is no longer lit by itself too.
+- **Glow ignores fog** (`"glowFog": false`), additive glows only.
+- **Pulse**: `pulseAmount`, `pulseHz`, `pulseStyle` breathe or flicker, on the world
+  tick (`Lights.Ticks`, now counted whether or not a light is sent), so it holds while
+  the world is paused. The glow and its light pulse together.
+- Editor: *Metalness*, *Specular*, *Occlusion*, *Fogged*, *Light*, *Light reach*,
+  *Pulse*, *Pulse rate*, *Flicker*. Shell: `set material:NAME metalness|specular|
+  occlusion|light|pulseAmount|pulseHz V`, `glowFog on|off`, `pulseStyle breathe|flicker`.
+
+**Measured** (area 1, the pinned view, reflections on, a scratch pack):
+- **The weave was the roughness blur, not the reflections.** A mirror floor
+  (`tile:1:37:36:upper` face 3) at roughness 0, 0.5 and 1, on the previous build and
+  this one, each with the pass at 2x and at full resolution; the autocorrelation of
+  the reflection's fine detail:
+
+  | build, pass | roughness 0 | 0.5 | 1 |
+  |---|---|---|---|
+  | previous, 2x | no repeat | **every 8 px, +0.50** | **8 px, +0.39** |
+  | previous, full | no repeat | **every 4 px, +0.72** | **4 px, +0.68** |
+  | this, 2x or full | no repeat | no repeat | no repeat |
+
+  The repeat was the 4x4 pattern at the pass's resolution (render scale 4 there),
+  so the resolution set its size and not its existence. The dark band under the ledge
+  in the report's shots was not checked; it is in area 0.
+- **The formula.** `light_probe.c`: 14 passes, 126 cases, every one 0 from the
+  formula; the first ten read as before. The skip pass lights 452 pixels of 512.
+- **Off is the picture it was**: `210d55698c875fb8` with nothing authored, and again
+  after each new term was set back to 0.
+- **Light only** (colour 1,0.7,0.4, light 1.5, reach 3000, no glow, on the wall
+  panel): all 309,703 of the panel's pixels unchanged; 601,350 around it lit; none
+  darker.
+- **Specular 1** on the floor under a light placed to mirror into it: at roughness
+  0.5, 66,444 pixels brighter by up to 49; at 0.2, 6,245 by up to 213; none darker.
+  On a metal the same pixels take the texel's colour.
+- **Metalness 1** on a mirror floor changed its reflection by up to 24 levels.
+- **Occlusion 0** on a wall: 210,402 pixels brighter by up to 10, none darker.
+- **Pulse** 1 at 2 Hz: three snaps 0.3 s apart with the world running, three hashes;
+  with the editor open, the same hash twice.
+- 144.0 fps drawn at 20.0 ticks/s with all of it at once (a pulsing glowing panel
+  with its light, a rough metal mirror floor with a highlight, a wall at occlusion 0
+  and an authored light), editor closed; `[present] wide 288`.
+
+**Changed for an existing pack.** A glowing material is exempt from occlusion unless
+it says otherwise, and its light no longer lights itself, so a glowing panel reads a
+little dimmer than in the first slice. Roughness is squared, so a saved value blurs
+less than it did.
+
+**Not judged.** All of it: whether roughness 0.2-0.5 reads as polished or wet stone
+and whether the blur grows with distance as it should, highlights on the floor and
+on models, metal on a mirror, a pulse's rate and a flicker's feel, a lamp with no
+glow, an unfogged glow at the edge of the draw window. The blur reads the whole
+picture, HUD included, at high roughness near it.
+
+**Looked at: metalness is hard to see.** "I'm struggling to see metalness
+whatsoever." Three reasons in the design: it only tints the reflection and the
+highlight, so with reflectivity 0 (or reflections off) and no highlight it does
+nothing; the tint is the surface's hue, and this game's stone is nearly grey
+(measured: 24 levels at most); and it leaves out what makes a metal read as one --
+a strong reflection looking straight at it (F0 is not raised) and a darker base
+colour. **Next** (proposed, not started): metalness pulls F0 up to the reflectivity,
+darkens the surface's own colour, and saturates the tint a little; whether it also
+brings some reflectivity of its own when that is 0 is the user's call. **Decided (2026-09-26): it does** -- a metal is a mirror tinted
+by its colour, so the reflectivity a metal gets is at least its metalness, as in
+PBR. Built after Phase 4; see "Metal is a tinted mirror".
+
+### Phase 4: materials by texture
+
+**Rescoped (2026-09-26).** Phase 4 was written for texture packs: replacement
+images, then normal and roughness maps that come only with one. Nobody here is
+making a pack, so none of that would change a picture anyone looks at. What the
+first slice built -- one stable name per piece of art -- is kept, and turned to
+what an author of materials wants: **set a material once on a texture, and have it
+wherever that art is drawn, in every area.**
+
+- **Ships:**
+  - the texture key made stable for materials: the image the game uploaded, its
+    pieces joined, and the scrolling textures keyed on their source image;
+  - `remaster/textures.json`, game-wide, the least specific rule (a half, a face,
+    a mesh and a model all win over it);
+  - the editor's pick names the texture under the click, with an *Everywhere*
+    material and an *Any palette* choice; `set texture material NAME`;
+  - the rule reaching everything that reads a material: the packet (reflections,
+    glow, highlight, occlusion), the retained scene, and a glow's lights.
+- **Mechanism measured by:** the census of material keys in view, stable across
+  ticks while the water scrolls, across areas and across a reload; packets sealed
+  by texture; the pinned view's hash with nothing authored; the frame's cost.
+- **You look at:** a wet or rough stone set once, in every area it appears.
+
+The replacement work from the first slice stays in, costs nothing without a pack,
+and is parked: the water's replacement through `0053`, replacements in the
+retained scene, and normal and roughness maps (`0075`) are Phase 8.
+
+### Phase 4, the first slice
+
+**What is in** (`0073`, and `patches/remaster/TextureCensus.cs`):
+
+- **The census.** Every lookup the replacement resolver makes, bucketed by the
+  settled area: keys, distinct art, the places (page, CLUT, rectangle) each key was
+  seen at, places whose art changes under them, page+CLUT groups whose rectangles
+  overlap, GPU-dirty keys, what a pack covers, and what the game uploads at a time.
+  `KF2_TEXCENSUS=1` prints a line every 5 s; the `textures [on|off|reset|save]`
+  shell verb answers the same, and `save` writes `dump/SLUS-00158/census/area-N.json`
+  with each key's file name (`INDEX_CLUT.png`, the name `TextureDumper` writes and
+  a pack's `textures/` takes), page, rectangle, hits, covered, dynamic. Hashes and
+  rectangles only, so a report may sit beside a pack.
+- **Textures were refused as GPU-dirty**, which nothing had said: 74 of area 1's
+  86 keys. `GlCore`'s batch bounds were never reset (see `0073` in
+  `RECOMPONE_PATCHES.md`), so the game's first untargeted draw at `GAME.EXE`'s
+  start -- a 32x32 black box at `(0,344)` -- marked `(0,0)` 748x481 dirty, and
+  every texture page under it stayed refused until the game happened to upload it
+  again. After: 0 dirty keys.
+- **A key per uploaded image.** The key was the polygon's UV bounding box, and this
+  game's faces read a texel past their texture: one texture showed as
+  `[191,63,65,64]`, `[191,63,64,64]` and more. A rectangle is keyed on the
+  LoadImage that last wrote its centre when it lies inside that image to within two
+  texels, else on the face's `0060` rectangle, never a fan triangle's own UVs.
+  `KF2_TEXKEY=face` and `KF2_TEXKEY=triangle` are the comparisons.
+- **A replacement is filtered by the port's slider**: trilinear with the
+  anisotropy level while mipmaps are on, bilinear with them off, taken on the
+  unwrapped UV's gradients; a replaced CLUT keeps the anisotropic taps.
+
+**Measured.**
+
+- **Keys in area 1** (slot 2, the spawn, 12 s):
+
+  | keying | keys | overlapping pairs | rects inside another |
+  |---|---|---|---|
+  | triangle (upstream) | 109 | 540 | 59 |
+  | face | 86 | 471 | 44 |
+  | upload | **21** | **6** | **1** |
+
+  The six left are one sheet at page `0x6` uploaded 128x120 while its faces reach
+  row 127, so they fall back to the face's rectangle.
+- **What the game uploads**: the map's textures as 128x128 images (read at first as
+  sheets of four tiles; see the correction below), models' as 64x64, 32x32 and
+  16x16 images. In area 1, six 8-word-wide strips (heights 4-28) go up about five
+  times a second each.
+- **The water cannot be keyed by content.** In `fdat02` (area 0) the census saw
+  1,657 keys in 12 s, 1,631 of them on page `0x15` and 1,538 of those dynamic:
+  `func_8002DC78` rewrites the fluid slots in strips every tick, so the upload
+  under a face is a strip and its texels change with the phase. The other 26 keys
+  of the area are ordinary.
+- **A pack reaches the screen.** A scratch pack (`packs/phase4-test`, generated
+  test patterns, not committed) replacing area 1's two tile sheets at 512x512:
+  `[assets] tile ...: 128x128 -> 512x512 (4x, 4x)`, 2 keys replaced, 97.4% of the
+  pinned view's pixels changed, the filter set twice, no GL error under
+  `KF2_GLDEBUG=1`. With `KF2_TEXKEY=face` the same pack replaces nothing, since no
+  face's rectangle is a sheet.
+- **Off is the picture it was**: with no pack, the pinned area-1 view is
+  `210d55698c875fb8`, as before, and with the census on.
+- **Cost**: frame work 1.10-1.12 ms with the pack against 1.05-1.08 without, at
+  144.0 fps drawn and 20.0 ticks/s; the packet walk's self time goes 0.135 to
+  0.167 ms, the resolver's lookups. `[present] wide 288`.
+
+**Not judged.** All of it: a replaced sheet under trilinear and anisotropic
+filtering at a distance and in motion, and whether the test pattern lies on the
+floor the right way up and at the right scale. The pack is kept in
+`scratch/phase4-test`; copy it into `packs/` to look with it. **It was first left in
+`packs/`, where every pack is enabled by default**, so every boot drew area 1 in the
+test pattern until it was moved out.
+
+**Not done**, parked with the rescope (see "Phase 4: materials by texture"): a
+replaced water texture scrolled through `0053`; replacements in the retained
+scene's world program (`0072`); upstream's 16-bit and page fallbacks, untested
+here; normal and roughness maps (`0075`).
+
+**Corrected by the second slice.** The map's 128x128 upload is **one texture**, not
+four tiles: a source face's UVs span the whole of it, and the subdivider draws it
+as four quarter-quads, which is where the 64x64 rectangles came from. Some uploads
+are one image in two pieces (100 rows and 28), which the second slice joins. And
+area 1's 8-word strips are a scrolling texture's wrap, drawn in view.
+
+### Phase 4, the second slice
+
+**What is in** (`patches/remaster/TextureKeys.cs`, `0073` amended):
+
+- **A material key per piece of art.** `TextureKeys` names the art a face draws as
+  upstream's texture packs would (`TexKey`: the index hash and the hash of the CLUT
+  entries it uses), from the image the game uploaded it in
+  (`TextureResolver.ToUpload`, now public). Two things the first slice had wrong
+  about the art are fixed in `0073`: an image the game loads in pieces straight
+  down, at one x and width, is one image (`VramTracker.NoteUpload` extends the
+  previous load), and the map's 128x128 image is one texture.
+- **The scrolling textures keyed on their source.** Their VRAM is rewritten at a
+  new phase every tick, so no hash of it holds. A face whose centre lies in a live
+  `func_8002DC78` slot's dest rectangle is keyed on the slot's source image in RAM,
+  hashed as `TextureTile.Hash` hashes a rectangle, so it is the key the VRAM would
+  have at phase 0 (not checked against a phase-0 upload); the slots are read again
+  only when VRAM has been written.
+- **`remaster/textures.json`**: `{"index", "clut"?, "material", "note"?}`, in every
+  area and with no fingerprint (it names content). Without `"clut"` a rule holds
+  for the art in any palette. It is the least specific rule: `SealDepth` asks for
+  it only when no half, face, mesh or model rule named the packet, so it reaches
+  models as well as the map.
+- **Everything that reads a material sees it**: the packet's record (reflections,
+  glow, highlight, occlusion), the retained scene's map, and a glow's lights
+  (`Lights.TileGlow` asks per mesh face).
+- **Editor**: a pick records the texture of the triangle under the click; the
+  selection panel shows it with *Any palette* (on by default) and an *Everywhere*
+  material. Shell: `select pick` answers `texture` and `textureMaterial`;
+  `set texture material NAME|none` sets the picked art, `set texture:INDEX[:CLUT]
+  material NAME|none` a key. The census (`textures save`) lists the material keys
+  looked up since its last reset (`cells`).
+
+**Measured.**
+
+- **Keys in view.** Area 1 at the spawn, editor open: 7 material keys, none outside
+  an upload; before the pieces were joined, three faces on page `0x6` and `0x7` fell
+  outside theirs. The replacement census on the same view: **17 keys and no
+  overlapping rectangles** (21 and 6 pairs before).
+- **Stable across ticks.** `fdat02`'s water (`texture:304d2876ffce31b6`, from the
+  source image) given a glow: 68,991-69,399 packets a second sealed with it while
+  the world ran and the water scrolled, 0 once the rule was cleared.
+- **Stable across areas.** Area 1's main 128x128 texture (`texture:db3893e2e2480ee2`)
+  is also drawn in `fdat02` (and is the key the first slice's replacement took). A
+  rule set on it in area 0 sealed 144 packets a second there; after `load 2`,
+  6,768 a second in area 1, from the same saved `textures.json`.
+- **The retained scene**: with reflections and the retained scene on, 4,443
+  authored faces in its map from that one rule, and four planes ranked; no GL
+  error under `KF2_GLDEBUG=1`.
+- **Off is the picture it was**: remaster on with an empty pack, the pinned area-1
+  view is `210d55698c875fb8`.
+- **Cost**, frame work in area 1 at 144 fps with a material that neither glows nor
+  reflects (so only the lookup is paid): 1.15-1.16 ms against 1.06-1.10 with
+  nothing authored. The C# assembler's self time goes 0.105 to 0.128 ms. 144.0 fps
+  drawn at 20.0 ticks/s.
+
+**A glowing texture gives a light per half.** A glow's light is placed per tile half
+and material, as for a mesh rule; a texture on most of an area makes thousands
+(2,175 in area 1 from one rule), of which the nearest 16 are sent. Set *Light* to 0
+on a material meant to glow without lighting the room.
+
+**Not judged.** All of it: the *Everywhere* combo and *Any palette* in the editor
+have been driven only through the shell, and no picture of a texture material has
+been looked at.
+
+**Not done.** A texture rule on a model gives no glow light of its own (the model
+lights come from model rules); the retained scene's models take only their model
+rule.
+
+### Metal is a tinted mirror
+
+**What is in** (`patches/remaster/Surfaces.cs`, `0067` amended), the change decided
+under "Looked at: metalness is hard to see":
+
+- **A metal reflects at least its metalness**, and as strongly looking straight at
+  it as at a grazing angle: the table gets `max(reflectivity, metalness)` and F0
+  pulled that far towards it (`F0 + (R - F0) * metalness`). The pack keeps what the
+  author wrote; only the table the passes read changes, so the retained scene ranks
+  a metal floor as a plane as it would a reflective one.
+- **Its own colour is darker**: half of it comes off at metalness 1, hit or miss,
+  and the reflection's weight comes off what is left (`emit()` in `SsrFs`, alpha
+  `1 - (1 - dark)(1 - w)`). With no metal the alpha is `w`, as it was.
+- **The tint is a little more saturated**: the surface's hue, pushed from its grey
+  by half the metalness and put back at full value.
+- The highlight's tint is unchanged. All of it needs reflections on: without them a
+  metal is the colour it was.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 at the spawn, `KF2_SSR=1`, a scratch pack,
+144 fps, the editor open, a 2140x1200 window; `tile:1:37:36:upper` given
+reflectivity 0.5, F0 0.1; the view's hashes are this window's, not
+`210d55698c875fb8`'s):
+
+- **Off is the picture it was.** The previous build and this one give the same
+  hashes with nothing authored (`3c64ce3b3e2bdd2e`) and with the floor at
+  metalness 0 (`b9b825b766d81be5`). Metalness 1 and back to 0 returns that hash.
+- **Metalness is visible now.** Over the 922,162 pixels it changed, against
+  metalness 0:
+
+  | | mean luma | mean saturation | largest change |
+  |---|---|---|---|
+  | metalness 0 | 100.2 | 0.479 | -- |
+  | 1, the previous build | 98.2 | 0.514 | 19 |
+  | 0.5 | 70.9 | 0.469 | 94 |
+  | 1 | 41.4 | 0.684 | 229 |
+
+  At metalness 1, 902,941 of them got darker and 19,221 brighter: the floor is
+  mostly the reflection of a dark room now.
+- **The retained scene**: a floor at reflectivity 0 and metalness 1 is ranked as a
+  plane (`2 authored face(s)`, a plane at Y -14848); no GL error under
+  `KF2_GLDEBUG=1`, 144.0 fps drawn at 20.0 ticks/s.
+- **Cost**: a shader-only change, a few ALU ops on reflective pixels; 144.0 fps
+  drawn at 20.0 ticks/s with the metal floor in view.
+
+**Not judged.** Whether metalness 1 reads as metal or just as a darker floor;
+whether half is the right darkening where the reflection misses; the saturation's
+push on this game's near-grey stone.
+
+### Phase 5: atmosphere
+
+- **Ships:**
+  - light-record overrides after stage 1's copy;
+  - fog colour and curve (`0074`);
+  - a sky fill at the far plane that respects `Overlay`, so the HUD is never
+    painted over;
+  - `atmosphere.json`.
+- **Depends on:** the read census confirming that only rendering reads the light
+  records. Done: see "The light records are read only by the renderer".
+- **Mechanism measured by:** `KF2_PERPIXEL_PROBE=2`, the formula against the GTE's
+  colour, still exact with an override on; the SSR fog-curve readback moving
+  with the new curve; `snap` for the no-override case.
+- **You look at:** the whole area's mood; the sky against the void past the draw
+  distance.
+- **Done:** the overrides in "Phase 5, the first slice"; the fog colour, the curve
+  and the sky in "Phase 5, the second slice". The sky turned out to be the game's
+  own background clear, not a fill at the far plane.
+
+### The light records are read only by the renderer
+
+**Confirmed, statically and at run time**, which is what Phase 5's overrides were
+waiting on.
+
+**Statically** (`scripts/callgraph.py`'s `Graph.touching`, after the parser was
+brought up to the current codegen; see "The static model read nothing" in
+`DEVELOPMENT.md`): every function in any overlay that forms an address inside the
+destination records (`0x801930EC`-`0x80195170`) or the source
+(`0x800679A0`-`0x80068760`). The destination's are stage 1 (`func_8002C944`, the
+copy), stage 10 (`func_8002CA74`, which turns each light matrix through its three
+quarter-turns with `func_80014B88`), `func_8002CBD4` (the same, inside the NPC
+conversation loop `func_80043388`), the tile half `func_80031950`, the HUD
+`func_80031D5C`, the arm `func_80032400`, the model submitter `func_80032588` and
+`func_80032AC4`, which loads a record's colour matrix and back colour to draw a
+model. All of it is lighting. The source's are the area setup `func_80015DD4` and,
+in `fdat14` and `fdat20`, the area modules, which write records 63-64 and the load
+flag. A table reached through an index the dataflow cannot follow would not show,
+so the run-time census is the one that settles it.
+
+**At run time** (`KF2_LIGHTCENSUS=1`, `patches/remaster/LightCensus.cs`): the
+runtime's RAM logger stamps each byte a read or write touches, and a pre and post on
+each of 24 owners (the thirteen stages, the NPC loop, the two derivations, the area
+setup and stage 13's own callees) credits the bytes stamped since the last event to
+the innermost owner running. Area 1 from save slot 2, walking, attacking, the menu
+opened and closed, then `warp 6` into `fdat20`, 99 s:
+
+| owner | destination | source |
+|---|---|---|
+| stage 1 | writes all 80 | reads all 80 |
+| stage 10 | reads each record's first matrix (+0x00-0x11), writes the other three; reads the load flag | -- |
+| tile walk `func_80031C94` | reads the drawn halves' records, +0x00-0x67 | -- |
+| model walk `func_800331B4` | reads 0, 15-16, 20, 62, 67, 69, 71 | -- |
+| HUD `func_80031D5C` | reads 64, 65, 72 | -- |
+| stage 6, in `fdat20` | writes record 63's first matrix, now and then (400 bytes over the run) | -- |
+| stage 7, the area loader | -- | writes 62-63 |
+| area setup `func_80015DD4` | -- | writes 0-63 |
+
+No other stage, and nothing outside a stage, read either block. **So nothing but
+rendering reads a record, and an override cannot change what the game does.**
+
+Two things the census had to get past, both worth knowing before reading the RAM
+logger for anything else:
+- **The RAM logger masks every address to 2 MB**, and `PrimBuffer` put the
+  primitive buffers above 2 MB, so a primitive written at `0x802679A0` is stamped as
+  `0x800679A0`. The first run showed the tile walk rewriting the whole source block
+  once a tick; it was the packets. The census is run with `KF2_PRIMBUF=1`.
+- **The host clears `TrackReads` at every present** from whether its RAM panels are
+  open, so the census sets it again at every event.
+
+Stage 6's write into the destination lasts until the next stage 1 copies the
+source back over it: a tick at the original rate, one frame at 144. It is listed
+in `TODO.md`; nothing has been seen on screen.
+
+### Phase 5, the first slice
+
+**What is in.** Overrides of the area's own light records, written through the
+game:
+
+- `patches/remaster/Atmosphere.cs`: a post on stage 1 writes the pack's
+  `areas/<n>/atmosphere.json` over the 80 records stage 1 has just copied in. Stage
+  10 then turns each light matrix through its quarter-turns, and the tile half, the
+  model walk, the HUD and the arm load the result with the game's own
+  `SetLightMatrix`, `SetColorMatrix`, `SetBackColor` and `SetFogNear`. So an
+  override reaches the GTE, `0048`'s per-pixel records, `EvenFog`'s blend and the
+  retained scene without any of them knowing, and is exact whether per-pixel
+  lighting is on or off. Turning it off needs no restore: the next stage 1 copies
+  the game's records back.
+- **An override names the record's own bytes.** Each carries `recordHash`, FNV-1a
+  64 over the record's 0x2C source bytes when it was authored; while the game's
+  record hashes differently the override is refused and counted. That is the same
+  shape as a face list's `meshHash`. Records are per area in the pack, but the data
+  is shared: records 15 and 16 hash the same in area 0 and area 1.
+- Every part is optional and a missing one is the game's:
+
+  ```json
+  // areas/1/atmosphere.json
+  { "formatVersion": 1, "area": 1, "fingerprint": "be64c93e02071c09",
+    "records": [
+      { "record": 15, "recordHash": "486b851794a9bd96",
+        "back": [200, 60, 40],
+        "lights": [ { "direction": [0, 1, 0] }, null, { "colour": [1.2, 0.7, 0.4] } ],
+        "fog": 4000 } ] }
+  ```
+
+  `back` is the back colour's three bytes. Light `j` is row `j` of the light matrix
+  (the way a face it lights fully faces) and column `j` of the colour matrix, both
+  in the GTE's 4.12 units as floats. `fog` is the record's fog word: the fog starts
+  at `(fog & 0x7FFF) / 2` view units, bit `0x8000` picks the linear curve, and 32000
+  or more draws none (see "Fog changes at a tile edge" in `RENDERING.md`).
+- The editor gains an Atmosphere section: the record under the player, or any
+  record the area's halves use, with how many halves use it; a checkbox per part
+  (back colour, each light's direction and colour, fog) that starts it from the
+  game's value; fog as a start distance, *Linear* and *No fog*; *Reset record*. A
+  held control is one undo entry.
+- Shell: `atmos list` (halves per record, the record under the player, the
+  overrides and whether each is current); `atmos show N` (the game's values, the
+  override, what is drawn); `atmos set N back R G B | light J direction X Y Z |
+  light J colour R G B | fog WORD`; `atmos reset N [back | light J | fog]`.
+  `KF2_REMASTER_ATMOS=0` leaves the overrides out, and the probe line gains
+  `N of M record override(s) written`.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 at the spawn, a scratch pack, 144 fps, the
+editor open and the world paused, 2140x1200):
+
+- **Nothing authored is the picture it was**: `3c64ce3b3e2bdd2e`, the hash the
+  previous build gave for the same view under "Metal is a tinted mirror".
+- **Record 15 decodes as the GTE was measured**: back 120 (`BK 1920`), light
+  columns 0.6499, 0.6499, 0.8125 (`2662, 2662, 3328`), fog word 16000.
+- **An override moves the picture and a reset returns it**: back `200 60 40` on
+  record 15 (3,813 of the area's halves) changed 97.6% of the pixels, largest step
+  80; `atmos reset 15` gave `3c64ce3b3e2bdd2e` again. Fog 4000 changed 97.6%,
+  largest step 150. **Fog 24000 changed nothing**, which is itself a measurement:
+  every surface in this view is nearer than the game's own 8,000, where its fog
+  starts.
+- **The lighting formula still holds**: `KF2_PERPIXEL_PROBE=2` with back colour,
+  one light's direction, another's colour and the fog word all overridden, 60,480
+  corners, **0 off by 2 or more**.
+- **A record changed under its override is refused**: with the saved file's
+  `recordHash` edited, the watcher reloaded it, `atmos list` read record 15
+  `current: false`, the probe `1 of 2 ... 1 refused`, and the view went back to
+  `3c64ce3b3e2bdd2e`.
+- Under `KF2_TILEWALK=verify KF2_POLYASM=verify KF2_MODELWALK=verify` with two
+  overrides written in area 0: 706 reports over 251,497 calls, **0 RAM, register and
+  GTE mismatches**.
+- 144.0 fps drawn at 19.9-20.8 ticks/s with the world running and two overrides
+  written, `[present] wide 288`. The post costs one hash of 44 bytes and at most
+  twenty stores per override per frame; not timed on its own.
+
+**A limit, measured.** The editor's pause holds a modal loop by redrawing stage 13
+without stage 1, so an edit made while the world is paused inside one (the area's
+fade-in, a conversation) is not written until the loop exits: opened during the
+fade-in, the probe read 92 stage 1 passes and `0 of 2 written` until the editor
+closed. In the main loop, stage 1 runs through the pause and an edit shows at once.
+An override already written stays through a modal loop, since nothing there copies
+the records back.
+
+**Judged**, from play through the editor: the area's own lights turned to black and
+one authored point light added (Phase 2) "looks fantastic". It is the first remaster
+look the user has signed off: a dark cave lit only where a light is, the pillar's
+far face black and the floor falling off round the light. The picture also shows
+what that look asks for next: **nothing casts a shadow** (the pillar leaves none on
+the floor behind it), and blacking out an area means editing each record it uses.
+
+**Not judged.** The light directions against their tooltip, fog at other starts
+and curves, and the look in any area but the one in the picture.
+
+### The area's darkness
+
+**What is in.** The look the user signed off in Phase 5 was an area with its own
+light turned down, lit by an authored light, and getting there meant editing each
+record the area uses (area 1 uses nine). The area now has a **Darkness** slider:
+0% is the game's light and 100% leaves only authored lights and glows.
+
+```json
+{ "record": "all", "darkness": 0.6 }
+```
+
+- It scales the back colour and the three light colours of **records 0-63**, every
+  record a tile half's `+4 & 0x3F` can name, after the record's own override. The
+  HUD's records (64, 65, 72) lie above them, so the HUD keeps its light. Directions
+  and fog are left alone.
+- **It is a scale, not an edit.** Each stage 1 pass computes it from the game's source
+  record (and the record's own override), so it cannot compound, and nothing of the
+  game's or of the author's per-record edits is replaced. At 0 the entry is removed
+  from the document.
+- An earlier version of this wrote black over every used record in one button
+  press. It was rejected as destructive: it replaced the values instead of scaling
+  them, and gave no way to choose how dark.
+- The entry carries no record hash: it is a setting for the area, and the area's
+  fingerprint is its gate.
+- Editor: the *Darkness* slider at the top of the Atmosphere section, live while
+  held and one undo entry on release. A record dimmed by it says so. Shell: `atmos
+  darkness [0..1]`; `atmos list` reports it.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 at the spawn, a scratch pack, the editor
+open and the world paused, 2140x1200):
+- Nothing authored: `210d55698c875fb8`, Phase 2's pinned hash.
+- Darkness 0.5: 98.7% of the pixels changed, largest step 70 (half of the 140 that
+  black gives). The same hash on four snaps, set twice.
+- Darkness 1: `33baaf5f08d7e504`, the same picture to the bit as the nine records'
+  back colours and lights overridden to black.
+- Back to 0: `210d55698c875fb8` again, and the document's records empty.
+- Record 15's back colour overridden to `200 60 40` under darkness 0.5 is drawn
+  `100 30 20`.
+
+**Not judged.** Only the black end was ever looked at (Phase 5). Nothing between has
+been. **A known gap**: creatures and objects lit by records above 63 (the model walk
+reads 67, 69 and 71 in area 1) keep the game's light. Which models those are has not
+been looked at.
+
+### Shadows, the first slice
+
+**What is in.** An authored light casts shadows from the area's map (runtime
+`0077`):
+
+- **A depth cubemap per light**, up to four, drawn on the GPU from the retained
+  map (`0072`) with the light at its centre. The draw goes through the world
+  program, so a texel the game draws as a hole (bars, grates) casts none, and it
+  draws only the opaque range, so water casts none. Each face holds the distance
+  along its axis to the nearest surface, which is what the world program already
+  writes as its depth.
+- **Drawn again only when the light moves or the map is rebuilt**, from the top of a
+  flush, before the batch that samples it, so a light never shows a frame without
+  its shadow. Walking and turning draw nothing: measured, 3 s walking forward and 3 s
+  back with a shadowed light in view, 0 cubemaps drawn. The static map is built
+  for shadows even with reflections off (`RetainedScene.ShadowsWanted`); the models
+  and planes stay reflections-only.
+- **Sampled in `authored()`**, per light, before the light is added to the lit
+  colour: the fragment is moved off its surface by 1.5 texels at its distance, then
+  compared five times, each compare the hardware's own 2x2, at fixed offsets **along
+  the receiving surface**. An earlier version offset the taps across the cubemap's
+  face instead, which made a sloped floor shadow itself: 11.6% of the pixels an
+  unoccluded light reached lost up to 10% of it. Along the surface, that is 0.02%.
+  The pattern is the same at every pixel, so there is nothing to weave a grid.
+- **Slots**: the nearest shadowed authored lights in the frame's list take the four
+  slots, and a light keeps its slot while it stays in the list, so its cubemap is
+  not redrawn when the order changes. Glow lights cast none.
+- A light casts unless its document says `"shadows": false` (the editor's
+  *Shadows* checkbox, `light set NAME shadows off`). `KF2_REMASTER_SHADOWS=0` and
+  `light shadows off` turn them all off; `light shadows tune BIAS OFFSET SOFT
+  [SIZE]` sets the bias (6 world units), the normal offset (1.5 texels), the filter's
+  spread (1.25 texels) and the face size (1024) live. `light list` and the probe
+  line report cubemaps ready and drawn and the triangles drawn into them.
+
+**Measured.** Headless, `scripts/light_probe.c`: with no light shadowed, the first
+fourteen passes read as before; a cubemap holding nothing leaves the lit wall exactly
+as the formula has it, and one occluding its left half removes light 0 there and
+nowhere right of centre, 0 off in every case (the filter's bands at the occluder's
+edge and at the face's edge are not checked). In play, area 1 at the spawn with the
+area's own lights black (darkness 1, above), one light at intensity 4 and radius 8000; for each pixel,
+the share of that light a shadow removes, `(off - on) / (off - no light)`, over the
+pixels the light adds at least 8 levels a channel to:
+
+| light | pixels reached | fully shadowed | untouched | between |
+|---|---|---|---|---|
+| in the open, near the far left wall | 2,492,066 | 0.0% | 99.98% | 0.02% |
+| behind the right-hand wall | 801,316 | 98.9% | 0.2% | 0.9% |
+| partly into the right-hand wall | 966,517 | 90.4% | 9.0% | 0.6% |
+
+- A shadow only ever takes light away: no channel of any pixel brighter with
+  shadows on, checked on the first open-light pair and the last.
+- The fully shadowed regions are solid, 97.0-98.7% of their pixels with all four
+  neighbours shadowed too.
+- The same with reflections and the retained scene off (`KF2_RETAINED=0
+  KF2_SSR=0`): the behind-the-wall light 98.9% fully shadowed, and the open one
+  100.0% untouched.
+- Toggling shadows returns the same hash; with nothing authored the view is
+  `210d55698c875fb8`.
+- One cubemap is about 13,000 triangles over its six faces in area 1.
+- 144.0 fps drawn at 19.9-20.0 ticks/s with the world running, and uncapped
+  715-764 fps with the shadowed light in view against 758-776 without, in the same
+  session.
+- `KF2_GLDEBUG=1` reported nothing over five runs.
+
+**Limits, by construction.**
+- **Only the map casts.** Creatures, objects, doors drawn as models and the player
+  cast nothing; they receive. *Since:* creatures and objects cast; see "Shadows,
+  the second slice".
+- **A light inside geometry** is fully shadowed outside it, which is correct but
+  easy to do by accident with *Place on the picture* near a thin wall.
+- **Spot lights** use the whole cubemap.
+
+**Not judged.** Nothing here has been looked at. Worth looking at: the shadow's
+edge (soft over about two and a half texels, so wider further from the light); the
+contact where a wall meets the floor (the offset and bias could lift a shadow off
+it); bars and grates; and the pillar in area 1 that cast nothing in the Phase 5
+picture.
+
+### Shadows, the second slice
+
+**What is in.** Creatures and objects cast too (`0077`, amended):
+
+- **The frame's models, from the retained scene.** `RetainedModels` already captured
+  every model the object walk submits, in world space, for reflections; it now
+  captures them whenever a light casts, reflections on or off, and without
+  colouring them when only shadows ask. The lights publish which frame's models cast
+  (`RemasterUniforms.ShadowFrame`) once the walk has submitted all of them, before
+  `DrawOTag`.
+- **A second cubemap per light**, used only while a model is in the light's reach:
+  the map's cubemap copied face by face (a depth blit), then the casters drawn over
+  it through the world program. The map's own cubemap is still drawn only when the
+  light or the map changes, so a model costs a copy and a few hundred triangles,
+  never the map again. A light with no model in reach samples the map's cubemap as
+  before.
+- **Drawn again only when the models in reach move**: a hash of the corners of every
+  caster triangle whose bounds reach the light's sphere, once a frame. A creature
+  idling redraws every frame; a chest, a pillar or a closed door never does.
+- **Which models cast.** Opaque faces with every texel. A blended face with the
+  texels the GPU draws opaque, those without the semi-transparency bit, through the
+  prim shader's existing `uOpaqueDepth = 1`: area 1's creature 129 has every face
+  blended and every texel translucent, so it casts nothing, which is what it looks
+  like. A door's blended model (`ModelWalk.SolidKind`, the same test the occlusion
+  pass takes) casts with every texel (`RetainedScene.FlagSolid`). Effects (sparks,
+  flames, `ModelKind.Effect`) cast nothing (`FlagNoShadow`). Billboards and the arm
+  were never captured and cast nothing.
+- **Placed from the record, not the camera.** The first version's corners moved by a
+  unit or two as the camera turned (the camera's rotation is only good to 1/4096),
+  so turning in place redrew a cubemap on 357 of about 475 frames with nothing
+  moving. The submitter now publishes each model's own rotation and world position,
+  and turning redraws nothing. See "Models, every frame" in `docs/RENDERING.md`.
+- `KF2_REMASTER_SHADOW_MODELS=0` and `light shadows models off` leave the models out
+  (the map still casts); `light list` reports the caster triangles in reach, the
+  model redraws and the triangles drawn into them, as does the remaster probe line.
+
+**Measured**, in area 1 with the area's lights black (darkness 1), one light at
+intensity 4 and radius 6000, the share each pixel loses as in the first slice
+(`(off - on) / (off - no light)` between models casting and not, over the pixels
+the light adds at least 8 levels a channel to), each shot twice and a pixel left out
+where the two shots differ:
+
+| caster | fully shadowed by it | of those, all four neighbours too | brighter with models on |
+|---|---|---|---|
+| object 445, the world running | 90,279 | | 0 |
+| creature 144, the world paused | 188,141 | 95.7% | 0 |
+
+- Standing still with only objects in reach: 0 redraws in 4-5 s. Turning in place
+  (60 turns in 3.4 s): 0. Creature 144 in reach: a redraw every frame it moves (434
+  in 3 s at 144 fps), 0 while the world is paused.
+- Model corners against the GTE's own screen words (`KF2_RETAINED_PROBE=1`, creatures
+  in view): 100.00% within 1 px, worst 2 px.
+- The same with reflections and the retained scene off (`KF2_RETAINED=0
+  KF2_SSR=0`): the models are captured for the shadows alone, 516 caster triangles
+  in reach, and the light redraws as it did with reflections on.
+- 144.0 fps drawn at 20.0 ticks/s with the creature redrawn every frame, and
+  uncapped (`KF2_FPS=2000`, reflections off, the same view) 275-285 fps with models
+  casting, 270-284 without and 267-279 with shadows off: nothing measurable, the
+  port being CPU-bound and a redraw being a copy and a few hundred triangles six
+  times.
+- `KF2_GLDEBUG=1` reported nothing.
+
+**Limits, by construction.**
+- **A model the walk does not submit casts nothing**: behind the camera, past the
+  draw window, or outside the grid the walk sweeps. A creature standing behind the
+  player, lit from in front, throws no shadow into view.
+- **The player casts nothing**; there is no player model.
+- **A model's shadow is its frame's pose**, drawn with the frame; nothing is
+  carried between frames, so it moves exactly as the model does.
+
+**Judged by eye (2026-09-26): good.** The creatures' moving shadows, and a light
+behind a door as the door opens, both approved. Not specifically looked at yet:
+whether a creature darkens itself where its own limbs face away from the light
+(the offset and bias were set against the map's surfaces), and creature 129, which
+casts nothing because every texel of it is translucent.
+
+### Phase 5, the second slice
+
+**What is in.** The area's fog takes a colour and a curve, and the frame a sky
+(runtime `0074`):
+
+- **The fog's colour is added past the texture.** The game's depth cue darkens the
+  lit colour by a weight (0..4096, from the packet's curve) before the texture
+  modulates it. Putting a colour into the GTE's far colour would tint that lit
+  colour, and a distant wall would come out as its texture times the fog. `shade8`
+  darkens exactly as before, then keeps the colour times the same weight, and every
+  output path adds it after the texel is modulated: the result is
+  `texture × lit × (1 − w) + fog × w`, a mix towards the colour. A texel blended
+  additively or subtractively takes none, since fog takes it away rather than to a
+  colour; an averaged or opaque one does.
+- **The curve bends the game's weight**: raised to a power and capped at a
+  maximum, after the packet's own curve, so the glow and a light's highlight fog on
+  it too. Power 1 and maximum 1 are the game's. Below 1 the fog thickens close by;
+  a maximum below 1 means nothing ever fades out completely.
+- **Only a packet with a `0048` record takes it**, so it needs per-pixel lighting and
+  Fast geometry, as authored lights do. A face fogged all the way to black used to
+  keep no record, since it drew the same either way; while a fog colour or curve is
+  set it keeps one (`PolyAssembler.KeepFogged`), because it is now drawn in the
+  colour or not all the way. Anything else keeps the game's black.
+- **The sky is the game's own background clear.** `PutDrawEnv`'s `isbg` rectangle
+  is what the frame is cleared to; a pre on the game's `PutDrawEnv` writes the sky
+  into the `DRAWENV` and a post puts the game's colour back, so guest memory holds
+  the game's value outside the call. The HUD and everything else draw over the
+  clear, so nothing 2D is painted over by construction. It is the fog's colour
+  unless the area names one, and only while the area is settled, so a loading
+  screen clears to black.
+- The reflection pass fogs a reflection towards the same colour on the same curve,
+  and a cubemap miss reflects the sky; the retained planes are drawn with it.
+- Pack: the area's `"all"` entry gains `fogColour`, `fogPower`, `fogMax` and `sky`:
+
+  ```json
+  { "record": "all", "darkness": 0.6, "fogColour": [90, 140, 200], "fogMax": 0.7 }
+  ```
+
+- Editor: under *Darkness*, *Fog colour* (a checkbox and a colour), *Fog curve*
+  (0.25 to 4, logarithmic), *Fog at most* (0 to 100%) and *Sky* (unticked, the
+  fog's colour). Each is one undo entry. Shell: `atmos fog R G B | off`,
+  `atmos curve POWER [MAX] | off`, `atmos sky R G B | fog`; `atmos list` reports
+  what was drawn, the sky's clears and the fogged batches, as does the probe line.
+
+**Measured** (`KF2_AUTOSTART=2`, area 1 at the spawn, a scratch pack, 144 fps, the
+editor open and the world paused, 2140x1200):
+- **The shader is the formula.** `scripts/light_probe.c`'s five new passes (the
+  switch on at black and the game's curve; a colour untextured and textured; a
+  colour and curve; a colour on an additive batch) are all **0** from the formula
+  in C, and the sixteen earlier passes read as before.
+- **Nothing authored is the picture it was**: `210d55698c875fb8`, Phase 2's pinned
+  hash. A fog colour set at the spawn changes nothing, because nothing there is
+  fogged: every surface is nearer than area 1's own fog start (8,000), which is
+  what the first slice found.
+- So record 15's fog was moved to 4000 first (42.3% of the pixels, as black fog):
+  `b55f9d7c8d4a4938`. On that, **a black fog colour is the same hash to the bit**,
+  with the fully fogged faces now keeping their records. A colour of `90 140 200`
+  changed 42.1% of the pixels (largest step 104); the curve `0.5 0.7` over it
+  changed 42.3% (largest 45). Removing the curve gave the colour's hash back, the
+  colour off gave `b55f9d7c8d4a4938`, and resetting record 15 gave
+  `210d55698c875fb8`.
+- **With the fog on, the lighting formula still holds against the GTE**:
+  `KF2_PERPIXEL_PROBE=2` in area 0 with a colour and a 0.6 cap, 1,905,069 corners
+  exact, 24,424 off by 1, **0 off by 2 or more**.
+- **The sky clear reaches the screen**: drawn from a camera outside the map
+  (`view -200000 -14400 98304 0 yaw 0`, four yaws) with a magenta sky, 94.9% of the
+  frame is the sky and the rest is the HUD.
+- **From inside, no void showed anywhere it was looked for**: 0 sky pixels at area
+  1's spawn facing four ways and in area 0's New Game view, and under 0.01% from
+  the air above area 0; 0 still with the fog capped at 60%, and turning the sky from magenta to
+  the fog's colour there changed nothing measurable. The game draws geometry out to
+  where its own fog is black, so the void past the draw distance is not in these
+  views. What paints the dark blue seen above area 0's sea is geometry, not a sky.
+- 144.0 fps drawn at 19.9-20.9 ticks/s with the fog on and the world running,
+  `[present] wide 289`. Uncapped (`KF2_FPS=2000`, area 0's New Game view): 178-184
+  fps with the fog on, 183-190 with it off and 170-184 on again, which is within the
+  run's own spread. `KF2_GLDEBUG=1` reported nothing.
+
+**Not judged.** Nothing here has been looked at: the fog's colour on any area, the
+curve, how a coloured fog meets the darkness slider's black, and the sky, which no
+normal view was found to show. Two limits by construction: a model or tile drawn
+without a `0048` record (Fast geometry off, or a routine the C# assemblers do not
+cover) keeps the black fog beside the coloured one, and the curve bends only the
+packets' own curves, not a record's fog start, which the first slice's per-record
+fog word already sets.
+
+### Phase 6: level edits
+
+- **Ships:**
+  - `level.json` with tile byte edits, behind the fingerprint gate;
+  - the rewrite census, so a door's tiles are flagged;
+  - the gameplay-changing label.
+- **Depends on:** measuring whether the tile block reaches a save.
+- **Mechanism measured by:**
+  - `goto` onto an edited height, with `state` reading a floor gap of 0;
+  - `press` into an edited wall, with the position not crossing it;
+  - the `KF2_MAP_PROBE=1` dump showing the edit;
+  - a save made after the edit loading with the pack off and giving the
+    original tile.
+- **You look at:** whether edited heights meet their neighbours; lighting on the
+  edited tiles, which take their light record from `+4`.
+
+### Phase 6, the first slice
+
+**What is in.** `areas/<n>/level.json` and the feature that applies it
+(`patches/remaster/Level.cs`), the rewrite census (`TileRewrites.cs`), the save check
+(`SaveCheck.cs`), a Level section in the editor, the `level` and `savecheck` shell
+verbs, and a switch of its own.
+
+- **The document holds fields, never bytes.** A half's entry names any of six fields
+  (`TileField.cs`): `mesh` (`+0`), `height` (`+1`), `collision` (`+2`, the bits
+  `0xF8` written where the byte holds them), `shape` (`+3`), `light` (`+4 & 0x3F`) and
+  `stopsFlood` (`+4 & 0x80`, a true/false). Each owns only its bits, so no edit can
+  write `+2`'s `0x04`, the footprint the game moves, or `+4`'s unexplained `0x40`. The
+  values are the author's own; the bytes as the disc holds them stay in the port's
+  memory (`Identity.Baseline`, copied from the loader's source buffer with the
+  fingerprint) and never reach a file. A field the document does not know is kept.
+
+      { "x": 35, "z": 37, "half": "upper", "height": 118, "stopsFlood": true }
+
+- **An area applies whole or not at all; so does a half.** The level document carries
+  its own fingerprint and is refused whole on a mismatch, and also when the load was
+  not seen (no baseline, so no way to know what an edit replaces). A half is refused
+  whole, with the reason on the probe line, the shell and the editor, when a value is
+  out of a field's range, when a mesh or a collision shape is not one the area's own
+  block uses (the only bound there is: the mesh table's `+4` is not a count, and a
+  shape is a slot in the 0x600-byte block), or when the game has rewritten the half
+  (any byte but `+2` differs from the loaded block): **the game's rewrites win**.
+- **Every write is held, and put back only if it still reads as written.** A write
+  keeps the byte it replaced; turning the edits off, changing the document or a new
+  settle puts the owned bits back only where they still read as written, so a door the
+  game opened over an edit since stays open (`keptGames` counts those; not exercised,
+  since no door was worked over an edit). A write is
+  void, and forgotten without writing, once the loader copies a block in
+  (`Identity.BlockLoads`), since the block it was made in is gone.
+- **The switch.** `KF2_REMASTER_LEVEL=1`, or *Level edits (changes gameplay)* on
+  Video ▸ Enhancements ▸ Remaster packs, or *Apply level edits* in the editor; **off by
+  default**, and applied only with the remaster on too. A pack with edits is labelled
+  with its count and *changes gameplay* on the packs page. The setting is the port's
+  gameplay rule in practice: an edit is opt-in twice.
+
+**The tile block never reaches a save.** `func_80023764` writes the card buffer
+(`*(u32*)0x8006E98C`, 0x4000 bytes) after `func_80049A88(buf + 0x400)` packs the
+state into it. Read off the code, the packer reads the inventory, the character at
+`0x80199414`-`0x8019953C`, the area bytes and the per-area state heap at
+`0x801B3188` -- which `func_800492B8` fills from the creature, descriptor and object
+tables -- and nothing in `0x801C8484`-`0x801D8A84`; the block is also four times the
+size of a save. **Measured** with `savecheck`, which runs the packer on the game's own
+buffer three times and puts everything back: in area 1, inverting all 64,000 tile
+bytes and the 0x600 shape bytes moved **0 of the 15,360 packed bytes**, and the
+control, inverting only the player's X, moved **4**. On the load side, `load 2`
+advanced `BlockLoads` from 2 to 3: the loader copied the block off the disc again,
+and the edits re-applied over it. So a save made with edits on loads with them off as
+the disc's tiles. **What a save does carry is the position** (the control is it): a
+save made standing on a raised floor keeps the height, not the floor. What the game
+does with a position above or below its floor on load is **Open**.
+
+**The rewrite census.** Four times a second the live block is compared with the
+loaded one, with the edits' held bits over it and every `+2` left out, and each half
+that differs is kept by fingerprint in `dump/SLUS-00158/census/rewrites.json`
+(coordinates and offsets, nothing else), so it grows over sessions. Area 1 from slot
+2: **100 upper halves**, all within seconds of the settle at the spawn -- 2x2 and 2x3 blocks changing
+`+3` and `+4` (an object's collision shape and flood bit written over the tiles it
+stands on), some `+0` too; area 0's New Game, 37. `level rewrites` lists them and the
+editor flags a selected one.
+
+**Measured, in area 1 from slot 2, at 144.0 fps drawn and 19.9-20.0 ticks/s,
+`[present] wide 288`:**
+- **An edited floor is the floor.** Lowering the player's own half from 116 to 112
+  dropped them to Y -14336, its new floor; `goto` onto (35,37) raised from 116 to 120
+  landed at -15360, the new floor (an unedited control at the same spot, -14848).
+  Gap 0 each time.
+- **An edited wall is a wall.** Walking from (35,37) into (36,36) with Up for 600 ms
+  ends at (74916, 75058), inside it. With (36,36) raised to 140 the walk slid along it
+  and stopped at z 75777, one unit short of it; with its `shape` 1 changed to 10 (the
+  shape of the wall pieces beside it) it stopped at z 75732, 44 units inside its edge.
+- **`+2`'s bits did not stop the player.** Each of `0x08`-`0x80` set alone on (36,36)
+  held (the game left it) and the same walk ended where the control did. What
+  `func_8002C700`'s `& 0xFC` test is for is **Open**; the field is kept, since the
+  game reads it.
+- **A floor lowered by more than 1024 under a standing player leaves them in the
+  air**, standing and unable to walk: drops of 256, 512 and 1024 were followed at
+  once, 1536 and 1792 were not. The game's rule, not the edit's; an author lowering
+  a floor more than eight steps should not do it under the player.
+- Off put every edited byte back to the game's (height 116, light 15, flood 0) and on
+  applied them again; a reload re-applied over the fresh block with nothing written
+  into it; a hand edit to the file applied on `pack reload`, a `light` of 99 refused
+  its half with the reason, and an unknown field survived a save.
+
+**Not judged.** Nothing has been looked at: an edited floor or wall on the picture,
+how an edited height meets its neighbours, the lighting on a half given another light
+record, a mesh swapped for another, the map panel showing an edit (it reads the live
+block, so it should), and the editor's Level section, which has not been opened.
+
+### Phase 7: the editor camera, and sharing
+
+- **Ships:**
+  - the free camera: `Stage13.ViewOverride`, with the grid following it;
+  - export of the working pack as a zip;
+  - a compatibility report per pack: fingerprints matched, keys resolved and
+    keys missing, per area.
+- **Risk:** the arm and the object walk read the player's position rather than the
+  camera. If that shows from far away, the free camera is limited to near the
+  player until those two are given the eye. The grid is not a risk any more: it
+  follows the eye, measured.
+- **You look at:** flying the camera through an area with nothing missing.
+
+### Phase 7, the first slice
+
+**What is in.** The editor's free camera (`patches/remaster/EditorCamera.cs`, a Camera
+section in the editor, the `camera` shell verb), the compatibility report
+(`Compat.cs`, a Share section, `pack report`) and the export (`Pack.Share.cs`,
+`pack export`).
+
+- **The free camera is `Stage13.ViewOverride`, owned by the editor.** *Free camera*
+  starts it at the player's eye (`Stage13.Handed`, the camera the main loop handed
+  stage 13 last, override or not); hold the right mouse button on the picture to look,
+  WASD to fly along the view, Q and E down and up in the world, Shift four times as
+  fast, Ctrl a quarter, the wheel for the speed (4096 units a second, two tiles, by
+  default). Shift+E does not close the editor while the button is held, since Shift+E
+  is also "up, fast". Closing the editor turns it off and the view is the game's again.
+  The world is paused while the editor is open, so the player stays where they are.
+- **The first-person arm is left out of a frame drawn from it**
+  (`Stage13.HideArmOnOverride`, set only by the editor camera). The arm is drawn in
+  view space, so from any eye it hangs in front of that eye. The `view` verb's override
+  still draws it.
+- **The stored angles run the other way from a mouse.** Measured with `camera turn`
+  against the axes the view matrix gives: a larger yaw turns the view left and a larger
+  pitch tips it down. Pitch is held within 1000 of level, short of straight up or down.
+
+**The Phase 7 risk does not hold: a frame drawn from the free camera does not depend on
+where the player is.** Read first, then measured. `func_80032400` (the arm) reads the
+player's X and Z only to pick the light record of the player's tile, and draws in view
+space; `func_800331B4` (the object walk) reads the player's position only to range an
+ambient sound source (kind `0x1F`), and culls by the cull grid, which follows the eye.
+Measured in area 1 from slot 2, with the world paused: the same override camera, the
+player at the spawn and then moved by `goto` to stand under it, **the presented
+picture hashed the same** (`snap hash`) at five cameras -- 10 tiles from the player
+and 1.5 tiles away, 1 object in view each; two 3.6 tiles away facing 5 creatures and 4
+objects, and 4 creatures and 3 objects; one 8 tiles away with 1 creature, 6 objects and
+3 billboards.
+While paused, only what the renderer reads directly can differ, and nothing did.
+Flying ten tiles changed the cull grid's digest and closing the editor put back the
+player's (`0a4cf34bc982d023`, 11 cells drawn); 144.0 fps drawn with the world paused,
+20.0 ticks/s once closed, `[present] wide 288`; `KF2_STAGE13=verify` 0 mismatches over
+288 calls a report.
+
+**The compatibility report.** A fingerprint is known only by loading the area, so the
+port keeps a census of every fingerprint it has settled on as loaded, per disc, in
+`dump/SLUS-00158/census/areas.json`, with the last count of what resolved there: the
+surfaces applied, dropped for a changed mesh and naming a material the library does
+not hold (`Surfaces.NoMaterial`, new); the lights authored; the light-record overrides
+written and refused for a changed record; the level edits applied and refused, or
+`off`; and any whole-area refusal with its reason. A count is taken a second after the
+area settles and every two seconds after, written only when it changes, and tagged
+with the pack it was taken with, so another pack's counts are never shown. The census
+grows while the remaster is on or the editor is open, which is when the area is
+identified at all. For each area the pack holds, the report gives each document's
+entries and fingerprint as **matches** (seen on this disc), **differs** (the area was
+seen, under another fingerprint: the document is refused whole) or **unseen** (the area
+has not been loaded here yet), and the last count. Texture rules are counted apart:
+they key on content and carry no fingerprint. Measured on a scratch pack: area 1
+matched with one tile naming an unknown material counted, area 0 given a wrong
+fingerprint read *differs* with the surfaces' refusal and its reason, and area 7,
+never loaded, read *unseen*.
+
+**The export** is the saved pack as a zip in upstream's own zip-pack layout, `pack.json`
+at its root, written to `exports/` (gitignored) with the date in its name, or to a path
+given to `pack export`. Not to `packs/`, where upstream loads every `*.zip` as a pack of
+its own. It is refused while an edit is unsaved, since it holds the saved files, and
+leaves out dotfiles. The remaster itself still reads only one directory, the working
+pack, so a pack received is unzipped into a directory and pointed at with
+`KF2_REMASTER_PACK`; layering packs is still to do.
+
+**Accepted as it stands; the editor's feel is deferred.** The slice was accepted
+without a pass over its handling: the mouse look's rate, the flying and the Share
+section's layout are the editor's UX, which is to be reworked once the editor is
+feature complete rather than section by section.
+
+### Phase 8: later
+
+**Deferred (2026-09-28).** The remaster plan adds no custom meshes and makes no
+texture pack, so meshes the author supplies, replacements in the retained scene,
+normal and roughness maps (`0075`) and the GPU id buffer (`0076`) wait until one of
+those is wanted. What is below is the list as it stands.
+
+- port-drawn props: the area's own object models first (see "Phase 8, the first
+  slice"), meshes the author supplies after;
+- ~~opt-in object and creature placement~~, dropped (see "Edited with a warning:
+  placement of objects and creatures");
+- a GPU id buffer (`0076`), if picking is ever too slow;
+- texture packs, parked from Phase 4: a replaced water texture scrolled through
+  `0053` (done, "Phase 8, the second slice"), replacements in the retained scene,
+  normal and roughness maps (`0075`).
+
+### Phase 8, the first slice
+
+**What is in.** Props: `areas/<n>/props.json`, each an object model the area already
+has, placed, turned and scaled where the author puts it (`patches/remaster/Props.cs`,
+`Pack.Props.cs`), a Props section in the editor and the `prop` shell verb.
+`KF2_REMASTER_PROPS=0` leaves them out; they apply with the remaster otherwise.
+
+```json
+{ "formatVersion": 1, "area": 1, "fingerprint": "be64c93e02071c09",
+  "props": [ { "name": "urn", "model": 443, "position": [74151, -14848, 74298],
+               "rotation": [0, 90, 0], "scale": 1.5, "half": "upper" } ] }
+```
+
+`model` is the id a pick names (`model:1:object:443`): the object definition index
+plus `0x100`, which is what the walk hands the submitter. Position is world units, up
+at -Y, the floor of a half at `-(height << 7)`; rotation is degrees about X, Y and Z;
+scale is against the model's own and may be one number or three; `half` is the tile
+half the prop is lit from and culled with, lower unless it says upper.
+
+**A prop is an object record of the port's own, drawn by the game's code.** Each is
+0x44 bytes above 2 MB (`PrimBuffer.PropScratch`, 0x2000 bytes past the wave copy, so
+120 fit), copied when the area settles from a live object drawn with the same model,
+and then given the prop's position (`+0x14`), rotation (`+0x24`), scale (`+0x2C`,
+scaled from the copy's; a zero, which a model the game grows in has, counts as 4096)
+and half mask (`+0`: 1 the lower, 2 the upper, read off the table below). The C#
+object walk submits them after the game's own objects, through the same code: the
+ordinary-object body of `WalkObjects` is now `ModelWalk.Ordinary`, called per record,
+and `Props.Walk` calls it once per prop. So a prop is culled by the game's own grid
+(`func_80032D78`), skipped while its model is not loaded (`func_80032CD8`), marks its
+texture page and CLUT as wanted like any object, is lit from its tile's light record,
+and goes through the game's assembler with the port's packet records. Depth, fog,
+per-pixel light, occlusion, a material on the model, a glow's light, the planar
+walk's replay and the retained scene's shadows all follow from that without a line of
+their own; the pointers the submitter is handed stay valid after the walk, since the
+record is not in the walk's frame. Nothing but the renderer reads the record: a prop
+has no collision, no behaviour, no use handler and never reaches a save. Copying the
+record rather than building one means a prop is only ever a model some object of the
+area is drawn with; a model no live object uses is refused by name, and retried each
+second, so one that appears later (a door opened, a drop) resolves then.
+
+**What a copied record carries, read off area 1's 343 live objects** (`prop objects`
+lists them): `+1` the clip byte, `0x80` and up rigid (sub-model in the low bits) and
+below it MO-posed from the record's own inline MO state at `+0x34`, so a prop of an
+animated object (a chest, a door) holds the pose it was copied in; `+2` the assembler
+(`0xFF`, lit, for every object there); `+3` bit 0 forces the assembler by the
+visibility answer and bit 1 asks the volume query; the scale at `+0x2C` is 4096 for
+1.0. The half mask read 0 (never drawn: markers, model 496), 1, 2 or 3; most of
+area 1's floor objects are 2, the upper half.
+
+**Placing.** *Add here* puts a prop on the floor of the player's own half (the
+position the game keeps is the feet: `-14848` there, the half's `-(116 << 7)`).
+*Place on the picture* takes the nearest surface the frame drew under the click, then
+stands the prop on the floor of that half (the picked tile's, or the player's under a
+model), and when the surface is more than 256 units off that floor -- a wall -- pulls
+it 512 towards the eye first. Picking a prop's triangles selects the prop
+(`Faces.Tri.Prop`, from the record the walk submitted), as well as its model, so a
+material set on the selection reaches every draw of that model, props included.
+
+**Measured.** Area 1 from slot 2, world paused, the editor open:
+- **Nothing authored is the picture before**: `snap hash` read `210d55698c875fb8`,
+  the pinned area-1 hash, with the refactored walk; adding a prop changed it, and
+  removing every prop put it back to `210d55698c875fb8`.
+- **A prop draws where it is put**: an urn (model 443, rigid) on the floor 830 units
+  ahead changed 40.5% of the presented picture; `select pick` over a grid of game
+  pixels named prop `urn` across its whole lower-screen footprint, and the game's own
+  object beside it as `model:1:object:486` as before. A door (386, MO-posed) resolved
+  and drew as well. `prop list` read `resolved 2, drawn 2` and the probe `props 1 of 1
+  resolved, 1 drawn last walk`.
+- **A material follows the model onto its props**: a glowing material on model 443,
+  with three props of it in view and none of the area's own, read `3 from model
+  glow, 3 sent` on the probe; all three props switched off read `0 from model glow`.
+- **The pack round-trips**: `pack save`, `pack reload`, and the prop came back from
+  `props.json` as written.
+- **The walk is unchanged**: `KF2_MODELWALK=verify`, 24 reports over `open → game →
+  fdat02 → fdat05`: 23 read 0 RAM, 0 register and 0 GTE mismatches (288 walks and
+  1,152 submits a report in area 1); one read 1 RAM mismatch, in area 0 with no prop,
+  4 bytes at `0x80073DF4` -- the ambient sound's key-on in libsnd's voice table that
+  "A verify pass replays, it does not re-run" in `PATCHES_AND_MODS.md` records. Props
+  stand down under verify, since the recompiled walk draws none (`props refused`).
+- **It costs nothing to see**: 144.0 fps drawn at 20.0 ticks/s with the prop in view,
+  `[present] wide 288, plain 0, vram fallback 0`.
+
+**A prop reaches the mirror, the retained scene and the shadows** (measured
+2026-09-28; the probes now count props: `planar: ... N of them props`,
+`retained: ... N of them props ...; shadow casters in reach N`):
+- *Retained scene*, area 1 from slot 2, `KF2_RETAINED=1`, two urns (443) placed by
+  pick: 576 of 1,152 captured models in two seconds were the props, 2 a frame, and
+  0 before they were added and after they were removed.
+- *Shadows*: a light put just above them (`light add l1 pick 160 140`) read 306
+  caster triangles in reach with the props and 98 once they were removed, and drew
+  the model cubemap again on the removal.
+- *Planar walk*, `fdat02`'s New Game, `KF2_PLANAR=1 KF2_RETAINED=0` (a saved
+  *World reflections* stands it down), two of model 460 over the water: 576
+  submits replayed a second, 288 of them props, against 288 and 0 without; the
+  mirrored walk 1.26 ms to 1.54 ms with them in view.
+
+**Not judged**: nothing of this has been looked at -- whether
+a prop sits on the floor rather than in it or above it (a model's origin need not be
+its base), whether its light matches the objects beside it, and how the editor's
+placement feels. The editor's handling is deferred with the rest of its UX.
+
+### Phase 8, the second slice
+
+**What is in**: a scrolling texture replaced (`0073` amended; `TextureKeys.ScrollLookup`).
+The water in `fdat02`, the main hall's fire and the creatures' scrolling skins are
+`func_8002DC78`'s eight slots, which rewrite a dest rectangle in VRAM from a source
+image in RAM every tick at a new phase, so a texture pack could never key them: the
+first slice's census saw 1,538 dynamic keys on the water's page in 12 s. A face on a
+live slot's dest is now keyed on the slot's source image -- the key the materials
+already used (`texture:304d2876ffce31b6` for the water) -- and drawn from that
+image's replacement over the whole dest, at the phase the frame shows: the slot's
+own, less the leftover `FluidSmoothing` publishes, so a replaced texture scrolls
+between ticks as the game's own does. `textures dump on` dumps it as its source
+image, 64x64 at phase 0, so an author has one image to paint over rather than 64
+shifted copies; `textures replace on|off` switches the texture packs for a
+comparison. The shell's `textures` answers the scroll lookups, how many were
+replaced, and for each live slot its phase against the shift VRAM actually holds.
+
+**Measured** (`fdat02`'s New Game, a pack in `packs/`):
+- **The mapping.** For every live slot (five in `fdat02`), VRAM row `d` of the dest
+  holds source row `(d - phase) mod h`: at 8 moments over two seconds the shift found
+  by comparing every row was the slot's phase, 40 of 40. The shader reads the
+  replacement at that row.
+- **The dump**: `textures dump on` for 6 s wrote 21 textures, the water once as
+  `304d2876ffce31b6_af8f80b2d98f5c2f` (4-bit, 64x64), and none of its shifted phases.
+- **It reaches the screen**: a pack with that image stretched in contrast and 4x,
+  every lookup on the water replaced (377,623-756,834 over the runs, none missed).
+  World paused, packs off against on, the high-passed brightness of the changed
+  pixels correlates 0.24-0.26 with the game's water, against 0.11-0.14 for the same
+  image shifted by half its height, at three phases each. Weak because the game's
+  water is 4-bit and fogged and the two paths filter differently; the mapping check
+  above is the exact one.
+- **Cost**: uncapped, facing the water, 133-145 fps with the pack against 122-153
+  without, inside the spread of each.
+
+**Not done**: `0078`'s ripples do not push a replaced texture (they run on the
+game's texel path only); a replaced CLUT on a scrolling texture is not looked up;
+upstream's page fallback is skipped for a scrolling face. **Not judged**: a real
+replacement water scrolling, at any speed, or the seam where it wraps.
+
+### Dependencies, in one list
+
+- Phase 1 comes before everything.
+- Phase 2 needs 1.
+- Phase 3 needs 1; it helps 2, since emissive shares the light term.
+- Phase 4 needs 3, because maps attach to materials.
+- Phase 5 needs 2's uniform block.
+- Phase 6 needs 1 and the save measurement.
+- Phase 7 needs 1.
+- Phase 8 needs 2, 6 and 7.
+
+### Risks, in one list
+
+1. **The texture key is unstable across UV rectangles.** It is measured in
+   Phase 4 and normalised through `GteTexRect` or the upload rectangle.
+2. **Instance slots may not be stable.** They are measured before any instance
+   key is used, and there is a fallback key.
+3. **The arm and the object walk from a free eye** read the player's position.
+   Measured harmless: the arm uses it only for its light record, and is left out of
+   the free camera's frames; the walk only to range an ambient sound. See "Phase 7,
+   the first slice".
+4. **Shader cost at a high render scale**, since the port is CPU-bound and frame
+   rate hides it. GPU timers per feature are the answer.
+5. **Save contamination** from placement edits. Gone with the placement edits,
+   which were dropped.
+6. **An upstream merge that touches `Assets/`.** The remaster depends on
+   upstream's pack code, so the next merge (see `RECOMPONE_FORK.md`) has to
+   treat `Assets/` as something the port relies on.
+
+## Open decisions
+
+Each has a recommendation. None of them blocks writing Phase 1 except the first
+two.
+
+1. **The first target area.** *Recommend `fdat02`*: a fixed spawn, water, and
+   SSR and planar numbers already taken there.
+2. **Material or light for the first slice.** *Recommend a material*: it needs no
+   runtime patch and exercises every layer.
+3. **In-game or external editor.** *Recommend in-game*, with hand-editable,
+   watched JSON as the external path.
+4. **Where packs live.** *Recommend upstream's `packs/`*: a remaster pack is an
+   asset pack plus a `remaster/` directory, so replacement textures and the
+   remaster ship as one thing.
+5. **Forward or deferred authored lights.** *Recommend forward, inside `shade8`*,
+   and deferred only for terms that apply to the finished picture.
+6. **Whether object and creature edits may reach a save.** *Decided: there are
+   none.* Moving the game's own records was dropped (2026-09-28); props are the
+   port's own records and never reach a save.
+7. **Shadows.** *Decided: shadow cubemaps from the retained map* (`0077`), drawn
+   on the GPU only when a light or the map changes, so a CPU-bound port pays
+   nothing a frame for them. The tile-grid march this recommended first is not
+   needed.
+8. **Normal maps only with replacement textures.** *Recommend yes.* A normal map
+   drawn over a 64×64 four-bit texture fights it.
+9. **Whether a remaster pack may change collision.** *Recommend tile collision
+   only, behind a gameplay-changing label.* It keeps the rule against gameplay
+   changes a player did not ask for.
+10. **The material id budget.** *Recommend 256*: exact in the surface buffer's
+    alpha, and allocated by name at load time.
+11. **Where the remaster's code lives.** *Recommend `patches/`, not `mods/`*: the
+    remaster is something the port offers, and a mod is a package that can be
+    absent (see "What belongs in a mod" in `PATCHES_AND_MODS.md`). The *packs*
+    are the optional part.

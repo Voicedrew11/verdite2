@@ -26,8 +26,16 @@ namespace Kf2;
 ///     press &lt;button&gt; [ms]   hold a pad button for ms (default 150)
 ///     kill                  drop HP to zero, the way a hit would
 ///     nearby [radius]       live world-table records within radius of the
-///                           player, nearest first (positions only; buf6's
+///                           player, nearest first: objects, entities, effects
+///                           and billboard sprites (positions only; buf6's
 ///                           entity reading is still Inferred)
+///     edit, select, set, pack, remaster, light, atmos, level
+///                           the remaster editor's verbs (Remaster.Shell)
+///     savecheck             whether a save carries any of the tile block
+///                           (Remaster.SaveCheck), on the heavy queue
+///     snap [hash|PATH] [after N]
+///                           the presented picture (Remaster.Snap), answered
+///                           from the present that reads it
 ///
 /// Off unless KF2_SHELL is set, like every other agent switch: an unasked
 /// listener is worse than one switch to find (the mouse-look precedent). A
@@ -100,10 +108,15 @@ public static class AgentServer
         "warp <area 0..7> - re-enter an area through the game's own entry routine",
         "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
         "kill - drop HP to zero, the way a hit would",
-        "nearby [radius=8192] - live records of the world tables within radius units",
+        "nearby [radius=8192] - live records of the world tables (objects, entities, effects, sprites) within radius units",
         "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
         "map [on|off|toggle] - the full-screen map, which pauses the world unless KF2_MAP_PAUSE=0",
         "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
+        "view [<x> <y> <z> <pitch> <yaw> <roll> | off] - the camera the last frame was drawn from, a digest of its cull grid and the cells it draws; with a camera, draw every frame from it until 'view off'",
+        "waves [on|off | swell|swellsize|ripple|ripplesize|shade|speed <value>] - the water waves: their state, the switch, or one setting (not saved)",
+        "gpuworld [on|off | surfaces on|off | water on|off | models on|off|hide|show | records on|off | scene | perpixel on|off] - the world drawn on the GPU (0085): its state, the switch, whether the map reaches the normal and surface buffers, whether its water and the object walk's models are drawn there too, models taken and not drawn (what they cover), whether the map is lit in the shader from the light records, the last walk's models and the camera's forward, or per-pixel lighting (not saved)",
+        "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
+        "aspect [4:3|16:9|<ratio>] - the widescreen aspect, as the settings window sets it (not saved)",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -138,6 +151,7 @@ public static class AgentServer
     public static void Install()
     {
         if (Port == 0) return;
+        FramePacing.PauseWhen(() => _paused);
 
         // Cheap commands: the VSync event fires on the game thread, the same
         // place the beacon reads memory, so no cross-thread access.
@@ -297,8 +311,16 @@ public static class AgentServer
     static string Route(string line)
     {
         var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        // goto and the remaster verbs take the whole rest of the line.
+        bool whole = parts[0].Equals("goto", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("view", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("snap", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("waves", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("gpuworld", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("murk", StringComparison.OrdinalIgnoreCase)
+                     || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
-                          parts.Length > 1 ? (parts[0].Equals("goto", StringComparison.OrdinalIgnoreCase) ? string.Join(' ', parts[1..]) : parts[1]) : "",
+                          parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",
                           parts.Length > 2 ? parts[2] : "",
                           new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously));
 
@@ -310,12 +332,32 @@ public static class AgentServer
             case "help":
             case "nearby":
             case "map":
+            case "edit":
+            case "select":
+            case "set":
+            case "pack":
+            case "remaster":
+            case "light":
+            case "textures":
+            case "atmos":
+            case "level":
+            case "camera":
+            case "prop":
+            case "snap":
+            case "view":
+            case "waves":
+            case "gpuworld":
+            case "capture":
+            case "murk":
+            case "pause":
+            case "aspect":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
             case "warp":
             case "goto":
             case "ending":
+            case "savecheck":
                 Enqueue(_heavy, cmd);
                 break;
             default:
@@ -340,6 +382,12 @@ public static class AgentServer
     {
         while (queue.TryDequeue(out var cmd))
         {
+            if (cmd.Name == "snap")
+            {
+                // Answered by the present that is read, not here.
+                Remaster.Snap.Run(cmd.Arg1, r => cmd.Reply.TrySetResult(r));
+                continue;
+            }
             string reply;
             try { reply = Execute(cmd); }
             catch (Exception ex)
@@ -364,6 +412,16 @@ public static class AgentServer
         queue.Enqueue(cmd);
     }
 
+    static bool _paused;
+
+    static string DoPause(string arg)
+    {
+        if (arg is "on" or "1") _paused = true;
+        else if (arg is "off" or "0") _paused = false;
+        else if (arg.Length > 0) return Err("pause [on|off]");
+        return "{\"ok\":true,\"cmd\":\"pause\",\"paused\":" + (_paused ? "true" : "false") + "}";
+    }
+
     static string Execute(Cmd cmd) => cmd.Name switch
     {
         "state" => DoState(),
@@ -376,6 +434,15 @@ public static class AgentServer
         "ending" => DoEnding(cmd.Arg1),
         "map" => DoMap(cmd.Arg1),
         "goto" => DoGoto(cmd.Arg1),
+        "view" => DoView(cmd.Arg1),
+        "waves" => Waves.Shell(cmd.Arg1),
+        "gpuworld" => GpuWorld.Shell(cmd.Arg1),
+        "pause" => DoPause(cmd.Arg1),
+        "aspect" => Widescreen.Shell(cmd.Arg1),
+        "murk" => Murk.Shell(cmd.Arg1),
+        "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
+        "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
+        "savecheck" => DoSaveCheck(),
         _ => Err($"unknown command '{cmd.Name}'; try help"),
     };
 
@@ -442,6 +509,10 @@ public static class AgentServer
     const int EntityCount = 0xC8;
     const int EntityEmptyOff = 0x0;
     const int EntityPosOff = 0x2C;         // VECTOR
+    const uint EffectTable = 0x8019CC6C;
+    const int EffectStride = 0x48, EffectCount = 128, EffectEmptyOff = 0x0, EffectPosOff = 0x14;
+    const uint SpriteTable = 0x80195174;   // billboards; free is u16 0xFFFF, read by its low byte
+    const int SpriteStride = 0x18, SpriteCount = 128, SpriteEmptyOff = 0x0, SpritePosOff = 0x8;
 
     const int NearbyDefaultRadius = 8192;  // four tiles
     const int NearbyMaxRadius = 0x10000;
@@ -476,6 +547,10 @@ public static class AgentServer
                      ObjectEmptyOff, ObjectPosOff, px, pz, radius);
         AppendNearby(sb, m, "entities", EntityTable, EntityStride, EntityCount,
                      EntityEmptyOff, EntityPosOff, px, pz, radius);
+        AppendNearby(sb, m, "effects", EffectTable, EffectStride, EffectCount,
+                     EffectEmptyOff, EffectPosOff, px, pz, radius);
+        AppendNearby(sb, m, "sprites", SpriteTable, SpriteStride, SpriteCount,
+                     SpriteEmptyOff, SpritePosOff, px, pz, radius);
         sb.Append('}');
         return sb.ToString();
     }
@@ -544,10 +619,11 @@ public static class AgentServer
     static string DoHelp()
     {
         var sb = new StringBuilder("{\"ok\":true,\"cmd\":\"help\",\"commands\":[");
-        for (int i = 0; i < HelpCommands.Length; i++)
+        var all = HelpCommands.Concat(Remaster.Shell.Help).Append(Remaster.Snap.Usage).Append(Remaster.SaveCheck.Usage).ToArray();
+        for (int i = 0; i < all.Length; i++)
         {
             if (i > 0) sb.Append(',');
-            sb.Append(Q(HelpCommands[i]));
+            sb.Append(Q(all[i]));
         }
         sb.Append("]}");
         return sb.ToString();
@@ -570,6 +646,16 @@ public static class AgentServer
             2 => Err("checksum failed"),
             _ => Err($"load failed ({result})"),
         };
+    }
+
+    /// <summary>On the heavy queue, since it runs the game's save packer on the
+    /// game's own CPU context.</summary>
+    static string DoSaveCheck()
+    {
+        var c = RecompOne.Runtime.Runtime.Cpu;
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (c == null || m == null) return Err("not running");
+        return "{\"ok\":true,\"cmd\":\"savecheck\",\"result\":" + Remaster.SaveCheck.Run(c, m).ToJsonString() + "}";
     }
 
     static string DoWarp(string areaArg)
@@ -603,6 +689,49 @@ public static class AgentServer
         if (a.Length >= 4) m.WriteU16(BaseYaw, (ushort)(int.Parse(a[3]) & 0xFFF));
         if (a.Length == 5) m.WriteU16(Analog.Pitch, (ushort)int.Parse(a[4]));
         return "{\"ok\":true,\"cmd\":\"goto\",\"pos\":[" + x + "," + y + "," + z + "]}";
+    }
+
+    const uint GridOffsetX = 0x80192E98, GridOffsetZ = 0x80192E9C;   // words
+    const uint Grid = 0x80192EAC, GridCells = 24 * 24;                  // what the tile walk reads
+
+    /// <summary>
+    /// The camera the last frame was drawn from, and a digest of the cull grid built
+    /// from it: the grid's two offset words and its 576 cells. With a camera, every
+    /// frame is drawn from it (<see cref="Stage13.ViewOverride"/>) until <c>view off</c>.
+    /// Two frames drawn from one camera, wherever the player stands, should give one
+    /// digest if the grid depends on the eye alone.
+    /// </summary>
+    static string DoView(string args)
+    {
+        var m = RecompOne.Runtime.Runtime.Mem;
+        if (m == null) return Err("not running");
+        var a = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (a.Length == 1 && a[0].Equals("off", StringComparison.OrdinalIgnoreCase))
+            Stage13.ViewOverride = null;
+        else if (a.Length == 6 && a.All(t => int.TryParse(t, out _)))
+        {
+            var n = Array.ConvertAll(a, int.Parse);
+            Stage13.ViewOverride = new Camera(n[0], n[1], n[2], (short)n[3], (short)n[4], (short)n[5]);
+        }
+        else if (a.Length != 0)
+            return Err("usage: view [<x> <y> <z> <pitch> <yaw> <roll> | off]");
+
+        var cam = Camera.Read(m);
+        ulong hash = 14695981039346656037UL;
+        void Mix(uint b) { hash ^= b; hash *= 1099511628211UL; }
+        Mix(m.ReadU32(GridOffsetX));
+        Mix(m.ReadU32(GridOffsetZ));
+        int drawn = 0;
+        for (uint i = 0; i < GridCells; i++)
+        {
+            uint cell = m.ReadU8(Grid + i);
+            if ((cell & 3u) != 0) drawn++;   // bit 0 the lower half, bit 1 the upper
+            Mix(cell);
+        }
+        return "{\"ok\":true,\"cmd\":\"view\",\"camera\":[" +
+               $"{cam.X},{cam.Y},{cam.Z},{cam.Pitch},{cam.Yaw},{cam.Roll}]," +
+               $"\"override\":{(Stage13.ViewOverride != null ? "true" : "false")}," +
+               $"\"grid\":\"{hash:x16}\",\"drawn\":{drawn}}}";
     }
 
     // ---- the ending ----

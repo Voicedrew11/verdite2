@@ -72,6 +72,16 @@ public static class PrimBuffer
 
     static uint MirrorBytes => Bytes + OtBytes + ScratchBytes;
 
+    /// <summary>Past the mirrored walk's scratch: a copy of the mesh vertices
+    /// <see cref="WaterSwell"/> moves, which the assemblers read in place of the bank's.</summary>
+    public const uint WaveBytes = 0x10000u;
+    public static uint WaveScratch => MirrorScratch + ScratchBytes;
+
+    /// <summary>Past the wave copy: the remaster's props, each an object record of the
+    /// port's own that the object walk submits (<see cref="Remaster.Props"/>).</summary>
+    public const uint PropBytes = 0x2000u;
+    public static uint PropScratch => WaveScratch + WaveBytes;
+
     /// <summary>The mirrored walk's arena, ordering table and scratch, in that order
     /// after the two buffers; valid only while <see cref="Relocated"/>.</summary>
     public static uint MirrorArena => Base + 2u * Bytes;
@@ -88,7 +98,7 @@ public static class PrimBuffer
     {
         get
         {
-            uint need = Scale > 1 ? (Base & 0x1FFFFFFFu) + 2u * Bytes + MirrorBytes : MemoryMap.RetailRamSize;
+            uint need = Scale > 1 ? (Base & 0x1FFFFFFFu) + 2u * Bytes + MirrorBytes + WaveBytes + PropBytes : MemoryMap.RetailRamSize;
             if (uint.TryParse(Environment.GetEnvironmentVariable("KF2_RAMSIZE"), out uint mb) && mb is > 0 and <= 8)
                 need = Math.Max(need, mb << 20);
             uint size = MemoryMap.RetailRamSize;

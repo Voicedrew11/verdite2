@@ -27,6 +27,13 @@ public static class OutputView
     public static Vector2 Size => Max - Min;
 
     /// <summary>
+    /// The pointer is over the picture and nothing is in front of it. The picture
+    /// is an ImGui window like any other, so <c>io.WantCaptureMouse</c> is true
+    /// over it and cannot tell a click on the game from a click on a panel.
+    /// </summary>
+    public static bool Hovered { get; internal set; }
+
+    /// <summary>
     /// The display buffer the *game* programmed, in its own pixels -- 320x240
     /// here. Published because <see cref="Min"/> and <see cref="Max"/> are a
     /// rectangle and not a scale, and the inverse of that rectangle is what an
@@ -42,6 +49,13 @@ public static class OutputView
     /// </summary>
     public static int GameW { get; internal set; }
     public static int GameH { get; internal set; }
+
+    /// <summary>
+    /// The dock node the Output panel sits in, or 0 while it floats. A node that
+    /// holds a window is a leaf, so a port can split it to dock a panel of its own
+    /// beside the picture.
+    /// </summary>
+    public static uint DockId { get; internal set; }
 }
 
 internal sealed class OutputPanel : IPanel
@@ -86,7 +100,9 @@ internal sealed class OutputPanel : IPanel
         var visible = ImGui.Begin(this.Title());
         ImGui.PopStyleVar(2);
         IsDocked = ImGui.IsWindowDocked();
+        OutputView.DockId = IsDocked ? ImGui.GetWindowDockID() : 0u;
         OutputView.Valid = false;
+        OutputView.Hovered = false;
 
         if (!visible)
         {
@@ -111,6 +127,7 @@ internal sealed class OutputPanel : IPanel
             OutputView.Valid = imageSize.X > 0f && imageSize.Y > 0f;
 
             ImGui.Image((nint)_texId, imageSize);
+            OutputView.Hovered = OutputView.Valid && ImGui.IsItemHovered();
         }
 
         ToastNotifications.Draw();

@@ -4,6 +4,9 @@
 //     gcc -O0 -o /tmp/shader_probe scripts/shader_probe.c -lEGL -lGL -lm
 //     FOOT=16 /tmp/shader_probe PrimFs.frag 1 2 4 8 16
 //
+// 0083. PLAIN=z puts the strip at depth 2000 with the enhancement distance at z:
+// at 1000 every uAniso and MIP=1 must read as uAniso=1, the console's one texel.
+//
 // 0060. MIP=1 builds the texture atlas the way GlTexCache does (decode, 2x2 box)
 // and turns the mip path on. RECT=u0,u1 is the polygon's texture rectangle along U
 // (V is 0..15). UC=u centres the sweep there instead of starting it at 0, and then
@@ -93,17 +96,18 @@ static const char *TESTVS_T =
 "layout(location=0) in vec2 aPos;\n"
 "noperspective out vec4 vColor; out vec2 vUV; out float vDepth;\n"
 "flat out ivec2 clutBase; flat out ivec2 pageBase; flat out int texMode;\n"
-"flat out int vDither; flat out int vRepClut;\n"
+"flat out int vDither; flat out int vRepClut; flat out float vFade;\n"
 "noperspective out vec3 vLit; noperspective out float vFog; flat out uint vLight;\n"
 "flat out uvec2 vTex; uniform uvec2 uTex; uniform float uCentre;\n"
 "const float foot = FOOTV;\n"
+"uniform float uTestDepth;\n"
 "void main(){\n"
 "  gl_Position = vec4(aPos,0.0,1.0);\n"
 "  float px = (aPos.x*0.5+0.5)*64.0;\n"
 "  vUV = vec2(uCentre < 0.0 ? px*foot : uCentre + (px-32.0)*foot, 8.0);\n"
-"  vLit = vec3(0.0); vFog = 0.0; vLight = 0u; vTex = uTex;\n"
+"  vLit = vec3(0.0); vFog = 0.0; vLight = 0u; vTex = uTex; vFade = 1.0;\n"
 "  vColor = vec4(vec3(128.0/255.0),1.0);\n"  // neutral through the >>7 modulate
-"  vDepth = 0.0; clutBase = ivec2(0); pageBase = ivec2(0);\n"
+"  vDepth = uTestDepth; clutBase = ivec2(0); pageBase = ivec2(0);\n"
 "  texMode = 2; vDither = 0; vRepClut = 0;\n"
 "}\n";
 
@@ -177,6 +181,10 @@ int main(int argc,char**argv){
  GLint uTexL=glGetUniformLocation_(p,"uTex");
  if(uTexL>=0){ typedef void(*U2)(GLint,GLuint,GLuint); ((U2)eglGetProcAddress("glUniform2ui"))(uTexL,rect,entry); }
  if((l=glGetUniformLocation_(p,"uMipOn"))>=0) glUniform1f_(l,mip?1.f:0.f);
+ if(getenv("PLAIN")){
+   if((l=glGetUniformLocation_(p,"uTestDepth"))>=0) glUniform1f_(l,2000.f/65536.f);
+   if((l=glGetUniformLocation_(p,"uPlainZ"))>=0) glUniform1f_(l,(float)atof(getenv("PLAIN")));
+   else {printf("no uPlainZ\n");return 1;} }
  if(mip){
    int bs=1<<lg; float *lv=malloc(sizeof(float)*4*bs*bs);
    for(int y=0;y<bs;y++)for(int x=0;x<bs;x++){

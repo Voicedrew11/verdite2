@@ -102,7 +102,7 @@ frame costs two `VSync` calls: one to show the picture, and however many the gat
 needs to see two vblanks go by.
 
 The literal `2` at `0x800178A4` **is the frame rate the game asks for**, in
-software. Here, where `patches/recompone/0021-vblank-wall-clock.patch` advances
+software. Here, where `tools/RecompOne/patches/0021-vblank-wall-clock.patch` advances
 the emulated vblank on a wall-clock 60 Hz grid, it paces the port to exactly
 30 fps whatever the host is doing, and nothing above 30 is reachable while it
 runs — which is why `patches/FramePacing.cs` hooks it.
@@ -143,7 +143,7 @@ the emitted C# for `DrawOTag`, `VSync`, `PutDispEnv` or `PutDrawEnv`.
 | stage 5 `func_80046A60` | 128 effect lifetimes at `rec+0x0E` | no |
 | stage 6 `func_8004910C` | the module's own per-frame logic | **no**, in all nine modules |
 | stage 2 `func_80037C0C` | the object table at `0x80177714` — every world prop that moves | **yes**, but through one edge only — see below; gated regardless |
-| stage 13 `func_800342D8` | the jitter accumulator at `0x8006E608`, in its own body | yes, it is the renderer |
+| stage 13 `func_800342D8` | the compass needle's speed at `0x8006E608`, in its own body (held to the tick by `patches/Stage13.cs`) | yes, it is the renderer |
 | — `func_80033FBC` | the fade state machine, called by stage 13 | **no** — three functions, none of them draw |
 
 ### Stage 2 is the object-table state machine
@@ -232,11 +232,13 @@ Its only callees are `func_80033FAC` (one byte write) and `func_80022B20` (a sma
 byte fill), so it cannot draw and can be run on the game's clock rather than the
 renderer's.
 
-**The jitter accumulator at `0x8006E608`** is inline in `func_800342D8` itself,
-just after a `func_80015374()` call: it adds the result, then subtracts an eighth
-of it (`(v + 7) >> 3` with the sign fixup), so it is a damped accumulator driving
-the screen shake, not a counter. No hook can reach it — `HookManager` detours whole
-functions and stage 13 must draw.
+**The word at `0x8006E608`** is inline in `func_800342D8` itself, just after a
+`func_80015374()` call: it adds the result, then subtracts an eighth of it
+(`(v + 7) >> 3` with the sign fixup). It was written up here as a damped
+accumulator driving the screen shake. **It is the compass needle's speed**: see
+"Stage 13's HUD block, and the compass needle" below. It was out of every hook's
+reach while stage 13 was recompiled; `patches/Stage13.cs` has it in C# now, and
+steps it on the tick.
 
 ### Stage 8 is the render camera, and it is the only copy
 
@@ -280,6 +282,13 @@ apart. That is **not** the area crossing's black frame: restoring the position
 after stage 13 instead of after stage 8, so the walks and the camera agree, left
 the flash on 2 of 2 walked crossings ("What the crossing frame actually is" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)).
+
+**What the two read it for, since read from the code and measured: neither places
+geometry by it.** `func_80032400` takes the player's tile from X and Z to pick the
+arm's light record, and draws the arm in view space; `func_800331B4` reads the
+triple only in the ambient sound source (kind `0x1F`), to range its volume. A frame
+drawn from a camera of the port's hashed the same with the player far from it and
+standing under it (see "Phase 7, the first slice" in [REMASTER.md](REMASTER.md)).
 
 ### Stage 9 is the sound listener, and the 3D sound it serves
 
@@ -372,6 +381,41 @@ like every other clip in the game. Because the clock is a per-tick counter feedi
 time, `patches/AnimSmoothing.cs` carries it exactly as it carries a creature's —
 see "The player's arm is the same bug after all" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+### Stage 13's HUD block, and the compass needle
+
+Stage 13 is nineteen calls and one block of its own arithmetic, between the arm
+(`func_80032400`) and the HUD builder (`func_80031D5C`); the calls are tabled under
+"Stage 13 in C#" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md). The block fills
+in what the HUD builder draws from: fourteen records of `0x24` bytes at
+`0x80067774`, which the builder walks until a `0xFF` in `+0`.
+
+| field | what | written by the block from |
+|---|---|---|
+| `+0x0` u8 | drawn when 1 | `0x801994DE` for record 0, `0x801994DD` for records 1-13 |
+| `+0x4` u16 | the model: a digit's is the digit plus 3 | records 3-5 the hundreds, tens and ones of HP (`0x80199428`) mod 1000; records 6-8 the same of MP (`0x8019942C`) |
+| `+0x8` u16 | a gauge's length, 204 at 5000 | record 9 from `0x8019942E`, record 10 from `0x80199432`, as `v * 204 / 5000` |
+| `+0x18` u16 | pitch | record 0: the camera's pitch, `0x80192E88` |
+| `+0x1A` u16 | yaw | record 0: see below |
+
+**Record 0 is the compass**, by what the block does with it rather than by a
+picture: its pitch is the camera's, and its yaw chases the camera's through a damped
+spring. `func_80015374(a0, a1)` is `(a1 - a0) & 0xFFF`, less 4096 when that is
+above 2048 -- the wrapped difference of two angles, here record 0's yaw and the
+camera's.
+That error is added to the word at `0x8006E608`, which then loses about an eighth of
+itself (`v - ((v + 7) >> 3)` for a positive `v`, `v - ((v - 7) >> 3)` for a negative
+one, nothing at zero), and record 0's yaw then turns by `v >> 6`. So `0x8006E608` is
+the needle's **speed**: the needle swings after a turn, overshoots and settles.
+
+**The routine steps it once per call of stage 13, so once per rendered frame**,
+which is a rate defect of the kind `docs/TODO.md` lists: on the console it stepped
+once a tick, and above the tick rate it steps more often, so the needle settles
+sooner in wall-clock time -- seven steps a tick at 144 fps. Nothing had been
+reported from play. The port steps the speed and the yaw only on the first walk of
+a tick (`KF2_STAGE13_NEEDLE=0` is the recompiled behaviour), and `FrameSmoothing`
+draws it between its steps; see "The compass needle is held to the tick" and "The
+compass is carried with the view" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
 ### The map is an 80x80 tile grid, and a tile's height is one byte
 
 `func_80031C94` (the "map tiles" line in `KF2_DRAWCENSUS`, and 78% of a frame's
@@ -1052,6 +1096,57 @@ screen prints when all five timers are zero.
 All seventeen are `u16`. The offense block has no poison or dark entry and the
 defense block has no holy one, which is why they are eight and nine rather than
 a matched pair.
+
+### The menu's primitives are `POLY_FT4`s out of a cursor, and the cursor is mirrored
+
+Built while replacing the `gearcompare` mod's draw path (which called the
+routines below through a faked stack frame) with plain C# writing the same
+packets byte for byte (now `patches/MenuDraw.cs`, checked by a one-boot
+harness against the recompiled routines: 1493 cases, 0 mismatches;
+`KF2_GEARCOMPARE=verify` repeats the check on every panel drawn).
+
+A template is 12 bytes: `u16 tpage` (+0), `u16 clut` (+2), `u8 u` (+4),
+`u8 v` (+6), `u16 w` (+8), `u16 h` (+0xA). Corners take `w`/`h` as **s16**;
+UVs take the same two fields as **u8**. The templates live beside the font
+table above: the label drawer reads `0x80064BF0`, the number drawer
+`0x80064BE4`, and the window drawer nine piece templates at `0x80064C68`,
+12 bytes each, row-major.
+
+Every packet is a `POLY_FT4`, `0x28` bytes: the tag at +0x00 (length 9 at +3),
+`r, g, b` at +0x04/05/06, code `0x2C` at +0x07 (`0x2E` with `SetSemiTrans(1)`),
+then four `(x, y, u, v)` corners at +0x08, +0x10, +0x18, +0x20 with `clut` at
++0x0E and `tpage` at +0x16. Bytes +0x26/+0x27 are never written.
+
+`func_800229D8` (`NewQuad`) reads the cursor at `0x8006E914`, writes length 9
+and code `0x2C` as two separate bytes, paints the colour `0x68` grey, and
+returns the old cursor. `func_80022A28` (`Link`) runs `AddPrim` onto the
+ordering-table slot (`*(u32*)0x8018E0A8 + slot*4`), then writes
+`cursor + 0x28` twice: to `0x8006E914` and to the `current` at
+`*(u32*)0x8017E0A4 + 8` (the descriptor `patches/PrimBuffer.cs` names). There
+is no overflow check; the rewrite has none either.
+
+`func_80021E10(template, rec)` draws the font-index text at `rec` (`s16 x`,
+`s16 y`, indices, `0xFF`-terminated): one quad per character at a 7 px step,
+spaces included (the cell at `0x7F`), stopping at the terminator or when the
+step reaches 168 (24 quads). The UV ignores the template's `u`/`v`:
+`u = (g & 15) * 8`, `v = (g >> 4) * 15`, with the template's `u8 w`/`h` added
+for the far corners. Colour stays grey, slot 10.
+
+`func_80022B20(value, width, zeroPad, mode)` formats into the caller's buffer
+(a `0xFF` terminator after it) and draws nothing: widen the width (modes 1/2/6
++1, modes 3/5 +2, mode 4 +3), fill with blanks (`10`) or zeroes, lay the mode's
+symbol (`0x13`; trailing `0x0D`/`0x0B` with the width shortened again; `0x0F
+0x10`; `0x0C 0x12 0x10`; `0x0E 0x11`), then digits right to left, one `0` for
+value 0. `func_80021FCC(template, rec)` draws that buffer with the same 7 px
+loop and slot: index `d < 11` reads the template's `u` with `v = d * 15`,
+`d >= 11` reads `u + 7` with `v = (d - 11) * 15`. `0xFF` ends the buffer.
+
+`func_800222B8(x, y, w, h, padW, padH)` is a 3x3 nine-slice from its nine
+templates: row 0 at `y`, row 1 at `y + 33` stretched by `h - 94 + padH`, row 2
+at `y + 61 + (h - 94)`; column 0 at `x`, column 1 at `x + 33` stretched by
+`w - 94 + padW`, column 2 at `x + 61 + (w - 94)`. Each piece is white with the
+semi-transparent bit set, its own template's UVs stretched, slot 20 — drawn
+after the text so the table puts it underneath.
 
 ### Nineteen of those words are a cache, and `func_800244CC` owns all of them
 

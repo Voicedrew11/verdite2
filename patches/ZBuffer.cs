@@ -13,6 +13,8 @@ namespace Kf2;
 ///
 ///     KF2_ZBUFFER=0             off; unset is on (the shipped default)
 ///     KF2_ZBUFFER_PROBE=1       report how many triangles actually depth-tested
+///     KF2_BLENDORDER=0          blended surfaces in table order again (0079)
+///     KF2_BLENDORDER_PROBE=1    opaque geometry drawn over a nearer translucent surface
 ///
 /// The PlayStation GPU has no depth buffer. The game sorts every polygon into an
 /// ordering table by one number, the GTE's OTZ (the average of its vertices), and
@@ -37,7 +39,9 @@ namespace Kf2;
 ///     a hole through the surface, so that triangle keeps painter's order rather
 ///     than testing.
 ///   * Semi-transparent primitives test against Z but do not write it, so two
-///     overlapping additives still blend in the order the table named.
+///     overlapping additives still blend in the order the table named. They are
+///     drawn after the opaque ones that follow them in the table (0079), which
+///     would otherwise paint over them.
 ///   * Untextured geometry is tested too. Perspective correction only cares
 ///     about textured polygons; a flat-shaded wall still has a view depth.
 ///
@@ -54,7 +58,7 @@ namespace Kf2;
 /// in NOTES.md.
 ///
 /// This patch is only the console switch and the report;
-/// the work is in the runtime (<c>patches/recompone/0014</c>), because a pixel's
+/// the work is in the runtime (<c>tools/RecompOne/patches/0014</c>), because a pixel's
 /// depth is decided far below anything <c>HookManager</c> can reach. The one hook
 /// is on <c>DrawOTag</c>, purely to have a frame boundary to count against, and
 /// it is a post-hook so it composes with the widescreen patch's replacement of
@@ -70,8 +74,7 @@ public static class ZBuffer
     /// <summary>Where the choice is kept between runs.</summary>
     public const string OnKey = "kf2.zbuffer.on";
 
-    /// <summary>The coplanar tolerance's two terms, kept between runs (Video ▸ Enhancements).</summary>
-    public const string BiasKey = "kf2.zbuffer.bias", SlopeKey = "kf2.zbuffer.slope";
+    /// <summary>The coplanar tolerance's two terms (no longer settings).</summary>
     public const float DefaultBias = 1f, DefaultSlope = 0.5f;
 
     /// <summary>False leaves occlusion to the ordering table, as the console does.</summary>
@@ -118,9 +121,17 @@ public static class ZBuffer
     /// <summary>KF2_ZBUFFER_BIAS and KF2_ZBUFFER_SLOPE: the coplanar tolerance.</summary>
     static float? _forcedBias, _forcedSlope;
 
+    /// <summary>KF2_BLENDORDER_PROBE: the blend order's line.</summary>
+    static bool _blendProbe;
+
     public static void Configure(string? on, string? probe, string? threshold = null, string? source = null,
-                                 string? bias = null, string? slope = null)
+                                 string? bias = null, string? slope = null, string? blendOrder = null,
+                                 string? blendProbe = null)
     {
+        BlendOrder.Enabled = blendOrder?.Trim() != "0";
+        _blendProbe = !string.IsNullOrWhiteSpace(blendProbe) && blendProbe.Trim() != "0";
+        BlendOrder.Probe = _blendProbe;
+
         _packetSource = source?.Trim().ToLowerInvariant() != "map";
         _forcedBias = ParseFloat(bias);
         _forcedSlope = ParseFloat(slope);
@@ -172,8 +183,8 @@ public static class ZBuffer
             // Env only: its slider is gone, so an old saved kf2.zbuffer.threshold is not read.
             GteDepth.DepthClearThreshold = _forcedThreshold ?? 0f;
             SyncSource();
-            GteDepth.DepthBias = _forcedBias ?? RecompOne.Runtime.Runtime.View.GetFloat(BiasKey, DefaultBias);
-            GteDepth.DepthSlope = _forcedSlope ?? RecompOne.Runtime.Runtime.View.GetFloat(SlopeKey, DefaultSlope);
+            GteDepth.DepthBias = _forcedBias ?? DefaultBias;
+            GteDepth.DepthSlope = _forcedSlope ?? DefaultSlope;
             Console.WriteLine($"[KF2] zbuffer: {(Enabled ? "on" : "off (ordering table)")}" +
                               $", depth from {(!_packetSource ? "the address map" : GtePacketDepth.Enabled ? "the assemblers" : "the assemblers, which are off")}" +
                               $", tolerance {GteDepth.DepthBias:0.##} SZ + {GteDepth.DepthSlope:0.##} px of slope" +
@@ -187,7 +198,7 @@ public static class ZBuffer
         bool attached = false;
         Event.AddListener<OverlayLoadedEvent>(_ =>
         {
-            if (attached || !_toConsole) return;
+            if (attached || !(_toConsole || _blendProbe)) return;
             attached = true;
             Attach();
         });
@@ -273,6 +284,9 @@ public static class ZBuffer
         double window = Now - _windowStart;
         if (window < 2.0) { if (_census) GteDepth.ResetCensus(); return; }
 
+        if (_blendProbe) ReportBlendOrder(window);
+        if (!_toConsole) { _frames = 0; _windowStart = Now; return; }
+
         if (_census) { ReportCensus(); GteDepth.ResetCensus(); }
 
         long tested = GteDepth.ZTris, skipped = GteDepth.ZSkipped, rejected = GteDepth.ZRejects;
@@ -330,6 +344,27 @@ public static class ZBuffer
         GteDepth.ResetZCounters();
         _frames = 0;
         _windowStart = Now;
+    }
+
+    static long _deferred, _flushes, _passed, _walks, _overModel, _overTile, _opaque, _translucent;
+
+    /// <summary>0079's line: what was held and how often the queue was cut, then what the
+    /// GPU was sent in which order, sampled on a 4-pixel grid. An opaque sample drawn
+    /// behind a nearer translucent one is geometry painting over the water.</summary>
+    static void ReportBlendOrder(double window)
+    {
+        long walks = BlendOrder.Walks - _walks;
+        long over = BlendOrder.OverModel - _overModel, overTile = BlendOrder.OverTile - _overTile;
+        long opaque = BlendOrder.OpaqueSamples - _opaque, translucent = BlendOrder.TranslucentSamples - _translucent;
+        double perWalk(long n) => walks == 0 ? 0 : (double)n / walks;
+        Console.WriteLine($"[KF2] blend order: {(BlendOrder.Active ? "on" : BlendOrder.Enabled ? "on, idle (needs the Z-buffer and Fast geometry)" : "off")}; " +
+                          $"a walk held {perWalk(BlendOrder.Deferred - _deferred):F1} packets past {perWalk(BlendOrder.Passed - _passed):F1} opaque, " +
+                          $"sent in {perWalk(BlendOrder.Flushes - _flushes):F1} runs; " +
+                          $"samples a walk: translucent {perWalk(translucent):F0}, opaque {perWalk(opaque):F0}, " +
+                          $"opaque over a nearer translucent: models {perWalk(over):F1}, tiles {perWalk(overTile):F1}");
+        _deferred = BlendOrder.Deferred; _flushes = BlendOrder.Flushes; _passed = BlendOrder.Passed; _walks = BlendOrder.Walks;
+        _overModel = BlendOrder.OverModel; _overTile = BlendOrder.OverTile;
+        _opaque = BlendOrder.OpaqueSamples; _translucent = BlendOrder.TranslucentSamples;
     }
 
     /// <summary>

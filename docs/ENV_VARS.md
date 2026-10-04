@@ -53,7 +53,9 @@ KF2_RATECENSUS_OUT=path KF2_RATECENSUS_PERIOD=5   # where to dump, and how often
 KF2_BLACKPROBE=1                       # what the picture held every drawn frame around an area load: luminance, black runs, the tint the game asked for, whether the frame's pixels were new, and whether the view was carried; camgap and camstep rows: how far the renderer's camera sat from the true position, and how far it moved per present
 KF2_BLACKPROBE_OUT=dir                 # also write the display rect (~12 frames before the load and 250 ms after) as PNGs; default scratch/blackprobe; 0 skips the pictures
 KF2_SMOOTH=0 KF2_SMOOTH_POS=0          # leave the view at the tick (on by default); leave position too
-KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second
+KF2_SMOOTH_COMPASS=0                   # leave the compass needle on the tick (carried with the view by default)
+KF2_SMOOTH_GAUGES=0                    # leave the HP and MP gauges on the tick (carried with the view by default)
+KF2_SMOOTH_PROBE=1                     # how far the view is being carried, per second; the compass's and the gauges' carries and new values
 KF2_SMOOTH_PROBE=2                     # also every frame for 400 ms after an area load: the verdict, the pair, and what was written
 KF2_CROSSPROBE=1                       # per presented frame across an area crossing: tiles, models, the view, the area, and whether the renderer built it; =2 adds the raw cell counts
 KF2_SMOOTH_OBJECTS=0                   # leave enemies, doors and everything else at the tick (on by default)
@@ -80,6 +82,8 @@ KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the 
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
 KF2_WIDESCREEN_CULL_PROBE=2              # also lit-per-ring after the occlusion flood
 KF2_WIDESCREEN_CULL_PROBE=3              # also rebuild the stock grid each frame: stock tiles missing from the widened one (must be 0)
+KF2_RENDERDIST=13.5                      # draw the map past the game's 24x24 window, to this many tiles (10.5, the game's, is off; 15 at most)
+KF2_RENDERDIST_PROBE=1                   # a line every 2 s: cells added, walked, model queries let through, packets clamped to the table's end; =2 adds the grid round the camera as ASCII
 KF2_PRIMBUF=1                            # the game's primitive buffers where it put them (moved above 2 MB, 4x as large, by default; =N for N x)
 KF2_PRIMBUF_PROBE=1                      # the frame's primitive budget: peak, capacity, overflows
 KF2_RAMSIZE=8                            # guest RAM in MB, at least what the buffers need (4 by default, 2 with KF2_PRIMBUF=1)
@@ -89,7 +93,7 @@ KF2_POLYASM=verify                       # run both on every call and compare RA
 KF2_POLYASM_REJECT=0                     # send every oversized polygon to the view-space clipper, including those it clips to nothing
 KF2_POLYASM_REJECT=replay                # a rejection also writes the clipper's scratch records and lists, which nothing reads
 KF2_POLYASM_UNCLIPPED=0                  # the recompiled func_8002FECC (the far map tiles' assembler) instead of the C# one
-KF2_POLYASM_TRANSFORM=0                  # the recompiled func_8002E650 and func_8002E7CC (the vertex transforms) instead of the C# ones
+KF2_POLYASM_TRANSFORM=0                  # the recompiled func_8002E650, func_8002E7CC and func_8002E910 (the vertex transforms, the last the HUD's) instead of the C# ones
 KF2_POLYASM_LIT=0                        # the recompiled func_8002F214 and func_8002EAEC (the models' lit assembler) instead of the C# one
 KF2_POLYASM_CLIPPER=0                    # the recompiled Clip4FTP and Clip3FTP (the view-space clipper) instead of the C# ones
 KF2_POLYASM_FACING=0                     # cull a clipped polygon or a quad on its first three whole-pixel corners, as the game does (the whole polygon, at its fractional corners, by default)
@@ -102,7 +106,17 @@ KF2_MODELWALK=0                          # the recompiled object and creature wa
 KF2_MODELWALK=verify                     # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
 KF2_MODELWALK_WALK=0                     # the recompiled func_800331B4 (the four table walks) instead of the C# one
 KF2_MODELWALK_SUBMIT=0                   # the recompiled func_80032588 (one model, set up and assembled) instead of the C# one
+KF2_MODELWALK_ARM=0                      # the recompiled func_80032400 (the first-person arm) instead of the C# one
+KF2_MODELWALK_SPECIAL=0                  # the recompiled func_80032AC4 (an object of kind 0xF0: the sky) instead of the C# one
 KF2_MODELWALK_PROBE=1                    # live slots per table, models submitted, by table and by assembler, and ambient key-ons
+KF2_MOPOSE=0                             # the recompiled MO blender func_80034DA8 instead of the C# one (on by default; the GPU world renderer's pose store needs it)
+KF2_MOPOSE=verify                        # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
+KF2_STAGE13=0                            # the recompiled renderer func_800342D8 instead of the C# one (on by default; Stage13.ViewOverride needs it)
+KF2_STAGE13=verify                       # the recompiled renderer draws; the C# one is replayed against a record of its calls and compared
+KF2_STAGE13_NEEDLE=0                     # step the compass needle's spring every frame drawn, as the routine does (on the world tick by default)
+KF2_STAGE13_PROBE=1                      # frames drawn and needle steps a second
+KF2_CAMERABLOCK=0                        # the recompiled camera block func_8002E22C instead of the C# one (on by default)
+KF2_CAMERABLOCK=verify                   # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
 KF2_GTE_FAST=0                           # the GTE's general path for the lighting, depth-cue, RotTrans and RotTransPers ops (0047)
 KF2_GTE_LIGHTCACHE=0                     # light every normal afresh instead of remembering its matrix products
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
@@ -129,7 +143,7 @@ KF2_EVENFOG=0                          # the game's fog and light edges (even fo
 KF2_EVENFOG_BLEND=0                    # no fog blend: the game's hard fog edge between records
 KF2_EVENLIGHT=0                        # no light blend: the game's hard colour matrix and back colour edge
 KF2_SUBPIXEL=0                         # whole-pixel vertex positions (sub-pixel is on by default)
-KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels; also polygons drawn back to front, and faces the fractional cull changed
+KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels; also polygons drawn back to front, faces the fractional cull changed, and the HUD's vertices placed with a fraction
 KF2_SUBPIXEL_CULL=0                    # cull the C# assemblers' faces on whole pixels again, as the game does (fractional corners by default under sub-pixel)
 KF2_PGXP=1                             # upstream's PGXP as the vertex source (off; the address map answers)
 KF2_PGXP_TEXTURE=0                     # its share of perspective correction off
@@ -146,6 +160,9 @@ KF2_ZBUFFER_PROBE=1                    # how many triangles actually depth-teste
 KF2_ZBUFFER_PROBE=2                    # the frame's polygon census, and a map of the depth buffer
 KF2_ZBUFFER_SOURCE=map                 # depth from the address map, not the assemblers' packet records (0050)
 KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  # coplanar tolerance on the test: SZ units, and pixels of depth slope; 0 0 is exact (0051)
+KF2_BLENDORDER=0                       # blended surfaces (water) in table order again, painted over by opaque geometry behind them that the table put later (drawn after it by default, 0079)
+KF2_BLENDORDER_PROBE=1                 # a line every 2 s: packets held and passed, and opaque samples drawn behind a nearer translucent one, models and tiles
+KF2_ENHANCEDIST=8                      # past this many tiles of view depth, the game's own look: no per-pixel lighting, authored lights, filtering, ripples, occlusion or reflections (0, everywhere enhanced, by default; 0083)
 KF2_AO=0                               # ambient occlusion off (on by default; GL backend only)
 KF2_AO_RADIUS=512 KF2_AO_STRENGTH=0.8  # how far it reaches, in world units, and how dark it goes
 KF2_AO_QUALITY=low                     # low (1x, 8 samples), medium (2x, the default), high (the render scale)
@@ -157,17 +174,72 @@ KF2_AO_WORLD_STRENGTH=0.6 KF2_AO_WORLD_RADIUS=3072   # how dark that term goes, 
 KF2_AO_WORLD_PROBE=1                   # the transform, the grid, and whether either is missing; =2 the camera's own tile
 KF2_AO_PROBE=1                         # coverage, the projection read off the GTE, passes run
 KF2_AO_PROBE=2                         # also read the occlusion back: how dark, how much, and where
-KF2_SSR=1                              # screen-space reflections on water (off by default; GL core only)
-KF2_SSR_STRENGTH=0.6 KF2_SSR_F0=0.12   # how much water reflects at a grazing angle, and looking straight down
+KF2_MURK=0 KF2_MURK_DISTANCE=1886      # murky water: a dark murk by the distance the view ray runs through water, surface to floor, 63% at the distance (on by default; independent of any reflection; GL core only; no sliders, so the depth and colour are this and the constants in Murk.cs)
+KF2_MURK_TILT=0.75                     # murk only a surface within this cosine of level (0.75 by default; 0 murks anything in the water's texture, as before; the `murk on|off|tilt X` verb)
+KF2_MODELWATER_PROBE=1                 # each model with faces in the water's texture, once per area: kind, model id, faces, height spread, and whether it is water (a rigid, flat object only)
+KF2_WAVES=0                            # water waves: a swell moves the water's vertices, ripples push and shade its texture (on by default; GL core only for the ripples; the tuning is the `waves` shell verb)
+KF2_WAVES_PROBE=1                      # a line every 2 s: rects, the clock, rippled batches, water positions free/rim/shared, halves and vertices moved
+KF2_SSR=1                              # screen-space reflections on water (off by default; no longer a setting, a comparison only; never marches a pixel the planar walk answers; GL core only)
+KF2_SSR_STRENGTH=0.6 KF2_SSR_F0=0.12   # how much water reflects at a grazing angle, and looking straight down (the strength overrides the Reflection strength slider)
 KF2_SSR_DISTANCE=16384 KF2_SSR_STEPS=32 KF2_SSR_THICKNESS=256   # the march: how far (unset: to where the game's fog turns black), how many steps, how far behind a depth still hits
 KF2_SSR_SKY=1                          # a miss takes the last background pixel it crossed, not under the HUD, at this weight; 0 none
 KF2_SSR_FOGCURVE=2                     # the depth-cue curve a reflection's longer path is fogged on: 0 none, 1 offset, 2 knee (default), 3 half, 4 linear
 KF2_SSR_RESOLUTION=2                   # the pass at this multiple of the game's pixels; 0 the render scale
 KF2_SSR_PROBE=1                        # passes, water rects and triangles, 2D overlays, refusals by blend, the fog curve, a readback of what each reflective pixel found, and a material map
-KF2_PLANAR=1                           # planar reflections: the world walked again from a camera mirrored in the water (off by default; needs KF2_SSR; GL core only)
+KF2_PLANAR=0                           # planar reflections: the world walked again from a camera mirrored in the water (on by default; GL core only)
 KF2_PLANAR_TOLERANCE=48 KF2_PLANAR_BIAS=8   # how far off the plane a surface may be and take it; how far above it geometry must be to be reflected
 KF2_PLANAR_RIPPLE=4                    # how far the water's own texture bends the reflection, game pixels per unit of brightness change; 0 a flat mirror
-KF2_PLANAR_PROBE=1                     # the plane, the mirrored walk and its arena, captures, binned water, and the readback with its check on the mirror
+KF2_PLANAR_PROBE=1                     # the plane and how far it moved, the mirrored walk and its arena, captures, binned water (at rest, not level), and the readback with its check on the mirror
+KF2_PLANAR_CULL=0                      # the mirrored walk draws only the eye's cells (its own cull by default: every half on the eye's level in the view cone, no occlusion flood, and the models standing there, drawn only in the mirror)
+KF2_PLANAR_FOG=0                       # fog the planar reflection at the mirrored camera's own view depth, as the game would (the larger of that and the level depth by default)
+KF2_RETAINED=1                         # reflections drawn from the retained scene: the map and models kept on the GPU in world space (off by default; no longer a setting; GL core only; stands down while the planar walk is on)
+KF2_RETAINED_PLANAR=0 KF2_RETAINED_CUBE=0   # leave out its planes, or its camera cubemap (which otherwise replaces the screen march)
+KF2_RETAINED_CUBESIZE=256              # a cubemap face's size in pixels
+KF2_RETAINED_CULL=0                    # draw the faces a mirror or a cube face sees from behind (culled by default, as the game culls them)
+KF2_RETAINED_GATE=0                    # reflect every map half, not only those the frame's own tile walk drew
+KF2_REFLECT_REACH=2                    # what the retained scene's reflections may show grown past the camera's cull by this many cells, held 0.75 s and faded (0, the frame's own, by default; no longer a setting; the planar walk has its own cull)
+KF2_REFLECT_REACH_PROBE=1              # a line every 2 s: halves drawn, grown, held after leaving, fading, extra tiles, model queries let through, halves that entered inside the view and the nearest's depth
+KF2_RETAINED_PROBE=1                   # the mesh and its check against the GTE's own vertices, the planes, GPU time per draw, chunks culled, and (with KF2_SSR_PROBE=1) the planar-vs-cubemap agreement
+KF2_RETAINED_LIT=0                     # leave authored lights and glows out of the reflections (in by default)
+KF2_RETAINED_MIPS=0                    # no mip atlas in the reflections, only the anisotropic taps (on by default)
+KF2_GPUWORLD=0                         # the map's opaque faces drawn on the GPU from the retained scene, not assembled by the game's code (on by default; 0 never; unset, Video ▸ Frame pacing ▸ GPU geometry; the `gpuworld on|off` shell verb; GL core only; 0085)
+KF2_GPUWORLD_PROBE=1                   # a line every 2 s: draws, walks that missed the map, triangles a draw, halves left whole and kept for their water, the water's slices, empty calls and calls that waited, and the draw's CPU time by part; the models taken, culled and drawn, and their light runs; light generations a frame and map builds; the surface buffer read back against the frame's depth (needs a reflection or the murk on)
+KF2_GPUWORLD_SURFACES=0                # leave the GPU-drawn map out of the occlusion's normals and the surface buffer (a comparison; the `gpuworld surfaces off` verb)
+KF2_GPUWORLD_FOGZ=0                    # fog the GPU-drawn map from the corners' screen-affine cue again, not each pixel's depth (a comparison: a floor clipped at the eye fogs to black)
+KF2_GPUWORLD_NEAR=16                   # the GPU-drawn map's near plane in view depth (16; the game's clipper keeps everything past 0)
+KF2_GPUWORLD_WATER=0                   # leave the map's water on the packets under the GPU world renderer (a comparison; the `gpuworld water off` verb)
+KF2_GPUWORLD_MODELS=0                  # leave the object walk's models on the packets under the GPU world renderer (a comparison; the `gpuworld models off` verb)
+KF2_GPUWORLD_MIRROR=0                  # leave the planar walk's mirror on its packets under the GPU world renderer (a comparison; the `gpuworld mirror off` verb; `gpuworld mirror hide` leaves it undrawn)
+KF2_GPUWORLD_MESHES=0                  # take the lit models' faces to world space on the CPU every frame, not draw them from meshes kept on the GPU (a comparison; the `gpuworld meshes off` verb; `gpuworld instances` lists the frame's)
+KF2_GPUWORLD_MESHCHECK=1               # run the transform for every model drawn from its mesh and compare each face's keep decision, and each vertex's place, with the game's (slow)
+KF2_GPUWORLD_POSES=0                   # copy every instance's posed vertices into the frame, not blend them from the pose store kept on the GPU (a comparison; the `gpuworld poses off` verb)
+KF2_GPUWORLD_POSECHECK=1               # decode every pose drawn from the store into RAM as well, and compare each vertex with the shader's blend of its texels
+KF2_GPUWORLD_ARM=0                     # leave the first-person arm on its packets under the GPU world renderer (a comparison; the `gpuworld arm off` verb)
+KF2_GPUWORLD_BLEND=0                   # leave a model's blended faces (translucent parts, effects, billboards) on the packets under the GPU world renderer (a comparison; the `gpuworld blend off` verb; `blend lit|twin|both` picks the routes, `blend hide|show` leaves them undrawn, `blend only N` draws one instance's, `blend depth off` skips their depth test)
+KF2_GPUWORLD_SKY=0                     # leave the sky (the objects of kind 0xF0) on the packets under the GPU world renderer (a comparison; the `gpuworld sky off` verb; `sky hide|show` leaves it undrawn)
+KF2_GPUWORLD_TILE=0                    # take the objects near the camera (the clipped map assembler's) to world space on the CPU every frame and leave their blended faces on the packets, not draw them from their meshes (a comparison; the `gpuworld tile off` verb)
+KF2_GPUWORLD_MIRRORBLEND=0             # leave the mirror's blended model faces (translucent parts, effects, billboards) on the mirrored table's packets (a comparison; the `gpuworld mirror blend off` verb)
+KF2_GPUWORLD_BLENDSURFACES=0           # leave the GPU-drawn blended model faces out of the normal and surface buffers (a comparison: a solid door, an authored material or the water's texture on a model's blended face missing there; the `gpuworld blend surfaces off` verb)
+KF2_GPUWORLD_SUBTEST=1                 # a diagnostic: every forced-blend submit (effects, billboards) at the subtractive rate, on both paths, since no area was seen to use it
+KF2_GPUWORLD_RECORDS=0                 # carry each map corner's colour and cue from the CPU, rebuilt whenever a light record changes, not lit in the shader from the records (a comparison; the `gpuworld records off` verb)
+KF2_GPUWORLD_RECORDCHECK=1             # build the map's colours and cues on the CPU as well, and compare the shader's formula with them on every corner (slow builds)
+KF2_GPUWORLD_CELL=0                    # the cell walk calls the half routine for every half again, the half returning at once when the GPU draws it (a comparison; the `gpuworld cell off` verb)
+KF2_GPUWORLD_CENSUS=1                  # a line every 2 s: the CPU's projections and the 3D packets drawn, in stage 13 and outside it, and every transform and assembler call by context (walk, mirror, arm, stage 13, outside) with its bytes; names the first caller outside the walks
+KF2_REMASTER=1                         # apply the working pack (off by default; the editor's checkbox saves it); Shift+E opens the editor
+KF2_REMASTER_PACK=dir                  # the working pack (packs/working)
+KF2_REMASTER_PROBE=1                   # a line every 2 s: the area, its fingerprint, what applied; a diff of the tile bytes when an area's fingerprint changes
+KF2_REMASTER_LIGHTS=0                  # leave the pack's authored lights out (they apply with the remaster by default; 0071)
+KF2_REMASTER_ATMOS=0                   # leave the pack's light-record overrides out (they apply with the remaster by default)
+KF2_REMASTER_LEVEL=1                   # apply the pack's tile edits, which change gameplay (off by default; 0 never; unset, the saved setting)
+KF2_REMASTER_PROPS=0                   # leave the pack's props out (they apply with the remaster by default)
+KF2_REMASTER_SHADOWS=0                 # no shadows from the authored lights (on by default: a depth cubemap per light from the retained map, 0077)
+KF2_REMASTER_SHADOW_MODELS=0           # only the map casts: creatures and objects stay out of the lights' cubemaps (they cast by default)
+KF2_REMASTER_SHADOW_SIZE=1024          # a shadow cubemap face's size in texels (64-4096)
+KF2_REMASTER_SHADOW_BIAS=6 KF2_REMASTER_SHADOW_OFFSET=1.5 KF2_REMASTER_SHADOW_SOFT=1.25   # compare bias in world units; normal offset and filter spread in texels (the `light shadows tune` verb sets them live)
+KF2_LIGHTCENSUS=1                      # who reads and writes the area's light records, by stage, every 5 s (slow: every RAM access takes the slow path; run with KF2_PRIMBUF=1)
+KF2_FACE_PROBE=1                       # every tile face given one of the ids 4-7 by its key; checks the subdivider's face order and a pick from the frame's triangles against the GPU's ids (needs a reflection or the murk on, and KF2_SSR_PROBE=1; overrides any authored material)
+KF2_TEXCENSUS=1                        # the texture-key census: keys, art, overlapping rects, dynamic places, what a pack covers, uploads, every 5 s; the `textures` shell verb saves it (0073)
+KF2_TEXKEY=face                        # key a replacement on the face's texture rectangle, not the image the game uploaded it as; =triangle each triangle's own UVs, as upstream does
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
@@ -180,13 +252,15 @@ KF2_MOUSE_LEAD=0                         # mouse look waits for the tick, as wit
 KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
 KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
+KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
+KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second
 KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_AUTOSTART=new                        # the same, but stay in the New Game (fdat02, which has scrolling water)
 KF2_BOOTEXE=end                          # boot straight into OPEN.EXE, GAME.EXE or END.EXE
 KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the original does (a button exits by default)
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
-KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill|goto
+KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill|goto|view
 KF2_UISCALE=1                            # force the interface scale, and save it
 KF2_ICON=orb                             # the shipped verdite mark as the window icon (the game's memory-card icon, off the disc, by default)
 KF2_ICON=off                             # no window icon at all

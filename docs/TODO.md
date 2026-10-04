@@ -25,10 +25,13 @@ useful than the question was.
 | **Every MO clip measured is 4096 units long.** | The modulus is confirmed twice over (highest clip time seen 4095; wrap steps are exactly `rate - 4096`), but a uniform length means `AnimSmoothing.Duration`'s per-clip walk would look identical if it were reading a constant. Finding one clip with a different `D` is the test. | "The model pipeline has no skeleton" in [GAME_INTERNALS.md](GAME_INTERNALS.md) |
 | **`SettingsRegistry.Extend` can only append, and cannot un-append.** No ordering argument, and no removal API. The port worked around both by taking the Input pane over outright; the gap is still upstream's. Nothing is filed upstream; the vendored tree is where it would be fixed. | The pane is fixed; this is the mechanism that made it hard. | "The Input pane is the port's" in [INPUT.md](INPUT.md) |
 | ~~**The smoothing is sometimes dead for a whole session, and the title screen's speed predicts it.**~~ **Closed: a committed hook stopped firing, because the tiered JIT recompiled the method under MonoMod's detour.** | Reported from play at 240 fps: the menu bar at **480** on the title and in areas, host VSync off, world speed normal. 480 is `FramePacing.ApplyHostCeiling`'s `max(60, 2×T)`, so nothing of the port was holding the picture. **The title-menu loop has no wait of its own** (`func_80011AE0`: swap, UI, `PadRead`, `func_80013B04` with one `VSync(0)` and one `DrawOTag`); a healthy title reads 240.0 drawn and 240.0 presents a second at 240. The 15.0 this row used to call the healthy title is the logos' STR stream. `FramePacing`'s sentinel (on `0042`'s counters, which count presents inside `LibEtc.VSync` rather than by hook) caught it three times: one of ten user-launched instances on the title (`VSync pre 0/s, DrawOTag post 480/s`), and a single autostart boot in an area (`VSync pre 0/s`, watchdog active, 235 fresh against 3144 held `FallbackTick` decisions, 483 presents a second). **Every time, the captured `VSync` stack ran `func_80013B04 → func_8001EB88` (or `func_8002E0FC → func_8005FCC8`) straight into its own body**, where a working hook runs `SyncProxy<…> → Hook<…>` — with `HookManager.IsCommitted` still true for all six sites. Forcing early tier-up (`DOTNET_TC_CallCountingDelayMs=0 DOTNET_TC_CallCountThreshold=1`) took it from about 1 boot in 10 to **6 in 10**, losing the `VSync` pre, the `DrawOTag` post or both; the same with `DOTNET_TC_QuickJit=0` took it to **0 in 10**. **Fixed** with `TieredCompilationQuickJit=false` in both `KingsField2Recomp.csproj` and `Verdite2.Launcher.csproj` (the launcher runs the game in-process): a method with no precompiled code is compiled once, fully optimised, and never recompiled. Verified over 20 autostart boots into an area, ten of them with tier-up forced early: the frame boundary held to the end of every session (its only gap a single watchdog second at the `fdat02` load, with ten instances sharing the CPU), against 6 of 10 sessions losing it before the fix. Costs about 2 s to the first area (6.2 s → 8.3 s) and a few seconds of first-run dips (160-208 fps) before a steady 240.0. **The in-area half was the watchdog doubling the rate**: `FallbackTick` held a decision for 3 ms, so an iteration shorter than that reused it with no `Floor` — two frames to one wait. It now holds only until the next present (`LibEtc.VSyncCalls`); with GAME.EXE's `VSync` hook deliberately removed it measures 240.0 presents and 19.7-20.7 ticks a second, and a 4 s walk covers 2844 units. **The prime-flag theory this row used to carry was wrong**: the smoothers were a casualty of the pacing. Whether the first-run dips are acceptable is for play to judge. | "Everything hung off one hook" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md) |
-| **RCNT3 is delivered twice per vblank on the port's timeline.** Found by reading; never listened to. | `LibEtc.TickVBlank` calls `BiosB.DeliverEventIntr(0xF2000003, EvSpINT)` and then `Runtime.DispatchIrq(0)`, and `Interrupts.ServiceIrq` opens with `BiosB.DeliverIrqEvents(0)` — which delivers `0xF2000003` again. An `EvMdINTR` handler on that event therefore runs twice a vblank whenever IRQ 0 is deliverable (unmasked, outside a critical section). OPEN.EXE's sound tick setup `func_8001F1D0` can drive `SsSeqCalledTbyT` from exactly that event (`SetRCnt(0xF2000003, 1, 0x1000)`) instead of `VSyncCallback`, so the sequencer may step double. Check whether `DeliverIrqEvents` arrived with the `d81dec8` merge, and listen to the title music before changing anything. Not the frame-rate row above. | "The vblank fired when the game asked" in [RUNTIME.md](RUNTIME.md) |
+| **RCNT3 is delivered twice per vblank on the port's timeline.** Found by reading; **measured 2026-10-02: `func_80017850` runs 120.0 times a second in an area, so `0x801B6CAC` (the ambient-sound retrigger clock) runs at twice the console's rate; no RCNT3 handler ran during OPEN.EXE, so the title music was not affected in that run. Fixed in the fork as `2013e51` (made in Verdite3 as `0825391`, amends `0021`; pushed, not pulled here): with it applied here, `0x801B6CAC` reads 60.0/s and the acceptance test reads the same (fdat05, HP 46/86, 144.0 fps, 20.0 ticks/s, presents wide 288, perspective 100% hit). Pulling it changes how often ambient object sounds retrigger: listen first.** | `LibEtc.TickVBlank` calls `BiosB.DeliverEventIntr(0xF2000003, EvSpINT)` and then `Runtime.DispatchIrq(0)`, and `Interrupts.ServiceIrq` opens with `BiosB.DeliverIrqEvents(0)` — which delivers `0xF2000003` again. An `EvMdINTR` handler on that event therefore runs twice a vblank whenever IRQ 0 is deliverable (unmasked, outside a critical section). OPEN.EXE's sound tick setup `func_8001F1D0` can drive `SsSeqCalledTbyT` from exactly that event (`SetRCnt(0xF2000003, 1, 0x1000)`) instead of `VSyncCallback`, so the sequencer may step double. Check whether `DeliverIrqEvents` arrived with the `d81dec8` merge, and listen to the title music before changing anything. Not the frame-rate row above. | "The vblank fired when the game asked" in [RUNTIME.md](RUNTIME.md) |
 | **The signature bank and this port disagree about where `DMACallback` is, in all three overlays.** | `patches[]` binds it at `open 0x8001EAF0` / `game 0x8005FC30` / `end 0x8001B0BC`, hand-identified by indirect-call tracing. Upstream's PSY-Q signature matcher puts it at `0x8001E49C` / `0x8005F60C` / `0x8001AA68` — about 0x620-0x654 earlier in each — and names `DMAInit` and `DMAStop` just after its candidate, which is a coherent libapi cluster. One of the two is wrong and it is checkable: `KF2_LOG=sdk` with a breakpoint, or logging the address `Dispatcher.Call` actually dispatches for a DMA completion, settles it. The name merge deliberately refuses to name either, so `patches[]` still binds the port's address and nothing changed — but if the port's address is the wrong one, MDEC callbacks have been running on a neighbouring routine. | "Merging the SDK names" in [RECOMPILATION.md](RECOMPILATION.md) |
+| **A speckled fringe along a reflected edge.** Seen by eye on a dry floor tile given full reflectivity through the remaster editor: the reflected doorway is placed correctly, but the wall edge beside it is reflected as a stipple of hits and misses. Judged by the user as the reflection pass's, not the material's. | Not diagnosed. The material only sets the pixel's reflectivity and F0; the march is `SsrFs`'s, unchanged. The edge is where the thickness test decides a ray is behind the wall or on it (`0067`'s amendment halves back to the crossing and keeps only a ray within `KF2_SSR_THICKNESS`), so the steps (`KF2_SSR_STEPS`), the thickness and the pass resolution are the first three things to vary. Water likely hid it: its reflection is weaker, fogged and scrolling. A still floor at reflectivity 1 is the harshest test the pass has had. | RENDERING, "Screen-space reflections"; REMASTER, "Phase 1, the first slice" |
 | **World-space occlusion is far too strong in some rooms.** Seen by eye with `KF2_AO_WORLD=1` at the default strength of 0.6: an enclosed cave floor sinks almost to the term's floor rather than darkening only in its corners. | The mechanism is right — the same view measures 17.8% shaded to 34.4% — so this is the shape of the term, not a wrong grid or transform. A small room is surrounded on every side by tiles that occlude, so nearly every march direction finds a horizon; the screen-space pass cannot do that because a direction leaving the screen contributes nothing. Three candidates, untested: the flat `AoWorldStrength` with no falloff in how much of the hemisphere is blocked, the ring radii being tile-sized so a small room lies entirely inside the first ring, and an undrawn tile standing as rock of unbounded height instead of up to the ceiling. It ships off, so nothing is affected until this is settled. | "Occluders the camera cannot see" in [RENDERING.md](RENDERING.md) |
+| **`+4` bit `0x80` is read as a wall, and in area 0 every tile has it.** `AoWorld` stands a tile with the bit as a wall of `uWallHeight`, and `CullGrid` stops its visibility flood there. | Measured by the remaster's picking over the 12×12 tiles round the New Game spawn in `fdat02`: every tile, both halves, water, shore and sea floor, carries it, so it cannot be what a wall is there. What it is instead is unknown; a cave area is the place to count it next. If it is set on every open-air tile, the world occlusion term treats the whole shore as walled, which may be part of the row above. | REMASTER, "Phase 1, the second slice"; "Occluders the camera cannot see" in [RENDERING.md](RENDERING.md) |
 | **Solid should mean blocks the player.** Which blended object models write a full depth is a hand-kept list of kinds (`ModelWalk.SolidKind`: `02` doors, `0E` the secret door), found by sweeping areas 0-7; an object the sweep never saw gets the default, not solid. | The old key (every object-table model) made area 0's water hide the walls below it. Two candidates for a key the game supplies: the movement code's object collision test, which already decides what stops the player and may read a definition byte (`def+3` is `00`/`01`/`03`/`04` across kinds); or splitting the two depth consumers, so a blended surface only ever feeds the occlusion pass and never the Z-buffer's test, which would make this class unable to hide geometry at all. Which consumer the door actually needs has not been measured (`KF2_AO=0` against `KF2_ZBUFFER=0` with the door unsolid). | "A secret door is solid all the way through" in [RENDERING.md](RENDERING.md) |
+| **An area module's write into a light record lasts a frame, not a tick.** Found by the light-record census; nothing seen on screen. | In `fdat20`, stage 6 (gated to the tick) writes record 63's light matrix straight into the destination at `0x801930F0`, and stage 1 (every frame) copies the source back over it on the next frame. At the original rate that was one tick; at 144 fps it is one frame in seven. What record 63 lights in area 6, and whether the module means it to last, are not known; `TintHold` is the shape of a fix if it matters (hold the copy of that record to the tick). | "The light records are read only by the renderer" in [REMASTER.md](REMASTER.md) |
 | **A stall at mod load, seen once, never reproduced.** | In `HookManager.Commit`, worker thread absent from the stack. Not a standing trap — recorded only so it is recognised if it recurs. | "Seen once, not reproduced", under "Four things that will bite" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md) |
 | ~~**The first primitive after the animated textures step costs 0.76 ms.**~~ **Closed.** `WriteRect` was blitting every `LoadImage` up to the scaled VRAM atlas (1024×512×`GlVram.Scale`), so ten uploads from `func_8002DC78` wrote that atlas as an FBO colour attachment and the next `GlCore.Flush` sampled it — a pipeline sync, measured 756 µs on one map-tile quad against 0.2–5 µs for every other send. The prim shader now samples a 1× copy (`IGlVram.SampleTexture`); uploads `TexSubImage2D` there and stop. The first version then `Publish`ed each no-target draw's AABB from the atlas onto that 1× copy, which erased the uploads: paletted surfaces discarded as index 0, objects sampled leftover framebuffer texels. Those draws now land in 1× and `Promote` up. Stopping the scaled blit left `GlCore.Flush` at 0.6 ms: the 1× texture was still the sample FBO's colour attachment, so the uploads were still render-target writes. Sample VRAM is now never a draw attachment; GPU writes go to a second 1× framebuffer and `CommitDraw` copies the AABB back. The scaled atlas remains the display writeback / present-fallback target. `0054`. The new `Flush` figure has not been re-measured. The 29 semi-transparency batch splits are a separate cost and still open. | "Watching a frame being built" in [DEVELOPMENT.md](DEVELOPMENT.md) |
 
@@ -167,17 +170,18 @@ useful than the question was.
      the question is not "can it be gated" but "is there one word upstream of all
      of it". See "The flames run at the render rate" in
      [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
-   * **Stage 13's jitter accumulator at `0x8006E608`**, which no hook can reach
-     because it is in stage 13's own body. With the modal loops closed and the
-     sprite cels fixed, this and the `rec+0x40` retrigger above are the **only**
-     rate defects left, and they are the same shape as each other: a counter
-     stepped inside a drawing function's own body, which needs a hold/restore pair
-     on the field rather than a deadline on the frame. Neither has been reported
-     from play, and neither has the sprite counter's single-word escape hatch —
-     the shake accumulator is summed from `func_80015374()` in place, and the
-     retrigger is per object. **A modal loop's redraws make both of them fire
-     inside it as often as they already do in the main loop** — no worse than an
-     ordinary frame, but no better either.
+   * ~~**The compass needle's speed at `0x8006E608`**~~, stepped in stage 13's own
+     body -- long written up here as a screen-shake "jitter accumulator". **Fixed**:
+     stage 13 is C# (`patches/Stage13.cs`) and steps the spring on the first walk
+     of a tick, 20.0 steps a second at 20, 60 and 144 fps against 144.0 before,
+     and 19-20.5 through a modal loop's redraws. See "The compass needle is held
+     to the tick" in [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md). With it, the
+     `rec+0x40` retrigger above is the **only** rate defect left: a counter
+     stepped per object inside a drawing function's own body, which needs a
+     hold/restore pair on the field rather than a deadline on the frame. Not
+     reported from play. **A modal loop's redraws make it fire inside the loop as
+     often as it already does in the main loop** — no worse than an ordinary
+     frame, but no better either.
 
    * **A counter a modal loop steps in its own body** — a picked-up item's spin, if
      its transform does not come from a table `ObjectSmoothing` carries. Its
@@ -396,16 +400,16 @@ useful than the question was.
    input polled only from `PresentFrame`, which deadlocks any game that waits on
    the pad without vsyncing, and `Interrupts.Deliver` deriving a callback-table
    address from the `HookEntryInt` jmp_buf, which calls whatever the resulting
-   game variable holds. Both are in `patches/recompone/0006` and `0007` with the
+   game variable holds. Both are in `tools/RecompOne/patches/0006` and `0007` with the
    reasoning; the second at minimum should refuse a handler that is not a known
    function. A third is `QueryDpiScale` taking the *primary* monitor's content
    scale once at startup, so the interface is scaled for a monitor the window may
    not be on and never follows it across; and a fourth is not RecompOne's at all
    but Silk.NET's — the integer division in
-   `ImGuiController.SetPerFrameImGuiData` that `patches/recompone/0018` works
+   `ImGuiController.SetPerFrameImGuiData` that `tools/RecompOne/patches/0018` works
    around, which breaks every fractionally scaled display and belongs in
    `dotnet/Silk.NET`; and the same controller trusting `Resize` alone for the
-   window's size, which `0069` works around on Wayland.
+   window's size, which `0080` works around on Wayland.
 9. **Walk a wall with sub-pixel on.** The default is now on. The mechanism is
    measured — 47k vertices a second recovered, offsets uniform across the pixel,
    no frame-rate cost. `GteDepth.Subpixel` is read at vertex-decode time. Expect a
@@ -425,7 +429,7 @@ useful than the question was.
    behind `KF2_ZBUFFER`/`KF2_ZBUFFER_PROBE`. See "Z-buffer" in
    [RENDERING.md](RENDERING.md).
 11. **Decide what the interface should be scaled by, and by eye.**
-   `patches/recompone/0018` fixed *where* the interface is drawn; how large it is
+   `tools/RecompOne/patches/0018` fixed *where* the interface is drawn; how large it is
    is a second defect and still ours. `QueryDpiScale` returns the primary
    monitor's integer `wl_output` scale — 2.0 for a monitor KDE runs at 1.15 — so
    `Theme.Scale` and the 26 px icon font are wrong on both screens at once, and
@@ -600,14 +604,15 @@ useful than the question was.
    one *Even fog and lighting* checkbox (`KF2_EVENLIGHT=0` drops the light part).
    See "The light colour changes at the same edge" in [RENDERING.md](RENDERING.md).
 18. **Look at the water reflections, then decide what comes next on the surface
-   buffer.** `KF2_SSR=1` (or Video ▸ Experimental ▸ *Water reflections*) with
+   buffer.** `KF2_SSR=1` (or Video ▸ Experimental ▸ *Screen-space reflections*) with
    `KF2_AUTOSTART=new`, facing the water in `fdat02`. The mechanism is measured and
    the picture has been seen once, and the two things reported (the HUD reflected,
    pop-in past the fog) are fixed by mechanism and not yet looked at again. Still to
    judge: strength, F0, the edge fade, and how a flat mirror sits on the scrolling
    water. Not yet measured: the main-hall fire (it
-   should be refused as additive; the probe counts refusals by blend) and blended
-   slime skins, which would reflect if they average. After that, in order of
+   should be refused as additive; the probe counts refusals by blend). The slime
+   skins did average, and are no longer water (RENDERING, "A model is water only if
+   it is a sheet of it"). After that, in order of
    payoff: a ripple on the water's normal, driven by the fluid slot's own phase so
    it moves with the scroll; a blur by hit distance for rougher surfaces; and a
    material from the port (`GtePacketDepth.Rec.Material`, set in `SealDepth`) for
@@ -618,8 +623,9 @@ useful than the question was.
    light in it; per-pixel lighting (`0048`) records what that light was made of
    per packet, which is where to start. See "Screen-space reflections" in
    [RENDERING.md](RENDERING.md).
-19. **Look at the planar reflections.** `KF2_SSR=1 KF2_PLANAR=1` (or *Planar
-   reflections* under *Water reflections*), `KF2_AUTOSTART=new`, facing the pool.
+19. **Look at the planar reflections.** `KF2_PLANAR=1` (or Video ▸ Experimental ▸
+   *Planar reflections*), `KF2_AUTOSTART=new`, facing the pool; add `KF2_SSR=1` for
+   the march off the plane.
    The mechanism is measured, and the mirror is sampled in the right place (3.5
    against 24.2 unmirrored); the picture has never been looked at. To judge: the
    ripple (`KF2_PLANAR_RIPPLE`), the seam where an empty mirrored texel falls back
@@ -633,3 +639,52 @@ useful than the question was.
    discarded per fragment. A tile half whose whole model lies below the plane
    could be skipped in the mirrored walk. See "Planar reflections" in
    [RENDERING.md](RENDERING.md).
+20. **Look at the world reflections.** `KF2_RETAINED=1` (or Video ▸ Experimental ▸
+   *World reflections*). The mechanism is
+   measured (see "The retained scene" in [RENDERING.md](RENDERING.md)): the map and
+   the object walk's models land within 1 px of the GTE's own vertices, the planes
+   and the cubemap agree to 3-4 brightness levels where both find a surface, and it
+   costs 0.3 ms of CPU and under 1 ms of GPU a frame here. Nothing about the
+   picture has been judged: the `fdat02` pool and a mirror floor while turning, the
+   cubemap on walls and props (a floor or a wall set reflective through the editor),
+   the seam between a plane and the cubemap, and what a miss reflecting nothing looks
+   like. Billboards and effects, authored lights and glows, mipmaps and
+   `EvenFog`/`EvenLight`'s blends are all in it now (measured, not judged); a
+   billboard is its card as the player sees it, not turned to the mirror. If it holds up, the planar walk (`PlanarWalk`) and the screen march are
+   comparisons only and can leave the settings window.
+21. **Look at a replaced texture.** `packs/phase4-test` (generated test patterns,
+   not committed; delete the folder to take it out) replaces area 1's two tile
+   sheets at 4x. The mechanism is measured (see "Phase 4, the first slice" in
+   [REMASTER.md](REMASTER.md)): both keys replaced, 97.4% of the pinned view
+   changed, the filter set, no GL error. Nothing about the picture has been judged:
+   whether the pattern lies on the floor the right way up and at the right scale,
+   and how it holds under the *Texture filtering* slider at a distance and while
+   turning. A scrolling texture can be replaced too now (see "Phase 8, the
+   second slice" in [REMASTER.md](REMASTER.md)): `textures dump on` in `fdat02`
+   writes the water's source image, and a replacement of it should scroll as the
+   water does, with no seam where it wraps.
+22. **Look at a material set on a texture.** Open the editor (Shift+E), pick a
+   wall or floor, and under *Texture* give it a material *Everywhere*; it should
+   reach every face drawing that art, in every area, and the water in `fdat02`
+   while it scrolls. The mechanism is measured (see "Phase 4, the second slice" in
+   [REMASTER.md](REMASTER.md)); the editor's *Everywhere* combo and *Any palette*
+   have been driven only through the shell, and no picture has been judged. A
+   glowing texture gives a light per tile half: set *Light* to 0 on a material
+   meant only to glow.
+23. **Look at a prop.** Open the editor (Shift+E), click an object in the picture
+   (an urn, a chest), and under *Props* press *Add here* or tick *Place on the
+   picture* and click the floor. The mechanism is measured (see "Phase 8, the first
+   slice" in [REMASTER.md](REMASTER.md)): it draws, picks as itself, takes the
+   model's material and its glow's light, and costs nothing at 144 fps. Nothing has
+   been looked at: whether it stands on the floor rather than in it or above it (a
+   model's origin need not be its base), whether its light matches the objects
+   beside it, and how an MO-posed model (a door, a chest) looks held in the pose it
+   was copied in.
+24. **`CullGrid`'s port of the flood differs from `func_8002D15C` in two places.**
+   Found by checking a flood written from `CullGrid` against the game's grid.
+   `patches/CullGrid.cs`'s `Cell` returns as soon as the eye's level is dark, where
+   the game still carries the other level (the `alive` bit) on through a cell whose
+   other half is not empty; and it seeds from the lower half's flags
+   (`MapBase + 4`), where the game adds the half selector. Only `KF2_CULLGRID=on`
+   runs it, which is off by default. `KF2_CULLGRID=shadow KF2_CULLGRID_COMPARE=1` is
+   the check to fix it against.

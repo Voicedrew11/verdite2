@@ -10,7 +10,7 @@ namespace Kf2.Settings;
 /// question. The console renders into 15-bit VRAM, so a fog gradient steps into
 /// 32 levels; the GPU's ordered dither hides that with a 4x4 crosshatch, and
 /// <see cref="TrueColor"/> removes it instead by keeping eight bits
-/// (<c>patches/recompone/0021</c>). Offered as two ticks they cross into four
+/// (<c>tools/RecompOne/patches/0021</c>). Offered as two ticks they cross into four
 /// states carrying three meanings, and the fourth — dither on *and* 24-bit — is a
 /// smooth gradient with a crosshatch laid over it, which is nobody's answer to
 /// anything. That state is what the combo exists to stop being reachable.

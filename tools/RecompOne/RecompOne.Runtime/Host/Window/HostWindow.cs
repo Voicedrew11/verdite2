@@ -1034,7 +1034,7 @@ public static class HostWindow
     private static Action<Vector2D<int>>? _imguiResized;
     private static bool _imguiResizedMissing;
 
-    // 0069. Silk's ImGuiController learns the window's size only from the Resize
+    // 0080. Silk's ImGuiController learns the window's size only from the Resize
     // event, and GLFW on Wayland raises no window-size callback on leaving
     // fullscreen (only the framebuffer one), so the interface stayed laid out
     // for the fullscreen size with its top -- the menu bar -- off the window.

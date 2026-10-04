@@ -161,7 +161,7 @@ if (!string.IsNullOrWhiteSpace(autopad))
 // 1.44 -- inside UiScale's own range, and reachable at a UiScale of 1 by itself,
 // since QueryDpiScale reads the primary monitor's GLFW content scale and GLFW's
 // Wayland path reports the integer wl_output scale (a 1.15 display arrives as 2).
-// patches/recompone/0019 clamps a popup to the viewport so the controls can no
+// tools/RecompOne/patches/0019 clamps a popup to the viewport so the controls can no
 // longer leave the window; this repairs a settings file that is already past that
 // point, by writing the value as well as applying it.
 Kf2.UiScale.Configure(Environment.GetEnvironmentVariable("KF2_UISCALE"));
@@ -368,7 +368,7 @@ Kf2.SpriteAnim.Install();
 // Which words of the game's memory change at the render rate rather than at the
 // tick rate -- the instrument that turns "something looks too fast" into an
 // address. Samples on the emulated vblank, which is a wall-clock 60 Hz grid since
-// patches/recompone/0021, so two runs at different render rates are directly
+// tools/RecompOne/patches/0021, so two runs at different render rates are directly
 // comparable. Off by default; it costs a compare over the game's data region
 // sixty times a second.
 //
@@ -391,10 +391,14 @@ Kf2.RateCensus.Install();
 //
 //     KF2_SMOOTH=0        off; on by default, or the view steps at the logic rate
 //     KF2_SMOOTH_POS=0    leave the position at the tick (carried by default)
+//     KF2_SMOOTH_COMPASS=0  leave the compass needle on the tick (carried by default)
+//     KF2_SMOOTH_GAUGES=0   leave the HP and MP gauges on the tick (carried by default)
 //     KF2_SMOOTH_PROBE=1  what is being carried, per second
 //     KF2_SMOOTH_PROBE=2  also trace every frame for 400 ms after an area load
 Kf2.FrameSmoothing.Configure(Environment.GetEnvironmentVariable("KF2_SMOOTH"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_POS"),
+                             Environment.GetEnvironmentVariable("KF2_SMOOTH_COMPASS"),
+                             Environment.GetEnvironmentVariable("KF2_SMOOTH_GAUGES"),
                              Environment.GetEnvironmentVariable("KF2_SMOOTH_PROBE"));
 Kf2.FrameSmoothing.Install();
 
@@ -501,10 +505,9 @@ Kf2.FluidSmoothing.Install();
 //     KF2_LOOPPACING_PROBE=1  modal frames a second, world and interface
 //     KF2_LOOPPACING_PROBE=2  also how far the loop's own view moves per iteration
 //
-// Installed *after* the three smoothing patches, and that ordering is
-// load-bearing: HookManager runs the posts on a function in the order they
-// were added, and the redraw has to be asked for once their own posts
-// have put the tables back.
+// The redraw has to be asked for once the smoothing patches' own posts have put
+// the tables back. That is declared on the hook (Stage13.HookOrder.Redraw, 0070),
+// so where this line sits no longer matters.
 Kf2.LoopPacing.Configure(Environment.GetEnvironmentVariable("KF2_LOOPPACING"),
                          Environment.GetEnvironmentVariable("KF2_LOOPPACING_PROBE"));
 Kf2.LoopPacing.Install();
@@ -626,6 +629,9 @@ Kf2.Subpixel.Install();
 //                          picture that costs
 //     KF2_ZBUFFER_SOURCE=map  depth from the address map instead of the assemblers
 //     KF2_ZBUFFER_BIAS=1 KF2_ZBUFFER_SLOPE=0.5  coplanar tolerance: SZ units, and pixels of slope
+//     KF2_BLENDORDER=0        blended surfaces (water) drawn in table order again, under
+//                             opaque geometry behind them that the table put later (0079)
+//     KF2_BLENDORDER_PROBE=1  opaque samples drawn over a nearer translucent surface
 //
 // Off by default where perspective correction is on -- the recovered number is
 // the same one, but the picture has not been checked by eye. Its switch is under
@@ -635,7 +641,9 @@ Kf2.ZBuffer.Configure(Environment.GetEnvironmentVariable("KF2_ZBUFFER"),
                       Environment.GetEnvironmentVariable("KF2_ZBUFFER_THRESHOLD"),
                       Environment.GetEnvironmentVariable("KF2_ZBUFFER_SOURCE"),
                       Environment.GetEnvironmentVariable("KF2_ZBUFFER_BIAS"),
-                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_SLOPE"));
+                      Environment.GetEnvironmentVariable("KF2_ZBUFFER_SLOPE"),
+                      Environment.GetEnvironmentVariable("KF2_BLENDORDER"),
+                      Environment.GetEnvironmentVariable("KF2_BLENDORDER_PROBE"));
 Kf2.ZBuffer.Install();
 
 // Ambient occlusion -- contact shading in the corners, under the doorframes and
@@ -669,7 +677,7 @@ Kf2.ZBuffer.Install();
 // not authentic. Installed after ZBuffer because it shares that patch's writes and
 // after Pgxp would be too late for nothing; its switch is under Video with the
 // others and the tuning is on the console. GL backend only; the work is
-// patches/recompone/0040.
+// tools/RecompOne/patches/0040.
 Kf2.AmbientOcclusion.Configure(Environment.GetEnvironmentVariable("KF2_AO"),
                                Environment.GetEnvironmentVariable("KF2_AO_RADIUS"),
                                Environment.GetEnvironmentVariable("KF2_AO_STRENGTH"),
@@ -686,7 +694,7 @@ Kf2.AoWorld.Configure(Environment.GetEnvironmentVariable("KF2_AO_WORLD"),
                       Environment.GetEnvironmentVariable("KF2_AO_WORLD_PROBE"));
 Kf2.AoWorld.Install();
 
-// Screen-space reflections on water (patches/recompone/0067): a pass at present
+// Screen-space reflections on water (tools/RecompOne/patches/0067): a pass at present
 // beside the occlusion pass, reading the same depth and a surface buffer that keeps
 // the water the depth buffer cannot (it is translucent). Off by default: the
 // mechanism is measured, the picture has not been judged. See "Screen-space
@@ -703,20 +711,100 @@ Kf2.Reflections.Configure(Environment.GetEnvironmentVariable("KF2_SSR"),
                           Environment.GetEnvironmentVariable("KF2_SSR_FOGCURVE"));
 Kf2.Reflections.Install();
 
-// Planar reflections (patches/recompone/0068): the tile walk and the object walk's
+// Murky water: the same pass lays a dark colour over water by how much of it the
+// view ray crosses, on its own switch -- no reflection needs to be on. Off by
+// default. See "Murky water" in docs/RENDERING.md.
+Kf2.Murk.Configure(Environment.GetEnvironmentVariable("KF2_MURK"),
+                   Environment.GetEnvironmentVariable("KF2_MURK_DISTANCE"));
+Kf2.Murk.Install();
+
+// Water waves: a slow swell moves the water's own vertices (the tile walk points each
+// water mesh at a moved copy), and ripples push and shade its texture per pixel
+// (tools/RecompOne/patches/0078), on the world's clock. Off by default. See "Water waves" in docs/RENDERING.md.
+Kf2.Waves.Configure(Environment.GetEnvironmentVariable("KF2_WAVES"),
+                    Environment.GetEnvironmentVariable("KF2_WAVES_PROBE"));
+Kf2.Waves.Install();
+
+// Planar reflections (tools/RecompOne/patches/0068): the tile walk and the object walk's
 // submits run a second time from the camera mirrored in the water, into an ordering
-// table of the port's own, drawn into a texture the reflection pass reads first.
-// Needs KF2_SSR. Off by default: measured, not judged. See "Planar reflections" in
-// docs/RENDERING.md.
+// table of the port's own, drawn into a texture the reflection pass reads. It is
+// the reflection: the march, the retained scene and the reflection reach are
+// comparisons now, and the mirror walks a cull of its own (PlanarCull, the cone
+// without the eye's occlusion flood; KF2_PLANAR_CULL=0 the eye's cells). Off by
+// default: measured, not judged. See "Planar reflections" in docs/RENDERING.md.
 Kf2.PlanarWalk.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR"),
                          Environment.GetEnvironmentVariable("KF2_PLANAR_TOLERANCE"),
                          Environment.GetEnvironmentVariable("KF2_PLANAR_RIPPLE"),
                          Environment.GetEnvironmentVariable("KF2_PLANAR_BIAS"),
-                         Environment.GetEnvironmentVariable("KF2_PLANAR_PROBE"));
+                         Environment.GetEnvironmentVariable("KF2_PLANAR_PROBE"),
+                         Environment.GetEnvironmentVariable("KF2_PLANAR_FOG"));
+Kf2.PlanarCull.Configure(Environment.GetEnvironmentVariable("KF2_PLANAR_CULL"));
 Kf2.PlanarWalk.Install();
 
+// The retained scene (tools/RecompOne/patches/0072): the map kept on the GPU in world
+// space, built from the map data, so the reflections draw the world again without
+// the game's walks: every water or authored plane, and a cubemap from the camera
+// in place of the screen-space march. Independent of KF2_SSR. Off by default:
+// measured, not judged. See "The retained scene" in docs/RENDERING.md.
+Kf2.RetainedMap.Configure(Environment.GetEnvironmentVariable("KF2_RETAINED"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_PLANAR"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_CUBE"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_CUBESIZE"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_CULL"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_GATE"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_PROBE"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_LIT"),
+                          Environment.GetEnvironmentVariable("KF2_RETAINED_MIPS"));
+Kf2.RetainedMap.Install();
+
+// The GPU world renderer (tools/RecompOne/patches/0085): the map's opaque faces drawn
+// from the retained scene into the frame, and no longer assembled by the game's
+// code. On by default. See docs/GPU_RENDERER.md.
+//
+//     KF2_GPUWORLD=1          on; 0 never; unset, the saved setting
+//     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept; the surface buffer against the depth
+//     KF2_GPUWORLD_SURFACES=0 leave the map out of the normal and surface buffers (the comparison)
+//     KF2_GPUWORLD_FOGZ=0     the map's fog from the corners' screen-affine cue (the comparison)
+//     KF2_GPUWORLD_NEAR=16    the map's near plane
+Kf2.GpuWorld.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD"),
+                       Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"),
+                       Environment.GetEnvironmentVariable("KF2_GPUWORLD_SURFACES"));
+Kf2.GpuWorld.Install();
+//     KF2_GPUWORLD_CENSUS=1   what 3D the game's code still builds under the renderer, and where from
+Kf2.GpuWorldCensus.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD_CENSUS"));
+Kf2.GpuWorldCensus.Install();
+
+// The remaster (docs/REMASTER.md): authored data from a pack, applied over the
+// game: materials on tile faces, read by the reflection pass, and point and spot
+// lights in the prim shader (0071). Off by default and nothing is authored until
+// the editor (Shift+E) saves something.
+Kf2.Remaster.Host.Configure(Environment.GetEnvironmentVariable("KF2_REMASTER"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_PACK"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_PROBE"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_LIGHTS"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_ATMOS"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_LEVEL"),
+                            Environment.GetEnvironmentVariable("KF2_REMASTER_PROPS"));
+// Shadows for the authored lights (0077): a depth cubemap per light from the retained map
+// and the frame's models.
+Kf2.Remaster.Lights.ConfigureShadows(Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOWS"),
+                                     Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_SIZE"),
+                                     Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_BIAS"),
+                                     Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_OFFSET"),
+                                     Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_SOFT"),
+                                     Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_MODELS"));
+Kf2.Remaster.Host.Install();
+// Phase 4's texture-key census: which replacement keys an area draws, and which a
+// pack covers. KF2_TEXKEY=triangle keys each triangle on its own UVs, as upstream does.
+Kf2.Remaster.TextureCensus.Configure(Environment.GetEnvironmentVariable("KF2_TEXCENSUS"),
+                                     Environment.GetEnvironmentVariable("KF2_TEXKEY"));
+Kf2.Remaster.TextureCensus.Install();
+// Phase 5's read census: which code reads and writes the area's light records.
+Kf2.Remaster.LightCensus.Configure(Environment.GetEnvironmentVariable("KF2_LIGHTCENSUS"));
+Kf2.Remaster.LightCensus.Install();
+
 // PGXP -- upstream RecompOne's own vertex tracking, backported as
-// patches/recompone/0034-0036, and the second mechanism the port has for the one
+// tools/RecompOne/patches/0034-0036, and the second mechanism the port has for the one
 // number everything above depends on. GteVertexMap pairs memory reads and writes
 // by value and cannot see a vertex the game computes; PGXP is told what every
 // register holds, by hooks the recompiler emits, so it does not have to guess.
@@ -752,7 +840,7 @@ Kf2.Pgxp.Install();
 //
 //     KF2_TRUECOLOR=1  on; 0 or unset keeps the 15-bit output
 //
-// The mechanism is patches/recompone/0021 (the render-target format and the
+// The mechanism is tools/RecompOne/patches/0021 (the render-target format and the
 // fragment shader). Its switch is under Video with the others.
 Kf2.TrueColor.Configure(Environment.GetEnvironmentVariable("KF2_TRUECOLOR"));
 Kf2.TrueColor.Install();
@@ -767,7 +855,7 @@ Kf2.TrueColor.Install();
 //     KF2_ANISO_PROBE=1     the level, and whether the uniform reaches the shader
 //
 // Off by default -- the mechanism is measured and the picture has not been looked
-// at. The mechanism is patches/recompone/0041 (a decode() holding the whole
+// at. The mechanism is tools/RecompOne/patches/0041 (a decode() holding the whole
 // per-texel job, and the kernel that calls it per tap); a paletted texel is a CLUT
 // index, so no filter can run before the lookup and none of this can be sampler
 // state. Its switch is under Video with the others.
@@ -781,7 +869,7 @@ Kf2.Anisotropic.Install();
 // Per-pixel lighting: the depth cue and the models' light evaluated per pixel from
 // what PolyAssembler recorded about each packet, instead of interpolated between
 // the corner colours. Off by default until the picture has been judged. GL core
-// backend only; the runtime half is patches/recompone/0048.
+// backend only; the runtime half is tools/RecompOne/patches/0048.
 //     KF2_PERPIXEL=1          on
 //     KF2_PERPIXEL_PROBE=1    packets recorded, polygons lit per pixel and not
 Kf2.PerPixelLighting.Configure(Environment.GetEnvironmentVariable("KF2_PERPIXEL"),
@@ -800,7 +888,7 @@ Kf2.EvenFog.Configure(Environment.GetEnvironmentVariable("KF2_EVENFOG"),
                       Environment.GetEnvironmentVariable("KF2_EVENLIGHT"));
 Kf2.EvenFog.Install();
 
-// Voice interpolation and reverb (patches/recompone/0043); see docs/AUDIO.md.
+// Voice interpolation and reverb (tools/RecompOne/patches/0043); see docs/AUDIO.md.
 //
 //     KF2_SPU_INTERP=gauss|cubic|sinc      KF2_REVERB=legacy|hardware|enhanced
 //     KF2_AUDIO_PROBE=1                    KF2_AUDIO_DUMP=dir
@@ -848,7 +936,7 @@ if (!RecompOne.Runtime.Hle.GlVram.Snapshots)
 // have that ceiling: FramePacing hands FrameClock a deliberately permissive rate
 // and keeps its own deadline at DrawOTag, and MenuPacing, LoadPacing and
 // SpriteAnim are each measured against a VSync that returns immediately. So the
-// port's own non-blocking grid (patches/recompone/0021-vblank-wall-clock) is the
+// port's own non-blocking grid (tools/RecompOne/patches/0021-vblank-wall-clock) is the
 // default and upstream's is the comparison:
 //
 //     KF2_VSYNC=block  upstream's blocking timeline; anything else keeps ours
@@ -1059,6 +1147,17 @@ Kf2.MenuMouse.Configure(Environment.GetEnvironmentVariable("KF2_MENUMOUSE"),
                         Environment.GetEnvironmentVariable("KF2_MENUMOUSE_PROBE"));
 Kf2.MenuMouse.Install();
 
+// The equip prompt and the shops' buy prompt show every stat the item would
+// change, now and after, in the game's own font and window (patches/MenuDraw.cs
+// writes the same packets as the status screen's routines). It began as
+// mods/gearcompare. On by default; Gameplay ▸ Compare gear.
+//
+//     KF2_GEARCOMPARE=0       off
+//     KF2_GEARCOMPARE=verify  draw each panel through the recompiled routines too
+//                             and compare every byte
+Kf2.GearCompare.Configure(Environment.GetEnvironmentVariable("KF2_GEARCOMPARE"));
+Kf2.GearCompare.Install();
+
 // Widescreen. The runtime already renders a margin either side of the display
 // buffer and presents the whole thing at Display.WideAspect, so setting that one
 // number is the entire hookup; the replacement of DrawOTag here is only for the
@@ -1090,7 +1189,7 @@ Kf2.Widescreen.Install();
 // Present-path census. Counts, per two-second window, what PresentDisplay
 // picked: the widened render target, a plain one, or a fallback to raw VRAM.
 // The fallback presents at 4:3, so a high fallback rate is the flashing margin
-// -- see "Widescreen" in docs/WIDESCREEN.md and patches/recompone/0022:
+// -- see "Widescreen" in docs/WIDESCREEN.md and tools/RecompOne/patches/0022:
 //
 //     KF2_PRESENT_PROBE=1    the census, on the console
 //     KF2_PRESENT_PROBE=2    also name the verdict, and every live target, the
@@ -1138,6 +1237,32 @@ Kf2.CullCone.Install();
 Kf2.CullGrid.Configure(Environment.GetEnvironmentVariable("KF2_CULLGRID"),
                        Environment.GetEnvironmentVariable("KF2_CULLGRID_COMPARE"));
 Kf2.CullGrid.Install();
+
+// The map drawn past the game's 24x24 window: the cone carried further, the flood
+// continued outward from what the game lit (Video ▸ Experimental ▸ Render distance).
+// See "Render distance" in docs/WIDESCREEN.md.
+//
+//     KF2_RENDERDIST=13.5       the far edge in tiles; 10.5 is the game's
+//     KF2_RENDERDIST_PROBE=1    cells added, walked, models let through, packets clamped
+Kf2.RenderDistance.Configure(Environment.GetEnvironmentVariable("KF2_RENDERDIST"),
+                             Environment.GetEnvironmentVariable("KF2_RENDERDIST_PROBE"));
+Kf2.RenderDistance.Install();
+
+// How far the enhancements reach; past it the game's own look (0083).
+//
+//     KF2_ENHANCEDIST=8         tiles of view depth; 0 everywhere
+Kf2.EnhancementDistance.Configure(Environment.GetEnvironmentVariable("KF2_ENHANCEDIST"));
+Kf2.EnhancementDistance.Install();
+
+// What the reflections may show: the frame's halves grown past the camera's cull and
+// held over time, so what the mirror sees and the eye does not stops popping in.
+// See "The reflections see past the camera's cull" in docs/RENDERING.md.
+//
+//     KF2_REFLECT_REACH=2         cells to grow by; 0 the frame's own
+//     KF2_REFLECT_REACH_PROBE=1   halves drawn, grown, held, fading, models let through
+Kf2.ReflectionReach.Configure(Environment.GetEnvironmentVariable("KF2_REFLECT_REACH"),
+                              Environment.GetEnvironmentVariable("KF2_REFLECT_REACH_PROBE"));
+Kf2.ReflectionReach.Install();
 
 // The frame's primitive buffers. The game hands out 0x19000 bytes a frame -- 1969
 // POLY_GT4 packets -- and its assemblers abandon the rest of the frame when the bump
@@ -1205,12 +1330,41 @@ Kf2.TileWalk.Install();
 //     KF2_MODELWALK=verify   run both on every call and compare RAM, registers, GTE
 //     KF2_MODELWALK_WALK=0   func_800331B4 recompiled, the submitter still C#
 //     KF2_MODELWALK_SUBMIT=0 func_80032588 recompiled, the walk still C#
+//     KF2_MODELWALK_ARM=0    func_80032400 (the first-person arm) recompiled
 //     KF2_MODELWALK_PROBE=1  what each of the four tables submitted
 Kf2.ModelWalk.Configure(Environment.GetEnvironmentVariable("KF2_MODELWALK"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_WALK"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_SUBMIT"),
                         Environment.GetEnvironmentVariable("KF2_MODELWALK_PROBE"));
 Kf2.ModelWalk.Install();
+
+// The MO blender, func_80034DA8, in C#: the pose every animated model is drawn in. For
+// a lit model the GPU world renderer draws from its mesh, the keyframe copy and the
+// delta decode are left undone and the vertex shader blends the pose itself.
+//
+//     KF2_MOPOSE=0        the recompiled routine
+//     KF2_MOPOSE=verify   run both on every call and compare RAM, registers, GTE
+Kf2.MoPose.Configure(Environment.GetEnvironmentVariable("KF2_MOPOSE"));
+Kf2.MoPose.Install();
+
+// Stage 13 itself, func_800342D8, and the camera block it opens with, func_8002E22C,
+// in C#. The renderer is nineteen calls and one block of HUD arithmetic; with it here
+// the frame's view is a value (Stage13.ViewOverride), the drawing half is one call
+// (Stage13.DrawScene), and the compass needle's spring inside its body steps on the
+// world tick rather than on every frame drawn. Every call still goes through its hooks.
+//
+//     KF2_STAGE13=0            the recompiled renderer
+//     KF2_STAGE13=verify       the recompiled one draws; ours is replayed against a record of it
+//     KF2_STAGE13_NEEDLE=0     step the compass needle every frame drawn, as the routine does
+//     KF2_STAGE13_PROBE=1      frames drawn and needle steps a second
+//     KF2_CAMERABLOCK=0        the recompiled camera block
+//     KF2_CAMERABLOCK=verify   run both on every call and compare RAM, registers, GTE
+Kf2.CameraBlock.Configure(Environment.GetEnvironmentVariable("KF2_CAMERABLOCK"));
+Kf2.CameraBlock.Install();
+Kf2.Stage13.Configure(Environment.GetEnvironmentVariable("KF2_STAGE13"),
+                      Environment.GetEnvironmentVariable("KF2_STAGE13_NEEDLE"),
+                      Environment.GetEnvironmentVariable("KF2_STAGE13_PROBE"));
+Kf2.Stage13.Install();
 
 // The game's other cull: a six-plane view-space clipper (func_8005CAC8) that only
 // the near floor and ceiling are big enough to reach, set to twice the screen

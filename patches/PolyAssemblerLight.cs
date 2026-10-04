@@ -39,6 +39,20 @@ public static partial class PolyAssembler
     const int RecordSlots = 64;
     static readonly RecordLight[] _recordLight = new RecordLight[RecordSlots];
 
+    /// <summary>Authored lights or a glowing material are applied: a face drawn unfogged
+    /// keeps its record, since both terms are evaluated from it (0071).</summary>
+    public static bool KeepUnfogged;
+
+    /// <summary>The two reasons, each owned by the remaster feature that has it.</summary>
+    public static bool KeepForLights, KeepForGlow;
+
+    public static void Keep() => KeepUnfogged = KeepForLights || KeepForGlow;
+
+    /// <summary>The area's fog has a colour or a curve (0074): a face fogged all the way
+    /// to black keeps its record, since it is drawn in the fog's colour, or not all the
+    /// way.</summary>
+    public static bool KeepFogged;
+
     /// <summary>Set while the HUD builder runs, whose icons go through the lit assembler
     /// too and are left to draw their own colours.</summary>
     public static bool InHud;
@@ -141,6 +155,7 @@ public static partial class PolyAssembler
     /// A face whose every corner is unfogged, or fogged all the way to black, comes out
     /// the same interpolated as per pixel, so it is not recorded: nothing to look up,
     /// and a batch of nothing else never uploads the light buffer or runs the lighting.
+    /// The area's fog keeps the second (<see cref="KeepFogged"/>).
     /// </summary>
     static bool Uniform(ref GteLightMap.Rec r, uint curve, int n)
     {
@@ -154,7 +169,7 @@ public static partial class PolyAssembler
             GteLightMap.CurveWord => 4096f,
             _ => float.PositiveInfinity,
         };
-        return hi <= 0f || lo >= black;
+        return (hi <= 0f && !KeepUnfogged) || (lo >= black && !KeepFogged);
     }
 
     static void Seal(PSMemory mem, ref GteLightMap.Rec r, uint pkt, uint mode, uint rgb)
@@ -217,8 +232,9 @@ public static partial class PolyAssembler
     }
 
     /// <summary>A map tile: a lit colour per corner (one for the face unless its light
-    /// is blended), fogged per vertex.</summary>
-    static void LightTile(PSMemory mem, uint pkt, uint c0, uint c1, uint c2, uint c3, int n,
+    /// is blended), fogged per vertex. The record keeps the colour it was lit with, which
+    /// only an authored light reads (0071).</summary>
+    static void LightTile(PSMemory mem, uint pkt, uint rgbc, uint c0, uint c1, uint c2, uint c3, int n,
                           uint p0, uint p1, uint p2, uint p3)
     {
         ref var r = ref GteLightMap.Slot(pkt);
@@ -228,7 +244,7 @@ public static partial class PolyAssembler
         Corner(c3, out r.L3x, out r.L3y, out r.L3z);
         uint curve = TileFogs(mem, ref r, n, p0, p1, p2, p3);
         if (Uniform(ref r, curve, n)) { r.Light = 0; return; }
-        Seal(mem, ref r, pkt, curve, 0);
+        Seal(mem, ref r, pkt, curve, rgbc);
     }
 
     /// <summary>A flat model face: the NormalColorDpq colour before its depth cue and
@@ -244,7 +260,7 @@ public static partial class PolyAssembler
         r.L0z = r.L1z = r.L2z = r.L3z = cb;
         uint curve = Fogs(mem, ref r, n, p0, p1, p2, p3);
         if (Uniform(ref r, curve, n)) { r.Light = 0; return; }
-        Seal(mem, ref r, pkt, curve, 0);
+        Seal(mem, ref r, pkt, curve, light);
     }
 
     /// <summary>A gouraud model face: the light dots of each vertex's normal, lit in
@@ -299,6 +315,7 @@ public static partial class PolyAssembler
         if (count == 0) return;
 
         uint colour = ClippedColour(mem, normal);
+        uint rgbc = Peek32(mem, LightColour);
         bool far = (int)Peek32(mem, FogMode) >= 32000;
         uint fogCurve = !refogged ? GteLightMap.CurveHalf : far ? GteLightMap.CurveNone : GteLightMap.CurveKnee;
 
@@ -329,7 +346,7 @@ public static partial class PolyAssembler
                 curve = GteLightMap.CurveWord;
             }
             if (Uniform(ref r, curve, 3)) { r.Light = 0; continue; }
-            Seal(mem, ref r, pkt, curve, 0);
+            Seal(mem, ref r, pkt, curve, rgbc);
         }
     }
 

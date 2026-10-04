@@ -513,7 +513,7 @@ edge jumps by up to a pixel every time the winner changes, which is wobble that
 sub-pixel recovery cannot kill because the vertex is being given *someone else's*
 fraction.
 
-`patches/recompone/0011-gte-depth-collisions.patch` is the rest of the same
+`tools/RecompOne/patches/0011-gte-depth-collisions.patch` is the rest of the same
 mechanism, not a new one:
 
 - **Saturated vertices are recorded for their depth**, so a large nearby polygon
@@ -583,7 +583,7 @@ findable. What the disassembly says:
   `LibGpu.DrawOTag` and `Dma.TransferGpu` both do
   `gpu.WriteGp0(m.ReadU32(addr…))`.
 
-`patches/recompone/0012-exact-gte-vertex-map.patch` connects those four facts.
+`tools/RecompOne/patches/0012-exact-gte-vertex-map.patch` connects those four facts.
 `GteVertexMap` is a map from **RAM word address** to `(z, fx, fy, the packed XY
 word)`, filled by three exact hops:
 
@@ -634,7 +634,7 @@ nothing left to pick between.
 front of and behind each other. The map changes W and the sub-pixel position, and
 the draw order is the game's ordering table, which the GPU walks back to front with
 no depth buffer at all. Two coplanar surfaces the game sorted by a single OTZ per
-polygon will flicker on hardware too. `patches/recompone/0014` is a Z-buffer from
+polygon will flicker on hardware too. `tools/RecompOne/patches/0014` is a Z-buffer from
 the same recovered SZ; it is off by default until the picture has been looked at
 in that cave. See "Z-buffer".
 
@@ -717,7 +717,7 @@ The depth is the same SZ3 perspective correction already recovers. Nothing new i
 caught; the rasterizer is just allowed to test it per pixel instead of throwing
 it away after the texture divide. `GteVertexMap` already follows the word from
 `Gte.Rtp` into the packet, and `DrawPolygon` already asks by the address the
-coordinate was read from. `patches/recompone/0014` is the rest:
+coordinate was read from. `tools/RecompOne/patches/0014` is the rest:
 
 - **All-or-nothing per triangle**, same rule as W. A corner left without a depth
   among two real ones would punch a hole, so that triangle keeps painter's
@@ -725,7 +725,9 @@ coordinate was read from. `patches/recompone/0014` is the rest:
 - **2D never hits**, so the HUD, the menus and the death fade still draw on top
   in table order with the depth test off.
 - **Semi-transparent tests and does not write**, so two overlapping additives
-  still blend in the order the table named.
+  still blend in the order the table named. They are drawn after the opaque
+  geometry the table put behind them, or that geometry paints over them (`0079`;
+  "Water was painted over by what lay under it" below).
 - **Untextured geometry is tested too.** Perspective correction only cares about
   textured polygons; a flat-shaded wall still has a view depth. `HasPersp` and
   `HasGteZ` are independent on `HleVertex` so putting SZ into clip W does not
@@ -764,7 +766,7 @@ this game submits, cannot produce a clean picture either, so offering a switch
 that only ever half-works is worse than not offering it. The mechanism stays for
 diagnosis, driven from the console alone: `KF2_ZBUFFER=1` forces it on for the
 run and `KF2_ZBUFFER_PROBE=2` takes the census below. `patches/ZBuffer.cs` and
-`patches/recompone/0014` are unchanged; only `patches/settings/ZBufferPage.cs`
+`tools/RecompOne/patches/0014` are unchanged; only `patches/settings/ZBufferPage.cs`
 and its registration are gone. That verdict was reached on the address map's depth,
 before the assemblers were in C#; "The assemblers write the depth" below is the
 reason to look again. **The switch is back** as `patches/settings/ZBufferPage.cs`
@@ -797,7 +799,7 @@ batch is usually the 2D HUD, which does not write depth — that case leaves the
 buffer wiped and looks correct, which is why the fault is intermittent. When the
 last batch is 3D it stamps *near* depths, and the next frame's geometry is
 rejected wherever they landed, leaving the earliest-drawn thing — the far
-background — on screen. `patches/recompone/0016` swaps the two statements.
+background — on screen. `tools/RecompOne/patches/0016` swaps the two statements.
 
 **The confirmation is a counter, not a screenshot.** `KF2_ZBUFFER_PROBE=2` reads
 the depth attachment of the target the frame's depth batches actually went to and
@@ -823,7 +825,7 @@ the table" fix sketched for this would have had nothing to act on. **Note the OT
 length varies per area** (8348, 8898, 9101, 9162, 9315 measured), so an `ot` is
 only comparable inside its own frame.
 
-`patches/recompone/0015` is the census itself: `GteDepth` keeps every polygon's
+`tools/RecompOne/patches/0015` is the census itself: `GteDepth` keeps every polygon's
 bbox, depth range, table position and flags for the window; `LibGpu.DrawOTag` and
 `Widescreen`'s replacement of it publish the walk position (`OtEntry`, counted
 from the far end); `GlCore` remembers which RT the depth batches went to, since
@@ -868,7 +870,7 @@ moved into C# (`PolyAssembler*.cs`). The port now *builds* nearly every packet
 that should occlude, so it knows two things the address map could only guess:
 every corner's depth, and which routine asked for the packet.
 
-`patches/recompone/0050` adds `GtePacketDepth`, a side table keyed by packet
+`tools/RecompOne/patches/0050` adds `GtePacketDepth`, a side table keyed by packet
 address in the same shape as `GteLightMap` (`0048`): four corner depths, checked
 against the command word and the first and last vertex words before they are
 believed. The assemblers fill it and `DrawPolygon` reads it. **While it is active
@@ -971,6 +973,77 @@ Whether these two panels are separate tiles' faces, as assumed, or share vertice
 not established. If they share vertices, neither change should have been needed, and
 a seam still fighting at a generous tolerance means the cause is something else.
 
+### Water was painted over by what lay under it
+
+**Mechanism measured; the picture has not been looked at.**
+
+Reported from play, and present since the start: fish and bones lying in the water
+drawn on top of it, and now and then a triangle or two of water missing. Both are one
+defect. **A blended polygon is depth-tested and writes no depth** (the bullet at the
+head of this section), so wherever the water is, the depth buffer holds whatever lies
+under it. Anything opaque that the ordering table puts *after* the water passes the
+test there and draws over it, as it did on the console, which had no test at all.
+The table does put such things after the water, for two reasons:
+
+- **Models are pulled forward.** The tile walk links every map tile 240 entries back
+  (`func_80031950` passes `0xF0` as the slot bias); the model submitter adds 240 only
+  when the model sits at or above the camera, and otherwise uses the caller's own
+  small bias (a creature's `rec+0x15`, 20 or -60 for the effects). A fish on the sea
+  floor below the camera therefore sorts a few hundred SZ in front of the water tile
+  above it. That is the fish drawn over the water.
+- **Tiles sort by their average.** A piece of sea floor whose four corners average
+  nearer than the water quad over it draws after it. That is the missing triangle:
+  the floor, untinted, where the water should be.
+
+The fix is the usual rule for a depth buffer: opaque first, then translucent.
+`0079`'s `BlendOrder` does it in the ordering table's walk (`LibGpu.WalkOTag`, which
+`Widescreen`'s replacement of `DrawOTag` now calls too, telling it each packet's
+entry): a blended polygon with a depth record is held, the opaque polygons with a
+record that follow it are sent, and the held ones go out in table order at the next
+packet that is anything else. **Moving a translucent packet past an opaque one is
+exact whichever is nearer**: the test decides what the opaque one covers, and the
+translucent one then blends over what is behind it and is rejected by what is in
+front. Everything the depth buffer does not order is a barrier: the HUD, the arm,
+the fades, a non-polygon command, a packet without a record, the table's first slot
+(the skybox's, which is never tested), and a blended model the port calls solid (the secret door, which writes depth). So nothing is ever moved
+past something it was not already ordered against by the test, and two blended
+surfaces keep the order the table gave them. It runs only while the Z-buffer tests
+and the assemblers' records are the depth source (Fast geometry); with either off
+the table is drawn as it always was. A held packet is sent under its own
+`GteDepth.OtEntry` and `OtSlot`, so the HUD anchoring, the census and the frame
+viewer see where it was linked.
+
+`KF2_BLENDORDER_PROBE=1` measures the defect itself rather than the mechanism:
+every recorded packet, in the order it is sent, is sampled on a 4-pixel grid
+(perspective-correct depth, and a sample already behind opaque geometry is
+skipped), and it counts opaque samples drawn behind a nearer translucent one, by
+source. Swept over the New Game beach in `fdat02` with the shell's `view` (a 7x7
+grid of camera positions four tiles apart around the spawn, four headings each, 196
+poses), fix off: tiles painted over nearer water at 106 of the poses, 7,228 samples
+in all and up to 887 at one (about 14,000 game pixels); models at 10, up to 205
+(`view 80896 -14408 82944 200 1024 0`). Fix on: **0 and 0 at every pose.** A frame
+there held 250-720 packets and sent them in one run, just before the HUD. Uncapped at
+a sea view, 317-321 fps either way; 144.0 fps drawn at 20.0 ticks/s, `[present] wide
+288, plain 0, vram fallback 0`, with the water enhancements on and with the HUD
+anchored, no exceptions. `KF2_BLENDORDER=0` is the comparison.
+
+**The trade** is at a waterline. A blended surface within the coplanar tolerance
+of an opaque one in front of it still draws over it (the previous section), and now
+does so whatever the table said, so the shore's edge in the water may move by that
+tolerance. Whether that shows is for the eye.
+
+**A corner at the camera made its polygon a barrier.** Up close, looking down at
+something under the water, it could still show above it. The GTE saturates a
+corner at or behind the camera plane to SZ 0, and a record with a zero corner was
+dropped, so a nearby model's polygon was a barrier in the middle of the table:
+it sent the held water there, and every underwater packet linked after it drew
+over the water. Measured with a census of the barriers that sent held packets (a
+local probe, not kept) at four poses over the `fdat02` beach: textured Gouraud
+polygons (`0x3C`, `0x34`) with no record at slots 7494-7678, and the water sent in
+1.9-2.5 runs. Such a corner is now recorded at depth 1, the nearest there is:
+after, the only barriers were the table's last two slots and the water went in
+1.0 runs at every pose, no exceptions. Judged by eye: fixed.
+
 ### The world lost its textures on NVIDIA
 
 Issue #34 (Windows 10, RTX 3080 Ti): every world surface was drawn in its shaded
@@ -1039,7 +1112,7 @@ screen position and the view depth the GTE divided by — and carries them from
 (`GteVertexMap`, "Following the value through memory"). RecompOne grew a second
 answer to that after our pin: a full **PGXP**, in `39fb337a`, `91c20fcf`,
 `95f0585b` and `6aae910a` (2026-08-31 to 09-07). It is backported here as
-`patches/recompone/0034`-`0036`, and both mechanisms ship, chosen between by
+`tools/RecompOne/patches/0034`-`0036`, and both mechanisms ship, chosen between by
 `KF2_PGXP` — **and by nothing in the settings window**. See "PGXP has no control
 in the window" below.
 
@@ -1450,7 +1523,7 @@ still reported occlusion — just less of it, in the wrong places.
 ### The pass
 
 Two full-screen draws between the finished target and the present blit, in
-`patches/recompone/0040`:
+`tools/RecompOne/patches/0040`:
 
 - **Occlusion.** Reconstruct the view position, take the normal from the *nearer*
   neighbour on each axis (so a pixel on a silhouette takes the surface it belongs
@@ -1824,8 +1897,10 @@ fetches. The integrated GPU itself has not been measured.
 ## Screen-space reflections: the water is the one surface the depth buffer does not have
 
 **Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_SSR=1`, or Video ▸ Experimental ▸ *Water reflections*). The runtime half is
-`0067`; the port half is `patches/Reflections.cs`.
+(`KF2_SSR=1`, or Video ▸ Experimental ▸ *Screen-space reflections*). The runtime
+half is `0067`; the port half is `patches/Reflections.cs`. The pass described here
+also composites the planar and retained reflections and the murk, and runs for any
+of them with the march off; see "The reflection pass runs for each term on its own".
 
 The pass is the occlusion pass's shape: at present, between the finished target and
 the blit, reading the target's depth attachment with the GTE's own H and centre, and
@@ -1905,7 +1980,81 @@ the right inside the `*` void: exactly the samples the fallback had been taking.
 Rays refused under the HUD: 0.0-0.4% of reflective pixels, depending on the yaw.
 **Not covered:** a HUD piece the GTE projects (a 3D compass or item model) reads
 as scene, and the first-person arm stamps the far plane without being 2D. Neither
-has been seen in a reflection, but nothing would stop either.
+has been seen in a reflection, but nothing would stop either. (The arm has since
+been seen, the other way round: see the next section.)
+
+### The arm showed the water through it
+
+Reported from play with the murk on: swinging over water, the first-person arm was
+drawn dark and carried the water's reflection. The arm's corners come out of the
+GTE (`func_8002E650`), so they are projected, but its packets are deliberately not
+recorded (`InArm`), so it draws in painter's order with no depth: zMode 3, the far
+plane stamped for the occlusion pass. The surface list kept such a triangle only
+as an `Overlay`, and only when no corner was projected, so the arm was not in it at
+all and the surface buffer still held the water drawn under it. The pass then
+composited the murk and the reflection at those pixels, over the arm.
+
+Every opaque zMode 3 triangle is now kept as `Overlay`, except in the table's slot 0
+(the skybox, which projects near and must read as no surface). Its pixels are what
+is on screen and are not water; the depth buffer already treated them as no
+surface. Measured in the `fdat02` New Game, facing the sea, `KF2_MURK=1
+KF2_SSR_PROBE=1`, 40 presses of Square: before, the material map's lower rows were
+all `~` and the 2D overlay count stayed at 16,170/s; after, the arm is an `H` block
+in the lower right over the `~` and the count rises from 17,160 to about 22,300/s
+while it swings. Judged by eye: fixed.
+
+### A see-through box showed the water unmurked
+
+Reported from play with the murk on: an item's name box over water ("BONES",
+bottom of the picture) showed the water through it at its own, lighter colour, as
+a pale patch in the murk. Every 2D primitive went into the surface list as
+`Overlay`, which the pass leaves alone, so the water under a *translucent* box
+kept no surface and got no murk, while the picture through the box was still that
+water.
+
+A see-through 2D primitive is a **veil** now. It leaves the surface under it and
+adds a mark to the id: `SurfaceMaterial.VeilHalf` (512) for blend mode 0, which
+shows half of what is behind, `VeilFull` (1024) for the others. The normal pass
+draws a run of veils blended RGB-kept, alpha-added, so the water's normal, depth
+and id stay; the reflection pass decodes `id & 511` and scales its whole output by
+the share (0.5 or 1), and treats a veiled pixel as the HUD for a ray landing on
+it. A textured veil is decided per texel: `NormalFs` reads the texel from sample
+VRAM (`veilTexel`, PrimFs's decode without the window), marks it where the
+semi-transparency bit is set, and writes `Overlay` where it is not, in a second
+draw of the run (`uVeilPass` 1 and 2); a transparent texel writes nothing. A
+replacement image stays `Overlay`, since VRAM is not its texel. `ssrKey` and the
+occlusion's material lookup decode the id the same way.
+
+Exact only where the box does not change what is behind it: the murk is laid over
+the finished picture, so it darkens a mode-0 box's own colour by half its weight
+as well as the water through it. Measured in the `fdat02` New Game, `KF2_MURK=1
+KF2_SSR_PROBE=1 KF2_GLDEBUG=1`: 8,580 textured see-through 2D triangles a second
+(the HUD panel) now go in as veils, no GL error, the probe's map unchanged. The
+name box itself was not measured. Judged by eye: fixed.
+
+### Water murk erased dialogue ink
+
+**Mechanism measured; confirmed from play.** NPC dialogue over water was readable
+in 0.3.3 but lost parts of its lower lines in 0.4.0 staging. The message's
+subtractive/additive text quads had not changed. Their nonzero ink has the STP
+bit set, so the newer veil path retained the water material under the letters
+and composited murk over the finished text.
+
+`NormalFs` now treats nonzero textured 2D ink in blend modes 1 and 2 as
+`Overlay`, even with STP set. Transparent zero and neutral STP-black texels
+still write nothing. Averaging boxes keep their veil behavior. Both `SsrFs`
+and `PresentFs.ssrKey` reject explicit overlays before filling gaps from
+neighboring water, which otherwise turns thin text strokes back into water.
+This also protects other small textured 2D additive/subtractive overlays; it
+does not change depth-bearing geometry or fullscreen fades.
+
+Measured with a synthetic fixture using the actual `GlCore` on native Windows,
+RTX 4090: murk reduced glyph red from 224 to 8-20 over water while glyphs over
+solid geometry stayed 224. After the fix, all 12 thick/thin ink samples retain
+224, and all 8 transparent/neutral-black samples match the water-only control,
+with and without an averaging box. No GL errors. AO-only results are unchanged.
+The original NPC dialogue was then checked in-game and reported fixed. Other
+platforms have not been tested.
 
 ### Reflections popped in, because the path is longer than the direct distance
 
@@ -1983,8 +2132,8 @@ The same slots hold the main-hall fire and the creatures' skins, so a slot rect 
 **translucent-only**: it applies only to a semi-transparent polygon in an averaging
 blend (modes 0 and 3). An opaque skin and an additive fire are refused, and the
 probe counts refusals by blend mode. **The fire has not been measured**; the census
-below is `fdat02`'s water alone. The slime skins, if any are blended at mode 0,
-would reflect.
+below is `fdat02`'s water alone. The slime skins were water by this rule; a model is
+now water only if it is a sheet of it (see "A model is water only if it is a sheet of it").
 
 ### What is measured
 
@@ -2029,17 +2178,19 @@ reflected, and the reflection fades as its source nears the edge.
 ## Planar reflections: the world walked twice, from under the water
 
 **Mechanism measured; the picture has not been judged. Off by default**
-(`KF2_PLANAR=1` with `KF2_SSR=1`, or Video ▸ Experimental ▸ *Water reflections* ▸
-*Planar reflections*). The runtime half is `0068`; the port half is
+(`KF2_PLANAR=1`, or Video ▸ Experimental ▸ *Planar reflections*; the screen march
+need not be on). The runtime half is `0068`; the port half is
 `patches/PlanarWalk.cs`, with an arena from `patches/PrimBuffer.cs`.
 
 The screen-space pass can reflect only what is on screen and in front of everything
 else. A wall above the top of the view, or a creature behind a pillar, is simply
 absent from the water. At the `fdat02` spawn, looking down at the pool, **79.5% of
 the pixels the planar texture answered were ones the march could not find at all**.
-This extends that pass rather than replacing it. A reflective pixel whose surface
-lies on the mirrored plane takes the planar texture; any other reflective pixel,
-and any whose planar texel is empty, marches as before.
+This extended that pass rather than replacing it: a reflective pixel whose surface
+lay on the mirrored plane took the planar texture, and any other, or any whose
+planar texel was empty, marched. **Since 2026-09-28 the planar walk is the
+reflection**, and the march is a comparison only; see "The planar walk is the
+reflection, with a cull of its own" below.
 
 ### Moving the camera, not the world
 
@@ -2184,11 +2335,554 @@ strength; the seam between the planar reflection and the march's sky where the
 mirrored texel is empty; the rim of the pool at an 8-unit clip bias; creatures and
 billboards in the reflection; and all of it while the camera moves.
 
+### The fog the mirror dropped: the game fogs by view depth, and culls level
+
+Reported from play, 2026-09-28, after render distance, reflection reach and the
+enhancement distance had not helped: the map's segments pop in at the distance in
+the water, where the game's fog hides the same pop in the scene; the fog did not
+seem to reach the reflection.
+
+**The capture is fogged, and fogged exactly as the game fogs.** A readback of the
+planar texture binned by its own depth (a temporary probe, the `fdat02` spawn)
+matched the picture band for band: lit to 9 tiles, 2 of 255 at 10, black from 11.
+What differs is *which* depth. The game's depth cue goes by view depth (SZ), and its
+map is culled by a level cone in plan, 10.5 tiles along the yaw. Looking level, the
+cone's far edge lies at about 10.5 tiles of view depth, where `fdat02`'s fog is
+black, so a cell popping in there is black on black. The mirrored camera looks *up*
+by the eye's pitch, so the same edge stands off its axis and its view depth is
+shorter by the cosine: at a pitch of 500 (44 degrees), cells at 10-11 tiles in plan
+were drawn at 7-8 tiles of depth, lit. The scene never shows them, because above the
+top of a pitched picture is exactly where they are; the water does.
+
+So a capture fogs each fragment at **the larger of its own depth and its depth along
+the view's level forward**, which is the game's fog looking level. `PrimFs` rebuilds
+the fragment's mirrored view position (as its clip test already did), takes its
+depth along `uClipLevel` (the view's forward with its world height taken out, in the
+mirrored view, from `PlanarWalk`), and rescales the recorded depth cue: MAC0 / 4096
+is `DQA * H/SZ / 4096 + DQB / 4096`, so the part past DQB scales as SZ does, exactly,
+whatever the tile's light record. A curve-4 corner (`EvenFog`'s blended weight) is
+taken back through the knee first; a colour with no record is darkened by the
+knee's keep at the frame's DQA. Glows, highlights and the authored fog colour go
+through the same `cueWeight()` and follow. Looking level the two depths are one,
+and the capture is what it was.
+
+Measured with `KF2_PLANAR_PROBE=1`, which now prints the planar texture binned by
+the depth it is fogged at, texels drawn / lit above 8 of 255, from 9 tiles:
+
+| pitch | `KF2_PLANAR_FOG=0` 10 tiles | 11 tiles | level fog 10 tiles | 11 tiles |
+|---|---|---|---|---|
+| 0 | 22148 / 10, max 10 | 29424 / 0 | the same | the same |
+| -250 | 521 / 512, max 27 | 6430 / 3, max 9 | 521 / 0, max 8 | 6430 / 0, max 1 |
+| 500 | 94085 / 3297, max 26 | 67954 / 43, max 11 | 94085 / 15, max 9 | 67954 / 0, max 4 |
+
+144.0 fps drawn at 19.9 ticks/s, `[present] wide 274`, no GL errors under
+`KF2_GLDEBUG=1`. `KF2_PLANAR_FOG=0` is the comparison. The retained planes
+(`0072`) fog by the real camera's depth of the mirror image and are not changed.
+
+**Judged by eye: a lot better.** The fix hides the cull's edge rather than moving
+it; the lasting answer is probably a less aggressive cull for the mirrored walk, so
+the reflection has cells to show past where the fog blacks them out.
+
+### The planar walk is the reflection, with a cull of its own
+
+Decided 2026-09-28, after a long run of reflection work in which five mechanisms
+were layered (the planar walk, the screen march as its fallback, the reflection
+reach, the render distance, the enhancement distance) and no one of them could be
+judged apart from the others: **planar is the way to go**, and it stands alone.
+
+**What is no longer in its way.**
+
+- The screen march, the retained scene's reflections and the reflection reach are
+  no longer settings. Their controls are gone from Video ▸ Experimental and their
+  saved keys (`kf2.ssr.on`, `kf2.ssr.retained`, `kf2.reflectreach`) are not read;
+  `KF2_SSR=1`, `KF2_RETAINED=1` and `KF2_REFLECT_REACH` are the comparisons. The
+  retained scene still builds the map for the authored lights' shadows (`0077`),
+  which never depended on its reflections.
+- The precedence is the other way round: the world reflections draw into the same
+  planar texture, so they stand down while the planar walk is on, where the planar
+  walk used to stand down for them.
+- The reflection reach no longer feeds the mirrored walk; it is the retained
+  scene's alone.
+- **On its plane the planar answer is final** (`0068`, amended). A pixel whose
+  surface lies on the plane and whose planar texel is empty reflects the
+  background (black, or the remaster's sky), at the water's own weight, and never
+  marches. Before, such a texel fell back to the march, so a cell culling in or out
+  of the mirror flipped that pixel between the march's guess and the mirror: a pop
+  source of its own. Black is what the fogged texels beside it fade into, so the
+  edge of what the mirror drew meets it without a seam; leaving the texel
+  unreflected instead would have shown bright water beyond dark reflection.
+- The enhancement distance (`0083`) no longer fades a pixel on the plane: what the
+  mirror shows is fogged by its own depth and meets the distance's black by itself.
+- The water's reflectivity has its own slider, *Reflection strength*, under the
+  checkbox (`kf2.planar.strength`, 0.6 by default, 0 to 1). `KF2_SSR_STRENGTH`
+  still overrides it. The old `kf2.ssr.strength` key was never read by anything.
+
+**The mirror's own cull** (`patches/PlanarCull.cs`, `KF2_PLANAR_CULL=0` the eye's
+cells, as before). The game culls its map in two steps: a level cone in plan along
+the yaw, then a flood from the camera that darkens what walls hide from the eye.
+The mirror looks from under the water, so the flood's answer is the wrong one for
+it: a cavern round a cliff is hidden from the eye and plain in the water. The
+mirrored walk now walks the game's cells and then **every half on the eye's level
+inside the cone, with no flood**, out to the larger of the game's reach and the
+render distance (the render distance's own cells are inside it, so they are not
+walked twice), and the depth test hides what the mirror cannot see. Within 3 tiles
+of the camera a half goes through the clipped assembler, as the game's near tiles
+do. A cell enters the cone at its side, which the frustum does not reach, or at its
+far edge, which the level fog above has already blacked out; so there is no hold
+and no fade.
+
+**The cone is widened for the pitch.** Judged by eye on the first build: the
+outdoor section "looks really good", but the very corner of the screen showed the
+cull. The game's cone is drawn for a level camera; a pitched frustum's corner rays
+run wider in plan. A view ray `(tanH, tanV, 1)` turned by the pitch has a forward
+run of `cos - tanV*|sin|` for a sideways run of `tanH`, and the mirror is pitched
+as far as the eye, the other way, so the cull's side lines take the slope
+`tanH / run` when that is wider than the game's (with `tanH = 160*Factor/H` and
+`tanV` 10% over `120/H`, for the ripple's bend), and once `run` falls below 0.2 the
+frustum reaches round behind the camera and every cell within reach is walked.
+Measured at the `fdat02` New Game spot through `view`: the cone 1.12x the game's
+at the pitch the game leaves (16), 1.83x at -300, 4.23x at -500, open at -700;
+cells added a frame 24, 39-41, 51-59, then the open circle.
+
+Models standing in cells only this cull lights are **mirror-only**: the object walk
+asks the cull when the game's grid answers 0, and a model admitted that way has its
+submit handed to `PlanarWalk.Record` instead of made, so the picture does not draw
+it (an object's drawn bit, `+3 | 0x80`, is not set either) and the mirror replays it
+with the rest. The reflection reach had let such models into the picture too, where
+only the depth test hid them.
+
+The proposal before this was to run `CullGrid`'s flood from the mirrored eye, which
+needed its flood fixed first (`docs/TODO.md` #24). That was wrong: the flood runs in
+plan from the camera's tile, which the mirror shares, so it would have given the
+eye's answer again. The cone without the flood needs neither.
+
+Measured at the `fdat02` New Game view, facing the water, `KF2_FPS=300`, with the
+cull and with `KF2_PLANAR_CULL=0`:
+
+| | own cull | the eye's cells |
+|---|---|---|
+| cells added to the mirror a frame | 18.0 | 0 |
+| mirror-only models a frame | 3.0 | 0 |
+| submits replayed a frame | 5.0 | 2.0 |
+| mirrored walk | 1.40 ms | 1.19 ms |
+| arena peak (of 409,600 bytes) | 48,892 | 33,940 |
+| reflective pixels answered by the planar texture | 97.0% | 97.0% |
+
+186-191 fps drawn at 19.9-20.0 ticks/s either way; no exception. The view there
+shows none of the added cells in the water (the fog census is identical), which is
+the point of a cull whose additions arrive where they cannot be seen.
+
+**What "done" is, to be judged by eye**, with only *Planar reflections* on among
+the reflection settings, the render distance at the game's (10.5), SSAO and the
+Z-buffer at their defaults:
+
+1. Turning slowly at the `fdat02` pier and at the shore by the cliff, nothing pops
+   into or out of the water: not the map, not a creature.
+2. The reflection's brightness sits with the scene's: a lit wall is not brighter in
+   the water than in the picture, and the fogged distance is as dark in both.
+3. No seam where the water meets the bank or a pillar standing in it, and no strip
+   where the reflection stops.
+
+**Judged by eye:** the outdoor section "looks really good"; the corner of the
+screen showed the cull until the cone was widened for the pitch (below), and
+after that "looks way better". The three checks above have not been gone through
+one by one.
+
+### A replayed model can be evicted after the walk tested it
+
+Reported from play with planar reflections on: `unmapped address: 0x8A32D234` in
+`ModelWalk.RunSubmit`, reached from `PlanarWalk.Mirror`'s replay, on the MO path
+reading `mesh + 4` after `func_8002E1BC(0)`. The mesh table `0x8018E19C` is
+`entry + u32[entry + 8]` for the id's entry in the model table at `0x8018E1A0`,
+so that entry pointed at something that was no longer a model.
+
+The walk tests a model with `func_80032CD8` (entry set, and for an id past the
+104 static ones a status byte at `entry - 0xC` of 1 or 2) just before submitting
+it, but the replay comes after the rest of the walk and the mirrored tile walk,
+and both poll interrupts at every loop head. The area streams its creature and
+object models while it plays (area 1 went from 26 to 48 resident within seconds of
+loading), so the loader can evict or replace a model between the record and the
+replay. Measured with every recorded submit re-tested at the walk's end: once in
+ten area loads, object model `0x218` was resident when recorded and gone by the
+end of the same walk. The game's own submit follows its test immediately, so only
+the replay is exposed.
+
+The replay now re-runs that test, plus the entry and its mesh table lying in RAM,
+before each submit (`PlanarWalk.Resident`), and skips a model that fails;
+`KF2_PLANAR_PROBE=1` counts them (`evicted before the replay`). The crash itself
+was not reproduced: the eviction was measured, not the replay hitting it.
+
+### What the planar walk costs, and where
+
+Reported from play: planar reflections tank the frame rate. Measured 2026-09-28 at
+the `KF2_AUTOSTART=new` spot facing the pool, the user's settings (render scale 5,
+16:9, SSAO, waves, murk), `KF2_FPS=1000 KF2_PROFILE=1`, steady-state averages
+from `KF2_PROFILE_OUT`:
+
+| | fps | frame work |
+|---|---|---|
+| planar off | 290-292 | 3.30 ms |
+| planar on | 178-179 | 5.42 ms |
+| planar on, `KF2_PLANAR_CULL=0` | 187-193 | 5.00-5.13 ms |
+
+**It is CPU, not GPU**: buffer swap and driver 0.15 ms off, 0.17 on. Measured
+since with `0084` ("GPU time per present" in `docs/DEVELOPMENT.md`): the capture is
+0.18 ms of GPU a present, and the whole present 1.46 ms off and 1.50 ms on.
+
+Where the ~2.1 ms goes (a `KF2_PLANAR_PROBE=1` run, 2.5 ms in all; the probe's
+readbacks also add 66 KB/frame of allocation, 2 KB without it):
+
+1. **The mirrored tile walk, ~1.2 ms**: 167 halves against the eye's 145, so a
+   whole second walk: 140 more far-assembler calls, 109 more `Clip3FTP`, 27 more
+   clipped halves. About 0.35 ms of it is the mirror's own cull (24 cells a frame).
+   Halves wholly below the plane are walked, assembled and drawn, then discarded
+   per fragment by `uClipPlane`; how many that is was not counted.
+2. **The mirrored `DrawOTag`, 0.68 ms**: the runtime's packet walk and batching
+   for the capture, in proportion to what item 1 submits.
+3. **The model replays, ~0.36 ms**: 5 submits a frame (3 mirror-only). The lit
+   assembler took 0.28 ms for the mirror's 5 calls against 0.19 ms for the eye's
+   16; why a mirrored call costs about 4x is not diagnosed.
+4. The camera block, `ScenePass` and the plane: under 0.05 ms. The reflection
+   pass: 0.07 ms of CPU.
+
+## The retained scene: the world kept on the GPU, so a reflection can draw it again
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(`KF2_RETAINED=1`, or Video ▸ Experimental ▸ *World reflections*; the screen march
+need not be on). The runtime half is `0072` (`Gpu/RetainedScene.cs`,
+`Gpu/Backends/Common/GlRetained.cs`); the port half is `patches/RetainedMap.cs`,
+`patches/RetainedPlanes.cs` and `patches/RetainedModels.cs`.
+
+The reflections above were screen-space (the march can only borrow what is on
+screen) or paid for a second pass of the game's own code on the CPU (the planar
+walk re-ran the tile walk and replayed every model submit, 1.8 ms a frame at the
+`fdat02` spawn). Every way of drawing the world again from another camera — a
+second plane, a cubemap — cost another such pass. **That is what this removes:**
+the area's geometry is kept in world space on the GPU, and any extra view is a
+draw with a different camera matrix. The game's code never runs twice.
+
+### The map is data
+
+80x80 tiles of two halves, each naming a mesh of the map's model bank
+(`0x8018E18C[0]`), a height, a quarter-turn and a light record (see `TileWalk`).
+`RetainedMap.Build` places each mesh's corners as `func_80031950` does — the tile's
+centre `(x*2048+1024, -height*128, z*2048+1024)` plus the corner turned by the
+inverse of what `func_80014B88` does to the view matrix's columns — and lights each
+face once, flat, through the GTE with the record's light matrix (by the turn),
+colour matrix and back colour, exactly as the assembler's `NormalColorCol` does.
+None of that depends on the camera. The depth cue does, so each corner carries the
+record's DQA and DQB (from the game's own `SetFogNear`, as `func_8002DDDC` calls it)
+and its curve, and the vertex shader fogs it at whatever camera draws it.
+
+The table's `+4` is not a model count: it is `TileWalk.Beyond`'s far-model limit,
+and gating on it dropped 5,623 of 6,313 halves in `fdat02`. A mesh is refused only
+when its header points outside RAM.
+
+**It is the game's geometry, measured.** With `KF2_RETAINED_PROBE=1`, after the
+assembler draws a half, every corner of its mesh is projected through the frame's
+camera and compared with the screen word the GTE left in the vertex cache: in
+`fdat02` 423,072 corners every two seconds, **100.00% within 1 px, mean 0.051 px**
+against the GTE's truncation (0.67 px against the unrounded position, which is
+just the truncation). A subdivided half's cache holds the subdivider's corners and
+is left out.
+
+`fdat02` is 48,837 triangles, area 1 67,501. A build takes 5.5-7.5 ms and runs
+only when what it reads changes: the bytes of the map a mesh is built from (model,
+height, the turn's low two bits and the light record's low six — the game writes
+other bits of the map as it runs, and hashing the whole block rebuilt it every
+couple of seconds), the light records, the bank pointer, the remaster's materials
+and the number of water rects.
+
+### Models, every frame
+
+Everything the object walk hands an assembler is captured before a single face
+is culled — a reflection sees the side the camera does not — from the lit assembler
+(`func_8002F214`, `func_8002EAEC`) and from the tile assemblers when the object walk
+calls them (`func_80030540`, `func_8002FECC`; area 1's objects are all drawn that
+way). Corners come from the vertex base the transform just read, so an animated
+pose is the pose drawn. The colour is `NormalColorCol` again,
+without the cue. Checked the same way: 553,800 corners in `fdat02` and 84,672 in
+area 1, **100.00% within 1 px**. Cost: 0.16 ms a frame of `ReplaceLit`'s time at the
+`fdat02` spawn (0.194 to 0.351 ms).
+
+**A model is placed from its record, not back through the camera.** The first
+version took the GTE's view transform back to the world with the frame's camera,
+whose rotation is only good to 1/4096: a static object's corners moved by a unit or
+two whenever the camera turned. Nothing a reflection shows, but the lights' shadows
+(`0077`) redraw a cubemap when a caster moves, and turning in place redrew one on
+357 of about 475 frames. The submitter (`ModelWalk`) now publishes the model's own
+rotation times its scale (the matrix before it is multiplied by the view) and its
+record's world position whenever it places the model through the view matrix, and
+a corner is that rotation about that position; only a model placed any other way
+still goes through the camera. Measured in area 1: every model in view placed from
+its record (864 of 864 in two seconds at the spawn), creatures included; corners
+**100.00% within 1 px** of the GTE's (347,697, worst 2 px); and 0 redraws over 60
+turns in 3.4 s. With reflections off and only shadows asking, a model is captured
+without its colour, since a shadow wants only the corners.
+
+### Drawing it: the game's own fragment shader
+
+`WorldVs` turns a world corner into exactly the outputs `PrimVs` gives `PrimFs`, and
+`PrimFs` is used unchanged, so a reflected texel is decoded through the CLUT,
+filtered and blended by the same code as a drawn one. The projection is the GTE's
+(centre plus H times x/z) written as a clip-space position with W the view depth, so
+UV is perspective-correct and the rasterizer clips at a near plane, which packets of
+projected corners never needed. Opaque triangles test and write depth; each blend
+mode is drawn tested without writing, with the same dual-source factors
+`FlushCore` uses. Subtractive blending needs a second pass against a copy and is
+left out.
+
+**Everything is drawn at present, for the target being presented, with that
+frame's camera and models.** With two display buffers the presented target was
+drawn a frame ago, so `RetainedScene` keeps the last four frames by serial and a
+target records the serial it was drawn under (`GlDisplayRt.RetainedSerial`). Nothing
+reflects a camera or a model from another frame.
+
+One trap, for anything that draws between the surface pass and the reflection
+pass: **dual-source blend factors left set are an error for any draw into more than
+one buffer, with blending disabled** (`GL_INVALID_OPERATION`, silently skipping the
+draw). The reflection pass draws into two when its probe is on, so the first build
+reflected nothing only while being measured. `DrawRetained` puts the factors back.
+
+### The planes, from the mesh
+
+`RetainedPlanes` keeps every level face that is water (translucent, textured from a
+fluid slot's VRAM rect) or carries an authored material, grouped by height, chunk
+and kind when the map is built (73 groups in `fdat02`). Each frame the groups a
+reflecting material covers are ranked by their area on screen from **that frame's
+camera**, and the best four the camera stands above are drawn. The old finder
+binned the water the backend had drawn, so its plane was the previous frame's.
+
+All the planes share one planar texture, drawn **straight into the picture's
+pixels**: a corner is drawn where its mirror image stands, seen from the real
+camera, with `gl_ClipDistance` removing what lies below the plane first. No row
+flip, no mirrored camera to build. Each plane's draw keeps a fragment only where the
+frame's own surface buffer says the surface at that pixel lies on that plane
+(`uMaskOn` in `PrimFs`; zero, the default, is the shader as it was), so a pixel of
+the texture holds the reflection in the plane its own surface lies on.
+
+### The cubemap, in place of the march
+
+Six 256-pixel faces from the frame's camera, with a depth cube beside the colour,
+drawn unfogged. A reflective pixel not on a plane marches its reflected ray **in
+world axes about the camera** against the depth cube: a step whose point stands
+further from the camera than the surface the camera sees in that direction has gone
+behind it; halved back to the crossing, it is a hit only where the ray is at that
+surface, so a ray passing behind an object marches on. The hit is fogged for the
+whole path, and a rough material reads a mip of the colour cube. There is **no
+per-pixel jitter** — 48 quadratic steps and six halvings, and a miss reflects
+nothing: nothing on screen is borrowed, including the old sky fallback.
+
+The ripple still bends the planar lookup by the water's own brightness gradient,
+which reads the water's texture, not the scene.
+
+### Culling
+
+The static map is kept in 8x8-tile chunks, sorted by range and chunk. Each view —
+each plane, each cube face — draws only the chunks whose box is in front, inside
+its picture and not wholly past the fog's black (by view depth and the chunk's own
+fog; see the next section), and for a plane, the part above it. At the `fdat02` spawn 5% of chunk tests pass and
+the triangles submitted fall 17-fold (98M to 5.7M every two seconds); the coverage
+the readback measures was identical before and after (61.9% planar, 58.1% cubemap).
+
+### What the mirror showed that it should not, and the fog it dropped
+
+Reported from play at the `fdat02` pier, 2026-09-26: the reflections did not look
+geometrically right, and distant geometry popped into them with no fog on it. Three
+defects, all in how the retained scene was drawn rather than in its geometry (the
+corners were already checked against the GTE's):
+
+- **Faces seen from behind were drawn.** The world program ran with culling off,
+  and every face the game draws is one-sided: the assemblers cull on `NormalClip`.
+  A mirror sees the scene from below, so the top of every floor, ledge and deck
+  above the water is seen from behind, and with no earth under it modelled it
+  showed as a floor lying under the water -- a textured slab in the reflection
+  beside the thing it belonged to. Both a mirror and a cube face (all six
+  rotations have determinant -1) turn the winding over, so the faces the game keeps
+  are clockwise there; `DrawWorldRanges` culls counter-clockwise ones
+  (`RetainedScene.CullBack`, `KF2_RETAINED_CULL=0` is the comparison). The probe
+  counts it on the planar pass: pixels whose nearest opaque face is a front face,
+  and pixels a back face drawn against that depth would still have taken. Over 100
+  views around the spawn (a 5x5 grid of 8192-unit steps, four headings, through
+  `view`), **mean 2.7% and up to 14.7% of the planes' opaque pixels** showed a face
+  from behind; 1.2% at the spawn itself.
+- **The distance cull was on the wrong measure.** A chunk was dropped once its
+  nearest point was further than the frame's fog black plus a tile, in straight-line
+  distance, with the one fog the GTE last held. The game's depth cue goes by view
+  depth, and depth is distance times the cosine of the ray: at the picture's corners
+  about 0.63 of it, so a chunk at the side was dropped while still lit. And each
+  light record has its own fog. Now each chunk carries its latest fog (the quotient
+  at which its last corner goes black, `RetainedScene.ChunkFogQ`), a mirrored chunk
+  is dropped only when its nearest corner's depth is past that, and a cube face,
+  drawn unfogged and fogged at the march for the whole path, drops a chunk past the
+  frame's black depth over the cosine of the picture's widest ray. The probe counts
+  the mirrored chunks the old rule dropped and what they kept: **every frame at the
+  spawn one, keeping up to 34% of its colour; over the sweep up to 97%** -- that is
+  the pop-in. More is drawn now (chunks 4320 to 6360 per two seconds at the spawn).
+- **The fog was per corner.** `WorldVs` darkened each corner's colour and let the
+  rasterizer interpolate it, where the game's faces, under per-pixel lighting, take
+  the curve at every pixel (`0048`). The raw IR0 goes as 1/z, which is affine on
+  screen, so it is now handed to `PrimFs` as `vFog` with the curve in `vLight`,
+  exactly as a recorded packet is, and `shade8` fogs it per pixel. A cube face is
+  unfogged, as before.
+
+**Reflecting halves the game never drew there.** Reported next, with two pictures a
+small camera move apart: a stone slab in the water beside the ledge, reaching well
+past the ledge's end, with nothing above the water to be its source -- and it came
+and went as the camera moved. The retained map is every half on the map, and the
+game draws far fewer: the tile walk draws only what `CullGrid`'s visibility grid
+lights, which is the view cone flooded out from the eye's own tile *on the eye's
+level* (the lower or the upper half of a stacked cell, `func_8002B6B4`), stopped by
+blocked cells and walls, and lights the other level only beside walls. So the mirror
+showed the other level's halves and cells the flood never reaches, and the 8x8-tile
+chunk culling swung them in and out a chunk at a time. The mirror's grid is the
+camera's: the cone depends on pitch only through `rcos(pitch)`, which a mirrored
+(negated) pitch leaves alone, the flood is two-dimensional, and its seed is the same
+tile. So each frame now records the halves its own walk drew (`TileWalk.RunTile`,
+after the far-model gate, into `RetainedScene.Frame.Halves`); every static corner
+carries its half (`Flags` bits 13-26); and `WorldVs` drops any half the frame did
+not draw, from a 160x80 byte texture (`uHalves`, unit 16) uploaded at present.
+Models carry no half and are what the object walk drew anyway. The lights' shadow
+cubemaps are not gated -- a light needs the walls the camera cannot see.
+`RetainedScene.HalfGate`, `KF2_RETAINED_GATE=0` to compare. The probe draws the
+undrawn halves against the gated depth and counts what they would have taken: at
+the spawn **11.9%** of the planar pixels (planar coverage 61.9% to 55.6% of the
+reflective pixels); over the same 100-view sweep, on average **2.2 times** as many
+pixels as everything kept, and in a view out to sea (camera at 63488, 114688,
+heading 3072) **99.0%** of what the mirror drew was halves the game did not draw.
+Everything reflected now is something the game shows from that eye, and appears in
+the reflection in the same frame it appears in the picture. **Judged by eye, 2026-09-26: worse than without the gate**, and kept for now at
+the user's word; `KF2_RETAINED_GATE=0` is the comparison. Why it reads worse is not
+yet known. A likely reason, from play on 2026-09-28: the gate is the eye's cull,
+and the mirror sees places the eye's flood culled, which then pop into the water as
+the eye turns. See "The reflections see past the camera's cull".
+
+And one change of rule: a pixel whose surface lies on a plane but whose planar texel
+is empty (open sky in the mirror) no longer marches the cubemap. The plane's answer
+is exact; the cube's has the camera's parallax, and could only put something there
+that is not. It reflects nothing, as a cube miss does. The probe's compare frame
+still marches it, so the readback's figures do not move.
+
+Measured after, `fdat02`, 144 fps, 16:9: 144.0 fps drawn at 19.9-20.0 ticks/s,
+`[present] wide 288`, no GL errors under `KF2_GLDEBUG=1`; the planes and the
+cubemap still agree (93.4% of planar pixels found by both, 3.7 apart against a
+control of 24.4 at the spawn; 95.1%, 12.6 against 84.6 in the 14.7% view); the
+planar pass 0.29 to 0.58 ms GPU with the probe's two counting draws in it.
+With the gate: 143.9-144.5 fps drawn at 19.9-20.0 ticks/s, planar pass 0.30 ms GPU,
+no GL errors. **Not judged by eye**: whether the pier and the rock now reflect as they should,
+and whether a thin deck, whose underside the game never modelled, now reads as
+missing from its reflection -- the price of drawing what the game would.
+
+### What is measured
+
+Render scale 5, 16:9, 144 fps, this machine (RX 9070 XT), `KF2_RETAINED_PROBE=1`:
+
+- **GPU**, timer queries read a present late: at the `fdat02` spawn the planes
+  0.29 ms and the cubemap 0.55 ms; in area 1 the cubemap 0.65 ms and an authored
+  floor's plane 0.12 ms.
+- **CPU**, frame profiler at the `fdat02` spawn: frame work 3.8-3.9 ms with the
+  screen march alone, 5.6 ms with the planar walk, **4.2 ms with the retained
+  scene**.
+- **Coverage**, the reflection pass's readback: at the `fdat02` spawn 61.9% of the
+  reflective pixels take the planar texture (the walk took 55.5% there), and with
+  planes off the cubemap reaches a surface for 58.1% where the screen march found
+  none.
+- **The two agree.** Where a planar pixel's cubemap march also finds a surface,
+  the probe writes the brightness difference, against the planar texture read the
+  wrong way up as the control: `fdat02` water 93.5% of planar pixels also found,
+  **3.8 apart (control 24.3)**; an authored mirror floor in area 1
+  (`tile:1:37:36:upper` face 3, reflectivity 1) 100% of its pixels planar, 100%
+  found by the cubemap too, **3.0 apart (control 61.7)**.
+- **Off is the picture it was**: the pinned area-1 view hashes to
+  `210d55698c875fb8` with it off, and with it on (nothing reflects there).
+- The acceptance run with it on: slot 2 at hp 46/86 in area 1, 144.0 fps at
+  20.0 ticks/s, `[present] wide 288`, the vertex map at 100.0% hit, no GL errors
+  under `KF2_GLDEBUG=1`.
+
+**Not reflected**: billboards and effects (their assembler is not captured), the
+arm and anything else drawn outside the two walks, subtractive faces. The cubemap
+sees from the camera: something the reflecting point would see and the camera
+cannot is missing from it, where a plane has it.
+
+**What still has to be judged by eye**: all of it — whether the planar water and a
+mirror floor read right and hold still while turning, whether the cubemap's
+reflections on walls and props read as reflections or as a pasted image, the seam
+where a plane meets the cubemap, what a miss reflecting nothing looks like against
+the old sky fallback, and roughness through the cube's mips.
+
+### Lights, fog blends and mipmaps in the reflections
+
+**Mechanism measured; picture never judged.** Three things the frame had and the
+reflections did not, amended into `0072`:
+
+- **Authored lights and glows** (`0071`). The world program is `PrimFs`, so it
+  already had `authored()`; what it lacked was the corner's RGBC, which a light
+  scales, and the lights in its own view. A corner carries the RGBC now
+  (`Vertex.Rgbc`; 0 leaves it out), `Lights` publishes each light's world position
+  and direction beside the view-space ones, and `SendWorldLights` turns them into
+  each mirror's view (mirrored in the plane first, as the geometry is) and each cube
+  face's, with that view's centre and `H` for the shader's position rebuild and the
+  view-to-world turn for the shadow lookup. `KF2_RETAINED_LIT=0` leaves them out.
+- **`EvenFog`'s and `EvenLight`'s blends** (`patches/PolyAssemblerFog.cs`). The
+  retained map is built by reading each half as `func_80031950` would draw it, so
+  the build now brackets a half with the same `BeginTile`/`EndTile` and asks the
+  same weights per corner: the lit colour blended between the light records around
+  it, and the fog words' DQA and DQB blended before the curve (the drawn tile blends
+  after it, one curve per word; the two agree wherever the words share a curve and a
+  side of its knee). Switching `EvenFog` rebuilds the map. It follows `EvenFog`'s own
+  switches, which are the comparison.
+- **The mip atlas** (`0060`). The frame's entry is per batch; the retained map is
+  one buffer, so each distinct static texture is looked up every present (which is
+  also what keeps it resident) and the entries go in a buffer of their own, uploaded
+  again only when one moves. A scrolling texture has none. `KF2_RETAINED_MIPS=0`.
+
+Measured on the pinned area-1 view (editor camera at `edit on`, slot 2, a pack
+making three tiles `mirror`, reflectivity 1, 16:9, `KF2_RETAINED=1`), hashed with
+`snap`:
+
+- **Off is the picture it was.** With all three parts off (`KF2_RETAINED_LIT=0
+  KF2_RETAINED_MIPS=0 KF2_EVENFOG_BLEND=0 KF2_EVENLIGHT=0`), the build before the
+  amendment and the build after both hash `20bef7a6295be72f`; the reflection is in
+  that view, since reflections off hash `210d55698c875fb8`, a difference of 622,446
+  pixels.
+- **Lights.** A light added at the camera (`light add test here`, radius 20000,
+  intensity 3, shadowed): switching `KF2_RETAINED_LIT` changes 622,496 pixels, all
+  but three of them the reflection's, mean 50.7 levels; the reflection's pixels
+  average 108.4 lit against 57.6 unlit, where the rest of the lit picture averages
+  123.4. A light 1-2 tiles off to the side changed no reflected pixel at all, which
+  is the reach of its radius, not a fault. No glow was on in either run.
+- **Blends.** Of 164,923 corners, 8,954 lit and 1,161 fogged between records. Not
+  separated from the frame's own blends in a picture, since the one switch turns
+  both.
+- **Mipmaps.** 376 of 1,331 static textures in the atlas; 231,948 pixels move, all
+  but 804 in the reflection, mean 0.94 levels, at most 10. **Not reproducible run
+  to run** as the other hashes are: two boots with mipmaps on hashed differently
+  (`1289bfa182379cbc`, `3c7c2cb4a00b03a3`), where every off and lit hash repeated.
+  Which entries are resident when the snap is taken is the likely reason, and not
+  measured.
+- The first run crashed on an empty mip buffer;
+  the upload is at least one entry now. No GL errors, no exceptions in any run.
+
+**Billboards are reached; the view above had none in it.** The probe counts captured
+models by the table they came from, and read `creature 0, object 3916, effect 0,
+sprite 0` -- but `KF2_MODELWALK_PROBE=1` beside it read 0 sprites *submitted* a
+second as well, at that spot and at every area's warp point. Standing 2,000 units
+from area 1's first billboard (`nearby` now lists the effect and sprite tables) at
+four headings, the walk submitted 35-323 sprites a second and the capture's sprite
+count rose with it, about 200 a second, and no face went unread. A billboard goes
+through the walk's submitter like any model, with the flat matrix, to the blended
+lit assembler `RetainedModels` sits on. It is captured as its card faces the real
+camera, so a mirror shows that card, not one turned to the mirrored eye (not
+judged). It is kept out of the lights' shadow cubemaps (`FlagNoShadow`, as an
+effect is), where a card facing the player would cast a shape no light sees.
+Measured with a light 600 units from area 1's first billboard: 23 caster triangles
+in reach and 11,076 model triangles into its cubemap before, 21 and 2,916 after.
+
 ## Per-pixel lighting: the corner colours are the end of a chain, and the chain is known
 
 **Mechanism measured; on by default.** One
 checkbox under Video ▸ Enhancements (`kf2.perpixel.on`), `KF2_PERPIXEL=0` off on the
-console. GL core backend only. The runtime half is `patches/recompone/0048`; the
+console. GL core backend only. The runtime half is `tools/RecompOne/patches/0048`; the
 port half is `patches/PerPixelLighting.cs` and `patches/PolyAssemblerLight.cs`.
 
 A packet's vertex colour is not a free number. The GTE made it in two steps, and
@@ -2556,7 +3250,7 @@ crosshatch. Two things enforce the five-bit truncation, and both have to give:
 
 - **The render-target format.** Geometry rasterises into a `GlDisplayRt` whose
   colour attachment is an `Rgb5A1` texture, so even a full-precision fragment is
-  crushed to five bits on write. `patches/recompone/0021` makes that attachment
+  crushed to five bits on write. `tools/RecompOne/patches/0021` makes that attachment
   `Rgba8` when `GteDepth.TrueColor` is set. The mask/STP bit rides the alpha either
   way — one bit in 1555, the top of an 8-bit alpha in RGBA8 — and reads back
   `>= 0.5` in both.
@@ -2612,7 +3306,7 @@ crawling, sparkling floor, and it is the artefact the port's own render scale
 makes more visible rather than less: more output pixels means more independently
 sparkling samples of the same sliver.
 
-`patches/recompone/0041` samples along the sliver instead, in both prim fragment
+`tools/RecompOne/patches/0041` samples along the sliver instead, in both prim fragment
 shaders, driven by `GteDepth.Anisotropy`, with `patches/Anisotropic.cs` as the
 switch (`KF2_ANISO=<1..16>`, `KF2_ANISO_PROBE=1`, and a combo under
 Video ▸ Enhancements).
@@ -3090,7 +3784,7 @@ choice. **Not looked at by eye** — what is measured is that the restore is ser
 from the scaled copy on every frame of a menu, not that the menu now looks like
 the world behind it.
 
-The mechanism is `patches/recompone/0039`. GL backend only: the software
+The mechanism is `tools/RecompOne/patches/0039`. GL backend only: the software
 rasterizer has a 1x VRAM and nothing to preserve.
 
 ## A shop overwrote the textures with the atlas's old texels
@@ -3359,3 +4053,366 @@ And **Debug ▸ VRAM viewer** answers layer (2) on its own, by eye, in one look.
 
 Never checked: any of this on Nvidia hardware. Nothing here owns an Nvidia GPU,
 so the vendor half of the question is a report rather than a measurement.
+
+### Murky water
+
+**Mechanism measured; the tuning judged by eye. Off by default**, at the user's
+tuning when switched on (depth 2654, the colour unchanged; `KF2_MURK=1`, or Video ▸
+Experimental ▸ *Murky water*). Runtime `WaterMurk`
+(amending `0067`), port `patches/Murk.cs`.
+
+Water was clear to the bottom. The reflection pass now lays a murk under the
+reflection on water (material 2): the depth buffer holds the opaque floor under a
+translucent surface and the surface buffer the water itself, so the view ray's run
+between the two is the water it crosses, `1 - exp(-run / KF2_MURK_DISTANCE)` of a
+dark teal (`WaterMurk.R/G/B`, fogged at the water's depth), sky behind the water
+counting as all water. It is per pixel and independent of world height, so a pond
+above the player does not darken anything else. Default 2654 units (a tile is 2048;
+700 until it was judged).
+Under the checkbox, *Murk depth* (100-8000, logarithmic; `kf2.murk.distance`,
+which `KF2_MURK_DISTANCE` overrides) and *Murk colour* (`kf2.murk.r/g/b`) set both
+live, with a reset back to 2654 and `0.03,0.05,0.06`.
+
+**The tiles' cracks as lines of murk.** Reported: seams between water quads with
+the murk on. The likely cause, not measured: the water tiles and the floor under
+them meet with hairline cracks the game's own picture hides, and the murk turned
+each into a seam: a surface texel no water triangle covered took no murk, and a
+floor texel no floor covered read as the sky's full run. `SsrFs` now takes such a
+texel as water when the texels either side of it on one axis are, and a missing
+floor depth from its nearest neighbour. Judged by eye: the seams are gone.
+
+**A halo round the pier's pillars.** Reported with a screenshot at `fdat02`'s
+pier (player `75773,-11520,83101`, yaw 1586, pitch 35; `view 75773 -13026 83101 35
+1586 0`), with the murk on and nothing else mattering. Measured at that camera with
+`snap`, three faults, each checked by its own before and after:
+
+- **Water with no floor under it.** The cells along the pier have no seabed: with
+  the murk off the water there lies over black. The murk takes the sky behind water
+  as a full run, so those cells are solid teal, flat patches ending at the cell
+  edges beside each pillar. **Kept as the look.** Three fills of that floor from
+  the water around it were built and reverted (`084707d`, `577d480`, and murking
+  what is drawn under the surface instead, `0b1b034`); the user preferred this
+  version's water, and only the two edge fixes below were carried forward.
+- **The crack fill borrowed the pillar's depth.** The fill for a one-texel crack in
+  the floor took the nearest neighbouring depth, and beside a pillar that is the
+  pillar, in front of the water: a run of 0, and a strip of unmurked water about a
+  game pixel wide down both sides of every pillar. Only a depth behind the water
+  counts now.
+- **The pass's resolution.** The pass runs at `KF2_SSR_RESOLUTION` (2x the game's
+  pixels) and the present read it bilinear, which put a teal fringe on the pillar's
+  own edge. `PresentFs` upsamples it by the surface under each pixel (`ssrAt`): what
+  the pass computed from at the pixel and at each of the four texels round it (the
+  surface buffer's material and view depth, cracks filled as the pass fills them,
+  nothing where the depth buffer has an opaque surface in front), nothing where
+  that is nothing, and otherwise only the texels with the same material and a depth
+  within 10%, renormalised, or the nearest such. The surface buffer is drawn at the
+  render scale while the pass runs, and the depth is bound for the composite on
+  unit 4.
+
+Measured, with the fill, at the pier: 330 fps uncapped with the murk against 336
+without, and no GL errors. The two edge fixes without the fill: no GL errors, 144.0
+fps drawn at 20.0 ticks/s in `fdat02`; judged by eye at the pier, good.
+
+#### Only level water is murked
+
+**Mechanism measured; not judged by eye.** Reported from play: the murk "sees through"
+translucent textures. It found water by material, and material by texture, so anything in
+the water's texture was water: area 7's spinning crystals, area 4's. With nothing behind a
+crystal the run was the sky's, endless, and the crystal went to the murk's colour; area 7's
+dark hexagon (known issue 7 in `docs/GPU_RENDERER.md`) was one. Water lies level, so a
+surface is murked only while its normal (the surface buffer's) is within `WaterMurk.MaxTilt`
+of the world's vertical, cosine 0.75, about 41 degrees, which leaves room for the swell. The
+vertical is column 1 of the view matrix, published by stage 13 after its camera block
+(`Stage13.PublishUp`) and sent as `uMurkUp` (`0067`, amended). In `fdat02` the pool is murked
+exactly as before: 0.0000 of pixels differ by more than 8 levels in four pinned views, the GPU
+world renderer on and off, the swell on and off. `KF2_MURK_TILT=0` (or the `murk tilt 0` verb)
+murks any surface again; `murk on|off` switches it in play. The reflections still take a crystal
+as water; the planar walk's lookup only answers on its plane, so it shows nothing there.
+
+#### A model is water only if it is a sheet of it
+
+**Mechanism measured; the slimes judged by eye** (with GPU geometry on and off). Reported from
+play: the murk still darkened the slimes. The tilt test above was a guard on the symptom: a
+slime's top is level, so it passed. The cause is the classification itself: the water's rects
+are the fluid slots, and the slots hold the creatures' skins too (see "Screen-space
+reflections"), so any averaging face drawn from a slot was water, to the murk and to the
+reflections alike.
+
+Water is now decided per model, not per texel. `ModelWalk`'s submitter asks `ModelWater.Is`
+before the assemblers run: a creature, an effect, a billboard, the arm and an MO-animated model
+are never water; a rigid object is water only if every averaging face of it on the water's
+rects lies at one height in model space, within 8 units -- a sheet of water is flat, a crystal
+and a slime are not. Measured once per model (keyed by its face list and vertices, cleared when
+the rects change or an area loads). The answer goes two ways: `PolyAssembler.NotWater` seals
+`GtePacketDepth.Rec.NotRect` into each packet, which `SurfaceMaterial.Classify` honours
+(`0067`, amended); and `RetainedModels` builds a GPU-drawn mesh without `FlagWater` (the
+mesh cache keyed on the answer), so its blended faces stay out of the surface buffer as their
+packets' do. The map's water is untouched: the tile walk is not a model. With `ModelWalk`'s
+walk off (`KF2_MODELWALK=0`) nothing is decided and the old classification holds.
+
+`KF2_MODELWATER_PROBE=1` prints each model with faces in the water's texture, once per area,
+with its kind, model id, face count, height spread and verdict; the reflections probe
+(`KF2_SSR_PROBE=1`) counts the refused triangles as `not water`. A census of areas 0-7 from
+their warp points, the packet path (`KF2_GPUWORLD=0`):
+
+| area | model | faces in the water's texture | spread | verdict |
+|---|---|---|---|---|
+| 0, 2 | creature 128 (animated), the slime | 39 | 261-266 | not water |
+| 0 | object 460 (animated) | 22 | 2560 | not water |
+| 6 | object 487 (animated) | 192 | 1109 | not water |
+| 7 | effect 49 | 160 | 512 | not water |
+| 7 | effect 88 | 96 | 32768 | not water |
+
+No model on this disc is water by the rule; it is there for one that would be. Area 2 refused
+about 1,800 triangles a second at its warp point. Area 0's flooded cave
+(`158821, -11520, 149415`), whose near water is two objects (models 204, 185), refused none
+and was 26% reflective: those objects do not sample a fluid slot, so its water was never
+theirs. `fdat02`'s pool: 36.4% of the picture reflective, as before (36.3%). The tilt test
+stays as a guard for the map. Not judged by eye since: the crystals of areas 4 and 7.
+
+### The reflection pass runs for each term on its own
+
+The pass at present used to be switched by the screen-space reflections, and the
+murk, the planar walk and the retained scene all rode on it: planar and retained
+reflections did nothing without `KF2_SSR=1`, and the murk nothing without a
+reflection. Each is its own switch now (`ScreenReflections.Enabled`,
+`WaterMurk.Enabled`, `PlanarReflections.Enabled`, `RetainedScene.Enabled`), and
+`GteDepth.Reflections` -- the pass, the surface buffer, the materials and the water
+rectangles -- is on while any of them is (`ScreenReflections.Refresh`). With the
+march off (`uMarchOn` 0) a water pixel takes a planar lookup where one answers and
+reflects nothing elsewhere; the retained cubemap still marches, being world space.
+This is the seam for taking the screen march out: what it still lends the rest is
+`ScreenReflections.March()`/`FogBlackDepth()` (the cubemap's reach), the fog curve,
+the pass's resolution and the probe's readback.
+
+Measured on `fdat02`'s water (`KF2_AUTOSTART=new`, 144 fps, each alone, the others
+forced off): murk 36.3% of the picture reflective, 0% marched, mean weight 0.945;
+SSR 53.5% of that hit a surface and 46.3% the sky, as before; planar 55.6% planar
+and 0% marched; retained 55.5% planar and 0.2% from the cubemap; none of them, no
+pass. 144.0 fps drawn at 19.9-20.0 ticks/s and `[present] wide 288` in each.
+
+### Water waves
+
+**Mechanism measured; the tuning judged by eye. Off by default**, at the user's
+tuning when switched on: swell 338 over 6114, ripples 139 over 700, shade 0.51,
+speed 1 (first 96 over 12000, 48 over 700 and 0.25; `KF2_WAVES=1`, or Video ▸
+Experimental ▸ *Water waves*). Runtime `WaterWaves`
+(`0078`), port `patches/Waves.cs` and `patches/WaterSwell.cs`.
+
+**The water is coarse, and that decides what a vertex can do.** A census of
+`fdat02`'s bank: open water is model 18, one quad a tile, used by 3,022 halves;
+a pool's edge is two to eight triangles a tile; every water face maps the same
+64x64 image once per tile, so the picture is that image on a 2048-unit grid. A
+vertex is at best a tile corner, so moving vertices can only make a long swell.
+Breaking up the grid is the texture's job, per pixel. The feature is both.
+
+**The swell** lifts and lowers the water's own vertices. A half's mesh is read in
+three places -- the vertex transforms and the clipper through `VertexBase`, the
+subdivider `func_80030C94` straight from the bank's header -- so for the length of
+a half with water `WaterSwell` copies its vertices to `PrimBuffer.WaveScratch`
+(past the mirrored walk's scratch), moves the copy's Y, and points the bank
+header's vertex offset and `VertexBase` at it, then puts the header back. Every
+consumer, and everything after them (depth records, sub-pixel, Z, the surface
+buffer, the planar walk), sees one surface; a subdivided half's midpoints are made
+from moved corners, so near and far tiles agree along each edge. Three waves at
+unrelated headings, lengths L, 0.71L and 0.53L, periods as the root of the length.
+**A vertex moves only if it is interior to the water**: not on an edge only one
+water face has (the rim), and not where any non-water face of the area has a
+vertex. Worked out per area from the map, the bank and the water's rects, hashed
+once a walk. In `fdat02`: 3,714 of 5,174 water positions free, 1,460 on a rim, 363
+shared; built in 9.7 ms; about 97 halves moved a frame. The map bank is
+`0x8018E18C`; `0x8018E19C` holds it only while the tile walk runs (it is the
+object bank at the walk's start, which is what the first build read: no water).
+Skipped under `KF2_TILEWALK=verify`, `KF2_TILEWALK=0` and `KF2_PRIMBUF=1`.
+`KF2_POLYASM=verify` with the swell on: 0 RAM, register and GTE mismatches in all
+nine routines.
+
+**The ripples** are `PrimFs`: a fragment of water's blend (semi-transparent, blend
+0 or 3; `GlCore` sets `uWaveOn` per batch, never into a planar texture) whose texel
+lies in a water rect is taken to world space -- view position from its depth, H
+and the centre, then `view = R (world - cam) + T` inverted, with the camera the
+port reads at the walk's start (the carried one, so the ripples do not swim with
+the smoothing). Four directional waves give a slope; the slope times *Ripple
+strength* is a push **in the world**, taken into texture space through the
+polygon's own mapping (the inverse of the world position's screen derivatives,
+then the UV's), so it agrees across tiles however each is turned; the pushed texel
+wraps inside the rect, as the upload does, and the aniso taps with it. The slope
+also lightens one side and darkens the other (*Ripple shading*). Faded out where a
+pixel spans more than 3-9% of the longest ripple, before it can shimmer.
+
+**One clock**, the world's: ticks plus `LogicPhase`, so both stop when the world
+does (the map, the editor) and are smooth at any rate; *Wave speed* scales its
+steps, not its value, so moving the slider does not jump the water.
+
+Measured in `fdat02` at the New Game's view, 144 fps, 2140x1200, the world paused
+by the editor (`waves` is a shell verb): off `5e48ed0a1016d4b4`, on
+`0651d4f7072b8a47`, and **off again `5e48ed0a1016d4b4`**; on changes 21.5% of the
+pixels, all in rows 694 and below (the water), largest step 61. Ripples alone
+20.4%, the swell alone 21.5%. Two snaps paused are identical; unpaused, 22% of the
+picture moves between two a second apart. 144.0 fps drawn at 20.0 ticks/s, about
+340 rippled batches a frame. Off is compared inside one run, not against a build
+without `0078`: with `uWaveOn` 0 the shader's texture path is the old one by
+construction (`uv` is `vUV`, the wrap returns its argument, no multiply).
+
+**What still needs an eye**: whether the swell reads as water or as the floor
+moving (at tile-corner resolution a short swell is faceted, which is why the
+length was first 12000, and the judged default is 6114); whether the rims, held still, look pinned; the ripples'
+strength and shading defaults; and that no crack opens anywhere a water tile meets
+something else.
+
+### The swell moved the water off the mirror
+
+**Mechanism measured; the picture has not been judged.** Reported from play: the
+planar reflection was not stable with the murk and the waves on. The swell was the
+cause, three ways, all measured at the `fdat02` New Game view with the user's
+settings (planar on, murk, waves, render distance 15, reach 4), 144 fps:
+
+- **The plane was found from moved water.** `NoteWater` refuses a water triangle
+  more than 64 units out of level (a waterfall), and a swelling triangle is: 39,448
+  of 54,896 a second were refused, and the plane was the mean of what was left, the
+  crests and troughs that happened to lie flat. It moved on **143 of 144 frames**,
+  over 20 units, so the mirrored camera moved with it.
+- **The pass took only water near the plane.** `planarAt` takes a surface within
+  `Tolerance` (48) of the plane, and the swell puts it up to 338 off, so only the
+  strips crossing the rest height reflected, and they drifted with the waves: 27.5%
+  of the reflective pixels planar where the same view with waves off reads 60.1%.
+- **The mirrored walk moved the water too**, so a crest stood above the plane by
+  more than the clip's 8-unit bias and was drawn into the planar texture: the water
+  reflected in itself.
+
+So `PlanarReflections.RestHeight` (`0068`, amended) lets the port say where water
+rests: `NoteWater` takes the triangle's centroid to world X and Z (`SetCamera`
+gains the camera's X and Z), asks, and bins an answered triangle at that height
+with no level test. `WaterSwell` answers from a height per half, the mean of its
+water vertices' rest heights (NaN where they spread past 64), choosing of a cell's
+two halves the one nearer the drawn height within the swell's reach. `Waves` sets
+the tolerance to the asked one plus the swell's height each walk, and
+`WaterSwell.Enter` leaves the mirrored walk's water at rest, where the clip takes it
+out. After: 72,172 water triangles a second binned, all at rest, none refused; the
+plane moved on 0 frames; **60.1% of the reflective pixels planar, as with waves
+off**. Waves off is the old path (0 at rest; the plane still). 144.0 fps drawn at
+20.0 ticks/s, `[present] wide 288`, no GL errors under `KF2_GLDEBUG=1`.
+
+The murk has no part in it that a counter shows: it reads the surface and the depth
+under it, not the plane. **Not judged by eye**: whether the reflection now holds
+still, how it reads on a surface up to 338 off the plane it is mirrored in (the
+lookup is at the pixel, so a crest shifts its reflection a little, which should read
+as the wave), and whether the wider tolerance lets a surface near the water that is
+not on it take the mirror.
+
+## The reflections see past the camera's cull
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(`KF2_REFLECT_REACH=<cells>`, 0 to 4; no longer a setting, and since 2026-09-28 the
+retained scene's alone: the planar walk has a cull of its own, "The planar walk is
+the reflection, with a cull of its own"). `patches/ReflectionReach.cs`; the world
+program's fade is `0072`, amended.
+
+Reported from play at the `fdat02` shore: the inside of a cavern round the cliff,
+just out of the eye's view, was missing from the water and popped into it as the
+view turned, and a squid close by vanished from it. **A reflection could show only
+what the game drew for the eye.** The retained scene's half gate is the halves the
+frame's tile walk drew ("What the mirror showed that it should not"), its models
+are those the object walk submitted, and the planar walk re-runs the same walk over
+the same grid. The mirror looks from under the water and sees what the game's
+visibility flood culled for the eye: a cell behind the cliff edge, or a creature
+whose one tested cell is dark. When the eye turns and the game starts drawing it,
+it appears in the water at once. That is very likely why the half gate was judged
+worse than no gate: without it those places were there all along, and with it they
+popped.
+
+What the reflections may show is now a set of its own, built after the frame's walk:
+
+- **Grown.** Breadth first from every half the walk drew (the game's cells and the
+  render distance's), to its eight neighbours on the same level, through halves that
+  are drawn at all (model byte below 240), for *Reflection reach* steps. No wall
+  test, which is the point: the cavern is behind one. The other level is never
+  added, so the slab that ungating showed stays out.
+- **Held.** A half stays in the set for 0.75 s after the set loses it.
+- **Faded.** A half entering or leaving fades over 0.3 s. A half the frame drew is
+  at full weight at once, since the picture shows it. The retained scene's gate
+  byte is the weight (0 not reflected, 255 fully; `NoteHalf` writes 255 now), and
+  the world program passes it to `PrimFs` as `vFade`, which drops fragments in the
+  4x4 ordered dither the game's own dither uses (eight levels). It needs no blending
+  and keeps its depth. `PrimVs` writes 1.
+- **Planar.** The mirrored walk walks the set's halves the frame did not draw after
+  its own: within 3 tiles of the camera through the clipped assembler, as the game
+  draws its near tiles, and the rest through the far one. It has no fade, since its
+  packets are drawn as the game's.
+- **Creatures, objects, effects, sprites.** The object walk's six visibility
+  queries OR in the set's level bits at the model's tile, so a model standing in the
+  set is submitted: the retained scene captures it and the planar walk replays it.
+  It is drawn in the picture too, where it was out of view or behind the walls the
+  flood culled it for, which hide it there.
+
+Measured, `fdat02` spawn, world reflections, reach 2, eight headings at 2.5 s each:
+116 to 204 halves grown a frame beyond the 156 to 318 drawn, up to 80 held after
+leaving and 41 fading at once, 1 to 5 model queries let through. Frame work at
+heading 0 is 5.64 ms at reach 0 and 5.52 ms at reach 2 (noise), 144.0 fps drawn at
+20.0 ticks/s, the planes and cubemap 0.29 and 0.29-0.32 ms GPU, no GL errors. Planar
+(`KF2_RETAINED=0 KF2_PLANAR=1`), heading 0: the mirrored walk takes 1.35 ms at reach
+2 against 0.65 ms at 0 (2.15 ms before the far tiles were moved off the clipper),
+arena peak 21,144 bytes. `scripts/light_probe.c` and `scripts/shader_probe.c` print
+what they did before (their vertex shaders write `vFade` 1). The retained probe
+(`KF2_RETAINED_PROBE=1`) costs about a third of the frame rate by itself, so it is
+not the place to read the frame rate from.
+
+**Not judged by eye**: whether the cavern and the squid now stay in the water as the
+view turns, whether the dither reads as a fade at the render scale, and whether
+anything shows in the water that the reach should not have added.
+
+**Past the placing limit.** A tile is placed by an s16 offset from the camera, so
+nothing past 15 tiles on an axis can be drawn (`RenderDistance.Reach`). With a
+render distance of 15 and a reach of 4 the set grew to 19, and the mirrored walk
+placed those tiles wrapped round, on the far side of the camera. The grow stops at
+the limit now, and `WalkMirror` skips a held tile the camera has moved away from.
+
+**Where halves still enter.** The probe counts halves that join the set inside the
+eye's own cone (`entered inside the view`, and the nearest's depth), since those
+are the ones the mirror may already be showing. `fdat02`, reach 4, render distance
+15, a four-second turn: about 20 a second while turning, none at rest, **the
+nearest 8.8 to 10.8 tiles deep**, all of them at the draw distance's far edge,
+where the picture's own tiles come and go. Tried and taken back: growing through
+the whole view cone to the draw distance rather than by steps, which let more in
+(29 inside 12 tiles against 22) at more cost in the mirrored walk. **So what pops
+nearer than that is not the set**, as far as a counter can see, and needs saying
+what it is: geometry or a creature, near or far, turning or walking.
+
+## The enhancement distance: past it, the game's own look
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(`KF2_ENHANCEDIST=<tiles>`, or Video ▸ Experimental ▸ *Enhancement distance*, 2 to
+16 tiles, the top reading as everywhere). `patches/EnhancementDistance.cs` sets
+`GteDepth.PlainDepth` (`0083`).
+
+Past a view depth, a surface is drawn as the console drew it. The cut is by the
+recovered depth, so it is the same measure the fog uses, faded in over the 2048
+units before it:
+
+- `PrimFs`: per-pixel lighting gives way to the packet's corner colours (`vColor`,
+  which the GTE lit), keeping a material's lit-mode glow. Authored lights and their
+  highlight fade out. The anisotropic taps and the mip footprint fade to the
+  console's one texel, and the ripple's slope to nothing.
+- `AoFs`: the occlusion fades to 1.
+- `SsrFs`: the whole output, reflection and murk, fades by `gShare`.
+
+Kept, because they correct the picture rather than add to it: perspective,
+sub-pixel positions and the depth test. A packet with no recovered depth (2D, the
+HUD) is never cut. The fog colour a remaster adds (`gFog8`) is kept, since that is
+the area's look. Only the core programs read it; the retained world program and the
+GLSL 1.20 path are left unset, which is off.
+
+Measured. `scripts/light_probe.c` gains three passes on pass 2's lit wall at depth
+2000: the cut at 5000 is pass 2 to the bit, the cut at 1000 is the corner colour,
+and the cut at 3024 is the mix, with the lights halved on the lit side. All 0 from
+the formula, and the first 21 passes print the same as the shader at `HEAD`.
+`scripts/shader_probe.c` gains `PLAIN=z`: at 5000 every row is the old one, at 1000
+every `uAniso` and `MIP=1` reads as `uAniso=1`, and at 3024 half. Its output with
+`PLAIN` unset is the same as at `HEAD`. In play at the `fdat02` spawn, heading 2048,
+with the cut at 4 tiles: the occluded share of the picture went from 5.9% to 0.5%,
+and the reflection's mean weight from 0.061 to 0.028. No GL errors. The occlusion
+census reads a cut pixel as a surface with no geometry normal, which is why its
+"lit from a geometry normal" share falls too.
+
+**Not judged by eye**: where the change of look sits, and whether a tile's fade
+reads as a band.

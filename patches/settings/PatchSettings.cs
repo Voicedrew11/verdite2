@@ -117,7 +117,7 @@ public static class PatchSettings
     /// stack up duplicates.
     ///
     /// The list is kept in <see cref="IPatchPage.Order"/> order, ties broken by
-    /// title, so the order the pages are registered in below carries no meaning —
+    /// title and then id, so the order the pages are registered in below carries no meaning —
     /// keep it matching the drawn order anyway, so the file reads as the pane does.
     /// </summary>
     public static void Register(string sectionId, IPatchPage page)
@@ -141,9 +141,9 @@ public static class PatchSettings
 
         list.RemoveAll(p => p.Id == page.Id);
         list.Add(page);
-        list.Sort((a, b) => a.Order != b.Order
-            ? a.Order.CompareTo(b.Order)
-            : string.Compare(a.Title, b.Title, StringComparison.Ordinal));
+        list.Sort((a, b) => a.Order != b.Order ? a.Order.CompareTo(b.Order)
+            : a.Title != b.Title ? string.Compare(a.Title, b.Title, StringComparison.Ordinal)
+            : string.Compare(a.Id, b.Id, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -154,7 +154,7 @@ public static class PatchSettings
     /// one of the section's ordinary options does not belong there: an aspect
     /// ratio is the same kind of choice as the render scale and wants to be next
     /// to it, above the backend combo, not in a block underneath the lot.
-    /// <c>SettingsRegistry.DrawSlot</c> is that — <c>patches/recompone/0013</c>,
+    /// <c>SettingsRegistry.DrawSlot</c> is that — <c>tools/RecompOne/patches/0013</c>,
     /// which is the only reason this needs the checkout patched at all.
     ///
     /// A slot page draws **bare**: no <c>SeparatorText</c>, no heading, so it sits
@@ -195,7 +195,10 @@ public static class PatchSettings
         Register("display", new PerPixelLightingPage());
         Register("display", new EvenFogPage());
         Register("display", new ZBufferPage());
+        Register("display", new DistancePage());
         Register("display", new ReflectionsPage());
+        Register("display", new RemasterPage());
+        Register("display", new RemasterPacksPage());
         Register("display", new FastGeometryPage());
         // Nothing registers a PGXP or a geometry-precision page either. PGXP buys
         // no coverage in this game and costs a fifth of the frame rate, and the
@@ -210,6 +213,7 @@ public static class PatchSettings
         // are held by InputSection and drawn inside the tab each belongs to.
         Register("gameplay", new MapPage());
         Register("gameplay", new AutoReloadPage());
+        Register("gameplay", new GearComparePage());
         Register("gameplay", new MouseLeadPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
     }

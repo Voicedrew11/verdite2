@@ -15,7 +15,7 @@ namespace Kf2;
 
 /// <summary>
 /// Where a frame's time goes: the port's half of the frame profiler
-/// (<c>RecompOne.Runtime.Diagnostics.Profiler</c>, patches/recompone/0045).
+/// (<c>RecompOne.Runtime.Diagnostics.Profiler</c>, tools/RecompOne/patches/0045).
 ///
 ///     KF2_PROFILE=1            record from boot; a summary on the console every 5 s
 ///     KF2_PROFILE=panel        record from boot and open the panel (Shift+P toggles it)
@@ -85,11 +85,13 @@ public static class FrameProfiler
     {
         var want = _envOn || _csv != null || _spikeMs > 0 || KeepRecording || ProfilerPanel.Instance.IsOpen;
         Profiler.Enabled = want && !Paused;
+        GpuTimes.Enabled = Profiler.Enabled;
     }
 
     public static void Install()
     {
         Profiler.FrameCompleted += OnFrame;
+        GpuFrames.Install();
 
         if (_csvPath != null)
         {
@@ -135,7 +137,7 @@ public static class FrameProfiler
         // offered as the mouse-capture key.
         Event.AddListener<KeyboardEvent>(e =>
         {
-            if (!e.Pressed || e.Repeat || e.Key != (int)Key.P || PopupManager.AnyOpen) return;
+            if (!e.Pressed || e.Repeat || e.Key != (int)Key.P || PopupManager.AnyOpen || HotkeyGate.Typing) return;
             if (!HostWindow.IsKeyDown(Key.ShiftLeft) && !HostWindow.IsKeyDown(Key.ShiftRight)) return;
             ProfilerPanel.Instance.IsOpen = !ProfilerPanel.Instance.IsOpen;
         });
@@ -250,9 +252,11 @@ public static class FrameProfiler
 
     static void OnFrame(Profiler.Frame f)
     {
+        GpuFrames.Close(f);
         if (_csv != null)
         {
-            WriteCsv(_csv, f);
+            WriteCsv(_csv, f, gpu: false);
+            GpuFrames.WriteCompleted(_csv);
             if (f.Start >= _csvFlushAt)
             {
                 _csv.Flush();
@@ -267,11 +271,41 @@ public static class FrameProfiler
         if (_console) Accumulate(f);
     }
 
+    // ---- GPU time (runtime 0084) ---------------------------------------------------
+
+    // What resolved since the window began, in ms per present; the queries are a few
+    // presents old when they are read.
+    static readonly double[] _winGpuMs = new double[GpuTimes.Passes];
+    static readonly long[] _winGpuAt = new long[GpuTimes.Passes];
+    static long _winGpuPresents, _winGpuPresentsAt;
+
+    static void TakeGpu(double[] ms, ref long presents, long[] at, ref long presentsAt)
+    {
+        presents = GpuTimes.Presents - presentsAt;
+        presentsAt = GpuTimes.Presents;
+        for (int i = 0; i < GpuTimes.Passes; i++)
+        {
+            long ns = GpuTimes.Ns[i] - at[i];
+            at[i] = GpuTimes.Ns[i];
+            ms[i] = presents > 0 ? ns / 1e6 / presents : 0;
+        }
+    }
+
+    static string GpuLine()
+    {
+        TakeGpu(_winGpuMs, ref _winGpuPresents, _winGpuAt, ref _winGpuPresentsAt);
+        if (!GpuTimes.Supported) return "";
+        if (_winGpuPresents <= 0) return "; GPU: nothing resolved";
+        var parts = string.Join(", ", Enumerable.Range(0, GpuTimes.Passes)
+            .Where(i => _winGpuMs[i] > 0).Select(i => $"{GpuTimes.Names[i]} {_winGpuMs[i]:0.000}"));
+        return $"; GPU ms/present {_winGpuMs.Sum():0.00}: {parts}";
+    }
+
     public const string CsvHeader = "frame,time_ms,section,group,self_ms,incl_ms,calls";
 
     /// <summary>One frame as CSV rows: a row per section, then the frame-level
     /// measurements as pseudo-sections in the same columns.</summary>
-    public static void WriteCsv(StreamWriter w, Profiler.Frame f)
+    public static void WriteCsv(StreamWriter w, Profiler.Frame f, bool gpu = true)
     {
         var t = (f.Start * Profiler.TicksToMs).ToString("0.000", CultureInfo.InvariantCulture);
         foreach (var s in f.Span)
@@ -297,6 +331,8 @@ public static class FrameProfiler
         if (f.GcPauseMs > 0) Row(w, f, t, "frame.gc_pause", f.GcPauseMs);
         if (f.AllocBytes > 0) Row(w, f, t, "frame.alloc_kb", f.AllocBytes / 1024.0);
         if (f.JitMs > 0) Row(w, f, t, "frame.jit", f.JitMs);
+        // Complete once the GPU has finished the frame; the streaming CSV writes them then.
+        if (gpu) GpuFrames.WriteRows(w, f);
 
         static void Row(StreamWriter w, Profiler.Frame f, string t, string name, double v)
             => w.WriteLine($"{f.Index},{t},{name},Frame,{v.ToString("0.0000", CultureInfo.InvariantCulture)},,");
@@ -349,7 +385,7 @@ public static class FrameProfiler
         Console.WriteLine($"[KF2] profile: {n / seconds:0.0} fps, frame {avg:0.00} ms avg / {p99:0.00} p99 / " +
                           $"{max:0.00} max; work {_winWork / n:0.00}, wait {_winWait / n:0.00}, " +
                           $"swap {_winGpu / n:0.00} ms; GC {_winGc / seconds:0.00} ms/s, JIT {_winJit / seconds:0.00} ms/s, " +
-                          $"{_winAlloc / 1024.0 / n:0.0} KB/frame allocated; top self ms/frame: {top}");
+                          $"{_winAlloc / 1024.0 / n:0.0} KB/frame allocated{GpuLine()}; top self ms/frame: {top}");
 
         _frameMs.Clear();
         Array.Clear(_sumSelf);

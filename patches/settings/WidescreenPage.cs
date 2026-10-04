@@ -10,7 +10,7 @@ namespace Kf2.Settings;
 ///
 /// That position is the one thing here that needs the checkout patched:
 /// <c>SettingsRegistry.Extend</c> only draws after a section's whole body, so
-/// <c>patches/recompone/0013</c> adds <c>SettingsRegistry.DrawSlot</c> and one
+/// <c>tools/RecompOne/patches/0013</c> adds <c>SettingsRegistry.DrawSlot</c> and one
 /// call to it inside the display section. The page is registered with
 /// <c>PatchSettings.RegisterSlot("display.render_scale", …)</c> and draws bare —
 /// no heading, so <see cref="Title"/> is unused.

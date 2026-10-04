@@ -40,3 +40,6 @@ A collection of mods by [@Acranon](https://github.com/Acranon) can be found in [
 
 Built on [RecompOne](https://github.com/BlackLabelHQ/RecompOne) (MIT). *King's
 Field* is the property of FromSoftware; this project ships no game data.
+
+The gear comparison on the equip and buy prompts began as
+[@Acranon](https://github.com/Acranon)'s Gear Compare mod.

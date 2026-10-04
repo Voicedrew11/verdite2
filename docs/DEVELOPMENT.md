@@ -5,9 +5,10 @@ The recompiler's own quirks are in [RECOMPILATION.md](RECOMPILATION.md); the
 patches to the RecompOne checkout are in [RUNTIME.md](RUNTIME.md).
 
 **Nothing here builds without the disc** (gitignored, `disc/KingsField2.cue`) or
-without `tools/RecompOne` (a gitignored checkout, not a submodule). A `.chd` works
-everywhere a `.cue` does — `DiscImage.Open` picks by extension — see "CHD disc
-images" in [RUNTIME.md](RUNTIME.md).
+without `tools/RecompOne` (a `--squash` git subtree of the fork
+`Voicedrew11/verdite-recompone`, tracked here). A `.chd` works everywhere a `.cue`
+does — `DiscImage.Open` picks by extension — see "CHD disc images" in
+[RUNTIME.md](RUNTIME.md).
 
 ## Prerequisites
 
@@ -56,12 +57,14 @@ of the overlay list and are read by the runtime through the CD interface.
 bash scripts/setup_tools.sh
 ```
 
-Clones RecompOne, applies everything in `patches/recompone/`, and builds the
-recompiler. Idempotent, so it is also the way to re-apply local fixes after
-pulling upstream.
+Builds the recompiler from the fork's sources, which are tracked here as a git
+subtree. `--pull-fork [ref]` takes the fork's changes, `--push-fork` sends this
+repo's `tools/RecompOne` commits to it, and harvesting upstream happens in the
+fork; see [RECOMPONE_FORK.md](RECOMPONE_FORK.md).
 
-It gets that idempotency by **peeling the stack off newest-first and then applying
-it oldest-first**. Asking each patch on its own "are you already applied?" — which
+What follows is history, from before the checkout was vendored, when the script
+replayed `patches/recompone/` over an upstream clone. It got its idempotency by
+**peeling the stack off newest-first and then applying it oldest-first**. Asking each patch on its own "are you already applied?" — which
 is what it used to do — only works while no patch touches lines another one added,
 and `0010` edits the `GteDepth.cs` that `0009` creates. The symptom was `0009`
 reverse-checking against text `0010` had since changed, failing, and being reported
@@ -115,7 +118,7 @@ something to say about *how* to use them:
   patches' own probes, which report a summary per window instead of a line per
   call.
 - **`KF2_CDTRACE=1`** puts a stack trace on the first CD register access
-  (`patches/recompone/0002`).
+  (`tools/RecompOne/patches/0002`).
 - **`KF2_AUTOPAD=8:Start:400,20:Circle:200`** replays scripted input, for
   reproducing an input-triggered bug with nobody at the keyboard. Its clock
   starts when the first area module loads, which is the only point in the boot
@@ -243,7 +246,7 @@ caveat about the widened render target under "Widescreen" in
 ## Profiling a frame
 
 `patches/FrameProfiler.cs`, `patches/ProfilerPanel.cs` and the runtime's
-`Diagnostics/Profiler.cs` (`patches/recompone/0045`) say where a frame's time
+`Diagnostics/Profiler.cs` (`tools/RecompOne/patches/0045`) say where a frame's time
 went, by section, on the game thread. **Shift+P** opens the panel, and recording runs
 while it is open; `KF2_PROFILE=1` records from boot and prints a summary every
 five seconds, and `KF2_PROFILE_OUT=profile.csv` writes every frame for
@@ -522,6 +525,62 @@ morph is still the next largest thing here, and it is now the largest recompiled
 thing left inside a C# submit. See "The object and creature walk in C#" in
 `PATCHES_AND_MODS.md`.
 
+Done since, a third time: the morph is C# (`patches/MoPose.cs`), 0.055 to 0.023 ms
+a frame in area 7 beside a creature, and with the GPU world renderer a model drawn
+from its mesh skips the copy and the decode, 0.003 ms. See "Step 3, the third slice"
+in `GPU_RENDERER.md`.
+
+### GPU time per present
+
+The sections above are CPU time on the game thread, and "buffer swap + driver" is
+the only place a GPU-bound frame shows, as a wait. **The profiler also times the
+GPU now** (`0084`, `Diagnostics/GpuTimes.cs`): while it records, the GL backend
+puts a `GL_TIME_ELAPSED` query around every batch submit and each present pass, and
+reads them back without waiting, oldest first, once the GPU has finished them. The
+console line gains `GPU ms/present`, by pass; `KF2_PROFILE_OUT` gains `gpu.scene`,
+`gpu.capture`, `gpu.ao`, `gpu.reflections`, `gpu.composite` and `gpu.total` rows,
+which `scripts/profile_report.py` averages. The passes:
+
+- **scene**: every batch drawn into a display target or VRAM (the world, the HUD,
+  the authored lights' shadow cubemaps, which are drawn at the top of a flush);
+- **capture**: batches drawn into a planar texture (`0068`);
+- **ao**: the surface buffer and the occlusion pass;
+- **reflections**: the retained scene's draws and the reflection pass (and the
+  surface buffer when the occlusion pass is off);
+- **composite**: the present blit and post-fx.
+
+Not counted: VRAM uploads, writebacks, the interface and the swap. A query covers
+the wall time of the GPU work inside it, so a GPU that starves inside a submit
+counts the bubble.
+
+**Each query is charged to the frame that issued it** (`patches/GpuFrames.cs`): a
+frame keeps the range of presents it issued (`GpuTimes.Issued`), the runtime raises
+`GpuTimes.Resolved` for each query as it is read, and a frame is complete once
+`GpuTimes.Complete` has passed its last present, about three frames later. The CSV
+writes a frame's `gpu.*` rows then, under its own index, so they line up with its
+CPU rows; the last few frames of a run have none. The console line is the window's
+average per present.
+
+**In the panel** (Shift+P): a `GPU` line under the header (average and worst over
+the window), a strip under the frame bars with each frame's GPU time stacked by
+pass, at the bars' own milliseconds per pixel so the two read against each other
+(a white tick where a frame is taller than the strip), a legend with each pass's
+average, and the GPU breakdown in the hover and in the selected frame's line. A
+frame still waiting on the GPU is left empty. The table's selector beside the filter
+shows **CPU + GPU**, **CPU** or **GPU**: the passes are rows (`GPU scene` and so on,
+group `gpu`), sorted with the sections, their `%` the share of the frame's GPU time
+where a section's is the share of its work. `swap` stays a CPU row: it is the game
+thread waiting on the driver. Whether the strip reads well is to be
+judged by eye. **Off while a frame capture traces** (`0046`'s
+queries take precedence; the two may not nest), and the retained scene's probe
+timer stands down while it is on.
+
+Measured at the `KF2_AUTOSTART=new` spot facing the pool, render scale 5, 16:9,
+SSAO, murk and waves on, RX 9070 XT, `KF2_FPS=1000`: 294 fps with it, 290 before
+it, so the queries cost nothing measurable. GPU 1.46 ms a present with planar
+off (scene 1.03, ao 0.27, reflections 0.02, composite 0.15) and 1.50 with it on
+(capture 0.18). No GL errors under `KF2_GLDEBUG=1`.
+
 ## The first frame of an area was the JIT
 
 Reported from play as a **hitch when walking between two areas**, and explicitly
@@ -612,7 +671,7 @@ compiles on its first call, which is where it started.
 ## Watching a frame being built
 
 `patches/FrameCapture.cs`, `patches/FrameViewerPanel.cs` and the runtime's
-`Hle/GpuTrace.cs` (`patches/recompone/0046`) capture **one run of stage 13** whole
+`Hle/GpuTrace.cs` (`tools/RecompOne/patches/0046`) capture **one run of stage 13** whole
 and replay it a GP0 command at a time. The profiler says which section a frame's
 time went to; this says which *primitive*, which routine built it, and what it cost
 downstream. **Shift+F** opens the panel and *Capture next frame* arms it;
@@ -908,7 +967,7 @@ Four verdicts, and the fourth is the one that matters:
 inside stage 3, which *is* gated, and every counter in it still stepped per
 rendered frame — because `FramePacing` decides whether the loop is *entered* and
 cannot cut one in half. A modal loop is computed, not listed: a function with a
-backward branch whose subtree reaches a drawing entry point. There are 53.
+backward branch whose subtree reaches a drawing entry point. There are 54.
 
 **The fourth verdict is no longer a defect on its own**, and that changes how to
 read a report: `patches/LoopPacing.cs` paces the *frames* a modal loop produces —
@@ -929,9 +988,10 @@ The question to ask of a render-rate row in a drawing function is therefore not
 flames run at the render rate" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
-`--audit` classifies every global on the per-frame path. As of writing: **594
-globals, 73 held to the tick rate, 157 inside a modal loop, 364 under a stage that
-presents.** A writer is any function that stores to the address — an initialiser
+`--audit` classifies every global on the per-frame path. As of writing: **547
+globals, 146 held to the tick rate, 219 inside a modal loop, 182 under a stage that
+presents** (read after the parser was fixed; see "The static model read nothing"
+below, and the earlier count was taken against an older codegen). A writer is any function that stores to the address — an initialiser
 and a reset count too — so a render-rate row is where to look, not a verdict.
 
 Addresses are recovered from `lui`/`addiu` pairs, which is how PSY-Q reaches
@@ -946,6 +1006,7 @@ address", never "not written".
     python3 scripts/rate_matrix.py menu-scroll --fps 144 --env KF2_MENUPACING=0
     python3 scripts/rate_matrix.py modal-rate --fps 20 144 --env KF2_LOOPPACING=0
     python3 scripts/rate_matrix.py sprite-anim --fps 20 60 144
+    python3 scripts/rate_matrix.py compass-needle --fps 20 60 144
     python3 scripts/rate_matrix.py --list
 
 Every empirical claim in these documents should be reproducible by one of these.
@@ -996,3 +1057,37 @@ lists **four ungated stages that could be gated and are not** — `func_8002C944
 `func_800140AC`, `func_80016FC8` and `func_80014534` all submit nothing and write
 between 1 and 14 globals each. Nobody has looked at whether those globals are
 per-tick state; the tool only says they are reachable and unheld.
+
+### The static model read nothing
+
+**For some time every tool on `scripts/callgraph.py` was answering from an empty
+graph, and saying so in a way that read as a clean bill.** Measured: 709 functions
+in `game`, **0 call edges and 0 global writes**. `check_gate.py` printed `0
+violation(s)` because no gated stage reached anything; `find_writers.py` answered
+`no function writes this through a literal address` for `0x801930EC`, which stage 1
+writes every frame. Three changes to the emitted C# had each broken one regex:
+
+- `0035` wraps every statement in a block and appends its PGXP hook, so an `addiu`
+  is `{ var _v = c.A0; c.A0 = c.A0 + 0x2E18u; if (...Pgxp...) ... }` and an access
+  goes through a local, `{ var _a = (c.S0 + 0x66u); ... mem.ReadU16(_a) ... }`;
+- the per-overlay classes made a call `KingsField2_game.func_...(c, m)`, where the
+  call regex wanted `KingsField2.func_`;
+- `merge_sdk_names.py` named 997 functions after PSY-Q, which the function regex
+  (`func_` only) skipped, calls into them included.
+
+The parser now cuts the PGXP tail off each line before reading it, tracks `_a`,
+matches any overlay class and any name (a PSY-Q name's address comes from its
+funcmap), and records **reads** and every address a `lui`/`addiu` pair forms as
+well as writes: `Graph.readers(addr)` and `Graph.touching(lo, hi)`, the second
+catching a table's base that the dataflow cannot follow into an index. After: 807
+functions in `game`, 1,910 call edges, 1,265 writes, 1,896 reads; `check_gate.py` now prints those
+counts first and fails outright on a graph with no edges or no writes.
+
+**The first honest `check_gate.py` run failed**, on stage 5: `func_80046A60 ->
+func_80043388 -> func_8001D544 -> func_800226A8 -> DrawOTag`. `func_80043388` is a
+modal loop (a backward branch; it opens the shops, the message box and stage 13
+itself, an NPC's conversation), and with every modal loop blocked stage 5 reaches
+nothing that draws, so it is the same exception as stages 2 and 3 and is recorded
+in `KNOWN` as such. It passes again, now on a graph that has edges in it. **A tool
+whose clean answer and whose broken answer print the same line needs a count of
+what it read**; the counts above are the thing to check after a codegen change.

@@ -83,7 +83,7 @@ draws, so most presents found both targets stale, fell back to the plain VRAM
 texture, and returned it at 4:3: **the margins flashed black, rapidly, through
 whole sessions.** Any present rate more than about five times the game's does
 it — a 144 Hz monitor with VSync on as well as VSync off. The gate is gone
-(`patches/recompone/0022`): every present writes the targets' middle columns
+(`tools/RecompOne/patches/0022`): every present writes the targets' middle columns
 back to VRAM first and direct VRAM writes are synced into the targets, so a
 target that contains the display area is never staler than the fallback it
 replaces, and idle targets are destroyed after 300 frames anyway.
@@ -98,7 +98,7 @@ CPU, no log output, and it looks exactly like a hang; set `VSync=False` in
 
 A wide target whose margin columns have never carried a world would present
 invented picture at the sides, so `PresentDisplay` refuses any wide target that
-has not latched margin content (`patches/recompone/0023` supplies the display-
+has not latched margin content (`tools/RecompOne/patches/0023` supplies the display-
 flip counter, `0024` the latch). Latching is per target and lasts for the
 overlay session: a single display flip that delivers 32 game vertices past the
 game's own draw edge latches the target, a fill covering the widened target
@@ -149,6 +149,31 @@ only refills the middle `W`. The obvious guard is to exempt whichever target
 contains the current display area, on the same reasoning `0022` used, but nobody
 has yet seen bars that outlast the latch fix, so it is written down rather than
 written.
+
+### A target made under the GPU world renderer never latched
+
+Reported from play: **changing the aspect in game put the window back to 4:3 and
+switched off most of the enhancements.** Both were one thing. A new aspect changes
+the margin, so `GetOrCreateRt` builds both display targets again, each unlatched;
+with *GPU geometry* on the map and the models are drawn by `GlMainView` and never
+pass through `V()`, which is the only place the 32-vertex rule counts, so neither
+target ever latched and the present refused them for good. The picture was then
+the 1x VRAM fallback at the source aspect, and every pass that runs on a display
+target — the occlusion, the reflections, the render scale — had none to run on.
+At boot the targets latch in the first frames of an area, before the GPU draws
+anything, which is why only a change *in play* showed it.
+
+Measured with the `aspect` shell verb in `fdat02`: after `4:3` then `16:9`,
+`[present] wide 0, plain 0, vram fallback 252` and `[KF2] ao: … 0.0 passes/s,
+125.8 no target/s`, for as long as it was left; with `gpuworld off` the same
+target latched from packets within the second (`wide 161`). The GPU main view
+now latches the target it draws into (`DrawWorldMain`, `0085` amended) once it
+has drawn the map with the clip spanning the target, which is a world across the
+margin by construction. After: 4:3, 16:9, 21:9, 16:10 and 16:9 again each present
+`wide` (or `plain` at 4:3) in the first probe window, the occlusion at `0.0 no
+target/s` throughout. The same route covers the idle-target case above whenever
+the GPU is drawing the world. Mechanism measured; the picture after a switch is
+for a person to look at.
 
 ### The margin's only clear is the game's own, and the merge narrowed it
 
@@ -334,7 +359,7 @@ under `KF2_WIDESCREEN_PROBE=1`, as the dither counters did.
 **The page is one combo, drawn directly under the render scale** —
 inside the runtime's own display section, not in a group of the port's below it.
 An aspect ratio is an ordinary picture option and belongs among the ordinary
-picture options; getting there is `patches/recompone/0013` and
+picture options; getting there is `tools/RecompOne/patches/0013` and
 `PatchSettings.RegisterSlot` (see "Patch settings" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)). There is no
 slider — the four presets are what a display actually is, an arbitrary ratio is a
@@ -345,7 +370,7 @@ instead of being rounded onto a preset.
 **The conversion found a bug the mod had: the replacement dropped the source
 address.** `LibGpu.DrawOTag` calls `gpu.WriteGp0(word, src)` — the address the word
 was read from, which is what `GteVertexMap` keys the recovered depth and sub-pixel
-fraction on (`patches/recompone/0012`). The mod's copy of that walk predates 0012
+fraction on (`tools/RecompOne/patches/0012`). The mod's copy of that walk predates 0012
 and called the one-argument `WriteGp0(word)`, i.e. `src = 0`, so **every frame with
 the HUD anchored would have quietly gone back to affine texturing** — perspective
 correction silently off, with nothing in any log to say so. Anything that mirrors a
@@ -824,3 +849,67 @@ are not as forced as the `_forced ?? saved` in `Widescreen.Install` reads; anyth
 A/B-ing two aspects should pin the *saved* setting instead, and this is worth
 tracking down.
 
+
+## Render distance: the game's flood carried past its window
+
+**Mechanism measured; the picture has not been judged. Off by default**
+(`KF2_RENDERDIST=<tiles>`, or Video ▸ Experimental ▸ *Render distance*, 10.5 to 15
+tiles). `patches/RenderDistance.cs`.
+
+Asked for because a reflection can only show what is drawn: the planar walk re-runs
+the tile walk from the mirrored camera, so its reach is the game's 24×24 window, and
+the retained scene's models are what the object walk drew. "Is the 24-tile window
+worth lifting?" above decided against replacing the nine routines. This does not
+replace them. **The game's grid is left exactly as it built it, and cells are added
+outside it.**
+
+- **Where.** The stock trapezoid the game hands `func_8002CD0C` (recorded by
+  `CullCone.BeforeLine`, published as `CullCone.StockCorners`) gives the view's
+  forward axis and its far edge. A cell is a candidate when its centre lies in front
+  of the camera, no deeper than *Render distance*, and within the table's side lines
+  (slope 0.727 times the widescreen factor, apex 1.875 tiles back, a tile of slack).
+  It is added only outside the 24×24 window or beyond the stock far edge. Every
+  other cell keeps the game's answer, so nothing the game lit or darkened changes.
+- **Which.** The game's flood is continued outward, not re-run. Cells are visited in
+  order of Manhattan distance from the camera's tile. An added cell is lit on the
+  eye's level when one of its neighbours a step nearer the camera (on x, on z, or
+  diagonally) is lit on that level and the cell has a half there (model byte not
+  `0xFF`, the test the flood stops at). A cell the game's flood left dark behind a
+  wall therefore darkens everything past it. The eye's level is whichever bit the
+  game's grid lit more of; the other level is never added.
+- **How far.** `func_80031B1C` places a tile at `(tx << 11) - camera + 0x400` as an
+  s16, so a tile more than 15 either side of the camera cannot be placed. That is the
+  slider's top, and the box the cells are chosen in.
+- **Drawn.** `TileWalk.RunWalk` walks the added cells after the game's own, with the
+  eye's bit and no assembler bits, so every half goes to `func_8002FECC`, the far
+  assembler, which has no clipper. The planar walk's mirrored pass walks the same
+  cells. `ModelWalk`'s six visibility queries OR in the added cell's bits, so
+  creatures, objects, effects and sprites standing there are submitted.
+- **The table's end.** `func_8002FECC` and the lit model assembler drop a packet
+  whose slot (`SZ/4 + 0xF0`) reaches `0x2000`, about 15.5 tiles of depth. While
+  cells are added, such a packet is placed at `0x1FFE` instead: the last slot but
+  one, since slot `0x1FFF` is the sky's. The near assembler's `Link` wraps rather
+  than drops, and is left alone, since its slot sum also carries the transform's
+  `0xFFFF` for a vertex it could not use.
+- **The fog is the game's.** In `fdat02` the depth cue is black at about 10.6 tiles,
+  which is where the window ends, so what is added there is drawn black, in the
+  picture and in a reflection (the mirror is fogged by the longer path). It shows
+  where the fog is not black: an area the game leaves unfogged, or a remaster fog
+  curve capped below full (`fogMax`).
+
+Measured, `fdat02` New Game spawn (71680, 98304), 15 tiles, 16:9. A sweep of eight
+headings added 10 to 144 cells a frame, and let 0 to 4 model queries through. At
+heading 0 (the most), 16 packets a frame were clamped to the table's end. The ASCII
+map (`KF2_RENDERDIST_PROBE=2`) shows the added band continuing the game's cone
+without a gap. Frame work at heading 0, capped at 144 fps: 4.0 ms off, 5.25 ms on.
+The primitive buffer peaked at 19.1% (0 frames ran out). With the planar walk
+(`KF2_RETAINED=0 KF2_PLANAR=1`), the mirror walked the added cells too (288 walked a
+frame), its arena peaked at 13,496 of 409,600 bytes with no overflow, and the
+mirrored walk took 0.96 ms against 0.65 ms without it. 144.0 fps drawn at 20.0
+ticks/s, `[present] wide`, no GL errors, no exceptions. The off position is the old
+code path: `Build` returns before touching anything and `Any` is false.
+
+**Not judged by eye**: all of it. Whether the added band joins the game's without a
+seam, whether something appears in it that the game's flood would have hidden (it
+has no wall test of its own), and whether the reflections' pop-in moved outward or
+went.

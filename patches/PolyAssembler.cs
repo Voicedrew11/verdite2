@@ -14,7 +14,8 @@ namespace Kf2;
 /// `func_80030540`, the polygon assembler, in C#: the same reads and stores in the
 /// same order, with the registers in locals. Also its unclipped twin
 /// `func_8002FECC`, which draws the far map tiles, the two vertex transforms
-/// `func_8002E650` and `func_8002E7CC`, and the models' lit assembler `func_8002F214`
+/// `func_8002E650` and `func_8002E7CC`, the HUD's transform `func_8002E910`
+/// (PolyAssemblerHud.cs), and the models' lit assembler `func_8002F214`
 /// with its semi-transparent twin `func_8002EAEC` (PolyAssemblerLit.cs).
 ///
 ///     KF2_POLYASM=0             all of them recompiled
@@ -22,7 +23,7 @@ namespace Kf2;
 ///     KF2_POLYASM_REJECT=0      send every oversized polygon to the clipper again
 ///     KF2_POLYASM_REJECT=replay a rejection makes the clipper's scratch writes too
 ///     KF2_POLYASM_UNCLIPPED=0   func_8002FECC recompiled
-///     KF2_POLYASM_TRANSFORM=0   func_8002E650 and func_8002E7CC recompiled
+///     KF2_POLYASM_TRANSFORM=0   func_8002E650, func_8002E7CC and func_8002E910 recompiled
 ///     KF2_POLYASM_LIT=0         func_8002F214 and func_8002EAEC recompiled
 ///     KF2_POLYASM_CLIPPER=0     Clip4FTP and Clip3FTP recompiled
 ///
@@ -80,6 +81,10 @@ public static partial class PolyAssembler
     }
 
     public static bool UnclippedEnabled { get; set; } = true;
+
+    /// <summary>0085. Set by the tile walk around a half the GPU draws: only its
+    /// semi-transparent faces are assembled, the rest being the retained map's.</summary>
+    public static bool BlendedOnly;
     public static bool TransformEnabled { get; set; } = true;
 
     public static bool RejectEnabled
@@ -102,7 +107,7 @@ public static partial class PolyAssembler
         Id = "kf2.polyasm",
         Name = "Polygon assembler",
         Version = "1.0",
-        Description = "func_80030540, func_8002FECC, func_8002E650, func_8002E7CC, func_8002F214, func_8002EAEC and the view-space clipper in C#.",
+        Description = "func_80030540, func_8002FECC, func_8002E650, func_8002E7CC, func_8002E910, func_8002F214, func_8002EAEC and the view-space clipper in C#.",
     };
 
     public static void Configure(string? mode, string? reject, string? unclipped, string? transform, string? lit,
@@ -138,12 +143,13 @@ public static partial class PolyAssembler
         var unclipped = SymbolRegistry.Resolve("game", null, Unclipped);
         var transform = SymbolRegistry.Resolve("game", null, Transform);
         var near = SymbolRegistry.Resolve("game", null, NearTransform);
+        var hud = SymbolRegistry.Resolve("game", null, HudTransform);
         var lit = SymbolRegistry.Resolve("game", null, Lit);
         var litBlend = SymbolRegistry.Resolve("game", null, LitBlend);
         var clip4 = SymbolRegistry.Resolve("game", null, Clip4);
         var clip3 = SymbolRegistry.Resolve("game", null, Clip3);
         var nclip = SymbolRegistry.Resolve("game", null, NormalClipAddress);
-        if (assembler == null || unclipped == null || transform == null || near == null || lit == null || litBlend == null
+        if (assembler == null || unclipped == null || transform == null || near == null || hud == null || lit == null || litBlend == null
             || clip4 == null || clip3 == null || nclip == null)
             return false;
 
@@ -151,6 +157,7 @@ public static partial class PolyAssembler
         if (!Queue(ref _queuedUnclipped, unclipped, nameof(ReplaceUnclipped))) return false;
         if (!Queue(ref _queuedTransform, transform, nameof(ReplaceTransform))) return false;
         if (!Queue(ref _queuedNearTransform, near, nameof(ReplaceNearTransform))) return false;
+        if (!Queue(ref _queuedHudTransform, hud, nameof(ReplaceHudTransform))) return false;
         if (!Queue(ref _queuedLit, lit, nameof(ReplaceLit))) return false;
         if (!Queue(ref _queuedLitBlend, litBlend, nameof(ReplaceLitBlend))) return false;
         if (!Queue(ref _queuedClip4, clip4, nameof(ReplaceClip4))) return false;
@@ -159,7 +166,7 @@ public static partial class PolyAssembler
 
         HookManager.Commit();
         bool ok = HookAttach.Installed(assembler) && HookAttach.Installed(unclipped) && HookAttach.Installed(transform)
-               && HookAttach.Installed(near) && HookAttach.Installed(lit) && HookAttach.Installed(litBlend)
+               && HookAttach.Installed(near) && HookAttach.Installed(hud) && HookAttach.Installed(lit) && HookAttach.Installed(litBlend)
                && HookAttach.Installed(clip4) && HookAttach.Installed(clip3) && HookAttach.Installed(nclip);
         string State(bool on) => !on ? "off" : _mode.ToString().ToLowerInvariant();
         Console.WriteLine(!ok
@@ -366,16 +373,24 @@ public static partial class PolyAssembler
         face += mesh != 0 ? mesh : mem.ReadU32(ModelTable);
 
         uint count = mem.ReadU32(header + 0x14u);
+        uint total = count;
+        // 0072. A model the object walk submitted, every face, for the retained scene.
+        if (mesh == 0 && RetainedModels.Capturing) RetainedModels.CaptureFlat(mem, header, normals, face, count, true);
+        // 0085. An object's opaque faces drawn by the GPU world renderer; only the blended ones built here.
+        bool mirror = mesh == 0 && RetainedModels.MirrorCapturing;
+        bool gpu = mesh == 0 && (mirror || RetainedModels.MainCapturing);
+        if (gpu && !RetainedModels.Instanced) RetainedModels.CaptureMain(mem, normals, face, count, bias, tile: true, mirror: mirror);
 
         var fr = new Frame(mem);
         for (; count != 0; count--)
         {
             Interrupts.Poll(c, mem);
             fr.Check();
+            if (Remaster.Faces.Wanted) Remaster.Faces.Enter(mesh != 0, (int)(total - count));
             uint word = mem.ReadU32(face);
             face += 4u;
             uint cmd = word >> 24;
-            uint type = cmd & 0xFDu;
+            uint type = (BlendedOnly || gpu) && (cmd & 2u) == 0u ? 0u : cmd & 0xFDu;
 
             if (type == 0x2Cu)
             {
@@ -466,7 +481,7 @@ public static partial class PolyAssembler
 
         W8(ref fr, pkt + 3u, 0x0C);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x3Cu));
-        if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c3, 4, p0, p1, p2, p3);
+        if (fr.Lighting) LightTile(mem, pkt, LightWord(ref fr), c0, c1, c2, c3, 4, p0, p1, p2, p3);
         RecordDepth(ref fr, pkt, 0x2Cu, 4, p0, p1, p2, p3);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u)
@@ -538,7 +553,7 @@ public static partial class PolyAssembler
 
         W8(ref fr, pkt + 3u, 0x09);
         W8(ref fr, pkt + 7u, (byte)((cmd & 2u) | 0x34u));
-        if (fr.Lighting) LightTile(mem, pkt, c0, c1, c2, c0, 3, p0, p1, p2, 0u);
+        if (fr.Lighting) LightTile(mem, pkt, LightWord(ref fr), c0, c1, c2, c0, 3, p0, p1, p2, 0u);
         RecordDepth(ref fr, pkt, 0x20u, 3, p0, p1, p2, 0u);
 
         return (short)R16(ref fr, p0 + 4u) + (short)R16(ref fr, p1 + 4u) + (short)R16(ref fr, p2 + 4u);
@@ -818,16 +833,19 @@ public static partial class PolyAssembler
 
         uint count = mem.ReadU32(header + 0x14u);
         uint face = mem.ReadU32(header + 0x10u) + 0xCu + mem.ReadU32(ModelTable);
+        uint total = count;
+        if (RetainedModels.Capturing) RetainedModels.CaptureFlat(mem, header, normals, face, count, false);
 
         var fr = new Frame(mem);
         for (; count != 0; count--)
         {
             Interrupts.Poll(c, mem);
             fr.Check();
+            if (Remaster.Faces.Wanted) Remaster.Faces.Enter(false, (int)(total - count));
             uint word = mem.ReadU32(face);
             face += 4u;
             uint cmd = word >> 24;
-            uint type = cmd & 0xFDu;
+            uint type = BlendedOnly && (cmd & 2u) == 0u ? 0u : cmd & 0xFDu;
 
             if (type == 0x24u)
             {
@@ -856,6 +874,30 @@ public static partial class PolyAssembler
             face += (word >> 6) & 0x3FCu;
         }
     }
+
+    /// <summary>The assemblers' facing test, for a capture that must keep what they keep.</summary>
+    internal static bool FaceKept(PSMemory mem, uint p0, uint p1, uint p2) => Facing(mem, p0, p1, p2);
+
+    /// <summary>func_80030540's: whether a face goes to the clipper (a corner the near
+    /// transform refused, or an edge too long for the GPU), as Quad and Triangle test it.</summary>
+    internal static bool TileFaceClips(PSMemory mem, int corners, uint p0, uint p1, uint p2, uint p3)
+    {
+        int x0 = (short)mem.ReadU16(p0), y0 = (short)mem.ReadU16(p0 + 2u);
+        int x1 = (short)mem.ReadU16(p1), y1 = (short)mem.ReadU16(p1 + 2u);
+        int x2 = (short)mem.ReadU16(p2), y2 = (short)mem.ReadU16(p2 + 2u);
+        if (corners == 3)
+            return (short)(mem.ReadU16(p0 + 4u) | mem.ReadU16(p1 + 4u) | mem.ReadU16(p2 + 4u)) == -1
+                || !FitsY(y0 - y1) || !FitsY(y1 - y2) || !FitsY(y2 - y0)
+                || !FitsX(x0 - x1) || !FitsX(x1 - x2) || !FitsX(x2 - x0);
+        int x3 = (short)mem.ReadU16(p3), y3 = (short)mem.ReadU16(p3 + 2u);
+        return (short)(mem.ReadU16(p0 + 4u) | mem.ReadU16(p1 + 4u) | mem.ReadU16(p2 + 4u) | mem.ReadU16(p3 + 4u)) == -1
+            || !FitsY(y0 - y1) || !FitsY(y1 - y3) || !FitsY(y3 - y2) || !FitsY(y2 - y0) || !FitsY(y1 - y2)
+            || !FitsX(x0 - x1) || !FitsX(x1 - x3) || !FitsX(x3 - x2) || !FitsX(x2 - x0) || !FitsX(x1 - x2);
+    }
+
+    /// <summary>func_80030540's facing for a face that fits: a quad on its whole loop.</summary>
+    internal static bool TileFaceKept(PSMemory mem, int corners, uint p0, uint p1, uint p2, uint p3)
+        => corners == 4 ? QuadFaces(mem, Visible(mem, p0, p1, p2), p0, p1, p2, p3) : Visible(mem, p0, p1, p2);
 
     /// <summary>NormalClip as this routine loads it: the third vertex before the second.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -890,12 +932,17 @@ public static partial class PolyAssembler
         return front;
     }
 
-    /// <summary>A fixed bias, and a slot out of range is dropped rather than clamped.
-    /// The packet is still allocated.</summary>
+    /// <summary>A fixed bias, and a slot out of range is dropped rather than clamped,
+    /// unless the render distance has drawn past it. The packet is still allocated.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static void Place(ref Frame fr, uint otz, uint pkt)
     {
-        if (otz >= 0x2000u) return;
+        if (otz >= 0x2000u)
+        {
+            if (!RenderDistance.Any) return;
+            otz = 0x1FFEu;
+            RenderDistance.Clamped();
+        }
         AddPrim(fr.Mem, (fr.Hoisted ? fr.Ot : fr.Mem.ReadU32(OtBase)) + (otz << 2), pkt);
     }
 

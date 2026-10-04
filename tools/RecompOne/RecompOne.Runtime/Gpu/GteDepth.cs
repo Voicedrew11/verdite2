@@ -242,9 +242,10 @@ public static class GteDepth
     /// not.</summary>
     public static bool DepthWanted => _zbuffer || _ao || _ssr;
 
-    /// <summary>0067. Screen-space reflections, the second reader of the finished
-    /// frame's depth and the first reader of its surface buffer. See
-    /// <see cref="ScreenReflections"/>.</summary>
+    /// <summary>0067. The reflection pass, the second reader of the finished frame's
+    /// depth and the first reader of its surface buffer: on while anything it
+    /// composites is (<see cref="ScreenReflections.Refresh"/>), the screen march,
+    /// the murk, the planar walk or the retained scene.</summary>
     public static bool Reflections
     {
         get => _ssr;
@@ -624,6 +625,22 @@ public static class GteDepth
 
     /// <summary>True once the GL backend has built the atlas and found <c>uMipOn</c>.</summary>
     public static bool MipmapsLive;
+
+    /// <summary>
+    /// 0083. The view depth, in GTE units, past which a surface is drawn the game's
+    /// own way: corner colours rather than per-pixel lighting, no authored light,
+    /// one texel rather than the filter, no ripple, no occlusion and no reflection.
+    /// Faded in over the 2048 units before it. 0 is everywhere enhanced. Perspective,
+    /// sub-pixel and the depth test are kept: they correct the picture rather than
+    /// add to it. GL core only; a plain uniform the next batch reads.
+    /// </summary>
+    public static float PlainDepth;
+
+    /// <summary>True once the GL backend has found <c>uPlainZ</c> on the prim program.</summary>
+    public static bool PlainDepthLive;
+
+    /// <summary>0073. How often a replacement texture's filter was set.</summary>
+    public static long RepFilterSets;
 
     /// <summary>Atlas entries live, decoded (first or again), evicted, and polygons
     /// that asked and found no room. Never reset.</summary>

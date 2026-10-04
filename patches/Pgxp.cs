@@ -30,7 +30,7 @@ namespace Kf2;
 /// <c>Gte.Rtp</c>. What differs is how the answer is carried from there to the GP0
 /// packet the GPU actually draws:
 ///
-///   * <see cref="GteVertexMap"/> (<c>patches/recompone/0012</c>) watches
+///   * <see cref="GteVertexMap"/> (<c>tools/RecompOne/patches/0012</c>) watches
 ///     <c>PSMemory</c>'s word reads and writes and pairs them by value in a small
 ///     ring. It needs no recompile, and it is a guess about registers made without
 ///     being able to see any: a coordinate the game <em>computes</em> rather than

@@ -5,7 +5,7 @@ namespace Kf2;
 
 /// <summary>
 /// Voice interpolation and reverb. The DSP is in the runtime's <c>Spu</c>
-/// (<c>patches/recompone/0043</c>); this is the switch. See docs/AUDIO.md.
+/// (<c>tools/RecompOne/patches/0043</c>); this is the switch. See docs/AUDIO.md.
 ///
 ///     KF2_SPU_INTERP=gauss|cubic|sinc
 ///     KF2_REVERB=legacy|hardware|enhanced

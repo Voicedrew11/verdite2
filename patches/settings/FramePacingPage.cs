@@ -45,12 +45,10 @@ namespace Kf2.Settings;
 /// nearest position and the note says what is actually running, and nothing is
 /// applied until the slider is moved.
 ///
-/// **Uncapped is not one of the positions.** The entry existed in the combo, and
-/// what it produced was not a working uncapped port, so offering it was offering a
-/// defect. <c>KF2_FPS=off</c> still reaches it, which is where an unbounded
-/// picture belongs until it is fixed — and a config already sitting there opens
-/// the slider at the world's tick rate, since 0 is a position no control here can
-/// express.
+/// **Unlimited is the last position**, past the highest panel rate: pacing off
+/// (<c>TargetFps</c> 0, as <c>KF2_FPS=off</c>), the picture drawn as fast as the
+/// host allows while the world stays on its tick; FramePacing turns the host
+/// ceiling off with it.
 ///
 /// **The smoothing tick shares this heading**, directly under the slider. It is
 /// greyed out whenever the rate is not above the world's tick, so at the shipped
@@ -68,6 +66,9 @@ public sealed class FramePacingPage : IPatchPage
     /// (<c>KF2_FPS</c>) rather than a position on this control.</summary>
     static readonly double[] Pins = [20, 30, 40, 50, 60, 75, 90, 100, 120, 144, 165, 180, 240];
 
+    /// <summary>The position past the last pin: no pacing at all.</summary>
+    static int Unlimited => Pins.Length;
+
     static int _index = 0;
     static bool _dragging;
 
@@ -75,12 +76,9 @@ public sealed class FramePacingPage : IPatchPage
     {
         // The slider's own position is the master only while it is being held: any
         // other frame it re-reads FramePacing, so a rate set from the console or
-        // by another page shows up here. Pacing switched off entirely has no
-        // position on this scale, so the handle parks at the world's tick rate
-        // and nothing is applied until it is moved.
-        double live = FramePacing.Enabled ? FramePacing.TargetFps : FramePacing.LogicHz;
-        if (live <= 0.0) live = FramePacing.LogicHz;
-        if (!_dragging) _index = Nearest(live);
+        // by another page shows up here.
+        double live = FramePacing.TargetFps;
+        if (!_dragging) _index = FramePacing.Enabled ? Nearest(live) : Unlimited;
 
         // No SetNextItemWidth: this matches the render-scale slider it sits under.
         // The format is a literal rather than a specifier, so the handle's index
@@ -88,16 +86,16 @@ public sealed class FramePacingPage : IPatchPage
         // That is also why ctrl-click entry is off: the box would open on "144
         // fps" and there is no specifier to read a number back out of it, and a
         // typed rate has nowhere to land on a slider whose positions are a list.
-        if (ImGui.SliderInt("Frame rate", ref _index, 0, Pins.Length - 1,
-                            $"{Pins[_index]:0} fps",
+        if (ImGui.SliderInt("Frame rate", ref _index, 0, Unlimited,
+                            _index == Unlimited ? "Unlimited" : $"{Pins[_index]:0} fps",
                             ImGuiSliderFlags.AlwaysClamp | ImGuiSliderFlags.NoInput))
-            Apply(Pins[_index]);
+            Apply(_index == Unlimited ? 0.0 : Pins[_index]);
 
         _dragging = ImGui.IsItemActive();
 
         // A console rate that is not on the list is left running and said out
         // loud, since the handle beside it is showing something else.
-        if (!_dragging && Math.Abs(live - Pins[_index]) > 0.5)
+        if (!_dragging && _index != Unlimited && Math.Abs(live - Pins[_index]) > 0.5)
             PatchSettings.Note($"Running at {live:0.#} fps, set outside this menu.");
 
         PatchSettings.Note(FramePacing.Measured > 0.0

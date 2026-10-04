@@ -36,6 +36,9 @@ public sealed class GlDisplayRt
     public long PlanarFrame = -1;
     public readonly float[] PlanarPlane = new float[4];
     public readonly float[] ClipPlane = new float[4];
+    public readonly float[] LevelAxis = new float[3];
+    // 0072. The retained scene's frame this target's picture was drawn under.
+    public int RetainedSerial;
     public int CreatedScale;
     public bool Dirty;
     public long Stamp;

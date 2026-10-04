@@ -9,16 +9,10 @@ generated/
 bin/
 obj/
 
-# Tool checkout: VENDORED, not cloned. See scripts/setup_tools.sh.
-# tools/RecompOne is VENDORED -- its sources are tracked, so a fresh clone has a
-# working recompiler and nothing is lost by editing inside it. What is ignored:
-# The fork's own history and its upstream remote: rebuildable by
-# scripts/setup_tools.sh --sync-upstream, so it is not carried here.
-tools/RecompOne.git/
-tools/RecompOne/**/bin/
-tools/RecompOne/**/obj/
-# 15.7 MB of PSY-Q signatures, read only by the standalone --autoconfigure
-# command. setup_tools.sh fetches it on demand.
+# tools/RecompOne is a subtree of the fork (see scripts/setup_tools.sh); its own
+# .gitignore covers bin/ and obj/ there. The 15.7 MB PSY-Q signature bank is read
+# only by the standalone --autoconfigure command; setup_tools.sh --signatures
+# fetches it on demand.
 tools/RecompOne/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json
 
 # Written by the runtime at play time: memory card saves and host settings.
@@ -32,6 +26,11 @@ interface.ini
 
 # Optional runtime asset-replacement packs
 packs/
+# The remaster editor's pack exports
+exports/
+
+# Upstream's texture dumper writes the disc's textures here, and the census its reports.
+dump/
 
 __pycache__/
 *.pyc

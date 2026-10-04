@@ -539,7 +539,7 @@ variant of the pad one.
 * **The pointer runs out of desktop.** An absolute pointer stops at the edge of
   the screen halfway through a turn, so motion is only motion while the cursor is
   locked to the window. That lock is the only part of this that the runtime had
-  to grow — `patches/recompone/0017`.
+  to grow — `tools/RecompOne/patches/0017`.
 
 ### The angle scale, and where it comes from
 
@@ -675,7 +675,7 @@ the cut only reads as a cut if something separates the two halves.
 
 Three things follow the map's viewports rather than being invented again. It is
 an `IFloatingPanel` anchored to **`MapRender.Picture`**, the game picture rather
-than the window (`patches/recompone/0029`), so it does not sit over the port's
+than the window (`tools/RecompOne/patches/0029`), so it does not sit over the port's
 menu bar or in the letterbox bar beside a 4:3 picture. Its cell is a whole number
 of screen pixels — `max(2, round(height / 180))`, off the picture rather than off
 `Theme.Scale`, since it belongs to the game's image and not to the port's chrome
@@ -1114,7 +1114,7 @@ through `func_800226A8`, and the panels draw inside that `VSync`.
 Turning a window pixel back into a game pixel needed one thing the runtime did
 not publish — the picture's size in the game's *own* pixels. `OutputView` had
 `Min`/`Max` and no scale, and `Display.LastDisplayW/H` is not re-exported, so
-`patches/recompone/0029` grew `GameW`/`GameH`, set from the `SetTexture` call
+`tools/RecompOne/patches/0029` grew `GameW`/`GameH`, set from the `SetTexture` call
 that already receives both. UI only, no recompile. `GameW` is deliberately the
 game's own width and not the presented one, which is why the widescreen margin is
 added back in the patch rather than read off the picture.
@@ -1183,7 +1183,7 @@ list opened — a list that pages itself on the frame it appears.
 
 ### The notch is taken from the host, not listened for
 
-`patches/recompone/0038` gives `HostWindow` a `TakeMouseWheel()` beside the
+`tools/RecompOne/patches/0038` gives `HostWindow` a `TakeMouseWheel()` beside the
 `TakeMouseMotion()` that `0017` added, and it is the same shape for the same
 reason: the host produces scroll as **discrete events**, so an accumulator that
 is drained cannot miss one or spend one twice, where a caller reading a level

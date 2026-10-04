@@ -6,7 +6,11 @@ Static recompilation of **King's Field** (NTSC-U, `SLUS-00158`) using
 **This file is the index.** It carries what the project is and where it stands;
 everything else lives in `docs/`, split by what you would be doing when you need
 it. **Nine documents became ten**: `docs/PACKAGING.md` is how the port becomes
-something a person can download, which is a different job from building it.
+something a person can download, which is a different job from building it. The
+eleventh, `docs/REMASTER.md`, is the design for a remaster's authoring tools,
+and the record of the work against it; Phase 1 is in, in two slices. The twelfth,
+`docs/GPU_RENDERER.md`, is the plan to draw the world from meshes kept on the
+GPU instead of from the triangles the game's code builds each frame.
 
 **Source comments still say `See "X" in NOTES.md`, and the text they mean is no
 longer in this file.** The section titles are unchanged, so the map below resolves
@@ -155,7 +159,7 @@ scripts/extract_file.py  extract a disc file and dump its PS-X EXE header
 scripts/match_overlays.py  carry a function identified in one overlay to the other two
 disc/                    your own dump (gitignored)
 generated/               recompiler output (gitignored, derived from the disc)
-tools/RecompOne/         upstream tool checkout (gitignored)
+tools/RecompOne/         RecompOne, a subtree of the fork Voicedrew11/verdite-recompone
 Program.cs               hand-owned entry point
 KingsField2Recomp.csproj
 ```
@@ -253,6 +257,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - Ambient occlusion: painter's order is the G-buffer
 - Screen-space reflections: the water is the one surface the depth buffer does not have
 - Planar reflections: the world walked twice, from under the water
+- The retained scene: the world kept on the GPU, so a reflection can draw it again
 - PGXP has no control in the window
 - Dithering: one flag, and it lives in the draw environment
 - True color: the other answer to 15-bit banding
@@ -262,6 +267,8 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - The first intro movie never reached the screen
 - The display list cannot name a face: why packet-level smoothing failed
 - "No textures on the other machine": splitting the three layers
+- The reflections see past the camera's cull
+- The enhancement distance: past it, the game's own look
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 
@@ -278,6 +285,7 @@ Aspect ratio, the HUD and screen-space effects authored 320 wide, and the three 
 - The second cull: a view-space clipper, and it is set to twice the screen
 - Is the 24-tile window worth lifting? Measured: binding, and barely
 - There is a third cull and it is none of the obvious ones
+- Render distance: the game's flood carried past its window
 
 ### [GAME_INTERNALS.md](docs/GAME_INTERNALS.md)
 
@@ -290,6 +298,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - The model pipeline has no skeleton
 - Stage 8 is the render camera, and it is the only copy
 - What in the renderer draws what
+- Stage 13's HUD block, and the compass needle
 - The frame's applied position delta is a triple of its own
 - Player state: found, and it was in stage 3 all along
 - The inventory is one byte per item, and the item id is the name-table index
@@ -313,6 +322,7 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - Messages draw the world live
 - Drawing message text
 - Auto reload
+- Comparing gear on the equip prompt
 - A dynamic map
 - Five map controls that were not choices
 - What the Map page is down to
@@ -321,9 +331,18 @@ How the port's own code attaches, where its settings go, plus frame pacing, auto
 - `ending` exists because the last ten minutes of the game are otherwise untestable
 - The MCP layer
 - The polygon assembler in C#
+- The HUD's transform in C#
+- The gauges lost their shadow
 - The map tile walk in C#
 - The object and creature walk in C#
 - A verify pass replays, it does not re-run
+- Stage 13 in C#
+- Drawing the frame from another camera
+- The compass needle is held to the tick
+- The compass is carried with the view
+- The gauges are carried like the needle
+- The hooks on stage 13 are ordered by what they need
+- A pass of the port's own
 
 ### [INPUT.md](docs/INPUT.md)
 
@@ -354,11 +373,11 @@ Every `KF2_*` switch the port reads, in one list.
 
 ### [RECOMPONE_FORK.md](docs/RECOMPONE_FORK.md)
 
-How the vendored RecompOne checkout is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided.
+How `tools/RecompOne`, a subtree of the fork, is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided.
 
-### [RECOMPONE_PATCHES.md](docs/RECOMPONE_PATCHES.md)
+### [RECOMPONE_PATCHES.md](tools/RecompOne/docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0069`, one entry each.
+Every change the port made to RecompOne, `0001`-`0085`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 
@@ -366,6 +385,87 @@ Next steps, and an index of what is reported but not diagnosed.
 
 - Open questions — reported, not diagnosed
 - Next steps
+
+### [REMASTER.md](docs/REMASTER.md)
+
+The authoring tools (identity, packs, editor) and the engine work for a remaster the user places, tunes, saves and shares. Phase 1 is in: a material per tile half or per face, from the working pack, through the editor (Shift+E) or `KF2_SHELL`; `snap` hashes the presented picture, and the switch is under Video ▸ Enhancements. Phase 2's first slice adds authored point and spot lights (`0071`). Phase 5's first slice overrides the game's own light records (back colour, lights, fog), after a census showed only the renderer reads them. Its second slice gives the area's fog a colour and a curve, and the frame a sky (`0074`). Phase 6's first slice edits the tile block (floors, collision, the flood, light records) behind a switch of its own, since that changes gameplay; `savecheck` measured that the block never reaches a save. Phase 7's first slice is the editor's free camera, a compatibility report per area and the pack's export as a zip. Phase 8's first slice is props: the area's own object models, placed, turned and scaled by the author, drawn through the game's own object path.
+
+- What this is, and what it is not
+- What exists, and what each piece gives the remaster
+- Identity: what authored data attaches to
+- Architecture: five layers and the seams between them
+- Data model and file format
+- The editor
+- Lighting: authored lights beside the game's own
+- Level editing: what can be edited and what can only be decorated
+- Rules every phase keeps
+- The phased roadmap
+- Phase 1, the first slice
+- Phase 1, the second slice
+- A tile half is a whole mesh, and a face is the key under it
+- Faces, picked from the frame
+- Phase 2, the first slice
+- The light records are read only by the renderer
+- Phase 5, the first slice
+- Phase 5, the second slice
+- Phase 6, the first slice
+- Phase 7, the first slice
+- Phase 8, the first slice
+- Open decisions
+
+### [GPU_RENDERER.md](docs/GPU_RENDERER.md)
+
+The plan to draw the world from meshes kept on the GPU (retained-mode rendering), the steps, and where the planar reflections come in. The renderer is off by default (`KF2_GPUWORLD=1`, Video ▸ Experimental), measured and not judged by eye except the mirror. Steps 1-3 draw the map, its water, every model with its blended faces, the arm and the sky on the GPU; Step 4's census finds the game's code building no 3D of the world anywhere it was driven, the menu's item preview aside; Step 5's first slice draws the planar mirror on the renderer.
+
+- Why: the frame is the game's geometry, done on one CPU thread
+- The target
+- The steps
+- Step 0: time the GPU
+- Step 1: the map, instanced, for the main view
+- Step 1, the first slice
+- Step 1, the second slice
+- Known issues
+- Step 2: every map feature in the renderer
+- Step 2, the first slice
+- Step 2, the second slice
+- Step 2, the third slice
+- The map's seams fought again
+- Step 3: models
+- Step 3, the first slice
+- Step 3, the second slice
+- Step 3, the third slice
+- Step 3, the fourth slice
+- Step 3, the fifth slice
+- Step 3, the sixth slice
+- Step 3, the seventh slice
+- Step 3, the eighth slice
+- Step 3, the ninth slice
+- Step 4: the old world path off
+- Step 4, the census (2026-09-30)
+- Step 4, the fallback census (2026-10-01)
+- Step 5: every extra view on the same renderer
+- Step 5, the first slice
+- Step 6, if needed: culling on the GPU
+- Where the reflections come in
+- The old path stays as the comparison
+- Rules this keeps
+
+### [SHARING.md](docs/SHARING.md)
+
+Sharing this port's work with Verdite1 and Verdite3: what in the repository is the RecompOne fork, what is game-agnostic, what is a mechanism that might generalize and what is this game's alone, and the progress log of the program. The plan, its phases and its rules are [SHARING_PLAN.md](docs/SHARING_PLAN.md); the per-file detail is [SHARING_INVENTORY.md](docs/SHARING_INVENTORY.md). Phase 0, the inventory, is written and awaits review.
+
+- The buckets
+- The finding that shapes everything else: one per-game table removes most of the coupling
+- Bucket A: the RecompOne fork
+- What the fork knows about this game
+- Bucket B: game-agnostic infrastructure
+- Bucket C: patches whose mechanism might generalize
+- Bucket D: KF2-only
+- What is game-specific in the infrastructure
+- What a new repo's `.gitignore` must copy
+- What mods can see
+- Corrections to the plan's guesses
+- Progress log
 
 ## Where to write a new finding
 

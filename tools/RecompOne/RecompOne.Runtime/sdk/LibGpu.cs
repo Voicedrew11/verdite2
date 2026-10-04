@@ -21,17 +21,46 @@ public static class LibGpu
 
     private static void DrawOTagCore(CpuContext c, IMemory m)
     {
+        if (Runtime.Gpu == null) return;
+        if (Log.SdkOn) Log.Sdk($"DrawOTag ot=0x{c.A0:X8}");
+        WalkOTag(m, c.A0, null);
+    }
+
+    /// <summary>
+    /// The ordering table's walk, back to front, for <see cref="DrawOTag"/> and for a
+    /// port that replaces it. <paramref name="onEntry"/>, if given, is told the entry
+    /// (counted from the head) before each packet is sent, which is the only way to
+    /// know where a primitive came from. 0079: while <see cref="BlendOrder.Active"/>,
+    /// a blended packet the depth buffer tests is sent after the opaque tested ones
+    /// that follow it, and is reported with its own entry when it is.
+    /// </summary>
+    public static void WalkOTag(IMemory m, uint head, Action<int>? onEntry)
+    {
         var gpu = Runtime.Gpu;
         if (gpu == null) return;
 
-        if (Log.SdkOn) Log.Sdk($"DrawOTag ot=0x{c.A0:X8}");
-
-        var addr = c.A0 & Runtime.RamWordMask;
+        var addr = head & Runtime.RamWordMask;
         var custom = GpuPrims.Any && GpuPrims.OtLength > 0;
         var otBase = GpuPrims.OtBase & Runtime.RamWordMask;
         var otEnd = otBase + (uint)GpuPrims.OtLength * 4u;
+        // An asset pack's own primitives are emitted by entry, so nothing may move.
+        var reorder = BlendOrder.Active && !custom;
+        var probe = BlendOrder.Probe && !custom && GtePacketDepth.Active;
+        if (probe) BlendOrder.ProbeBegin();
+        // A walk cut short by an exception must not hand the next one its packets.
+        BlendOrder.Clear();
+        BlendOrder.Walks++;
 
         var slot = -1;
+        // 0085. The map's water, drawn by the backend where its packets would be sent.
+        var water = false;
+        // 0085. The first-person arm, drawn by the backend face by face where the walk
+        // would have sent its packets: the runs it has passed go in together before the
+        // next packet the walk sends that draws where the arm does, since nothing between
+        // them shares a pixel with it.
+        var arm = RetainedScene.ArmSerial > 0 && RetainedScene.ArmSerial == RetainedScene.MainSerial
+                  && !custom && !PlanarReflections.Capturing;
+        var armDue = false;
         for (var guard = 0; guard < 0x100000; guard++)
         {
             // Where in the table this primitive was linked, counted from the head —
@@ -45,24 +74,54 @@ public static class LibGpu
 
             var header = m.ReadU32(addr);
             var count = (int)(header >> 24);
-            if (count == 0) slot++;
+            if (count == 0)
+            {
+                slot++;
+                // 0085. The map, past the sky and ahead of everything tested against it;
+                // in a planar capture, the mirror's.
+                if (slot == 1 && !custom && PlanarReflections.Capturing && RetainedScene.MirrorSerial > 0)
+                {
+                    if (!gpu.DrawRetainedMain()) RetainedScene.MirrorMissed++;
+                    RetainedScene.MirrorSerial = 0;
+                }
+                else if (slot == 1 && RetainedScene.MainSerial > 0 && !custom && !PlanarReflections.Capturing)
+                {
+                    if (!gpu.DrawRetainedMain()) RetainedScene.MainMissed++;
+                    else water = RetainedScene.WaterPending && reorder;
+                    RetainedScene.MainSerial = 0;
+                }
+                armDue |= arm && slot >= RetainedScene.ArmSlot && slot >= 1;
+            }
             GteDepth.OtSlot = slot;
 
             if (count > 0)
             {
-                if (m is PSMemory ram && ram.TryWords(addr + 4u, count, out var words))
+                // The arm is a barrier, as its packets were: what the walk holds goes first.
+                if (armDue && Draws(m, addr) && ArmMeets(m, addr, count))
                 {
-                    gpu.WriteGp0Packet(words, addr + 4u);
+                    if (BlendOrder.Queued > 0) SendHeld(gpu, m, onEntry, probe, guard, slot, ref water);
+                    if (water) water = gpu.DrawRetainedWater(WaterCut(slot));
+                    arm = DrawArm(gpu, slot);
+                    armDue = false;
                 }
+                // Slot 0 (the skybox) is never depth-tested, whatever it recorded.
+                var kind = (reorder || probe) && slot != 0 ? BlendOrder.Classify(m, addr, count, out _) : BlendOrder.Kind.Barrier;
+                if (reorder && kind == BlendOrder.Kind.Deferred)
+                    BlendOrder.Defer(addr, count, guard, slot);
                 else
                 {
-                    // 0012. The slow path has to carry the source address too, or
-                    // every vertex in a packet that took it misses the map.
-                    for (var i = 0; i < count; i++)
+                    if (BlendOrder.Queued > 0)
                     {
-                        var src = addr + 4u + (uint)i * 4u;
-                        gpu.WriteGp0(m.ReadU32(src), src);
+                        if (kind == BlendOrder.Kind.Opaque) BlendOrder.Passed++;
+                        else SendHeld(gpu, m, onEntry, probe, guard, slot, ref water);
                     }
+                    // The water walked before a barrier that draws goes before it, as
+                    // the held packets do.
+                    if (water && kind == BlendOrder.Kind.Barrier && Draws(m, addr))
+                        water = gpu.DrawRetainedWater(WaterCut(slot));
+                    onEntry?.Invoke(guard);
+                    if (probe) BlendOrder.ProbePacket(m, addr, count);
+                    SendPacket(gpu, m, addr, count);
                 }
             }
 
@@ -70,6 +129,9 @@ public static class LibGpu
             if (next == 0xFFFFFFu || (next & 0x800000u) != 0) break;
             addr = next & Runtime.RamWordMask;
         }
+        if (BlendOrder.Queued > 0) SendHeld(gpu, m, onEntry, probe, GteDepth.OtEntry, GteDepth.OtSlot, ref water);
+        if (water) gpu.DrawRetainedWater(float.NegativeInfinity);
+        if (arm) DrawArm(gpu, int.MaxValue);
 
         // The length is only known once the walk ends, so it is published for the
         // next one. An entry is readable as an OTZ against it: the walk starts at
@@ -78,6 +140,96 @@ public static class LibGpu
         GteDepth.OtEntry = -1;
         GteDepth.OtSlot = -1;
         if (custom) GpuPrims.Clear();
+    }
+
+    /// <summary>0085. The arm's runs the walk has reached at <paramref name="slot"/>;
+    /// false once none is left.</summary>
+    private static bool DrawArm(Gpu gpu, int slot)
+    {
+        RetainedScene.ArmCut = slot;
+        if (gpu.DrawRetainedArm()) return true;
+        RetainedScene.ArmSerial = 0;
+        return false;
+    }
+
+    private static bool ArmMeets(IMemory m, uint addr, int count)
+    {
+        var (x0, y0, x1, y1) = PacketBox(m, addr, count);
+        return RetainedScene.ArmMeets(x0, y0, x1, y1);
+    }
+
+    /// <summary>0085. Whether a packet draws: a polygon, a line or a rectangle.</summary>
+    private static bool Draws(IMemory m, uint addr)
+    {
+        uint op = m.ReadU32(addr + 4u) >> 24;
+        return op >= 0x20u && op < 0x80u;
+    }
+
+    /// <summary>0085. The screen box of a packet of polygons, in their own
+    /// coordinates; anything else covers everything.</summary>
+    private static (float, float, float, float) PacketBox(IMemory m, uint addr, int count)
+    {
+        const float Lo = float.MinValue, Hi = float.MaxValue;
+        float x0 = Hi, y0 = Hi, x1 = Lo, y1 = Lo;
+        for (int at = 0; at < count;)
+        {
+            uint cmd = m.ReadU32(addr + 4u + 4u * (uint)at) >> 24;
+            if ((cmd & 0xE0u) != 0x20u) return (Lo, Lo, Hi, Hi);
+            bool gouraud = (cmd & 0x10u) != 0;
+            int n = (cmd & 8u) != 0 ? 4 : 3, stride = 1 + ((cmd & 4u) != 0 ? 1 : 0) + (gouraud ? 1 : 0);
+            int size = n * stride + (gouraud ? 0 : 1);
+            if (at + size > count) return (Lo, Lo, Hi, Hi);
+            for (int i = 0; i < n; i++)
+            {
+                uint w = m.ReadU32(addr + 4u + 4u * (uint)(at + 1 + i * stride));
+                float x = (short)w, y = (short)(w >> 16);
+                x0 = Math.Min(x0, x); x1 = Math.Max(x1, x); y0 = Math.Min(y0, y); y1 = Math.Max(y1, y);
+            }
+            at += size;
+        }
+        return x0 <= x1 ? (x0, y0, x1, y1) : (Lo, Lo, Hi, Hi);
+    }
+
+    /// <summary>0085. The view depth a map face is walked at a slot for: the table's
+    /// 0x2000 entries walked from the far end, and a tile linked at its mean SZ over
+    /// four plus 0xF0 (PolyAssembler). Water linked deeper was walked already.</summary>
+    private static float WaterCut(int slot) => 4f * (0x1FFF - slot - 0xF0);
+
+    /// <summary>0079. The held packets, each under its own entry and slot, then the walk's put back.
+    /// 0085: the map's water the walk passed before each goes in ahead of it.</summary>
+    private static void SendHeld(Gpu gpu, IMemory m, Action<int>? onEntry, bool probe, int entry, int slot, ref bool water)
+    {
+        foreach (var e in BlendOrder.Take())
+        {
+            if (water)
+            {
+                var (x0, y0, x1, y1) = PacketBox(m, e.Addr, e.Count);
+                water = gpu.DrawRetainedWater(WaterCut(e.OtSlot), x0, y0, x1, y1);
+            }
+            GteDepth.OtEntry = e.OtEntry;
+            GteDepth.OtSlot = e.OtSlot;
+            onEntry?.Invoke(e.OtEntry);
+            if (probe) BlendOrder.ProbePacket(m, e.Addr, e.Count);
+            SendPacket(gpu, m, e.Addr, e.Count);
+        }
+        GteDepth.OtEntry = entry;
+        GteDepth.OtSlot = slot;
+    }
+
+    private static void SendPacket(Gpu gpu, IMemory m, uint addr, int count)
+    {
+        if (m is PSMemory ram && ram.TryWords(addr + 4u, count, out var words))
+        {
+            gpu.WriteGp0Packet(words, addr + 4u);
+            return;
+        }
+        // 0012. The slow path has to carry the source address too, or
+        // every vertex in a packet that took it misses the map.
+        for (var i = 0; i < count; i++)
+        {
+            var src = addr + 4u + (uint)i * 4u;
+            gpu.WriteGp0(m.ReadU32(src), src);
+        }
     }
 
     public static void DrawSync(CpuContext c, IMemory m)

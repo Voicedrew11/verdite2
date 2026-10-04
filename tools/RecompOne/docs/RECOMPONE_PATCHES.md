@@ -1,7 +1,13 @@
 # The port's changes to RecompOne, one by one
 
-`patches/recompone/*.patch` are no longer replayed (the tree is vendored — see
-`docs/RECOMPONE_FORK.md`), but they are still the record of what the port changed
+This record moved here from Verdite2 (`Voicedrew11/verdite2`) on 2026-10-02, so
+that every game taking this fork has the record its source cites. In a game
+repository it is `tools/RecompOne/docs/RECOMPONE_PATCHES.md`, and the diffs are
+`tools/RecompOne/patches/`. Every other `docs/` file named below (`RUNTIME.md`,
+`RENDERING.md`, `REMASTER.md` and the rest) is Verdite2's, where the work was done.
+
+`patches/*.patch` are no longer replayed (the tree is this fork, taken into each
+game as a subtree — see Verdite2's `docs/RECOMPONE_FORK.md`), but they are still the record of what the port changed
 in the runtime and the recompiler and why, and the numbering is still how each
 change is referred to in the source. `docs/RUNTIME.md`'s "The patches to the
 checkout, one by one" covers the early ones at more length; this list is the
@@ -13,11 +19,13 @@ amendment's diff appended to its `.patch` file, and the source comments keep its
 number. `0016` and `0057` predate this and keep their numbers, since the source
 refers to them.
 
-Fifty of the fifty-six are load-bearing; `0002`, `0003`, `0015`, `0046` and
-`0065` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
-it was folded into `0054` as an amendment, and the number is not reused. **Three force a recompile** —
+Seventy-two of the eighty are load-bearing; `0002`, `0003`, `0015`, `0045`,
+`0046`, `0065`, `0069` and `0084` are diagnostics and `0013` is a settings-placement hook. `0063` is retired:
+it was folded into `0054` as an amendment, and the number is not reused. `0075` and `0076`
+are held by the remaster's plan for work not yet made (`docs/REMASTER.md`), which is
+why the shadows are `0077`. **Three force a recompile** —
 `0004`, `0035` and `0037`; every other one changes runtime behaviour only. **One
-patch has an asset beside it**: `patches/recompone/assets/` holds the TTF `0033`
+patch has an asset beside it**: `patches/assets/` holds the TTF `0033`
 embeds, which is now simply a tracked file in the vendored tree.
 
 Four files in the directory have no entry below:
@@ -305,6 +313,16 @@ Four files in the directory have no entry below:
   a window pixel back into a game pixel — which is what the menu pointer needs to
   ask which item is under the cursor. UI only — **no recompile**. See "A dynamic
   map" in `docs/PATCHES_AND_MODS.md` and "The menu pointer" in `docs/INPUT.md`.
+  Since amended: `OutputView.Hovered`, the picture's own `IsItemHovered`. The
+  picture is an ImGui window, so `io.WantCaptureMouse` is true whenever the
+  pointer is over it, and the remaster editor's click gate
+  (`!WantCaptureMouse`) never opened: neither a pick nor a light placement on
+  the picture did anything. The amendment is the second diff in the patch file.
+  Since amended: `OutputView.DockId`, the dock node the Output panel sits in (0
+  while it floats). A node holding a window is a leaf, so the port can split it
+  with `DockBuilder` to dock a panel of its own beside the picture: the remaster
+  editor opens at the right edge that way. The third diff in the patch file. See
+  "Modes" in `docs/REMASTER.md`.
 
 - `0030-expose-host-pump.patch` — the shipped launcher has to build the game
   before there is a game to run, and that blocks for seconds; a window that stops
@@ -348,7 +366,7 @@ Four files in the directory have no entry below:
   kept, being Noto's own coverage and only atlas space — they are what a path or a
   mod name falls back to instead of boxes. A missing resource falls back to the
   bitmap font rather than to no text. The font is OFL 1.1
-  (`patches/recompone/assets/NotoSans-OFL.txt`, which the packaging must ship).
+  (`patches/assets/NotoSans-OFL.txt`, which the packaging must ship).
   UI only — **no recompile**. This is the one patch that *wants* to stop applying:
   when the pin moves past `aaf7be0` it is upstream's, and the right response to
   `FAILED TO APPLY` here is to delete it. See "The interface's font" in
@@ -588,6 +606,14 @@ Four files in the directory have no entry below:
   `Gte.LightDots` give the port a normal's lighting without touching a register.
   GL core backend only. **No recompile.** See "Per-pixel lighting" in
   `docs/RENDERING.md`.
+  Since amended: the BK and LCM were kept in a ring of eight generations, and a
+  generation starts whenever the constants change. Every model sets its own from its
+  tile's light record and the planar walk replays them, so area 7 starts up to 11 in
+  a frame, and when the ring wrapped before the table was drawn, the first models'
+  packets uploaded a later model's BK: darker by a constant, 22-33 levels. The ring is
+  64 now, and `GteLightMap.Generations` counts them for `0085`'s probe. The amendment
+  is the second diff in the patch file. See "Step 3, the first slice" in
+  `docs/GPU_RENDERER.md`.
 
 - `0049-gte-depth-quotient.patch` — `Gte.DepthQuotient(sz3)`, the `H/SZ3` divide
   `Rtp` feeds its depth cue, split out of `Divide` with no flag raised and no
@@ -875,6 +901,107 @@ Four files in the directory have no entry below:
   to its crossing and kept only if the ray is within the thickness of the surface
   there; otherwise the march goes on. The amendment is the second diff in the patch
   file.
+  Since amended: `NormalFs` took a triangle's opacity from its material id
+  (`vM < 1.5`), which was right only while every id above 1 was water. An authored
+  id on an opaque floor would have dropped that floor out of the normal buffer. A
+  blended triangle now carries its material plus `SurfaceMaterial.BlendedFlag` (128)
+  in the surface list, and `NormalFs` takes opacity from that and the id from the
+  rest; `SurfaceMaterial.FirstAuthored` (4) is where a port's ids start. Every
+  existing id reaches the shader with the opacity it had, so the pass is unchanged.
+  The amendment is the third diff in the patch file. See "Phase 1, the first slice"
+  in `docs/REMASTER.md`.
+  Since amended: `HleVertex.Projected` was set on any vertex-map hit, which was the
+  same thing as "the GTE projected it" only while every published vertex came out
+  of `Rtp`. The port now publishes the HUD's vertices itself, placed on the screen
+  by `RotTrans` with no divide, so that they get their sub-pixel fraction; they are
+  published with a depth of 0, and a hit counts as projected only with a depth. The
+  HUD therefore stays 2D to the reflection pass (measured: its overlay count did not
+  fall). The amendment is the fourth diff in the patch file. See "The HUD's
+  transform in C#" in `docs/PATCHES_AND_MODS.md`.
+  Since amended: the probe's readback keeps its per-pixel info texels
+  (`ScreenReflections.LastInfo`, `LastW`, `LastH`, `MapSerial`), so the port can ask
+  which material the GPU drew at a pixel. `patches/remaster/FaceProbe.cs` is the
+  reader. The amendment is the fifth diff in the patch file. See "A tile half is a
+  whole mesh, and a face is the key under it" in `docs/REMASTER.md`.
+  Since amended: eight ids were four a port could author, so `SurfaceMaterial.Count`
+  is 256 (the surface buffer's half-float alpha holds every integer to 2048, and the
+  record holds a byte) and `BlendedFlag` 256. The table gains `Roughness` and
+  `Emissive` (the latter `0071`'s, below) and a `Generation` a port bumps with
+  `Changed()`; `GlCore` uploads it as a 256x2 RGBA32F texture on unit 6 when that
+  moves, and `SsrFs` reads row 0 by `texelFetch` instead of two 8-float uniform
+  arrays -- 256 of each would pass the fragment stage's uniform minimum. Roughness is
+  a blur of the hit: nine taps over the footprint of the cone the reflected ray
+  stands for, `roughness * distance` across at the hit's depth, the planar lookup
+  taking its distance from the planar depth; 0 is the one read it was. With nothing
+  authored the picture is the one before, to the bit (the pinned area-1 view's hash
+  is Phase 2's `210d55698c875fb8`). The amendment is the sixth diff in the patch
+  file, and it carries `0071`'s amendment too, since the two share `GlCore` and
+  `GlShaders` hunks. See "Phase 3, the first slice" in `docs/REMASTER.md`.
+  Since amended: the roughness blur's eight taps were turned per pixel by the 4x4
+  interleaved pattern with nothing after it to cancel it, which on a busy texture
+  left a woven grid repeating every 4 pixels of the pass (8 render pixels at the
+  default resolution, 4 at full; measured, autocorrelation +0.39 to +0.72 at that
+  lag, none at roughness 0). The pass now shrinks the picture, and the planar
+  texture, into a half-size mip chain (`BuildMip`, units 7 and 8, only while an id is
+  rough; `ScreenReflections.MipBuilds`) and reads the level whose texel spans the
+  blur, centre and four taps, the same at every pixel: no repeat at any lag after.
+  Roughness is squared before use. The table grows to 256x3: row 0's alpha is
+  metalness, which tints a reflection with the surface's hue at full value; row 2
+  is a highlight (`0071`'s) and the share of occlusion taken off, which the present
+  shader reads from the surface buffer's id (`uAoMatOn`, only while an id is
+  occluded other than fully). The seventh diff in the patch file, carrying `0071`'s
+  amendment too. See "Phase 3, the second slice" in `docs/REMASTER.md`.
+  Since amended: a metal is a tinted mirror. `SsrFs`'s outputs go through `emit()`,
+  which takes half of the surface's own colour off at metalness 1, hit or miss, and
+  the reflection's weight off what is left; `metalTint` pushes the hue a little
+  from grey. With no metal the output is the one before, to the bit (the same
+  hashes from the previous build). The reflectivity and F0 a metal gets are the
+  port's (`patches/remaster/Surfaces.cs`). The eighth diff in the patch file. See
+  "Metal is a tinted mirror" in `docs/REMASTER.md`.
+  Since amended: the pass runs for each of its terms on its own. It was switched by
+  the screen march, so `0068`'s planar texture and `0072`'s planes and cubemap were
+  read only with SSR on. `ScreenReflections.Enabled` is the march alone now, and
+  `GteDepth.Reflections` (the pass, the surface buffer, the materials) is on while
+  the march, `PlanarReflections.Enabled`, `RetainedScene.Enabled` or the new
+  `WaterMurk.Enabled` is (`ScreenReflections.Refresh`, called from each setter).
+  `SsrFs` gains `uMarchOn`, which leaves a pixel no planar lookup answers
+  unreflected, and the murk: a dark colour over water by the view ray's run from the
+  surface to the depth buffer's floor under it, laid under the reflection in
+  `emit()`. With the march on and no murk the output is the one before. The ninth
+  diff in the patch file. See "The reflection pass runs for each term on its own"
+  and "Murky water" in `docs/RENDERING.md`.
+  Since amended: an opaque triangle drawn in painter's order (zMode 3, no depth
+  record) was kept out of the surface list unless no corner was projected, so the
+  first-person arm, whose corners the GTE projects but whose packets are not
+  recorded, left the water under it in the surface buffer, and the murk and the
+  reflection were composited over the arm. It is kept as `Overlay` now, except in
+  the table's slot 0 (the skybox, which must read as no surface). The tenth diff in
+  the patch file. See "The arm showed the water through it" in `docs/RENDERING.md`.
+  Since amended: the one-texel crack fill took a pillar in front of the water as
+  the floor, leaving a strip unmurked; it takes only a depth behind the water now.
+  And `PresentFs` upsamples the pass by the surface
+  under each pixel (`ssrAt`), with the surface buffer at the render scale while the
+  pass runs and the depth on unit 4. The eleventh diff in the patch file. See "A
+  halo round the pier's pillars" in `docs/RENDERING.md`.
+  Since amended: a see-through 2D primitive (a name box, the HUD panel) is a veil
+  in the surface list rather than an `Overlay`: it keeps the water under it and adds
+  512 (blend mode 0) or 1024 to the id, and the pass murks and reflects that water
+  at the share the box lets through. A textured one is decided per texel from
+  sample VRAM in `NormalFs`, its opaque texels an `Overlay` as before. The twelfth
+  diff in the patch file. See "A see-through box showed the water unmurked" in
+  `docs/RENDERING.md`.
+  Since amended: only a level surface is murked. `uMurkUp` carries the world's vertical in view
+  space (`WaterMurk.UpX/Y/Z`, which the port publishes) and the cosine a murked surface may lean
+  to (`WaterMurk.MaxTilt`, 0.75); a crystal in the water's texture, with nothing behind it, had
+  taken the sky's endless run and gone to the murk's colour. The thirteenth diff in the patch
+  file. See "Only level water is murked" in `docs/RENDERING.md`.
+  Since amended: a published rect no longer names a surface the port says it is not.
+  `GtePacketDepth.Rec.NotRect`, carried to `HleVertex.NotRect`, makes
+  `SurfaceMaterial.Classify` skip the rects (counted in `RefusedByPort`): the water's rects
+  are the fluid slots, which hold the creatures' skins too, so a slime was water to the murk
+  and the reflections, and level enough on top for the tilt test to let it through. The
+  fourteenth diff in the patch file. See "A model is water only if it is a sheet of it" in
+  `docs/RENDERING.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass
@@ -907,8 +1034,305 @@ Four files in the directory have no entry below:
   brightness difference against the planar texture read unmirrored.
   `PlanarReflections.Supported` is set only by the GL core backend. Off by
   default. **No recompile.** See "Planar reflections" in `docs/RENDERING.md`.
+  Since amended: `RestHeight`, where the port says water rests at a world X and Z.
+  The swell moves the water's vertices, so its triangles were refused as not level
+  and the plane was the mean of the few left, moving on 143 of 144 frames.
+  `NoteWater` takes a triangle's centroid to world X and Z (`SetCamera` gains the
+  camera's X and Z) and bins an answered triangle at the rest height with no level
+  test; `WaterRested` counts them. With no answer it is the old path. The
+  amendment is the second diff in the patch file. See "The swell moved the water
+  off the mirror" in `docs/RENDERING.md`.
+  Since amended: a capture fogs a fragment at the larger of its own view depth and
+  its depth along the view's level forward (`PlanarReflections.LevelAxis`,
+  `uClipLevel`, `uClipDq`), rescaling the recorded depth cue's part past DQB. The
+  game culls its map by a level cone and fogs by view depth, so the cone's far edge
+  reflected lit from a mirrored camera looking up, and popped in in the water. Level,
+  the capture is unchanged. The probe reads the planar texture back by that depth
+  (`FogCensus`). `KF2_PLANAR_FOG=0` is the comparison. The third diff in the patch
+  file. See "The fog the mirror dropped" in `docs/RENDERING.md`.
+  Since amended: on its plane the planar answer is final. A surface on the plane
+  whose planar texel is empty reflects the background (`uAtmosSky`, or black) at
+  the water's weight instead of marching, so a cell culled in or out of the mirror
+  no longer flips a pixel between the march and the mirror (`gPlanarEmpty`,
+  `onPlanar`), and `0083`'s enhancement distance leaves a surface on the plane
+  alone. The fourth diff in the patch file. See "The planar walk is the
+  reflection, with a cull of its own" in `docs/RENDERING.md`.
 
-- `0069-imgui-size-after-fullscreen.patch` — Silk's `ImGuiController` takes the
+- `0069-present-snap.patch` — a diagnostic: the presented picture read back once,
+  on request. `Gpu/PresentSnap.cs` holds one pending request (skip `N` presents,
+  then the first whose display buffer starts at a named VRAM row, or any after
+  eight); `GlCore.PresentDisplay` asks it once per present, after the composite
+  and any post shader, and `SnapPresent` reads the texture the window is drawn
+  from with `glReadPixels` into RGBA8, top row first. VRAM could not answer this:
+  the occlusion and reflection passes composite at present and write nothing back,
+  so a VRAM hash cannot see what a material changes. One null test a present while
+  nothing is asked. The port half is `patches/remaster/Snap.cs` (the `snap` shell
+  verb). **No recompile.** See "Phase 1, the second slice" in `docs/REMASTER.md`.
+
+- `0070-hook-order.patch` — `HookManager.AddPre` and `AddPost` take an `order`,
+  and the hooks on one function run in ascending order, then in the order added.
+  Without it the order was the order of the calls, so a post that must run after
+  another's was kept there by where its patch's `Install()` sat in `Program.cs`:
+  `LoopPacing`'s redraw on stage 13, after the smoothers' restores. The default is
+  0 and an insert goes after every entry of the same or a lower order, so every
+  existing order is unchanged. `Stage13.HookOrder` names the orders on the
+  renderer. **No recompile.** See "The hooks on stage 13 are ordered by what they
+  need" in `docs/PATCHES_AND_MODS.md`.
+
+- `0071-authored-lights.patch` — the remaster's point and spot lights, as one more
+  term in the lit colour. `Gpu/RemasterUniforms.cs` holds up to 16 lights the port
+  has already put in the GTE's view space (position and radius, colour times
+  intensity and the spot's inner cosine, direction and the outer cosine), with a
+  generation. `PrimFs` gains `authored()`: the fragment's view position rebuilt
+  from its recovered depth, H and the centre as `NormalFs` does, its normal from
+  that position's screen derivatives (taken before any per-fragment test), and a
+  smooth-windowed, cosine-weighted sum over the lights; `shade8` takes it and adds
+  it times the packet's RGBC (the record's low bytes) to the lit colour before the
+  depth cue, so fog, texture and saturation apply to it as to the game's light.
+  Only a packet with a `0048` record and a depth is lit, and nothing is lit in a
+  planar texture (`uClipOn`). `GlCore` uploads the arrays when the generation
+  moves, sends the centre and H per batch like `uClipCentre`, and flushes a batch
+  built under the previous generation (`FlushReason.StateLight`). With no light
+  the shader's output is 0048's to the bit (`scripts/light_probe.c`).
+  `patches/remaster/Lights.cs` is the only writer. GL core only. **No recompile.**
+  See "Phase 2, the first slice" in `docs/REMASTER.md`.
+  Since amended: a material can glow. `GlLight` carries the packet's material
+  (attribute 11, beside the light record), and `PrimFs` adds
+  `SurfaceMaterial.Emissive[id]`, row 1 of `0067`'s table, to the same term an
+  authored light adds, before the depth cue -- so it is fogged and textured as the
+  game's own light is, and times the packet's RGBC. It needs no depth, so unlike a
+  light it is drawn into a planar texture too. `uEmitOn` is set only for a batch with
+  records while some id glows; with it off, or with material 0, `light_probe.c`
+  reads the shader as before to the bit. The hunks are in `0067`'s file (its sixth
+  diff). See "Phase 3, the first slice" in `docs/REMASTER.md`.
+  Since amended: the glow multiplied the texture, so glow 4 was the texture at twice
+  full, clipped, and read as overexposed stone rather than a light source. Row 1's
+  alpha now picks the mode (`SurfaceMaterial.EmissiveAdditive`): 0 is the old term,
+  1 adds RGBC times the glow after the texture is modulated, fogged on the packet's
+  own curve (`cueWeight()`, split out of `shade8`), on every output path. A packet
+  without an additive glow adds zero, and `light_probe.c` reads the old passes as
+  before and the four new ones at 0 from the formula. The amendment is the second
+  diff in `0071`'s file. See "The glow is a light source" in `docs/REMASTER.md`.
+  Since amended: an authored light leaves a highlight on an id with a specular
+  value: normalised Blinn-Phong in `authored()`, its size from the id's roughness
+  (squared, floored at 0.15), added past the texture and fogged, and tinted by the
+  texel on a metal (`post()`). Row 1's alpha is flags now, 2 keeping an additive
+  glow out of the fog. A point light's outer cosine below -2 names the material that
+  gave it off (`-2 - id`), and that material is not lit by it. `light_probe.c` gains
+  four passes (the highlight flat and on a textured metal, the skip, the unfogged
+  glow), all at 0 from the formula, the first ten unchanged. The hunks are in
+  `0067`'s seventh diff. See "Phase 3, the second slice" in `docs/REMASTER.md`.
+
+- `0072-retained-scene.patch` — the area's geometry kept on the GPU in world
+  space, so a reflection draws the world again without the game's walks.
+  `Gpu/RetainedScene.cs` holds what the port fills: the static map as world-space
+  corners (lit colour before the cue, CLUT, texpage, UV, the depth cue's DQA, DQB
+  and curve, the texture rectangle and a material), sorted into five ranges
+  (opaque, then each blend mode) and 8x8-tile chunks with their bounds; and a ring
+  of four frames by serial, each the camera it was drawn with, its models and the
+  planes it mirrors in. `GlDisplayRt.RetainedSerial` is the serial a target was
+  drawn under, stamped in `FlushCore`. `GlShaders.WorldVs` gives `PrimFs` exactly
+  what `PrimVs` does, from a world corner through a camera uniform, with W the
+  view depth and a near plane, the corner fogged on its own curve at that camera's
+  depth, or drawn at its mirror image in `Y = uPlaneY` with `gl_ClipDistance`
+  removing what lies below. `PrimFs` gains `uMaskOn`: keep a fragment only where
+  the presented frame's surface buffer lies within the tolerance of a plane; 0 is
+  the shader as it was. `GlRetained.cs` (`GlCore` is now partial) draws at present,
+  before the reflection pass and for the presented target's frame: every plane
+  into the target's planar texture, unmirrored, and six faces of a cubemap with a
+  depth cube, each view culling chunks by its frustum and the fog's reach. `SsrFs`
+  gains `retPlanarAt` (the first plane the surface lies on, read unmirrored) and
+  `cubeMarch` (the reflected ray in world axes against the depth cube, no jitter),
+  which replaces the screen march while the cubemap is on; the probe's compare mode
+  checks one against the other. The blend function is put back after the draws:
+  dual-source factors left set make any draw into two buffers an error with
+  blending off. The port half is `patches/RetainedMap.cs`, `RetainedPlanes.cs` and
+  `RetainedModels.cs`. Off by default. GL core only. **No recompile.** See "The
+  retained scene" in `docs/RENDERING.md`.
+  Since amended: the mirror and the cube faces drew every face both ways, so the
+  top of anything above the water showed under it seen from behind; they cull the
+  faces the game culls now, clockwise being front through a mirror and a cube face
+  (`RetainedScene.CullBack`). The distance cull went by straight-line distance and
+  one fog, and dropped chunks at the picture's sides that kept up to 97% of their
+  colour; it goes by view depth and each chunk's own latest fog now
+  (`ChunkFogQ`). `WorldVs` fogs per pixel through `0048`'s `vFog`/`vLight`, and a
+  surface on a plane whose planar texel is empty reflects nothing rather than
+  marching the cubemap. Only the map halves the frame's own tile walk drew are
+  reflected (`Frame.Halves`, `Flags` bits 13-26, `uHalves` in `WorldVs`; the
+  shadow cubemaps are not gated), since the map holds both levels of every cell
+  and the game's visibility flood draws far fewer. The probe counts the
+  back-facing pixels, the undrawn halves' and the old cull's visible drops. The amendment is the second diff in the patch file. See "What the
+  mirror showed that it should not, and the fog it dropped" in `docs/RENDERING.md`.
+  Since amended: `0071`'s authored lights and glows reach the world program. A
+  corner carries the RGBC the game lit it from (`Vertex.Rgbc`, attribute 8; 0 leaves
+  it out), `RemasterUniforms.LightWorldPos`/`LightWorldDir` hold the lights in world
+  space, and `SendWorldLights` turns them into each mirror's and cube face's view
+  (mirrored first for a plane), with the projection `authored()` rebuilds a fragment
+  with and the shadow lookup's view-to-world turn. And the mip atlas (`0060`): an
+  entry per distinct static texture, looked up every present so it stays resident,
+  in a buffer of its own (attribute 9) re-uploaded only when an entry moves; the
+  frame's models' per present. `RetainedScene.Lit` and `Mips` are the comparisons.
+  The third diff in the patch file. See "Lights, fog blends and mipmaps in the
+  reflections" in `docs/RENDERING.md`.
+  Since amended: a half's gate byte is a weight. `NoteHalf` writes 255, and
+  `RetainedScene.CurrentHalves` lets the port write its own, 0 to 255, after the
+  frame's walk. `WorldVs` passes it as `vFade` (1 for anything the gate does not
+  weigh, and for the shadow and probe draws), `PrimVs` writes 1, and `PrimFs` drops a
+  fragment whose 4x4 ordered-dither threshold is above it. With every weight 255 the
+  shader's output is the one before (`scripts/light_probe.c` and `shader_probe.c`
+  unchanged). The fourth diff in the patch file; the discard shares a hunk with
+  `0083` and is in that file. See "The reflections see past the camera's cull" in
+  `docs/RENDERING.md`.
+  Since amended: a static corner carried its mip-atlas entry, and every texture on
+  the map was looked up each present (1,633 in `fdat02`, 361 of them held), which
+  re-uploaded the map's whole entry buffer whenever one moved and kept textures no
+  frame draws in the atlas. A corner now carries its texture's index plus one;
+  `WorldVs` reads the entry from a table of one word per texture (`uMipTable`, a
+  buffer texture on unit 17, `uMipIndirect` 1 for the static map and 0 for the frame's
+  models); and `UpdateWorldMips` looks up only the textures of the halves a draw
+  gates in (`Frame.Halves` while the half gate is on). The hunks are in `0085`'s
+  file. See "Step 1, the first slice" in `docs/GPU_RENDERER.md`.
+
+- `0073-texture-replacement-on-the-port-path.patch` — upstream's texture packs
+  (`Assets/`) made to work in this port, and a way to see what they would key.
+  **A draw with no display target marked VRAM GPU-dirty from boot.** `GlCore.V`
+  took a batch's first vertex as `_count == 0`, but every caller writes
+  `_verts[_count++] = V(...)`, which increments `_count` before `V` runs, so the
+  batch bounds were never reset and grew to everything drawn since boot; the game's
+  first untargeted draw (a 32x32 black box at `(0,344)`, clip 1024x1024) marked
+  `(0,0)` 748x481 dirty, and the resolver refused every texture under it: 74 of
+  area 1's 86 keys, which would never have been replaced. A flag now starts the
+  bounds per batch; the dest-copy rectangle reads the same bounds and shrinks with
+  it. **One piece of art had several keys**, because the key is the UV bounding box
+  and this game's faces read a texel past their texture (`[191,63,65,64]` beside
+  `[191,63,64,64]` for one texture); a clipped fan's triangles were keyed on their own
+  UVs too. `VramTracker.NoteUpload` keeps which LoadImage last wrote each VRAM word,
+  and `TextureResolver` keys a rectangle on that upload's when it lies inside it to
+  within two texels (`KeyOnUpload`); `DrawTri` looks up by the face's `0060`
+  rectangle (`KeyOnFaceRect`). Area 1: 109 keys by triangle, 86 by face, 21 by
+  upload, and 471 overlapping pairs down to 6. **A replacement is filtered by the
+  port's slider**: a mip chain at load, `LinearMipmapLinear` and the anisotropy
+  level while mipmaps are on (`RepFilter`, set per texture when the slider moves),
+  sampled by `textureGrad` on the unwrapped UV's gradients so a texture window's
+  wrap is no seam; a replaced CLUT keeps the anisotropic taps and not the mip atlas
+  (decoded through the game's CLUT). `TextureResolver.Observer` and
+  `VramTracker.Uploaded` feed the port's census (`patches/remaster/TextureCensus.cs`);
+  while an observer is set a lookup runs with no pack. With no pack the pinned
+  area-1 view is `210d55698c875fb8`, as before. GL core only for the filter.
+  **No recompile.** See "Phase 4, the first slice" in `docs/REMASTER.md`.
+  Since amended: an image the game loads in pieces straight down, at one x and
+  width (a 128x128 texture as 100 rows and 28), was two uploads, so a face on the
+  second piece fell outside its upload and kept its own rectangle.
+  `VramTracker.NoteUpload` extends the previous load when the next continues it;
+  area 1's replacement keys went 21 to 17 and its overlapping rectangles 6 pairs
+  to none. `TextureResolver.ToUpload` is public and returns whether it widened, so
+  the port's texture materials key on the same rectangle. The amendment is the
+  second diff in the patch file. See "Phase 4, the second slice" in
+  `docs/REMASTER.md`.
+  Since amended: a texture the game scrolls (`func_8002DC78` rewrites its VRAM at a
+  new phase every tick, so no hash of the VRAM holds) is replaced by its source
+  image's replacement. `TextureResolver.Scroll` asks the port for the source's key,
+  the dest rectangle and the phase to draw at; `ResolvedTexture.Scrolls`/`Scroll`
+  carry them, `GlCore` batches on the phase (`uRepScroll`, -1 for none) and sets the
+  texture to wrap in V, and both prim shaders read row `d` of the dest at the
+  replacement's `(d - phase) mod h`. `TextureDumper.OfferImage` dumps an image that
+  is not in VRAM as it is keyed, so the source can be dumped at all. With no pack
+  and nothing observing, `Scroll` is never called. The third diff in the patch file.
+  See "Phase 8, the second slice" in `docs/REMASTER.md`.
+
+- `0074-fog-colour-and-sky.patch` — the area's fog colour and curve, from the
+  remaster. The game's depth cue darkens a colour towards the GTE's far colour,
+  which is 0, so everything fades to black; putting a colour in the far colour
+  itself would tint the *vertex* colour, which then multiplies the texture, and a
+  distant wall would come out texture-times-fog rather than fog. So the colour is
+  added **past the texture**: `shade8` darkens the lit colour by the cue's weight as
+  before and keeps `uAtmosColour` times the same weight in `gFog8`, which every
+  output path adds after the texel is modulated (`fogAdd`), so the result is a mix
+  towards the colour. A blended texel whose batch adds or subtracts skips it
+  (`uAtmosSkip`, set from the batch's blend mode), since fog takes such a texel
+  away rather than to a colour. `uAtmosShape` bends the weight after the game's
+  curve: raised to `x` and capped at `y`, in `cueWeight()`, so the glow and the
+  highlight fog on the same curve. `RemasterUniforms` gains the fog block
+  (`FogOn`, `FogColour`, `FogPower`, `FogMax`, `SkyColour`, `PublishFog`, which
+  also bumps `Generation` so a batch is drawn under the fog it was built with). The
+  world program sends it for the retained planes (`SendWorldAtmos`, the blend
+  ranges setting the skip), and `SsrFs` fogs a reflection towards the colour on the
+  same curve (`fogTo`, `refog`) and reflects the sky on a cubemap miss. Only a
+  packet with a `0048` record takes it; the rest keep the game's black. With the
+  switch off, and with it on at black and the game's curve, the shader's output is
+  `0071`/`0077`'s to the bit (`scripts/light_probe.c`, five new passes, all 0 from
+  the formula). The sky is the port's alone: `patches/remaster/Atmosphere.cs`
+  writes it into the `DRAWENV` the game's background clear reads. GL core only.
+  **No recompile.** See "Phase 5, the second slice" in `docs/REMASTER.md`.
+
+- `0077-light-shadows.patch` — shadows for `0071`'s authored lights, from `0072`'s
+  retained map. `RemasterUniforms` gains up to four shadow slots (the light's world
+  position and radius), the slot each light in the list samples (`LightShadow`, -1
+  none) and the frame's world-to-view rotation (`ToWorld`), which the port publishes
+  with the lights; `RetainedScene.ShadowsWanted` asks for the static map without
+  reflections. `GlShadows.cs` (`GlCore` partial) draws a slot's depth cubemap from the
+  top of `FlushCore`, before the batch that samples it, and only when the light, the
+  map's generation or the size changed: six faces through the world program
+  (`WorldVs` and `PrimFs`, so a texel drawn as a hole casts none), the opaque range
+  of the chunks the light's sphere reaches, into a `DepthComponent24` cubemap with a
+  compare mode. What a face holds is what the world program already writes, the
+  distance along the face's axis over 65536. `PrimFs` gains `uLightShadow[16]`,
+  `uShadowToWorld`, four `samplerCubeShadow`s on units 12-15 (named, since GLSL 3.30
+  cannot index a sampler array by a loop variable; a cube sampler left on unit 0 beside
+  `uVram` fails every draw, so both programs set them at init) and `shadowAt()`: the
+  fragment moved off its surface by `uShadowOffset` texels at its distance, and five
+  compares, each the hardware's 2x2, at fixed offsets **along the surface** rather
+  than across the face, so a sloped floor does not shadow itself. With no light
+  shadowed the shader's output is `0071`'s to the bit (`scripts/light_probe.c`, whose
+  first fourteen passes read as before; two new passes read 0 from the formula).
+  `DrawRange` returns the static vertices it drew and takes no frame for a shadow.
+  GL core only. **No recompile.** See "Shadows, the first slice" in
+  `docs/REMASTER.md`.
+  Since amended: models cast. A slot whose light has a model in reach samples a
+  second cubemap, the map's blitted face by face and the frame's casters drawn over
+  it, from the frame the port names in `RemasterUniforms.ShadowFrame`; it is drawn
+  again when a hash of the casters in reach changes, and the map's cubemap still only
+  when the light or the map does. Casters are the frame's opaque model triangles and
+  those flagged `RetainedScene.FlagSolid` (a door), with every texel, then the other
+  blended ones with `uOpaqueDepth = 1`, which keeps the texels the GPU draws opaque;
+  `FlagNoShadow` (an effect) casts nothing. `RetainedScene.ShadowModels` is the
+  switch; `ShadowModelRenders`, `ShadowModelTriangles` and `ShadowCasters` count it.
+  The amendment is the second diff in the patch file. See "Shadows, the second
+  slice" in `docs/REMASTER.md`.
+
+- `0078-water-waves.patch` — ripples on water, per pixel. `Gpu/WaterWaves.cs` holds
+  what the port publishes: the water's VRAM rects, the camera the frame was drawn
+  with (`view = R (world - cam) + T`), a clock, and three settings (the push in world
+  units, the longest ripple's length, the shading). `PrimFs` gains `uWave*`: a
+  fragment whose texel lies in a rect is taken to world space from its depth, a
+  four-wave field's slope becomes a push in the world, taken into texture space
+  through the polygon's own mapping (the world position's and the UV's screen
+  derivatives), and the pushed texel wraps inside the rect (`waveWrap`), the aniso
+  taps with it; the slope also scales the texel. Faded out where a pixel spans too
+  much of the field. `GlCore` sets `uWaveOn` for a batch in water's blend
+  (semi-transparent, 0 or 3) and not into a planar texture, and sends the rest when
+  `WaterWaves.Generation` moves. With `uWaveOn` 0 the texture path is the old one.
+  The swell is the port's alone (`patches/WaterSwell.cs`). GL core only. **No
+  recompile.** See "Water waves" in `docs/RENDERING.md`.
+
+- `0079-translucent-after-opaque.patch` — a blended polygon the depth buffer tests
+  is drawn after the opaque tested polygons the ordering table put after it. It
+  writes no depth, so those painted over it wherever they passed the test: a fish
+  under the water drawn on top of it, a floor tile a triangle of water missing.
+  `LibGpu.WalkOTag` is `DrawOTag`'s walk, public, with a callback told each
+  packet's entry before it is sent (`patches/Widescreen.cs` now calls it instead of
+  a copy). `Gpu/BlendOrder.cs` classifies a packet by its command and its
+  `0050` record (`GtePacketDepth.Peek`, `Find` without the counters): a blended
+  polygon with a full record and not solid is held; an opaque one with a full record
+  is sent past the held ones; anything else sends them first, in table order, each
+  under its own `OtEntry` and `OtSlot`. Only while `GteDepth.ZBuffer` and
+  `GtePacketDepth.Active`, and not with an asset pack's own primitives. The probe
+  (`BlendOrder.Probe`) samples what is sent on a 4-pixel grid and counts opaque
+  samples behind a nearer translucent one; `Rec.Model` splits them by source. **No
+  recompile.** See "Water was painted over by what lay under it" in
+  `docs/RENDERING.md`.
+
+- `0080-imgui-size-after-fullscreen.patch` — Silk's `ImGuiController` takes the
   window's size only from the `Resize` event, and GLFW on Wayland raises none when
   a window leaves fullscreen (the framebuffer callback fires; the window-size one
   does not), so `io.DisplaySize` stayed at the fullscreen size and the menu bar
@@ -937,6 +1361,228 @@ Four files in the directory have no entry below:
   and the frame after it almost none: at 60 fps a steady turn drew 22, 1 and 11
   units a tick. `Mouse.Poll` is the only caller. Input only — **no recompile**.
   See "The mouse was sampled at two points" in `docs/INPUT.md`.
+
+- `0083-enhancement-distance.patch` — past a view depth, a surface is drawn the
+  game's own way. `GteDepth.PlainDepth` (0, the default, is off) is sent as
+  `uPlainZ` to `PrimFs`, `AoFs` and `SsrFs`, and each fades its own additions out
+  over the 2048 units before it, by the recovered depth: `PrimFs` mixes the per-pixel
+  lit colour towards the packet's corner colour (keeping a lit-mode glow), scales
+  the authored lights and their highlight down, mixes the filtered texel towards the
+  centre one, and scales the ripple's slope; `AoFs` fades the occlusion to 1; `SsrFs`
+  scales the whole output by `gShare`. A fragment with no recovered depth is never
+  cut. `GteDepth.PlainDepthLive` says the prim program has the uniform.
+  `scripts/light_probe.c` and `scripts/shader_probe.c` read the old passes the same
+  as the shader at `HEAD` and the new ones at 0 from the formula. The port half is
+  `patches/EnhancementDistance.cs`. GL core only. **No recompile.** See "The
+  enhancement distance" in `docs/RENDERING.md`.
+
+- `0084-gpu-frame-timers.patch` — a diagnostic: GPU time per present, by pass.
+  `Diagnostics/GpuTimes.cs` holds the totals; while `GpuTimes.Enabled` (the port
+  sets it with the profiler) `GlCore`'s `BeginGpuTimer`/`EndGpuTimer`, which `0046`
+  used only under a trace sink, queue each query with its pass (a flush into a
+  planar texture is `Capture`, any other `Scene`; then AO, reflections, composite)
+  and the present it was issued in, and `ResolveGpuTimes` reads them back at the
+  end of each present without waiting. `GpuTimes.Issued`, `Complete` and the
+  `Resolved` event let the port charge each query to the frame that issued it
+  (`patches/GpuFrames.cs`). A trace sink takes precedence, and the
+  retained scene's probe timer stands down, since `GL_TIME_ELAPSED` queries may
+  not nest. **No recompile.** See "GPU time per present" in `docs/DEVELOPMENT.md`.
+
+- `0085-gpu-world-main-view.patch` — the retained map (`0072`) drawn into the frame
+  itself, the first slice of the GPU world renderer. `RetainedScene.MainView`,
+  `MainSerial` (the frame whose map the next table walk draws) and `MainDrawer`, which
+  `GlCore` fills; `LibGpu.WalkOTag` calls `Gpu.DrawRetainedMain` as the walk reaches
+  slot 1, past the sky, and not in a planar capture or an asset pack's custom order.
+  `GlMainView.cs` flushes the batch, takes the display target the draw area names,
+  clears its depth as `FlushCore` would on a first draw (`ClearStaleDepth`, now shared),
+  and draws the static opaque range through `WorldVs` with the frame's camera, centred
+  by the GPU's draw offset and the margin, scissored to the game's clip, culled on
+  facing, depth tested and written, gated to `Frame.MainHalves` (the halves the walk
+  visited, which `ReflectionReach` does not grow). `GpuTimes` gains the `World` pass.
+  The first cut spent 1.3-1.5 ms a frame keeping mip-atlas entries current, so `0072`
+  is amended with it (below). `WorldVs` gains `uWorldSnap`, `uWorldPerPixel` and
+  `uWorldDither`, so the main view follows sub-pixel, per-pixel lighting and the
+  crosshatch as the frame's packets do; the reflections leave them at their defaults.
+  Against the packet path, at most 4.9% of pixels differ by more than 4 levels in
+  `fdat02` and 14.2% in area 1, all texel edges one render pixel over. GL core only. **No
+  recompile.** See "Step 1, the first slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the map drawn on the GPU reached neither the occlusion pass's
+  normal buffer nor the surface buffer (`0058`, `0067`), so the table's triangles
+  alone filled them, in table order, and a creature behind a wall left its normal
+  where the wall stood: its shading showed through. `RenderSurfaces` now draws the
+  frame's map first (`GlMainView.DrawWorldNormals`, `WorldNormalVs` with `NormalFs`,
+  for the frame `AoGeometry.WorldSerial` names, through its half gate), and
+  `NormalFs` drops a fragment behind the frame's own depth (`uDepthCull`,
+  `uFrameDepth` on unit 18), since the order no longer says which surface is in
+  front. Without the map on the GPU the uniform is 0 and the pass is the one before.
+  `RetainedScene.MainSurfaces` (`KF2_GPUWORLD_SURFACES=0`, `gpuworld surfaces off`)
+  is the comparison, and `RetainedScene.SurfaceCheck` the probe's readback. The
+  second diff in the patch file. See "Step 2, the first slice" in
+  `docs/GPU_RENDERER.md`.
+  Since amended: the main view's per-pixel fog was the corners' raw depth cue
+  interpolated flat across the screen (`vFog`), which holds only while every corner
+  is in front of the eye. The game's clipper hands the GPU only such corners; the
+  GPU's own clipper does not, so a floor face clipped at the camera's feet took a
+  wrong value along the clip and fogged to black in the corner of the picture.
+  `WorldVs` now passes each corner's DQA and DQB perspective-correct (`vCue`), and
+  `PrimFs`'s `fogRaw()` takes `DQA · H/z + DQB` at the pixel's own depth while
+  `uCueFromZ` is set (the main view only, `RetainedScene.MainFogFromZ`,
+  `KF2_GPUWORLD_FOGZ=0` to compare); for a face with one cue that is the
+  screen-affine value exactly. The main view's near plane is
+  `RetainedScene.MainNear` (`KF2_GPUWORLD_NEAR`, 16), which the measurement ruled
+  out. The third diff in the patch file. See "Step 2, the second slice" in
+  `docs/GPU_RENDERER.md`.
+  Since amended: the map's blended faces (water) are drawn by the backend too.
+  `GlMainView.SortWater` sorts the frame's visible ones far to near per blend mode by
+  the key the game links a face at, and `LibGpu.WalkOTag` hands the backend each
+  point where the walk sends a packet that could cover them: before each of 0079's
+  held packets (`SendHeld`, with the packet's screen box, `PacketBox`), before each
+  barrier that draws, and at the walk's end (`Gpu.DrawRetainedWater`,
+  `RetainedScene.WaterDrawer`). The backend draws whole faces whose key the walk has
+  passed, unless none shares a screen box with that packet, in which case they wait.
+  `WorldVs` and `WorldNormalVs` move corners flagged `RetainedScene.FlagSwell` by the
+  frame's three swell waves (`uSwell`, `RetainedScene.SetSwell`); `FlagWater` marks
+  a face the surface buffer takes as water, and `FlagQuadTail` a quad's second
+  triangle. The normal pass draws the water per pixel at the same cuts
+  (`AoGeometry.Water`, `uZSlice` in `NormalFs`), and the plane finder is fed from it.
+  The world program's uniforms are set once a frame and kept between the slices
+  (`BindWorldMain`, `CloseWorldMain` before a shadow or reflection draw). With
+  `RetainedScene.MainWater` off, the water stays on the packets as before. The fourth
+  diff in the patch file. See "Step 2, the third slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the object walk's opaque models are drawn by the backend too, after
+  the map. The port adds each model's opaque faces to the frame
+  (`RetainedScene.AddMainModel`, `Frame.Models`), in runs lit by one BK and LCM
+  (`ModelGroup`); a gouraud corner carries its normal's three light dots
+  (`FlagDots`), which `WorldVs` lights with `uLightBk` and `uLcmR/G/B` as `PrimFs`
+  lights a directional record, and a run may ask for the facing cull (`Cull`, faces
+  the port could not cull as the game does). `GlMainView.DrawWorldModels` draws them
+  after the map with 0051's depth prepass and bias, uncapped by chunks or the half
+  gate; the normal pass draws them after the map. Each frame's models are uploaded
+  once, to a buffer in a ring of four keyed by serial, with their mip-atlas entries,
+  so the normal pass at present finds the presented frame's. `MainModelsShown` off
+  leaves them undrawn, the probe's measure of what they cover. The fifth diff in the
+  patch file. See "Step 3, the first slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the planar walk's mirror is drawn by the backend too. A frame
+  carries a mirror (`RetainedScene.BeginMirror`: the mirrored camera, its own half
+  gate `Frame.MirrorHalves`, `NoteMirrorHalf`, and its models, `AddMainModel`'s
+  `mirror`; a frame's model runs are `ModelRuns` now), and `LibGpu.WalkOTag` calls the
+  same drawer as a planar capture reaches slot 1 (`MirrorSerial`).
+  `GlMainView.DrawWorldMirror` draws the map's opaque range and the mirror's models
+  into the capture's planar texture through `WorldVs` from the mirrored camera, with
+  PrimFs's clip plane and level fog (`uClipOn` and the rest, as `GlCore` sends them for
+  a planar batch), then its blended faces whole, far to near, unswollen and unrippled
+  (`DrawMirrorWater`, `RetainedScene.MirrorWater`); `SortWater` takes the view and the
+  gate. `MirrorShown` off leaves it undrawn, the probe's measure of what it covers.
+  The sixth diff in the patch file. See "Step 5, the first slice" in
+  `docs/GPU_RENDERER.md`.
+  Since amended: models drawn from meshes kept on the GPU. `RetainedScene.MeshCorners`
+  holds each mesh's opaque faces in the model's own space (a corner's vertex index,
+  normal and its face's four vertex indices in `Vertex`'s fields), appended to and
+  emptied by the port (`AddMesh`, `ClearMeshes`, `MeshGeneration`); a frame carries
+  its posed vertices (`AddModelVertices`) and a `ModelInstance` per model, in the main
+  view and the mirror (`AddInstance`; `Mirrored` ones are copied at `BeginMirror`).
+  `GlModelMeshes.cs` uploads the store as it grows, the frame's vertices into an
+  RGBA16I buffer texture per frame of the ring (unit 19), and a table of the meshes'
+  atlas entries bound on unit 17 while they draw, and draws each instance after the
+  map (0051's prepass and bias) and into the normal pass. `ModelGlsl`, in `WorldVs`
+  and `WorldNormalVs` behind `uModel`: a corner fetches its vertex and its face's,
+  places them with the instance's rotation and translation, drops the face as the lit
+  assembler does (mean table depth, facing on the GTE's saturated projection,
+  `uModelGteC`; a negative bias wraps the test, `uModelNear`), and lights its normal to dots with the instance's LLM. With `uModel`
+  0 the programs are the ones before. The seventh diff in the patch file. See
+  "Step 3, the second slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the vertices are kept on the GPU too. `RetainedScene.PoseStore`
+  (`AddPose`, `PoseTexels`, emptied by `ClearMeshes`) holds a rigid model's vertices,
+  a texel each, and an MO pose's keyframe and its delta to the segment's target, two
+  texels a vertex; an instance names its first texel (`Pose`), and for a pose its
+  weight (`PoseMorph`, `PoseWeight`). `GlModelMeshes` uploads the store as it grows
+  into an RGBA16I buffer texture on unit 20, and `ModelGlsl`'s `modelPosed` blends a
+  pose as the game's decoder does, `key + (short)((delta * weight) >> 12)` in 16 bits.
+  An instance with no `Pose` reads the frame's vertices as before. The eighth diff in
+  the patch file. See "Step 3, the third slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the first-person arm is drawn by the backend too, in painter's order,
+  as its unrecorded packets were. The port hands the frame the arm's instance and its
+  faces' corners in the walk's order, in runs of one key, with the screen box it covers
+  (`RetainedScene.SetArm`); `LibGpu.WalkOTag` calls `Gpu.DrawRetainedArm` before the
+  first packet past a run's slot that draws and meets that box (`ArmCut`, `ArmMeets`),
+  after the held packets and the water walked before it, as for a barrier; and
+  `GlModelMeshes.DrawWorldArm` draws the runs passed with the depth test off and
+  `PrimFs`'s `uFarPlane` writing the far plane, as zMode 3 does. The normal pass draws
+  it as an `Overlay` at its place in the list (`AoGeometry.ArmAt`). `ModelGlsl` gains
+  `modelPlace`, which puts a model's corner nearer than H/2, or past the screen clamp,
+  where the GTE's saturated projection puts it, with no near clip, and `modelEye`, which
+  places a `ModelInstance.ViewSpace` instance with the GTE's own matrix in integers.
+  With `uFarPlane` 0 the shader is the one before. The ninth diff in the patch file.
+  See "Step 3, the fourth slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the static map is lit and fogged in `WorldVs` from the area's 64
+  light records, so a record the game rewrites is an upload and not a rebuild.
+  `RetainedScene.Records` (52 ints a record: the light matrix at each quarter turn,
+  the colour matrix, the back colour, the fog word, its DQA and DQB and its curve;
+  `SetRecords`, `RecordGeneration`) is uploaded as a 13x64 RGBA32I texture on unit 21
+  (`GlRetained.UploadRecords`, from `UploadStatic`). A corner whose
+  `Vertex.Light` (attribute 10) has bit 31 carries its face's normal in R, G and B,
+  its two EvenFog weights in DQA and DQB, and the records of its half and the three
+  it blends with; `recordLit` lights it as `NormalColorCol` does and blends the colour
+  matrix, back colour and fog as `EvenFog` does, in the same integers (`mixExact`
+  rounds half away from zero as the CPU's double does). A chunk's fog bound
+  (`ChunkFogQ`) is taken again from its records when they change. With `Light` 0 the
+  program is the one before. The tenth diff in the patch file. See "Step 1, the second
+  slice" in `docs/GPU_RENDERER.md`.
+  Since amended: a model's blended faces are drawn by the backend too. A mesh keeps its
+  blended faces' corners after its opaque ones, with a table of where each face's corners
+  are (`RetainedModels.Mesh.FaceAt`); the port notes each blended face of a main-view
+  instance with the table slot the lit assembler would link it at, taken from the GTE's own
+  matrix in integers (`RetainedScene.AddBlendFace`, `Frame.BlendFaces`), so no transform
+  and no assembler run. `GlMainView.SortBlend` sorts them by blend mode, slot and build
+  order into an element buffer on the mesh VAO, and `DrawWorldWater` merges them with the
+  map's water by key (a model first at one key, since it was built after the map), drawing
+  a run per instance through `SendInstance`, and their opaque texels' depth after. A
+  `ModelInstance` gains `MeshAll` and `Solid`. The forced-blend twin (effects, billboards)
+  takes the same route. Subtractive faces stay on the packets. The eleventh diff in the
+  patch file. See "Step 3, the fifth slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the sky, subtractive faces, and every blend mode in one order. The objects of
+  kind 0xF0 go to the frame's sky (`RetainedScene.AddSky`, `Frame.Sky`, `SkyFaces`), instances
+  with `ModelInstance.Sky`, which `ModelGlsl` keeps by facing alone on whole pixels and `WorldVs`
+  lights per corner with no cue and no authored light (`uModelSky`); an untextured face carries
+  its own colour in `Vertex.Light` (`RetainedScene.FaceColour`). `GlModelMeshes.DrawSky` draws
+  them as the main view begins, before the map, far key first and the last linked first, untested,
+  an opaque face writing the far plane. `GlModelMeshes.DrawBlended` blends a draw at the console's
+  rate, mode 2 in GlCore's two passes, and every blended draw of the main view and the mirror goes
+  through it, so range 3 is drawn with the rest. `DrawWorldWater` merges the water's four ranges
+  and the models' four modes into the table's order instead of drawing one mode after another
+  (`RetainedScene.MainWaterRuns` counts the runs). The twelfth diff in the patch file. See "Step 3,
+  the sixth slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the objects near the camera, the mirror's blended faces, and blended faces in the
+  surface buffer. A `ModelInstance.Tile` is assembled as `func_80030540` assembles it: no depth range,
+  a face whose corners project without saturating kept by its facing on the screen (a quad on its
+  whole loop), any other by its plane against the eye and left to the GPU's near clip, and no corner
+  at the saturated projection (`uModelTile`, `modelTileKept`, `modelProjects` in `ModelGlsl`). A frame
+  carries the mirror's blended faces (`Frame.MirrorBlendFaces`, `AddBlendFace`'s `mirror`), which
+  `DrawMirrorWater` merges with the mirror's blended map faces in the table's order through
+  `DrawMerged`, the merge split out of `DrawWorldWater` (which now calls it too). An instance marked
+  `BlendSurfaces` has its blended faces drawn into the normal and surface buffers in the water's
+  slices (`DrawBlendNormals`): `WorldNormalVs`'s `uModelBlend` takes a solid one's as opaque, else one
+  with a material, or on the water's rect (`FlagWater` on a mesh corner) in an averaging blend
+  (`uModelTwin` the twin's rate), as a blended surface; and a blended model surface carries its own id
+  plus 256 rather than water's. The probe's surface readback counts samples by id
+  (`RetainedScene.SurfaceIds`). With `uModelTile` and `uModelBlend` 0 the programs are the ones
+  before. The thirteenth diff in the patch file. See "Step 3, the seventh slice", "Step 3, the
+  eighth slice" and "Step 3, the ninth slice" in `docs/GPU_RENDERER.md`.
+  Since amended: the map's opaque range is drawn with `0051`'s tolerance, as the models
+  already were (`GlMainView.DrawMapOpaque`, main view and mirror): true depth first with
+  colour masked, then colour against it pulled towards the camera, so two wall panels
+  overlapping in one plane no longer fight. `PrimFs` and `WorldVs` gain `uDepthOnly`, set
+  for every such depth pass (`DepthOnly`): the fragment decides only whether it exists,
+  and the corner is not lit. With it 0 the programs are the ones before.
+  `RetainedScene.MainMapPrepasses` counts the map draws. The fourteenth diff in the patch
+  file. See "The map's seams fought again" in `docs/GPU_RENDERER.md`.
+  Since amended: the main view latches the display target it draws into (`0024`'s
+  `MarginContentFlip`) once the map is drawn with the clip spanning the target. The
+  latch counted only packet vertices past the clip, and the map and models drawn here
+  are none, so a target built while the GPU drew the world (an aspect changed in
+  play) was refused by the present for good: the 4:3 VRAM fallback, and no pass that
+  needs a display target. The fifteenth diff in the patch file. See "A target made
+  under the GPU world renderer never latched" in `docs/WIDESCREEN.md`.
 
 `0007`, `0008` and `patches/EndingHold.cs` are the shape to keep in mind
 generally: **anything the runtime refreshes only at `VSync` is invisible to a

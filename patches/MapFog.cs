@@ -70,7 +70,7 @@ namespace Kf2;
 /// The accumulator has to run **with the map closed**, so it cannot live in a
 /// panel's Draw the way every other read in patches/Map.cs does. The obvious seam
 /// is a post-hook on func_8002D3A8 — and it is the seam to fall back to — but
-/// <c>VSyncEvent</c> costs no hook at all, and since patches/recompone/0021 it
+/// <c>VSyncEvent</c> costs no hook at all, and since tools/RecompOne/patches/0021 it
 /// fires on a **wall-clock 60 Hz grid** rather than per rendered frame, so the
 /// sample rate is 60/s at 20 fps and 60/s at 144 fps. The grid is stable for the
 /// whole frame once built, so a vblank read gets a complete one.
@@ -300,6 +300,9 @@ public static class MapFog
         // The staleness guard. See the class comment.
         int slack = CamSlackTiles * Map.TileUnits;
         if (Math.Abs(cx - px) > slack || Math.Abs(cz - pz) > slack) return;
+
+        // A view the port set is not where the player looked.
+        if (Stage13.ViewOverride != null) return;
 
         int slot = m.ReadU8(CurrentSlot);
         int area = m.ReadU8(AreaAddr);
