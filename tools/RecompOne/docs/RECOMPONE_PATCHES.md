@@ -995,6 +995,13 @@ Four files in the directory have no entry below:
   to (`WaterMurk.MaxTilt`, 0.75); a crystal in the water's texture, with nothing behind it, had
   taken the sky's endless run and gone to the murk's colour. The thirteenth diff in the patch
   file. See "Only level water is murked" in `docs/RENDERING.md`.
+  Since amended: a published rect no longer names a surface the port says it is not.
+  `GtePacketDepth.Rec.NotRect`, carried to `HleVertex.NotRect`, makes
+  `SurfaceMaterial.Classify` skip the rects (counted in `RefusedByPort`): the water's rects
+  are the fluid slots, which hold the creatures' skins too, so a slime was water to the murk
+  and the reflections, and level enough on top for the tilt test to let it through. The
+  fourteenth diff in the patch file. See "A model is water only if it is a sheet of it" in
+  `docs/RENDERING.md`.
   `GlCore.RenderNormals` became `RenderSurfaces` and runs once for both passes,
   timed with the occlusion pass when that runs. New profiler sections (`Surfaces`,
   `Ssr`) and `GpuWork.Reflections`; the probe attaches a second target to the pass

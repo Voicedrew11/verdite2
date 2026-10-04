@@ -3632,3 +3632,121 @@ index 2d8f343..2881353 100644
 +    /// water by about 20 degrees at its default).</summary>
 +    public static float MaxTilt = 0.75f;
  }
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+index e0c6e80..b894ba1 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Backends/Common/GlCore.cs
+@@ -1037,7 +1037,7 @@ public sealed partial class GlCore : IGpuBackend
+             {
+                 m = zMode == 2 ? SurfaceMaterial.None : SurfaceMaterial.Opaque;
+                 if (GteDepth.Reflections)
+-                    m = SurfaceMaterial.Classify(a.Material, f.Textured && !f.UseImage, f.SemiTrans && zMode == 2,
++                    m = SurfaceMaterial.Classify(a.Material, a.NotRect, f.Textured && !f.UseImage, f.SemiTrans && zMode == 2,
+                         f.BlendMode, f.TPage,
+                         (int)Math.Min(a.U, Math.Min(b.U, c.U)), (int)Math.Min(a.V, Math.Min(b.V, c.V)),
+                         (int)Math.Max(a.U, Math.Max(b.U, c.U)), (int)Math.Max(a.V, Math.Max(b.V, c.V)));
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuHleForward.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuHleForward.cs
+index 1c06ac0..8710ceb 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuHleForward.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuHleForward.cs
+@@ -31,7 +31,7 @@ public sealed partial class Gpu
+         R = (byte)v.R, G = (byte)v.G, B = (byte)v.B, U = (short)v.U, V = (short)v.V,
+         Z = v.W, HasGteZ = z, HasPersp = persp,
+         Lx = v.Lx, Ly = v.Ly, Lz = v.Lz, Fog = v.Fog, Light = v.Light, LightGen = v.LightGen,
+-        TexRect = v.TexRect, HasTexRect = v.HasTexRect, Solid = v.Solid, Material = v.Material, Projected = v.Projected,
++        TexRect = v.TexRect, HasTexRect = v.HasTexRect, Solid = v.Solid, Material = v.Material, NotRect = v.NotRect, Projected = v.Projected,
+     };
+ 
+     PrimFlags PrimOf(bool tex, bool semi, bool raw, int clut, bool gouraud = false) => new()
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
+index e9e1776..e53f2e0 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GpuRaster.cs
+@@ -32,6 +32,8 @@ public sealed partial class Gpu
+         public uint TexRect; public bool HasTexRect;
+         public bool Solid;
+         public byte Material;
++        // GtePacketDepth.Rec.NotRect.
++        public bool NotRect;
+         // 0067. The vertex map or PGXP answered: the GTE projected this vertex, so
+         // the polygon is part of the 3D scene, whether or not it carries a depth.
+         public bool Projected;
+@@ -175,12 +177,12 @@ public sealed partial class Gpu
+         // fraction above are left to the address map.
+         if (!Detached && GtePacketDepth.Active)
+         {
+-            for (int i = 0; i < n; i++) v[i].HasZ = false;
++            for (int i = 0; i < n; i++) { v[i].HasZ = false; v[i].NotRect = false; }
+             ref readonly var dr = ref GtePacketDepth.Find(_fifoSrc[0], _fifo[0], _fifo[vwAt[0]], _fifo[vwAt[n - 1]], out bool has);
+             if (has && dr.Z0 > 0f && dr.Z1 > 0f && dr.Z2 > 0f && (n == 3 || dr.Z3 > 0f))
+             {
+                 v[0].W = dr.Z0; v[1].W = dr.Z1; v[2].W = dr.Z2; v[3].W = dr.Z3;
+-                for (int i = 0; i < n; i++) { v[i].HasZ = true; v[i].Solid = dr.Solid; v[i].Material = dr.Material; }
++                for (int i = 0; i < n; i++) { v[i].HasZ = true; v[i].Solid = dr.Solid; v[i].Material = dr.Material; v[i].NotRect = dr.NotRect; }
+             }
+         }
+ 
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/GtePacketDepth.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/GtePacketDepth.cs
+index afc3ca0..87b66d0 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/GtePacketDepth.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/GtePacketDepth.cs
+@@ -32,6 +32,9 @@ public static class GtePacketDepth
+         public byte Material;
+         // 0079. Built by the model submitter rather than the tile walk; the probe's only.
+         public bool Model;
++        // The port knows the packet is none of the materials SurfaceMaterial.Rects
++        // stand for, whatever its texels: a creature drawn in the water's texture.
++        public bool NotRect;
+     }
+ 
+     /// <summary>The port's switch.</summary>
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+index 40505dd..9e696df 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/Hle/HleTypes.cs
+@@ -28,6 +28,8 @@ public struct HleVertex
+     public bool Solid;
+     // 0067. GtePacketDepth.Rec.Material: the port's word on what the surface is.
+     public byte Material;
++    // GtePacketDepth.Rec.NotRect: no published rect names this surface.
++    public bool NotRect;
+     // 0067. The GTE projected this vertex (the vertex map or PGXP answered for it
+     // with a depth; a vertex the port placed on the screen carries a fraction and
+     // no depth). A polygon with no projected corner is 2D: the HUD, text, a menu.
+diff --git a/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs b/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+index 83f6e29..de295a3 100644
+--- a/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
++++ b/tools/RecompOne/RecompOne.Runtime/Gpu/SurfaceMaterial.cs
+@@ -153,18 +153,21 @@ public static class SurfaceMaterial
+     /// <see cref="Overlay"/> (a texel may be opaque, which the normal pass cannot see).</summary>
+     public static long Veils, TexturedVeils;
+     public static readonly long[] RefusedByBlend = new long[4];
++    /// <summary>Triangles on a rect whose packet the port said was not its material.</summary>
++    public static long RefusedByPort;
+ 
+     public static void ResetCounters()
+     {
+-        FromPacket = FromRect = Blended = Overlays = Veils = TexturedVeils = 0;
++        FromPacket = FromRect = Blended = Overlays = Veils = TexturedVeils = RefusedByPort = 0;
+         Array.Clear(ByMaterial);
+         Array.Clear(RefusedByBlend);
+     }
+ 
+     /// <summary>The material of a triangle: the packet's, then a published
+     /// rectangle's, then <see cref="Opaque"/> for an opaque one and
+-    /// <see cref="None"/> for a blended one.</summary>
+-    public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage,
++    /// <see cref="None"/> for a blended one. <paramref name="notRect"/> is the packet's
++    /// <see cref="GtePacketDepth.Rec.NotRect"/>: no rectangle names it.</summary>
++    public static byte Classify(byte packet, bool notRect, bool textured, bool semi, int blend, int tpage,
+                                 int u0, int v0, int u1, int v1)
+     {
+         if (packet != None) { FromPacket++; ByMaterial[packet]++; return packet; }
+@@ -182,6 +185,7 @@ public static class SurfaceMaterial
+             {
+                 ref var r = ref Rects[i];
+                 if (x0 >= r.X + r.W || x1 <= r.X || y0 >= r.Y + r.H || y1 <= r.Y) continue;
++                if (notRect) { RefusedByPort++; break; }
+                 if (r.TranslucentOnly && !averaging)
+                 {
+                     if (semi) RefusedByBlend[blend & 3]++;

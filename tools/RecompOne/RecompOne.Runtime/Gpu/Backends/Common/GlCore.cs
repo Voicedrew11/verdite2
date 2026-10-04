@@ -1037,7 +1037,7 @@ public sealed partial class GlCore : IGpuBackend
             {
                 m = zMode == 2 ? SurfaceMaterial.None : SurfaceMaterial.Opaque;
                 if (GteDepth.Reflections)
-                    m = SurfaceMaterial.Classify(a.Material, f.Textured && !f.UseImage, f.SemiTrans && zMode == 2,
+                    m = SurfaceMaterial.Classify(a.Material, a.NotRect, f.Textured && !f.UseImage, f.SemiTrans && zMode == 2,
                         f.BlendMode, f.TPage,
                         (int)Math.Min(a.U, Math.Min(b.U, c.U)), (int)Math.Min(a.V, Math.Min(b.V, c.V)),
                         (int)Math.Max(a.U, Math.Max(b.U, c.U)), (int)Math.Max(a.V, Math.Max(b.V, c.V)));
