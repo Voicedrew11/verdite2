@@ -1,4 +1,6 @@
-# Verdite2
+<img width="700" alt="verdite2whi" src="https://github.com/user-attachments/assets/cfdd9335-6f94-4feb-9093-957fe9c58749" />
+
+***
 
 [![Release](https://img.shields.io/github/v/release/Voicedrew11/verdite2)](https://github.com/Voicedrew11/verdite2/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/Voicedrew11/verdite2/total)](https://github.com/Voicedrew11/verdite2/releases)
@@ -17,6 +19,8 @@ Verdite2 is a PC port of King's Field (US) built atop of the [RecompOne](https:/
 - 60+ fps
 - Consistent game speed
 - Per-pixel lighting
+- Fancy water
+- Reflections
 - Smooth fog
 - Enhanced audio quality
 - Automatic save reload after death
@@ -26,7 +30,7 @@ Verdite2 is a PC port of King's Field (US) built atop of the [RecompOne](https:/
 
 ## Status
 
-Game is playable from start to finish. There may still be some intermittent issues.
+Game is playable from start to finish.
 
 ## Requirements
 
