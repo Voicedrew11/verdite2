@@ -52,7 +52,7 @@ jobs:
       # apphost. Catch a broken stub on every push rather than on the release
       # job that actually publishes the zip.
       - name: Build the Windows stub
-        run: dotnet build packaging/windows/Stub/Verdite2.Stub.csproj -c Release
+        run: dotnet build tools/verdite-core/packaging/windows/Stub/Verdite.Stub.csproj -c Release -p:StubName=Verdite2 "-p:StubIcon=$PWD/packaging/shared/verdite2.ico"
 
       # KingsField2Recomp.csproj is deliberately NOT built here: it compiles
       # generated/ and so cannot build without the disc, by design.

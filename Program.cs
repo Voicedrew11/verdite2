@@ -1469,6 +1469,12 @@ foreach (var icon in new[]
     break;
 }
 
+// What a desktop entry written for this run calls the port (Verdite Core's
+// DesktopEntry writes one only when no packager has).
+Verdite.Core.DesktopEntry.Name = "Verdite2";
+Verdite.Core.DesktopEntry.GenericName = "King's Field";
+Verdite.Core.DesktopEntry.Comment = "A PC port of King's Field (SLUS-00158). Requires your own disc image.";
+
 // And over it, the game's own memory-card icon off the player's disc, which the
 // release cannot carry. The orb above is the fallback.
 //

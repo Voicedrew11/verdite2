@@ -38,6 +38,30 @@ and `patches/` through the SDK's default globs, which is what makes iteration
 incremental and is why nothing about the developer workflow changed. The launcher
 compiles neither: it carries them as *payload* and compiles them at first run.
 
+**The launcher's code is Verdite Core's** (`tools/verdite-core/launcher/`, since
+2026-10-05), shared with Verdite3. `Verdite2.Launcher/` holds only a csproj that
+names the executable and imports `Launcher.targets`, and a `Program.cs` that hands
+`Launcher.Run` this port's record: `Verdite2`/`verdite2`, *King's Field*,
+`SLUS-00158`, the `SLUS-00255` message, `kf2.json`, `KingsField2`,
+`Voicedrew11/verdite2`, and which overlays are play. Everything below that names a
+launcher file (`Paths`, `DiscCheck`, `BuildKey`, `Recompile`, `GameCompile`,
+`UpdateCheck`, the popups) means core's copy; Verdite Core's README describes the
+split. Two things are derived there rather than written here: the disc files the
+check requires and the build key hashes are every overlay `file` in `kf2.json`,
+each at least as long as its furthest `offset + skip + size` (the same
+`SYSTEM.CNF`, `SLUS_001.58`, three `.EXE`s at `0x800` and `FDAT.T` from its last
+slice that were listed by hand), and the localisation keys are `verdite.build.*`
+and `verdite.update.*` with the port's name filled in.
+
+Measured on the move, an AppImage built by core's script and run on an empty data
+folder (`VERDITE2_DATA`) with `VERDITE2_UPDATE_CHECK=force`: `[Verdite2]
+0.3.3+8debecd66`, `update available: v0.4.0 (running 0.3.3)` and `update.json`
+written, the game recompiled and compiled into `builds/306e49d40b6983fc/`, then
+`open → game → fdat02 → fdat05`, slot 2 at HP 46/86, 144.0 fps at 19.9 ticks/s,
+`wide 288`, and the same `[KF2]` lines as the developer build. Given
+`SLUS-00255`, it refuses with the same message. **Not run:** the Windows package
+(no `pwsh` here; the stub builds as `Verdite2.exe` from core's project).
+
 `.github/workflows/ci.yml` asserts the difference on every push, because it is
 easy to break by accident and impossible to notice locally, where `generated/`
 exists.
@@ -52,6 +76,7 @@ Beside the executable, `content/`:
   (`tools/verdite-core/src/**`, under `content/src/verdite-core/`), as source text.
   `Sources.All()` walks it recursively, so `GameCompile` compiles core and
   `BuildKey` hashes it: a core change rebuilds the game like a patch change.
+  (Core's `launcher/` is the launcher itself, not payload.)
 - `content/mods/` — copied into the data directory the first time each file is
   seen. `.mods-seeded` records the relative paths that have ever been seeded,
   rather than being a bare "seeding has happened" marker: a mod the player has
@@ -66,12 +91,12 @@ runtime. About 109 MB laid out, 41 MB as an AppImage.
 On Windows those DLLs live in `bin/`, not next to the thing the player
 double-clicks. A self-contained apphost will not start unless its managed
 assembly and `hostfxr` sit beside it, so the published tree goes in `bin/` and
-`packaging/windows/Stub/` is a few-KB .NET Framework 4.8 executable at the
-install root that launches `bin\Verdite2.exe`. Shortcuts, Inno's icon and
-`UninstallDisplayIcon` all point at the stub. The stub is a nested project, so
-building it leaves `obj/` AssemblyInfo under the game project's tree;
-`KingsField2Recomp.csproj` removes `packaging/**` for the same CS0579 reason it
-removes `tools/**`. `Paths.Install` looks one directory up when `content/` is
+a few-KB .NET Framework 4.8 executable at the install root
+(`tools/verdite-core/packaging/windows/Stub/`, built under the launcher's name)
+launches `bin\Verdite2.exe`. Shortcuts, Inno's icon and `UninstallDisplayIcon`
+all point at the stub. It is a nested project, so building it leaves `obj/`
+AssemblyInfo under the game project's tree, inside `tools/**`, which
+`KingsField2Recomp.csproj` removes for that CS0579 reason. `Paths.Install` looks one directory up when `content/` is
 not next to the apphost, which is how a developer run and the AppImage (payload
 still beside the executable) keep working. The zip and the install directory look like:
 
@@ -190,10 +215,10 @@ of which could silently disagree.
 
 | what | how it gets the number |
 |---|---|
-| the assembly | the csproj reads `../VERSION` into `<Version>` |
+| the assembly | core's `Launcher.targets` reads `VERSION` into `<Version>` |
 | `Verdite2-<v>-x86_64.AppImage` | `build-appimage.sh` reads `VERSION` |
 | `Verdite2-<v>-win-x64.zip` | `build-windows.ps1` reads `VERSION` |
-| `…-win-x64-setup.exe` | the script exports `VERDITE2_VERSION`; the `.iss` **errors** if it is unset |
+| `…-win-x64-setup.exe` | the script exports `VERDITE_VERSION`; core's `verdite.iss` **errors** if it is unset |
 | the git tag | `release.yml` asserts `v$(cat VERSION)` equals the tag it was triggered by |
 
 That last row is the one that matters most, and it closes a failure that is
@@ -314,6 +339,13 @@ bash packaging/linux/build-appimage.sh      # dist/Verdite2-<v>-x86_64.AppImage
 pwsh packaging/windows/build-windows.ps1    # dist/…-win-x64.zip and the installer
 ```
 
+Both are one-line wrappers of Verdite Core's scripts
+(`tools/verdite-core/packaging/`), which read this port's names from
+`packaging/package.env` (`NAME`, `APP_ID`, and `INNO_APP_ID`, the installer's
+`{9F1F0C1E-…}`, which must never change); `scripts/release.sh` is the same.
+The Windows script used to copy the font licence from `patches/recompone/assets/`,
+a path from before the subtree; core's reads `tools/RecompOne/patches/assets/`.
+
 Neither needs the disc. `.github/workflows/release.yml` runs both on a `v*` tag
 and opens a draft release; it asserts that `generated/` and `disc/` are absent,
 and that the tag matches `VERSION`, before it packages anything.
@@ -363,7 +395,9 @@ the archive if that fails. Nothing of the disc is in the port's source, and a
 differently mastered dump is a scan rather than a miss. The pixels are in
 `FDAT.T` only; `GAME.EXE` has the palette and not the picture.
 
-**The sizes are exact multiples.** 16, 32, 48, 64, 128 and 256, each a
+**The sizes are exact multiples** (the decode and the scale are Verdite Core's
+`WindowIcon`, since 2026-10-05; `CardIcon` keeps where the icon is). 16, 32, 48,
+64, 128 and 256, each a
 nearest-neighbour scale of the same 16 pixels, handed to GLFW together
 (`tools/RecompOne/patches/0061`, which is what made `SetWindowIcon` take more than
 one). A desktop asking for any of those gets pixel art it does not resample;
@@ -397,7 +431,8 @@ either, which is a packaging bug that was invisible for as long as nobody looked
 from `Runtime.AppId`, which `Program.cs` and the launcher both set to `verdite2`
 before the window is made. After: `xdg_toplevel#45.set_app_id("verdite2")`.
 
-**And something has to be there to match.** `patches/DesktopEntry.cs` writes the
+**And something has to be there to match.** `DesktopEntry` (Verdite Core's
+`src/`, since 2026-10-05; `Program.cs` gives it the entry's name and comment) writes the
 six sizes to `$XDG_DATA_HOME/icons/hicolor/NxN/apps/verdite2.png`. The theme is
 the right home for them rather than one big PNG in the data directory, for two
 reasons: the lookup picks the exact size the desktop asks for, so 32 and 48 px are
@@ -409,7 +444,10 @@ XDG data directory**, which is the source-tree case; an installed or
 appimaged-integrated build already has one. `Exec` prefers `$APPIMAGE` over
 `Environment.ProcessPath`, because an AppImage's apphost lives in a mount point
 that stops existing when it exits. A file already byte-identical is not rewritten,
-so an ordinary boot touches nothing. `KF2_ICON_INSTALL=0` writes none of it.
+so an ordinary boot touches nothing — **per runtime**: the system `dotnet` and the
+AppImage's bundled runtime compress the same pixels to different PNG bytes
+(measured 2026-10-05, pixels identical), so alternating a developer run and the
+AppImage rewrites the six files each time. `KF2_ICON_INSTALL=0` writes none of it.
 
 **This is how every AppImage does it, too** — it is just usually somebody else
 doing the writing. An AppImage carries its `.desktop` and its hicolor icons
