@@ -1666,3 +1666,40 @@ port's". `Analog`, `AnalogProbe`, `InputSection`, `BindingTable`, `AnalogPage`,
   physical layout, so the keys and mouse now match Verdite2's. Read a game's
   action table from a loaded save, and settle verbs by pressing buttons
   (Verdite3 `8c84eb0`, superseded by the next commit there).
+
+### 2026-10-05: Verdite3's menu world
+
+**Done in Verdite3** (`main`, not committed), written up in its
+`docs/WIDESCREEN.md`, "Menus and messages draw the world live". `MenuWorld`
+ported, the presenter and the message fade both, on by default.
+
+- **The same two shapes on new addresses.** Menus: enter `func_80027198`, frame
+  head `func_80026FE4`, presenter `func_800270F8` (the paste), leave
+  `func_80027310`, the buffers shrunk to `0x7400` each and the frame stored after
+  them. Messages: `func_800441D4(file, entry)` and its fade `func_80043BB8`, the
+  frame `MoveImage`d onto world texture space at (320, 0), and a wait between the
+  fades that draws nothing; Verdite3's docs had misread the fade as an area-load
+  bar.
+- **No relocated buffer to borrow.** Verdite3 keeps 2 MB and the stock buffers,
+  so the menu's pass lives in the frozen frame's store (120,784 bytes, more than
+  a world buffer), and a message's pass borrows the same store, which then holds
+  the saved texture space: the texels go back into VRAM first and the bytes are
+  kept aside in C# for the fade. Verdite2's `KF2_PRIMBUF=1` case, where a message
+  keeps the game's loop, has no counterpart.
+- **The fade writes the examine bit into the pad word on a press**, set or
+  cleared by which button it was; the replacement keeps it. Worth checking
+  whether Verdite2's `func_800356F4` does the same.
+- **The world is frozen by a flag, not by holds per patch**: a menu's frames are
+  frame boundaries and move `Ticks`, so `FramePacing.Frozen` pins the tick
+  fraction to the last frame's and makes no walk a tick's first. Verdite2 holds
+  `SpriteAnim` alone. The pass also puts back the scratchpad as stage 15 left it,
+  besides the GTE, and draws from the carried camera.
+- **The pass must be a scene to the retained renderer**: Verdite3's `GpuWorld`
+  begins a retained frame only inside stage 15, so under "Retained GPU" the pass
+  fell back to the packet path, and with the Z-buffer its near faces in table
+  order left slivers of the wall in front of a sign (seen in play). The pass now
+  enters the scene and begins the frame after the cull grid. Verdite2's
+  `MenuWorld` under `KF2_RETAINED` has the same question.
+- Measured at 16:9: the in-game menu's margin 34.6% against 0.0%; a held message
+  418 frames live with no VRAM fallback, against the game's loop falling back a
+  few seconds in. Picture not judged. Done by hand.
