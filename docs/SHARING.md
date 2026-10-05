@@ -1703,3 +1703,50 @@ ported, the presenter and the message fade both, on by default.
 - Measured at 16:9: the in-game menu's margin 34.6% against 0.0%; a held message
   418 frames live with no VRAM fallback, against the game's loop falling back a
   few seconds in. Picture not judged. Done by hand.
+
+### 2026-10-05: the subtrees reconciled, and the launcher and packaging in Verdite Core
+
+Asked for by the user: "the launcher should be in verdite-core, in fact, get
+everything reconciled including recompone."
+
+**RecompOne.** Verdite3 carried seven fork commits nobody had pushed (its
+retained-scene work, `0085`-`0089`). Split from Verdite3, they stacked on the
+fork's `2013e51` as a fast-forward and were pushed (`2e766da`), then pulled here,
+bringing `2013e51` with them: the vblank root counter's event once a vblank,
+which this branch had held back as an ear question (`docs/TODO.md`; the ambient
+retrigger clock `0x801B6CAC` now runs at 60/s). Acceptance before and after the
+pull: `open → game → fdat02 → fdat05`, slot 2 at HP 46/86, 144.0 fps at
+19.9-20.0 ticks/s, `wide 288`, the same `[KF2]` lines, `carda.sav` untouched. A
+docs-only fork commit (`f02f484`, `RECOMPONE_PATCHES.md` naming the shared
+launcher as the caller of `0030`, `0061` and `0081`) followed. **Both games now
+hold fork `f02f484` and Verdite Core `91f4a4a`, each equal to the pushed commit.**
+
+**The launcher and the packaging** (Verdite Core `91f4a4a`, authored in Verdite3
+as `c2f617a`). `launcher/` is `Verdite2.Launcher` made game-agnostic, taking a
+`LauncherGame` record: the inventory's "shell plus about twenty strings" held, and
+the one piece of game logic (`UpdatePopup`'s overlay names) became the record's
+`PlayAfter`. The disc check's file list and floors, and the build key's file
+list, are now read from the game's recompiler config (every overlay's `file`, at
+least `offset + skip + size`), which reproduces the list written here by hand.
+`launcher/Launcher.targets` holds what the csproj held; `packaging/` holds the
+AppImage, Windows, Inno and stub builds, read through a game's
+`packaging/package.env`, and `scripts/release.sh`. `src/` gained `DesktopEntry`
+(from `patches/`) and `WindowIcon` (the card icon's decode and scale, out of
+`CardIcon`). The Windows script's font licence path, still the pre-subtree
+`patches/recompone/assets/`, is right in core's copy.
+
+Measured here: an AppImage built by core's script on an empty data folder
+recompiled, compiled and reached `fdat05` (HP 46/86, 144.0 fps at 19.9 ticks/s,
+`wide 288`, the developer build's `[KF2]` lines), announced `v0.4.0` from GitHub,
+and refused `SLUS-00255` with the same message. In Verdite3, which gained
+`Verdite3.Launcher`, `VERSION` 0.1.0, packaging and CI: the same from an empty
+data folder (`fdat17`, 144.0 fps, 14.9 ticks/s), a 404 from the update check (no
+release yet), and `SLUS-00158` refused. The Windows package was not run (no
+`pwsh`); the stub builds under each name.
+
+**Verdite3's window icon** is its fourth save slot's card icon, found in
+`FDAT.T` entry 96 (Verdite3's `docs/PACKAGING.md`); unlike Verdite2's, no
+palette copy exists in `GAME.EXE`, so it is fingerprinted rather than found by a
+signature.
+
+**Not pushed:** this branch and Verdite3's `main`. The fork and Verdite Core are.
