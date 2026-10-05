@@ -454,6 +454,10 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 
 Sharing this port's work with Verdite1 and Verdite3: what in the repository is the RecompOne fork, what is game-agnostic, what is a mechanism that might generalize and what is this game's alone, and the progress log of the program. The plan, its phases and its rules are [SHARING_PLAN.md](docs/SHARING_PLAN.md); the per-file detail is [SHARING_INVENTORY.md](docs/SHARING_INVENTORY.md). Phase 0, the inventory, is written and awaits review.
 
+The full-coverage Verdite3 native/GPU renderer plan is
+[VERDITE3_GPU_PLAN.md](docs/VERDITE3_GPU_PLAN.md): reuse, native replacement
+inventory, final scene contracts, implementation gates and whole-game verification.
+
 - The buckets
 - The finding that shapes everything else: one per-game table removes most of the coupling
 - Bucket A: the RecompOne fork

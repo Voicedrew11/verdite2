@@ -18,6 +18,10 @@ The per-file detail (hook targets, addresses, struct layouts, env vars, settings
 keys, mod-visible members, and where the seam is in each file) is in
 `docs/SHARING_INVENTORY.md`. This file is the summary and the decisions.
 
+The current full-coverage plan for Verdite3's native submission and GPU world
+renderer is [VERDITE3_GPU_PLAN.md](VERDITE3_GPU_PLAN.md). It targets the final
+mesh/pose path from the outset and identifies practical reuse from Verdite2.
+
 ## The buckets
 
 - **A. RecompOne fork**: `tools/RecompOne`, the generic PS1 runtime and
@@ -416,6 +420,27 @@ surface.
   log.
 
 ## Progress log
+
+### 2026-10-04: Verdite3 complete native/GPU renderer plan
+
+**Planned, not implemented.** The user wants complete coverage without repeating
+Verdite2's recompiled-only, hand-written C#, and GPU renderer sequence.
+`VERDITE3_GPU_PLAN.md` records the final target, source-backed native function
+inventory, practical reuse from the final Verdite2 implementation, game-specific
+fog/light/subdivision differences, phase gates, and whole-game coverage criteria.
+Reference native replacements support verification and fallback; the primary
+implementation is the retained GPU world path from the outset.
+
+**Inspected.** Verdite2 `ebd5412`, Verdite3 `130f870` plus existing uncommitted
+pacing/settings/docs changes. Shared `GteLightMap`, `AoGeometry` and `GteDepth`
+sources match; shaders/backend contain some later Verdite2 fixes. No game was
+run, no implementation or subtree pin changed, and no visual judgement made.
+
+**Open before implementation.** Full caller/context census, all 28 areas' content
+and variants, preview ownership, sky redraw, native submission side effects,
+mutable assets, shared runtime parameterisation, and exact near/fog semantics.
+The plan distinguishes renderer completion from water/reflection/remaster feature
+completion. Those extensions use the same scene contract and need their own gates.
 
 ### 2026-10-02: Phase 0, the inventory
 
