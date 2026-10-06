@@ -1288,6 +1288,8 @@ public static class ModelWalk
         // backend draws those too (not in view space). So does an object near the camera,
         // which the clipped map assembler would have assembled.
         uint pick = assembler & 0xFFu;
+        // A model in the water's texture is water only if it is a sheet of it.
+        PolyAssembler.NotWater = _walkOwns && !ModelWater.Is(mem, _kind, _model, sub, mem.ReadU32(mesh + 4u), clip >= 0x80u);
         // KF2_GPUWORLD_SUBTEST=1: every forced-blend submit subtracts, on both paths.
         if (SubtractTest && pick < 0xFEu) pick = (pick & ~3u) | 2u;
         if (matrix == 0u && _walkOwns) ViewSpaceSubmits[pick == 0xFFu ? 0 : pick == 0xFEu ? 1 : 2]++;
@@ -1340,6 +1342,7 @@ public static class ModelWalk
             if (!whole) KingsField2.func_8002EAEC(c, mem);
         }
         PolyAssembler.TileMaterial = 0;
+        PolyAssembler.NotWater = false;
         RetainedModels.Instanced = false;
         _model = -1;
         Placed = false;

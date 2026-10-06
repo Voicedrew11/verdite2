@@ -176,6 +176,7 @@ KF2_AO_PROBE=1                         # coverage, the projection read off the G
 KF2_AO_PROBE=2                         # also read the occlusion back: how dark, how much, and where
 KF2_MURK=0 KF2_MURK_DISTANCE=1886      # murky water: a dark murk by the distance the view ray runs through water, surface to floor, 63% at the distance (on by default; independent of any reflection; GL core only; no sliders, so the depth and colour are this and the constants in Murk.cs)
 KF2_MURK_TILT=0.75                     # murk only a surface within this cosine of level (0.75 by default; 0 murks anything in the water's texture, as before; the `murk on|off|tilt X` verb)
+KF2_MODELWATER_PROBE=1                 # each model with faces in the water's texture, once per area: kind, model id, faces, height spread, and whether it is water (a rigid, flat object only)
 KF2_WAVES=0                            # water waves: a swell moves the water's vertices, ripples push and shade its texture (on by default; GL core only for the ripples; the tuning is the `waves` shell verb)
 KF2_WAVES_PROBE=1                      # a line every 2 s: rects, the clock, rippled batches, water positions free/rim/shared, halves and vertices moved
 KF2_SSR=1                              # screen-space reflections on water (off by default; no longer a setting, a comparison only; never marches a pixel the planar walk answers; GL core only)
@@ -206,6 +207,8 @@ KF2_GPUWORLD_PROBE=1                   # a line every 2 s: draws, walks that mis
 KF2_GPUWORLD_SURFACES=0                # leave the GPU-drawn map out of the occlusion's normals and the surface buffer (a comparison; the `gpuworld surfaces off` verb)
 KF2_GPUWORLD_FOGZ=0                    # fog the GPU-drawn map from the corners' screen-affine cue again, not each pixel's depth (a comparison: a floor clipped at the eye fogs to black)
 KF2_GPUWORLD_NEAR=16                   # the GPU-drawn map's near plane in view depth (16; the game's clipper keeps everything past 0)
+KF2_GPUWORLD_DEPTHCAP=1                # 0087: the ceiling on 0051's slope term in the GPU world, in game pixels at the fragment's depth (1; 0 unbounded, the comparison: a face seen edge-on drew over what stood hundreds of units in front, issue #52)
+KF2_GPUWORLD_TOLERANCE_PROBE=1         # 0087's probe: per map and model colour pass, the samples that pass only by more than 0.25/1/4/16/64/512 units; read with `gpuworld tolerance` (occlusion queries, a stall each)
 KF2_GPUWORLD_WATER=0                   # leave the map's water on the packets under the GPU world renderer (a comparison; the `gpuworld water off` verb)
 KF2_GPUWORLD_MODELS=0                  # leave the object walk's models on the packets under the GPU world renderer (a comparison; the `gpuworld models off` verb)
 KF2_GPUWORLD_MIRROR=0                  # leave the planar walk's mirror on its packets under the GPU world renderer (a comparison; the `gpuworld mirror off` verb; `gpuworld mirror hide` leaves it undrawn)
