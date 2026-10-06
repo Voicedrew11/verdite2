@@ -276,6 +276,7 @@ Aspect ratio, the HUD and screen-space effects authored 320 wide, and the three 
 
 - Widescreen: the runtime renders the margin, the game fills a quarter of it
 - The HUD does not widen with the world, and finding it is the problem
+- The HUD is moved by its records
 - The screen-space effects are 320 wide too, and one drawer makes all of them
 - Widescreen became a patch, and the default stayed 4:3
 - Three checkboxes that were not choices

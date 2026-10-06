@@ -80,44 +80,33 @@ namespace Kf2;
 /// The world gets wider; the HUD does not, because it is drawn in screen space
 /// and screen space is still 320 wide. Left alone it sits inset from the new
 /// edges, hugging the 4:3 box it was authored in. Anchoring moves each element to
-/// the edge it belongs to — which needs a way to tell a HUD primitive from a
-/// world one, and the primitive stream carries no such flag.
+/// the edge it belongs to.
 ///
-/// Two measurements, both in `fdat02`, say what it is and what it is not:
+/// The HUD is fourteen models the HUD builder <c>func_80031D5C</c> draws from the
+/// records at <see cref="Stage13.HudRecords"/>, each placed by its record's
+/// translation and transformed with no divide, so a record's X is where it lands
+/// on the screen: the compass at 290, the HP/MP panel's thirteen pieces at 5..76.
+/// A pre-hook on the builder moves each record's X out by the margin, left of the
+/// screen's centre to the left and right of it to the right, and its post-hook
+/// puts every X back. Nothing downstream is told: the transform, the vertex map
+/// and the assembler see a HUD the game placed there.
 ///
-///   * **Where the HUD is.** Whole-frame dumps put it in two fixed clusters —
-///     x 5..91 for the HP/MP panel, x 269..310 for the equipment icons, both at
-///     y 11..60 — and always in the **last ordering-table entries**, from about
-///     65 from the end. That is the front of the OT, which is where a painter's
-///     algorithm has to put anything that goes on top.
-///   * **What it is not: the palette.** Every HUD primitive in that first dump
-///     used a CLUT in VRAM column 0, and no world primitive in that frame did,
-///     which looked like a clean test and is not one: walking further into the
-///     area finds world geometry using column-0 palettes all the way back through
-///     the OT. Anchoring on that rule shifted half the world sideways by exactly
-///     the margin — 54-pixel wedges of missing floor and ceiling, which is what
-///     the artefact looks like when a rule like this is wrong.
-///
-/// So the test is structural and positional, not palette-based: a primitive is
-/// HUD if it is in the last <see cref="HudTailEntries"/> ordering-table entries
-/// *and* its box falls inside one of the two clusters. The OT gate is why this
-/// replaces <c>DrawOTag</c> and walks the table itself — the primitive event
-/// cannot say which entry a primitive came from. Being wrong now costs one small
-/// triangle in a corner rather than the whole frame after it.
-///
-/// Each HUD primitive then moves to its own side: entirely left of screen centre
-/// moves out by the margin, entirely right moves out the other way, and anything
-/// straddling the middle is left where it is, which is where centred text and
-/// full-width elements want to be.
+/// It used to be found in the primitive stream instead -- a primitive in the last
+/// 128 ordering-table entries whose box fell in one of the two corners -- which is
+/// a guess about the frame's shape, and a menu breaks it twice: <c>MenuWorld</c>
+/// draws the world and its HUD into a table of its own linked in front of the
+/// menu's, so the HUD is no longer at the end and stops moving, and the menu's own
+/// boxes in those corners are, and start. So with a menu open the HUD flashed
+/// between its two places. See "The HUD is moved by its records" in
+/// docs/WIDESCREEN.md.
 ///
 /// ## What it costs at 4:3
 ///
 /// Nothing that runs per primitive, which is what makes the default-off case free
-/// rather than merely cheap. The replacement's two-pass walk and the
-/// <c>RenderPrimEvent</c> listener are both gated on the margin actually being
-/// non-zero: with no margin the replacement is a straight call to the original and
-/// no listener is attached at all, so <c>GpuRaster</c> skips the whole dispatch on
-/// <c>HasAnyListeners</c>. The hooks are still installed, because a hook cannot be
+/// rather than merely cheap. The <c>RenderPrimEvent</c> listener is gated on the
+/// margin actually being non-zero, so <c>GpuRaster</c> skips the whole dispatch on
+/// <c>HasAnyListeners</c>, and the <c>DrawOTag</c> replacement's numbered walk runs
+/// only for <c>KF2_WIDESCREEN_PROBE=2</c>. The hooks are still installed, because a hook cannot be
 /// added once the game is running past its overlay loads and the aspect is a
 /// setting that can be changed mid-session.
 /// </summary>
@@ -211,17 +200,6 @@ public static class Widescreen
     /// <summary>KF2_WIDESCREEN_PROBE=2: also list the wide primitives themselves.</summary>
     static bool _listWide;
 
-    // The HUD measured 65 entries from the end of the ordering table; this is that
-    // with room to spare, and still a thousandth of the ~9,400-entry table, so
-    // world geometry has to be practically touching the camera to reach it.
-    const int HudTailEntries = 128;
-
-    // Screen-space boxes the HUD was measured in, padded. Clip-relative, so they
-    // do not care where in VRAM the frame buffer sits.
-    const int HudBottom = 70;
-    const int HudLeftEdge = 110;      // left cluster: x 5..91
-    const int HudRightEdge = 250;     // right cluster: x 269..310
-
     // How far off the screen edge a vertex may sit and still count as being on it.
     // The game's own tints land exactly on 0 and 320, so this is only insurance.
     const int EdgeSlack = 2;
@@ -304,6 +282,8 @@ public static class Widescreen
                 : "[KF2] widescreen: off (4:3)");
         });
 
+        HookAttach.OnOverlayLoad("widescreen HUD", AttachHud);
+
         // Attached whether or not an aspect is set, for the same reason the dither
         // hooks are: the aspect is a setting that can be changed mid-session, and
         // hooks cannot be added once the game is running past the overlay loads.
@@ -372,7 +352,7 @@ public static class Widescreen
     static void Listen()
     {
         Event.RemoveListener<RenderPrimEvent>(OnPrim);
-        if (_measure || (On && (AnchorHud || StretchEffects))) Event.AddListener<RenderPrimEvent>(OnPrim);
+        if (_measure || (On && StretchEffects)) Event.AddListener<RenderPrimEvent>(OnPrim);
     }
 
     static void Attach()
@@ -397,7 +377,7 @@ public static class Widescreen
 
         if (n == 0)
             Console.Error.WriteLine("[KF2] widescreen: nothing hooked — the picture still widens, " +
-                                    "but the HUD will stay in its 4:3 box. See \"Widescreen\" in NOTES.md.");
+                                    "but the probe cannot list entries. See \"Widescreen\" in NOTES.md.");
     }
 
     /// <summary>
@@ -413,12 +393,11 @@ public static class Widescreen
     public static void DrawOTag(Action<CpuContext, IMemory> orig, CpuContext c, IMemory m)
     {
         var gpu = RecompOne.Runtime.Runtime.Gpu;
-        // The listing wants the entry number too, so it walks for that as well as
-        // for the anchoring -- at 4:3 included, since "where is this drawn from" is
-        // a question asked before the aspect is changed. The plain census does not
-        // need it, and the tint stretch does not either: a screen-space tint is
-        // recognised by its shape, not by where in the table it sits.
-        if (!((AnchorHud && On) || _listWide) || gpu == null) { orig(c, m); return; }
+        // The listing wants the entry number, so it walks for that -- at 4:3
+        // included, since "where is this drawn from" is a question asked before the
+        // aspect is changed. Nothing else needs it: a screen-space tint is
+        // recognised by its shape, and the HUD is moved by its records.
+        if (!_listWide || gpu == null) { orig(c, m); return; }
 
         uint mask = RecompOne.Runtime.Runtime.RamWordMask;
         uint addr = c.A0 & mask;
@@ -458,8 +437,6 @@ public static class Widescreen
         }
 
         if (StretchEffects && On) Stretch(e);
-
-        if (AnchorHud && On && _fromEnd >= 0 && _fromEnd < HudTailEntries) Anchor(e);
     }
 
     static void Census(RenderPrimEvent e)
@@ -481,9 +458,13 @@ public static class Widescreen
             ? "[KF2] widescreen: no primitives in the last window"
             : $"[KF2] widescreen: {_margin * 100.0 / total:F1}% of {total} prims reach the margin " +
               $"({total / window:F0}/s)" +
-              (_stretched > 0 ? $"; {_stretched} full-screen tint(s) stretched" : ""));
+              (_stretched > 0 ? $"; {_stretched} full-screen tint(s) stretched" : "") +
+              $"; HUD built {_hudFrames} in frames, {_hudPasses} in passes, " +
+              $"{(_hudFrames + _hudPasses > 0 ? _hudBytes / (_hudFrames + _hudPasses) : 0)} bytes each, " +
+              $"{_hudMovedRecords} record(s) moved");
 
         _inside = _margin = _stretched = 0;
+        _hudFrames = _hudPasses = _hudBytes = _hudMovedRecords = 0;
         _windowStart = Now;
     }
 
@@ -572,35 +553,96 @@ public static class Widescreen
         _stretched++;
     }
 
-    // Move a HUD element out to the side of the screen it sits on. The clip
-    // rectangle is the screen, so everything here is relative to it: the boxes, the
-    // dividing line, and the width the margin was sized from.
-    static void Anchor(RenderPrimEvent e)
+    // ---- the HUD, moved by its records -----------------------------------------
+
+    /// <summary>The HUD builder: one model per record, placed on the screen by the
+    /// record's translation and transformed orthographically.</summary>
+    const uint HudBuilder = 0x80031D5C;
+
+    /// <summary>A record's screen X, the translation the builder loads with
+    /// <c>SetTransMatrix</c>, measured from the screen's left edge.</summary>
+    const uint HudX = 0x10;
+
+    /// <summary>The middle of the 320-pixel screen: a record left of it belongs to
+    /// the left edge.</summary>
+    const int ScreenCentre = 160;
+
+    static readonly short[] _hudX = new short[Stage13.HudCount];
+    static int _hudMoved;
+    static bool _hudQueued;
+
+    // KF2_WIDESCREEN_PROBE: builder calls per window, from a frame and from a pass,
+    // the bytes of packets they added, and the records moved; and each distinct set
+    // of record positions, once.
+    static long _hudFrames, _hudPasses, _hudBytes, _hudMovedRecords;
+    static uint _hudCursor;
+    static readonly HashSet<string> _hudSeen = [];
+
+    static bool AttachHud()
     {
-        int width = e.DrawRight - e.DrawLeft + 1;
-        int margin = Display.WideMargin(width);
+        SymbolRegistry.Build();
+        var target = SymbolRegistry.Resolve("game", null, HudBuilder);
+        if (target == null) return false;
+        const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+        if (!_hudQueued)
+        {
+            HookManager.AddPre(_self, target, typeof(Widescreen).GetMethod(nameof(BeforeHud), flags)!);
+            HookManager.AddPost(_self, target, typeof(Widescreen).GetMethod(nameof(AfterHud), flags)!);
+            _hudQueued = true;
+        }
+        HookManager.Commit();
+        return HookAttach.Installed(target);
+    }
+
+    /// <summary>Move every record out to its edge for the builder. The same in stage
+    /// 13's frame and in a pass (<see cref="MenuWorld"/>), since both draw the HUD
+    /// through this one call.</summary>
+    public static void BeforeHud(CpuContext c, IMemory m)
+    {
+        _hudMoved = 0;
+        if (_measure) ProbeHud(m);
+        if (!(AnchorHud && On)) return;
+        int margin = Margin;
         if (margin <= 0) return;
 
-        int lo = int.MaxValue, hi = int.MinValue, top = int.MaxValue, bottom = int.MinValue;
-        for (int i = 0; i < e.Count; i++)
+        for (uint i = 0; i < Stage13.HudCount; i++)
         {
-            lo = Math.Min(lo, e.X[i]); hi = Math.Max(hi, e.X[i]);
-            top = Math.Min(top, e.Y[i]); bottom = Math.Max(bottom, e.Y[i]);
+            uint rec = Stage13.HudRecords + i * Stage13.HudStride;
+            if (m.ReadU8(rec) == 0xFF) break;
+            short x = (short)m.ReadU16(rec + HudX);
+            _hudX[i] = x;
+            m.WriteU16(rec + HudX, (ushort)(x + (x < ScreenCentre ? -margin : margin)));
+            _hudMoved = (int)i + 1;
         }
+        _hudMovedRecords += _hudMoved;
+    }
 
-        lo -= e.DrawLeft; hi -= e.DrawLeft;
-        top -= e.DrawTop; bottom -= e.DrawTop;
-        if (top < 0 || bottom > HudBottom) return;
+    /// <summary>Put every record's X back the moment the builder has drawn it.</summary>
+    public static void AfterHud(CpuContext c, IMemory m)
+    {
+        for (int i = 0; i < _hudMoved; i++)
+            m.WriteU16(Stage13.HudRecords + (uint)i * Stage13.HudStride + HudX, (ushort)_hudX[i]);
+        _hudMoved = 0;
 
-        // A box that crosses the middle -- centred text, a full-width bar -- has no
-        // side to move to.
-        int shift = hi <= HudLeftEdge ? -margin : lo >= HudRightEdge ? margin : 0;
-        if (shift == 0) return;
+        if (!_measure) return;
+        if (Stage13.InFrame) _hudFrames++; else _hudPasses++;
+        _hudBytes += Cursor(m) - _hudCursor;
+    }
 
-        // Same rule as Stretch: width this patch manufactured is not margin
-        // content the game drew, and the backend latch must not count it.
-        RecompOne.Runtime.Hle.GpuHle.PortWidenedPrim = true;
-        for (int i = 0; i < e.Count; i++) e.X[i] += shift;
+    static uint Cursor(IMemory m) => m.ReadU32((m.ReadU32(ScenePass.ActiveDescriptor) & RecompOne.Runtime.Runtime.RamWordMask) + 8u);
+
+    static void ProbeHud(IMemory m)
+    {
+        _hudCursor = Cursor(m);
+        var line = new System.Text.StringBuilder();
+        for (uint i = 0; i < Stage13.HudCount; i++)
+        {
+            uint rec = Stage13.HudRecords + i * Stage13.HudStride;
+            if (m.ReadU8(rec) == 0xFF) break;
+            line.Append($" {i}{(m.ReadU8(rec) == 1 ? "" : "(hidden)")}@{(short)m.ReadU16(rec + HudX)},{(short)m.ReadU16(rec + HudX + 2)}");
+        }
+        string s = line.ToString();
+        if (_hudSeen.Count < 16 && _hudSeen.Add(s)) Console.WriteLine($"[KF2] widescreen: HUD records at{s}");
     }
 
     /// <summary>"16:9" and "1.777" both, since the environment variable is typed by
