@@ -176,6 +176,7 @@ KF2_AO_PROBE=1                         # coverage, the projection read off the G
 KF2_AO_PROBE=2                         # also read the occlusion back: how dark, how much, and where
 KF2_MURK=0 KF2_MURK_DISTANCE=1886      # murky water: a dark murk by the distance the view ray runs through water, surface to floor, 63% at the distance (on by default; independent of any reflection; GL core only; no sliders, so the depth and colour are this and the constants in Murk.cs)
 KF2_MURK_TILT=0.75                     # murk only a surface within this cosine of level (0.75 by default; 0 murks anything in the water's texture, as before; the `murk on|off|tilt X` verb)
+KF2_MODELWATER_PROBE=1                 # each model with faces in the water's texture, once per area: kind, model id, faces, height spread, and whether it is water (a rigid, flat object only)
 KF2_WAVES=0                            # water waves: a swell moves the water's vertices, ripples push and shade its texture (on by default; GL core only for the ripples; the tuning is the `waves` shell verb)
 KF2_WAVES_PROBE=1                      # a line every 2 s: rects, the clock, rippled batches, water positions free/rim/shared, halves and vertices moved
 KF2_SSR=1                              # screen-space reflections on water (off by default; no longer a setting, a comparison only; never marches a pixel the planar walk answers; GL core only)
