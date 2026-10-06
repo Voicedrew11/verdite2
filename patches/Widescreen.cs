@@ -124,12 +124,17 @@ public static class Widescreen
     /// them, so a player who had the mod on keeps the picture they had.</summary>
     public const string AspectKey = "kf2.widescreen.aspect";
 
-    // The HUD anchoring and the tint stretching had a saved key each and a
-    // checkbox each, and both are gone. They are not choices: a wide picture whose
-    // death fade covers the middle 320 pixels is a defect, not a preference, and
-    // the HUD anchoring is the one part of widescreen that moves something the
-    // game drew where it meant to draw it. So the tints follow the aspect always
-    // and the HUD never moves, with the console keeping both as comparisons.
+    /// <summary>Whether the HUD is moved out to the new edges. A key of its own
+    /// rather than the old checkbox's <c>kf2.widescreen.anchorhud</c>, which
+    /// defaulted on and stopped being read when the checkbox went: a value saved
+    /// under it then is not a choice anyone made of this control.</summary>
+    public const string HudKey = "kf2.widescreen.hud";
+
+    // The tint stretching had a saved key and a checkbox, and both are gone: a wide
+    // picture whose death fade covers the middle 320 pixels is a defect, not a
+    // preference, so the tints follow the aspect always, with the console keeping
+    // the comparison. The HUD anchoring went the same way and came back once it was
+    // moved by its records instead of guessed at in the primitive stream.
 
     /// <summary>The game's own aspect, and the one that means "off".</summary>
     public const float FourThree = 4f / 3f;
@@ -155,15 +160,16 @@ public static class Widescreen
     /// <summary>The target aspect. 4:3 is off; 16:9 is the default.</summary>
     public static float Aspect { get; private set; } = SixteenNine;
 
-    /// <summary>Move the HP/MP panel and the equipment icons out to the new edges.
-    /// **Off, and no longer a setting** (<c>KF2_WIDESCREEN_HUD=1</c> is the
-    /// comparison): everything else widescreen does presents geometry the game
-    /// submitted and the GPU clipped, and this alone *moves* something the game
-    /// placed deliberately. Where it lands has never been looked at by eye, which
-    /// is the port's usual reason for a default, and offering it as a tick asked
-    /// the player to judge that instead. Costs nothing while
-    /// <see cref="Aspect"/> is 4:3.</summary>
+    /// <summary>Move the HP/MP panel and the compass out to the new edges. A
+    /// checkbox under the aspect, <see cref="HudKey"/>; <c>KF2_WIDESCREEN_HUD</c>
+    /// wins over it for a run. **Off by default**: everything else widescreen does
+    /// presents geometry the game submitted and the GPU clipped, and this alone
+    /// *moves* something the game placed deliberately, and where it lands has not
+    /// been judged by eye. Costs nothing while <see cref="Aspect"/> is 4:3.</summary>
     public static bool AnchorHud { get; private set; }
+
+    /// <summary>The checkbox: takes effect on the next frame the HUD is built.</summary>
+    public static void SetAnchorHud(bool on) => AnchorHud = on;
 
     /// <summary>Widen the game's full-screen tints — the death fade, the damage
     /// flash — across the margin. **On whenever an aspect is chosen, and no longer
@@ -193,8 +199,8 @@ public static class Widescreen
     /// checkbox.</summary>
     static bool? _forcedEffects;
 
-    /// <summary>KF2_WIDESCREEN_HUD: the comparison for the anchoring, which is
-    /// otherwise unreachable.</summary>
+    /// <summary>KF2_WIDESCREEN_HUD: the anchoring for the run, over the checkbox's
+    /// saved value.</summary>
     static bool? _forcedHud;
 
     /// <summary>KF2_WIDESCREEN_PROBE=2: also list the wide primitives themselves.</summary>
@@ -268,11 +274,12 @@ public static class Widescreen
         {
             Aspect = _forced ?? RecompOne.Runtime.Runtime.View.GetFloat(AspectKey, SixteenNine);
 
-            // Neither of these reads the saved config any more, deliberately: a
-            // player who ticked one off before it stopped being a tick would
+            AnchorHud = _forcedHud ?? RecompOne.Runtime.Runtime.View.GetBool(HudKey, false);
+
+            // The stretch does not read the saved config any more, deliberately: a
+            // player who ticked it off before it stopped being a tick would
             // otherwise be stuck with that forever, with nothing in the settings
             // window to put it back.
-            AnchorHud = _forcedHud ?? false;
             StretchEffects = _forcedEffects ?? true;
             Apply();
             Console.WriteLine(On

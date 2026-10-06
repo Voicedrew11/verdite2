@@ -76,7 +76,7 @@ KF2_TEXPROBE=1                         # textured vs flat prims a second, and a 
 KF2_WIDESCREEN=4:3 KF2_WIDESCREEN_PROBE=1  # aspect (16:9 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide (stretched by default)
-KF2_WIDESCREEN_HUD=1                     # anchor the HP/MP panel and the compass to the new edges, by the HUD records' X (off; no longer a setting)
+KF2_WIDESCREEN_HUD=1                     # anchor the HP/MP panel and the compass to the new edges, by the HUD records' X; wins over Video's *HUD at the screen edges* (off)
 KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3 shape (widened by default)
 KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the aspect's
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped

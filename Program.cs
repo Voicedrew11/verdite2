@@ -1178,10 +1178,9 @@ Kf2.GearCompare.Install();
 //     KF2_WIDESCREEN_PROBE=1    the margin census, on the console
 //     KF2_WIDESCREEN_EFFECTS=0  leave the death fade and the damage flash 320 wide
 //     KF2_WIDESCREEN_HUD=1      anchor the HP/MP panel and the compass to the new
-//                               edges -- off, and no longer a setting: it is the
-//                               one thing widescreen does that moves something the
-//                               game placed deliberately, and where it lands has
-//                               never been looked at by eye
+//                               edges; wins over Video's "HUD at the screen edges"
+//                               for the run (off by default: it moves something
+//                               the game placed deliberately)
 //
 // A patch rather than a mod because an aspect ratio is a picture the port should
 // be able to offer without a package having to load, and Video is where a player

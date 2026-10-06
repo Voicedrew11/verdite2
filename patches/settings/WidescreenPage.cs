@@ -1,4 +1,5 @@
 using ImGuiNET;
+using RecompOne.Runtime.Host.Window;
 
 namespace Kf2.Settings;
 
@@ -21,17 +22,20 @@ namespace Kf2.Settings;
 /// <c>KF2_WIDESCREEN=1.9</c> still takes any value, and a value that is not one of
 /// the four shows up here as Custom rather than being rounded away.
 ///
-/// Three checkboxes used to sit under it and none of them was a choice. Widening
-/// the game's cull cone and stretching its full-screen tints are what the rest of
-/// the picture needs to be *correct* once it is wide — off, the sides fill in and
-/// empty as you turn, and a death fade blacks out the middle of the screen and
-/// leaves the dungeon showing either side — so both follow the aspect now, on
-/// whenever one is chosen. Anchoring the HUD went the other way and is off: it is
-/// the one thing widescreen does that *moves* something the game placed
-/// deliberately, rather than presenting geometry the GPU used to clip, and where
-/// it lands has never been looked at by eye. All three are still switchable from
-/// the console — <c>KF2_WIDESCREEN_CULL=0</c>, <c>KF2_WIDESCREEN_EFFECTS=0</c>,
-/// <c>KF2_WIDESCREEN_HUD=1</c> — which is where a comparison belongs.
+/// Three checkboxes used to sit under it and two of them were not a choice.
+/// Widening the game's cull cone and stretching its full-screen tints are what the
+/// rest of the picture needs to be *correct* once it is wide — off, the sides fill
+/// in and empty as you turn, and a death fade blacks out the middle of the screen
+/// and leaves the dungeon showing either side — so both follow the aspect now, on
+/// whenever one is chosen, with <c>KF2_WIDESCREEN_CULL=0</c> and
+/// <c>KF2_WIDESCREEN_EFFECTS=0</c> as the comparisons.
+///
+/// The third, the HUD at the edges, is a choice and is back, off by default and
+/// dimmed at 4:3: it is the one thing widescreen does that *moves* something the
+/// game placed deliberately, and it is a setting again now that it moves the HUD's
+/// records rather than guessing at primitives (see "The HUD is moved by its
+/// records" in docs/WIDESCREEN.md). <c>KF2_WIDESCREEN_HUD</c> wins over it for a
+/// run.
 ///
 /// The primitive census the mod drew in its panel is not here. It is the answer to
 /// "would this scene gain anything", which is worth asking from a headless run and
@@ -45,6 +49,25 @@ public sealed class WidescreenPage : IPatchPage
 
     /// <summary>Unused: a slot page draws no heading.</summary>
     public string Title => "Widescreen";
+
+    const string Strings = """
+    {
+      "strings": {
+        "kf2.widescreen.hud.label": {
+          "en": "HUD at the screen edges",
+          "pt-BR": "HUD nas bordas da tela",
+          "es-419": "HUD en los bordes de la pantalla"
+        },
+        "kf2.widescreen.hud.tooltip": {
+          "en": "Moves the health panel and the compass out to the edges of the wide picture.",
+          "pt-BR": "Move o painel de vida e a bússola para as bordas da imagem larga.",
+          "es-419": "Mueve el panel de vida y la brújula a los bordes de la imagen ancha."
+        }
+      }
+    }
+    """;
+
+    public WidescreenPage() => Localization.Merge(Strings);
 
     public void Draw()
     {
@@ -69,5 +92,17 @@ public sealed class WidescreenPage : IPatchPage
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("How wide the picture is. Wider shows more of the room, not a stretched 4:3.");
+
+        // At 4:3 there is no edge to move to.
+        ImGui.BeginDisabled(!Widescreen.On);
+        bool hud = Widescreen.AnchorHud;
+        if (ImGui.Checkbox(Localization.T("kf2.widescreen.hud.label"), ref hud))
+        {
+            Widescreen.SetAnchorHud(hud);
+            PatchSettings.Set(Widescreen.HudKey, hud);
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip(Localization.T("kf2.widescreen.hud.tooltip"));
+        ImGui.EndDisabled();
     }
 }

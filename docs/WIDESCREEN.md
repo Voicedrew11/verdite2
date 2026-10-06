@@ -291,6 +291,19 @@ the menu opened and closed with `press Circle`:
 and whether anything flashes now at a menu's first and last frames. The anchoring
 stays off until it has been.
 
+## The HUD at the edges is a setting again
+
+It went out of the window as one of "Three checkboxes that were not choices",
+because it moved what the game placed deliberately by a rule that could be wrong.
+Moved by its records, it is a choice like the aspect, so it is back as Video ▸
+*HUD at the screen edges*, under the aspect, dimmed at 4:3 and **off by default**
+(not judged by eye). It saves to a new key, `kf2.widescreen.hud`: the old
+checkbox's `kf2.widescreen.anchorhud` defaulted on and has not been read since it
+went, so a value saved there is not a choice anyone made of this control.
+`KF2_WIDESCREEN_HUD` wins over the saved value for a run. It takes effect on the
+next frame the builder runs, since it only decides whether the pre-hook moves the
+records.
+
 ## The screen-space effects are 320 wide too, and one drawer makes all of them
 
 The first of the two things the census could not see, reported from a real
