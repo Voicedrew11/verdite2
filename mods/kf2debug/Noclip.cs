@@ -154,10 +154,7 @@ internal static class Noclip
             _cinematic = value;
             _lookPrimed = false;
             // A flythrough being filmed must not have anything fading in over
-            // the picture: the hotkey toasts go quiet in Hotkeys.Notify, and
-            // the pointer-capture glyph here. (Precedent for a mod driving a
-            // host type: Warp calls Kf2.AreaWarp.)
-            Verdite.Core.MouseIndicator.Suppressed = value;
+            // the picture: the hotkey toasts go quiet in Hotkeys.Notify.
         }
     }
 
@@ -571,8 +568,5 @@ internal static class Noclip
         _wasEnabled = false;
         _vx = _vy = _vz = 0;
         _lookPrimed = false;
-        // The host outlives the mod: unloading mid-filming must not leave its
-        // capture glyph muted for the rest of the session.
-        Verdite.Core.MouseIndicator.Suppressed = false;
     }
 }
