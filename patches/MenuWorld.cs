@@ -15,6 +15,7 @@ namespace Kf2;
 ///
 ///     KF2_MENUWORLD=0         the game's frozen copy -- comparison only
 ///     KF2_MENUWORLD_PROBE=1   world passes a second, primitive bytes used, overflows
+///     KF2_MESSAGE_FADE=1..4   vblanks each step of a message's fade is shown for
 ///
 /// Every menu (the in-game menu, the shops, the save list) runs on one framework:
 /// `func_80022754` shrinks the primitive buffers and stores the displayed frame,
@@ -69,6 +70,18 @@ public static class MenuWorld
     public static bool Enabled { get; private set; } = true;
     static bool _probe;
 
+    /// <summary>How many vblanks each step of a message's fade is shown for: 1 is the
+    /// game's own (one step a <c>VSync(0)</c>, the presenter's), more holds each
+    /// brightness that many times longer. The wait for the button is not touched, and
+    /// a message left to the game's loop (<see cref="MessageFade"/> refused) keeps
+    /// the game's speed. <c>KF2_MESSAGE_FADE</c>, else Gameplay's <see cref="FadeKey"/>.
+    /// See "The fade's length" in docs/PATCHES_AND_MODS.md.</summary>
+    public static int FadeVBlanks { get; private set; } = 1;
+    public const string FadeKey = "kf2.messagefade";
+    public const int MaxFadeVBlanks = 4;
+    static bool _fadeFromEnv;
+    public static void SetFadeVBlanks(int vblanks) => FadeVBlanks = Math.Clamp(vblanks, 1, MaxFadeVBlanks);
+
     static bool _hooked, _queued, _worldSeen, _session;
     static int _depth;
     static bool _drawing;
@@ -106,14 +119,29 @@ public static class MenuWorld
         Description = "Draws the world live behind menus and shops instead of a frozen 320-wide copy.",
     };
 
-    public static void Configure(string? enabled, string? probe)
+    public static void Configure(string? enabled, string? probe, string? fade)
     {
         if (!string.IsNullOrWhiteSpace(enabled)) Enabled = enabled != "0";
         if (!string.IsNullOrWhiteSpace(probe)) _probe = probe != "0";
+        if (!string.IsNullOrWhiteSpace(fade))
+        {
+            if (int.TryParse(fade, out int vblanks) && vblanks >= 1 && vblanks <= MaxFadeVBlanks)
+            {
+                SetFadeVBlanks(vblanks);
+                _fadeFromEnv = true;
+            }
+            else Console.WriteLine($"[KF2] menu world: KF2_MESSAGE_FADE expects 1..{MaxFadeVBlanks}, not '{fade}'; ignored");
+        }
     }
 
     public static void Install()
     {
+        // The saved length can only be read once ConfigManager has loaded, after
+        // Program.cs called Configure; the variable wins.
+        Event.AddListener<RuntimeReadyEvent>(_ =>
+        {
+            if (!_fadeFromEnv) SetFadeVBlanks(RecompOne.Runtime.Runtime.View.GetInt(FadeKey, FadeVBlanks));
+        });
         Event.AddListener<OverlayLoadedEvent>(_ =>
         {
             _worldSeen = false;
@@ -289,9 +317,12 @@ public static class MenuWorld
         MessageLive = true;
         _messages++;
 
-        int b = (int)c.A0, step = (int)c.A1, state = -1, frames = 0;
+        int b = (int)c.A0, step = (int)c.A1, state = -1, frames = 0, fadeFrames = 0;
         bool ranOut = false;
         uint result;
+        long started = Stopwatch.GetTimestamp(), vsyncs = RecompOne.Runtime.Sdk.LibEtc.VSyncCalls;
+        double fadeMs = 0;
+        long fadeVsyncs = 0;
         try
         {
             // The MoveImage copy sits on world texture pages; the pass needs them back.
@@ -303,13 +334,22 @@ public static class MenuWorld
 
             while (true)
             {
-                Step(c, mem, b);
-                frames++;
+                // Each extra draw ends in the presenter's VSync(0): one more vblank
+                // at this brightness. The pad is read once a step, as the game does.
+                for (int hold = 0; hold < FadeVBlanks; hold++) { Step(c, mem, b); frames++; }
 
                 b += step;
-                if ((uint)(b - 1) >= 0x77u) { result = (uint)state; ranOut = true; break; }
-
-                if (Pad(c, mem, ref state)) { result = (uint)b; break; }
+                bool ran = (uint)(b - 1) >= 0x77u;
+                bool pressed = !ran && Pad(c, mem, ref state);
+                if (ran || pressed)
+                {
+                    fadeFrames = frames;
+                    fadeMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+                    fadeVsyncs = RecompOne.Runtime.Sdk.LibEtc.VSyncCalls - vsyncs;
+                    if (ran) { result = (uint)state; ranOut = true; }
+                    else result = (uint)b;
+                    break;
+                }
             }
 
             // Faded in: the caller waits for a button drawing nothing, which leaves the
@@ -332,7 +372,9 @@ public static class MenuWorld
         }
 
         if (_probe)
-            Console.WriteLine($"[KF2] menu world: message fade {step:+0;-0} over the live world, {frames} frame(s), " +
+            Console.WriteLine($"[KF2] menu world: message fade {step:+0;-0} over the live world, x{FadeVBlanks}: " +
+                              $"{fadeFrames} step draw(s), {fadeVsyncs} VSync(s) in {fadeMs:0} ms, {frames} frame(s) in all" +
+                              (frames > fadeFrames ? " (held for the button)" : "") + $", returns {(int)result}, " +
                               $"{(MessageText.Covering ? "text drawn by the overlay" : "the game's picture kept")}");
         c.Restore(saved);
         c.V0 = result;

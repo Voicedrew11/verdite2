@@ -329,8 +329,11 @@ Kf2.MenuPacing.Install();
 //
 //     KF2_MENUWORLD=0         the game's frozen copy -- comparison only
 //     KF2_MENUWORLD_PROBE=1   world passes a second, primitive bytes, overflows
+//     KF2_MESSAGE_FADE=1..4   vblanks each step of a sign's fade is shown for; 1 is
+//                             the game's own. Gameplay > Message fade length
 Kf2.MenuWorld.Configure(Environment.GetEnvironmentVariable("KF2_MENUWORLD"),
-                        Environment.GetEnvironmentVariable("KF2_MENUWORLD_PROBE"));
+                        Environment.GetEnvironmentVariable("KF2_MENUWORLD_PROBE"),
+                        Environment.GetEnvironmentVariable("KF2_MESSAGE_FADE"));
 Kf2.MenuWorld.Install();
 
 // Sign and dialogue text drawn as text on an opaque box, decoded from the message's
