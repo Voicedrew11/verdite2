@@ -1794,3 +1794,27 @@ The runtime's profiler now reports the game thread's JIT only (fork `0045`,
 amended): with a background pass the process-wide figure charged its compiles to
 whatever frame was running. Verdite2's own Prejit numbers were taken before this
 and include that.
+
+### 2026-10-09: Verdite3's work brought back
+
+Verdite3's 97 commits since 2026-10-05 sorted against this port: most were already here,
+KF3's own, or notes; both subtrees were already pulled. Brought back, each on `dev`:
+
+- 0103's near clip for GPU-drawn models, on (`KF2_GPUWORLD_MODELCLIP`), with a probe; the
+  surface probe's `ahead`; fog by distance from the eye as the default.
+- The debug mod's film mode on V and the mute key, and `FrameSmoothing.LeadSuppressed`
+  under its cinematic camera.
+- 3D (tank) controls (`kf2.controls`, `KF2_TANK`).
+- The rolling `preview` prerelease (`scripts/prerelease.sh`, `PREVIEW_PASSWORD`).
+- The menu pointer on PORT SETTINGS (`MenuMouse.Rows`, the shell's `point`).
+- The message fade's length, x1-x4 (`kf2.messagefade`).
+- Escape opens the menu, a click captures the pointer (the shell's `key`).
+- The shell's `scale`, and the menu bar hidden at startup.
+- The crossing measured: no frame loses its models here (`c84d822`'s defect is absent),
+  but every map change was built twice; now once (`46edd23`'s concern, fixed another way).
+- The bow found in this game (`func_800271D0`, weapons 16 and 17), and Verdite3's rumble
+  and gyro aim put on it.
+
+Not brought back, being KF3's: its map viewers on M, the picked-up item's hold and turn,
+the spell palette fix (cannot happen here), the front-table splice, its creature
+streaming at the render distance, the full-card save, and taking the murk out of WATER.
