@@ -1,4 +1,6 @@
 using RecompOne.Runtime.Cdrom;
+using RecompOne.Runtime.Events;
+using RecompOne.Runtime.Host;
 
 namespace Kf2;
 
@@ -32,9 +34,32 @@ public static class CardIcon
     {
         if (WindowIcon.Frame(Frames, byDefault: 0) is not { } frame) return;
 
-        var path = string.IsNullOrWhiteSpace(discPath) ? RecompOne.Runtime.Runtime.CdPath : discPath;
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        if (!string.IsNullOrWhiteSpace(discPath))
+        {
+            if (File.Exists(discPath)) Apply(discPath, frame);
+            return;
+        }
 
+        // No disc on the command line: KingsField2.exe opened on its own. The saved
+        // disc is only known once the window has loaded settings.json, and a first
+        // run's only once the picker answers, both inside Entry.Run, so reading
+        // Runtime.CdPath here found it empty and the card icon never came. The first
+        // overlay loads after both, on the game thread, so the icon is set on the
+        // window's own; until then it is the shipped mark.
+        bool done = false;
+        Event.AddListener<OverlayLoadedEvent>(_ =>
+        {
+            if (done) return;
+            done = true;
+            var path = RecompOne.Runtime.Runtime.CdPath;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+
+            GpuJobs.Run(() => Apply(path, frame));
+        });
+    }
+
+    static void Apply(string path, int frame)
+    {
         try
         {
             using var disc = DiscFs.Open(path);

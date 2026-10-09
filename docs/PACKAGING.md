@@ -395,6 +395,17 @@ the archive if that fails. Nothing of the disc is in the port's source, and a
 differently mastered dump is a scan rather than a miss. The pixels are in
 `FDAT.T` only; `GAME.EXE` has the palette and not the picture.
 
+**When it is read.** With a disc on the command line (the launcher always passes
+one, and so does a run from the checkout) the icon is read at once, before
+`Entry.Run`. With none — `KingsField2.exe` opened on its own — the disc is not
+known yet: `settings.json` is loaded by the window, which `Entry.Run` makes, and
+a first run's disc only once the picker answers. `CardIcon` read an empty
+`CdPath` there and returned without a word, so Windows showed the orb. It now
+waits for the first overlay to load and sets the icon on the window's thread
+(`GpuJobs.Run`). Not yet measured in Verdite2: the Verdite3 fix was measured
+under Wine, and the no-argument case here is unverified until someone runs it
+with no argument and sees the icon.
+
 **The sizes are exact multiples** (the decode and the scale are Verdite Core's
 `WindowIcon`, since 2026-10-05; `CardIcon` keeps where the icon is). 16, 32, 48,
 64, 128 and 256, each a
