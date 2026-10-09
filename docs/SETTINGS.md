@@ -73,12 +73,14 @@ pointer is not wired into the page yet.
 | WORLD | RENDER DISTANCE | ORIGINAL, ENHANCED | `kf2.renderdistance`: 10.5 tiles (off) or 15 (its maximum; not judged) |
 | | FOG | CORNERS, PIXEL DEPTH, DISTANCE | `kf2.fog`: the game's fog at the corners, by pixel depth, or by distance from the eye (the default since 2026-10-09; a kept `kf2.fog` still wins) (`KF2_FOG`; RENDERING, "Fog by distance from the eye") |
 | | WATER | ORIGINAL, ENHANCED, FULL | `kf2.murk.on`, `kf2.waves.on`, `kf2.ssr.planar`: ENHANCED murk and waves, FULL the planar reflection too (the default) |
-| GAMEPLAY | INVERTED CAMERA | OFF, ON | `kf2.analog.invertpitch` |
+| GAMEPLAY | CONTROLS | 2D, 3D | `kf2.controls` (`True` is 3D): one stick, as tank controls (INPUT, "2D and 3D controls") |
+| | INVERTED CAMERA | OFF, ON | `kf2.analog.invertpitch`; dimmed in 3D |
 | | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
 | | MOUSE LOOK | OFF, ON | `kf2.mouse.on` |
 
-Left out of Verdite3's: CONTROLS (2D/3D), GYRO and RUMBLE, which this port does not
+CONTROLS (2D, 3D; `kf2.controls`, `KF2_TANK`) sits first on GAMEPLAY; see "2D and 3D
+controls" in `docs/INPUT.md`. Left out of Verdite3's: GYRO and RUMBLE, which this port does not
 have; the minimap has no saved key (N toggles it for the session).
 
 ## Measured (2026-10-09)

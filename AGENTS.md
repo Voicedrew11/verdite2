@@ -204,7 +204,7 @@ what it is) live there, not here.
 | `AutoReload` | reload the last save on death, fixed 2 s delay | on | PATCHES_AND_MODS, "Auto reload" |
 | `GearCompare`, `MenuDraw` | the equip and buy prompts show every stat the item would change, now and after (`func_800244CC` run on the candidate and put back), drawn with the status screen's menu primitives rewritten in C# (`KF2_GEARCOMPARE=verify` diffs them against the recompiled routines); was `mods/gearcompare` | on | PATCHES_AND_MODS, "Comparing gear on the equip prompt"; GAME_INTERNALS, "The menu's primitives are `POLY_FT4`s out of a cursor, and the cursor is mirrored" |
 | `Map*` | full-screen map (touchpad / `M`), minimap (`N`), fog of war, markers; full map pauses the world | map on; fog on; minimap, markers off | PATCHES_AND_MODS, "A dynamic map", "What the Map page is down to" |
-| `Analog` | twin-stick control | on | INPUT, "Analog twin-stick control" |
+| `Analog` | twin-stick control; *Controls* 3D is one stick, as tank controls (`KF2_TANK`, `kf2.controls`) | on; 2D | INPUT, "Analog twin-stick control", "2D and 3D controls" |
 | `Mouse` | mouse look (Verdite Core's, this game's values in `Analog.MouseValues`), spent inside `Analog.BeforeLook`; the view shows motion the tick has not spent yet (`FrameSmoothing.MouseLead`; Gameplay ▸ *Instant mouse look*, `KF2_MOUSE_LEAD`) | on; lead on (judged) | INPUT, "Mouse look", "The mouse leads the tick" |
 | `MenuMouse` | point-and-click in the in-game menus | on | INPUT, "The menu pointer" |
 | `KeyLayout` | the port's WASD layout; the table and store here, the mechanism Verdite Core's `KeyLayoutApply` | on | INPUT, "The keyboard layout" |

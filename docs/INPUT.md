@@ -272,6 +272,32 @@ Cheap next step: reproduce with `KF2_ANALOG_PROBE=1`, which already reports the
 control state, and read `0x8019955C` / `0x80199558` / `0x801994E1` at the moment
 it breaks. All three candidates are one memory read apart.
 
+### 2D and 3D controls
+
+Ported from Verdite3 (`c355bd2`, `6f6f479`, 2026-10-09). *Controls* (Gameplay, and
+CONTROLS on PORT SETTINGS ▸ GAMEPLAY; `kf2.controls`, `KF2_TANK`) chooses 2D, the twin
+sticks above, or 3D: one stick, as tank controls are. In 3D the left stick walks
+forward and back and turns as the D-pad does, L1 and R1 strafe, L2 and R2 look, and the
+right stick is not read at all (the right-stick rows of Input ▸ Analog dim, and so does
+INVERTED CAMERA).
+
+- **Each axis has its own deadzone, 0.3** (a cross, not a circle), so a thumb a little
+  off forward walks straight and a sideways push turns in place. 0.3 of the byte is well
+  inside the runtime's own stick-to-D-pad threshold, so a stick inside it never reaches
+  the game as a D-pad turn either.
+- **The turn is squared** and scaled to the game's own rate (`0x8019955C`) times the turn
+  sensitivity, and moves toward the stick's by `rate >> 2` a tick from the current
+  `TurnVel`, as a held D-pad's turn ramps.
+- **Release is the D-pad's**: the stick back inside its deadzone leaves the velocity to
+  the game's decay instead of the right stick's instant stop.
+
+Measured with a synthetic stick (`KF2_TANK=1 KF2_ANALOG_PROBE=1`, slot 2, a temporary
+hook writing `Controller.LeftX/Y` and `RightX/Y`; rate 35): left full right turned at
+-35 a tick (yaw 2639 → 1299 in 2 s); 0.12 right, inside the deadzone, released to 0 and
+did not turn; the right stick full right and up moved nothing; left up with 0.16 right
+walked at 200 with no turn; 0.5 right turned at -3 (0.29² × 35). 144.0 fps at 20.0
+ticks/s. **Not felt on a pad.**
+
 ## The Input pane is the port's
 
 `patches/settings/InputSection.cs` and `patches/settings/BindingTable.cs`. One

@@ -250,7 +250,8 @@ KF2_TEXCENSUS=1                        # the texture-key census: keys, art, over
 KF2_TEXKEY=face                        # key a replacement on the face's texture rectangle, not the image the game uploaded it as; =triangle each triangle's own UVs, as upstream does
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
-KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
+KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report (in 3D, also the left stick's turn: wanted, driven, the ramp)
+KF2_TANK=1                               # 3D controls: the left stick walks and turns, L1/R1 strafe, the right stick is not read (0 forces 2D; unset, Gameplay ▸ Controls, PORT SETTINGS ▸ GAMEPLAY ▸ CONTROLS)
 KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
 KF2_MOUSE=0                              # mouse look off (it is on by default; Escape captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y

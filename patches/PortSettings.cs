@@ -230,11 +230,31 @@ public static class PortSettings
 
     // ---- Gameplay ----
 
+    /// <summary>2D is the twin sticks, the left one walking and strafing; 3D is one
+    /// stick, as tank controls are: the left stick walking and turning as the D-pad
+    /// does, the right stick unused (<see cref="Analog.Tank"/>). Kept as a switch,
+    /// "True" for 3D, the text the Settings window's ControlsPage writes.</summary>
+    public static readonly PortSetting Controls = new()
+    {
+        Key = Analog.ControlsKey, Envs = ["KF2_TANK"], Label = "Controls",
+        Tip = "2D: the left stick walks and strafes, the right stick turns and looks.\n" +
+              "3D: one stick, as tank controls. The left stick walks forward and back and turns;\n" +
+              "L1 and R1 strafe, L2 and R2 look up and down, and the right stick is not used.",
+        Page = Gameplay, MenuLabel = "CONTROLS", Steps = [0, 1], MenuValue = Named([0, 1], "2D", "3D"),
+        Names = ["2D (twin sticks)", "3D (one stick)"], Default = 0,
+        Live = () => Analog.Tank ? 1 : 0, Apply = v => Analog.Tank = v != 0,
+        Keys = v => [(Analog.ControlsKey, v is double d ? (d != 0 ? "True" : "False") : null)],
+        Ui = Ui.None,
+    };
+
     /// <summary>The right stick's look up and down reversed, as a plane's flight stick:
-    /// push up to look down. The same key as Analog's "Invert look Y".</summary>
+    /// push up to look down. The same key as Analog's "Invert look Y". Dimmed in 3D,
+    /// where the right stick does not look.</summary>
     public static readonly PortSetting InvertedCamera = Switch(Analog.InvertPitchKey, "KF2_ANALOG_INVERTY", "Inverted camera",
         Gameplay, "INVERTED CAMERA", () => Analog.InvertPitch, v => Analog.InvertPitch = v, false,
-        tip: "Reverses the right stick's up and down, like a plane's flight stick: push up to look down, pull back to look up.");
+        tip: "Reverses the right stick's up and down, like a plane's flight stick: push up to look down, pull back to look up.\n" +
+             "2D controls only: in 3D the right stick does not look.",
+        usable: () => !Analog.Tank);
 
     public static readonly PortSetting AutoReloadOn = Switch(AutoReload.OnKey, "KF2_AUTORELOAD", "Reload the last save on death",
         Gameplay, "RELOAD ON DEATH", () => AutoReload.Enabled, AutoReload.SetEnabled, true,
@@ -258,7 +278,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate,
         TextureFilter, PerPixel, AmbientOcclusionRow,
         RenderDist, FogMode, Water,
-        InvertedCamera, AutoReloadOn, GearCompareOn, MouseLook,
+        Controls, InvertedCamera, AutoReloadOn, GearCompareOn, MouseLook,
     ];
 
     /// <summary>Every setting and every combined row's part, the list the shell's
@@ -268,7 +288,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        InvertedCamera, AutoReloadOn, GearCompareOn, MouseLook,
+        Controls, InvertedCamera, AutoReloadOn, GearCompareOn, MouseLook,
     ];
 
     /// <summary>Every setting and every combined row, for the shell's <c>settings</c> verb.</summary>

@@ -233,6 +233,7 @@ public static class PatchSettings
         // a page left here would draw a second time under the tab bar, outside
         // every tab, with no way to take it back. The four pages that were here
         // are held by InputSection and drawn inside the tab each belongs to.
+        Register("gameplay", new ControlsPage());
         Register("gameplay", new MapPage());
         Register("gameplay", new AutoReloadPage());
         Register("gameplay", new GearComparePage());
