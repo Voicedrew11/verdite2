@@ -927,6 +927,86 @@ settles back by **1 unit** (0.09°) at the next tick on about one stop in ten,
 because the game truncates its step and carries the fraction while the picture
 rounds. Pacing held at 144.0 fps drawn and 20.0 ticks/s.
 
+#### The carry is part of the lead
+
+Reported from play afterwards: instant mouse look *snaps a tiny amount*, well
+under a degree, and reads as jutter. The wart above was not only at a stop. The
+tick spends `trunc(pending + carry)` (`Analog.Step`) and keeps the rest in
+`_turnCarry`/`_pitchCarry`; the lead showed `pending` alone, so at **every**
+tick of a turn the view moved by the old carry less the new one, anywhere in
+±1 unit (0.09°), with no pattern, twenty times a second. And the pitch was
+rounded twice, once in `MouseLead` before the limit and again with the lerp,
+where the yaw is rounded once.
+
+Now `Analog.MouseCarry` gives the lead the carry, and the lead shows `pending +
+carry`, the exact amount the next tick will add. For a mouse turn alone the drawn
+view is then continuous across the tick: before it, `cur + P + c₀`; after it,
+`cur + trunc(P + c₀) + c₁ + P′ = cur + P + c₀ + P′`. The pitch stays fractional
+until the one rounding on the carried frame, as the yaw does. The carry is only
+the mouse's while every step that touched it was the mouse's alone: a step with a
+stick, the gyro or the tank turn in it hides the carry until a mouse-only step
+shows it again, so a stick never leads by it. Switching from one to the other
+still costs one jump of up to a unit, once.
+
+What is left is the game's own grid: the angle is a whole 12-bit unit when the
+camera block builds its matrix (`CameraBlock.Camera` is `short`), so a slow pan
+still steps 0.088° at a time, 1, 2, 1, 2 units a frame. The next section builds
+the matrix from a fractional angle.
+
+**Mechanism from the code; a boot at 144 fps held 144.0 fps drawn at 20.0
+ticks/s. Nothing measured with a moving mouse.**
+Verdite3 has the same handoff error (`MouseLook._fracTurn` is not in its lead),
+and rounds the lerp and the lead apart as well; not changed there yet.
+
+Judged by eye afterwards, with a mouse: **no perceptible difference**. It is kept
+because it is right and costs nothing; the error it removed is the size of the
+grid step, which still shows either way.
+
+#### The view turns by a fraction of a unit
+
+The whole-unit grid above, taken out. `FrameSmoothing` computes the frame's yaw and
+pitch exactly (`yawD * frac + yawLead`, or the lead alone in `LeadOnly`) and rounds
+them into the composed angles, which stage 8 hands to stage 13 unchanged
+(GAME_INTERNALS, "Stage 8 is the render camera"). It now publishes what the
+rounding took off, `CameraBlock.SetFraction`, keyed on the whole angles it wrote,
+and clears it at every stage 8 that sets none.
+
+`CameraBlock.Run` builds the view matrix as `func_80015048` always has, from
+`(pitch, -yaw, roll)`: `Ry`, `Rz`, a GTE `MulMatrix`, then `Rx` (`func_80014E90`) and
+`MulMatrix2`. When the stored angles are the published ones it first builds the
+neighbours, the whole angle one past in pitch, in yaw and in both, with the same
+two routines into scratch under its frame, and the pitch-only matrix one past in
+pitch; then the routine's own build, last, so the GTE is left as it always was; then
+blends: bilinear in pitch and yaw for the view, linear in pitch for the pitch-only
+one. The entries are 4.12, so a unit of yaw moves an entry by up to about 6, and
+the blend resolves about a sixth of a unit. At a whole angle the blend is the
+routine's matrix bit for bit. Nothing derives a translation from the angles: the
+walks place everything relative to the camera (`TileWalk.Place`, the object walk's
+own subtraction) and rotate it by this matrix, so the translation follows.
+
+Everything downstream reads the matrix out of RAM, so nothing else changed: the
+packets through the GTE, the GPU world (`RetainedMap.ReadView`), the occlusion's
+world term, the lights, the planar cull. The planar walk's mirror is built at the
+same fraction with its pitch mirrored (`CameraBlock.Build(..., (-fp, fy))`), or the
+reflection would step on the grid under a world that does not. The cull grid, the
+compass's error and the sky's yaw still read the whole angle, under a unit off,
+which nothing draws. A build from any other angles (an override, the editor's
+camera, a verify run of the camera block) gets no fraction.
+
+**Measured** (`KF2_VIEW_FRACTION_PROBE=1`, the drawn yaw read back out of the matrix
+with `atan2(R02, R00)`, which roll 0 leaves the yaw's alone): a held D-pad Left at
+144 fps, turning 4.86 units a frame, each frame's step was off the steady one (the
+mean of the eight around it) by **0.28-0.32 units with the blend off and 0.13-0.15
+with it on**, the whole-unit angle in the same frames still 0.23-0.29. What is left
+is mostly the phase: the smoothing's `LogicPhase` is wall-clock, so a frame drawn
+late takes a longer step, and the metric's own window crosses ticks. 144.0 fps
+drawn at 20.0 ticks/s, presents reaching the screen; `KF2_STAGE13=verify` with it
+on, turning, 288 calls and 0 mismatches.
+
+**Judged by eye**, in play with a mouse: *better*, so it is **on by default**
+(`KF2_VIEW_FRACTION=0` to compare, or `viewfrac on|off|toggle` on the command
+channel within one session). Not a setting.
+
 **Judged by eye**, in play on a real mouse: reported as feeling *freaking
 fantastic*, which is why it is on by default. That verdict is on ordinary
 walking and looking. **Not yet tried by hand**: turning while a menu, a dialogue

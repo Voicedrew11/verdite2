@@ -318,6 +318,7 @@ public static class Stage13
         }
         Call(c, mem, Site.View);
         PublishUp(mem);
+        if (ViewOverride == null && !Verifier.Replaying) CameraBlock.ProbeView(mem);
         Call(c, mem, Site.AnimatedTextures);
         Call(c, mem, Site.Fade);
         Call(c, mem, Site.CullGrid);

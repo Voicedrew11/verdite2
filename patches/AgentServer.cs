@@ -122,6 +122,7 @@ public static class AgentServer
         "gpuworld [on|off | surfaces on|off | water on|off | models on|off|hide|show | records on|off | scene | perpixel on|off] - the world drawn on the GPU (0085): its state, the switch, whether the map reaches the normal and surface buffers, whether its water and the object walk's models are drawn there too, models taken and not drawn (what they cover), whether the map is lit in the shader from the light records, the last walk's models and the camera's forward, or per-pixel lighting (not saved)",
         "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
         "aspect [4:3|16:9|<ratio>] - the widescreen aspect, as the settings window sets it (not saved)",
+        "viewfrac [on|off|toggle] - build the view a fraction of an angle unit past the whole one the smoothing rounded to (not saved)",
         "scale [1..8] - the render scale, taken at the next present (0097, not saved); alone, the current one",
         "settings [open|save|discard|step <key> <-1|1>|reset <key>] - the game menu's settings session without its page; alone, every setting",
         "point [<x> <y>|left|right|off] - the menu pointer at game pixels, a click, or the host's pointer again; alone, what it saw",
@@ -367,6 +368,7 @@ public static class AgentServer
             case "gpuworld":
             case "capture":
             case "murk":
+            case "viewfrac":
             case "pause":
             case "aspect":
             case "scale":
@@ -478,6 +480,7 @@ public static class AgentServer
         "pause" => DoPause(cmd.Arg1),
         "aspect" => Widescreen.Shell(cmd.Arg1),
         "murk" => Murk.Shell(cmd.Arg1),
+        "viewfrac" => CameraBlock.Shell(cmd.Arg1),
         "scale" => DoScale(cmd.Arg1),
         "settings" => DoSettings(cmd.Arg1),
         "point" => MenuMouse.Shell(cmd.Arg1, cmd.Arg2),

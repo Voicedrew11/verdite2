@@ -1409,7 +1409,12 @@ Kf2.MoPose.Install();
 //     KF2_STAGE13_PROBE=1      frames drawn and needle steps a second
 //     KF2_CAMERABLOCK=0        the recompiled camera block
 //     KF2_CAMERABLOCK=verify   run both on every call and compare RAM, registers, GTE
-Kf2.CameraBlock.Configure(Environment.GetEnvironmentVariable("KF2_CAMERABLOCK"));
+//     KF2_VIEW_FRACTION=0      the view's matrices built at the whole angles the smoothing
+//                              rounds to, not a fraction of a unit past them (on; the viewfrac verb)
+//     KF2_VIEW_FRACTION_PROBE=1  how evenly the drawn yaw steps through a turn, a line a second
+Kf2.CameraBlock.Configure(Environment.GetEnvironmentVariable("KF2_CAMERABLOCK"),
+                          Environment.GetEnvironmentVariable("KF2_VIEW_FRACTION"),
+                          Environment.GetEnvironmentVariable("KF2_VIEW_FRACTION_PROBE"));
 Kf2.CameraBlock.Install();
 Kf2.Stage13.Configure(Environment.GetEnvironmentVariable("KF2_STAGE13"),
                       Environment.GetEnvironmentVariable("KF2_STAGE13_NEEDLE"),

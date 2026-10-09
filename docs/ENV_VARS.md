@@ -121,6 +121,8 @@ KF2_STAGE13_NEEDLE=0                     # step the compass needle's spring ever
 KF2_STAGE13_PROBE=1                      # frames drawn and needle steps a second
 KF2_CAMERABLOCK=0                        # the recompiled camera block func_8002E22C instead of the C# one (on by default)
 KF2_CAMERABLOCK=verify                   # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
+KF2_VIEW_FRACTION=0                      # the view's matrices built at the whole angles the smoothing and the mouse lead round to, not a fraction of a unit past them (on by default; the viewfrac verb); see "The view turns by a fraction of a unit"
+KF2_VIEW_FRACTION_PROBE=1                # a line a second: frames blended, and how far each frame's drawn yaw step is from the steady one, read back out of the view matrix
 KF2_GTE_FAST=0                           # the GTE's general path for the lighting, depth-cue, RotTrans and RotTransPers ops (0047)
 KF2_GTE_LIGHTCACHE=0                     # light every normal afresh instead of remembering its matrix products
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
