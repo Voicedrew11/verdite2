@@ -17,6 +17,7 @@ public sealed class FastGeometryPage : IPatchPage
     public string Id => "fastgeometry";
     public string Title => "Frame pacing";
     public int Order => 12;
+    public IReadOnlyList<string> Patches => ["kf2.polyasm"];
 
     const string Strings = """
     {

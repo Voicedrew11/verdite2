@@ -49,6 +49,7 @@ public sealed class WidescreenPage : IPatchPage
 
     /// <summary>Unused: a slot page draws no heading.</summary>
     public string Title => "Widescreen";
+    public IReadOnlyList<string> Patches => ["kf2.widescreen"];
 
     const string Strings = """
     {

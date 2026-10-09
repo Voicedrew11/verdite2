@@ -24,6 +24,7 @@ public sealed class AnalogPage : IPatchPage
 {
     public string Id => "analog";
     public string Title => "Analog sticks";
+    public IReadOnlyList<string> Patches => ["kf2.analog"];
 
     public void Draw()
     {

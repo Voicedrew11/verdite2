@@ -51,6 +51,7 @@ public sealed class FrameSmoothingPage : IPatchPage
     public string Id => "framesmoothing";
     public string Title => "Frame pacing";
     public int Order => 11;
+    public IReadOnlyList<string> Patches => ["kf2.framesmoothing", "kf2.objectsmoothing", "kf2.animsmoothing", "kf2.fluidsmoothing"];
 
     public void Draw()
     {

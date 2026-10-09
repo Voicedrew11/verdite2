@@ -12,6 +12,7 @@ public sealed class EvenFogPage : IPatchPage
     public string Id => "evenfog";
     public string Title => "Enhancements";
     public int Order => 26;
+    public IReadOnlyList<string> Patches => ["kf2.evenfog"];
 
     const string Strings = """
     {

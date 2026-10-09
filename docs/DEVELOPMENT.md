@@ -158,7 +158,23 @@ returns 1 instead of rethrowing). `KF2_HANG=seconds` sets the hang watchdog (15;
 `0` turns it off). `KF2_FAULT=hook|crash|hang[:seconds]` makes each report on
 purpose, that many seconds (20) after the first area, to test the paths: `hook`
 throws from a hook and should turn that hook off with a notice, `crash` throws
-from the game's own routine, `hang` spins on a hardware register.
+from the game's own routine, `hang` spins on a hardware register. `hook@<mod id>`
+(`hook@kf2.zbuffer`) makes the throwing hook that patch's, so that patch is the one
+turned off.
+
+A patch turned off for a fault is off until a restart, and its page in the
+Settings window says so (2026-10-09, from Verdite3 `2208c09`): each page names
+the mod ids of the patches it needs (`IPatchPage.Patches`), and a page naming one
+`HookManager.Faulted` has named is drawn greyed under "Failed: off until the game
+restarts.", writing nothing, so the kept setting returns at the next boot
+(`[KF2] settings: <id> failed; greyed until a restart: <pages>`). A page whose
+controls belong to more than one patch (Audio, Mouse, Reflections, Shading,
+Remaster) names none, rather than greying what still works; the controls show
+the kept value, not what runs; the game menu's PORT SETTINGS page does not mark
+it. Measured with `KF2_AUTOSTART=1 KF2_FAULT=hook@kf2.zbuffer:5`: the fault
+report, `kf2.zbuffer is turned off for this session`, the settings line naming
+the `zbuffer` page, and the game running on to the end of the 60 s run. The
+greyed page itself is not yet seen.
 
 Not yet run in Verdite2: this is ported from Verdite3, where the three
 `KF3_FAULT` paths were measured, and no report has been written by this code in
