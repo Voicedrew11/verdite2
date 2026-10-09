@@ -9,7 +9,7 @@
 ; %LOCALAPPDATA%\<name> -- so the install directory stays read-only, an
 ; uninstall leaves saves alone, and reinstalling does not force a rebuild.
 
-; The version comes from the game's VERSION, the one place it is written. A
+; The version comes from the script, by the rule scripts/version.sh gives. A
 ; literal fallback here would be a second source of it and would quietly ship an
 ; installer whose name disagreed with its contents, so a missing value is an
 ; error instead; the same for the names.
@@ -21,6 +21,15 @@
   #error VERDITE_VERSION, VERDITE_NAME, VERDITE_INNO_APP_ID or VERDITE_ROOT is not set. Run the game's packaging/windows/build-windows.ps1 rather than iscc directly.
 #endif
 
+; "lowest" installs for the one player, under %LOCALAPPDATA%\Programs, with the
+; shortcuts in their own Desktop and Start menu, which the game may then point at
+; the card icon it reads off the disc (Verdite Core's ShortcutIcon). "admin", the
+; default, installs for every user, and the game cannot rewrite those shortcuts.
+#define Privileges GetEnv("VERDITE_INNO_PRIVILEGES")
+#if Privileges == ""
+  #define Privileges "admin"
+#endif
+
 [Setup]
 ; One GUID per game, from package.env: it is how Windows tells an upgrade of
 ; this port from a second, different program.
@@ -28,6 +37,7 @@ AppId={{{#AppGuid}}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Voicedrew11
+PrivilegesRequired={#Privileges}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 ; <name>.exe at the install root is the stub; the self-contained runtime lives in
