@@ -140,6 +140,30 @@ something to say about *how* to use them:
   sequence still. See "Auto reload" in
   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
+### Crash reports carry the port's place
+
+A crash, a hook's fault or a 15 s hang writes a report to `crashes/` beside the
+cards, `<time>-<kind>.log`, with the 2 MB of game RAM beside it as
+`<time>-<kind>.ram.bin` (runtime `0107`; the newest 20 are kept). The report
+carries the exception and its managed stack, the port's version, the player's
+state (the agent beacon's `Snapshot`), every `kf2.*` setting and every set
+`KF2_*` variable (`patches/CrashReports.cs`), the CPU registers, the last 64
+indirect calls, the overlays, the hooks turned off (`0108`) and the console's last
+300 lines. `patches/CrashDump.cs` still prints the game's own state to stderr at a
+crash; those lines are in the report's console section, so the two overlap there.
+
+A crash keeps the window up with the report's path until the player closes it
+(`Runtime.HoldAfterCrash`, from `Program.cs`'s catch round `Entry.Run`, which now
+returns 1 instead of rethrowing). `KF2_HANG=seconds` sets the hang watchdog (15;
+`0` turns it off). `KF2_FAULT=hook|crash|hang[:seconds]` makes each report on
+purpose, that many seconds (20) after the first area, to test the paths: `hook`
+throws from a hook and should turn that hook off with a notice, `crash` throws
+from the game's own routine, `hang` spins on a hardware register.
+
+Not yet run in Verdite2: this is ported from Verdite3, where the three
+`KF3_FAULT` paths were measured, and no report has been written by this code in
+Verdite2 yet. Run each `KF2_FAULT` value once before relying on it.
+
 ### The GL backend reported nothing
 
 Nothing in the GL backend read an error back — no `glGetError`, no

@@ -71,6 +71,8 @@ KF2_SMOOTH_FLUID=0                     # leave scrolling textures (water, slime 
 KF2_SMOOTH_FLUID_PROBE=1               # live slots, dest rects, leftover V shift, whether the uniform is bound
 KF2_HITGUARD=0                         # let the hit path's reaction lookup fault (it is fenced by default; docs/TODO.md #14)
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
+KF2_HANG=15                            # seconds without a frame before a hang report is written to crashes/; 0 turns the watchdog off (15 by default; "Crash reports carry the port's place" in docs/DEVELOPMENT.md)
+KF2_FAULT=hook                         # hook, crash or hang, optionally :seconds after the first area (20): makes that report on purpose, to test the paths; never for play (off by default)
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_TEXPROBE=1                         # textured vs flat prims a second, and a per-page VRAM census, into texprobe.log
