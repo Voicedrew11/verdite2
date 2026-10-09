@@ -239,6 +239,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 - The interface's font
 - CHD disc images
 - Leaving fullscreen left the interface at the fullscreen size
+- The menu bar starts hidden
 - Minimising froze the game on Wayland
 - Two general shapes worth keeping
 - Upstream contribution policy

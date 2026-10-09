@@ -117,6 +117,7 @@ public static class AgentServer
         "gpuworld [on|off | surfaces on|off | water on|off | models on|off|hide|show | records on|off | scene | perpixel on|off] - the world drawn on the GPU (0085): its state, the switch, whether the map reaches the normal and surface buffers, whether its water and the object walk's models are drawn there too, models taken and not drawn (what they cover), whether the map is lit in the shader from the light records, the last walk's models and the camera's forward, or per-pixel lighting (not saved)",
         "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
         "aspect [4:3|16:9|<ratio>] - the widescreen aspect, as the settings window sets it (not saved)",
+        "scale [1..8] - the render scale, taken at the next present (0097, not saved); alone, the current one",
         "settings [open|save|discard|step <key> <-1|1>|reset <key>] - the game menu's settings session without its page; alone, every setting",
     ];
 
@@ -353,6 +354,7 @@ public static class AgentServer
             case "murk":
             case "pause":
             case "aspect":
+            case "scale":
             case "settings":
                 Enqueue(_fast, cmd);
                 break;
@@ -425,6 +427,22 @@ public static class AgentServer
         return "{\"ok\":true,\"cmd\":\"pause\",\"paused\":" + (_paused ? "true" : "false") + "}";
     }
 
+    /// <summary>The render scale, set as the window's slider sets it: through
+    /// <c>GlVram.Requested</c>, which the backend takes at the next present
+    /// (0097), and never through the store, so settings.json is untouched.
+    /// <c>requested</c> is 0 once a present has taken it.</summary>
+    static string DoScale(string arg)
+    {
+        if (arg.Length > 0)
+        {
+            if (!int.TryParse(arg, out int s) || s < 1 || s > 8) return Err("scale [1..8]");
+            RecompOne.Runtime.Hle.GlVram.Requested = s;
+        }
+        return "{\"ok\":true,\"cmd\":\"scale\",\"scale\":" + RecompOne.Runtime.Hle.GlVram.Scale +
+               ",\"requested\":" + RecompOne.Runtime.Hle.GlVram.Requested +
+               ",\"max\":" + RecompOne.Runtime.Hle.GlVram.MaxScale + "}";
+    }
+
     static string Execute(Cmd cmd) => cmd.Name switch
     {
         "state" => DoState(),
@@ -443,6 +461,7 @@ public static class AgentServer
         "pause" => DoPause(cmd.Arg1),
         "aspect" => Widescreen.Shell(cmd.Arg1),
         "murk" => Murk.Shell(cmd.Arg1),
+        "scale" => DoScale(cmd.Arg1),
         "settings" => DoSettings(cmd.Arg1),
         "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
         "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
