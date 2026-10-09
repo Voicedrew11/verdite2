@@ -109,6 +109,13 @@ public static class GpuWorld
         RetainedScene.DepthCapPixels = float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_DEPTHCAP"),
             System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float cap) && cap >= 0f ? cap : 1f;
         RetainedScene.ToleranceProbe = Environment.GetEnvironmentVariable("KF2_GPUWORLD_TOLERANCE_PROBE")?.Trim() is "1";
+        // 0103. A model's face with a corner the GTE cannot project (nearer than H/2, or
+        // off the divide's range) is clipped at the near plane and drawn in the true
+        // projection, not placed at the divide's saturated ends: a large face reaching
+        // past the eye (a tree's billboard looked up at) drew as a long sheared slab.
+        // KF2_GPUWORLD_MODELCLIP=0 places such corners as the packets do, to compare.
+        RetainedScene.ModelNearClip = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MODELCLIP")?.Trim() != "0";
+        RetainedModels.ClipProbe = Environment.GetEnvironmentVariable("KF2_GPUWORLD_CLIP_PROBE")?.Trim() is "1";
         if (!string.IsNullOrWhiteSpace(on)) _forced = on.Trim() is "1" or "on";
         _probe = probe?.Trim() is not (null or "" or "0");
     }
@@ -172,6 +179,7 @@ public static class GpuWorld
         MirrorWaterActive = MirrorActive && _water;
         RetainedScene.MirrorWater = MirrorWaterActive;
         RetainedModels.AtFrame();
+        if (RetainedModels.ClipProbe) ClipReport();
         if (_probe)
         {
             // BK and LCM generations the last frame started (GteLightMap keeps eight).
@@ -299,6 +307,8 @@ public static class GpuWorld
             case "models show": RetainedScene.MainModelsShown = true; break;
             case "perpixel on": GteLightMap.Enabled = true; break;
             case "perpixel off": GteLightMap.Enabled = false; break;
+            case "modelclip on": RetainedScene.ModelNearClip = true; break;
+            case "modelclip off": RetainedScene.ModelNearClip = false; break;
             case "scene":
             {
                 // The last walk's submits, and the frame's forward in world axes (row 2 of R).
@@ -336,12 +346,14 @@ public static class GpuWorld
                     $"\"bk\":[{m.Bk0},{m.Bk1},{m.Bk2}],\"mirrored\":{(m.Mirrored ? "true" : "false")}}}";
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|cell on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|scene|instances|perpixel on|off|depthcap <pixels>|tolerance]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|cell on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|modelclip on|off|scene|instances|perpixel on|off|depthcap <pixels>|tolerance]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
                $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"tile\":{(RetainedModels.TileOn ? "true" : "false")},\"mirrorBlend\":{(RetainedModels.MirrorBlendOn ? "true" : "false")},\"sky\":{(RetainedModels.SkyOn ? "true" : "false")},\"blend\":{(RetainedModels.BlendOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
                $"\"depthCap\":{RetainedScene.DepthCapPixels.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
+               $"\"modelClip\":{(RetainedScene.ModelNearClip ? "true" : "false")},\"clipFaces\":{RetainedModels.ClipFaces},\"clipped\":{RetainedModels.Clipped}," +
+               $"\"clipTwinFaces\":{RetainedModels.ClipTwinFaces},\"clipTwinClipped\":{RetainedModels.ClipTwinClipped}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
     }
 
@@ -416,6 +428,29 @@ public static class GpuWorld
     static long _bNoted, _bSorted, _bDrawn, _bRuns, _sIns, _sDrawn, _sFaces, _wRuns;
     static long _pPosed, _pRigid, _pDeferred, _pMat, _pTexels;
     static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
+
+    static double _clipAt;
+
+    /// <summary><c>KF2_GPUWORLD_CLIP_PROBE=1</c>: every 5 s, the running counts of the
+    /// main view's instanced model faces kept by depth, and of those with a corner the
+    /// GTE cannot project, which 0103 clips at the near plane (the lit route and the
+    /// forced-blend twin's, apart).</summary>
+    static void ClipReport()
+    {
+        double now = Environment.TickCount64 / 1000.0;
+        if (now < _clipAt) return;
+        _clipAt = now + 5.0;
+        static string Pct(long part, long all) => all == 0 ? "0.00" : (100.0 * part / all).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+        // The window's own counts, so a `gpuworld modelclip` toggle reads under its label.
+        long faces = RetainedModels.ClipFaces - _clipFaces, clipped = RetainedModels.Clipped - _clipped;
+        long twin = RetainedModels.ClipTwinFaces - _clipTwin, twinClipped = RetainedModels.ClipTwinClipped - _clipTwinClipped;
+        (_clipFaces, _clipped, _clipTwin, _clipTwinClipped) = (RetainedModels.ClipFaces, RetainedModels.Clipped, RetainedModels.ClipTwinFaces, RetainedModels.ClipTwinClipped);
+        Console.WriteLine($"[KF2] clip probe: near clip {(RetainedScene.ModelNearClip ? "on" : "off")}; last 5 s: " +
+                          $"faces kept by depth {faces}, a corner the GTE cannot project {clipped} " +
+                          $"({Pct(clipped, faces)}%); forced-blend twin {twin}, {twinClipped} ({Pct(twinClipped, twin)}%)");
+    }
+
+    static long _clipFaces, _clipped, _clipTwin, _clipTwinClipped;
 
     static void Report()
     {
@@ -532,6 +567,7 @@ public static class GpuWorld
         Console.WriteLine($"[KF2] gpu world: surfaces: {RetainedScene.MainNormalTriangles - _nrmTris} map triangle(s) into the normal pass; " +
                           (RetainedScene.SurfaceChecks == 0 ? "no readback (needs the surface buffer: a reflection or the murk on)" :
                            $"of {px} pixel(s) with a depth, {(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceBehind / px):F2}% whose surface lies behind it, " +
+                           $"{(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceAhead / px):F2}% ({RetainedScene.SurfaceAhead}) with an opaque surface in front of it, " +
                            $"{(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceMissing / px):F2}% with none; by id none/opaque/water/overlay/authored/blended " +
                            string.Join("/", RetainedScene.SurfaceIds)));
         Array.Clear(RetainedScene.SurfaceIds);
@@ -548,7 +584,7 @@ public static class GpuWorld
         _mModelTris = RetainedScene.MirrorModelTriangles; _mMirModels = RetainedModels.MirrorModels;
         _mWater = RetainedScene.MirrorWaterTriangles;
         MirrorSkipped = MirrorKept = 0;
-        RetainedScene.SurfaceDepthPixels = RetainedScene.SurfaceBehind = RetainedScene.SurfaceMissing = RetainedScene.SurfaceChecks = 0;
+        RetainedScene.SurfaceDepthPixels = RetainedScene.SurfaceBehind = RetainedScene.SurfaceAhead = RetainedScene.SurfaceMissing = RetainedScene.SurfaceChecks = 0;
         RetainedScene.SurfaceCheck = true;
         Skipped = Kept = 0;
     }

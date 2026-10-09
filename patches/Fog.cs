@@ -8,9 +8,13 @@ namespace Kf2;
 ///
 /// - at the corners (the game's): the GTE cues fog at each corner, from its
 ///   view depth, and the face is shaded between them;
-/// - by pixel depth: each pixel is fogged by its own view depth (the default);
+/// - by pixel depth: each pixel is fogged by its own view depth;
 /// - by distance from the eye: the same as pixel depth at the picture's centre, more
-///   at its edges, and still as the view turns (runtime patch <c>0100</c>).
+///   at its edges, and still as the view turns (runtime patch <c>0100</c>); the
+///   default since 2026-10-09, the user's decision, as in Verdite3.
+///
+/// A kept <c>kf2.fog</c>, <c>KF2_FOG</c> or <c>KF2_GPUWORLD_FOGZ=0</c> still wins over
+/// the default, so a player who chose pixel depth keeps it.
 ///
 /// The GTE cues fog by SZ, the view depth, so a pixel at the side of a wide picture,
 /// or below a camera looking down, is fogged as if it were nearer than it is, and the
@@ -19,8 +23,8 @@ namespace Kf2;
 /// a depth, the reflection pass), so the fog stays put with the view.
 ///
 ///     KF2_FOG=0 | corners      at the corners (the game's)
-///     KF2_FOG=1 | depth        by pixel depth (the default)
-///     KF2_FOG=2 | distance     by distance from the eye (also: radial)
+///     KF2_FOG=1 | depth        by pixel depth (the default before 2026-10-09)
+///     KF2_FOG=2 | distance     by distance from the eye (also: radial; the default)
 ///     KF2_GPUWORLD_FOGZ=0      the old spelling of KF2_FOG=corners, still honoured
 ///
 /// See "Fog by distance from the eye" in docs/RENDERING.md.
@@ -28,7 +32,7 @@ namespace Kf2;
 public static class Fog
 {
     public const string Key = "kf2.fog";
-    public const int Corners = 0, Depth = 1, Distance = 2, Default = Depth;
+    public const int Corners = 0, Depth = 1, Distance = 2, Default = Distance;
 
     static int? _forced;
 

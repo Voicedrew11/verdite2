@@ -193,7 +193,7 @@ public static class PortSettings
     };
 
     /// <summary>The fog's distance cue (<see cref="Fog"/>): at the corners, by pixel
-    /// depth (the default), or by distance from the eye. Applied at boot by Fog itself.</summary>
+    /// depth, or by distance from the eye (the default). Applied at boot by Fog itself.</summary>
     public static readonly PortSetting FogMode = new()
     {
         Key = Fog.Key, Envs = ["KF2_FOG", "KF2_GPUWORLD_FOGZ"], Label = "Fog",
