@@ -1685,3 +1685,31 @@ Measured: `KF2_AUTOSTART=2` (fdat05, area 1, standing at the save): 223,650 face
 by depth in 5 s, none with a corner the GTE cannot project, so standing there nothing
 changes. Not measured walking into models, and **not judged by eye**: models close to the
 eye (creatures, doors, trees from below) with the switch on and off.
+
+## The GPU world at a crossing (2026-10-09)
+
+Verdite3 fixed two crossing defects in its own retained renderer: models lost for a frame
+because the world was reset at the area module's load, which landed between its walk and
+its `DrawOTag` (`c84d822`), and the map rebuilt three to five times an arrival (`46edd23`).
+Measured here with `KF2_GPUWORLD_PROBE=1 KF2_CROSSPROBE=1`, `KF2_AUTOSTART=2`, then
+`warp 3`, `warp 1`, `warp 4`, `warp 2` and `load 2`; the probe now prints a line a load
+(where it landed against stage 13 and the frame, and what the frame drew from the emptied
+store) and a `mapprobe` line a build.
+
+- **No frame loses its models.** Every load (fdat02, 05, 11, 14, 08) landed outside stage
+  13 with no frame walked and not yet drawn; arm lost, arm missed and sky missed 0 over
+  the next three frames. The reset at the load (`GpuWorld`'s `ForgetMeshes`) stays.
+- **The map was built twice for every change.** `TileWalk` ran `RetainedMap.AtWalk` before
+  `Waves.AtWalk`, and the map's hash carries the water's rects
+  (`SurfaceMaterial.RectN`, read at `DrawOTag`) and the swell's generation: an arrival
+  built with no rects and the old swell, then again 25 ms later; every map change the
+  game made in an area was followed one walk later by a build for the swell. Each is
+  12-32 ms on the game thread. `RetainedMap.AtWalk` now reads the rects
+  (`Reflections.ReadRects`) and classifies the swell (`Waves.BeforeMap`) before it hashes;
+  the swell is still published into the frame by `Waves.AtWalk`.
+
+Over the same route, 33 builds before and 17 after: one an arrival (12-32 ms, by area) and
+one a map change. The two left 1.87 and 1.92 s into area 1 are two rewrites by the game a
+tick apart. 144.0 fps at 19.9 ticks/s, every present wide. No settle gate was needed, so
+Verdite3's `061691e` (packets while a new map settles) has nothing to guard here. Not
+judged by eye: the water's swell and ripples on an area's first frames.
