@@ -258,7 +258,10 @@ public static class Analog
         TextEditing: () => HotkeyGate.Editing,
         Frames: () => FramePacing.Frames,
         LogicHz: () => FramePacing.LogicHz,
-        Paused: () => FramePacing.Paused);
+        Paused: () => FramePacing.Paused,
+        // A click on the picture captures; Escape opens the menu (KeyLayout), which
+        // gives the pointer back. A key saved before this keeps working.
+        DefaultCaptureKey: Silk.NET.Input.Key.Unknown);
 
     /// <summary>
     /// The environment variables, read before anything else. This one reads them

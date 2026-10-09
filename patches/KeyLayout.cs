@@ -1,4 +1,8 @@
 using RecompOne.Runtime.Config;
+using RecompOne.Runtime.Events;
+using RecompOne.Runtime.Hardware;
+using RecompOne.Runtime.Host.Window;
+using Silk.NET.Input;
 
 namespace Kf2;
 
@@ -36,7 +40,8 @@ namespace Kf2;
 /// that puts this one back.
 ///
 /// The second-key handling and the migration live in Verdite Core's
-/// <c>KeyLayoutApply</c>; this file keeps only the table and the store.
+/// <c>KeyLayoutApply</c>; this file keeps the table, the store, and Escape as a
+/// second key on the menu button (<see cref="OnKey"/>).
 ///
 /// See "The keyboard layout" in NOTES.md.
 /// </summary>
@@ -127,13 +132,82 @@ public static class KeyLayout
         KeyLayoutApply.Configure(Layout, Version, Superseded, Announce, GetApplied, SetApplied);
 
     const string Announce = "WASD layout applied (W/S walk, A/D strafe, arrows walk and turn, " +
-                            "Space attack, F use, Q cast, Tab menu). Input settings has both layouts.";
+                            "Space attack, F use, Q cast, Tab or Escape menu). Input settings has both layouts.";
 
     /// <summary>
     /// Migrate an existing settings.json, once, and only if nothing in it was
     /// chosen by hand.
     /// </summary>
-    public static void Install() => KeyLayoutApply.Install();
+    public static void Install()
+    {
+        KeyLayoutApply.Install();
+        Event.AddListener<KeyboardEvent>(OnKey);
+        Event.AddListener(_escape);
+        Console.WriteLine("[KF2] keys: Escape opens the menu and backs out (Circle, with the port's layout" +
+                          " in place and no capture key on Escape)");
+    }
+
+    // ---- Escape, the menu's second key ----------------------------------------
+    //
+    // A desktop game's Escape opens its menu and backs out of it, and Circle does
+    // both here: the in-game menu's button (0x8006E56C, a just-pressed edge in
+    // func_80029CBC) and the cancel every chooser tests through func_80022E58 --
+    // the in-game menu, its pages, the shops, the start and load-slot menus. The
+    // runtime's table holds one key a button and Tab has Circle, so Escape presses
+    // it inside PAD_dr, as KeyLayoutApply's arrows press Up and Down. See "Escape,
+    // the menu's second key" in docs/INPUT.md.
+    //
+    // Decided once, on the press, not on every PAD_dr: whether the layout is in
+    // place is sixteen string compares and an allocation, and PAD_dr is called
+    // hundreds of thousands of times a second. Refused for a press that began over
+    // a popup (a popup closes on Escape, and the key still held after it closed is
+    // not a menu), while text or the remaster editor has the keyboard, and while
+    // Escape is the player's own capture key: one saved before the click took
+    // capture over is still theirs, and core's Mouse toggles on it.
+
+    static volatile bool _escHeld;
+    static long _escReads;
+    static long _escDown;
+
+    static void OnKey(KeyboardEvent e)
+    {
+        if (e.Key != (int)Key.Escape) return;
+
+        if (!e.Pressed)
+        {
+            if (!_escHeld) return;
+            _escHeld = false;
+            Console.WriteLine($"[KF2] keys: Escape up after {Environment.TickCount64 - _escDown} ms; " +
+                              $"Circle pressed in {Interlocked.Exchange(ref _escReads, 0)} pad reads");
+            return;
+        }
+
+        string? refused =
+            Mouse.CaptureKey == Key.Escape ? "Escape is the capture key" :
+            PopupManager.AnyOpen ? "a popup is open" :
+            HotkeyGate.Editing ? "text or the editor has the keyboard" :
+            !IsApplied() ? "the port's layout is not in place" :
+            null;
+        if (refused != null)
+        {
+            Console.WriteLine($"[KF2] keys: Escape not the menu: {refused}");
+            return;
+        }
+
+        Interlocked.Exchange(ref _escReads, 0);
+        _escDown = Environment.TickCount64;
+        _escHeld = true;
+    }
+
+    static readonly Action<PadReadEvent> _escape = e =>
+    {
+        if (e.Port != 0 || !_escHeld) return;
+        e.Buttons &= unchecked((ushort)~CircleSwapped);
+        Interlocked.Increment(ref _escReads);
+    };
+
+    // Active low, the two button bytes swapped from Controller's layout.
+    const ushort CircleSwapped = unchecked((ushort)((Controller.Circle >> 8) | (Controller.Circle << 8)));
 
     /// <summary>Write the layout and save it. What the settings button calls.</summary>
     public static void Apply() => KeyLayoutApply.Apply();

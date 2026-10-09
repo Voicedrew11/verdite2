@@ -1158,12 +1158,13 @@ Kf2.Analog.Install();
 //     KF2_MOUSE=1                              on; off by default
 //     KF2_MOUSE_TURN/LOOK=1.0                  sensitivities; INVERTY=1 flips look Y
 //     KF2_MOUSE_BUTTONS=Square,Triangle,Cross  left, right, middle, as pad buttons
-//     KF2_MOUSE_KEY=Escape                     the key that captures and releases
+//     KF2_MOUSE_KEY=F9                         a capture key besides the click; None by default
 //
 // Off by default, unlike the sticks: nothing is broken about playing this with the
 // keyboard, and a pointer that vanishes into the game unasked is worse than one
 // switch to find. Its settings sit under Input beside the stick ones. A click on
-// the picture captures as well as the key, and a menu holds the pointer free
+// the picture captures; there is no capture key unless one was saved or set
+// (Escape opens the menu instead, KeyLayout), and a menu holds the pointer free
 // (Mouse.Suspend, from MenuMouse).
 Mouse.Configure(Kf2.Analog.MouseValues);
 Mouse.Install();
