@@ -401,12 +401,16 @@ public static class Analog
         // Taken unconditionally: the accumulator has to be emptied whether or not
         // anything here is going to spend it.
         var (mTurn, mPitch) = Mouse.TakeLook();
+        // The gyro (GyroAim, a drawn bow) asks as the mouse does, with an amount,
+        // and is spent beside the stick's share; emptied here whatever happens.
+        var (gTurn, gPitch) = GyroAim.Take();
+        bool gyro = gTurn != 0f || gPitch != 0f;
         // 3D is one stick, as tank controls are: the right stick is not read at all,
         // L2 and R2 look as the game has them, and the left stick turns. So the left
         // stick needs only "walks" there, not "the right stick turns and looks".
         bool right = Enabled && AnalogLook && !Tank;
         bool left = Enabled && AnalogMove && (Tank || AnalogLook);
-        if (!right && !left && mTurn == 0f && mPitch == 0f && !_mouseTurn && !_mousePitch)
+        if (!right && !left && !gyro && mTurn == 0f && mPitch == 0f && !_mouseTurn && !_mousePitch)
         {
             _tankLive = false;
             return;
@@ -438,7 +442,7 @@ public static class Analog
         bool releaseTurn  = (CameraInstantStop && _ownedTurn)  || _mouseTurn;
         bool releasePitch = (CameraInstantStop && _ownedPitch) || _mousePitch;
 
-        if (x == 0f && y == 0f && !leftActive && mTurn == 0f && mPitch == 0f &&
+        if (x == 0f && y == 0f && !leftActive && mTurn == 0f && mPitch == 0f && !gyro &&
             !releaseTurn && !releasePitch)
         {
             _accelT = 0f;
@@ -475,25 +479,27 @@ public static class Analog
             stickTurn += _tankTurn;
         }
         _tankLive = Tank && leftActive;
+        stickTurn += gTurn;
+        stickPitch += gPitch;
         Mouse.NoteSpent(m, mTurn, stickTurn, mPitch, stickPitch);
 
-        if (x != 0f || leftActive || mTurn != 0f || releaseTurn)
+        if (x != 0f || leftActive || mTurn != 0f || gTurn != 0f || releaseTurn)
         {
             // Stick right turns right, and turning right is the *decreasing*
             // branch: the mask that increases yaw is the game's Left, which the
             // probe's table dump is the evidence for. Hence the negation. The
             // mouse arrives already in that convention, from Mouse.TakeLook.
             int step = Step(stickTurn + mTurn,
-                            ref _turnCarry, Ceiling(rate * OverspeedCap, mTurn));
+                            ref _turnCarry, Ceiling(rate * OverspeedCap, MathF.Abs(mTurn) + MathF.Abs(gTurn)));
             pad = Drive(m, pad, TurnVel, step, rate >> 2, rate, MaskTurnInc, MaskTurnDec);
             // 3D's release is the D-pad's: the stick back inside its deadzone leaves
             // the velocity to the game's decay, the ramp-down a released Left/Right
             // gets, rather than CameraInstantStop's zero, which is the right stick's.
             _ownedTurn = step != 0 && !Tank;
-            _mouseTurn = mTurn != 0f;
+            _mouseTurn = mTurn != 0f || gTurn != 0f;
         }
 
-        if (y != 0f || mPitch != 0f || releasePitch)
+        if (y != 0f || mPitch != 0f || gPitch != 0f || releasePitch)
         {
             // Screen up is a negative stick Y, and looking up is the pitch
             // velocity going *down*: the increasing branch is the game's R2,
@@ -502,10 +508,10 @@ public static class Analog
             // way the view tips -- so it was fixed by playing it, and the sticks
             // agree with the D-pad's own L2/R2 now.
             int step = Step(stickPitch + mPitch,
-                            ref _pitchCarry, Ceiling(PitchVelMax * OverspeedCap, mPitch));
+                            ref _pitchCarry, Ceiling(PitchVelMax * OverspeedCap, MathF.Abs(mPitch) + MathF.Abs(gPitch)));
             pad = Drive(m, pad, PitchVel, step, PitchAccel, PitchVelMax, MaskPitchInc, MaskPitchDec);
             _ownedPitch = step != 0;
-            _mousePitch = mPitch != 0f;
+            _mousePitch = mPitch != 0f || gPitch != 0f;
         }
 
         m.WriteU16(Pad, pad);

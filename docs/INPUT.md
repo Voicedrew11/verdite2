@@ -298,6 +298,29 @@ did not turn; the right stick full right and up moved nothing; left up with 0.16
 walked at 200 with no turn; 0.5 right turned at -3 (0.29² × 35). 144.0 fps at 20.0
 ticks/s. **Not felt on a pad.**
 
+## Rumble and gyro aim with a drawn bow
+
+Ported from Verdite3 (`d6ee250`, `1d84575`, `e75ad1f`, 2026-10-09) onto this game's bow
+("The bow and the arbalest" in `docs/GAME_INTERNALS.md`); `Bow` in `patches/Rumble.cs`
+reads it after `func_800271D0`, once a tick.
+
+- **Rumble** (`Rumble`, `KF2_RUMBLE`, `KF2_RUMBLE_HD`, on): a click as the arrow is
+  nocked, a creak rising with the tension (the clock over `0x0FFF`), a strain with a slow
+  tremble at full draw, and a twang on the loose as strong as the draw was, dying in a
+  fifth of a second. Two motors on any pad (runtime `0104`), HD on a Switch Pro or a
+  single Joy-Con, the actuators of a DualSense over USB (`0105`). The world stopped (the
+  weapon routine silent for 150 ms) stops it. `KF2_RUMBLE_TEST=1` plays the bow three
+  times over from 3 s in, without one; `KF2_RUMBLE_PROBE=1|2`.
+- **Gyro aim** (`GyroAim`, `KF2_GYROAIM`, on, so a pad with a gyroscope streams it from
+  boot, runtime `0102`): while the bow is drawn the pad's rate is integrated each vblank
+  and spent in `Analog.BeforeLook` beside the stick's share, as the mouse's is, one to
+  one; tipping takes the mouse's Y inversion. `KF2_GYROAIM_PROBE=1`.
+
+PORT SETTINGS > GAMEPLAY > GYRO (OFF, ON) and RUMBLE (OFF, ON, HD). Measured: the draw and
+loose read off the game as above, and the rumble's phases followed them (nock, drawing at
+tension 0.59, full draw, loosed); the test cycle asks about 60 waves a second. **No pad
+was attached: nothing was felt, and the gyro never ran** (`pad gyro off`).
+
 ## The Input pane is the port's
 
 `patches/settings/InputSection.cs` and `patches/settings/BindingTable.cs`. One

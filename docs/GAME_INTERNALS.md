@@ -2064,3 +2064,33 @@ target, or redraw with stage 13 as `LoopPacing` does. The text: a replacement pe
 (file, entry), drawn where quads 3-4 go. Nothing in the runtime draws a port
 texture into the GL frame; the map draws through ImGui over `OutputView`, which only
 blends by alpha, so a replacement there would be pre-composited.
+
+## The bow and the arbalest
+
+Found 2026-10-09 for rumble and gyro aim (Verdite3's `d6ee250`, `1d84575`). The bow is
+`func_800271D0`'s branch for weapons 16 (BOW) and 17 (ARBALEST): the equipped weapon is
+`u8 0x801994AF` (`0xFF` none). Stage 3 runs `func_800271D0` once a tick, whatever the
+weapon, and not under a menu.
+
+| address | what |
+|---|---|
+| `u8 0x801994AF` | the equipped weapon id |
+| `s16 0x801994A4` | the swing clock: -1 idle, the draw, then the loose |
+| `u8 0x801994AE` | for a bow, 0 drawn, 1 loosed |
+| `u16 0x8019942E` | the draw's power, 0..5000, climbing once the clock passes the record's `+0x1E` |
+| `u32 0x801994A0` | the nocked arrow's object, 0 none |
+| `u8 0x8009B5A1`, `0x8009B5A2` | ARROW FOR THE BOW (117) and ELF'S BOLT (118) held |
+
+The press (`func_800262C8(0)`, from stage 3's just-pressed Square) sets the clip byte to
+0 and the clock to 0. While the clip byte is 0 the bow is drawn: on the clock's first
+tick an arrow is nocked (one of 117 for the bow, 118 for the arbalest), and each tick
+adds the weapon record's `+0x1C` (`0x12C` for the bow) until the clock holds at `0x0FFF`,
+full draw, for as long as Square is held. Letting go looses it: the clip byte 1 and the
+clock back to 0, then stepped `0x190` a tick to -1.
+
+Measured (`KF2_AUTOSTART=2`, the bow and five arrows given and equipped through
+`func_80026210` by a temporary hook, Square held 2.5 s over the shell): the clock 300,
+600 ... 4095 a tick with the arrows 5 to 4, the power from 867 to 5000 past clock 2700;
+on release clip 1, the clock 0, 400 ... 4000, then -1; the next press nocked again
+(arrows 3).
+

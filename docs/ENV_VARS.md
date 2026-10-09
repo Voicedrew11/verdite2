@@ -253,6 +253,10 @@ KF2_ANALOG=0                             # twin-stick control off (it is on by d
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report (in 3D, also the left stick's turn: wanted, driven, the ramp)
 KF2_TANK=1                               # 3D controls: the left stick walks and turns, L1/R1 strafe, the right stick is not read (0 forces 2D; unset, Gameplay ▸ Controls, PORT SETTINGS ▸ GAMEPLAY ▸ CONTROLS)
+KF2_RUMBLE=0 KF2_RUMBLE_HD=0             # no rumble as a bow is drawn and loosed; two motors on a Switch pad or a DualSense too (both on by default)
+KF2_RUMBLE_PROBE=1                       # a line a second: the phase, the tension, waves asked, HD; 2 also a line each tick the bow's state changes
+KF2_RUMBLE_TEST=1                        # from 3 s in, the bow's rumble three times over without a bow
+KF2_GYROAIM=0 KF2_GYROAIM_PROBE=1        # no gyro aim with a drawn bow (on by default); its line a second
 KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
 KF2_MOUSE=0                              # mouse look off (it is on by default; a click on the picture captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
