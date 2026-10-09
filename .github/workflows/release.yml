@@ -10,6 +10,11 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      preview:
+        description: 'Publish the build as the rolling "preview" prerelease (scripts/prerelease.sh)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -52,7 +57,8 @@ jobs:
       # The tag names the release and VERSION names the artifacts inside it, and
       # nothing but this makes them the same number. Without it a v0.2.0 tag on a
       # tree that still says 0.1.0 publishes 0.1.0 files under a 0.2.0 release --
-      # silently, and only visible after somebody has downloaded it.
+      # silently, and only visible after somebody has downloaded it. A run started
+      # by hand (a preview) has no tag, so there is nothing to check it against.
       - name: Assert the tag matches VERSION
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -127,3 +133,62 @@ jobs:
 
             Note that the US-boxed *King's Field II* (`SLUS-00255`) is a different
             game and will be refused.
+
+  # The preview: one prerelease under the tag `preview`, a build handed to
+  # testers, replaced whole on every run, so there is never more than one and its
+  # download links never change. Each package is zipped with the PREVIEW_PASSWORD
+  # secret (AES-256), under a name without the commit; the files inside carry it,
+  # and so does the title. A prerelease is never GitHub's "latest", so the
+  # launcher's update check, which reads only that, never announces it; the tag
+  # is no version (VERSION is, and the tag check above runs on a `v*` tag alone)
+  # and starts no workflow. preview-cleanup.yml deletes it when a release is
+  # published.
+  preview:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.preview
+    # Two previews started close together would race on deleting and creating
+    # the one release; this queues the second behind the first.
+    concurrency:
+      group: preview
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      PREVIEW_PASSWORD: ${{ secrets.PREVIEW_PASSWORD }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Zip each package with the password
+        run: |
+          test -n "$PREVIEW_PASSWORD" || { echo "the PREVIEW_PASSWORD secret is not set"; exit 1; }
+          command -v 7z >/dev/null || { sudo apt-get update && sudo apt-get install -y p7zip-full; }
+          sha="${GITHUB_SHA::9}"
+          mkdir -p out stage/linux stage/setup stage/win
+          cp dist/*.AppImage "stage/linux/Verdite2-preview-$sha-x86_64.AppImage"
+          chmod +x stage/linux/*.AppImage
+          cp dist/*setup.exe "stage/setup/Verdite2-preview-$sha-win-x64-setup.exe"
+          unzip -q dist/*-win-x64.zip -d stage/win
+          (cd stage/linux && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" ../../out/Verdite2-preview-linux-x86_64.zip . >/dev/null)
+          (cd stage/setup && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" ../../out/Verdite2-preview-win-x64-setup.zip . >/dev/null)
+          (cd stage/win && 7z a -tzip -mem=AES256 "-p$PREVIEW_PASSWORD" ../../out/Verdite2-preview-win-x64.zip . >/dev/null)
+          for f in out/*.zip; do 7z t "-p$PREVIEW_PASSWORD" "$f" >/dev/null; done
+          ls -la out
+
+      - name: Replace the preview prerelease
+        run: |
+          cat > notes.md <<'NOTES'
+          **Preview builds are password protected.** Join the [Verdite Project Discord](https://discord.gg/R4EKCs8RWH) for access.
+
+          **Always back up your saves before installing a preview build!** They are `carda.sav` and `cardb.sav`, in `%LOCALAPPDATA%\Verdite2` on Windows and `~/.local/share/verdite2` on Linux (`$XDG_DATA_HOME/verdite2` if that is set).
+          NOTES
+          gh release delete preview --cleanup-tag --yes 2>/dev/null || true
+          # A tag left without its release (a run that died between the two, or
+          # a release deleted on the web) survives the line above, and `create`
+          # would reuse it at its old commit, ignoring --target.
+          gh api -X DELETE "repos/$GH_REPO/git/refs/tags/preview" 2>/dev/null || true
+          gh release create preview out/*.zip --target "$GITHUB_SHA" --prerelease \
+            --title "Verdite2 preview (${GITHUB_SHA::9})" --notes-file notes.md

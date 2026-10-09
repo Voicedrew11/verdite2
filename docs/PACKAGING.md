@@ -255,6 +255,67 @@ the tag is what publishes the draft release and that is a decision rather than a
 step. The workflow builds both platforms, asserts the tag against `VERSION`, and
 opens a **draft** with the commits since the previous tag appended to the body.
 
+### Previews
+
+A preview is a build handed to testers: a commit, not a version, and no promise
+of which release it becomes. When one proves a release, `release.sh` bumps
+`VERSION` on top of that commit and tags it, so the release is what was tested
+plus the one-line bump. There is one preview at a time, the **rolling `preview`
+prerelease**, replaced whole each time:
+
+```bash
+git push origin main
+bash scripts/prerelease.sh      # builds HEAD as GitHub has it; replaces `preview`
+bash scripts/prerelease.sh --no-wait
+```
+
+The script refuses a detached `HEAD`, a dirty tree, a `HEAD` that is not what
+`origin` has for the branch, and a repository without the secret (listing
+secrets needs admin access; without it, the script warns and goes on). It starts
+`release.yml` by hand (`gh workflow run release.yml -f preview=true`); the build
+job runs as for a release, and its tag check is skipped, since that step runs on
+a `v*` tag alone and a run started by hand has none. The `preview` job then zips
+each package with the `PREVIEW_PASSWORD` repository secret (AES-256, so 7-Zip or
+WinRAR opens them and Windows Explorer does not) and deletes and recreates the
+`preview` prerelease at that commit, with fixed notes: the password is had on the
+Verdite Project Discord, and back up `carda.sav` and `cardb.sav` first, from
+`%LOCALAPPDATA%\Verdite2` on Windows and `~/.local/share/verdite2` on Linux
+(`$XDG_DATA_HOME/verdite2` if that is set; see "First run"). The assets are always
+`Verdite2-preview-linux-x86_64.zip`, `Verdite2-preview-win-x64.zip` and
+`Verdite2-preview-win-x64-setup.zip`, so
+`…/releases/download/preview/<name>` never changes; the files inside, and the
+title, carry the commit. The build calls itself `VERSION`'s number and the commit
+(`0.4.0+<sha>`, `Ver.Full`): `VERSION` is not bumped for a preview.
+
+- **The `PREVIEW_PASSWORD` secret has to be set by hand, once, before the first
+  preview**: `gh secret set PREVIEW_PASSWORD` (or the repository's Settings ▸
+  Secrets ▸ Actions). The script checks for it, and the job fails before zipping
+  anything without it. The password is the secret, never the repository, which is
+  public; setting it again changes it.
+- **It is never GitHub's "Latest".** A prerelease cannot be: the badge, and
+  `releases/latest`, which the update check reads, name only a published full
+  release, so no player is told about a preview.
+- **`preview` is no version.** `release.yml` starts on `v*` tags alone, so the tag
+  moving starts nothing, and `VERSION` is the number. A clone that fetched the tag
+  keeps a stale copy when it moves; `git tag -d preview` drops it.
+- **It goes when the release does.** `preview-cleanup.yml` deletes the prerelease
+  and its tag when a full release is *published* (not when its draft is opened),
+  so a preview stays up until the release is live. A `release` event runs the
+  workflow as the release's tagged commit has it, so it acts only for a release
+  tagged on a commit that contains `preview-cleanup.yml`. It deletes the preview
+  whatever commit it was built from, a newer one too; that is the design (one
+  preview, gone with the release), not an oversight.
+- **The old preview is deleted before the new one is made**, so its links 404
+  while the new zips upload, and stay that way if the upload fails, until the job
+  is rerun. A failure before that (a missing installer, an unset secret) leaves
+  the old preview up. The job also deletes a `preview` tag left without its
+  release, which `gh release create` would otherwise reuse at its old commit,
+  and a `concurrency` group queues a second preview behind the first.
+- Ported from Verdite3, where it was called `rc` until 2026-10-08 and renamed
+  because it is handed out for any fix worth testing, not only a commit meant to
+  ship. **Never run here yet**: the workflow files parse and the script passes
+  `bash -n`, and that is all.
+
 ## Telling the player about a new release
 
 The shipped launcher checks GitHub for a newer release at startup and says so;
