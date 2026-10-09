@@ -893,6 +893,10 @@ the sub-pixel fraction still come from the address map.
   `ZBuffer.cs`). Their addresses' old records are dropped so a stale one cannot
   match. With no depth they keep painter's order, which is what they had on the
   console.
+- **The menu's item preview** (`InPreview`, a pre/post on `func_800346CC` in
+  `ZBuffer.cs`) was not barred: its faces went through the lit assembler and were
+  tested against the world, so it crossed what stood behind it. It now keeps
+  painter's order, drawn over the world as on the console.
 
 **The skybox needs no special case under this source.** It never passes through
 these assemblers, so it records nothing and draws first in painter's order, and
@@ -1004,7 +1008,7 @@ packet that is anything else. **Moving a translucent packet past an opaque one i
 exact whichever is nearer**: the test decides what the opaque one covers, and the
 translucent one then blends over what is behind it and is rejected by what is in
 front. Everything the depth buffer does not order is a barrier: the HUD, the arm,
-the fades, a non-polygon command, a packet without a record, the table's first slot
+the item preview, the fades, a non-polygon command, a packet without a record, the table's first slot
 (the skybox's, which is never tested), and a blended model the port calls solid (the secret door, which writes depth). So nothing is ever moved
 past something it was not already ordered against by the test, and two blended
 surfaces keep the order the table gave them. It runs only while the Z-buffer tests
