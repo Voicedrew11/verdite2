@@ -342,7 +342,8 @@ pwsh packaging/windows/build-windows.ps1    # dist/…-win-x64.zip and the insta
 Both are one-line wrappers of Verdite Core's scripts
 (`tools/verdite-core/packaging/`), which read this port's names from
 `packaging/package.env` (`NAME`, `APP_ID`, and `INNO_APP_ID`, the installer's
-`{9F1F0C1E-…}`, which must never change); `scripts/release.sh` is the same.
+`{9F1F0C1E-…}`, which must never change, and `INNO_PRIVILEGES=lowest`, the
+per-user install "The shortcuts wear it too" needs); `scripts/release.sh` is the same.
 The Windows script used to copy the font licence from `patches/recompone/assets/`,
 a path from before the subtree; core's reads `tools/RecompOne/patches/assets/`.
 
@@ -418,6 +419,31 @@ itself.
 
 `KF2_ICON=orb` keeps the shipped mark, `KF2_ICON=off` clears it, `KF2_ICON=1` or
 `=2` picks another of the three frames (they differ by a one-pixel bob).
+
+## The shortcuts wear it too
+
+Explorer draws a shortcut with the icon embedded in its target, and the target is
+the release's `Verdite2.exe`, which can only carry the orb. Verdite Core's
+`ShortcutIcon` (ported from Verdite3 `dc4a6d1`, `6603075`) is already called by
+`WindowIcon.Apply`: once the disc is read it writes the same sizes into `icon.ico`
+in the data directory and points every Desktop, Start menu and pinned taskbar
+shortcut whose target is this process, or the stub above `bin\`, at it, and keeps
+`icon.png` for the next run, which `CardIcon` now sets over the orb at boot
+(`WindowIcon.ApplySaved`) until the disc is read again.
+
+That reached only a shortcut the player pinned. The installer was per-machine, so
+its Start menu and desktop shortcuts were in the all-users folders, which the game
+cannot write. Since 2026-10-09 it is **per-user** (`INNO_PRIVILEGES=lowest`): it
+installs under `%LOCALAPPDATA%\Programs\Verdite2` with the shortcuts in the
+player's own folders. **An upgrade from a per-machine install (v0.4.0 and before)
+is a second install**, since Inno looks for a previous one in HKCU only: the old
+copy in `Program Files` and its orb shortcuts stay until it is uninstalled, which
+the release notes have to say. The orb stays the executable's icon and the
+fallback (`KF2_ICON=orb`); Verdite3 dropped its copy of it, being Verdite2's mark.
+
+Not measured in Verdite2: Verdite3's run under Wine rewrote two shortcuts
+(`icon: 2 shortcut(s) now wear icon.ico`); here nothing has run on Windows, and
+the installer has not been built per-user.
 
 ## Wayland takes the icon from the desktop entry
 
