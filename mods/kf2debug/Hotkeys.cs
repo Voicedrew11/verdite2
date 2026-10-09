@@ -2,6 +2,7 @@
 // file needs must be named here -- including System.
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 // HostWindow is in RecompOne.Runtime.Host, not .Host.Window -- the file lives in
 // the Window folder but declares the parent namespace. ToastNotifications,
 // PanelManager and MenuRegistry really are in .Window.
@@ -26,6 +27,10 @@ namespace Kf2.Mods.Debug;
 /// F1 and F11 are deliberately not used: the host claims both, F1 for the top
 /// bar and F11 for fullscreen. The game's own default keymap is Z X A S Q W E R
 /// F G, Enter, RShift and the arrows, so the function keys are otherwise clear.
+///
+/// V, which neither that keymap nor the port's WASD layout (patches/KeyLayout.cs)
+/// binds, is film mode: the cinematic camera, enemies that ignore you and noclip,
+/// together. The pad's mute key does the same.
 /// </summary>
 internal static class Hotkeys
 {
@@ -38,6 +43,7 @@ internal static class Hotkeys
     internal static Key LoadBookmark  = Key.F6;
     internal static Key SnapToFloor   = Key.F7;
     internal static Key ReturnToEntry = Key.F8;
+    internal static Key FilmMode      = Key.V;
     internal static Key FlyUp         = Key.Space;
     internal static Key FlyDown       = Key.ControlLeft;
     internal static Key FlyFastKey    = Key.ShiftLeft;
@@ -109,14 +115,13 @@ internal static class Hotkeys
     /// </summary>
     internal static void Poll()
     {
+        FilmModeProbe();
         if (!Enabled) return;
 
         if (Pressed(TogglePanel))
             DebugPanel.Instance.IsOpen = !DebugPanel.Instance.IsOpen;
 
-        // F3, or the pad's spare button -- the DualSense's mute key -- so a
-        // player on a controller never has to reach for the keyboard to fly.
-        if (Pressed(ToggleNoclip) || PadPressed(PadMute))
+        if (Pressed(ToggleNoclip))
         {
             Noclip.Enabled = !Noclip.Enabled;
             Notify("Noclip", Noclip.Enabled);
@@ -132,6 +137,45 @@ internal static class Hotkeys
         if (Pressed(LoadBookmark)) Warp.Restore(0);
         if (Pressed(SnapToFloor)) Noclip.SnapToFloor();
         if (Pressed(ReturnToEntry)) Noclip.ReturnToEntry();
+
+        // Film mode: all three on, or all three off when they already are. No
+        // toast either way -- it is for filming, and one would land in the shot.
+        // V, or the pad's spare button -- the DualSense's mute key -- does it.
+        if (Pressed(FilmMode) || PadPressed(PadMute)) ToggleFilmMode();
+    }
+
+    /// <summary>The cinematic camera, enemies ignoring you and noclip: all on,
+    /// or all off when they already are.</summary>
+    internal static void ToggleFilmMode()
+    {
+        bool on = !FilmModeOn;
+        Noclip.Cinematic = on;
+        Cheats.Peaceful = on;
+        Noclip.Enabled = on;
+    }
+
+    internal static bool FilmModeOn => Noclip.Cinematic && Cheats.Peaceful && Noclip.Enabled;
+
+    // KF2_DEBUG_FILMMODE_PROBE=<seconds> toggles film mode that often, as V
+    // would, and prints what each flag reads after -- the check that all three
+    // flip together and that the port's mouse lead follows the cinematic camera.
+    // There is no other way to press V without a hand on the keyboard.
+    static readonly double ProbeSeconds =
+        double.TryParse(Environment.GetEnvironmentVariable("KF2_DEBUG_FILMMODE_PROBE"),
+                        NumberStyles.Float, CultureInfo.InvariantCulture, out double s) ? s : 0;
+    static long _probeAt;
+
+    static void FilmModeProbe()
+    {
+        if (ProbeSeconds <= 0) return;
+        long now = Environment.TickCount64;
+        if (_probeAt == 0) { _probeAt = now; return; }
+        if (now - _probeAt < ProbeSeconds * 1000) return;
+        _probeAt = now;
+        ToggleFilmMode();
+        Console.WriteLine($"[kf2debug] film mode probe: on={FilmModeOn} cinematic={Noclip.Cinematic} "
+                        + $"peaceful={Cheats.Peaceful} noclip={Noclip.Enabled} "
+                        + $"leadSuppressed={Kf2.FrameSmoothing.LeadSuppressed} lead={Verdite.Core.Mouse.Lead}");
     }
 
     /// <summary>
@@ -151,5 +195,6 @@ internal static class Hotkeys
     {
         _held.Clear();
         _padHeld.Clear();
+        _probeAt = 0;
     }
 }

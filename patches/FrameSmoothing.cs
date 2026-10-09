@@ -689,6 +689,12 @@ public static class FrameSmoothing
     static long _leadFrame = -1;
     static int _tickYaw, _tickPitch;
 
+    /// <summary>Set by a mod whose own camera filter fights the lead -- the debug
+    /// mod's cinematic camera smooths the angles the lead would jump past, and
+    /// the two together judder. Off is the same as <see cref="Mouse.Lead"/> off;
+    /// the saved setting is left alone.</summary>
+    public static bool LeadSuppressed;
+
     // The part of the lead the tick has not spent yet: all of it, on a frame
     // that is not interpolated and so already shows the tick's own turn.
     static int _aheadYaw, _aheadPitch;
@@ -701,7 +707,13 @@ public static class FrameSmoothing
     static (double Yaw, double Pitch) MouseLead(IMemory m, double frac)
     {
         _aheadYaw = _aheadPitch = 0;
-        if (!Mouse.Lead) return (0, 0);
+        if (!Mouse.Lead || LeadSuppressed)
+        {
+            // Not carried into the frames after the lead comes back: until the
+            // next tick measures it, no tick's turn is known.
+            _tickYaw = _tickPitch = 0;
+            return (0, 0);
+        }
         Mouse.Poll();
 
         // On the tick the look routine spent the mouse, what the game actually

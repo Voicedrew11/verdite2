@@ -155,6 +155,11 @@ internal static class Noclip
             _lookPrimed = false;
             // A flythrough being filmed must not have anything fading in over
             // the picture: the hotkey toasts go quiet in Hotkeys.Notify.
+            // Instant mouse look is held off while it is on: the look filter
+            // smooths the angles the lead jumps past, and the two together
+            // judder. The player's saved setting is left alone. See "The mouse
+            // leads the tick" in docs/INPUT.md.
+            Kf2.FrameSmoothing.LeadSuppressed = value;
         }
     }
 
@@ -567,6 +572,10 @@ internal static class Noclip
         Enabled = false;
         _wasEnabled = false;
         _vx = _vy = _vz = 0;
+        _cinematic = false;
         _lookPrimed = false;
+        // The host outlives the mod: unloading mid-filming must not leave the
+        // mouse lead held off for the rest of the session.
+        Kf2.FrameSmoothing.LeadSuppressed = false;
     }
 }

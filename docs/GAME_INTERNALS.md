@@ -1778,7 +1778,8 @@ bits — `Up`/`Down` for forward, `L1`/`R1` for strafe, which is where the shipp
 WASD layout puts W/S and A/D — so a keyboard, a pad and any rebinding all reach
 it with no second table. The pad's shoulders fly up and down instead of
 strafing, read straight off the pad through `0062`'s `IsPadButtonDown` so that
-one bit cannot mean two things at once; the mute key toggles the flight.
+one bit cannot mean two things at once. The mute key was the flight's toggle; it
+is film mode now (below), and the flight's own toggle is F3 alone.
 
 ### The cinematic camera has to recover the turn as a difference
 
@@ -1829,6 +1830,21 @@ glyph (`MouseIndicator.Suppressed`, driven from the `Cinematic` setter) stay
 silent, so a filmed flythrough has nothing fading in over the picture.
 
 (Removed from Verdite Core on 2026-10-09: there is no glyph left to suppress, and the `Cinematic` setter no longer touches it. See "A click captures, and the menu suspends it" in `docs/INPUT.md`.)
+
+**It holds instant mouse look off.** The look filter eases toward the angle the
+game integrated, and the port's mouse lead draws the view *past* that angle by
+the motion the tick has not spent yet; one smooths what the other jumps, and the
+two together judder. The `Cinematic` setter raises `FrameSmoothing.LeadSuppressed`
+(and `Noclip.Reset` lowers it, with `_cinematic`, so an unload mid-film leaves
+neither behind); the saved setting is left alone. See "The mouse leads the tick"
+in `docs/INPUT.md`.
+
+**Film mode is V**, or the pad's spare button (SDL `Misc1`, a DualSense's mute
+key): the cinematic camera, `Enemies ignore you` and noclip all on, or all off
+when all three already are; any mix of them turns all three on. No toast either
+way, since one would land in the shot. V is bound by neither RecompOne's stock
+keymap nor the port's WASD layout. Ported from Verdite3's debug mod.
+`KF2_DEBUG_FILMMODE_PROBE=<seconds>` presses it on a timer and prints the flags.
 
 Off by default, and it stays a debug-mod option rather than a port setting: the
 mechanism is measured, the picture is a matter of taste and has not been judged.
