@@ -1416,6 +1416,16 @@ Kf2.BootExe.Install();
 // plays rather than how the machine behaves.
 Kf2.Settings.PatchSettings.Install();
 
+// The port settings as a page of the game's own menu: PORT SETTINGS, in place of
+// RETURN at the bottom of the in-game menu. KF2_SETTINGSPAGE_PROBE=1 logs what it
+// did. See "The port settings page" in docs/GAME_INTERNALS.md.
+Kf2.SettingsPage.Configure(Environment.GetEnvironmentVariable("KF2_SETTINGSPAGE_PROBE"));
+Kf2.SettingsPage.Install();
+
+// The port settings the page draws from, and the one writer of interface.ini's
+// keys it changes (docs/SETTINGS.md). Last, so its boot check follows every start-up.
+Kf2.PortSettings.Install();
+
 // Compile the recompiled code ahead of the game running it. QuickJit is off (a
 // tier-up loses a MonoMod detour), so every function is compiled by the full JIT
 // on its first call -- which for an area change is 234 methods inside one frame,

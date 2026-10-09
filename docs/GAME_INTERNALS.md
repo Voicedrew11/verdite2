@@ -961,6 +961,39 @@ loads the entry's preview. `func_80022CAC` **always returns 0**, so the
 10 visible from 0, rows at x 42 y 44, 236 × 14; a sub-list on the same page is 3
 entries, 4 visible, rows at x 42 y 164, the same size.
 
+### RETURN is the chooser's last item, and the port settings page takes it
+
+Read for `patches/SettingsPage.cs` (2026-10-09). The in-game menu `func_80018E80`
+draws group 0 with `func_800208D8(0, 8, cursor, confirmed)` (returns `0x80018EE4`
+and `0x8001906C`) and steps it with `func_8001EA14(cursor, 7, &sel, &confirmed)`,
+`&cancel` at its `sp+0x10` (return `0x80018FFC`; the menu's locals are `sel`
+`sp+0x18`, `confirmed` `sp+0x1C`, `cancel` `sp+0x20`, `-99` until cancelled). Group
+0 has no header and eight items, `USE ITEM` .. `OPTION` and `RETURN` at X 31, Y
+19 + 26*i; `RETURN` is the record at `0x80064DB4`.
+
+**`RETURN` has no arm in the dispatch.** The chooser treats Cross on the last index
+as a cancel: it sets `confirmed = 1`, leaves `sel` at -1 and writes `cancel = -1`,
+which closes the menu exactly as Circle does (Circle and Start leave `confirmed` at
+0). The jump table at `0x80011098` covers `sel` 0..6 only. Every list in the game
+ends this way (`DATA`, `OPTION`, the shops), so a list's last record is a cancel
+and not a choice.
+
+So the page needs no dispatch arm: a pre on `func_800208D8` writes `PORT SETTINGS`
+over the record each time group 0 is drawn, and a post on the chooser (order 100,
+after `MenuMouse`'s) that sees `V0 == 7`, `confirmed == 1` and `cancel == -1` puts
+`cancel` back to -99, clears `confirmed` and runs the page between the menu's
+frames. The page's records are built on the guest stack and drawn with the list's
+own routines: box `func_800218B4(0x80064C20, rec)`, cursor
+`func_80021A84(0x80064BFC, rec)`, label `func_80021E10(0x80064BF0, rec)`, a header
+at OPTION's (17, 19), rows from (31, 45), values at OPTION's value column X 180.
+Its pad is the chooser's (`func_80022E90`, `func_80022E58`) against the action-mask
+words; its sounds `func_80022DC4` 0x10 (move), 0x11 (change), 0x12 (back).
+
+The label font is KF3's layout: `,` `'` `/` `!` `?` sit at `0x31`, `0x32`, `0x35`,
+`0x38`, `0x3A` in this game's own strings (`SEATH'S`, `HP/MP`, `FORMAT?`).
+**Digits at `0x20`..`0x29` are assumed from KF3** and appear in no record of this
+game's; the page's numbers (`1440P`, `144`, `16/9`) are the first to use them.
+
 ### The two-line prompt keeps its cursor nowhere
 
 `func_800206E0(desc, ?, listFlag, page)` is the yes/no prompt every scrolling page

@@ -117,6 +117,7 @@ public static class AgentServer
         "gpuworld [on|off | surfaces on|off | water on|off | models on|off|hide|show | records on|off | scene | perpixel on|off] - the world drawn on the GPU (0085): its state, the switch, whether the map reaches the normal and surface buffers, whether its water and the object walk's models are drawn there too, models taken and not drawn (what they cover), whether the map is lit in the shader from the light records, the last walk's models and the camera's forward, or per-pixel lighting (not saved)",
         "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
         "aspect [4:3|16:9|<ratio>] - the widescreen aspect, as the settings window sets it (not saved)",
+        "settings [open|save|discard|step <key> <-1|1>|reset <key>] - the game menu's settings session without its page; alone, every setting",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -318,6 +319,7 @@ public static class AgentServer
                      || parts[0].Equals("waves", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("gpuworld", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("murk", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("settings", StringComparison.OrdinalIgnoreCase)
                      || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
                           parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",
@@ -351,6 +353,7 @@ public static class AgentServer
             case "murk":
             case "pause":
             case "aspect":
+            case "settings":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -440,6 +443,7 @@ public static class AgentServer
         "pause" => DoPause(cmd.Arg1),
         "aspect" => Widescreen.Shell(cmd.Arg1),
         "murk" => Murk.Shell(cmd.Arg1),
+        "settings" => DoSettings(cmd.Arg1),
         "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
         "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         "savecheck" => DoSaveCheck(),
@@ -614,6 +618,41 @@ public static class AgentServer
     {
         AutoReload.Simulate();
         return "{\"ok\":true,\"cmd\":\"kill\",\"status\":" + Q(AutoReload.Status) + "}";
+    }
+
+    /// <summary>A <see cref="SettingsSession"/> driven from the game thread, as the menu
+    /// page drives it, so the rules in docs/SETTINGS.md can be checked against the file.</summary>
+    static string DoSettings(string args)
+    {
+        var a = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string verb = a.Length > 0 ? a[0] : "list";
+        var session = SettingsSession.Current;
+        string? why = null;
+        switch (verb)
+        {
+            case "list": break;
+            case "open": SettingsSession.Open(); break;
+            case "save" or "discard" or "step" or "reset" when session is null: return Err("no session; settings open");
+            case "save": session!.Save(); break;
+            case "discard": session!.Discard(); break;
+            case "step" or "reset":
+                if (a.Length < 2 || PortSettings.Find(a[1]) is not { } s) return Err($"settings {verb} <key>: no such key");
+                if (verb == "reset") why = session!.Reset(s);
+                else if (a.Length < 3 || !int.TryParse(a[2], out int dir) || dir == 0) return Err("settings step <key> <-1|1>");
+                else why = session!.Step(s, dir);
+                break;
+            default: return Err($"settings: unknown '{verb}'");
+        }
+        session = SettingsSession.Current;
+        var rows = PortSettings.Listed.Select(s =>
+            "{\"key\":" + Q(s.Key) + ",\"page\":" + Q(s.Page ?? "") +
+            ",\"live\":" + s.Live().ToString(System.Globalization.CultureInfo.InvariantCulture) +
+            ",\"shown\":" + Q(session is null ? "" : s.MenuValue(session.Shown(s))) +
+            ",\"changed\":" + (session?.IsChanged(s) == true ? "true" : "false") +
+            ",\"locked\":" + Q(s.LockedBy ?? "") + "}");
+        return "{\"ok\":" + (why is null ? "true" : "false") + ",\"cmd\":\"settings\",\"verb\":" + Q(verb) +
+               (why is null ? "" : ",\"error\":" + Q(why)) + ",\"session\":" + (session is null ? "false" : "true") +
+               ",\"writes\":" + SettingsStore.Writes + ",\"settings\":[" + string.Join(',', rows) + "]}";
     }
 
     static string DoHelp()
