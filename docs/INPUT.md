@@ -1132,6 +1132,15 @@ picture, which is right for something that has to be drawn *somewhere* and wrong
 for a coordinate conversion: a hit test would rather answer "nowhere" than answer
 confidently against a rectangle the game is not in.
 
+**A pointer over a panel floating in front of the picture is off it** (2026-10-09,
+from Verdite3 `4654755`). The rectangle alone held under any ImGui window in front
+of the game, so in a menu a click on such a panel was the menu's: it confirmed the
+row under it or, clear of the boxes, backed out, and the last leave then
+recaptured the pointer. `Point` now asks `OutputView.Covered` (fork `0029`) after
+the rectangle, as Verdite Core's `Mouse` already does for the capturing click: no
+hover, and the click is the panel's. To be judged in play: in a menu, a click on a
+floating panel over the picture neither moves the menu nor captures.
+
 ### Whichever device moved last owns the cursor
 
 Hover takes the cursor only once the pointer has **moved**, and hands it back the

@@ -1249,6 +1249,9 @@ public static class MenuMouse
 
         if (pos.X < g0.X || pos.X > OutputView.Max.X ||
             pos.Y < g0.Y || pos.Y > OutputView.Max.Y) return;
+        // A panel floating in front of the picture has the pointer: its clicks
+        // are not the menu's, which would confirm a row or back out under it.
+        if (OutputView.Covered) return;
 
         int margin = Display.WideMargin(gameW);
         float picW = gameW + 2 * margin;
