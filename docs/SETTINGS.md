@@ -71,6 +71,7 @@ pointer is not wired into the page yet.
 | | PER-PIXEL LIGHT | OFF, ON | `kf2.perpixel.on` |
 | | AMB. OCCLUSION | OFF, LOW, MEDIUM, HIGH | `kf2.ao.on` and `kf2.ao.quality` |
 | WORLD | RENDER DISTANCE | ORIGINAL, ENHANCED | `kf2.renderdistance`: 10.5 tiles (off) or 15 (its maximum; not judged) |
+| | FOG | CORNERS, PIXEL DEPTH, DISTANCE | `kf2.fog`: the game's fog at the corners, by pixel depth (the default), or by distance from the eye (`KF2_FOG`; RENDERING, "Fog by distance from the eye") |
 | | WATER | ORIGINAL, ENHANCED, FULL | `kf2.murk.on`, `kf2.waves.on`, `kf2.ssr.planar`: ENHANCED murk and waves, FULL the planar reflection too (the default) |
 | GAMEPLAY | INVERTED CAMERA | OFF, ON | `kf2.analog.invertpitch` |
 | | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |

@@ -101,7 +101,6 @@ public static class GpuWorld
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
             RetainedScene.MainNear = Math.Max(near, 0.01f);
-        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_FOGZ")?.Trim() == "0") RetainedScene.MainFogFromZ = false;
         // 0087. The ceiling on 0051's slope term, in game pixels at the fragment's depth:
         // a face seen edge-on is pulled towards the camera by at most one pixel's world
         // width, not half its own depth change across a pixel, which on a stair or a

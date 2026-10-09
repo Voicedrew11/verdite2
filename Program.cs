@@ -776,7 +776,7 @@ Kf2.RetainedMap.Install();
 //     KF2_GPUWORLD=1          on; 0 never; unset, the saved setting
 //     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept; the surface buffer against the depth
 //     KF2_GPUWORLD_SURFACES=0 leave the map out of the normal and surface buffers (the comparison)
-//     KF2_GPUWORLD_FOGZ=0     the map's fog from the corners' screen-affine cue (the comparison)
+//     KF2_GPUWORLD_FOGZ=0     the same as KF2_FOG=corners (see below)
 //     KF2_GPUWORLD_NEAR=16    the map's near plane
 Kf2.GpuWorld.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD"),
                        Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"),
@@ -899,6 +899,15 @@ Kf2.EvenFog.Configure(Environment.GetEnvironmentVariable("KF2_EVENFOG"),
                       Environment.GetEnvironmentVariable("KF2_EVENFOG_BLEND"),
                       Environment.GetEnvironmentVariable("KF2_EVENLIGHT"));
 Kf2.EvenFog.Install();
+
+// The fog's distance cue, one choice of three (PORT SETTINGS ▸ WORLD ▸ Fog): at the
+// corners (the game's), by pixel depth, or by distance from the eye. Pixel depth is
+// the default. See "Fog by distance from the eye" in docs/RENDERING.md.
+//
+//     KF2_FOG=corners|depth|distance   0, 1 or 2; unset, the saved setting, else depth
+//     KF2_GPUWORLD_FOGZ=0              the old spelling of KF2_FOG=corners, still honoured
+Kf2.Fog.Configure(Environment.GetEnvironmentVariable("KF2_FOG"));
+Kf2.Fog.Install();
 
 // Voice interpolation and reverb (tools/RecompOne/patches/0043); see docs/AUDIO.md.
 //
