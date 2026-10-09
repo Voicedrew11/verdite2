@@ -58,6 +58,8 @@ public static class SettingsPage
 
     // ---- Templates in GAME.EXE's data ----
     const uint BoxTemplate = 0x80064C20;          // a list item's box, 124 x 24, at the record's X - 6, Y - 6
+    const int Inset = 6;                          // func_800218B4 draws a box that far up and left of its record
+    const int GlyphW = 7;                         // a label cell, for the value column's extent
     const uint CursorSprite = 0x80064BFC;         // the blinking cursor of the selected item
     const uint LabelTemplate = 0x80064BF0;        // a label, drawn from its record's string
 
@@ -180,6 +182,7 @@ public static class SettingsPage
         {
             // Never leave the session open, whatever happened.
             if (SettingsSession.Current == session) session.Discard();
+            MenuMouse.Forget();                   // nothing the page drew is on screen now
             c.Restore(saved);
             _open = false;
         }
@@ -284,6 +287,8 @@ public static class SettingsPage
                 Item(c, m, AskX, AskY, "SAVE CHANGES", cursor == 0, usable: true);
                 Item(c, m, AskX, AskY + AskStep, "DISCARD CHANGES", cursor == 1, usable: true);
                 Item(c, m, AskX, AskY + 2 * AskStep, "RETURN", cursor == 2, usable: true);
+                // The chooser above takes these as its rows, as it takes the drawer's.
+                Pointed(m, AskX, AskY, AskStep, 3, (int)cursor, values: false, "settings question");
                 KingsField2.func_800226A8(c, m);  // the presenter
             }
         }
@@ -310,9 +315,27 @@ public static class SettingsPage
             Label(c, m, c.SP + Record, dim: !usable);
         }
 
-        // The menu pointer is not wired into the page yet: KF2's MenuMouse has no
-        // row API to hand these rows to.
+        // The rows to the menu pointer: the page's loop keeps its cursor in a
+        // register, so hover reaches it as Up/Down through the pad read and a
+        // click on the selected row as Right. The header and the value column
+        // are the page's too, so a click on them is not a click off it.
+        var (w, h) = MenuMouse.BoxSize(m, BoxTemplate);
+        int bottom = FirstRowY + Math.Max(rows.Length - 1, 0) * RowStep - Inset + h;
+        Pointed(m, RowX, FirstRowY, RowStep, rows.Length, row, values: true, $"settings page {PortSettings.Pages[_page]}",
+                (HeaderX - Inset, HeaderY - Inset, ValueX + ValueChars * GlyphW - (HeaderX - Inset), bottom - (HeaderY - Inset)));
         KingsField2.func_800226A8(c, m);          // the presenter
+    }
+
+    /// <summary>The rows just drawn, for the menu pointer (Verdite3's): the boxes
+    /// <see cref="Box"/> draws, at X - 6, Y - 6 by the template's size. A click on the
+    /// selected row of a page of <paramref name="values"/> steps it, as Right does.</summary>
+    static void Pointed(IMemory m, int x, int y, int step, int count, int cursor, bool values, string what,
+                        (int X, int Y, int W, int H)? area = null)
+    {
+        var (w, h) = MenuMouse.BoxSize(m, BoxTemplate);
+        Span<(int, int, int, int)> rows = stackalloc (int, int, int, int)[count];
+        for (int i = 0; i < count; i++) rows[i] = (x - Inset, y + i * step - Inset, w, h);
+        MenuMouse.Rows(rows, cursor, values, what, area);
     }
 
     /// <summary>One list item as <c>func_800208D8</c> draws it: the box, then the

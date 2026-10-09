@@ -57,8 +57,20 @@ The shell's `settings` verb drives a session from the game thread (`settings`,
 
 At the question, RETURN or Circle goes back to the page with the changes still
 staged. The page last shown is kept for the next open. Seven rows fit under the
-header (Y 45..201). There is no hint row (the game's menu has none) and the menu
-pointer is not wired into the page yet.
+header (Y 45..201). There is no hint row (the game's menu has none).
+
+**The menu pointer reaches the page** (2026-10-09, Verdite3's `48db447`): the page hands
+its drawn rows to `MenuMouse.Rows` (each box at the record's X - 6, Y - 6, the item
+template's 124x24), with the header and the value column as the page's own area. The
+page's loop keeps its cursor in a register, so hover reaches it as one Up or Down a pad
+read until the drawn cursor is under the pointer (three pushes that do not move it give
+up until the pointer moves), a click on the selected row steps its value as Right does,
+and a click clear of the page backs out as Circle does; the question's three rows go
+through the chooser as the drawer's do. The shell's `point <x> <y>|left|right|off` puts
+a pointer at game pixels in place of the host's. Measured (`KF2_AUTOSTART=1`, Circle, Up,
+Cross, then `point`): pointing at row 3 from 0 took three pushes, a click there stepped
+HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the question.
+**Not felt with a real mouse.**
 
 | page | row | values | stands for |
 |---|---|---|---|

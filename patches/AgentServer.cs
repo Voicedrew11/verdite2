@@ -119,6 +119,7 @@ public static class AgentServer
         "aspect [4:3|16:9|<ratio>] - the widescreen aspect, as the settings window sets it (not saved)",
         "scale [1..8] - the render scale, taken at the next present (0097, not saved); alone, the current one",
         "settings [open|save|discard|step <key> <-1|1>|reset <key>] - the game menu's settings session without its page; alone, every setting",
+        "point [<x> <y>|left|right|off] - the menu pointer at game pixels, a click, or the host's pointer again; alone, what it saw",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -356,6 +357,7 @@ public static class AgentServer
             case "aspect":
             case "scale":
             case "settings":
+            case "point":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -463,6 +465,7 @@ public static class AgentServer
         "murk" => Murk.Shell(cmd.Arg1),
         "scale" => DoScale(cmd.Arg1),
         "settings" => DoSettings(cmd.Arg1),
+        "point" => MenuMouse.Shell(cmd.Arg1, cmd.Arg2),
         "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
         "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         "savecheck" => DoSaveCheck(),
