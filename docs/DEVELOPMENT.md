@@ -669,6 +669,48 @@ to gain, and one less thing to be doing concurrently with a detour being written
 A method that will not prepare is counted and skipped — it is a method that
 compiles on its first call, which is where it started.
 
+### Compiling ahead on several threads
+
+`patches/Prejit.cs` now takes its work from one ordered list on several threads:
+a quarter of the cores, at most four, overridable with `KF2_PREJIT_THREADS`. The
+list is flattened once at `main`, and each thread takes the next method from its
+head, so the order is still the one above (area modules, patches, runtime,
+generics, `game`, `main`, `end`, `open`). Three other things changed in the same
+pass, all ported from Verdite3 (its "The stutters" and "Compiling ahead: `Prejit`"
+in its `DEVELOPMENT.md`):
+
+- **Constructors** are compiled too (`GetConstructors`, static ones included),
+  since `GetMethods` leaves them out and a type's first use compiled its `.cctor`
+  on the game thread.
+- **Value-type generics** the port's fields close over (`Dictionary<…, Mesh>`,
+  `List<Vertex>`) are found through the fields of this assembly and the runtime
+  and compiled as their own batch, because a value-type instantiation shares no
+  code with any other.
+- **Verdite Core's namespace** (`Verdite.Core`) is warmed with the port's own
+  `Kf2` namespace, in the same batch: it compiles into this assembly as source,
+  so it was being JITted on first call like everything else. Verdite3 does the
+  same.
+
+The `KF2_PREJIT_PROBE` line is now one per batch, printed by the thread that
+finishes the batch's last method, and says when the batch was done rather than
+what it cost, since several batches overlap.
+
+Verdite3 measured the threads and the ordering on its own game: one thread took
+**8.9 s** over 7751 methods, still in `game` when an autostart reached its first
+area; four threads took **2.7-2.9 s**, done about 1.7 s before the area. Its
+constructors took the method count from 7754 to 8326, and the generics added 6200
+methods for about 0.2 s.
+
+**Measured here on 2026-10-09** (16 threads, so four prejit threads; two
+`KF2_AUTOSTART=2` boots each way, `KF2_FPS=off`): the old pass compiled **9935
+methods in 5844-5926 ms**, 210 left to their hook, 13 refused; this one compiles
+**20320 in 1873-1891 ms**, 416 left to their hook, 225 refused. The pass now ends
+before the autostart reaches its area (11.6 s from launch, unchanged). The refusals
+are `PrepareMethod` throwing on a constructor or a closed generic it cannot
+prepare, caught and counted. What is not measured yet is the JIT left on the game
+thread in the first frame of an area, the `KF2_PREJIT=0` / on comparison of the
+section above; that is the number this change exists to move.
+
 ## Watching a frame being built
 
 `patches/FrameCapture.cs`, `patches/FrameViewerPanel.cs` and the runtime's
