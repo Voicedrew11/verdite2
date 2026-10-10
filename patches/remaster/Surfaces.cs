@@ -330,7 +330,7 @@ public sealed class Surfaces : IRemasterFeature
         long tick = Lights.Ticks;
         if (tick == _pulseTick) return;
         _pulseTick = tick;
-        double t = tick / 20.0;
+        double t = tick / FramePacing.LogicHz;
         for (int i = SurfaceMaterial.FirstAuthored; i < SurfaceMaterial.Count; i++)
         {
             var (amount, hz, flicker) = _pulse[i];

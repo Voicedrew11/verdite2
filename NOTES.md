@@ -123,20 +123,22 @@ floor speckle — and **mipmaps** are built where a texture is decoded, in an at
 of its own, since VRAM cannot hold them (`0060`). Both off by default, the picture
 not looked at (see "Anisotropic filtering").
 
-**The frame rate is a free number and the world's tick rate is a fixed 20.** The
+**The frame rate is a free number and the world's tick rate is a fixed 15.** The
 port skips the game's own frame gate at every rate — it decides both together and
 knows one answer for both, 30 — paces the picture itself, holds the world to a
 fixed timestep and carries the camera between ticks, so the picture can run at 60,
 120 or 165 while the world keeps a console's timing. **The render rate defaults to
-60**, three pictures per tick; 20 is still the world's clock and what every
+60**, four pictures per tick; 15 is the world's clock and what every
 rate in this port is measured against. The literal 2
 in that gate is a *ceiling* rather than a target — it forbids a frame faster than
 30 and asks nothing of a slower one — and the console missed that deadline under
-load and landed in the three-vblank band, so since the game's speed is its frame
-rate, 20 is the speed it was played at and built at. That is a judgement no counter here can
+load, so since the game's speed is its frame rate, the band it landed in is the
+speed it was played at and built at: 15, the four-vblank band, which is what a
+door's sound fits against its motion, judged by ear (it was 20, the three-vblank
+band, until then). That is a judgement no counter here can
 settle — which is a reason to make it, not a reason to hand it to the player, so
-the tick rate is **not** a setting and `KF2_TICKRATE=30` is the comparison (see
-"Any frame rate" in `docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
+the tick rate is **not** a setting and `KF2_TICKRATE=20` or `30` is the comparison (see
+"Any frame rate" and "The reference band is 4 vblanks" in `docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
 movies and holds "The End", and **any button then returns to the title** —
 holding it forever is what the original does, and on a window that is
 indistinguishable from a crash. See "The ending screen" in `docs/RUNTIME.md`.
@@ -239,6 +241,7 @@ What a static recompilation loses (interrupts, VSync-driven work) and the patche
 - The interface's font
 - CHD disc images
 - Leaving fullscreen left the interface at the fullscreen size
+- The menu bar starts hidden
 - Minimising froze the game on Wayland
 - Two general shapes worth keeping
 - Upstream contribution policy
@@ -269,6 +272,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - "No textures on the other machine": splitting the three layers
 - The reflections see past the camera's cull
 - The enhancement distance: past it, the game's own look
+- Fog by distance from the eye
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 
@@ -276,6 +280,8 @@ Aspect ratio, the HUD and screen-space effects authored 320 wide, and the three 
 
 - Widescreen: the runtime renders the margin, the game fills a quarter of it
 - The HUD does not widen with the world, and finding it is the problem
+- The HUD is moved by its records
+- The HUD at the edges is a setting again
 - The screen-space effects are 320 wide too, and one drawer makes all of them
 - Widescreen became a patch, and the default stayed 4:3
 - Three checkboxes that were not choices
@@ -305,6 +311,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - Saving and loading
 - Debug tools
 - The Items tab gives through the game's own give, and the names are read live
+- RETURN is the chooser's last item, and the port settings page takes it
 - Full-screen messages are pictures, and the world behind them is a 1x copy
 
 ### [PATCHES_AND_MODS.md](docs/PATCHES_AND_MODS.md)
@@ -367,6 +374,15 @@ The SPU mixer, its reverb and interpolation, XA resampling and the host output.
 - The host output
 - Positional audio
 
+### [SETTINGS.md](docs/SETTINGS.md)
+
+PORT SETTINGS, in place of RETURN in the in-game menu: the port's settings on pages drawn with the game's own routines, ported from Verdite3.
+
+- The rules
+- The pieces
+- The page
+- Measured (2026-10-09)
+
 ### [ENV_VARS.md](docs/ENV_VARS.md)
 
 Every `KF2_*` switch the port reads, in one list.
@@ -377,7 +393,7 @@ How `tools/RecompOne`, a subtree of the fork, is kept, why it is not a patch sta
 
 ### [RECOMPONE_PATCHES.md](tools/RecompOne/docs/RECOMPONE_PATCHES.md)
 
-Every change the port made to RecompOne, `0001`-`0085`, one entry each.
+Every change the port made to RecompOne, `0001`-`0109`, one entry each.
 
 ### [TODO.md](docs/TODO.md)
 
@@ -453,6 +469,10 @@ The plan to draw the world from meshes kept on the GPU (retained-mode rendering)
 ### [SHARING.md](docs/SHARING.md)
 
 Sharing this port's work with Verdite1 and Verdite3: what in the repository is the RecompOne fork, what is game-agnostic, what is a mechanism that might generalize and what is this game's alone, and the progress log of the program. The plan, its phases and its rules are [SHARING_PLAN.md](docs/SHARING_PLAN.md); the per-file detail is [SHARING_INVENTORY.md](docs/SHARING_INVENTORY.md). Phase 0, the inventory, is written and awaits review.
+
+The full-coverage Verdite3 native/GPU renderer plan is
+[VERDITE3_GPU_PLAN.md](docs/VERDITE3_GPU_PLAN.md): reuse, native replacement
+inventory, final scene contracts, implementation gates and whole-game verification.
 
 - The buckets
 - The finding that shapes everything else: one per-game table removes most of the coupling

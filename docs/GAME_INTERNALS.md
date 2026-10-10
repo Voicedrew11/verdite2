@@ -113,8 +113,8 @@ frame costs three vblanks; since the game's speed *is* its frame rate, 20 is the
 speed it was played at. The port's HLE GPU makes the two-vblank deadline every
 time and never bands down, so the gate is now **skipped at every rate, not only
 above 30** — it decides the render rate and the world rate together and knows one
-answer for both. The world runs on `FramePacing.LogicHz` instead, 20 by default
-and 30 as a setting. See "The reference band is 3 vblanks, not 2" in
+answer for both. The world runs on `FramePacing.LogicHz` instead, 15 by default
+(not a setting; `KF2_TICKRATE`). See "The reference band is 4 vblanks" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 `0x801B6CAC` is bumped by the same callback and never reset by anything.
@@ -961,6 +961,39 @@ loads the entry's preview. `func_80022CAC` **always returns 0**, so the
 10 visible from 0, rows at x 42 y 44, 236 × 14; a sub-list on the same page is 3
 entries, 4 visible, rows at x 42 y 164, the same size.
 
+### RETURN is the chooser's last item, and the port settings page takes it
+
+Read for `patches/SettingsPage.cs` (2026-10-09). The in-game menu `func_80018E80`
+draws group 0 with `func_800208D8(0, 8, cursor, confirmed)` (returns `0x80018EE4`
+and `0x8001906C`) and steps it with `func_8001EA14(cursor, 7, &sel, &confirmed)`,
+`&cancel` at its `sp+0x10` (return `0x80018FFC`; the menu's locals are `sel`
+`sp+0x18`, `confirmed` `sp+0x1C`, `cancel` `sp+0x20`, `-99` until cancelled). Group
+0 has no header and eight items, `USE ITEM` .. `OPTION` and `RETURN` at X 31, Y
+19 + 26*i; `RETURN` is the record at `0x80064DB4`.
+
+**`RETURN` has no arm in the dispatch.** The chooser treats Cross on the last index
+as a cancel: it sets `confirmed = 1`, leaves `sel` at -1 and writes `cancel = -1`,
+which closes the menu exactly as Circle does (Circle and Start leave `confirmed` at
+0). The jump table at `0x80011098` covers `sel` 0..6 only. Every list in the game
+ends this way (`DATA`, `OPTION`, the shops), so a list's last record is a cancel
+and not a choice.
+
+So the page needs no dispatch arm: a pre on `func_800208D8` writes `PORT SETTINGS`
+over the record each time group 0 is drawn, and a post on the chooser (order 100,
+after `MenuMouse`'s) that sees `V0 == 7`, `confirmed == 1` and `cancel == -1` puts
+`cancel` back to -99, clears `confirmed` and runs the page between the menu's
+frames. The page's records are built on the guest stack and drawn with the list's
+own routines: box `func_800218B4(0x80064C20, rec)`, cursor
+`func_80021A84(0x80064BFC, rec)`, label `func_80021E10(0x80064BF0, rec)`, a header
+at OPTION's (17, 19), rows from (31, 45), values at OPTION's value column X 180.
+Its pad is the chooser's (`func_80022E90`, `func_80022E58`) against the action-mask
+words; its sounds `func_80022DC4` 0x10 (move), 0x11 (change), 0x12 (back).
+
+The label font is KF3's layout: `,` `'` `/` `!` `?` sit at `0x31`, `0x32`, `0x35`,
+`0x38`, `0x3A` in this game's own strings (`SEATH'S`, `HP/MP`, `FORMAT?`).
+**Digits at `0x20`..`0x29` are assumed from KF3** and appear in no record of this
+game's; the page's numbers (`1440P`, `144`, `16/9`) are the first to use them.
+
 ### The two-line prompt keeps its cursor nowhere
 
 `func_800206E0(desc, ?, listFlag, page)` is the yes/no prompt every scrolling page
@@ -1745,7 +1778,8 @@ bits — `Up`/`Down` for forward, `L1`/`R1` for strafe, which is where the shipp
 WASD layout puts W/S and A/D — so a keyboard, a pad and any rebinding all reach
 it with no second table. The pad's shoulders fly up and down instead of
 strafing, read straight off the pad through `0062`'s `IsPadButtonDown` so that
-one bit cannot mean two things at once; the mute key toggles the flight.
+one bit cannot mean two things at once. The mute key was the flight's toggle; it
+is film mode now (below), and the flight's own toggle is F3 alone.
 
 ### The cinematic camera has to recover the turn as a difference
 
@@ -1794,6 +1828,23 @@ running away past a limit the base cannot follow while it sits at it.
 While it is on, the hotkey toasts (`Hotkeys.Notify`) and the pointer-capture
 glyph (`MouseIndicator.Suppressed`, driven from the `Cinematic` setter) stay
 silent, so a filmed flythrough has nothing fading in over the picture.
+
+(Removed from Verdite Core on 2026-10-09: there is no glyph left to suppress, and the `Cinematic` setter no longer touches it. See "A click captures, and the menu suspends it" in `docs/INPUT.md`.)
+
+**It holds instant mouse look off.** The look filter eases toward the angle the
+game integrated, and the port's mouse lead draws the view *past* that angle by
+the motion the tick has not spent yet; one smooths what the other jumps, and the
+two together judder. The `Cinematic` setter raises `FrameSmoothing.LeadSuppressed`
+(and `Noclip.Reset` lowers it, with `_cinematic`, so an unload mid-film leaves
+neither behind); the saved setting is left alone. See "The mouse leads the tick"
+in `docs/INPUT.md`.
+
+**Film mode is V**, or the pad's spare button (SDL `Misc1`, a DualSense's mute
+key): the cinematic camera, `Enemies ignore you` and noclip all on, or all off
+when all three already are; any mix of them turns all three on. No toast either
+way, since one would land in the shot. V is bound by neither RecompOne's stock
+keymap nor the port's WASD layout. Ported from Verdite3's debug mod.
+`KF2_DEBUG_FILMMODE_PROBE=<seconds>` presses it on a timer and prints the flags.
 
 Off by default, and it stays a debug-mod option rather than a port setting: the
 mechanism is measured, the picture is a matter of taste and has not been judged.
@@ -2013,3 +2064,33 @@ target, or redraw with stage 13 as `LoopPacing` does. The text: a replacement pe
 (file, entry), drawn where quads 3-4 go. Nothing in the runtime draws a port
 texture into the GL frame; the map draws through ImGui over `OutputView`, which only
 blends by alpha, so a replacement there would be pre-composited.
+
+## The bow and the arbalest
+
+Found 2026-10-09 for rumble and gyro aim (Verdite3's `d6ee250`, `1d84575`). The bow is
+`func_800271D0`'s branch for weapons 16 (BOW) and 17 (ARBALEST): the equipped weapon is
+`u8 0x801994AF` (`0xFF` none). Stage 3 runs `func_800271D0` once a tick, whatever the
+weapon, and not under a menu.
+
+| address | what |
+|---|---|
+| `u8 0x801994AF` | the equipped weapon id |
+| `s16 0x801994A4` | the swing clock: -1 idle, the draw, then the loose |
+| `u8 0x801994AE` | for a bow, 0 drawn, 1 loosed |
+| `u16 0x8019942E` | the draw's power, 0..5000, climbing once the clock passes the record's `+0x1E` |
+| `u32 0x801994A0` | the nocked arrow's object, 0 none |
+| `u8 0x8009B5A1`, `0x8009B5A2` | ARROW FOR THE BOW (117) and ELF'S BOLT (118) held |
+
+The press (`func_800262C8(0)`, from stage 3's just-pressed Square) sets the clip byte to
+0 and the clock to 0. While the clip byte is 0 the bow is drawn: on the clock's first
+tick an arrow is nocked (one of 117 for the bow, 118 for the arbalest), and each tick
+adds the weapon record's `+0x1C` (`0x12C` for the bow) until the clock holds at `0x0FFF`,
+full draw, for as long as Square is held. Letting go looses it: the clip byte 1 and the
+clock back to 0, then stepped `0x190` a tick to -1.
+
+Measured (`KF2_AUTOSTART=2`, the bow and five arrows given and equipped through
+`func_80026210` by a temporary hook, Square held 2.5 s over the shell): the clock 300,
+600 ... 4095 a tick with the arrows 5 to 4, the power from 867 to 5000 past clock 2700;
+on release clip 1, the clock 0, 400 ... 4000, then -1; the next press nocked again
+(arrows 3).
+

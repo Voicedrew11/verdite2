@@ -270,3 +270,47 @@ game that is switched over the same way needs the same trailers on its add
 commit, and the first `--push-fork` from it should be checked for exactly that:
 `git rev-list --count <fork-branch> ^<fork-commit-added>` is the number of
 commits being sent, and none of them may be a game commit.
+
+## The pull that found a one-parent rejoin
+
+On 2026-10-09 `bash scripts/setup_tools.sh --pull-fork` failed with
+`fatal: Needed a single revision`, before anything was merged.
+
+The cause is commit `c47daf6`, the rejoin written when `tools/RecompOne` was
+first brought back to the fork's `f02f484`. It carries the `git-subtree-mainline`
+and `git-subtree-split` trailers of a rejoin, but it has **one parent**, not two.
+`git subtree` takes a commit with a mainline trailer for a rejoin, and its
+`find_latest_squash` then runs `git rev-parse --verify <commit>^2`, which does
+not exist for a one-parent commit. The pull stops there, so `--pull-fork` could
+not take any later fork commit.
+
+The fix was a squash commit made by hand and a real merge onto it:
+
+- `git commit-tree <fork main>^{tree} -p 18e4cfe` makes the squash. `18e4cfe` is
+  the previous squash, and its tree equals `f02f484`'s, so the new commit's
+  parent is the last squash the subtree actually has. The commit carries
+  `git-subtree-dir: tools/RecompOne` and `git-subtree-split: <fork main sha>`.
+- `git merge --no-ff -Xsubtree=tools/RecompOne` joins it, so the newest join in
+  history is an ordinary squash merge with the squash commit as its second parent.
+
+After that `git subtree pull --squash` finds this join first and reports
+`Subtree is already at commit 09f3f09`, and `--pull-fork` works again. The pull
+that moved the subtree from `f02f484` to `09f3f09` brings the fork's patches `0090`-`0109`, the amendment to `0045`, and Silk.NET 2.23.0,
+which fixes the Wayland Alt+Tab `Key.Unknown` crash (Verdite2 issue #48).
+
+**The rule that follows:** a rejoin is never written as a one-parent commit.
+If one is needed, it is a real merge whose second parent is the squash or split
+commit. A commit that has the trailers and one parent looks like a rejoin to
+`git subtree` and breaks the next pull.
+
+The pull was checked against a build from before it. `generated/` is
+byte-identical to the earlier recompile. The acceptance run (`KF2_AUTOSTART=2`,
+`KF2_FPS=144`) reached open, game, fdat02 and fdat05, with slot 2 at hp 46/86 in
+area 1 and 144.0 fps drawn at 19.9 to 20.0 ticks/s. The present probe read
+`[present] wide 288, plain 0, vram fallback 0`, the perspective probe 100.0% hit
+at 18720 caught/s, and gpuworld ran active with 0 missed. No hook failed. The
+numbers are the same as the baseline run of the pre-pull build.
+
+Not judged by eye: the HUD and menu palettes, which the wrapped image loads
+(`0092`) now feed; far depthless scenery under the retained world (`0096`);
+see-through HUD over water (`0099`); models clipped at the near plane (`0103`).

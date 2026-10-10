@@ -300,6 +300,11 @@ public static class MenuMouse
     /// routine above that has a cancel arm at all tests this one first.</summary>
     const uint MaskUp = 0x8006E590, MaskCross = 0x8006E568, MaskCancel = 0x8006E56C;
 
+    /// <summary>Down and Right, for a page with a loop of its own: a push the
+    /// other way, and a click on a page of values (the settings page steps a
+    /// value on Right, as on Cross).</summary>
+    const uint MaskDown = 0x8006E594, MaskRight = 0x8006E598;
+
     /// <summary>The menu's own blips: move and confirm. The arguments
     /// `func_80022DC4` takes. There is no cancel blip here any more -- backing
     /// out goes through the game's own cancel arm, which blips itself.</summary>
@@ -362,19 +367,42 @@ public static class MenuMouse
     /// but a counter cannot latch the session open if one ever does.</summary>
     static int _depth;
 
-    /// <summary>Whether this class took the pointer back on the way in, and so
-    /// owes it on the way out. A pointer captured for mouse look is an unbounded
-    /// virtual position -- there is no "where is it over the menu" while it is
-    /// locked -- so the session releases it and the desktop cursor is what the
-    /// player points with.</summary>
-    static bool _tookCapture;
-
     // --- the fixed list's geometry -------------------------------------------
 
-    static readonly int[] _fixX = new int[MaxFixedRows];
-    static readonly int[] _fixY = new int[MaxFixedRows];
-    static int _fixCount, _fixW, _fixH, _fixGroup = -1;
+    /// <summary>The boxes last drawn, one rectangle each in game pixels: the
+    /// drawer's, or a page's own through <see cref="Rows"/>.</summary>
+    static readonly (int X, int Y, int W, int H)[] _fix = new (int, int, int, int)[MaxFixedRows];
+    static int _fixCount, _fixGroup = -1;
     static long _fixDrawnAt;
+
+    // --- a page with a loop of its own (Rows) --------------------------------
+
+    /// <summary>Menu pad reads so far, and the read the page's rows were drawn
+    /// after: a page's rows count only at the first read after they were drawn,
+    /// so a page's leftovers never steer the next loop to read the pad.</summary>
+    static long _reads, _pageDrawnAfter = -1;
+    static int _pageCursor = -1;
+    static bool _pageValues;
+    static string _pageWhat = "none";
+
+    /// <summary>The page's whole drawn area, when it is wider than its boxes:
+    /// a click inside it that is on no box is a click on nothing rather than a
+    /// back-out.</summary>
+    static (int X, int Y, int W, int H)? _pageArea;
+
+    /// <summary>Pushes through the pad that did not move the drawn cursor,
+    /// and the cursor they pushed from; <see cref="MaxPushes"/> of them stop the
+    /// pushing until the pointer moves.</summary>
+    static int _pushes, _pushedFrom = -1;
+
+    /// <summary>Verdite3's number: a page whose loop does not take a push is
+    /// given up on after three, rather than pushed for ever.</summary>
+    const int MaxPushes = 3;
+
+    /// <summary>The shell's pointer, in game pixels, in place of the host's
+    /// (<see cref="Shell"/>), and its pending clicks.</summary>
+    static Vector2? _fake;
+    static bool _fakeLeft, _fakeRight;
 
     // --- the pointer ---------------------------------------------------------
 
@@ -453,6 +481,7 @@ public static class MenuMouse
     static double _windowMs = -1.0;
     static int _samples, _hovers, _moves, _scrolls, _confirms, _cancels, _injects;
     static int _lastReported = -2;
+    static string _lastRowsWhat = "";
     static uint _lastScDesc;
     static int _lastScCount = -1;
 
@@ -506,7 +535,7 @@ public static class MenuMouse
 
         if (!_loopHooked)
         {
-            loop = At(MenuLoop, "a captured pointer will not be given back inside the menu.");
+            loop = At(MenuLoop, "a captured pointer is not released for the menu, and a click there captures it.");
             if (loop != null)
             {
                 HookManager.AddPre(_self, loop, Own(nameof(BeforeMenu)));
@@ -588,11 +617,13 @@ public static class MenuMouse
     // ------------------------------------------------------------------------
 
     /// <summary>
-    /// The menu is opening. Give the pointer back if mouse look had it: under
-    /// `CursorMode.Raw` GLFW reports an unbounded virtual position, so there is
-    /// no "over the picture" while it is locked, and there is no visible cursor
-    /// to point with either. <see cref="Mouse.SetCaptured"/> announces both ends
-    /// of that through the glyph in patches/MouseIndicator.cs.
+    /// The menu is opening. Hold the pointer free for it with
+    /// <see cref="Mouse.Suspend"/>: under `CursorMode.Raw` GLFW reports an
+    /// unbounded virtual position, so there is no "over the picture" while it is
+    /// locked, and there is no visible cursor to point with either. The suspension
+    /// also keeps a click on the menu from capturing the pointer (a click on the
+    /// picture captures everywhere else), and it is taken whether or not the menu
+    /// pointer is on, since that click capture is Verdite Core's either way.
     /// </summary>
     public static bool BeforeMenu(CpuContext c, IMemory m)
     {
@@ -607,6 +638,7 @@ public static class MenuMouse
         _backOut = _cancelled = false;
         _lastPos = new Vector2(float.NaN, float.NaN);
         _lastReported = -2;
+        _lastRowsWhat = "";
 
         // Read the buttons once rather than leaving the previous session's state
         // to fire an edge on the first sample: opening the menu with Cross under
@@ -614,17 +646,13 @@ public static class MenuMouse
         _leftWas = Down(HostMouseButton.Left);
         _rightWas = Down(HostMouseButton.Right);
 
-        if (Enabled)
-        {
-            _tookCapture = Mouse.Captured;
-            if (_tookCapture) Mouse.SetCaptured(false);
-        }
+        Mouse.Suspend(true);
 
         return true;
     }
 
-    /// <summary>The menu closed. Give the pointer back to mouse look if it had
-    /// it.</summary>
+    /// <summary>The menu closed. Give the pointer back to mouse look if the
+    /// menu took it (Verdite Core's <see cref="Mouse.Suspend"/> remembers).</summary>
     public static void AfterMenu(CpuContext c, IMemory m)
     {
         if (--_depth > 0) return;
@@ -634,11 +662,7 @@ public static class MenuMouse
         _hover = -1;
         _live = "none";
 
-        if (_tookCapture)
-        {
-            _tookCapture = false;
-            if (Mouse.Enabled) Mouse.SetCaptured(true);
-        }
+        Mouse.Suspend(false);
     }
 
     // ------------------------------------------------------------------------
@@ -664,31 +688,90 @@ public static class MenuMouse
         if (count <= 0 || count > MaxFixedRows || group < 0 || group > 31) return true;
 
         uint bas = LayoutBase + (uint)group * GroupStride;
+        var (w, h) = BoxSize(m, ItemTemplate);
 
         for (int i = 0; i < count; i++)
         {
             uint rec = bas + RecordStride * (uint)(i + 1);
             // The record's position is the sprite's, and func_800218B4 draws the
             // box six pixels up and left of it.
-            _fixX[i] = (short)m.ReadU16(rec) - TemplateInset;
-            _fixY[i] = (short)m.ReadU16(rec + 2) - TemplateInset;
+            _fix[i] = ((short)m.ReadU16(rec) - TemplateInset, (short)m.ReadU16(rec + 2) - TemplateInset, w, h);
         }
 
-        _fixW = Math.Max(1, (int)m.ReadU16(ItemTemplate + 0x8));
-        _fixH = Math.Max(1, (int)m.ReadU16(ItemTemplate + 0xA));
         _fixCount = count;
         _fixGroup = group;
         _fixDrawnAt = Environment.TickCount64;
+        // The tab menu's list is the chooser's, not a page that reads the pad.
+        _pageDrawnAfter = -1;
+        _pageArea = null;
 
         if (_probe && _lastReported != group)
         {
             _lastReported = group;
-            var ys = string.Join(",", _fixY.Take(count));
+            var ys = string.Join(",", _fix.Take(count).Select(r => r.Y));
             Console.WriteLine($"[KF2] menu pointer: fixed group {group} at 0x{bas:X8}, {count} rows, " +
-                              $"x {_fixX[0]}, y {ys}, box {_fixW}x{_fixH}");
+                              $"x {_fix[0].X}, y {ys}, box {w}x{h}");
         }
 
         return true;
+    }
+
+    /// <summary>A template's drawn size: <c>func_800218B4</c> reads its
+    /// <c>+0x8</c>/<c>+0xA</c> as the box's width and height, and the box sits
+    /// <see cref="TemplateInset"/> up and left of the record.</summary>
+    public static (int W, int H) BoxSize(IMemory m, uint template) =>
+        (Math.Max(1, (int)m.ReadU16(template + 0x8)), Math.Max(1, (int)m.ReadU16(template + 0xA)));
+
+    /// <summary>
+    /// A page that draws its own boxes hands them over: the boxes in game pixels,
+    /// the row drawn selected, and whether a click on the selected row steps a
+    /// value (Right) rather than confirming it (Cross). <paramref name="area"/> is
+    /// what the page draws beyond its boxes -- a value column, a header -- where a
+    /// click is on nothing rather than off the page.
+    ///
+    /// The rows serve two drivers. A chooser (`func_8001EA14`) called after the
+    /// draw takes them as the fixed list's, exactly as it takes the drawer's: that
+    /// is the settings page's question. A loop of the page's own, which keeps its
+    /// cursor in a register and reads the pad through `func_80022E58`, is driven
+    /// at that read (<see cref="AfterPadRead"/>): one Up or Down a read toward the
+    /// pointer, then Right or Cross for a click. Verdite3's <c>MenuMouse.Rows</c>.
+    /// </summary>
+    public static void Rows(ReadOnlySpan<(int X, int Y, int W, int H)> rows, int cursor, bool values, string what,
+                            (int X, int Y, int W, int H)? area = null)
+    {
+        if (!Enabled) return;
+        int n = Math.Min(rows.Length, MaxFixedRows);
+        rows[..n].CopyTo(_fix);
+        _fixCount = n;
+        _fixGroup = -1;
+        _fixDrawnAt = Environment.TickCount64;
+        _pageDrawnAfter = _reads;
+        _pageCursor = cursor;
+        _pageValues = values;
+        _pageWhat = what;
+        _pageArea = area;
+
+        if (_probe && _lastRowsWhat != what)
+        {
+            _lastRowsWhat = what;
+            var ys = string.Join(",", _fix.Take(n).Select(r => r.Y));
+            Console.WriteLine($"[KF2] menu pointer: {what}, {n} rows, x {(n > 0 ? _fix[0].X : 0)}, y {ys}, " +
+                              $"box {(n > 0 ? _fix[0].W : 0)}x{(n > 0 ? _fix[0].H : 0)}, cursor {cursor}" +
+                              (values ? ", values" : "") +
+                              (area is { } a ? $", area ({a.X},{a.Y}) {a.W}x{a.H}" : ""));
+        }
+    }
+
+    /// <summary>The page that handed its rows over has closed: nothing it drew is
+    /// on screen, so nothing of it may be hit before the next widget draws.</summary>
+    public static void Forget()
+    {
+        _fixCount = 0;
+        _fixGroup = -1;
+        _pageDrawnAfter = -1;
+        _pageArea = null;
+        _pushes = 0;
+        _pushedFrom = -1;
     }
 
     /// <summary>
@@ -759,7 +842,7 @@ public static class MenuMouse
                 m.WriteU32(_fixConfirmPtr, 1u);
                 if (target < _fixMaxIn) m.WriteU32(_fixSelPtr, (uint)target);
                 else if (_fixCancelPtr != 0) m.WriteU32(_fixCancelPtr, 0xFFFFFFFFu);
-                _confirms++;
+                _confirms++; _confirmsTotal++;
             }
             else if (Off(FixedBounds()))
             {
@@ -790,7 +873,7 @@ public static class MenuMouse
     {
         if (_fixCount == 0 || Environment.TickCount64 - _fixDrawnAt > GeomStaleMs) return -1;
         for (int i = 0; i < _fixCount; i++)
-            if (In(_fixX[i], _fixY[i], _fixW, _fixH)) { _hovers++; return i; }
+            if (In(_fix[i].X, _fix[i].Y, _fix[i].W, _fix[i].H)) { _hovers++; return i; }
         return -1;
     }
 
@@ -900,7 +983,7 @@ public static class MenuMouse
             {
                 Blip(c, m, BlipConfirm);
                 m.WriteU32(_scConfirmPtr, 1u);
-                _confirms++;
+                _confirms++; _confirmsTotal++;
             }
             else if (Off(ScrollBounds(m, rows))) _backOut = true;
         }
@@ -1066,6 +1149,12 @@ public static class MenuMouse
         _padReadAt = now;
         _cancelled = false;
 
+        // A page's rows count at the first read after they were drawn and at no
+        // other: the read of the loop that drew them. Taken before the count
+        // moves on, and whatever else this read turns out to be.
+        bool pageFresh = _fixCount > 0 && _pageDrawnAfter == _reads;
+        _reads++;
+
         if (opening)
         {
             _leftWas = Down(HostMouseButton.Left);
@@ -1091,8 +1180,17 @@ public static class MenuMouse
             _backOut = false;
             _cancelled = true;
             c.V0 |= m.ReadU32(MaskCancel);
-            _cancels++;
-            _injects++;
+            _cancels++; _cancelsTotal++;
+            _injects++; _injectsTotal++;
+            Report();
+            return;
+        }
+
+        // A read inside a stepper or the prompt belongs to that widget's own
+        // mechanism; a page's rows drawn just before this read are the page's.
+        if (pageFresh && !_haveFixed && !_haveScroll && _promptDepth <= 0)
+        {
+            PageRead(c, m);
             Report();
             return;
         }
@@ -1123,16 +1221,76 @@ public static class MenuMouse
         {
             _clickLeft = false;
             add = m.ReadU32(MaskCross);
-            _confirms++;
+            _confirms++; _confirmsTotal++;
         }
 
         if (add != 0)
         {
             c.V0 |= add;
-            _injects++;
+            _injects++; _injectsTotal++;
         }
 
         Report();
+    }
+
+    /// <summary>
+    /// A page with a loop of its own has read the pad: the rows it handed over
+    /// through <see cref="Rows"/> were drawn just before, with its cursor, so
+    /// this is the prompt's mechanism on any number of rows. One Up or Down a
+    /// read while the hovered row and the drawn cursor disagree -- closed over
+    /// the state it changes, since the next draw reports the cursor the push
+    /// produced -- then, for a click once they agree, Right on a page of values
+    /// or Cross on any other. A click on a row the cursor is not on is left
+    /// pending until the cursor arrives, so pointing and clicking is one
+    /// gesture. <see cref="MaxPushes"/> pushes that do not move the drawn cursor
+    /// stop the pushing until the pointer moves.
+    ///
+    /// The pad wins a read it is pressing anything on: a real Up or Down hands it
+    /// the cursor, and nothing is ORed over a button the player is holding.
+    /// </summary>
+    static void PageRead(CpuContext c, IMemory m)
+    {
+        uint up = m.ReadU32(MaskUp), down = m.ReadU32(MaskDown);
+        uint real = c.V0;
+        if ((real & (up | down)) != 0) _padOwns = true;
+
+        TakeWheel();          // a page draws every row it has: nothing to scroll
+        _live = $"page {_pageWhat}";
+        if (_pageCursor != _pushedFrom) _pushes = 0;   // the last push moved it
+        int hover = _hover = HoverLive() ? HitFixed() : -1;
+        if (real != 0) return;
+
+        uint add = 0;
+        if (hover < 0)
+        {
+            // As in the prompt: clear of the page is a back-out on the next read,
+            // in a gutter or on the page's value column a click on nothing.
+            if (_clickLeft && Off(FixedBounds())) _backOut = true;
+            _clickLeft = false;
+        }
+        else if (hover != _pageCursor)
+        {
+            if (_pushes < MaxPushes)
+            {
+                add = hover > _pageCursor ? down : up;
+                _pushedFrom = _pageCursor;
+                _pushes++;
+                _moves++;
+            }
+            else _clickLeft = false;
+        }
+        else if (_clickLeft)
+        {
+            _clickLeft = false;
+            add = _pageValues ? m.ReadU32(MaskRight) : m.ReadU32(MaskCross);
+            _confirms++; _confirmsTotal++;
+        }
+
+        if (add != 0)
+        {
+            c.V0 |= add;
+            _injects++; _injectsTotal++;
+        }
     }
 
     /// <summary>Which of the prompt's two boxes the pointer is inside, or -1.
@@ -1213,6 +1371,18 @@ public static class MenuMouse
         _inPicture = false;
         _gameX = _gameY = float.NaN;
 
+        // The shell's pointer, already in game pixels: the conversion is skipped,
+        // and with it the panels' cover and the host's buttons.
+        if (_fake is { } fake)
+        {
+            if (fake != _lastPos) { _movedAt = Environment.TickCount64; _padOwns = false; _lastPos = fake; _pushes = 0; }
+            if (_fakeLeft) { _clickLeft = true; _fakeLeft = false; _movedAt = Environment.TickCount64; _padOwns = false; }
+            if (_fakeRight) { _clickRight = true; _fakeRight = false; }
+            _inPicture = true;
+            (_gameX, _gameY) = (fake.X, fake.Y);
+            return;
+        }
+
         // Before the first frame there is no context to read an IO out of.
         if (ImGui.GetCurrentContext() == IntPtr.Zero) return;
 
@@ -1222,7 +1392,7 @@ public static class MenuMouse
         var pos = ImGui.GetIO().MousePos;
         if (pos != _lastPos && !float.IsNaN(pos.X))
         {
-            if (!float.IsNaN(_lastPos.X)) { _movedAt = Environment.TickCount64; _padOwns = false; }
+            if (!float.IsNaN(_lastPos.X)) { _movedAt = Environment.TickCount64; _padOwns = false; _pushes = 0; }
             _lastPos = pos;
         }
 
@@ -1262,6 +1432,9 @@ public static class MenuMouse
 
         if (pos.X < g0.X || pos.X > OutputView.Max.X ||
             pos.Y < g0.Y || pos.Y > OutputView.Max.Y) return;
+        // A panel floating in front of the picture has the pointer: its clicks
+        // are not the menu's, which would confirm a row or back out under it.
+        if (OutputView.Covered) return;
 
         int margin = Display.WideMargin(gameW);
         float picW = gameW + 2 * margin;
@@ -1313,8 +1486,15 @@ public static class MenuMouse
         int x0 = int.MaxValue, y0 = int.MaxValue, x1 = int.MinValue, y1 = int.MinValue;
         for (int i = 0; i < _fixCount; i++)
         {
-            x0 = Math.Min(x0, _fixX[i]); y0 = Math.Min(y0, _fixY[i]);
-            x1 = Math.Max(x1, _fixX[i] + _fixW); y1 = Math.Max(y1, _fixY[i] + _fixH);
+            var r = _fix[i];
+            x0 = Math.Min(x0, r.X); y0 = Math.Min(y0, r.Y);
+            x1 = Math.Max(x1, r.X + r.W); y1 = Math.Max(y1, r.Y + r.H);
+        }
+        // A page's value column and header are its own: on no box, but not off it.
+        if (_pageArea is { } a)
+        {
+            x0 = Math.Min(x0, a.X); y0 = Math.Min(y0, a.Y);
+            x1 = Math.Max(x1, a.X + a.W); y1 = Math.Max(y1, a.Y + a.H);
         }
         return (x0, y0, x1 - x0, y1 - y0);
     }
@@ -1392,6 +1572,46 @@ public static class MenuMouse
     static bool HoverLive() => !_padOwns && Environment.TickCount64 - _movedAt < IdleMs;
 
     static bool Down(HostMouseButton b) => HostWindow.MouseAvailable && HostWindow.IsMouseButtonDown(b);
+
+    /// <summary>
+    /// The shell's <c>point</c> (Verdite3's): a pointer in game pixels in place
+    /// of the host's, so a script can measure hover, a click and a back-out
+    /// without a person. <c>point &lt;x&gt; &lt;y&gt;</c>, <c>point left</c>,
+    /// <c>point right</c>, <c>point off</c> (the host's pointer again); alone,
+    /// what the last sample saw. It skips the window-to-game conversion, so it
+    /// says nothing about where a real pointer lands.
+    /// </summary>
+    public static string Shell(string a1, string a2)
+    {
+        static string Ok(string what) =>
+            "{\"ok\":true,\"cmd\":\"point\",\"pointer\":" +
+            (_fake is { } f ? $"[{f.X.ToString("0.#", Inv)},{f.Y.ToString("0.#", Inv)}]" : "\"host\"") +
+            ",\"what\":\"" + what + "\",\"live\":\"" + _live.Replace("\"", "'") + "\",\"row\":" + _hover +
+            ",\"pageCursor\":" + _pageCursor + ",\"padOwns\":" + (_padOwns ? "true" : "false") +
+            ",\"confirmsTotal\":" + _confirmsTotal + ",\"injectsTotal\":" + _injectsTotal +
+            ",\"cancelsTotal\":" + _cancelsTotal + "}";
+
+        switch (a1)
+        {
+            case "": return Ok("status");
+            case "off": _fake = null; _lastPos = new(float.NaN, float.NaN); return Ok("off");
+            case "left": _fakeLeft = true; return Ok("left");
+            case "right": _fakeRight = true; return Ok("right");
+        }
+        if (float.TryParse(a1, System.Globalization.NumberStyles.Float, Inv, out float x)
+            && float.TryParse(a2, System.Globalization.NumberStyles.Float, Inv, out float y))
+        {
+            _fake = new Vector2(x, y);
+            return Ok("moved");
+        }
+        return "{\"ok\":false,\"cmd\":\"point\",\"error\":\"point [<x> <y>|left|right|off]\"}";
+    }
+
+    static readonly System.Globalization.CultureInfo Inv = System.Globalization.CultureInfo.InvariantCulture;
+
+    /// <summary>Running totals for the shell, which the probe's per-second
+    /// counters are not: those are zeroed each time they are printed.</summary>
+    static long _confirmsTotal, _injectsTotal, _cancelsTotal;
 
     static void Report()
     {

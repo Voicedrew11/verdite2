@@ -381,6 +381,7 @@ public static class FrameSmoothing
         _applied = false;
         Frames++;
         LastVerdict = 0;
+        CameraBlock.ClearFraction();
         // Extrapolating, not Gating: Gating is true at the tick rate too, where
         // every frame ticks and LogicPhase is always ~0. Carrying there is not
         // merely pointless -- lerp(prev, cur, 0) is `prev`, so the renderer would
@@ -499,8 +500,9 @@ public static class FrameSmoothing
 
         // Rounded with the mouse's lead rather than apart, or the two roundings
         // wobble the view by a unit as the phase moves.
-        int yawStep = (int)Math.Round(yawD * frac + yawLead);
-        int pitchStep = (int)Math.Round(pitchD * frac + pitchLead);
+        double yawExact = yawD * frac + yawLead, pitchExact = pitchD * frac + pitchLead;
+        int yawStep = (int)Math.Round(yawExact);
+        int pitchStep = (int)Math.Round(pitchExact);
 
         // Stepped from the game's own previous-tick word, in the game's own 16-bit
         // domain, rather than rebuilt out of the 12-bit angle. The composer
@@ -514,6 +516,9 @@ public static class FrameSmoothing
         // phase 0 and agrees with `cur` mod 4096 at phase 1.
         m.WriteU16(ComposedYaw, (ushort)(_viewYaw.Prev + yawStep));
         m.WriteU16(ComposedPitch, (ushort)(_prevPitch + pitchStep));
+        // What the rounding took off, for the view's matrices to put back.
+        CameraBlock.SetFraction(m.ReadU16(ComposedPitch), m.ReadU16(ComposedYaw),
+                                pitchExact - pitchStep, yawExact - yawStep);
 
         if (posLive)
         {
@@ -689,9 +694,16 @@ public static class FrameSmoothing
     static long _leadFrame = -1;
     static int _tickYaw, _tickPitch;
 
+    /// <summary>Set by a mod whose own camera filter fights the lead -- the debug
+    /// mod's cinematic camera smooths the angles the lead would jump past, and
+    /// the two together judder. Off is the same as <see cref="Mouse.Lead"/> off;
+    /// the saved setting is left alone.</summary>
+    public static bool LeadSuppressed;
+
     // The part of the lead the tick has not spent yet: all of it, on a frame
     // that is not interpolated and so already shows the tick's own turn.
     static int _aheadYaw, _aheadPitch;
+    static double _aheadYawFrac, _aheadPitchFrac;
     static long _leadFrames, _leadTicks;
     static double _leadSum, _leadMiss;
 
@@ -701,7 +713,14 @@ public static class FrameSmoothing
     static (double Yaw, double Pitch) MouseLead(IMemory m, double frac)
     {
         _aheadYaw = _aheadPitch = 0;
-        if (!Mouse.Lead) return (0, 0);
+        _aheadYawFrac = _aheadPitchFrac = 0;
+        if (!Mouse.Lead || LeadSuppressed)
+        {
+            // Not carried into the frames after the lead comes back: until the
+            // next tick measures it, no tick's turn is known.
+            _tickYaw = _tickPitch = 0;
+            return (0, 0);
+        }
         Mouse.Poll();
 
         // On the tick the look routine spent the mouse, what the game actually
@@ -720,16 +739,27 @@ public static class FrameSmoothing
         double keep = 1.0 - frac;
         var (turn, look) = Mouse.Pending;
 
+        // With the fraction the tick's truncated step carried. The tick spends the
+        // pending sum and the carry together and leaves a new fraction; shown
+        // without the carry, the view jumped by the old fraction less the new one,
+        // up to a unit (0.09 deg), at every tick of a turn.
+        var (carryTurn, carryLook) = Analog.MouseCarry;
+        turn += carryTurn;
+        look += carryLook;
+
         _aheadYaw = (int)Math.Round(turn);
+        _aheadYawFrac = turn - _aheadYaw;
         double yaw = _tickYaw * keep + turn;
 
         // Held inside the game's pitch limit, off the base angle the next tick
         // will add to, so looking into the limit does not overshoot and come back.
         // The base is a 12-bit angle: just above level it is 0x0FFx, and only the
-        // clamp writes the sign-extended 0xFD44.
+        // clamp writes the sign-extended 0xFD44. Left fractional, as the yaw is,
+        // so the carried frame rounds it once with the lerp.
         int basePitch = S12(m.ReadU16(Analog.Pitch));
-        int ahead = Math.Clamp(basePitch + (int)Math.Round(look), -PitchLimit, PitchLimit) - basePitch;
-        _aheadPitch = ahead;
+        double ahead = Math.Clamp(basePitch + look, -PitchLimit, PitchLimit) - basePitch;
+        _aheadPitch = (int)Math.Round(ahead);
+        _aheadPitchFrac = ahead - _aheadPitch;
         double pitch = _tickPitch * keep + ahead;
 
         if (_probe && (yaw != 0 || pitch != 0))
@@ -755,6 +785,8 @@ public static class FrameSmoothing
 
         m.WriteU16(ComposedYaw, (ushort)(_yaw + _aheadYaw));
         m.WriteU16(ComposedPitch, (ushort)(_pitch + _aheadPitch));
+        CameraBlock.SetFraction(m.ReadU16(ComposedPitch), m.ReadU16(ComposedYaw),
+                                _aheadPitchFrac, _aheadYawFrac);
     }
 
     /// <summary>Placements the pair was shifted across: the game moved the view

@@ -32,6 +32,8 @@ public sealed class AutoReloadPage : IPatchPage
 
     public int Order => 20;
 
+    public IReadOnlyList<string> Patches => ["kf2.autoreload"];
+
     static readonly string[] Slots = ["Last used", "Slot 1", "Slot 2", "Slot 3"];
 
     public void Draw()

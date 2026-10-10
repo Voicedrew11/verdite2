@@ -69,13 +69,16 @@ public static class AgentBeacon
 
     public static void Install()
     {
-        if (!_on) return;
-
+        // The overlay is kept whether or not the beacon prints: the command
+        // channel's `state` and a crash report's Game section (CrashReports) both
+        // read the snapshot, and without it they said "boot" in every area.
         Event.AddListener<OverlayLoadedEvent>(e =>
         {
             _overlay = e.Name;
-            Console.WriteLine($"[KF2-AGENT] overlay {e.Name}");
+            if (_on) Console.WriteLine($"[KF2-AGENT] overlay {e.Name}");
         });
+
+        if (!_on) return;
 
         Event.AddListener<VSyncEvent>(_ =>
         {

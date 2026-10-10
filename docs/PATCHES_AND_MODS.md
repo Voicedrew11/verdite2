@@ -8,7 +8,7 @@ lives here — frame pacing and auto reload.
 
 | file | what it does | detail |
 |---|---|---|
-| `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
+| `FramePacing.cs` | paces the picture, and holds the world to 15 Hz | this file |
 | `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
 | `LoadPacing.cs` | makes a `VSync(0)` inside a disc wait cost a vblank again, so the loading screen's figure walks at the console's rate | this file |
 | `MenuWorld.cs` | draws the world live behind a menu or a shop instead of the frozen 320-wide copy | this file |
@@ -392,6 +392,20 @@ and the software rasterizer is always 15-bit, so a note under `Smooth (24-bit)`
 saying so looked right — but the Graphics backend combo offers `auto`, `gl45`,
 `gl33` and `gl21`, all four of them GL, and `GlBackendKind` has no software
 entry. The note would be for a state the pane cannot produce.
+
+**The dither off switch is the runtime's mask now.** `NoDither` used to clear
+bit 9 of each GP0(E1) word in guest RAM, around every `PutDrawEnv` and every
+`DrawOTag`, by walking the whole ordering table a second time before each call
+and putting the words back after. It now sets `Gpu.SuppressDither` (RecompOne
+patch `0094`), which the GPU's draw-mode decode honours on both render paths, so
+nothing is written to the game's memory and the table walk runs only under
+`KF2_NODITHER_PROBE`. Verdite3 measured the old walk and the table clear it forced
+at 0.1 ms of a 1 ms frame (its commit `3b3efa3`). Here, standing in fdat05 at
+`KF2_FPS=off` (default Shading, Smooth), the median uncapped rate went from
+1165-1180 fps to 1206 fps across two runs each, about 0.02 ms a frame; that run
+also carried the `Prejit` change, so it is not this change alone. The picture in
+each position has not been looked at since. The three Shading positions are unchanged: `Dither` has
+the mask off, `None` and `Smooth` have it on, and `Smooth` adds `TrueColor`.
 
 ### The rate became a setting, so every hook is installed whatever it is set to
 
@@ -978,6 +992,40 @@ fastest band, never above it, and without the banding that made the original's
 speed wander. No game knowledge, no constants touched — and it is strictly more
 consistent than hardware ever was. **Done**; see below.
 
+### The reference band is 4 vblanks
+
+**This overturns the section above in its number, not its reasoning.** The
+reasoning stands: the gate's `2` is a ceiling, the console missed it under load,
+and the band it landed in is the speed the game was built at. Which band was the
+open part, and it is now **15, four vblanks**: `FramePacing.LogicHz` defaults to
+15, and 20 and 30 are comparisons under `KF2_TICKRATE`.
+
+* **The evidence is by ear, not a counter.** Played at 15, a door's sound fits its
+  motion; the sound is on the SPU's wall clock and the door moves per tick, so the
+  rate at which they agree is the rate the two were authored against. That is the
+  user's judgement in play, not a measurement, and which door, and how far off it
+  was at 20, is not recorded.
+* **Not yet checked** the same way: any other sound against motion (a lever, a
+  drawbridge, a creature's attack), or the cutscenes in `OPEN.EXE`. The JP
+  executable's gate literal is still unread (see above).
+* **What moves with it.** Everything the world steps per tick runs at three
+  quarters of the 20 Hz speed: walking, turning (the D-pad, L2/R2 and the stick
+  alike, 37°/s walking and 46°/s standing, 42°/s looking), creatures, timers, the
+  death clock (65 ticks, 4.33 s). The mouse and the gyro do not: they ask for an
+  amount, not a speed. The render rate does not either; 60 is four pictures a tick.
+* **What the port had hard-coded at 20, and now follows the tick rate**: the
+  pulse and flicker clock of authored lights and glows (`Lights`, `Surfaces`, which
+  divided ticks by 20 to get seconds, so an authored 1 Hz pulse stays 1 Hz), and
+  the map markers' sampling period (`MapMarkers.PeriodMs`, one sample a tick).
+  Everything else read `LogicHz` already.
+* **Measured**: `KF2_FPS=144 KF2_FPS_PROBE=1 KF2_PRESENT_PROBE=1`, slot 2: 144.0 fps
+  drawn, 144.0 presents/s, 15.0 ticks/s (one-second windows reading 14.9, 15.0 and
+  now and then 15.9, about 15.0 on average), every hook attached. **Not looked at**:
+  the smoothing at four pictures a tick, by eye.
+
+Measurements elsewhere in these documents that say 20 Hz were taken at 20 and are
+left as they were.
+
 ### The floor, as built
 
 `patches/FramePacing.cs`, attached as a post hook on `DrawOTag` in all three
@@ -1320,7 +1368,7 @@ together and the read-back cannot separate them; what it is for is a patch whose
 sites are *different functions* — `AnimSmoothing`'s five, `FramePacing`'s
 per-overlay roles — and every claim printed to the console.
 
-`patches/HookAttach.cs` holds both halves: `OnOverlayLoad(label, attach, hint)` is
+`HookAttach` (Verdite Core's, `tools/verdite-core/src/HookAttach.cs`, since 2026-10-02) holds both halves: `OnOverlayLoad(label, attach, hint)` is
 the retry latch set from the pass's own success and capped at `MaxTries` (3 — a
 miss is nearly always a miss for good, since every overlay is registered before the
 first load, so this only has to cover a transient), and `Installed(target)` is the
@@ -3554,6 +3602,22 @@ death from any other reason that byte could hold `0x11`, then starts a clock. Th
 reload fires once, after a configurable delay (default 2 s) during which the
 game's own death sequence plays.
 
+
+### The fade's length
+
+Ported from Verdite3 (`f8f7fbb`, 2026-10-09): Gameplay ▸ *Message fade length*, x1 to x4
+(`kf2.messagefade`, `KF2_MESSAGE_FADE`, the variable wins). `MessageFade` draws each
+brightness that many times; each draw ends in the presenter's `VSync(0)`, so it is that
+many vblanks a step, and the pad is still read once a step, as the game reads it. Only a
+message `MenuWorld` takes is held; one left to the game's loop keeps the game's speed.
+x1 is the default, the game's own.
+
+Measured (`KF2_AUTOSTART=2 KF2_MESSAGETEXT_TEST=3:0 KF2_MENUWORLD_PROBE=1`, Cross over
+the shell): at x1 the fade-in was 10 step draws, 10 `VSync`s, 143 ms, and the fade-out
+7, 7, 117 ms, so a step is one vblank here as in Verdite3; at x2, 20 and 14 `VSync`s,
+310 and 233 ms. A fade-out that runs out returns the button test's state, -1 until every
+button is up and -2 after, so a longer fade-out can return -2 where a short one returned
+-1, as the game's own would at that length. **Not judged by eye.**
 ### The game is already reloading, and it wins the race
 
 The thing that nearly sank this, and the reason the delay is not just a sleep.
@@ -5008,7 +5072,7 @@ menu. It cannot, and the reason took several runs to pin down:
 - **Writing `Controller.State` does not reach the boot menus.** It advanced
   OPEN.EXE's title but did nothing at GAME.EXE's menu. The path that reaches the
   game *wherever it is* is `PAD_dr` — a `PadReadEvent` listener, exactly what
-  `patches/Mouse.cs` uses "so the buttons work in its menus". The buffer is
+  Verdite Core's Mouse uses "so the buttons work in its menus". The buffer is
   active-low and its two button bytes are swapped against `Controller`'s layout,
   so a pressed `Controller` bit is injected as `e.Buttons &= ~((b>>8)|(b<<8))`.
 - **The start menu (`func_8001B35C`) is a blocking poll loop**, so the per-frame
@@ -5106,6 +5170,11 @@ capture               arm the frame capture (FrameCapture.Arm) for the next run
 murk [on|off|tilt X]  the murk, and the steepest a murked surface may lean
 aspect [4:3|16:9|R]   the widescreen aspect, through Widescreen.SetAspect as the
                       settings window changes it (not saved)
+scale [1..8]          the render scale, through GlVram.Requested as the window's
+                      slider sets it, taken at the next present (fork 0097; not
+                      saved); alone, the current scale, the one still pending
+                      ("requested", 0 once taken) and the largest the GL context
+                      allows ("max")
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the

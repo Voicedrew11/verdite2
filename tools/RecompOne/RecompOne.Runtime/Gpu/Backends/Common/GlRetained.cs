@@ -13,6 +13,14 @@ public sealed partial class GlCore
 {
     uint _progWorld, _worldVao, _worldVbo, _worldDynVao, _worldDynVbo;
     int _worldGen = -1, _worldCap, _worldDynCap;
+    // The chunk table _worldVbo holds and its length, as UploadStatic put them there.
+    // The game thread rebuilds RetainedScene's own whenever the map changes, and the
+    // normal pass draws from this buffer at a present, before the next main draw has
+    // uploaded the new map: drawn by the new table, a larger map's ranges ran past the
+    // old buffer's end, which NVIDIA's driver faults on.
+    readonly int[] _worldChunkStart = new int[5 * RetainedScene.Chunks], _worldChunkCount = new int[5 * RetainedScene.Chunks];
+    readonly int[] _worldStaticCount = new int[5];
+    int _worldVerts;
     int _uwR, _uwCam, _uwT, _uwH, _uwC, _uwFb, _uwNear, _uwCueH, _uwFogOn, _uwMirror, _uwPlaneY, _uwPlaneBias;
     int _uwScale, _uwAniso, _uwBlend, _uwBlendOpaque, _uwFluidN;
     int _uwAtmosOn, _uwAtmosColour, _uwAtmosShape, _uwAtmosSkip;
@@ -75,7 +83,9 @@ public sealed partial class GlCore
         void Unit(string n, int u) { int l = L(n); if (l >= 0) _gl.Uniform1(l, u); }
         Unit("uVram", 0); Unit("uDest", 1); Unit("uExtTex", 2); Unit("uRepTex", 3); Unit("uRepClut", 4);
         Unit("uMip", 5); Unit("uMatTable", MatUnit); Unit("uMaskSurface", MaskUnit); Unit("uHalves", HalvesUnit);
-        Unit("uRecords", RecordsUnit);
+        Unit("uRecords", RecordsUnit); Unit("uNbHalves", NbHalvesUnit);
+        _uwNeighbour = L("uNeighbour"); _uwNbTile = L("uNbTile");
+        _uwFade = L("uFade"); _uwFadeZ = L("uFadeZ");
         void I(string n, int v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
         void F(string n, float v) { int l = L(n); if (l >= 0) _gl.Uniform1(l, v); }
         int tw = L("uTexWindow");
@@ -83,7 +93,7 @@ public sealed partial class GlCore
         F("uSetMask", 0f); I("uCheckMask", 0); I("uOpaqueDepth", 0); F("uDepthBias", 0f); F("uDepthSlope", 0f);
         I("uClipOn", 0); I("uLightN", 0); I("uEmitOn", 0); F("uMipOn", 0f); F("uTrueColor", 1f); F("uFluidN", 0f);
         I("uMaskOn", 0); I("uHalfGate", 0); I("uAtmosOn", 0); I("uAtmosSkip", 0); I("uWorldLit", 0);
-        I("uWorldSnap", 0); I("uWorldPerPixel", 1); I("uWorldDither", 0);
+        I("uWorldSnap", 0); I("uWorldPerPixel", 1); I("uWorldDither", 0); I("uNeighbour", 0);
         InitShadowUniforms(_progWorld, false);
         if (_uwBlendOpaque >= 0) _gl.Uniform4(_uwBlendOpaque, 1f, 1f, 1f, 0f);
         int pb = L("uPosBias");
@@ -265,15 +275,69 @@ public sealed partial class GlCore
         RetainedScene.RecordUploads++;
     }
 
+    // 0088. Each map half's record for NeighbourBlend, one byte a half.
+    const int NbHalvesUnit = 22;
+    uint _nbHalvesTex;
+    int _nbHalvesGen = -1, _uwNeighbour = -1, _uwNbTile = -1;
+    // 0089. DistanceFade's uniforms, in the world program and its normal program.
+    int _uwFade = -1, _uwFadeZ = -1, _uwnFade = -1, _uwnFadeZ = -1;
+
+    /// <summary>0089. The frame's DistanceFade, or none.</summary>
+    void SendFade(int fade, int depth, RetainedScene.Frame? f)
+    {
+        if (fade >= 0)
+        {
+            if (f == null) _gl.Uniform4(fade, 0f, 0f, 0f, 0f);
+            else _gl.Uniform4(fade, (float)f.View.CamX, (float)f.View.CamZ, f.FadeEdge, f.FadeBand);
+        }
+        if (depth >= 0) _gl.Uniform1(depth, f?.FadeDepth ?? 0f);
+    }
+
+    unsafe void UploadNbHalves()
+    {
+        if (_nbHalvesGen == NeighbourBlend.Generation) return;
+        _nbHalvesGen = NeighbourBlend.Generation;
+        _gl.ActiveTexture(TextureUnit.Texture0 + NbHalvesUnit);
+        if (_nbHalvesTex == 0)
+        {
+            _nbHalvesTex = _gl.GenTexture();
+            _gl.BindTexture(TextureTarget.Texture2D, _nbHalvesTex);
+            _gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.R8ui, RetainedScene.HalvesW, RetainedScene.HalvesH, 0,
+                PixelFormat.RedInteger, PixelType.UnsignedByte, null);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)GLEnum.Nearest);
+            _gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)GLEnum.Nearest);
+        }
+        else _gl.BindTexture(TextureTarget.Texture2D, _nbHalvesTex);
+        fixed (byte* p = NeighbourBlend.Halves)
+            _gl.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, RetainedScene.HalvesW, RetainedScene.HalvesH,
+                PixelFormat.RedInteger, PixelType.UnsignedByte, p);
+        // Nothing else takes this unit either.
+        _gl.ActiveTexture(TextureUnit.Texture0);
+        NeighbourBlend.Uploads++;
+    }
+
     /// <summary>The static map, when it was rebuilt since the last upload.</summary>
     void UploadStatic()
     {
         UploadRecords();
+        UploadNbHalves();
         if (_worldGen == RetainedScene.StaticGeneration) return;
         var s = RetainedScene.Static;
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldVbo);
         _gl.BufferData<RetainedScene.Vertex>(BufferTargetARB.ArrayBuffer, s, BufferUsageARB.StaticDraw);
+        // The mip entries are attribute 9 of the same VAO, and UpdateWorldMips sizes them
+        // to the new map only after the shadows have drawn it: zeros as long as the map
+        // until then, so no draw reads past their end.
+        if (_mipKeysGen != RetainedScene.StaticGeneration)
+        {
+            _gl.BindBuffer(BufferTargetARB.ArrayBuffer, _worldMipVbo);
+            _gl.BufferData<uint>(BufferTargetARB.ArrayBuffer, new uint[Math.Max(s.Length, 1)], BufferUsageARB.StaticDraw);
+        }
         _gl.BindBuffer(BufferTargetARB.ArrayBuffer, 0);
+        Array.Copy(RetainedScene.ChunkStart, _worldChunkStart, _worldChunkStart.Length);
+        Array.Copy(RetainedScene.ChunkCount, _worldChunkCount, _worldChunkCount.Length);
+        Array.Copy(RetainedScene.StaticCount, _worldStaticCount, _worldStaticCount.Length);
+        _worldVerts = s.Length;
         _worldGen = RetainedScene.StaticGeneration;
     }
 
@@ -403,7 +467,7 @@ public sealed partial class GlCore
     int DrawRange(int r, RetainedScene.Frame? f)
     {
         int drawn = 0;
-        if (RetainedScene.StaticCount[r] > 0)
+        if (_worldStaticCount[r] > 0)
         {
             if (_uwMipIndirect >= 0) _gl.Uniform1(_uwMipIndirect, 1);
             drawn = DrawStaticChunks(r);
@@ -420,7 +484,8 @@ public sealed partial class GlCore
     }
 
     /// <summary>Range <paramref name="r"/> of the visible static chunks through
-    /// whatever program is bound; the vertices drawn.</summary>
+    /// whatever program is bound; the vertices drawn. By the table the buffer was
+    /// uploaded with, and never past its end.</summary>
     int DrawStaticChunks(int r)
     {
         int drawn = 0;
@@ -430,15 +495,16 @@ public sealed partial class GlCore
         for (int c = 0; c <= RetainedScene.Chunks; c++)
         {
             int k = r * RetainedScene.Chunks + c;
-            bool take = c < RetainedScene.Chunks && _chunkVis[c] && RetainedScene.ChunkCount[k] > 0;
-            if (take && first >= 0 && RetainedScene.ChunkStart[k] == first + count) { count += RetainedScene.ChunkCount[k]; continue; }
+            bool take = c < RetainedScene.Chunks && _chunkVis[c] && _worldChunkCount[k] > 0;
+            if (take && first >= 0 && _worldChunkStart[k] == first + count) { count += _worldChunkCount[k]; continue; }
+            count = Math.Min(count, _worldVerts - first);
             if (first >= 0 && count > 0)
             {
                 _gl.DrawArrays(PrimitiveType.Triangles, first, (uint)count);
                 drawn += count;
             }
-            first = take ? RetainedScene.ChunkStart[k] : -1;
-            count = take ? RetainedScene.ChunkCount[k] : 0;
+            first = take ? _worldChunkStart[k] : -1;
+            count = take ? _worldChunkCount[k] : 0;
         }
         return drawn;
     }

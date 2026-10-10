@@ -893,6 +893,10 @@ the sub-pixel fraction still come from the address map.
   `ZBuffer.cs`). Their addresses' old records are dropped so a stale one cannot
   match. With no depth they keep painter's order, which is what they had on the
   console.
+- **The menu's item preview** (`InPreview`, a pre/post on `func_800346CC` in
+  `ZBuffer.cs`) was not barred: its faces went through the lit assembler and were
+  tested against the world, so it crossed what stood behind it. It now keeps
+  painter's order, drawn over the world as on the console.
 
 **The skybox needs no special case under this source.** It never passes through
 these assemblers, so it records nothing and draws first in painter's order, and
@@ -1004,7 +1008,7 @@ packet that is anything else. **Moving a translucent packet past an opaque one i
 exact whichever is nearer**: the test decides what the opaque one covers, and the
 translucent one then blends over what is behind it and is rejected by what is in
 front. Everything the depth buffer does not order is a barrier: the HUD, the arm,
-the fades, a non-polygon command, a packet without a record, the table's first slot
+the item preview, the fades, a non-polygon command, a packet without a record, the table's first slot
 (the skybox's, which is never tested), and a blended model the port calls solid (the secret door, which writes depth). So nothing is ever moved
 past something it was not already ordered against by the test, and two blended
 surfaces keep the order the table gave them. It runs only while the Z-buffer tests
@@ -3169,6 +3173,68 @@ Its cost was not measured with an edge in view.
 
 Looked at, both switches on, at the arch near save 3: "looks good". Both still ship
 off, as enhancements of the game's own behaviour.
+
+## Fog by distance from the eye
+
+The game's fog is worked out at a face's corners, and the GPU world's map, from
+`MainFogFromZ`, is fogged at each pixel's view depth instead. Both take the cue from
+the view depth, Z, not from the distance to the eye. Z is the distance along the
+view axis, so at the side of a wide picture, or below a camera tipped down, a point
+has the same Z as one straight ahead that is nearer to the eye. It is fogged as if it
+were nearer than it is. The fog also moves as the view turns: a wall darkens as it
+comes to the centre of the picture.
+
+The fix is runtime patch `0100` (`GteDepth.RadialFog`). The GTE is left alone; the
+shaders that recover a pixel's view position take the cue at the eye's distance
+instead of SZ: the retained world, the packets that carry a depth, the neighbour
+blend and the reflection pass's own fog (the murk's colour, a reflection's longer
+path). The planar mirror takes it at the mirrored eye's distance, which is the path
+through the water. At the picture's centre the two agree, so nothing changes there;
+off the centre there is more fog than the game's, because the point is now as far
+as it is.
+
+It is one choice of three, not two switches. Distance is per pixel too, and distance
+over corner fog only half works: a colour fogged at its corners can only be refogged
+by the ratio of depth to distance (`0068`'s level rescale), an approximation. So the
+setting is a single `kf2.fog` (int), read from the environment as `KF2_FOG`:
+
+- `0`, `corners` (`KF2_FOG=corners`): the game's fog, worked out at the corners and
+  spread across the face (`RetainedScene.MainFogFromZ` off). The old spelling was
+  `KF2_GPUWORLD_FOGZ=0`, which still works.
+- `1`, `depth` (`KF2_FOG=depth`): the GPU world's map fogged at each pixel's view
+  depth (`MainFogFromZ` on). **The default**, which is what the port did before this
+  choice existed.
+- `2`, `distance` (`KF2_FOG=distance`, or `radial`): patch `0100` as above.
+
+Settings window: Video ▸ Enhancements ▸ *Fog*, a dropdown after *Even fog and
+lighting*. In-game: PORT SETTINGS ▸ WORLD ▸ FOG, after RENDER DISTANCE, with CORNERS,
+PIXEL DEPTH and DISTANCE. No recompile.
+
+### Measured
+
+The mechanism, not the picture. Slot 2 restored, the world paused with `pause on`
+and the mode stepped through the `settings` verb, `snap hash` on the presented
+frame under each mode after warping:
+
+| area | corners | pixel depth | distance |
+|---|---|---|---|
+| 2 | `aa514e62d201f370` | `46cf78accf6b62c2` | `790bb7688d5cc469` |
+| 5 | `3902d5f9eaca864a` | `f1ebc5c5160029b8` | `29d5012a787d9edc` |
+| 6 | `8a43aa02e788fe61` | `77423e9d56a022d0` | `bc3ab396cbc205d7` |
+
+Three pictures in each; at the save's own spot in area 1 all three hash the same
+(nothing in view is far enough to fog). The boot reads `[KF2] fog: by pixel depth`
+and `0 default(s) wrong`; 144.0 fps drawn at 20.0 ticks/s. How much the fog moves
+over a turn, and the cost, were not measured here (Verdite3's figures, in its
+`WIDESCREEN.md` under "Radial fog", are for its game: the fog's movement over a
+turn of 11.25° fell from as much as 1.72 to at most 0.25, about 0.08 ms a frame).
+
+### For the user to judge
+
+In a foggy area at 16:9, turning in place: whether walls still brighten towards the
+picture's edges; whether the corners are darker than the game's; the edge of the
+render distance at the sides; looking down at the floor; water's reflections and
+murk.
 
 ## Dithering: one flag, and it lives in the draw environment
 

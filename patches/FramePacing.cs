@@ -13,9 +13,9 @@ namespace Kf2;
 /// What frame rate the port runs at, and how the game's own clock is held to
 /// <see cref="LogicHz"/> while it does.
 ///
-///     KF2_FPS=20      (default) draw at 20, the rate the console achieved
-///     KF2_FPS=60      render at 60, tick the world at 20
-///     KF2_FPS=144     any number is allowed; the world still ticks at 20
+///     KF2_FPS=15      draw at 15, the world's own rate
+///     KF2_FPS=60      (default) render at 60, tick the world at 15
+///     KF2_FPS=144     any number is allowed; the world still ticks at 15
 ///     KF2_FPS=off     no pacing at all -- the picture is uncapped, the world is not
 ///     KF2_TICKRATE=30 tick the world at what the game's code asks for instead
 ///     KF2_FPS_LOGIC=full   do not gate anything; scale the movement deltas instead
@@ -162,33 +162,39 @@ namespace Kf2;
 /// </summary>
 public static class FramePacing
 {
+    // The frame cap's sleep, as a section of the frame profiler.
+    public static readonly int FloorWait = RecompOne.Runtime.Diagnostics.Profiler.Register(
+        "FramePacing.Floor (frame cap)", RecompOne.Runtime.Diagnostics.ProfileGroup.Wait);
+
     /// <summary>
     /// Ticks a second the game's own world is held to, whatever the port draws at.
     ///
-    /// **20, not 30, and that is a judgement rather than a reading.** The game's
-    /// own frame gate asks for two vblanks -- 30 fps -- and for a long time this
-    /// was 30 for that reason. But the literal is what the code *asks* for, not
-    /// what the console *achieved*: King's Field is heavy enough that the loop
-    /// lands in the three-vblank band under load, and since the game's speed is
-    /// its frame rate, that band is the speed the game was played at. This port
-    /// has an HLE GPU and native MIPS, so it makes the two-vblank deadline every
-    /// single frame and never bands down -- which is why it needs to be told.
+    /// **15, and that is a judgement rather than a reading.** The game's own frame
+    /// gate asks for two vblanks -- 30 fps -- and for a long time this was 30 for
+    /// that reason, then 20, the three-vblank band. But the literal is what the
+    /// code *asks* for, not what the console *achieved*: King's Field is heavy
+    /// enough that the loop misses that deadline under load, and since the game's
+    /// speed is its frame rate, the band it lands in is the speed the game was
+    /// played at. 15 is the four-vblank band, and it is what a door's sound fits
+    /// against its motion, judged by ear in play. This port has an HLE GPU and
+    /// native MIPS, so it makes the two-vblank deadline every single frame and
+    /// never bands down -- which is why it needs to be told.
     ///
     /// **The literal 2 is a ceiling, not a target**, and it is worth being exact
     /// about that: <c>func_80017880</c> spins *while* the vblank credit is below 2,
     /// so it forbids a frame faster than 30 and asks nothing of a slower one. A
     /// limit that was never the binding constraint is not a statement of intended
-    /// speed. 20 is: it is the band the console actually landed in, and King's
+    /// speed. 15 is: it is the band the game's sound is timed against, and King's
     /// Field's speed *is* its frame rate, so it is the speed the game was built and
     /// tuned at.
     ///
     /// No counter here can settle it, and **that is not a reason to make the player
-    /// settle it**: 20 is the rate, and 30 -- the fastest the gate permits -- is a
-    /// comparison. It lives on the console under <c>KF2_TICKRATE</c>, which is where
+    /// settle it**: 15 is the rate, and 20 and 30 -- the band this was once and the
+    /// fastest the gate permits -- are comparisons. It lives on the console under <c>KF2_TICKRATE</c>, which is where
     /// comparisons belong; the combo that used to offer both is gone. See "Frame
-    /// pacing" in docs/PATCHES_AND_MODS.md.
+    /// pacing" and "The reference band is 4 vblanks" in docs/PATCHES_AND_MODS.md.
     /// </summary>
-    public static double LogicHz { get; private set; } = 20.0;
+    public static double LogicHz { get; private set; } = 15.0;
 
     const double SpinMs = 1.5;   // spin the last stretch; Thread.Sleep granularity is a few ms
 
@@ -242,8 +248,8 @@ public static class FramePacing
     public const string VBlankKey = "kf2.framepacing.vblanks";
 
     // The tick rate had a key here (kf2.framepacing.logichz) and a combo under
-    // Video, and both are gone: 20 is the speed the game was played at, and the
-    // 30 beside it was a comparison rather than a preference. KF2_TICKRATE still
+    // Video, and both are gone: 15 is the speed the game was played at, and the
+    // 30 the combo offered was a comparison rather than a preference. KF2_TICKRATE still
     // takes any rate. The key is deliberately not read any more -- a saved 30 with
     // no combo left to see it would be a session running half again too fast with
     // nothing in the window to explain it.
@@ -707,9 +713,9 @@ public static class FramePacing
         {
             // Order matters: the tick rate is read first, because SetTargetFps
             // resets the accumulator. The tick rate is no longer read from the
-            // config: it is 20 unless KF2_TICKRATE says otherwise, and Configure
+            // config: it is 15 unless KF2_TICKRATE says otherwise, and Configure
             // has already applied that. The render rate defaults to DefaultFps,
-            // not the tick rate, so a first run draws three pictures per tick.
+            // not the tick rate, so a first run draws four pictures per tick.
             if (!_fromEnv) SetTargetFps(SavedRate());
             else ApplyHostCeiling();
         });
@@ -1417,7 +1423,7 @@ public static class FramePacing
         {
             _winFloorWaits++;
             _winFloorSleptMs += _due - now;
-            int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(FrameProfiler.FloorWait);
+            int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(FloorWait);
             double sleepUntil = _due - SpinMs;
             if (now < sleepUntil)
             {

@@ -152,13 +152,15 @@ public static class SurfaceMaterial
     /// <summary>2D triangles kept as a veil, and see-through textured ones kept as
     /// <see cref="Overlay"/> (a texel may be opaque, which the normal pass cannot see).</summary>
     public static long Veils, TexturedVeils;
+    /// <summary>0099. Pictures copied before a frame's first veil, for the present.</summary>
+    public static long PreHudCopies;
     public static readonly long[] RefusedByBlend = new long[4];
     /// <summary>Triangles on a rect whose packet the port said was not its material.</summary>
     public static long RefusedByPort;
 
     public static void ResetCounters()
     {
-        FromPacket = FromRect = Blended = Overlays = Veils = TexturedVeils = RefusedByPort = 0;
+        FromPacket = FromRect = Blended = Overlays = Veils = TexturedVeils = RefusedByPort = PreHudCopies = 0;
         Array.Clear(ByMaterial);
         Array.Clear(RefusedByBlend);
     }
@@ -167,6 +169,10 @@ public static class SurfaceMaterial
     /// rectangle's, then <see cref="Opaque"/> for an opaque one and
     /// <see cref="None"/> for a blended one. <paramref name="notRect"/> is the packet's
     /// <see cref="GtePacketDepth.Rec.NotRect"/>: no rectangle names it.</summary>
+    public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage,
+                                int u0, int v0, int u1, int v1) =>
+        Classify(packet, false, textured, semi, blend, tpage, u0, v0, u1, v1);
+
     public static byte Classify(byte packet, bool notRect, bool textured, bool semi, int blend, int tpage,
                                 int u0, int v0, int u1, int v1)
     {

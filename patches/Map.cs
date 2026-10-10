@@ -463,14 +463,14 @@ public static class Map
         Event.AddListener<OverlayLoadedEvent>(_ => Invalidate());
 
         // The hotkeys come off the event bus rather than being polled, for the
-        // reason patches/Mouse.cs records: every hook this port owns is in the
+        // reason Verdite Core's Mouse records: every hook this port owns is in the
         // walking-around part of the game, so a polled toggle would be dead in the
         // in-game menu, on the title screen and through a load. PadReadEvent is
         // emphatically not the bus for this — that call is polled hundreds of
         // thousands of times a second.
         Event.AddListener<KeyboardEvent>(e =>
         {
-            if (!Enabled || !e.Pressed || PopupManager.AnyOpen || HotkeyGate.Editing) return;
+            if (!Enabled || !e.Pressed || PopupManager.AnyOpen || HotkeyGate.Typing || Remaster.Editor.Open) return;
 
             // M is the *player's* map -- the full-screen one -- and Shift+M is the
             // docked instrument with the ten-byte hover readout. They were one key

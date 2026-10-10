@@ -88,6 +88,10 @@ public static class AgentServer
     static volatile ushort _pressBits;
     static long _pressUntil;
 
+    // The synthetic key: one held at a time, released by the VSync listener.
+    static int _keyHeld = -1;
+    static long _keyUntil;
+
     // The same case-insensitive names KF2_AUTOPAD builds in Program.cs.
     static readonly Dictionary<string, ushort> Buttons = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -107,6 +111,7 @@ public static class AgentServer
         "load <slot 1..3> - load a save through the game's own loader",
         "warp <area 0..7> - re-enter an area through the game's own entry routine",
         "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
+        "key <name> [holdMs=150] - a keyboard key (a Silk.NET name, e.g. Escape) down and up again, as the host's KeyboardEvent; reaches the port's key listeners, not the binding table or a polled key",
         "kill - drop HP to zero, the way a hit would",
         "nearby [radius=8192] - live records of the world tables (objects, entities, effects, sprites) within radius units",
         "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
@@ -117,6 +122,10 @@ public static class AgentServer
         "gpuworld [on|off | surfaces on|off | water on|off | models on|off|hide|show | records on|off | scene | perpixel on|off] - the world drawn on the GPU (0085): its state, the switch, whether the map reaches the normal and surface buffers, whether its water and the object walk's models are drawn there too, models taken and not drawn (what they cover), whether the map is lit in the shader from the light records, the last walk's models and the camera's forward, or per-pixel lighting (not saved)",
         "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
         "aspect [4:3|16:9|<ratio>] - the widescreen aspect, as the settings window sets it (not saved)",
+        "viewfrac [on|off|toggle] - build the view a fraction of an angle unit past the whole one the smoothing rounded to (not saved)",
+        "scale [1..8] - the render scale, taken at the next present (0097, not saved); alone, the current one",
+        "settings [open|save|discard|step <key> <-1|1>|reset <key>] - the game menu's settings session without its page; alone, every setting",
+        "point [<x> <y>|left|right|off] - the menu pointer at game pixels, a click, or the host's pointer again; alone, what it saw",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -155,7 +164,15 @@ public static class AgentServer
 
         // Cheap commands: the VSync event fires on the game thread, the same
         // place the beacon reads memory, so no cross-thread access.
-        Event.AddListener<VSyncEvent>(_ => Drain(_fast));
+        Event.AddListener<VSyncEvent>(_ =>
+        {
+            ReleaseKey(false);
+            Drain(_fast);
+        });
+        // A menu's wait for the buttons to come up (func_80022EFC) spins on the pad
+        // with no VSync, so the synthetic key is let up on a pad read too, as the
+        // host's own key-up would arrive there.
+        Event.AddListener<PadReadEvent>(_ => ReleaseKey(false));
 
         // Heavy commands: attached on the first overlay load, when SymbolRegistry
         // can resolve GAME.EXE -- exactly like AutoReload.Attach.
@@ -318,6 +335,7 @@ public static class AgentServer
                      || parts[0].Equals("waves", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("gpuworld", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("murk", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("settings", StringComparison.OrdinalIgnoreCase)
                      || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
                           parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",
@@ -328,6 +346,7 @@ public static class AgentServer
         {
             case "state":
             case "press":
+            case "key":
             case "kill":
             case "help":
             case "nearby":
@@ -349,8 +368,12 @@ public static class AgentServer
             case "gpuworld":
             case "capture":
             case "murk":
+            case "viewfrac":
             case "pause":
             case "aspect":
+            case "scale":
+            case "settings":
+            case "point":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -422,10 +445,27 @@ public static class AgentServer
         return "{\"ok\":true,\"cmd\":\"pause\",\"paused\":" + (_paused ? "true" : "false") + "}";
     }
 
+    /// <summary>The render scale, set as the window's slider sets it: through
+    /// <c>GlVram.Requested</c>, which the backend takes at the next present
+    /// (0097), and never through the store, so settings.json is untouched.
+    /// <c>requested</c> is 0 once a present has taken it.</summary>
+    static string DoScale(string arg)
+    {
+        if (arg.Length > 0)
+        {
+            if (!int.TryParse(arg, out int s) || s < 1 || s > 8) return Err("scale [1..8]");
+            RecompOne.Runtime.Hle.GlVram.Requested = s;
+        }
+        return "{\"ok\":true,\"cmd\":\"scale\",\"scale\":" + RecompOne.Runtime.Hle.GlVram.Scale +
+               ",\"requested\":" + RecompOne.Runtime.Hle.GlVram.Requested +
+               ",\"max\":" + RecompOne.Runtime.Hle.GlVram.MaxScale + "}";
+    }
+
     static string Execute(Cmd cmd) => cmd.Name switch
     {
         "state" => DoState(),
         "press" => DoPress(cmd.Arg1, cmd.Arg2),
+        "key" => DoKey(cmd.Arg1, cmd.Arg2),
         "kill" => DoKill(),
         "help" => DoHelp(),
         "load" => DoLoad(cmd.Arg1),
@@ -440,6 +480,10 @@ public static class AgentServer
         "pause" => DoPause(cmd.Arg1),
         "aspect" => Widescreen.Shell(cmd.Arg1),
         "murk" => Murk.Shell(cmd.Arg1),
+        "viewfrac" => CameraBlock.Shell(cmd.Arg1),
+        "scale" => DoScale(cmd.Arg1),
+        "settings" => DoSettings(cmd.Arg1),
+        "point" => MenuMouse.Shell(cmd.Arg1, cmd.Arg2),
         "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
         "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         "savecheck" => DoSaveCheck(),
@@ -610,10 +654,80 @@ public static class AgentServer
         return "{\"ok\":true,\"cmd\":\"press\",\"button\":" + Q(name) + ",\"holdMs\":" + hold + "}";
     }
 
+    /// <summary>
+    /// A keyboard key down, and up again after <paramref name="msArg"/>, dispatched
+    /// as the host dispatches a real one. It exists for the listeners that only a
+    /// key can reach -- Escape as the menu's second key (KeyLayout), core's capture
+    /// key -- and it reaches nothing that polls the keyboard, the runtime's binding
+    /// table included. On the fast queue, so on the game thread, where the host's
+    /// own key events arrive too (the input is pumped there).
+    /// </summary>
+    static string DoKey(string name, string msArg)
+    {
+        if (!Enum.TryParse<Silk.NET.Input.Key>(name, true, out var key) || key == Silk.NET.Input.Key.Unknown)
+            return Err($"no such key '{name}' (a Silk.NET key name, e.g. Escape)");
+
+        long hold = DefaultHoldMs;
+        if (msArg.Length > 0 &&
+            (!long.TryParse(msArg, out hold) || hold < 1 || hold > 5000))
+            return Err("holdMs must be 1..5000");
+
+        ReleaseKey(true);
+        _keyHeld = (int)key;
+        _keyUntil = Environment.TickCount64 + hold;
+        Event.Dispatch(new KeyboardEvent { Key = _keyHeld, Pressed = true });
+
+        return "{\"ok\":true,\"cmd\":\"key\",\"key\":" + Q(key.ToString()) + ",\"holdMs\":" + hold + "}";
+    }
+
+    /// <summary>Let the synthetic key up: when its time is out, or now.</summary>
+    static void ReleaseKey(bool now)
+    {
+        if (_keyHeld < 0 || (!now && Environment.TickCount64 < _keyUntil)) return;
+        int key = _keyHeld;
+        _keyHeld = -1;
+        Event.Dispatch(new KeyboardEvent { Key = key, Pressed = false });
+    }
+
     static string DoKill()
     {
         AutoReload.Simulate();
         return "{\"ok\":true,\"cmd\":\"kill\",\"status\":" + Q(AutoReload.Status) + "}";
+    }
+
+    /// <summary>A <see cref="SettingsSession"/> driven from the game thread, as the menu
+    /// page drives it, so the rules in docs/SETTINGS.md can be checked against the file.</summary>
+    static string DoSettings(string args)
+    {
+        var a = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        string verb = a.Length > 0 ? a[0] : "list";
+        var session = SettingsSession.Current;
+        string? why = null;
+        switch (verb)
+        {
+            case "list": break;
+            case "open": SettingsSession.Open(PortSettings.All); break;
+            case "save" or "discard" or "step" or "reset" when session is null: return Err("no session; settings open");
+            case "save": session!.Save(); break;
+            case "discard": session!.Discard(); break;
+            case "step" or "reset":
+                if (a.Length < 2 || PortSettings.Find(a[1]) is not { } s) return Err($"settings {verb} <key>: no such key");
+                if (verb == "reset") why = session!.Reset(s);
+                else if (a.Length < 3 || !int.TryParse(a[2], out int dir) || dir == 0) return Err("settings step <key> <-1|1>");
+                else why = session!.Step(s, dir);
+                break;
+            default: return Err($"settings: unknown '{verb}'");
+        }
+        session = SettingsSession.Current;
+        var rows = PortSettings.Listed.Select(s =>
+            "{\"key\":" + Q(s.Key) + ",\"page\":" + Q(s.Page ?? "") +
+            ",\"live\":" + s.Live().ToString(System.Globalization.CultureInfo.InvariantCulture) +
+            ",\"shown\":" + Q(session is null ? "" : s.MenuValue(session.Shown(s))) +
+            ",\"changed\":" + (session?.IsChanged(s) == true ? "true" : "false") +
+            ",\"locked\":" + Q(s.LockedBy ?? "") + "}");
+        return "{\"ok\":" + (why is null ? "true" : "false") + ",\"cmd\":\"settings\",\"verb\":" + Q(verb) +
+               (why is null ? "" : ",\"error\":" + Q(why)) + ",\"session\":" + (session is null ? "false" : "true") +
+               ",\"writes\":" + SettingsStore.Writes + ",\"settings\":[" + string.Join(',', rows) + "]}";
     }
 
     static string DoHelp()

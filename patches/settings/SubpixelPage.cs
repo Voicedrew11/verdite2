@@ -19,6 +19,7 @@ public sealed class SubpixelPage : IPatchPage
     public string Id => "subpixel";
     public string Title => "Enhancements";
     public int Order => 21;
+    public IReadOnlyList<string> Patches => ["kf2.subpixel"];
 
     public void Draw()
     {

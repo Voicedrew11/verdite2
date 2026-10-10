@@ -10,7 +10,7 @@ public sealed class GlDisplayRt
     // A texture rather than a renderbuffer, because the ambient-occlusion pass
     // reads the finished buffer back in a full-screen shader and a renderbuffer
     // cannot be sampled. Nothing else changes: it is still the same
-    // DEPTH_COMPONENT24 attachment, still cleared at the head of a frame that
+    // 24-bit depth attachment (with 0086's stencil), still cleared at the head of a frame that
     // draws to this target, and ReadPixels off the FBO (the KF2_ZBUFFER_PROBE=2
     // census) reads it exactly as before.
     public uint Depth;
@@ -24,6 +24,12 @@ public sealed class GlDisplayRt
     // last surface drawn at each pixel, translucent water included, as an
     // octahedral normal, a depth and a material. Only while reflections are on.
     public uint Surface;
+    // 0099. The picture as it was before the first see-through 2D primitive of the frame
+    // (a HUD's text or box) was drawn over it: the passes darken or reflect the
+    // surface under such a primitive in this, and the present puts back what the
+    // primitive changed. Only while reflections are on (Geo.PreHud).
+    public uint PreHud, PreHudFbo;
+    public int PreHudW, PreHudH;
     public readonly AoGeometry Geo = new();
     // 0068. The scene from the camera mirrored in the water, drawn at this target's
     // size so the reflection pass indexes it exactly as it indexes this one. Its
@@ -53,6 +59,9 @@ public sealed class GlDisplayRt
     public int MarginVerts;
     public int MarginVertFlip = -1;
     public int ZGen = -1;
+    // 0086. The frame whose retained models marked this target's stencil; the
+    // packets drawn after them in that frame test against their true depth there.
+    public long ModelMaskFrame = -1;
     // Upstream's own, kept beside ours rather than in place of it.
     public long LastMarginFrame = -1;
 
@@ -112,9 +121,11 @@ public sealed class GlDisplayRt
         // the driver defaults to, an ordinary sampler2D read of this texture is
         // undefined rather than the stored depth.
         gl.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, (int)GLEnum.None);
-        gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.DepthComponent24, (uint)TexW, (uint)TexH, 0,
-            PixelFormat.DepthComponent, PixelType.Float, null);
-        gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment,
+        // 0086. With a stencil beside it: the retained models' pixels (ModelMaskFrame).
+        // Sampled, it still reads as depth (DEPTH_STENCIL_TEXTURE_MODE's default).
+        gl.TexImage2D(TextureTarget.Texture2D, 0, InternalFormat.Depth24Stencil8, (uint)TexW, (uint)TexH, 0,
+            PixelFormat.DepthStencil, PixelType.UnsignedInt248, null);
+        gl.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthStencilAttachment,
             TextureTarget.Texture2D, Depth, 0);
         gl.BindTexture(TextureTarget.Texture2D, 0);
 
@@ -122,7 +133,9 @@ public sealed class GlDisplayRt
         gl.ClearDepth(1.0);
         gl.Disable(EnableCap.ScissorTest);
         gl.DepthMask(true);
-        gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+        gl.ClearStencil(0);
+        gl.StencilMask(0xFF);
+        gl.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit | ClearBufferMask.StencilBufferBit);
     }
 
     public void Destroy(GL gl)
@@ -133,8 +146,10 @@ public sealed class GlDisplayRt
         if (NormalFbo != 0) gl.DeleteFramebuffer(NormalFbo);
         if (Normal != 0) gl.DeleteTexture(Normal);
         if (Surface != 0) gl.DeleteTexture(Surface);
+        if (PreHudFbo != 0) gl.DeleteFramebuffer(PreHudFbo);
+        if (PreHud != 0) gl.DeleteTexture(PreHud);
         Planar?.Destroy(gl);
         Planar = null;
-        Fbo = Tex = Depth = Normal = NormalFbo = Surface = 0;
+        Fbo = Tex = Depth = Normal = NormalFbo = Surface = PreHud = PreHudFbo = 0;
     }
 }

@@ -118,7 +118,7 @@ internal static class Noclip
     internal static bool Enabled;
 
     // Units per *second* at full deflection, spent against real elapsed time
-    // rather than per call. The hook is stage 3, which runs on the world's 20 Hz
+    // rather than per call. The hook is stage 3, which runs on the world's 15 Hz
     // tick when the frame gate is paced and at the render rate when it is not,
     // so a per-call step is a different speed on every machine and every
     // setting; a rate is the same flight everywhere.
@@ -154,10 +154,12 @@ internal static class Noclip
             _cinematic = value;
             _lookPrimed = false;
             // A flythrough being filmed must not have anything fading in over
-            // the picture: the hotkey toasts go quiet in Hotkeys.Notify, and
-            // the pointer-capture glyph here. (Precedent for a mod driving a
-            // host type: Warp calls Kf2.AreaWarp.)
-            Kf2.MouseIndicator.Suppressed = value;
+            // the picture: the hotkey toasts go quiet in Hotkeys.Notify.
+            // Instant mouse look is held off while it is on: the look filter
+            // smooths the angles the lead jumps past, and the two together
+            // judder. The player's saved setting is left alone. See "The mouse
+            // leads the tick" in docs/INPUT.md.
+            Kf2.FrameSmoothing.LeadSuppressed = value;
         }
     }
 
@@ -570,9 +572,10 @@ internal static class Noclip
         Enabled = false;
         _wasEnabled = false;
         _vx = _vy = _vz = 0;
+        _cinematic = false;
         _lookPrimed = false;
-        // The host outlives the mod: unloading mid-filming must not leave its
-        // capture glyph muted for the rest of the session.
-        Kf2.MouseIndicator.Suppressed = false;
+        // The host outlives the mod: unloading mid-filming must not leave the
+        // mouse lead held off for the rest of the session.
+        Kf2.FrameSmoothing.LeadSuppressed = false;
     }
 }

@@ -11,6 +11,7 @@ public sealed class PerPixelLightingPage : IPatchPage
     public string Id => "perpixel";
     public string Title => "Enhancements";
     public int Order => 25;
+    public IReadOnlyList<string> Patches => ["kf2.perpixel"];
 
     public void Draw()
     {
