@@ -90,10 +90,11 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
 | | MOUSE LOOK | OFF, ON | `kf2.mouse.on` |
+| | GYRO | OFF, ON | `kf2.gyroaim.on`: a drawn bow aims with the pad's gyroscope (INPUT, "Rumble and gyro aim with a drawn bow") |
+| | RUMBLE | OFF, ON, HD | `kf2.rumble.on`, `kf2.rumble.hd`; OFF leaves the HD choice |
 
 CONTROLS (2D, 3D; `kf2.controls`, `KF2_TANK`) sits first on GAMEPLAY; see "2D and 3D
-controls" in `docs/INPUT.md`. Left out of Verdite3's: GYRO and RUMBLE, which this port does not
-have; the minimap has no saved key (N toggles it for the session).
+controls" in `docs/INPUT.md`. The minimap has no saved key (N toggles it for the session).
 
 ## Measured (2026-10-09)
 

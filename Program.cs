@@ -1169,6 +1169,17 @@ Kf2.Analog.Install();
 Mouse.Configure(Kf2.Analog.MouseValues);
 Mouse.Install();
 
+// The bow and the arbalest, read off func_800271D0 once a tick: the pad's
+// gyroscope aims a drawn bow, spent inside Analog's look hook beside the right
+// stick (KF2_GYROAIM, on; runtime 0102), and the pad rumbles as it is drawn and
+// loosed, two motors or HD on a Switch pad or a DualSense by USB (KF2_RUMBLE,
+// KF2_RUMBLE_HD, both on; runtime 0104, 0105). See "Gyro aim with a drawn bow" and
+// "Rumble" in docs/INPUT.md, "The bow and the arbalest" in docs/GAME_INTERNALS.md.
+Kf2.GyroAim.Configure();
+Kf2.GyroAim.Install();
+Kf2.Rumble.Configure();
+Kf2.Rumble.Install();
+
 // The menu pointer: hover an in-game menu item and the game's own cursor moves to
 // it, left click confirms, right click backs out.
 //
