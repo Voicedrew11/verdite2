@@ -80,7 +80,7 @@ Four things worth keeping:
   and asserting nothing lands on `target` however large it is, while writing
   `target - accel` and asserting the button is capped at the game's own rate.
   That is the whole difference between a camera that tops out at the d-pad's
-  rate (49°/s walking, 62°/s standing, at the 20 Hz world) and one that does not, and it costs one branch in `Drive`. Confirmed in
+  rate (37°/s walking, 46°/s standing, at the 15 Hz world) and one that does not, and it costs one branch in `Drive`. Confirmed in
   play: mean yaw steps of 39 against a frame rate limit of 28, and a `turnVel` of
   37 sitting in memory, which no button can produce. Nothing else gameplay-side
   reads the turn masks — the only other readers are the control-config screen —
@@ -104,7 +104,7 @@ Four things worth keeping:
 
 The defaults turned the view more than twice as fast as the game can: look
 acceleration took a full stick to 2.2× the D-pad's rate (about 107°/s walking,
-against the D-pad's 49°/s), the stick started and stopped the view dead, and the
+against the D-pad's 49°/s, at the 20 Hz world then), the stick started and stopped the view dead, and the
 sensitivity slider went to 3.0 through the overspeed branch above. The game's
 fights are built on how fast the player turns — a creature cannot reach a player
 who circles it faster than the D-pad allows — and players said so.
@@ -646,8 +646,8 @@ variant of the pad one.
 
 Yaw is 12 bits to the circle (`yaw & 0xFFF`), and the game's own numbers confirm
 it: the D-pad's turn rate is `0x1C` **a logic tick**, which is 74°/s against the
-30 Hz world this was measured with and 49°/s against the 20 Hz one the port now
-defaults to. It is a tick rate and not a frame rate: drawing faster does not turn
+30 Hz world this was measured with, 49°/s against the 20 Hz one the port had
+next, and 37°/s against the 15 Hz one it now defaults to. It is a tick rate and not a frame rate: drawing faster does not turn
 faster. Pitch is in the same units, held
 inside ±`0x2BC` — about 62° either side of level.
 

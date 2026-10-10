@@ -230,11 +230,10 @@ public static class MapMarkers
     static long _sampledAt = long.MinValue;
     static int _sampledArea = -1;
 
-    /// <summary>Milliseconds between samples. The world ticks at 20 Hz by default,
-    /// so 50 ms is one sample a tick — reading these tables faster cannot show
-    /// anything the game has not produced, and reading them slower makes a
-    /// creature's dot lag its model.</summary>
-    const long PeriodMs = 50;
+    /// <summary>Milliseconds between samples: one a world tick (67 ms at the default
+    /// 15 Hz) — reading these tables faster cannot show anything the game has not
+    /// produced, and reading them slower makes a creature's dot lag its model.</summary>
+    static long PeriodMs => (long)(1000.0 / Math.Max(1.0, FramePacing.LogicHz));
 
     /// <summary>
     /// Bring <see cref="Live"/> up to date. Called from <see cref="Map.Refresh"/>,

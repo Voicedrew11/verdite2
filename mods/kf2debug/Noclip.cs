@@ -118,7 +118,7 @@ internal static class Noclip
     internal static bool Enabled;
 
     // Units per *second* at full deflection, spent against real elapsed time
-    // rather than per call. The hook is stage 3, which runs on the world's 20 Hz
+    // rather than per call. The hook is stage 3, which runs on the world's 15 Hz
     // tick when the frame gate is paced and at the render rate when it is not,
     // so a per-call step is a different speed on every machine and every
     // setting; a rate is the same flight everywhere.

@@ -123,20 +123,22 @@ floor speckle — and **mipmaps** are built where a texture is decoded, in an at
 of its own, since VRAM cannot hold them (`0060`). Both off by default, the picture
 not looked at (see "Anisotropic filtering").
 
-**The frame rate is a free number and the world's tick rate is a fixed 20.** The
+**The frame rate is a free number and the world's tick rate is a fixed 15.** The
 port skips the game's own frame gate at every rate — it decides both together and
 knows one answer for both, 30 — paces the picture itself, holds the world to a
 fixed timestep and carries the camera between ticks, so the picture can run at 60,
 120 or 165 while the world keeps a console's timing. **The render rate defaults to
-60**, three pictures per tick; 20 is still the world's clock and what every
+60**, four pictures per tick; 15 is the world's clock and what every
 rate in this port is measured against. The literal 2
 in that gate is a *ceiling* rather than a target — it forbids a frame faster than
 30 and asks nothing of a slower one — and the console missed that deadline under
-load and landed in the three-vblank band, so since the game's speed is its frame
-rate, 20 is the speed it was played at and built at. That is a judgement no counter here can
+load, so since the game's speed is its frame rate, the band it landed in is the
+speed it was played at and built at: 15, the four-vblank band, which is what a
+door's sound fits against its motion, judged by ear (it was 20, the three-vblank
+band, until then). That is a judgement no counter here can
 settle — which is a reason to make it, not a reason to hand it to the player, so
-the tick rate is **not** a setting and `KF2_TICKRATE=30` is the comparison (see
-"Any frame rate" in `docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
+the tick rate is **not** a setting and `KF2_TICKRATE=20` or `30` is the comparison (see
+"Any frame rate" and "The reference band is 4 vblanks" in `docs/PATCHES_AND_MODS.md`). **The ending runs**: `END.EXE` plays the two STR
 movies and holds "The End", and **any button then returns to the title** —
 holding it forever is what the original does, and on a window that is
 indistinguishable from a crash. See "The ending screen" in `docs/RUNTIME.md`.

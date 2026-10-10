@@ -84,8 +84,8 @@ public static class AutoReload
     //     65      func_80024154(0, 0, 0, 0, 0, 0xFF)  -- respawn at area 0,
     //             i.e. back to the beginning of the game
     //
-    // These are logic ticks, not rendered frames, so 65 of them is 3.25 s at the
-    // 20 Hz the world runs at and 2.17 s if the tick rate is set to 30 -- either
+    // These are logic ticks, not rendered frames, so 65 of them is 4.33 s at the
+    // 15 Hz the world runs at and 2.17 s if the tick rate is set to 30 -- either
     // way, any delay long enough to read as deliberate loses a race with it. Holding the counter here is
     // what makes the delay ours: the animation finishes, the fade never starts,
     // and the game's own respawn never comes due.

@@ -402,7 +402,7 @@ public sealed class Lights : IRemasterFeature
         int sent = Math.Min(n, RemasterUniforms.MaxLights);
         culled += n - sent;
 
-        double t = _ticks / 20.0;
+        double t = _ticks / FramePacing.LogicHz;
         for (int k = 0; k < sent; k++)
         {
             ref readonly var l = ref _frame[_order[k].Index];

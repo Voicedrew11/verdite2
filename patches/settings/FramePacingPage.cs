@@ -12,9 +12,9 @@ namespace Kf2.Settings;
 /// so rather than leaving a player to find out by playing.
 ///
 /// **The world's tick rate was the second control and it is gone.** It offered
-/// two entries -- 20, the band the console actually landed in, and 30, the fastest
-/// the game's own frame gate permits -- and offering both made the *player* settle
-/// a question about what King's Field's speed is. It is 20: that is the speed the
+/// two entries -- 20, the band the console was then thought to land in, and 30, the
+/// fastest the game's own frame gate permits -- and offering both made the *player*
+/// settle a question about what King's Field's speed is. It is 15: that is the speed the
 /// game was built and played at, it is what every rate in this port is measured
 /// against, and 30 is a comparison rather than a preference. <c>KF2_TICKRATE</c> still takes any rate, which is where a
 /// comparison belongs. See FramePacing.LogicHz.
