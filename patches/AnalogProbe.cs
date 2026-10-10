@@ -52,6 +52,8 @@ internal static class AnalogProbe
     static int _lastRate, _lastSpeed;
     static int _mouseFrames;
     static double _mouseTurnSum, _mousePitchSum;
+    static int _tankFrames;
+    static float _lastTankX, _lastTankWant, _lastTankTurn;
 
     static double Now => Environment.TickCount64 / 1000.0;
 
@@ -103,6 +105,19 @@ internal static class AnalogProbe
         _mousePitchSum += Math.Abs(pitch);
     }
 
+    /// <summary>
+    /// 3D controls' turn (<see cref="Analog.Tank"/>): the left stick's sideways
+    /// deflection after its own deadzone and the square, the turn it asks for, and
+    /// the turn this tick drove after the rate>>2 ramp -- the evidence that the 3D
+    /// path, and not the twin sticks', is the one being taken.
+    /// </summary>
+    internal static void NoteTank(float x, float want, float turn, int rate)
+    {
+        if (!On) return;
+        _tankFrames++;
+        _lastTankX = x; _lastTankWant = want; _lastTankTurn = turn; _lastRate = rate;
+    }
+
     internal static void NoteMove(float x, float y, int speed)
     {
         if (!On) return;
@@ -142,7 +157,7 @@ internal static class AnalogProbe
 
         Console.WriteLine(
             $"[KF2] analog: {_frames} frames in {window:0.#}s | " +
-            $"look {_lookFrames} move {_moveFrames} mouse {_mouseFrames}" +
+            $"{(Analog.Tank ? "3D" : "2D")} look {_lookFrames} move {_moveFrames} tank {_tankFrames} mouse {_mouseFrames}" +
             (_mouseFrames == 0 ? "" :
                 $" (mean |turn| {_mouseTurnSum / _mouseFrames:0.0}, |pitch| {_mousePitchSum / _mouseFrames:0.0}" +
                 $", capture {(Mouse.Captured ? "on" : "off")})") + " | " +
@@ -161,7 +176,13 @@ internal static class AnalogProbe
             $"{(_yawSteps == 0 ? 0.0 : (double)_yawStepSum / _yawSteps):0.00}, " +
             $"pitch total {_pitchStepSum}");
 
-        _frames = _lookFrames = _moveFrames = _mouseFrames = 0;
+        if (_tankFrames > 0)
+            Console.WriteLine(
+                $"           3D turn: L x {_lastTankX:+0.00;-0.00;0.00} (0.3 cross, squared)  " +
+                $"want {_lastTankWant:+0.0;-0.0;0.0}  driven {_lastTankTurn:+0.0;-0.0;0.0}  " +
+                $"(ramp {_lastRate >> 2} a tick)");
+
+        _frames = _lookFrames = _moveFrames = _mouseFrames = _tankFrames = 0;
         _mouseTurnSum = _mousePitchSum = 0;
         _yawSteps = _yawStepSum = _pitchStepSum = 0;
     }

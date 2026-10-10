@@ -13,6 +13,8 @@ namespace Kf2;
 ///     KF2_ANALOG=1              on (the default); 0 hands the sticks back
 ///     KF2_ANALOG_LOOK=1         right stick turns and looks
 ///     KF2_ANALOG_MOVE_ENABLE=1  left stick walks and strafes
+///     KF2_TANK=1                3D (one-stick) controls: the left stick walks and turns,
+///                               the right stick is not read
 ///     KF2_ANALOG_TURN/PITCH/MOVE=1.0            sensitivities
 ///     KF2_ANALOG_DEADZONE/MOVEDEADZONE=0.15     deadzones
 ///     KF2_ANALOG_CURVE/MOVECURVE=1.35/1.0       response curves
@@ -142,12 +144,19 @@ public static class Analog
     public const string InvertTurnKey  = "kf2.analog.invertturn";
     public const string InvertStrafeKey = "kf2.analog.invertstrafe";
     public const string InvertFwdKey   = "kf2.analog.invertforward";
+    public const string ControlsKey    = "kf2.controls";
 
     /// <summary>Live rather than fixed at startup: the hooks stay attached and
     /// return immediately when this is off, so it can be taken back mid-session.</summary>
     public static bool Enabled = true;
     public static bool AnalogLook = true;
     public static bool AnalogMove = true;
+
+    /// <summary>3D controls: one stick, as tank controls are. The left stick walks and
+    /// turns as the D-pad does, L1 and R1 strafe, L2 and R2 look, and the right stick
+    /// is not read. Off is 2D, the twin sticks. Kept as a bool ("True"/"False") under
+    /// <see cref="ControlsKey"/>, as every switch of this port is.</summary>
+    public static bool Tank;
 
     // Look acceleration: hold the stick out and the camera keeps speeding up for
     // the first half second, instead of sitting at one rate the moment you touch
@@ -168,6 +177,16 @@ public static class Analog
     // slow to get going and never fast.
     public static float LookCurve = 1.35f;
     public static float MoveCurve = 1.0f;
+    // 3D controls read each axis of the left stick on its own deadzone (a cross,
+    // not a circle), so a thumb a little off forward walks straight and a sideways
+    // push turns in place: past a radial deadzone the off axis counts in full, and
+    // there it is a turn or a walk nobody asked for. The turn is squared, so a small
+    // push corrects finely and a full one still turns at the full rate. 0.3 of the
+    // byte's range is well inside the runtime's own stick-to-D-pad threshold
+    // (InputManager.StickThreshold, about 0.64 of the byte), so a stick inside this
+    // deadzone never reaches the game as a D-pad turn either.
+    const float TankDeadzone = 0.3f;
+    const float TankTurnCurve = 2f;
     public static float TurnSens = 1.0f;
     public static float PitchSens = 1.0f;
     public static float MoveSens = 1.0f;
@@ -201,6 +220,10 @@ public static class Analog
     // Fractional remainders. Not optional: at a 20 Hz tick a small stick deflection
     // rounds to a zero step every tick, and the player would simply not move.
     static float _turnCarry, _pitchCarry, _fwdCarry, _strafeCarry;
+
+    // 3D's turn as it ramps toward the stick's, and whether it was driven last tick.
+    static float _tankTurn;
+    static bool _tankLive;
 
     /// <summary>Keys a KF2_ANALOG* variable set, which the saved settings must
     /// not overwrite — the same precedence the other patches keep.</summary>
@@ -249,6 +272,7 @@ public static class Analog
         Env("KF2_ANALOG", OnKey, ref Enabled);
         Env("KF2_ANALOG_LOOK", LookKey, ref AnalogLook);
         Env("KF2_ANALOG_MOVE_ENABLE", MoveKey, ref AnalogMove);
+        Env("KF2_TANK", ControlsKey, ref Tank);
         Env("KF2_ANALOG_INVERTY", InvertPitchKey, ref InvertPitch);
         Env("KF2_ANALOG_INVERTTURN", InvertTurnKey, ref InvertTurn);
         Env("KF2_ANALOG_INVERTSTRAFE", InvertStrafeKey, ref InvertStrafe);
@@ -293,6 +317,7 @@ public static class Analog
             Saved(OnKey, ref Enabled);
             Saved(LookKey, ref AnalogLook);
             Saved(MoveKey, ref AnalogMove);
+            Saved(ControlsKey, ref Tank);
             Saved(StopKey, ref CameraInstantStop);
             Saved(AccelKey, ref LookAccel);
             Saved(AccelMaxKey, ref LookAccelMax);
@@ -343,8 +368,9 @@ public static class Analog
         HookManager.Commit();
         Console.WriteLine($"[KF2] analog: {(Enabled ? "on" : "off")}, {n} hook(s) " +
                           $"(deadzone {LookDeadzone:0.##}, turn x{TurnSens:0.##}, move x{MoveSens:0.##}); " +
-                          "left stick walks and strafes, right stick turns and looks, " +
-                          "and the D-pad is untouched while both are centred");
+                          (Tank ? "3D, one stick: the left stick walks and turns, the right stick is not read, "
+                                : "2D: the left stick walks and strafes, the right stick turns and looks, ") +
+                          "and the D-pad is untouched while the sticks are centred");
     }
 
     static int Hook(uint addr, MethodInfo pre)
@@ -372,20 +398,30 @@ public static class Analog
         // Taken unconditionally: the accumulator has to be emptied whether or not
         // anything here is going to spend it.
         var (mTurn, mPitch) = Mouse.TakeLook();
-        bool sticks = Enabled && AnalogLook;
-        if (!sticks && mTurn == 0f && mPitch == 0f && !_mouseTurn && !_mousePitch) return;
+        // 3D is one stick, as tank controls are: the right stick is not read at all,
+        // L2 and R2 look as the game has them, and the left stick turns. So the left
+        // stick needs only "walks" there, not "the right stick turns and looks".
+        bool right = Enabled && AnalogLook && !Tank;
+        bool left = Enabled && AnalogMove && (Tank || AnalogLook);
+        if (!right && !left && mTurn == 0f && mPitch == 0f && !_mouseTurn && !_mousePitch)
+        {
+            _tankLive = false;
+            return;
+        }
 
-        var (x, y) = sticks ? Shape(Controller.RightX, Controller.RightY, LookDeadzone, LookCurve)
-                            : (0f, 0f);
+        var (x, y) = right ? Shape(Controller.RightX, Controller.RightY, LookDeadzone, LookCurve)
+                           : (0f, 0f);
 
         // The runtime binds the left stick to the D-pad by default, and the game's
         // turn actions *are* D-pad left/right -- so a left stick pushed sideways
         // turns as well as strafes unless the turn bits are taken away from it.
         // Owning them with a zero step is exactly that: buttons cleared, velocity
-        // zeroed, and the D-pad still turns when neither stick is deflected.
-        var (lx, ly) = sticks ? Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve)
-                              : (0f, 0f);
-        bool leftActive = sticks && AnalogMove && (lx != 0f || ly != 0f);
+        // zeroed, and the D-pad still turns when neither stick is deflected. In 3D
+        // the same ownership is what makes the sideways push the stick's turn.
+        var (lx, ly) = !left ? (0f, 0f)
+                     : Tank ? TankLeft
+                     : Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve);
+        bool leftActive = left && (lx != 0f || ly != 0f);
 
         // A released axis still needs one frame to stop the velocity the game
         // would otherwise ramp down; _ownedTurn/_ownedPitch are what keep us in
@@ -404,20 +440,38 @@ public static class Analog
         {
             _accelT = 0f;
             _accelTick = 0;
+            _tankLive = false;
             return;
         }
 
         // The ramp is a held stick's, so it is neither fed nor applied by a mouse.
-        float mult = sticks ? Accelerate(RawMag(Controller.RightX, Controller.RightY, LookDeadzone)) : 1f;
+        float mult = right ? Accelerate(RawMag(Controller.RightX, Controller.RightY, LookDeadzone)) : 1f;
 
         ushort pad = m.ReadU16(Pad);
         int rate = (int)m.ReadU32(TurnRate);
-        if (rate <= 0) return;
+        if (rate <= 0) { _tankLive = false; return; }
 
         // The stick's share of each step, so FrameSmoothing can tell how much of
         // what the game turns by this tick was the mouse's (Mouse.NoteSpent).
         float stickTurn = -x * rate * TurnSens * mult * (InvertTurn ? -1f : 1f);
         float stickPitch = y * PitchVelMax * PitchSens * mult * (InvertPitch ? -1f : 1f);
+        // 3D turns with the left stick's sideways deflection, at the game's own rate
+        // at full deflection times the turn sensitivity, as the D-pad turns; no look
+        // ramp, which is the right stick's, for aiming. The turn moves toward the
+        // stick's by the game's own accel a tick (rate>>2, four ticks to full), as a
+        // held D-pad's does, starting from wherever the velocity is, so a push during
+        // a D-pad turn's ramp-down carries on from it. The same sign as the right
+        // stick's: stick right turns right, the decreasing branch.
+        float tankWant = 0f;
+        if (Tank && leftActive)
+        {
+            tankWant = -lx * rate * TurnSens * (InvertTurn ? -1f : 1f);
+            float from = _tankLive ? _tankTurn : (short)m.ReadU16(TurnVel);
+            int accel = rate >> 2;
+            _tankTurn = Math.Clamp(tankWant, from - accel, from + accel);
+            stickTurn += _tankTurn;
+        }
+        _tankLive = Tank && leftActive;
         Mouse.NoteSpent(m, mTurn, stickTurn, mPitch, stickPitch);
 
         if (x != 0f || leftActive || mTurn != 0f || releaseTurn)
@@ -429,7 +483,10 @@ public static class Analog
             int step = Step(stickTurn + mTurn,
                             ref _turnCarry, Ceiling(rate * OverspeedCap, mTurn));
             pad = Drive(m, pad, TurnVel, step, rate >> 2, rate, MaskTurnInc, MaskTurnDec);
-            _ownedTurn = step != 0;
+            // 3D's release is the D-pad's: the stick back inside its deadzone leaves
+            // the velocity to the game's decay, the ramp-down a released Left/Right
+            // gets, rather than CameraInstantStop's zero, which is the right stick's.
+            _ownedTurn = step != 0 && !Tank;
             _mouseTurn = mTurn != 0f;
         }
 
@@ -450,6 +507,7 @@ public static class Analog
 
         m.WriteU16(Pad, pad);
         if (x != 0f || y != 0f) AnalogProbe.NoteLook(x, y, rate);
+        if (Tank && leftActive) AnalogProbe.NoteTank(lx, tankWant, _tankTurn, rate);
         if (mTurn != 0f || mPitch != 0f) AnalogProbe.NoteMouse(mTurn, mPitch);
     }
 
@@ -471,7 +529,11 @@ public static class Analog
     {
         if (!Enabled || !AnalogMove) return;
 
-        var (x, y) = Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve);
+        // 3D: the stick's sideways deflection turns (BeforeLook), not strafes, and the
+        // walk is read on its own deadzone, so a turn does not creep forward or back.
+        // L1 and R1 still strafe: the strafe bits are left alone when x is zero.
+        var (x, y) = Tank ? (0f, TankLeft.Y)
+                          : Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve);
         if (x == 0f && y == 0f) return;
 
         ushort pad = m.ReadU16(Pad);
@@ -592,6 +654,20 @@ public static class Analog
         float unit = Math.Clamp((mag - deadzone) / (1f - deadzone), 0f, 1f);
         float scaled = MathF.Pow(unit, curve) / mag;
         return (x * scaled, y * scaled);
+    }
+
+    /// <summary>The left stick for 3D controls, as (turn, walk): each axis past its
+    /// own deadzone, so neither leaks into the other (see TankDeadzone).</summary>
+    static (float X, float Y) TankLeft => (
+        Axis((Controller.LeftX - 128) / 127f, TankDeadzone, TankTurnCurve),
+        Axis((Controller.LeftY - 128) / 127f, TankDeadzone, MoveCurve));
+
+    /// <summary>One axis past an axial deadzone, rescaled to 0..1 and curved, signed.</summary>
+    static float Axis(float v, float deadzone, float curve)
+    {
+        float a = MathF.Abs(v);
+        if (a <= deadzone) return 0f;
+        return MathF.Sign(v) * MathF.Pow(Math.Clamp((a - deadzone) / (1f - deadzone), 0f, 1f), curve);
     }
 
     /// <summary>
