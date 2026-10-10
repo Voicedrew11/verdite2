@@ -159,7 +159,16 @@ public static class Reflections
     public static void BeforeDrawOTag(CpuContext c, IMemory m)
     {
         if (!GteDepth.Reflections) return;
+        ReadRects(m);
+        if (_probe) Report();
+    }
 
+    /// <summary>The rects themselves; also from <see cref="RetainedMap.AtWalk"/> before
+    /// it hashes the map, which carries them, so an arrival's map is built once with
+    /// them rather than again a frame later when this draw had read them.</summary>
+    public static void ReadRects(IMemory m)
+    {
+        if (!GteDepth.Reflections) return;
         int n = 0;
         for (int i = 0; i < Count && n < SurfaceMaterial.RectSlots; i++)
         {
@@ -176,8 +185,6 @@ public static class Reflections
             r.TranslucentOnly = true;
         }
         SurfaceMaterial.RectN = n;
-
-        if (_probe) Report();
     }
 
     /// <summary>SsrFs's fogKeep, for the probe line.</summary>

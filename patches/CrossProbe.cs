@@ -122,6 +122,10 @@ public static class CrossProbe
     static int _depth;
     static bool _hooked;
 
+    /// <summary>Whether stage 13 is running now; false unless this probe or
+    /// <see cref="BlackProbe"/> installed the renderer hook.</summary>
+    public static bool InRenderer => _depth > 0;
+
     static readonly ModInfo _self = new()
     {
         Id = "kf2.crossprobe",

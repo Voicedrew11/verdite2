@@ -130,8 +130,70 @@ public static class GpuWorld
                               (_on && Blocker is { } why ? $", standing down: {why}" : ""));
         });
         // A model bank of the next area may put other meshes at the same addresses.
-        Event.AddListener<OverlayLoadedEvent>(_ => RetainedModels.ForgetMeshes());
+        Event.AddListener<OverlayLoadedEvent>(e =>
+        {
+            if (_probe) NoteLoad(e.Name);
+            RetainedModels.ForgetMeshes();
+        });
     }
+
+    // ---- the crossing, for the probe -------------------------------------------------
+
+    static long _drawsAtFrame;
+    static string? _loadName;
+    static int _loadSerial, _loadGen, _loadIns, _loadSky, _loadFrames;
+    static bool _loadPending, _loadArm, _loadInRenderer;
+    static long _loadDraws, _loadArmLost, _loadArmMissed, _loadSkyMissed;
+
+    /// <summary>Where an overlay load lands against the retained frame. A frame the walk
+    /// has begun and the backend not yet drawn holds instances, sky and arm made from
+    /// the store the load empties, and the backend skips each one whose generation is
+    /// not the store's. Read back a few frames later (<see cref="ReportLoad"/>).</summary>
+    static void NoteLoad(string name)
+    {
+        var f = RetainedScene.Find(RetainedScene.Serial);
+        _loadName = name;
+        _loadSerial = RetainedScene.Serial;
+        _loadGen = RetainedScene.MeshGeneration;
+        _loadPending = Active && RetainedScene.MainSerial == RetainedScene.Serial && RetainedScene.MainDraws == _drawsAtFrame;
+        _loadIns = f?.Instances.Count ?? 0;
+        _loadSky = f?.Sky.Count ?? 0;
+        _loadArm = f?.HasArm ?? false;
+        _loadInRenderer = CrossProbe.InRenderer;
+        _loadDraws = RetainedScene.MainDraws;
+        _loadArmLost = RetainedModels.ArmLost;
+        _loadArmMissed = RetainedScene.ArmMissed;
+        _loadSkyMissed = RetainedScene.SkyMissed;
+        _loadFrames = 0;
+    }
+
+    /// <summary>From <see cref="AtFrame"/>: the loaded frame's instances by the store
+    /// they were made from, and what the backend skipped since the load.</summary>
+    static void ReportLoad()
+    {
+        if (_loadName == null || ++_loadFrames < 3) return;
+        var f = RetainedScene.Find(_loadSerial);
+        int before = 0, after = 0, skyBefore = 0;
+        if (f != null)
+        {
+            foreach (var m in f.Instances)
+                if (m.MeshGen == _loadGen) before++; else after++;
+            foreach (var m in f.Sky)
+                if (m.MeshGen == _loadGen) skyBefore++;
+        }
+        bool armBefore = f is { HasArm: true } && f.Arm.MeshGen == _loadGen;
+        Console.WriteLine($"[KF2] gpu world: {_loadName} loaded {(_loadInRenderer ? "inside" : "outside")} stage 13, frame {_loadSerial} " +
+                          $"{(_loadPending ? "walked and not yet drawn" : "not pending")}; at the load {_loadIns} instance(s), {_loadSky} sky, " +
+                          $"arm {(_loadArm ? "placed" : "none")}; the frame finished with {before} instance(s) from the emptied store and {after} from the new, " +
+                          $"{skyBefore} sky and {(armBefore ? "the" : "no")} arm from the emptied store" +
+                          $"{(f == null ? " (frame gone)" : "")}; over 3 frames {RetainedScene.MainDraws - _loadDraws} draw(s), arm lost " +
+                          $"{RetainedModels.ArmLost - _loadArmLost}, arm missed {RetainedScene.ArmMissed - _loadArmMissed}, " +
+                          $"sky missed {RetainedScene.SkyMissed - _loadSkyMissed}");
+        _loadName = null;
+    }
+
+    /// <summary>The probe's switch, for the map's line a build.</summary>
+    public static bool Probing => _probe;
 
     public static void SetEnabled(bool on)
     {
@@ -180,8 +242,10 @@ public static class GpuWorld
         RetainedScene.MirrorWater = MirrorWaterActive;
         RetainedModels.AtFrame();
         if (RetainedModels.ClipProbe) ClipReport();
+        _drawsAtFrame = RetainedScene.MainDraws;
         if (_probe)
         {
+            ReportLoad();
             // BK and LCM generations the last frame started (GteLightMap keeps eight).
             long g = GteLightMap.Generations - _gensAt;
             _gensAt = GteLightMap.Generations;

@@ -393,6 +393,20 @@ saying so looked right — but the Graphics backend combo offers `auto`, `gl45`,
 `gl33` and `gl21`, all four of them GL, and `GlBackendKind` has no software
 entry. The note would be for a state the pane cannot produce.
 
+**The dither off switch is the runtime's mask now.** `NoDither` used to clear
+bit 9 of each GP0(E1) word in guest RAM, around every `PutDrawEnv` and every
+`DrawOTag`, by walking the whole ordering table a second time before each call
+and putting the words back after. It now sets `Gpu.SuppressDither` (RecompOne
+patch `0094`), which the GPU's draw-mode decode honours on both render paths, so
+nothing is written to the game's memory and the table walk runs only under
+`KF2_NODITHER_PROBE`. Verdite3 measured the old walk and the table clear it forced
+at 0.1 ms of a 1 ms frame (its commit `3b3efa3`). Here, standing in fdat05 at
+`KF2_FPS=off` (default Shading, Smooth), the median uncapped rate went from
+1165-1180 fps to 1206 fps across two runs each, about 0.02 ms a frame; that run
+also carried the `Prejit` change, so it is not this change alone. The picture in
+each position has not been looked at since. The three Shading positions are unchanged: `Dither` has
+the mask off, `None` and `Smooth` have it on, and `Smooth` adds `TrueColor`.
+
 ### The rate became a setting, so every hook is installed whatever it is set to
 
 Hooks attach at the first overlay load; the rate is chosen from the settings long

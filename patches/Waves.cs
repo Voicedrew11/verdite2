@@ -124,6 +124,18 @@ public static class Waves
         if (_probe) Report();
     }
 
+    /// <summary>From <see cref="RetainedMap.AtWalk"/>, before it hashes the map: the
+    /// water's rects and the swell's free corners, which the map carries. Run after it,
+    /// as <see cref="AtWalk"/> runs, every map change was built twice: once with the old
+    /// swell and again on the next walk when the swell's generation moved. Publishing
+    /// the swell stays in AtWalk, into the frame the map has begun.</summary>
+    public static void BeforeMap(PSMemory mem)
+    {
+        if (!Enabled) return;
+        ReadRects(mem);
+        WaterSwell.AtWalk(mem);
+    }
+
     /// <summary>The world's own time: ticks taken plus the phase between them. The
     /// field's clock takes its steps scaled by the speed.</summary>
     static void Tick()

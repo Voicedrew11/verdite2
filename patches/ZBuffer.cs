@@ -155,6 +155,9 @@ public static class ZBuffer
     /// <summary>The first-person arm, which keeps painter's order.</summary>
     const uint ArmDraw = 0x80032400;
 
+    /// <summary>The menu's item preview, which keeps painter's order.</summary>
+    const uint PreviewDraw = 0x800346CC;
+
     /// <summary>The model submitter: a blended packet built inside it is a solid
     /// surface for the occlusion pass (the secret door), where the blended map
     /// tiles (water) and the billboards (flames) are not.</summary>
@@ -192,6 +195,7 @@ public static class ZBuffer
         });
 
         HookAttach.OnOverlayLoad("zbuffer arm", AttachArm);
+        HookAttach.OnOverlayLoad("zbuffer preview", AttachPreview);
         if (Environment.GetEnvironmentVariable("KF2_AO_SOLID") != "0")
             HookAttach.OnOverlayLoad("zbuffer models", AttachModel);
 
@@ -226,6 +230,24 @@ public static class ZBuffer
         return HookAttach.Installed(target);
     }
 
+    static bool _previewQueued;
+
+    static bool AttachPreview()
+    {
+        SymbolRegistry.Build();
+        var target = SymbolRegistry.Resolve("game", null, PreviewDraw);
+        if (target == null) return false;
+        if (!_previewQueued)
+        {
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.Static;
+            HookManager.AddPre(_self, target, typeof(ZBuffer).GetMethod(nameof(BeforePreview), flags)!);
+            HookManager.AddPost(_self, target, typeof(ZBuffer).GetMethod(nameof(AfterPreview), flags)!);
+            _previewQueued = true;
+        }
+        HookManager.Commit();
+        return HookAttach.Installed(target);
+    }
+
     static bool _modelQueued;
 
     static bool AttachModel()
@@ -249,6 +271,9 @@ public static class ZBuffer
 
     public static void BeforeArm(CpuContext c, IMemory m) => PolyAssembler.InArm = true;
     public static void AfterArm(CpuContext c, IMemory m) => PolyAssembler.InArm = false;
+
+    public static void BeforePreview(CpuContext c, IMemory m) => PolyAssembler.InPreview = true;
+    public static void AfterPreview(CpuContext c, IMemory m) => PolyAssembler.InPreview = false;
 
     /// <summary>Change the setting at run time. The next triangle starts or stops
     /// testing; a frame drawn during the change is at worst partly sorted, which

@@ -85,8 +85,16 @@ public static class RetainedMap
                               (Enabled ? $", planar {(RetainedScene.Planar ? "on" : "off")}, " +
                                          $"cubemap {(RetainedScene.Cube ? $"{RetainedScene.CubeSize}px" : "off")}" : ""));
         });
-        Event.AddListener<OverlayLoadedEvent>(_ => { _hash = 0; _lightHash = 0; });
+        Event.AddListener<OverlayLoadedEvent>(e =>
+        {
+            _hash = 0; _lightHash = 0;
+            _loadName = e.Name; _loadAt = Interrupts.ClockMs;
+        });
     }
+
+    // The probe's: the last overlay load, which each build is timed from.
+    static string _loadName = "boot";
+    static double _loadAt;
 
     public static void SetEnabled(bool on)
     {
@@ -133,6 +141,9 @@ public static class RetainedMap
     public static void AtWalk(CpuContext c, PSMemory mem)
     {
         if (!Ready) return;
+        // What the hash carries of the water, read now rather than later in the frame.
+        Reflections.ReadRects(mem);
+        Waves.BeforeMap(mem);
         // The corners carry EvenFog's blends, so switching them is a rebuild too. Lit
         // from the records (0085), a record the game rewrites is only an upload.
         Hash(mem);
@@ -149,6 +160,10 @@ public static class RetainedMap
             _buildMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             _builds++;
             _lastWhy = _why;
+            if (GpuWorld.Probing)
+                Console.WriteLine($"[KF2] mapprobe: build {_builds}, {_buildMs:F2} ms, {_n / 3} triangle(s), for " +
+                                  $"{(_why.Length > 0 ? _why : "the load's reset ")}" +
+                                  $"{Interrupts.ClockMs - _loadAt:F0} ms after {_loadName}");
         }
         else if (lights)
         {
