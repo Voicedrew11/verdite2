@@ -2,9 +2,9 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using RecompOne.Runtime.Config;
-using Verdite2.Launcher.Build;
+using Verdite.Launcher.Build;
 
-namespace Verdite2.Launcher;
+namespace Verdite.Launcher;
 
 /// <summary>
 /// Asks GitHub whether a newer release exists. Notify only: nothing is downloaded.
@@ -12,14 +12,14 @@ namespace Verdite2.Launcher;
 /// Runs once per launch on a worker thread, and reaches the network at most once a
 /// day; between checks the last answer is reused from update.json in the data
 /// directory, so a player who launches twice still sees the notice. See
-/// "Telling the player about a new release" in docs/PACKAGING.md.
+/// "Telling the player about a new release" in Verdite Core's README.
 /// </summary>
 static class UpdateCheck
 {
-    const string Api = "https://api.github.com/repos/Voicedrew11/verdite2/releases/latest";
+    static string Api => $"https://api.github.com/repos/{Launcher.Game.UpdateRepository}/releases/latest";
 
     /// <summary>The View config key behind the Interface checkbox.</summary>
-    public const string SettingKey = "Verdite2.UpdateCheck";
+    public static string SettingKey => Launcher.Game.Name + ".UpdateCheck";
 
     static readonly TimeSpan Interval = TimeSpan.FromHours(24);
 
@@ -37,17 +37,17 @@ static class UpdateCheck
     }
 
     /// <summary>
-    /// VERDITE2_UPDATE_CHECK=0 turns it off, =force ignores the daily throttle (a
-    /// skipped version stays skipped).
+    /// {prefix}UPDATE_CHECK=0 (VERDITE2_UPDATE_CHECK) turns it off, =force ignores
+    /// the daily throttle (a skipped version stays skipped).
     /// </summary>
     public static void Start()
     {
-        var env = Environment.GetEnvironmentVariable("VERDITE2_UPDATE_CHECK");
+        var env = Launcher.Game.Env("UPDATE_CHECK");
         if (env == "0") return;
         var force = string.Equals(env, "force", StringComparison.OrdinalIgnoreCase);
         if (!force && !Enabled) return;
 
-        new Thread(() => Run(force)) { IsBackground = true, Name = "verdite2-update" }.Start();
+        new Thread(() => Run(force)) { IsBackground = true, Name = Launcher.Game.AppId + "-update" }.Start();
     }
 
     static void Run(bool force)
@@ -80,19 +80,19 @@ static class UpdateCheck
             if (latest is null || page is null) return;
             if (ReadText(state, "skipped") == latest)
             {
-                Console.WriteLine($"[Verdite2] {latest} is available and was skipped");
+                Console.WriteLine($"{Launcher.Tag} {latest} is available and was skipped");
                 return;
             }
 
             if (IsNewer(latest, Ver.Number))
             {
-                Console.WriteLine($"[Verdite2] update available: {latest} (running {Ver.Number})");
+                Console.WriteLine($"{Launcher.Tag} update available: {latest} (running {Ver.Number})");
                 Available = new Release(latest, page);
             }
         }
         catch (Exception e)
         {
-            Console.WriteLine($"[Verdite2] update check failed: {e.Message}");
+            Console.WriteLine($"{Launcher.Tag} update check failed: {e.Message}");
         }
     }
 
@@ -102,7 +102,7 @@ static class UpdateCheck
         try
         {
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
-            http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Verdite2", Ver.Number));
+            http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue(Launcher.Game.Name, Ver.Number));
             http.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
 
             // /releases/latest skips drafts and prereleases, so a draft release.yml has
@@ -115,7 +115,7 @@ static class UpdateCheck
         }
         catch (Exception e)
         {
-            Console.WriteLine($"[Verdite2] update check failed: {e.Message}");
+            Console.WriteLine($"{Launcher.Tag} update check failed: {e.Message}");
             return null;
         }
     }
@@ -128,7 +128,7 @@ static class UpdateCheck
     {
         if (Numeric(tag) is not { } a)
         {
-            Console.WriteLine($"[Verdite2] update check: cannot read a version in the tag {tag}");
+            Console.WriteLine($"{Launcher.Tag} update check: cannot read a version in the tag {tag}");
             return false;
         }
 
@@ -160,11 +160,11 @@ static class UpdateCheck
                     SaveState(state);
                     return state;
                 });
-                Console.WriteLine($"[Verdite2] skipped {tag}");
+                Console.WriteLine($"{Launcher.Tag} skipped {tag}");
             }
             catch (Exception e)
             {
-                Console.WriteLine($"[Verdite2] could not record the skipped version: {e.Message}");
+                Console.WriteLine($"{Launcher.Tag} could not record the skipped version: {e.Message}");
             }
         });
     }

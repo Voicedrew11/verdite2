@@ -321,9 +321,13 @@ config/funcmaps/*.json   swept function maps (address/name/size; size is mandato
 patches/                 hand-written C# replacing recompiled functions
 mods/<id>/               runtime-loaded mods (mod.json + C#, Roslyn-compiled)
 mcp/                     stdio MCP server exposing the KF2_SHELL command channel as tools to MCP hosts
-Verdite2.Launcher/       the SHIPPED executable; builds with no disc, and makes the
-                         game at first run from the player's own image. See docs/PACKAGING.md
-packaging/               AppImage and Windows packaging, plus placeholder icons
+Verdite2.Launcher/       the SHIPPED executable: Verdite Core's launcher under this
+                         port's names (one Program.cs and a csproj importing
+                         tools/verdite-core/launcher/Launcher.targets); builds with
+                         no disc, and makes the game at first run from the player's
+                         own image. See docs/PACKAGING.md
+packaging/               package.env (this port's names for Verdite Core's packaging),
+                         the icons and desktop entry, and wrappers of the core scripts
 tools/RecompOne/patches/*.patch  the record of the port's changes to RecompOne
 tools/verdite-core/       Verdite Core, the game-agnostic code shared with Verdite3 (a subtree)
 config/verdite.json      this game's values for Verdite Core's scripts
@@ -471,8 +475,8 @@ working clone of the fork.
   the commands in this file are unchanged. Its C# (`src/`, namespace
   `Verdite.Core`) compiles into this assembly as source, through a `Compile
   Include` after the `tools/**` remove and a global using (stated twice: the
-  csproj and `GameCompile.GlobalUsings`), and the launcher ships it under
-  `content/src/verdite-core/`; `Program.cs` sets the game's tag first
+  csproj and core's `launcher/Build/GameCompile.cs`), and the launcher ships it
+  under `content/src/verdite-core/`; `Program.cs` sets the game's tag first
   (`Game.Configure(tag: "KF2")`). See `docs/SHARING.md`.
 - **Three changes force a recompile**: `0004`, `0035` and `0037`. Everything else
   is runtime-only.
@@ -505,11 +509,14 @@ fail to load area modules on a differently mastered dump.
 
 - **`Verdite2.Launcher/` is the shipped executable and compiles neither
   `generated/` nor `patches/`** — it carries them as payload under `content/` and
-  compiles them at first run. Anything added there must keep that property;
+  compiles them at first run. Its code is Verdite Core's `launcher/`, shared with
+  Verdite3; `Verdite2.Launcher/Program.cs` is the one record of this port's names,
+  serial, wrong discs and update repository, and a change to the shell is a
+  `tools/verdite-core` commit like any other. Anything added there must keep that property;
   `.github/workflows/ci.yml` asserts it on every push, because it is invisible
   locally where `generated/` exists.
 - **The recompiled output and the port's sources compile in ONE Roslyn pass**
-  (`GameCompile`). Its reference set comes from `TRUSTED_PLATFORM_ASSEMBLIES`, not
+  (core's `GameCompile`). Its reference set comes from `TRUSTED_PLATFORM_ASSEMBLIES`, not
   loaded assemblies, and it supplies `GlobalUsings.g.cs` itself, since
   `ImplicitUsings` is an SDK feature.
 - **`GameCompile`'s options and `KingsField2Recomp.csproj`'s properties are two

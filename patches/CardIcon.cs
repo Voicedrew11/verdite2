@@ -10,14 +10,11 @@ namespace Kf2;
 ///     KF2_ICON=1        a frame of the card icon's three (0 by default)
 ///     KF2_ICON_INSTALL=0   do not write the icon into the desktop's icon theme
 ///
-/// 16x16 at 4bpp, scaled by whole multiples with no filter, so the desktop is
-/// handed a size it can use without resampling pixel art. Nothing is shipped:
-/// the bytes come from the player's own image at boot, and a disc that does not
-/// answer leaves whatever Program.cs already set.
-///
-/// A Wayland compositor does not take an icon from a window -- GLFW says so in
-/// as many words -- so on Linux the same pixels are also written into the icon
-/// theme under the app id, which is what a compositor looks up. See "The icon
+/// Where the icon is on this disc is this file's; decoding it, scaling it by
+/// whole multiples for every size a desktop asks for, and writing it into the
+/// icon theme for Wayland are Verdite Core's WindowIcon and DesktopEntry. Nothing
+/// is shipped: the bytes come from the player's own image at boot, and a disc
+/// that does not answer leaves whatever Program.cs already set. See "The icon
 /// comes off the disc" and "Wayland takes the icon from the desktop entry" in
 /// docs/PACKAGING.md.
 /// </summary>
@@ -29,22 +26,11 @@ public static class CardIcon
     /// <summary>The same sixteen colours in GAME.EXE, which is what names the icon.</summary>
     const int PaletteOffset = 0x56DB4;
 
-    const int Frames = 3, Side = 16, FrameBytes = Side * Side / 2;
-
-    static readonly int[] Sizes = [16, 32, 48, 64, 128, 256];
+    const int Frames = 3, FrameBytes = WindowIcon.Side * WindowIcon.Side / 2;
 
     public static void Install(string? discPath)
     {
-        var mode = (Environment.GetEnvironmentVariable("KF2_ICON") ?? "").Trim().ToLowerInvariant();
-        if (mode is "orb" or "png") return;
-        if (mode is "off" or "none")
-        {
-            RecompOne.Runtime.Runtime.ClearIcon();
-            return;
-        }
-
-        int frame = mode.Length == 1 && char.IsDigit(mode[0]) ? mode[0] - '0' : 0;
-        if (frame >= Frames) frame = 0;
+        if (WindowIcon.Frame(Frames, byDefault: 0) is not { } frame) return;
 
         var path = string.IsNullOrWhiteSpace(discPath) ? RecompOne.Runtime.Runtime.CdPath : discPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
@@ -58,12 +44,10 @@ public static class CardIcon
                 return;
             }
 
-            var argb = Decode(clut, pixels, frame);
-            var images = new List<(byte[] Rgba, int W, int H)>(Sizes.Length);
-            foreach (int n in Sizes) images.Add((Scale(argb, n / Side), n, n));
-            RecompOne.Runtime.Runtime.SetIcons(images);
-            Console.WriteLine("[KF2] icon: the game's memory-card icon, off the disc");
-            DesktopEntry.Publish(images);
+            // The three frames are stored a row at a time -- frame 0's row y, then
+            // frame 1's, then frame 2's -- which is the order a loop filling all
+            // three of a card header's frames reads them in: a row stride of three.
+            WindowIcon.Apply(WindowIcon.Decode(clut, pixels, Frames * WindowIcon.Side / 2, frame));
         }
         catch (Exception e)
         {
@@ -106,52 +90,6 @@ public static class CardIcon
         clut = sector[at..(at + 32)];
         pixels = sector[(at + 0x30)..(at + 0x30 + Frames * FrameBytes)];
         return null;
-    }
-
-    /// <summary>
-    /// One frame as RGBA. The three are stored a row at a time, frame 0's row y
-    /// then frame 1's then frame 2's, which is the order a loop writing all three
-    /// into a card header reads them in. Index 0 is the background and the card's
-    /// own header zeroes it, so it is this icon's transparency.
-    /// </summary>
-    static byte[] Decode(byte[] clut, byte[] pixels, int frame)
-    {
-        var rgba = new byte[Side * Side * 4];
-        for (int y = 0; y < Side; y++)
-        {
-            int row = (y * Frames + frame) * (Side / 2);
-            for (int x = 0; x < Side; x++)
-            {
-                int b = pixels[row + x / 2];
-                int index = (x & 1) == 0 ? b & 0xF : b >> 4;
-                int c = clut[index * 2] | (clut[index * 2 + 1] << 8);
-                int o = (y * Side + x) * 4;
-                rgba[o + 0] = (byte)((c & 31) * 255 / 31);
-                rgba[o + 1] = (byte)((c >> 5 & 31) * 255 / 31);
-                rgba[o + 2] = (byte)((c >> 10 & 31) * 255 / 31);
-                rgba[o + 3] = index == 0 ? (byte)0 : (byte)255;
-            }
-        }
-
-        return rgba;
-    }
-
-    static byte[] Scale(byte[] src, int n)
-    {
-        if (n <= 1) return src;
-        int side = Side * n;
-        var dst = new byte[side * side * 4];
-        for (int y = 0; y < side; y++)
-        for (int x = 0; x < side; x++)
-        {
-            int s = ((y / n) * Side + x / n) * 4, d = (y * side + x) * 4;
-            dst[d] = src[s];
-            dst[d + 1] = src[s + 1];
-            dst[d + 2] = src[s + 2];
-            dst[d + 3] = src[s + 3];
-        }
-
-        return dst;
     }
 
     static bool Same(byte[] data, int at, byte[] want)

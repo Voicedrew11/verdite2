@@ -2,7 +2,7 @@ using System.Numerics;
 using ImGuiNET;
 using RecompOne.Runtime.Host.Window;
 
-namespace Verdite2.Launcher;
+namespace Verdite.Launcher;
 
 /// <summary>
 /// What the player looks at while the game is being built.
@@ -18,7 +18,7 @@ namespace Verdite2.Launcher;
 /// </summary>
 sealed class BuildProgressPopup : Popup
 {
-    protected override string TitleKey => "verdite2.build.title";
+    protected override string TitleKey => "verdite.build.title";
     protected override Vector2 Size => new(560f, 0f);
     protected override bool Closable => false;
 
@@ -32,7 +32,7 @@ sealed class BuildProgressPopup : Popup
         if (Error is { } error)
         {
             ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.45f, 0.4f, 1f));
-            ImGui.TextWrapped(Localization.T("verdite2.build.failed"));
+            ImGui.TextWrapped(Localization.T("verdite.build.failed"));
             ImGui.PopStyleColor();
             ImGui.Spacing();
             ImGui.Separator();
@@ -41,11 +41,11 @@ sealed class BuildProgressPopup : Popup
             ImGui.Spacing();
             ImGui.Separator();
             ImGui.Spacing();
-            ImGui.TextWrapped(Localization.T("verdite2.build.log"));
+            ImGui.TextWrapped(Localization.T("verdite.build.log"));
             return;
         }
 
-        ImGui.TextWrapped(Localization.T("verdite2.build.explain"));
+        ImGui.TextWrapped(Localization.T("verdite.build.explain"));
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Spacing();
@@ -65,45 +65,45 @@ sealed class BuildProgressPopup : Popup
     /// <summary>
     /// The three languages the runtime ships. A new key has to supply all of them,
     /// unlike an override of an existing one, or the missing ones fall back to the
-    /// key itself and the popup shows "verdite2.build.title" to those players.
+    /// key itself and the popup shows "verdite.build.title" to those players.
     /// </summary>
     public const string Strings = """
     {
       "strings": {
-        "verdite2.build.title": {
-          "en": "Preparing King's Field",
-          "pt-BR": "Preparando King's Field",
-          "es-419": "Preparando King's Field"
+        "verdite.build.title": {
+          "en": "Preparing %GAME%",
+          "pt-BR": "Preparando %GAME%",
+          "es-419": "Preparando %GAME%"
         },
-        "verdite2.build.explain": {
-          "en": "Verdite2 is building the game from your disc. This happens once; later launches start straight away.",
-          "pt-BR": "O Verdite2 está construindo o jogo a partir do seu disco. Isso acontece uma vez; as próximas execuções iniciam direto.",
-          "es-419": "Verdite2 está construyendo el juego desde tu disco. Esto ocurre una sola vez; los próximos inicios serán directos."
+        "verdite.build.explain": {
+          "en": "%NAME% is building the game from your disc. This happens once; later launches start straight away.",
+          "pt-BR": "O %NAME% está construindo o jogo a partir do seu disco. Isso acontece uma vez; as próximas execuções iniciam direto.",
+          "es-419": "%NAME% está construyendo el juego desde tu disco. Esto ocurre una sola vez; los próximos inicios serán directos."
         },
-        "verdite2.build.reading": {
+        "verdite.build.reading": {
           "en": "Reading the disc",
           "pt-BR": "Lendo o disco",
           "es-419": "Leyendo el disco"
         },
-        "verdite2.build.translating": {
+        "verdite.build.translating": {
           "en": "Translating the game code",
           "pt-BR": "Traduzindo o código do jogo",
           "es-419": "Traduciendo el código del juego"
         },
-        "verdite2.build.compiling": {
+        "verdite.build.compiling": {
           "en": "Compiling",
           "pt-BR": "Compilando",
           "es-419": "Compilando"
         },
-        "verdite2.build.failed": {
+        "verdite.build.failed": {
           "en": "The game could not be built.",
           "pt-BR": "Não foi possível construir o jogo.",
           "es-419": "No se pudo construir el juego."
         },
-        "verdite2.build.log": {
-          "en": "The full report was written to build.log in the Verdite2 data folder.",
-          "pt-BR": "O relatório completo foi salvo em build.log na pasta de dados do Verdite2.",
-          "es-419": "El informe completo se guardó en build.log en la carpeta de datos de Verdite2."
+        "verdite.build.log": {
+          "en": "The full report was written to build.log in the %NAME% data folder.",
+          "pt-BR": "O relatório completo foi salvo em build.log na pasta de dados do %NAME%.",
+          "es-419": "El informe completo se guardó en build.log en la carpeta de datos de %NAME%."
         }
       }
     }

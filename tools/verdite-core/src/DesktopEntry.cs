@@ -1,9 +1,9 @@
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
 /// The Wayland half of the window icon.
 ///
-///     KF2_ICON_INSTALL=0    write nothing outside the game's own data directory
+///     {Tag}_ICON_INSTALL=0    write nothing outside the game's own data directory
 ///
 /// GLFW cannot set a window icon on Wayland — its own words are "Wayland: The
 /// platform does not support setting the window icon" — because there is no
@@ -17,17 +17,28 @@ namespace Kf2;
 /// XDG_DATA_HOME outranks /usr/share, so nothing the packager wrote is touched.
 /// An entry is only written when no <c>&lt;app id&gt;.desktop</c> exists
 /// anywhere, which is the case for a run out of the source tree and not for an
-/// installed or AppImage-integrated one.
+/// installed or AppImage-integrated one; the game says what it calls itself there
+/// (<see cref="Name"/>, <see cref="GenericName"/>, <see cref="Comment"/>).
 ///
 /// Linux only; on Windows and X11 the window icon works and none of this runs.
-/// See "Wayland takes the icon from the desktop entry" in docs/PACKAGING.md.
+/// See "Wayland takes the icon from the desktop entry" in Verdite2's
+/// docs/PACKAGING.md.
 /// </summary>
 public static class DesktopEntry
 {
+    /// <summary>The entry's Name, the port's: <c>Verdite2</c>.</summary>
+    public static string Name { get; set; } = "Verdite";
+
+    /// <summary>The entry's GenericName, the game's: <c>King's Field</c>.</summary>
+    public static string GenericName { get; set; } = "";
+
+    /// <summary>The entry's Comment: what it is and that it needs the player's disc.</summary>
+    public static string Comment { get; set; } = "";
+
     public static void Publish(IReadOnlyList<(byte[] Rgba, int W, int H)> images)
     {
         if (!OperatingSystem.IsLinux()) return;
-        if (Environment.GetEnvironmentVariable("KF2_ICON_INSTALL") is "0" or "off") return;
+        if (Game.Env("ICON_INSTALL") is "0" or "off") return;
 
         var id = RecompOne.Runtime.Runtime.AppId;
         if (string.IsNullOrWhiteSpace(id)) return;
@@ -43,13 +54,13 @@ public static class DesktopEntry
 
             var entry = InstallEntry(id);
             if (written > 0 || entry)
-                Console.WriteLine($"[KF2] icon: {written} sizes into the icon theme" +
+                Console.WriteLine($"[{Game.Tag}] icon: {written} sizes into the icon theme" +
                                   (entry ? $", and a {id}.desktop" : "") +
                                   " (a compositor may want a relog to notice)");
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"[KF2] icon: cannot write the theme copy: {e.Message}");
+            Console.Error.WriteLine($"[{Game.Tag}] icon: cannot write the theme copy: {e.Message}");
         }
     }
 
@@ -88,9 +99,9 @@ public static class DesktopEntry
         var text = $"""
                     [Desktop Entry]
                     Type=Application
-                    Name=Verdite2
-                    GenericName=King's Field
-                    Comment=A PC port of King's Field (SLUS-00158). Requires your own disc image.
+                    Name={Name}
+                    GenericName={GenericName}
+                    Comment={Comment}
                     Exec="{exec}" %f
                     Icon={id}
                     Terminal=false

@@ -3,18 +3,19 @@ using ImGuiNET;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Host.Window;
 
-namespace Verdite2.Launcher;
+namespace Verdite.Launcher;
 
 /// <summary>
 /// The startup notice: once per launch, when <see cref="UpdateCheck"/> finds a newer
 /// release, only while no other popup is open, so it never lands on the disc
-/// picker or the build, and only outside play, since it is modal: once an area
-/// module or END.EXE has loaded it waits for the next title (OPEN.EXE, or GAME.EXE
-/// arriving afresh). <see cref="UpdateBadge"/> stays in the menu bar either way.
+/// picker or the build, and only outside play, since it is modal: once an overlay
+/// the game says starts play has loaded (<see cref="LauncherGame.PlayAfter"/>), it
+/// waits for the next title. <see cref="UpdateBadge"/> stays in the menu bar
+/// either way.
 /// </summary>
 sealed class UpdatePopup : Popup
 {
-    protected override string TitleKey => "verdite2.update.title";
+    protected override string TitleKey => "verdite.update.title";
     protected override Vector2 Size => new(420f, 0f);
 
     UpdateCheck.Release? _shown;
@@ -22,10 +23,10 @@ sealed class UpdatePopup : Popup
 
     public UpdatePopup()
     {
+        // Which overlays start play and which are the title is the game's to say.
         Event.AddListener<OverlayLoadedEvent>(e =>
         {
-            if (e.Name is "open" or "game") _inPlay = false;
-            else if (e.Name == "end" || e.Name.StartsWith("fdat", StringComparison.Ordinal)) _inPlay = true;
+            if (Launcher.Game.PlayAfter(e.Name) is { } play) _inPlay = play;
         });
     }
 
@@ -41,9 +42,9 @@ sealed class UpdatePopup : Popup
     {
         if (_shown is not { } release) return;
 
-        ImGui.TextWrapped(string.Format(Localization.T("verdite2.update.available"), release.Tag.TrimStart('v')));
+        ImGui.TextWrapped(string.Format(Localization.T("verdite.update.available"), release.Tag.TrimStart('v')));
         ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
-        ImGui.TextWrapped(string.Format(Localization.T("verdite2.update.running"), Ver.Number));
+        ImGui.TextWrapped(string.Format(Localization.T("verdite.update.running"), Ver.Number));
         ImGui.PopStyleColor();
         ImGui.Spacing();
         ImGui.Separator();
@@ -51,9 +52,9 @@ sealed class UpdatePopup : Popup
 
         string[] labels =
         [
-            Localization.T("verdite2.update.download"),
-            Localization.T("verdite2.update.skip"),
-            Localization.T("verdite2.update.later"),
+            Localization.T("verdite.update.download"),
+            Localization.T("verdite.update.skip"),
+            Localization.T("verdite.update.later"),
         ];
 
         // One row of equal buttons when the widest label fits a third of the

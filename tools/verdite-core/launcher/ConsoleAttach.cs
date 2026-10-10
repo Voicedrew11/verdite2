@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Verdite2.Launcher;
+namespace Verdite.Launcher;
 
 /// <summary>
 /// Give a Windows release back its standard output when it was started from a
@@ -8,9 +8,9 @@ namespace Verdite2.Launcher;
 ///
 /// The launcher is WinExe so that double-clicking it does not also open a console
 /// window behind the game. The cost of that is that a WinExe starts with no
-/// console at all, so every KF2_LOG line, every KF2_AGENT beacon line and every
-/// build diagnostic goes nowhere -- including for somebody running it from a
-/// terminal precisely to read them, which is how this port is debugged.
+/// console at all, so every log line, every agent beacon line and every build
+/// diagnostic goes nowhere -- including for somebody running it from a terminal
+/// precisely to read them, which is how a port is debugged.
 ///
 /// ATTACH_PARENT_PROCESS is the way back: it attaches to the console of whatever
 /// launched us if there is one, and fails harmlessly if there is not (a shortcut,

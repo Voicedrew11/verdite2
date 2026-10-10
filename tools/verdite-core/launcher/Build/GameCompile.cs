@@ -6,31 +6,30 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Emit;
 using Microsoft.CodeAnalysis.Text;
 
-namespace Verdite2.Launcher.Build;
+namespace Verdite.Launcher.Build;
 
 /// <summary>
 /// Compiles the recompiler's output together with the port's own C# into one game
 /// assembly.
 ///
-/// TOGETHER is the design, not an accident of convenience. The port reaches into
-/// the recompiled code directly: Program.cs calls Recompiled.Entry.Run, and
-/// AutoReload, AreaWarp and CullGrid make fifteen static calls to
-/// Recompiled.KingsField2.func_XXXXXXXX. Splitting the two apart would mean either
-/// an interface boundary for every one of those, or routing them through
-/// Dispatcher.Call -- which goes through HookManager and so would not be the same
-/// call. Compiling them in one pass keeps every one a plain static call and needs
-/// no change to a single line of the port. It costs about fifteen seconds, once.
+/// TOGETHER is the design, not an accident of convenience. A port reaches into
+/// the recompiled code directly: its Program.cs calls Recompiled.Entry.Run, and
+/// its patches make static calls to Recompiled.&lt;Game&gt;.func_XXXXXXXX. Splitting
+/// the two apart would mean either an interface boundary for every one of those,
+/// or routing them through Dispatcher.Call -- which goes through HookManager and
+/// so would not be the same call. Compiling them in one pass keeps every one a
+/// plain static call and needs no change to a single line of the port. It costs
+/// about fifteen seconds, once.
 ///
-/// The options below MUST stay in step with KingsField2Recomp.csproj, which
-/// compiles these same sources on the developer path. A difference between the two
+/// The options below MUST stay in step with the game's own csproj (the developer
+/// path, KingsField2Recomp.csproj and its kind), which compiles these same
+/// sources. A difference between the two
 /// is a class of bug that only appears in the release: the port's own notes record
 /// what losing the frame boundary looks like, and it is not a crash -- it is the
 /// whole game running fast from the title onward, silently.
 /// </summary>
 static class GameCompile
 {
-    public const string AssemblyName = "KingsField2";
-
     /// <summary>
     /// Emit the game assembly to <paramref name="dllPath"/>. Throws with the
     /// compiler's own diagnostics on failure.
@@ -65,7 +64,7 @@ static class GameCompile
                 ["CS5001"] = ReportDiagnostic.Error,
             });
 
-        var compilation = CSharpCompilation.Create(AssemblyName, trees, References(), options);
+        var compilation = CSharpCompilation.Create(Launcher.Game.GameAssembly, trees, References(), options);
 
         // Emit beside the destination and rename, so an interrupted or failed build
         // never leaves a half-written game.dll that the next launch would load.
@@ -191,5 +190,8 @@ static class GameCompile
     /// excluded: RecompOne.Runtime references it for ModCompiler, so dropping it
     /// would risk failing on whatever the runtime exposes.
     /// </summary>
-    static bool Skip(string name) => name is "recompone" or "Verdite2";
+    static bool Skip(string name) => name == "recompone" || name == Own;
+
+    /// <summary>This launcher's assembly, Verdite2 or Verdite3: core's launcher/ compiles into it.</summary>
+    static readonly string Own = typeof(GameCompile).Assembly.GetName().Name ?? "";
 }

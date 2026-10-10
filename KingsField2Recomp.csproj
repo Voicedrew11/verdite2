@@ -113,12 +113,11 @@
     </ItemGroup>
 
     <!--
-      packaging/windows/Stub/ is a nested net48 project. Building it (the Windows
-      package script does) leaves AssemblyInfo.cs under its obj/, and the default
-      glob compiles that into this assembly — CS0579, the same trap tools/**,
-      mcp/** and Verdite2.Launcher/** are removed for. Its Program.cs would also
-      become a second Main. The rest of packaging/ is scripts and icons, so the
-      remove is the whole tree.
+      packaging/ is scripts, icons and package.env; the nested net48 stub it once
+      held is now Verdite Core's (tools/verdite-core/packaging/windows/Stub/, under
+      the tools/** remove). The remove stays so that nothing staged here can become
+      a source of this assembly: a project's obj/ AssemblyInfo.cs is CS0579, the
+      same trap tools/**, mcp/** and Verdite2.Launcher/** are removed for.
     -->
     <ItemGroup>
         <Compile Remove="packaging/**" />

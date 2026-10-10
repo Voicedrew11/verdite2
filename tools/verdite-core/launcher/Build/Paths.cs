@@ -1,11 +1,11 @@
-namespace Verdite2.Launcher.Build;
+namespace Verdite.Launcher.Build;
 
 /// <summary>
 /// Where the launcher reads its payload from, and where everything it writes goes.
 ///
 /// The runtime addresses every file it owns with a bare relative path --
 /// ConfigManager's "settings.json" and "interface.ini", Runtime's "carda.sav" and
-/// "cardb.sav", MapFog's "carda.fog" beside them, and ModLoader's
+/// "cardb.sav", a game's own files beside them, and ModLoader's
 /// Path.GetFullPath("mods") with its .cache of compiled mod assemblies. All of
 /// those resolve against the process working directory, which for a shortcut, a
 /// desktop entry or an AppImage is wherever the launcher happened to be started
@@ -33,7 +33,7 @@ static class Paths
 
     /// <summary>
     /// Per-user, writable, and stable across updates:
-    ///   $VERDITE2_DATA, if set
+    ///   $VERDITE2_DATA (the game's launcher prefix), if set
     ///   %LOCALAPPDATA%\Verdite2
     ///   $XDG_DATA_HOME/verdite2, else ~/.local/share/verdite2
     /// Saves live here, so it deliberately does not move when the install does.
@@ -66,25 +66,27 @@ static class Paths
 
     static string ResolveData()
     {
+        var game = Launcher.Game;
+
         // An explicit override, for a second install, a save directory on another
         // drive, or a test that must not write into the player's real one.
-        var pinned = Environment.GetEnvironmentVariable("VERDITE2_DATA");
+        var pinned = game.Env("DATA");
         if (!string.IsNullOrWhiteSpace(pinned))
             return Path.GetFullPath(pinned);
 
         if (OperatingSystem.IsWindows())
         {
             var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            if (!string.IsNullOrWhiteSpace(local)) return Path.Combine(local, "Verdite2");
+            if (!string.IsNullOrWhiteSpace(local)) return Path.Combine(local, game.Name);
         }
 
         var xdg = Environment.GetEnvironmentVariable("XDG_DATA_HOME");
         if (!string.IsNullOrWhiteSpace(xdg) && Path.IsPathRooted(xdg))
-            return Path.Combine(xdg, "verdite2");
+            return Path.Combine(xdg, game.AppId);
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         if (string.IsNullOrWhiteSpace(home)) home = Directory.GetCurrentDirectory();
-        return Path.Combine(home, ".local", "share", "verdite2");
+        return Path.Combine(home, ".local", "share", game.AppId);
     }
 
     /// <summary>

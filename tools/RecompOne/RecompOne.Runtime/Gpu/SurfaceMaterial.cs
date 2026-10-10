@@ -167,6 +167,10 @@ public static class SurfaceMaterial
     /// rectangle's, then <see cref="Opaque"/> for an opaque one and
     /// <see cref="None"/> for a blended one. <paramref name="notRect"/> is the packet's
     /// <see cref="GtePacketDepth.Rec.NotRect"/>: no rectangle names it.</summary>
+    public static byte Classify(byte packet, bool textured, bool semi, int blend, int tpage,
+                                int u0, int v0, int u1, int v1) =>
+        Classify(packet, false, textured, semi, blend, tpage, u0, v0, u1, v1);
+
     public static byte Classify(byte packet, bool notRect, bool textured, bool semi, int blend, int tpage,
                                 int u0, int v0, int u1, int v1)
     {

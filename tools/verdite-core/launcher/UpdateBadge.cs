@@ -4,7 +4,7 @@ using ImGuiNET;
 using RecompOne.Runtime.Config;
 using RecompOne.Runtime.Host.Window;
 
-namespace Verdite2.Launcher;
+namespace Verdite.Launcher;
 
 /// <summary>
 /// A gold "Update available!" badge at the right of the menu bar, left of the FPS
@@ -13,7 +13,7 @@ namespace Verdite2.Launcher;
 /// </summary>
 static class UpdateBadge
 {
-    const string MenuId = "##verdite2-update";
+    const string MenuId = "##verdite-update";
 
     static readonly Vector4 Gold = new(0.83f, 0.69f, 0.22f, 1f);
     static readonly Vector4 Ink = new(0.08f, 0.07f, 0.02f, 1f);
@@ -29,7 +29,7 @@ static class UpdateBadge
 
     static UpdateCheck.Release? Shown => _hidden ? null : UpdateCheck.Available;
 
-    static string Label => Localization.T("verdite2.update.badge");
+    static string Label => Localization.T("verdite.update.badge");
 
     static float Width() =>
         Shown is null ? 0f : ImGui.CalcTextSize(Label).X + ImGui.GetStyle().FramePadding.X * 2f;
@@ -46,11 +46,11 @@ static class UpdateBadge
 
         if (!ImGui.BeginPopup(MenuId)) return;
 
-        ImGui.TextDisabled(string.Format(Localization.T("verdite2.update.versions"), release.Tag.TrimStart('v'), Ver.Number));
+        ImGui.TextDisabled(string.Format(Localization.T("verdite.update.versions"), release.Tag.TrimStart('v'), Ver.Number));
         ImGui.Separator();
-        if (ImGui.MenuItem(Localization.T("verdite2.update.open"))) OpenUrl(release.Url);
-        if (ImGui.MenuItem(Localization.T("verdite2.update.skip"))) Skip(release);
-        if (ImGui.MenuItem(Localization.T("verdite2.update.hide"))) _hidden = true;
+        if (ImGui.MenuItem(Localization.T("verdite.update.open"))) OpenUrl(release.Url);
+        if (ImGui.MenuItem(Localization.T("verdite.update.skip"))) Skip(release);
+        if (ImGui.MenuItem(Localization.T("verdite.update.hide"))) _hidden = true;
 
         ImGui.EndPopup();
     }
@@ -84,7 +84,7 @@ static class UpdateBadge
         }
         catch (Exception e)
         {
-            Console.Error.WriteLine($"[Verdite2] could not open {url}: {e.Message}");
+            Console.Error.WriteLine($"{Launcher.Tag} could not open {url}: {e.Message}");
         }
     }
 
@@ -92,75 +92,75 @@ static class UpdateBadge
     {
         ImGui.Spacing();
         var on = UpdateCheck.Enabled;
-        if (ImGui.Checkbox(Localization.T("verdite2.update.setting"), ref on))
+        if (ImGui.Checkbox(Localization.T("verdite.update.setting"), ref on))
         {
             UpdateCheck.Enabled = on;
             ConfigManager.SaveView(PanelManager.Panels);
         }
 
-        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("verdite2.update.setting_hint"));
+        if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("verdite.update.setting_hint"));
     }
 
     /// <summary>All three of the runtime's languages, as for BuildProgressPopup.</summary>
     public const string Strings = """
     {
       "strings": {
-        "verdite2.update.badge": {
+        "verdite.update.badge": {
           "en": "Update available!",
           "pt-BR": "Atualização disponível!",
           "es-419": "¡Actualización disponible!"
         },
-        "verdite2.update.title": {
+        "verdite.update.title": {
           "en": "Update available",
           "pt-BR": "Atualização disponível",
           "es-419": "Actualización disponible"
         },
-        "verdite2.update.available": {
-          "en": "Verdite2 {0} is available.",
-          "pt-BR": "O Verdite2 {0} está disponível.",
-          "es-419": "Verdite2 {0} está disponible."
+        "verdite.update.available": {
+          "en": "%NAME% {0} is available.",
+          "pt-BR": "O %NAME% {0} está disponível.",
+          "es-419": "%NAME% {0} está disponible."
         },
-        "verdite2.update.running": {
+        "verdite.update.running": {
           "en": "You have {0}.",
           "pt-BR": "Você tem a versão {0}.",
           "es-419": "Tienes la versión {0}."
         },
-        "verdite2.update.download": {
+        "verdite.update.download": {
           "en": "Download page",
           "pt-BR": "Página de download",
           "es-419": "Página de descarga"
         },
-        "verdite2.update.later": {
+        "verdite.update.later": {
           "en": "Later",
           "pt-BR": "Mais tarde",
           "es-419": "Más tarde"
         },
-        "verdite2.update.versions": {
-          "en": "Verdite2 {0} (you have {1})",
-          "pt-BR": "Verdite2 {0} (você tem a {1})",
-          "es-419": "Verdite2 {0} (tienes la {1})"
+        "verdite.update.versions": {
+          "en": "%NAME% {0} (you have {1})",
+          "pt-BR": "%NAME% {0} (você tem a {1})",
+          "es-419": "%NAME% {0} (tienes la {1})"
         },
-        "verdite2.update.open": {
+        "verdite.update.open": {
           "en": "Open download page",
           "pt-BR": "Abrir página de download",
           "es-419": "Abrir página de descarga"
         },
-        "verdite2.update.skip": {
+        "verdite.update.skip": {
           "en": "Skip this version",
           "pt-BR": "Pular esta versão",
           "es-419": "Omitir esta versión"
         },
-        "verdite2.update.hide": {
+        "verdite.update.hide": {
           "en": "Hide until next launch",
           "pt-BR": "Ocultar até a próxima execução",
           "es-419": "Ocultar hasta el próximo inicio"
         },
-        "verdite2.update.setting": {
+        "verdite.update.setting": {
           "en": "Check for updates at launch",
           "pt-BR": "Procurar atualizações ao iniciar",
           "es-419": "Buscar actualizaciones al iniciar"
         },
-        "verdite2.update.setting_hint": {
+        "verdite.update.setting_hint": {
           "en": "Asks GitHub for the latest release at most once a day. Nothing is downloaded.",
           "pt-BR": "Consulta o GitHub pela versão mais recente no máximo uma vez por dia. Nada é baixado.",
           "es-419": "Consulta a GitHub por la versión más reciente como máximo una vez al día. No se descarga nada."
