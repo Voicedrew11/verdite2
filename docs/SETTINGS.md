@@ -33,12 +33,12 @@ every write goes through `SettingsStore`, which queues it for the host's next fr
 
 | file | what |
 |---|---|
-| `patches/PortSetting.cs` | one setting: key, variables, menu label, steps and their text, default, live getter and setter, how it is stored |
+| `tools/verdite-core/src/Settings/PortSetting.cs` | one setting: key, variables, menu label, steps and their text, default, live getter and setter, how it is stored |
 | `patches/PortSettings.cs` | the list, the four pages, the combined rows; checked at start-up (labels against the font and the box) and at `RuntimeReadyEvent` (every declared default is what the feature boots at) |
-| `patches/SettingsStore.cs` | the one writer, pumped on the host thread by an always-open panel that draws nothing (`Panels.kf2settingsstore`) |
-| `patches/SettingsSession.cs` | the page without its drawing: open, step, reset, save, discard |
-| `patches/WindowMode.cs` | windowed, fullscreen or borderless: the runtime's two keys, applied on the host thread |
-| `patches/MenuFont.cs` | text to the label font's codes |
+| `tools/verdite-core/src/Settings/SettingsStore.cs` | the one writer, pumped on the host thread by an always-open panel that draws nothing (`Panels.kf2settingsstore`) |
+| `tools/verdite-core/src/Settings/SettingsSession.cs` | the page without its drawing: open, step, reset, save, discard |
+| `tools/verdite-core/src/Settings/WindowMode.cs` | windowed, fullscreen or borderless: the runtime's two keys, applied on the host thread |
+| `tools/verdite-core/src/Settings/MenuFont.cs` | text to the label font's codes |
 | `patches/SettingsPage.cs` | the item, the loop, the drawing, the question |
 
 The Settings window's own pages (`patches/settings/*Page.cs`) are unchanged and

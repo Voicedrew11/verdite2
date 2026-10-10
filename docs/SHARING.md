@@ -206,7 +206,7 @@ from `TRUSTED_PLATFORM_ASSEMBLIES` plus loaded assemblies, and a generated
 
 | item | game-specific strings |
 |---|---|
-| `patches/FrameViewerPanel.cs`, `patches/ProfilerPanel.cs`, `patches/GpuFrames.cs`, `patches/TexProbe.cs`, `patches/AudioProbe.cs` | `KF2_` prefix; section names. `FrameViewerPanel` names `FrameCapture`'s slots, so it moves with `FrameCapture`. |
+| `patches/FrameViewerPanel.cs`, `patches/ProfilerPanel.cs`, `tools/verdite-core/src/GpuFrames.cs`, `patches/TexProbe.cs`, `patches/AudioProbe.cs` | `KF2_` prefix; section names. `FrameViewerPanel` names `FrameCapture`'s slots, so it moves with `FrameCapture`. |
 | `patches/RateCensus.cs` | the default RAM window `0x80060000:0x801C0000` |
 | `patches/remaster/Snap.cs` | none |
 | `patches/FrameProfiler.cs`, `patches/FrameCapture.cs` | **C**: the profiler, capture and replay are generic, but each is seeded with a table of this game's routine addresses (`Known[]`, the slot list). The table is the seam. |
@@ -1818,3 +1818,21 @@ KF3's own, or notes; both subtrees were already pulled. Brought back, each on `d
 Not brought back, being KF3's: its map viewers on M, the picked-up item's hold and turn,
 the spell palette fix (cannot happen here), the front-table splice, its creature
 streaming at the render distance, the full-card save, and taking the murk out of WATER.
+
+### 2026-10-09: the settings model and `GpuFrames` moved into Verdite Core
+
+Every patch both ports have was ranked by how far apart the two copies are, method by
+method, after stripping the tag, the addresses and the numbers. Six files were the same
+in both apart from the namespace, and they are core's now, in `src/Settings/`
+(`PortSetting` with `Stored` and `Ui`, `SettingsStore`, `SettingsSession`,
+`WindowMode`, `MenuFont`) and `src/GpuFrames.cs`. The only seams: the store's log prefix
+and its panel name come from `Game.Tag` and `Game.Id`, which gives the same strings
+as before, and `SettingsSession.Open` takes the port's list (`PortSettings.All`), which core
+cannot name. Both ports boot to `0 default(s) wrong`.
+
+Next in the ranking, the same code with only the data differing: `FrameProfiler`
+(the address table), `ProfilerPanel`, `BindingTable`, `Prejit`, `GameState`'s
+helpers, and inside files that differ, `Analog`'s stick maths, `MenuMouse`'s pointer
+helpers and `AgentServer`'s plumbing. Where the two ports' attach code differs, take
+KF3's form (`HookAttach.OnOverlayLoad`, `Differential`); some of KF2's files still
+listen to `OverlayLoadedEvent` themselves.
