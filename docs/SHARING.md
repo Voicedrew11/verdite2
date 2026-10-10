@@ -1836,3 +1836,138 @@ helpers, and inside files that differ, `Analog`'s stick maths, `MenuMouse`'s poi
 helpers and `AgentServer`'s plumbing. Where the two ports' attach code differs, take
 KF3's form (`HookAttach.OnOverlayLoad`, `Differential`); some of KF2's files still
 listen to `OverlayLoadedEvent` themselves.
+
+#### The ranking: every patch both ports have, by tier
+
+KF2 has 187 C# files under `patches/` and `mods/`, and KF3 has 110. They have 68 file
+names in common. Each pair was scored twice:
+- **Measured:** the changed-line count of the folded diff in the handoff below.
+- **Judged:** each member read and scored 0-4: 0 identical; 1 data only; 2 a few game
+  seams; 3 rewritten; 4 one port only. The file score is the line-weighted judgement.
+
+Where the two disagree, the measured count decides the tier: a file scored 2 whose diff is
+most of its length is treated as 3. The judged scores were made by small models, file by
+file; a member called identical was checked where it mattered, but not every one.
+
+**Tier 0, identical but for the namespace: moved** (above). `PortSetting`, `SettingsStore`,
+`SettingsSession`, `WindowMode`, `MenuFont`, `GpuFrames`: 0 changed lines each.
+
+**Tier 1, the same code with the data apart: next.** `ProfilerPanel` (8),
+`FrameProfiler` (66), `HotkeyGate.Typing`, `settings/BindingTable` (18), `Prejit` (42),
+`settings/KeyLayoutPage` (19). See the handoff below.
+
+**Tier 2, the same algorithm with a few game seams: move with callbacks, by group.**
+
+| group | files (changed lines) | identical already | the seams |
+|---|---|---|---|
+| sticks and pad | `Analog` (231), `settings/AnalogPage` (43), `AnalogProbe` (175), `settings/InputSection` (72), `settings/MousePage` (83), `KeyLayout` (69; KF1 too) | `Analog`'s `RawMag`, `Shape`, `Axis`, `Step`, `Accelerate`, `TankLeft`; `AnalogProbe`'s button table | the pad and mask-table addresses (KF2 reads the mask words as u32, KF3 as u16); the look and move hook sites; KF2's extra rows; KF3's `TurnSens`/`PitchSens` defaults (1.25) |
+| bow | `Rumble` (118), `GyroAim` (37) | `Rumble`'s `Test`, `Twang`, `Creak`, `Strain`, `Ask`; `GyroAim.Take` | the bow's reads: KF2 has its own `Bow` class off `func_800271D0` (weapons 16, 17), KF3 inlines them (27, 28) |
+| picture switches | `Perspective` (110), `Subpixel` (106), `NoDither` (130), `TrueColor` (23), `Widescreen` (203), `CameraBlock` (257); each has a KF1 copy | `Widescreen`'s `Parse`, `SetAspect`, `Presets`; `CameraBlock.Replace`; `Subpixel.Cull` | the per-overlay `DrawOTag`/`PutDrawEnv` address table, the same pattern in all six; KF1 and KF3 are one lineage and KF2's has moved on (PGXP seams, probe-gated attach) |
+| boot and lifecycle | `BootExe` (59), `EndingHold` (73), `CardIcon` (89), `CrashReports` (36), `AutoReload` (157), `AgentBeacon` (76; KF1 too) | -- | addresses, the stub's index word, the reload delay (2.0 against 2.5), the player block |
+| the settings page | `SettingsPage` (225) | `PortSettings`' `Named`, `Number`, `Validate` | the menu's addresses, masks, templates, row count and layout constants: all data, a large table |
+
+**Tier 2 by score, tier 3 by measure.** `ZBuffer` (394; KF2 555 lines against KF3 161),
+`PolyAssemblerLit` (274), `PolyAssemblerDepth` (168 of 182), `Waves` (149 of 235), `MoPose`
+(653). The renderers have parted: KF3 draws from a retained mesh, so what KF2 does in guest
+RAM KF3 does not do at all. Leave them in the ports.
+
+**The debug mods** (`mods/kf2debug`, `mods/kf3debug`): `DebugMod` (17), `Cheats` (33),
+`Hotkeys` (57), `Noclip` (112), `GameState` (116), `Attributes` (147), `Warp` (250), `Items`
+(294), `DebugPanel` (300). The hooks are attributes, which take constants, so those classes
+stay. Only the pure helpers can move; see the handoff. KF3's are ahead in features: the
+equipment and spell editors, *Peaceful*, the warp's area field.
+
+**Tier 3, rewritten for the same purpose: stay in the ports.** `FramePacing` (689),
+`LoopPacing` (454), `SpriteAnim` (158), `MenuWorld` (677), `MenuMouse` (823), `ModelWalk`
+(1924), `CullCone` (586), `GearCompare` (619), `RetainedMap` (943), `RetainedModels`
+(1489), `GpuWorld` (714), `RenderDistance` (449), `PolyAssembler` (1135), `PolyAssemblerHud`
+(408), `WaterSwell` (367), `Murk` (65), `AutoStart` (150), `RateCensus` (142),
+`CrossProbe` (352), `AgentServer` (705), `PortSettings` (346),
+`settings/GameplaySection` (63). Inside some of them are pieces identical in both, which
+can come out without the rest:
+- `MenuMouse`'s `Point`, `In`, `TakeWheel`, `HoverLive` and `Down`.
+- `AgentServer`'s `AcceptLoop`, `Enqueue`, `Err`, `Q`, `Buttons` and `DoScale`; the verbs
+  would need a registry.
+- `MenuWorld`'s `SetFadeVBlanks`, `Quiet`, `RestoreClear`, `TPage`, `Xy` and `Link`.
+- `WaterSwell`'s world-key packing.
+- `PolyAssembler.Queue`.
+
+Lineage: `FramePacing`, `AutoStart`, `RateCensus` and `AgentServer` are one design in KF1
+and KF3, and KF2's has grown away from it. KF3's `SpriteAnim` has no 500 ms watchdog, which a
+frame-keyed hold needs ("Rules that bite"), so that one is likely a KF3 defect.
+
+**Tier 4, one port only.**
+- 119 of KF2's files have no KF3 counterpart: the remaster editor, the map, smoothing,
+  `Stage13`, the planar walk.
+- 42 of KF3's have none in KF2: `NativeScene*`, `NearPath*`, `Stage15`, `ItemTurn`, `Magic`.
+- Five files are KF1's and KF3's but not KF2's: `VBlankPacing` (34 changed lines),
+  `MouseLook` (78), `ViewSmoothing` (162), `TestingSection` (173), `ModelSmoothing` (618).
+  The first two are a KF1-KF3 tier 1 in their own right.
+
+#### Handoff: tier 1, the same code with the data differing
+
+What is left after tier 0 that is the same code in both ports with only the data apart:
+addresses, keys, labels, help text. The "diff" column counts the changed lines after
+`diff -w` of the two copies, with the tag folded (`KF2`/`KF3` → `KFN`, `Verdite2`/`3`) and
+comment lines dropped; reproduce a row with
+
+```bash
+diff -w <(sed 's/[Kk][Ff]2/KFN/g;s/Verdite2/VerditeN/g' KFII-PC/<path> | grep -v '^\s*//') \
+        <(sed 's/[Kk][Ff]3/KFN/g;s/Verdite3/VerditeN/g' verdite3/<path> | grep -v '^\s*//')
+```
+
+**How tier 0 went, and how to repeat it.** Write the core copy by hand in
+`tools/verdite-core/src/` (namespace `Verdite.Core`, the tag from `Game.Tag`/`Game.Id`/
+`Game.Env`). Core cannot name a port's type, so each seam becomes an argument, a
+delegate the port sets in `Program.cs`, or a table handed in. Delete both ports' copies, build both, and
+boot both. Then commit, in this order: a KF2 commit touching only `tools/verdite-core/`,
+the KF2 port commit, `bash scripts/setup_tools.sh --push-core --no-build`, then in Verdite3 stash the port
+changes, `--pull-core --no-build`, pop them, and commit; check `diff -r -x bin -x obj`
+of the two cores is empty. Where the two copies differ in quality rather than data,
+take the newer member and name in the commit which port it came from. KF3 is ahead on attach
+(`HookAttach.OnOverlayLoad`, `Differential`); KF2 is ahead on most of the rest.
+
+In order, easiest first:
+
+| files | KF2 / KF3 lines | diff | the seams |
+|---|---|---|---|
+| `ProfilerPanel` + `FrameProfiler` + `HotkeyGate` | 830/831, 406/423, 17/— | 8, 66 | move together (they name each other; `GpuFrames` is core already) |
+| `settings/BindingTable` | 267/250 | 18 | the per-button action text only |
+| `Prejit` | 384/338 | 42 | not data: two versions to merge |
+| `settings/KeyLayoutPage` | 78/67 | 19 | KF2 an `IPatchPage`, KF3 a static `Draw` from its `InputSection`; the tip text; calls the port's `KeyLayout` |
+
+**The profiler.**
+- `FrameProfiler.Known`, the address-and-label table (KF2's 24 rows, KF3's 36), becomes the port's, handed in.
+- The wait sections differ: KF2 registers `MenuWait` and `LoadWait`, KF3 registers `VBlankWait`. Move each `Profiler.Register` into the pacing file that uses it (`MenuPacing.cs:373`, `LoadPacing.cs:383`, KF3's `VBlankPacing.cs:140`).
+- The Shift+P gate: KF2 calls `HotkeyGate.Typing` (`patches/HotkeyGate.cs`), and KF3 inlines the same ImGui `WantTextInput` test. Move `Typing` to core. `HotkeyGate.Editing` names `Remaster.Editor`, so it stays in the port.
+- `FramePacing` stays the port's. `FrameProfiler` reads `FramePacing.Floor`, and the panel reads `Enabled` and `TargetFps`, which KF3 also gates on `!Uncapped` (KF2 has no `Uncapped`). Make the panel's target one `Func<double>` (ms, 0 for none) that each port sets.
+- The panel's default probe (`"game:80040348"` / `"game:8003BFD0"`) and the stage count on the button ("Time the 13 stages" / "15") become data.
+- Check: Shift+P in both, the CSV written, the stage button timing every stage.
+
+**`BindingTable`.**
+- The table and its drawing go to core.
+- The sixteen action descriptions are handed in by the port as button name → text. KF2's are "use, open; confirm", "look up", …; KF3's are "examine, open, talk", "tilt the view", ….
+- KF2's sits in `Kf2.Settings`, KF3's in `Kf3`.
+- Check: the Input pane's table in both.
+
+**`Prejit`.**
+- Take KF2's per-batch counters (`_labels`, `_remaining`, `_batchPrepared`): each batch is reported by the thread that finishes it, with its method count.
+- Take KF3's `Configure(enabled, probe, threads)`, with the env read in `Program.cs` through `Game.Env("PREJIT_THREADS")`.
+- The one piece of game data is `PortMethods()`'s `AssemblyMethods(typeof(Prejit).Assembly, "Kf2")`. The port's namespace has to be handed in, plus `"Verdite.Core"`: core compiles into the same assembly, and its methods, `Prejit`'s own among them, want warming too.
+- Check: `KF2_PREJIT_PROBE=1` prints a "done by" line per batch, and an area arrives without the JIT stall ("The first frame of an area was the JIT" in `DEVELOPMENT.md`).
+
+**`KeyLayoutPage`.**
+- Its 70 lines pay only if `KeyLayout` itself is shaped for core first: the stock and port tables handed to core's `KeyLayoutApply`, `Version` and `Superseded` staying the port's. Leave it last, or for `Analog`'s move.
+
+**Not tier 1 after all, though the agents' scoring put them there:**
+
+- **`settings/AnalogPage`** (165/152, 43 changed lines) names about 40 of `Analog`'s keys and fields, so it moves with `Analog` (tier 2), not before.
+  - KF2 has rows KF3 lacks: *Invert look Y*, the probe and its interval.
+  - KF3 saves through a local `Set`; KF2 saves through `PatchSettings.Set`.
+- **`Subpixel`** (206/151, 106) and **`CameraBlock`** (418/218, 257): the line counts say tier 2.
+  - KF1 has copies of both. KF1's and KF3's share a lineage, and KF2's has moved away from it.
+  - Measure all three before deciding.
+- **The debug mods** (`mods/kf2debug`, `mods/kf3debug`: `Cheats` 33 changed lines, `DebugMod` 17, `Noclip` 112, `Attributes` 147, `GameState` 116) are a different question:
+  - Mods are compiled at run time and hook with `[PreHook("game", Address = 0x…)]`. An attribute takes a constant, so no per-game table can feed it, and the hooked classes stay in the mods.
+  - What can move is the pure helpers, identical in both: `GameState`'s `ReadS16`/`ReadS32`/`WriteS16`/`WriteS32`, `SetAngles`, `Position`/`SetPosition`/`Angles`, `AngleToRadians`; `Noclip`'s `Lag`, `SmoothLook` and `Format`. A mod reaches them with `using Verdite.Core;`; mods do not get the global using.
+  - One behaviour differs, so decide it rather than copy it. KF2's speed cheat scales in `BeforeMove` (`0x80028DB8`) and stands down under noclip. KF3 split it into `BeforeMove` and `BeforeWalk` (`0x8002F9BC`), without the noclip test.

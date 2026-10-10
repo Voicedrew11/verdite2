@@ -144,6 +144,10 @@ namespace Kf2;
 /// </summary>
 public static class MenuPacing
 {
+    // The menu repeat grid's sleep, as a section of the frame profiler.
+    public static readonly int MenuWait = RecompOne.Runtime.Diagnostics.Profiler.Register(
+        "MenuPacing (menu repeat grid)", RecompOne.Runtime.Diagnostics.ProfileGroup.Wait);
+
     /// <summary>The auto-repeat delay every list in the game calls first: spin on
     /// up to six `VSync(0)` calls while a button is still held, then let the
     /// caller step the cursor once.</summary>
@@ -370,7 +374,7 @@ public static class MenuPacing
 
         if (now < _due)
         {
-            int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(FrameProfiler.MenuWait);
+            int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(MenuWait);
             double sleepUntil = _due - SpinMs;
             if (now < sleepUntil)
             {

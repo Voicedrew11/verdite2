@@ -284,11 +284,14 @@ Kf2.TintHold.Install();
 //     KF2_PROFILE_SPIKE=12      a console line per frame over 12 ms of work
 //     KF2_PROFILE_FUNCS=stages  time all thirteen main-loop stages, or name
 //                               functions: game:80040348+800342D8
-Kf2.FrameProfiler.Configure(Environment.GetEnvironmentVariable("KF2_PROFILE"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_OUT"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_SPIKE"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_FUNCS"));
-Kf2.FrameProfiler.Install();
+Verdite.Core.FrameProfiler.Configure(Environment.GetEnvironmentVariable("KF2_PROFILE"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_OUT"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_SPIKE"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_FUNCS"),
+                                     Kf2.ProfilerKnown.Table);
+Verdite.Core.FrameProfiler.Install();
+Verdite.Core.ProfilerPanel.Configure(() => Kf2.FramePacing.Enabled ? 1000.0 / Kf2.FramePacing.TargetFps : 0,
+                                     defaultProbe: "game:80040348", stages: 13);
 
 // The frame viewer: capture one run of stage 13 and scrub it a GP0 command at a
 // time, replayed on a detached software GPU -- who emitted each primitive, what it
@@ -1475,11 +1478,13 @@ Kf2.PortSettings.Install();
 // lot on a background thread while the title is up. Installed last, so the
 // patches' own attach listeners have run before the first method is prepared.
 //
-//     KF2_PREJIT=0        leave every method to its first call -- the comparison
-//     KF2_PREJIT_PROBE=1  a line per overlay as it is warmed
-Kf2.Prejit.Configure(Environment.GetEnvironmentVariable("KF2_PREJIT"),
-                     Environment.GetEnvironmentVariable("KF2_PREJIT_PROBE"));
-Kf2.Prejit.Install();
+//     KF2_PREJIT=0            leave every method to its first call -- the comparison
+//     KF2_PREJIT_PROBE=1      a line per batch as the pass reaches its end
+//     KF2_PREJIT_THREADS=n    threads for the pass (a quarter of the cores, 1-4)
+Verdite.Core.Prejit.Configure(Verdite.Core.Game.Env("PREJIT"),
+                              Verdite.Core.Game.Env("PREJIT_PROBE"),
+                              Verdite.Core.Game.Env("PREJIT_THREADS"));
+Verdite.Core.Prejit.Install("Kf2");
 
 // What each drawn frame's ordering table actually got, across an area crossing.
 // Luminance cannot answer this -- a door into an unlit corridor is dark whether or
