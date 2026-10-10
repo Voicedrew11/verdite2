@@ -659,6 +659,49 @@ The colour pass still gets no early Z (the shader writes `gl_FragDepth`); a dept
 pass of its own program with the depth in `gl_FragCoord.z` would need the colour pass
 to agree on that depth, and was not tried. Judged from play: the seams are gone.
 
+#### Walls that wobbled up close at hard angles (issue #52, 2026-10-06)
+
+**Mechanism measured; judged by eye: the walls no longer wobble.**
+
+Reported from play: walls wobble when seen up close at very hard angles, stairways
+most of all; the picture showed a wall split along a straight diagonal, a lighter
+triangle of another face over it. It was `0051`'s tolerance, which the map's
+opaque range took on 2026-10-01 ("The map's seams fought again", above): one unit
+plus half the fragment's own depth change across a pixel. On a face seen nearly
+edge-on, half a pixel spans hundreds of units, so the face passed the test against
+surfaces that far in front of it, and being drawn later (the map's build order) it
+painted over them. Stairs are faces close together seen at grazing angles, so they
+show it most, and the depth change per pixel moves with the view, which is the
+wobble. Verdite3 found the same with a doorway's wall and bounded the term in the
+runtime (`0087`, "The tolerance on faces seen edge-on" in Verdite3's
+`docs/GPU_RENDERER.md`); nothing here set it, so the term stayed unbounded.
+
+`GpuWorld.Configure` now sets `RetainedScene.DepthCapPixels` to 1: a fragment is
+pulled towards the camera by at most the bias plus one game pixel's world width at
+its own depth (z / H). A coplanar partner's offset is a unit or two of world, so a
+seam is still owned as before. `KF2_GPUWORLD_DEPTHCAP=0` is the comparison and
+`gpuworld depthcap <pixels>` sets it live; `KF2_GPUWORLD_TOLERANCE_PROBE=1` arms
+`0087`'s probe and `gpuworld tolerance` reads it.
+
+**Measured**: slot 2, area 1, 16:9, paused; 40 views from 100-2,500 units around the
+area's objects, creatures and the spawn, eye height, pitch -400 to 400, every
+heading. The same 40 views at each cap, counts of samples that pass only by more
+than each distance:
+
+| pass | cap | samples | > 16 | > 64 | > 512 |
+|---|---|---|---|---|---|
+| map | 0 (before) | 8.72e9 | 73,089 | 9,386 | 4,113 |
+| map | 1 | 8.64e9 | 55,603 | **0** | **0** |
+| instances | 0 | 5.20e8 | 2,192 | 1,076 | 0 |
+| instances | 1 | 5.17e8 | 518 | **0** | 0 |
+
+The picture differs in 20 of the 40 views. What stays under 16 units is the
+coplanar overlap the tolerance exists for. Before this was found, two other suspects
+were measured and ruled out for the GPU world: no packet quad drew one triangle
+corrected and the other affine (0 in 150 views), and no packet reached the GPU with a
+corner clamped at the GTE's ±1024 (0 in 60 views; 16,206 with `gpuworld off`, the
+game's own unclipped far assemblers). Judged from play: the wobble is gone.
+
 ### Step 3: models
 
 A mesh cache: each model uploaded once when it becomes resident, invalidated when

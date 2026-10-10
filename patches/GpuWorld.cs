@@ -102,6 +102,14 @@ public static class GpuWorld
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
             RetainedScene.MainNear = Math.Max(near, 0.01f);
         if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_FOGZ")?.Trim() == "0") RetainedScene.MainFogFromZ = false;
+        // 0087. The ceiling on 0051's slope term, in game pixels at the fragment's depth:
+        // a face seen edge-on is pulled towards the camera by at most one pixel's world
+        // width, not half its own depth change across a pixel, which on a stair or a
+        // doorway's wall up close is hundreds of units and drew it over what stands in
+        // front. KF2_GPUWORLD_DEPTHCAP=0 leaves the term unbounded, as it was.
+        RetainedScene.DepthCapPixels = float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_DEPTHCAP"),
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float cap) && cap >= 0f ? cap : 1f;
+        RetainedScene.ToleranceProbe = Environment.GetEnvironmentVariable("KF2_GPUWORLD_TOLERANCE_PROBE")?.Trim() is "1";
         if (!string.IsNullOrWhiteSpace(on)) _forced = on.Trim() is "1" or "on";
         _probe = probe?.Trim() is not (null or "" or "0");
     }
@@ -239,6 +247,10 @@ public static class GpuWorld
         var word = arg.Trim().ToLowerInvariant();
         if (word.StartsWith("blend only ") && int.TryParse(word.AsSpan(11), out int only)) { RetainedScene.BlendOnly = only; word = ""; }
         if (word.StartsWith("at ")) return At(word[3..]);
+        if (word.StartsWith("depthcap ") && float.TryParse(word.AsSpan(9), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float depthCap) && depthCap >= 0f)
+        { RetainedScene.DepthCapPixels = depthCap; word = ""; }
+        if (word == "tolerance") return Tolerance();
         switch (word)
         {
             case "": break;
@@ -325,12 +337,28 @@ public static class GpuWorld
                     $"\"bk\":[{m.Bk0},{m.Bk1},{m.Bk2}],\"mirrored\":{(m.Mirrored ? "true" : "false")}}}";
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|cell on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|cell on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|scene|instances|perpixel on|off|depthcap <pixels>|tolerance]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
                $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"tile\":{(RetainedModels.TileOn ? "true" : "false")},\"mirrorBlend\":{(RetainedModels.MirrorBlendOn ? "true" : "false")},\"sky\":{(RetainedModels.SkyOn ? "true" : "false")},\"blend\":{(RetainedModels.BlendOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"depthCap\":{RetainedScene.DepthCapPixels.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
+    }
+
+    /// <summary>`gpuworld tolerance`: the tolerance probe's running counts (0087,
+    /// KF2_GPUWORLD_TOLERANCE_PROBE=1), per pass (the map, the frame's posed models, the
+    /// instances): the samples, and those that passed only by more than each of
+    /// <see cref="RetainedScene.ToleranceCaps"/> units.</summary>
+    static string Tolerance()
+    {
+        var caps = RetainedScene.ToleranceCaps;
+        string Pass(int p) => $"{{\"samples\":{RetainedScene.ToleranceSamples[p]},\"behind\":[" +
+                              string.Join(",", Enumerable.Range(0, caps.Length).Select(k => RetainedScene.ToleranceBehind[p * caps.Length + k])) + "]}";
+        return $"{{\"ok\":true,\"probe\":{(RetainedScene.ToleranceProbe ? "true" : "false")}," +
+               $"\"depthCap\":{RetainedScene.DepthCapPixels.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
+               $"\"caps\":[{string.Join(",", caps.Select(c => c.ToString(System.Globalization.CultureInfo.InvariantCulture)))}]," +
+               $"\"map\":{Pass(0)},\"models\":{Pass(1)},\"instances\":{Pass(2)}}}";
     }
 
     /// <summary>`gpuworld at X Y`: the static map triangles that cover game pixel (X, Y)
