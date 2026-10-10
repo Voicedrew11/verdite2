@@ -3554,6 +3554,22 @@ death from any other reason that byte could hold `0x11`, then starts a clock. Th
 reload fires once, after a configurable delay (default 2 s) during which the
 game's own death sequence plays.
 
+
+### The fade's length
+
+Ported from Verdite3 (`f8f7fbb`, 2026-10-09): Gameplay ▸ *Message fade length*, x1 to x4
+(`kf2.messagefade`, `KF2_MESSAGE_FADE`, the variable wins). `MessageFade` draws each
+brightness that many times; each draw ends in the presenter's `VSync(0)`, so it is that
+many vblanks a step, and the pad is still read once a step, as the game reads it. Only a
+message `MenuWorld` takes is held; one left to the game's loop keeps the game's speed.
+x1 is the default, the game's own.
+
+Measured (`KF2_AUTOSTART=2 KF2_MESSAGETEXT_TEST=3:0 KF2_MENUWORLD_PROBE=1`, Cross over
+the shell): at x1 the fade-in was 10 step draws, 10 `VSync`s, 143 ms, and the fade-out
+7, 7, 117 ms, so a step is one vblank here as in Verdite3; at x2, 20 and 14 `VSync`s,
+310 and 233 ms. A fade-out that runs out returns the button test's state, -1 until every
+button is up and -2 after, so a longer fade-out can return -2 where a short one returned
+-1, as the game's own would at that length. **Not judged by eye.**
 ### The game is already reloading, and it wins the race
 
 The thing that nearly sank this, and the reason the delay is not just a sleep.
