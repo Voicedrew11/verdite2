@@ -135,6 +135,23 @@ byte 200 (about 0.57) held 13-14 a tick; full up looked 3, 6 … 30, then 32 a t
 and decayed by 3 to 0 on release. The same steps as a held D-pad and L2/R2. The
 mouse is not changed. **Not felt on a pad.**
 
+### The stick can turn at that speed without the ease
+
+The ease is the original's, and it is also drag: a button cannot be half pressed,
+so four or five ticks in and out is how the game softens a d-pad, and on a stick it
+reads as the view lagging the thumb. *Stick eases in and out* (`StickEase`,
+`kf2.analog.ease`, `KF2_ANALOG_EASE=0`; Input ▸ Gamepad ▸ Fine tuning) turns it off:
+the stick's turn and look are what its position asks at once, through the same
+deadzone, curve and cap, and a released stick stops dead the tick after, as the
+instant stop does (whose checkbox is dimmed, having nothing to add). On is the
+default and is the mode above, unchanged. It is 2D's right stick only: 3D's
+left-stick turn is the D-pad's, and keeps its ease.
+
+Measured the same way, with the ease off: full right turned 35 a tick from the first
+tick and 0 the tick after release; byte 200 held 13-14 a tick from the first; full
+up looked 32 a tick from the first, and stopped the tick after release. With it on,
+the run above repeated step for step. **Not felt on a pad.**
+
 `KF2_ANALOG_PROBE=1` reports the velocities, the yaw and pitch steps, the walk
 speed and turn rate next to the stick deflection that produced them, and dumps
 the mask table once. That dump is the evidence for the sign conventions in the

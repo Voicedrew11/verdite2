@@ -20,6 +20,7 @@ namespace Kf2;
 ///     KF2_ANALOG_CURVE/MOVECURVE=1.35/1.0       response curves
 ///     KF2_ANALOG_ACCEL=1 ACCELMAX=2.2 ACCELTIME=0.5   the look ramp
 ///     KF2_ANALOG_INSTANTSTOP=1                  camera stops on release
+///     KF2_ANALOG_EASE=0                         the right stick neither eases in nor out
 ///     KF2_ANALOG_INVERTY/INVERTTURN/INVERTSTRAFE/INVERTFWD=1
 ///     KF2_ANALOG_PROBE=1        the control-state report; see AnalogProbe
 ///
@@ -131,6 +132,7 @@ public static class Analog
     public const string MoveKey        = "kf2.analog.move";
     public const string StopKey        = "kf2.analog.instantstop";
     public const string AccelKey       = "kf2.analog.accel";
+    public const string EaseKey        = "kf2.analog.ease";
     public const string AccelMaxKey    = "kf2.analog.accelmax";
     public const string AccelTimeKey   = "kf2.analog.acceltime";
     public const string TurnSensKey    = "kf2.analog.turn";
@@ -217,6 +219,14 @@ public static class Analog
     // that starts and stops the view dead turns it faster than the game ever did,
     // and the original's ease in and out is how its turning feels.
     public static bool CameraInstantStop = false;
+
+    // The right stick eased toward what it asks, by the game's own step (see Ramp).
+    // Off, it is direct: the turn and look are the stick's position at once, still
+    // capped at the D-pad's rate and L2/R2's, and a released stick stops dead, so
+    // CameraInstantStop says nothing. The speed is the original's either way; only
+    // the drag a held button has, four or five ticks in and out, is gone. 2D only:
+    // 3D's left-stick turn is the D-pad's, ease and all.
+    public static bool StickEase = true;
 
     // Which camera axes the sticks were driving last frame, so the release can be
     // handed back to the D-pad and L2/R2 after exactly one zeroing frame, and the
@@ -328,6 +338,7 @@ public static class Analog
         Env("KF2_ANALOG_MOVE", MoveSensKey, ref MoveSens);
         Env("KF2_ANALOG_INSTANTSTOP", StopKey, ref CameraInstantStop);
         Env("KF2_ANALOG_ACCEL", AccelKey, ref LookAccel);
+        Env("KF2_ANALOG_EASE", EaseKey, ref StickEase);
         Env("KF2_ANALOG_ACCELMAX", AccelMaxKey, ref LookAccelMax);
         Env("KF2_ANALOG_ACCELTIME", AccelTimeKey, ref LookAccelTime);
 
@@ -354,6 +365,7 @@ public static class Analog
             Saved(ControlsKey, ref Tank);
             Saved(StopKey, ref CameraInstantStop);
             Saved(AccelKey, ref LookAccel);
+            Saved(EaseKey, ref StickEase);
             Saved(AccelMaxKey, ref LookAccelMax);
             Saved(AccelTimeKey, ref LookAccelTime);
             Saved(TurnSensKey, ref TurnSens);
@@ -494,8 +506,11 @@ public static class Analog
         // option; a mouse that has stopped moving has said nothing at all, and a
         // camera that carries on for a third of a second afterwards is simply
         // wrong. Hence the separate flags, which ignore CameraInstantStop.
-        bool releaseTurn  = (CameraInstantStop && _ownedTurn)  || _mouseTurn;
-        bool releasePitch = (CameraInstantStop && _ownedPitch) || _mousePitch;
+        // A direct stick (StickEase off) stops dead as well, having no ease to stop by.
+        bool direct = !StickEase && !Tank;
+        bool stopDead = CameraInstantStop || direct;
+        bool releaseTurn  = (stopDead && _ownedTurn)  || _mouseTurn;
+        bool releasePitch = (stopDead && _ownedPitch) || _mousePitch;
 
         if (x == 0f && y == 0f && !leftActive && mTurn == 0f && mPitch == 0f && !gyro &&
             !releaseTurn && !releasePitch)
@@ -529,12 +544,16 @@ public static class Analog
         // what the game turns by this tick was the mouse's (Mouse.NoteSpent): the
         // wanted speed eased toward by the game's own acceleration, as a held D-pad
         // and L2/R2 are, so the stick neither starts nor stops faster than they do.
-        float stickTurn = x != 0f || tankTurn || _rampTurnLive
+        // A direct stick skips the ease and is the speed it asks for at once.
+        float stickTurn = direct ? (x != 0f ? turnWant : 0f)
+            : x != 0f || tankTurn || _rampTurnLive
             ? Ramp(turnWant, ref _rampTurn, ref _rampTurnLive, m, TurnVel, rate >> 2, _mouseTurn)
             : 0f;
-        float stickPitch = y != 0f || _rampPitchLive
+        float stickPitch = direct ? (y != 0f ? pitchWant : 0f)
+            : y != 0f || _rampPitchLive
             ? Ramp(pitchWant, ref _rampPitch, ref _rampPitchLive, m, PitchVel, PitchAccel, _mousePitch)
             : 0f;
+        if (direct) _rampTurnLive = _rampPitchLive = false;
         // The instant stop asks for the opposite, and is the player's to choose.
         if (CameraInstantStop && x == 0f && !Tank) { stickTurn = 0f; _rampTurnLive = false; }
         if (CameraInstantStop && y == 0f) { stickPitch = 0f; _rampPitchLive = false; }

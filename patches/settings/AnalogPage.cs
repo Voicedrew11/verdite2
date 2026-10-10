@@ -89,11 +89,18 @@ public sealed class AnalogPage : IPatchPage
             ImGui.EndDisabled();
 
             ImGui.Spacing();
+            Check("Stick eases in and out", Analog.EaseKey, ref Analog.StickEase,
+                  "On is the original: the view takes four or five ticks to reach full speed and " +
+                  "to stop, as it does on a held D-pad or L2/R2. Off is direct: the view turns at " +
+                  "the stick's speed at once and stops dead on release. The top speed is the " +
+                  "original's either way.");
+            ImGui.BeginDisabled(!Analog.StickEase);
             Check("Camera stops on release", Analog.StopKey, ref Analog.CameraInstantStop,
                   "Off is the original: the view eases to a stop over a fifth to half a second, as it " +
                   "does when a D-pad or L2/R2 button is let go. On stops it dead, which can read better " +
                   "on a stick. Walking momentum is the game's own and is not affected either way. " +
                   "3D's turn always eases to a stop as the D-pad's does.");
+            ImGui.EndDisabled();
             ImGui.EndDisabled();
 
             ImGui.Spacing();
