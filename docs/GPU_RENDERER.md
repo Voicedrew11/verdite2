@@ -1650,3 +1650,27 @@ the 2D.
 - No gameplay change: collision, the map block and saves are untouched
   (`savecheck`).
 - A new runtime mechanism gets a new patch number; a fix to one amends it.
+
+## Models clipped at the near plane (2026-10-09)
+
+Verdite3 found a tree's billboard, looked up at from close by, drawn as a long sheared
+slab: a retained model's face is kept by the lit assembler's tests alone (facing, mean
+table depth), and a corner the GTE's divide saturates (nearer than H/2, or off the
+divide's range) was placed where the packets place it, at the ends of its range. Runtime
+`0103` (`RetainedScene.ModelNearClip`) keeps such a face by its plane against the eye and
+draws it in the true projection, clipped at the GPU's near plane, as a `Tile` instance
+already was. Not the sky, nor the arm.
+
+**On by default here too** (the user's decision, matching Verdite3);
+`KF2_GPUWORLD_MODELCLIP=0` and `gpuworld modelclip off` are the draw as before.
+`KF2_GPUWORLD_CLIP_PROBE=1` counts, every 5 s, the main view's instanced model faces
+kept by depth and those with a corner the GTE cannot project (the forced-blend twin's
+apart), on the CPU from each submit's GTE in integer arithmetic; the shader decides in
+floats, so a corner within a unit of H/2 or the screen limit may be counted on the other
+side. The counts are taken before the instance is added, so an instance the store refuses
+is still counted.
+
+Measured: `KF2_AUTOSTART=2` (fdat05, area 1, standing at the save): 223,650 faces kept
+by depth in 5 s, none with a corner the GTE cannot project, so standing there nothing
+changes. Not measured walking into models, and **not judged by eye**: models close to the
+eye (creatures, doors, trees from below) with the switch on and off.

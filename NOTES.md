@@ -269,6 +269,7 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - "No textures on the other machine": splitting the three layers
 - The reflections see past the camera's cull
 - The enhancement distance: past it, the game's own look
+- Fog by distance from the eye
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 
