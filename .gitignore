@@ -19,6 +19,10 @@ tools/RecompOne/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json
 *.sav
 settings.json
 interface.ini
+*.sav.bak
+# Hang and crash reports (a log and a RAM dump each), and the icon taken off the disc.
+crashes/
+/icon.png
 
 # Written by patches/MapFog.cs beside the memory card: explored-tile records.
 *.fog
