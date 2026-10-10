@@ -221,6 +221,18 @@ public static class Analog
     // rounds to a zero step every tick, and the player would simply not move.
     static float _turnCarry, _pitchCarry, _fwdCarry, _strafeCarry;
 
+    // Whether the turn and look carries are the mouse's alone: set by a step the
+    // mouse asked for with no stick, gyro or tank turn in it, cleared by any step
+    // one of those shares, and left as it was by a step neither asks for.
+    static bool _turnCarryMouse, _pitchCarryMouse;
+
+    /// <summary>The fraction of the mouse's turn and look the truncated steps have
+    /// not spent yet, which the next step adds to what it is asked; zero while a
+    /// stick, the gyro or the tank turn shares the carry. The mouse's lead shows it,
+    /// so the picture and the tick agree to the fraction (FrameSmoothing.MouseLead).</summary>
+    internal static (float Turn, float Pitch) MouseCarry =>
+        (_turnCarryMouse ? _turnCarry : 0f, _pitchCarryMouse ? _pitchCarry : 0f);
+
     // 3D's turn as it ramps toward the stick's, and whether it was driven last tick.
     static float _tankTurn;
     static bool _tankLive;
@@ -491,6 +503,8 @@ public static class Analog
             // mouse arrives already in that convention, from Mouse.TakeLook.
             int step = Step(stickTurn + mTurn,
                             ref _turnCarry, Ceiling(rate * OverspeedCap, MathF.Abs(mTurn) + MathF.Abs(gTurn)));
+            if (stickTurn != 0f) _turnCarryMouse = false;
+            else if (mTurn != 0f) _turnCarryMouse = true;
             pad = Drive(m, pad, TurnVel, step, rate >> 2, rate, MaskTurnInc, MaskTurnDec);
             // 3D's release is the D-pad's: the stick back inside its deadzone leaves
             // the velocity to the game's decay, the ramp-down a released Left/Right
@@ -509,6 +523,8 @@ public static class Analog
             // agree with the D-pad's own L2/R2 now.
             int step = Step(stickPitch + mPitch,
                             ref _pitchCarry, Ceiling(PitchVelMax * OverspeedCap, MathF.Abs(mPitch) + MathF.Abs(gPitch)));
+            if (stickPitch != 0f) _pitchCarryMouse = false;
+            else if (mPitch != 0f) _pitchCarryMouse = true;
             pad = Drive(m, pad, PitchVel, step, PitchAccel, PitchVelMax, MaskPitchInc, MaskPitchDec);
             _ownedPitch = step != 0;
             _mousePitch = mPitch != 0f || gPitch != 0f;
