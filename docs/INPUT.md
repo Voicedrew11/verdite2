@@ -396,7 +396,9 @@ fix, and whether the action column is worth its width.
 
 ## The keyboard layout, and changing a default RecompOne provides
 
-`patches/KeyLayout.cs`. RecompOne's default keyboard bindings are a *console's*
+`patches/KeyLayout.cs` (the table, `Version`, `Superseded` and the store) and, since
+2026-10-02, Verdite Core's `KeyLayoutApply` (the default, the migration and the
+arrows' second key, shared with Verdite3). RecompOne's default keyboard bindings are a *console's*
 defaults spelled on a keyboard — face buttons on Z X A S, shoulders on Q W E R,
 the D-pad on the arrows. That is the right generic answer for a runtime that has
 to run any PS1 game and the wrong one for this one, because King's Field walks
@@ -506,7 +508,7 @@ it for this pair specifically: `0x8006E590` reads `0x1000`, which is
 
 ## Mouse look
 
-`patches/Mouse.cs` steers with the mouse, and presses pad buttons with its
+Verdite Core's Mouse steers with the mouse, and presses pad buttons with its
 buttons. It is **on by default** and its knobs are under Input, below the stick
 ones. Capture is still Escape, so the pointer does not disappear into the game
 until the player asks.
@@ -662,7 +664,8 @@ and come back, so the notification fires often and every firing is a modal-looki
 card reporting a state the player has just this moment asked for. There is nothing
 in it to read.
 
-`patches/MouseIndicator.cs` is what replaced it: a white pixel-art mouse in the
+`MouseIndicator` (Verdite Core's since 2026-10-02, `tools/verdite-core/src/`,
+its rectangle set to `MapRender.Picture` by `Mouse.Install`) is what replaced it: a white pixel-art mouse in the
 top right of the game picture, faded in over 140 ms, held for 1.1 s and faded out
 over 420 ms. **The glyph carries the state and the fade carries the change** —
 captured is a solid mouse, released is the same silhouette with a two-cell
@@ -1140,7 +1143,7 @@ Opening the menu also **gives the pointer back** if mouse look had it: under
 `CursorMode.Raw` GLFW reports an unbounded virtual position, so there is no "over
 the picture" while it is locked, and no visible cursor to point with either. It
 is retaken on the way out. Both ends go through `Mouse.SetCaptured`, so the glyph
-in `patches/MouseIndicator.cs` announces them, and the `PadReadEvent` button
+in `MouseIndicator` (Verdite Core's) announces them, and the `PadReadEvent` button
 listener detaches with the capture — which is what keeps a menu click from also
 arriving as a Square.
 

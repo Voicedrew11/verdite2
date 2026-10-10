@@ -913,6 +913,15 @@ as it reached the recompiled one (385 and 387 weights carried in the same window
 Verify with `KF2_SMOOTH_ANIM=0`, since both runs call the clock and its hooks carry
 only the first.
 
+**LO and HI are left differently** (2026-10-02, once `Differential` came from Verdite
+Core and began comparing them). With `KF2_SMOOTH_ANIM=0`, from `KF2_AUTOSTART=2`
+through `fdat02` to `fdat05`: 0 RAM, scratchpad or GTE mismatches, and 17 and 67
+register mismatches in the two windows after an area loads, all on one model
+(`a0=801711AC a1=8E`), all LO/HI only: the recompiled routine leaves `lo FFFFFD08
+hi 2F7`, ours `lo 2F8 hi 0`. No caller reads LO or HI without writing them first, so
+nothing downstream can see it; it is a difference in the transcription, not yet
+looked into.
+
 **The pose left for the GPU.** For a lit model placed in the world that the renderer
 may draw from its mesh, the submitter sets `MoPose.Defer`, and the blender does
 everything but the copy and the decode: the pose is kept (the keyframe's address, the

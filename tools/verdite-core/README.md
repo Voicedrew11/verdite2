@@ -32,6 +32,7 @@ game; a flag overrides it.
 | `add_call_targets.py` | splice the `jal` targets a linear sweep missed into a function map |
 | `merge_branch_spans.py` | rejoin functions the sweep split at an interior `jr`/`j` |
 | `merge_sdk_names.py` | write the PSY-Q names a signature match found into the function maps |
+| `match_code.py` | a function's nearest counterparts in *another game's* executable, by structure (opcodes, GTE commands, record offsets, constants, calls), and two routines' calls aligned in order |
 | `verdite_game.py` | finds the game's root and reads its `config/verdite.json` |
 
 A game's `config/verdite.json` today:
@@ -47,3 +48,28 @@ A game's `config/verdite.json` today:
 
 `inspect_disc.py` and `extract_file.py` need none of it, so they run in a game
 that has no config yet.
+
+## C#
+
+`src/` holds C# the games share. It is **source, not a library**: each game
+compiles `tools/verdite-core/src/**/*.cs` into its own assembly beside its
+`patches/`, so RecompOne's `HookManager` detours, reflection over the game's
+types and a launcher's one Roslyn pass all see it as they see `patches/`.
+Everything is in the namespace `Verdite.Core`, which each game imports with a
+global using, so its callers name these types as they did their own copies.
+
+The game says who it is once, first thing in its `Program.cs`, with
+`Verdite.Core.Game.Configure(tag: "KF2")`; that gives the log prefix (`[KF2]`),
+the env prefix (`KF2_`) and the lowercase id (`kf2`). Anything else core needs
+from the game, it is handed at install time by the game's own code, never read
+from a file.
+
+| file | what |
+|---|---|
+| `Game.cs` | the game's tag, its log and env prefixes and its id |
+| `HookAttach.cs` | attach on overlay loads until the pass succeeds, and read back what `HookManager` actually committed |
+| `Differential.cs` | run a recompiled routine and its C# transcription from one state and compare RAM, the scratchpad, the callee-saved registers with LO/HI, and the GTE; the recompiled result stands (a game's `verify` modes) |
+| `MouseIndicator.cs` | the glyph shown over the game picture when the mouse is captured or released; `Picture` is the rectangle it sits in, `OutputView` unless the game sets it |
+| `KeyLayoutApply.cs` | the port's keyboard layout as a default and a once-per-version migration that leaves a customised layout alone and corrects a superseded one; the game hands it its table, `Version`, `Superseded`, the line announcing it and where the applied version is kept |
+| `Kept.cs` | a setting's env var, then its saved key: the env var wins and is remembered as having won; `BoolsAsInts` for a game that keeps its switches as 0/1 |
+| `Mouse.cs` | mouse look and the mouse buttons: capture, the per-frame poll, the stale-motion rule, what a tick spends and what it turned by; the game hands it a `MouseGame` (units, step cap, pitch limit, base angle addresses, default buttons, its frame clock and text-editing test) and keeps the look hook and the settings page |

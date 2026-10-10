@@ -106,7 +106,8 @@ static class GameCompile
     /// into obj/. Roslyn on its own generates nothing, so without this the port's
     /// 22k lines lose System, System.Linq and the rest, and the build fails in
     /// hundreds of places that look like the port is broken rather than like a
-    /// missing file. This is the Microsoft.NET.Sdk set for a non-web project.
+    /// missing file. This is the Microsoft.NET.Sdk set for a non-web project, plus
+    /// the csproj's own <c>&lt;Using Include="Verdite.Core" /&gt;</c>.
     /// </summary>
     const string GlobalUsings = """
         global using global::System;
@@ -116,6 +117,7 @@ static class GameCompile
         global using global::System.Net.Http;
         global using global::System.Threading;
         global using global::System.Threading.Tasks;
+        global using global::Verdite.Core;
         """;
 
     /// <summary>

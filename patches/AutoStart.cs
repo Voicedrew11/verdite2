@@ -128,7 +128,7 @@ public static class AutoStart
         // Inject through PAD_dr, the path that reaches the game wherever it is --
         // including its boot menus, which reading Controller.State does not. The
         // pad buffer is active-low and its two button bytes are swapped against
-        // Controller's layout (see patches/Mouse.cs), so a pressed Controller bit
+        // Controller's layout (see Verdite Core's Mouse), so a pressed Controller bit
         // becomes a cleared swapped bit here.
         Event.AddListener<PadReadEvent>(e =>
         {

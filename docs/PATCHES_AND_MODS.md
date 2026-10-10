@@ -1320,7 +1320,7 @@ together and the read-back cannot separate them; what it is for is a patch whose
 sites are *different functions* — `AnimSmoothing`'s five, `FramePacing`'s
 per-overlay roles — and every claim printed to the console.
 
-`patches/HookAttach.cs` holds both halves: `OnOverlayLoad(label, attach, hint)` is
+`HookAttach` (Verdite Core's, `tools/verdite-core/src/HookAttach.cs`, since 2026-10-02) holds both halves: `OnOverlayLoad(label, attach, hint)` is
 the retry latch set from the pass's own success and capped at `MaxTries` (3 — a
 miss is nearly always a miss for good, since every overlay is registered before the
 first load, so this only has to cover a transient), and `Installed(target)` is the
@@ -5008,7 +5008,7 @@ menu. It cannot, and the reason took several runs to pin down:
 - **Writing `Controller.State` does not reach the boot menus.** It advanced
   OPEN.EXE's title but did nothing at GAME.EXE's menu. The path that reaches the
   game *wherever it is* is `PAD_dr` — a `PadReadEvent` listener, exactly what
-  `patches/Mouse.cs` uses "so the buttons work in its menus". The buffer is
+  Verdite Core's Mouse uses "so the buttons work in its menus". The buffer is
   active-low and its two button bytes are swapped against `Controller`'s layout,
   so a pressed `Controller` bit is injected as `e.Buttons &= ~((b>>8)|(b<<8))`.
 - **The start menu (`func_8001B35C`) is a blocking poll loop**, so the per-frame

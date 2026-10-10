@@ -3,21 +3,25 @@ using RecompOne.Runtime;
 using RecompOne.Runtime.Context;
 using RecompOne.Runtime.Memory;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
 /// A recompiled routine and its C# transcription, run from one state and compared:
-/// RAM outside the stack window below the call, the callee-saved registers with SP
-/// and RA, and the GTE. **The recompiled result stands**, so a mismatch cannot reach
-/// the picture. This is the shape <see cref="TileWalk"/>, <see cref="ModelWalk"/>
-/// and <see cref="PolyAssembler"/> each carry a copy of; the RAM helpers are shared
-/// with <see cref="Stage13"/>'s replay, which compares a different way.
+/// RAM outside the stack window below the call, the scratchpad (outside
+/// <c>PSMemory.Ram</c>), the callee-saved registers with SP, RA, LO and HI, and the
+/// GTE. **The recompiled result stands**, so a mismatch cannot reach the picture.
+/// The static RAM and register helpers serve a replay that compares another way;
+/// <paramref name="extra"/> adds to the summary line.
 /// </summary>
-sealed class Differential(string tag, string name, uint stackWindow)
+sealed class Differential(string tag, string name, uint stackWindow, Func<string>? extra = null)
 {
+    public const uint Pad = 0x1F800000;
+    public const int PadWords = 256;
+
     byte[] _before = [], _theirs = [];
+    readonly uint[] _padBefore = new uint[PadWords], _padTheirs = new uint[PadWords], _padOurs = new uint[PadWords];
     readonly Gte.State _gteEntry = new(), _gteTheirs = new(), _gteOurs = new();
-    long _calls, _badRam, _badReg, _badGte;
+    long _calls, _badRam, _badPad, _badReg, _badGte;
     readonly List<string> _samples = [];
     double _reportAt;
 
@@ -32,18 +36,22 @@ sealed class Differential(string tag, string name, uint stackWindow)
 
         uint a0 = c.A0, a1 = c.A1;
         ram.CopyTo(_before);
+        SavePad(mem, _padBefore);
         var entry = c.Snapshot();
         Gte.Save(_gteEntry);
 
         orig(c, mem);
         ram.CopyTo(_theirs);
+        SavePad(mem, _padTheirs);
         var theirs = c.Snapshot();
         Gte.Save(_gteTheirs);
 
         _before.CopyTo(ram);
+        LoadPad(mem, _padBefore);
         c.Restore(entry);
         Gte.Load(_gteEntry);
         ours(c, mem);
+        SavePad(mem, _padOurs);
         var mine = c.Snapshot();
         Gte.Save(_gteOurs);
 
@@ -57,11 +65,18 @@ sealed class Differential(string tag, string name, uint stackWindow)
             Sample($"a0={a0:X} a1={a1:X}: {diff}");
         }
 
-        if (!CalleeSavedEqual(mine, theirs))
+        int pad = _padOurs.AsSpan().CommonPrefixLength(_padTheirs);
+        if (pad < PadWords)
+        {
+            _badPad++;
+            Sample($"a0={a0:X} a1={a1:X}: scratchpad +0x{pad * 4:X3} recompiled {_padTheirs[pad]:X8} ours {_padOurs[pad]:X8}");
+        }
+
+        if (!CalleeSavedEqual(mine, theirs) || mine.LO != theirs.LO || mine.HI != theirs.HI)
         {
             _badReg++;
             Sample($"a0={a0:X} a1={a1:X}: registers sp {theirs.SP:X}/{mine.SP:X} ra {theirs.RA:X}/{mine.RA:X} " +
-                   $"s0 {theirs.S0:X}/{mine.S0:X}");
+                   $"s0 {theirs.S0:X}/{mine.S0:X} lo {theirs.LO:X}/{mine.LO:X} hi {theirs.HI:X}/{mine.HI:X}");
         }
 
         if (Gte.Diff(_gteTheirs, _gteOurs) is { } gte)
@@ -71,6 +86,7 @@ sealed class Differential(string tag, string name, uint stackWindow)
         }
 
         _theirs.CopyTo(ram);
+        LoadPad(mem, _padTheirs);
         c.Restore(theirs);
         Gte.Load(_gteTheirs);
 
@@ -78,10 +94,11 @@ sealed class Differential(string tag, string name, uint stackWindow)
         if (now < _reportAt) return;
         _reportAt = now + 2.0;
         Console.WriteLine($"[{tag}] verify {name}: {_calls} call(s), {_badRam} RAM mismatch(es), " +
-                          $"{_badReg} register mismatch(es), {_badGte} GTE mismatch(es)");
+                          $"{_badPad} scratchpad mismatch(es), {_badReg} register mismatch(es), " +
+                          $"{_badGte} GTE mismatch(es){extra?.Invoke()}");
         foreach (var s in _samples) Console.WriteLine($"[{tag}]   {s}");
         _samples.Clear();
-        _calls = _badRam = _badReg = _badGte = 0;
+        _calls = _badRam = _badPad = _badReg = _badGte = 0;
     }
 
     void Sample(string s)
@@ -94,6 +111,17 @@ sealed class Differential(string tag, string name, uint stackWindow)
     {
         var ro = mem.Ram;
         return MemoryMarshal.CreateSpan(ref MemoryMarshal.GetReference(ro), ro.Length);
+    }
+
+    /// <summary>The scratchpad is a separate array in PSMemory, taken word by word.</summary>
+    public static void SavePad(PSMemory mem, uint[] to)
+    {
+        for (int i = 0; i < PadWords; i++) to[i] = mem.ReadU32(Pad + (uint)i * 4u);
+    }
+
+    public static void LoadPad(PSMemory mem, uint[] from)
+    {
+        for (int i = 0; i < PadWords; i++) mem.WriteU32(Pad + (uint)i * 4u, from[i]);
     }
 
     /// <summary>What a caller may rely on surviving a call.</summary>
@@ -110,5 +138,12 @@ sealed class Differential(string tag, string name, uint stackWindow)
         int i = from + first, n = 0;
         for (int k = i; k < to; k++) if (ours[k] != theirs[k]) n++;
         return $"{n} byte(s), first 0x{0x80000000u + (uint)i:X8} recompiled {theirs[i]:X2} ours {ours[i]:X2}";
+    }
+
+    /// <summary>The first word where two scratchpad copies differ, or null.</summary>
+    public static string? DescribePad(uint[] ours, uint[] theirs)
+    {
+        int i = ours.AsSpan().CommonPrefixLength(theirs);
+        return i == PadWords ? null : $"scratchpad +0x{i * 4:X3} recompiled {theirs[i]:X8} ours {ours[i]:X8}";
     }
 }

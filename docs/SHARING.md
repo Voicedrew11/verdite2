@@ -1162,3 +1162,259 @@ without it.
 **Don't**: push anything without asking; let an opencode agent share a checkout
 being edited (inputs for a read-only agent go into a scratch directory of their
 own); drive menus without a copy of `carda.sav` (Cross saves over slot 1).
+
+### 2026-10-02: Verdite3's keyboard and mouse, with the mouse lead
+
+**Done in Verdite3** (`main`, local commit `afeb187`, not pushed): Verdite2's
+`KeyLayout`, `Mouse`, `MouseIndicator` and `MouseLead` ported, the look hook
+written for that game's routine. Written up in Verdite3's `docs/INPUT.md`.
+
+- **The look routine is the same three branches.** Verdite3's `func_8002F5C0` is
+  `func_80028DB8`'s shape on both axes, so `Analog.Drive`'s pre-load carries over
+  unchanged; the one difference is that **L2 and R2 together recentre the pitch**
+  there, so a mouse pitch masks both buttons. The pitch limit is `0x2BC`/`0xD44`
+  at 12 bits in both games. The mouse drive is a replace hook of its own
+  (`MouseLook`), not inside a ported `Analog`: twin-stick analog was not ported.
+- **The lead fits Verdite3's view override better than Verdite2's stage-8
+  pair**: it is a few lines in `ViewSmoothing.OnHanded` adding to the
+  interpolated `Camera`, nothing written into the game's state. Measured with a
+  synthetic hand at 144 fps: the view starts 6.9 ms after the hand against
+  52.4 ms off, stops 4.0 ms after against 95.2 ms, and tracks it to 1-2 units.
+- **Shared candidates for Verdite Core's first C#**: `KeyLayout`'s mechanism
+  (`Configure` before the load, the once-only migration, `Superseded`),
+  `Mouse`'s capture, poll and stale handling, and `MouseIndicator` are
+  game-agnostic as ported; only the constants block, the layout table and the
+  look hook are each game's.
+- **Not ported**: the menu pointer (`MenuMouse`, 1.4k lines of this game's menu
+  internals; Verdite3's menus read the pad through their own `PadRead` calls,
+  per its survey) and `Analog`.
+
+### 2026-10-02: Plan: Verdite Core's first C#, the five near-identical patches
+
+**Not started.** A plan for the next agent. Verdite Core is Python scripts only;
+this moves the first C# into it: the five patches whose Verdite2 and Verdite3
+copies are nearly the same file. Measured by a line match of each pair, comments
+dropped and the `KF2`/`KF3` prefixes normalised (`difflib`, 2026-10-02):
+
+| file | match | what differs |
+|---|---|---|
+| `HookAttach.cs` | 100% | code identical; V2's doc comment is long, V3's points at V2's docs; the log prefix |
+| `MouseIndicator.cs` | 97% | the picture rectangle: V2 `MapRender.Picture` (its map viewports), V3 the fork's `OutputView`; the panel id |
+| `KeyLayout.cs` | 85% | the layout table, `Version`, `Superseded`; where "applied" is kept: V2 `Settings.PatchSettings.Get/Set`, V3 `Rt.View.GetInt/SetInt` + `Rt.SaveView()` |
+| `Mouse.cs` | 82% | the constants block (V3 names its yaw/pitch addresses and default buttons there); the settings helpers (V2 borrows `Analog.Env/Saved`, V3 has its own copies); the text-input gate (V2 `HotkeyGate.Editing`, V3 ImGui's `WantTextInput`) |
+| `Differential.cs` | 80% | V3's is a superset: it also compares the scratchpad and LO/HI, and takes an `extra` summary callback |
+
+Everything else in either game's `patches/` matches below 65% or is the game's
+own code (the next candidates, in order: the pacing core with `LoopPacing`, `VBlankPacing` and
+the once-a-tick holds; the agent harness; the smoothing math).
+
+#### Decisions already made
+
+- **Source, not a DLL.** Core C# lives in `src/` of `Voicedrew11/verdite-core`
+  (so `tools/verdite-core/src/` in each game) and is compiled **into each game's
+  own assembly**, like `patches/`. No project reference, no second assembly, so
+  `HookManager` detours, `AutoStart`'s reflection and the launcher's one Roslyn
+  pass (`GameCompile`) see it as they see `patches/`.
+- **Namespace `Verdite.Core`**, imported everywhere by a global using, so the
+  callers do not change: `<Using Include="Verdite.Core" />` in each game's csproj,
+  and in Verdite2 the same line in `GameCompile.GlobalUsings`, **which must stay in
+  step with the csproj** (a difference exists only in the release).
+- **The game's identity is set once**, first thing in `Program.cs`:
+  `Verdite.Core.Game.Configure(tag: "KF2")` (`"KF3"`), giving the log prefix
+  (`[KF2]`), the env prefix (`KF2_`) and the lowercase id for panel names
+  (`kf2mouseind`). A new 10-line `src/Game.cs`. Nothing else in core may know a
+  game: no address, no overlay name, no `KingsField` (Verdite Core's README rule).
+- **The game's values are passed in, not read from a file.** A `config/verdite.json`
+  is for the Python scripts; the C# takes small records from the game's own
+  patch at install time.
+- **Author in Verdite3, adopt in Verdite2.** Verdite3 (`main`) has fewer callers
+  (about 30 files against 51) and no launcher, so the core version is written
+  in its `tools/verdite-core`, pushed with `--push-core`, and pulled into
+  Verdite2 (`dev`) with `--pull-core`. Each subtree commit touches only
+  `tools/verdite-core/` (`--push-core` refuses a mixed one); each game's adoption
+  is a separate commit.
+
+#### Step 0: the core is out of step already
+
+Verdite3's `tools/verdite-core` carries a commit Verdite Core does not have:
+`498dbc9`, `scripts/match_code.py` (Verdite Core's `main` is `a6c2434`; Verdite2
+is pinned at `536167a`). **Ask the user, then `bash scripts/setup_tools.sh
+--push-core` from Verdite3** before adding anything, so the new work is not
+stacked on an unpushed commit.
+
+#### Step 1: the build wiring, with `HookAttach`
+
+The wiring and the simplest file land together, so the wiring is proved by a file
+that exercises it everywhere.
+
+- Core: `src/Game.cs`; `src/HookAttach.cs`, V2's code, with V3's short doc
+  comment pointing at "A registration is not a hook" in Verdite2's
+  `docs/PATCHES_AND_MODS.md`, and `[{Game.Tag}]` in place of the literal prefix.
+  README: a "C#" table beside the scripts, and the rule that it compiles into the
+  game.
+- Each game: `<Compile Include="tools/verdite-core/src/**/*.cs" />` **after** the
+  `<Compile Remove="tools/**" />` (the remove stays: it keeps RecompOne's own
+  sources out), the global using, `Game.Configure` in `Program.cs`, and its own
+  `patches/HookAttach.cs` deleted.
+- **Verdite2's launcher**: `<Content Include="../tools/verdite-core/src/**/*.cs"
+  LinkBase="content/src/verdite-core" .../>` in `Verdite2.Launcher.csproj`, beside
+  the `patches/**` line. `Sources.All()` walks `content/src` recursively, so this
+  is what makes `GameCompile` compile it **and `BuildKey` hash it**: miss it and
+  the release fails to compile, or a core change never triggers a rebuild. Check
+  that `.github/workflows/ci.yml`'s payload assertion still holds (the launcher
+  compiles neither `generated/` nor `patches/`; it must not compile core either).
+- **Done when**: both games build; the startup log's attach lines are the same set
+  before and after, prefix included (diff a boot's `[KF2]`/`[KF3]` lines); Verdite2's
+  acceptance test (`open → game → fdat02 → fdat05`, 144.0 fps at 20.0 ticks/s,
+  every hook attached, with `KF2_PRESENT_PROBE=1`); Verdite3's `KF3_FPS=144
+  KF3_FPS_PROBE=1` at 144.0 fps and 15.0 ticks/s; and the launcher's first-run
+  compile of a clean data folder succeeds (`packaging/linux/build-appimage.sh`,
+  then run it once without a built game).
+
+#### Step 2: `Differential`
+
+- Core: V3's file. **Adopting it changes what Verdite2's verify modes compare**
+  (the scratchpad and LO/HI were never compared there). Its Verdite2 users are
+  `CameraBlock` and `MoPose` (an instance each) and `Stage13`'s replay (the RAM
+  and register helpers), so run `KF2_CAMERABLOCK=verify`, `KF2_MOPOSE=verify` and
+  `KF2_STAGE13=verify`. (`TileWalk`, `ModelWalk` and `PolyAssembler` carry copies
+  of the same shape of their own; folding them in is a later unit, not this one.)
+  A new mismatch is a finding
+  about Verdite2's C#, not a reason to drop the check: write it down and ask. If
+  the user wants it parked, a `comparePad: false` constructor argument is the
+  stopgap, defaulting to true.
+- Verdite3: `KF3_POLYASM=verify`, `KF3_NEARPATH=verify`, `KF3_MODELWALK=verify`,
+  `KF3_MOPOSE=verify`, `KF3_STAGE15=verify`, `KF3_CAMERABLOCK=verify` still read 0.
+- Verdite3's users: `CameraBlock`, `MoPose`, `ModelWalk`, `NearPath`,
+  `PolyAssembler`, `PolyAssemblerLit` and `Stage15`.
+- V2's doc comment names `TileWalk`, `ModelWalk`, `PolyAssembler` and `Stage13` by
+  `cref`; core must not, so they become plain words ("the walks and assemblers").
+
+#### Step 3: `MouseIndicator`
+
+- Core: the file with `public static Func<(Vector2 Min, Vector2 Max)?> Picture`,
+  defaulting to `OutputView` (Verdite3's), and the panel id from `Game.Id`.
+  Verdite2 sets `Picture` to `MapRender.Picture` where it installs `Mouse`.
+- **`mods/kf2debug/Noclip.cs` names `Kf2.MouseIndicator.Suppressed`** (lines 160
+  and 576). A mod is compiled at run time against the game assembly, so a missed
+  rename shows only when the mod is enabled in the Mods panel: change both to
+  `Verdite.Core.MouseIndicator` and enable the mod once.
+- **Done when**: both build, and the user has seen the glyph on Escape in both
+  games (by eye; nothing measures it).
+
+#### Step 4: `KeyLayout`
+
+- Core: the mechanism as `Verdite.Core.KeyLayoutApply`: apply before the settings
+  load, once per `Version`, leave a customised layout alone, correct a superseded
+  one. It takes the layout, `Version`, `Superseded`, the applied key and two
+  delegates, `Func<int> getApplied` and `Action<int> setApplied`. Each game keeps
+  a short `patches/KeyLayout.cs` holding its table and its storage: Verdite2's
+  `PatchSettings`, Verdite3's `Rt.View` with `Rt.SaveView()`.
+- **The applied key's name and store must not change in either game**, or every
+  existing `settings.json` reads as never applied (the layout is rewritten over
+  the player's bindings) or as customised (never corrected): the rule about
+  `KeyLayout.Version` in Verdite2's `AGENTS.md`. **Done when**, in each game: a
+  copy of a real `settings.json` is unchanged after a boot (diff it), and a boot
+  with no `settings.json` writes the game's layout and the current `Version`.
+
+#### Step 5: `Mouse`, the one with real seams
+
+- Core keeps the class name `Mouse` and its whole public API (`Enabled`, `Lead`,
+  `Captured`, `SpentThisFrame`, `TakeLook`, `Poll`, the keys), so
+  `ViewSmoothing`/`FrameSmoothing`, `MouseLook`/`Analog` and the settings pages
+  compile unchanged through the global using. The game hands it one record at
+  install: units per degree, degrees per pixel, the step cap, the pitch limit,
+  the default left, right and middle buttons, and `Func<bool> TextEditing`
+  (Verdite2 passes `HotkeyGate.Editing`, which also covers the remaster editor;
+  Verdite3 passes ImGui's `WantTextInput`).
+- The settings helpers move into core as `Verdite.Core.Kept.Env/Saved` (the env
+  var wins over the saved key), and Verdite2's `Analog` calls those in place of
+  its own copies, which removes `Mouse`'s only dependency on `Analog`.
+- **What stays in each game**: the look hook that spends the motion (Verdite2's
+  `Analog.BeforeLook`, Verdite3's `MouseLook` with its yaw and pitch addresses)
+  and the settings page.
+- **Done when**: both build; the mouse lead is measured as in "Verdite3's keyboard
+  and mouse" above (a synthetic hand at 144 fps; the view starts within about a
+  frame of the hand and tracks it to 1-2 units) in both games; and the user has
+  turned and looked with the mouse in both (feel is by eye).
+
+#### Rules for whoever does it
+
+- **Ask before every push**: `--push-core`, and each game's branch (Verdite2 on
+  `dev`, Verdite3 on `main`).
+- One unit at a time, in the order above, each through both games before the
+  next: a core commit, pushed, pulled into Verdite2, adopted in both.
+- If opencode does the edits: one worktree per game, never the checkout being
+  edited; gitignored inputs copied in (`generated/` symlinked, `disc/`, the save
+  cards and `settings.json` copied); only the orchestrator runs a game, one at a
+  time (one shell port per game: 27900, 27903).
+- Findings go in the docs that own them: this log for the program, each game's
+  `docs/` for what it changed in that game, Verdite Core's README for what core
+  now holds.
+
+### 2026-10-02: Verdite Core's first C#, step by step
+
+Doing the plan above, in its order.
+
+- **Step 0**: Verdite3's `498dbc9` (`match_code.py`) pushed to Verdite Core
+  (`165d748`).
+- **Step 1, the wiring and `HookAttach`**: Verdite Core `a238227` adds `src/Game.cs`
+  and `src/HookAttach.cs`; both games compile `tools/verdite-core/src/**/*.cs`
+  with `Verdite.Core` as a global using and set their tag first in `Program.cs`.
+  Verdite2's launcher ships core under `content/src/verdite-core/`, and
+  `GameCompile.GlobalUsings` names the namespace. Measured: each game's boot prints
+  the same set of `[KF2]`/`[KF3]` lines as before (numbers and paths normalised);
+  Verdite2's acceptance run (`open → game → fdat02 → fdat05`, hp 46/86 in area 1,
+  144.0 fps at 20.0 ticks/s, `[present] wide 288`); Verdite3 at 144.0 fps and 15.0
+  ticks/s; and an AppImage built from the change, run on an empty data folder,
+  recompiled, compiled the game with core in its one Roslyn pass, and reached
+  `fdat05` with the same lines. A comparison needs the main checkout's
+  `interface.ini` and `settings.json` beside the build: without them a worktree
+  boots with other enhancements and the lines differ for that reason alone, and a
+  `settings.json` whose `CdPath` names another image stops a launcher run at the
+  disc picker.
+- **Step 2, `Differential`**: Verdite Core `19c86a3`, Verdite3's file (the
+  scratchpad, LO/HI, the `extra` callback). Verdite3: every verify mode in the plan
+  reads 0, as before. Verdite2: `KF2_CAMERABLOCK=verify` and `KF2_STAGE13=verify`
+  read 0 and the scratchpad reads 0 everywhere; `KF2_MOPOSE=verify` (with
+  `KF2_SMOOTH_ANIM=0`, which `MoPose`'s own write-up requires; without it the RAM
+  differs before and after alike) now reports LO/HI mismatches on one model's blend,
+  a finding about Verdite2's `MoPose` written up under "The blender in C#" in
+  `docs/GPU_RENDERER.md`. The check stays on.
+- **Step 3, `MouseIndicator`**: Verdite Core `7f62bc9`. `Picture` is a
+  `Func<(Vector2 Min, Vector2 Max)?>`, `OutputView` by default (Verdite3); Verdite2
+  sets it to `MapRender.Picture` in `Mouse.Install`, before registering the panel.
+  The panel id is `{Game.Id}mouseind`, unchanged in both. `kf2debug`'s two
+  `Kf2.MouseIndicator` names became `Verdite.Core.MouseIndicator`, and the mod
+  builds and loads with it enabled. Both boots print the same lines as before. The
+  glyph itself is for the user's eye (Escape, in both games).
+- **Step 4, `KeyLayout`**: Verdite Core `cdb19ac`, `KeyLayoutApply`: the env switch
+  (`{Tag}_KEYS`), the fresh-install default, the once-per-version migration, the
+  arrows' second key in `PAD_dr`, `Apply`/`ApplyStock`/`IsApplied`, all of which
+  were the same code in both games. Each game's `patches/KeyLayout.cs` keeps its
+  table, `Version`, `Superseded`, the line announcing it and its store (Verdite2
+  `PatchSettings`, Verdite3 `Rt.View` with `SaveView`), behind the same public
+  API; the applied key (`kf2.keys.layout`, `kf3.keys.layout`) is unchanged.
+  Measured in each game: a boot leaves a real `settings.json` and `interface.ini`
+  byte-identical; a boot with neither writes the game's layout and its `Version`
+  (2, 1); and an old layout with no marker is migrated with the same line
+  (Verdite2's superseded version 1, Verdite3's stock keys).
+- **Step 5, `Mouse`**: Verdite Core `0df259d`: `Mouse`, configured with one
+  `MouseGame` record (units per degree, degrees per pixel, the step cap, the pitch
+  limit, the base yaw and pitch addresses, the default buttons, `TextEditing`, the
+  frame clock `Frames` and `LogicHz`, and an optional `Paused`, which only
+  Verdite2's stale rule had), and `Kept`, the env-then-saved helpers. One real
+  difference was kept per game: Verdite2 stores a saved bool as `True`/`False`,
+  Verdite3 as 0/1, so `Kept.BoolsAsInts` is set by Verdite3. The settings keys are
+  properties built from `Game.Id`, not fields, so no early type initialisation can
+  fix them to another game's name. Verdite2's record is `Analog.MouseValues`,
+  `Analog.Env/Saved` call `Kept`, and `MouseIndicator.Picture` moved to
+  `Program.cs`; Verdite3's record is `MouseLook.Game`. Measured, with a synthetic
+  hand (400 px/s in 400 ms bursts, fed through `Mouse.Poll`, the real mouse's
+  motion discarded; a local hack, not committed) at 144 fps, 75 s a run, before
+  and after: Verdite2 led 160.4 and 169.4 frames per 2 s window, 12.0 and 12.1
+  units ahead, |applied − asked| 0.40 and 0.35; Verdite3 led 79.7 and 80.6 frames
+  a second, |applied − asked| 0.00 in every window of both. Both boots print the
+  same lines and leave `settings.json` and `interface.ini` unchanged; pacing held at
+  144.0 fps, 20.0 and 15.0 ticks/s. How it feels to turn and look is for the
+  user's hand, in both games.

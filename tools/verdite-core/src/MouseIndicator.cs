@@ -2,7 +2,7 @@ using System.Numerics;
 using ImGuiNET;
 using RecompOne.Runtime.Host.Window;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
 /// What tells the player the pointer has been captured or given back: a small
@@ -15,22 +15,18 @@ namespace Kf2;
 /// sliding in over the game every time is a modal-looking interruption reporting
 /// a state the player just asked for. The state is a boolean and the change is
 /// the only interesting moment, so the whole of it fits in one glyph that
-/// announces itself and then leaves: nothing to read, nothing to dismiss,
-/// nothing left on screen.
+/// announces itself and then leaves.
 ///
 /// **The glyph carries the state and the fade carries the change.** Captured is
 /// a solid mouse; released is the same silhouette with a diagonal cut through it,
-/// which is the universal "off" and so needs no learning — a shape that has to be
-/// remembered ("filled means captured") would be no better than the words. Both
-/// are drawn as pixel blocks rather than as a font glyph or a texture, at an
-/// integer number of screen pixels a cell, so they stay crisp at any interface
-/// scale and read as part of a 1996 game rather than as desktop chrome.
+/// which is the universal "off" and so needs no learning. Both are drawn as pixel
+/// blocks rather than as a font glyph or a texture, at an integer number of
+/// screen pixels a cell, so they stay crisp at any interface scale and read as
+/// part of a 1996 game rather than as desktop chrome.
 ///
-/// It is anchored to <c>MapRender.Picture</c> — the game picture, not the window
-/// — for the reason tools/RecompOne/patches/0029 records: an overlay anchored to the
-/// viewport sits over the port's own menu bar and the letterbox bars beside a 4:3
-/// picture, which reads as a window over the port rather than as part of the
-/// game.
+/// It is anchored to the rectangle <see cref="Picture"/> returns — the game
+/// picture, not the window — so an overlay sits over the game's own image and not
+/// over the port's menu bar or the letterbox bar beside a 4:3 picture.
 ///
 /// Draws nothing at all while faded out, takes no input (<c>NoInputs</c>) and
 /// writes no game memory.
@@ -44,10 +40,17 @@ public sealed class MouseIndicator : IFloatingPanel
     public static readonly MouseIndicator Instance = new();
     MouseIndicator() { }
 
-    public string Name => "kf2mouseind";
+    /// <summary>
+    /// The game picture's rectangle in screen space, or null when there is none.
+    /// Defaults to <c>OutputView</c>; a game with a rectangle of its own sets it.
+    /// </summary>
+    public static Func<(Vector2 Min, Vector2 Max)?> Picture { get; set; } = () =>
+        OutputView.Valid ? (OutputView.Min, OutputView.Max) : null;
+
+    public string Name => $"{Game.Id}mouseind";
 
     /// <summary>Always drawable, never persisted: the fade is the open state, and
-    /// <see cref="Draw"/> returns before it begins a window when there is nothing
+    /// <c>Draw</c> returns before it begins a window when there is nothing
     /// to show. A setter that wrote anything would give "Reset view" an opinion
     /// about a transient.</summary>
     public bool IsOpen { get => true; set { } }
@@ -62,15 +65,15 @@ public sealed class MouseIndicator : IFloatingPanel
     static bool _captured;
 
     /// <summary>
-    /// Silence the glyph outright. The debug mod's cinematic camera sets this
-    /// while it is on: a flythrough being filmed must not have capture
-    /// announcements fading in over the picture. Both ends are gated -- Show so
-    /// nothing queues underneath, Draw so switching on mid-fade hides it at once.
+    /// Silence the glyph outright. A cinematic camera or a flythrough being
+    /// filmed sets this so capture announcements do not fade in over the
+    /// picture. Both ends are gated -- Show so nothing queues underneath, Draw so
+    /// switching on mid-fade hides it at once.
     /// </summary>
     public static bool Suppressed { get; set; }
 
-    /// <summary>Announce the state. Called from <see cref="Mouse.SetCaptured"/>
-    /// and from the once-a-session hint in <see cref="Mouse.TakeLook"/>; a repeat
+    /// <summary>Announce the state. Called from <c>Mouse.SetCaptured</c>
+    /// and from the once-a-session hint in <c>Mouse.TakeLook</c>; a repeat
     /// restarts the fade, so mashing the capture key keeps it visible rather than
     /// stacking anything up.</summary>
     public static void Show(bool captured)
@@ -118,10 +121,9 @@ public sealed class MouseIndicator : IFloatingPanel
     /// cannot drift apart.
     ///
     /// Two cells wide and one row a column, which is the only slope that reads at
-    /// this size: a steeper line covers thirteen rows in seven columns and its
-    /// one-cell staircase is noise rather than a slash. The offset puts it under
-    /// the buttons and out at the bottom right corner, so the top of the shell
-    /// and the cable survive and the thing is still a mouse.</summary>
+    /// this size. The offset puts it under the buttons and out at the bottom right
+    /// corner, so the top of the shell and the cable survive and the thing is
+    /// still a mouse.</summary>
     static bool Cut(int x, int y) => y - x is 4 or 5;
 
     public void Draw()
@@ -130,8 +132,9 @@ public sealed class MouseIndicator : IFloatingPanel
         float a = Alpha();
         if (a <= 0.001f) return;
 
-        MapRender.Picture(out var g0, out var g1);
-        var size = g1 - g0;
+        var picture = Picture();
+        if (picture is not { } r) return;
+        var size = r.Max - r.Min;
         if (size.X < 64f || size.Y < 64f) return;
 
         // A cell is a whole number of screen pixels or the shell's one-cell
@@ -142,21 +145,21 @@ public sealed class MouseIndicator : IFloatingPanel
         float w = cell * Glyph[0].Length, h = cell * Glyph.Length;
         float margin = MathF.Max(cell * 2f, MathF.Round(size.Y * 0.03f));
 
-        ImGui.SetNextWindowPos(g0);
+        ImGui.SetNextWindowPos(r.Min);
         ImGui.SetNextWindowSize(size);
         ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, Vector2.Zero);
 
-        // NoBringToFrontOnFocus is absent for the reason patches/MapOverlay.cs
-        // records: a window carrying it is created at the front of g.Windows,
-        // which is the back of the display order, and would be drawn underneath
-        // the dockspace's opaque background.
+        // NoBringToFrontOnFocus is absent for the reason the map overlay records:
+        // a window carrying it is created at the front of g.Windows, which is the
+        // back of the display order, and would be drawn underneath the dockspace's
+        // opaque background.
         const ImGuiWindowFlags flags =
             ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoInputs |
             ImGuiWindowFlags.NoNav | ImGuiWindowFlags.NoFocusOnAppearing |
             ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoDocking |
             ImGuiWindowFlags.NoBackground;
 
-        if (ImGui.Begin("##kf2mouseind", flags))
+        if (ImGui.Begin($"##{Game.Id}mouseind", flags))
         {
             var p = ImGui.GetWindowPos();
             var o = new Vector2(p.X + size.X - margin - w, p.Y + margin);

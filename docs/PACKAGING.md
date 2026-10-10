@@ -48,7 +48,10 @@ Beside the executable, `content/`:
 
 - `content/config/` — `kf2.json` and the thirteen funcmaps. Addresses, names and
   sizes; no disc bytes.
-- `content/src/` — `Program.cs` and `patches/**`, as source text.
+- `content/src/` — `Program.cs`, `patches/**` and Verdite Core's C#
+  (`tools/verdite-core/src/**`, under `content/src/verdite-core/`), as source text.
+  `Sources.All()` walks it recursively, so `GameCompile` compiles core and
+  `BuildKey` hashes it: a core change rebuilds the game like a patch change.
 - `content/mods/` — copied into the data directory the first time each file is
   seen. `.mods-seeded` records the relative paths that have ever been seeded,
   rather than being a bare "seeding has happened" marker: a mod the player has

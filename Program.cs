@@ -8,6 +8,8 @@ using Recompiled;
 // file takes that role instead so startup stays hand-editable. Custom init and
 // patching hooks go here, before Entry.Run.
 
+Verdite.Core.Game.Configure(tag: "KF2");
+
 // Diagnostics. The runtime's log channels are plain static bools with no CLI of
 // their own, so expose them through an env var:
 //     KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec   (or KF2_LOG=all)
@@ -1126,8 +1128,16 @@ Kf2.Analog.Install();
 // Off by default, unlike the sticks: nothing is broken about playing this with the
 // keyboard, and a pointer that vanishes into the game unasked is worse than one
 // switch to find. Its settings sit under Input beside the stick ones.
-Kf2.Mouse.Configure();
-Kf2.Mouse.Install();
+//
+// The capture glyph sits on the game picture as the map finds it (MapRender.Picture),
+// not on the fork's OutputView alone.
+MouseIndicator.Picture = () =>
+{
+    Kf2.MapRender.Picture(out var p0, out var p1);
+    return (p0, p1);
+};
+Mouse.Configure(Kf2.Analog.MouseValues);
+Mouse.Install();
 
 // The menu pointer: hover an in-game menu item and the game's own cursor moves to
 // it, left click confirms, right click backs out.
