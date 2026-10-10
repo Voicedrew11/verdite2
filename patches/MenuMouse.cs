@@ -362,13 +362,6 @@ public static class MenuMouse
     /// but a counter cannot latch the session open if one ever does.</summary>
     static int _depth;
 
-    /// <summary>Whether this class took the pointer back on the way in, and so
-    /// owes it on the way out. A pointer captured for mouse look is an unbounded
-    /// virtual position -- there is no "where is it over the menu" while it is
-    /// locked -- so the session releases it and the desktop cursor is what the
-    /// player points with.</summary>
-    static bool _tookCapture;
-
     // --- the fixed list's geometry -------------------------------------------
 
     static readonly int[] _fixX = new int[MaxFixedRows];
@@ -506,7 +499,7 @@ public static class MenuMouse
 
         if (!_loopHooked)
         {
-            loop = At(MenuLoop, "a captured pointer will not be given back inside the menu.");
+            loop = At(MenuLoop, "a captured pointer is not released for the menu, and a click there captures it.");
             if (loop != null)
             {
                 HookManager.AddPre(_self, loop, Own(nameof(BeforeMenu)));
@@ -588,11 +581,13 @@ public static class MenuMouse
     // ------------------------------------------------------------------------
 
     /// <summary>
-    /// The menu is opening. Give the pointer back if mouse look had it: under
-    /// `CursorMode.Raw` GLFW reports an unbounded virtual position, so there is
-    /// no "over the picture" while it is locked, and there is no visible cursor
-    /// to point with either. <see cref="Mouse.SetCaptured"/> announces both ends
-    /// of that through the MouseIndicator glyph (Verdite Core's).
+    /// The menu is opening. Hold the pointer free for it with
+    /// <see cref="Mouse.Suspend"/>: under `CursorMode.Raw` GLFW reports an
+    /// unbounded virtual position, so there is no "over the picture" while it is
+    /// locked, and there is no visible cursor to point with either. The suspension
+    /// also keeps a click on the menu from capturing the pointer (a click on the
+    /// picture captures everywhere else), and it is taken whether or not the menu
+    /// pointer is on, since that click capture is Verdite Core's either way.
     /// </summary>
     public static bool BeforeMenu(CpuContext c, IMemory m)
     {
@@ -614,17 +609,13 @@ public static class MenuMouse
         _leftWas = Down(HostMouseButton.Left);
         _rightWas = Down(HostMouseButton.Right);
 
-        if (Enabled)
-        {
-            _tookCapture = Mouse.Captured;
-            if (_tookCapture) Mouse.SetCaptured(false);
-        }
+        Mouse.Suspend(true);
 
         return true;
     }
 
-    /// <summary>The menu closed. Give the pointer back to mouse look if it had
-    /// it.</summary>
+    /// <summary>The menu closed. Give the pointer back to mouse look if the
+    /// menu took it (Verdite Core's <see cref="Mouse.Suspend"/> remembers).</summary>
     public static void AfterMenu(CpuContext c, IMemory m)
     {
         if (--_depth > 0) return;
@@ -634,11 +625,7 @@ public static class MenuMouse
         _hover = -1;
         _live = "none";
 
-        if (_tookCapture)
-        {
-            _tookCapture = false;
-            if (Mouse.Enabled) Mouse.SetCaptured(true);
-        }
+        Mouse.Suspend(false);
     }
 
     // ------------------------------------------------------------------------

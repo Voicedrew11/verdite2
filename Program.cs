@@ -1127,15 +1127,9 @@ Kf2.Analog.Install();
 //
 // Off by default, unlike the sticks: nothing is broken about playing this with the
 // keyboard, and a pointer that vanishes into the game unasked is worse than one
-// switch to find. Its settings sit under Input beside the stick ones.
-//
-// The capture glyph sits on the game picture as the map finds it (MapRender.Picture),
-// not on the fork's OutputView alone.
-MouseIndicator.Picture = () =>
-{
-    Kf2.MapRender.Picture(out var p0, out var p1);
-    return (p0, p1);
-};
+// switch to find. Its settings sit under Input beside the stick ones. A click on
+// the picture captures as well as the key, and a menu holds the pointer free
+// (Mouse.Suspend, from MenuMouse).
 Mouse.Configure(Kf2.Analog.MouseValues);
 Mouse.Install();
 

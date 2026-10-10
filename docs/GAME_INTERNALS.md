@@ -1795,6 +1795,8 @@ While it is on, the hotkey toasts (`Hotkeys.Notify`) and the pointer-capture
 glyph (`MouseIndicator.Suppressed`, driven from the `Cinematic` setter) stay
 silent, so a filmed flythrough has nothing fading in over the picture.
 
+(Removed from Verdite Core on 2026-10-09: there is no glyph left to suppress, and the `Cinematic` setter no longer touches it. See "A click captures, and the menu suspends it" in `docs/INPUT.md`.)
+
 Off by default, and it stays a debug-mod option rather than a port setting: the
 mechanism is measured, the picture is a matter of taste and has not been judged.
 

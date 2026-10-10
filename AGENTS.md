@@ -29,7 +29,7 @@ you would be doing when you need them:
 | `docs/RECOMPILATION.md` | config, overlays, function maps, SDK addresses |
 | `docs/RUNTIME.md` | interrupts, HLE, the `tools/RecompOne/patches/` stack |
 | `docs/RECOMPONE_FORK.md` | the fork `tools/RecompOne` is a subtree of, and merging from upstream |
-| `tools/RecompOne/docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0085` |
+| `tools/RecompOne/docs/RECOMPONE_PATCHES.md` | every change the port made to RecompOne, `0001`-`0109` |
 | `docs/RENDERING.md` | perspective correction, sub-pixel, Z-buffer, dither |
 | `docs/WIDESCREEN.md` | aspect ratio, the HUD, the three culls |
 | `docs/AUDIO.md` | SPU interpolation, reverb, XA resampling, the host output |
@@ -455,7 +455,7 @@ removed for the same reason.
 standalone fork `Voicedrew11/verdite-recompone` (`main`): its sources are tracked
 here, so a fresh clone builds with nothing fetched, and an edit inside it is a
 change to this repository like any other.** `tools/RecompOne/patches/*.patch` (the fork's own, since Phase 2) are kept
-as the record of what the port changed and why, and the numbers (`0001`-`0085`)
+as the record of what the port changed and why, and the numbers (`0001`-`0109`)
 are how the source refers to each change, but they are **no longer replayed**.
 The merge base is `tools/RecompOne/UPSTREAM` (currently `d81dec8`); the fork's
 history descends from upstream, so a harvest is an ordinary merge, made in a

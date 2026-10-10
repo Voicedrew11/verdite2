@@ -676,6 +676,8 @@ sits under the white, because the picture behind it is whatever the dungeon
 happens to be and a torch-lit wall is bright enough to lose a white shell — and
 the cut only reads as a cut if something separates the two halves.
 
+(Removed from Verdite Core on 2026-10-09; see "A click captures, and the menu suspends it".)
+
 Three things follow the map's viewports rather than being invented again. It is
 an `IFloatingPanel` anchored to **`MapRender.Picture`**, the game picture rather
 than the window (`tools/RecompOne/patches/0029`), so it does not sit over the port's
@@ -703,6 +705,8 @@ console line at boot and in the settings page.
 outright while it is on (`MouseIndicator.Suppressed`, both ends gated so nothing
 queues underneath and switching on mid-fade hides it at once), since a flythrough
 being filmed must not have announcements fading in over the picture.
+
+(Removed from Verdite Core on 2026-10-09; see "A click captures, and the menu suspends it".)
 
 **Never judged by eye**: whether the top right is where the eye is, whether 1.75 s
 total is long enough to notice and short enough not to nag, and whether the cut
@@ -1147,6 +1151,10 @@ in `MouseIndicator` (Verdite Core's) announces them, and the `PadReadEvent` butt
 listener detaches with the capture — which is what keeps a menu click from also
 arriving as a Square.
 
+(The glyph named here was removed from Verdite Core on 2026-10-09, and the menu now
+suspends the capture through `Mouse.Suspend`; see "A click captures, and the menu
+suspends it".)
+
 ### The wheel owns the page, not the cursor
 
 **A list longer than its window was unreachable with the mouse.** Pointing gets
@@ -1276,3 +1284,34 @@ far has opened a yes/no prompt with the pointer over it.
 `func_800208D8` and then read the pad themselves rather than calling
 `func_8001EA14`, so they are a fourth shape, with a fourth place the cursor could
 be living. Neither has been identified by what it is on screen.
+
+## A click captures, and the menu suspends it
+
+On 2026-10-09 Verdite Core changed how the pointer is taken. `MouseIndicator` is
+gone from `tools/verdite-core/src/`, and with it the glyph described above. A
+click on the game picture now captures the pointer, as a desktop game does; the
+capture is released on focus loss and when a panel opens. Nothing announces a
+capture any more, since the click is the announcement.
+
+A game screen that wants a pointer holds it free with `Mouse.Suspend(true)` and
+gives it back with `Mouse.Suspend(false)`. The suspension also gives back a
+pointer that the suspension itself took, so the end of it leaves the state the
+screen found.
+
+The port's use of this is in `patches/MenuMouse.cs`. Its `BeforeMenu` and
+`AfterMenu` now call `Mouse.Suspend(true)` and `Mouse.Suspend(false)`
+unconditionally, in place of its own `_tookCapture` flag and `Mouse.SetCaptured`
+pair. A click in the in-game menu therefore does not capture the pointer, and the
+menu keeps the pointer free for its point-and-click. Mouse look still captures
+on a click outside a menu, and Escape still toggles the capture (`MouseGame.DefaultCaptureKey`
+is left at its default).
+
+Two other ends of the old glyph went with it. `Program.cs` no longer sets
+`MouseIndicator.Picture`, and the debug mod's `Noclip` no longer sets
+`MouseIndicator.Suppressed` from its `Cinematic` setter, since there is no glyph
+to mute.
+
+**Not judged by eye yet**: whether a click that captures is expected by a player
+who has only seen the old glyph, whether a capture released by a panel opening
+reads as the pointer being handed back, and whether the menu feels right with the
+pointer free throughout. None of this has been run through a person.
