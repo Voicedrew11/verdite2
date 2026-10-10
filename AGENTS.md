@@ -95,7 +95,7 @@ KF2_CDTRACE=1                          # stack trace on first CD register access
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
 KF2_FPS=120                            # 60 (default), any number, or off
 KF2_FPS_PROBE=1                        # a line a second: fps drawn, ticks taken, what each smoother is doing
-KF2_TICKRATE=30                        # the world's tick rate (20, and not a setting); a comparison only
+KF2_TICKRATE=20                        # the world's tick rate (15, and not a setting); a comparison only
 KF2_PRESENT_PROBE=1                    # proves frames reach the screen; prints nothing if they do not
 KF2_AUTOSTART=2                        # boot straight into save slot 1..3, past the title menus
 KF2_AGENT=1                            # [KF2-AGENT] state lines on stdout
@@ -160,7 +160,7 @@ what it is) live there, not here.
 
 | patch | what | default | doc, section |
 |---|---|---|---|
-| `FramePacing` | skips the game's frame gate `func_80017880`, paces frames itself, runs the gated stages on a 20 Hz world clock | 60 fps drawn, 20 ticks/s | PATCHES_AND_MODS, "Any frame rate" |
+| `FramePacing` | skips the game's frame gate `func_80017880`, paces frames itself, runs the gated stages on a 15 Hz world clock | 60 fps drawn, 15 ticks/s | PATCHES_AND_MODS, "Any frame rate" |
 | `FrameSmoothing`, `ObjectSmoothing`, `AnimSmoothing`, `FluidSmoothing` | carry the camera (and the compass needle and the HP/MP gauges with it, bracketing the HUD builder), the four world tables, MO pose and the scrolling textures between ticks | on; one checkbox | PATCHES_AND_MODS, "One switch for all of the smoothing", "The compass is carried with the view", "The gauges are carried like the needle" |
 | `LoopPacing` | modal loops (fades, cutscenes, item/spell animations) run once per tick, gaps filled with stage-13 redraws | on | PATCHES_AND_MODS, "Loops that render their own frames" |
 | `MenuPacing` | menu cursor repeat and blink held to the 60 Hz grid | on | PATCHES_AND_MODS, "The menu's cursor repeat" |
@@ -234,7 +234,7 @@ judged by eye; say which of the two a change has when you write it up.
   silently. The stage gate's 500 ms watchdog (`FallbackTick`) is what saves it; a
   hold keyed on the frame (like `SpriteAnim`) fails *closed* and needs the same
   watchdog. Check any pacing change with `KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps
-  drawn at 20.0 ticks/s.
+  drawn at 15.0 ticks/s.
 - **A gated stage must not draw** (`scripts/check_gate.py`; its `KNOWN` holds the
   two recorded exceptions). Something stepped inside a drawing function's own body
   cannot be gated and needs a hold/restore pair instead.
@@ -485,7 +485,7 @@ working clone of the fork.
 - **Three changes force a recompile**: `0004`, `0035` and `0037`. Everything else
   is runtime-only.
 - **The acceptance test for a merge** is `open → game → fdat02 → fdat05`, slot 2
-  restored at hp 46/86 in area 1, 144.0 fps drawn at 20.0 ticks/s, every hook
+  restored at hp 46/86 in area 1, 144.0 fps drawn at 15.0 ticks/s, every hook
   attached — **paired with `KF2_PRESENT_PROBE=1`**, because every number in that
   run was once still true with a completely black window. The last merge also
   silently broke the vertex map (`KF2_PERSPECTIVE_PROBE=1` reading `0 caught/s`)
@@ -526,7 +526,7 @@ fail to load area modules on a differently mastered dump.
 - **`GameCompile`'s options and `KingsField2Recomp.csproj`'s properties are two
   statements of one thing and must stay in step** — a difference is a bug that
   exists only in the release. Check the packaged binary with
-  `KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 20.0 ticks/s.
+  `KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 15.0 ticks/s.
 - **The version is one line in `VERSION`**; everything else reads it, and
   `release.yml` asserts the tag equals `v$(cat VERSION)`. `bash scripts/release.sh
   0.2.0` bumps, commits and tags, and deliberately does not push.

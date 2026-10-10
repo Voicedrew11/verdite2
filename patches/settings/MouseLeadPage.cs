@@ -4,7 +4,7 @@ namespace Kf2.Settings;
 
 /// <summary>
 /// <see cref="Mouse.Lead"/>, under Gameplay: whether mouse look reaches the
-/// picture the frame the hand moves, or waits for the game's next 20 Hz tick.
+/// picture the frame the hand moves, or waits for the game's next tick.
 /// See "The mouse leads the tick" in docs/INPUT.md.
 /// </summary>
 public sealed class MouseLeadPage : IPatchPage
@@ -31,7 +31,7 @@ public sealed class MouseLeadPage : IPatchPage
         }
 
         if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-            ImGui.SetTooltip("Turns the view the frame you move the mouse, instead of on the game's next 20 Hz tick.");
+            ImGui.SetTooltip("Turns the view the frame you move the mouse, instead of on the game's next tick.");
 
         ImGui.EndDisabled();
     }

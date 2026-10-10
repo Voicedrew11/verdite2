@@ -235,7 +235,7 @@ public static class Analog
     static bool _ownedTurn, _ownedPitch;
     static bool _mouseTurn, _mousePitch;
 
-    // Fractional remainders. Not optional: at a 20 Hz tick a small stick deflection
+    // Fractional remainders. Not optional: at a 15 Hz tick a small stick deflection
     // rounds to a zero step every tick, and the player would simply not move.
     static float _turnCarry, _pitchCarry, _fwdCarry, _strafeCarry;
 

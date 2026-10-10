@@ -8,7 +8,7 @@ lives here — frame pacing and auto reload.
 
 | file | what it does | detail |
 |---|---|---|
-| `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
+| `FramePacing.cs` | paces the picture, and holds the world to 15 Hz | this file |
 | `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
 | `LoadPacing.cs` | makes a `VSync(0)` inside a disc wait cost a vblank again, so the loading screen's figure walks at the console's rate | this file |
 | `MenuWorld.cs` | draws the world live behind a menu or a shop instead of the frozen 320-wide copy | this file |
@@ -991,6 +991,40 @@ nothing in the window to explain it.
 fastest band, never above it, and without the banding that made the original's
 speed wander. No game knowledge, no constants touched — and it is strictly more
 consistent than hardware ever was. **Done**; see below.
+
+### The reference band is 4 vblanks
+
+**This overturns the section above in its number, not its reasoning.** The
+reasoning stands: the gate's `2` is a ceiling, the console missed it under load,
+and the band it landed in is the speed the game was built at. Which band was the
+open part, and it is now **15, four vblanks**: `FramePacing.LogicHz` defaults to
+15, and 20 and 30 are comparisons under `KF2_TICKRATE`.
+
+* **The evidence is by ear, not a counter.** Played at 15, a door's sound fits its
+  motion; the sound is on the SPU's wall clock and the door moves per tick, so the
+  rate at which they agree is the rate the two were authored against. That is the
+  user's judgement in play, not a measurement, and which door, and how far off it
+  was at 20, is not recorded.
+* **Not yet checked** the same way: any other sound against motion (a lever, a
+  drawbridge, a creature's attack), or the cutscenes in `OPEN.EXE`. The JP
+  executable's gate literal is still unread (see above).
+* **What moves with it.** Everything the world steps per tick runs at three
+  quarters of the 20 Hz speed: walking, turning (the D-pad, L2/R2 and the stick
+  alike, 37°/s walking and 46°/s standing, 42°/s looking), creatures, timers, the
+  death clock (65 ticks, 4.33 s). The mouse and the gyro do not: they ask for an
+  amount, not a speed. The render rate does not either; 60 is four pictures a tick.
+* **What the port had hard-coded at 20, and now follows the tick rate**: the
+  pulse and flicker clock of authored lights and glows (`Lights`, `Surfaces`, which
+  divided ticks by 20 to get seconds, so an authored 1 Hz pulse stays 1 Hz), and
+  the map markers' sampling period (`MapMarkers.PeriodMs`, one sample a tick).
+  Everything else read `LogicHz` already.
+* **Measured**: `KF2_FPS=144 KF2_FPS_PROBE=1 KF2_PRESENT_PROBE=1`, slot 2: 144.0 fps
+  drawn, 144.0 presents/s, 15.0 ticks/s (one-second windows reading 14.9, 15.0 and
+  now and then 15.9, about 15.0 on average), every hook attached. **Not looked at**:
+  the smoothing at four pictures a tick, by eye.
+
+Measurements elsewhere in these documents that say 20 Hz were taken at 20 and are
+left as they were.
 
 ### The floor, as built
 

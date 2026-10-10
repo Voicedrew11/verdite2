@@ -113,8 +113,8 @@ frame costs three vblanks; since the game's speed *is* its frame rate, 20 is the
 speed it was played at. The port's HLE GPU makes the two-vblank deadline every
 time and never bands down, so the gate is now **skipped at every rate, not only
 above 30** — it decides the render rate and the world rate together and knows one
-answer for both. The world runs on `FramePacing.LogicHz` instead, 20 by default
-and 30 as a setting. See "The reference band is 3 vblanks, not 2" in
+answer for both. The world runs on `FramePacing.LogicHz` instead, 15 by default
+(not a setting; `KF2_TICKRATE`). See "The reference band is 4 vblanks" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 `0x801B6CAC` is bumped by the same callback and never reset by anything.

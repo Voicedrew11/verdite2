@@ -16,7 +16,7 @@ KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
 KF2_FPS=120                            # 60 (default), any number, or off; see "Any frame rate"
-KF2_TICKRATE=30                        # ticks a second the world runs at (20, and no longer a setting)
+KF2_TICKRATE=20                        # ticks a second the world runs at (15, and no longer a setting); 20 and 30 are the comparisons
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_FPS_PROBE=1                        # a line a second: fps drawn, presents, ticks taken, what each smoother is doing; a `no boundary` line while the watchdog paces
