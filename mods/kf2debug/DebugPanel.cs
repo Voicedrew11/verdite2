@@ -85,10 +85,9 @@ internal sealed class DebugPanel : IPanel
             ImGui.SetTooltip("Fly through walls, with the body coming along. Forward goes where "
                            + "the camera is looking, pitch included. Your own walk keys or the "
                            + "left stick move; Space and Left Ctrl -- or the pad's R1 and L1 -- "
-                           + "go up and down; Left Shift or L3 is fast. F3 toggles it, as does a "
-                           + "DualSense's mute key. Collision is not disabled -- the position is "
-                           + "written after the game's own movement, so enemies and items keep "
-                           + "theirs.");
+                           + "go up and down; Left Shift or L3 is fast. F3 toggles it. Collision "
+                           + "is not disabled -- the position is written after the game's own "
+                           + "movement, so enemies and items keep theirs.");
 
         if (Noclip.Enabled)
         {
@@ -134,7 +133,10 @@ internal sealed class DebugPanel : IPanel
                                + "the velocity builds up and coasts down, and the view trails "
                                + "where you are looking. For filming a flythrough, not for "
                                + "getting somewhere. The hotkey toasts and the mouse-capture "
-                               + "glyph stay silent while it is on.");
+                               + "glyph stay silent while it is on, and instant mouse look is "
+                               + "held off (the two together judder; the setting is left alone). "
+                               + "V, or a DualSense's mute key, is film mode: this, enemies "
+                               + "ignoring you and noclip, together.");
 
             if (Noclip.Cinematic)
             {
@@ -602,6 +604,7 @@ internal sealed class DebugPanel : IPanel
             Row("F5 / F6", "save / go to bookmark 1");
             Row("F7", "snap to floor");
             Row("F8", "back to where noclip was switched on");
+            Row("V", "film mode: cinematic camera, enemies ignore you and noclip, together (no toast)");
             Row("Space / Left Ctrl", "fly up / down");
             Row("Left Shift", "fly fast (hold)");
             ImGui.EndTable();
@@ -611,7 +614,7 @@ internal sealed class DebugPanel : IPanel
         ImGui.TextDisabled("On a pad");
         if (ImGui.BeginTable("##padkeys", 2, ImGuiTableFlags.SizingStretchProp))
         {
-            Row("Mute / Share", "toggle noclip");
+            Row("Mute / Share", "film mode (as V)");
             Row("Left stick", "fly forward and strafe");
             Row("R1 / L1", "fly up / down");
             Row("L3", "fly fast (hold)");
@@ -621,7 +624,8 @@ internal sealed class DebugPanel : IPanel
         ImGui.Separator();
         ImGui.TextWrapped("F1 and F11 are the host's own (top bar, fullscreen) and are left alone. "
                         + "The game's default keymap uses Z X A S Q W E R F G, Enter, Right Shift "
-                        + "and the arrows, so the function keys do not collide with play.");
+                        + "and the arrows, so the function keys do not collide with play; "
+                        + "neither it nor the port's WASD layout binds V.");
 
         static void Row(string key, string what)
         {

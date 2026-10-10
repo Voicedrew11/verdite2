@@ -752,8 +752,9 @@ claims — so anything else held masks it. `InputManager.IsPadButtonDown(button,
 pad)` asks about one binding in the same encoding the rest of that class uses, so
 the triggers (100/101) and the stick directions (102–109) answer through it too,
 and `HostWindow` forwards it. `mods/kf2debug` is the only caller: the mute key
-toggles noclip, so a player on a pad never reaches for F3. Input only, so no
-recompile.
+is film mode, as V is (the cinematic camera, enemies ignoring you and noclip,
+together; noclip alone stays on F3), so a player filming on a pad never reaches
+for the keyboard. Input only, so no recompile.
 
 ### What is measured, and what is not
 
@@ -883,6 +884,22 @@ walking and looking. **Not yet tried by hand**: turning while a menu, a dialogue
 or a scripted sequence opens (the look routine never spends that motion, so it
 shows for up to three ticks and is then dropped), the mouse and a stick or turn
 key at once, turning across an area load or a death, and the head bob.
+
+**The debug mod's cinematic camera holds it off.** That camera's look filter
+(`mods/kf2debug/Noclip.cs`, "The cinematic camera has to recover the turn as a
+difference" in `docs/GAME_INTERNALS.md`) eases the view toward the angle the game
+integrated, and the lead jumps the drawn view past that angle by the mouse's
+unspent motion: one smooths what the other leaps over, and together they judder.
+So `FrameSmoothing.LeadSuppressed`, a public static a mod may raise, makes
+`MouseLead` answer nothing, exactly as with the setting off (no `Mouse.Poll`
+there, no `LeadOnly`, and the last tick's measured share dropped so it is not
+carried into the frames after the lead comes back). The `Cinematic` setter raises
+and lowers it, and the mod's `Noclip.Reset` lowers it, so unloading mid-film
+leaves the lead as the player set it. **The saved `kf2.mouse.lead` is never
+touched.** Ported from Verdite3's `ViewSmoothing.LeadSuppressed`. Measured: the
+flag follows the camera (`KF2_DEBUG_FILMMODE_PROBE`, below under the debug
+tools); **not judged by eye**: that the judder is gone with a real mouse in a
+cinematic flythrough.
 
 ### The mouse was sampled at two points
 
