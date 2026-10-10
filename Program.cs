@@ -17,8 +17,8 @@ Verdite.Core.Game.Configure(tag: "KF2");
 //
 //     KF2_HANG=15                 seconds without a frame before a hang report
 //     KF2_FAULT=hook|crash|hang[:s]  makes that report s seconds (20) after the first area
-Kf2.CrashReports.Configure(Environment.GetEnvironmentVariable("KF2_HANG"));
-Kf2.CrashReports.InstallFault(Environment.GetEnvironmentVariable("KF2_FAULT"));
+Verdite.Core.CrashReports.Configure(Verdite.Core.Game.Env("HANG"), "Verdite2", Kf2.AgentBeacon.Snapshot, 0x800140AC);
+Verdite.Core.CrashReports.InstallFault(Verdite.Core.Game.Env("FAULT"));
 
 // Diagnostics. The runtime's log channels are plain static bools with no CLI of
 // their own, so expose them through an env var:
@@ -1178,10 +1178,10 @@ Mouse.Install();
 // loosed, two motors or HD on a Switch pad or a DualSense by USB (KF2_RUMBLE,
 // KF2_RUMBLE_HD, both on; runtime 0104, 0105). See "Gyro aim with a drawn bow" and
 // "Rumble" in docs/INPUT.md, "The bow and the arbalest" in docs/GAME_INTERNALS.md.
-Kf2.GyroAim.Configure();
-Kf2.GyroAim.Install();
-Kf2.Rumble.Configure();
-Kf2.Rumble.Install();
+GyroAim.Configure(Kf2.Bow.Reads);
+GyroAim.Install();
+Rumble.Configure(Kf2.Bow.Reads);
+Rumble.Install();
 
 // The menu pointer: hover an in-game menu item and the game's own cursor moves to
 // it, left click confirms, right click backs out.
@@ -1540,7 +1540,7 @@ Verdite.Core.DesktopEntry.Comment = "A PC port of King's Field (SLUS-00158). Req
 //
 //     KF2_ICON=orb      keep the shipped mark
 //     KF2_ICON=off      no icon at all
-Kf2.CardIcon.Install(args.Length > 0 ? args[0] : null);
+Verdite.Core.CardIcon.Install(args.Length > 0 ? args[0] : null, 0, Kf2.CardIconSource.Read);
 
 var memory = new PSMemory(Kf2.PrimBuffer.RamSize);
 try
