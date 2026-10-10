@@ -54,13 +54,12 @@ after the game's own accumulate, so the clamp branch is not taken.
 
 Four things worth keeping:
 
-* **The camera accelerates while the stick is held out.** A d-pad is down or it
-  is not, so the game has no notion of a ramp; a stick held at the edge for half
-  a second should be sweeping faster than one just pushed. The patch ramps a
-  look-speed multiplier to 2.2× over half a second past 80% deflection and drops
-  it three times faster, which — with the cap lifted above — is what took the
-  camera from "stiff" to something like a modern shooter's. Fine aim near centre
-  is untouched, because the ramp never starts there.
+* **The camera can accelerate while the stick is held out, and by default does
+  not.** The patch can ramp a look-speed multiplier to 2.2× over half a second past
+  80% deflection and drop it three times faster — with the cap lifted below, the
+  camera goes from "stiff" to something like a modern shooter's. It was the
+  default once, and is off now (`KF2_ANALOG_ACCEL`, Fine tuning ▸ *Look
+  acceleration*): see "The stick turns at the original's speed" below.
 * **The fractional carry is not optional.** A small deflection rounds to a zero
   step every tick; without carrying the remainder the player simply does not move
   below about a third of stick. The world ticking at 20 rather than 30 makes this
@@ -81,26 +80,77 @@ Four things worth keeping:
   and asserting nothing lands on `target` however large it is, while writing
   `target - accel` and asserting the button is capped at the game's own rate.
   That is the whole difference between a camera that tops out at the d-pad's
-  74°/s and one that does not, and it costs one branch in `Drive`. Confirmed in
+  rate (49°/s walking, 62°/s standing, at the 20 Hz world) and one that does not, and it costs one branch in `Drive`. Confirmed in
   play: mean yaw steps of 39 against a frame rate limit of 28, and a `turnVel` of
   37 sitting in memory, which no button can produce. Nothing else gameplay-side
   reads the turn masks — the only other readers are the control-config screen —
   so dropping the button for a frame is free.
 * **A released velocity ramps down, and on a stick that reads as inertia.** The
   game drops nothing: pitch decays by 3 a frame from a limit of 32, so releasing
-  the stick keeps the view moving for about eleven frames — a third of a second,
-  some 16°. That is reasonable for a button, which cannot be released halfway,
-  and wrong for a stick, and it showed up *only* on pitch because the leak fix
-  above was already zeroing turn whenever the left stick moved. The patch therefore
-  drives a released camera axis to zero for one frame and then hands it back, so
-  L2/R2 and the D-pad still work. Movement is deliberately left alone: its
-  ramp-down is the walking momentum the game has always had.
+  the stick keeps the view moving for about eleven ticks — over half a second at
+  the 20 Hz world, some 16°. *Camera stops on release* (`KF2_ANALOG_INSTANTSTOP`)
+  drives a released camera axis to zero for one tick and then hands it back, so
+  L2/R2 and the D-pad still work. It was the default once and is off now: the
+  ease is the original's. Movement is left alone either way: its ramp-down is the
+  walking momentum the game has always had.
 * **Sticks idle means the patch is idle.** Both hooks return before touching memory, which
   is what keeps D-pad and keyboard play identical to having it switched off — which is why it can default to on.
 * **The look hook is now shared with the mouse.** `Mouse.TakeLook` hands
   `BeforeLook` a step in the same yaw units and this class writes the word, so
   two devices cannot fight over one velocity; the look hook therefore also runs
   with the sticks switched off. See "Mouse look" below.
+
+### The stick turns at the original's speed
+
+The defaults turned the view more than twice as fast as the game can: look
+acceleration took a full stick to 2.2× the D-pad's rate (about 107°/s walking,
+against the D-pad's 49°/s), the stick started and stopped the view dead, and the
+sensitivity slider went to 3.0 through the overspeed branch above. The game's
+fights are built on how fast the player turns — a creature cannot reach a player
+who circles it faster than the D-pad allows — and players said so.
+
+So by default a stick now turns as the D-pad does, and looks as L2/R2 do:
+
+* **The speed at full deflection is the game's own**: the turn rate at
+  `0x8019955C` (28 walking, 35 standing, halved by SLOW, all decided by stage 3),
+  and 32 a tick for the look. A partial push asks for a share of it, through the
+  deadzone and the curve, so the stick still aims finely and can never beat the
+  button.
+* **It eases in and out by the game's own step** (`Analog.Ramp`): `rate >> 2` a
+  tick for the turn (four or five ticks to full) and 3 for the look (eleven), up and
+  down, which is what the button branches and the released branch of
+  `func_80028DB8` do to a held and a let-go button. It carries on from the game's
+  velocity when the stick takes over from a D-pad turn or its decay, but not from a
+  step the mouse drove. 3D's left-stick turn was already ramped and now shares it.
+* **Faster is opt-in.** Look acceleration and the instant stop are off, and the
+  sensitivities default to 1.0; the sliders still go to 3.0. A config saved
+  before this is brought to the new defaults once (`kf2.analog.defaults` = 2):
+  acceleration and the instant stop off, a turn or look sensitivity above 1.0 put
+  back to 1.0, and a console line saying how many were reset. A variable set in the
+  environment still wins; it never touched the store.
+
+Measured with a scripted right stick (slot 2, standing, rate 35, 2D): full right
+turned 8, 16, 24, 32, then 35 a tick, and on release 27, 19, 11, 3, 0; a push to
+byte 200 (about 0.57) held 13-14 a tick; full up looked 3, 6 … 30, then 32 a tick,
+and decayed by 3 to 0 on release. The same steps as a held D-pad and L2/R2. The
+mouse is not changed. **Not felt on a pad.**
+
+### The stick can turn at that speed without the ease
+
+The ease is the original's, and it is also drag: a button cannot be half pressed,
+so four or five ticks in and out is how the game softens a d-pad, and on a stick it
+reads as the view lagging the thumb. *Stick eases in and out* (`StickEase`,
+`kf2.analog.ease`, `KF2_ANALOG_EASE=0`; Input ▸ Gamepad ▸ Fine tuning) turns it off:
+the stick's turn and look are what its position asks at once, through the same
+deadzone, curve and cap, and a released stick stops dead the tick after, as the
+instant stop does (whose checkbox is dimmed, having nothing to add). On is the
+default and is the mode above, unchanged. It is 2D's right stick only: 3D's
+left-stick turn is the D-pad's, and keeps its ease.
+
+Measured the same way, with the ease off: full right turned 35 a tick from the first
+tick and 0 the tick after release; byte 200 held 13-14 a tick from the first; full
+up looked 32 a tick from the first, and stopped the tick after release. With it on,
+the run above repeated step for step. **Not felt on a pad.**
 
 `KF2_ANALOG_PROBE=1` reports the velocities, the yaw and pitch steps, the walk
 speed and turn rate next to the stick deflection that produced them, and dumps
