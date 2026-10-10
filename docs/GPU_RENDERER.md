@@ -1384,6 +1384,17 @@ beyond that, the murk and a reflection on a blended model face, was not seen in 
 **Not checked:** an authored material on a model's blended face, and a model's face on the water's
 texture standing level in water.
 
+**Verdite3's pink spells cannot happen here** (checked 2026-10-09, against
+Verdite3 `b20242e`). There, the effect loop set the lit assembler's CLUT offset
+from scratchpad `+0x84`, outside the face data, so a mesh cached with the faces'
+base CLUTs drew Fire Ball in the wrong palette. This game's lit assembler has no
+such offset: `PolyAssemblerLit` writes each packet's CLUT straight from the face
+(`f + 2`), and `KF2_POLYASM=verify` diffs it against `func_8002F214`/`func_8002EAEC`.
+So a palette change here can only be a rewrite of the face words, and
+`TryInstance` checks every cached mesh against a hash of those words
+(`FaceHash`) before it draws one and rebuilds on a mismatch. Read, not run: no
+spell has been cast with the meshes on to look at.
+
 ### Step 4: the old world path off
 
 The walks stop building triangles. `PolyAssembler`, `TileWalk` and `ModelWalk`

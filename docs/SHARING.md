@@ -1750,3 +1750,71 @@ palette copy exists in `GAME.EXE`, so it is fingerprinted rather than found by a
 signature.
 
 **Not pushed:** this branch and Verdite3's `main`. The fork and Verdite Core are.
+
+### 2026-10-06: Verdite3's water
+
+**Done in Verdite3** (not committed), written up in its `docs/WATER.md`. Murky water,
+water waves and planar reflections ported onto its retained renderer, off until
+judged. No runtime change: `0067`, `0068`, `0078` and `0085` carried everything.
+
+- **Water is the scrolling texture's rect**, as the fluid slots are here: two records
+  at `0x801AEB1C` (dest `+8`/`+0xA`, size `+0x14`/`+0x16`), one live in every area at
+  (1016, 96) 8x32. Averaging faces on it are water; four areas also draw an additive
+  liquid on it, left out as the fire is here. No model mesh in the area tables samples
+  it, so Verdite3 has no `ModelWater`.
+- **The swell is retained only**: `WaterSwell` there decides the free corners and flags
+  them (`FlagSwell`); nothing is moved in guest RAM.
+- **The mirror is not a second walk**: the retained frame's halves and instances drawn
+  from `F R S` before the frame's `DrawOTag`, with a frustum cull of its own in place of
+  `PlanarCull`. Models only that cull reaches are not mirrored.
+- **The mip atlas's lookups are per view**: drawing the mirror through the atlas cost
+  as much CPU as the main view (1.6 ms a frame over a pool), so Verdite3's mirror leaves
+  it out by default. A per-frame memo in `UpdateWorldMips` would serve both games.
+
+### 2026-10-06: Verdite3's `Prejit`
+
+**Done in Verdite3**, written up in its `docs/DEVELOPMENT.md` ("The stutters",
+"Compiling ahead"). `patches/Prejit.cs` copied into Verdite3's `patches/` under
+`Kf3`/`KF3_PREJIT`, not moved into Verdite Core: the overlay ranking is the only
+game-specific data, and the names (`fdat*`, `game`, `main`, `open`, `end`) happen
+to be the same; Verdite2's copy is unchanged. Verdite3's copy differs in
+three measured ways that would serve Verdite2 too, and are the case for making it
+core's when it is next touched:
+
+- **Several threads** (a quarter of the cores, at most four, `KF3_PREJIT_THREADS`)
+  taking from one ordered list: one thread was 8.9 s there, still compiling `game`
+  when the autostart reached its area; four are 2.7-2.9 s.
+- **Constructors**: `GetMethods` returns none, so every `.cctor`/`.ctor` compiled on
+  the game thread at its type's first use. Verdite2's pass has the same gap.
+- **Value-type generic instantiations** named by fields (`Dictionary<(…), …>`,
+  `List<Vertex>`): about 0.2 s more of the pass, and a third off the first area
+  frame's remaining JIT.
+
+The runtime's profiler now reports the game thread's JIT only (fork `0045`,
+amended): with a background pass the process-wide figure charged its compiles to
+whatever frame was running. Verdite2's own Prejit numbers were taken before this
+and include that.
+
+### 2026-10-09: Verdite3's work brought back
+
+Verdite3's 97 commits since 2026-10-05 sorted against this port: most were already here,
+KF3's own, or notes; both subtrees were already pulled. Brought back, each on `dev`:
+
+- 0103's near clip for GPU-drawn models, on (`KF2_GPUWORLD_MODELCLIP`), with a probe; the
+  surface probe's `ahead`; fog by distance from the eye as the default.
+- The debug mod's film mode on V and the mute key, and `FrameSmoothing.LeadSuppressed`
+  under its cinematic camera.
+- 3D (tank) controls (`kf2.controls`, `KF2_TANK`).
+- The rolling `preview` prerelease (`scripts/prerelease.sh`, `PREVIEW_PASSWORD`).
+- The menu pointer on PORT SETTINGS (`MenuMouse.Rows`, the shell's `point`).
+- The message fade's length, x1-x4 (`kf2.messagefade`).
+- Escape opens the menu, a click captures the pointer (the shell's `key`).
+- The shell's `scale`, and the menu bar hidden at startup.
+- The crossing measured: no frame loses its models here (`c84d822`'s defect is absent),
+  but every map change was built twice; now once (`46edd23`'s concern, fixed another way).
+- The bow found in this game (`func_800271D0`, weapons 16 and 17), and Verdite3's rumble
+  and gyro aim put on it.
+
+Not brought back, being KF3's: its map viewers on M, the picked-up item's hold and turn,
+the spell palette fix (cannot happen here), the front-table splice, its creature
+streaming at the render distance, the full-card save, and taking the murk out of WATER.
