@@ -594,7 +594,7 @@ Not counted: VRAM uploads, writebacks, the interface and the swap. A query cover
 the wall time of the GPU work inside it, so a GPU that starves inside a submit
 counts the bubble.
 
-**Each query is charged to the frame that issued it** (`patches/GpuFrames.cs`): a
+**Each query is charged to the frame that issued it** (`tools/verdite-core/src/GpuFrames.cs`): a
 frame keeps the range of presents it issued (`GpuTimes.Issued`), the runtime raises
 `GpuTimes.Resolved` for each query as it is read, and a frame is complete once
 `GpuTimes.Complete` has passed its last present, about three frames later. The CSV

@@ -185,7 +185,7 @@ public static class KeyLayout
         string? refused =
             Mouse.CaptureKey == Key.Escape ? "Escape is the capture key" :
             PopupManager.AnyOpen ? "a popup is open" :
-            HotkeyGate.Editing ? "text or the editor has the keyboard" :
+            HotkeyGate.Typing || Remaster.Editor.Open ? "text or the editor has the keyboard" :
             !IsApplied() ? "the port's layout is not in place" :
             null;
         if (refused != null)

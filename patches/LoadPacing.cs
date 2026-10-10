@@ -102,6 +102,10 @@ namespace Kf2;
 /// </summary>
 public static class LoadPacing
 {
+    // The loading figure's grid sleep, as a section of the frame profiler.
+    public static readonly int LoadWait = RecompOne.Runtime.Diagnostics.Profiler.Register(
+        "LoadPacing (loading figure grid)", RecompOne.Runtime.Diagnostics.ProfileGroup.Wait);
+
     /// <summary>The CD job's drain loop: `func_80017818()` then four calls to the
     /// animator, until the queue at `0x801B6F44` empties. Reached from the area
     /// loader `func_80024154`, the door warp `func_800474D0` and four others.</summary>
@@ -380,7 +384,7 @@ public static class LoadPacing
 
         if (now >= _due) return;
 
-        int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(FrameProfiler.LoadWait);
+        int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(LoadWait);
         double sleepUntil = _due - SpinMs;
         if (now < sleepUntil)
         {

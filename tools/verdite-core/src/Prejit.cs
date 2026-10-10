@@ -7,84 +7,51 @@ using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Memory;
 using RecompOne.Runtime.Modding;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
 /// Compile the recompiled code before the game runs it, on background threads,
 /// so walking into an area does not stop to JIT it.
 ///
-///     KF2_PREJIT=0          leave every method to be compiled on first call
-///     KF2_PREJIT_PROBE=1    a line per batch as the pass reaches its end
-///     KF2_PREJIT_THREADS=n  threads for the pass (a quarter of the cores, 1-4)
+///     {Tag}_PREJIT=0          leave every method to be compiled on first call
+///     {Tag}_PREJIT_PROBE=1    a line per batch as the pass reaches its end
+///     {Tag}_PREJIT_THREADS=n  threads for the pass (a quarter of the cores, 1-4)
 ///
 /// ## The defect
 ///
 /// `TieredCompilationQuickJit` is off and must stay off -- tier-up recompiles a
 /// hooked method and MonoMod's detour does not follow -- so **every** recompiled
-/// function is compiled by the full optimizing JIT the first time it is called,
-/// on the thread that called it. An area change is the largest batch of first
-/// calls the game makes, and it makes them inside one frame. Measured at boot
-/// with `KF2_PROFILE_SPIKE=30`, first entry to `fdat02`:
-///
-/// | frame | work | of which JIT | section |
-/// |---|---|---|---|
-/// | 358 | 297.87 ms | 292.37 ms, 234 methods | the assemblers, the model walk, stage 13 |
-/// | 580 | 179.95 ms | 174.88 ms, 66 methods | stages 4, 3 and 2 |
-/// | 1362 | 102.28 ms | 100.71 ms, 12 methods | stage 5, the first projectile |
-///
-/// The control is the same transition into a module the session has already run:
-/// area 1 to area 0 with `fdat02` warm cost **15 ms**, a max frame of 25.93 ms
-/// and `JIT 6.06 ms/s`. So it is the compile and not the disc -- an emulated CD
-/// read out of the host's page cache is microseconds.
-///
-/// **It is worst when walking**, which is why it reads as a hitch rather than a
-/// load: the full-load path (`func_80024154`, used by a save load and by
-/// <see cref="AreaWarp"/>) runs the loading screen that <see cref="LoadPacing"/>
-/// paces, and the JIT lands inside something that already looks like a load. A
-/// boundary crossing is stage 2's own object state machine -- an object with
-/// state `0xE0`, handler `0x80038DC8`, which calls `0x800162DC` directly -- and
-/// that path enters neither wait `LoadPacing` hooks, so the loading figure never
-/// steps and the freeze is naked, mid-stride.
+/// function, patch and runtime method is compiled by the full optimizing JIT the
+/// first time it is called, on the thread that called it. An area change is the
+/// largest batch of first calls the game makes, and it makes them inside one
+/// frame. The port's docs carry the measurements.
 ///
 /// ## Preparing rather than tiering
 ///
 /// <c>RuntimeHelpers.PrepareMethod</c> compiles a body without calling it, and
 /// the set to compile is already enumerable: every overlay is registered before
-/// the first `Dispatcher.Load`, so `Functions` holds a delegate per recompiled
-/// function and <c>Delegate.Method</c> is the method the JIT would compile
-/// later. The port's own assembly -- the patches and Verdite Core, which compiles
-/// into it as source -- and the runtime go in the same pass: a replace hook is an
-/// ordinary managed method, and so is the GTE fast path it spends its time in, so
-/// both are compiled on first call like everything else. That is why
-/// `PolyAssembler.Replace` and `ModelWalk.ReplaceWalk` are named in the frame
-/// above, and the area modules are *not* the bulk: `fdat02` declares ten
-/// functions. The cost is `game` (1035), the patches (1933 and Verdite Core's)
-/// and the runtime (3111).
+/// the first <c>Dispatcher.Load</c>, so <c>Functions</c> holds a delegate per
+/// recompiled function and <c>Delegate.Method</c> is the method the JIT would
+/// compile later. The port's own assembly -- the patches and Verdite Core, which
+/// compiles into it as source -- and the runtime go in the same pass.
 ///
-/// Two things the pass used to leave to the game thread are taken here too:
-/// **constructors**, which `GetMethods` does not return (a type's first use
-/// compiled its `.cctor` at the first area), and **the library's generics closed
-/// over this port's value types**, as far as the port's fields name them.
+/// Also taken: **constructors**, which <c>GetMethods</c> does not return (a type's
+/// first use compiled its <c>.cctor</c> on the game thread), and **the library's
+/// generics closed over the port's value types**, as far as the port's fields
+/// name them.
 ///
 /// **The thread starts at the first overlay load, not at the area's.** The load
 /// returns straight into the first frame of the new area, so preparing the
 /// incoming module from its own <c>OverlayLoadedEvent</c> would race the frames
-/// it is meant to protect. It starts during `main`, which leaves the intro and
-/// the title -- seconds of idle CPU -- to cover the whole assembly, and the area
-/// modules are warmed first because they are what hitches.
+/// it is meant to protect. It starts during <c>main</c>, which leaves the intro
+/// and the title to cover the whole assembly, and the area modules are warmed
+/// first because they are what hitches.
 ///
-/// Several threads take from the head of one ordered list. One thread was
-/// measured at 8.9 s in Verdite3, longer than an autostart takes to reach its
-/// area; a quarter of the cores (at most four) leaves the rest to the game, the
-/// driver and the audio. Lowest priority and a yield every 32 methods, so a
+/// Several threads take from the head of one ordered list, a quarter of the cores
+/// (at most four) by default. Lowest priority and a yield every 32 methods, so a
 /// machine with few cores spends its cores on the picture; background, so it
-/// cannot hold up an exit. A method <see cref="HookManager"/> has already
-/// committed is left alone -- MonoMod prepares its target when it installs the
-/// detour, so there is nothing to gain and one less thing to do concurrently
-/// with a detour being written.
-///
-/// See "The first frame of an area was the JIT" in docs/DEVELOPMENT.md, and
-/// "Compiling ahead on several threads" there for the threads and the rest.
+/// cannot hold up an exit. A method <see cref="HookManager"/> has already committed
+/// is left alone -- MonoMod prepares its target when it installs the detour.
 /// </summary>
 public static class Prejit
 {
@@ -96,6 +63,7 @@ public static class Prejit
     public static bool Enabled { get; private set; } = true;
 
     static bool _probe;
+    static string _portNamespace = "";
     static Thread[]? _threads;
     static (int Batch, MethodBase Method)[]? _work;
     static string[] _labels = [];
@@ -104,7 +72,8 @@ public static class Prejit
     static int _next, _finished, _prepared, _left, _refused;
 
     /// <summary>Threads the pass runs on: a quarter of the cores, at most four.
-    /// `KF2_PREJIT_THREADS` overrides it.</summary>
+    /// The port's <c>{Tag}_PREJIT_THREADS</c> overrides it, through
+    /// <see cref="Configure"/>.</summary>
     public static int Threads { get; private set; } = Math.Clamp(Environment.ProcessorCount / 4, 1, 4);
 
     /// <summary>Methods compiled by the pass, and whether it has finished. Read
@@ -113,14 +82,13 @@ public static class Prejit
 
     public static bool Done { get; private set; }
 
-    public static void Configure(string? enabled, string? probe)
+    /// <summary>The port's switches, read by its <c>Program.cs</c> from
+    /// <c>Game.Env</c>; a null or blank value leaves the default.</summary>
+    public static void Configure(string? enabled, string? probe, string? threads)
     {
         if (!string.IsNullOrWhiteSpace(enabled)) Enabled = enabled != "0";
         if (!string.IsNullOrWhiteSpace(probe)) _probe = probe != "0";
-
-        // Read here rather than passed in, so Program.cs's call stays as it is.
-        if (int.TryParse(Environment.GetEnvironmentVariable("KF2_PREJIT_THREADS"), out int n) && n > 0)
-            Threads = Math.Min(n, Environment.ProcessorCount);
+        if (int.TryParse(threads, out int n) && n > 0) Threads = Math.Min(n, Environment.ProcessorCount);
     }
 
     /// <summary>
@@ -129,11 +97,15 @@ public static class Prejit
     /// and installed last in Program.cs so the patches' own attach listeners have
     /// run -- and their hooks committed -- before the first method is prepared.
     /// </summary>
-    public static void Install()
+    /// <param name="portNamespace">The port's method namespace (<c>Kf2</c>,
+    /// <c>Kf3</c>): the patches sit there, in the same assembly as core.</param>
+    public static void Install(string portNamespace)
     {
+        _portNamespace = portNamespace;
+
         if (!Enabled)
         {
-            Console.WriteLine("[KF2] prejit: off, every method compiles on its first call");
+            Console.WriteLine($"[{Game.Tag}] prejit: off, every method compiles on its first call");
             return;
         }
 
@@ -152,11 +124,11 @@ public static class Prejit
             {
                 IsBackground = true,
                 Priority = ThreadPriority.Lowest,
-                Name = "kf2-prejit",
+                Name = Game.Id + "-prejit",
             };
             _threads[i].Start();
         }
-        Console.WriteLine($"[KF2] prejit: warming the recompiled code on {_threads.Length} background thread(s)");
+        Console.WriteLine($"[{Game.Tag}] prejit: warming the recompiled code on {_threads.Length} background thread(s)");
     }
 
     /// <summary>The whole pass, in order, flattened up front so that several
@@ -204,7 +176,7 @@ public static class Prejit
             // A batch is reported by the thread that finishes its last method,
             // so the time is when the batch was done, not what it cost.
             if (Interlocked.Decrement(ref _remaining[batch]) == 0 && _probe)
-                Console.WriteLine($"[KF2] prejit: {_labels[batch]} {_batchPrepared[batch]} method(s) done by " +
+                Console.WriteLine($"[{Game.Tag}] prejit: {_labels[batch]} {_batchPrepared[batch]} method(s) done by " +
                                   $"{_clock!.Elapsed.TotalMilliseconds:0} ms");
 
             if (++step % YieldEvery == 0) Thread.Yield();
@@ -213,7 +185,7 @@ public static class Prejit
         if (Interlocked.Increment(ref _finished) != _threads!.Length) return;
         Prepared = _prepared;
         Done = true;
-        Console.WriteLine($"[KF2] prejit: {_prepared} method(s) compiled in " +
+        Console.WriteLine($"[{Game.Tag}] prejit: {_prepared} method(s) compiled in " +
                           $"{_clock!.Elapsed.TotalMilliseconds:0} ms on {_threads.Length} thread(s), " +
                           $"{_left} left to their hook" + (_refused > 0 ? $", {_refused} refused" : ""));
     }
@@ -252,12 +224,12 @@ public static class Prejit
 
     /// <summary>
     /// Ordered by what a walk into an area needs, because the pass is racing the
-    /// player: the nine area modules (only 10-19 functions each, so 0.3 s for the
-    /// lot), then the port's own replace hooks and the runtime they spend their
-    /// time in -- which is what the first frame of an area is -- then the
-    /// generics those fields close, then `game`, which holds the stages and the
-    /// renderer and is the bulk at 1035. `open` and `end` are last: the title has
-    /// already run by the time the pass reaches it, and the ending is an hour away.
+    /// player: the area modules (small, so the lot is a fraction of a second),
+    /// then the port's own replace hooks and the runtime they spend their time in
+    /// -- which is what the first frame of an area is -- then the generics those
+    /// fields close, then <c>game</c>, which holds the stages and the renderer and
+    /// is the bulk. <c>open</c> and <c>end</c> are last: the title has already run
+    /// by the time the pass reaches it, and the ending is far away.
     /// </summary>
     static IEnumerable<(string Label, IEnumerable<MethodBase?> Methods)> Batches()
     {
@@ -303,7 +275,7 @@ public static class Prejit
     /// namespace is what separates them. Verdite Core's source compiles into the
     /// same assembly, so its namespace is warmed here as well, after the port's.</summary>
     static IEnumerable<MethodBase?> PortMethods()
-        => AssemblyMethods(typeof(Prejit).Assembly, "Kf2")
+        => AssemblyMethods(typeof(Prejit).Assembly, _portNamespace)
             .Concat(AssemblyMethods(typeof(Prejit).Assembly, "Verdite.Core"));
 
     /// <summary>
@@ -357,8 +329,8 @@ public static class Prejit
 
     /// <summary>Every method an assembly declares, optionally under one namespace
     /// root. The runtime goes in whole: a replace hook's own time is spent in the
-    /// GTE fast path, `GteVertexMap` and `GlCore`, and those are compiled on
-    /// first call like everything else.</summary>
+    /// runtime's fast paths, and those are compiled on first call like everything
+    /// else.</summary>
     static IEnumerable<MethodBase?> AssemblyMethods(Assembly asm, string? ns)
     {
         Type?[] types;

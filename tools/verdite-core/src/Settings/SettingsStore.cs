@@ -2,10 +2,10 @@ using System.Collections.Concurrent;
 using RecompOne.Runtime.Host.Window;
 using Rt = RecompOne.Runtime.Runtime;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
-/// The only writer of the port's settings to interface.ini. See docs/SETTINGS.md.
+/// The only writer of the port's settings to interface.ini. See docs/SETTINGS.md in a port.
 ///
 /// The file is the runtime's <c>ViewConfig</c>: a plain dictionary loaded once at
 /// boot, and <c>Rt.SaveView</c> writes all of it back and asks ImGui for its layout
@@ -53,12 +53,12 @@ public static class SettingsStore
                 {
                     if (values.TryGetValue(key, out var old) && old == text) continue;
                     values[key] = text;
-                    Console.WriteLine($"[KF2] settings: {key}={text} ({from})");
+                    Console.WriteLine($"[{Game.Tag}] settings: {key}={text} ({from})");
                 }
                 else
                 {
                     if (!values.Remove(key)) continue;
-                    Console.WriteLine($"[KF2] settings: {key} back to its default ({from})");
+                    Console.WriteLine($"[{Game.Tag}] settings: {key} back to its default ({from})");
                 }
                 changed = true;
             }
@@ -87,7 +87,7 @@ public static class SettingsStore
     {
         public static readonly Pump Instance = new();
 
-        public string Name => "kf2settingsstore";
+        public string Name => Game.Id + "settingsstore";
         public bool IsOpen { get => true; set { } }
 
         public void Draw()

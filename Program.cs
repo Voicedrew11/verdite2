@@ -17,8 +17,8 @@ Verdite.Core.Game.Configure(tag: "KF2");
 //
 //     KF2_HANG=15                 seconds without a frame before a hang report
 //     KF2_FAULT=hook|crash|hang[:s]  makes that report s seconds (20) after the first area
-Kf2.CrashReports.Configure(Environment.GetEnvironmentVariable("KF2_HANG"));
-Kf2.CrashReports.InstallFault(Environment.GetEnvironmentVariable("KF2_FAULT"));
+Verdite.Core.CrashReports.Configure(Verdite.Core.Game.Env("HANG"), "Verdite2", Kf2.AgentBeacon.Snapshot, 0x800140AC);
+Verdite.Core.CrashReports.InstallFault(Verdite.Core.Game.Env("FAULT"));
 
 // Diagnostics. The runtime's log channels are plain static bools with no CLI of
 // their own, so expose them through an env var:
@@ -284,11 +284,14 @@ Kf2.TintHold.Install();
 //     KF2_PROFILE_SPIKE=12      a console line per frame over 12 ms of work
 //     KF2_PROFILE_FUNCS=stages  time all thirteen main-loop stages, or name
 //                               functions: game:80040348+800342D8
-Kf2.FrameProfiler.Configure(Environment.GetEnvironmentVariable("KF2_PROFILE"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_OUT"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_SPIKE"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_FUNCS"));
-Kf2.FrameProfiler.Install();
+Verdite.Core.FrameProfiler.Configure(Environment.GetEnvironmentVariable("KF2_PROFILE"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_OUT"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_SPIKE"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_FUNCS"),
+                                     Kf2.ProfilerKnown.Table);
+Verdite.Core.FrameProfiler.Install();
+Verdite.Core.ProfilerPanel.Configure(() => Kf2.FramePacing.Enabled ? 1000.0 / Kf2.FramePacing.TargetFps : 0,
+                                     defaultProbe: "game:80040348", stages: 13);
 
 // The frame viewer: capture one run of stage 13 and scrub it a GP0 command at a
 // time, replayed on a detached software GPU -- who emitted each primitive, what it
@@ -1175,10 +1178,10 @@ Mouse.Install();
 // loosed, two motors or HD on a Switch pad or a DualSense by USB (KF2_RUMBLE,
 // KF2_RUMBLE_HD, both on; runtime 0104, 0105). See "Gyro aim with a drawn bow" and
 // "Rumble" in docs/INPUT.md, "The bow and the arbalest" in docs/GAME_INTERNALS.md.
-Kf2.GyroAim.Configure();
-Kf2.GyroAim.Install();
-Kf2.Rumble.Configure();
-Kf2.Rumble.Install();
+GyroAim.Configure(Kf2.Bow.Reads);
+GyroAim.Install();
+Rumble.Configure(Kf2.Bow.Reads);
+Rumble.Install();
 
 // The menu pointer: hover an in-game menu item and the game's own cursor moves to
 // it, left click confirms, right click backs out.
@@ -1475,11 +1478,13 @@ Kf2.PortSettings.Install();
 // lot on a background thread while the title is up. Installed last, so the
 // patches' own attach listeners have run before the first method is prepared.
 //
-//     KF2_PREJIT=0        leave every method to its first call -- the comparison
-//     KF2_PREJIT_PROBE=1  a line per overlay as it is warmed
-Kf2.Prejit.Configure(Environment.GetEnvironmentVariable("KF2_PREJIT"),
-                     Environment.GetEnvironmentVariable("KF2_PREJIT_PROBE"));
-Kf2.Prejit.Install();
+//     KF2_PREJIT=0            leave every method to its first call -- the comparison
+//     KF2_PREJIT_PROBE=1      a line per batch as the pass reaches its end
+//     KF2_PREJIT_THREADS=n    threads for the pass (a quarter of the cores, 1-4)
+Verdite.Core.Prejit.Configure(Verdite.Core.Game.Env("PREJIT"),
+                              Verdite.Core.Game.Env("PREJIT_PROBE"),
+                              Verdite.Core.Game.Env("PREJIT_THREADS"));
+Verdite.Core.Prejit.Install("Kf2");
 
 // What each drawn frame's ordering table actually got, across an area crossing.
 // Luminance cannot answer this -- a door into an unlit corridor is dark whether or
@@ -1535,7 +1540,7 @@ Verdite.Core.DesktopEntry.Comment = "A PC port of King's Field (SLUS-00158). Req
 //
 //     KF2_ICON=orb      keep the shipped mark
 //     KF2_ICON=off      no icon at all
-Kf2.CardIcon.Install(args.Length > 0 ? args[0] : null);
+Verdite.Core.CardIcon.Install(args.Length > 0 ? args[0] : null, 0, Kf2.CardIconSource.Read);
 
 var memory = new PSMemory(Kf2.PrimBuffer.RamSize);
 try

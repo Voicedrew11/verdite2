@@ -1,8 +1,8 @@
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
 /// The game menu's settings page, without its drawing: changes shown and applied
-/// live, kept only on Save. See docs/SETTINGS.md.
+/// live, kept only on Save. See docs/SETTINGS.md in a port.
 ///
 /// Opening it reads every setting; moving a value applies it (unless it waits for
 /// the next boot) and remembers it; moving it back to where it started forgets it.
@@ -19,11 +19,12 @@ public sealed class SettingsSession
     readonly Dictionary<PortSetting, double> _before = [];
     readonly Dictionary<PortSetting, double?> _changed = [];   // null: back to the default
 
-    public static SettingsSession Open()
+    /// <summary>A session over <paramref name="settings"/>: the port's list of them.</summary>
+    public static SettingsSession Open(IEnumerable<PortSetting> settings)
     {
         Current?.Discard();
         var session = new SettingsSession();
-        foreach (var s in PortSettings.All) session._before[s] = s.Live();
+        foreach (var s in settings) session._before[s] = s.Live();
         return Current = session;
     }
 
@@ -69,7 +70,7 @@ public sealed class SettingsSession
         {
             var values = s.Split!(value, Shown);
             for (int i = 0; i < parts.Length; i++)
-                Stage(parts[i], double.IsNaN(values[i]) ? _before[parts[i]] : values[i]);   // PortSettings.Unchanged
+                Stage(parts[i], double.IsNaN(values[i]) ? _before[parts[i]] : values[i]);   // the port's PortSettings.Unchanged
             return;
         }
         if (!s.AtBoot) s.Apply(value);

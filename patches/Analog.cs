@@ -267,7 +267,7 @@ public static class Analog
         DefaultLeftButton: 3,           // Square swings
         DefaultRightButton: 4,          // Triangle casts
         DefaultMiddleButton: 1,         // Cross is the action button
-        TextEditing: () => HotkeyGate.Editing,
+        TextEditing: () => HotkeyGate.Typing || Remaster.Editor.Open,
         Frames: () => FramePacing.Frames,
         LogicHz: () => FramePacing.LogicHz,
         Paused: () => FramePacing.Paused,

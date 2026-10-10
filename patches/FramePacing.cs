@@ -162,6 +162,10 @@ namespace Kf2;
 /// </summary>
 public static class FramePacing
 {
+    // The frame cap's sleep, as a section of the frame profiler.
+    public static readonly int FloorWait = RecompOne.Runtime.Diagnostics.Profiler.Register(
+        "FramePacing.Floor (frame cap)", RecompOne.Runtime.Diagnostics.ProfileGroup.Wait);
+
     /// <summary>
     /// Ticks a second the game's own world is held to, whatever the port draws at.
     ///
@@ -1417,7 +1421,7 @@ public static class FramePacing
         {
             _winFloorWaits++;
             _winFloorSleptMs += _due - now;
-            int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(FrameProfiler.FloorWait);
+            int profile = RecompOne.Runtime.Diagnostics.Profiler.Begin(FloorWait);
             double sleepUntil = _due - SpinMs;
             if (now < sleepUntil)
             {

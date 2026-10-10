@@ -11,47 +11,44 @@ using RecompOne.Runtime.Modding;
 using Silk.NET.Input;
 using HostWindow = RecompOne.Runtime.Host.HostWindow;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
-/// Where a frame's time goes: the port's half of the frame profiler
-/// (<c>RecompOne.Runtime.Diagnostics.Profiler</c>, tools/RecompOne/patches/0045).
+/// Where a frame's time goes: the shared half of the frame profiler
+/// (<c>RecompOne.Runtime.Diagnostics.Profiler</c>, tools/RecompOne/patches/0045). The
+/// port reads its own env vars (<c>{TAG}_PROFILE</c>, <c>_PROFILE_OUT</c>,
+/// <c>_PROFILE_SPIKE</c>, <c>_PROFILE_FUNCS</c>) and hands them to
+/// <see cref="Configure"/>, with the table of addresses it names.
 ///
-///     KF2_PROFILE=1            record from boot; a summary on the console every 5 s
-///     KF2_PROFILE=panel        record from boot and open the panel (Shift+P toggles it)
-///     KF2_PROFILE_OUT=path     every frame's sections as CSV rows, for
-///                              scripts/profile_report.py
-///     KF2_PROFILE_SPIKE=12     a console line for every frame whose *work* passes 12 ms
-///     KF2_PROFILE_FUNCS=stages time the thirteen main-loop stages; or a list,
-///                              game:80040348+800342D8 (overlay defaults to game)
+///     {TAG}_PROFILE=1            record from boot; a summary on the console every 5 s
+///     {TAG}_PROFILE=panel        record from boot and open the panel (Shift+P toggles it)
+///     {TAG}_PROFILE_OUT=path     every frame's sections as CSV rows, for
+///                                scripts/profile_report.py
+///     {TAG}_PROFILE_SPIKE=12     a console line for every frame whose *work* passes 12 ms
+///     {TAG}_PROFILE_FUNCS=stages time the main-loop stages; or a list,
+///                                game:80040348+800342D8 (overlay defaults to game)
 ///
 /// **What it can see without being asked.** Every hooked function is already a
 /// section, because the runtime times inside <c>HookManager.Invoke</c>: the
 /// function's own body (recompiled MIPS) and every pre, post and replace delegate
-/// separately, named after the method that implements it. With the port's
-/// patches that covers the gated stages, stage 13, DrawOTag and VSync. The runtime
-/// adds the present path -- window events, picture compose, the interface, the
-/// swap -- and the sleeps are sections of their own (<see cref="ProfileGroup.Wait"/>),
-/// so a frame capped at 144 fps reads as work plus waiting rather than as 6.9 ms of
-/// something. Whatever no section claims is "game code (no section)".
+/// separately, named after the method that implements it. The runtime adds the
+/// present path -- window events, picture compose, the interface, the swap -- and
+/// the sleeps are sections of their own (<see cref="ProfileGroup.Wait"/>), so a frame
+/// capped at 144 fps reads as work plus waiting rather than as 6.9 ms of something.
+/// Whatever no section claims is "game code (no section)".
 ///
 /// **To look inside the game's own time**, time more functions: an empty pre-hook
-/// makes any recompiled function a section, which is what
-/// <see cref="AddProbe"/> does. That is a detour, so it is opt-in.
+/// makes any recompiled function a section, which is what <see cref="AddProbe"/>
+/// does. That is a detour, so it is opt-in.
 ///
 /// Recording costs nothing when off -- one bool at every site -- and turns itself
 /// on while the panel is open, so it is not a setting and saves nothing.
 /// </summary>
 public static class FrameProfiler
 {
-    // The port's own waits, registered here so the three pacers can name them.
-    public static readonly int FloorWait = Profiler.Register("FramePacing.Floor (frame cap)", ProfileGroup.Wait);
-    public static readonly int MenuWait = Profiler.Register("MenuPacing (menu repeat grid)", ProfileGroup.Wait);
-    public static readonly int LoadWait = Profiler.Register("LoadPacing (loading figure grid)", ProfileGroup.Wait);
-
     static readonly ModInfo _self = new()
     {
-        Id = "kf2.profiler",
+        Id = $"{Game.Id}.profiler",
         Name = "Frame profiler",
         Version = "1.0",
         Description = "Times the frame by section; empty pre-hooks make game functions sections.",
@@ -63,13 +60,19 @@ public static class FrameProfiler
     static double _spikeMs;
     static string? _csvPath;
     static string? _funcs;
+    static (string Overlay, uint Addr, string Label)[] _known = [];
 
     /// <summary>Record while the panel is closed.</summary>
     public static bool KeepRecording;
     /// <summary>Hold the history still, for reading.</summary>
     public static bool Paused;
 
-    public static void Configure(string? on, string? csv, string? spike, string? funcs)
+    /// <summary>
+    /// The port's env values, and its table of addresses to label (a row whose label
+    /// starts "stage " is one of the main-loop stages the "stages" probe times).
+    /// </summary>
+    public static void Configure(string? on, string? csv, string? spike, string? funcs,
+                                 (string Overlay, uint Addr, string Label)[] known)
     {
         _envOn = on is "1" or "panel" or "on";
         _openPanel = on == "panel";
@@ -77,6 +80,7 @@ public static class FrameProfiler
         _csvPath = string.IsNullOrWhiteSpace(csv) ? null : csv;
         if (double.TryParse(spike, NumberStyles.Float, CultureInfo.InvariantCulture, out var s) && s > 0) _spikeMs = s;
         _funcs = string.IsNullOrWhiteSpace(funcs) ? null : funcs;
+        _known = known;
     }
 
     /// <summary>Recording follows whoever wants it: the environment, the CSV, the panel
@@ -100,26 +104,26 @@ public static class FrameProfiler
                 _csv = new StreamWriter(_csvPath, false, new UTF8Encoding(false), 1 << 16);
                 _csv.WriteLine(CsvHeader);
                 AppDomain.CurrentDomain.ProcessExit += (_, _) => _csv?.Flush();
-                Console.WriteLine($"[KF2] profile: writing every frame to {_csvPath}");
+                Console.WriteLine($"[{Game.Tag}] profile: writing every frame to {_csvPath}");
             }
             catch (Exception e)
             {
-                Console.Error.WriteLine($"[KF2] profile: cannot write {_csvPath}: {e.Message}");
+                Console.Error.WriteLine($"[{Game.Tag}] profile: cannot write {_csvPath}: {e.Message}");
                 _csv = null;
             }
         }
 
         UpdateEnabled();
         if (Profiler.Enabled)
-            Console.WriteLine("[KF2] profile: recording" +
+            Console.WriteLine($"[{Game.Tag}] profile: recording" +
                               (_spikeMs > 0 ? $", spikes over {_spikeMs:0.#} ms of work" : ""));
 
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Localization.Merge("""
+            Localization.Merge($$"""
             {
               "strings": {
-                "kf2.profiler": { "en": "Frame profiler", "pt-BR": "Perfilador de quadros",
+                "{{Game.Id}}.profiler": { "en": "Frame profiler", "pt-BR": "Perfilador de quadros",
                                   "es-419": "Perfilador de cuadros" }
               }
             }
@@ -130,11 +134,11 @@ public static class FrameProfiler
             UpdateEnabled();
         });
 
-        // Off the event bus for the reason patches/Map.cs gives: a polled key would be
+        // Off the event bus for the reason the port's map gives: a polled key would be
         // dead in the menus and through a load, which are two of the places worth
         // profiling. Shift+P, in the shape of the map's Shift+M: every function key is
-        // taken -- F1 and F11 by the runtime, F2-F8 by mods/kf2debug, F9, F10 and F12
-        // offered as the mouse-capture key.
+        // taken -- F1 and F11 by the runtime, F2-F8 by mods, F9, F10 and F12 offered as
+        // the mouse-capture key.
         Event.AddListener<KeyboardEvent>(e =>
         {
             if (!e.Pressed || e.Repeat || e.Key != (int)Key.P || PopupManager.AnyOpen || HotkeyGate.Typing) return;
@@ -147,40 +151,12 @@ public static class FrameProfiler
             ApplyLabels();
             if (_funcs != null)
                 foreach (var line in AddProbes(_funcs))
-                    Console.WriteLine($"[KF2] profile: {line}");
+                    Console.WriteLine($"[{Game.Tag}] profile: {line}");
             return true;
         });
     }
 
     // ---- names for the addresses the port knows --------------------------------
-
-    static readonly (string Overlay, uint Addr, string Label)[] Known =
-    [
-        ("game", 0x8002C944, "stage 1"),
-        ("game", 0x80037C0C, "stage 2: object state machine"),
-        ("game", 0x8002A550, "stage 3: player, pad, menu"),
-        ("game", 0x80040348, "stage 4: entity table"),
-        ("game", 0x80046A60, "stage 5: effects and projectiles"),
-        ("game", 0x8004910C, "stage 6: area module per-frame"),
-        ("game", 0x8001689C, "stage 7: area loader"),
-        ("game", 0x80025A1C, "stage 8"),
-        ("game", 0x800140AC, "stage 9"),
-        ("game", 0x8002CA74, "stage 10"),
-        ("game", 0x80016FC8, "stage 11"),
-        ("game", 0x80014534, "stage 12"),
-        ("game", 0x800342D8, "stage 13: renderer"),
-        ("game", 0x80033FBC, "fade stepper"),
-        ("game", 0x8002DC78, "animated textures"),
-        ("game", 0x80017880, "frame gate"),
-        ("game", 0x80018E80, "in-game menu loop"),
-        ("game", 0x80037B5C, "transition fade loop"),
-        ("game", 0x80060818, "DrawOTag"),
-        ("game", 0x8005FCC8, "VSync thunk"),
-        ("open", 0x80016078, "DrawOTag"),
-        ("open", 0x8001EB88, "VSync thunk"),
-        ("end", 0x80013D80, "DrawOTag"),
-        ("end", 0x8001B154, "VSync thunk"),
-    ];
 
     static bool _labelled;
 
@@ -188,7 +164,7 @@ public static class FrameProfiler
     {
         if (_labelled) return;
         _labelled = true;
-        foreach (var (overlay, addr, label) in Known)
+        foreach (var (overlay, addr, label) in _known)
             if (SymbolRegistry.Resolve(overlay, null, addr) is { } target)
                 Profiler.SetLabel(Profiler.FunctionName(target), label);
         Profiler.SetLabel($"pre {nameof(FrameProfiler)}.{nameof(Probe)}", "profiler probes (empty)", ProfileGroup.Hook);
@@ -224,7 +200,7 @@ public static class FrameProfiler
         {
             if (raw.Equals("stages", StringComparison.OrdinalIgnoreCase))
             {
-                foreach (var (overlay, addr, label) in Known)
+                foreach (var (overlay, addr, label) in _known)
                     if (label.StartsWith("stage ", StringComparison.Ordinal))
                         yield return AddProbe(overlay, addr);
                 continue;
@@ -264,7 +240,7 @@ public static class FrameProfiler
             }
         }
         if (_spikeMs > 0 && f.WorkMs > _spikeMs)
-            Console.WriteLine($"[KF2] profile spike: frame {f.Index}, {f.WorkMs:0.00} ms of work in {f.Ms:0.00} ms" +
+            Console.WriteLine($"[{Game.Tag}] profile spike: frame {f.Index}, {f.WorkMs:0.00} ms of work in {f.Ms:0.00} ms" +
                               (f.GcPauseMs > 0 ? $", GC {f.GcPauseMs:0.00} ms" : "") +
                               (f.JitMs > 0.05 ? $", JIT {f.JitMs:0.00} ms ({f.JitMethods} methods)" : "") +
                               $": {Top(f.Span, 6)}");
@@ -382,7 +358,7 @@ public static class FrameProfiler
         var top = string.Join(", ", ids.Where(id => Profiler.Group(id) != ProfileGroup.Wait).Take(10)
             .Select(id => $"{Profiler.DisplayName(id)} {_sumSelf[id] * Profiler.TicksToMs / n:0.000}"));
 
-        Console.WriteLine($"[KF2] profile: {n / seconds:0.0} fps, frame {avg:0.00} ms avg / {p99:0.00} p99 / " +
+        Console.WriteLine($"[{Game.Tag}] profile: {n / seconds:0.0} fps, frame {avg:0.00} ms avg / {p99:0.00} p99 / " +
                           $"{max:0.00} max; work {_winWork / n:0.00}, wait {_winWait / n:0.00}, " +
                           $"swap {_winGpu / n:0.00} ms; GC {_winGc / seconds:0.00} ms/s, JIT {_winJit / seconds:0.00} ms/s, " +
                           $"{_winAlloc / 1024.0 / n:0.0} KB/frame allocated{GpuLine()}; top self ms/frame: {top}");

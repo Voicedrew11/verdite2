@@ -1,13 +1,13 @@
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
-/// The in-game menu's label font, as text: what <c>func_80021E10</c> draws from a
-/// list record's string. Read off GAME.EXE's own name table, 2026-10-09: the
-/// records of group 0 and group 6 spell USE ITEM, EQUIPMENT, DATA, OPTION, RETURN,
-/// NEW and LOAD with these codes, and the capitals, space and marks below are the
-/// ones they use. Digits are assumed to sit where KF3's do (0x20..0x29) and have
-/// not been seen in a KF2 record yet, so a page that shows a number is the first
-/// thing to check. No lower case, colon, <c>%</c>, <c>+</c> or brackets.
+/// The in-game menu's label font, as text: the codes a list record's string holds.
+/// The same in KF2 and KF3. KF3's was read off a VRAM dump (2026-10-06): capitals,
+/// digits, nine marks, a bullet and a middle dot. KF2's off GAME.EXE's own name
+/// table (2026-10-09), whose records use the capitals, space and marks below; KF2's
+/// digits are assumed to sit where KF3's do (0x20..0x29) and have not been seen in a
+/// KF2 record yet. No lower case, colon, <c>%</c>, <c>+</c> or brackets. Each port's
+/// docs/GAME_INTERNALS.md names its drawer.
 /// </summary>
 public static class MenuFont
 {

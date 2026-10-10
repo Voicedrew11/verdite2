@@ -86,6 +86,39 @@ public sealed class InputSection : ISettingsSection
     int _padRow = -1;
     bool _padAdd;
 
+    // The middle column of Verdite Core's binding table, handed in: what each
+    // button does in King's Field by default. Provenance, all measured, none
+    // guessed: the action-mask table 0x8006E568-0x8006E5D0 -- Left/Right turn,
+    // Up/Down walk, R1/L1 strafe right/left, R2/L2 pitch (R2 looks down), entry 1
+    // = Circle opens the menu, entry 0 = Cross confirms; func_8002957C -- Square
+    // attack, Cross the action button, Triangle cast, Select the second slot.
+    // See "The action-mask table" in docs/GAME_INTERNALS.md and "Which pad buttons
+    // the defaults are, and why" in docs/INPUT.md. Start is blank because its
+    // branch has never been identified, and a guess in a column read as
+    // measurement is worse than a gap. L3 and R3 say the game does not read them,
+    // which a blank would not carry: a player would learn it by binding one and
+    // finding nothing happens.
+    const string ActionColumn = "In King's Field";
+
+    static readonly Dictionary<string, string> BindingActions = new()
+    {
+        ["Cross"] = "use, open; confirm",
+        ["Circle"] = "the in-game menu",
+        ["Square"] = "attack",
+        ["Triangle"] = "cast",
+        ["L1"] = "strafe left",
+        ["R1"] = "strafe right",
+        ["L2"] = "look up",
+        ["R2"] = "look down",
+        ["L3"] = "(the game does not read it)",
+        ["R3"] = "(the game does not read it)",
+        ["Select"] = "second spell or item",
+        ["Up"] = "walk forward",
+        ["Down"] = "walk back",
+        ["Left"] = "turn left",
+        ["Right"] = "turn right",
+    };
+
     // The pages, in the order they draw, grouped by the device they are about.
     // MapButtonPage is here rather than under Gameplay because a player looking
     // for what a button does looks under Input; AnalogPage and MousePage are the
@@ -137,7 +170,7 @@ public sealed class InputSection : ISettingsSection
         Pages(_keyboard);
         ImGui.Spacing();
 
-        BindingTable.Draw(gamepad: false, ref _keyRow, ref _padAdd);
+        BindingTable.Draw(gamepad: false, ref _keyRow, ref _padAdd, ActionColumn, BindingActions);
         ActionNote();
 
         ImGui.Spacing();
@@ -171,7 +204,7 @@ public sealed class InputSection : ISettingsSection
         Pages(_gamepad);
         ImGui.Spacing();
 
-        BindingTable.Draw(gamepad: true, ref _padRow, ref _padAdd);
+        BindingTable.Draw(gamepad: true, ref _padRow, ref _padAdd, ActionColumn, BindingActions);
         ActionNote();
 
         ImGui.Spacing();

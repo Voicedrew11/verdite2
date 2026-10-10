@@ -524,7 +524,7 @@ Map.cs, MapFog.cs, MapFullscreen.cs, MapMarkers.cs, MapOverlay.cs, MapPanel.cs, 
 - Mod-visible: `public static class FullRateLogic`, `Scale`, `Before`.
 - Split note: generic seam is `Before`/`Apply` (scale a rate word); KF2-specific are the two addresses and the hook target.
 
-#### patches/GpuFrames.cs  (114 lines)
+#### tools/verdite-core/src/GpuFrames.cs  (114 lines)
 - Bucket: A/B (high) -- pure host-side bookkeeping of GPU timer queries per profiler frame; no game RAM, addresses or assets.
 - Does: attributes async GPU timer-query results (a few frames late) to the profiler frame that issued them, keeping per-pass GPU ms and streaming CSV rows.
 - Hooks: none (subscribes `GpuTimes.Resolved`).

@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>How a setting's value is kept in interface.ini: the text
 /// <c>ViewConfig.SetInt</c> or <c>SetFloat</c> writes, so a key keeps the format it
@@ -13,7 +13,7 @@ public enum Ui { None, Checkbox, Combo, SliderInt, SliderFloat }
 
 /// <summary>
 /// One port setting, declared once for both screens: the Settings window (ImGui)
-/// and the page drawn with the game's own menu routines. See docs/SETTINGS.md.
+/// and the page drawn with the game's own menu routines. See docs/SETTINGS.md in a port.
 ///
 /// Every value is a double. A switch is 0/1, a choice is the chosen value itself
 /// (an aspect ratio, a frame rate, a slot), so the key keeps what it held before.
@@ -25,7 +25,7 @@ public sealed class PortSetting
 {
     public required string Key { get; init; }
 
-    /// <summary>The <c>KF2_*</c> variables that set this at boot. One set locks the
+    /// <summary>The <c>{Tag}_*</c> variables that set this at boot. One set locks the
     /// setting in game: a saved change would be overridden again at the next boot.</summary>
     public string[] Envs { get; init; } = [];
 
@@ -49,7 +49,7 @@ public sealed class PortSetting
     public string[]? Names { get; init; }
 
     /// <summary>What the setting is with no key kept and no variable set. Checked
-    /// against the live value at boot (<see cref="PortSettings"/>).</summary>
+    /// against the live value at boot (the port's <c>PortSettings</c>).</summary>
     public required double Default { get; init; }
 
     public required Func<double> Live { get; init; }
@@ -75,7 +75,7 @@ public sealed class PortSetting
     /// its own, its value <see cref="Join"/> of theirs (each read through the getter it
     /// is handed, the live or the staged value), and a step stages each part with the
     /// value <see cref="Split"/> gives it (NaN: as it was when the page opened). Built by
-    /// <c>PortSettings.Combine</c>.</summary>
+    /// the port's <c>PortSettings.Combine</c>.</summary>
     public PortSetting[]? Parts { get; init; }
     public Func<Func<PortSetting, double>, double>? Join { get; init; }
     public Func<double, Func<PortSetting, double>, double[]>? Split { get; init; }
@@ -91,6 +91,13 @@ public sealed class PortSetting
         Envs.FirstOrDefault(e => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(e)));
 
     public static bool Same(double a, double b) => Math.Abs(a - b) < 1e-4;
+
+    /// <summary>A value as the port settings page writes it: at most two decimals.</summary>
+    public static string Number(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    /// <summary>A value's name from a list of steps: the name of the step it equals, else its number.</summary>
+    public static Func<double, string> Named(double[] steps, params string[] names) => v =>
+        Array.FindIndex(steps, s => Same(s, v)) is >= 0 and var i ? names[i] : Number(v);
 
     public int StepIndex(double value)
     {

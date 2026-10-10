@@ -1,14 +1,14 @@
 using System.Globalization;
 using RecompOne.Runtime.Diagnostics;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
 /// GPU time per profiler frame (runtime <c>0084</c>). A frame keeps the range of
 /// presents it issued, and each query's time is added to the frame that issued it
 /// when the GPU finishes it, a few frames later; a frame is complete once every one
 /// of its presents has resolved. Everything here runs on the thread that presents,
-/// which is the game thread. See "GPU time per present" in docs/DEVELOPMENT.md.
+/// which is the game thread. See "GPU time per present" in a port's docs/DEVELOPMENT.md.
 /// </summary>
 public static class GpuFrames
 {

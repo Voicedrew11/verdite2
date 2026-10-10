@@ -1,12 +1,12 @@
 using RecompOne.Runtime.Config;
 using RecompOne.Runtime.Host;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
 /// Windowed (0), fullscreen (1) or borderless (2), for the game's settings page. The
 /// runtime keeps it as two keys, <c>Fullscreen</c> and <c>Borderless</c>, read by F11,
-/// the menu bar and the Display tab, all on the host thread. See docs/SETTINGS.md.
+/// the menu bar and the Display tab, all on the host thread. See docs/SETTINGS.md in a port.
 ///
 /// A change from the page is applied on the host thread and the two keys put back
 /// as they were, so a change not yet saved never reaches the file with some other

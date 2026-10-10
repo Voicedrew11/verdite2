@@ -5,24 +5,45 @@ using ImGuiNET;
 using RecompOne.Runtime.Diagnostics;
 using RecompOne.Runtime.Host.Window;
 
-namespace Kf2;
+namespace Verdite.Core;
 
 /// <summary>
-/// The frame profiler's window: Shift+P, or <c>KF2_PROFILE=panel</c>.
+/// The frame profiler's window: Shift+P, or the port's <c>{TAG}_PROFILE=panel</c>.
 ///
 /// A bar per recorded frame, stacked by what the time was spent on, then a table of
 /// every section over the chosen window -- or over one frame, once a bar or a spike
 /// is clicked. **Self** time is what a section did itself, so the column sums to the
 /// frame; **incl** adds what it called. The panel draws inside the frame it measures
 /// (the "menu bar + panels + popups" row), so that row is partly this window.
+///
+/// The port sets three things with <see cref="Configure"/>: the frame's target, the
+/// address the probe box starts with, and how many stages the stage button times.
 /// </summary>
 public sealed class ProfilerPanel : IPanel
 {
     public static readonly ProfilerPanel Instance = new();
     ProfilerPanel() { }
 
-    public string Name => "kf2profiler";
-    public string TitleKey => "kf2.profiler";
+    static Func<double> _target = () => 0;
+    static string _defaultProbe = "";
+    static int _stages;
+
+    /// <summary>
+    /// The port's data for the panel: <paramref name="targetMs"/> is the frame the pacer
+    /// aims at in milliseconds, or 0 for none; <paramref name="defaultProbe"/> is the
+    /// address the probe box starts with; <paramref name="stages"/> is how many main-loop
+    /// stages the stage button times. Called once, before the panel first draws.
+    /// </summary>
+    public static void Configure(Func<double> targetMs, string defaultProbe, int stages)
+    {
+        _target = targetMs;
+        _defaultProbe = defaultProbe;
+        _stages = stages;
+        Instance._probeInput = defaultProbe;
+    }
+
+    public string Name => $"{Game.Id}profiler";
+    public string TitleKey => $"{Game.Id}.profiler";
 
     bool _open;
     public bool IsOpen
@@ -35,13 +56,24 @@ public sealed class ProfilerPanel : IPanel
         }
     }
 
+    // The ImGui ids are built once, from the game's tag, so two ports' panels do not
+    // share an id if both are ever open in one process.
+    readonly string _graphId = $"##{Game.Id}profgraph";
+    readonly string _gpuId = $"##{Game.Id}profgpu";
+    readonly string _filterId = $"##{Game.Id}proffilter";
+    readonly string _sideId = $"##{Game.Id}profside";
+    readonly string _tableId = $"##{Game.Id}proftable";
+    readonly string _spikeListId = $"##{Game.Id}profspikelist";
+    readonly string _probeId = $"##{Game.Id}profprobe";
+    readonly string _spikesId = $"###{Game.Id}profspikes";
+
     float _windowSeconds = 3f;
     float _spikeMs;             // 0 = automatic
     bool _showWaits;
     bool _fitTallest;
     long _selected = -1;        // a frame's Index, or -1 for the window
     string _filter = "";
-    string _probeInput = "game:80040348";
+    string _probeInput = "";
     string _probeResult = "";
 
     int _sortColumn = 2;
@@ -392,7 +424,7 @@ public sealed class ProfilerPanel : IPanel
 
         // The scale: the tallest bar when asked, otherwise the p99 with room above it
         // and never less than the frame the pacer is aiming at.
-        double target = FramePacing.Enabled ? 1000.0 / FramePacing.TargetFps : 0;
+        double target = _target();
         double top = 0;
         for (var i = 0; i < bars; i++)
         {
@@ -436,12 +468,12 @@ public sealed class ProfilerPanel : IPanel
         if (target != _targetMs)
         {
             _targetMs = target;
-            _targetText = $"{target:0.0} ms  {FramePacing.TargetFps:0.#} fps";
+            _targetText = target > 0 ? $"{target:0.0} ms  {1000.0 / target:0.#} fps" : "";
         }
         Line(target, _targetText);
         if (Math.Abs(target - 1000.0 / 60) > 1) Line(1000.0 / 60, "16.7 ms  60 fps");
 
-        ImGui.InvisibleButton("##kf2profgraph", new Vector2(width, height));
+        ImGui.InvisibleButton(_graphId, new Vector2(width, height));
         if (hovered >= 0 && ImGui.IsItemHovered())
         {
             var f = Profiler.GetFrame(hovered);
@@ -543,7 +575,7 @@ public sealed class ProfilerPanel : IPanel
         }
         dl.AddText(new Vector2(p0.X + 4, p0.Y + 2), ImGui.GetColorU32(new Vector4(1, 1, 1, 0.5f)), "GPU");
 
-        ImGui.InvisibleButton("##kf2profgpu", new Vector2(width, height));
+        ImGui.InvisibleButton(_gpuId, new Vector2(width, height));
         if (hovered >= 0 && ImGui.IsItemHovered())
         {
             var f = Profiler.GetFrame(hovered);
@@ -579,7 +611,6 @@ public sealed class ProfilerPanel : IPanel
     // ---- spikes -------------------------------------------------------------------------
 
     int _spikeCount;
-    string _spikeHeader = "Spikes###kf2profspikes";
     bool _spikesOpen;
     readonly List<(long Index, string Label)> _spikes = new();
 
@@ -599,12 +630,11 @@ public sealed class ProfilerPanel : IPanel
             _spikes.Add((f.Index,
                 $"frame {f.Index,7}  {f.WorkMs,6:0.00} ms work{extra}   {FrameProfiler.Top(f.Span, 3)}##s{f.Index}"));
         }
-        _spikeHeader = $"Spikes ({_spikeCount} in the history)###kf2profspikes";
     }
 
     void DrawSpikes()
     {
-        var open = ImGui.CollapsingHeader(_spikeHeader);
+        var open = ImGui.CollapsingHeader($"Spikes ({_spikeCount} in the history){_spikesId}");
         if (open != _spikesOpen)
         {
             _spikesOpen = open;
@@ -612,7 +642,7 @@ public sealed class ProfilerPanel : IPanel
         }
         if (!open) return;
 
-        ImGui.BeginChild("##kf2profspikelist", new Vector2(0, Math.Min(160, 22 + _spikeCount * ImGui.GetTextLineHeightWithSpacing())));
+        ImGui.BeginChild(_spikeListId, new Vector2(0, Math.Min(160, 22 + _spikeCount * ImGui.GetTextLineHeightWithSpacing())));
         foreach (var (index, label) in _spikes)
             if (ImGui.Selectable(label, index == _selected))
                 _selected = index;
@@ -722,10 +752,10 @@ public sealed class ProfilerPanel : IPanel
     unsafe void DrawTable()
     {
         ImGui.SetNextItemWidth(220);
-        if (ImGui.InputTextWithHint("##kf2proffilter", "filter sections", ref _filter, 128)) BuildRows();
+        if (ImGui.InputTextWithHint(_filterId, "filter sections", ref _filter, 128)) BuildRows();
         ImGui.SameLine();
         ImGui.SetNextItemWidth(120);
-        if (ImGui.Combo("##kf2profside", ref _side, Sides, Sides.Length)) BuildRows();
+        if (ImGui.Combo(_sideId, ref _side, Sides, Sides.Length)) BuildRows();
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("CPU: the game thread's sections; % is the share of the frame's work. GPU: the GPU's " +
                              "passes, from timer queries; % is the share of the frame's GPU time. \"swap\" is the " +
@@ -737,7 +767,7 @@ public sealed class ProfilerPanel : IPanel
                                       ImGuiTableFlags.ScrollY | ImGuiTableFlags.Resizable |
                                       ImGuiTableFlags.SizingStretchProp;
         var height = Math.Max(160, ImGui.GetContentRegionAvail().Y - 64);
-        if (!ImGui.BeginTable("##kf2proftable", 7, flags, new Vector2(0, height))) return;
+        if (!ImGui.BeginTable(_tableId, 7, flags, new Vector2(0, height))) return;
 
         ImGui.TableSetupScrollFreeze(0, 1);
         ImGui.TableSetupColumn("section", ImGuiTableColumnFlags.WidthStretch, 4f);
@@ -793,14 +823,14 @@ public sealed class ProfilerPanel : IPanel
 
     void DrawProbes()
     {
-        if (ImGui.Button("Time the 13 stages"))
+        if (ImGui.Button($"Time the {_stages} stages"))
             _probeResult = string.Join("; ", FrameProfiler.AddProbes("stages"));
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("Put an empty pre-hook on each main-loop stage that is not already hooked, so every " +
                              "stage is a row. A detour each, for the rest of the session.");
         ImGui.SameLine();
         ImGui.SetNextItemWidth(160);
-        ImGui.InputTextWithHint("##kf2profprobe", "game:80040348", ref _probeInput, 64);
+        ImGui.InputTextWithHint(_probeId, _defaultProbe, ref _probeInput, 64);
         ImGui.SameLine();
         if (ImGui.Button("Time function"))
             _probeResult = string.Join("; ", FrameProfiler.AddProbes(_probeInput));
@@ -825,6 +855,5 @@ public sealed class ProfilerPanel : IPanel
         {
             return $"could not write {path}: {e.Message}";
         }
-
     }
 }
