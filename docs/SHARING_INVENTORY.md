@@ -1461,7 +1461,7 @@ Most important observations:
 
 #### patches/Widescreen.cs  (627 lines)
 - Bucket: C (high) -- "present at a wider aspect with margin, anchor HUD, stretch full-screen tints" generalizes; the HUD geometry and 320 width are KF2's.
-- Does: sets the runtime's wide aspect/margin, replaces `DrawOTag` to number entries for HUD anchoring, stretches full-screen tints across the margin, and drives `CullCone`/`ViewClip`.
+- Does: sets the runtime's wide aspect/margin, replaces `DrawOTag` to number entries for the probe's listing, anchors the HUD by moving the HUD records' X around the builder `func_80031D5C`, stretches full-screen tints across the margin, and drives `CullCone`/`ViewClip`.
 - Hooks: replace `DrawOTag` at `open 0x80016078`, `game 0x80060818`, `end 0x80013D80` (the single owner of the `Replace`; dither/perspective/subpixel are pre/post). Job: libgpu OT walk with entries numbered.
 - Data: display width `320`; HUD clusters x 5..91 and x 269..310, y 11..60, last `HudTailEntries=128` OT entries; tint request block `0x80192D45` (comment; read by `func_8003214C`, drawn by `func_80031EE8(0,0,320,240)`).
 - Structs: OT linked list (24-bit `next` pointers), `RenderPrimEvent` vertex arrays; HUD boxes clip-relative.

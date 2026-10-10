@@ -92,9 +92,10 @@ public static class Stage13
     ];
 
     /// <summary>The HUD's records, 0x24 bytes each: +0 drawn when 1 (0xFF ends the
-    /// list), +4 the model, +8 a gauge's length, +0x18 a rotation. Record 0 is the
-    /// compass, 3-5 and 6-8 the digits of HP and MP, 9 and 10 the two gauges.</summary>
-    const uint HudRecords = 0x80067774, HudStride = 0x24, HudCount = 14;
+    /// list), +4 the model, +8 a gauge's length, +0x10 the screen position, +0x18 a
+    /// rotation. Record 0 is the compass, 3-5 and 6-8 the digits of HP and MP, 9 and
+    /// 10 the two gauges.</summary>
+    public const uint HudRecords = 0x80067774, HudStride = 0x24, HudCount = 14;
     const uint Shown = 0x0, Model = 0x4, Length = 0x8, Pitch = 0x18, Yaw = 0x1A;
 
     /// <summary>What record 0's and every other record's drawn byte is copied from.</summary>
