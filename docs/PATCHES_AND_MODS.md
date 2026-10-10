@@ -5106,6 +5106,11 @@ capture               arm the frame capture (FrameCapture.Arm) for the next run
 murk [on|off|tilt X]  the murk, and the steepest a murked surface may lean
 aspect [4:3|16:9|R]   the widescreen aspect, through Widescreen.SetAspect as the
                       settings window changes it (not saved)
+scale [1..8]          the render scale, through GlVram.Requested as the window's
+                      slider sets it, taken at the next present (fork 0097; not
+                      saved); alone, the current scale, the one still pending
+                      ("requested", 0 once taken) and the largest the GL context
+                      allows ("max")
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the

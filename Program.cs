@@ -213,6 +213,19 @@ RecompOne.Runtime.Runtime.Defaults(v =>
     v.Default("Background", "#000000");
 });
 
+// The top menu bar starts hidden whatever the last session saved; F1 shows it.
+// Once, at the first ready: a hard reset raises the event again, and a bar the
+// player has opened since is theirs. See "The menu bar starts hidden" in
+// docs/RUNTIME.md.
+bool topBarHidden = false;
+RecompOne.Runtime.Events.Event.AddListener<RecompOne.Runtime.Events.RuntimeReadyEvent>(_ =>
+{
+    if (topBarHidden) return;
+    topBarHidden = true;
+    RecompOne.Runtime.Config.ConfigManager.View.HideTopBar = true;
+    Console.WriteLine("[KF2] top bar: hidden at startup (F1 shows it)");
+});
+
 // Frame pacing. The game's speed is its frame rate, so the rate the port draws at
 // and the rate the game's own clock runs at are two different numbers here:
 //
