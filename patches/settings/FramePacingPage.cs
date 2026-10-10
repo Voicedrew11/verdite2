@@ -60,6 +60,7 @@ public sealed class FramePacingPage : IPatchPage
     public string Id => "framepacing";
     public string Title => "Frame pacing";
     public int Order => 10;
+    public IReadOnlyList<string> Patches => ["kf2.framepacing"];
 
     /// <summary>The positions the slider has: the world's own tick, the console's
     /// gate, and the panels people own. Anything between them is a console rate

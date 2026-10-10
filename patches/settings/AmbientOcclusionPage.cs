@@ -19,6 +19,7 @@ public sealed class AmbientOcclusionPage : IPatchPage
     public string Id => "ao";
     public string Title => "Enhancements";
     public int Order => 23;
+    public IReadOnlyList<string> Patches => ["kf2.ao"];
 
     static readonly string[] Labels = ["Off", "Low", "Medium", "High"];
 

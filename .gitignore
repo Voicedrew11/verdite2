@@ -17,7 +17,16 @@ tools/RecompOne/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json
 
 # Written by the runtime at play time: memory card saves and host settings.
 *.sav
+*.sav.bak
+# 0106: a damaged card, settings.json or interface.ini kept aside, and a write in flight.
+*.damaged-*
+/*.tmp
 settings.json
+# Verdite Core's WindowIcon keeps the disc's card icon here for the next run.
+/icon.png
+/icon.ico
+# The runtime's crash reports (0107), with the game RAM beside each.
+/crashes/
 interface.ini
 
 # Written by patches/MapFog.cs beside the memory card: explored-tile records.

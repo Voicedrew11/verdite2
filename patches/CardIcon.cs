@@ -1,4 +1,6 @@
 using RecompOne.Runtime.Cdrom;
+using RecompOne.Runtime.Events;
+using RecompOne.Runtime.Host;
 
 namespace Kf2;
 
@@ -8,11 +10,13 @@ namespace Kf2;
 ///     KF2_ICON=orb      the shipped verdite mark instead
 ///     KF2_ICON=off      no icon at all
 ///     KF2_ICON=1        a frame of the card icon's three (0 by default)
-///     KF2_ICON_INSTALL=0   do not write the icon into the desktop's icon theme
+///     KF2_ICON_INSTALL=0   do not write the icon into the desktop's icon theme or the shortcuts
 ///
 /// Where the icon is on this disc is this file's; decoding it, scaling it by
 /// whole multiples for every size a desktop asks for, and writing it into the
-/// icon theme for Wayland are Verdite Core's WindowIcon and DesktopEntry. Nothing
+/// icon theme for Wayland, icon.ico and the Windows shortcuts pointed at it, and
+/// the copy kept for the next run are Verdite Core's WindowIcon, DesktopEntry and
+/// ShortcutIcon. Nothing
 /// is shipped: the bytes come from the player's own image at boot, and a disc
 /// that does not answer leaves whatever Program.cs already set. See "The icon
 /// comes off the disc" and "Wayland takes the icon from the desktop entry" in
@@ -32,9 +36,35 @@ public static class CardIcon
     {
         if (WindowIcon.Frame(Frames, byDefault: 0) is not { } frame) return;
 
-        var path = string.IsNullOrWhiteSpace(discPath) ? RecompOne.Runtime.Runtime.CdPath : discPath;
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+        // What an earlier run read, over the orb, until this one reads the disc.
+        WindowIcon.ApplySaved();
 
+        if (!string.IsNullOrWhiteSpace(discPath))
+        {
+            if (File.Exists(discPath)) Apply(discPath, frame);
+            return;
+        }
+
+        // No disc on the command line: KingsField2.exe opened on its own. The saved
+        // disc is only known once the window has loaded settings.json, and a first
+        // run's only once the picker answers, both inside Entry.Run, so reading
+        // Runtime.CdPath here found it empty and the card icon never came. The first
+        // overlay loads after both, on the game thread, so the icon is set on the
+        // window's own; until then it is the copy an earlier run kept, or the orb.
+        bool done = false;
+        Event.AddListener<OverlayLoadedEvent>(_ =>
+        {
+            if (done) return;
+            done = true;
+            var path = RecompOne.Runtime.Runtime.CdPath;
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+
+            GpuJobs.Run(() => Apply(path, frame));
+        });
+    }
+
+    static void Apply(string path, int frame)
+    {
         try
         {
             using var disc = DiscFs.Open(path);

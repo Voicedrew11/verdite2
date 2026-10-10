@@ -71,6 +71,8 @@ KF2_SMOOTH_FLUID=0                     # leave scrolling textures (water, slime 
 KF2_SMOOTH_FLUID_PROBE=1               # live slots, dest rects, leftover V shift, whether the uniform is bound
 KF2_HITGUARD=0                         # let the hit path's reaction lookup fault (it is fenced by default; docs/TODO.md #14)
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
+KF2_HANG=15                            # seconds without a frame before a hang report is written to crashes/; 0 turns the watchdog off (15 by default; "Crash reports carry the port's place" in docs/DEVELOPMENT.md)
+KF2_FAULT=hook                         # hook, crash or hang, optionally :seconds after the first area (20): makes that report on purpose, to test the paths; never for play; hook@<mod id> (hook@kf2.zbuffer) makes the hook that patch's, so it is turned off and its settings page greys (off by default)
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_TEXPROBE=1                         # textured vs flat prims a second, and a per-page VRAM census, into texprobe.log
@@ -268,7 +270,7 @@ KF2_UISCALE=1                            # force the interface scale, and save i
 KF2_ICON=orb                             # the shipped verdite mark as the window icon (the game's memory-card icon, off the disc, by default)
 KF2_ICON=off                             # no window icon at all
 KF2_ICON=1                               # which of the card icon's three frames (0)
-KF2_ICON_INSTALL=0                       # do not write the icon into the desktop's icon theme (Linux; it is what a Wayland compositor reads)
+KF2_ICON_INSTALL=0                       # do not write the icon into the desktop's icon theme (Linux; it is what a Wayland compositor reads), and point no Windows shortcut at icon.ico
 KF2_MAP=0                                # the map off entirely (on by default); M opens it
 KF2_MAP_MINIMAP=1                        # the corner minimap on (off; no longer a setting); N toggles it
 KF2_MAP_MARKERS=1                        # creatures, objects, effects and sprites on (off; no longer a setting)

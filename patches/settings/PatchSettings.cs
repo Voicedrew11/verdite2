@@ -1,6 +1,7 @@
 using ImGuiNET;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Host.Window;
+using RecompOne.Runtime.Modding;
 using Rt = RecompOne.Runtime.Runtime;
 
 namespace Kf2.Settings;
@@ -61,6 +62,16 @@ public interface IPatchPage
     /// read rather than raced against a mouse.
     /// </summary>
     void Draw();
+
+    /// <summary>
+    /// The mod ids of the patches whose hooks do what this page sets. Runtime
+    /// <c>0108</c> turns a patch whose own code threw off until a restart, whatever
+    /// its switch says, so a page naming that patch is drawn greyed with a line
+    /// saying so, and writes nothing: the kept setting returns at the next boot.
+    /// Only a page every control of which needs the patch names it; a page mixing
+    /// patches (Audio, Mouse) names none rather than greying what still works.
+    /// </summary>
+    IReadOnlyList<string> Patches => [];
 }
 
 /// <summary>
@@ -184,6 +195,16 @@ public static class PatchSettings
     {
         if (_installed) return;
         _installed = true;
+
+        Localization.Merge(FailedStrings);
+        HookManager.Faulted += (mod, _, _) =>
+        {
+            lock (_failed) _failed.Add(mod.Id);
+            var pages = _pages.Values.Concat(_slots.Values).SelectMany(l => l)
+                              .Where(p => p.Patches.Contains(mod.Id)).Select(p => p.Id).ToList();
+            if (pages.Count > 0)
+                Console.WriteLine($"[KF2] settings: {mod.Id} failed; greyed until a restart: {string.Join(", ", pages)}");
+        };
 
         Register("display", new FramePacingPage());
         Register("display", new FrameSmoothingPage());
@@ -323,9 +344,7 @@ public static class PatchSettings
                 if (!string.IsNullOrEmpty(heading)) ImGui.SeparatorText(heading);
             }
 
-            ImGui.PushID(page.Id);
-            page.Draw();
-            ImGui.PopID();
+            DrawPage(page);
         }
     }
 
@@ -334,13 +353,53 @@ public static class PatchSettings
     /// section's ordinary options.</summary>
     static void DrawBare(List<IPatchPage> pages)
     {
-        foreach (var page in pages)
-        {
-            ImGui.PushID(page.Id);
-            page.Draw();
-            ImGui.PopID();
-        }
+        foreach (var page in pages) DrawPage(page);
     }
+
+    // The mod ids HookManager.Faulted has named, read on the window's thread.
+    static readonly HashSet<string> _failed = [];
+
+    /// <summary>Whether a patch this page names was turned off for a fault (runtime 0108).</summary>
+    public static bool Failed(IPatchPage page)
+    {
+        if (page.Patches.Count == 0) return false;
+        lock (_failed)
+            return _failed.Count > 0 && page.Patches.Any(_failed.Contains);
+    }
+
+    static void DrawPage(IPatchPage page)
+    {
+        ImGui.PushID(page.Id);
+        bool failed = Failed(page);
+        if (failed)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new System.Numerics.Vector4(0.95f, 0.45f, 0.4f, 1f));
+            ImGui.TextWrapped(Localization.T("kf2.settings.failed"));
+            ImGui.PopStyleColor();
+            if (ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T("kf2.settings.failed.tip"));
+        }
+        ImGui.BeginDisabled(failed);
+        page.Draw();
+        ImGui.EndDisabled();
+        ImGui.PopID();
+    }
+
+    const string FailedStrings = """
+    {
+      "strings": {
+        "kf2.settings.failed": {
+          "en": "Failed: off until the game restarts.",
+          "pt-BR": "Falhou: desligado até o jogo reiniciar.",
+          "es-419": "Falló: desactivado hasta que el juego se reinicie."
+        },
+        "kf2.settings.failed.tip": {
+          "en": "This failed and was turned off until the game restarts; the game's own routine runs in its place. The report is in crashes/. The setting is kept as you chose it.",
+          "pt-BR": "Isto falhou e foi desligado até o jogo reiniciar; a rotina do próprio jogo roda no lugar. O relatório está em crashes/. A configuração é mantida como você escolheu.",
+          "es-419": "Esto falló y se desactivó hasta que el juego se reinicie; la rutina del propio juego se ejecuta en su lugar. El informe está en crashes/. El ajuste se mantiene como lo elegiste."
+        }
+      }
+    }
+    """;
 
     // interface.ini, saved on the spot: a setting is changed once and then the
     // player goes back to the game, and there is no later moment to write it.

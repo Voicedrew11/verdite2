@@ -10,6 +10,16 @@ using Recompiled;
 
 Verdite.Core.Game.Configure(tag: "KF2");
 
+// Crash, fault and hang reports carry this port's version, place and switches,
+// and KF2_FAULT makes each kind on purpose to test its path. KF2_HANG=seconds
+// without a frame before a hang report (15; 0 turns the watchdog off). See "Crash
+// reports carry the port's place" in docs/DEVELOPMENT.md.
+//
+//     KF2_HANG=15                 seconds without a frame before a hang report
+//     KF2_FAULT=hook|crash|hang[:s]  makes that report s seconds (20) after the first area
+Kf2.CrashReports.Configure(Environment.GetEnvironmentVariable("KF2_HANG"));
+Kf2.CrashReports.InstallFault(Environment.GetEnvironmentVariable("KF2_FAULT"));
+
 // Diagnostics. The runtime's log channels are plain static bools with no CLI of
 // their own, so expose them through an env var:
 //     KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec   (or KF2_LOG=all)
@@ -1482,10 +1492,13 @@ try
 }
 catch (Exception e)
 {
-    // Dump first, then rethrow: the runtime still prints its own trace, and the
-    // state that explains it goes out immediately above it rather than being lost.
+    // The game state goes out first (CrashDump), then the report to crashes/ with
+    // the window kept up until the player closes it (runtime 0107): a player who
+    // starts the game from a launcher has no stderr to read the exception from.
     Kf2.CrashDump.Dump(e, memory);
-    throw;
+    Console.Error.WriteLine($"[KF2] the game has crashed: {e}");
+    RecompOne.Runtime.Runtime.HoldAfterCrash(RecompOne.Runtime.Diagnostics.CrashReport.Write("crash", e));
+    return 1;
 }
 finally
 {

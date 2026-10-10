@@ -15,6 +15,8 @@ public sealed class MouseLeadPage : IPatchPage
 
     public int Order => 30;
 
+    public IReadOnlyList<string> Patches => ["kf2.framesmoothing"];
+
     public void Draw()
     {
         // Dimmed rather than hidden while mouse look is off, as AutoReloadPage
