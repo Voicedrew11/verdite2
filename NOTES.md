@@ -307,6 +307,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - Saving and loading
 - Debug tools
 - The Items tab gives through the game's own give, and the names are read live
+- RETURN is the chooser's last item, and the port settings page takes it
 - Full-screen messages are pictures, and the world behind them is a 1x copy
 
 ### [PATCHES_AND_MODS.md](docs/PATCHES_AND_MODS.md)
@@ -368,6 +369,15 @@ The SPU mixer, its reverb and interpolation, XA resampling and the host output.
 - XA resampling
 - The host output
 - Positional audio
+
+### [SETTINGS.md](docs/SETTINGS.md)
+
+PORT SETTINGS, in place of RETURN in the in-game menu: the port's settings on pages drawn with the game's own routines, ported from Verdite3.
+
+- The rules
+- The pieces
+- The page
+- Measured (2026-10-09)
 
 ### [ENV_VARS.md](docs/ENV_VARS.md)
 
