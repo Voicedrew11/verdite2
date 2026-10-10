@@ -141,7 +141,7 @@ Start the game from the same shell you run that in, or the diagnostic socket in
   tells "stuck at the title" from "in an area" without a screenshot.
 - **`KF2_SHELL=1`** — one request per line on TCP 127.0.0.1:27900, one
   single-line JSON response back: `state`, `nearby`, `load <slot>`,
-  `warp <area>`, `press <button> [ms]`, `kill`, `ending [boss|kill]`,
+  `warp <area>`, `press <button> [ms]`, `key <name> [ms]` (a host key down and up, e.g. Escape), `kill`, `ending [boss|kill]`,
   `map [on|off|toggle]`, `waves [on|off|<setting> <value>]`, `savecheck`, `prop`, `goto <x> <y> <z> [yaw [pitch]]`, `view [<x> <y> <z> <pitch> <yaw> <roll> | off]` (the frame's camera and a cull-grid digest; with a camera, draw from it), and the remaster editor's `edit`, `select`, `set`, `pack`, `remaster`, `textures`, `level`, `camera`, plus `snap [hash|PATH.png]`, which reads the presented picture back and hashes it, `pause [on|off]`, which holds the world on the stage gate so two snaps compare one frame, `gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|arm on|off|sky on|off|hide|show|mirror on|off|hide|show|scene|at X Y|perpixel on|off]` (see `help`), `capture` (arms the frame capture; `KF2_FRAMEVIEW_OUT` writes it), `murk [on|off|tilt X]`, `aspect [4:3|16:9|<ratio>]` and `scale [1..8]` (the render scale at the next present, unsaved; alone, the current one), `point [<x> <y>|left|right|off]` (a menu pointer at game pixels in place of the host's). The `kf2` MCP server in `mcp/` exposes the same channel.
   `ending kill` is the form that reproduces the final-boss crash; reaching it
   needs `KF2_DEBUG_GODMODE=1`, or `warp 7` kills the player on the way in.

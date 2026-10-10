@@ -88,6 +88,10 @@ public static class AgentServer
     static volatile ushort _pressBits;
     static long _pressUntil;
 
+    // The synthetic key: one held at a time, released by the VSync listener.
+    static int _keyHeld = -1;
+    static long _keyUntil;
+
     // The same case-insensitive names KF2_AUTOPAD builds in Program.cs.
     static readonly Dictionary<string, ushort> Buttons = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -107,6 +111,7 @@ public static class AgentServer
         "load <slot 1..3> - load a save through the game's own loader",
         "warp <area 0..7> - re-enter an area through the game's own entry routine",
         "press <button> [holdMs=150] - press a pad button; one press active at a time, replaced by the next",
+        "key <name> [holdMs=150] - a keyboard key (a Silk.NET name, e.g. Escape) down and up again, as the host's KeyboardEvent; reaches the port's key listeners, not the binding table or a polled key",
         "kill - drop HP to zero, the way a hit would",
         "nearby [radius=8192] - live records of the world tables (objects, entities, effects, sprites) within radius units",
         "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
@@ -158,7 +163,15 @@ public static class AgentServer
 
         // Cheap commands: the VSync event fires on the game thread, the same
         // place the beacon reads memory, so no cross-thread access.
-        Event.AddListener<VSyncEvent>(_ => Drain(_fast));
+        Event.AddListener<VSyncEvent>(_ =>
+        {
+            ReleaseKey(false);
+            Drain(_fast);
+        });
+        // A menu's wait for the buttons to come up (func_80022EFC) spins on the pad
+        // with no VSync, so the synthetic key is let up on a pad read too, as the
+        // host's own key-up would arrive there.
+        Event.AddListener<PadReadEvent>(_ => ReleaseKey(false));
 
         // Heavy commands: attached on the first overlay load, when SymbolRegistry
         // can resolve GAME.EXE -- exactly like AutoReload.Attach.
@@ -332,6 +345,7 @@ public static class AgentServer
         {
             case "state":
             case "press":
+            case "key":
             case "kill":
             case "help":
             case "nearby":
@@ -449,6 +463,7 @@ public static class AgentServer
     {
         "state" => DoState(),
         "press" => DoPress(cmd.Arg1, cmd.Arg2),
+        "key" => DoKey(cmd.Arg1, cmd.Arg2),
         "kill" => DoKill(),
         "help" => DoHelp(),
         "load" => DoLoad(cmd.Arg1),
@@ -634,6 +649,41 @@ public static class AgentServer
         _pressUntil = Environment.TickCount64 + hold;
 
         return "{\"ok\":true,\"cmd\":\"press\",\"button\":" + Q(name) + ",\"holdMs\":" + hold + "}";
+    }
+
+    /// <summary>
+    /// A keyboard key down, and up again after <paramref name="msArg"/>, dispatched
+    /// as the host dispatches a real one. It exists for the listeners that only a
+    /// key can reach -- Escape as the menu's second key (KeyLayout), core's capture
+    /// key -- and it reaches nothing that polls the keyboard, the runtime's binding
+    /// table included. On the fast queue, so on the game thread, where the host's
+    /// own key events arrive too (the input is pumped there).
+    /// </summary>
+    static string DoKey(string name, string msArg)
+    {
+        if (!Enum.TryParse<Silk.NET.Input.Key>(name, true, out var key) || key == Silk.NET.Input.Key.Unknown)
+            return Err($"no such key '{name}' (a Silk.NET key name, e.g. Escape)");
+
+        long hold = DefaultHoldMs;
+        if (msArg.Length > 0 &&
+            (!long.TryParse(msArg, out hold) || hold < 1 || hold > 5000))
+            return Err("holdMs must be 1..5000");
+
+        ReleaseKey(true);
+        _keyHeld = (int)key;
+        _keyUntil = Environment.TickCount64 + hold;
+        Event.Dispatch(new KeyboardEvent { Key = _keyHeld, Pressed = true });
+
+        return "{\"ok\":true,\"cmd\":\"key\",\"key\":" + Q(key.ToString()) + ",\"holdMs\":" + hold + "}";
+    }
+
+    /// <summary>Let the synthetic key up: when its time is out, or now.</summary>
+    static void ReleaseKey(bool now)
+    {
+        if (_keyHeld < 0 || (!now && Environment.TickCount64 < _keyUntil)) return;
+        int key = _keyHeld;
+        _keyHeld = -1;
+        Event.Dispatch(new KeyboardEvent { Key = key, Pressed = false });
     }
 
     static string DoKill()

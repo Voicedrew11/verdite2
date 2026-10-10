@@ -955,6 +955,31 @@ captured, so it costs nothing otherwise; the pad read's pump is left as it was.
 Mechanism measured; **whether it now feels right at 60 fps is for a real mouse
 to judge**.
 
+### Escape, the menu's second key
+
+Ported from Verdite3 (`c4e6677`, 2026-10-09). A desktop game's Escape opens its menu and
+backs out of it, and Circle does both here: the in-game menu's button (`0x8006E56C`, an
+edge in `func_80029CBC`) and the cancel every chooser tests through `func_80022E58`. The
+runtime's table holds one key a button and Tab has Circle, so `KeyLayout` presses Circle
+inside `PAD_dr` (a `PadReadEvent`, the bit active low) while Escape is held, as the
+arrows press Up and Down. Decided once, on the press; refused while Escape is the
+player's own capture key, a popup is open, text or the remaster editor has the
+keyboard, or the port's layout is not in place.
+
+**A click captures, and there is no capture key by default**: `Analog.MouseValues`
+hands core's `Mouse` `DefaultCaptureKey: Key.Unknown` ("None"). A key saved before
+(`kf2.mouse.key`, Escape included) is kept and still toggles, and then Escape stays the
+capture key and does not open the menu. The Mouse page's line says which is in force.
+
+The shell's `key <name> [ms]` dispatches a host `KeyboardEvent` down and up; it reaches
+the port's key listeners, not the binding table. It lets the key up on a `VSync` or a pad
+read: the menu's wait for every button to come up (`func_80022EFC`) spins on the pad with
+no `VSync`, and a key released only on `VSync` held Escape, and the game, there for good.
+Measured (`KF2_AUTOSTART=2`, `key Escape` twice): the menu opened (the pointer's group 0,
+8 rows), Circle was pressed for 150 ms each time, the second closed it, and the world ran
+on at 144.0 fps, 20.0 ticks/s. Not checked: the shops and the title's menus by key, and
+how it feels.
+
 ## The menu pointer
 
 Mouse look leaves the menus pad-only: Circle opens `func_80018E80`, and from
@@ -1174,6 +1199,15 @@ not.** That helper falls back to the whole viewport when the panel drew no
 picture, which is right for something that has to be drawn *somewhere* and wrong
 for a coordinate conversion: a hit test would rather answer "nowhere" than answer
 confidently against a rectangle the game is not in.
+
+**A pointer over a panel floating in front of the picture is off it** (2026-10-09,
+from Verdite3 `4654755`). The rectangle alone held under any ImGui window in front
+of the game, so in a menu a click on such a panel was the menu's: it confirmed the
+row under it or, clear of the boxes, backed out, and the last leave then
+recaptured the pointer. `Point` now asks `OutputView.Covered` (fork `0029`) after
+the rectangle, as Verdite Core's `Mouse` already does for the capturing click: no
+hover, and the click is the panel's. To be judged in play: in a menu, a click on a
+floating panel over the picture neither moves the menu nor captures.
 
 ### Whichever device moved last owns the cursor
 

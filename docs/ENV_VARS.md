@@ -254,10 +254,10 @@ KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitiv
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report (in 3D, also the left stick's turn: wanted, driven, the ramp)
 KF2_TANK=1                               # 3D controls: the left stick walks and turns, L1/R1 strafe, the right stick is not read (0 forces 2D; unset, Gameplay ▸ Controls, PORT SETTINGS ▸ GAMEPLAY ▸ CONTROLS)
 KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
-KF2_MOUSE=0                              # mouse look off (it is on by default; Escape captures the pointer)
+KF2_MOUSE=0                              # mouse look off (it is on by default; a click on the picture captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
-KF2_MOUSE_KEY=Escape                     # the key that captures and releases
+KF2_MOUSE_KEY=F9                         # a key that captures and releases besides the click; None (the default) for none, and Escape takes Escape from the menu
 KF2_MOUSE_LEAD=0                         # mouse look waits for the tick, as with Gameplay ▸ Instant mouse look off (on by default); =1 forces it on
 KF2_DEBUG_FILMMODE_PROBE=5               # mods/kf2debug: toggle film mode (V) every 5 s and print the three flags and FrameSmoothing.LeadSuppressed
 KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
