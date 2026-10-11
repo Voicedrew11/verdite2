@@ -140,10 +140,13 @@ group inside them) are a switch at the top of the tiers page. Every group has
 three tiers:
 
 * **Original**: the game as the PlayStation ran it.
-* **Faithful**: that look and feel, with what the hardware got wrong fixed;
-  nothing added.
-* **Modern**: today's defaults, so only features already judged. Mouse aim, the
-  HUD at the edges, render distance and the remaster packs stay off, as they ship.
+* **Faithful**: that look and feel, with what the hardware got wrong fixed, and
+  the controls and conveniences that keep the game's own pace: mouse aim (the
+  mouse moves a reticle, the player turns toward it at the D-pad's rate) with no
+  centre dot and no line, and the last save reloaded on death.
+* **Modern**: today's defaults, so only features already judged: mouse look in
+  place of mouse aim. Mouse aim, the HUD at the edges, render distance and the
+  remaster packs stay off, as they ship.
 
 ### Where setup lives
 
@@ -203,8 +206,8 @@ three tiers:
   colour, the others dimmed. The chosen button is also marked "> " (the font has
   no bullet glyph), so the choice is not colour alone. **Tiers that write the same
   keys are one button**, named with a slash ("Original / Faithful"), its text the
-  first tier's: water, the map and death (Original and Faithful), and motion and
-  comparing gear (Faithful and Modern). The spec keeps the two texts identical so
+  first tier's: water and the map (Original and Faithful), and motion, comparing
+  gear and death (Faithful and Modern). The spec keeps the two texts identical so
   they cannot drift. A group or category that starts Custom gets a **Keep as is**
   button before the tiers, which puts back what it started at.
 * **A key every tier writes alike is a mistake in the spec**, logged at load:
@@ -276,3 +279,18 @@ the game then starting) has not been watched either.
 **Not judged:** the welcome's two buttons, the description columns under the tier
 buttons, the "> " mark, where keyboard focus lands, and the Keep as is button. The
 popup has not been looked at.
+
+### Setup measured (2026-10-11, Faithful's mouse aim and reload)
+
+* Faithful's mouse group writes `kf2.mouse.aim` True, `kf2.mouse.aimline` and
+  `kf2.mouse.aimdot` False, and leaves mouse look on; Original and Modern put all
+  three back to their defaults (aim off, line and dot on). On death, Faithful now
+  reloads, so the group is one button, Faithful / Modern. The line and dot have
+  live setters in `Setup.Window` (`KF2_MOUSE_AIM_LINE`, `KF2_MOUSE_AIM_DOT`).
+* Developer run, the shell: boot check `38 key(s), 0 problem(s)`; `setup apply
+  faithful` then `setup` read every group at 1, and `setup apply modern` every
+  group at 2. The line and dot were already off in that `interface.ini`, so the
+  run proved the detection and the reset, not the write to False.
+
+**Not judged:** mouse aim as Faithful's default has never been played through a
+first run.

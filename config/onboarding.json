@@ -12,6 +12,9 @@
     "kf2.controls": "False",
     "kf2.mouse.on": "True",
     "kf2.menumouse.on": "True",
+    "kf2.mouse.aim": "False",
+    "kf2.mouse.aimline": "True",
+    "kf2.mouse.aimdot": "True",
     "kf2.rumble.on": "True",
     "kf2.rumble.hd": "True",
     "kf2.gyroaim.on": "True",
@@ -324,21 +327,30 @@
               "desc": "kf2.setup.mouse.0",
               "set": {
                 "kf2.mouse.on": "False",
-                "kf2.menumouse.on": "False"
+                "kf2.menumouse.on": "False",
+                "kf2.mouse.aim": null,
+                "kf2.mouse.aimline": null,
+                "kf2.mouse.aimdot": null
               }
             },
             {
               "desc": "kf2.setup.mouse.1",
               "set": {
-                "kf2.mouse.on": "False",
-                "kf2.menumouse.on": null
+                "kf2.mouse.on": null,
+                "kf2.menumouse.on": null,
+                "kf2.mouse.aim": "True",
+                "kf2.mouse.aimline": "False",
+                "kf2.mouse.aimdot": "False"
               }
             },
             {
               "desc": "kf2.setup.mouse.2",
               "set": {
                 "kf2.mouse.on": null,
-                "kf2.menumouse.on": null
+                "kf2.menumouse.on": null,
+                "kf2.mouse.aim": null,
+                "kf2.mouse.aimline": null,
+                "kf2.mouse.aimdot": null
               }
             }
           ]
@@ -627,7 +639,7 @@
             {
               "desc": "kf2.setup.death.1",
               "set": {
-                "kf2.autoreload.enabled": "False"
+                "kf2.autoreload.enabled": null
               }
             },
             {
@@ -713,9 +725,9 @@
       "es-419": "El control como lo leía la PlayStation: la cruceta camina y gira, sin mouse y sin vibración."
     },
     "kf2.setup.controls.1": {
-      "en": "One stick walks and turns, as the D-pad did; a pointer in the menus; plain rumble.",
-      "pt-BR": "Um analógico anda e vira, como o direcional fazia; um ponteiro nos menus; vibração simples.",
-      "es-419": "Una palanca camina y gira, como lo hacía la cruceta; un puntero en los menús; vibración simple."
+      "en": "One stick walks and turns, as the D-pad did; the mouse turns you toward where it points; a pointer in the menus; plain rumble.",
+      "pt-BR": "Um analógico anda e vira, como o direcional fazia; o mouse vira você para onde aponta; um ponteiro nos menus; vibração simples.",
+      "es-419": "Una palanca camina y gira, como lo hacía la cruceta; el mouse te gira hacia donde apunta; un puntero en los menús; vibración simple."
     },
     "kf2.setup.controls.2": {
       "en": "Twin sticks and mouse look, a pointer in the menus, HD rumble and gyro aim with a drawn bow.",
@@ -753,9 +765,9 @@
       "es-419": "Sin mouse, en el juego ni en los menús."
     },
     "kf2.setup.mouse.1": {
-      "en": "A pointer in the menus; no mouse look.",
-      "pt-BR": "Um ponteiro nos menus; sem visão com o mouse.",
-      "es-419": "Un puntero en los menús; sin vista con el mouse."
+      "en": "Mouse aim: the mouse moves a reticle and you turn toward it at the D-pad's speed; a pointer in the menus.",
+      "pt-BR": "Mira com o mouse: o mouse move uma mira e você vira até ela na velocidade do direcional; um ponteiro nos menus.",
+      "es-419": "Apuntado con el mouse: el mouse mueve una retícula y giras hacia ella a la velocidad de la cruceta; un puntero en los menús."
     },
     "kf2.setup.mouse.2": {
       "en": "Mouse look in play and a pointer in the menus.",
@@ -913,9 +925,9 @@
       "es-419": "El juego como se lanzó: sin mapa, sin comparación de atributos, y la muerte es la del propio juego."
     },
     "kf2.setup.gameplay.1": {
-      "en": "Every stat an item would change is shown when buying and equipping; otherwise as released.",
-      "pt-BR": "Todos os atributos que um item mudaria aparecem ao comprar e equipar; fora isso, como no lançamento.",
-      "es-419": "Todos los atributos que un objeto cambiaría se muestran al comprar y equipar; por lo demás, como en el lanzamiento."
+      "en": "Every stat an item would change is shown when buying and equipping, and death reloads your last save; otherwise as released.",
+      "pt-BR": "Todos os atributos que um item mudaria aparecem ao comprar e equipar, e a morte recarrega seu último save; fora isso, como no lançamento.",
+      "es-419": "Todos los atributos que un objeto cambiaría se muestran al comprar y equipar, y la muerte recarga tu último guardado; por lo demás, como en el lanzamiento."
     },
     "kf2.setup.gameplay.2": {
       "en": "A map that fills in as you explore, stat comparison, and death reloads your last save.",
@@ -973,9 +985,9 @@
       "es-419": "La muerte propia del juego, sin recarga automática."
     },
     "kf2.setup.death.1": {
-      "en": "The game's own death, with no automatic reload.",
-      "pt-BR": "A morte do próprio jogo, sem recarga automática.",
-      "es-419": "La muerte propia del juego, sin recarga automática."
+      "en": "Your last save is reloaded two seconds after dying.",
+      "pt-BR": "Seu último save é recarregado dois segundos após morrer.",
+      "es-419": "Tu último guardado se recarga dos segundos después de morir."
     },
     "kf2.setup.death.2": {
       "en": "Your last save is reloaded two seconds after dying.",

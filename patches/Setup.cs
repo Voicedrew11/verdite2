@@ -135,6 +135,8 @@ public static class Setup
     {
         [Analog.OnKey] = new(t => Analog.Enabled = B(t, true), () => Text(Analog.Enabled)),
         [MenuMouse.OnKey] = new(t => MenuMouse.Enabled = B(t, true), () => Text(MenuMouse.Enabled), "KF2_MENUMOUSE"),
+        [MouseAim.LineKey] = new(t => MouseAim.Line = B(t, true), () => Text(MouseAim.Line), "KF2_MOUSE_AIM_LINE"),
+        [MouseAim.DotKey] = new(t => MouseAim.Dot = B(t, true), () => Text(MouseAim.Dot), "KF2_MOUSE_AIM_DOT"),
         [Perspective.OnKey] = new(t => Perspective.SetEnabled(B(t, true)), () => Text(Perspective.Enabled), "KF2_PERSPECTIVE"),
         [Subpixel.OnKey] = new(t => Subpixel.SetEnabled(B(t, true)), () => Text(Subpixel.Enabled), "KF2_SUBPIXEL"),
         [ZBuffer.OnKey] = new(t => ZBuffer.SetEnabled(B(t, true)), () => Text(ZBuffer.Enabled), "KF2_ZBUFFER"),
