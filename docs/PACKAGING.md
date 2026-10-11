@@ -169,6 +169,10 @@ this.
 8. `AssemblyLoadContext.Default.LoadFromAssemblyPath`, then the assembly's entry
    point with the cue as `argv[0]`.
 
+While steps 5-7 run, a player who has not done the first-run setup gets that
+instead of the build popup, with the build as a strip at its foot. Step 8 waits
+for both. See "Onboarding" in `docs/SETTINGS.md`.
+
 Measured on a 16-thread machine: **12.7 s** from launching the AppImage to a
 built `KingsField2.dll` and a running game, of which the recompile is 0.85 s and
 the rest is Roslyn. Warm launches skip to step 8.

@@ -118,3 +118,85 @@ No exception. **Not judged**: how the page looks; whether the label font really 
 digits where Verdite3's does (no string of this game's uses them, so a number
 drawing as something else is the first thing to look for); the window changing
 mode.
+
+## Onboarding
+
+The first-run setup, shown by the launcher **while the game is being built** and
+holding the game back until both are done, and run again from the settings page's
+DISPLAY page (RUN SETUP, its last row, not a setting). It asks the display first
+(window mode, render resolution, aspect ratio, frame rate), then Basic (one style
+for each of Controls, Presentation and Gameplay) or Advanced (one for each group
+inside them). Every group has three tiers:
+
+* **Original**: the game as the PlayStation ran it.
+* **Faithful**: that look and feel, with what the hardware got wrong fixed;
+  nothing added.
+* **Modern**: today's defaults, so only features already judged. Mouse aim, the
+  HUD at the edges, render distance and the remaster packs stay off, as they ship.
+
+### Where setup lives
+
+* `tools/verdite-core/src/Onboarding/` (`Onboarding`, `OnboardingPopup`): the
+  game-agnostic half. It is compiled twice, by the launcher (`Launcher.targets`
+  includes the directory) and as payload into the game, so every type is
+  `internal` and the two copies share nothing but the files.
+* `config/onboarding.json`: this game's half. It holds the display fields, the
+  categories, groups and tiers (each tier a `{key: text | null}` map over the same
+  keys in all three), `defaults` (what each key means when absent), and every
+  string in en, pt-BR and es-419. It ships in `content/config`, so it is part of
+  the build key: a change to it rebuilds.
+* `patches/Setup.cs`: RUN SETUP, the live apply, and the shell's `setup` verb.
+* `Launcher.cs`: `Onboarding.Due` decides whether setup is shown. `BuildGame` opens
+  the setup in place of the build popup and shows the build as a strip at its
+  foot, and it pumps until **both** the build and the setup are done. A failed
+  build closes the setup into the usual failure popup. On a warm launch with setup
+  due, it runs on its own (`RunSetup`).
+
+### What setup writes, and when
+
+* **Due** while `verdite.setup` in `interface.ini` is below the spec's `version`.
+  A fresh install and a player whose settings predate setup both see it once.
+  Finishing or skipping writes the flag; raise `version` to ask everyone again.
+  `VERDITE2_SETUP=1` shows it regardless.
+* The page's own rules: a value equal to its declared default **removes** the key,
+  and a key already meaning the value is left alone. `null` in a tier is the
+  default, so Modern writes nothing and removes what Original wrote.
+* **Detecting** where a player is (a re-run starts there): a group matches a tier
+  when every key of the tier already means its value. Faithful water is Original
+  water and Faithful motion is Modern motion, so a group can match two tiers.
+  A category therefore takes a tier every one of its groups matches (the later
+  tier first), so a fresh install reads as Modern throughout rather than "Custom".
+  A group matching nothing is **Custom**, and is left alone unless a tier is chosen.
+* A first run starts the display on the monitor: its aspect, the largest render
+  scale its height holds, its refresh rate (`$refresh` in a value is the
+  display's rate, read when applied). Window mode has no suggestion. The runtime
+  fills `Fullscreen=True` at boot, so the field's `default` (fullscreen) is where
+  it starts while no key is written yet; windowed writes `False` explicitly for
+  the same reason.
+* **Live in the game**: the window keys are applied by core
+  (`HostWindow.SetFullscreen`). Every other changed key goes to
+  `Onboarding.LiveApply`: the Settings window's setter for the keys the game's
+  page does not list, else the `PortSetting`'s `Apply`. A key with neither, or an
+  `AtBoot` one, is listed at the end as taking effect at the next launch. In the
+  launcher nothing is live: every key is read at boot.
+* RUN SETUP puts back anything the page had staged (setup chooses everything
+  again), draws the page without reading buttons while setup is up, and opens a
+  fresh session on what setup left.
+
+### Setup measured (2026-10-10)
+
+* Developer run, area 1, the shell's `setup`: the state read `Modern` for every
+  group the player had left at defaults, and `-1` for the map (fog of war off) and
+  the frame rate (165). `setup apply original` changed 31 keys, **all live**, with
+  none left for the next launch; `settings` read every one back at its Original
+  value (aniso 1, per-pixel 0, fog 0, mouse 0, rumble 0 ...).
+  `setup apply modern` changed 30 back and left **none** of the group keys in
+  `interface.ini`.
+* Packaged launcher, empty `VERDITE2_DATA` (a `settings.json` holding only the
+  disc): `onboarding.json` was found in `content/config`, the build finished
+  (`builds/<key>/KingsField2.dll`), and the process waited with no `[KF2]` line,
+  so the game was held until setup closes.
+
+**Not judged:** the pages' look and wording, pad navigation, and whether each tier
+looks the way its name promises. Clicking through to Finish in the launcher (and
+the game then starting) has not been watched either.

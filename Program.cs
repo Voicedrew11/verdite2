@@ -1474,6 +1474,11 @@ Kf2.Settings.PatchSettings.Install();
 Kf2.SettingsPage.Configure(Environment.GetEnvironmentVariable("KF2_SETTINGSPAGE_PROBE"));
 Kf2.SettingsPage.Install();
 
+// The first-run setup run again from that page (RUN SETUP, on DISPLAY), its
+// choices applied live where a setter exists. The launcher shows the same setup
+// at first run, from config/onboarding.json. See "Onboarding" in docs/SETTINGS.md.
+Kf2.Setup.Install();
+
 // The port settings the page draws from, and the one writer of interface.ini's
 // keys it changes (docs/SETTINGS.md). Last, so its boot check follows every start-up.
 Kf2.PortSettings.Install();
