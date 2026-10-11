@@ -268,6 +268,7 @@ KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=F9                         # a key that captures and releases besides the click; None (the default) for none, and Escape takes Escape from the menu
 KF2_MOUSE_LEAD=0                         # mouse look waits for the tick, as with Gameplay ▸ Instant mouse look off (on by default); =1 forces it on
 KF2_MOUSE_AIM=1                         # the mouse moves a reticle and the player turns toward it, instead of the view (1 on, 0 off; overrides the saved Mouse aim setting; off by default)
+KF2_MOUSE_AIM_RING=32                   # mouse aim's commit ring, in angle units: the reticle wanders inside it without turning the player (default 32, about 2.8 deg; 0 turns every offset into a turn, as before)
 KF2_DEBUG_FILMMODE_PROBE=5               # mods/kf2debug: toggle film mode (V) every 5 s and print the three flags and FrameSmoothing.LeadSuppressed
 KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
 KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did

@@ -1124,6 +1124,44 @@ the ease feels right, the reticle's size and colours, and the D-pad or a stick
 turning while the reticle pulls (the offset is relative, so a key turn leaves the
 reticle where it is on the screen and it keeps pulling).
 
+#### Mouse aim made the player feel sick
+
+Reported from the first play with a mouse: mouse aim was "a little nauseating".
+Three causes were found in the code and fixed, none of which lets the player turn
+faster than the D-pad:
+
+- **The reticle shook at 15 Hz.** The view is drawn a tick behind
+  (`lerp(prev, cur, frac)`, see `FrameSmoothing`), but each tick took its whole
+  step off the offset at once. So between ticks the reticle drifted with the view,
+  then snapped back by the step: about 28 units, roughly 2.5 deg or 10 game pixels,
+  fifteen times a second during a turn. The step is now remembered, and every drawn
+  frame adds back the part of it the interpolated view has not reached
+  (`step * (1 - frac)`, the same correction instant mouse look applies with
+  `_tickYaw * keep`). The reticle stays fixed in the world while the view glides
+  onto it. That part is the step asked for, not the turn the game measured, so at
+  the pitch limit, where the game turns less than asked, it is off by the
+  difference.
+- **The turn stopped with a jolt.** The brake aimed at the continuous stopping
+  speed, sqrt(2a|d|), which brakes a tick late, so a turn ended by dropping 12 to
+  15 units in one tick where the D-pad's ease allows 7 (`28, 25, 18, 3`;
+  `21, 15, 3`; `7, 13`, then stop). `Toward` now aims at the largest whole speed
+  whose run braking by `a` a tick (v + (v-a) + ...) still fits the remaining
+  distance. Simulated over 24 distances and both turn rates, plus pitch, with the
+  target moving mid-turn: no step changes by more than the acceleration, nothing
+  overshoots, and nothing is left over. A full turn of 200 is now
+  `7, 14, 21, 28, 28, 28, 28, 22, 15, 8, 1`.
+- **Hand tremor turned the camera.** Any offset was a turn, so a few units of
+  tremor kept the view making small corrections nobody asked for. The reticle now
+  moves freely inside a ring (`KF2_MOUSE_AIM_RING`, 32 units, about 2.8 deg; 0 is
+  the old behaviour), and the player stays still. Once the reticle leaves the ring
+  the turn is committed, and it runs until it lands on the reticle, even if the
+  hand comes back inside, as a D-pad tap is a whole turn.
+
+**Measured**: builds clean; slot 2 restored with aim on, 144.0 fps drawn at 15.0
+ticks/s, presents reaching the screen. The occasional second at 15.9 ticks/s is
+there with aim off too. **Not judged with a mouse**: whether it still makes the
+player feel sick, and whether 32 is the right ring.
+
 ### The mouse was sampled at two points
 
 Reported from play on the v0.3.3 draft: instant mouse look was very choppy at 60
