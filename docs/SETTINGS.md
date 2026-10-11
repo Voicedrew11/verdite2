@@ -154,10 +154,14 @@ inside them). Every group has three tiers:
 
 ### What setup writes, and when
 
-* **Due** while `verdite.setup` in `interface.ini` is below the spec's `version`.
-  A fresh install and a player whose settings predate setup both see it once.
-  Finishing or skipping writes the flag; raise `version` to ask everyone again.
-  `VERDITE2_SETUP=1` shows it regardless.
+* **Due** while `verdite.setup` in `interface.ini` is below the spec's `version`,
+  **except for a player who already has settings**: no flag, and any stored key
+  under the spec's `existing` prefix (`kf2.`). The game writes `kf2.keys.layout`
+  on its first boot, so anyone who has ever played is not asked; their settings
+  are theirs, and RUN SETUP is there. So a fresh install sees it once, and a
+  player who finished or skipped it (the flag) sees it again when `version` is
+  raised; a player who predates setup is never asked. `VERDITE2_SETUP=1` shows it
+  regardless.
 * The page's own rules: a value equal to its declared default **removes** the key,
   and a key already meaning the value is left alone. `null` in a tier is the
   default, so Modern writes nothing and removes what Original wrote.
@@ -167,9 +171,21 @@ inside them). Every group has three tiers:
   A category therefore takes a tier every one of its groups matches (the later
   tier first), so a fresh install reads as Modern throughout rather than "Custom".
   A group matching nothing is **Custom**, and is left alone unless a tier is chosen.
-* A first run starts the display on the monitor: its aspect, the largest render
-  scale its height holds, its refresh rate (`$refresh` in a value is the
-  display's rate, read when applied). Window mode has no suggestion. The runtime
+* **Only a first run** (no flag, no settings) starts the display on the monitor:
+  its aspect, the largest render scale its height holds, the frame rate nearest
+  its refresh rate (`$refresh` in a value, the display's rate when applied, is
+  still understood; this game no longer uses it). Every other run, a version
+  bump or `VERDITE2_SETUP=1` included, starts on what is set, so clicking through
+  changes nothing the player chose. Window mode has no suggestion.
+* **The frame rate is a slider** (`"slider": true` on a display field), its
+  positions the options in order, as the Settings window's: 20 to 240 at the
+  window's own stops, then Uncapped; 30 is labelled the original. A rate on no
+  position (72, say, from the game's page) reads "Custom, unchanged" with the
+  handle at the start, and is left alone unless the handle moves.
+* **A key every tier writes alike is a mistake in the spec**, logged at load:
+  `null` in all three would put the player's own value back to the default
+  whichever tier they chose, and read the group as Custom until then. That was
+  the map's fog of war (`kf2.map.fog`), now out of the map group. The runtime
   fills `Fullscreen=True` at boot, so the field's `default` (fullscreen) is where
   it starts while no key is written yet; windowed writes `False` explicitly for
   the same reason.
@@ -179,6 +195,12 @@ inside them). Every group has three tiers:
   page does not list, else the `PortSetting`'s `Apply`. A key with neither, or an
   `AtBoot` one, is listed at the end as taking effect at the next launch. In the
   launcher nothing is live: every key is read at boot.
+* **Checked against the code at boot** (`Setup.Check`, after every feature has
+  read its saved value): each key the spec writes has a live setter, and each
+  key not saved reads what `defaults` says it means. A feature whose default
+  changes without the spec would make Modern write a key and a fresh install
+  read as Custom; it prints `[KF2] setup check: <key> reads X with nothing saved,
+  but defaults says Y`. A key whose override variable is set is skipped.
 * RUN SETUP puts back anything the page had staged (setup chooses everything
   again), draws the page without reading buttons while setup is up, and opens a
   fresh session on what setup left.
@@ -197,6 +219,18 @@ inside them). Every group has three tiers:
   (`builds/<key>/KingsField2.dll`), and the process waited with no `[KF2]` line,
   so the game was held until setup closes.
 
-**Not judged:** the pages' look and wording, pad navigation, and whether each tier
+### Setup measured (2026-10-11)
+
+* The boot check, from a directory with no `interface.ini`: `35 key(s), 0
+  problem(s)`. With `kf2.ao.on` and `kf2.audio.interp` given wrong defaults in a
+  copy of the spec, it named both (`reads 1 ... defaults says False`, `reads 2
+  ... defaults says 1`); with `kf2.map.fog` put back as `null` in every map tier,
+  the load named it.
+* Built launcher, `VERDITE2_DATA` holding only the disc and
+  `kf2.keys.layout=3`: it built and went straight to the game (`[KF2]` lines), no
+  setup. The same build with an empty `interface.ini`: no `[KF2]` line in 30 s,
+  held for setup.
+
+**Not judged:** the frame-rate slider's look and its handling by pad, the pages' look and wording, pad navigation, and whether each tier
 looks the way its name promises. Clicking through to Finish in the launcher (and
 the game then starting) has not been watched either.

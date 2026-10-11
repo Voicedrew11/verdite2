@@ -282,7 +282,7 @@ KF2_DEBUG_FILMMODE_PROBE=5               # mods/kf2debug: toggle film mode (V) e
 KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
 KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did
 KF2_SETTINGSPAGE_PROBE=1                 # PORT SETTINGS in the in-game menu: a line for each open, page, step, save and discard (docs/SETTINGS.md); RUN SETUP and setup closing too
-VERDITE2_SETUP=1                         # the launcher shows the first-run setup even when it is not due; "Onboarding" in docs/SETTINGS.md
+VERDITE2_SETUP=1                         # the launcher shows the first-run setup even when it is not due (a player with settings is never due); "Onboarding" in docs/SETTINGS.md
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
 KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
 KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second

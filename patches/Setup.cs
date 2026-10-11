@@ -1,5 +1,6 @@
 using System.Globalization;
 using RecompOne.Runtime;
+using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Host.Window;
 
 namespace Kf2;
@@ -24,6 +25,8 @@ public static class Setup
     {
         Onboarding.LiveApply = Apply;
         _spec = Onboarding.Load("KF2", Onboarding.Candidates("onboarding.json"));
+        // After every feature's own listener, which is where each reads its saved value.
+        if (_spec is { } spec) Event.AddListener<RuntimeReadyEvent>(_ => Check(spec));
     }
 
     /// <summary>From the game thread: ask the host to open setup. With no spec to run
@@ -87,40 +90,101 @@ public static class Setup
     /// world held by the menu, as the Settings window's own controls run.</summary>
     static bool Apply(string key, string? text)
     {
-        bool B(bool fallback) => text is null ? fallback : bool.TryParse(text, out var b) ? b : fallback;
-        int I(int fallback) => text is not null && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var d) ? (int)Math.Round(d) : fallback;
-
-        // The keys the game's page does not list: the Settings window's setters.
-        switch (key.ToLowerInvariant())
+        if (Window.TryGetValue(key, out var w))
         {
-            case Analog.OnKey: Analog.Enabled = B(true); return true;
-            case MenuMouse.OnKey: MenuMouse.Enabled = B(true); return true;
-            case Perspective.OnKey: Perspective.SetEnabled(B(true)); return true;
-            case Subpixel.OnKey: Subpixel.SetEnabled(B(true)); return true;
-            case ZBuffer.OnKey: ZBuffer.SetEnabled(B(true)); return true;
-            case NoDither.OnKey: NoDither.SetEnabled(B(true)); return true;
-            case TrueColor.OnKey: TrueColor.SetEnabled(B(true)); return true;
-            case EvenFog.OnKey: EvenFog.Enabled = B(true); return true;
-            case FrameSmoothing.OnKey: FrameSmoothing.SetEnabled(B(true)); return true;
-            case FrameSmoothing.PosKey: FrameSmoothing.SetPosition(B(true)); return true;
-            case ObjectSmoothing.OnKey: ObjectSmoothing.SetEnabled(B(true)); return true;
-            case AnimSmoothing.OnKey: AnimSmoothing.SetEnabled(B(true)); return true;
-            case FluidSmoothing.OnKey: FluidSmoothing.SetEnabled(B(true)); return true;
-            case AudioQuality.InterpKey: AudioQuality.SetInterpolation((SpuInterpolation)I(2)); return true;
-            case AudioQuality.ReverbKey: AudioQuality.SetEnhancedReverb(I(1) == 1); return true;
-            case PositionalAudio.ModeKey: PositionalAudio.Set((PositionalAudio.Mode)I(2)); return true;
-            case Map.OnKey: Map.SetEnabled(B(true)); return true;
-            case MapFog.OnKey: MapFog.SetEnabled(B(true)); return true;
+            w.Set(text);
+            return true;
         }
 
         // The game's page's own: its live setter, which is what a step there runs.
         var s = PortSettings.All.FirstOrDefault(p => string.Equals(p.Key, key, StringComparison.OrdinalIgnoreCase));
         if (s is null || s.AtBoot) return false;
-        double value = text is null ? s.Default
-            : bool.TryParse(text, out var on) ? (on ? 1 : 0)
-            : double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v
-            : s.Default;
-        s.Apply(value);
+        s.Apply(Number(text, s.Default));
         return true;
+    }
+
+    static bool B(string? text, bool fallback) => text is not null && bool.TryParse(text, out var b) ? b : fallback;
+
+    static double Number(string? text, double fallback) =>
+        text is null ? fallback
+        : bool.TryParse(text, out var on) ? (on ? 1 : 0)
+        : double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v
+        : fallback;
+
+    static int I(string? text, int fallback) => (int)Math.Round(Number(text, fallback));
+
+    static string Text(bool b) => b ? "True" : "False";
+
+    /// <summary>A key the game's page does not list: the Settings window's setter, the
+    /// value it reads now, and the variables that override it (under which the
+    /// value is not the saved one, so the boot check leaves it alone).</summary>
+    sealed record WindowKey(Action<string?> Set, Func<string> Live, params string[] Envs);
+
+    static readonly Dictionary<string, WindowKey> Window = new(StringComparer.OrdinalIgnoreCase)
+    {
+        [Analog.OnKey] = new(t => Analog.Enabled = B(t, true), () => Text(Analog.Enabled)),
+        [MenuMouse.OnKey] = new(t => MenuMouse.Enabled = B(t, true), () => Text(MenuMouse.Enabled), "KF2_MENUMOUSE"),
+        [Perspective.OnKey] = new(t => Perspective.SetEnabled(B(t, true)), () => Text(Perspective.Enabled), "KF2_PERSPECTIVE"),
+        [Subpixel.OnKey] = new(t => Subpixel.SetEnabled(B(t, true)), () => Text(Subpixel.Enabled), "KF2_SUBPIXEL"),
+        [ZBuffer.OnKey] = new(t => ZBuffer.SetEnabled(B(t, true)), () => Text(ZBuffer.Enabled), "KF2_ZBUFFER"),
+        [NoDither.OnKey] = new(t => NoDither.SetEnabled(B(t, true)), () => Text(NoDither.Enabled), "KF2_NODITHER"),
+        [TrueColor.OnKey] = new(t => TrueColor.SetEnabled(B(t, true)), () => Text(TrueColor.Enabled), "KF2_TRUECOLOR"),
+        [EvenFog.OnKey] = new(t => EvenFog.Enabled = B(t, true), () => Text(EvenFog.Enabled), "KF2_EVENFOG"),
+        [FrameSmoothing.OnKey] = new(t => FrameSmoothing.SetEnabled(B(t, true)), () => Text(FrameSmoothing.Enabled), "KF2_SMOOTH"),
+        [FrameSmoothing.PosKey] = new(t => FrameSmoothing.SetPosition(B(t, true)), () => Text(FrameSmoothing.Position), "KF2_SMOOTH_POS"),
+        [ObjectSmoothing.OnKey] = new(t => ObjectSmoothing.SetEnabled(B(t, true)), () => Text(ObjectSmoothing.Enabled), "KF2_SMOOTH_OBJECTS"),
+        [AnimSmoothing.OnKey] = new(t => AnimSmoothing.SetEnabled(B(t, true)), () => Text(AnimSmoothing.Enabled), "KF2_SMOOTH_ANIM"),
+        [FluidSmoothing.OnKey] = new(t => FluidSmoothing.SetEnabled(B(t, true)), () => Text(FluidSmoothing.Enabled), "KF2_SMOOTH_FLUID"),
+        [AudioQuality.InterpKey] = new(t => AudioQuality.SetInterpolation((SpuInterpolation)I(t, 2)),
+            () => ((int)Spu.Interpolation).ToString(CultureInfo.InvariantCulture), "KF2_SPU_INTERP"),
+        [AudioQuality.ReverbKey] = new(t => AudioQuality.SetEnhancedReverb(I(t, 1) == 1),
+            () => Spu.ReverbMode == SpuReverbMode.Enhanced ? "1" : "0", "KF2_REVERB"),
+        [PositionalAudio.ModeKey] = new(t => PositionalAudio.Set((PositionalAudio.Mode)I(t, 2)),
+            () => ((int)PositionalAudio.Current).ToString(CultureInfo.InvariantCulture), "KF2_POSAUDIO"),
+        [Map.OnKey] = new(t => Map.SetEnabled(B(t, true)), () => Text(Map.Enabled), "KF2_MAP"),
+        [MapFog.OnKey] = new(t => MapFog.SetEnabled(B(t, true)), () => Text(MapFog.Enabled), "KF2_MAP_FOG"),
+    };
+
+    /// <summary>
+    /// onboarding.json against the code, once every feature has read its saved value:
+    /// each key it writes must have a live setter, and each key not saved must read
+    /// what the spec's <c>defaults</c> say it means, or Modern (which writes nothing)
+    /// is not the defaults and a fresh install reads as Custom. A line per mismatch;
+    /// the game boots either way. The spec's own shape is checked as it loads. See "What setup writes, and when" in docs/SETTINGS.md.
+    /// </summary>
+    static void Check(OnboardingSpec spec)
+    {
+        var keys = spec.Display.SelectMany(f => f.Options).SelectMany(o => o.Set.Keys)
+            .Concat(spec.Categories.SelectMany(c => c.Groups).SelectMany(g => g.Tiers).SelectMany(t => t.Set.Keys))
+            .Where(k => !Onboarding.IsWindowKey(k))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var view = RecompOne.Runtime.Runtime.View;
+        int problems = 0;
+        void Problem(string line) { problems++; Console.WriteLine($"[KF2] setup check: {line}"); }
+
+        foreach (var key in keys)
+        {
+            var port = PortSettings.All.FirstOrDefault(p => string.Equals(p.Key, key, StringComparison.OrdinalIgnoreCase));
+            bool window = Window.TryGetValue(key, out var w);
+            if (!window && (port is null || port.AtBoot))
+            {
+                Problem($"{key} has no live setter; setup would leave it for the next launch");
+                continue;
+            }
+            if (!spec.Defaults.TryGetValue(key, out var declared))
+            {
+                Problem($"{key} has no entry in defaults");
+                continue;
+            }
+            if (view.Has(key)) continue;    // saved: the value read is the player's, not the default
+            var envs = window ? w!.Envs : port!.Envs;
+            if (envs.Any(e => Environment.GetEnvironmentVariable(e) is not null)) continue;
+
+            string live = window ? w!.Live() : port!.Live().ToString(CultureInfo.InvariantCulture);
+            string want = window ? declared : Number(declared, double.NaN).ToString(CultureInfo.InvariantCulture);
+            if (!Onboarding.SameText(live, want))
+                Problem($"{key} reads {live} with nothing saved, but defaults says {declared}");
+        }
+        Console.WriteLine($"[KF2] setup check: {keys.Count} key(s), {problems} problem(s)");
     }
 }

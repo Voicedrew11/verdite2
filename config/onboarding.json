@@ -2,6 +2,7 @@
   "_comment": "The first-run setup's groups and tiers; read by Verdite Core's Onboarding (tools/verdite-core/src/Onboarding). See \"Onboarding\" in docs/SETTINGS.md.",
   "version": 1,
   "welcome": "kf2.setup.welcome",
+  "existing": "kf2.",
   "defaults": {
     "Borderless": "False",
     "RenderScale": "4",
@@ -37,7 +38,6 @@
     "kf2.audio.reverb": "1",
     "kf2.audio.positional": "2",
     "kf2.map.on": "True",
-    "kf2.map.fog": "True",
     "kf2.gearcompare.enabled": "True",
     "kf2.autoreload.enabled": "True"
   },
@@ -174,35 +174,97 @@
       "label": "kf2.setup.fps",
       "tip": "kf2.setup.fps.tip",
       "suggest": "refresh",
+      "slider": true,
       "options": [
         {
+          "label": "20 fps",
+          "match": 20,
+          "set": {
+            "kf2.framepacing.fps": "20"
+          }
+        },
+        {
           "label": "kf2.setup.fps.original",
+          "match": 30,
           "set": {
             "kf2.framepacing.fps": "30"
           }
         },
         {
-          "label": "60",
+          "label": "40 fps",
+          "match": 40,
+          "set": {
+            "kf2.framepacing.fps": "40"
+          }
+        },
+        {
+          "label": "50 fps",
+          "match": 50,
+          "set": {
+            "kf2.framepacing.fps": "50"
+          }
+        },
+        {
+          "label": "60 fps",
+          "match": 60,
           "set": {
             "kf2.framepacing.fps": "60"
           }
         },
         {
-          "label": "120",
+          "label": "75 fps",
+          "match": 75,
+          "set": {
+            "kf2.framepacing.fps": "75"
+          }
+        },
+        {
+          "label": "90 fps",
+          "match": 90,
+          "set": {
+            "kf2.framepacing.fps": "90"
+          }
+        },
+        {
+          "label": "100 fps",
+          "match": 100,
+          "set": {
+            "kf2.framepacing.fps": "100"
+          }
+        },
+        {
+          "label": "120 fps",
+          "match": 120,
           "set": {
             "kf2.framepacing.fps": "120"
           }
         },
         {
-          "label": "144",
+          "label": "144 fps",
+          "match": 144,
           "set": {
             "kf2.framepacing.fps": "144"
           }
         },
         {
-          "label": "kf2.setup.fps.monitor",
+          "label": "165 fps",
+          "match": 165,
           "set": {
-            "kf2.framepacing.fps": "$refresh"
+            "kf2.framepacing.fps": "165"
+          }
+        },
+        {
+          "label": "180 fps",
+          "match": 180,
+          "set": {
+            "kf2.framepacing.fps": "180"
+          }
+        },
+        {
+          "label": "240 fps",
+          "match": 240,
+          "set": {
+            "kf2.framepacing.fps": "240"
           }
         },
         {
@@ -508,22 +570,19 @@
             {
               "desc": "kf2.setup.map.0",
               "set": {
-                "kf2.map.on": "False",
-                "kf2.map.fog": null
+                "kf2.map.on": "False"
               }
             },
             {
               "desc": "kf2.setup.map.1",
               "set": {
-                "kf2.map.on": "False",
-                "kf2.map.fog": null
+                "kf2.map.on": "False"
               }
             },
             {
               "desc": "kf2.setup.map.2",
               "set": {
-                "kf2.map.on": null,
-                "kf2.map.fog": null
+                "kf2.map.on": null
               }
             }
           ]
@@ -631,14 +690,9 @@
       "es-419": "Con qué frecuencia se dibuja la imagen. El mundo siempre corre a la velocidad propia del juego."
     },
     "kf2.setup.fps.original": {
-      "en": "Original (30)",
-      "pt-BR": "Original (30)",
-      "es-419": "Original (30)"
-    },
-    "kf2.setup.fps.monitor": {
-      "en": "Match my display ({0} Hz)",
-      "pt-BR": "Igual à minha tela ({0} Hz)",
-      "es-419": "Igual a mi pantalla ({0} Hz)"
+      "en": "30 fps (original)",
+      "pt-BR": "30 fps (original)",
+      "es-419": "30 fps (original)"
     },
     "kf2.setup.fps.uncapped": {
       "en": "Uncapped",
