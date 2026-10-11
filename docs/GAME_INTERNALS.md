@@ -1905,6 +1905,25 @@ is the trap in this area: the obvious "enemies ignore you" implementations —
 feeding stage 4 a decoy player position, or refusing `func_80015620` — go
 through the acquire test and so make creatures **disappear** instead.
 
+**The arrival flag `0x8019941E`, and why pacing does not lose it here.** An unaware
+creature (state 0) found already inside its *inner* radius, `desc+0xA << 11`, is
+parked in state 2 (not drawn) until the player leaves the hold radius, unless the
+byte at `0x8019941E` is set; with it set, it wakes as if approached. The loader
+(stage 7, `func_8001689C`) sets it after an area load; the main loop clears it
+inline, `sb $0` between stages 5 and 6 (`0x80013940`/`0x80013950`), every
+iteration. Verdite3 lost its copy of this flag under frame pacing (its
+`2853787`): the store is not a stage call, so an untimed iteration after a load
+cleared it before the next tick's stage 4 read it, and an NPC by an entrance never
+woke. KF2 has the same shape and does not lose it. Measured 2026-10-11 with a
+probe on the stage gate (since removed), 44 warps through every area but 7 at
+144 fps: every time the flag was set (68, a warp sometimes loads twice), a ticked
+stage 4 saw it on the first iteration after the load and none was cleared unseen,
+with load pacing on and with `KF2_LOADPACING=0`; holding it changed nothing. The reason is `AdvanceLogicClock`: the load's own frame
+gap is always longer than a tick (67 ms), and over 250 ms grants one outright, so
+the iteration after a load always ticks. If that rule changes, or a load could
+ever finish inside a tick, this flag needs holding across untimed iterations as
+Verdite3 does (save it at stage 5's call, write it back at stage 6's).
+
 **The think is where the player actually enters, and it enters as one scalar.**
 `func_8003A3FC` is five instructions and two calls: the horizontal distance to
 the player out of `func_800154E4`, handed straight to `func_8003A300`. That one
