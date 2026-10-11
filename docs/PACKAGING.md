@@ -173,6 +173,20 @@ While steps 5-7 run, a player who has not done the first-run setup gets that
 instead of the build popup, with the build as a strip at its foot. Step 8 waits
 for both. See "Onboarding" in `docs/SETTINGS.md`.
 
+**An install unpacked over an older one builds only what it shipped** (Verdite Core's
+`9d6bac8`, taken 2026-10-11). Verdite3 0.1.1 unpacked over 0.1.0 failed to compile:
+0.1.1 had moved fourteen patches into Verdite Core, the old copies stayed in
+`content/src/patches`, and step 5's key and step 7's compile took every `.cs` under
+`content/`. The launcher's build now writes `content/manifest.txt`, every payload file
+it staged, and the launcher hashes and compiles only what it lists, naming anything
+else at startup (`ignoring N file(s) under content/ this release did not ship`); an
+install with no manifest builds from everything, as before. The Windows installer
+(core's `verdite.iss`) also clears `content\` and `bin\` before an upgrade. Measured
+here on a publish: the manifest's 227 lines are exactly the files under `content/`
+(`content/config/onboarding.json` among them), and an `#error` file planted in
+`content/src/patches/` was set aside. CI checks both on every push, as Verdite3's
+does. **Not run:** an upgrade over a real older Verdite2 release, on either platform.
+
 Measured on a 16-thread machine: **12.7 s** from launching the AppImage to a
 built `KingsField2.dll` and a running game, of which the recompile is 0.85 s and
 the rest is Roslyn. Warm launches skip to step 8.
@@ -335,10 +349,10 @@ release exists to update to.
   `api.github.com/repos/Voicedrew11/verdite2/releases/latest`, which leaves out
   drafts and prereleases, so the draft `release.yml` opens is announced only
   once it is published.
-- **It reaches the network at most once a day.** `update.json` in the data
+- **It reaches the network at most once an hour** (once a day until 2026-10-10, Verdite Core's `26aabe4`: a release published after a player's launch went unannounced for up to 24 hours). `update.json` in the data
   directory keeps the last answer (`checked`, `tag`, `url`) and any version the
   player skipped (`skipped`). Between checks the cached answer is used, so a
-  player who launches twice in a day still sees the notice. Offline or
+  player who launches twice in an hour still sees the notice. Offline or
   rate-limited, it prints one `[Verdite2] update check failed:` line, leaves
   `checked` alone so the next launch tries again, and **still announces the cached
   answer**: a release already known is not forgotten because the network is down.
@@ -369,7 +383,7 @@ release exists to update to.
 - It is on by default. *Check for updates at launch* is a checkbox at the foot of
   Settings ▸ Interface (`SettingsRegistry.Extend("interface", …)`, saved under
   `Verdite2.UpdateCheck` in the view config). `VERDITE2_UPDATE_CHECK=0` turns it
-  off from the environment. `=force` ignores the daily limit; a skipped version
+  off from the environment. `=force` ignores the hourly limit; a skipped version
   stays skipped. To see a skipped release again, delete `skipped` from
   `update.json`.
 
