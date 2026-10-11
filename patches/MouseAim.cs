@@ -74,6 +74,14 @@ public static class MouseAim
     // live, so a menu, a load or the paused map hides it.
     static long _steered;
 
+    // The ring the reticle may wander in without turning the player, in angle
+    // units (KF2_MOUSE_AIM_RING; 0 turns it off). Not a setting.
+    public static int Ring = 32;
+
+    // Whether a turn is under way. Set once the reticle leaves the ring, cleared
+    // once it lands on the centre.
+    static bool _steering;
+
     const float TwoPi = MathF.PI * 2f;
     const float UnitsPerRadian = 4096f / TwoPi;
 
@@ -88,6 +96,9 @@ public static class MouseAim
     public static void Configure()
     {
         Kept.Env("KF2_MOUSE_AIM", OnKey, ref Enabled, _fromEnv);
+
+        string ring = Environment.GetEnvironmentVariable("KF2_MOUSE_AIM_RING");
+        if (ring != null && int.TryParse(ring, out int r) && r >= 0) Ring = r;
     }
 
     public static void Install()
@@ -120,6 +131,23 @@ public static class MouseAim
         _offPitch += pitch;
         Clamp(m);
 
+        // Hand tremor is smaller than a turn, so the reticle may wander inside the
+        // ring without turning the player. Past its edge the turn is a decision:
+        // it is committed, and it lands on the reticle even if the hand comes back.
+        if (Ring > 0 && !_steering)
+        {
+            float dist = MathF.Sqrt(_offYaw * _offYaw + _offPitch * _offPitch);
+            if (dist <= Ring)
+            {
+                // No step this tick, so the view owes the reticle nothing either.
+                _velYaw = _velPitch = 0f;
+                _lastStepYaw = _lastStepPitch = 0f;
+                Publish(0f, 0f);
+                return (0f, 0f);
+            }
+            _steering = true;
+        }
+
         float stepYaw = Toward(_offYaw, ref _velYaw, rate, rate >> 2);
         float stepPitch = Toward(_offPitch, ref _velPitch, PitchVelMax, PitchAccel);
 
@@ -132,6 +160,11 @@ public static class MouseAim
         _offPitch -= stepPitch;
         if (stepYaw == 0f) _velYaw = 0f;
         if (stepPitch == 0f) _velPitch = 0f;
+
+        // Landed: the turn is over, and the next tremor is a new decision.
+        if (_steering && stepYaw == 0f && stepPitch == 0f
+            && MathF.Abs(_offYaw) < 1f && MathF.Abs(_offPitch) < 1f)
+            _steering = false;
 
         // Kept for Frame: the view is still behind this step at the tick, so the
         // reticle is drawn with the step's unreached part added back on.
@@ -163,6 +196,7 @@ public static class MouseAim
         _offYaw = _offPitch = 0f;
         _velYaw = _velPitch = 0f;
         _lastStepYaw = _lastStepPitch = 0f;
+        _steering = false;
         Publish(0f, 0f);
     }
 
