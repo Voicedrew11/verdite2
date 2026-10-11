@@ -147,6 +147,50 @@ pull_subtree() {
         -m "Pull $1 from $4 at $3"
 }
 
+# split_subtree PREFIX: `git subtree split` of HEAD, printed; dies loudly.
+#
+# The split reads every rejoin in the history and caches the shared commit each
+# names; two naming one commit kill it ("cache for X already exists!"). The
+# one-parent rejoins of 2026 (131853f, 447557c) name the commits a two-parent
+# rejoin made later at the same point would name too, so for the split only, each
+# rejoin older than another naming the same commit is replaced by a copy without
+# the trailers, through replace refs in a namespace of its own (GIT_REPLACE_REF_BASE),
+# removed after. Nothing in the history changes.
+split_subtree() {
+    local prefix="$1" ns="refs/subtree-split-$$/" c b s seen=" " out rc
+    while read -r c; do
+        b="$(git -C "$ROOT" log -1 --format=%B "$c")"
+        grep -q "^git-subtree-dir: $prefix/*\$" <<<"$b" || continue
+        s="$(sed -n 's/^git-subtree-split: *//p' <<<"$b" | head -1)"
+        [ -n "$s" ] || continue
+        if [[ "$seen" == *" $s "* ]]; then
+            local copy
+            copy="$(GIT_AUTHOR_NAME="$(git -C "$ROOT" log -1 --format=%an "$c")" \
+                GIT_AUTHOR_EMAIL="$(git -C "$ROOT" log -1 --format=%ae "$c")" \
+                GIT_AUTHOR_DATE="$(git -C "$ROOT" log -1 --format=%ad --date=raw "$c")" \
+                GIT_COMMITTER_NAME="$(git -C "$ROOT" log -1 --format=%cn "$c")" \
+                GIT_COMMITTER_EMAIL="$(git -C "$ROOT" log -1 --format=%ce "$c")" \
+                GIT_COMMITTER_DATE="$(git -C "$ROOT" log -1 --format=%cd --date=raw "$c")" \
+                git -C "$ROOT" commit-tree "$c^{tree}" $(git -C "$ROOT" log -1 --format=%P "$c" | sed 's/[^ ]*/-p &/g') \
+                    -m "$(grep -v '^git-subtree-' <<<"$b")")"
+            git -C "$ROOT" update-ref "${ns}$c" "$copy"
+            echo "    (split: hiding the older rejoin $(git -C "$ROOT" log -1 --format='%h %s' "$c" | cut -c1-70))" >&2
+        fi
+        seen+="$s "
+    done < <(git -C "$ROOT" log --format=%H --grep='^git-subtree-mainline:' HEAD)
+    local err; err="$(mktemp)"
+    out="$(GIT_REPLACE_REF_BASE="$ns" git -C "$ROOT" subtree split --prefix="$prefix" HEAD 2>"$err")"; rc=$?
+    git -C "$ROOT" for-each-ref --format='delete %(refname)' "$ns" | git -C "$ROOT" update-ref --stdin
+    local split; split="$(tail -1 <<<"$out")"
+    if [ $rc -ne 0 ] || ! git -C "$ROOT" rev-parse -q --verify "$split^{commit}" >/dev/null; then
+        echo "git subtree split of $prefix failed:" >&2
+        tr '\r' '\n' < "$err" | grep -v '^[0-9]*/[0-9]* ' | tail -5 >&2
+        rm -f "$err"; exit 1
+    fi
+    rm -f "$err"
+    echo "$split"
+}
+
 # push_subtree PREFIX URL BRANCH
 #
 # The push is `git subtree split` and a plain push of the result, checked first;
@@ -204,7 +248,7 @@ push_subtree() {
         echo "==> $prefix already equals $url $branch (${remote:0:7}); nothing to push."
         return 0
     fi
-    split="$(git -C "$ROOT" subtree split --prefix="$prefix" HEAD 2>/dev/null)"
+    split="$(split_subtree "$prefix")" || exit 1
     if ! git -C "$ROOT" merge-base --is-ancestor "$remote" "$split"; then
         echo "$url $branch (${remote:0:7}) has commits $prefix lacks; pull them first." >&2
         exit 1
@@ -274,6 +318,11 @@ rejoin_subtree() {
     if [ "$(git -C "$ROOT" rev-parse "HEAD:$prefix")" != "$(git -C "$ROOT" rev-parse "$remote^{tree}")" ]; then
         echo "$prefix differs from $url $branch (${remote:0:7}); pull or push first, then rejoin." >&2
         exit 1
+    fi
+    local split; split="$(split_subtree "$prefix")" || exit 1
+    if [ "$split" = "$remote" ]; then
+        echo "==> a split of $prefix already stops at ${remote:0:7}; no rejoin needed."
+        return 0
     fi
     # The newest squash commit with that tree (a squash names the split and no mainline).
     sq=""
