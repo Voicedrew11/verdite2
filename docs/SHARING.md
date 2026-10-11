@@ -1999,3 +1999,23 @@ unpacked over an older one compiles only what it shipped). Verdite3 was already 
 - Not pushed: the setup's popup has not been judged by eye. After the push, Verdite3
   pulls core and builds and boots; it has no `onboarding.json`, so `Onboarding.Load`
   returns null and the launcher shows no setup.
+
+**Verdite3's game commits since 2026-10-09, sorted 2026-10-11:**
+
+- `f956c1c`, the manifest checked in CI, and `a09120d`, the hourly check's docs:
+  taken (`1825088`).
+- `6603075`/`e7f95f2`, no mark of the port's own: taken. The orb (`verdite2.png`,
+  `verdite2.ico`, `make-icon.py`) is gone, the executables carry no icon resource,
+  and the card icon is the only one (`PACKAGING.md`, "The icon comes off the disc").
+- `2853787`, the arrival flag lost under pacing: the same shape here (`0x8019941E`,
+  cleared inline between stages 5 and 6), but never lost, since the frame after a
+  load always ticks. Measured, not fixed: `GAME_INTERNALS.md`, "The arrival flag
+  `0x8019941E`, and why pacing does not lose it here".
+- `5696cab`, the map at another BRIGHTNESS: does not apply. Verdite3 drew a half on
+  the GPU only at `0x808080` and sent the rest to the packets; `RetainedMap` here
+  bakes the assembler's live light word (`0x8006E604`) into every corner and hashes
+  it each walk, so a change is a rebuild, and there is no fallback keyed on the
+  colour. `KF2_GPUWORLD_RECORDCHECK=1` over areas 0-6: 2,932,975 corners, 0 coloured
+  otherwise than the GTE.
+- `4362046`, billboards turned to the eye: KF3's own.
+- `b20242e`, spell effects' palette: cannot happen here (2026-10-09).
