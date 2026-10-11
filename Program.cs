@@ -1530,28 +1530,18 @@ Kf2.CrashDump.Configure(Environment.GetEnvironmentVariable("KF2_CRASHDUMP"));
 // entry" in docs/PACKAGING.md -- and it has to be set before the window is made.
 RecompOne.Runtime.Runtime.AppId = "verdite2";
 
-foreach (var icon in new[]
-{
-    Path.Combine("packaging", "shared", "verdite2.png"),
-    Path.Combine(AppContext.BaseDirectory, "verdite2.png"),
-})
-{
-    if (!File.Exists(icon)) continue;
-    RecompOne.Runtime.Runtime.SetIcon(File.ReadAllBytes(icon));
-    break;
-}
-
 // What a desktop entry written for this run calls the port (Verdite Core's
 // DesktopEntry writes one only when no packager has).
 Verdite.Core.DesktopEntry.Name = "Verdite2";
 Verdite.Core.DesktopEntry.GenericName = "King's Field";
 Verdite.Core.DesktopEntry.Comment = "A PC port of King's Field (SLUS-00158). Requires your own disc image.";
 
-// And over it, the game's own memory-card icon off the player's disc, which the
-// release cannot carry. The orb above is the fallback.
+// The icon, everywhere: the game's own memory-card icon off the player's disc,
+// which the release cannot carry, so the port ships no mark at all. Until a run
+// has read it once there is none.
 //
-//     KF2_ICON=orb      keep the shipped mark
 //     KF2_ICON=off      no icon at all
+//     KF2_ICON=0|1|2    a frame of its three (0 by default)
 Verdite.Core.CardIcon.Install(args.Length > 0 ? args[0] : null, 0, Kf2.CardIconSource.Read);
 
 var memory = new PSMemory(Kf2.PrimBuffer.RamSize);

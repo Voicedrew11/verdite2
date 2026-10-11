@@ -171,7 +171,7 @@ inventory, the record a shared launcher would take from the game:
 | app id; per-user data folder | `verdite2`; `Verdite2` / `verdite2` |
 | env prefixes | `VERDITE2_` (launcher), `KF2_` (game) |
 | update repository | `Voicedrew11/verdite2` |
-| window title; icons; desktop entry | `Verdite2 {ver}`; `verdite2.png`, `verdite2.ico`; `verdite2.desktop` |
+| window title; icons; desktop entry | `Verdite2 {ver}`; none shipped (the card icon off the disc); `verdite2.desktop` |
 | package names; Inno AppId | `Verdite2-$VERSION-x86_64.AppImage`, `Verdite2-$v-win-x64.zip`, `-setup`; `{9F1F0C1E-…}` |
 | overlays that mean "at the title" | `open`, `game` (`UpdatePopup`) |
 
