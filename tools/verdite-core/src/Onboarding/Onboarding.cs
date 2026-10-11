@@ -93,7 +93,31 @@ internal static class Onboarding
         return [.. list];
     }
 
-    public static bool Due(OnboardingSpec spec) => ConfigManager.View.GetInt(FlagKey, 0) < spec.Version;
+    /// <summary>Whether a key is one of the runtime's window keys, which setup applies itself.</summary>
+    public static bool IsWindowKey(string key) => WindowKeys.Contains(key, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether setup is shown: the player last finished it at an older spec, or has
+    /// never seen it and has not played either. A player who already has settings
+    /// (any stored key under the spec's <see cref="OnboardingSpec.Existing"/>
+    /// prefix, which the game writes on its first boot) is not asked: their
+    /// settings are theirs, and RUN SETUP is there if they want it.
+    /// </summary>
+    public static bool Due(OnboardingSpec spec)
+    {
+        int seen = ConfigManager.View.GetInt(FlagKey, 0);
+        return seen < spec.Version && (seen > 0 || !Played(spec));
+    }
+
+    /// <summary>A player with no setup flag and no settings of the game's: the only
+    /// case in which the display starts on what the monitor suggests rather than on
+    /// what is set.</summary>
+    public static bool FirstRun(OnboardingSpec spec) => ConfigManager.View.GetInt(FlagKey, 0) == 0 && !Played(spec);
+
+    /// <summary>Whether interface.ini holds any key under the spec's prefix.</summary>
+    static bool Played(OnboardingSpec spec) =>
+        spec.Existing is { Length: > 0 } prefix
+        && ConfigManager.View.Values.Keys.Any(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Setup was seen and declined: nothing is written but the flag.</summary>
     public static void Skip(OnboardingSpec spec, string tag)
@@ -188,7 +212,9 @@ internal static class Onboarding
                 pick = Best(o => o.Match is { } h && h <= m.H ? h : null);
                 break;
             case "refresh":
+                // An option writing the display's own rate, else the nearest one.
                 pick = options.FindIndex(o => o.Set.Values.Any(v => v == RefreshToken));
+                if (pick < 0) pick = Best(o => o.Match is { } r ? -Math.Abs(r - Refresh()) : null);
                 break;
         }
         return pick >= 0 ? pick : Detect(spec, field);
@@ -321,6 +347,11 @@ internal sealed class OnboardingSpec
     /// A value equal to it is written as no key at all.</summary>
     public Dictionary<string, string> Defaults { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>A key prefix the game writes on its first boot (<c>kf2.</c>): a player
+    /// with any stored key under it already has settings, and is not asked. Absent,
+    /// every player without the flag is asked once.</summary>
+    public string? Existing { get; set; }
+
     /// <summary>The welcome's text, a localisation key; the setup's own when absent.</summary>
     public string? Welcome { get; set; }
 
@@ -345,6 +376,13 @@ internal sealed class OnboardingSpec
                     yield return $"{c.Id}.{g.Id}: {g.Tiers.Count} tiers, not {OnboardingPopup.TierCount}";
                 var keys = g.Tiers.Select(t => string.Join(",", t.Set.Keys.Order(StringComparer.OrdinalIgnoreCase))).Distinct().Count();
                 if (keys > 1) yield return $"{c.Id}.{g.Id}: its tiers write different keys";
+                // A key every tier writes alike is not the group's choice to make: null
+                // in all of them would put a player's own value back to the default
+                // whichever tier they chose, and read the group as Custom until then.
+                if (g.Tiers.Count > 1)
+                    foreach (var key in g.Tiers[0].Set.Keys)
+                        if (g.Tiers.All(t => t.Set.TryGetValue(key, out var v) && Onboarding.SameText(v, g.Tiers[0].Set[key])))
+                            yield return $"{c.Id}.{g.Id}: every tier writes {key} alike";
             }
         }
     }
@@ -362,6 +400,10 @@ internal sealed class SetupField
 
     public List<SetupOption> Options { get; set; } = [];
 
+    /// <summary>Drawn as a slider whose positions are the options, in order, as the
+    /// Settings window's frame rate is; a list otherwise.</summary>
+    public bool Slider { get; set; }
+
     /// <summary>The option to start on when the keys match none: a key the runtime
     /// fills at boot, say, and so has not written yet.</summary>
     public int? Default { get; set; }
@@ -371,7 +413,7 @@ internal sealed class SetupOption
 {
     public string Label { get; set; } = "";
 
-    /// <summary>What <see cref="SetupField.Suggest"/> compares: an aspect ratio, or a height in pixels.</summary>
+    /// <summary>What <see cref="SetupField.Suggest"/> compares: an aspect ratio, a height in pixels, or a refresh rate.</summary>
     public double? Match { get; set; }
 
     public Dictionary<string, string?> Set { get; set; } = new(StringComparer.OrdinalIgnoreCase);

@@ -63,9 +63,11 @@ internal sealed class OnboardingPopup : Popup
         _advanced = false;
         _result = null;
         Finished = false;
-        // A first run starts the display on what suits the monitor; a run from the
-        // game starts every choice on what is set now.
-        _display = [.. _spec.Display.Select(f => _inGame ? Onboarding.Detect(_spec, f) : Onboarding.Suggest(_spec, f))];
+        // A first run starts the display on what suits the monitor; any other run
+        // (from the game, after a version bump, forced) on what is set now, so
+        // clicking through changes nothing the player chose.
+        bool suggest = !_inGame && Onboarding.FirstRun(_spec);
+        _display = [.. _spec.Display.Select(f => suggest ? Onboarding.Suggest(_spec, f) : Onboarding.Detect(_spec, f))];
         _tiers = [.. _spec.Categories.Select(c => Onboarding.Detect(_spec, c))];
         Nav(true);
     }
@@ -143,6 +145,11 @@ internal sealed class OnboardingPopup : Popup
             if (field.Tip is { } tip && ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T(tip));
             ImGui.SameLine(labelW);
             ImGui.SetNextItemWidth(-1f);
+            if (field.Slider)
+            {
+                Slider(field, ref _display[i]);
+                continue;
+            }
             string preview = _display[i] >= 0 ? OptionLabel(field.Options[_display[i]]) : Localization.T("verdite.setup.unchanged");
             if (ImGui.BeginCombo($"##{field.Id}", preview))
             {
@@ -352,6 +359,22 @@ internal sealed class OnboardingPopup : Popup
     }
 
     // ---- Pieces ----
+
+    /// <summary>
+    /// A field as a slider whose positions are its options, as the Settings window's
+    /// frame rate is: the format is the option's label, a literal, so no index ever
+    /// shows and typed entry is off. A value matching no option shows as unchanged
+    /// with the handle at the start, and stays so until the handle is moved.
+    /// </summary>
+    static void Slider(SetupField field, ref int index)
+    {
+        int last = field.Options.Count - 1;
+        int at = Math.Clamp(index, 0, last);
+        string label = index >= 0 ? OptionLabel(field.Options[at]) : Localization.T("verdite.setup.unchanged");
+        if (ImGui.SliderInt($"##{field.Id}", ref at, 0, last, label.Replace("%", "%%"),
+                            ImGuiSliderFlags.AlwaysClamp | ImGuiSliderFlags.NoInput))
+            index = at;
+    }
 
     /// <summary>Three equal buttons, the chosen one lit; the tier clicked, else <paramref name="current"/>.</summary>
     static int TierRow(string id, int current)
