@@ -220,20 +220,46 @@ public static class MouseAim
     }
 
     /// <summary>
-    /// One axis's step toward an offset <paramref name="d"/>: the velocity eased by
-    /// <paramref name="accel"/> a tick toward the fastest speed that can still stop
-    /// on the offset, capped at <paramref name="max"/> and at what is left.
+    /// One axis's step toward an offset <paramref name="d"/>, in whole units: the
+    /// velocity eased by <paramref name="accel"/> a tick toward the fastest whole
+    /// speed that can still stop on the offset when it brakes by <paramref name="accel"/>
+    /// a tick, capped at <paramref name="max"/> and at what is left. The stopping
+    /// speed is the discrete one (<see cref="StopDistance"/>), not the continuous
+    /// sqrt(2*a*d): that brakes a tick too late, so the last steps drop faster than
+    /// the ease allows.
     /// </summary>
     static float Toward(float d, ref float vel, int max, int accel)
     {
         float dist = MathF.Abs(d);
-        float want = MathF.Min(max, MathF.Min(MathF.Sqrt(2f * accel * dist), dist));
-        want *= MathF.Sign(d);
+        float sign = MathF.Sign(d);
+
+        // The closed form v = (-a + sqrt(a*a + 8*a*dist)) / 2 solves v(v+a)/2a = dist,
+        // and the exact sum is never less than that, so it bounds the answer from
+        // above; step down from it to the largest speed whose exact run fits.
+        int fast = (int)MathF.Floor((-accel + MathF.Sqrt(accel * accel + 8f * accel * dist)) / 2f);
+        fast = Math.Min(fast, max);
+        while (fast > 0 && StopDistance(fast, accel) > dist) fast--;
+
+        // Whole units throughout (vel starts at 0 and moves by whole accel steps), so
+        // the caller's truncation takes nothing and the offset is spent exactly.
+        float want = sign * fast;
         vel = Math.Clamp(want, vel - accel, vel + accel);
         // Never past the reticle: a reversal still brakes at the game's rate, but
         // a step that would carry beyond it in the same direction, or past a
-        // reticle already reached, is cut to it.
-        if (MathF.Sign(vel) * MathF.Sign(d) >= 0 && MathF.Abs(vel) > dist) vel = d;
+        // reticle already reached, is cut to it (truncated, so still whole units
+        // and never beyond |d|).
+        if (MathF.Sign(vel) * sign >= 0 && MathF.Abs(vel) > dist) vel = MathF.Truncate(d);
         return vel;
+    }
+
+    /// <summary>
+    /// The distance a run covers braking by <paramref name="accel"/> a tick from the
+    /// whole speed <paramref name="v"/> to rest: v + (v-a) + ... over its positive steps.
+    /// </summary>
+    static int StopDistance(int v, int accel)
+    {
+        int sum = 0;
+        for (int s = v; s > 0; s -= accel) sum += s;
+        return sum;
     }
 }
