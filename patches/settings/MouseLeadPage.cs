@@ -20,8 +20,8 @@ public sealed class MouseLeadPage : IPatchPage
     public void Draw()
     {
         // Dimmed rather than hidden while mouse look is off, as AutoReloadPage
-        // dims its slot.
-        ImGui.BeginDisabled(!Mouse.Enabled);
+        // dims its slot, and while mouse aim steers (it has no effect then).
+        ImGui.BeginDisabled(!Mouse.Enabled || MouseAim.Active);
 
         bool on = Mouse.Lead;
         if (ImGui.Checkbox("Instant mouse look", ref on))

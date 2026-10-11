@@ -279,9 +279,21 @@ public static class PortSettings
         (v, _) => v <= 0 ? [0, Unchanged] : v >= 2 ? [1, 1] : [1, 0]);
 
     public static readonly PortSetting MouseLook = Switch(Mouse.OnKey, "KF2_MOUSE", "Mouse look",
-        Gameplay, "MOUSE LOOK", () => Mouse.Enabled,
+        null, null, () => Mouse.Enabled,
         v => { if (!v && Mouse.Enabled) Mouse.SetCaptured(false); Mouse.Enabled = v; }, true,
         tip: "Turns and looks with the mouse. The pointer has to be captured before anything happens.");
+    public static readonly PortSetting MouseAimOn = Switch(MouseAim.OnKey, "KF2_MOUSE_AIM", "Mouse aim",
+        null, null, () => MouseAim.Enabled,
+        v => { if (!v) MouseAim.Reset(); MouseAim.Enabled = v; }, false,
+        tip: "The mouse moves a reticle; you turn toward it at the game's own speed.");
+
+    /// <summary>OFF, LOOK (the mouse turns the view) or AIM (the mouse moves a reticle
+    /// and the player turns toward it); AIM turns mouse look on, and OFF leaves the
+    /// kept aim choice.</summary>
+    public static readonly PortSetting MouseRow = Combine("row.mouse", Gameplay, "MOUSE LOOK", [MouseLook, MouseAimOn],
+        [0, 1, 2], v => v == 0 ? "OFF" : v == 1 ? "LOOK" : "AIM",
+        get => get(MouseLook) == 0 ? 0 : get(MouseAimOn) == 0 ? 1 : 2,
+        (v, _) => v <= 0 ? [0, Unchanged] : v >= 2 ? [1, 1] : [1, 0]);
 
     // ---- The game's page ----
 
@@ -291,7 +303,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate,
         TextureFilter, PerPixel, AmbientOcclusionRow,
         RenderDist, FogMode, Water,
-        Controls, InvertedCamera, AutoReloadOn, GearCompareOn, MouseLook, GyroAimOn, RumbleRow,
+        Controls, InvertedCamera, AutoReloadOn, GearCompareOn, MouseRow, GyroAimOn, RumbleRow,
     ];
 
     /// <summary>Every setting and every combined row's part, the list the shell's
@@ -301,7 +313,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        Controls, InvertedCamera, AutoReloadOn, GearCompareOn, MouseLook, GyroAimOn, RumbleOn, RumbleHd,
+        Controls, InvertedCamera, AutoReloadOn, GearCompareOn, MouseLook, MouseAimOn, GyroAimOn, RumbleOn, RumbleHd,
     ];
 
     /// <summary>Every setting and every combined row, for the shell's <c>settings</c> verb.</summary>

@@ -169,6 +169,24 @@ this.
 8. `AssemblyLoadContext.Default.LoadFromAssemblyPath`, then the assembly's entry
    point with the cue as `argv[0]`.
 
+While steps 5-7 run, a player who has not done the first-run setup gets that
+instead of the build popup, with the build as a strip at its foot. Step 8 waits
+for both. See "Onboarding" in `docs/SETTINGS.md`.
+
+**An install unpacked over an older one builds only what it shipped** (Verdite Core's
+`9d6bac8`, taken 2026-10-11). Verdite3 0.1.1 unpacked over 0.1.0 failed to compile:
+0.1.1 had moved fourteen patches into Verdite Core, the old copies stayed in
+`content/src/patches`, and step 5's key and step 7's compile took every `.cs` under
+`content/`. The launcher's build now writes `content/manifest.txt`, every payload file
+it staged, and the launcher hashes and compiles only what it lists, naming anything
+else at startup (`ignoring N file(s) under content/ this release did not ship`); an
+install with no manifest builds from everything, as before. The Windows installer
+(core's `verdite.iss`) also clears `content\` and `bin\` before an upgrade. Measured
+here on a publish: the manifest's 227 lines are exactly the files under `content/`
+(`content/config/onboarding.json` among them), and an `#error` file planted in
+`content/src/patches/` was set aside. CI checks both on every push, as Verdite3's
+does. **Not run:** an upgrade over a real older Verdite2 release, on either platform.
+
 Measured on a 16-thread machine: **12.7 s** from launching the AppImage to a
 built `KingsField2.dll` and a running game, of which the recompile is 0.85 s and
 the rest is Roslyn. Warm launches skip to step 8.
@@ -331,10 +349,10 @@ release exists to update to.
   `api.github.com/repos/Voicedrew11/verdite2/releases/latest`, which leaves out
   drafts and prereleases, so the draft `release.yml` opens is announced only
   once it is published.
-- **It reaches the network at most once a day.** `update.json` in the data
+- **It reaches the network at most once an hour** (once a day until 2026-10-10, Verdite Core's `26aabe4`: a release published after a player's launch went unannounced for up to 24 hours). `update.json` in the data
   directory keeps the last answer (`checked`, `tag`, `url`) and any version the
   player skipped (`skipped`). Between checks the cached answer is used, so a
-  player who launches twice in a day still sees the notice. Offline or
+  player who launches twice in an hour still sees the notice. Offline or
   rate-limited, it prints one `[Verdite2] update check failed:` line, leaves
   `checked` alone so the next launch tries again, and **still announces the cached
   answer**: a release already known is not forgotten because the network is down.
@@ -365,7 +383,7 @@ release exists to update to.
 - It is on by default. *Check for updates at launch* is a checkbox at the foot of
   Settings ▸ Interface (`SettingsRegistry.Extend("interface", …)`, saved under
   `Verdite2.UpdateCheck` in the view config). `VERDITE2_UPDATE_CHECK=0` turns it
-  off from the environment. `=force` ignores the daily limit; a skipped version
+  off from the environment. `=force` ignores the hourly limit; a skipped version
   stays skipped. To see a skipped release again, delete `skipped` from
   `update.json`.
 
@@ -423,21 +441,24 @@ Trimming is off and must stay off: `MonoMod.RuntimeDetour` builds detours at run
 time, `ModCompiler` hands Roslyn the loaded assemblies, and
 `patches/AutoStart.cs` reflects over runtime internals.
 
-`packaging/shared/verdite2.png` and `.ico` are the shipping mark (a green
-verdite orb). The PNG is 256×256; the ICO holds 16/32/48/256. See
-`packaging/shared/README.md`.
+The port ships no mark (since 2026-10-11; a green verdite orb until then). See
+"The icon comes off the disc" and `packaging/shared/README.md`.
 
 ## The icon comes off the disc
 
 The window wears the game's **own memory-card icon** — the teal helm with the two
 red gems that a King's Field save shows in the PlayStation's card browser — read
-out of the player's image at boot by `patches/CardIcon.cs`. The orb stays the
-shipped mark and is the fallback: `Program.cs` sets it from the PNG first, and
-this replaces it only when a disc answers. That division is not a preference. The
-artifact is built in CI with no disc, so anything baked into `verdite2.ico`, the
-AppImage or the `.desktop` file has to be the port's own work; the game's art can
-only ever appear on a machine that already has the disc, which is the same line
-`generated/` is on.
+out of the player's image at boot by Verdite Core's `CardIcon` (where it is on this
+disc: `patches/CardIconSource.cs`). It is the port's **only** icon. The artifact
+is built in CI with no disc, so nothing baked into an executable, the AppImage or
+the `.desktop` file can be the game's art, which is the same line `generated/` is
+on; so since 2026-10-11 the port ships **no mark at all**, as Verdite3 has since
+2026-10-08. The executables have no icon resource, the AppImage a transparent
+square (core's `build-appimage.sh`, since appimagetool refuses an AppDir with
+none), and until a run has read the disc once there is no icon. Until then the
+fallback was a green verdite orb (`verdite2.png`, `verdite2.ico`), which
+`Program.cs` set first and which also stood as the launcher's, the game's and the
+Windows stub's `ApplicationIcon`, so a shortcut showed it until the game rewrote it.
 
 **Where it is.** 16×16 at 4bpp with a 16-entry BGR555 CLUT, in `CD/COM/FDAT.T` at
 file offset `0x14D210` — the CLUT, then at `0x14D240` the three animation frames
@@ -462,7 +483,7 @@ one, and so does a run from the checkout) the icon is read at once, before
 `Entry.Run`. With none — `KingsField2.exe` opened on its own — the disc is not
 known yet: `settings.json` is loaded by the window, which `Entry.Run` makes, and
 a first run's disc only once the picker answers. `CardIcon` read an empty
-`CdPath` there and returned without a word, so Windows showed the orb. It now
+`CdPath` there and returned without a word, so Windows showed the shipped mark. It now
 waits for the first overlay to load and sets the icon on the window's thread
 (`GpuJobs.Run`). Not yet measured in Verdite2: the Verdite3 fix was measured
 under Wine, and the no-argument case here is unverified until someone runs it
@@ -478,18 +499,19 @@ before that, one image meant the window manager smoothing a 16×16 up or a 256×
 down, which is exactly what makes this kind of icon look like a photograph of
 itself.
 
-`KF2_ICON=orb` keeps the shipped mark, `KF2_ICON=off` clears it, `KF2_ICON=1` or
-`=2` picks another of the three frames (they differ by a one-pixel bob).
+`KF2_ICON=off` clears it, `KF2_ICON=1` or `=2` picks another of the three frames
+(they differ by a one-pixel bob). `KF2_ICON=orb` is still read by core, and with no
+mark shipped it now means no icon.
 
 ## The shortcuts wear it too
 
 Explorer draws a shortcut with the icon embedded in its target, and the target is
-the release's `Verdite2.exe`, which can only carry the orb. Verdite Core's
+the release's `Verdite2.exe`, which carries no icon (Windows draws its plain program icon). Verdite Core's
 `ShortcutIcon` (ported from Verdite3 `dc4a6d1`, `6603075`) is already called by
 `WindowIcon.Apply`: once the disc is read it writes the same sizes into `icon.ico`
 in the data directory and points every Desktop, Start menu and pinned taskbar
 shortcut whose target is this process, or the stub above `bin\`, at it, and keeps
-`icon.png` for the next run, which `CardIcon` now sets over the orb at boot
+`icon.png` for the next run, which `CardIcon` sets at boot
 (`WindowIcon.ApplySaved`) until the disc is read again.
 
 That reached only a shortcut the player pinned. The installer was per-machine, so
@@ -499,8 +521,9 @@ installs under `%LOCALAPPDATA%\Programs\Verdite2` with the shortcuts in the
 player's own folders. **An upgrade from a per-machine install (v0.4.0 and before)
 is a second install**, since Inno looks for a previous one in HKCU only: the old
 copy in `Program Files` and its orb shortcuts stay until it is uninstalled, which
-the release notes have to say. The orb stays the executable's icon and the
-fallback (`KF2_ICON=orb`); Verdite3 dropped its copy of it, being Verdite2's mark.
+the release notes have to say. Since 2026-10-11 the orb is gone from Verdite2
+too, so a shortcut the game has not reached shows Windows's plain program icon,
+as in Verdite3.
 
 Not measured in Verdite2: Verdite3's run under Wine rewrote two shortcuts
 (`icon: 2 shortcut(s) now wear icon.ico`); here nothing has run on Windows, and
@@ -523,7 +546,7 @@ on the wire, and two things have to be true.
 **The window has to say what it is.** Measured with `WAYLAND_DEBUG=1`, GLFW sent
 `set_title("KingsField2")` and **no `set_app_id` at all** — the default is the
 empty string. KWin therefore had nothing to match, and no icon could have appeared
-whatever the port did: not the card icon, and not the orb the AppImage installs
+whatever the port did: not the card icon, and not the orb the AppImage then installed
 either, which is a packaging bug that was invisible for as long as nobody looked.
 `tools/RecompOne/patches/0061` hints `GLFW_WAYLAND_APP_ID` (and the X11 class beside it)
 from `Runtime.AppId`, which `Program.cs` and the launcher both set to `verdite2`

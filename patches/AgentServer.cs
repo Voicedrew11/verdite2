@@ -125,7 +125,9 @@ public static class AgentServer
         "viewfrac [on|off|toggle] - build the view a fraction of an angle unit past the whole one the smoothing rounded to (not saved)",
         "scale [1..8] - the render scale, taken at the next present (0097, not saved); alone, the current one",
         "settings [open|save|discard|step <key> <-1|1>|reset <key>] - the game menu's settings session without its page; alone, every setting",
+        "setup [open|apply <original|faithful|modern> [two more]] - the first-run setup: each group's tier now, opened as RUN SETUP does, or one tier (or one per category) applied live, the display left alone",
         "point [<x> <y>|left|right|off] - the menu pointer at game pixels, a click, or the host's pointer again; alone, what it saw",
+        "aim [on|off|head on|off|hold on|off|ease on|off|<dyaw> <dpitch> [ms]] - mouse aim: alone, its state; on/off set the setting (unsaved); head on|off sets whether the view follows the mouse; hold on|off whether it holds still while the body turns; ease on|off whether a turn ramps as the D-pad's; <dyaw> <dpitch> move the reticle (4096 is a full turn, +dyaw is Left, +dpitch is down) over ms, capturing the pointer if needed",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -335,7 +337,9 @@ public static class AgentServer
                      || parts[0].Equals("waves", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("gpuworld", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("murk", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("aim", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("settings", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("setup", StringComparison.OrdinalIgnoreCase)
                      || Remaster.Shell.Verbs.Contains(parts[0].ToLowerInvariant());
         var cmd = new Cmd(parts[0].ToLowerInvariant(),
                           parts.Length > 1 ? (whole ? string.Join(' ', parts[1..]) : parts[1]) : "",
@@ -374,6 +378,8 @@ public static class AgentServer
             case "scale":
             case "settings":
             case "point":
+            case "aim":
+            case "setup":
                 Enqueue(_fast, cmd);
                 break;
             case "load":
@@ -483,7 +489,9 @@ public static class AgentServer
         "viewfrac" => CameraBlock.Shell(cmd.Arg1),
         "scale" => DoScale(cmd.Arg1),
         "settings" => DoSettings(cmd.Arg1),
+        "setup" => Setup.Shell(cmd.Arg1),
         "point" => MenuMouse.Shell(cmd.Arg1, cmd.Arg2),
+        "aim" => DoAim(cmd.Arg1),
         "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
         "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         "savecheck" => DoSaveCheck(),
@@ -729,6 +737,68 @@ public static class AgentServer
                (why is null ? "" : ",\"error\":" + Q(why)) + ",\"session\":" + (session is null ? "false" : "true") +
                ",\"writes\":" + SettingsStore.Writes + ",\"settings\":[" + string.Join(',', rows) + "]}";
     }
+
+    /// <summary>Mouse aim, from the game thread like <c>view</c> and <c>point</c>
+    /// (the fast queue). <c>aim &lt;dyaw&gt; &lt;dpitch&gt;</c> needs the pointer
+    /// captured, so it captures it first, as a click would. On/off and head are the
+    /// settings' own switches, unsaved.</summary>
+    static string DoAim(string args)
+    {
+        var a = args.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (a.Length == 0) return AimReply();
+
+        if (a[0].Equals("on", StringComparison.OrdinalIgnoreCase) && a.Length == 1)
+        {
+            Mouse.Enabled = true;
+            MouseAim.Enabled = true;
+            return AimReply();
+        }
+        if (a[0].Equals("off", StringComparison.OrdinalIgnoreCase) && a.Length == 1)
+        {
+            MouseAim.Enabled = false;
+            MouseAim.Reset();
+            return AimReply();
+        }
+        if (a[0].Equals("head", StringComparison.OrdinalIgnoreCase) && a.Length == 2
+            && (a[1].Equals("on", StringComparison.OrdinalIgnoreCase) || a[1].Equals("off", StringComparison.OrdinalIgnoreCase)))
+        {
+            MouseAim.HeadLook = a[1].Equals("on", StringComparison.OrdinalIgnoreCase);
+            return AimReply();
+        }
+        if (a[0].Equals("ease", StringComparison.OrdinalIgnoreCase) && a.Length == 2
+            && (a[1].Equals("on", StringComparison.OrdinalIgnoreCase) || a[1].Equals("off", StringComparison.OrdinalIgnoreCase)))
+        {
+            MouseAim.Ease = a[1].Equals("on", StringComparison.OrdinalIgnoreCase);
+            return AimReply();
+        }
+        if (a[0].Equals("hold", StringComparison.OrdinalIgnoreCase) && a.Length == 2
+            && (a[1].Equals("on", StringComparison.OrdinalIgnoreCase) || a[1].Equals("off", StringComparison.OrdinalIgnoreCase)))
+        {
+            MouseAim.HoldView = a[1].Equals("on", StringComparison.OrdinalIgnoreCase);
+            if (MouseAim.HoldView) MouseAim.HeadLook = false;
+            return AimReply();
+        }
+
+        if (a.Length is < 2 or > 3
+            || !int.TryParse(a[0], System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out int dyaw)
+            || !int.TryParse(a[1], System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out int dpitch)
+            || (a.Length == 3 && (!int.TryParse(a[2], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int ms) || ms < 0)))
+            return Err("aim [on|off|head on|off|hold on|off|ease on|off|<dyaw> <dpitch> [ms]]");
+
+        if (!Mouse.Enabled) return Err("mouse look is off; try 'aim on'");
+        if (!MouseAim.Enabled) return Err("mouse aim is off; try 'aim on'");
+        if (!Mouse.Captured)
+        {
+            Mouse.SetCaptured(true);
+            if (!Mouse.Captured) return Err("pointer not captured");
+        }
+
+        int spreadMs = a.Length == 3 ? int.Parse(a[2], System.Globalization.CultureInfo.InvariantCulture) : 0;
+        MouseAim.Inject(dyaw, dpitch, spreadMs);
+        return AimReply();
+    }
+
+    static string AimReply() => "{\"ok\":true,\"cmd\":\"aim\",\"aim\":" + MouseAim.StateJson() + "}";
 
     static string DoHelp()
     {

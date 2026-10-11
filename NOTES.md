@@ -376,12 +376,16 @@ The SPU mixer, its reverb and interpolation, XA resampling and the host output.
 
 ### [SETTINGS.md](docs/SETTINGS.md)
 
-PORT SETTINGS, in place of RETURN in the in-game menu: the port's settings on pages drawn with the game's own routines, ported from Verdite3.
+PORT SETTINGS, in place of RETURN in the in-game menu: the port's settings on pages drawn with the game's own routines, ported from Verdite3; and the first-run setup, shown while the game builds and run again from that page.
 
 - The rules
 - The pieces
 - The page
 - Measured (2026-10-09)
+- Onboarding
+  - Where setup lives
+  - What setup writes, and when
+  - Setup measured (2026-10-10)
 
 ### [ENV_VARS.md](docs/ENV_VARS.md)
 

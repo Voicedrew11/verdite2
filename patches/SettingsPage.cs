@@ -27,6 +27,10 @@ namespace Kf2;
 /// cancelled" so the menu stays open. The game's dispatch never sees the item: the
 /// chooser leaves the selection at none. The page's own records are built on the
 /// guest stack, and the menu's cursor is left on the item.
+///
+/// The DISPLAY page ends in RUN SETUP, which is not a setting: it opens the
+/// first-run setup (<see cref="Setup"/>) over the menu and holds the page, drawn
+/// and deaf, until it closes, then reads every value again.
 /// </summary>
 public static class SettingsPage
 {
@@ -46,6 +50,7 @@ public static class SettingsPage
     const uint OurRecord = 0x80064DB4;            // group 0's record 8: X 31, Y 201, the string after
     const int OurX = 31, OurY = 201;
     const string OurLabel = "PORT SETTINGS";
+    const string SetupLabel = "RUN SETUP";         // the DISPLAY page's last row
 
     // ---- The action masks: the pad word ANDed with each, as the menu tests them ----
     const uint ConfirmMask = 0x8006E568;          // Cross
@@ -175,25 +180,29 @@ public static class SettingsPage
             c.SP -= Frame;
             KingsField2.func_80022EFC(c, m);      // every button up, as the game waits before a page
             if (_probe) Console.WriteLine($"[KF2] settings page: open on {PortSettings.Pages[_page]}");
-            Loop(c, m, session);
+            Loop(c, m, ref session);
             KingsField2.func_80022EFC(c, m);      // so the Circle that left does not close the menu
         }
         finally
         {
             // Never leave the session open, whatever happened.
-            if (SettingsSession.Current == session) session.Discard();
+            if (SettingsSession.Current is { } open) open.Discard();
             MenuMouse.Forget();                   // nothing the page drew is on screen now
             c.Restore(saved);
             _open = false;
         }
     }
 
-    static void Loop(CpuContext c, IMemory m, SettingsSession session)
+    /// <summary>Whether the page shown ends in RUN SETUP.</summary>
+    static bool SetupRow => PortSettings.Pages[_page] == PortSettings.DisplayPage;
+
+    static void Loop(CpuContext c, IMemory m, ref SettingsSession session)
     {
         int row = 0;
         while (true)
         {
             var rows = PortSettings.OnPage(PortSettings.Pages[_page]).ToArray();
+            int count = rows.Length + (SetupRow ? 1 : 0);
             KingsField2.func_80022E90(c, m);      // the repeat gate
             KingsField2.func_80022E58(c, m);      // the pad, in V0
             uint pad = c.V0;
@@ -202,8 +211,8 @@ public static class SettingsPage
             uint left = m.ReadU32(LeftMask), right = m.ReadU32(RightMask);
             uint l1 = m.ReadU32(L1Mask), r1 = m.ReadU32(R1Mask);
 
-            if ((pad & up) != 0) { row = row == 0 ? rows.Length - 1 : row - 1; Moved(c, m); }
-            else if ((pad & down) != 0) { row = row == rows.Length - 1 ? 0 : row + 1; Moved(c, m); }
+            if ((pad & up) != 0) { row = row == 0 ? count - 1 : row - 1; Moved(c, m); }
+            else if ((pad & down) != 0) { row = row == count - 1 ? 0 : row + 1; Moved(c, m); }
             else if ((pad & (l1 | r1)) != 0)
             {
                 int n = PortSettings.Pages.Length;
@@ -212,7 +221,12 @@ public static class SettingsPage
                 Moved(c, m);
                 if (_probe) Console.WriteLine($"[KF2] settings page: page {PortSettings.Pages[_page]}");
             }
-            else if ((pad & (m.ReadU32(ConfirmMask) | right | left)) != 0)
+            else if (row == rows.Length && (pad & (m.ReadU32(ConfirmMask) | right)) != 0)
+            {
+                Sound(c, m, SoundChange);
+                session = RunSetup(c, m, session, rows, row);
+            }
+            else if (row < rows.Length && (pad & (m.ReadU32(ConfirmMask) | right | left)) != 0)
             {
                 var s = rows[row];
                 int dir = (pad & left) != 0 ? -1 : 1;
@@ -237,9 +251,9 @@ public static class SettingsPage
                 switch (Ask(c, m))
                 {
                     case 0:
-                        int count = session.Changed.Count();
+                        int saved = session.Changed.Count();
                         session.Save();
-                        if (_probe) Console.WriteLine($"[KF2] settings page: saved {count} change(s)");
+                        if (_probe) Console.WriteLine($"[KF2] settings page: saved {saved} change(s)");
                         return;
                     case 1:
                         session.Discard();
@@ -252,6 +266,29 @@ public static class SettingsPage
 
             for (int f = 0; f < 2; f++) DrawPage(c, m, session, rows, row);
         }
+    }
+
+    /// <summary>
+    /// RUN SETUP: the setup opens on the host and applies its choices itself, live
+    /// where it can; the page goes on drawing, reading no buttons, until it closes.
+    /// What this page had staged is put back first, since setup chooses everything
+    /// again, and the session is opened afresh after, on the values setup left.
+    /// </summary>
+    static SettingsSession RunSetup(CpuContext c, IMemory m, SettingsSession session, PortSetting[] rows, int row)
+    {
+        if (session.Dirty && _probe) Console.WriteLine("[KF2] settings page: staged changes put back for setup");
+        session.Discard();
+        if (_probe) Console.WriteLine("[KF2] settings page: run setup");
+
+        var held = SettingsSession.Open([]);      // nothing to show changed while setup is up
+        Setup.Open();
+        while (Setup.Busy)
+            DrawPage(c, m, held, rows, row);
+        held.Discard();
+
+        KingsField2.func_80022EFC(c, m);          // the button that closed setup is not a press here
+        if (_probe) Console.WriteLine("[KF2] settings page: setup closed");
+        return SettingsSession.Open(PortSettings.All);
     }
 
     static void Moved(CpuContext c, IMemory m)
@@ -315,13 +352,20 @@ public static class SettingsPage
             Label(c, m, c.SP + Record, dim: !usable);
         }
 
+        int count = rows.Length;
+        if (SetupRow)
+        {
+            Item(c, m, RowX, FirstRowY + count * RowStep, SetupLabel, row == count, usable: true);
+            count++;
+        }
+
         // The rows to the menu pointer: the page's loop keeps its cursor in a
         // register, so hover reaches it as Up/Down through the pad read and a
         // click on the selected row as Right. The header and the value column
         // are the page's too, so a click on them is not a click off it.
         var (w, h) = MenuMouse.BoxSize(m, BoxTemplate);
-        int bottom = FirstRowY + Math.Max(rows.Length - 1, 0) * RowStep - Inset + h;
-        Pointed(m, RowX, FirstRowY, RowStep, rows.Length, row, values: true, $"settings page {PortSettings.Pages[_page]}",
+        int bottom = FirstRowY + Math.Max(count - 1, 0) * RowStep - Inset + h;
+        Pointed(m, RowX, FirstRowY, RowStep, count, row, values: true, $"settings page {PortSettings.Pages[_page]}",
                 (HeaderX - Inset, HeaderY - Inset, ValueX + ValueChars * GlyphW - (HeaderX - Inset), bottom - (HeaderY - Inset)));
         KingsField2.func_800226A8(c, m);          // the presenter
     }

@@ -267,10 +267,22 @@ KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities 
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=F9                         # a key that captures and releases besides the click; None (the default) for none, and Escape takes Escape from the menu
 KF2_MOUSE_LEAD=0                         # mouse look waits for the tick, as with Gameplay ▸ Instant mouse look off (on by default); =1 forces it on
+KF2_MOUSE_AIM=1                         # the mouse moves a reticle and the player turns toward it, instead of the view (1 on, 0 off; overrides the saved Mouse aim setting; off by default)
+KF2_MOUSE_AIM_RING=32                   # mouse aim's commit ring, in angle units: the reticle wanders inside it without turning the player (default 32, about 2.8 deg; 0 turns every offset into a turn, as before)
+KF2_MOUSE_AIM_HEAD=1                    # mouse aim's head look: the view is drawn at the facing plus the reticle, so it follows the hand while the body turns toward it (1 on, 0 off; overrides the saved View follows the mouse setting; off by default)
+KF2_MOUSE_AIM_HOLD=1                    # mouse aim's held view: the picture holds still while the body turns, the facing's dot travels to the circle, and the view recentres once the turn lands (head look wins if both are on; overrides the saved View setting)
+KF2_MOUSE_AIM_SENS=1.0                  # scales the hand's motion before it reaches mouse aim's reticle, on top of the turn sensitivity (0.1 to 4, default 1.0; overrides the saved Aim sensitivity setting)
+KF2_MOUSE_AIM_SETTLE=3                  # ticks a small aim must hold still inside the ring before it is carried out (default 3; 0 is off, and a small aim then never turns the player)
+KF2_MOUSE_AIM_PROBE=1                   # one line a tick while mouse aim's reticle or a step is not at rest: offset, step, velocity, yield, measured turn, still count
+KF2_MOUSE_AIM_MARKS=aiming              # when mouse aim's dot, line and circle are drawn: off, aiming (only during a turn or with the circle off the middle; the default) or always; overrides the saved Aim marks setting
+KF2_MOUSE_AIM_LINE=0                    # leave out mouse aim's line from the middle to the circle (1 draws it, the default); overrides the saved Connecting line setting
+KF2_MOUSE_AIM_DOT=0                     # leave out mouse aim's dot, the facing (1 draws it, the default); overrides the saved Centre dot setting
+KF2_MOUSE_AIM_EASE=0                    # mouse aim's turn without the D-pad's ease: full rate at once, stopping dead on the reticle (1 eases, the default); overrides the saved Ease the turn setting
 KF2_DEBUG_FILMMODE_PROBE=5               # mods/kf2debug: toggle film mode (V) every 5 s and print the three flags and FrameSmoothing.LeadSuppressed
 KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
 KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did
-KF2_SETTINGSPAGE_PROBE=1                 # PORT SETTINGS in the in-game menu: a line for each open, page, step, save and discard (docs/SETTINGS.md)
+KF2_SETTINGSPAGE_PROBE=1                 # PORT SETTINGS in the in-game menu: a line for each open, page, step, save and discard (docs/SETTINGS.md); RUN SETUP and setup closing too
+VERDITE2_SETUP=1                         # the launcher shows the first-run setup even when it is not due (a player with settings is never due); "Onboarding" in docs/SETTINGS.md
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
 KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
 KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second
@@ -282,8 +294,7 @@ KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the origi
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
 KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill|goto|view
 KF2_UISCALE=1                            # force the interface scale, and save it
-KF2_ICON=orb                             # the shipped verdite mark as the window icon (the game's memory-card icon, off the disc, by default)
-KF2_ICON=off                             # no window icon at all
+KF2_ICON=off                             # no icon at all (the game's memory-card icon, off the disc, by default; the port ships no other)
 KF2_ICON=1                               # which of the card icon's three frames (0)
 KF2_ICON_INSTALL=0                       # do not write the icon into the desktop's icon theme (Linux; it is what a Wayland compositor reads), and point no Windows shortcut at icon.ico
 KF2_MAP=0                                # the map off entirely (on by default); M opens it

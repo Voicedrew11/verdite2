@@ -1,0 +1,1003 @@
+{
+  "_comment": "The first-run setup's groups and tiers; read by Verdite Core's Onboarding (tools/verdite-core/src/Onboarding). See \"Onboarding\" in docs/SETTINGS.md.",
+  "version": 1,
+  "welcome": "kf2.setup.welcome",
+  "existing": "kf2.",
+  "defaults": {
+    "Borderless": "False",
+    "RenderScale": "4",
+    "kf2.widescreen.aspect": "1.7777778",
+    "kf2.framepacing.fps": "60",
+    "kf2.analog.on": "True",
+    "kf2.controls": "False",
+    "kf2.mouse.on": "True",
+    "kf2.menumouse.on": "True",
+    "kf2.mouse.aim": "False",
+    "kf2.mouse.aimline": "True",
+    "kf2.mouse.aimdot": "True",
+    "kf2.rumble.on": "True",
+    "kf2.rumble.hd": "True",
+    "kf2.gyroaim.on": "True",
+    "kf2.perspective.on": "True",
+    "kf2.subpixel.on": "True",
+    "kf2.zbuffer.on": "True",
+    "kf2.nodither.on": "True",
+    "kf2.truecolor.on": "True",
+    "kf2.aniso.level": "16",
+    "kf2.mipmaps.on": "True",
+    "kf2.perpixel.on": "True",
+    "kf2.evenfog.on": "True",
+    "kf2.fog": "2",
+    "kf2.ao.on": "True",
+    "kf2.murk.on": "True",
+    "kf2.waves.on": "True",
+    "kf2.ssr.planar": "True",
+    "kf2.smoothing.on": "True",
+    "kf2.smoothing.pos": "True",
+    "kf2.smoothing.objects": "True",
+    "kf2.smoothing.anim": "True",
+    "kf2.smoothing.fluid": "True",
+    "kf2.audio.interp": "2",
+    "kf2.audio.reverb": "1",
+    "kf2.audio.positional": "2",
+    "kf2.map.on": "True",
+    "kf2.gearcompare.enabled": "True",
+    "kf2.autoreload.enabled": "True"
+  },
+  "display": [
+    {
+      "id": "window",
+      "label": "kf2.setup.window",
+      "default": 1,
+      "options": [
+        {
+          "label": "kf2.setup.windowed",
+          "set": {
+            "Fullscreen": "False"
+          }
+        },
+        {
+          "label": "kf2.setup.fullscreen",
+          "set": {
+            "Fullscreen": "True",
+            "Borderless": "False"
+          }
+        },
+        {
+          "label": "kf2.setup.borderless",
+          "set": {
+            "Fullscreen": "True",
+            "Borderless": "True"
+          }
+        }
+      ]
+    },
+    {
+      "id": "resolution",
+      "label": "kf2.setup.resolution",
+      "tip": "kf2.setup.resolution.tip",
+      "suggest": "height",
+      "original": 0,
+      "options": [
+        {
+          "label": "240p (1x)",
+          "match": 240,
+          "set": {
+            "RenderScale": "1"
+          }
+        },
+        {
+          "label": "480p (2x)",
+          "match": 480,
+          "set": {
+            "RenderScale": "2"
+          }
+        },
+        {
+          "label": "720p (3x)",
+          "match": 720,
+          "set": {
+            "RenderScale": "3"
+          }
+        },
+        {
+          "label": "960p (4x)",
+          "match": 960,
+          "set": {
+            "RenderScale": "4"
+          }
+        },
+        {
+          "label": "1200p (5x)",
+          "match": 1200,
+          "set": {
+            "RenderScale": "5"
+          }
+        },
+        {
+          "label": "1440p (6x)",
+          "match": 1440,
+          "set": {
+            "RenderScale": "6"
+          }
+        },
+        {
+          "label": "1680p (7x)",
+          "match": 1680,
+          "set": {
+            "RenderScale": "7"
+          }
+        },
+        {
+          "label": "1920p (8x)",
+          "match": 1920,
+          "set": {
+            "RenderScale": "8"
+          }
+        }
+      ]
+    },
+    {
+      "id": "aspect",
+      "label": "kf2.setup.aspect",
+      "tip": "kf2.setup.aspect.tip",
+      "suggest": "aspect",
+      "original": 0,
+      "options": [
+        {
+          "label": "4:3",
+          "match": 1.3333333,
+          "set": {
+            "kf2.widescreen.aspect": "1.3333334"
+          }
+        },
+        {
+          "label": "16:10",
+          "match": 1.6,
+          "set": {
+            "kf2.widescreen.aspect": "1.6"
+          }
+        },
+        {
+          "label": "16:9",
+          "match": 1.7777778,
+          "set": {
+            "kf2.widescreen.aspect": "1.7777778"
+          }
+        },
+        {
+          "label": "21:9",
+          "match": 2.3703704,
+          "set": {
+            "kf2.widescreen.aspect": "2.3703704"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fps",
+      "label": "kf2.setup.fps",
+      "tip": "kf2.setup.fps.tip",
+      "suggest": "refresh",
+      "slider": true,
+      "original": 0,
+      "options": [
+        {
+          "label": "kf2.setup.fps.original",
+          "match": 20,
+          "set": {
+            "kf2.framepacing.fps": "20"
+          }
+        },
+        {
+          "label": "30 fps",
+          "match": 30,
+          "set": {
+            "kf2.framepacing.fps": "30"
+          }
+        },
+        {
+          "label": "40 fps",
+          "match": 40,
+          "set": {
+            "kf2.framepacing.fps": "40"
+          }
+        },
+        {
+          "label": "50 fps",
+          "match": 50,
+          "set": {
+            "kf2.framepacing.fps": "50"
+          }
+        },
+        {
+          "label": "60 fps",
+          "match": 60,
+          "set": {
+            "kf2.framepacing.fps": "60"
+          }
+        },
+        {
+          "label": "75 fps",
+          "match": 75,
+          "set": {
+            "kf2.framepacing.fps": "75"
+          }
+        },
+        {
+          "label": "90 fps",
+          "match": 90,
+          "set": {
+            "kf2.framepacing.fps": "90"
+          }
+        },
+        {
+          "label": "100 fps",
+          "match": 100,
+          "set": {
+            "kf2.framepacing.fps": "100"
+          }
+        },
+        {
+          "label": "120 fps",
+          "match": 120,
+          "set": {
+            "kf2.framepacing.fps": "120"
+          }
+        },
+        {
+          "label": "144 fps",
+          "match": 144,
+          "set": {
+            "kf2.framepacing.fps": "144"
+          }
+        },
+        {
+          "label": "165 fps",
+          "match": 165,
+          "set": {
+            "kf2.framepacing.fps": "165"
+          }
+        },
+        {
+          "label": "180 fps",
+          "match": 180,
+          "set": {
+            "kf2.framepacing.fps": "180"
+          }
+        },
+        {
+          "label": "240 fps",
+          "match": 240,
+          "set": {
+            "kf2.framepacing.fps": "240"
+          }
+        },
+        {
+          "label": "kf2.setup.fps.uncapped",
+          "set": {
+            "kf2.framepacing.fps": "0"
+          }
+        }
+      ]
+    }
+  ],
+  "categories": [
+    {
+      "id": "controls",
+      "label": "kf2.setup.controls",
+      "tiers": [
+        "kf2.setup.controls.0",
+        "kf2.setup.controls.1",
+        "kf2.setup.controls.2"
+      ],
+      "groups": [
+        {
+          "id": "movement",
+          "label": "kf2.setup.movement",
+          "tiers": [
+            {
+              "desc": "kf2.setup.movement.0",
+              "set": {
+                "kf2.analog.on": "False",
+                "kf2.controls": null
+              }
+            },
+            {
+              "desc": "kf2.setup.movement.1",
+              "set": {
+                "kf2.analog.on": null,
+                "kf2.controls": "True"
+              }
+            },
+            {
+              "desc": "kf2.setup.movement.2",
+              "set": {
+                "kf2.analog.on": null,
+                "kf2.controls": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "mouse",
+          "label": "kf2.setup.mouse",
+          "tiers": [
+            {
+              "desc": "kf2.setup.mouse.0",
+              "set": {
+                "kf2.mouse.on": "False",
+                "kf2.menumouse.on": "False",
+                "kf2.mouse.aim": null,
+                "kf2.mouse.aimline": null,
+                "kf2.mouse.aimdot": null
+              }
+            },
+            {
+              "desc": "kf2.setup.mouse.1",
+              "set": {
+                "kf2.mouse.on": null,
+                "kf2.menumouse.on": null,
+                "kf2.mouse.aim": "True",
+                "kf2.mouse.aimline": "False",
+                "kf2.mouse.aimdot": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.mouse.2",
+              "set": {
+                "kf2.mouse.on": null,
+                "kf2.menumouse.on": null,
+                "kf2.mouse.aim": null,
+                "kf2.mouse.aimline": null,
+                "kf2.mouse.aimdot": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "haptics",
+          "label": "kf2.setup.haptics",
+          "tiers": [
+            {
+              "desc": "kf2.setup.haptics.0",
+              "set": {
+                "kf2.rumble.on": "False",
+                "kf2.rumble.hd": null,
+                "kf2.gyroaim.on": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.haptics.1",
+              "set": {
+                "kf2.rumble.on": null,
+                "kf2.rumble.hd": "False",
+                "kf2.gyroaim.on": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.haptics.2",
+              "set": {
+                "kf2.rumble.on": null,
+                "kf2.rumble.hd": null,
+                "kf2.gyroaim.on": null
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "presentation",
+      "label": "kf2.setup.presentation",
+      "tiers": [
+        "kf2.setup.presentation.0",
+        "kf2.setup.presentation.1",
+        "kf2.setup.presentation.2"
+      ],
+      "groups": [
+        {
+          "id": "image",
+          "label": "kf2.setup.image",
+          "tiers": [
+            {
+              "desc": "kf2.setup.image.0",
+              "set": {
+                "kf2.perspective.on": "False",
+                "kf2.subpixel.on": "False",
+                "kf2.zbuffer.on": "False",
+                "kf2.nodither.on": "False",
+                "kf2.truecolor.on": "False",
+                "kf2.aniso.level": "1",
+                "kf2.mipmaps.on": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.image.1",
+              "set": {
+                "kf2.perspective.on": null,
+                "kf2.subpixel.on": null,
+                "kf2.zbuffer.on": null,
+                "kf2.nodither.on": null,
+                "kf2.truecolor.on": "False",
+                "kf2.aniso.level": "1",
+                "kf2.mipmaps.on": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.image.2",
+              "set": {
+                "kf2.perspective.on": null,
+                "kf2.subpixel.on": null,
+                "kf2.zbuffer.on": null,
+                "kf2.nodither.on": null,
+                "kf2.truecolor.on": null,
+                "kf2.aniso.level": null,
+                "kf2.mipmaps.on": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "lighting",
+          "label": "kf2.setup.lighting",
+          "tiers": [
+            {
+              "desc": "kf2.setup.lighting.0",
+              "set": {
+                "kf2.perpixel.on": "False",
+                "kf2.evenfog.on": "False",
+                "kf2.fog": "0",
+                "kf2.ao.on": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.lighting.1",
+              "set": {
+                "kf2.perpixel.on": null,
+                "kf2.evenfog.on": null,
+                "kf2.fog": null,
+                "kf2.ao.on": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.lighting.2",
+              "set": {
+                "kf2.perpixel.on": null,
+                "kf2.evenfog.on": null,
+                "kf2.fog": null,
+                "kf2.ao.on": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "water",
+          "label": "kf2.setup.water",
+          "tiers": [
+            {
+              "desc": "kf2.setup.water.0",
+              "set": {
+                "kf2.murk.on": "False",
+                "kf2.waves.on": "False",
+                "kf2.ssr.planar": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.water.1",
+              "set": {
+                "kf2.murk.on": "False",
+                "kf2.waves.on": "False",
+                "kf2.ssr.planar": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.water.2",
+              "set": {
+                "kf2.murk.on": null,
+                "kf2.waves.on": null,
+                "kf2.ssr.planar": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "motion",
+          "label": "kf2.setup.motion",
+          "tiers": [
+            {
+              "desc": "kf2.setup.motion.0",
+              "set": {
+                "kf2.smoothing.on": "False",
+                "kf2.smoothing.pos": "False",
+                "kf2.smoothing.objects": "False",
+                "kf2.smoothing.anim": "False",
+                "kf2.smoothing.fluid": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.motion.1",
+              "set": {
+                "kf2.smoothing.on": null,
+                "kf2.smoothing.pos": null,
+                "kf2.smoothing.objects": null,
+                "kf2.smoothing.anim": null,
+                "kf2.smoothing.fluid": null
+              }
+            },
+            {
+              "desc": "kf2.setup.motion.2",
+              "set": {
+                "kf2.smoothing.on": null,
+                "kf2.smoothing.pos": null,
+                "kf2.smoothing.objects": null,
+                "kf2.smoothing.anim": null,
+                "kf2.smoothing.fluid": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "audio",
+          "label": "kf2.setup.audio",
+          "tiers": [
+            {
+              "desc": "kf2.setup.audio.0",
+              "set": {
+                "kf2.audio.interp": "0",
+                "kf2.audio.reverb": "0",
+                "kf2.audio.positional": "0"
+              }
+            },
+            {
+              "desc": "kf2.setup.audio.1",
+              "set": {
+                "kf2.audio.interp": null,
+                "kf2.audio.reverb": "0",
+                "kf2.audio.positional": "0"
+              }
+            },
+            {
+              "desc": "kf2.setup.audio.2",
+              "set": {
+                "kf2.audio.interp": null,
+                "kf2.audio.reverb": null,
+                "kf2.audio.positional": null
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gameplay",
+      "label": "kf2.setup.gameplay",
+      "tiers": [
+        "kf2.setup.gameplay.0",
+        "kf2.setup.gameplay.1",
+        "kf2.setup.gameplay.2"
+      ],
+      "groups": [
+        {
+          "id": "map",
+          "label": "kf2.setup.map",
+          "tiers": [
+            {
+              "desc": "kf2.setup.map.0",
+              "set": {
+                "kf2.map.on": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.map.1",
+              "set": {
+                "kf2.map.on": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.map.2",
+              "set": {
+                "kf2.map.on": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "gear",
+          "label": "kf2.setup.gear",
+          "tiers": [
+            {
+              "desc": "kf2.setup.gear.0",
+              "set": {
+                "kf2.gearcompare.enabled": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.gear.1",
+              "set": {
+                "kf2.gearcompare.enabled": null
+              }
+            },
+            {
+              "desc": "kf2.setup.gear.2",
+              "set": {
+                "kf2.gearcompare.enabled": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "death",
+          "label": "kf2.setup.death",
+          "tiers": [
+            {
+              "desc": "kf2.setup.death.0",
+              "set": {
+                "kf2.autoreload.enabled": "False"
+              }
+            },
+            {
+              "desc": "kf2.setup.death.1",
+              "set": {
+                "kf2.autoreload.enabled": null
+              }
+            },
+            {
+              "desc": "kf2.setup.death.2",
+              "set": {
+                "kf2.autoreload.enabled": null
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "strings": {
+    "kf2.setup.window": {
+      "en": "Window",
+      "pt-BR": "Janela",
+      "es-419": "Ventana"
+    },
+    "kf2.setup.windowed": {
+      "en": "Windowed",
+      "pt-BR": "Em janela",
+      "es-419": "En ventana"
+    },
+    "kf2.setup.fullscreen": {
+      "en": "Fullscreen",
+      "pt-BR": "Tela cheia",
+      "es-419": "Pantalla completa"
+    },
+    "kf2.setup.borderless": {
+      "en": "Borderless",
+      "pt-BR": "Sem bordas",
+      "es-419": "Sin bordes"
+    },
+    "kf2.setup.resolution": {
+      "en": "Render resolution",
+      "pt-BR": "Resolução de renderização",
+      "es-419": "Resolución de renderizado"
+    },
+    "kf2.setup.resolution.tip": {
+      "en": "The resolution the 3D picture is drawn at, before it is fitted to the window. 240p is the PlayStation's.",
+      "pt-BR": "A resolução em que a imagem 3D é desenhada, antes de ser ajustada à janela. 240p é a do PlayStation.",
+      "es-419": "La resolución a la que se dibuja la imagen 3D, antes de ajustarse a la ventana. 240p es la de la PlayStation."
+    },
+    "kf2.setup.aspect": {
+      "en": "Aspect ratio",
+      "pt-BR": "Proporção de tela",
+      "es-419": "Relación de aspecto"
+    },
+    "kf2.setup.aspect.tip": {
+      "en": "4:3 is the original picture; a wider ratio shows more to either side.",
+      "pt-BR": "4:3 é a imagem original; uma proporção mais larga mostra mais dos lados.",
+      "es-419": "4:3 es la imagen original; una relación más ancha muestra más a los lados."
+    },
+    "kf2.setup.fps": {
+      "en": "Frame rate",
+      "pt-BR": "Taxa de quadros",
+      "es-419": "Velocidad de fotogramas"
+    },
+    "kf2.setup.fps.tip": {
+      "en": "How often the picture is drawn. The world itself always runs at the game's own speed.",
+      "pt-BR": "Com que frequência a imagem é desenhada. O mundo sempre roda na velocidade do próprio jogo.",
+      "es-419": "Con qué frecuencia se dibuja la imagen. El mundo siempre corre a la velocidad propia del juego."
+    },
+    "kf2.setup.fps.original": {
+      "en": "20 fps (original)",
+      "pt-BR": "20 fps (original)",
+      "es-419": "20 fps (original)"
+    },
+    "kf2.setup.fps.uncapped": {
+      "en": "Uncapped",
+      "pt-BR": "Sem limite",
+      "es-419": "Sin límite"
+    },
+    "kf2.setup.controls": {
+      "en": "Controls",
+      "pt-BR": "Controles",
+      "es-419": "Controles"
+    },
+    "kf2.setup.controls.0": {
+      "en": "The pad as the PlayStation read it: the D-pad walks and turns, with no mouse and no rumble.",
+      "pt-BR": "O controle como o PlayStation o lia: o direcional anda e vira, sem mouse e sem vibração.",
+      "es-419": "El control como lo leía la PlayStation: la cruceta camina y gira, sin mouse y sin vibración."
+    },
+    "kf2.setup.controls.1": {
+      "en": "One stick walks and turns, as the D-pad did; the mouse turns you toward where it points; a pointer in the menus; plain rumble.",
+      "pt-BR": "Um analógico anda e vira, como o direcional fazia; o mouse vira você para onde aponta; um ponteiro nos menus; vibração simples.",
+      "es-419": "Una palanca camina y gira, como lo hacía la cruceta; el mouse te gira hacia donde apunta; un puntero en los menús; vibración simple."
+    },
+    "kf2.setup.controls.2": {
+      "en": "Twin sticks and mouse look, a pointer in the menus, HD rumble and gyro aim with a drawn bow.",
+      "pt-BR": "Dois analógicos e visão com o mouse, um ponteiro nos menus, vibração HD e mira por giroscópio com o arco puxado.",
+      "es-419": "Dos palancas y vista con el mouse, un puntero en los menús, vibración HD y apuntado con giroscopio con el arco tensado."
+    },
+    "kf2.setup.movement": {
+      "en": "Movement",
+      "pt-BR": "Movimento",
+      "es-419": "Movimiento"
+    },
+    "kf2.setup.movement.0": {
+      "en": "D-pad only. The analog sticks do nothing.",
+      "pt-BR": "Só o direcional. Os analógicos não fazem nada.",
+      "es-419": "Solo la cruceta. Las palancas no hacen nada."
+    },
+    "kf2.setup.movement.1": {
+      "en": "The left stick walks and turns, like tank controls.",
+      "pt-BR": "O analógico esquerdo anda e vira, como controles de tanque.",
+      "es-419": "La palanca izquierda camina y gira, como controles de tanque."
+    },
+    "kf2.setup.movement.2": {
+      "en": "Twin sticks: the left stick walks and steps aside, the right one looks around.",
+      "pt-BR": "Dois analógicos: o esquerdo anda e se desloca de lado, o direito olha ao redor.",
+      "es-419": "Dos palancas: la izquierda camina y se desplaza de lado, la derecha mira alrededor."
+    },
+    "kf2.setup.mouse": {
+      "en": "Mouse",
+      "pt-BR": "Mouse",
+      "es-419": "Mouse"
+    },
+    "kf2.setup.mouse.0": {
+      "en": "No mouse, in play or in the menus.",
+      "pt-BR": "Sem mouse, no jogo ou nos menus.",
+      "es-419": "Sin mouse, en el juego ni en los menús."
+    },
+    "kf2.setup.mouse.1": {
+      "en": "Mouse aim: the mouse moves a reticle and you turn toward it at the D-pad's speed; a pointer in the menus.",
+      "pt-BR": "Mira com o mouse: o mouse move uma mira e você vira até ela na velocidade do direcional; um ponteiro nos menus.",
+      "es-419": "Apuntado con el mouse: el mouse mueve una retícula y giras hacia ella a la velocidad de la cruceta; un puntero en los menús."
+    },
+    "kf2.setup.mouse.2": {
+      "en": "Mouse look in play and a pointer in the menus.",
+      "pt-BR": "Visão com o mouse no jogo e um ponteiro nos menus.",
+      "es-419": "Vista con el mouse en el juego y un puntero en los menús."
+    },
+    "kf2.setup.haptics": {
+      "en": "Rumble and gyro",
+      "pt-BR": "Vibração e giroscópio",
+      "es-419": "Vibración y giroscopio"
+    },
+    "kf2.setup.haptics.0": {
+      "en": "No rumble and no gyro; the original release had neither.",
+      "pt-BR": "Sem vibração e sem giroscópio; o lançamento original não tinha nenhum dos dois.",
+      "es-419": "Sin vibración ni giroscopio; el lanzamiento original no tenía ninguno."
+    },
+    "kf2.setup.haptics.1": {
+      "en": "Plain rumble as a bow is drawn and loosed; no gyro.",
+      "pt-BR": "Vibração simples ao puxar e soltar o arco; sem giroscópio.",
+      "es-419": "Vibración simple al tensar y soltar el arco; sin giroscopio."
+    },
+    "kf2.setup.haptics.2": {
+      "en": "HD rumble, and the pad's gyro aims a drawn bow.",
+      "pt-BR": "Vibração HD, e o giroscópio do controle mira o arco puxado.",
+      "es-419": "Vibración HD, y el giroscopio del control apunta el arco tensado."
+    },
+    "kf2.setup.presentation": {
+      "en": "Presentation",
+      "pt-BR": "Apresentação",
+      "es-419": "Presentación"
+    },
+    "kf2.setup.presentation.0": {
+      "en": "The PlayStation's picture and sound: warping textures, jittering edges, dither and the console's soft audio.",
+      "pt-BR": "A imagem e o som do PlayStation: texturas que se deformam, bordas que tremem, pontilhado e o áudio suave do console.",
+      "es-419": "La imagen y el sonido de la PlayStation: texturas que se deforman, bordes que tiemblan, tramado y el audio suave de la consola."
+    },
+    "kf2.setup.presentation.1": {
+      "en": "The same look with the hardware's faults fixed: steady textures and edges, no dither, cleaner sound, and smooth motion at any frame rate.",
+      "pt-BR": "A mesma aparência com as falhas do hardware corrigidas: texturas e bordas estáveis, sem pontilhado, som mais limpo e movimento suave em qualquer taxa de quadros.",
+      "es-419": "El mismo aspecto con las fallas del hardware corregidas: texturas y bordes estables, sin tramado, sonido más limpio y movimiento suave a cualquier velocidad de fotogramas."
+    },
+    "kf2.setup.presentation.2": {
+      "en": "Everything the port adds: smooth shading, filtered textures, ambient occlusion, living water, a richer reverb and 3D sound.",
+      "pt-BR": "Tudo o que o port acrescenta: sombreamento suave, texturas filtradas, oclusão de ambiente, água viva, reverberação mais rica e som 3D.",
+      "es-419": "Todo lo que agrega el port: sombreado suave, texturas filtradas, oclusión ambiental, agua viva, una reverberación más rica y sonido 3D."
+    },
+    "kf2.setup.image": {
+      "en": "Image",
+      "pt-BR": "Imagem",
+      "es-419": "Imagen"
+    },
+    "kf2.setup.image.0": {
+      "en": "Textures that warp, vertices on whole pixels, the console's dither and unfiltered texels.",
+      "pt-BR": "Texturas que se deformam, vértices em pixels inteiros, o pontilhado do console e texels sem filtro.",
+      "es-419": "Texturas que se deforman, vértices en píxeles enteros, el tramado de la consola y texels sin filtro."
+    },
+    "kf2.setup.image.1": {
+      "en": "Perspective-correct textures, sub-pixel vertices and a depth buffer; no dither; texels kept sharp.",
+      "pt-BR": "Texturas com perspectiva correta, vértices subpixel e buffer de profundidade; sem pontilhado; texels nítidos.",
+      "es-419": "Texturas con perspectiva correcta, vértices subpíxel y búfer de profundidad; sin tramado; texels nítidos."
+    },
+    "kf2.setup.image.2": {
+      "en": "As Faithful, with smooth 24-bit shading and 16x filtered, mipmapped textures.",
+      "pt-BR": "Como Fiel, com sombreamento suave de 24 bits e texturas filtradas em 16x com mipmaps.",
+      "es-419": "Como Fiel, con sombreado suave de 24 bits y texturas filtradas a 16x con mipmaps."
+    },
+    "kf2.setup.lighting": {
+      "en": "Lighting and fog",
+      "pt-BR": "Iluminação e névoa",
+      "es-419": "Iluminación y niebla"
+    },
+    "kf2.setup.lighting.0": {
+      "en": "Light and fog worked out at each polygon's corners, as the console did.",
+      "pt-BR": "Luz e névoa calculadas nos cantos de cada polígono, como o console fazia.",
+      "es-419": "Luz y niebla calculadas en las esquinas de cada polígono, como lo hacía la consola."
+    },
+    "kf2.setup.lighting.1": {
+      "en": "Light per pixel, and fog even across tiles and by distance from the eye. No ambient occlusion.",
+      "pt-BR": "Luz por pixel, e névoa uniforme entre os blocos e pela distância do olho. Sem oclusão de ambiente.",
+      "es-419": "Luz por píxel, y niebla uniforme entre las baldosas y por distancia al ojo. Sin oclusión ambiental."
+    },
+    "kf2.setup.lighting.2": {
+      "en": "As Faithful, with ambient occlusion darkening corners and creases.",
+      "pt-BR": "Como Fiel, com oclusão de ambiente escurecendo cantos e frestas.",
+      "es-419": "Como Fiel, con oclusión ambiental que oscurece esquinas y rincones."
+    },
+    "kf2.setup.water": {
+      "en": "Water",
+      "pt-BR": "Água",
+      "es-419": "Agua"
+    },
+    "kf2.setup.water.0": {
+      "en": "Flat water, as released.",
+      "pt-BR": "Água plana, como no lançamento.",
+      "es-419": "Agua plana, como en el lanzamiento."
+    },
+    "kf2.setup.water.1": {
+      "en": "Flat water, as released.",
+      "pt-BR": "Água plana, como no lançamento.",
+      "es-419": "Agua plana, como en el lanzamiento."
+    },
+    "kf2.setup.water.2": {
+      "en": "Water with murky depth, waves and reflections.",
+      "pt-BR": "Água com profundidade turva, ondas e reflexos.",
+      "es-419": "Agua con profundidad turbia, olas y reflejos."
+    },
+    "kf2.setup.motion": {
+      "en": "Motion",
+      "pt-BR": "Movimento na tela",
+      "es-419": "Movimiento en pantalla"
+    },
+    "kf2.setup.motion.0": {
+      "en": "The world moves in the game's own 15 steps a second, however fast the picture is drawn.",
+      "pt-BR": "O mundo se move nos 15 passos por segundo do próprio jogo, não importa a taxa de quadros.",
+      "es-419": "El mundo se mueve en los 15 pasos por segundo propios del juego, sin importar la velocidad de fotogramas."
+    },
+    "kf2.setup.motion.1": {
+      "en": "Movement is smoothed between the world's 15 steps a second, at any frame rate.",
+      "pt-BR": "O movimento é suavizado entre os 15 passos do mundo por segundo, em qualquer taxa de quadros.",
+      "es-419": "El movimiento se suaviza entre los 15 pasos del mundo por segundo, a cualquier velocidad de fotogramas."
+    },
+    "kf2.setup.motion.2": {
+      "en": "Movement is smoothed between the world's 15 steps a second, at any frame rate.",
+      "pt-BR": "O movimento é suavizado entre os 15 passos do mundo por segundo, em qualquer taxa de quadros.",
+      "es-419": "El movimiento se suaviza entre los 15 pasos del mundo por segundo, a cualquier velocidad de fotogramas."
+    },
+    "kf2.setup.audio": {
+      "en": "Sound",
+      "pt-BR": "Som",
+      "es-419": "Sonido"
+    },
+    "kf2.setup.audio.0": {
+      "en": "The console's soft filter and reverb; sound effects panned as released.",
+      "pt-BR": "O filtro suave e a reverberação do console; efeitos sonoros posicionados como no lançamento.",
+      "es-419": "El filtro suave y la reverberación de la consola; efectos de sonido ubicados como en el lanzamiento."
+    },
+    "kf2.setup.audio.1": {
+      "en": "Sharper, cleaner resampling; the console's own reverb and panning.",
+      "pt-BR": "Reamostragem mais nítida e limpa; a reverberação e o posicionamento do próprio console.",
+      "es-419": "Remuestreo más nítido y limpio; la reverberación y la ubicación propias de la consola."
+    },
+    "kf2.setup.audio.2": {
+      "en": "Sharper resampling, a denser reverb and 3D sound for headphones.",
+      "pt-BR": "Reamostragem mais nítida, reverberação mais densa e som 3D para fones de ouvido.",
+      "es-419": "Remuestreo más nítido, una reverberación más densa y sonido 3D para audífonos."
+    },
+    "kf2.setup.gameplay": {
+      "en": "Gameplay",
+      "pt-BR": "Jogabilidade",
+      "es-419": "Jugabilidad"
+    },
+    "kf2.setup.gameplay.0": {
+      "en": "The game as released: no map, no stat comparison, and death is the game's own.",
+      "pt-BR": "O jogo como foi lançado: sem mapa, sem comparação de atributos, e a morte é a do próprio jogo.",
+      "es-419": "El juego como se lanzó: sin mapa, sin comparación de atributos, y la muerte es la del propio juego."
+    },
+    "kf2.setup.gameplay.1": {
+      "en": "Every stat an item would change is shown when buying and equipping, and death reloads your last save; otherwise as released.",
+      "pt-BR": "Todos os atributos que um item mudaria aparecem ao comprar e equipar, e a morte recarrega seu último save; fora isso, como no lançamento.",
+      "es-419": "Todos los atributos que un objeto cambiaría se muestran al comprar y equipar, y la muerte recarga tu último guardado; por lo demás, como en el lanzamiento."
+    },
+    "kf2.setup.gameplay.2": {
+      "en": "A map that fills in as you explore, stat comparison, and death reloads your last save.",
+      "pt-BR": "Um mapa que se completa conforme você explora, comparação de atributos, e a morte recarrega seu último save.",
+      "es-419": "Un mapa que se completa mientras exploras, comparación de atributos, y la muerte recarga tu último guardado."
+    },
+    "kf2.setup.map": {
+      "en": "Map",
+      "pt-BR": "Mapa",
+      "es-419": "Mapa"
+    },
+    "kf2.setup.map.0": {
+      "en": "No map, as released.",
+      "pt-BR": "Sem mapa, como no lançamento.",
+      "es-419": "Sin mapa, como en el lanzamiento."
+    },
+    "kf2.setup.map.1": {
+      "en": "No map, as released.",
+      "pt-BR": "Sem mapa, como no lançamento.",
+      "es-419": "Sin mapa, como en el lanzamiento."
+    },
+    "kf2.setup.map.2": {
+      "en": "A map of the area that fills in as you go (M, or the pad's touchpad).",
+      "pt-BR": "Um mapa da área que se completa conforme você anda (M, ou o touchpad do controle).",
+      "es-419": "Un mapa del área que se completa mientras avanzas (M, o el panel táctil del control)."
+    },
+    "kf2.setup.gear": {
+      "en": "Comparing gear",
+      "pt-BR": "Comparar equipamento",
+      "es-419": "Comparar equipo"
+    },
+    "kf2.setup.gear.0": {
+      "en": "The equip and buy prompts as released.",
+      "pt-BR": "As telas de equipar e comprar como no lançamento.",
+      "es-419": "Las pantallas de equipar y comprar como en el lanzamiento."
+    },
+    "kf2.setup.gear.1": {
+      "en": "The equip and buy prompts show every stat the item would change, now and after.",
+      "pt-BR": "As telas de equipar e comprar mostram cada atributo que o item mudaria, antes e depois.",
+      "es-419": "Las pantallas de equipar y comprar muestran cada atributo que el objeto cambiaría, antes y después."
+    },
+    "kf2.setup.gear.2": {
+      "en": "The equip and buy prompts show every stat the item would change, now and after.",
+      "pt-BR": "As telas de equipar e comprar mostram cada atributo que o item mudaria, antes e depois.",
+      "es-419": "Las pantallas de equipar y comprar muestran cada atributo que el objeto cambiaría, antes y después."
+    },
+    "kf2.setup.death": {
+      "en": "On death",
+      "pt-BR": "Ao morrer",
+      "es-419": "Al morir"
+    },
+    "kf2.setup.death.0": {
+      "en": "The game's own death, with no automatic reload.",
+      "pt-BR": "A morte do próprio jogo, sem recarga automática.",
+      "es-419": "La muerte propia del juego, sin recarga automática."
+    },
+    "kf2.setup.death.1": {
+      "en": "Your last save is reloaded two seconds after dying.",
+      "pt-BR": "Seu último save é recarregado dois segundos após morrer.",
+      "es-419": "Tu último guardado se recarga dos segundos después de morir."
+    },
+    "kf2.setup.death.2": {
+      "en": "Your last save is reloaded two seconds after dying.",
+      "pt-BR": "Seu último save é recarregado dois segundos após morrer.",
+      "es-419": "Tu último guardado se recarga dos segundos después de morir."
+    },
+    "kf2.setup.welcome": {
+      "en": "Before you play, choose how King's Field should look, sound and control. Everything here can be changed later, and this setup can be run again from PORT SETTINGS in the game's menu.",
+      "pt-BR": "Antes de jogar, escolha como King's Field deve parecer, soar e ser controlado. Tudo aqui pode ser alterado depois, e esta configuração pode ser refeita em PORT SETTINGS no menu do jogo.",
+      "es-419": "Antes de jugar, elige cómo debe verse, sonar y controlarse King's Field. Todo esto se puede cambiar después, y esta configuración se puede repetir desde PORT SETTINGS en el menú del juego."
+    }
+  }
+}

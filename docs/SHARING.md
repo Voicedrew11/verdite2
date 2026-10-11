@@ -171,7 +171,7 @@ inventory, the record a shared launcher would take from the game:
 | app id; per-user data folder | `verdite2`; `Verdite2` / `verdite2` |
 | env prefixes | `VERDITE2_` (launcher), `KF2_` (game) |
 | update repository | `Voicedrew11/verdite2` |
-| window title; icons; desktop entry | `Verdite2 {ver}`; `verdite2.png`, `verdite2.ico`; `verdite2.desktop` |
+| window title; icons; desktop entry | `Verdite2 {ver}`; none shipped (the card icon off the disc); `verdite2.desktop` |
 | package names; Inno AppId | `Verdite2-$VERSION-x86_64.AppImage`, `Verdite2-$v-win-x64.zip`, `-setup`; `{9F1F0C1E-…}` |
 | overlays that mean "at the title" | `open`, `game` (`UpdatePopup`) |
 
@@ -1971,3 +1971,51 @@ In order, easiest first:
   - Mods are compiled at run time and hook with `[PreHook("game", Address = 0x…)]`. An attribute takes a constant, so no per-game table can feed it, and the hooked classes stay in the mods.
   - What can move is the pure helpers, identical in both: `GameState`'s `ReadS16`/`ReadS32`/`WriteS16`/`WriteS32`, `SetAngles`, `Position`/`SetPosition`/`Angles`, `AngleToRadians`; `Noclip`'s `Lag`, `SmoothLook` and `Format`. A mod reaches them with `using Verdite.Core;`; mods do not get the global using.
   - One behaviour differs, so decide it rather than copy it. KF2's speed cheat scales in `BeforeMove` (`0x80028DB8`) and stands down under noclip. KF3 split it into `BeforeMove` and `BeforeWalk` (`0x8002F9BC`), without the noclip test.
+
+### 2026-10-11: the setup's core commits reconciled with the fork
+
+The first-run setup (`src/Onboarding`, the launcher's hold on the build; `SETTINGS.md`,
+"Onboarding") was three core commits here on the fork's `b74cab8`, while the fork had
+moved on to `9d6bac8` (the hourly update check, and `content/manifest.txt`, so a release
+unpacked over an older one compiles only what it shipped). Verdite3 was already at
+`9d6bac8`.
+
+- **`--push-core` refused** with "no subtree join found on the first-parent line". The
+  join that took `b74cab8`, `87ae1c5`, reaches this branch only through the second parent
+  of `412eaad` ("Merge dev into v0.5.0-staging"), and the script looks along first
+  parents only.
+- **The one-parent rejoin `447557c` did not break the pull.** It is the shape
+  `RECOMPONE_FORK.md` warns of ("The pull that found a one-parent rejoin"), but the real
+  join `87ae1c5` follows it, and `git subtree pull --squash` finds that join's squash
+  (`192039d`) first. The rule there still stands.
+- `--pull-core` then merged `9d6bac8` cleanly (`76671b4`; `Launcher.cs` and
+  `Launcher.targets` overlap and auto-merged). That merge is the new first-parent join,
+  so `--push-core`'s checks now pass, with no mixed commit, and its split is the three
+  setup commits on `b74cab8` plus the merge to `9d6bac8`: a fast-forward of the fork by 4.
+- Checked: the game and launcher build; the launcher's manifest lists
+  `content/config/onboarding.json` and both `Onboarding` sources; the setup's boot check
+  reads 38 keys, 0 problems; slot 2 restored in area 1 at hp 46/86, 144.0 fps drawn at
+  15.0 ticks/s, `[present] wide 288, plain 0`, perspective 100.0% hit at 18720 caught/s.
+- Not pushed: the setup's popup has not been judged by eye. After the push, Verdite3
+  pulls core and builds and boots; it has no `onboarding.json`, so `Onboarding.Load`
+  returns null and the launcher shows no setup.
+
+**Verdite3's game commits since 2026-10-09, sorted 2026-10-11:**
+
+- `f956c1c`, the manifest checked in CI, and `a09120d`, the hourly check's docs:
+  taken (`1825088`).
+- `6603075`/`e7f95f2`, no mark of the port's own: taken. The orb (`verdite2.png`,
+  `verdite2.ico`, `make-icon.py`) is gone, the executables carry no icon resource,
+  and the card icon is the only one (`PACKAGING.md`, "The icon comes off the disc").
+- `2853787`, the arrival flag lost under pacing: the same shape here (`0x8019941E`,
+  cleared inline between stages 5 and 6), but never lost, since the frame after a
+  load always ticks. Measured, not fixed: `GAME_INTERNALS.md`, "The arrival flag
+  `0x8019941E`, and why pacing does not lose it here".
+- `5696cab`, the map at another BRIGHTNESS: does not apply. Verdite3 drew a half on
+  the GPU only at `0x808080` and sent the rest to the packets; `RetainedMap` here
+  bakes the assembler's live light word (`0x8006E604`) into every corner and hashes
+  it each walk, so a change is a rebuild, and there is no fallback keyed on the
+  colour. `KF2_GPUWORLD_RECORDCHECK=1` over areas 0-6: 2,932,975 corners, 0 coloured
+  otherwise than the GTE.
+- `4362046`, billboards turned to the eye: KF3's own.
+- `b20242e`, spell effects' palette: cannot happen here (2026-10-09).
