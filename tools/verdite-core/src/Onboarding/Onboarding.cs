@@ -220,6 +220,28 @@ internal static class Onboarding
         return pick >= 0 ? pick : Detect(spec, field);
     }
 
+    /// <summary>
+    /// The choices a preset makes: the Original option of each display field (or where
+    /// it starts, when it has none) and the Original or Modern tier of every group, or
+    /// the Recommended display (<see cref="Suggest"/>) with Modern throughout.
+    /// </summary>
+    public static (int[] Display, int[][] Tiers) Preset(OnboardingSpec spec, bool original)
+    {
+        var display = spec.Display.Select(f => original
+            ? (f.Original is { } o && o >= 0 && o < f.Options.Count ? o : Detect(spec, f))
+            : Suggest(spec, f)).ToArray();
+        var tiers = spec.Categories
+            .Select(c => c.Groups.Select(_ => original ? 0 : OnboardingPopup.TierCount - 1).ToArray()).ToArray();
+        return (display, tiers);
+    }
+
+    /// <summary>What a display field's first key means now: its text, else its default; null when its options write no key.</summary>
+    public static string? Current(OnboardingSpec spec, SetupField field)
+    {
+        if (field.Options.Count == 0 || field.Options[0].Set.Keys.FirstOrDefault() is not { } key) return null;
+        return Effective(spec, key, Stored(key));
+    }
+
     // ---- The monitor ----
 
     const string RefreshToken = "$refresh";
@@ -366,6 +388,10 @@ internal sealed class OnboardingSpec
     /// different keys (so detecting the tier depends on which is tried first).</summary>
     public IEnumerable<string> Check()
     {
+        foreach (var f in Display)
+            if (f.Original is { } o && (o < 0 || o >= f.Options.Count))
+                yield return $"display.{f.Id}: original {o} is not an option";
+
         foreach (var c in Categories)
         {
             if (c.Tiers.Count != OnboardingPopup.TierCount)
@@ -407,6 +433,9 @@ internal sealed class SetupField
     /// <summary>The option to start on when the keys match none: a key the runtime
     /// fills at boot, say, and so has not written yet.</summary>
     public int? Default { get; set; }
+
+    /// <summary>The option the Original preset picks; absent, the preset leaves the field where it starts (window mode, say).</summary>
+    public int? Original { get; set; }
 }
 
 internal sealed class SetupOption
