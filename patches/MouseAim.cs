@@ -1,0 +1,218 @@
+using RecompOne.Runtime;
+using RecompOne.Runtime.Events;
+using RecompOne.Runtime.Hle;
+using RecompOne.Runtime.Host.Window;
+using RecompOne.Runtime.Memory;
+
+namespace Kf2;
+
+/// <summary>
+/// Mouse aim: the mouse moves a reticle, and the player turns toward it at the
+/// game's own speed -- War Thunder's mouse aim, where the hand points and the
+/// plane follows. Ordinary mouse look turns the view by however far the hand moved,
+/// which out-turns anything the D-pad can do; the game's fights are built on how
+/// fast the player turns (see "The stick turns at the original's speed" in
+/// docs/INPUT.md), and this keeps that.
+///
+/// **The reticle is an offset from the facing, in the game's own angle units**,
+/// yaw in <see cref="Mouse.TakeLook"/>'s sign convention (positive is the game's
+/// Left) and pitch the same. The mouse adds to it, and each tick the look hook
+/// asks for a step toward it and takes that step off it, so a reached reticle sits
+/// at the centre. Relative rather than a world direction, so a warp, a load or a
+/// death leaves it where it was on the screen rather than pulling the player round
+/// to an old heading.
+///
+/// **The step is the D-pad's**: at most the game's turn rate (<c>0x1C</c> walking,
+/// <c>0x23</c> standing) and changing by at most its acceleration (rate&gt;&gt;2) a
+/// tick, the look's 32 and 3 for pitch -- the same ease the button branches of
+/// <c>func_80028DB8</c> give a held D-pad and L2/R2. It brakes on the curve that
+/// stops it on the reticle (v = sqrt(2a|d|)), so it does not overshoot, and never
+/// asks for more than is left. The step is handed to <see cref="Analog.BeforeLook"/>
+/// as the mouse's amount, so the pad word, the release and the carry are the ones
+/// mouse look already uses.
+///
+/// The reticle is held on the picture: inside 90% of the half-width (widescreen
+/// margin included) and half-height, as angles off the GTE's own projection
+/// distance, and inside the game's pitch limit. Pushed against the edge it keeps
+/// the turn at full speed, so a turn round is a hand held at the edge.
+///
+/// Instant mouse look stands down while this is on (<see cref="FrameSmoothing"/>):
+/// the view is the player's facing, so there is nothing to lead. The reticle
+/// itself moves every drawn frame -- <see cref="Frame"/> drains the host's motion
+/// at stage 8, where the lead used to -- and is drawn by
+/// <see cref="MouseAimOverlay"/>.
+/// See "Mouse aim" in docs/INPUT.md.
+/// </summary>
+public static class MouseAim
+{
+    public const string OnKey = "kf2.mouse.aim";
+
+    /// <summary>The setting. Only does anything while mouse look is on.</summary>
+    public static bool Enabled;
+
+    /// <summary>On, and mouse look on: the mouse steers rather than turns.</summary>
+    public static bool Active => Enabled && Mouse.Enabled;
+
+    static readonly HashSet<string> _fromEnv = new(StringComparer.Ordinal);
+
+    // The reticle off the facing, in 12-bit angle units: what the ticks have left.
+    static float _offYaw, _offPitch;
+
+    // The steering velocities, in units a tick, eased as the D-pad's are.
+    static float _velYaw, _velPitch;
+
+    // What the overlay draws: the offset plus the motion the next tick has not
+    // taken yet, published at stage 8. Read on the host thread.
+    static volatile float _shownYaw, _shownPitch;
+
+    // When the look routine last steered; the overlay is drawn only while it is
+    // live, so a menu, a load or the paused map hides it.
+    static long _steered;
+
+    const float TwoPi = MathF.PI * 2f;
+    const float UnitsPerRadian = 4096f / TwoPi;
+
+    // The look's acceleration and limit (Analog's PitchAccel, PitchVelMax).
+    const int PitchAccel = 3;
+    const int PitchVelMax = 32;
+
+    /// <summary>How much of the picture's half-width and half-height the reticle
+    /// may reach.</summary>
+    const float Reach = 0.9f;
+
+    public static void Configure()
+    {
+        Kept.Env("KF2_MOUSE_AIM", OnKey, ref Enabled, _fromEnv);
+    }
+
+    public static void Install()
+    {
+        // Registered here rather than in Install's body for the reason Map gives:
+        // PanelManager and the ImGui context exist only from RuntimeReadyEvent, so
+        // a panel registered earlier would not be drawn at all.
+        Event.AddListener<RuntimeReadyEvent>(_ =>
+        {
+            Kept.Saved(OnKey, ref Enabled, _fromEnv);
+            PanelManager.Register(MouseAimOverlay.Instance);
+        });
+    }
+
+    /// <summary>
+    /// Called from the look hook once a tick with the motion since the last one.
+    /// Returns the step to turn and look by this tick, which the hook spends as the
+    /// mouse's amount.
+    /// </summary>
+    internal static (float Turn, float Pitch) Steer(IMemory m, float turn, float pitch, int rate)
+    {
+        _steered = Environment.TickCount64;
+        if (rate <= 0) return (0f, 0f);
+
+        _offYaw += turn;
+        _offPitch += pitch;
+        Clamp(m);
+
+        float stepYaw = Toward(_offYaw, ref _velYaw, rate, rate >> 2);
+        float stepPitch = Toward(_offPitch, ref _velPitch, PitchVelMax, PitchAccel);
+
+        // Whole units: the hook truncates and carries the fraction, and what the
+        // offset gives up has to be what the game turns by, or the reticle drifts
+        // off the place the player is turning to.
+        stepYaw = MathF.Truncate(stepYaw);
+        stepPitch = MathF.Truncate(stepPitch);
+        _offYaw -= stepYaw;
+        _offPitch -= stepPitch;
+        if (stepYaw == 0f) _velYaw = 0f;
+        if (stepPitch == 0f) _velPitch = 0f;
+
+        Publish(0f, 0f);
+        return (stepYaw, stepPitch);
+    }
+
+    /// <summary>
+    /// Every drawn frame, from stage 8: the host's motion so far, added to the
+    /// reticle the overlay draws. Not spent: the next tick takes it.
+    /// </summary>
+    internal static void Frame()
+    {
+        Mouse.Poll();
+        var (turn, look) = Mouse.Pending;
+        Publish(turn, look);
+    }
+
+    /// <summary>Forget the reticle, as on turning this off or losing the pointer.</summary>
+    public static void Reset()
+    {
+        _offYaw = _offPitch = 0f;
+        _velYaw = _velPitch = 0f;
+        Publish(0f, 0f);
+    }
+
+    /// <summary>
+    /// The reticle's offset from the facing to draw, in radians (yaw positive to the
+    /// game's Left, pitch positive down), or null while there is none to draw: off,
+    /// the pointer free, or the look routine not running.
+    /// </summary>
+    public static (float Yaw, float Pitch)? Shown
+    {
+        get
+        {
+            if (!Active || !Mouse.Captured || Mouse.Suspended) return null;
+            long now = Environment.TickCount64;
+            double hz = Math.Max(1.0, FramePacing.LogicHz);
+            if (FramePacing.Paused || now - _steered > (long)(3000.0 / hz)) return null;
+            return (_shownYaw / UnitsPerRadian, _shownPitch / UnitsPerRadian);
+        }
+    }
+
+    static void Publish(float pendTurn, float pendPitch)
+    {
+        var (maxYaw, maxPitch) = Limits();
+        _shownYaw = Math.Clamp(_offYaw + pendTurn, -maxYaw, maxYaw);
+        _shownPitch = Math.Clamp(_offPitch + pendPitch, -maxPitch, maxPitch);
+    }
+
+    /// <summary>The reticle held on the picture, and its pitch inside the game's
+    /// limit off the base angle the step adds to.</summary>
+    static void Clamp(IMemory m)
+    {
+        var (maxYaw, maxPitch) = Limits();
+        _offYaw = Math.Clamp(_offYaw, -maxYaw, maxYaw);
+
+        // The base pitch is a 12-bit angle: just above level it reads 0x0FFx.
+        int basePitch = ((m.ReadU16(Analog.Pitch) & 0xFFF) ^ 0x800) - 0x800;
+        int limit = Mouse.PitchLimit;
+        float lo = Math.Max(-maxPitch, -limit - basePitch);
+        float hi = Math.Min(maxPitch, limit - basePitch);
+        _offPitch = lo <= hi ? Math.Clamp(_offPitch, lo, hi) : 0f;
+    }
+
+    /// <summary>The largest offsets that keep the reticle on the picture, in
+    /// angle units, off the GTE's projection distance.</summary>
+    static (float Yaw, float Pitch) Limits()
+    {
+        float h = Math.Max(1f, GteDepth.ProjH);
+        int w = OutputView.GameW > 0 ? OutputView.GameW : 320;
+        int hgt = OutputView.GameH > 0 ? OutputView.GameH : 240;
+        float halfW = w / 2f + Display.WideMargin(w);
+        return (MathF.Atan(Reach * halfW / h) * UnitsPerRadian,
+                MathF.Atan(Reach * hgt / 2f / h) * UnitsPerRadian);
+    }
+
+    /// <summary>
+    /// One axis's step toward an offset <paramref name="d"/>: the velocity eased by
+    /// <paramref name="accel"/> a tick toward the fastest speed that can still stop
+    /// on the offset, capped at <paramref name="max"/> and at what is left.
+    /// </summary>
+    static float Toward(float d, ref float vel, int max, int accel)
+    {
+        float dist = MathF.Abs(d);
+        float want = MathF.Min(max, MathF.Min(MathF.Sqrt(2f * accel * dist), dist));
+        want *= MathF.Sign(d);
+        vel = Math.Clamp(want, vel - accel, vel + accel);
+        // Never past the reticle: a reversal still brakes at the game's rate, but
+        // a step that would carry beyond it in the same direction, or past a
+        // reticle already reached, is cut to it.
+        if (MathF.Sign(vel) * MathF.Sign(d) >= 0 && MathF.Abs(vel) > dist) vel = d;
+        return vel;
+    }
+}

@@ -468,6 +468,14 @@ public static class Analog
         // Taken unconditionally: the accumulator has to be emptied whether or not
         // anything here is going to spend it.
         var (mTurn, mPitch) = Mouse.TakeLook();
+        // Mouse aim (MouseAim): the motion moves a reticle, and what is spent is the
+        // step toward it at the D-pad's rate, as the mouse's amount. The pointer
+        // let go takes the reticle with it, so nothing steers that cannot be seen.
+        if (MouseAim.Active)
+        {
+            if (Mouse.Captured) (mTurn, mPitch) = MouseAim.Steer(m, mTurn, mPitch, (int)m.ReadU32(TurnRate));
+            else MouseAim.Reset();
+        }
         // The gyro (GyroAim, a drawn bow) asks as the mouse does, with an amount,
         // and is spent beside the stick's share; emptied here whatever happens.
         var (gTurn, gPitch) = GyroAim.Take();

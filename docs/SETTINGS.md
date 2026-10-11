@@ -89,7 +89,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | INVERTED CAMERA | OFF, ON | `kf2.analog.invertpitch`; dimmed in 3D |
 | | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
-| | MOUSE LOOK | OFF, ON | `kf2.mouse.on` |
+| | MOUSE LOOK | OFF, LOOK, AIM | `kf2.mouse.on` and `kf2.mouse.aim`: AIM is mouse aim, the mouse moves a reticle and the player turns toward it (INPUT, "Mouse aim: the hand points, the player turns"); AIM turns mouse look on |
 | | GYRO | OFF, ON | `kf2.gyroaim.on`: a drawn bow aims with the pad's gyroscope (INPUT, "Rumble and gyro aim with a drawn bow") |
 | | RUMBLE | OFF, ON, HD | `kf2.rumble.on`, `kf2.rumble.hd`; OFF leaves the HD choice |
 

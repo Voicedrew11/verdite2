@@ -1172,6 +1172,13 @@ Kf2.Analog.Install();
 Mouse.Configure(Kf2.Analog.MouseValues);
 Mouse.Install();
 
+// Mouse aim: the mouse moves a reticle and the player turns toward it at the
+// D-pad's own rate, spent inside the same look hook. Off by default.
+//
+//     KF2_MOUSE_AIM=1                          on
+Kf2.MouseAim.Configure();
+Kf2.MouseAim.Install();
+
 // The bow and the arbalest, read off func_800271D0 once a tick: the pad's
 // gyroscope aims a drawn bow, spent inside Analog's look hook beside the right
 // stick (KF2_GYROAIM, on; runtime 0102), and the pad rumbles as it is drawn and

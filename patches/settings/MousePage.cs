@@ -45,6 +45,11 @@ public sealed class MousePage : IPatchPage
                "pixels, so a larger window turns a little slower for the same movement of the hand.");
         Slider("Look sensitivity", Mouse.LookKey, ref Mouse.LookSens, 0.1f, 5f);
         Check("Invert look Y", Mouse.InvertKey, ref Mouse.InvertY);
+        bool aim = MouseAim.Enabled;
+        Check("Mouse aim", MouseAim.OnKey, ref MouseAim.Enabled,
+              "The mouse moves a reticle and you turn toward it at the game's own speed, as with " +
+              "the D-pad, instead of the view turning as far as the hand moves.");
+        if (aim && !MouseAim.Enabled) MouseAim.Reset();
 
         ImGui.Spacing();
         // This used to end "...exactly as for a controller", which was a denial

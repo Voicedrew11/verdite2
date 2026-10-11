@@ -714,6 +714,14 @@ public static class FrameSmoothing
     {
         _aheadYaw = _aheadPitch = 0;
         _aheadYawFrac = _aheadPitchFrac = 0;
+        // Mouse aim moves a reticle, not the view: the view is the facing, so there
+        // is nothing to lead, and the motion drained here moves the reticle instead.
+        if (MouseAim.Active)
+        {
+            MouseAim.Frame();
+            _tickYaw = _tickPitch = 0;
+            return (0, 0);
+        }
         if (!Mouse.Lead || LeadSuppressed)
         {
             // Not carried into the frames after the lead comes back: until the

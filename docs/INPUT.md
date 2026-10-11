@@ -1080,6 +1080,50 @@ flag follows the camera (`KF2_DEBUG_FILMMODE_PROBE`, below under the debug
 tools); **not judged by eye**: that the judder is gone with a real mouse in a
 cinematic flythrough.
 
+### Mouse aim: the hand points, the player turns
+
+Mouse aim is War Thunder's mouse aim, suggested by a player: the mouse moves an
+on-screen reticle, and the player turns toward it rather than the view turning
+by however far the hand moved. Ordinary mouse look out-turns anything the D-pad
+can do, and the game's fights are built on how fast the player turns (see "The
+stick turns at the original's speed" above), so a hand that sweeps the view
+round in a flick takes the fight away from the stick. Mouse aim keeps the
+original's turn speed and lets the hand choose the direction.
+
+The reticle is an offset from the facing, in the game's 12-bit angle units. The
+mouse adds to it, and each tick the look hook takes a step toward it. The step is
+the D-pad's: at most the walking or standing turn rate, changing by at most its
+acceleration (rate>>2), and pitch uses the look's own 32 and 3. The step brakes on
+the curve that stops it on the reticle (v = sqrt(2a|d|)), so it does not overshoot,
+and it is truncated to whole units and taken off the offset, so the reticle and
+the turn stay in step. The step is handed to `Analog.BeforeLook` as the mouse's
+amount, so the pad word, the release and the carry are the ones mouse look
+already uses. Pushed against the edge of the picture the reticle keeps the turn
+at full speed, so a turn round is a hand held at the edge.
+
+The reticle is held on the picture: inside 90% of the half-width (widescreen
+margin included) and of the half-height, as angles off the GTE's projection
+distance, and inside the game's pitch limit. It is relative to the facing rather
+than a world direction, so a warp, a load or a death leaves it where it was on
+the screen and does not pull the player round to an old heading. Releasing the
+pointer resets it. While mouse aim is on, Instant mouse look has no effect, since
+the view is the player's facing and there is nothing to lead. `MouseAimOverlay`
+draws the reticle from the motion the host has delivered by stage 8, the point
+where the lead used to be taken.
+
+The controls are Input ▸ Mouse ▸ *Mouse aim* and, in PORT SETTINGS ▸ GAMEPLAY, the
+MOUSE LOOK row, now OFF, LOOK or AIM: the page holds seven rows, so aim is a
+third value of the mouse row rather than a row of its own (`KF2_MOUSE_AIM`).
+
+**Mechanism from the code, and a boot with it on**: slot 2 restored, 144.0 fps
+drawn at 15.0 ticks/s, presents reaching the screen. The controller was
+simulated (a full-rate turn eases in over four ticks, holds 28 a tick, brakes and
+lands without overshoot; the last braking step drops from 13 to 0, faster than
+the D-pad's release). **Nothing moved with a mouse, and not judged by eye**: whether
+the ease feels right, the reticle's size and colours, and the D-pad or a stick
+turning while the reticle pulls (the offset is relative, so a key turn leaves the
+reticle where it is on the screen and it keeps pulling).
+
 ### The mouse was sampled at two points
 
 Reported from play on the v0.3.3 draft: instant mouse look was very choppy at 60
