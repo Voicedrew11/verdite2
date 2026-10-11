@@ -1270,7 +1270,8 @@ pixels, its stroke 0.75). Input ▸ Mouse ▸ *Aim marks* chooses Off, While aim
 (`kf2.mouse.aimmarks`, `KF2_MOUSE_AIM_MARKS=off|aiming|always`). Off suits head look,
 where the middle of the picture is the aim. *Connecting line*, under it, leaves the
 line out (`kf2.mouse.aimline`, `KF2_MOUSE_AIM_LINE=0`), so only the dot and the circle
-are drawn.
+are drawn. *Centre dot* leaves the dot out the same way (`kf2.mouse.aimdot`,
+`KF2_MOUSE_AIM_DOT=0`).
 
 **Measured**: builds; slot 2 with aim on, `aim 300 0`, then head look and
 `aim -300 0`, back to yaw 2639; 144.0 fps drawn at 15.0 ticks/s; no faults.
@@ -1304,6 +1305,22 @@ camera against `state`'s yaw every 0.2 s): `aim 300 0`: the body 2639, 2719, 282
 there while the camera was dragged, then closed when the hand stopped. 144.0 fps drawn
 at 15.0 ticks/s, no faults. **Not judged**: whether it is more comfortable, and the
 recentre's speed.
+
+#### The turn without the ease
+
+Reported from play with every view: "it doesn't feel good but it's technically
+right". The D-pad's ease takes about four ticks to reach full speed and as many to
+stop, a quarter of a second each way at 15 Hz, which reads as weight on a D-pad and
+as lag under a hand. Input ▸ Mouse ▸ *Ease the turn* (`kf2.mouse.aimease`,
+`KF2_MOUSE_AIM_EASE=0`, the shell's `aim ease on|off`; on by default) turns it off:
+`Toward` then steps the whole way at the full rate, the last step whatever is left,
+so a turn starts at once and stops dead on the reticle. The top speed is still the
+D-pad's. The held view's recentre goes through `Toward` too, so it follows the switch.
+
+**Measured** (slot 2, standing rate 35): `aim 200 0` with the ease off is 35, 35, 35,
+35, 35, 25, six ticks against the eased ten, yaw 2639 to 2839; with the view held,
+`aim -150 0` is -35 four times and -10, and the camera ends on the facing at 2689.
+144.0 fps drawn at 14.9-15.0 ticks/s. **Not judged**: how it feels.
 
 ### The mouse was sampled at two points
 

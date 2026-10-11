@@ -126,7 +126,7 @@ public static class AgentServer
         "scale [1..8] - the render scale, taken at the next present (0097, not saved); alone, the current one",
         "settings [open|save|discard|step <key> <-1|1>|reset <key>] - the game menu's settings session without its page; alone, every setting",
         "point [<x> <y>|left|right|off] - the menu pointer at game pixels, a click, or the host's pointer again; alone, what it saw",
-        "aim [on|off|head on|off|hold on|off|<dyaw> <dpitch> [ms]] - mouse aim: alone, its state; on/off set the setting (unsaved); head on|off sets whether the view follows the mouse; hold on|off whether it holds still while the body turns; <dyaw> <dpitch> move the reticle (4096 is a full turn, +dyaw is Left, +dpitch is down) over ms, capturing the pointer if needed",
+        "aim [on|off|head on|off|hold on|off|ease on|off|<dyaw> <dpitch> [ms]] - mouse aim: alone, its state; on/off set the setting (unsaved); head on|off sets whether the view follows the mouse; hold on|off whether it holds still while the body turns; ease on|off whether a turn ramps as the D-pad's; <dyaw> <dpitch> move the reticle (4096 is a full turn, +dyaw is Left, +dpitch is down) over ms, capturing the pointer if needed",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
@@ -761,6 +761,12 @@ public static class AgentServer
             MouseAim.HeadLook = a[1].Equals("on", StringComparison.OrdinalIgnoreCase);
             return AimReply();
         }
+        if (a[0].Equals("ease", StringComparison.OrdinalIgnoreCase) && a.Length == 2
+            && (a[1].Equals("on", StringComparison.OrdinalIgnoreCase) || a[1].Equals("off", StringComparison.OrdinalIgnoreCase)))
+        {
+            MouseAim.Ease = a[1].Equals("on", StringComparison.OrdinalIgnoreCase);
+            return AimReply();
+        }
         if (a[0].Equals("hold", StringComparison.OrdinalIgnoreCase) && a.Length == 2
             && (a[1].Equals("on", StringComparison.OrdinalIgnoreCase) || a[1].Equals("off", StringComparison.OrdinalIgnoreCase)))
         {
@@ -773,7 +779,7 @@ public static class AgentServer
             || !int.TryParse(a[0], System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out int dyaw)
             || !int.TryParse(a[1], System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out int dpitch)
             || (a.Length == 3 && (!int.TryParse(a[2], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int ms) || ms < 0)))
-            return Err("aim [on|off|head on|off|hold on|off|<dyaw> <dpitch> [ms]]");
+            return Err("aim [on|off|head on|off|hold on|off|ease on|off|<dyaw> <dpitch> [ms]]");
 
         if (!Mouse.Enabled) return Err("mouse look is off; try 'aim on'");
         if (!MouseAim.Enabled) return Err("mouse aim is off; try 'aim on'");

@@ -19,7 +19,7 @@ namespace Kf2;
 /// turns, so the dot, the facing, leaves the middle and travels to the circle, and
 /// both come back to the middle as the view catches up. The line is brighter while a
 /// committed turn is under way (<see cref="MouseAim.Steering"/>), and can be left
-/// out (<see cref="MouseAim.Line"/>).
+/// out (<see cref="MouseAim.Line"/>), as can the dot (<see cref="MouseAim.Dot"/>).
 ///
 /// **The marks are there only while they say something** (<see cref="MouseAim.Marks"/>,
 /// "while aiming" by default). Reported from play: marks held at the middle of the
@@ -140,9 +140,12 @@ public sealed class MouseAimOverlay : IFloatingPanel
 
         // The dot at the middle, with a faint dark outline so it shows on a bright
         // wall too.
-        float dotRadius = DotRadius * scale;
-        dl.AddCircleFilled(c, dotRadius, Colour(1f, DotAlpha, fade));
-        dl.AddCircle(c, dotRadius + outlineT * 0.5f, Colour(0f, OutlineAlpha, fade), 0, outlineT);
+        if (MouseAim.Dot)
+        {
+            float dotRadius = DotRadius * scale;
+            dl.AddCircleFilled(c, dotRadius, Colour(1f, DotAlpha, fade));
+            dl.AddCircle(c, dotRadius + outlineT * 0.5f, Colour(0f, OutlineAlpha, fade), 0, outlineT);
+        }
 
         dl.PopClipRect();
     }

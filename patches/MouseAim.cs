@@ -73,6 +73,8 @@ public static class MouseAim
     public const string SensKey = "kf2.mouse.aimsens";
     public const string MarksKey = "kf2.mouse.aimmarks";
     public const string LineKey = "kf2.mouse.aimline";
+    public const string EaseKey = "kf2.mouse.aimease";
+    public const string DotKey = "kf2.mouse.aimdot";
 
     /// <summary>The setting. Only does anything while mouse look is on.</summary>
     public static bool Enabled;
@@ -106,6 +108,14 @@ public static class MouseAim
     /// <summary>Whether the marks include the line from the middle to the circle
     /// (KF2_MOUSE_AIM_LINE).</summary>
     public static bool Line = true;
+
+    /// <summary>Whether the marks include the dot, the facing (KF2_MOUSE_AIM_DOT).</summary>
+    public static bool Dot = true;
+
+    /// <summary>Whether a turn eases in and out as the D-pad's does. Off, it starts at
+    /// the full rate and stops dead on the reticle: the speed is still the D-pad's,
+    /// but there is no ramp at either end (KF2_MOUSE_AIM_EASE).</summary>
+    public static bool Ease = true;
 
     /// <summary>Ticks a small aim must stay still inside the ring before it is carried
     /// out (KF2_MOUSE_AIM_SETTLE; 0 is off). Not a setting.</summary>
@@ -219,6 +229,8 @@ public static class MouseAim
         Kept.Env("KF2_MOUSE_AIM_HOLD", HoldKey, ref HoldView, _fromEnv);
         Kept.Env("KF2_MOUSE_AIM_SENS", SensKey, ref Sens, _fromEnv);
         Kept.Env("KF2_MOUSE_AIM_LINE", LineKey, ref Line, _fromEnv);
+        Kept.Env("KF2_MOUSE_AIM_DOT", DotKey, ref Dot, _fromEnv);
+        Kept.Env("KF2_MOUSE_AIM_EASE", EaseKey, ref Ease, _fromEnv);
 
         string ring = Environment.GetEnvironmentVariable("KF2_MOUSE_AIM_RING");
         if (ring != null && int.TryParse(ring, out int r) && r >= 0) Ring = r;
@@ -252,6 +264,8 @@ public static class MouseAim
             Kept.Saved(SensKey, ref Sens, _fromEnv);
             Kept.Saved(MarksKey, ref Marks, _fromEnv);
             Kept.Saved(LineKey, ref Line, _fromEnv);
+            Kept.Saved(DotKey, ref Dot, _fromEnv);
+            Kept.Saved(EaseKey, ref Ease, _fromEnv);
             Marks = Math.Clamp(Marks, MarksOff, MarksAlways);
             PanelManager.Register(MouseAimOverlay.Instance);
         });
@@ -549,7 +563,7 @@ public static class MouseAim
             $"\"measured\":{Pair(_measYaw, _measPitch)},\"steering\":{B(_steering)}," +
             $"\"ring\":{Ring.ToString(CultureInfo.InvariantCulture)}," +
             $"\"settle\":{Settle.ToString(CultureInfo.InvariantCulture)}," +
-            $"\"sens\":{F(Sens)}" + "}";
+            $"\"sens\":{F(Sens)},\"ease\":{B(Ease)}" + "}";
     }
 
     /// <summary>Publishes the offset plus what the view still owes the reticle (the
@@ -633,6 +647,14 @@ public static class MouseAim
     /// </summary>
     static float Toward(float d, ref float vel, int max, int accel)
     {
+        // Without the ease the step is the whole way at the full rate: on at once,
+        // and the last step whatever is left, so it stops dead on the reticle.
+        if (!Ease)
+        {
+            vel = Math.Clamp(MathF.Truncate(d), -max, max);
+            return vel;
+        }
+
         float dist = MathF.Abs(d);
         float sign = MathF.Sign(d);
 

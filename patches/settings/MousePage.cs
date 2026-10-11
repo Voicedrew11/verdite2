@@ -70,6 +70,9 @@ public sealed class MousePage : IPatchPage
         Slider("Aim sensitivity", MouseAim.SensKey, ref MouseAim.Sens, 0.1f, 4f,
                "How far the reticle moves for a movement of the hand, on top of the turn " +
                "sensitivity. Lower it if the reticle reaches the edge of the picture too easily.");
+        Check("Ease the turn", MouseAim.EaseKey, ref MouseAim.Ease,
+              "On, a turn speeds up and slows down as the D-pad's does. Off, it starts at full " +
+              "speed and stops dead on the reticle, at the same top speed.");
         int marks = MouseAim.Marks;
         if (ImGui.Combo("Aim marks", ref marks, MouseAim.MarksNames, MouseAim.MarksNames.Length))
         {
@@ -83,6 +86,9 @@ public sealed class MousePage : IPatchPage
         Check("Connecting line", MouseAim.LineKey, ref MouseAim.Line,
               "The thin line from the dot at the middle to the circle. Without it the dot and the " +
               "circle are all that is drawn.");
+        Check("Centre dot", MouseAim.DotKey, ref MouseAim.Dot,
+              "The small dot where you face. Without it the circle, and the line if it is on, " +
+              "are all that is drawn.");
         ImGui.EndDisabled();
         ImGui.Unindent();
         ImGui.EndDisabled();
