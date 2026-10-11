@@ -54,6 +54,7 @@ usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork]
                     refuses if one of them also touches files outside it
   --pull-core [ref] the same for Verdite Core into tools/verdite-core
   --push-core       the same for Verdite Core
+                    (DRY_RUN=1 with either push: report what it would push, and stop)
   --sync-upstream   removed; prints where harvesting moved and exits 2
   --no-build        skip the build
 USAGE
@@ -141,35 +142,104 @@ pull_subtree() {
 }
 
 # push_subtree PREFIX URL BRANCH
+#
+# The push is `git subtree split` and a plain push of the result, checked first;
+# it refuses rather than publishing something wrong. Every check is made on what
+# the split would actually publish (the shared branch..the split), each commit
+# found again here by its author, author time and subject:
+#
+# - A commit the shared branch already has under another hash is refused. The
+#   split rebuilds history the joins do not reach, and from a branch that
+#   merged others it rebuilt 56 commits of tools/RecompOne from before the
+#   subtree existed, with the trees already equal (SHARING.md, 2026-10-11).
+# - A commit that touches the prefix must touch nothing else here, or the split
+#   carries a half-commit to the shared repo. This is the original of each
+#   commit to be pushed, wherever it sits: a pull merged after it does not hide
+#   it, as "since the last join" did.
+# - The shared branch must be an ancestor of the split, or the push is not a
+#   fast-forward: the shared repo has commits this copy lacks, so pull first.
+# - A one-parent commit carrying a rejoin's trailers since the last joins is
+#   refused: git subtree takes it for a rejoin and the next pull fails with
+#   "Needed a single revision" (RECOMPONE_FORK.md, "The pull that found a
+#   one-parent rejoin"). The joins are every pull merge in HEAD's history, on any
+#   parent line, not only the first: a pull made on a branch later merged into
+#   another sits on that merge's second parent.
+#
+# Nothing is pushed when the prefix's tree already equals the shared branch's.
+# With DRY_RUN=1 it reports what it would push and stops.
 push_subtree() {
     require_subtree
-    # A commit that touches the prefix must touch nothing else, or the split
-    # carries a half-commit to the shared repo. Check every one since the last
-    # join. The last join is the newest add/pull merge on the first-parent line:
-    # its second parent is a squash commit naming the prefix.
-    join=""
-    while read -r c _ p2; do
-        if git -C "$ROOT" log -1 --format=%B "$p2" | grep -q "^git-subtree-dir: $1/*\$"; then
-            join="$c"; break
-        fi
-    done < <(git -C "$ROOT" log --first-parent --merges --format='%H %P' HEAD)
-    if [ -z "$join" ]; then
-        echo "no $1 subtree join found on the first-parent line; refusing to push." >&2
+    local prefix="$1" url="$2" branch="$3"
+    local joins=() c p1 rest p bad=0
+    while read -r c p1 rest; do
+        for p in $rest; do
+            if git -C "$ROOT" log -1 --format=%B "$p" | grep -q "^git-subtree-dir: $prefix/*\$"; then
+                joins+=("$c"); break
+            fi
+        done
+    done < <(git -C "$ROOT" log --merges --format='%H %P' HEAD)
+    if [ ${#joins[@]} -eq 0 ]; then
+        echo "no $prefix subtree join found in HEAD's history; refusing to push." >&2
         exit 1
     fi
-    mixed=0
-    for c in $(git -C "$ROOT" rev-list --no-merges "$join..HEAD" -- "$1"); do
-        if git -C "$ROOT" diff-tree --no-commit-id --name-only -r "$c" | grep -qv "^$1/"; then
-            echo "mixed commit: $(git -C "$ROOT" log -1 --format='%h %s' "$c")" >&2
-            mixed=1
+    while read -r c p1 rest; do
+        [ -n "$c" ] && [ -z "$rest" ] || continue
+        local body; body="$(git -C "$ROOT" log -1 --format=%B "$c")"
+        if grep -q "^git-subtree-mainline:" <<<"$body" && grep -q "^git-subtree-dir: $prefix/*\$" <<<"$body"; then
+            echo "one-parent rejoin: $(git -C "$ROOT" log -1 --format='%h %s' "$c")" >&2
+            bad=1
         fi
-    done
-    if [ "$mixed" = 1 ]; then
-        echo "split those into a $1 commit and a game commit, then push." >&2
+    done < <(git -C "$ROOT" log --format='%H %P' HEAD --not "${joins[@]}")
+
+    local remote split
+    git -C "$ROOT" fetch -q "$url" "$branch"
+    remote="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+    if [ "$(git -C "$ROOT" rev-parse "HEAD:$prefix")" = "$(git -C "$ROOT" rev-parse "$remote^{tree}")" ]; then
+        echo "==> $prefix already equals $url $branch (${remote:0:7}); nothing to push."
+        return 0
+    fi
+    split="$(git -C "$ROOT" subtree split --prefix="$prefix" HEAD 2>/dev/null)"
+    if ! git -C "$ROOT" merge-base --is-ancestor "$remote" "$split"; then
+        echo "$url $branch (${remote:0:7}) has commits $prefix lacks; pull them first." >&2
         exit 1
     fi
-    echo "==> pushing $1 to $2 $3 (this publishes to the shared repo)"
-    git -C "$ROOT" subtree push --prefix="$1" "$2" "$3"
+
+    # What the split would publish, each found again here.
+    local tmp; tmp="$(mktemp -d)"
+    git -C "$ROOT" log --no-merges --format='%at %ae %s' "$remote" | sort -u > "$tmp/published"
+    git -C "$ROOT" log --no-merges --format='%at %ae %s%x09%H' HEAD -- "$prefix" > "$tmp/local"
+    local key orig n=0
+    while IFS= read -r line; do
+        c="${line%%$'\t'*}"; key="${line#*$'\t'}"
+        n=$((n + 1))
+        if grep -qxF -- "$key" "$tmp/published"; then
+            echo "already in $branch under another hash: $(git -C "$ROOT" log -1 --format='%h %s' "$c" | cut -c1-90)" >&2
+            bad=1; continue
+        fi
+        orig="$(awk -F'\t' -v k="$key" '$1 == k { print $2; exit }' "$tmp/local")"
+        if [ -z "$orig" ]; then
+            echo "no commit here matches split commit $(git -C "$ROOT" log -1 --format='%h %s' "$c" | cut -c1-80)" >&2
+            bad=1
+        elif git -C "$ROOT" diff-tree --no-commit-id --name-only -r "$orig" | grep -qv "^$prefix/"; then
+            echo "mixed commit: $(git -C "$ROOT" log -1 --format='%h %s' "$orig" | cut -c1-90)" >&2
+            bad=1
+        fi
+    done < <(git -C "$ROOT" log --no-merges --format='%H%x09%at %ae %s' "$remote..$split")
+    rm -rf "$tmp"
+    if [ "$bad" = 1 ]; then
+        echo "refusing to push $prefix. Split a mixed commit into a $prefix commit and a" >&2
+        echo "game commit; make a rejoin a real merge; see docs/RECOMPONE_FORK.md." >&2
+        exit 1
+    fi
+
+    echo "==> $n commit(s) to push to $url $branch, ${remote:0:7}..${split:0:7}:"
+    git -C "$ROOT" log --format='    %h %s' "$remote..$split" | cut -c1-100
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        echo "==> DRY_RUN=1: not pushed."
+        return 0
+    fi
+    echo "==> pushing (this publishes to the shared repo)"
+    git -C "$ROOT" push "$url" "$split:refs/heads/$branch"
 }
 
 [ "$PULL" = 1 ] && pull_subtree tools/RecompOne "$FORK_URL" "$PULL_REF" "the fork"
