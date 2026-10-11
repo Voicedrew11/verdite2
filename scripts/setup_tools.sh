@@ -42,8 +42,8 @@ SIGS="$TOOLS/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json"
 
 usage() {
     cat <<'USAGE'
-usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork]
-                      [--pull-core [ref]] [--push-core] [--no-build]
+usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork] [--rejoin-fork]
+                      [--pull-core [ref]] [--push-core] [--rejoin-core] [--no-build]
 
   (no flags)        build the recompiler
   --signatures      fetch AutoConfigure/signatures/psyq.json (15.7 MB, gitignored;
@@ -51,9 +51,13 @@ usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork]
   --pull-fork [ref] pull the RecompOne fork into tools/RecompOne as one squash
                     subtree commit; ref defaults to main
   --push-fork       push tools/RecompOne's subtree commits to the RecompOne fork;
-                    refuses if one of them also touches files outside it
+                    refuses a mixed commit, a commit the fork already has under
+                    another hash, and a push that is not a fast-forward
+  --rejoin-fork     when tools/RecompOne equals the fork, mark HEAD as that commit
+                    (a two-parent rejoin), so the next split starts there
   --pull-core [ref] the same for Verdite Core into tools/verdite-core
   --push-core       the same for Verdite Core
+  --rejoin-core     the same for Verdite Core
                     (DRY_RUN=1 with either push: report what it would push, and stop)
   --sync-upstream   removed; prints where harvesting moved and exits 2
   --no-build        skip the build
@@ -72,8 +76,8 @@ require_subtree() {
     esac
 }
 
-SYNC=0 SIGNATURES=0 BUILD=1 PULL=0 PUSH=0 PULL_REF="$FORK_BRANCH"
-CORE_PULL=0 CORE_PUSH=0 CORE_REF="$CORE_BRANCH"
+SYNC=0 SIGNATURES=0 BUILD=1 PULL=0 PUSH=0 REJOIN=0 PULL_REF="$FORK_BRANCH"
+CORE_PULL=0 CORE_PUSH=0 CORE_REJOIN=0 CORE_REF="$CORE_BRANCH"
 while [ $# -gt 0 ]; do
     case "$1" in
         --signatures)    SIGNATURES=1 ;;
@@ -85,6 +89,7 @@ while [ $# -gt 0 ]; do
             esac
             ;;
         --push-fork)     PUSH=1 ;;
+        --rejoin-fork)   REJOIN=1 ;;
         --pull-core)
             CORE_PULL=1
             case "${2:-}" in
@@ -93,6 +98,7 @@ while [ $# -gt 0 ]; do
             esac
             ;;
         --push-core)     CORE_PUSH=1 ;;
+        --rejoin-core)   CORE_REJOIN=1 ;;
         --sync-upstream) SYNC=1 ;;
         --no-build)      BUILD=0 ;;
         -h|--help)       usage; exit 0 ;;
@@ -228,7 +234,9 @@ push_subtree() {
     rm -rf "$tmp"
     if [ "$bad" = 1 ]; then
         echo "refusing to push $prefix. Split a mixed commit into a $prefix commit and a" >&2
-        echo "game commit; make a rejoin a real merge; see docs/RECOMPONE_FORK.md." >&2
+        echo "game commit; make a rejoin a real merge; see docs/RECOMPONE_FORK.md. A commit" >&2
+        echo "already there under another hash is history the split rebuilt: when the" >&2
+        echo "prefix equals the shared branch, --rejoin-fork / --rejoin-core marks it." >&2
         exit 1
     fi
 
@@ -242,10 +250,64 @@ push_subtree() {
     git -C "$ROOT" push "$url" "$split:refs/heads/$branch"
 }
 
+# rejoin_subtree PREFIX URL BRANCH NAME
+#
+# Marks HEAD as equal to the shared branch, so a later split starts there. A split
+# walks every commit that touches the prefix and no rejoin covers; from a branch
+# that merged others it rebuilt pre-subtree history, which the push then refuses
+# ("already in BRANCH under another hash"). A rejoin is a TWO-parent commit: HEAD,
+# and the newest squash commit, whose tree is the shared branch's. git subtree
+# pull takes a rejoin's second parent for the squash and fails on a one-parent one
+# ("Needed a single revision"; RECOMPONE_FORK.md). Its trailers say HEAD is the
+# shared branch's commit, so a split stops there. Made only when the prefix
+# already equals the shared branch; the tree is HEAD's, so nothing else changes.
+rejoin_subtree() {
+    require_subtree
+    local prefix="$1" url="$2" branch="$3" name="$4" remote head sq
+    if [ -n "$(git -C "$ROOT" status --porcelain --untracked-files=no)" ]; then
+        echo "working tree is dirty; commit or stash before a rejoin." >&2
+        exit 1
+    fi
+    git -C "$ROOT" fetch -q "$url" "$branch"
+    remote="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+    head="$(git -C "$ROOT" rev-parse HEAD)"
+    if [ "$(git -C "$ROOT" rev-parse "HEAD:$prefix")" != "$(git -C "$ROOT" rev-parse "$remote^{tree}")" ]; then
+        echo "$prefix differs from $url $branch (${remote:0:7}); pull or push first, then rejoin." >&2
+        exit 1
+    fi
+    # The newest squash commit with that tree (a squash names the split and no mainline).
+    sq=""
+    while read -r c; do
+        if ! git -C "$ROOT" log -1 --format=%B "$c" | grep -q "^git-subtree-mainline:" \
+            && [ "$(git -C "$ROOT" rev-parse "$c^{tree}")" = "$(git -C "$ROOT" rev-parse "$remote^{tree}")" ]; then
+            sq="$c"; break
+        fi
+    done < <(git -C "$ROOT" log --format=%H --grep="^git-subtree-dir: $prefix/*\$" HEAD)
+    if [ -z "$sq" ]; then
+        echo "no squash commit of $prefix at ${remote:0:7} in HEAD's history; pull it first." >&2
+        exit 1
+    fi
+    local c msg
+    msg="Rejoin $prefix at $name's ${remote:0:7}
+
+$prefix here equals $name's ${remote:0:7}, so a subtree split starts at
+${head:0:10} and stops rebuilding history from before it. A real merge: the
+second parent is the squash commit ${sq:0:10}, as git subtree pull needs.
+
+git-subtree-dir: $prefix
+git-subtree-mainline: $head
+git-subtree-split: $remote"
+    c="$(git -C "$ROOT" commit-tree "HEAD^{tree}" -p HEAD -p "$sq" -m "$msg")"
+    git -C "$ROOT" merge -q --ff-only "$c"
+    echo "==> rejoined $prefix at ${remote:0:7}: $(git -C "$ROOT" log -1 --format='%h %s' "$c")"
+}
+
 [ "$PULL" = 1 ] && pull_subtree tools/RecompOne "$FORK_URL" "$PULL_REF" "the fork"
 [ "$PUSH" = 1 ] && push_subtree tools/RecompOne "$FORK_URL" "$FORK_BRANCH"
+[ "$REJOIN" = 1 ] && rejoin_subtree tools/RecompOne "$FORK_URL" "$FORK_BRANCH" "the fork"
 [ "$CORE_PULL" = 1 ] && pull_subtree tools/verdite-core "$CORE_URL" "$CORE_REF" "Verdite Core"
 [ "$CORE_PUSH" = 1 ] && push_subtree tools/verdite-core "$CORE_URL" "$CORE_BRANCH"
+[ "$CORE_REJOIN" = 1 ] && rejoin_subtree tools/verdite-core "$CORE_URL" "$CORE_BRANCH" "Verdite Core"
 
 if [ "$BUILD" = 1 ]; then
     echo "==> building recompiler"
