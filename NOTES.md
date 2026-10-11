@@ -393,7 +393,7 @@ Every `KF2_*` switch the port reads, in one list.
 
 ### [RECOMPONE_FORK.md](docs/RECOMPONE_FORK.md)
 
-How `tools/RecompOne`, a subtree of the fork, is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided.
+How `tools/RecompOne`, a subtree of the fork, is kept, why it is not a patch stack, and what the merges to `0409bc2` and `d81dec8` decided, and what `--push-fork`/`--push-core` check before they send anything (and `--rejoin-fork`/`--rejoin-core`).
 
 ### [RECOMPONE_PATCHES.md](tools/RecompOne/docs/RECOMPONE_PATCHES.md)
 
