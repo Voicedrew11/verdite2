@@ -123,10 +123,21 @@ mode.
 
 The first-run setup, shown by the launcher **while the game is being built** and
 holding the game back until both are done, and run again from the settings page's
-DISPLAY page (RUN SETUP, its last row, not a setting). It asks the display first
-(window mode, render resolution, aspect ratio, frame rate), then Basic (one style
-for each of Controls, Presentation and Gameplay) or Advanced (one for each group
-inside them). Every group has three tiers:
+DISPLAY page (RUN SETUP, its last row, not a setting). The welcome offers two
+presets and **Customise**:
+
+* **Recommended**: Modern in every group, with the display suggested from the
+  monitor (`Onboarding.Suggest`). Window mode has no suggestion and stays where it
+  starts.
+* **Original**: Original in every group, and each display field's `original`
+  option: 4:3, 240p (1x) and 20 fps. Window mode is left alone.
+* **Customise**: walks the display, then the tiers, then the summary.
+
+A preset goes straight to the summary, whose Back returns to the welcome.
+Recommended takes keyboard and pad focus whenever the welcome shows. Basic (one
+style for each of Controls, Presentation and Gameplay) and Advanced (one for each
+group inside them) are a switch at the top of the tiers page. Every group has
+three tiers:
 
 * **Original**: the game as the PlayStation ran it.
 * **Faithful**: that look and feel, with what the hardware got wrong fixed;
@@ -143,9 +154,13 @@ inside them). Every group has three tiers:
 * `config/onboarding.json`: this game's half. It holds the display fields, the
   categories, groups and tiers (each tier a `{key: text | null}` map over the same
   keys in all three), `defaults` (what each key means when absent), and every
-  string in en, pt-BR and es-419. It ships in `content/config`, so it is part of
-  the build key: a change to it rebuilds.
-* `patches/Setup.cs`: RUN SETUP, the live apply, and the shell's `setup` verb.
+  string in en, pt-BR and es-419. A display field may carry `original`, the option
+  index the Original preset picks; absent, the preset leaves that field where it
+  starts. An index out of range is logged at load by `OnboardingSpec.Check`. It
+  ships in `content/config`, so it is part of the build key: a change to it
+  rebuilds.
+* `patches/Setup.cs`: RUN SETUP, the live apply, and the shell's `setup` verb,
+  including `setup preset original|recommended`.
 * `Launcher.cs`: `Onboarding.Due` decides whether setup is shown. `BuildGame` opens
   the setup in place of the build popup and shows the build as a strip at its
   foot, and it pumps until **both** the build and the setup are done. A failed
@@ -179,9 +194,19 @@ inside them). Every group has three tiers:
   changes nothing the player chose. Window mode has no suggestion.
 * **The frame rate is a slider** (`"slider": true` on a display field), its
   positions the options in order, as the Settings window's: 20 to 240 at the
-  window's own stops, then Uncapped; 30 is labelled the original. A rate on no
-  position (72, say, from the game's page) reads "Custom, unchanged" with the
-  handle at the start, and is left alone unless the handle moves.
+  window's own stops, then Uncapped; 20 is labelled the original, and 30 is plain.
+  A value matching no option on opening (72, say, from the game's page) gets one
+  extra position or list entry before the options, "Keep current (72)". That is
+  where the control starts and what it leaves alone until it is moved; the handle
+  and the label agree.
+* **Every tier's description is shown**, under its button: the chosen one in full
+  colour, the others dimmed. The chosen button is also marked "> " (the font has
+  no bullet glyph), so the choice is not colour alone. **Tiers that write the same
+  keys are one button**, named with a slash ("Original / Faithful"), its text the
+  first tier's: water, the map and death (Original and Faithful), and motion and
+  comparing gear (Faithful and Modern). The spec keeps the two texts identical so
+  they cannot drift. A group or category that starts Custom gets a **Keep as is**
+  button before the tiers, which puts back what it started at.
 * **A key every tier writes alike is a mistake in the spec**, logged at load:
   `null` in all three would put the player's own value back to the default
   whichever tier they chose, and read the group as Custom until then. That was
@@ -234,3 +259,20 @@ inside them). Every group has three tiers:
 **Not judged:** the frame-rate slider's look and its handling by pad, the pages' look and wording, pad navigation, and whether each tier
 looks the way its name promises. Clicking through to Finish in the launcher (and
 the game then starting) has not been watched either.
+
+### Setup measured (2026-10-11, the presets)
+
+* Developer run at the title, the shell: `setup preset original` changed 33 keys,
+  all live, none left for the next launch: RenderScale 1,
+  `kf2.widescreen.aspect` 1.3333334, `kf2.framepacing.fps` 20, and every group key
+  at its Original value. `setup` then read every group at 0 and the display at
+  0/0/0, with the window unchanged at 1.
+* `setup preset recommended` changed the same 33 back: the monitor's suggestion of
+  render scale 6, 165 fps and 16:9, and every group key at Modern. `setup` read
+  every group at 2 (Modern).
+* Boot check: `35 key(s), 0 problem(s)`.
+* Both builds, the game and the launcher, compile the new popup.
+
+**Not judged:** the welcome's two buttons, the description columns under the tier
+buttons, the "> " mark, where keyboard focus lands, and the Keep as is button. The
+popup has not been looked at.

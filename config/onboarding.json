@@ -74,6 +74,7 @@
       "label": "kf2.setup.resolution",
       "tip": "kf2.setup.resolution.tip",
       "suggest": "height",
+      "original": 0,
       "options": [
         {
           "label": "240p (1x)",
@@ -138,6 +139,7 @@
       "label": "kf2.setup.aspect",
       "tip": "kf2.setup.aspect.tip",
       "suggest": "aspect",
+      "original": 0,
       "options": [
         {
           "label": "4:3",
@@ -175,16 +177,17 @@
       "tip": "kf2.setup.fps.tip",
       "suggest": "refresh",
       "slider": true,
+      "original": 0,
       "options": [
         {
-          "label": "20 fps",
+          "label": "kf2.setup.fps.original",
           "match": 20,
           "set": {
             "kf2.framepacing.fps": "20"
           }
         },
         {
-          "label": "kf2.setup.fps.original",
+          "label": "30 fps",
           "match": 30,
           "set": {
             "kf2.framepacing.fps": "30"
@@ -690,9 +693,9 @@
       "es-419": "Con qué frecuencia se dibuja la imagen. El mundo siempre corre a la velocidad propia del juego."
     },
     "kf2.setup.fps.original": {
-      "en": "30 fps (original)",
-      "pt-BR": "30 fps (original)",
-      "es-419": "30 fps (original)"
+      "en": "20 fps (original)",
+      "pt-BR": "20 fps (original)",
+      "es-419": "20 fps (original)"
     },
     "kf2.setup.fps.uncapped": {
       "en": "Uncapped",
@@ -790,9 +793,9 @@
       "es-419": "La imagen y el sonido de la PlayStation: texturas que se deforman, bordes que tiemblan, tramado y el audio suave de la consola."
     },
     "kf2.setup.presentation.1": {
-      "en": "The same look with the hardware's faults fixed: steady textures and edges, no dither, cleaner sound. Nothing is added.",
-      "pt-BR": "A mesma aparência com as falhas do hardware corrigidas: texturas e bordas estáveis, sem pontilhado, som mais limpo. Nada é acrescentado.",
-      "es-419": "El mismo aspecto con las fallas del hardware corregidas: texturas y bordes estables, sin tramado, sonido más limpio. No se agrega nada."
+      "en": "The same look with the hardware's faults fixed: steady textures and edges, no dither, cleaner sound, and smooth motion at any frame rate.",
+      "pt-BR": "A mesma aparência com as falhas do hardware corrigidas: texturas e bordas estáveis, sem pontilhado, som mais limpo e movimento suave em qualquer taxa de quadros.",
+      "es-419": "El mismo aspecto con las fallas del hardware corregidas: texturas y bordes estables, sin tramado, sonido más limpio y movimiento suave a cualquier velocidad de fotogramas."
     },
     "kf2.setup.presentation.2": {
       "en": "Everything the port adds: smooth shading, filtered textures, ambient occlusion, living water, a richer reverb and 3D sound.",
@@ -850,9 +853,9 @@
       "es-419": "Agua plana, como en el lanzamiento."
     },
     "kf2.setup.water.1": {
-      "en": "Flat water: nothing is added to it.",
-      "pt-BR": "Água plana: nada é acrescentado.",
-      "es-419": "Agua plana: no se le agrega nada."
+      "en": "Flat water, as released.",
+      "pt-BR": "Água plana, como no lançamento.",
+      "es-419": "Agua plana, como en el lanzamiento."
     },
     "kf2.setup.water.2": {
       "en": "Water with murky depth, waves and reflections.",
@@ -870,14 +873,14 @@
       "es-419": "El mundo se mueve en los 15 pasos por segundo propios del juego, sin importar la velocidad de fotogramas."
     },
     "kf2.setup.motion.1": {
-      "en": "Movement is smoothed between the world's steps, at any frame rate.",
-      "pt-BR": "O movimento é suavizado entre os passos do mundo, em qualquer taxa de quadros.",
-      "es-419": "El movimiento se suaviza entre los pasos del mundo, a cualquier velocidad de fotogramas."
+      "en": "Movement is smoothed between the world's 15 steps a second, at any frame rate.",
+      "pt-BR": "O movimento é suavizado entre os 15 passos do mundo por segundo, em qualquer taxa de quadros.",
+      "es-419": "El movimiento se suaviza entre los 15 pasos del mundo por segundo, a cualquier velocidad de fotogramas."
     },
     "kf2.setup.motion.2": {
-      "en": "Movement is smoothed between the world's steps, at any frame rate.",
-      "pt-BR": "O movimento é suavizado entre os passos do mundo, em qualquer taxa de quadros.",
-      "es-419": "El movimiento se suaviza entre los pasos del mundo, a cualquier velocidad de fotogramas."
+      "en": "Movement is smoothed between the world's 15 steps a second, at any frame rate.",
+      "pt-BR": "O movimento é suavizado entre os 15 passos do mundo por segundo, em qualquer taxa de quadros.",
+      "es-419": "El movimiento se suaviza entre los 15 pasos del mundo por segundo, a cualquier velocidad de fotogramas."
     },
     "kf2.setup.audio": {
       "en": "Sound",
@@ -925,9 +928,9 @@
       "es-419": "Mapa"
     },
     "kf2.setup.map.0": {
-      "en": "No map.",
-      "pt-BR": "Sem mapa.",
-      "es-419": "Sin mapa."
+      "en": "No map, as released.",
+      "pt-BR": "Sem mapa, como no lançamento.",
+      "es-419": "Sin mapa, como en el lanzamiento."
     },
     "kf2.setup.map.1": {
       "en": "No map, as released.",
@@ -965,14 +968,14 @@
       "es-419": "Al morir"
     },
     "kf2.setup.death.0": {
-      "en": "The game's own death.",
-      "pt-BR": "A morte do próprio jogo.",
-      "es-419": "La muerte propia del juego."
+      "en": "The game's own death, with no automatic reload.",
+      "pt-BR": "A morte do próprio jogo, sem recarga automática.",
+      "es-419": "La muerte propia del juego, sin recarga automática."
     },
     "kf2.setup.death.1": {
-      "en": "The game's own death, as released.",
-      "pt-BR": "A morte do próprio jogo, como no lançamento.",
-      "es-419": "La muerte propia del juego, como en el lanzamiento."
+      "en": "The game's own death, with no automatic reload.",
+      "pt-BR": "A morte do próprio jogo, sem recarga automática.",
+      "es-419": "La muerte propia del juego, sin recarga automática."
     },
     "kf2.setup.death.2": {
       "en": "Your last save is reloaded two seconds after dying.",
