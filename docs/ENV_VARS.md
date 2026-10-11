@@ -269,6 +269,13 @@ KF2_MOUSE_KEY=F9                         # a key that captures and releases besi
 KF2_MOUSE_LEAD=0                         # mouse look waits for the tick, as with Gameplay ▸ Instant mouse look off (on by default); =1 forces it on
 KF2_MOUSE_AIM=1                         # the mouse moves a reticle and the player turns toward it, instead of the view (1 on, 0 off; overrides the saved Mouse aim setting; off by default)
 KF2_MOUSE_AIM_RING=32                   # mouse aim's commit ring, in angle units: the reticle wanders inside it without turning the player (default 32, about 2.8 deg; 0 turns every offset into a turn, as before)
+KF2_MOUSE_AIM_HEAD=1                    # mouse aim's head look: the view is drawn at the facing plus the reticle, so it follows the hand while the body turns toward it (1 on, 0 off; overrides the saved View follows the mouse setting; off by default)
+KF2_MOUSE_AIM_HOLD=1                    # mouse aim's held view: the picture holds still while the body turns, the facing's dot travels to the circle, and the view recentres once the turn lands (head look wins if both are on; overrides the saved View setting)
+KF2_MOUSE_AIM_SENS=1.0                  # scales the hand's motion before it reaches mouse aim's reticle, on top of the turn sensitivity (0.1 to 4, default 1.0; overrides the saved Aim sensitivity setting)
+KF2_MOUSE_AIM_SETTLE=3                  # ticks a small aim must hold still inside the ring before it is carried out (default 3; 0 is off, and a small aim then never turns the player)
+KF2_MOUSE_AIM_PROBE=1                   # one line a tick while mouse aim's reticle or a step is not at rest: offset, step, velocity, yield, measured turn, still count
+KF2_MOUSE_AIM_MARKS=aiming              # when mouse aim's dot, line and circle are drawn: off, aiming (only during a turn or with the circle off the middle; the default) or always; overrides the saved Aim marks setting
+KF2_MOUSE_AIM_LINE=0                    # leave out mouse aim's line from the middle to the circle (1 draws it, the default); overrides the saved Connecting line setting
 KF2_DEBUG_FILMMODE_PROBE=5               # mods/kf2debug: toggle film mode (V) every 5 s and print the three flags and FrameSmoothing.LeadSuppressed
 KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
 KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did

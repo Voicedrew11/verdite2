@@ -1094,7 +1094,8 @@ The reticle is an offset from the facing, in the game's 12-bit angle units. The
 mouse adds to it, and each tick the look hook takes a step toward it. The step is
 the D-pad's: at most the walking or standing turn rate, changing by at most its
 acceleration (rate>>2), and pitch uses the look's own 32 and 3. The step brakes on
-the curve that stops it on the reticle (v = sqrt(2a|d|)), so it does not overshoot,
+the discrete stopping distance (see "Mouse aim made the player feel sick" and
+"Seven changes after the first play" below), so it does not overshoot,
 and it is truncated to whole units and taken off the offset, so the reticle and
 the turn stay in step. The step is handed to `Analog.BeforeLook` as the mouse's
 amount, so the pad word, the release and the carry are the ones mouse look
@@ -1106,14 +1107,17 @@ margin included) and of the half-height, as angles off the GTE's projection
 distance, and inside the game's pitch limit. It is relative to the facing rather
 than a world direction, so a warp, a load or a death leaves it where it was on
 the screen and does not pull the player round to an old heading. Releasing the
-pointer resets it. While mouse aim is on, Instant mouse look has no effect, since
-the view is the player's facing and there is nothing to lead. `MouseAimOverlay`
-draws the reticle from the motion the host has delivered by stage 8, the point
-where the lead used to be taken.
+pointer resets it. While mouse aim is on, Instant mouse look has no effect, since the view is the
+player's facing and there is nothing to lead. The one exception is head look,
+which leads the view by the reticle itself (see "Seven changes after the first
+play" below). `MouseAimOverlay` draws the marks from the motion the host has
+delivered by stage 8, the point where the lead used to be taken.
 
-The controls are Input ▸ Mouse ▸ *Mouse aim* and, in PORT SETTINGS ▸ GAMEPLAY, the
-MOUSE LOOK row, now OFF, LOOK or AIM: the page holds seven rows, so aim is a
-third value of the mouse row rather than a row of its own (`KF2_MOUSE_AIM`).
+The controls are Input ▸ Mouse ▸ *Mouse aim*, with *View* (turns with you, follows the mouse or holds still; follows the mouse is head
+look) and *Aim sensitivity* under it. In PORT SETTINGS ▸ GAMEPLAY, the MOUSE LOOK
+row is OFF, LOOK or AIM: the page holds seven rows, so aim is a third value of the
+mouse row rather than a row of its own (`KF2_MOUSE_AIM`). Head look is not on that
+row; it is only in Input ▸ Mouse.
 
 **Mechanism from the code, and a boot with it on**: slot 2 restored, 144.0 fps
 drawn at 15.0 ticks/s, presents reaching the screen. The controller was
@@ -1161,6 +1165,145 @@ faster than the D-pad:
 ticks/s, presents reaching the screen. The occasional second at 15.9 ticks/s is
 there with aim off too. **Not judged with a mouse**: whether it still makes the
 player feel sick, and whether 32 is the right ring.
+
+#### Seven changes after the first play
+
+The fixes above were checked in the code and on a simulated controller, not with a
+mouse. To test the aim without one, the shell gained an `aim` verb, and the changes
+below were made against what it measured.
+
+- **The `aim` shell verb and `KF2_MOUSE_AIM_PROBE=1`.** `aim` alone reports the
+  state. `aim <dyaw> <dpitch> [ms]` moves the reticle by angle units (4096 a turn,
+  +dyaw is Left, +dpitch is down), spread evenly over `ms`, capturing the pointer if
+  it is not already. `aim on|off` sets the setting, unsaved, and `aim head on|off`
+  sets head look. The motion enters `MouseAim` directly (`MouseAim.Inject`), after
+  the sensitivity, so it tests the aim and everything after it (`Analog`'s step,
+  the game's turn) and not core's mouse sampling. The probe prints a line a tick
+  while the reticle or a step is not at rest: the offset, the step, the velocity,
+  whether it is steering, which axes are yielding, the measured turn and the still
+  count.
+- **A small aim is carried out** (`KF2_MOUSE_AIM_SETTLE`, 3 ticks; 0 is off). Before
+  this, the reticle could sit up to 32 units off the facing forever, inside the
+  ring, and the attacks went along the facing. Now a hand that holds still (under
+  half a unit a tick) for 3 ticks, with the reticle a unit or more off, commits the
+  turn. Tremor keeps the hand moving, so it does not settle; a deliberate small aim
+  does.
+- **One device turns at a time.** A right stick, the 3D left stick, the gyro, a
+  stick's ramp-down, or the D-pad's turn or look buttons in the pad word yields that
+  axis. The reticle keeps following the hand relative to the facing, but the aim
+  takes no step on a yielding axis, so the player never turns at the sum of two
+  rates. A held D-pad button takes the axis without the mouse's release tick, which
+  had zeroed the velocity and cleared the button for a tick before the game's own
+  branch turned again, so the turn continues from the aim's velocity on the game's
+  own ease.
+- **The turn is measured, not assumed.** Once a tick, at the first walk of the tick
+  (`FramePacing.FirstWalkOfTick`), `MouseAim` reads what the game turned for the
+  mouse (`Mouse.SpentThisFrame`) and gives the reticle back what it did not turn:
+  Analog's step carry, the overspeed ceiling, the pitch limit. A difference over 64
+  units is taken as a warp or a load and ignored. The unreached step drawn on the
+  reticle is the measured one.
+- **The overlay.** A small dot at the middle (1.5 game pixels), a thin line (0.75
+  px) from it to the circle's centre, brighter while a turn is under way, and a
+  thinner circle (6 px radius, 1 px stroke, a dark 0.75 px outline). A dead ring is
+  drawn faintly round the middle, at the ring's angle off the projection distance.
+  Once the circle has sat centred for a second, everything eases down to 30% over
+  half a second. The request was "instead of a big crosshair, a small dot, a thin
+  line connecting the center of the circle to the middle of the screen, and a
+  thinner circle."
+- **Aim sensitivity** (`kf2.mouse.aimsens`, `KF2_MOUSE_AIM_SENS`, 0.1 to 4, default
+  1.0). It scales the hand's motion before the reticle, on top of the turn
+  sensitivity. A sensitivity set for mouse look throws the reticle to the picture's
+  edge, so the two are separate.
+- **Head look** (Input ▸ Mouse ▸ *View follows the mouse*, `kf2.mouse.aimhead`,
+  `KF2_MOUSE_AIM_HEAD`, off). The view is drawn at the facing plus the reticle
+  (`MouseAim.HeadLead`, through `FrameSmoothing.MouseLead`'s lead, so the cull
+  follows as it does for instant mouse look). The picture follows the hand one to
+  one, while the body, which walks and attacks, turns toward it at the D-pad's
+  rate. The circle then marks where the body faces (the negated offset) and the dot
+  is the aim. The lead is zero whenever the reticle is not drawn: menus, loads, the
+  paused map. The view's freedom is held to the picture's 90%, the neck limit, since
+  the circle has to stay on screen. The reason is that the remaining likely cause of
+  the sickness was the view moving without the hand. The tick-rate path of
+  `FrameSmoothing` (`!FramePacing.Extrapolating`) used to return before `MouseLead`,
+  so the reticle was drawn only per tick there and head look would have been lost;
+  it now runs `MouseAim.Frame` and the head lead there too.
+
+**Measured**: slot 2 restored with `KF2_AUTOSTART=2`, area 1, `KF2_FPS=144`,
+standing turn rate 35, acceleration 8.
+
+- `aim 200 0`: steps 8, 16, 24, 32, 35, 33, 25, 17, 9, 1; yaw 2639 to 2839, exactly
+  200; the measured turn equal to the asked turn every tick.
+- `aim 20 0` (inside the 32 ring): three still ticks, then 8, 10, 2; yaw 2839 to
+  2859.
+- `aim 0 -900`: held at the picture's pitch reach, pitch 26 to -296 (3800); a
+  remainder of 0.8 units is left, which counts as landed.
+- `aim 400 0 300`, with `press Right 600` 0.4 s in: the aim steps 8 to 35, then nine
+  ticks yield with the offset held at 250, then 8, 16, 24, 32, 35, 35, 35, 28, 20,
+  12 to land. The D-pad reversed the aim's 35 on its own ease (27, 19, 11, 3, -5,
+  -13, -21, -29, -35: -43 units net); yaw 2859 to 3216.
+- Head look, `aim 300 0`: 150 ms later the body's yaw was 3240 and the frame's
+  camera (the `view` verb) 3516; 3 s later both were 3516.
+- Pacing throughout: 144.0 fps drawn, 144.0 presents a second, 14.9 to 15.0 ticks a
+  second of 15 Hz; no faults.
+
+**Not judged with a mouse or by eye**: whether the overlay reads well, whether 3
+settle ticks is right, whether the yield feels right, whether head look removes the
+sickness, whether the arm (drawn in view space, so it points where the view looks,
+not where the body faces) is confusing in head look, and the range of the aim
+sensitivity.
+
+#### The marks held the eye
+
+Reported from play with the overlay above: "abstract tunneling where I can't stop
+looking at the overlay". The marks sat at the middle of the picture all the time,
+and the line and the circle moved with every small motion of the hand, so there
+was always something there pulling the eye in, and the faint dead ring was one more
+thing at the centre.
+
+The marks now show only while they say something: a turn under way, or the circle
+off the middle by more than half the dead ring, so tremor inside the ring shows
+nothing. They fade in over 0.1 s, hold 0.15 s once that is over, and fade out
+completely over 0.35 s. The dead ring is no longer drawn, and every stroke is
+dimmer (circle 0.5, dot 0.5, line 0.2, 0.35 while steering; the circle 5 game
+pixels, its stroke 0.75). Input ▸ Mouse ▸ *Aim marks* chooses Off, While aiming
+(the default) or Always, which is the earlier behaviour fading to 30% when idle
+(`kf2.mouse.aimmarks`, `KF2_MOUSE_AIM_MARKS=off|aiming|always`). Off suits head look,
+where the middle of the picture is the aim. *Connecting line*, under it, leaves the
+line out (`kf2.mouse.aimline`, `KF2_MOUSE_AIM_LINE=0`), so only the dot and the circle
+are drawn.
+
+**Measured**: builds; slot 2 with aim on, `aim 300 0`, then head look and
+`aim -300 0`, back to yaw 2639; 144.0 fps drawn at 15.0 ticks/s; no faults.
+**Not judged**: whether it still holds the eye.
+
+#### The view can hold still while the body turns
+
+Asked for from play: "instead of the cursor moving to the center, the center should
+move to the cursor". In plain mouse aim the view is the facing, so a turn slides the
+whole picture under the circle and the eye follows the circle back to the middle.
+Input ▸ Mouse ▸ *View* now offers three answers to what the view does while the body
+turns: *Turns with you* (as before), *Follows the mouse* (head look) and *Holds still*
+(`kf2.mouse.aimhold`, `KF2_MOUSE_AIM_HOLD`, the shell's `aim hold on|off`; head look
+wins if both keys are set).
+
+Held, the camera keeps its world angle while the body turns under it: MouseAim keeps
+the camera's angle off the facing (`_camYaw`, `_camPitch`), takes the body's step off
+it each tick, and the view is drawn off the facing by it through the same lead head
+look uses (`MouseAim.ViewLead`), interpolated with the body's step so the picture is
+still on every drawn frame. The dot, the facing, leaves the middle and travels to the
+circle. Two things turn the camera: the facing reaching the reticle's reach of the
+picture drags it along, and once the turn has landed it comes back onto the facing at
+the D-pad's rate and ease, as a second turn. The circle is held on the picture round
+where the camera points, not round the facing. The marks show while the view is
+still off the facing. Which of the two catch-ups is wanted, or both, was a guess.
+
+**Measured** (slot 2, area 1, standing rate 35, `aim hold on`, the `view` verb's
+camera against `state`'s yaw every 0.2 s): `aim 300 0`: the body 2639, 2719, 2824,
+2915, 2939 with the camera at 2639 throughout, then the camera 2649, 2739, 2852,
+2931, 2939. `aim 1200 0 2500`: the gap opened to about 490 units, the reach, and held
+there while the camera was dragged, then closed when the hand stopped. 144.0 fps drawn
+at 15.0 ticks/s, no faults. **Not judged**: whether it is more comfortable, and the
+recentre's speed.
 
 ### The mouse was sampled at two points
 

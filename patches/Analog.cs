@@ -468,14 +468,6 @@ public static class Analog
         // Taken unconditionally: the accumulator has to be emptied whether or not
         // anything here is going to spend it.
         var (mTurn, mPitch) = Mouse.TakeLook();
-        // Mouse aim (MouseAim): the motion moves a reticle, and what is spent is the
-        // step toward it at the D-pad's rate, as the mouse's amount. The pointer
-        // let go takes the reticle with it, so nothing steers that cannot be seen.
-        if (MouseAim.Active)
-        {
-            if (Mouse.Captured) (mTurn, mPitch) = MouseAim.Steer(m, mTurn, mPitch, (int)m.ReadU32(TurnRate));
-            else MouseAim.Reset();
-        }
         // The gyro (GyroAim, a drawn bow) asks as the mouse does, with an amount,
         // and is spent beside the stick's share; emptied here whatever happens.
         var (gTurn, gPitch) = GyroAim.Take();
@@ -485,14 +477,40 @@ public static class Analog
         // stick needs only "walks" there, not "the right stick turns and looks".
         bool right = Enabled && AnalogLook && !Tank;
         bool left = Enabled && AnalogMove && (Tank || AnalogLook);
+        var (x, y) = right ? Shape(Controller.RightX, Controller.RightY, LookDeadzone, LookCurve)
+                           : (0f, 0f);
+        // Read once: the left stick's turn for 3D, which is also the stick's share below.
+        (float X, float Y) tankLeft = Tank ? TankLeft : (0f, 0f);
+
+        // Mouse aim (MouseAim): the motion moves a reticle, and what is spent is the
+        // step toward it at the D-pad's rate, as the mouse's amount. The pointer
+        // let go takes the reticle with it, so nothing steers that cannot be seen.
+        // Each device that turns an axis this tick is told to MouseAim, which yields
+        // that axis, so the player never turns at the sum of two rates.
+        if (MouseAim.Active)
+        {
+            if (Mouse.Captured)
+            {
+                ushort padNow = m.ReadU16(Pad);
+                bool dpadTurn = (padNow & ((ushort)m.ReadU32(MaskTurnInc) | (ushort)m.ReadU32(MaskTurnDec))) != 0;
+                bool dpadPitch = (padNow & ((ushort)m.ReadU32(MaskPitchInc) | (ushort)m.ReadU32(MaskPitchDec))) != 0;
+                bool yieldYaw = (right && x != 0f) || (Tank && left && tankLeft.X != 0f) || gTurn != 0f
+                                || _rampTurnLive || dpadTurn;
+                bool yieldPitch = (right && y != 0f) || gPitch != 0f || _rampPitchLive || dpadPitch;
+                (mTurn, mPitch) = MouseAim.Steer(m, mTurn, mPitch, (int)m.ReadU32(TurnRate), yieldYaw, yieldPitch);
+                // A held button takes the axis from the mouse as it is: no release
+                // tick, which would zero the velocity and clear the button for a tick
+                // before the game's own branch turned again.
+                if (dpadTurn) _mouseTurn = false;
+                if (dpadPitch) _mousePitch = false;
+            }
+            else MouseAim.Reset();
+        }
         if (!right && !left && !gyro && mTurn == 0f && mPitch == 0f && !_mouseTurn && !_mousePitch)
         {
             _rampTurnLive = _rampPitchLive = false;
             return;
         }
-
-        var (x, y) = right ? Shape(Controller.RightX, Controller.RightY, LookDeadzone, LookCurve)
-                           : (0f, 0f);
 
         // The runtime binds the left stick to the D-pad by default, and the game's
         // turn actions *are* D-pad left/right -- so a left stick pushed sideways
@@ -501,7 +519,7 @@ public static class Analog
         // zeroed, and the D-pad still turns when neither stick is deflected. In 3D
         // the same ownership is what makes the sideways push the stick's turn.
         var (lx, ly) = !left ? (0f, 0f)
-                     : Tank ? TankLeft
+                     : Tank ? tankLeft
                      : Shape(Controller.LeftX, Controller.LeftY, MoveDeadzone, MoveCurve);
         bool leftActive = left && (lx != 0f || ly != 0f);
 

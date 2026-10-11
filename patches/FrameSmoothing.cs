@@ -388,7 +388,19 @@ public static class FrameSmoothing
         // be handed last tick's camera on every frame, a permanent tick of latency
         // bought with no smoothing at all. The checkbox greys itself out on the
         // same test; this is the half that has to agree with it.
-        if (!FramePacing.Extrapolating) { if (_probe) { _skipped++; _skipOff++; } return; }
+        // Mouse aim's reticle is drained here too, and head look still leads: every
+        // frame is a tick, so the lead is the reticle's offset and the pending motion,
+        // with nothing to interpolate. Without this, head look was lost at the tick rate.
+        if (!FramePacing.Extrapolating)
+        {
+            if (MouseAim.Active)
+            {
+                MouseLead(m, 1.0);
+                if (MouseAim.ViewLeads) LeadOnly(m);
+            }
+            if (_probe) { _skipped++; _skipOff++; }
+            return;
+        }
 
         // Off, the mouse still leads: the view is the tick's plus what the mouse
         // has moved since, and nothing is interpolated.
@@ -396,7 +408,7 @@ public static class FrameSmoothing
         {
             if (_probe) { _skipped++; _skipOff++; }
             MouseLead(m, 1.0);
-            if (_aheadYaw != 0 || _aheadPitch != 0) LeadOnly(m);
+            if (_aheadYaw != 0 || _aheadPitch != 0 || MouseAim.ViewLeads) LeadOnly(m);
             return;
         }
 
@@ -452,7 +464,8 @@ public static class FrameSmoothing
 
         double frac = FramePacing.LogicPhase;
         var (yawLead, pitchLead) = MouseLead(m, frac);
-        bool leading = _aheadYaw != 0 || _aheadPitch != 0;
+        // Head look's lead can be a fraction of a unit: a whole-unit test would drop it.
+        bool leading = _aheadYaw != 0 || _aheadPitch != 0 || MouseAim.ViewLeads;
 
         // Not gated on a small phase: interpolation must overwrite the live globals
         // even at frac ~= 0, because on a tick frame they hold `cur` (the new tick)
@@ -714,13 +727,22 @@ public static class FrameSmoothing
     {
         _aheadYaw = _aheadPitch = 0;
         _aheadYawFrac = _aheadPitchFrac = 0;
-        // Mouse aim moves a reticle, not the view: the view is the facing, so there
-        // is nothing to lead, and the motion drained here moves the reticle instead.
+        // Mouse aim moves a reticle, and the motion drained here moves the reticle. The
+        // view leads by the reticle only in head look: then the screen centre follows
+        // the hand and the body chases it, so the view is the facing plus the offset.
+        // Otherwise the view is the facing, and there is nothing to lead.
         if (MouseAim.Active)
         {
-            MouseAim.Frame(frac);
+            MouseAim.Frame(m, frac);
             _tickYaw = _tickPitch = 0;
-            return (0, 0);
+            if (!MouseAim.ViewLeads) return (0, 0);
+
+            var (headYaw, headPitch) = MouseAim.ViewLead;
+            _aheadYaw = (int)Math.Round(headYaw);
+            _aheadYawFrac = headYaw - _aheadYaw;
+            _aheadPitch = (int)Math.Round(headPitch);
+            _aheadPitchFrac = headPitch - _aheadPitch;
+            return (headYaw, headPitch);
         }
         if (!Mouse.Lead || LeadSuppressed)
         {

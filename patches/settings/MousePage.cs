@@ -48,8 +48,44 @@ public sealed class MousePage : IPatchPage
         bool aim = MouseAim.Enabled;
         Check("Mouse aim", MouseAim.OnKey, ref MouseAim.Enabled,
               "The mouse moves a reticle and you turn toward it at the game's own speed, as with " +
-              "the D-pad, instead of the view turning as far as the hand moves.");
+              "the D-pad, instead of the view turning as far as the hand moves. Small movements " +
+              "near the centre do not turn you until the hand rests.");
         if (aim && !MouseAim.Enabled) MouseAim.Reset();
+
+        ImGui.BeginDisabled(!MouseAim.Enabled);
+        ImGui.Indent();
+        int view = MouseAim.ViewMode;
+        if (ImGui.Combo("View", ref view, MouseAim.ViewNames, MouseAim.ViewNames.Length))
+        {
+            MouseAim.HeadLook = view == 1;
+            MouseAim.HoldView = view == 2;
+            PatchSettings.Set(MouseAim.HeadKey, MouseAim.HeadLook);
+            PatchSettings.Set(MouseAim.HoldKey, MouseAim.HoldView);
+        }
+        Tip("What the view does while you turn toward the reticle. Turns with you: the view is " +
+            "your facing, and the reticle comes to the middle as you turn. Follows the mouse: the " +
+            "view turns with the hand, as in mouse look, and your body follows at the game's own " +
+            "speed. Holds still: the picture stays put while the dot, your facing, travels to the " +
+            "circle; once you arrive, the view turns to bring both back to the middle.");
+        Slider("Aim sensitivity", MouseAim.SensKey, ref MouseAim.Sens, 0.1f, 4f,
+               "How far the reticle moves for a movement of the hand, on top of the turn " +
+               "sensitivity. Lower it if the reticle reaches the edge of the picture too easily.");
+        int marks = MouseAim.Marks;
+        if (ImGui.Combo("Aim marks", ref marks, MouseAim.MarksNames, MouseAim.MarksNames.Length))
+        {
+            MouseAim.Marks = marks;
+            PatchSettings.Set(MouseAim.MarksKey, marks);
+        }
+        Tip("When the dot, line and circle are drawn. While aiming shows them only during a turn " +
+            "or while the circle is off the middle, and lets them fade out after, so they do not " +
+            "hold the eye. Off suits View follows the mouse, where the middle of the picture is the aim.");
+        ImGui.BeginDisabled(MouseAim.Marks == MouseAim.MarksOff);
+        Check("Connecting line", MouseAim.LineKey, ref MouseAim.Line,
+              "The thin line from the dot at the middle to the circle. Without it the dot and the " +
+              "circle are all that is drawn.");
+        ImGui.EndDisabled();
+        ImGui.Unindent();
+        ImGui.EndDisabled();
 
         ImGui.Spacing();
         // This used to end "...exactly as for a controller", which was a denial
