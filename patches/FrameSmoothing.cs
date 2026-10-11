@@ -718,7 +718,7 @@ public static class FrameSmoothing
         // is nothing to lead, and the motion drained here moves the reticle instead.
         if (MouseAim.Active)
         {
-            MouseAim.Frame();
+            MouseAim.Frame(frac);
             _tickYaw = _tickPitch = 0;
             return (0, 0);
         }

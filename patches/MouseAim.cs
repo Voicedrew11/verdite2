@@ -61,8 +61,13 @@ public static class MouseAim
     // The steering velocities, in units a tick, eased as the D-pad's are.
     static float _velYaw, _velPitch;
 
-    // What the overlay draws: the offset plus the motion the next tick has not
-    // taken yet, published at stage 8. Read on the host thread.
+    // The step the last tick took off the offset. The drawn view reaches it only
+    // at phase 1, so the part it has not reached yet is still owed to the reticle.
+    static float _lastStepYaw, _lastStepPitch;
+
+    // What the overlay draws: the offset plus the step the view has not reached
+    // yet and the motion the next tick has not taken, published at each tick and
+    // at stage 8. Read on the host thread.
     static volatile float _shownYaw, _shownPitch;
 
     // When the look routine last steered; the overlay is drawn only while it is
@@ -105,7 +110,11 @@ public static class MouseAim
     internal static (float Turn, float Pitch) Steer(IMemory m, float turn, float pitch, int rate)
     {
         _steered = Environment.TickCount64;
-        if (rate <= 0) return (0f, 0f);
+        if (rate <= 0)
+        {
+            _lastStepYaw = _lastStepPitch = 0f;
+            return (0f, 0f);
+        }
 
         _offYaw += turn;
         _offPitch += pitch;
@@ -124,19 +133,28 @@ public static class MouseAim
         if (stepYaw == 0f) _velYaw = 0f;
         if (stepPitch == 0f) _velPitch = 0f;
 
-        Publish(0f, 0f);
+        // Kept for Frame: the view is still behind this step at the tick, so the
+        // reticle is drawn with the step's unreached part added back on.
+        _lastStepYaw = stepYaw;
+        _lastStepPitch = stepPitch;
+        Publish(stepYaw, stepPitch);
         return (stepYaw, stepPitch);
     }
 
     /// <summary>
     /// Every drawn frame, from stage 8: the host's motion so far, added to the
-    /// reticle the overlay draws. Not spent: the next tick takes it.
+    /// reticle the overlay draws, and the part of the last tick's step the
+    /// interpolated view has not reached yet (<paramref name="frac"/> is its phase).
+    /// That part is what keeps the reticle still on the picture: without it the
+    /// reticle drifts with the view and snaps back at each tick. Not spent: the
+    /// next tick takes the motion.
     /// </summary>
-    internal static void Frame()
+    internal static void Frame(double frac)
     {
         Mouse.Poll();
         var (turn, look) = Mouse.Pending;
-        Publish(turn, look);
+        float keep = (float)(1.0 - frac);
+        Publish(_lastStepYaw * keep + turn, _lastStepPitch * keep + look);
     }
 
     /// <summary>Forget the reticle, as on turning this off or losing the pointer.</summary>
@@ -144,6 +162,7 @@ public static class MouseAim
     {
         _offYaw = _offPitch = 0f;
         _velYaw = _velPitch = 0f;
+        _lastStepYaw = _lastStepPitch = 0f;
         Publish(0f, 0f);
     }
 
@@ -164,11 +183,13 @@ public static class MouseAim
         }
     }
 
-    static void Publish(float pendTurn, float pendPitch)
+    /// <summary>The offset plus what the view still owes the reticle (the unreached
+    /// step and the pending motion), held on the picture.</summary>
+    static void Publish(float addYaw, float addPitch)
     {
         var (maxYaw, maxPitch) = Limits();
-        _shownYaw = Math.Clamp(_offYaw + pendTurn, -maxYaw, maxYaw);
-        _shownPitch = Math.Clamp(_offPitch + pendPitch, -maxPitch, maxPitch);
+        _shownYaw = Math.Clamp(_offYaw + addYaw, -maxYaw, maxYaw);
+        _shownPitch = Math.Clamp(_offPitch + addPitch, -maxPitch, maxPitch);
     }
 
     /// <summary>The reticle held on the picture, and its pitch inside the game's
