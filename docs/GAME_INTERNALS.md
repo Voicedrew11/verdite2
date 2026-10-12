@@ -1506,6 +1506,70 @@ at **`0x8019954E`**.
 knowing: it carries fall damage (`func_80024FE0`), the bottomless-pit check
 (`func_800284BC`) and the crushed-or-below-the-floor check (`func_80023ECC`).
 
+### The wall slide never leaves a wall it starts in
+
+Found 2026-10-12 from a player's report: the game "would simply freeze then
+close" near Base No. 2 (area 2, `fdat08`, their slot 1 at LV14), at the foot of a
+stair into a short hallway. **Measured:** a teleport sweep over area 2 (`goto` onto
+every drawn half, four facings each) froze on its 23rd half, `(41984, -15872,
+1024)`, tile (20, 0) lower. It freezes there every time with `KF2_WALLGUARD=0`. The
+hang report's game thread was in `func_80028080` under `func_800290D4` (stage 3),
+with no indirect call and no hardware access for a second.
+
+`func_80028080(angle, speed)` moves X and Z by `(-sin, cos) * speed >> 12` and
+calls `func_8002C700(x, Y, z, 0x320, 0x6A4, 0x31)` on the candidate. On a
+collision it retries in this order:
+
+1. A creature or object bit (`0x30`): a turned step, at most twice, then it gives up.
+2. Map collision: the same angle at `speed - 22`, `- 44`, ... (committed at the
+   first free one).
+3. Bit `0x1` or `0x2`: X zeroed, then Z alone, then (bit `0x2`, once, `s7 = 1`) a
+   diagonal of `(dx ± dz) / 2` chosen by the tile half's `+2 & 3`, then those
+   zeroed again.
+
+Every branch ends at the candidate with **both deltas zero**, which is where the
+player already stands. If that spot answers bit `0x2` and no `0x30` bit, the
+branches at `0x800283E4` → `0x800283F4` → `0x80028408` (`s7 != 0`) → `0x800283E4`
+cycle with `s2 = s3 = 0`. They never reach `0x80028108` and never call anything.
+The registers in the report are exactly that: `S2 = S3 = 0`, `S4 = 6`, `S6 = 0`,
+`S7 = 1`. The original has this loop too. Nothing on the way into it is the port's.
+
+**Stage 3 calls the routine every tick with the forward speed even at 0**
+(`0x800294CC`, on `s0 >= 0`), so a player who is standing still is enough. So the
+hang needs only one thing: the player's own spot is in map collision. A committed
+move is always free at the moment it commits. Getting into a wall therefore needs
+something else to change: the player's Y (the step and gravity are
+`func_80028560`'s, after the move), the tile (a half the game rewrites), or a
+placement that skips the test (`goto`, a warp). **Which of these the reporter hit
+is not known.** The sweep only proves the loop and the guard.
+
+**The report's own place was walked on 2026-10-12, and neither build froze there.**
+Base No. 2 is down the stair at tile (32, 27), floor 132, facing -X: it steps down
+through 124, 116 and 108 to floor 100 at x 27-29. The hallway is (27-28, 28), running
++Z into the floor-100 room at x 27-35, z 29-33, which sits under the floor-132
+level. It holds a kind-4 object at (28, 31), likely the bow's chest, and two kind-`0xF0`
+objects over the stair at (27, 25). The reporter's save was walked there by pad input
+on HEAD, then through 78 tiles of the base pressing Cross at every block, and on a
+v0.4.0 build (the reporter's) down the stair, the hallway and to the chest. Both
+were close to default settings, and the reporter's are not known. There was no
+freeze, no fault and no wall-guard line. v0.4.0 had neither `0108` nor `0109`, so
+any exception in a port patch or on the mixer thread closed it without a word.
+That matches "freeze then close" from anywhere, so the next report from a build
+that has them should carry a `crashes/` file naming the cause. This guard
+is a fix for a real loop. Nothing yet says it is the reporter's.
+
+`patches/WallGuard.cs` replaces the routine. Before each call it tests the
+player's spot against the map alone (mask `0x01`, the routine's radius and
+height). That path writes only the query's scratch words, `0x801D9C84`-`0x801D9CAC`,
+and the guard puts them back. When the spot is free (every call
+in normal play) the recompiled routine runs untouched. When it is not, the player
+is moved to the nearest free spot on 64-unit rings out to a tile, and the routine
+runs from there. If no spot is free, the move is refused for that call. Each
+time, it prints `[KF2] wall guard: area N, stuck in a wall at (x, y, z); ...`, at
+most once a second, so a player's log says whether this was their freeze.
+Measured at the sweep's spot: nudged `-634, 634`, and play goes on. Picture and
+feel are not judged.
+
 ### `func_8002C3A8` is the floor-height query
 
 `func_8002C3A8(mode, x, z, radius, /*sp+0x10*/ height)` returns the ground `Y` for

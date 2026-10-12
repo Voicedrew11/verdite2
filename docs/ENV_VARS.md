@@ -69,6 +69,7 @@ KF2_SMOOTH_ANIM_PROBE=1                # morph vs rigid submits, the verdict cen
 KF2_SMOOTH_FLUID=0                     # leave scrolling textures (water, slime skins) on the tick (on by default)
 KF2_SMOOTH_FLUID_PROBE=1               # live slots, dest rects, leftover V shift, whether the uniform is bound
 KF2_HITGUARD=0                         # let the hit path's reaction lookup fault (it is fenced by default; docs/TODO.md #14)
+KF2_WALLGUARD=0                        # the recompiled wall slide alone: standing inside map collision freezes the game (guarded by default; "The wall slide never leaves a wall it starts in" in docs/GAME_INTERNALS.md)
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
