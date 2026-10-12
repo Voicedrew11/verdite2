@@ -557,6 +557,15 @@ Kf2.HitGuard.Configure(Environment.GetEnvironmentVariable("KF2_HITGUARD"),
                        Environment.GetEnvironmentVariable("KF2_HITPROBE"));
 Kf2.HitGuard.Install();
 
+// The wall slide, func_80028080, loops forever without a call once the player
+// stands inside map collision (bit 0x2), and stage 3 calls it every tick, so the
+// game freezes. The guard tests the player's spot first and nudges them out. See
+// "The wall slide never leaves a wall it starts in" in docs/GAME_INTERNALS.md.
+//
+//     KF2_WALLGUARD=0     the recompiled routine alone: the hang back -- comparison only
+Kf2.WallGuard.Configure(Environment.GetEnvironmentVariable("KF2_WALLGUARD"));
+Kf2.WallGuard.Install();
+
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
 // picture the port should be able to offer without a package having to load: the

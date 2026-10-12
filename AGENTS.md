@@ -208,6 +208,7 @@ what it is) live there, not here.
 | `CardIcon`, `DesktopEntry` | the window icon is the game's own memory-card icon, read off the player's disc at boot; the shipped orb is the fallback. On Linux the same pixels go into the icon theme under the app id, which is the only way a Wayland compositor can show one (`0061`) | on | PACKAGING, "The icon comes off the disc", "Wayland takes the icon from the desktop entry" |
 | `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |
 | `HitGuard` | fences the final-boss hit-path fault | on | TODO, "The crash on the final boss's last hit" |
+| `WallGuard` | replaces the wall slide `func_80028080`: if the player already stands in map collision (bit `0x2`) its retries end in a loop with no call that never exits, and stage 3 calls it every tick, so the game froze; the guard tests the spot first and nudges the player to the nearest free one | on | GAME_INTERNALS, "The wall slide never leaves a wall it starts in" |
 | `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | sinc, enhanced reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |
 | `PositionalAudio` | 3D sound effects re-aimed every frame, for speakers or headphones (`0044`) | headphones | AUDIO, "Positional audio" |
 

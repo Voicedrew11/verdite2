@@ -304,6 +304,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - The inventory is one byte per item, and the item id is the name-table index
 - Saving and loading
 - Debug tools
+- The wall slide never leaves a wall it starts in
 - The Items tab gives through the game's own give, and the names are read live
 - Full-screen messages are pictures, and the world behind them is a 1x copy
 
