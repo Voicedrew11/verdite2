@@ -57,8 +57,9 @@ public static class Setup
     ///   setup apply T [T T]         one tier (original, faithful, modern) for every group, or one
     ///                               per category in the spec's order; the display left alone.
     ///                               Applied on the host's next frame, so ask again for the result.
-    ///   setup preset original|recommended
-    ///                               the welcome's Original or Recommended choice, applied the same way.
+    ///   setup preset original|faithful|recommended
+    ///                               the welcome's Original, Faithful or Recommended choice (tiers 0, 1, 2),
+    ///                               applied the same way.
     /// </summary>
     public static string Shell(string args)
     {
@@ -79,13 +80,14 @@ public static class Setup
             case "preset":
             {
                 var which = a.Length == 2 ? a[1].ToLowerInvariant() : "";
-                if (which is not ("original" or "recommended"))
-                    return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup preset <original|recommended>\"}";
-                var (presetDisplay, presetTiers) = Onboarding.Preset(spec, which == "original");
+                if (which is not ("original" or "faithful" or "recommended"))
+                    return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup preset <original|faithful|recommended>\"}";
+                int presetTier = which switch { "original" => 0, "faithful" => 1, _ => 2 };
+                var (presetDisplay, presetTiers) = Onboarding.Preset(spec, presetTier);
                 SettingsStore.OnHost(() => _last = Onboarding.Apply(spec, Onboarding.Sets(spec, presetDisplay, presetTiers), "KF2"));
                 break;
             }
-            default: return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup [open|apply ...|preset original|recommended]\"}";
+            default: return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup [open|apply ...|preset original|faithful|recommended]\"}";
         }
         var groups = spec.Categories.SelectMany(c => c.Groups.Zip(Onboarding.Detect(spec, c), (g, t) => $"\"{c.Id}.{g.Id}\":{t}"));
         var display = spec.Display.Select(f => $"\"{f.Id}\":{Onboarding.Detect(spec, f)}");

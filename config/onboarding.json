@@ -995,9 +995,9 @@
       "es-419": "Tu último guardado se recarga dos segundos después de morir."
     },
     "kf2.setup.welcome": {
-      "en": "Before you play, choose how King's Field should look, sound and control. Everything here can be changed later, and this setup can be run again from PORT SETTINGS in the game's menu.",
-      "pt-BR": "Antes de jogar, escolha como King's Field deve parecer, soar e ser controlado. Tudo aqui pode ser alterado depois, e esta configuração pode ser refeita em PORT SETTINGS no menu do jogo.",
-      "es-419": "Antes de jugar, elige cómo debe verse, sonar y controlarse King's Field. Todo esto se puede cambiar después, y esta configuración se puede repetir desde PORT SETTINGS en el menú del juego."
+      "en": "Before you play, choose how King's Field should look, sound and control. Everything here can be changed later, and the setup can be run again from the game's menu (Circle on the pad, Tab on the keyboard): PORT SETTINGS > DISPLAY > RUN SETUP.",
+      "pt-BR": "Antes de jogar, escolha como King's Field deve parecer, soar e ser controlado. Tudo aqui pode ser alterado depois, e a configuração pode ser refeita pelo menu do jogo (Círculo no controle, Tab no teclado): PORT SETTINGS > DISPLAY > RUN SETUP.",
+      "es-419": "Antes de jugar, elige cómo debe verse, sonar y controlarse King's Field. Todo esto se puede cambiar después, y la configuración se puede repetir desde el menú del juego (Círculo en el mando, Tab en el teclado): PORT SETTINGS > DISPLAY > RUN SETUP."
     }
   }
 }

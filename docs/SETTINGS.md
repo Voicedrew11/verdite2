@@ -123,18 +123,24 @@ mode.
 
 The first-run setup, shown by the launcher **while the game is being built** and
 holding the game back until both are done, and run again from the settings page's
-DISPLAY page (RUN SETUP, its last row, not a setting). The welcome offers two
-presets and **Customise**:
+DISPLAY page (RUN SETUP, its last row, not a setting). The welcome has three
+presets as buttons in its body, and **Customise…** as a fourth. Its footer holds
+only Skip setup (launcher) or Cancel (in game):
 
 * **Recommended**: Modern in every group, with the display suggested from the
   monitor (`Onboarding.Suggest`). Window mode has no suggestion and stays where it
   starts.
+* **Faithful**: Faithful in every group, with the display suggested from the
+  monitor, as Recommended.
 * **Original**: Original in every group, and each display field's `original`
   option: 4:3, 240p (1x) and 20 fps. Window mode is left alone.
-* **Customise**: walks the display, then the tiers, then the summary.
+* **Customise…**: walks the display, then the tiers, then the summary. It starts
+  from what the player had set, not from a preset clicked earlier.
 
-A preset goes straight to the summary, whose Back returns to the welcome.
-Recommended takes keyboard and pad focus whenever the welcome shows. Basic (one
+A preset goes to the summary. Its top button, **Adjust these choices…**, goes to
+the display page with the preset's choices kept. The summary's Back returns to
+the welcome. Every page puts keyboard and pad focus on its first control: the
+welcome's first button, the summary's Adjust or Finish, the report's Close. Basic (one
 style for each of Controls, Presentation and Gameplay) and Advanced (one for each
 group inside them) are a switch at the top of the tiers page. Every group has
 three tiers:
@@ -163,12 +169,13 @@ three tiers:
   ships in `content/config`, so it is part of the build key: a change to it
   rebuilds.
 * `patches/Setup.cs`: RUN SETUP, the live apply, and the shell's `setup` verb,
-  including `setup preset original|recommended`.
+  including `setup preset original|recommended|faithful`.
 * `Launcher.cs`: `Onboarding.Due` decides whether setup is shown. `BuildGame` opens
   the setup in place of the build popup and shows the build as a strip at its
-  foot, and it pumps until **both** the build and the setup are done. A failed
-  build closes the setup into the usual failure popup. On a warm launch with setup
-  due, it runs on its own (`RunSetup`).
+  foot, and it pumps until **both** the build and the setup are done. If the build
+  fails while setup is open, setup stays up, its strip says the build failed, the
+  choices are saved on Finish, and the failure popup follows. On a warm
+  launch with setup due, it runs on its own (`RunSetup`).
 
 ### What setup writes, and when
 
@@ -294,3 +301,31 @@ popup has not been looked at.
 
 **Not judged:** mouse aim as Faithful's default has never been played through a
 first run.
+
+### Setup reworked (2026-10-13)
+
+* **The welcome's choices were split between body and footer.** Two presets sat
+  in the body and Customise in the footer where Next is, with Skip where Back is
+  on the other pages. Recommended, Faithful, Original and Customise… are now all body buttons,
+  and the footer holds only Skip setup (launcher) or Cancel (in game).
+* **There was no Faithful preset.** Faithful now has one, with the display
+  suggested from the monitor like Recommended, so the three tiers each have a
+  preset.
+* **A preset could not be adjusted.** It went to the summary with nothing to
+  change it. The summary's top button, Adjust these choices…, now opens the
+  display page with the preset's choices kept. Customise… starts from what the
+  player had set, not from a preset clicked earlier.
+* **A pad had no focus past the welcome.** Every page now puts focus on its first
+  control (the welcome's first button, the summary's Adjust or Finish, the
+  report's Close).
+* **A failed build lost the choices.** The failure closed setup, so anything the
+  player had picked was gone. Setup now stays up with the build failed in its
+  strip, the choices are saved on Finish, and the failure popup follows.
+* The shell's `setup` verb gains `setup preset faithful`, beside original and
+  recommended.
+* The launcher's disc picker (step 3 of "First run" in `docs/PACKAGING.md`) is
+  retitled and reworded by the launcher, and Cancel on it during the boot wait
+  quits.
+
+**Not judged:** none of it has been looked at or clicked through; measured only by
+the build.
