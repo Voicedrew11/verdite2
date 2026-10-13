@@ -9,7 +9,7 @@ namespace Verdite.Core;
 
 /// <summary>
 /// The first-run setup: a display step, then one of three tiers (Original,
-/// Faithful, Modern) for each group of a game's settings. Nothing here knows a
+/// Original++, Modern) for each group of a game's settings. Nothing here knows a
 /// game: the groups, the keys each tier writes and every word the player reads
 /// come from the game's <c>config/onboarding.json</c> (<see cref="OnboardingSpec"/>).
 /// See "Onboarding" in docs/SETTINGS.md in a port.
@@ -220,20 +220,43 @@ internal static class Onboarding
         return pick >= 0 ? pick : Detect(spec, field);
     }
 
+    /// <summary>A key's number now: its stored value, else its declared default; null when neither parses.</summary>
+    public static double? Level(OnboardingSpec spec, string key)
+    {
+        if (Effective(spec, key, Stored(key)) is { } text
+            && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var v))
+            return v;
+        return null;
+    }
+
+    /// <summary>
+    /// The option a choice page is at now (or -1), and its slider's value now: the
+    /// key's effective value, else its minimum.
+    /// </summary>
+    public static SetupPageChoice Detect(OnboardingSpec spec, SetupPage page)
+    {
+        int option = page.Options.FindIndex(o => Matches(spec, o.Set));
+        double? value = page.Slider is { } s ? Level(spec, s.Key) ?? s.Min : null;
+        return new SetupPageChoice { Option = option, Value = value };
+    }
+
     /// <summary>
     /// The choices a preset makes: every group at <paramref name="tier"/> (0 Original,
-    /// 1 Faithful, 2 Modern). Tier 0 takes the Original option of each display field
+    /// 1 Original++, 2 Modern). Tier 0 takes the Original option of each display field
     /// (or where it starts, when it has none); the other tiers take the Recommended
-    /// display (<see cref="Suggest"/>).
+    /// display (<see cref="Suggest"/>). Each choice page takes its preset for the tier,
+    /// or keeps the player's choice when it has none.
     /// </summary>
-    public static (int[] Display, int[][] Tiers) Preset(OnboardingSpec spec, int tier)
+    public static (int[] Display, int[][] Tiers, SetupPageChoice[] Pages) Preset(OnboardingSpec spec, int tier)
     {
         var display = spec.Display.Select(f => tier == 0
             ? (f.Original is { } o && o >= 0 && o < f.Options.Count ? o : Detect(spec, f))
             : Suggest(spec, f)).ToArray();
         var tiers = spec.Categories
             .Select(c => c.Groups.Select(_ => tier).ToArray()).ToArray();
-        return (display, tiers);
+        var pages = spec.Pages
+            .Select(p => tier < p.Presets.Count ? p.Presets[tier].Clone() : new SetupPageChoice()).ToArray();
+        return (display, tiers, pages);
     }
 
     /// <summary>What a display field's first key means now: its text, else its default; null when its options write no key.</summary>
@@ -279,8 +302,9 @@ internal static class Onboarding
     // ---- Writing ----
 
     /// <summary>The sets a choice writes: the option chosen for each display field and
-    /// the tier for each group, by index; -1 leaves a field or group as it is.</summary>
-    public static List<Dictionary<string, string?>> Sets(OnboardingSpec spec, int[] display, int[][] tiers)
+    /// the tier for each group, by index; -1 leaves a field or group as it is. Then, per
+    /// choice page, its chosen option's set and its slider's value (when set).</summary>
+    public static List<Dictionary<string, string?>> Sets(OnboardingSpec spec, int[] display, int[][] tiers, SetupPageChoice[]? pages = null)
     {
         var sets = new List<Dictionary<string, string?>>();
         for (int i = 0; i < spec.Display.Count && i < display.Length; i++)
@@ -289,6 +313,14 @@ internal static class Onboarding
             for (int g = 0; g < spec.Categories[c].Groups.Count && g < tiers[c].Length; g++)
                 if (tiers[c][g] is var t && t >= 0 && t < spec.Categories[c].Groups[g].Tiers.Count)
                     sets.Add(spec.Categories[c].Groups[g].Tiers[t].Set);
+        for (int p = 0; pages is not null && p < spec.Pages.Count && p < pages.Length; p++)
+        {
+            var page = spec.Pages[p];
+            var choice = pages[p];
+            if (choice.Option >= 0 && choice.Option < page.Options.Count) sets.Add(page.Options[choice.Option].Set);
+            if (choice.Value is { } v && page.Slider is { } slider)
+                sets.Add(new() { [slider.Key] = v.ToString("0.##", CultureInfo.InvariantCulture) });
+        }
         return sets;
     }
 
@@ -383,6 +415,10 @@ internal sealed class OnboardingSpec
 
     public List<SetupCategory> Categories { get; set; } = [];
 
+    /// <summary>Choice pages after the tiers and before the summary: a game's own
+    /// choices (an option and a slider each), with presets per tier.</summary>
+    public List<SetupPage> Pages { get; set; } = [];
+
     public JsonElement? Strings { get; set; }
 
     /// <summary>What a loaded spec gets wrong, for the log: tiers of a group writing
@@ -411,6 +447,16 @@ internal sealed class OnboardingSpec
                         if (g.Tiers.All(t => t.Set.TryGetValue(key, out var v) && Onboarding.SameText(v, g.Tiers[0].Set[key])))
                             yield return $"{c.Id}.{g.Id}: every tier writes {key} alike";
             }
+        }
+
+        foreach (var p in Pages)
+        {
+            if (p.Presets.Count != OnboardingPopup.TierCount)
+                yield return $"page {p.Id}: {p.Presets.Count} presets, not {OnboardingPopup.TierCount}";
+            var keys = p.Options.Select(o => string.Join(",", o.Set.Keys.Order(StringComparer.OrdinalIgnoreCase))).Distinct().Count();
+            if (keys > 1) yield return $"page {p.Id}: its options write different keys";
+            if (p.Slider is { } s && p.Options.Any(o => o.Set.ContainsKey(s.Key)))
+                yield return $"page {p.Id}: an option writes the slider's key {s.Key}";
         }
     }
 }
@@ -474,4 +520,67 @@ internal sealed class SetupTier
     /// <summary>Every key the group owns, in every tier: null is the key removed,
     /// the feature's default.</summary>
     public Dictionary<string, string?> Set { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+/// <summary>A choice page: an option (a button each) and, under them, a slider.</summary>
+internal sealed class SetupPage
+{
+    public string Id { get; set; } = "";
+
+    /// <summary>A localisation key, the page's heading.</summary>
+    public string Title { get; set; } = "";
+
+    /// <summary>Localisation keys, one wrapped paragraph each.</summary>
+    public List<string> Body { get; set; } = [];
+
+    /// <summary>A localisation key over the options.</summary>
+    public string Label { get; set; } = "";
+
+    public List<SetupPageOption> Options { get; set; } = [];
+
+    public SetupSlider? Slider { get; set; }
+
+    /// <summary>One per tier (three): what a preset at that tier picks.</summary>
+    public List<SetupPageChoice> Presets { get; set; } = [];
+
+    /// <summary>A category id: while the player has not touched this page, it takes the
+    /// preset of the tier that category's groups are at when the page is entered.</summary>
+    public string? Follows { get; set; }
+}
+
+internal sealed class SetupPageOption
+{
+    public string Label { get; set; } = "";
+    public string? Desc { get; set; }
+
+    public Dictionary<string, string?> Set { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Picking this option moves the slider here; null leaves it where it is.</summary>
+    public double? Value { get; set; }
+}
+
+internal sealed class SetupSlider
+{
+    public string Key { get; set; } = "";
+    public string Label { get; set; } = "";
+    public string? Tip { get; set; }
+    public double Min { get; set; }
+    public double Max { get; set; }
+    public double Step { get; set; } = 0.25;
+
+    /// <summary>An ImGui printf format for the value.</summary>
+    public string Format { get; set; } = "%.2f";
+
+    /// <summary>A localisation key shown instead of the number at Min.</summary>
+    public string? MinLabel { get; set; }
+}
+
+/// <summary>A page's choice: an option index (-1 keeps the player's current one) and
+/// a slider value (null keeps the slider's key as it is).</summary>
+internal sealed class SetupPageChoice
+{
+    public int Option { get; set; } = -1;
+    public double? Value { get; set; }
+
+    public SetupPageChoice Clone() => new() { Option = Option, Value = Value };
 }
