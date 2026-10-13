@@ -2030,3 +2030,25 @@ core changed. CI checks out with `fetch-depth: 0` and refuses a `VERSION` file;
 the two equal. `release.sh` now only tags. Measured: `version.sh` prints `0.4.0`
 off `v0.4.0`, and the launcher builds as `0.4.0+dae2255b9`. See "Versioning" in
 `PACKAGING.md`.
+
+### 2026-10-13: Verdite Core pushed at `1301748`, and Verdite3 given it
+
+The fork was at `9d6bac8`, Verdite3 exactly on it; this repo's `tools/verdite-core`
+was that plus the setup's work (`src/Onboarding`, the launcher's hold on the build,
+`MouseGame.OnIsSetting`/`LeadIsSetting`), 1,570 lines, nothing of the fork's undone.
+
+- **`--push-core` would refuse again, as on 2026-10-11**: the join `76671b4` reaches
+  `v0.5.0-staging` only through a merge's second parent (`53fcacc`, the onboarding
+  merge), and the script looks along first parents only. Its checks were run by hand
+  instead: no mixed commit since `76671b4` (`4f13c17`, `65159be`, core only), and
+  `git subtree split` gives `1301748`, whose tree equals this repo's prefix and which
+  contains `9d6bac8`. Pushed as that commit: a fast-forward of the fork by 6. A
+  `--pull-core` after any staging merge would put a join back on the first-parent line.
+- Verdite3 pulled it (`f5b9f0b`, PR #6 there, not merged); its launcher and game build
+  with 0 errors, not booted. It has no `onboarding.json`, so it shows no setup, and its
+  mouse look and lead stay settings (both flags default true).
+- Not judged by eye: the setup's popup.
+
+**Corrected from 2026-10-09:** `ItemTurn` is not KF3's own. Turning a held-up item with
+the mouse, the right stick and the gyroscope, and the GYRO row that sets the item's gyro
+and the bow's together, are wanted here; KF2's pickup has not been found yet.
