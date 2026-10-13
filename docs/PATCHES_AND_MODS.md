@@ -19,6 +19,7 @@ lives here — frame pacing and auto reload.
 | `PolyAssembler.cs`, `PolyAssemblerLit.cs` | `func_80030540`, the polygon assembler, `func_8002FECC`/`func_8002E650`, the far map tiles' assembler and its vertex transform, and `func_8002F214`/`func_8002EAEC`, the models' lit assembler, rewritten in C# as replace hooks | this file |
 | `AutoReload.cs` | reloads the last save on death | this file |
 | `GearCompare.cs`, `MenuDraw.cs` | shows the stats an equip or a purchase would change beside the prompt, drawn with the game's menu primitives in C# | this file |
+| `EnemyTurn.cs` | scales how fast a creature turns at the player (Gameplay ▸ *Enemy turn speed*) | this file |
 | `Map.cs`, `MapMarkers.cs`, `MapRender.cs`, `MapPanel.cs`, `MapOverlay.cs`, `MapFog.cs` | the area's floor plan, what is standing in it, and the tiles you have seen | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
 | `Perspective.cs`, `Subpixel.cs`, `ZBuffer.cs` | switches and probes over the GTE depth mechanisms | [RENDERING.md](RENDERING.md) |
@@ -3814,6 +3815,105 @@ Measured on the move: `[KF2] gear compare: on, verify, 6/6 hooked`, booting into
 slot 2. The panel itself was judged by eye as the mod; the prompt is not reachable
 from the command channel (`press` does not reach the menu's Up/Down), so the
 patch's picture and its verify line on a real prompt are the user's to check.
+
+## Enemies turn faster
+
+`patches/EnemyTurn.cs` is Gameplay ▸ *Enemy turn speed*, a multiplier from x1
+(the game's own, the default) to x8 in quarter steps, with *Track you while
+standing* under it (on, dimmed and inert at x1). It is there because the mouse
+lets a player turn in a frame, where the D-pad turns `0x1C` a tick, and a creature
+that turns at the pad's pace can be circled forever. The slider applies on the next
+tick, so it can be moved in a fight. `KF2_ENEMYTURN` sets it from the console (and
+wins over the saved `kf2.enemyturn`).
+
+**One hook covers every caller.** All creature turning goes through
+`func_8003C8D8(rec, target, maxSpeed, accel)` (see "The creature turn is one
+routine" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), so a pre-hook rewrites `a2`
+and `a3` and lets it run. Nothing is stored and nothing is restored: the arguments
+are the only thing changed, and they are read fresh on every call.
+
+**Speed times k, acceleration times k squared.** A turn starts from rest and gains
+`accel` a tick until it reaches `maxSpeed`, and the creatures measured have an
+acceleration of 3 or 4 a tick against a top speed of 4 to 52. A short turn is
+therefore limited by the acceleration (`sqrt(2 angle / accel)` ticks; a quarter
+turn from rest is about 22 ticks, 1.5 s) and a long one by the top speed (`angle /
+maxSpeed`). Scaling both by k would make a short turn only `sqrt(k)` faster; scaling
+the acceleration by k² and the speed by k makes a turn of any size k times faster,
+which is what "x2" should mean. A step is capped at `0x400`: the routine's
+overshoot test looks a half turn either side of the target, so a step near `0x800`
+could pass the target unseen. A zero stays zero (`0x8003EB18` calls it with no
+speed, to stand still).
+
+**Only a turn at the player is scaled.** The chase writes its heading as
+`rec+0x64 = func_80015394(player - creature)` on the tick it turns (the calls at
+`0x8003E6F8` and `0x8003F000`, both feeding `func_8003CA08`), while a wander
+heading is `rand >> 3` (`0x8003E448`). So a target within 16 (1.4°) of the
+player's bearing is taken as a chase and anything else keeps the game's pace; a
+creature milling about at x3 otherwise snaps from heading to heading. The window
+was `0x80` (11°) first, and 5-15% of wander turns passed it; the trace below
+measured the chase's target within 3 of the bearing.
+`func_80015394` is `-atan2(dx, dz)`, not `atan2`: the first version of the gate
+used the latter and matched none of the chase's calls. `KF2_ENEMYTURN_ALL=1`
+scales every turn, as a comparison.
+
+Measured with `KF2_ENEMYTURN_PROBE=1`, slot 2 in area 1, walking the player
+toward the creatures east of where it loads (the census names the wrapper's own
+caller):
+
+| site | action | at x1 | at x3 |
+|---|---|---|---|
+| `0x8003E750` via `func_8003CA08` | `0x05` | every call at the player; speed 11, accel 4, \|vel\| ≤ 11 | every call scaled; \|vel\| ≤ 33 |
+| `0x8003E418` via `func_8003CA08` | `0x01` | 0-8% at the player; speed 4-52, accel 3-4, \|vel\| ≤ 52 | 5-15% scaled; \|vel\| ≤ 52 in most windows, up to 156 when one is |
+
+and `KF2_FPS=144 KF2_FPS_PROBE=1` still reads 144.0 fps drawn at 15.0 ticks/s.
+The census never caught `func_8003DEBC`'s two direct calls, `func_8003CCAC`, or the
+area modules' calls, because no fight was reached: the agent's player could not
+get into reach of a creature in area 1. Those calls are covered by the same hook
+and gate, but not measured.
+
+**At x4 they turned at the player only every so often**, as played, and that was
+not the one-in-four think. `KF2_ENEMYTURN_PROBE=2` prints a line a tick for each
+active creature within 12000: its action, HP, how far its facing is off the
+player, and whether it turned. The type-10 creature by save 2 chases (action
+`0x05`) for 3-4 ticks at the player, then stands in action `0x19` for 5-16 s, and
+`0x19` never calls the turn: its facing held 25-145 off the player until the next
+chase re-aimed it. (`0x19`, at `0x8003FA14`, is driven by an animation counter at
+`rec+0x70`; what it is in play is not identified.) The chase's own speed is low as
+well: `rule+0xE` is 11 there, 44 at x4, 58°/s, which is why the ceiling went from
+x4 to x8.
+
+**So a standing creature is tracked.** Once a tick (a post on stage 4, telling a
+tick from a gated frame by stage 4's own run count at `0x80175908`), each active
+creature that is engaged, did not move since the last tick, was not turned by the
+game this tick, is alive (`rec+0x1A`, its HP, not 0: a killing hit sets it to 0 and
+installs the death rule) and is in an action of the motion routine's table (below
+`0x20`; slots in `0xF0` are left alone) is put through `func_8003C8D8` itself, at the
+player's bearing, speed 16 and its type's acceleration, with the CPU context
+snapshotted and restored around it. The call goes through the hook, so it is scaled
+like any turn at the player: 64 a tick at x4.
+
+*Engaged* is from the game's own chase turn until the creature's next own turn
+elsewhere (a wander) or it goes inactive; a turn of the port's is marked by its
+return address and neither engages nor releases. Without it, the idle type-2
+creatures 7000-13000 away in action `0x00` were tracked too, and everything active
+in the area turned to watch the player. A 20 s timer was tried before the event and
+ran out on the type-10 creature still standing at the player in `0x19`.
+
+Measured, x4, the same walk: the type-10 creature chases, then holds its facing
+within 0-1 of the player through every `0x19` (three cycles); the type-2 creatures
+idle and wander at the game's pace, untracked; the `0xF0` slots untouched; 144.0
+fps drawn at 15.0 ticks/s. A wander turn between chases releases it, so it stood
+untracked from t25 to t147 after one, as designed.
+
+**The mechanism is measured; the feel is not judged.** It ships at x1. What a
+person has to check is whether x2-x8 makes a fight harder to circle without making
+creatures look like they snap; whether tracking through `0x19` reads as aggression
+or as a creature sliding round on its feet (it turns the facing, not the
+animation's footing); whether an NPC, if any is in this table, now turns to follow
+the player; and whether a creature that loses the player still turns at the game's
+pace. A creature whose descriptor has `desc+0x34 & 0x10000` already faces the
+player outright every tick. The in-game PORT SETTINGS ▸ GAMEPLAY page has no row
+for this: it is full at its seven.
 
 ## A dynamic map
 

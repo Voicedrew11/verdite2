@@ -286,6 +286,11 @@ VERDITE2_SETUP=1                         # the launcher shows the first-run setu
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
 KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
 KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second
+KF2_ENEMYTURN=2                          # 1-8: how fast creatures turn at the player, a multiple of the game's own (speed x k, acceleration x k^2); Gameplay ▸ Enemy turn speed, kept as kf2.enemyturn; the variable wins
+KF2_ENEMYTURN_TRACK=0                    # an engaged creature standing still is not turned at the player each tick (on by default; inert at x1); Gameplay ▸ Track you while standing, kept as kf2.enemyturn.track
+KF2_ENEMYTURN_ALL=1                      # scale every creature turn, wandering too, not only turns at the player -- comparison only
+KF2_ENEMYTURN_PROBE=1                    # every 5 s, a census of func_8003C8D8's callers: calls, turning, at the player, speed, acceleration, peak velocity, actions, types
+KF2_ENEMYTURN_PROBE=2                    # also a line a tick for each active creature within 12000: action, rule, HP, facing off the player, velocity, distance, and turned / tracked / standing
 KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_AUTOSTART=new                        # the same, but stay in the New Game (fdat02, which has scrolling water)

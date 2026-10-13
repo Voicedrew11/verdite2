@@ -1941,6 +1941,59 @@ untouched because none of them consult the picker. The same rule table is the
 one `func_8003A448` walks for hit reactions, which is the walk
 `patches/HitGuard.cs` fences.
 
+### The creature turn is one routine
+
+`func_8003C8D8(rec, target, maxSpeed, accel)` turns a creature, and nothing else
+in the motion code does. It reads the yaw at `rec+0x42` and the turn velocity at
+`rec+0x58` (an `s16`, zeroed by the spawn `func_80039B70`):
+
+- yaw already on the target: the velocity is zeroed and nothing moves;
+- otherwise the velocity gains `accel` toward the target (the shorter way round,
+  by `func_80015364`: `(a - b) & 0xFFF < 0x801`) and is clamped to `±maxSpeed`,
+  then added to the yaw;
+- a step that carries the yaw past the target puts it on the target, so the turn
+  never oscillates. The test looks a half turn either side, so it holds for a step
+  under `0x800`.
+
+There is no deceleration: the velocity is still at speed when the yaw lands, and
+the next call zeroes it. Its callers:
+
+| caller | target | `maxSpeed` | `accel` |
+|---|---|---|---|
+| `func_8003DEBC` at `0x8003F2F4` | `func_80015394(rec+0x50, rec+0x54)`, the heading of a motion vector | `rule+0x16` | `desc+0x4` |
+| `func_8003DEBC` at `0x8003FD50` | `rec+0x20` | `rule+0x10` | `desc+0x4` |
+| `func_8003CA08(target, ..., speed, ...; accel on the stack)` | its `a0` | its `a2` | its first stack word |
+| `func_8003CCAC` | `*(s16*)(a0 + 2)` | its `a2` | its first stack word |
+
+`func_8003CA08` is the common one: seven calls from `func_8003DEBC` plus one from
+`func_8003CA78`, and two each from the `fdat02` and `fdat11` modules; `fdat23`
+calls `func_8003C8D8` itself. From `func_8003DEBC` it is mostly given `rec+0x64` as the
+target, `rule+0xE` as the speed and `desc+0x4` as the acceleration. Here `rule` is
+the installed rule (`rec+0x60`), `desc` the type's descriptor (`0x801758EC`), and
+`rec+0xE` the action the switch at `0x800120D8` dispatches on. `rec+0x64` is
+either a wander heading, `rand >> 3` (`0x8003E448`, in action `0x01`, the walk the
+census sees most), or the player's bearing taken on the tick of the turn
+(`func_80015394` called at `0x8003E6F8` and `0x8003F000`).
+
+**`func_80015394(dx, dz)` is `-atan2(dx, dz)`** in a turn of 4096, through
+`catan`: the game's yaw runs clockwise seen from above. A player's `goto` with yaw
+`y` walks along bearing `-y`, which is the same fact seen from the other side.
+
+**What else the turn needs to know.** A creature's HP is the `u16` at `rec+0x1A`:
+`func_8003A9CC` subtracts the hit from it, and on a killing hit writes 0 and installs
+the rule of kind 3 through `func_8003A490(rec, 3)`. Stage 4 bumps a run count at
+`0x80175908` once at the end of every run; it is the word the think's
+`counter & 3` test reads. Action `0x19` (`0x8003FA14`) is driven by an animation
+counter at `rec+0x70` and never turns; a creature stands in it for seconds between
+chases. Actions `0xF0` and up are past the 32-entry table at `0x800120D8` and go to
+`0x800400E4`.
+
+Measured in area 1 (see "Enemies turn faster" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)): accelerations 3-4 a tick, speeds 4-52,
+against the player's own `0x1C` moving and `0x23` standing. So a creature's quarter
+turn from rest takes about 22 ticks, 1.5 s at 15 Hz, and the acceleration rather
+than the top speed is what makes it slow.
+
 ### Editing the character: the split is the design
 
 `mods/kf2debug`'s Attributes tab writes every stat the status screen shows, and
