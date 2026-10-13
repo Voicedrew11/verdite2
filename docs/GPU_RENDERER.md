@@ -1001,6 +1001,40 @@ off and on; no GL error under `KF2_GLDEBUG=1`.
 before; since drawn by the renderer, "Step 3, the fourth slice"); a pose stream that
 revisits a vertex, which the store refuses and none has been seen to use.
 
+**A rigid model drew the last MO pose.** Reported from play as a vertex explosion in
+area 1, at (39494, -12800, 70626) facing yaw 1961, pitch 4020: object model 359 at
+(37888, -14100, 61760), a rigid sub-model (its clip byte `>= 0x80`), drawn as a fan of
+long faces. A pose stays pending after the submit that deferred it: the store has it,
+and nothing needs it in RAM. A rigid submit does not call the blender, so it found the
+previous MO object's pose (record `0x8017B718`) still pending, and `Instance` took the
+pending pose on that flag alone. `MoPose.Store` refused only on the vertex count, and
+both models have 77 vertices, so model 359 was drawn every frame with the other
+object's keyframe and deltas. When the counts differed, the store refused and the model
+fell back to having its vertices copied into the frame every frame. That was correct but
+cost an upload every frame, and it happened 910 times in the first seconds at that spot.
+**Fixed** by `MoPose.PendingAt(verts)`: a submit draws the pending pose only while its
+vertex base still names the posed buffer, which only the blender sets. `Store` takes the
+base and refuses otherwise, and the sky's `TrySpecial` asks the same thing. A rigid
+model after an MO one now goes to `StoreRigid`.
+
+**Why the pose check never saw it.** `KF2_GPUWORLD_POSECHECK=1` decoded every stored
+pose into RAM through `Materialize`, which ended the pending state. With the check
+on, the next submit therefore never found a stale pose, so the check removed the very
+condition it was there to catch. It now decodes with `Materialize(check: true)` and
+leaves the pose pending, so the run it checks is the run without it. Also,
+`KF2_GPUWORLD_MESHCHECK=1` turns the deferral off entirely (`!RetainedModels.Checking`),
+so a run with both checks never exercised the deferred path at all. Measured at that
+spot:
+
+| | poses on against off, paused | the pose check |
+|---|---|---|
+| before | 11.4% of the picture, max 171, the centre 685×968 | 0 apart (blind); with the check amended, 116,116 of 1,879,072 apart |
+| after | bit-identical, three frames | 0 of 2,050,367 apart; areas 0-7 toured, 0 of 21,148,051 |
+
+Found and fixed on `main` (20 Hz), then on `v0.5.0-staging` at 15 Hz: there, before, 11.4% of the picture, max 162; after, bit-identical, 0 of 1,973,466 apart at the spot and 0 of 15,227,551 over areas 0-7; 165.1 fps drawn at 14.9-15.0 ticks/s. **Not checked by eye:** the object
+itself after the fix. The pictures compare equal to the copy path, which is the game's
+own pose.
+
 #### Step 3, the fourth slice
 
 **The first-person arm drawn by the renderer, from its mesh and its pose in the store,
