@@ -221,17 +221,18 @@ internal static class Onboarding
     }
 
     /// <summary>
-    /// The choices a preset makes: the Original option of each display field (or where
-    /// it starts, when it has none) and the Original or Modern tier of every group, or
-    /// the Recommended display (<see cref="Suggest"/>) with Modern throughout.
+    /// The choices a preset makes: every group at <paramref name="tier"/> (0 Original,
+    /// 1 Faithful, 2 Modern). Tier 0 takes the Original option of each display field
+    /// (or where it starts, when it has none); the other tiers take the Recommended
+    /// display (<see cref="Suggest"/>).
     /// </summary>
-    public static (int[] Display, int[][] Tiers) Preset(OnboardingSpec spec, bool original)
+    public static (int[] Display, int[][] Tiers) Preset(OnboardingSpec spec, int tier)
     {
-        var display = spec.Display.Select(f => original
+        var display = spec.Display.Select(f => tier == 0
             ? (f.Original is { } o && o >= 0 && o < f.Options.Count ? o : Detect(spec, f))
             : Suggest(spec, f)).ToArray();
         var tiers = spec.Categories
-            .Select(c => c.Groups.Select(_ => original ? 0 : OnboardingPopup.TierCount - 1).ToArray()).ToArray();
+            .Select(c => c.Groups.Select(_ => tier).ToArray()).ToArray();
         return (display, tiers);
     }
 
