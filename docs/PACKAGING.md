@@ -137,6 +137,12 @@ this.
    native file dialog and saves the accepted path. It needed nothing but the
    validator.
 
+   The launcher overrides the picker's title and text. This is the first thing a
+   new player sees, so it says "Choose your disc", that the game is built from the
+   player's own copy, and names the disc (a .cue or .chd, the serial); the runtime's
+   wording is for a disc that has gone missing. Cancel on the picker during the boot
+   wait quits the launcher, rather than leaving an empty window waiting forever.
+
 4. A cue on the command line — the developer form, `Verdite2 other.cue` — is
    settled **here**, before the key, and is validated like any other disc. It has
    to be: the generated dispatch tables bake absolute LBAs from one mastering, so

@@ -237,8 +237,8 @@ public static class PatchSettings
         Register("gameplay", new MapPage());
         Register("gameplay", new AutoReloadPage());
         Register("gameplay", new GearComparePage());
-        Register("gameplay", new MouseLeadPage());
         Register("gameplay", new MessageFadePage());
+        Register("gameplay", new EnemyTurnPage());
         Event.AddListener<RuntimeReadyEvent>(_ => RegisterUi());
     }
 

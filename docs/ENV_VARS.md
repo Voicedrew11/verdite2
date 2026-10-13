@@ -262,30 +262,36 @@ KF2_RUMBLE_PROBE=1                       # a line a second: the phase, the tensi
 KF2_RUMBLE_TEST=1                        # from 3 s in, the bow's rumble three times over without a bow
 KF2_GYROAIM=0 KF2_GYROAIM_PROBE=1        # no gyro aim with a drawn bow (on by default); its line a second
 KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
-KF2_MOUSE=0                              # mouse look off (it is on by default; a click on the picture captures the pointer)
+KF2_MOUSE=0                              # mouse look off (always on otherwise, not a setting: kf2.mouse.on is no longer read; a click on the picture captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
 KF2_MOUSE_KEY=F9                         # a key that captures and releases besides the click; None (the default) for none, and Escape takes Escape from the menu
-KF2_MOUSE_LEAD=0                         # mouse look waits for the tick, as with Gameplay ▸ Instant mouse look off (on by default); =1 forces it on
-KF2_MOUSE_AIM=1                         # the mouse moves a reticle and the player turns toward it, instead of the view (1 on, 0 off; overrides the saved Mouse aim setting; off by default)
+KF2_MOUSE_LEAD=0                         # mouse look waits for the tick (always on otherwise; not a setting, kf2.mouse.lead no longer read)
+# Mouse aim is not a setting (INPUT, "Mouse aim is not a setting"): these KF2_MOUSE_AIM* variables are the comparison and the only way to turn it on. No saved kf2.mouse.aim* key is read.
+KF2_MOUSE_AIM=1                         # the mouse moves a reticle and the player turns toward it, instead of the view (1 on, 0 off; off by default)
 KF2_MOUSE_AIM_RING=32                   # mouse aim's commit ring, in angle units: the reticle wanders inside it without turning the player (default 32, about 2.8 deg; 0 turns every offset into a turn, as before)
-KF2_MOUSE_AIM_HEAD=1                    # mouse aim's head look: the view is drawn at the facing plus the reticle, so it follows the hand while the body turns toward it (1 on, 0 off; overrides the saved View follows the mouse setting; off by default)
-KF2_MOUSE_AIM_HOLD=1                    # mouse aim's held view: the picture holds still while the body turns, the facing's dot travels to the circle, and the view recentres once the turn lands (head look wins if both are on; overrides the saved View setting)
-KF2_MOUSE_AIM_SENS=1.0                  # scales the hand's motion before it reaches mouse aim's reticle, on top of the turn sensitivity (0.1 to 4, default 1.0; overrides the saved Aim sensitivity setting)
+KF2_MOUSE_AIM_HEAD=1                    # mouse aim's head look: the view is drawn at the facing plus the reticle, so it follows the hand while the body turns toward it (1 on, 0 off)
+KF2_MOUSE_AIM_HOLD=1                    # mouse aim's held view: the picture holds still while the body turns, the facing's dot travels to the circle, and the view recentres once the turn lands (head look wins if both are on)
+KF2_MOUSE_AIM_SENS=1.0                  # scales the hand's motion before it reaches mouse aim's reticle, on top of the turn sensitivity (0.1 to 4, default 1.0)
 KF2_MOUSE_AIM_SETTLE=3                  # ticks a small aim must hold still inside the ring before it is carried out (default 3; 0 is off, and a small aim then never turns the player)
 KF2_MOUSE_AIM_PROBE=1                   # one line a tick while mouse aim's reticle or a step is not at rest: offset, step, velocity, yield, measured turn, still count
-KF2_MOUSE_AIM_MARKS=aiming              # when mouse aim's dot, line and circle are drawn: off, aiming (only during a turn or with the circle off the middle; the default) or always; overrides the saved Aim marks setting
-KF2_MOUSE_AIM_LINE=0                    # leave out mouse aim's line from the middle to the circle (1 draws it, the default); overrides the saved Connecting line setting
-KF2_MOUSE_AIM_DOT=0                     # leave out mouse aim's dot, the facing (1 draws it, the default); overrides the saved Centre dot setting
-KF2_MOUSE_AIM_EASE=0                    # mouse aim's turn without the D-pad's ease: full rate at once, stopping dead on the reticle (1 eases, the default); overrides the saved Ease the turn setting
+KF2_MOUSE_AIM_MARKS=aiming              # when mouse aim's dot, line and circle are drawn: off, aiming (only during a turn or with the circle off the middle; the default) or always
+KF2_MOUSE_AIM_LINE=0                    # leave out mouse aim's line from the middle to the circle (1 draws it, the default)
+KF2_MOUSE_AIM_DOT=0                     # leave out mouse aim's dot, the facing (1 draws it, the default)
+KF2_MOUSE_AIM_EASE=0                    # mouse aim's turn without the D-pad's ease: full rate at once, stopping dead on the reticle (1 eases, the default)
 KF2_DEBUG_FILMMODE_PROBE=5               # mods/kf2debug: toggle film mode (V) every 5 s and print the three flags and FrameSmoothing.LeadSuppressed
-KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
+KF2_MENUMOUSE=0                          # the menu pointer off (always on otherwise, not a setting: kf2.menumouse.on is no longer read)
 KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did
 KF2_SETTINGSPAGE_PROBE=1                 # PORT SETTINGS in the in-game menu: a line for each open, page, step, save and discard (docs/SETTINGS.md); RUN SETUP and setup closing too
 VERDITE2_SETUP=1                         # the launcher shows the first-run setup even when it is not due (a player with settings is never due); "Onboarding" in docs/SETTINGS.md
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
 KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
 KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second
+KF2_ENEMYTURN=2                          # 1-8: how fast creatures turn at the player, a multiple of the game's own (speed x k, acceleration x k^2); Gameplay ▸ Enemy turn speed, kept as kf2.enemyturn; the variable wins
+KF2_ENEMYTURN_TRACK=0                    # an engaged creature standing still is not turned at the player each tick (on by default; inert at x1); Gameplay ▸ Track you while standing, kept as kf2.enemyturn.track
+KF2_ENEMYTURN_ALL=1                      # scale every creature turn, wandering too, not only turns at the player -- comparison only
+KF2_ENEMYTURN_PROBE=1                    # every 5 s, a census of func_8003C8D8's callers: calls, turning, at the player, speed, acceleration, peak velocity, actions, types
+KF2_ENEMYTURN_PROBE=2                    # also a line a tick for each active creature within 12000: action, rule, HP, facing off the player, velocity, distance, and turned / tracked / standing
 KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_AUTOSTART=new                        # the same, but stay in the New Game (fdat02, which has scrolling water)

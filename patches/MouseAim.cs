@@ -63,6 +63,10 @@ namespace Kf2;
 /// except that head look leads the view by the reticle. The reticle itself moves
 /// every drawn frame -- <see cref="Frame"/> drains the host's motion at stage 8,
 /// where the lead used to -- and is drawn by <see cref="MouseAimOverlay"/>.
+/// **Not a setting.** It is off, and it is no longer in the settings window, PORT
+/// SETTINGS or the first-run setup; its saved keys (<c>kf2.mouse.aim*</c>) are no
+/// longer read. The <c>KF2_MOUSE_AIM*</c> variables are the comparison and the only
+/// way to turn it on.
 /// See "Mouse aim" in docs/INPUT.md.
 /// </summary>
 public static class MouseAim
@@ -258,14 +262,6 @@ public static class MouseAim
         // a panel registered earlier would not be drawn at all.
         Event.AddListener<RuntimeReadyEvent>(_ =>
         {
-            Kept.Saved(OnKey, ref Enabled, _fromEnv);
-            Kept.Saved(HeadKey, ref HeadLook, _fromEnv);
-            Kept.Saved(HoldKey, ref HoldView, _fromEnv);
-            Kept.Saved(SensKey, ref Sens, _fromEnv);
-            Kept.Saved(MarksKey, ref Marks, _fromEnv);
-            Kept.Saved(LineKey, ref Line, _fromEnv);
-            Kept.Saved(DotKey, ref Dot, _fromEnv);
-            Kept.Saved(EaseKey, ref Ease, _fromEnv);
             Marks = Math.Clamp(Marks, MarksOff, MarksAlways);
             PanelManager.Register(MouseAimOverlay.Instance);
         });

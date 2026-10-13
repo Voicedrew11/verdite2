@@ -1219,6 +1219,23 @@ Kf2.MenuMouse.Install();
 Kf2.GearCompare.Configure(Environment.GetEnvironmentVariable("KF2_GEARCOMPARE"));
 Kf2.GearCompare.Install();
 
+// Enemies turn faster: every creature turn goes through func_8003C8D8, whose top
+// speed and acceleration a pre-hook scales when the turn is at the player (a chase,
+// not a wander). x1, the game's own, by default;
+// Gameplay ▸ Enemy turn speed.
+//
+//     KF2_ENEMYTURN=1..8      the multiplier
+//     KF2_ENEMYTURN_TRACK=0   no turning at the player while a creature stands (on;
+//                             inert at x1). Gameplay > Track you while standing
+//     KF2_ENEMYTURN_ALL=1     scale every turn, not only turns at the player -- comparison
+//     KF2_ENEMYTURN_PROBE=1   a census of the turn's callers every 5 s
+//     KF2_ENEMYTURN_PROBE=2   also a line a tick for each active creature in reach
+Kf2.EnemyTurn.Configure(Environment.GetEnvironmentVariable("KF2_ENEMYTURN"),
+                        Environment.GetEnvironmentVariable("KF2_ENEMYTURN_TRACK"),
+                        Environment.GetEnvironmentVariable("KF2_ENEMYTURN_ALL"),
+                        Environment.GetEnvironmentVariable("KF2_ENEMYTURN_PROBE"));
+Kf2.EnemyTurn.Install();
+
 // Widescreen. The runtime already renders a margin either side of the display
 // buffer and presents the whole thing at Display.WideAspect, so setting that one
 // number is the entire hookup; the replacement of DrawOTag here is only for the

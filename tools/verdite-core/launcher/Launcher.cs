@@ -64,6 +64,11 @@ public static class Launcher
             Localization.Merge(game.Fill(BuildProgressPopup.Strings));
             Localization.Merge(game.Fill(UpdateBadge.Strings));
 
+            // The runtime's picker is written for a disc that went missing ("Disc
+            // image not found"). Here it is the welcome, so the launcher's own
+            // title and text replace those.
+            Localization.Merge(game.Fill(DiscStrings));
+
             // In the background; the badge appears in the menu bar once it has an answer.
             UpdateBadge.Install();
             UpdateCheck.Start();
@@ -133,6 +138,27 @@ public static class Launcher
     }
 
     /// <summary>
+    /// The disc picker's title and text for a first run, in the launcher's voice.
+    /// Overrides of existing keys, so all three languages are the override's own.
+    /// </summary>
+    const string DiscStrings = """
+    {
+      "strings": {
+        "disc.title": {
+          "en": "Choose your disc",
+          "pt-BR": "Escolha seu disco",
+          "es-419": "Elige tu disco"
+        },
+        "disc.description": {
+          "en": "Choose the disc image (.cue or .chd) of %GAME% (%SERIAL%) to begin. %NAME% builds the game from your own copy, and the first launch takes a moment while it does.",
+          "pt-BR": "Escolha a imagem do disco (.cue ou .chd) de %GAME% (%SERIAL%) para começar. O %NAME% constrói o jogo a partir da sua própria cópia, e o primeiro início leva um momento enquanto isso acontece.",
+          "es-419": "Elige la imagen del disco (.cue o .chd) de %GAME% (%SERIAL%) para comenzar. %NAME% construye el juego a partir de tu propia copia, y el primer inicio tarda un momento mientras lo hace."
+        }
+      }
+    }
+    """;
+
+    /// <summary>
     /// Build the game assembly, with the window alive throughout.
     ///
     /// The work runs on a worker thread and the main thread pumps, because both
@@ -197,8 +223,9 @@ public static class Launcher
 
         work.Start();
         // The build, and setup if it is up: the game starts when both are done. A
-        // failed build does not wait for setup, which cannot lead anywhere now.
-        while (work.IsAlive || (wizard is { IsOpen: true } && popup.Error is null)) Runtime.Pump();
+        // failed build still waits for setup, whose strip now says the build
+        // failed, so the player's choices are kept, and the failure popup follows.
+        while (work.IsAlive || wizard is { IsOpen: true }) Runtime.Pump();
 
         if (popup.Error is null)
         {

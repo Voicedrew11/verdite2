@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Numerics;
+using System.Text.RegularExpressions;
 using ImGuiNET;
 using RecompOne.Runtime.Host;
 using RecompOne.Runtime.Host.Window;
@@ -6,10 +8,11 @@ using RecompOne.Runtime.Host.Window;
 namespace Verdite.Core;
 
 /// <summary>
-/// The setup's pages: a welcome with two presets (Recommended, Original) and
-/// Customise, the display step, the tiers (Basic or Advanced behind one switch), a
-/// summary. A preset goes straight to the summary; Customise walks the display and
-/// the tiers. In the launcher (<see cref="Build"/> set) a strip at the foot follows
+/// The setup's pages: a welcome with three presets (Recommended, Original++, Original)
+/// and Customise, the display step, the tiers (Basic or Advanced behind one switch),
+/// the game's own choice pages (if its spec has any), a summary. A preset goes
+/// straight to the summary, where Adjust takes its choices into the display, the
+/// tiers and the choice pages; Customise walks them from what the player started with. In the launcher (<see cref="Build"/> set) a strip at the foot follows
 /// the game's build, and the popup stays up after Finish until the build is done,
 /// which is what holds the game back until both are. In the game it is opened
 /// from the settings page and closes on Finish, or on a list of what waits for
@@ -23,7 +26,7 @@ namespace Verdite.Core;
 internal sealed class OnboardingPopup : Popup
 {
     public const int TierCount = 3;
-    static readonly string[] TierKeys = ["verdite.setup.tier.original", "verdite.setup.tier.faithful", "verdite.setup.tier.modern"];
+    static readonly string[] TierKeys = ["verdite.setup.tier.original", "verdite.setup.tier.originalplus", "verdite.setup.tier.modern"];
 
     protected override string TitleKey => "verdite.setup.title";
     protected override Vector2 Size => new(720f, 580f);
@@ -40,7 +43,7 @@ internal sealed class OnboardingPopup : Popup
     /// <summary>True once the choices were applied or setup skipped.</summary>
     public bool Finished { get; private set; }
 
-    enum Page { Welcome, Display, Tiers, Summary, Waiting, Report }
+    enum Page { Welcome, Display, Tiers, Choice, Summary, Waiting, Report }
 
     readonly OnboardingSpec _spec;
     readonly string _tag;
@@ -54,6 +57,12 @@ internal sealed class OnboardingPopup : Popup
     int[][] _tiers = [];
     int[] _startDisplay = [];
     int[][] _startTiers = [];
+    /// <summary>The choice page on screen, an index into the spec's pages.</summary>
+    int _pageAt;
+    SetupPageChoice[] _pages = [];
+    SetupPageChoice[] _startPages = [];
+    /// <summary>Whether the player has changed a choice page; one untouched follows its category.</summary>
+    bool[] _pageTouched = [];
     Onboarding.Result? _result;
 
     public OnboardingPopup(OnboardingSpec spec, string tag, bool inGame)
@@ -65,10 +74,9 @@ internal sealed class OnboardingPopup : Popup
 
     protected override void OnOpened()
     {
-        _page = Page.Welcome;
+        Go(Page.Welcome);
         _advanced = false;
         _preset = false;
-        _focus = true;
         _result = null;
         Finished = false;
         // A first run starts the display on what suits the monitor; any other run
@@ -81,6 +89,9 @@ internal sealed class OnboardingPopup : Popup
         // when the player does not pick a style for it.
         _startDisplay = [.. _display];
         _startTiers = [.. _tiers.Select(t => (int[])t.Clone())];
+        _pages = [.. _spec.Pages.Select(p => Onboarding.Detect(_spec, p))];
+        _startPages = [.. _pages.Select(c => c.Clone())];
+        _pageTouched = new bool[_spec.Pages.Count];
         Nav(true);
     }
 
@@ -90,7 +101,7 @@ internal sealed class OnboardingPopup : Popup
     {
         if (!IsOpen) return;
         FeedPad();
-        if (_page == Page.Waiting && (Build is null || Build().Done)) Close();
+        if (_page == Page.Waiting && (Build is null || Build().Done || Build().Error is not null)) Close();
     }
 
     // ---- Pages ----
@@ -108,6 +119,7 @@ internal sealed class OnboardingPopup : Popup
                 case Page.Welcome: Welcome(); break;
                 case Page.Display: Display(); break;
                 case Page.Tiers: if (_advanced) Advanced(); else Basic(); break;
+                case Page.Choice: Choice(); break;
                 case Page.Summary: Summary(); break;
                 case Page.Waiting: Waiting(); break;
                 case Page.Report: Report(); break;
@@ -141,22 +153,35 @@ internal sealed class OnboardingPopup : Popup
         ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new Vector2(0f, 0.5f));
         if (_focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
         if (ImGui.Button($"{Localization.T("verdite.setup.recommended")}\n{Localization.T("verdite.setup.recommended.desc")}", new Vector2(-1f, h)))
-        {
-            (_display, _tiers) = Onboarding.Preset(_spec, original: false);
-            _preset = true;
-            _page = Page.Summary;
-        }
+            Pick(2);
+        ImGui.Spacing();
+        if (ImGui.Button($"{Localization.T("verdite.setup.originalplus")}\n{Localization.T("verdite.setup.originalplus.desc")}", new Vector2(-1f, h)))
+            Pick(1);
         ImGui.Spacing();
         var list = string.Join(", ", _spec.Display
             .Where(f => f.Original is { } o && o >= 0 && o < f.Options.Count)
             .Select(f => OptionLabel(f.Options[f.Original!.Value])));
         if (ImGui.Button($"{Localization.T("verdite.setup.original")}\n{Localization.T("verdite.setup.original.desc", list)}", new Vector2(-1f, h)))
+            Pick(0);
+        ImGui.Spacing();
+        if (ImGui.Button($"{Localization.T("verdite.setup.customise")}\n{Localization.T("verdite.setup.customise.desc")}", new Vector2(-1f, h)))
         {
-            (_display, _tiers) = Onboarding.Preset(_spec, original: true);
-            _preset = true;
-            _page = Page.Summary;
+            _display = [.. _startDisplay];
+            _tiers = [.. _startTiers.Select(t => (int[])t.Clone())];
+            _pages = [.. _startPages.Select(c => c.Clone())];
+            _pageTouched = new bool[_spec.Pages.Count];
+            _preset = false;
+            Go(Page.Display);
         }
         ImGui.PopStyleVar();
+    }
+
+    /// <summary>A preset's choices (tier 0, 1 or 2), then the summary.</summary>
+    void Pick(int tier)
+    {
+        (_display, _tiers, _pages) = Onboarding.Preset(_spec, tier);
+        _preset = true;
+        Go(Page.Summary);
     }
 
     void Display()
@@ -177,6 +202,8 @@ internal sealed class OnboardingPopup : Popup
             if (field.Tip is { } tip && ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T(tip));
             ImGui.SameLine(labelW);
             ImGui.SetNextItemWidth(-1f);
+            // Only the first field takes the focus: _focus is spent here.
+            if (_focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
             if (field.Slider)
             {
                 Slider(field, ref _display[i], keep);
@@ -229,7 +256,7 @@ internal sealed class OnboardingPopup : Popup
             int now = _tiers[c].Distinct().Count() == 1 ? _tiers[c][0] : -1;
             // Keep restores what the groups started at, so a category set by hand is kept.
             bool started = _startTiers[c].Distinct().Count() != 1 || _startTiers[c][0] < 0;
-            var pick = TierRow(cat.Id, now, cat.Tiers, Enumerable.Range(0, TierCount).ToArray(), started);
+            var pick = TierRow(cat.Id, now, cat.Tiers, Enumerable.Range(0, TierCount).ToArray(), started, first: c == 0);
             if (pick is { } p)
             {
                 if (p < 0) Array.Copy(_startTiers[c], _tiers[c], _tiers[c].Length);
@@ -251,15 +278,101 @@ internal sealed class OnboardingPopup : Popup
                 var group = cat.Groups[g];
                 ImGui.TextUnformatted(Localization.T(group.Label));
                 var pick = TierRow($"{cat.Id}.{group.Id}", _tiers[c][g], group.Tiers.Select(t => t.Desc).ToList(),
-                                   Spans(group), _startTiers[c][g] < 0);
+                                   Spans(group), _startTiers[c][g] < 0, first: c == 0 && g == 0);
                 if (pick is { } p) _tiers[c][g] = p < 0 ? _startTiers[c][g] : p;
                 ImGui.Spacing();
             }
         }
     }
 
+    /// <summary>
+    /// One of the spec's choice pages: its heading and paragraphs, its label, an option
+    /// button each (the chosen one lit, its description under it), then its slider.
+    /// </summary>
+    void Choice()
+    {
+        var page = _spec.Pages[_pageAt];
+        var choice = _pages[_pageAt];
+        Heading(page.Title);
+        foreach (var body in page.Body)
+        {
+            Wrapped(body);
+            ImGui.Spacing();
+        }
+        ImGui.SeparatorText(Localization.T(page.Label));
+        var style = ImGui.GetStyle();
+        for (int o = 0; o < page.Options.Count; o++)
+        {
+            var option = page.Options[o];
+            bool lit = choice.Option == o;
+            // The page's first button takes the focus, once; a page with no options gives it to the slider.
+            if (o == 0 && _focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
+            if (LitButton(OptionLabel(option), $"{page.Id}{o}", lit, new Vector2(-1f, 0f)))
+            {
+                choice.Option = o;
+                _pageTouched[_pageAt] = true;
+                if (option.Value is { } v) choice.Value = v;
+            }
+            if (option.Desc is { } desc)
+            {
+                if (!lit) ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
+                ImGui.TextWrapped(Localization.T(desc));
+                if (!lit) ImGui.PopStyleColor();
+            }
+            ImGui.Spacing();
+        }
+
+        if (page.Slider is { } s)
+        {
+            ImGui.Spacing();
+            ImGui.TextUnformatted(Localization.T(s.Label));
+            float v = (float)ValueOf(s, choice);
+            // At the minimum the slider shows its label, not the number.
+            string format = s.MinLabel is { } low && v <= s.Min + 1e-6 ? Localization.T(low).Replace("%", "%%") : s.Format;
+            if (_focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
+            if (ImGui.SliderFloat($"##{page.Id}.slider", ref v, (float)s.Min, (float)s.Max, format,
+                                  ImGuiSliderFlags.AlwaysClamp | ImGuiSliderFlags.NoInput))
+            {
+                double d = s.Step > 0 ? Math.Round(v / s.Step) * s.Step : v;
+                choice.Value = Math.Clamp(d, s.Min, s.Max);
+                _pageTouched[_pageAt] = true;
+            }
+            if (s.Tip is { } tip && ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T(tip));
+        }
+    }
+
+    /// <summary>A choice page's slider value now: its own, else the key's, else its minimum.</summary>
+    double ValueOf(SetupSlider slider, SetupPageChoice choice) =>
+        choice.Value ?? Onboarding.Level(_spec, slider.Key) ?? slider.Min;
+
+    /// <summary>A slider's value as the summary shows it: its minimum label at the minimum, else its format.</summary>
+    string SliderText(SetupSlider slider, double v) =>
+        slider.MinLabel is { } low && v <= slider.Min + 1e-6 ? Localization.T(low) : Printf(slider.Format, v);
+
+    /// <summary>A number in an ImGui printf format, the one forms the setup uses: <c>%.2f</c>, <c>%d</c>.</summary>
+    static string Printf(string format, double v)
+    {
+        var m = Regex.Match(format, @"%(?:\.(\d+))?([fd])");
+        if (!m.Success) return format;
+        string number = m.Groups[2].Value == "d"
+            ? Math.Round(v).ToString(CultureInfo.InvariantCulture)
+            : v.ToString("F" + (m.Groups[1].Success ? m.Groups[1].Value : "6"), CultureInfo.InvariantCulture);
+        return format[..m.Index] + number + format[(m.Index + m.Length)..];
+    }
+
     void Summary()
     {
+        if (_preset)
+        {
+            // A preset's choices stay as they are; Adjust only opens them for changing.
+            if (_focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
+            if (ImGui.Button(Localization.T("verdite.setup.adjust"), new Vector2(-1f, 0f)))
+            {
+                _preset = false;
+                Go(Page.Display);
+            }
+            ImGui.Spacing();
+        }
         Heading("verdite.setup.summary");
         Dim("verdite.setup.summary.intro");
         ImGui.Spacing();
@@ -280,6 +393,17 @@ internal sealed class OnboardingPopup : Popup
             }
             for (int g = 0; g < cat.Groups.Count; g++)
                 Line(cat.Groups[g].Label, GroupName(cat.Groups[g], _tiers[c][g]));
+        }
+
+        for (int p = 0; p < _spec.Pages.Count; p++)
+        {
+            var page = _spec.Pages[p];
+            var choice = _pages[p];
+            ImGui.SeparatorText(Localization.T(page.Title));
+            Line(page.Label, choice.Option >= 0 && choice.Option < page.Options.Count
+                ? OptionLabel(page.Options[choice.Option])
+                : Localization.T("verdite.setup.keep"));
+            if (page.Slider is { } s) Line(s.Label, SliderText(s, ValueOf(s, choice)));
         }
     }
 
@@ -302,6 +426,15 @@ internal sealed class OnboardingPopup : Popup
     void Strip()
     {
         var state = Build!();
+        if (state.Error is not null)
+        {
+            // A failed build keeps the setup open, so the choices are not lost; the
+            // failure popup after it says why.
+            ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1f, 0.38f, 0.38f, 1f));
+            ImGui.TextWrapped(Localization.T("verdite.setup.buildfailed"));
+            ImGui.PopStyleColor();
+            return;
+        }
         if (state.Done)
             ImGui.TextUnformatted(Localization.T("verdite.setup.built"));
         else
@@ -318,9 +451,10 @@ internal sealed class OnboardingPopup : Popup
 
         (string? left, string? right) = _page switch
         {
-            Page.Welcome => (_inGame ? "verdite.setup.cancel" : "verdite.setup.skip", "verdite.setup.customise"),
+            Page.Welcome => (_inGame ? "verdite.setup.cancel" : "verdite.setup.skip", (string?)null),
             Page.Display => ("verdite.setup.back", "verdite.setup.next"),
             Page.Tiers => ("verdite.setup.back", "verdite.setup.next"),
+            Page.Choice => ("verdite.setup.back", "verdite.setup.next"),
             Page.Summary => ("verdite.setup.back", "verdite.setup.finish"),
             Page.Report => (null, "verdite.setup.close"),
             _ => (null, null),
@@ -334,6 +468,8 @@ internal sealed class OnboardingPopup : Popup
         else ImGui.Dummy(new Vector2(half, 0f));
         if (right is null) return;
         ImGui.SameLine(avail - half + style.WindowPadding.X);
+        // Finish takes the focus on a summary with no Adjust above it, and Close on the report.
+        if (_focus && (_page == Page.Report || _page == Page.Summary && !_preset)) { ImGui.SetKeyboardFocusHere(); _focus = false; }
         if (ImGui.Button(Localization.T(right), new Vector2(half, 0f))) Forward();
     }
 
@@ -351,18 +487,41 @@ internal sealed class OnboardingPopup : Popup
                 }
                 break;
             case Page.Display: ToWelcome(); break;
-            case Page.Tiers: _page = Page.Display; break;
+            case Page.Tiers: Go(Page.Display); break;
+            case Page.Choice:
+                if (_pageAt > 0) { _pageAt--; Go(Page.Choice); }
+                else Go(Page.Tiers);
+                break;
             case Page.Summary:
                 if (_preset) ToWelcome();
-                else _page = Page.Tiers;
+                else if (_spec.Pages.Count > 0) { _pageAt = _spec.Pages.Count - 1; Go(Page.Choice); }
+                else Go(Page.Tiers);
                 break;
             case Page.Report: Close(); break;
         }
     }
 
-    void ToWelcome()
+    void ToWelcome() => Go(Page.Welcome);
+
+    /// <summary>
+    /// Enter a choice page going forward. Untouched by the player, a page with a
+    /// <see cref="SetupPage.Follows"/> category takes the preset of the tier that
+    /// category is at, when every one of its groups is at the same tier.
+    /// </summary>
+    void Enter(int at)
     {
-        _page = Page.Welcome;
+        _pageAt = at;
+        var page = _spec.Pages[at];
+        int c = page.Follows is null || _pageTouched[at] ? -1 : _spec.Categories.FindIndex(k => k.Id == page.Follows);
+        if (c >= 0 && _tiers[c].Distinct().Count() == 1 && _tiers[c][0] is var t && t >= 0 && t < page.Presets.Count)
+            _pages[at] = page.Presets[t].Clone();
+        Go(Page.Choice);
+    }
+
+    /// <summary>Change page, and put the keyboard focus on the page's first widget.</summary>
+    void Go(Page page)
+    {
+        _page = page;
         _focus = true;
     }
 
@@ -370,12 +529,15 @@ internal sealed class OnboardingPopup : Popup
     {
         switch (_page)
         {
-            case Page.Welcome:
-                _preset = false;
-                _page = Page.Display;
+            case Page.Display: Go(Page.Tiers); break;
+            case Page.Tiers:
+                if (_spec.Pages.Count > 0) Enter(0);
+                else Go(Page.Summary);
                 break;
-            case Page.Display: _page = Page.Tiers; break;
-            case Page.Tiers: _page = Page.Summary; break;
+            case Page.Choice:
+                if (_pageAt + 1 < _spec.Pages.Count) Enter(_pageAt + 1);
+                else Go(Page.Summary);
+                break;
             case Page.Summary: Finish(); break;
             case Page.Report: Close(); break;
         }
@@ -383,16 +545,19 @@ internal sealed class OnboardingPopup : Popup
 
     void Finish()
     {
-        _result = Onboarding.Apply(_spec, Onboarding.Sets(_spec, _display, _tiers), _tag);
+        _result = Onboarding.Apply(_spec, Onboarding.Sets(_spec, _display, _tiers, _pages), _tag);
         Finished = true;
-        if (_inGame && _result.NextLaunch.Count > 0) _page = Page.Report;
+        if (_inGame && _result.NextLaunch.Count > 0) Go(Page.Report);
         else Done();
     }
 
-    /// <summary>Close, or in the launcher hold on the waiting page until the build is done.</summary>
+    /// <summary>
+    /// Close, or in the launcher hold on the waiting page until the build is done. A
+    /// build that failed closes too: the choices are applied, and the strip said why.
+    /// </summary>
     void Done()
     {
-        if (Build is { } build && !build().Done) _page = Page.Waiting;
+        if (Build is { } build && build() is { Done: false, Error: null }) Go(Page.Waiting);
         else Close();
     }
 
@@ -421,11 +586,14 @@ internal sealed class OnboardingPopup : Popup
     /// The tiers as buttons, one per run of identical tiers (<paramref name="span"/>, see
     /// <see cref="Spans"/>), each run's names joined and the lit one marked; the run's
     /// description wrapped under its button. A keep button comes first when
-    /// <paramref name="keep"/>. Returns the run's first tier when one is clicked, -1
+    /// <paramref name="keep"/>; <paramref name="first"/> gives the row the page's focus.
+    /// Returns the run's first tier when one is clicked, -1
     /// for keep, or null when nothing was.
     /// </summary>
-    int? TierRow(string id, int current, IReadOnlyList<string> descs, int[] span, bool keep)
+    int? TierRow(string id, int current, IReadOnlyList<string> descs, int[] span, bool keep, bool first = false)
     {
+        // The row's first button takes the focus, once; the switch above never does.
+        if (first && _focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
         var style = ImGui.GetStyle();
         float space = style.ItemSpacing.X;
         var starts = Enumerable.Range(0, span.Length).Where(t => span[t] == t).ToList();
@@ -514,10 +682,14 @@ internal sealed class OnboardingPopup : Popup
 
     /// <summary>An option's label: a localisation key (they all have a dot), or a
     /// plain one ("60", "16:9") shown as it is, which the runtime would warn about.</summary>
-    static string OptionLabel(SetupOption o)
+    static string OptionLabel(SetupOption o) => OptionLabel(o.Label, o.Set);
+
+    static string OptionLabel(SetupPageOption o) => OptionLabel(o.Label, o.Set);
+
+    static string OptionLabel(string label, Dictionary<string, string?> set)
     {
-        if (!o.Label.Contains('.')) return o.Label;
-        return o.Set.Values.Any(v => v == "$refresh") ? Localization.T(o.Label, Onboarding.Refresh()) : Localization.T(o.Label);
+        if (!label.Contains('.')) return label;
+        return set.Values.Any(v => v == "$refresh") ? Localization.T(label, Onboarding.Refresh()) : Localization.T(label);
     }
 
     /// <summary>The groups and display fields owning a key that waits for the next launch.</summary>
@@ -630,9 +802,15 @@ internal sealed class OnboardingPopup : Popup
         },
         "verdite.setup.recommended": { "en": "Recommended", "pt-BR": "Recomendado", "es-419": "Recomendado" },
         "verdite.setup.recommended.desc": {
-          "en": "Modern in every style, with the display suited to your monitor.",
-          "pt-BR": "Moderno em todos os estilos, com a tela adequada ao seu monitor.",
-          "es-419": "Moderno en todos los estilos, con la pantalla adaptada a tu monitor."
+          "en": "Everything the port adds, with the display suited to your monitor.",
+          "pt-BR": "Tudo o que o port acrescenta, com a tela adequada ao seu monitor.",
+          "es-419": "Todo lo que añade el port, con la pantalla adaptada a tu monitor."
+        },
+        "verdite.setup.originalplus": { "en": "Original++", "pt-BR": "Original++", "es-419": "Original++" },
+        "verdite.setup.originalplus.desc": {
+          "en": "The PlayStation's look and feel, with what its hardware got wrong fixed, and the display suited to your monitor.",
+          "pt-BR": "A aparência e a sensação do PlayStation, com o que o hardware fazia errado corrigido, e a tela adequada ao seu monitor.",
+          "es-419": "El aspecto y la sensación de la PlayStation, con lo que el hardware hacía mal corregido, y la pantalla adaptada a tu monitor."
         },
         "verdite.setup.original": { "en": "Original", "pt-BR": "Original", "es-419": "Original" },
         "verdite.setup.original.desc": {
@@ -641,13 +819,24 @@ internal sealed class OnboardingPopup : Popup
           "es-419": "Todos los estilos como los ejecutaba la PlayStation, a {0}."
         },
         "verdite.setup.customise": { "en": "Customise…", "pt-BR": "Personalizar…", "es-419": "Personalizar…" },
+        "verdite.setup.customise.desc": {
+          "en": "Choose the display and a style for each part yourself.",
+          "pt-BR": "Escolha a tela e um estilo para cada parte, por conta própria.",
+          "es-419": "Elige tú mismo la pantalla y un estilo para cada parte."
+        },
+        "verdite.setup.adjust": { "en": "Adjust these choices…", "pt-BR": "Ajustar estas escolhas…", "es-419": "Ajustar estas opciones…" },
+        "verdite.setup.buildfailed": {
+          "en": "The build failed. Finish setup to keep your choices; the reason follows.",
+          "pt-BR": "A construção falhou. Conclua a configuração para manter suas escolhas; o motivo vem em seguida.",
+          "es-419": "La construcción falló. Finaliza la configuración para conservar tus opciones; el motivo viene a continuación."
+        },
         "verdite.setup.tiers.intro": {
-          "en": "Original is the game as the PlayStation ran it. Faithful keeps that look and feel and fixes what the hardware got wrong. Modern adds the port's enhancements.",
-          "pt-BR": "Original é o jogo como o PlayStation o rodava. Fiel mantém essa aparência e sensação e corrige o que o hardware fazia errado. Moderno acrescenta as melhorias do port.",
-          "es-419": "Original es el juego tal como lo ejecutaba la PlayStation. Fiel conserva ese aspecto y sensación y corrige lo que el hardware hacía mal. Moderno agrega las mejoras del port."
+          "en": "Original is the game as the PlayStation ran it. Original++ keeps that look and feel and fixes what the hardware got wrong. Modern adds the port's enhancements.",
+          "pt-BR": "Original é o jogo como o PlayStation o rodava. Original++ mantém essa aparência e sensação e corrige o que o hardware fazia errado. Moderno acrescenta as melhorias do port.",
+          "es-419": "Original es el juego tal como lo ejecutaba la PlayStation. Original++ conserva ese aspecto y sensación y corrige lo que el hardware hacía mal. Moderno agrega las mejoras del port."
         },
         "verdite.setup.tier.original": { "en": "Original", "pt-BR": "Original", "es-419": "Original" },
-        "verdite.setup.tier.faithful": { "en": "Faithful", "pt-BR": "Fiel", "es-419": "Fiel" },
+        "verdite.setup.tier.originalplus": { "en": "Original++", "pt-BR": "Original++", "es-419": "Original++" },
         "verdite.setup.tier.modern": { "en": "Modern", "pt-BR": "Moderno", "es-419": "Moderno" },
         "verdite.setup.display": { "en": "Display", "pt-BR": "Tela", "es-419": "Pantalla" },
         "verdite.setup.display.intro": {
@@ -702,7 +891,7 @@ internal sealed class OnboardingPopup : Popup
           "pt-BR": "Todo o resto já mudou. Estas entram em vigor na próxima vez que o jogo iniciar:",
           "es-419": "Todo lo demás ya cambió. Estas se aplican la próxima vez que inicie el juego:"
         },
-        "verdite.setup.skip": { "en": "Skip, change nothing", "pt-BR": "Pular, sem mudar nada", "es-419": "Omitir, sin cambiar nada" },
+        "verdite.setup.skip": { "en": "Skip setup", "pt-BR": "Pular configuração", "es-419": "Omitir configuración" },
         "verdite.setup.cancel": { "en": "Cancel", "pt-BR": "Cancelar", "es-419": "Cancelar" },
         "verdite.setup.back": { "en": "Back", "pt-BR": "Voltar", "es-419": "Atrás" },
         "verdite.setup.next": { "en": "Next", "pt-BR": "Avançar", "es-419": "Siguiente" },

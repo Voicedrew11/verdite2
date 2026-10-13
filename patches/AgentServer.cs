@@ -125,9 +125,9 @@ public static class AgentServer
         "viewfrac [on|off|toggle] - build the view a fraction of an angle unit past the whole one the smoothing rounded to (not saved)",
         "scale [1..8] - the render scale, taken at the next present (0097, not saved); alone, the current one",
         "settings [open|save|discard|step <key> <-1|1>|reset <key>] - the game menu's settings session without its page; alone, every setting",
-        "setup [open|apply <original|faithful|modern> [two more]] - the first-run setup: each group's tier now, opened as RUN SETUP does, or one tier (or one per category) applied live, the display left alone",
+        "setup [open|apply <original|original++|modern> [two more]] - the first-run setup: each group's tier now, opened as RUN SETUP does, or one tier (or one per category) applied live, the display left alone",
         "point [<x> <y>|left|right|off] - the menu pointer at game pixels, a click, or the host's pointer again; alone, what it saw",
-        "aim [on|off|head on|off|hold on|off|ease on|off|<dyaw> <dpitch> [ms]] - mouse aim: alone, its state; on/off set the setting (unsaved); head on|off sets whether the view follows the mouse; hold on|off whether it holds still while the body turns; ease on|off whether a turn ramps as the D-pad's; <dyaw> <dpitch> move the reticle (4096 is a full turn, +dyaw is Left, +dpitch is down) over ms, capturing the pointer if needed",
+        "aim [on|off|head on|off|hold on|off|ease on|off|<dyaw> <dpitch> [ms]] - mouse aim: alone, its state; on/off turn it on or off for the session (not a setting); head on|off sets whether the view follows the mouse; hold on|off whether it holds still while the body turns; ease on|off whether a turn ramps as the D-pad's; <dyaw> <dpitch> move the reticle (4096 is a full turn, +dyaw is Left, +dpitch is down) over ms, capturing the pointer if needed",
     ];
 
     // HookManager attributes hooks to a mod so they can be removed again. This is
