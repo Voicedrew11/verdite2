@@ -78,23 +78,48 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | RESOLUTION | 240P … 1920P | `RenderScale` 1..8 |
 | | ASPECT | 4/3, 16/10, 16/9, 21/9 | `kf2.widescreen.aspect` |
 | | HUD AT EDGES | OFF, ON | `kf2.widescreen.hud`, dimmed at 4/3 |
-| | FRAME RATE | 30 … 360, UNCAPPED | `kf2.framepacing.fps`; this game's pacing has no "original", so there is no ORIGINAL step |
+| | FRAME RATE | ORIGINAL, 30 … 360, UNCAPPED | `kf2.framepacing.fps` and the five `kf2.smoothing.*` keys: ORIGINAL is the setup's 20 fps with the smoothing off, any other rate smooths; a rate with the smoothing off (the Settings window) shows `NO SMOOTH` |
 | GRAPHICS | TEXTURE FILTER | OFF, TRILINEAR, 2X … 16X | `kf2.mipmaps.on` and `kf2.aniso.level` |
 | | PER-PIXEL LIGHT | OFF, ON | `kf2.perpixel.on` |
 | | AMB. OCCLUSION | OFF, LOW, MEDIUM, HIGH | `kf2.ao.on` and `kf2.ao.quality` |
+| | SHADING | DITHER, NONE, SMOOTH | `kf2.nodither.on` and `kf2.truecolor.on`, true color the master, as `ShadingPage` |
 | WORLD | RENDER DISTANCE | ORIGINAL, ENHANCED | `kf2.renderdistance`: 10.5 tiles (off) or 15 (its maximum; not judged) |
 | | FOG | CORNERS, PIXEL DEPTH, DISTANCE | `kf2.fog`: the game's fog at the corners, by pixel depth, or by distance from the eye (the default since 2026-10-09; a kept `kf2.fog` still wins) (`KF2_FOG`; RENDERING, "Fog by distance from the eye") |
 | | WATER | ORIGINAL, ENHANCED, FULL | `kf2.murk.on`, `kf2.waves.on`, `kf2.ssr.planar`: ENHANCED murk and waves, FULL the planar reflection too (the default) |
-| GAMEPLAY | CONTROLS | 2D, 3D | `kf2.controls` (`True` is 3D): one stick, as tank controls (INPUT, "2D and 3D controls") |
-| | INVERTED CAMERA | OFF, ON | `kf2.analog.invertpitch`; dimmed in 3D |
-| | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
+| GAMEPLAY | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
-| | MOUSE LOOK | OFF, LOOK, AIM | `kf2.mouse.on` and `kf2.mouse.aim`: AIM is mouse aim, the mouse moves a reticle and the player turns toward it (INPUT, "Mouse aim: the hand points, the player turns"); AIM turns mouse look on |
+| | ENEMY TURN | ORIGINAL, X1.25 … X8 | `kf2.enemyturn` (PATCHES_AND_MODS, "Enemies turn faster"); tracking while standing stays in the Settings window |
+| | MAP | OFF, WHOLE AREA, AS YOU GO | `kf2.map.on` and `kf2.map.fog`, the map the master, as `MapPage`; OFF leaves the fog choice |
+| CONTROLS | CONTROLS | 2D, 2D ACCEL, 3D | `kf2.controls` (`True` is 3D) and `kf2.analog.accel`: the setup's turning page as a row; 3D clears the acceleration, as the setup's tank option does (INPUT, "2D and 3D controls") |
+| | INVERTED CAMERA | OFF, ON | `kf2.analog.invertpitch`; dimmed in 3D |
+| | STICK SENS | X0.5 … X3 | `kf2.analog.turn` and `kf2.analog.pitch`, both to the step; a pair set apart shows CUSTOM |
+| | MOUSE SENS | X0.25 … X5 | `kf2.mouse.turn` and `kf2.mouse.look`, as STICK SENS; dimmed only under `KF2_MOUSE=0` |
 | | GYRO | OFF, ON | `kf2.gyroaim.on`: a drawn bow aims with the pad's gyroscope (INPUT, "Rumble and gyro aim with a drawn bow") |
 | | RUMBLE | OFF, ON, HD | `kf2.rumble.on`, `kf2.rumble.hd`; OFF leaves the HD choice |
+| SOUND | 3D AUDIO | ORIGINAL, SPEAKERS, HEADPHONES | `kf2.audio.positional` (AUDIO, "Positional audio") |
 
-CONTROLS (2D, 3D; `kf2.controls`, `KF2_TANK`) sits first on GAMEPLAY; see "2D and 3D
-controls" in `docs/INPUT.md`. The minimap has no saved key (N toggles it for the session).
+The minimap has no saved key (N toggles it for the session).
+
+### What the page is for
+
+The user's rule (2026-10-13): a row is on the page when a player would choose it for
+their hardware or their taste (the pad's gyro and rumble, speakers or headphones, how
+fast enemies turn, how much of the map to show), not because the port has a switch for
+it. The renderer's fidelity switches (perspective, sub-pixel, Z-buffer, even fog,
+interpolation, reverb) stay in the Settings window, and **what can be inferred is not
+asked**: ORIGINAL frame rate is the original motion, so the smoothing goes off with it,
+as in Verdite3, where the smoothers follow pacing. Settled, not to be offered again:
+
+* **Message fade length** is never a port setting (Settings window only).
+* **Instant mouse look** is not a setting at all: always on (INPUT, "The mouse leads the tick").
+* **The menu pointer** is not a real choice; it stays in the Settings window.
+* **Smoothing** has no row of its own; FRAME RATE carries it.
+* **Mouse look and the menu pointer** are not settings at all, anywhere: a mouse is
+  used or it is not, and a player after the original experience is on a pad anyway.
+  Both are always on, their saved keys (`kf2.mouse.on`, `kf2.menumouse.on`) are no
+  longer read, the setup has no Mouse group (it wrote both off for Original, which
+  stranded the mouse with no control to bring it back), and the Settings window's
+  two checkboxes are gone. `KF2_MOUSE=0` and `KF2_MENUMOUSE=0` are the comparisons.
 
 ## Measured (2026-10-09)
 
@@ -130,12 +155,12 @@ only Skip setup (launcher) or Cancel (in game):
 * **Recommended**: Modern in every group, with the display suggested from the
   monitor (`Onboarding.Suggest`). Window mode has no suggestion and stays where it
   starts.
-* **Faithful**: Faithful in every group, with the display suggested from the
+* **Original++**: Original++ in every group, with the display suggested from the
   monitor, as Recommended.
 * **Original**: Original in every group, and each display field's `original`
   option: 4:3, 240p (1x) and 20 fps. Window mode is left alone.
-* **Customise…**: walks the display, then the tiers, then the summary. It starts
-  from what the player had set, not from a preset clicked earlier.
+* **Customise…**: walks the display, then the tiers, then the turning page, then the
+  summary. It starts from what the player had set, not from a preset clicked earlier.
 
 A preset goes to the summary. Its top button, **Adjust these choices…**, goes to
 the display page with the preset's choices kept. The summary's Back returns to
@@ -146,13 +171,25 @@ group inside them) are a switch at the top of the tiers page. Every group has
 three tiers:
 
 * **Original**: the game as the PlayStation ran it.
-* **Faithful**: that look and feel, with what the hardware got wrong fixed, and
-  the controls and conveniences that keep the game's own pace: mouse aim (the
-  mouse moves a reticle, the player turns toward it at the D-pad's rate) with no
-  centre dot and no line, and the last save reloaded on death.
-* **Modern**: today's defaults, so only features already judged: mouse look in
-  place of mouse aim. Mouse aim, the HUD at the edges, render distance and the
-  remaster packs stay off, as they ship.
+* **Original++**: that look and feel, with what the hardware got wrong fixed, and
+  the controls and conveniences that keep the game's own pace, and the last save
+  reloaded on death.
+* **Modern**: the port's own choices for each feature already judged: the HUD at the edges and the world drawn out to 15 tiles (the
+  View group), and the turning page's twin sticks with acceleration. The remaster
+  packs stay off, as they ship; murky water is off in every tier and by default.
+
+After the tiers comes **the turning page** (`pages` in the spec, `"id": "turning"`),
+before the summary. It asks how the player turns, and how fast the creatures turn
+toward them: three options (tank controls, twin stick, and twin stick with
+acceleration), and an **Enemy turn speed** slider from x1 to x8 under them, with
+the original's x1 labelled. Each option writes `kf2.controls` and `kf2.analog.accel`;
+the accelerated option also moves the slider to x2.2, since holding the right stick
+out speeds the turn up to that much. Its presets follow the tier the player chose:
+Original and Original++ pick tank controls at x1, Modern picks twin stick with
+acceleration at x2.2. The page **follows the Gameplay tier** until the player touches
+it, so changing that tier moves it too; once touched it is left alone. Its text
+explains the problem (the turn was fixed on the PlayStation, and creatures were
+tuned to it) and why the port's faster turn needs faster creatures.
 
 ### Where setup lives
 
@@ -169,7 +206,10 @@ three tiers:
   ships in `content/config`, so it is part of the build key: a change to it
   rebuilds.
 * `patches/Setup.cs`: RUN SETUP, the live apply, and the shell's `setup` verb,
-  including `setup preset original|recommended|faithful`.
+  including `setup preset original|recommended|original++`. Its live setters cover
+  `kf2.enemyturn` (`EnemyTurn.SetMultiplier`) and `kf2.analog.accel`
+  (`Analog.LookAccel`) as well as the tiers' keys; the boot check also covers the
+  turning page's option keys and its slider.
 * `Launcher.cs`: `Onboarding.Due` decides whether setup is shown. `BuildGame` opens
   the setup in place of the build popup and shows the build as a strip at its
   foot, and it pumps until **both** the build and the setup are done. If the build
@@ -191,8 +231,8 @@ three tiers:
   and a key already meaning the value is left alone. `null` in a tier is the
   default, so Modern writes nothing and removes what Original wrote.
 * **Detecting** where a player is (a re-run starts there): a group matches a tier
-  when every key of the tier already means its value. Faithful water is Original
-  water and Faithful motion is Modern motion, so a group can match two tiers.
+  when every key of the tier already means its value. Original++ water is Original
+  water and Original++ motion is Modern motion, so a group can match two tiers.
   A category therefore takes a tier every one of its groups matches (the later
   tier first), so a fresh install reads as Modern throughout rather than "Custom".
   A group matching nothing is **Custom**, and is left alone unless a tier is chosen.
@@ -212,9 +252,9 @@ three tiers:
 * **Every tier's description is shown**, under its button: the chosen one in full
   colour, the others dimmed. The chosen button is also marked "> " (the font has
   no bullet glyph), so the choice is not colour alone. **Tiers that write the same
-  keys are one button**, named with a slash ("Original / Faithful"), its text the
-  first tier's: water and the map (Original and Faithful), and motion, comparing
-  gear and death (Faithful and Modern). The spec keeps the two texts identical so
+  keys are one button**, named with a slash ("Original / Original++"), its text the
+  first tier's: water and the map (Original and Original++), and motion, comparing
+  gear and death (Original++ and Modern). The spec keeps the two texts identical so
   they cannot drift. A group or category that starts Custom gets a **Keep as is**
   button before the tiers, which puts back what it started at.
 * **A key every tier writes alike is a mistake in the spec**, logged at load:
@@ -287,28 +327,33 @@ the game then starting) has not been watched either.
 buttons, the "> " mark, where keyboard focus lands, and the Keep as is button. The
 popup has not been looked at.
 
-### Setup measured (2026-10-11, Faithful's mouse aim and reload)
+### Setup measured (2026-10-11, Original++'s mouse aim and reload)
 
-* Faithful's mouse group writes `kf2.mouse.aim` True, `kf2.mouse.aimline` and
+**Superseded (2026-10-13):** the mouse aim part below is gone from the setup and
+the settings window; the tiers wrote only `kf2.mouse.on` and `kf2.menumouse.on`,
+and since the same day the Mouse group is gone too (see "What the page is for").
+See INPUT, "Mouse aim is not a setting". The reload part still stands.
+
+* Original++'s mouse group writes `kf2.mouse.aim` True, `kf2.mouse.aimline` and
   `kf2.mouse.aimdot` False, and leaves mouse look on; Original and Modern put all
-  three back to their defaults (aim off, line and dot on). On death, Faithful now
-  reloads, so the group is one button, Faithful / Modern. The line and dot have
+  three back to their defaults (aim off, line and dot on). On death, Original++ now
+  reloads, so the group is one button, Original++ / Modern. The line and dot have
   live setters in `Setup.Window` (`KF2_MOUSE_AIM_LINE`, `KF2_MOUSE_AIM_DOT`).
 * Developer run, the shell: boot check `38 key(s), 0 problem(s)`; `setup apply
-  faithful` then `setup` read every group at 1, and `setup apply modern` every
+  original++` then `setup` read every group at 1, and `setup apply modern` every
   group at 2. The line and dot were already off in that `interface.ini`, so the
   run proved the detection and the reset, not the write to False.
 
-**Not judged:** mouse aim as Faithful's default has never been played through a
+**Not judged:** mouse aim as Original++'s default has never been played through a
 first run.
 
 ### Setup reworked (2026-10-13)
 
 * **The welcome's choices were split between body and footer.** Two presets sat
   in the body and Customise in the footer where Next is, with Skip where Back is
-  on the other pages. Recommended, Faithful, Original and Customise… are now all body buttons,
+  on the other pages. Recommended, Original++, Original and Customise… are now all body buttons,
   and the footer holds only Skip setup (launcher) or Cancel (in game).
-* **There was no Faithful preset.** Faithful now has one, with the display
+* **There was no Original++ preset.** Original++ now has one, with the display
   suggested from the monitor like Recommended, so the three tiers each have a
   preset.
 * **A preset could not be adjusted.** It went to the summary with nothing to
@@ -321,11 +366,53 @@ first run.
 * **A failed build lost the choices.** The failure closed setup, so anything the
   player had picked was gone. Setup now stays up with the build failed in its
   strip, the choices are saved on Finish, and the failure popup follows.
-* The shell's `setup` verb gains `setup preset faithful`, beside original and
+* **The middle tier is named Original++**, not Faithful, in every language and
+  in the shell (`setup apply original++`); its localisation keys are
+  `verdite.setup.originalplus` and `verdite.setup.tier.originalplus`.
+* The shell's `setup` verb gains `setup preset original++`, beside original and
   recommended.
 * The launcher's disc picker (step 3 of "First run" in `docs/PACKAGING.md`) is
   retitled and reworded by the launcher, and Cancel on it during the boot wait
   quits.
+
+**Not judged:** none of it has been looked at or clicked through; measured only by
+the build.
+
+### Setup's turning page (2026-10-13)
+
+* **A page after the tiers.** The turning page (`pages` in `config/onboarding.json`,
+  between the tiers and the summary) owns `kf2.controls`, which the movement group
+  no longer writes. Its three options are tank controls (3D), twin stick (2D), and
+  twin stick (2D) with acceleration; the slider is **Enemy turn speed**, x1 to x8,
+  format `x%.2f`, labelled "x1 (original)" at its bottom. Presets: Original and
+  Original++ pick tank at x1, Modern picks twin stick with acceleration at x2.2. The
+  page follows the Gameplay tier until touched.
+* **The movement group loses `kf2.controls`.** It keeps only `kf2.analog.on`, and its
+  three descriptions no longer say 3D or 2D: Original is the D-pad only, as the
+  PlayStation had; Original++ and Modern (the same text) have the analog sticks on,
+  and how they turn is chosen on the turning page.
+* **A View group** (presentation, last): `kf2.widescreen.hud` and `kf2.renderdistance`.
+  Original and Original++ leave both at the game's own (null, the HUD in the middle
+  and the view distance as released); Modern writes the HUD at the edges and render
+  distance 15. Modern no longer leaves those two off.
+* **Murky water is off in every tier and by default.** `kf2.murk.on` is out of the
+  water group's tiers and out of `defaults`, and `Murk.DefaultOn` is `false`, so
+  nothing writes the key and a fresh install reads it off. The murk is still on the
+  `murk` shell verb and `KF2_MURK=1`.
+* **Defaults added** for the four keys the page and View group write:
+  `kf2.analog.accel` `False`, `kf2.enemyturn` `1`, `kf2.widescreen.hud` `False` and
+  `kf2.renderdistance` `10.5` (the stock distance). `kf2.controls` keeps `False`
+  (twin stick, the page's untouched default).
+* **Original++ wording.** The tier-1 summaries of Controls, Presentation and Gameplay
+  now say the game is as intended with the hardware's faults fixed and a higher frame
+  rate, and that turn speed is the original's. The Modern summaries of Controls,
+  Presentation and Gameplay say what Modern now turns on, including the faster turn
+  and the View group.
+* **Measured** through the shell, `setup` now reporting each page's detected
+  option and slider value: boot check `41 key(s), 0 problem(s)`; `setup preset
+  recommended` read every group at 2 and the page at option 2, x2.2; `setup preset
+  original++` every group at 1 and the page at option 0, x1, writing
+  `kf2.controls`, `kf2.analog.accel` and `kf2.enemyturn` live.
 
 **Not judged:** none of it has been looked at or clicked through; measured only by
 the build.

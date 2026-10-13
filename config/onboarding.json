@@ -10,11 +10,6 @@
     "kf2.framepacing.fps": "60",
     "kf2.analog.on": "True",
     "kf2.controls": "False",
-    "kf2.mouse.on": "True",
-    "kf2.menumouse.on": "True",
-    "kf2.mouse.aim": "False",
-    "kf2.mouse.aimline": "True",
-    "kf2.mouse.aimdot": "True",
     "kf2.rumble.on": "True",
     "kf2.rumble.hd": "True",
     "kf2.gyroaim.on": "True",
@@ -29,7 +24,6 @@
     "kf2.evenfog.on": "True",
     "kf2.fog": "2",
     "kf2.ao.on": "True",
-    "kf2.murk.on": "True",
     "kf2.waves.on": "True",
     "kf2.ssr.planar": "True",
     "kf2.smoothing.on": "True",
@@ -42,7 +36,11 @@
     "kf2.audio.positional": "2",
     "kf2.map.on": "True",
     "kf2.gearcompare.enabled": "True",
-    "kf2.autoreload.enabled": "True"
+    "kf2.autoreload.enabled": "True",
+    "kf2.analog.accel": "False",
+    "kf2.enemyturn": "1",
+    "kf2.widescreen.hud": "False",
+    "kf2.renderdistance": "10.5"
   },
   "display": [
     {
@@ -299,58 +297,19 @@
             {
               "desc": "kf2.setup.movement.0",
               "set": {
-                "kf2.analog.on": "False",
-                "kf2.controls": null
+                "kf2.analog.on": "False"
               }
             },
             {
               "desc": "kf2.setup.movement.1",
               "set": {
-                "kf2.analog.on": null,
-                "kf2.controls": "True"
+                "kf2.analog.on": null
               }
             },
             {
               "desc": "kf2.setup.movement.2",
               "set": {
-                "kf2.analog.on": null,
-                "kf2.controls": null
-              }
-            }
-          ]
-        },
-        {
-          "id": "mouse",
-          "label": "kf2.setup.mouse",
-          "tiers": [
-            {
-              "desc": "kf2.setup.mouse.0",
-              "set": {
-                "kf2.mouse.on": "False",
-                "kf2.menumouse.on": "False",
-                "kf2.mouse.aim": null,
-                "kf2.mouse.aimline": null,
-                "kf2.mouse.aimdot": null
-              }
-            },
-            {
-              "desc": "kf2.setup.mouse.1",
-              "set": {
-                "kf2.mouse.on": null,
-                "kf2.menumouse.on": null,
-                "kf2.mouse.aim": "True",
-                "kf2.mouse.aimline": "False",
-                "kf2.mouse.aimdot": "False"
-              }
-            },
-            {
-              "desc": "kf2.setup.mouse.2",
-              "set": {
-                "kf2.mouse.on": null,
-                "kf2.menumouse.on": null,
-                "kf2.mouse.aim": null,
-                "kf2.mouse.aimline": null,
-                "kf2.mouse.aimdot": null
+                "kf2.analog.on": null
               }
             }
           ]
@@ -478,7 +437,6 @@
             {
               "desc": "kf2.setup.water.0",
               "set": {
-                "kf2.murk.on": "False",
                 "kf2.waves.on": "False",
                 "kf2.ssr.planar": "False"
               }
@@ -486,7 +444,6 @@
             {
               "desc": "kf2.setup.water.1",
               "set": {
-                "kf2.murk.on": "False",
                 "kf2.waves.on": "False",
                 "kf2.ssr.planar": "False"
               }
@@ -494,7 +451,6 @@
             {
               "desc": "kf2.setup.water.2",
               "set": {
-                "kf2.murk.on": null,
                 "kf2.waves.on": null,
                 "kf2.ssr.planar": null
               }
@@ -563,6 +519,33 @@
                 "kf2.audio.interp": null,
                 "kf2.audio.reverb": null,
                 "kf2.audio.positional": null
+              }
+            }
+          ]
+        },
+        {
+          "id": "view",
+          "label": "kf2.setup.view",
+          "tiers": [
+            {
+              "desc": "kf2.setup.view.0",
+              "set": {
+                "kf2.widescreen.hud": null,
+                "kf2.renderdistance": null
+              }
+            },
+            {
+              "desc": "kf2.setup.view.1",
+              "set": {
+                "kf2.widescreen.hud": null,
+                "kf2.renderdistance": null
+              }
+            },
+            {
+              "desc": "kf2.setup.view.2",
+              "set": {
+                "kf2.widescreen.hud": "True",
+                "kf2.renderdistance": "15"
               }
             }
           ]
@@ -653,6 +636,72 @@
       ]
     }
   ],
+  "pages": [
+    {
+      "id": "turning",
+      "title": "kf2.setup.turning",
+      "body": [
+        "kf2.setup.turning.problem",
+        "kf2.setup.turning.port",
+        "kf2.setup.turning.solution"
+      ],
+      "label": "kf2.setup.turning.controls",
+      "options": [
+        {
+          "label": "kf2.setup.turning.tank",
+          "desc": "kf2.setup.turning.tank.desc",
+          "set": {
+            "kf2.controls": "True",
+            "kf2.analog.accel": null
+          },
+          "value": null
+        },
+        {
+          "label": "kf2.setup.turning.2d",
+          "desc": "kf2.setup.turning.2d.desc",
+          "set": {
+            "kf2.controls": null,
+            "kf2.analog.accel": null
+          },
+          "value": null
+        },
+        {
+          "label": "kf2.setup.turning.2daccel",
+          "desc": "kf2.setup.turning.2daccel.desc",
+          "set": {
+            "kf2.controls": null,
+            "kf2.analog.accel": "True"
+          },
+          "value": 2.2
+        }
+      ],
+      "slider": {
+        "key": "kf2.enemyturn",
+        "label": "kf2.setup.enemyturn",
+        "tip": "kf2.setup.enemyturn.tip",
+        "min": 1,
+        "max": 8,
+        "step": 0.25,
+        "format": "x%.2f",
+        "minLabel": "kf2.setup.enemyturn.original"
+      },
+      "presets": [
+        {
+          "option": 0,
+          "value": 1
+        },
+        {
+          "option": 0,
+          "value": 1
+        },
+        {
+          "option": 2,
+          "value": 2.2
+        }
+      ],
+      "follows": "gameplay"
+    }
+  ],
   "strings": {
     "kf2.setup.window": {
       "en": "Window",
@@ -720,19 +769,19 @@
       "es-419": "Controles"
     },
     "kf2.setup.controls.0": {
-      "en": "The pad as the PlayStation read it: the D-pad walks and turns, with no mouse and no rumble.",
-      "pt-BR": "O controle como o PlayStation o lia: o direcional anda e vira, sem mouse e sem vibração.",
-      "es-419": "El control como lo leía la PlayStation: la cruceta camina y gira, sin mouse y sin vibración."
+      "en": "The pad as the PlayStation read it: the D-pad walks and turns, with no rumble.",
+      "pt-BR": "O controle como o PlayStation o lia: o direcional anda e vira, sem vibração.",
+      "es-419": "El control como lo leía la PlayStation: la cruceta camina y gira, sin vibración."
     },
     "kf2.setup.controls.1": {
-      "en": "One stick walks and turns, as the D-pad did; the mouse turns you toward where it points; a pointer in the menus; plain rumble.",
-      "pt-BR": "Um analógico anda e vira, como o direcional fazia; o mouse vira você para onde aponta; um ponteiro nos menus; vibração simples.",
-      "es-419": "Una palanca camina y gira, como lo hacía la cruceta; el mouse te gira hacia donde apunta; un puntero en los menús; vibración simple."
+      "en": "The game as intended, with the hardware's faults fixed and a higher frame rate. You turn at the original's speed, with plain rumble.",
+      "pt-BR": "O jogo como foi pensado, com as falhas do hardware corrigidas e uma taxa de quadros maior. Você vira na velocidade original, com vibração simples.",
+      "es-419": "El juego como se pensó, con las fallas del hardware corregidas y una velocidad de fotogramas mayor. Giras a la velocidad original, con vibración simple."
     },
     "kf2.setup.controls.2": {
-      "en": "Twin sticks and mouse look, a pointer in the menus, HD rumble and gyro aim with a drawn bow.",
-      "pt-BR": "Dois analógicos e visão com o mouse, um ponteiro nos menus, vibração HD e mira por giroscópio com o arco puxado.",
-      "es-419": "Dos palancas y vista con el mouse, un puntero en los menús, vibración HD y apuntado con giroscopio con el arco tensado."
+      "en": "Twin sticks with acceleration on the right stick, HD rumble and gyro aim with a drawn bow.",
+      "pt-BR": "Dois analógicos com aceleração no direito, vibração HD e mira por giroscópio com o arco puxado.",
+      "es-419": "Dos palancas con aceleración en la derecha, vibración HD y apuntado con giroscopio con el arco tensado."
     },
     "kf2.setup.movement": {
       "en": "Movement",
@@ -740,39 +789,19 @@
       "es-419": "Movimiento"
     },
     "kf2.setup.movement.0": {
-      "en": "D-pad only. The analog sticks do nothing.",
-      "pt-BR": "Só o direcional. Os analógicos não fazem nada.",
-      "es-419": "Solo la cruceta. Las palancas no hacen nada."
+      "en": "The D-pad only, as the PlayStation had. The analog sticks do nothing.",
+      "pt-BR": "Só o direcional, como no PlayStation. Os analógicos não fazem nada.",
+      "es-419": "Solo la cruceta, como en la PlayStation. Las palancas no hacen nada."
     },
     "kf2.setup.movement.1": {
-      "en": "The left stick walks and turns, like tank controls.",
-      "pt-BR": "O analógico esquerdo anda e vira, como controles de tanque.",
-      "es-419": "La palanca izquierda camina y gira, como controles de tanque."
+      "en": "The analog sticks are on. How they turn you is chosen on the turning page.",
+      "pt-BR": "Os analógicos estão ligados. Como eles viram você é escolhido na página de virada.",
+      "es-419": "Las palancas analógicas están activadas. Cómo te giran se elige en la página de giro."
     },
     "kf2.setup.movement.2": {
-      "en": "Twin sticks: the left stick walks and steps aside, the right one looks around.",
-      "pt-BR": "Dois analógicos: o esquerdo anda e se desloca de lado, o direito olha ao redor.",
-      "es-419": "Dos palancas: la izquierda camina y se desplaza de lado, la derecha mira alrededor."
-    },
-    "kf2.setup.mouse": {
-      "en": "Mouse",
-      "pt-BR": "Mouse",
-      "es-419": "Mouse"
-    },
-    "kf2.setup.mouse.0": {
-      "en": "No mouse, in play or in the menus.",
-      "pt-BR": "Sem mouse, no jogo ou nos menus.",
-      "es-419": "Sin mouse, en el juego ni en los menús."
-    },
-    "kf2.setup.mouse.1": {
-      "en": "Mouse aim: the mouse moves a reticle and you turn toward it at the D-pad's speed; a pointer in the menus.",
-      "pt-BR": "Mira com o mouse: o mouse move uma mira e você vira até ela na velocidade do direcional; um ponteiro nos menus.",
-      "es-419": "Apuntado con el mouse: el mouse mueve una retícula y giras hacia ella a la velocidad de la cruceta; un puntero en los menús."
-    },
-    "kf2.setup.mouse.2": {
-      "en": "Mouse look in play and a pointer in the menus.",
-      "pt-BR": "Visão com o mouse no jogo e um ponteiro nos menus.",
-      "es-419": "Vista con el mouse en el juego y un puntero en los menús."
+      "en": "The analog sticks are on. How they turn you is chosen on the turning page.",
+      "pt-BR": "Os analógicos estão ligados. Como eles viram você é escolhido na página de virada.",
+      "es-419": "Las palancas analógicas están activadas. Cómo te giran se elige en la página de giro."
     },
     "kf2.setup.haptics": {
       "en": "Rumble and gyro",
@@ -805,14 +834,14 @@
       "es-419": "La imagen y el sonido de la PlayStation: texturas que se deforman, bordes que tiemblan, tramado y el audio suave de la consola."
     },
     "kf2.setup.presentation.1": {
-      "en": "The same look with the hardware's faults fixed: steady textures and edges, no dither, cleaner sound, and smooth motion at any frame rate.",
-      "pt-BR": "A mesma aparência com as falhas do hardware corrigidas: texturas e bordas estáveis, sem pontilhado, som mais limpo e movimento suave em qualquer taxa de quadros.",
-      "es-419": "El mismo aspecto con las fallas del hardware corregidas: texturas y bordes estables, sin tramado, sonido más limpio y movimiento suave a cualquier velocidad de fotogramas."
+      "en": "The game as intended, with the hardware's faults fixed: steady textures and edges, no dither, cleaner sound, and a higher frame rate with smooth motion.",
+      "pt-BR": "O jogo como foi pensado, com as falhas do hardware corrigidas: texturas e bordas estáveis, sem pontilhado, som mais limpo e uma taxa de quadros maior com movimento suave.",
+      "es-419": "El juego como se pensó, con las fallas del hardware corregidas: texturas y bordes estables, sin tramado, sonido más limpio y una velocidad de fotogramas mayor con movimiento suave."
     },
     "kf2.setup.presentation.2": {
-      "en": "Everything the port adds: smooth shading, filtered textures, ambient occlusion, living water, a richer reverb and 3D sound.",
-      "pt-BR": "Tudo o que o port acrescenta: sombreamento suave, texturas filtradas, oclusão de ambiente, água viva, reverberação mais rica e som 3D.",
-      "es-419": "Todo lo que agrega el port: sombreado suave, texturas filtradas, oclusión ambiental, agua viva, una reverberación más rica y sonido 3D."
+      "en": "Everything the port adds: smooth shading, filtered textures, ambient occlusion, living water, a richer reverb, 3D sound, the HUD at the edges of a wide picture and the world drawn out to 15 tiles.",
+      "pt-BR": "Tudo o que o port acrescenta: sombreamento suave, texturas filtradas, oclusão de ambiente, água viva, reverberação mais rica, som 3D, o HUD nas bordas de uma imagem larga e o mundo desenhado até 15 blocos.",
+      "es-419": "Todo lo que agrega el port: sombreado suave, texturas filtradas, oclusión ambiental, agua viva, una reverberación más rica, sonido 3D, el HUD en los bordes de una imagen ancha y el mundo dibujado hasta 15 baldosas."
     },
     "kf2.setup.image": {
       "en": "Image",
@@ -830,9 +859,9 @@
       "es-419": "Texturas con perspectiva correcta, vértices subpíxel y búfer de profundidad; sin tramado; texels nítidos."
     },
     "kf2.setup.image.2": {
-      "en": "As Faithful, with smooth 24-bit shading and 16x filtered, mipmapped textures.",
-      "pt-BR": "Como Fiel, com sombreamento suave de 24 bits e texturas filtradas em 16x com mipmaps.",
-      "es-419": "Como Fiel, con sombreado suave de 24 bits y texturas filtradas a 16x con mipmaps."
+      "en": "As Original++, with smooth 24-bit shading and 16x filtered, mipmapped textures.",
+      "pt-BR": "Como Original++, com sombreamento suave de 24 bits e texturas filtradas em 16x com mipmaps.",
+      "es-419": "Como Original++, con sombreado suave de 24 bits y texturas filtradas a 16x con mipmaps."
     },
     "kf2.setup.lighting": {
       "en": "Lighting and fog",
@@ -850,9 +879,9 @@
       "es-419": "Luz por píxel, y niebla uniforme entre las baldosas y por distancia al ojo. Sin oclusión ambiental."
     },
     "kf2.setup.lighting.2": {
-      "en": "As Faithful, with ambient occlusion darkening corners and creases.",
-      "pt-BR": "Como Fiel, com oclusão de ambiente escurecendo cantos e frestas.",
-      "es-419": "Como Fiel, con oclusión ambiental que oscurece esquinas y rincones."
+      "en": "As Original++, with ambient occlusion darkening corners and creases.",
+      "pt-BR": "Como Original++, com oclusão de ambiente escurecendo cantos e frestas.",
+      "es-419": "Como Original++, con oclusión ambiental que oscurece esquinas y rincones."
     },
     "kf2.setup.water": {
       "en": "Water",
@@ -870,9 +899,9 @@
       "es-419": "Agua plana, como en el lanzamiento."
     },
     "kf2.setup.water.2": {
-      "en": "Water with murky depth, waves and reflections.",
-      "pt-BR": "Água com profundidade turva, ondas e reflexos.",
-      "es-419": "Agua con profundidad turbia, olas y reflejos."
+      "en": "Water with waves and reflections.",
+      "pt-BR": "Água com ondas e reflexos.",
+      "es-419": "Agua con olas y reflejos."
     },
     "kf2.setup.motion": {
       "en": "Motion",
@@ -925,14 +954,14 @@
       "es-419": "El juego como se lanzó: sin mapa, sin comparación de atributos, y la muerte es la del propio juego."
     },
     "kf2.setup.gameplay.1": {
-      "en": "Every stat an item would change is shown when buying and equipping, and death reloads your last save; otherwise as released.",
-      "pt-BR": "Todos os atributos que um item mudaria aparecem ao comprar e equipar, e a morte recarrega seu último save; fora isso, como no lançamento.",
-      "es-419": "Todos los atributos que un objeto cambiaría se muestran al comprar y equipar, y la muerte recarga tu último guardado; por lo demás, como en el lanzamiento."
+      "en": "The game as intended: every stat an item would change is shown when buying and equipping, and death reloads your last save. Turn speed is the original's.",
+      "pt-BR": "O jogo como foi pensado: todos os atributos que um item mudaria aparecem ao comprar e equipar, e a morte recarrega seu último save. A velocidade de giro é a original.",
+      "es-419": "El juego como se pensó: todos los atributos que un objeto cambiaría se muestran al comprar y equipar, y la muerte recarga tu último guardado. La velocidad de giro es la original."
     },
     "kf2.setup.gameplay.2": {
-      "en": "A map that fills in as you explore, stat comparison, and death reloads your last save.",
-      "pt-BR": "Um mapa que se completa conforme você explora, comparação de atributos, e a morte recarrega seu último save.",
-      "es-419": "Un mapa que se completa mientras exploras, comparación de atributos, y la muerte recarga tu último guardado."
+      "en": "A map that fills in as you explore, creatures that turn toward you faster, stat comparison, and death reloads your last save.",
+      "pt-BR": "Um mapa que se completa conforme você explora, criaturas que se viram para você mais rápido, comparação de atributos, e a morte recarrega seu último save.",
+      "es-419": "Un mapa que se completa mientras exploras, criaturas que se giran hacia ti más rápido, comparación de atributos, y la muerte recarga tu último guardado."
     },
     "kf2.setup.map": {
       "en": "Map",
@@ -998,6 +1027,96 @@
       "en": "Before you play, choose how King's Field should look, sound and control. Everything here can be changed later, and the setup can be run again from the game's menu (Circle on the pad, Tab on the keyboard): PORT SETTINGS > DISPLAY > RUN SETUP.",
       "pt-BR": "Antes de jogar, escolha como King's Field deve parecer, soar e ser controlado. Tudo aqui pode ser alterado depois, e a configuração pode ser refeita pelo menu do jogo (Círculo no controle, Tab no teclado): PORT SETTINGS > DISPLAY > RUN SETUP.",
       "es-419": "Antes de jugar, elige cómo debe verse, sonar y controlarse King's Field. Todo esto se puede cambiar después, y la configuración se puede repetir desde el menú del juego (Círculo en el mando, Tab en el teclado): PORT SETTINGS > DISPLAY > RUN SETUP."
+    },
+    "kf2.setup.turning": {
+      "en": "Turning and difficulty",
+      "pt-BR": "Virada e dificuldade",
+      "es-419": "Giro y dificultad"
+    },
+    "kf2.setup.turning.problem": {
+      "en": "King's Field's fights are balanced around how fast you turn. On the PlayStation you turned at one fixed rate, and every creature was tuned to keep up with it.",
+      "pt-BR": "As lutas de King's Field são equilibradas em torno da velocidade com que você vira. No PlayStation você virava em uma velocidade fixa, e cada criatura foi ajustada para acompanhá-la.",
+      "es-419": "Los combates de King's Field están equilibrados en torno a la velocidad con que giras. En la PlayStation girabas a una velocidad fija, y cada criatura estaba ajustada para seguirla."
+    },
+    "kf2.setup.turning.port": {
+      "en": "The port can turn you faster. Look acceleration on the right stick speeds the turn up to 2.2 times while you hold it out, and mouse look turns as fast as you move the mouse. A creature at its original pace can then be circled forever without landing a hit.",
+      "pt-BR": "O port permite virar mais rápido. A aceleração de visão no analógico direito acelera a virada em até 2,2 vezes enquanto você o mantém inclinado, e a visão com o mouse vira tão rápido quanto você move o mouse. Uma criatura no ritmo original pode então ser contornada para sempre sem levar um golpe.",
+      "es-419": "El port permite girar más rápido. La aceleración de vista en la palanca derecha acelera el giro hasta 2.2 veces mientras la mantienes inclinada, y la vista con mouse gira tan rápido como muevas el mouse. Una criatura a su ritmo original puede entonces ser rodeada para siempre sin recibir un golpe."
+    },
+    "kf2.setup.turning.solution": {
+      "en": "The answer is to let creatures turn faster when they turn toward you; their wandering keeps the game's pace. Choose how you will control the game, and the enemy turn speed below follows it. You can set it yourself.",
+      "pt-BR": "A resposta é deixar as criaturas virarem mais rápido quando se voltam para você; a perambulação delas mantém o ritmo do jogo. Escolha como você vai controlar o jogo, e a velocidade de giro dos inimigos abaixo acompanha a escolha. Você também pode defini-la por conta própria.",
+      "es-419": "La respuesta es dejar que las criaturas giren más rápido cuando se vuelven hacia ti; su deambular mantiene el ritmo del juego. Elige cómo vas a controlar el juego, y la velocidad de giro de los enemigos de abajo la sigue. También puedes ajustarla tú mismo."
+    },
+    "kf2.setup.turning.controls": {
+      "en": "Controls",
+      "pt-BR": "Controles",
+      "es-419": "Controles"
+    },
+    "kf2.setup.turning.tank": {
+      "en": "Tank controls (3D)",
+      "pt-BR": "Controles de tanque (3D)",
+      "es-419": "Controles de tanque (3D)"
+    },
+    "kf2.setup.turning.tank.desc": {
+      "en": "One stick walks and turns, as the D-pad does; L1 and R1 strafe. You turn at the original rate.",
+      "pt-BR": "Um analógico anda e vira, como o direcional; L1 e R1 se deslocam de lado. Você vira na velocidade original.",
+      "es-419": "Una palanca camina y gira, como la cruceta; L1 y R1 te desplazan de lado. Giras a la velocidad original."
+    },
+    "kf2.setup.turning.2d": {
+      "en": "Twin stick (2D)",
+      "pt-BR": "Dois analógicos (2D)",
+      "es-419": "Dos palancas (2D)"
+    },
+    "kf2.setup.turning.2d.desc": {
+      "en": "The left stick walks and strafes, the right stick turns and looks, at the D-pad's rate. You turn at the original rate.",
+      "pt-BR": "O analógico esquerdo anda e se desloca de lado, o direito vira e olha, na velocidade do direcional. Você vira na velocidade original.",
+      "es-419": "La palanca izquierda camina y se desplaza de lado, la derecha gira y mira, a la velocidad de la cruceta. Giras a la velocidad original."
+    },
+    "kf2.setup.turning.2daccel": {
+      "en": "Twin stick (2D) with acceleration",
+      "pt-BR": "Dois analógicos (2D) com aceleração",
+      "es-419": "Dos palancas (2D) con aceleración"
+    },
+    "kf2.setup.turning.2daccel.desc": {
+      "en": "As twin stick, but holding the right stick out speeds the turn up to 2.2 times. Enemy turn speed rises to x2.2 to match.",
+      "pt-BR": "Como dois analógicos, mas manter o analógico direito inclinado acelera a virada em até 2,2 vezes. A velocidade de giro dos inimigos sobe para x2,2 para acompanhar.",
+      "es-419": "Como dos palancas, pero mantener la palanca derecha inclinada acelera el giro hasta 2.2 veces. La velocidad de giro de los enemigos sube a x2.2 para igualarla."
+    },
+    "kf2.setup.enemyturn": {
+      "en": "Enemy turn speed",
+      "pt-BR": "Velocidade de giro dos inimigos",
+      "es-419": "Velocidad de giro de los enemigos"
+    },
+    "kf2.setup.enemyturn.tip": {
+      "en": "How much faster a creature turns toward you. x1 is the original game.",
+      "pt-BR": "O quanto mais rápido uma criatura se vira para você. x1 é o jogo original.",
+      "es-419": "Qué tan rápido gira una criatura hacia ti. x1 es el juego original."
+    },
+    "kf2.setup.enemyturn.original": {
+      "en": "x1 (original)",
+      "pt-BR": "x1 (original)",
+      "es-419": "x1 (original)"
+    },
+    "kf2.setup.view": {
+      "en": "View",
+      "pt-BR": "Visão",
+      "es-419": "Vista"
+    },
+    "kf2.setup.view.0": {
+      "en": "The HUD in the middle of the picture, and the game's own view distance.",
+      "pt-BR": "O HUD no meio da imagem, e a distância de visão do próprio jogo.",
+      "es-419": "El HUD en el centro de la imagen, y la distancia de visión propia del juego."
+    },
+    "kf2.setup.view.2": {
+      "en": "The HUD at the edges of a wide picture, and the world drawn out to 15 tiles.",
+      "pt-BR": "O HUD nas bordas de uma imagem larga, e o mundo desenhado até 15 blocos.",
+      "es-419": "El HUD en los bordes de una imagen ancha, y el mundo dibujado hasta 15 baldosas."
+    },
+    "kf2.setup.view.1": {
+      "en": "The HUD in the middle of the picture, and the game's own view distance.",
+      "pt-BR": "O HUD no meio da imagem, e a distância de visão do próprio jogo.",
+      "es-419": "El HUD en el centro de la imagen, y la distancia de visión propia del juego."
     }
   }
 }

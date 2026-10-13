@@ -54,11 +54,11 @@ public static class Setup
     /// The shell's <c>setup</c>, from the game thread:
     ///   setup                       each group's tier now (-1 is set by hand) and the last apply
     ///   setup open                  open it, as RUN SETUP does
-    ///   setup apply T [T T]         one tier (original, faithful, modern) for every group, or one
+    ///   setup apply T [T T]         one tier (original, original++, modern) for every group, or one
     ///                               per category in the spec's order; the display left alone.
     ///                               Applied on the host's next frame, so ask again for the result.
-    ///   setup preset original|faithful|recommended
-    ///                               the welcome's Original, Faithful or Recommended choice (tiers 0, 1, 2),
+    ///   setup preset original|original++|recommended
+    ///                               the welcome's Original, Original++ or Recommended choice (tiers 0, 1, 2),
     ///                               applied the same way.
     /// </summary>
     public static string Shell(string args)
@@ -73,31 +73,33 @@ public static class Setup
             case "apply":
                 var tiers = a.Skip(1).Select(t => Array.IndexOf(TierNames, t.ToLowerInvariant())).ToArray();
                 if (tiers.Length is not (1 or 3) || tiers.Length == 3 && spec.Categories.Count != 3 || tiers.Any(t => t < 0))
-                    return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup apply <original|faithful|modern> [two more, one per category]\"}";
+                    return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup apply <original|original++|modern> [two more, one per category]\"}";
                 var chosen = spec.Categories.Select((c, i) => Enumerable.Repeat(tiers.Length == 1 ? tiers[0] : tiers[i], c.Groups.Count).ToArray()).ToArray();
                 SettingsStore.OnHost(() => _last = Onboarding.Apply(spec, Onboarding.Sets(spec, [], chosen), "KF2"));
                 break;
             case "preset":
             {
                 var which = a.Length == 2 ? a[1].ToLowerInvariant() : "";
-                if (which is not ("original" or "faithful" or "recommended"))
-                    return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup preset <original|faithful|recommended>\"}";
-                int presetTier = which switch { "original" => 0, "faithful" => 1, _ => 2 };
-                var (presetDisplay, presetTiers) = Onboarding.Preset(spec, presetTier);
-                SettingsStore.OnHost(() => _last = Onboarding.Apply(spec, Onboarding.Sets(spec, presetDisplay, presetTiers), "KF2"));
+                if (which is not ("original" or "original++" or "recommended"))
+                    return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup preset <original|original++|recommended>\"}";
+                int presetTier = which switch { "original" => 0, "original++" => 1, _ => 2 };
+                var (presetDisplay, presetTiers, presetPages) = Onboarding.Preset(spec, presetTier);
+                SettingsStore.OnHost(() => _last = Onboarding.Apply(spec, Onboarding.Sets(spec, presetDisplay, presetTiers, presetPages), "KF2"));
                 break;
             }
-            default: return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup [open|apply ...|preset original|faithful|recommended]\"}";
+            default: return "{\"ok\":false,\"cmd\":\"setup\",\"error\":\"setup [open|apply ...|preset original|original++|recommended]\"}";
         }
         var groups = spec.Categories.SelectMany(c => c.Groups.Zip(Onboarding.Detect(spec, c), (g, t) => $"\"{c.Id}.{g.Id}\":{t}"));
         var display = spec.Display.Select(f => $"\"{f.Id}\":{Onboarding.Detect(spec, f)}");
+        var pages = spec.Pages.Select(p => Onboarding.Detect(spec, p) is var c
+            ? $"\"{p.Id}\":{{\"option\":{c.Option},\"value\":{(c.Value is { } v ? v.ToString(CultureInfo.InvariantCulture) : "null")}}}" : "");
         string List(IReadOnlyList<string>? keys) => "[" + string.Join(',', (keys ?? []).Select(k => $"\"{k}\"")) + "]";
         return $"{{\"ok\":true,\"cmd\":\"setup\",\"verb\":\"{verb}\",\"open\":{(Busy ? "true" : "false")}," +
                $"\"due\":{(Onboarding.Due(spec) ? "true" : "false")},\"display\":{{{string.Join(',', display)}}}," +
-               $"\"groups\":{{{string.Join(',', groups)}}},\"changed\":{List(_last?.Changed)},\"nextLaunch\":{List(_last?.NextLaunch)}}}";
+               $"\"groups\":{{{string.Join(',', groups)}}},\"pages\":{{{string.Join(',', pages)}}},\"changed\":{List(_last?.Changed)},\"nextLaunch\":{List(_last?.NextLaunch)}}}";
     }
 
-    static readonly string[] TierNames = ["original", "faithful", "modern"];
+    static readonly string[] TierNames = ["original", "original++", "modern"];
 
     /// <summary>One key, live, from what it now means. On the host thread, with the
     /// world held by the menu, as the Settings window's own controls run.</summary>
@@ -126,6 +128,8 @@ public static class Setup
 
     static int I(string? text, int fallback) => (int)Math.Round(Number(text, fallback));
 
+    static float F(string? text, float fallback) => (float)Number(text, fallback);
+
     static string Text(bool b) => b ? "True" : "False";
 
     /// <summary>A key the game's page does not list: the Settings window's setter, the
@@ -136,9 +140,6 @@ public static class Setup
     static readonly Dictionary<string, WindowKey> Window = new(StringComparer.OrdinalIgnoreCase)
     {
         [Analog.OnKey] = new(t => Analog.Enabled = B(t, true), () => Text(Analog.Enabled)),
-        [MenuMouse.OnKey] = new(t => MenuMouse.Enabled = B(t, true), () => Text(MenuMouse.Enabled), "KF2_MENUMOUSE"),
-        [MouseAim.LineKey] = new(t => MouseAim.Line = B(t, true), () => Text(MouseAim.Line), "KF2_MOUSE_AIM_LINE"),
-        [MouseAim.DotKey] = new(t => MouseAim.Dot = B(t, true), () => Text(MouseAim.Dot), "KF2_MOUSE_AIM_DOT"),
         [Perspective.OnKey] = new(t => Perspective.SetEnabled(B(t, true)), () => Text(Perspective.Enabled), "KF2_PERSPECTIVE"),
         [Subpixel.OnKey] = new(t => Subpixel.SetEnabled(B(t, true)), () => Text(Subpixel.Enabled), "KF2_SUBPIXEL"),
         [ZBuffer.OnKey] = new(t => ZBuffer.SetEnabled(B(t, true)), () => Text(ZBuffer.Enabled), "KF2_ZBUFFER"),
@@ -156,6 +157,9 @@ public static class Setup
             () => Spu.ReverbMode == SpuReverbMode.Enhanced ? "1" : "0", "KF2_REVERB"),
         [PositionalAudio.ModeKey] = new(t => PositionalAudio.Set((PositionalAudio.Mode)I(t, 2)),
             () => ((int)PositionalAudio.Current).ToString(CultureInfo.InvariantCulture), "KF2_POSAUDIO"),
+        [EnemyTurn.Key] = new(t => EnemyTurn.SetMultiplier(F(t, 1f)),
+            () => EnemyTurn.Multiplier.ToString(CultureInfo.InvariantCulture), "KF2_ENEMYTURN"),
+        [Analog.AccelKey] = new(t => Analog.LookAccel = B(t, false), () => Text(Analog.LookAccel), "KF2_ANALOG_ACCEL"),
         [Map.OnKey] = new(t => Map.SetEnabled(B(t, true)), () => Text(Map.Enabled), "KF2_MAP"),
         [MapFog.OnKey] = new(t => MapFog.SetEnabled(B(t, true)), () => Text(MapFog.Enabled), "KF2_MAP_FOG"),
     };
@@ -171,6 +175,8 @@ public static class Setup
     {
         var keys = spec.Display.SelectMany(f => f.Options).SelectMany(o => o.Set.Keys)
             .Concat(spec.Categories.SelectMany(c => c.Groups).SelectMany(g => g.Tiers).SelectMany(t => t.Set.Keys))
+            .Concat(spec.Pages.SelectMany(p => p.Options).SelectMany(o => o.Set.Keys))
+            .Concat(spec.Pages.Where(p => p.Slider is not null).Select(p => p.Slider!.Key))
             .Where(k => !Onboarding.IsWindowKey(k))
             .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         var view = RecompOne.Runtime.Runtime.View;

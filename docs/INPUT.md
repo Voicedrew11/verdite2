@@ -325,7 +325,7 @@ it breaks. All three candidates are one memory read apart.
 ### 2D and 3D controls
 
 Ported from Verdite3 (`c355bd2`, `6f6f479`, 2026-10-09). *Controls* (Gameplay, and
-CONTROLS on PORT SETTINGS ▸ GAMEPLAY; `kf2.controls`, `KF2_TANK`) chooses 2D, the twin
+CONTROLS on PORT SETTINGS ▸ CONTROLS; `kf2.controls`, `KF2_TANK`) chooses 2D, the twin
 sticks above, or 3D: one stick, as tank controls are. In 3D the left stick walks
 forward and back and turns as the D-pad does, L1 and R1 strafe, L2 and R2 look, and the
 right stick is not read at all (the right-stick rows of Input ▸ Analog dim, and so does
@@ -366,7 +366,7 @@ reads it after `func_800271D0`, once a tick.
   and spent in `Analog.BeforeLook` beside the stick's share, as the mouse's is, one to
   one; tipping takes the mouse's Y inversion. `KF2_GYROAIM_PROBE=1`.
 
-PORT SETTINGS > GAMEPLAY > GYRO (OFF, ON) and RUMBLE (OFF, ON, HD). Measured: the draw and
+PORT SETTINGS > CONTROLS > GYRO (OFF, ON) and RUMBLE (OFF, ON, HD). Measured: the draw and
 loose read off the game as above, and the rumble's phases followed them (nock, drawing at
 tension 0.59, full draw, loosed); the test cycle asks about 60 waves a second. **No pad
 was attached: nothing was felt, and the gyro never ran** (`pad gyro off`).
@@ -608,8 +608,11 @@ it for this pair specifically: `0x8006E590` reads `0x1000`, which is
 ## Mouse look
 
 Verdite Core's Mouse steers with the mouse, and presses pad buttons with its
-buttons. It is **on by default** and its knobs are under Input, below the stick
-ones. Capture is still Escape, so the pointer does not disappear into the game
+buttons. It is **always on, and not a setting** (2026-10-13, the user's call: a mouse is
+used or it is not, and the original experience is on a pad anyway); `kf2.mouse.on` is no
+longer read (`MouseGame.OnIsSetting` false) and `KF2_MOUSE=0` is the comparison. The
+menu pointer is the same (`kf2.menumouse.on` no longer read, `KF2_MENUMOUSE=0`). Its
+knobs are under Input, below the stick ones. Capture is still Escape, so the pointer does not disappear into the game
 until the player asks.
 
 **The look half is not a hook.** A mouse and a stick are two ways of asking for
@@ -955,9 +958,11 @@ back:
 * **With smoothing off it still leads**: the view is the tick's angle plus the
   pending sum. At the tick rate there is no frame between ticks and nothing to do.
 
-It is **Instant mouse look** under Gameplay (`MouseLeadPage`, saved as
-`kf2.mouse.lead`), on by default and dimmed while mouse look is off;
-`KF2_MOUSE_LEAD=0` or `=1` overrides the saved choice. `KF2_SMOOTH_PROBE=1` adds a line: frames
+It is always on, and not a setting (2026-10-13, the user's call: a player using a mouse
+wants it, and one who is not never meets it). It was **Instant mouse look** under
+Gameplay (`MouseLeadPage`, saved as `kf2.mouse.lead`); the page is gone and the key is
+no longer read (`MouseGame.LeadIsSetting` false; Verdite3 still keeps it), so nobody is
+stranded off by a value with no control. `KF2_MOUSE_LEAD=0` is the comparison. `KF2_SMOOTH_PROBE=1` adds a line: frames
 led, how far ahead of the tick, and the mean |applied − asked| per tick, which
 is the number that says whether the tick agreed with the picture.
 
@@ -1321,6 +1326,14 @@ D-pad's. The held view's recentre goes through `Toward` too, so it follows the s
 35, 35, 25, six ticks against the eased ten, yaw 2639 to 2839; with the view held,
 `aim -150 0` is -35 four times and -10, and the camera ends on the facing at 2689.
 144.0 fps drawn at 14.9-15.0 ticks/s. **Not judged**: how it feels.
+
+### Mouse aim is not a setting (2026-10-13)
+
+Mouse aim was removed from the settings window, the game's PORT SETTINGS page and
+the first-run setup. Its saved keys (`kf2.mouse.aim*`) are no longer read, so a
+value saved earlier has no control to show it and is ignored. The
+`KF2_MOUSE_AIM*` environment variables remain as the comparison, and are now the
+only way to turn it on. Mouse look and the menu pointer are unchanged.
 
 ### The mouse was sampled at two points
 

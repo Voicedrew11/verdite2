@@ -39,9 +39,9 @@ public static class PortSettings
     /// <see cref="PortSetting.Parts"/>); declared after its parts, whose defaults it reads.</summary>
     static PortSetting Combine(string key, string page, string menu, PortSetting[] parts, double[] steps,
         Func<double, string> text, Func<Func<PortSetting, double>, double> join,
-        Func<double, Func<PortSetting, double>, double[]> split) => new()
+        Func<double, Func<PortSetting, double>, double[]> split, Func<bool>? usable = null) => new()
     {
-        Key = key, Envs = [.. parts.SelectMany(p => p.Envs).Distinct()], Label = menu,
+        Key = key, Envs = [.. parts.SelectMany(p => p.Envs).Distinct()], Label = menu, Usable = usable,
         Page = page, MenuLabel = menu, Steps = steps, MenuValue = text,
         Parts = parts, Join = join, Split = split,
         Default = join(p => p.Default), Live = () => join(p => p.Live()),
@@ -63,8 +63,15 @@ public static class PortSettings
     public const double Unchanged = double.NaN;
 
     // The pages, in the order the game's menu shows them, and their rows in Menu below.
-    public const string DisplayPage = "DISPLAY", Graphics = "GRAPHICS", World = "WORLD", Gameplay = "GAMEPLAY";
-    public static readonly string[] Pages = [DisplayPage, Graphics, World, Gameplay];
+    //
+    // A row is here when a player would choose it for their hardware or their taste
+    // (the pad's gyro and rumble, how fast enemies turn, speakers or headphones), not
+    // because the port has a switch for it: the renderer's own switches stay in the
+    // Settings window, and what can be inferred is not asked (ORIGINAL frame rate is
+    // no smoothing; any other rate smooths). See "What the page is for" in docs/SETTINGS.md.
+    public const string DisplayPage = "DISPLAY", Graphics = "GRAPHICS", World = "WORLD", Gameplay = "GAMEPLAY",
+        ControlsPage = "CONTROLS", Sound = "SOUND";
+    public static readonly string[] Pages = [DisplayPage, Graphics, World, Gameplay, ControlsPage, Sound];
 
     // ---- Display ----
 
@@ -114,13 +121,56 @@ public static class PortSettings
     /// so that step is UNCAPPED rather than ORIGINAL.</summary>
     static readonly double[] Rates = [30, 60, 72, 75, 90, 100, 120, 144, 165, 180, 240, 360, 0];
 
+    /// <summary>The rate, a part of <see cref="FrameRateRow"/>.</summary>
     public static readonly PortSetting FrameRate = new()
     {
         Key = FramePacing.FpsKey, Envs = ["KF2_FPS"], Label = "Frame rate",
-        Page = DisplayPage, MenuLabel = "FRAME RATE", Steps = Rates, MenuValue = v => v <= 0 ? "UNCAPPED" : Number(v),
+        Steps = Rates, MenuValue = v => v <= 0 ? "UNCAPPED" : Number(v),
         Default = FramePacing.DefaultFps, Live = () => Math.Max(0, FramePacing.TargetFps), Apply = v => FramePacing.SetTargetFps(v),
         Stored = Stored.Float, Ui = Ui.None,
     };
+
+    /// <summary>The setup's "20 fps (original)": the rate the PlayStation drew at.</summary>
+    public const double OriginalFps = 20;
+
+    /// <summary>The smoothing between ticks, a part of <see cref="FrameRateRow"/>: one
+    /// switch for all five patches and their five keys, as the Settings window's
+    /// <c>FrameSmoothingPage</c> writes them. The view is the master.</summary>
+    static readonly PortSetting Smoothing = new()
+    {
+        Key = FrameSmoothing.OnKey, Envs = ["KF2_SMOOTH"], Label = "Smooth motion between game ticks",
+        Steps = [0, 1], MenuValue = v => v != 0 ? "ON" : "OFF",
+        Default = 1, Live = () => FrameSmoothing.Enabled ? 1 : 0,
+        Apply = v =>
+        {
+            bool on = v != 0;
+            FrameSmoothing.SetEnabled(on);
+            FrameSmoothing.SetPosition(on);
+            ObjectSmoothing.SetEnabled(on);
+            AnimSmoothing.SetEnabled(on);
+            FluidSmoothing.SetEnabled(on);
+        },
+        Keys = v =>
+        {
+            string? text = v is double d ? (d != 0 ? "True" : "False") : null;
+            return [(FrameSmoothing.OnKey, text), (FrameSmoothing.PosKey, text), (ObjectSmoothing.OnKey, text),
+                    (AnimSmoothing.OnKey, text), (FluidSmoothing.OnKey, text)];
+        },
+        Ui = Ui.None,
+    };
+
+    static readonly double[] RateRows = [-1, .. Rates];
+
+    static string RateText(double v) => v <= 0 ? "UNCAPPED" : Number(v);
+
+    /// <summary>ORIGINAL is the PlayStation's 20 fps with no smoothing: a player who asks
+    /// for the original rate wants the original motion. Any other rate smooths. A rate
+    /// with the smoothing off (the Settings window can still set it) shows "NO SMOOTH",
+    /// half a step above the rate, so Left and Right each reach one.</summary>
+    public static readonly PortSetting FrameRateRow = Combine("row.framerate", DisplayPage, "FRAME RATE", [FrameRate, Smoothing],
+        RateRows, v => v < 0 ? "ORIGINAL" : v % 1 != 0 ? RateText(v - .5) + " NO SMOOTH" : RateText(v),
+        get => get(Smoothing) != 0 ? get(FrameRate) : Same(get(FrameRate), OriginalFps) ? -1 : get(FrameRate) + .5,
+        (v, _) => v < 0 ? [OriginalFps, 0] : [v, 1]);
 
     // ---- Graphics ----
 
@@ -174,6 +224,23 @@ public static class PortSettings
         get => get(Ao) == 0 ? 0 : get(AoQuality) + 1,
         (v, _) => v <= 0 ? [0, Unchanged] : [1, v - 1]);
 
+    /// <summary>The crosshatch, a part of <see cref="ShadingRow"/>. Note the polarity:
+    /// on is the crosshatch off.</summary>
+    static readonly PortSetting NoDitherOn = Switch(NoDither.OnKey, "KF2_NODITHER", "No dither",
+        null, null, () => NoDither.Enabled, NoDither.SetEnabled, true);
+
+    /// <summary>The 24-bit output, a part of <see cref="ShadingRow"/>.</summary>
+    static readonly PortSetting TrueColorOn = Switch(TrueColor.OnKey, "KF2_TRUECOLOR", "24-bit color",
+        null, null, () => TrueColor.Enabled, TrueColor.SetEnabled, true);
+
+    /// <summary>DITHER is the console's crosshatch, NONE the bands raw, SMOOTH 24-bit. True
+    /// color is the master, as in the Settings window's <c>ShadingPage</c>, so the
+    /// crosshatch over 24-bit reads as SMOOTH.</summary>
+    public static readonly PortSetting ShadingRow = Combine("row.shading", Graphics, "SHADING", [NoDitherOn, TrueColorOn],
+        [0, 1, 2], Named([0, 1, 2], "DITHER", "NONE", "SMOOTH"),
+        get => get(TrueColorOn) != 0 ? 2 : get(NoDitherOn) != 0 ? 1 : 0,
+        (v, _) => v >= 2 ? [1, 1] : v >= 1 ? [1, 0] : [0, 0]);
+
     // ---- World ----
 
     /// <summary>The game's far edge, the one the game draws to, and the most the
@@ -226,32 +293,6 @@ public static class PortSettings
 
     // ---- Gameplay ----
 
-    /// <summary>2D is the twin sticks, the left one walking and strafing; 3D is one
-    /// stick, as tank controls are: the left stick walking and turning as the D-pad
-    /// does, the right stick unused (<see cref="Analog.Tank"/>). Kept as a switch,
-    /// "True" for 3D, the text the Settings window's ControlsPage writes.</summary>
-    public static readonly PortSetting Controls = new()
-    {
-        Key = Analog.ControlsKey, Envs = ["KF2_TANK"], Label = "Controls",
-        Tip = "2D: the left stick walks and strafes, the right stick turns and looks.\n" +
-              "3D: one stick, as tank controls. The left stick walks forward and back and turns;\n" +
-              "L1 and R1 strafe, L2 and R2 look up and down, and the right stick is not used.",
-        Page = Gameplay, MenuLabel = "CONTROLS", Steps = [0, 1], MenuValue = Named([0, 1], "2D", "3D"),
-        Names = ["2D (twin sticks)", "3D (one stick)"], Default = 0,
-        Live = () => Analog.Tank ? 1 : 0, Apply = v => Analog.Tank = v != 0,
-        Keys = v => [(Analog.ControlsKey, v is double d ? (d != 0 ? "True" : "False") : null)],
-        Ui = Ui.None,
-    };
-
-    /// <summary>The right stick's look up and down reversed, as a plane's flight stick:
-    /// push up to look down. The same key as Analog's "Invert look Y". Dimmed in 3D,
-    /// where the right stick does not look.</summary>
-    public static readonly PortSetting InvertedCamera = Switch(Analog.InvertPitchKey, "KF2_ANALOG_INVERTY", "Inverted camera",
-        Gameplay, "INVERTED CAMERA", () => Analog.InvertPitch, v => Analog.InvertPitch = v, false,
-        tip: "Reverses the right stick's up and down, like a plane's flight stick: push up to look down, pull back to look up.\n" +
-             "2D controls only: in 3D the right stick does not look.",
-        usable: () => !Analog.Tank);
-
     public static readonly PortSetting AutoReloadOn = Switch(AutoReload.OnKey, "KF2_AUTORELOAD", "Reload the last save on death",
         Gameplay, "RELOAD ON DEATH", () => AutoReload.Enabled, AutoReload.SetEnabled, true,
         tip: "Puts you back at your last save instead of the menus.");
@@ -260,9 +301,113 @@ public static class PortSettings
         Gameplay, "COMPARE GEAR", () => GearCompare.Enabled, v => GearCompare.Enabled = v, true,
         tip: "Choosing equipment or browsing a shop shows every stat the item would change, now and after.");
 
-    /// <summary>Mouse look. Turning it off releases the pointer, as the game's own page does.</summary>
+    /// <summary>How fast a creature turns at the player, as a multiple of the game's own.
+    /// Tracking while standing stays in the Settings window.</summary>
+    public static readonly PortSetting EnemyTurnSpeed = new()
+    {
+        Key = EnemyTurn.Key, Envs = ["KF2_ENEMYTURN"], Label = "Enemy turn speed",
+        Tip = "How fast enemies turn to follow you, as a multiple of the game's own speed. Higher makes them harder to circle around.",
+        Page = Gameplay, MenuLabel = "ENEMY TURN", Steps = [1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 3, 4, 5, 6, 8],
+        MenuValue = v => v <= EnemyTurn.Min ? "ORIGINAL" : "X" + Number(v),
+        Default = EnemyTurn.Min, Live = () => EnemyTurn.Multiplier, Apply = v => EnemyTurn.SetMultiplier((float)v),
+        Stored = Stored.Float, Ui = Ui.None, Min = EnemyTurn.Min, Max = EnemyTurn.Max,
+    };
+
+    /// <summary>The map, a part of <see cref="MapRow"/>.</summary>
+    static readonly PortSetting MapOn = Switch(Map.OnKey, "KF2_MAP", "Map",
+        null, null, () => Map.Enabled, Map.SetEnabled, true);
+
+    /// <summary>The fog of war, a part of <see cref="MapRow"/>.</summary>
+    static readonly PortSetting MapFogOn = Switch(MapFog.OnKey, "KF2_MAP_FOG", "Map fills in as you go",
+        null, null, () => MapFog.Enabled, MapFog.SetEnabled, true);
+
+    /// <summary>OFF, the WHOLE AREA, or filled in AS YOU GO; the map is the master, as in
+    /// the Settings window's <c>MapPage</c>, and OFF leaves the kept fog choice.</summary>
+    public static readonly PortSetting MapRow = Combine("row.map", Gameplay, "MAP", [MapOn, MapFogOn],
+        [0, 1, 2], Named([0, 1, 2], "OFF", "WHOLE AREA", "AS YOU GO"),
+        get => get(MapOn) == 0 ? 0 : get(MapFogOn) != 0 ? 2 : 1,
+        (v, _) => v <= 0 ? [0, Unchanged] : v >= 2 ? [1, 1] : [1, 0]);
+
+    // ---- Controls ----
+
+    /// <summary>2D is the twin sticks, the left one walking and strafing; 3D is one
+    /// stick, as tank controls are: the left stick walking and turning as the D-pad
+    /// does, the right stick unused (<see cref="Analog.Tank"/>). Kept as a switch,
+    /// "True" for 3D, the text the Settings window's ControlsPage writes. A part of
+    /// <see cref="ControlsRow"/>.</summary>
+    public static readonly PortSetting Controls = new()
+    {
+        Key = Analog.ControlsKey, Envs = ["KF2_TANK"], Label = "Controls",
+        Tip = "2D: the left stick walks and strafes, the right stick turns and looks.\n" +
+              "3D: one stick, as tank controls. The left stick walks forward and back and turns;\n" +
+              "L1 and R1 strafe, L2 and R2 look up and down, and the right stick is not used.",
+        Steps = [0, 1], MenuValue = Named([0, 1], "2D", "3D"),
+        Names = ["2D (twin sticks)", "3D (one stick)"], Default = 0,
+        Live = () => Analog.Tank ? 1 : 0, Apply = v => Analog.Tank = v != 0,
+        Keys = v => [(Analog.ControlsKey, v is double d ? (d != 0 ? "True" : "False") : null)],
+        Ui = Ui.None,
+    };
+
+    /// <summary>The right stick's turn speeding up while held out, a part of <see cref="ControlsRow"/>.</summary>
+    static readonly PortSetting StickAccel = Switch(Analog.AccelKey, "KF2_ANALOG_ACCEL", "Look acceleration",
+        null, null, () => Analog.LookAccel, v => Analog.LookAccel = v, false);
+
+    /// <summary>The setup's turning page as one row: 2D, 2D with the right stick's
+    /// acceleration, or 3D. 3D clears the acceleration, as the setup's tank option does.</summary>
+    public static readonly PortSetting ControlsRow = Combine("row.controls", ControlsPage, "CONTROLS", [Controls, StickAccel],
+        [0, 1, 2], Named([0, 1, 2], "2D", "2D ACCEL", "3D"),
+        get => get(Controls) != 0 ? 2 : get(StickAccel) != 0 ? 1 : 0,
+        (v, _) => v >= 2 ? [1, 0] : v >= 1 ? [0, 1] : [0, 0]);
+
+    /// <summary>The right stick's look up and down reversed, as a plane's flight stick:
+    /// push up to look down. The same key as Analog's "Invert look Y". Dimmed in 3D,
+    /// where the right stick does not look.</summary>
+    public static readonly PortSetting InvertedCamera = Switch(Analog.InvertPitchKey, "KF2_ANALOG_INVERTY", "Inverted camera",
+        ControlsPage, "INVERTED CAMERA", () => Analog.InvertPitch, v => Analog.InvertPitch = v, false,
+        tip: "Reverses the right stick's up and down, like a plane's flight stick: push up to look down, pull back to look up.\n" +
+             "2D controls only: in 3D the right stick does not look.",
+        usable: () => !Analog.Tank);
+
+    /// <summary>A sensitivity, a part of a SENS row: kept as a float, as the Settings
+    /// window's slider writes it.</summary>
+    static PortSetting Sensitivity(string key, string env, string label, Func<float> get, Action<float> set, double min, double max) => new()
+    {
+        Key = key, Envs = [env], Label = label, Steps = [1], MenuValue = Number,
+        Default = 1, Live = () => get(), Apply = v => set((float)Math.Clamp(v, min, max)),
+        Stored = Stored.Float, Ui = Ui.None, Min = min, Max = max,
+    };
+
+    /// <summary>One row for a turn and a look sensitivity: both to the step. A pair the
+    /// Settings window set apart shows as CUSTOM, below the first step.</summary>
+    static PortSetting SensRow(string key, string page, string menu, PortSetting turn, PortSetting look, double[] steps,
+        Func<bool>? usable = null) =>
+        Combine(key, page, menu, [turn, look], steps,
+            v => v < 0 ? "CUSTOM" : "X" + Number(v),
+            get => Same(get(turn), get(look)) ? get(turn) : -1,
+            (v, _) => [v, v], usable);
+
+    static readonly PortSetting StickTurn = Sensitivity(Analog.TurnSensKey, "KF2_ANALOG_TURN", "Stick turn sensitivity",
+        () => Analog.TurnSens, v => Analog.TurnSens = v, 0.1, 3);
+    static readonly PortSetting StickLook = Sensitivity(Analog.PitchSensKey, "KF2_ANALOG_PITCH", "Stick look sensitivity",
+        () => Analog.PitchSens, v => Analog.PitchSens = v, 0.1, 3);
+
+    /// <summary>The sticks' turn and look; X1 is the D-pad's speed. In 3D the look half
+    /// does nothing, and the turn is the left stick's.</summary>
+    public static readonly PortSetting StickSens = SensRow("row.sticksens", ControlsPage, "STICK SENS", StickTurn, StickLook,
+        [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3]);
+
+    static readonly PortSetting MouseTurn = Sensitivity(Mouse.TurnKey, "KF2_MOUSE_TURN", "Mouse turn sensitivity",
+        () => Mouse.TurnSens, v => Mouse.TurnSens = v, 0.1, 5);
+    static readonly PortSetting MouseLookSens = Sensitivity(Mouse.LookKey, "KF2_MOUSE_LOOK", "Mouse look sensitivity",
+        () => Mouse.LookSens, v => Mouse.LookSens = v, 0.1, 5);
+
+    /// <summary>The mouse's turn and look; X1 is a quarter turn for about 600 pixels.
+    /// Dimmed while mouse look is off.</summary>
+    public static readonly PortSetting MouseSens = SensRow("row.mousesens", ControlsPage, "MOUSE SENS", MouseTurn, MouseLookSens,
+        [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5], usable: () => Mouse.Enabled);
+
     public static readonly PortSetting GyroAimOn = Switch(GyroAim.OnKey, "KF2_GYROAIM", "Gyro aims a drawn bow",
-        Gameplay, "GYRO", () => GyroAim.Enabled, GyroAim.SetEnabled, true,
+        ControlsPage, "GYRO", () => GyroAim.Enabled, GyroAim.SetEnabled, true,
         tip: "While a bow or the arbalest is drawn, turn and tip the pad to aim. Needs a pad with a gyroscope, such as a DualShock 4, DualSense or Switch Pro.");
     public static readonly PortSetting RumbleOn = Switch(Rumble.OnKey, "KF2_RUMBLE", "Rumble",
         null, null, () => Rumble.Enabled, Rumble.SetEnabled, true,
@@ -273,47 +418,48 @@ public static class PortSettings
         usable: () => Rumble.Enabled);
 
     /// <summary>OFF, ON (two motors) or HD; OFF leaves the kept HD choice.</summary>
-    public static readonly PortSetting RumbleRow = Combine("row.rumble", Gameplay, "RUMBLE", [RumbleOn, RumbleHd],
+    public static readonly PortSetting RumbleRow = Combine("row.rumble", ControlsPage, "RUMBLE", [RumbleOn, RumbleHd],
         [0, 1, 2], v => v == 0 ? "OFF" : v == 1 ? "ON" : "HD",
         get => get(RumbleOn) == 0 ? 0 : get(RumbleHd) == 0 ? 1 : 2,
         (v, _) => v <= 0 ? [0, Unchanged] : v >= 2 ? [1, 1] : [1, 0]);
 
-    public static readonly PortSetting MouseLook = Switch(Mouse.OnKey, "KF2_MOUSE", "Mouse look",
-        null, null, () => Mouse.Enabled,
-        v => { if (!v && Mouse.Enabled) Mouse.SetCaptured(false); Mouse.Enabled = v; }, true,
-        tip: "Turns and looks with the mouse. The pointer has to be captured before anything happens.");
-    public static readonly PortSetting MouseAimOn = Switch(MouseAim.OnKey, "KF2_MOUSE_AIM", "Mouse aim",
-        null, null, () => MouseAim.Enabled,
-        v => { if (!v) MouseAim.Reset(); MouseAim.Enabled = v; }, false,
-        tip: "The mouse moves a reticle; you turn toward it at the game's own speed.");
+    // ---- Sound ----
 
-    /// <summary>OFF, LOOK (the mouse turns the view) or AIM (the mouse moves a reticle
-    /// and the player turns toward it); AIM turns mouse look on, and OFF leaves the
-    /// kept aim choice.</summary>
-    public static readonly PortSetting MouseRow = Combine("row.mouse", Gameplay, "MOUSE LOOK", [MouseLook, MouseAimOn],
-        [0, 1, 2], v => v == 0 ? "OFF" : v == 1 ? "LOOK" : "AIM",
-        get => get(MouseLook) == 0 ? 0 : get(MouseAimOn) == 0 ? 1 : 2,
-        (v, _) => v <= 0 ? [0, Unchanged] : v >= 2 ? [1, 1] : [1, 0]);
+    /// <summary>Sound effects re-aimed as the player moves and turns: the game's own
+    /// panning, for speakers, or for headphones (front and back too).</summary>
+    public static readonly PortSetting Positional = new()
+    {
+        Key = PositionalAudio.ModeKey, Envs = ["KF2_POSAUDIO"], Label = "Positional audio",
+        Page = Sound, MenuLabel = "3D AUDIO", Steps = [0, 1, 2], MenuValue = Named([0, 1, 2], "ORIGINAL", "SPEAKERS", "HEADPHONES"),
+        Names = ["Original", "Speakers", "Headphones"],
+        Default = (int)PositionalAudio.Mode.Headphones, Live = () => (int)PositionalAudio.Current,
+        Apply = v => PositionalAudio.Set((PositionalAudio.Mode)(int)Math.Clamp(Math.Round(v), 0, 2)),
+        Stored = Stored.Int, Ui = Ui.None,
+    };
 
     // ---- The game's page ----
 
     /// <summary>The game's page, in order. Each row is one setting or a combined row.</summary>
     public static readonly PortSetting[] Menu =
     [
-        Display, Resolution, Aspect, HudAnchor, FrameRate,
-        TextureFilter, PerPixel, AmbientOcclusionRow,
+        Display, Resolution, Aspect, HudAnchor, FrameRateRow,
+        TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
-        Controls, InvertedCamera, AutoReloadOn, GearCompareOn, MouseRow, GyroAimOn, RumbleRow,
+        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapRow,
+        ControlsRow, InvertedCamera, StickSens, MouseSens, GyroAimOn, RumbleRow,
+        Positional,
     ];
 
     /// <summary>Every setting and every combined row's part, the list the shell's
     /// <c>settings</c> verb and the start-up check read.</summary>
     public static readonly PortSetting[] All =
     [
-        Display, Resolution, Aspect, HudAnchor, FrameRate,
-        Mipmaps, Anisotropy, PerPixel, Ao, AoQuality,
+        Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
+        Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        Controls, InvertedCamera, AutoReloadOn, GearCompareOn, MouseLook, MouseAimOn, GyroAimOn, RumbleOn, RumbleHd,
+        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapOn, MapFogOn,
+        Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, GyroAimOn, RumbleOn, RumbleHd,
+        Positional,
     ];
 
     /// <summary>Every setting and every combined row, for the shell's <c>settings</c> verb.</summary>

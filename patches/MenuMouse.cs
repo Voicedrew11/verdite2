@@ -342,9 +342,10 @@ public static class MenuMouse
     /// it. The other two read their geometry live.</summary>
     const long GeomStaleMs = 500;
 
-    /// <summary>A field rather than a property because the settings page and
-    /// <c>Analog.Saved</c> both take it by reference, the way every other switch
-    /// in this directory does.</summary>
+    /// <summary>Always on, and not a setting: the pointer takes the cursor only once
+    /// the mouse moves, so a player without one never meets it (the user's call,
+    /// 2026-10-13). <c>KF2_MENUMOUSE=0</c> is the comparison; the saved key is no
+    /// longer read.</summary>
     public static bool Enabled = true;
 
     public const string OnKey = "kf2.menumouse.on";
@@ -505,11 +506,6 @@ public static class MenuMouse
     /// </summary>
     public static void Install()
     {
-        Event.AddListener<RuntimeReadyEvent>(_ =>
-        {
-            Analog.Saved(OnKey, ref Enabled, _fromEnv);
-        });
-
         HookAttach.OnOverlayLoad("menu pointer", Attach,
                                  "The in-game menus stay pad and keyboard only.");
     }

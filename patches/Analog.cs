@@ -301,7 +301,12 @@ public static class Analog
         Paused: () => FramePacing.Paused,
         // A click on the picture captures; Escape opens the menu (KeyLayout), which
         // gives the pointer back. A key saved before this keeps working.
-        DefaultCaptureKey: Silk.NET.Input.Key.Unknown);
+        DefaultCaptureKey: Silk.NET.Input.Key.Unknown,
+        // Mouse look and instant mouse look are always on: a mouse is used or it
+        // is not, and a player without one never meets either (the user's call,
+        // 2026-10-13). KF2_MOUSE=0 and KF2_MOUSE_LEAD=0 are the comparisons.
+        OnIsSetting: false,
+        LeadIsSetting: false);
 
     /// <summary>
     /// The environment variables, read before anything else. This one reads them
