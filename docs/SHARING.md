@@ -2019,3 +2019,14 @@ unpacked over an older one compiles only what it shipped). Verdite3 was already 
   otherwise than the GTE.
 - `4362046`, billboards turned to the eye: KF3's own.
 - `b20242e`, spell effects' palette: cannot happen here (2026-10-09).
+
+### 2026-10-13: the tag is the version, as Verdite3's
+
+Verdite3's `de8a476`/`06c982d` brought over: `VERSION` is gone, and the version is
+the newest `vMAJOR.MINOR.PATCH` tag `HEAD` contains, by the rule Verdite Core
+already applied (a file, `VERDITE_VERSION`, the tags, `0.0.0`); nothing in the
+core changed. CI checks out with `fetch-depth: 0` and refuses a `VERSION` file;
+`release.yml` takes `VERDITE_VERSION` from the pushed tag in place of asserting
+the two equal. `release.sh` now only tags. Measured: `version.sh` prints `0.4.0`
+off `v0.4.0`, and the launcher builds as `0.4.0+dae2255b9`. See "Versioning" in
+`PACKAGING.md`.

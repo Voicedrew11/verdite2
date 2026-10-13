@@ -529,9 +529,10 @@ fail to load area modules on a differently mastered dump.
   statements of one thing and must stay in step** — a difference is a bug that
   exists only in the release. Check the packaged binary with
   `KF2_FPS=144 KF2_FPS_PROBE=1`: 144.0 fps drawn at 15.0 ticks/s.
-- **The version is one line in `VERSION`**; everything else reads it, and
-  `release.yml` asserts the tag equals `v$(cat VERSION)`. `bash scripts/release.sh
-  0.2.0` bumps, commits and tags, and deliberately does not push.
+- **The version is the newest `vMAJOR.MINOR.PATCH` tag `HEAD` contains**, as
+  Verdite3's is; there is no `VERSION` file and CI refuses one. `bash
+  scripts/release.sh 0.5.0` tags `HEAD`, commits nothing, and deliberately does
+  not push; `release.yml` names the artifacts by the pushed tag.
 - Packaging is `packaging/linux/build-appimage.sh` and
   `packaging/windows/build-windows.ps1`, neither of which needs the disc.
   **Trimming is off and must stay off** (MonoMod detours, Roslyn, `AutoStart`'s

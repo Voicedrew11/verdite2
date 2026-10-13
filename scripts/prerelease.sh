@@ -2,8 +2,8 @@
 # Publish the current branch's HEAD as the preview: the rolling `preview`
 # prerelease on GitHub, replacing the last one, each package zipped with the
 # PREVIEW_PASSWORD secret. Release.yml's preview job does the work; this starts it
-# on the branch as GitHub has it, so HEAD must be pushed. VERSION is not touched
-# and no tag is made: a preview is a commit, not a version. See "Previews" in
+# on the branch as GitHub has it, so HEAD must be pushed. No tag is
+# made: a preview is a commit, not a version. See "Previews" in
 # docs/PACKAGING.md.
 #
 #   bash scripts/prerelease.sh            # start it and wait for it
