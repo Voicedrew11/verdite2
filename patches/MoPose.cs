@@ -81,8 +81,21 @@ public static class MoPose
     /// <summary>Set by the submitter around its call: leave the pose undecoded.</summary>
     public static bool Defer;
 
-    /// <summary>The last deferred call's pose, not yet in RAM.</summary>
+    /// <summary>The last deferred call's pose, not yet in RAM. It stays pending past the
+    /// submit that asked for it (nothing needs it in RAM), so it is not this submit's
+    /// pose unless <see cref="PendingAt"/> says so.</summary>
     public static bool Pending { get; private set; }
+
+    /// <summary>
+    /// Whether a submit whose vertex base is <paramref name="verts"/> is drawn from the
+    /// pending pose: the blender deferred, and the base still names the posed buffer.
+    /// A rigid sub-model is submitted without calling the blender, so the last MO
+    /// model's pose is still pending at it, while its base names its own vertices; taken
+    /// on <see cref="Pending"/> alone, a rigid model with as many vertices as that pose
+    /// was drawn with it. See "A rigid model drew the last MO pose" in
+    /// docs/GPU_RENDERER.md.
+    /// </summary>
+    public static bool PendingAt(uint verts) => Pending && verts == Posed;
     static uint _key, _stream, _weight, _count;
 
     /// <summary>Calls, calls deferred, and deferred poses decoded into RAM after all; never reset.</summary>
@@ -248,11 +261,14 @@ public static class MoPose
         f(c, mem);
     }
 
-    /// <summary>The deferred pose into RAM, as the blender would have left it.</summary>
-    public static void Materialize(CpuContext? c, PSMemory mem)
+    /// <summary>The deferred pose into RAM, as the blender would have left it. With
+    /// <paramref name="check"/> (<see cref="Checking"/>) it stays pending, so the check
+    /// leaves the run it checks as it found it: the next submit sees the pending pose
+    /// it would have seen without the check.</summary>
+    public static void Materialize(CpuContext? c, PSMemory mem, bool check = false)
     {
         if (!Pending) return;
-        Pending = false;
+        Pending = check;
         Materialized++;
         Copy(c, mem, _key, Posed, _count);
         Decode(c, mem, Posed, _stream, _weight);
@@ -332,17 +348,19 @@ public static class MoPose
     public static long PoseBuilds, PoseHits, PoseRefused, RigidBuilds, RigidHits;
 
     /// <summary>
-    /// The pending pose in the pose store: its keyframe and each vertex's delta to the
-    /// segment's target, two texels a vertex, found by a hash of the keyframe, the
-    /// stream's address and the count, and checked every time by a hash of the stream.
-    /// One past the first texel, or 0 when the stream visits a vertex twice or leaves
-    /// the model, which the shader's per-vertex blend cannot express.
+    /// The pending pose in the pose store, for a submit whose vertex base is
+    /// <paramref name="verts"/> (see <see cref="PendingAt"/>): its keyframe and each
+    /// vertex's delta to the segment's target, two texels a vertex, found by a hash of
+    /// the keyframe, the stream's address and the count, and checked every time by a
+    /// hash of the stream. One past the first texel, or 0 when the pose is not this
+    /// submit's, or the stream visits a vertex twice or leaves the model, which the
+    /// shader's per-vertex blend cannot express.
     /// </summary>
-    public static int Store(PSMemory mem, uint vertices, out int weight)
+    public static int Store(PSMemory mem, uint verts, uint vertices, out int weight)
     {
         weight = (int)_weight;
         uint n = _count & 0xFFFFu;
-        if (!Pending || n == 0u || n != vertices || n > 8192u || !InRam(_key, n * 8u) || !InRam(_stream, 2u)) return 0;
+        if (!PendingAt(verts) || n == 0u || n != vertices || n > 8192u || !InRam(_key, n * 8u) || !InRam(_stream, 2u)) return 0;
         Forget();
         var ram = mem.Ram;
         ulong key = RetainedModels.Hash(ram, _key, n * 8u);

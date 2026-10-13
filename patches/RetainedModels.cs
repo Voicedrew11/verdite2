@@ -781,10 +781,11 @@ static class RetainedModels
         bool morph = false;
         if (PosesOn)
         {
-            if (MoPose.Pending) morph = (pose = MoPose.Store(mem, vertices, out weight)) != 0;
+            if (MoPose.PendingAt(verts)) morph = (pose = MoPose.Store(mem, verts, vertices, out weight)) != 0;
             else if (verts != PosedBuffer) pose = MoPose.StoreRigid(mem, verts, vertices);
         }
-        if (pose == 0 || MoPose.Checking) MoPose.Materialize(null, mem);
+        if (pose == 0) MoPose.Materialize(null, mem);
+        else if (MoPose.Checking) MoPose.Materialize(null, mem, check: true);
         int vb = 0;
         if (pose == 0)
         {
@@ -1019,10 +1020,11 @@ static class RetainedModels
         bool morph = false;
         if (PosesOn)
         {
-            if (MoPose.Pending) morph = (pose = MoPose.Store(mem, vertices, out weight)) != 0;
+            if (MoPose.PendingAt(verts)) morph = (pose = MoPose.Store(mem, verts, vertices, out weight)) != 0;
             else if (verts != PosedBuffer) pose = MoPose.StoreRigid(mem, verts, vertices);
         }
-        if (!whole || pose == 0 || MoPose.Checking) MoPose.Materialize(null, mem);
+        if (!whole || pose == 0) MoPose.Materialize(null, mem);
+        else if (MoPose.Checking) MoPose.Materialize(null, mem, check: true);
         if (pose != 0 && MoPose.Checking) MoPose.Check(mem, pose, morph, weight, verts, vertices);
         int vb = 0;
         var posed = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(
