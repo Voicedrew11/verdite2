@@ -1667,6 +1667,30 @@ not that it is a visible upgrade on its own. The visible one is `0059` below.
 - **Never looked at by eye:** whether that sub-1% of pixels — the edges — reads
   cleaner. The numbers now say how little of the picture is in question.
 
+#### A dark line along every edge on Windows (2026-10-14)
+
+Reported from a Windows machine: thin dark lines between every vertex, looking
+like occlusion; Linux (Mesa) never showed them. `NormalFs` took `dFdx(p)`/`dFdy(p)`
+*after* its discards (the distance dither, a transparent texel, the water slice)
+and a `return`. A derivative is the difference across a 2×2 quad, and GLSL leaves
+it undefined once any pixel of the quad has left by `discard` or `return`. Inside
+a triangle every quad pixel is real; on an edge some are helpers, whose
+interpolants are extrapolated past the polygon, so a helper reads a texel beyond
+the polygon's rectangle, finds it transparent and discards. Mesa keeps a discarded
+helper computing and the difference came out right; a Windows driver need not, so
+every edge pixel got a garbage normal and the occlusion pass shaded it. The texture
+derivatives at the top of the shader already said "taken here, in uniform control
+flow"; the position's had been added later, below the discards.
+
+Every derivative is now taken at the top of `main`, before anything can leave, in
+`NormalFs`, `PrimFs` (the texel rounding, `authored()`'s normal, the wave field's
+footprint) and `PrimFs120`. Measured: builds, every shader links, the paused frame
+renders stably on Mesa. A pixel-for-pixel comparison against the old shaders was
+not possible (two runs of the same build already hash differently).
+
+- **Not yet seen on Windows:** whether the lines are gone. `KF2_AO_NORMALS=0` (or
+  *SSAO* off) making them vanish on the old build would confirm the diagnosis.
+
 ### Occluders the camera cannot see (`0059`)
 
 **Mechanism measured; off by default.** `KF2_AO_WORLD=1` turns it on.
