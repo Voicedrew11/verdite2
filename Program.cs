@@ -824,6 +824,13 @@ Kf2.Remaster.Lights.ConfigureShadows(Environment.GetEnvironmentVariable("KF2_REM
                                      Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_OFFSET"),
                                      Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_SOFT"),
                                      Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_MODELS"));
+// Magic projectiles give off light in their own colour, through the lights above,
+// with or without the remaster, fading out once their effect is gone. On by default
+// (judged), Video ▸ Enhancements ▸ Glowing spells.
+Kf2.ProjectileLights.Configure(Environment.GetEnvironmentVariable("KF2_PROJECTILE_LIGHTS"),
+                               Environment.GetEnvironmentVariable("KF2_PROJECTILE_LIGHTS_PROBE"),
+                               Environment.GetEnvironmentVariable("KF2_PROJECTILE_LIGHTS_RADIUS"),
+                               Environment.GetEnvironmentVariable("KF2_PROJECTILE_LIGHTS_INTENSITY"));
 Kf2.Remaster.Host.Install();
 // Phase 4's texture-key census: which replacement keys an area draws, and which a
 // pack covers. KF2_TEXKEY=triangle keys each triangle on its own UVs, as upstream does.

@@ -4482,3 +4482,77 @@ census reads a cut pixel as a surface with no geometry normal, which is why its
 
 **Not judged by eye**: where the change of look sits, and whether a tile's fade
 reads as a band.
+
+## Magic projectiles give off light
+
+**Mechanism measured, and the picture judged good by the user (2026-10-14). On by
+default**: Video ▸ Enhancements ▸ *Glowing spells* (`kf2.projectilelights.on`, dimmed
+without per-pixel lighting or Fast geometry), the first-run setup's *Lighting and fog*
+group (Original and Original++ off, Modern on), `KF2_PROJECTILE_LIGHTS=0|1` over the
+saved value, or the `projectiles on|off` shell verb for the session.
+`patches/ProjectileLights.cs`, fed by `ModelWalk` and published through
+`Remaster.Lights`.
+
+A spell is an effect: stage 5's table at `0x8019CC6C` (128 x `0x48`), drawn by the
+object walk's third loop, which hands the submitter the model `u8[+0x3] + 0x28`, the
+clip byte `u8[+0x4]` and the assembler `u8[+0x9]`. **What the game itself draws as
+light is the test**: an effect whose faces are mostly *added* to the picture, blend
+mode 1 (or 3, the quarter add), by the forced-blend assembler (`pick < 0xFE`,
+mode `pick & 3`) or by the mesh's own semi-transparent faces in their page's mode.
+Anything drawn by the lit or clipped assembler as opaque faces is left dark, which is
+what keeps an arrow or a rock out without naming either: it is a solid model the
+GTE lights. An averaged face (smoke, mist) and a subtracted one (a darkening effect)
+give no light either. The colour is the mean of the added texels, read off the CPU's
+copy of VRAM (`Gpu.Vram`) through each face's CLUT, transparent texel 0 left out,
+normalised to its brightest channel; a mesh whose mean is under 0.2 lights nothing.
+
+**The decision is made where the mesh is known, and the light where the effect is
+seen.** The submitter (`RunSubmit`) has the selected model table, so it measures the
+mesh once per (face list, count, assembler) and remembers the answer against the
+record's three bytes; that happens for the eye's submits and for the planar walk's
+replay alike. The effect walk then adds a light for every record it will draw, in the
+eye's view or only the mirror's, whose three bytes were found to glow. That split is
+not a nicety: at area 1's start, facing the lake, every effect of a cast was culled
+from the eye's view and kept only for the reflection (`ModelWalk._mirrorOnly`), so a
+light hung on the eye's submits never appeared there. A projectile's first frame has
+no light, since the mesh is measured as it is drawn.
+
+**A bolt is a head and a trail**, each a record: spell 0's blue bolt is six. Records
+nearer than a tile of one colour are one light at their centroid, and past six lights
+a frame the nearest two are merged until six remain, so a scattering spell (spell 9
+spread to 21) leaves the authored lights their slots. A merged light is up to 1.5x
+brighter. Lights rank with the authored ones, ahead of the tile and model glows.
+
+**It needs no pack and no remaster.** `Lights.Bare` runs from `Host`'s frame with the
+remaster off (and when it is on but the area has not settled), enabling
+`RemasterUniforms` with nothing but the projectiles in the list; with a pack applied
+they join its lights. Like every authored light, it needs per-pixel lighting and Fast
+geometry. Flicker is fixed (up to 20% dimmer, about 6 Hz, on the world tick).
+
+Measured (area 2, slot 3, each spell selected with the test aid `projectiles spell
+<n>`, which also fills MP; the cast waits on the charge at `0x80199434`, about 20 s
+to 5000): every additive effect mesh met glowed, in its own colour (blue `54`, `73`;
+green `71`; white `72`; orange and yellow `48`, `55`-`58`, `60`, `74`, `79`, `85`);
+the two effect meshes drawn by the lit assembler, `72` as opaque and `49` (160 opaque
+faces), were left dark. With the remaster off and on, the shader drew lit batches
+while a bolt flew; 144.0 fps drawn at 15.0 ticks/s with six lights up. **Not seen:**
+the picture; an enemy's projectile; the player's arrows (expected to be opaque lit
+models and so dark, but no arrow was fired); whether the radius (5120, 2.5 tiles) and
+strength (1.5) suit.
+
+### A light goes out instead of off
+
+A light used to vanish on the frame its last effect record did: a bolt striking a
+wall, or a spell's last spark expiring, cut the lit room to dark at once. Now
+`EndWalk` keeps the last walk's lights, and one that no light of this walk continues
+(the same colour, within 4096 units, so a moving bolt is followed from frame to frame)
+fades out where it was last seen over `FadeSeconds` (0.35 s, on the wall clock, eased
+as (1-t)²), multiplied into its strength in `Lights`. A fading light whose effect
+comes back is live again and drops its fade; the fading ones take only the slots the
+live ones leave of the six; an area change or switching the lights off forgets them.
+The `projectiles` verb reports `fading`.
+
+Measured (area 2, slot 3, spell 0, the effect table and the verb sampled every 20 ms):
+the last effect record went at 5.83 s after the cast, its light was reported fading
+from then, and was gone at 6.18 s. The fade itself has not been judged by eye.
+

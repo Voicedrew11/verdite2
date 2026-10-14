@@ -216,6 +216,7 @@ public static class PatchSettings
         Register("display", new PerPixelLightingPage());
         Register("display", new EvenFogPage());
         Register("display", new FogPage());
+        Register("display", new ProjectileLightsPage());
         Register("display", new ZBufferPage());
         Register("display", new DistancePage());
         Register("display", new ReflectionsPage());
