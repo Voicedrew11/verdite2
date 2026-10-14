@@ -19,6 +19,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The runtime's GLSL: no derivative after a discard or a return (undefined,
+      # and a Windows driver drew a dark line along every polygon edge on it),
+      # and every stage through the reference compiler. Needs no GPU and no disc.
+      - name: Lint the shaders
+        run: |
+          sudo apt-get install -y -qq glslang-tools >/dev/null
+          python3 tools/RecompOne/scripts/shader_lint.py --glslang
+
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'

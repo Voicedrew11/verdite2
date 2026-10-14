@@ -1688,6 +1688,18 @@ footprint) and `PrimFs120`. Measured: builds, every shader links, the paused fra
 renders stably on Mesa. A pixel-for-pixel comparison against the old shaders was
 not possible (two runs of the same build already hash differently).
 
+`tools/RecompOne/scripts/shader_lint.py` now holds the rule: it pulls every stage
+out of `GlShaders.cs` as the runtime compiles it (the `.Replace` snippets spliced
+in) and fails on a `dFdx`/`dFdy`/`fwidth`, or an implicit-LOD lookup on a sampler
+with a mip chain (its `MIPMAPPED`, kept in step with the runtime's
+`GenerateMipmap`s), textually after a `discard`, a `return` or a call that can
+discard, following calls into helpers; `--glslang` also compiles every stage with
+`glslangValidator`. CI runs both. Against the shaders before this fix it reports
+the `NormalFs` derivative and eleven more; it also found `PrimFs120` reading the
+replacement texture's mip chain after the mask's discard, now read at the top. A
+reviewed exception carries `// derivatives-ok: <why>` on its line. What it does
+not see: a derivative under a branch on a per-pixel value without any discard.
+
 - **Not yet seen on Windows:** whether the lines are gone. `KF2_AO_NORMALS=0` (or
   *SSAO* off) making them vanish on the old build would confirm the diagnosis.
 
