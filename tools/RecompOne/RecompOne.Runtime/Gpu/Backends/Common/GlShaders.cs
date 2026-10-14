@@ -3123,6 +3123,17 @@ internal static class GlShaders
             // Before any discard: past one, a derivative is undefined.
             vec2 dUVdx = dFdx(vUV);
             vec2 dUVdy = dFdy(vUV);
+            // A replacement texture has a mip chain (0073), so its implicit-LOD
+            // lookup is a derivative too: read here, before the mask's discard.
+            // The mode is the primitive's, so the quad agrees on it.
+            vec4 repImg = vec4(0.0);
+            if (vTexMode > 5.5) {
+                vec2 rwin = uTexWindow.xy + 1.0;
+                vec2 rfuv = vec2(mod(vUV.x, rwin.x), mod(vUV.y, rwin.y)) + uTexWindow.zw;
+                vec2 t = (rfuv - uRepRect.xy) / uRepRect.zw;
+                if (uRepScroll >= 0.0) t.y = fract(t.y - uRepScroll / uRepRect.w);
+                repImg = texture2D(uRepTex, t);
+            }
             vec2 destUv = gl_FragCoord.xy / uDestSize;
             vec4 dstTexel = texture2D(uDest, destUv);
             if (uCheckMask > 0.5 && dstTexel.a >= 0.5) discard;
@@ -3150,9 +3161,7 @@ internal static class GlShaders
                 float rawV = dUVdy.y < 0.0 ? ceil(vUV.y - 0.0001) : floor(vUV.y + 0.0001);
 
                 if (vTexMode > 5.5) {
-                    vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
-                    if (uRepScroll >= 0.0) t.y = fract(t.y - uRepScroll / uRepRect.w);
-                    vec4 img = texture2D(uRepTex, t);
+                    vec4 img = repImg;
                     if (img.a < 0.5) discard;
                     rgb = floor(img.rgb * 255.0 + 0.5) * floor(vColor.rgb * 255.0 + 0.5) / 128.0;
                     stp = img.a < 0.95 ? 1.0 : 0.0;
