@@ -175,6 +175,27 @@ target/s` throughout. The same route covers the idle-target case above whenever
 the GPU is drawing the world. Mechanism measured; the picture after a switch is
 for a person to look at.
 
+### A still held for a button was reaped after five seconds
+
+Reported from play: **opening the game's own map item, black bars appear outside
+the 4:3 area after a few seconds** (King's Field III does not do it). The map item
+draws its board once and then waits on the pad without drawing; the host keeps
+presenting the last frame. `PresentDisplay` destroyed every render target not drawn
+for 300 frames, the displayed one included, so at 60 presents a second the only
+wide target went five seconds in and every present after was the 1x VRAM fallback
+at 4:3. It is the same failure `MenuWorld.MessageFade` worked around for signs by
+drawing the world while it waits; the map item had no such workaround.
+
+Fixed in the runtime (`0110`): a target containing the display rect is never
+reaped for idleness, which covers any loop of this shape, not one routine at a
+time. Measured with a sign on the game's own loop (`KF2_MENUWORLD=0
+KF2_MESSAGETEXT_TEST=3:0 KF2_PRESENT_PROBE=2`): before, `rt0 none … idle 300` and
+`vram fallback 125` every 2 s from five seconds in; after, `wide 125, vram fallback
+0` for the whole wait. Play unchanged (144.0 fps drawn at 15.0 ticks/s, `wide`
+throughout a warp). **The map item itself was not reached by the shell, and the
+picture has not been looked at**: the edges keep the last world frame drawn before
+the board, which is what the margin held before the bars appeared.
+
 ### The margin's only clear is the game's own, and the merge narrowed it
 
 **The `isbg` background clear in `LibGpu.PutDrawEnv` is the one thing that paints
