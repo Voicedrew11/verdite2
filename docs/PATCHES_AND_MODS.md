@@ -1179,7 +1179,7 @@ gate's spin calls land after it. After the fix, every rate from 30 to 144 measur
 **30.0-30.3 world ticks a second and a rendered rate equal to the number asked
 for**.
 
-`mods/framestats` carried the same guard and so reported the vblank-bearing subset
+`mods/framestats` (since removed) carried the same guard and so reported the vblank-bearing subset
 as its frame rate; it now uses the call boundary too, and a `0:` band in its
 vblanks-per-frame histogram is the correct answer for a frame shorter than a
 vblank.
@@ -1472,8 +1472,8 @@ So **it is now skipped at every rate**, and two consequences follow:
 * **A rendered frame carries exactly one `VSync` call at every rate** — the
   presenter's — because the gate's spin calls were the second one. The frame
   boundary is therefore the same shape at 20 fps as at 144, which is the simpler
-  of the two cases it used to have to handle. `mods/framestats` reading `2` on
-  calls/frame now means the gate is back.
+  of the two cases it used to have to handle. Two `VSync` calls per frame
+  (what the removed `mods/framestats` counted) now means the gate is back.
 
 `0x801B6CAC` and the vblank callback `func_80017850` are untouched: only the spin
 is skipped, so the CD timeout riding on that counter is unaffected.
@@ -3377,8 +3377,8 @@ to print "0 of N carried (phase idle)" whether the phase was zero or the player
 was simply standing still, and the second reads as a broken logic clock when it is
 nothing of the kind.
 
-The measurement to run it against is `mods/framestats`, restored for this work and
-now reporting **two** histograms: vblanks per frame (how long the frame took) and
+The measurement to run it against was `mods/framestats` (since removed), restored for this work and
+reporting **two** histograms: vblanks per frame (how long the frame took) and
 `VSync` calls per frame (how many times the game asked). Since `0021` those are
 different numbers, and conflating them is what made the first pass at frame pacing
 read as circular.

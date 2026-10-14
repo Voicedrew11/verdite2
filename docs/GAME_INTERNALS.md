@@ -122,8 +122,8 @@ answer for both. The world runs on `FramePacing.LogicHz` instead, 15 by default
 **With the gate skipped, a rendered frame costs exactly one `VSync` call** — the
 presenter's, which `func_8002E0FC` makes immediately *before* its `DrawOTag`. That
 is what the port's frame boundary is keyed on, and since the gate is now skipped at
-every rate it is the only case that arises: a `2` on `mods/framestats`' calls-per-
-frame count means the gate is back. (The ordering is why it also worked while the
+every rate it is the only case that arises: two `VSync` calls per
+frame (what the removed `mods/framestats` counted) means the gate is back. (The ordering is why it also worked while the
 gate still ran below 30 — the presenter's call landed before the ordering table and
 the gate's spin calls after it, so the count at the boundary was non-zero exactly
 once per table either way.) See "Any frame rate" in

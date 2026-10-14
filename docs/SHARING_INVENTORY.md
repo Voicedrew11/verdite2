@@ -2229,22 +2229,9 @@ settings keys read/written, localisation keys merged, env comparison.
 assembly (`patches/`, `Program.cs`) and `tools/RecompOne` at load time. The
 **mod-visible surface** below is what a runtime mod can name and must not break.
 
-#### mods/framestats/mod.json (7) + FrameStats.cs (133)
-- Bucket: B (medium) — the fps/vblank histogram is game-agnostic; only the VSync
-  thunk address and the `open/game/end` DrawOTag addresses are KF2.
-- Does: `public sealed class FrameStatsMod : IMod` — reports fps, vblanks/frame
-  and VSync-calls/frame every `KF2_FRAMESTATS` seconds.
-- Hooks: `[PreHook("game", Address = 0x8005FCC8)]` (VSync thunk, counts calls);
-  `[PostHook("open", 0x80016078)]`, `[PostHook("game", 0x80060818)]`,
-  `[PostHook("end", 0x80013D80)]` (DrawOTag frame boundary).
-- Data/Structs/Control flow/Overlays: draws only; reads no game RAM.
-- Env / settings keys: env `KF2_FRAMESTATS`; no `PatchSettings` keys. `IMod.DrawSettings` slider `_seconds`.
-- RecompOne deps: `VSyncEvent`, `Event.AddListener/RemoveListener`,
-  `CpuContext`, `IMemory`, `Modding.IMod`, `Host.Window`; patch `0021` (vblank grid).
-- Mod-visible: `IMod` (`OnLoad`, `OnUnload`, `DrawSettings`); `[PreHook]`/`[PostHook]`
-  attributes in `RecompOne.Runtime.Modding`; `VSyncEvent`; `CpuContext`;
-  `IMemory` (`ReadU8/16/32`, `WriteU8/16/32`).
-- Split note: mechanism generic; the three overlay names + four addresses are KF2.
+#### mods/framestats (removed)
+- Removed from the repo; it reported fps, vblanks/frame and VSync-calls/frame
+  (`KF2_FRAMESTATS`). Frame rate and tick rate are `KF2_FPS_PROBE=1`'s.
 
 #### mods/kf2debug/mod.json (7) + DebugMod.cs (205)
 - Bucket: D (high) — the whole debug mod is KF2 addresses and routines.
@@ -2553,8 +2540,7 @@ nine FDAT modules. All names are address-derived; no per-area SDK renames.
    `DistancePage`, `EvenFogPage`, `FastGeometryPage`, `ReflectionsPage`,
    `RemasterPage`, `ZBufferPage`.
 10. **The `mods/.cache` directory is compiled output and was excluded**; the two
-    real mods are `framestats` (game-agnostic measurement, KF2 addresses) and
-    `kf2debug` (entirely KF2).
+    real mods were `framestats` (since removed) and `kf2debug` (entirely KF2).
 
 ## scripts/
 Scope: every source file under `scripts/` except `__pycache__`. Read-only analysis.

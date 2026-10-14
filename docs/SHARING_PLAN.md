@@ -29,7 +29,7 @@ In Verdite2: `AGENTS.md`, `NOTES.md`, then `docs/RECOMPONE_FORK.md`, `docs/RECOM
   - `KF2_*` environment variables (216 of them, documented in `docs/ENV_VARS.md`) keep their exact names in Verdite2. Shared code takes the prefix from the game.
   - `settings.json` / `interface.ini` keys stay identical, so existing users' settings survive an update.
   - Save files and `.fog` map files stay readable.
-  - Mods (`mods/kf2debug`, `mods/framestats`, and third-party ones I don't control) are compiled at run time against the game's types. Moving or renaming a type a mod might use breaks them. Keep the names Verdite2 exposes, using type forwarding or thin wrappers if something moves.
+  - Mods (`mods/kf2debug` and third-party ones I don't control) are compiled at run time against the game's types. Moving or renaming a type a mod might use breaks them. Keep the names Verdite2 exposes, using type forwarding or thin wrappers if something moves.
   - The assembly name `KingsField2`, the MCP project `KingsField2Mcp` and the launcher's update check keep working.
 - **Section titles in `docs/` are referenced from source comments by exact title.** Add sections freely; never rename or delete one without fixing every reference.
 - **Don't rewrite history in any existing game repo.**

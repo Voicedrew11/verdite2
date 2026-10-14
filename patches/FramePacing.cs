@@ -208,7 +208,7 @@ public static class FramePacing
     // libetc VSync, per overlay -- the same three addresses config/kf2.json binds
     // to LibEtc.VSync. A `replace` in the config and a `pre` here coexist:
     // HookManager runs every pre before the replacement, which is what
-    // mods/framestats already relies on. Counting *calls* here is what makes the
+    // the removed mods/framestats relied on. Counting *calls* here is what makes the
     // frame boundary below rate-independent; VSyncEvent is a vblank, not a call.
     static readonly (string Overlay, uint Addr)[] VSyncThunk =
     [
