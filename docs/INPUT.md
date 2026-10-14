@@ -1517,6 +1517,15 @@ Measured (`KF2_AUTOSTART=2`, `key Escape` twice): the menu opened (the pointer's
 on at 144.0 fps, 20.0 ticks/s. Not checked: the shops and the title's menus by key, and
 how it feels.
 
+## The map key
+
+M, or the touchpad, opens the game's own map item when one is held (`patches/MapKey.cs`,
+`KF2_MAPKEY=0` to leave them alone). It is taken in a post on stage 3, on a tick, and
+the picture closes on any pad button; M or the touchpad again holds Circle to close it.
+Mechanism measured with `KF2_MAPKEY_TEST` and `KF2_MAPKEY_CLOSE` (see "The maps" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md)); the real key and touchpad presses were not
+driven, and whether the picture is the right one is not judged.
+
 ## The menu pointer
 
 Mouse look leaves the menus pad-only: Circle opens `func_80018E80`, and from

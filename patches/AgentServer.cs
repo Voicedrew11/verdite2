@@ -83,6 +83,16 @@ public static class AgentServer
     static readonly ConcurrentQueue<Cmd> _fast = new();
     static readonly ConcurrentQueue<Cmd> _heavy = new();
 
+    /// <summary>
+    /// Verbs a mod adds to the shell. Each runs on the fast queue, the same queue as
+    /// the port's own display verbs, and its handler takes the verb's argument and
+    /// returns the JSON reply. The map mod registers <c>map</c> here, so a build
+    /// without the mod has no <c>map</c> verb at all. A mod removes its verbs in
+    /// OnUnload.
+    /// </summary>
+    public static readonly ConcurrentDictionary<string, Func<string, string>> FastVerbs =
+        new(StringComparer.OrdinalIgnoreCase);
+
     // The synthetic press. Own copy rather than AutoStart._inject, which belongs
     // to that patch's boot driver: the two must never fight over one field.
     static volatile ushort _pressBits;
@@ -115,7 +125,6 @@ public static class AgentServer
         "kill - drop HP to zero, the way a hit would",
         "nearby [radius=8192] - live records of the world tables (objects, entities, effects, sprites) within radius units",
         "ending [boss|kill] - hand over to END.EXE; 'boss' runs the post-final-boss sequence, 'kill' replays the killing blow (docs/TODO.md #14)",
-        "map [on|off|toggle] - the full-screen map, which pauses the world unless KF2_MAP_PAUSE=0",
         "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
         "view [<x> <y> <z> <pitch> <yaw> <roll> | off] - the camera the last frame was drawn from, a digest of its cull grid and the cells it draws; with a camera, draw every frame from it until 'view off'",
         "projectiles [on|off|spell <n>] - magic projectiles' lights: alone, their state; on/off for the session (not saved); spell <n> selects spell n for the cast button and fills MP, a test aid",
@@ -356,7 +365,6 @@ public static class AgentServer
             case "kill":
             case "help":
             case "nearby":
-            case "map":
             case "edit":
             case "select":
             case "set":
@@ -393,7 +401,10 @@ public static class AgentServer
                 Enqueue(_heavy, cmd);
                 break;
             default:
-                return "{\"ok\":false,\"error\":" + Q($"unknown command '{cmd.Name}'; try help") + "}";
+                if (!FastVerbs.ContainsKey(cmd.Name))
+                    return "{\"ok\":false,\"error\":" + Q($"unknown command '{cmd.Name}'; try help") + "}";
+                Enqueue(_fast, cmd);
+                break;
         }
 
         if (!cmd.Reply.Task.Wait(ReplyTimeoutMs))
@@ -481,7 +492,6 @@ public static class AgentServer
         "warp" => DoWarp(cmd.Arg1),
         "nearby" => DoNearby(cmd.Arg1),
         "ending" => DoEnding(cmd.Arg1),
-        "map" => DoMap(cmd.Arg1),
         "goto" => DoGoto(cmd.Arg1),
         "view" => DoView(cmd.Arg1),
         "waves" => Waves.Shell(cmd.Arg1),
@@ -499,7 +509,9 @@ public static class AgentServer
         "capture" => "{\"ok\":true,\"capture\":" + Q(FrameCapture.Arm()) + "}",
         "edit" or "select" or "set" or "pack" or "remaster" or "light" or "textures" or "atmos" or "level" or "camera" or "prop" => Remaster.Shell.Run(cmd.Name, cmd.Arg1),
         "savecheck" => DoSaveCheck(),
-        _ => Err($"unknown command '{cmd.Name}'; try help"),
+        _ => FastVerbs.TryGetValue(cmd.Name, out var verb)
+            ? verb(cmd.Arg1)
+            : Err($"unknown command '{cmd.Name}'; try help"),
     };
 
     // ---- commands ----
@@ -508,39 +520,6 @@ public static class AgentServer
     {
         if (RecompOne.Runtime.Runtime.Mem == null) return Err("not running");
         return "{\"ok\":true,\"cmd\":\"state\",\"state\":" + AgentBeacon.Snapshot() + "}";
-    }
-
-    /// <summary>
-    /// Open or close the full-screen map.
-    ///
-    /// **On the fast queue, and that is the whole reason it is here.** The fast
-    /// queue drains on <c>VSyncEvent</c> -- a vblank, which arrives whatever the
-    /// world is doing -- while the heavy one drains on <c>PadReadEvent</c>, which
-    /// is stage 3 and is therefore *not running* while the map has the world
-    /// paused. A map verb on the heavy queue could open the map and then never
-    /// close it.
-    ///
-    /// It exists because a pause is a thing only a person at the keyboard could
-    /// switch on before: M and the pad button are the only two ways in, and
-    /// neither is reachable from a headless run. With it, `map on` followed by the
-    /// tick rate on the KF2_FPS_PROBE line is the measurement that says whether
-    /// the world actually stopped.
-    /// </summary>
-    static string DoMap(string arg)
-    {
-        if (!Map.Enabled) return Err("the map is off (KF2_MAP=0 or the Gameplay switch)");
-
-        bool open = arg switch
-        {
-            "" or "toggle" => !MapFullscreen.Instance.IsOpen,
-            "on" or "1"    => true,
-            "off" or "0"   => false,
-            _              => throw new ArgumentException($"map: expected on, off or toggle, got '{arg}'"),
-        };
-
-        MapFullscreen.Instance.IsOpen = open;
-        return "{\"ok\":true,\"cmd\":\"map\",\"open\":" + (open ? "true" : "false") +
-               ",\"pauses\":" + (Map.Pause ? "true" : "false") + "}";
     }
 
     // ---- world perception (nearby) ----

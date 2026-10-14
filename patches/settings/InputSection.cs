@@ -120,11 +120,17 @@ public sealed class InputSection : ISettingsSection
     };
 
     // The pages, in the order they draw, grouped by the device they are about.
-    // MapButtonPage is here rather than under Gameplay because a player looking
-    // for what a button does looks under Input; AnalogPage and MousePage are the
-    // stick and pointer halves of the same keyboard-and-mouse question.
+    // AnalogPage and MousePage are the stick and pointer halves of the same
+    // keyboard-and-mouse question.
+    //
+    // GamepadExtras is the one way a mod puts a page in this pane: the map mod
+    // adds its pad-button choice here, so a player looking for what a button does
+    // still finds it under Input. It is read when the pane is first drawn, which
+    // is after any mod that loaded at boot has added its pages.
+    public static readonly List<IPatchPage> GamepadExtras = [];
+
     readonly IPatchPage[] _keyboard = [new KeyLayoutPage()];
-    readonly IPatchPage[] _gamepad = [new AnalogPage(), new MapButtonPage()];
+    IPatchPage[]? _gamepad;
     readonly IPatchPage[] _mouse = [new MousePage()];
 
     public void Draw()
@@ -201,7 +207,7 @@ public sealed class InputSection : ISettingsSection
             ImGui.Spacing();
         }
 
-        Pages(_gamepad);
+        Pages(_gamepad ??= [new AnalogPage(), .. GamepadExtras]);
         ImGui.Spacing();
 
         BindingTable.Draw(gamepad: true, ref _padRow, ref _padAdd, ActionColumn, BindingActions);

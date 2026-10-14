@@ -15,7 +15,7 @@ namespace Kf2.Settings;
 /// instruments — dying on purpose is the hard part of testing this, which is a
 /// sentence about testing rather than about playing — and this port already knows
 /// where its instruments go: the same argument that moved Forget and Reveal to the
-/// docked MapPanel. Nothing is lost. <c>AutoReload.Simulate</c> is still the
+/// docked map panel (mods/map/MapPanel.cs). Nothing is lost. <c>AutoReload.Simulate</c> is still the
 /// shell's <c>kill</c> verb (<c>patches/AgentServer.cs</c>) and the MCP
 /// <c>kf2_kill</c> tool, the attract demo still kills itself unattended, and
 /// <c>AutoReload.Status</c> — including the two failures a player could see, "no
@@ -55,7 +55,7 @@ public sealed class AutoReloadPage : IPatchPage
         // KF2_AUTORELOAD_DELAY is the comparison.
 
         // Dimmed and indented rather than hidden: a control that disappears reads
-        // as a setting that was lost, which is MapButtonPage's rule for the pad
+        // as a setting that was lost, which is the map mod's rule for the pad
         // button and FrameSmoothingPage's for the smoothing tick.
         ImGui.Indent();
         ImGui.BeginDisabled(!AutoReload.Enabled);

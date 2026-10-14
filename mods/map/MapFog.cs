@@ -1,3 +1,9 @@
+// ModCompiler compiles mods with no implicit usings, so these are named here.
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Memory;
 
@@ -233,15 +239,31 @@ public static class MapFog
             _forcedLos = !los.Equals("0", StringComparison.Ordinal);
     }
 
+    static Action<VSyncEvent>? _onSample;
+    static Action<OverlayLoadedEvent>? _onOverlay;
+    static Action? _onReady;
+    static EventHandler? _onExit;
+    static bool _installed;
+
+    /// <summary>
+    /// The ready-time half of <see cref="Install"/>: the saved switch, the memory card's
+    /// path and the kept record. **The map mod calls this from its first VSync**, as
+    /// Map.RunReady, because RuntimeReadyEvent is dispatched before mods load.
+    /// </summary>
+    public static void RunReady() => _onReady?.Invoke();
+
     public static void Install()
     {
+        if (_installed) return;
+        _installed = true;
+
         Enabled = _forced ?? true;
         _los    = _forcedLos ?? true;
 
-        // ConfigManager.Load runs inside HostWindow.Initialize, which is after
-        // Program.cs, so both the saved switch and the memory card's path can only
-        // be read here. An env var beats the saved value for the run.
-        Event.AddListener<RuntimeReadyEvent>(_ =>
+        // ConfigManager.Load runs before the mod loads, so both the saved switch and
+        // the memory card's path are read in RunReady. An env var beats the saved
+        // value for the run.
+        _onReady = () =>
         {
             Enabled = _forced ?? RecompOne.Runtime.Runtime.View.GetBool(OnKey, true);
             _path = PathFor();
@@ -250,25 +272,45 @@ public static class MapFog
                               $"line of sight {(_los ? "on" : "off")}, " +
                               $"{_seen.Count} record(s) in {_path}" +
                               (_probe > 0 ? ", probing" : ""));
-        });
+        };
 
         // An overlay load is an area change often enough to be worth flushing on,
         // and it is the moment the grid in RAM stops describing where the player
         // is. Both halves of that are handled here.
-        Event.AddListener<OverlayLoadedEvent>(_ =>
+        _onOverlay = _ =>
         {
             _holdUntil = Environment.TickCount64 + HoldMs;
             _losKey = -1;
             Flush();
-        });
+        };
+        Event.AddListener(_onOverlay);
 
         // The sampling clock. See the class comment: a vblank rather than a hook,
         // and a wall-clock 60 Hz rather than a rendered frame.
-        Event.AddListener<VSyncEvent>(_ => Sample());
+        _onSample = _ => Sample();
+        Event.AddListener(_onSample);
 
         // The one exit that runs managed code. A kill does not, which is why the
         // periodic flush is the one that matters -- patches/RateCensus.cs:135.
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => Flush();
+        // The mod also flushes from AppExit.Leaving for a run that ends by throwing.
+        _onExit = (_, _) => Flush();
+        AppDomain.CurrentDomain.ProcessExit += _onExit;
+    }
+
+    /// <summary>Takes back the listeners <see cref="Install"/> added, after a last flush.</summary>
+    public static void Uninstall()
+    {
+        if (!_installed) return;
+        _installed = false;
+
+        if (_onOverlay != null) Event.RemoveListener(_onOverlay);
+        if (_onSample != null) Event.RemoveListener(_onSample);
+        if (_onExit != null) AppDomain.CurrentDomain.ProcessExit -= _onExit;
+        _onOverlay = null;
+        _onSample = null;
+        _onExit = null;
+        _onReady = null;
+        Flush();
     }
 
     public static void SetEnabled(bool on) => Enabled = on;

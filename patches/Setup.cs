@@ -161,8 +161,6 @@ public static class Setup
         [EnemyTurn.Key] = new(t => EnemyTurn.SetMultiplier(F(t, 1f)),
             () => EnemyTurn.Multiplier.ToString(CultureInfo.InvariantCulture), "KF2_ENEMYTURN"),
         [Analog.AccelKey] = new(t => Analog.LookAccel = B(t, false), () => Text(Analog.LookAccel), "KF2_ANALOG_ACCEL"),
-        [Map.OnKey] = new(t => Map.SetEnabled(B(t, true)), () => Text(Map.Enabled), "KF2_MAP"),
-        [MapFog.OnKey] = new(t => MapFog.SetEnabled(B(t, true)), () => Text(MapFog.Enabled), "KF2_MAP_FOG"),
     };
 
     /// <summary>

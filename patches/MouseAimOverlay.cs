@@ -35,7 +35,7 @@ namespace Kf2;
 /// that could take input from the picture.
 ///
 /// **The switch is <see cref="MouseAim.Active"/>, and the setter is a no-op** for
-/// the same reason as <see cref="MapOverlay"/>: the runtime writes every panel's
+/// the same reason as mods/map/MapOverlay.cs: the runtime writes every panel's
 /// open state back into the view, and a second store for "is aim on" would
 /// disagree with the setting. <see cref="MouseAim.Shown"/> returning null (the
 /// pointer free, a menu, a load) is what hides the marks inside a drawn frame.
@@ -78,7 +78,7 @@ public sealed class MouseAimOverlay : IFloatingPanel
 
     /// <summary>On while mouse aim is on and its marks are; <c>PanelManager.DrawPanels</c>
     /// skips a closed panel. The setter is a no-op because the setting is the one
-    /// store, as on <see cref="MapOverlay"/>.</summary>
+    /// store, as on mods/map/MapOverlay.cs.</summary>
     public bool IsOpen
     {
         get => MouseAim.Active && MouseAim.Marks != MouseAim.MarksOff;

@@ -1,3 +1,8 @@
+// ModCompiler compiles mods with no implicit usings, so every namespace the
+// file needs is named here -- including System.
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using ImGuiNET;
 using RecompOne.Runtime.Host.Window;
@@ -6,7 +11,7 @@ namespace Kf2;
 
 /// <summary>
 /// The full-screen map: the whole area at once, over the game, opened with the
-/// pad's touchpad button or with M.
+/// pad button or with G.
 ///
 /// **This is the map a player opens, and patches/MapPanel.cs is the instrument.**
 /// The docked panel exists to settle what a tile record's unattributed bytes mean
@@ -24,7 +29,7 @@ namespace Kf2;
 /// side. Sized to the viewport instead, the map covered all of that — a scrim
 /// over the port's own chrome, with its floor plan centred on the window rather
 /// than on the game and its edges nowhere near the picture's. It now takes the
-/// rectangle <c>MapRender.Picture</c> publishes (tools/RecompOne/patches/0029), which
+/// rectangle <c>GamePicture.Get</c> publishes (tools/RecompOne/patches/0029), which
 /// falls back to the viewport when no picture was drawn, so the map lands exactly
 /// over the game and nowhere else. Its margin and its header band are a share of
 /// that rectangle as well as of the interface scale, since the picture is the
@@ -119,11 +124,11 @@ public sealed class MapFullscreen : IFloatingPanel
     {
         if (!Map.Refresh()) return;
 
-        // The game picture, not the window: see MapRender.Picture. A map laid over
+        // The game picture, not the window: see GamePicture.Get. A map laid over
         // the whole viewport covered the menu bar, the dockspace border and the
         // letterbox bars either side of a 4:3 picture in a wider window, so it
         // read as a window over the port rather than as a screen the game put up.
-        MapRender.Picture(out var g0, out var g1);
+        GamePicture.Get(out var g0, out var g1);
         var size = g1 - g0;
 
         ImGui.SetNextWindowPos(g0);
@@ -260,8 +265,8 @@ public sealed class MapFullscreen : IFloatingPanel
         dl.AddText(new Vector2(p0.X + margin, p0.Y + margin * 0.6f), text, title);
 
         string hint = Map.PadButton == Map.PadNone
-            ? "M to close"
-            : $"{Map.PadName(Map.PadButton)} or M to close";
+            ? "G to close"
+            : $"{Map.PadName(Map.PadButton)} or G to close";
         var size = ImGui.CalcTextSize(hint);
         dl.AddText(new Vector2((p0.X + p1.X - size.X) * 0.5f, p1.Y - margin * 0.6f - size.Y),
                    dim, hint);

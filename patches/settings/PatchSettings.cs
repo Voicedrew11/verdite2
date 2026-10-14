@@ -186,6 +186,18 @@ public static class PatchSettings
     }
 
     /// <summary>
+    /// Take a page back out of a section, by id. Pages are drawn from the list the
+    /// section was extended with, so this is what a mod that registered a page calls
+    /// from OnUnload: <c>Extend</c> itself has no un-extend, but the page leaves the
+    /// list it draws from.
+    /// </summary>
+    public static void Unregister(string sectionId, string pageId)
+    {
+        if (string.IsNullOrWhiteSpace(sectionId) || string.IsNullOrWhiteSpace(pageId)) return;
+        if (_pages.TryGetValue(sectionId, out var list)) list.RemoveAll(p => p.Id == pageId);
+    }
+
+    /// <summary>
     /// Hand the pages to the settings UI. Waits for <c>RuntimeReadyEvent</c>, which
     /// is dispatched at the end of <c>Runtime.Initialize</c> -- after the host
     /// window's Load has run, so the runtime's own sections are all registered and
@@ -235,7 +247,6 @@ public static class PatchSettings
         // every tab, with no way to take it back. The four pages that were here
         // are held by InputSection and drawn inside the tab each belongs to.
         Register("gameplay", new ControlsPage());
-        Register("gameplay", new MapPage());
         Register("gameplay", new FocusPausePage());
         Register("gameplay", new AutoReloadPage());
         Register("gameplay", new GearComparePage());

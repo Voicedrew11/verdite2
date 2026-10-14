@@ -89,7 +89,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | GAMEPLAY | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
 | | ENEMY TURN | ORIGINAL, X1.25 … X8 | `kf2.enemyturn` (PATCHES_AND_MODS, "Enemies turn faster"); tracking while standing stays in the Settings window |
-| | MAP | OFF, WHOLE AREA, AS YOU GO | `kf2.map.on` and `kf2.map.fog`, the map the master, as `MapPage`; OFF leaves the fog choice |
+| | MAP | WHOLE AREA, AS YOU GO | the map mod's own page (`mods/map`, `MapPage`), present only with `kf2.map` enabled in the Mods panel: `kf2.map.fog`; enabling the mod is the on switch, so `kf2.map.on` is no longer read. Not a PORT SETTINGS row any more |
 | CONTROLS | CONTROLS | 2D, 2D ACCEL, 3D | `kf2.controls` (`True` is 3D) and `kf2.analog.accel`: the setup's turning page as a row; 3D clears the acceleration, as the setup's tank option does (INPUT, "2D and 3D controls") |
 | | INVERTED CAMERA | OFF, ON | `kf2.analog.invertpitch`; dimmed in 3D |
 | | STICK SENS | X0.5 … X3 | `kf2.analog.turn` and `kf2.analog.pitch`, both to the step; a pair set apart shows CUSTOM |
@@ -98,7 +98,9 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | RUMBLE | OFF, ON, HD | `kf2.rumble.on`, `kf2.rumble.hd`; OFF leaves the HD choice |
 | SOUND | 3D AUDIO | ORIGINAL, SPEAKERS, HEADPHONES | `kf2.audio.positional` (AUDIO, "Positional audio") |
 
-The minimap has no saved key (N toggles it for the session).
+The minimap has no saved key (N toggles it for the session). The map's pad button
+is the Input pane's Gamepad tab, also the mod's (`MapButtonPage`), and the map has no
+row on PORT SETTINGS: it is an optional mod, enabled in the Mods panel.
 
 ### What the page is for
 
@@ -280,7 +282,8 @@ tuned to it) and why the port's faster turn needs faster creatures.
 * **A key every tier writes alike is a mistake in the spec**, logged at load:
   `null` in all three would put the player's own value back to the default
   whichever tier they chose, and read the group as Custom until then. That was
-  the map's fog of war (`kf2.map.fog`), now out of the map group. The runtime
+  the map's fog of war (`kf2.map.fog`), once out of the map group; the map group
+  has since gone altogether, to the map mod (see MAP above). The runtime
   fills `Fullscreen=True` at boot, so the field's `default` (fullscreen) is where
   it starts while no key is written yet; windowed writes `False` explicitly for
   the same reason.

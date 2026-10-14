@@ -1013,96 +1013,19 @@ Kf2.AutoReload.Configure(Environment.GetEnvironmentVariable("KF2_AUTORELOAD"),
                          Environment.GetEnvironmentVariable("KF2_AUTORELOAD_SLOT"));
 Kf2.AutoReload.Install();
 
-// The map. King's Field is a maze, the original shipped no automap, and every
-// other thing in this port that knows where you are is a debug instrument. The
-// floor plan is already in RAM and is not polygon soup: the area loader copies
-// 64,000 bytes to 0x801C8484, an 80x80 grid of 10-byte tile records, two stacked
-// 5-byte floors each, a tile spanning 2048 world units. So the map is a read --
-// no hook, no write to game memory, and with the panels closed it costs a bool
-// test a frame:
-//
-//     KF2_MAP=0             the whole feature off (on by default)
-//     KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
-//     KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII on each area load
-//     KF2_MAP_PAUSE=0       leave the world running while the full map is up
-//                           (it pauses by default)
-//
-// Three comparisons for what are no longer settings. The map is drawn the way
-// the game's own map screen is, with no height ramp and no wall tint on it: the
-// argument for that picture is that it belongs, so offering the debugger's one
-// beside it asks the player to settle what the port is for. The blueprint is
-// still the picture the fog, the extents and the markers were judged against,
-// so it stays reachable:
-//
-//     KF2_MAP_STYLE=blueprint   the port's original blueprint plan
-//     KF2_MAP_SHADE=1           colour each tile by its height byte
-//     KF2_MAP_WALLS=1           tint the tiles whose +4 bit 0x80 is set
-//     KF2_MAP_FLOOR=lower       pin a stacked half instead of following the player
-//     KF2_MAP_ARROW=1           the player as an arrow with a heading, not a dot
-//
-// KF2_MAP_MINIMAP and KF2_MAP_PAUSE are in that list now too. The minimap's
-// picture has never been judged by eye, which is the port's standing reason for a
-// default and a poor reason for a settings block, so its six knobs went with its
-// checkbox and N toggles it for the session. The pause is not a preference: the
-// full map is a screen with no chrome and no input, opened in a corridor.
-//
-// A patch rather than a mod for auto reload's reason -- it is something the port
-// itself should offer, so it should not be able to be absent -- and its knobs are
-// under Gameplay beside it. The minimap defaults off because the mechanism is
-// measured and the picture is not.
-Kf2.Map.Configure(Environment.GetEnvironmentVariable("KF2_MAP"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_MINIMAP"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_PROBE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_PAUSE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_STYLE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_SHADE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_WALLS"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_FLOOR"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_ARROW"));
+// The dynamic map is not core any more: it is the kf2.map mod (mods/map), loaded
+// by ModLoader and off until it is enabled in the Mods panel. Its environment
+// switches (KF2_MAP*) read only with the mod enabled; docs/ENV_VARS.md has them.
 
-// The other half of that map: what is *in* the area rather than what shape it is.
-// The four world tables the renderer walks -- creatures, props, effects,
-// billboards -- read at their own liveness tests and drawn where the game says
-// they stand:
-//
-//     KF2_MAP_MARKERS=1     the marker layer on (off, and no longer a setting)
-//
-// **Off, and the save points are the exception rather than part of it.** A live
-// read of where every creature, prop, effect and torch is standing is an
-// instrument, not a map, and King's Field's difficulty is not knowing what is
-// round the corner. A save point is the opposite case -- the one object in a
-// maze a player wants a map to find, and the game names it itself (definition
-// kind 0x0E) -- so it is drawn always and independently, which is why
-// MapMarkers.Refresh stands down only when both are off.
-// KF2_MAP_PROBE=1 also dumps a per-table census and a histogram of the object
-// table's type byte, which is what would let those types be paired with nouns.
-Kf2.MapMarkers.Configure(Environment.GetEnvironmentVariable("KF2_MAP_MARKERS"));
-Kf2.Map.Install();
-
-// Fog of war for that map: the tiles the player has actually seen, remembered per
-// save slot and kept between sessions in a file beside the memory card. It is the
-// game's own 24x24 visibility grid at 0x80192EAC -- occlusion already flooded --
-// ORed into an 80x80 bitset, sampled on the vblank rather than through a hook, so
-// it accumulates with the map closed and at the same 60 Hz whatever the render
-// rate is:
-//
-//     KF2_MAP_FOG=1         fog on for the run (off by default)
-//     KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, rejected, flushes
-//     KF2_MAP_FOG_LOS=0     the line-of-sight gate off (on by default)
-//
-// The cull grid is a *culling* test, so it is allowed to over-report and does:
-// its flood lights a cell when either of its two ring parents is lit, which
-// spreads 45 degrees a ring and paints rooms through the wall beside a doorway.
-// A cell is therefore checked against a recursive symmetric shadowcast out of
-// the player's own tile before it is written, and only the intersection is
-// remembered.
-//
-// Off by default for the sub-pixel reason: the mechanism is measured and the
-// picture has never been looked at.
-Kf2.MapFog.Configure(Environment.GetEnvironmentVariable("KF2_MAP_FOG"),
-                     Environment.GetEnvironmentVariable("KF2_MAP_FOG_PROBE"),
-                     Environment.GetEnvironmentVariable("KF2_MAP_FOG_LOS"));
-Kf2.MapFog.Install();
+// M, or the touchpad, opens the game's own map item (PIRATE'S, MINER'S or NECRON'S
+// MAP) through the ITEM page's viewer, as using it there does. Off with KF2_MAPKEY=0;
+// KF2_MAPKEY_TEST=<seconds> opens it that many seconds into the first area. See
+// "The maps" in docs/GAME_INTERNALS.md.
+Kf2.MapKey.Configure(Environment.GetEnvironmentVariable("KF2_MAPKEY"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_TEST"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_GIVE"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_CLOSE"));
+Kf2.MapKey.Install();
 
 // Auto start, and the agent beacon -- the pair that lets an automated tester get
 // into the game and know it got there. Scripted input cannot drive the boot menus
@@ -1626,9 +1549,8 @@ catch (Exception e)
 }
 finally
 {
-    // The map's fog store. It flushes on a timer and on ProcessExit, but a run
-    // that ends by throwing runs neither, and the exploration since the last
-    // flush is worth more than the ten lines this costs.
-    Kf2.MapFog.Flush();
+    // Whatever a mod keeps (the map mod's fog of war is saved between sessions)
+    // is written before the process leaves, including a run that ends by throwing.
+    Kf2.AppExit.Run();
 }
 return 0;

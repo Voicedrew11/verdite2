@@ -1,3 +1,8 @@
+// ModCompiler compiles mods with no implicit usings, so every namespace the
+// file needs is named here -- including System.
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using RecompOne.Runtime.Memory;
 
 namespace Kf2;
