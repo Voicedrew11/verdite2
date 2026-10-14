@@ -286,11 +286,6 @@
     {
       "id": "controls",
       "label": "kf2.setup.controls",
-      "tiers": [
-        "kf2.setup.controls.0",
-        "kf2.setup.controls.1",
-        "kf2.setup.controls.2"
-      ],
       "groups": [
         {
           "id": "movement",
@@ -354,11 +349,6 @@
     {
       "id": "presentation",
       "label": "kf2.setup.presentation",
-      "tiers": [
-        "kf2.setup.presentation.0",
-        "kf2.setup.presentation.1",
-        "kf2.setup.presentation.2"
-      ],
       "groups": [
         {
           "id": "image",
@@ -390,6 +380,7 @@
             },
             {
               "desc": "kf2.setup.image.2",
+              "cost": true,
               "set": {
                 "kf2.perspective.on": null,
                 "kf2.subpixel.on": null,
@@ -426,6 +417,7 @@
             },
             {
               "desc": "kf2.setup.lighting.2",
+              "cost": true,
               "set": {
                 "kf2.perpixel.on": null,
                 "kf2.evenfog.on": null,
@@ -455,6 +447,7 @@
             },
             {
               "desc": "kf2.setup.water.2",
+              "cost": true,
               "set": {
                 "kf2.waves.on": null,
                 "kf2.ssr.planar": null
@@ -560,11 +553,6 @@
     {
       "id": "gameplay",
       "label": "kf2.setup.gameplay",
-      "tiers": [
-        "kf2.setup.gameplay.0",
-        "kf2.setup.gameplay.1",
-        "kf2.setup.gameplay.2"
-      ],
       "groups": [
         {
           "id": "map",
@@ -773,21 +761,6 @@
       "pt-BR": "Controles",
       "es-419": "Controles"
     },
-    "kf2.setup.controls.0": {
-      "en": "The pad as the PlayStation read it: the D-pad walks and turns, with no rumble.",
-      "pt-BR": "O controle como o PlayStation o lia: o direcional anda e vira, sem vibração.",
-      "es-419": "El control como lo leía la PlayStation: la cruceta camina y gira, sin vibración."
-    },
-    "kf2.setup.controls.1": {
-      "en": "The game as intended, with the hardware's faults fixed and a higher frame rate. You turn at the original's speed, with plain rumble.",
-      "pt-BR": "O jogo como foi pensado, com as falhas do hardware corrigidas e uma taxa de quadros maior. Você vira na velocidade original, com vibração simples.",
-      "es-419": "El juego como se pensó, con las fallas del hardware corregidas y una velocidad de fotogramas mayor. Giras a la velocidad original, con vibración simple."
-    },
-    "kf2.setup.controls.2": {
-      "en": "Twin sticks with acceleration on the right stick, HD rumble and gyro aim with a drawn bow.",
-      "pt-BR": "Dois analógicos com aceleração no direito, vibração HD e mira por giroscópio com o arco puxado.",
-      "es-419": "Dos palancas con aceleración en la derecha, vibración HD y apuntado con giroscopio con el arco tensado."
-    },
     "kf2.setup.movement": {
       "en": "Movement",
       "pt-BR": "Movimento",
@@ -833,40 +806,25 @@
       "pt-BR": "Apresentação",
       "es-419": "Presentación"
     },
-    "kf2.setup.presentation.0": {
-      "en": "The PlayStation's picture and sound: warping textures, jittering edges, dither and the console's soft audio.",
-      "pt-BR": "A imagem e o som do PlayStation: texturas que se deformam, bordas que tremem, pontilhado e o áudio suave do console.",
-      "es-419": "La imagen y el sonido de la PlayStation: texturas que se deforman, bordes que tiemblan, tramado y el audio suave de la consola."
-    },
-    "kf2.setup.presentation.1": {
-      "en": "The game as intended, with the hardware's faults fixed: steady textures and edges, no dither, cleaner sound, and a higher frame rate with smooth motion.",
-      "pt-BR": "O jogo como foi pensado, com as falhas do hardware corrigidas: texturas e bordas estáveis, sem pontilhado, som mais limpo e uma taxa de quadros maior com movimento suave.",
-      "es-419": "El juego como se pensó, con las fallas del hardware corregidas: texturas y bordes estables, sin tramado, sonido más limpio y una velocidad de fotogramas mayor con movimiento suave."
-    },
-    "kf2.setup.presentation.2": {
-      "en": "Everything the port adds: smooth shading, filtered textures, ambient occlusion, living water, a richer reverb, 3D sound, the HUD at the edges of a wide picture and the world drawn out to 15 tiles.",
-      "pt-BR": "Tudo o que o port acrescenta: sombreamento suave, texturas filtradas, oclusão de ambiente, água viva, reverberação mais rica, som 3D, o HUD nas bordas de uma imagem larga e o mundo desenhado até 15 blocos.",
-      "es-419": "Todo lo que agrega el port: sombreado suave, texturas filtradas, oclusión ambiental, agua viva, una reverberación más rica, sonido 3D, el HUD en los bordes de una imagen ancha y el mundo dibujado hasta 15 baldosas."
-    },
     "kf2.setup.image": {
       "en": "Image",
       "pt-BR": "Imagem",
       "es-419": "Imagen"
     },
     "kf2.setup.image.0": {
-      "en": "Textures that warp, vertices on whole pixels, the console's dither and unfiltered texels.",
-      "pt-BR": "Texturas que se deformam, vértices em pixels inteiros, o pontilhado do console e texels sem filtro.",
-      "es-419": "Texturas que se deforman, vértices en píxeles enteros, el tramado de la consola y texels sin filtro."
+      "en": "Wobbling polygons, warping textures, and the console's dither pattern, as the PlayStation drew them.",
+      "pt-BR": "Polígonos que oscilam, texturas que se deformam e o padrão de pontilhado do console, como o PlayStation os desenhava.",
+      "es-419": "Polígonos que se tambalean, texturas que se deforman y el patrón de tramado de la consola, tal como los dibujaba la PlayStation."
     },
     "kf2.setup.image.1": {
-      "en": "Perspective-correct textures, sub-pixel vertices and a depth buffer; no dither; texels kept sharp.",
-      "pt-BR": "Texturas com perspectiva correta, vértices subpixel e buffer de profundidade; sem pontilhado; texels nítidos.",
-      "es-419": "Texturas con perspectiva correcta, vértices subpíxel y búfer de profundidad; sin tramado; texels nítidos."
+      "en": "Steady polygons and textures that no longer warp, with no dither. Textures stay sharp and pixelated.",
+      "pt-BR": "Polígonos estáveis e texturas que não se deformam mais, sem pontilhado. As texturas continuam nítidas e pixeladas.",
+      "es-419": "Polígonos estables y texturas que ya no se deforman, sin tramado. Las texturas siguen nítidas y pixeladas."
     },
     "kf2.setup.image.2": {
-      "en": "As Balanced, with smooth 24-bit shading and 16x filtered, mipmapped textures.",
-      "pt-BR": "Como Equilibrado, com sombreamento suave de 24 bits e texturas filtradas em 16x com mipmaps.",
-      "es-419": "Como Equilibrado, con sombreado suave de 24 bits y texturas filtradas a 16x con mipmaps."
+      "en": "As Balanced, with smoother colour gradients and filtered textures that stay clean at a distance.",
+      "pt-BR": "Como Equilibrado, com transições de cor mais suaves e texturas filtradas que continuam limpas à distância.",
+      "es-419": "Como Equilibrado, con degradados de color más suaves y texturas filtradas que se mantienen limpias a distancia."
     },
     "kf2.setup.lighting": {
       "en": "Lighting and fog",
@@ -879,14 +837,14 @@
       "es-419": "Luz y niebla calculadas en las esquinas de cada polígono, como lo hacía la consola."
     },
     "kf2.setup.lighting.1": {
-      "en": "Light per pixel, and fog even across tiles and by distance from the eye. No ambient occlusion.",
-      "pt-BR": "Luz por pixel, e névoa uniforme entre os blocos e pela distância do olho. Sem oclusão de ambiente.",
-      "es-419": "Luz por píxel, y niebla uniforme entre las baldosas y por distancia al ojo. Sin oclusión ambiental."
+      "en": "Smooth lighting across every surface, and fog that fades evenly with distance.",
+      "pt-BR": "Iluminação suave em todas as superfícies, e névoa que se dissipa uniformemente com a distância.",
+      "es-419": "Iluminación suave en todas las superficies, y niebla que se desvanece de forma uniforme con la distancia."
     },
     "kf2.setup.lighting.2": {
-      "en": "As Balanced, with ambient occlusion darkening corners and creases.",
-      "pt-BR": "Como Equilibrado, com oclusão de ambiente escurecendo cantos e frestas.",
-      "es-419": "Como Equilibrado, con oclusión ambiental que oscurece esquinas y rincones."
+      "en": "As Balanced, with soft shadowing in corners and creases.",
+      "pt-BR": "Como Equilibrado, com sombreamento suave nos cantos e vincos.",
+      "es-419": "Como Equilibrado, con sombras suaves en esquinas y pliegues."
     },
     "kf2.setup.water": {
       "en": "Water",
@@ -952,21 +910,6 @@
       "en": "Gameplay",
       "pt-BR": "Jogabilidade",
       "es-419": "Jugabilidad"
-    },
-    "kf2.setup.gameplay.0": {
-      "en": "The game as released: no map, no stat comparison, and death is the game's own.",
-      "pt-BR": "O jogo como foi lançado: sem mapa, sem comparação de atributos, e a morte é a do próprio jogo.",
-      "es-419": "El juego como se lanzó: sin mapa, sin comparación de atributos, y la muerte es la del propio juego."
-    },
-    "kf2.setup.gameplay.1": {
-      "en": "The game as intended: every stat an item would change is shown when buying and equipping, and death reloads your last save. Turn speed is the original's.",
-      "pt-BR": "O jogo como foi pensado: todos os atributos que um item mudaria aparecem ao comprar e equipar, e a morte recarrega seu último save. A velocidade de giro é a original.",
-      "es-419": "El juego como se pensó: todos los atributos que un objeto cambiaría se muestran al comprar y equipar, y la muerte recarga tu último guardado. La velocidad de giro es la original."
-    },
-    "kf2.setup.gameplay.2": {
-      "en": "A map that fills in as you explore, creatures that turn toward you faster, stat comparison, and death reloads your last save.",
-      "pt-BR": "Um mapa que se completa conforme você explora, criaturas que se viram para você mais rápido, comparação de atributos, e a morte recarrega seu último save.",
-      "es-419": "Un mapa que se completa mientras exploras, criaturas que se giran hacia ti más rápido, comparación de atributos, y la muerte recarga tu último guardado."
     },
     "kf2.setup.map": {
       "en": "Map",

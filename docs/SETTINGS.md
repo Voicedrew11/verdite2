@@ -169,17 +169,17 @@ returns to the welcome, where another card starts the pages again from its own
 choices. Every page puts keyboard and pad focus on its first control: the
 welcome's first card, the summary's Finish, the report's Close. **A pad needs no
 trip to the footer**: Start is Next (Finish on the summary, Close on the report),
-Circle/B is Back, Triangle/Y switches Basic and Advanced on the tiers page, and
-left and right on a focused list or slider step its value in place, without
+Circle/B is Back, and left and right on a focused list or slider step its value in place, without
 opening the list or grabbing the slider (the arrow keys do the same). None of
 them fire on the frame after a list was open or a slider held, since ImGui spends
 Circle/B closing or releasing it first (by reading, B on a held slider could
 also leave the page before). Square/X is no longer fed to ImGui: held, it is ImGui's window
 switcher, which took the focus off the setup. The footer's prompt names the keys
-each page takes. Built, not yet driven with a pad. Basic (one
-style for each of Controls, Presentation and Gameplay) and Advanced (one for each
-group inside them) are a switch at the top of the tiers page. Every group has
-three tiers:
+each page takes. Built, not yet driven with a pad. The tiers are **a page per
+category** (Controls, then Presentation, then Gameplay), each headed by the
+category's name and listing a tier for every group in it; Next and Back step from
+one category's page to the next, and Back on the first returns to the display.
+Every group has three tiers:
 
 * **Original**: the game as the PlayStation ran it.
 * **Original++**: that look and feel, with what the hardware got wrong fixed, and
@@ -491,3 +491,50 @@ the lit edge have not been looked at.
 Refined was tried first the same day and dropped: it said the original was unrefined.
 
 **Not judged:** not looked at.
+
+### Setup's tiers are a page per category (2026-10-13)
+
+The Basic page (one style for each whole category) is gone, and with it the switch
+and Triangle/Y. What was Advanced is now three pages, one per category in the
+spec's order, so Presentation's six groups no longer share a page with the other
+five. A category's `tiers` (Basic's one line per tier) are no longer read, and are
+out of `config/onboarding.json` with their nine strings; a spec that still has
+them parses, since unknown fields are ignored. The summary lists every group,
+always. Both assemblies build; **not run**: the walk through the three pages, and
+how Presentation's page fits at 1080p, are unchecked.
+
+### The tiers pages after a design review (2026-10-13)
+
+From a review of the Presentation page, all on the tiers pages unless named:
+
+* **One grid.** The columns are computed once per page (a keep track of 2/3 a column
+  when any group on the page has one, then three equal tracks, floored to whole
+  pixels), so every Original, Balanced and Modern button, and every merged span, has
+  the same edges in every row; a description starts at its button's edge and wraps at
+  its width.
+* **A preset row** above the first group sets every group on the page to one tier;
+  a preset is lit when every group's run covers it, else none is and "Custom" shows.
+  It takes the page's focus. The recommended tier (`RecommendedTier`, Modern, the
+  welcome's badge too) carries "(Recommended)" there only. The review asked for
+  Balanced; it would have contradicted the welcome.
+* **Focus apart from the choice.** The choice is the lit fill and "> "; the focus is
+  ImGui's outline, the hovered fill on an unlit button, a bar in the gutter beside the
+  row, and its description at full strength. An inset border in the text colour was
+  tried first and dropped on sight: inside ImGui's outline it drew two frames round
+  one button.
+* **Up and down keep the column**: a preferred column, set by left and right on a
+  one-column button and never by a merged one, picks the button in the row above or
+  below (Lighting > Modern, down, down, down: Water > Modern, Motion's
+  Balanced / Modern, Sound > Modern).
+* **Hierarchy**: group headers at 1.22x, faked bold; button labels faked bold.
+  Tighter spacing, and a 12-pixel scrollbar if the page still overflows.
+* **"Higher GPU cost."** dim after a tier's description where the spec's tier has
+  `"cost": true` (Modern of Image, Lighting, Water). Image and Lighting's copy
+  rewritten in plain words, and the intro says merged tiers share a button.
+* **The foot, on every page**: Next (Finish, Close) is filled in the accent and bold;
+  "Step X of N" sits right of the page heading (the title bar is the runtime's
+  `Popup`); PageDown is Next on the keyboard; the prompt names only the device used
+  last (`ReadDevice`, `FeedPad`).
+
+Both assemblies build. **Seen once** (the focus border, dropped); **not judged**: the
+rest, and whether Presentation fits at 1280x800. **Not run**: the column walk.
