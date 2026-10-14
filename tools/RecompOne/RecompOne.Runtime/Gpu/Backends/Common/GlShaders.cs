@@ -629,7 +629,14 @@ internal static class GlShaders
         void main() {
             float z = vDepth * 65536.0;
             // Taken here, in uniform control flow, for a surface's texel below.
+            // Every derivative is: past a discard or a return they are undefined,
+            // and at a polygon's edge the 2x2 quad's helper pixels read texels
+            // past the polygon and may discard. Mesa answered anyway; a Windows
+            // driver gave every edge pixel a wrong normal, and the occlusion
+            // pass drew a dark line along every edge.
             vec2 dUvx = dFdx(vUv), dUvy = dFdy(vUv);
+            vec3 p = vec3((gl_FragCoord.xy / uScale - uCentre) * (z / uProjH), z);
+            vec3 dpx = dFdx(p), dpy = dFdy(p);
             // 0089. A pixel the colour pass dithers away by distance is no surface.
             if (fadeDropped(vKeep * distanceFade(vFadeXZ, z))) discard;
             // A veil, a see-through 2D box: where it is see-through, both buffers
@@ -671,9 +678,6 @@ internal static class GlShaders
             }
             if (z <= 0.0) { oColor = vec4(0.0); oSurface = vec4(0.0); return; }
             if (uZSlice.y > 0.0 && (z <= uZSlice.x || z > uZSlice.y)) discard;
-            vec2 s = gl_FragCoord.xy / uScale;
-            vec3 p = vec3((s - uCentre) * (z / uProjH), z);
-            vec3 dpx = dFdx(p), dpy = dFdy(p);
             if (uDepthCull != 0) {
                 float d = texelFetch(uFrameDepth, ivec2(gl_FragCoord.xy * uDepthStep), 0).r;
                 float dz = d * 65536.0;
@@ -2384,11 +2388,15 @@ internal static class GlShaders
             return v * 0.2;
         }
 
+        // Set at the top of main, before any discard (see there).
+        vec3 gLightN;
+        vec2 gUVdx, gUVdy, gWx, gWy;
+
         vec3 authored(float spec, float rough, out vec3 hi) {
             hi = vec3(0.0);
             float z = vDepth * 65536.0;
             vec3 p = vec3((gl_FragCoord.xy / float(uScale) - uLightCentre) * (z / uLightH), z);
-            vec3 n = cross(dFdx(p), dFdy(p));
+            vec3 n = gLightN;
             if (vDepth <= 0.0 || vLight == 0u || !(dot(n, n) > 1e-12)) return vec3(0.0);
             n = normalize(n);
             if (dot(n, p) > 0.0) n = -n;
@@ -2581,6 +2589,19 @@ internal static class GlShaders
             // punch-through discard cannot occlude whatever is behind the hole.
             // 0051. The tolerance is on the test only; GlCore draws the true depth first.
             float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
+            // Every derivative the shader uses is taken here: past a discard or a
+            // return they are undefined, and at a polygon's edge the 2x2 quad's
+            // helper pixels may discard (a clip plane, a dither, a mask). Mesa
+            // answered anyway; a Windows driver did not, along every edge.
+            gUVdx = dFdx(vUV); gUVdy = dFdy(vUV);
+            {
+                float lz = vDepth * 65536.0;
+                vec3 lp = vec3((gl_FragCoord.xy / float(uScale) - uLightCentre) * (lz / uLightH), lz);
+                gLightN = cross(dFdx(lp), dFdy(lp));
+                vec3 vp = vec3((gl_FragCoord.xy / float(uScale) - uWaveCentre) * (lz / uWaveH), lz);
+                vec2 wxz = (transpose(uWaveR) * (vp - uWaveT) + uWaveCam).xz;
+                gWx = dFdx(wxz); gWy = dFdy(wxz);
+            }
             // The slope term grows without bound on a face seen edge-on, where half a
             // pixel spans the face's whole depth: a model's silhouette then drew over a
             // surface hundreds of units in front of it. A coplanar partner's offset is a
@@ -2622,7 +2643,7 @@ internal static class GlShaders
                 if (uCheckMask != 0 && texelFetch(uDest, ivec2(gl_FragCoord.xy), 0).a >= 0.5) discard;
                 if (texMode == 4) { if (uOpaqueDepth == 1) discard; return; }
                 if (texMode == 5) { if (texture(uExtTex, vUV).a < 0.5 || uOpaqueDepth == 1) discard; return; }
-                vec2 ddx = dFdx(vUV), ddy = dFdy(vUV);
+                vec2 ddx = gUVdx, ddy = gUVdy;
                 if (texMode == 6) {
                     vec2 fuv = mod(vUV, vec2(uTexWindow.xy) + 1.0) + vec2(uTexWindow.zw);
                     vec2 t = (fuv - uRepRect.xy) / uRepRect.zw;
@@ -2691,8 +2712,8 @@ internal static class GlShaders
             // pixel's footprint in texture space. They already decided which way
             // the console's truncation rounds; the kernel below reads the same
             // pair as the shape of the area this pixel actually covers.
-            vec2 dUVdx = dFdx(vUV);
-            vec2 dUVdy = dFdy(vUV);
+            vec2 dUVdx = gUVdx;
+            vec2 dUVdy = gUVdy;
 
             // 0078. Water: the texel is read from where the wave field's slope pushes
             // it, a push in the world taken into texture space through the polygon's
@@ -2706,7 +2727,7 @@ internal static class GlShaders
                 float z = vDepth * 65536.0;
                 vec3 vp = vec3((gl_FragCoord.xy / float(uScale) - uWaveCentre) * (z / uWaveH), z);
                 vec3 wp = transpose(uWaveR) * (vp - uWaveT) + uWaveCam;
-                vec2 wx = dFdx(wp.xz), wy = dFdy(wp.xz);
+                vec2 wx = gWx, wy = gWy;
                 float det = wx.x * wy.y - wx.y * wy.x;
                 waveRectOf(vUV);
                 if (vDepth > 0.0 && gWave.z > 0 && abs(det) > 1e-6) {
@@ -3099,6 +3120,9 @@ internal static class GlShaders
             // 0051. The tolerance is on the test only; GlCore draws the true depth first.
             float dz = uDepthBias + uDepthSlope * max(abs(dFdx(vDepth)), abs(dFdy(vDepth)));
             gl_FragDepth = vDepth > 0.0 ? max(vDepth - dz, 0.0) : 1.0;
+            // Before any discard: past one, a derivative is undefined.
+            vec2 dUVdx = dFdx(vUV);
+            vec2 dUVdy = dFdy(vUV);
             vec2 destUv = gl_FragCoord.xy / uDestSize;
             vec4 dstTexel = texture2D(uDest, destUv);
             if (uCheckMask > 0.5 && dstTexel.a >= 0.5) discard;
@@ -3121,9 +3145,7 @@ internal static class GlShaders
                 vec2 win = uTexWindow.xy + 1.0;
                 vec2 fuv = vec2(mod(vUV.x, win.x), mod(vUV.y, win.y)) + uTexWindow.zw;
 
-        
-                vec2 dUVdx = dFdx(vUV);
-                vec2 dUVdy = dFdy(vUV);
+
                 float rawU = dUVdx.x < 0.0 ? ceil(vUV.x - 0.0001) : floor(vUV.x + 0.0001);
                 float rawV = dUVdy.y < 0.0 ? ceil(vUV.y - 0.0001) : floor(vUV.y + 0.0001);
 
