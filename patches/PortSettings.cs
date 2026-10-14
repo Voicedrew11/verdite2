@@ -328,6 +328,12 @@ public static class PortSettings
         get => get(MapOn) == 0 ? 0 : get(MapFogOn) != 0 ? 2 : 1,
         (v, _) => v <= 0 ? [0, Unchanged] : v >= 2 ? [1, 1] : [1, 0]);
 
+    /// <summary>Verdite Core's pause while the window is in the background; the
+    /// Settings window's Gameplay tab only.</summary>
+    public static readonly PortSetting FocusPauseOn = Switch(FocusPause.OnKey, "KF2_FOCUS_PAUSE", "Pause in the background",
+        null, null, () => FocusPause.Enabled, FocusPause.SetEnabled, true,
+        tip: "The game stops and goes quiet while its window is not the one in front.");
+
     // ---- Controls ----
 
     /// <summary>2D is the twin sticks, the left one walking and strafing; 3D is one
@@ -457,7 +463,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapOn, MapFogOn,
+        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapOn, MapFogOn, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];

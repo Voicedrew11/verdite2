@@ -3578,6 +3578,35 @@ TIM does not already show. Placement and the fade were never judged. Behind it i
 when `MenuWorld` is on ("Messages draw the world live"), and the dim is then this
 panel's; with it off, the game's 1x `MoveImage` copy.
 
+## Pausing when the window loses focus
+
+Click away from the window and the game stands still and goes quiet, as a desktop
+game does; click back and it carries on from the same tick. Verdite Core's
+`FocusPause` (`tools/verdite-core/src/FocusPause.cs`) decides when -- the switch,
+`HostWindow.FocusChanged` (runtime `0101`), and the sound -- and the port decides
+how: `Program.cs` hands `FocusPause.Active` to `FramePacing.PauseWhen`, the stage
+gate held shut that the full-screen map already pauses with ("Opening the map
+stops the world"). Nothing is written to game memory, and stage 13 still draws, so
+the window keeps its picture.
+
+- **The sound is the SPU's two gains**, voices and CD audio, set to nothing and put
+  back from the runtime's own audio settings (`ConfigManager.Game.SpuVolume`,
+  `XaVolume`), so the player's volume is never what moves. The game's sequencer
+  keeps running under it: the music has moved on by the time the window comes back.
+- **What the stage gate does not hold is only muted**: `OPEN.EXE`'s intro, `END.EXE`,
+  and anything else outside the gated main loop run on in silence.
+- **A run a program drives is not paused.** `KF2_SHELL`, `KF2_AUTOPAD`,
+  `KF2_AUTOSTART` or `KF2_AGENT` set means nobody is there to give the window
+  focus, so the pause is off for that run and the saved key is not read;
+  `KF2_FOCUS_PAUSE=1` turns it back on.
+- On by default; Gameplay ▸ *Pause in the background* (`kf2.focuspause.on`), not a
+  PORT SETTINGS row. `[KF2] focus lost: paused` and `focus back: resumed` are
+  printed as it happens.
+
+Measured: a focused boot into slot 2 with `KF2_FOCUS_PAUSE=1` holds 15.0 ticks/s,
+so the pause is not taken while the window has focus. **Not yet seen**: the pause
+and the silence on an actual focus loss, which needs someone to click away.
+
 ## Auto reload
 
 `patches/AutoReload.cs` reloads the last save when the player dies. King's Field

@@ -1133,6 +1133,20 @@ Kf2.AgentBeacon.Install();
 Kf2.AgentServer.Configure(Environment.GetEnvironmentVariable("KF2_SHELL"));
 Kf2.AgentServer.Install();
 
+// The window losing focus pauses the game and silences it, as a desktop game
+// does: Verdite Core's FocusPause decides when, and the stage gate held shut
+// (FramePacing.PauseWhen, the full map's pause) is how. On by default; a run a
+// program drives (the four switches above and KF2_AUTOPAD) has no one to focus the
+// window, so there it is off unless asked for.
+//
+//     KF2_FOCUS_PAUSE=0   keep running in the background
+//
+// See "Pausing when the window loses focus" in docs/PATCHES_AND_MODS.md.
+FocusPause.Configure(driven: new[] { "KF2_SHELL", "KF2_AUTOPAD", "KF2_AUTOSTART", "KF2_AGENT" }
+    .Any(v => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(v))));
+FocusPause.Install();
+Kf2.FramePacing.PauseWhen(() => FocusPause.Active);
+
 // Analog twin-stick control. Two pre-hooks on the game's own turn/look and
 // walk/strafe routines pre-load the velocities those routines are about to
 // accumulate, so the sticks pick the amount and the game's own movement code

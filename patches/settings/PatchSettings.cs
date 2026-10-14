@@ -235,6 +235,7 @@ public static class PatchSettings
         // are held by InputSection and drawn inside the tab each belongs to.
         Register("gameplay", new ControlsPage());
         Register("gameplay", new MapPage());
+        Register("gameplay", new FocusPausePage());
         Register("gameplay", new AutoReloadPage());
         Register("gameplay", new GearComparePage());
         Register("gameplay", new MessageFadePage());
