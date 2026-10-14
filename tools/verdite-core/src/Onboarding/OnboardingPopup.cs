@@ -22,7 +22,10 @@ namespace Verdite.Core;
 /// Every page can be driven by the mouse, the keyboard or a pad: ImGui's own
 /// navigation, switched on only while the popup is open (the runtime's windows
 /// never had it) and fed the pad's buttons here, since the runtime's ImGui backend
-/// feeds it only the keyboard.
+/// feeds it only the keyboard. On top of that navigation, the pad has shortcuts of
+/// its own: Start is Next (Finish on the summary), Circle/B is Back, Triangle/Y
+/// switches Basic and Advanced, and left and right on a focused list or slider step
+/// its value without opening or grabbing it.
 /// </summary>
 internal sealed class OnboardingPopup : Popup
 {
@@ -164,12 +167,51 @@ internal sealed class OnboardingPopup : Popup
         ImGui.Separator();
         if (Build is not null) Strip();
         Footer();
+        Shortcuts();
+    }
 
-        // Escape and the pad's Circle/B step back, but never off the welcome, where
-        // Back is skip, and never while a combo's list is open, which they close.
-        if (_page != Page.Welcome && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows)
+    /// <summary>
+    /// The page-wide keys. Escape and Circle/B step back, but never off the welcome,
+    /// where Back is skip; Start goes on, as Next or Finish; Triangle/Y switches Basic
+    /// and Advanced on the tiers page. None of them while a list was open or a slider
+    /// held last frame: ImGui's navigation spends Circle/B closing or releasing it
+    /// before this frame is drawn, so this frame alone cannot tell.
+    /// </summary>
+    void Shortcuts()
+    {
+        bool busy = _busy;
+        _busy = _comboOpen || ImGui.IsAnyItemActive();
+        _comboOpen = false;
+        if (busy || !ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows)) return;
+
+        if (_page != Page.Welcome
             && (ImGui.IsKeyPressed(ImGuiKey.Escape, false) || ImGui.IsKeyPressed(ImGuiKey.GamepadFaceRight, false)))
             Back();
+        else if (ImGui.IsKeyPressed(ImGuiKey.GamepadStart, false))
+            Forward();
+        else if (_page == Page.Tiers && ImGui.IsKeyPressed(ImGuiKey.GamepadFaceUp, false))
+        {
+            _advanced = !_advanced;
+            _focus = true;
+        }
+    }
+
+    /// <summary>A list was open this frame, or (<see cref="_busy"/>) a list or a held slider last frame.</summary>
+    bool _comboOpen, _busy;
+
+    /// <summary>
+    /// Left or right, with repeat, on the item just drawn when it has the focus and is
+    /// not held: -1, 1, or 0. Lets the pad step a list or a slider in place, as a
+    /// console menu does, instead of opening the list or grabbing the slider first.
+    /// </summary>
+    static int Step()
+    {
+        if (!ImGui.IsItemFocused() || ImGui.IsItemActive()) return 0;
+        if (ImGui.IsKeyPressed(ImGuiKey.GamepadDpadLeft) || ImGui.IsKeyPressed(ImGuiKey.GamepadLStickLeft)
+            || ImGui.IsKeyPressed(ImGuiKey.LeftArrow)) return -1;
+        if (ImGui.IsKeyPressed(ImGuiKey.GamepadDpadRight) || ImGui.IsKeyPressed(ImGuiKey.GamepadLStickRight)
+            || ImGui.IsKeyPressed(ImGuiKey.RightArrow)) return 1;
+        return 0;
     }
 
     /// <summary>
@@ -350,8 +392,12 @@ internal sealed class OnboardingPopup : Popup
                 continue;
             }
             string preview = _display[i] >= 0 ? OptionLabel(field.Options[_display[i]]) : KeepValue(field);
-            if (ImGui.BeginCombo($"##{field.Id}", preview))
+            bool listed = ImGui.BeginCombo($"##{field.Id}", preview);
+            if (!listed && Step() is var step && step != 0)
+                _display[i] = Math.Clamp(_display[i] + step, keep ? -1 : 0, field.Options.Count - 1);
+            if (listed)
             {
+                _comboOpen = true;
                 if (keep)
                 {
                     bool kept = _display[i] < 0;
@@ -475,6 +521,12 @@ internal sealed class OnboardingPopup : Popup
             {
                 double d = s.Step > 0 ? Math.Round(v / s.Step) * s.Step : v;
                 choice.Value = Math.Clamp(d, s.Min, s.Max);
+                _pageTouched[_pageAt] = true;
+            }
+            if (Step() is var step && step != 0)
+            {
+                double by = s.Step > 0 ? s.Step : (s.Max - s.Min) / 20.0;
+                choice.Value = Math.Clamp(Math.Round(v / by) * by + step * by, s.Min, s.Max);
                 _pageTouched[_pageAt] = true;
             }
             if (s.Tip is { } tip && ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T(tip));
@@ -601,7 +653,7 @@ internal sealed class OnboardingPopup : Popup
 
         ImGui.AlignTextToFramePadding();
         ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
-        ImGui.TextUnformatted(Prompt());
+        ImGui.TextUnformatted(Prompt(right));
         ImGui.PopStyleColor();
         ImGui.SameLine(avail - group);
 
@@ -616,13 +668,18 @@ internal sealed class OnboardingPopup : Popup
         if (ImGui.Button(Localization.T(right), new Vector2(rightW, 0f))) Forward();
     }
 
-    /// <summary>The input prompt for the page's foot: Enter or A selects, Escape or B goes back, or skips on the welcome.</summary>
-    string Prompt()
+    /// <summary>
+    /// The input prompt for the page's foot: Enter or A selects, Escape or B goes back
+    /// (on the welcome only the button skips), Start does the right-hand button
+    /// (<paramref name="right"/>), and Y switches Basic and Advanced on the tiers page.
+    /// </summary>
+    string Prompt(string? right)
     {
-        string back = _page == Page.Welcome
-            ? Localization.T(_inGame ? "verdite.setup.cancel" : "verdite.setup.skip")
-            : Localization.T("verdite.setup.prompt.back");
-        return $"Enter / A: {Localization.T("verdite.setup.prompt.select")}    Esc / B: {back}";
+        var prompt = $"Enter / A: {Localization.T("verdite.setup.prompt.select")}";
+        if (_page != Page.Welcome) prompt += $"    Esc / B: {Localization.T("verdite.setup.prompt.back")}";
+        if (right is not null) prompt += $"    Start: {Localization.T(right)}";
+        if (_page == Page.Tiers) prompt += $"    Y: {Localization.T(_advanced ? "verdite.setup.basic" : "verdite.setup.advanced")}";
+        return prompt;
     }
 
     void Back()
@@ -731,6 +788,7 @@ internal sealed class OnboardingPopup : Popup
         if (ImGui.SliderInt($"##{field.Id}", ref at, lo, last, label.Replace("%", "%%"),
                             ImGuiSliderFlags.AlwaysClamp | ImGuiSliderFlags.NoInput))
             index = at;
+        index = Math.Clamp(index + Step(), lo, last);
     }
 
     /// <summary>
@@ -891,11 +949,12 @@ internal sealed class OnboardingPopup : Popup
     // ---- The pad, for ImGui's navigation ----
 
     /// <summary>SDL game-controller buttons, as the runtime numbers them (the stick
-    /// directions are its own 102-105), to ImGui's gamepad keys.</summary>
+    /// directions are its own 102-105), to ImGui's gamepad keys. Square/X is left out:
+    /// held, it is ImGui's window switcher, which takes the focus off the setup.</summary>
     static readonly (int Button, ImGuiKey Key)[] PadKeys =
     [
         (0, ImGuiKey.GamepadFaceDown), (1, ImGuiKey.GamepadFaceRight),
-        (2, ImGuiKey.GamepadFaceLeft), (3, ImGuiKey.GamepadFaceUp),
+        (3, ImGuiKey.GamepadFaceUp), (6, ImGuiKey.GamepadStart),
         (9, ImGuiKey.GamepadL1), (10, ImGuiKey.GamepadR1),
         (11, ImGuiKey.GamepadDpadUp), (12, ImGuiKey.GamepadDpadDown),
         (13, ImGuiKey.GamepadDpadLeft), (14, ImGuiKey.GamepadDpadRight),
