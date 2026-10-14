@@ -8,11 +8,12 @@ using RecompOne.Runtime.Host.Window;
 namespace Verdite.Core;
 
 /// <summary>
-/// The setup's pages: a welcome with three presets (Recommended, Original++, Original)
-/// and Customise, the display step, the tiers (Basic or Advanced behind one switch),
-/// the game's own choice pages (if its spec has any), a summary. A preset goes
-/// straight to the summary, where Adjust takes its choices into the display, the
-/// tiers and the choice pages; Customise walks them from what the player started with. In the launcher (<see cref="Build"/> set) a strip at the foot follows
+/// The setup's pages: a welcome with three presets (Original, Balanced, Modern)
+/// and Custom, the display step, the tiers (Basic or Advanced behind one switch),
+/// the game's own choice pages (if its spec has any), a summary. Every choice on the
+/// welcome is a starting point, not an answer: a preset fills the pages with its
+/// choices and Custom with what the player has now, and the player walks them all
+/// to the summary either way. In the launcher (<see cref="Build"/> set) a strip at the foot follows
 /// the game's build, and the popup stays up after Finish until the build is done,
 /// which is what holds the game back until both are. In the game it is opened
 /// from the settings page and closes on Finish, or on a list of what waits for
@@ -28,8 +29,18 @@ internal sealed class OnboardingPopup : Popup
     public const int TierCount = 3;
     static readonly string[] TierKeys = ["verdite.setup.tier.original", "verdite.setup.tier.originalplus", "verdite.setup.tier.modern"];
 
+    /// <summary>The welcome card's title, the heading and the badge, as multiples of the text size.</summary>
+    const float CardTitleScale = 1.3f;
+    const float HeadingScale = 1.5f;
+
+    /// <summary>
+    /// The popup's scale: 1 at 1080 pixels high, larger above it, so the text stays
+    /// readable at 1440 and above. Read each frame; every pixel size here is multiplied by it.
+    /// </summary>
+    static float UiScale => Math.Max(1f, ImGui.GetMainViewport().Size.Y / 1080f);
+
     protected override string TitleKey => "verdite.setup.title";
-    protected override Vector2 Size => new(720f, 580f);
+    protected override Vector2 Size => new Vector2(1100f, 680f) * UiScale;
 
     /// <summary>Its own Cancel and Back: Escape is Back here, not close.</summary>
     protected override bool Closable => false;
@@ -51,7 +62,6 @@ internal sealed class OnboardingPopup : Popup
 
     Page _page;
     bool _advanced;
-    bool _preset;
     bool _focus;
     int[] _display = [];
     int[][] _tiers = [];
@@ -64,6 +74,8 @@ internal sealed class OnboardingPopup : Popup
     /// <summary>Whether the player has changed a choice page; one untouched follows its category.</summary>
     bool[] _pageTouched = [];
     Onboarding.Result? _result;
+    /// <summary>Each preset's display as one line ("1280 x 720 / 16:9 / 60 fps"), by tier, from OnOpened.</summary>
+    string[] _specLines = [];
 
     public OnboardingPopup(OnboardingSpec spec, string tag, bool inGame)
     {
@@ -76,7 +88,6 @@ internal sealed class OnboardingPopup : Popup
     {
         Go(Page.Welcome);
         _advanced = false;
-        _preset = false;
         _result = null;
         Finished = false;
         // A first run starts the display on what suits the monitor; any other run
@@ -92,7 +103,24 @@ internal sealed class OnboardingPopup : Popup
         _pages = [.. _spec.Pages.Select(p => Onboarding.Detect(_spec, p))];
         _startPages = [.. _pages.Select(c => c.Clone())];
         _pageTouched = new bool[_spec.Pages.Count];
+        // Deterministic for the open (the monitor is read once), so each preset's line is made once.
+        _specLines = [.. Enumerable.Range(0, TierCount).Select(t => SpecLine(Onboarding.Preset(_spec, t)))];
         Nav(true);
+    }
+
+    /// <summary>A preset's display as one line: each display choice in the spec's order, the
+    /// window's left out, a trailing parenthetical stripped, the parts joined with " / ".</summary>
+    string SpecLine((int[] Display, int[][] Tiers, SetupPageChoice[] Pages) preset)
+    {
+        var parts = new List<string>();
+        for (int i = 0; i < _spec.Display.Count && i < preset.Display.Length; i++)
+        {
+            var field = _spec.Display[i];
+            int o = preset.Display[i];
+            if (field.Id == "window" || o < 0 || o >= field.Options.Count) continue;
+            parts.Add(Regex.Replace(OptionLabel(field.Options[o]), @"\s*\([^)]*\)$", ""));
+        }
+        return string.Join(" / ", parts);
     }
 
     protected override void OnClosed() => Nav(false);
@@ -108,11 +136,17 @@ internal sealed class OnboardingPopup : Popup
 
     protected override void DrawContent()
     {
+        float s = UiScale;
+        ImGui.SetWindowFontScale(s);
+
         var style = ImGui.GetStyle();
         float footer = ImGui.GetFrameHeightWithSpacing() + style.ItemSpacing.Y * 2f;
         if (Build is not null) footer += ImGui.GetTextLineHeightWithSpacing() + ImGui.GetFrameHeightWithSpacing();
 
-        if (ImGui.BeginChild("##page", new Vector2(0f, -footer)))
+        bool open = ImGui.BeginChild("##page", new Vector2(0f, -footer));
+        // The page is a window of its own, so its font scale is set again.
+        ImGui.SetWindowFontScale(s);
+        if (open)
         {
             switch (_page)
             {
@@ -138,50 +172,156 @@ internal sealed class OnboardingPopup : Popup
             Back();
     }
 
+    /// <summary>
+    /// The welcome: its heading and text, then the three presets side by side (Original,
+    /// Balanced, Modern), filling the page's height down to Custom, a full-width card
+    /// at the foot. First run and a re-run differ only in their heading and text.
+    /// </summary>
     void Welcome()
     {
-        Heading("verdite.setup.welcome.title");
-        Wrapped(_spec.Welcome ?? "verdite.setup.welcome");
+        float s = UiScale;
+        Heading(_inGame ? "verdite.setup.again.title" : "verdite.setup.welcome.title");
+        Wrapped(_inGame ? (_spec.WelcomeAgain ?? "verdite.setup.again") : (_spec.Welcome ?? "verdite.setup.welcome"));
         if (Build is not null)
         {
             ImGui.Spacing();
             Wrapped("verdite.setup.welcome.building");
         }
         ImGui.Spacing();
+        Dim("verdite.setup.welcome.start");
+        ImGui.Spacing();
 
-        float h = ImGui.GetTextLineHeightWithSpacing() * 3f;
-        ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new Vector2(0f, 0.5f));
-        if (_focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
-        if (ImGui.Button($"{Localization.T("verdite.setup.recommended")}\n{Localization.T("verdite.setup.recommended.desc")}", new Vector2(-1f, h)))
-            Pick(2);
-        ImGui.Spacing();
-        if (ImGui.Button($"{Localization.T("verdite.setup.originalplus")}\n{Localization.T("verdite.setup.originalplus.desc")}", new Vector2(-1f, h)))
-            Pick(1);
-        ImGui.Spacing();
-        var list = string.Join(", ", _spec.Display
-            .Where(f => f.Original is { } o && o >= 0 && o < f.Options.Count)
-            .Select(f => OptionLabel(f.Options[f.Original!.Value])));
-        if (ImGui.Button($"{Localization.T("verdite.setup.original")}\n{Localization.T("verdite.setup.original.desc", list)}", new Vector2(-1f, h)))
-            Pick(0);
-        ImGui.Spacing();
-        if (ImGui.Button($"{Localization.T("verdite.setup.customise")}\n{Localization.T("verdite.setup.customise.desc")}", new Vector2(-1f, h)))
+        var spacing = ImGui.GetStyle().ItemSpacing;
+        var avail = ImGui.GetContentRegionAvail();
+        var presets = new (string Id, int Tier, string Title, string? Badge, string Desc)[]
+        {
+            ("##card.original", 0, Localization.T("verdite.setup.original"), null, Localization.T("verdite.setup.original.desc")),
+            ("##card.originalplus", 1, Localization.T("verdite.setup.originalplus"), null, Localization.T("verdite.setup.originalplus.desc")),
+            ("##card.modern", 2, Localization.T("verdite.setup.tier.modern"), Localization.T("verdite.setup.recommended"), Localization.T("verdite.setup.recommended.desc")),
+        };
+        string customDesc = Localization.T("verdite.setup.customise.desc");
+        float customH = CardHeight(avail.X, customDesc, null);
+        float columnW = (avail.X - spacing.X * (presets.Length - 1)) / presets.Length;
+        // The grid takes the height Custom leaves, but never less than its tallest card,
+        // so a short window scrolls the page instead of cutting a card's text.
+        float tallest = presets.Max(c => CardHeight(columnW, c.Desc, _specLines[c.Tier]));
+        float gridH = Math.Max(tallest, avail.Y - customH - spacing.Y);
+
+        for (int i = 0; i < presets.Length; i++)
+        {
+            var c = presets[i];
+            if (i > 0) ImGui.SameLine();
+            // The recommended card takes the focus on opening, wherever it sits in the row.
+            if (c.Badge is not null && _focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
+            if (Card(c.Id, c.Title, c.Badge, c.Desc, _specLines[c.Tier], new Vector2(columnW, gridH)))
+                Pick(c.Tier);
+        }
+        if (Card("##card.custom", Localization.T("verdite.setup.customise"), null, customDesc, null, new Vector2(avail.X, customH)))
         {
             _display = [.. _startDisplay];
             _tiers = [.. _startTiers.Select(t => (int[])t.Clone())];
             _pages = [.. _startPages.Select(c => c.Clone())];
             _pageTouched = new bool[_spec.Pages.Count];
-            _preset = false;
             Go(Page.Display);
         }
-        ImGui.PopStyleVar();
     }
 
-    /// <summary>A preset's choices (tier 0, 1 or 2), then the summary.</summary>
+    /// <summary>A card's padding and the gap between its lines, and the room its chevron keeps at the right.</summary>
+    static float CardPad => 12f * UiScale;
+    static float CardGap => 5f * UiScale;
+    static float CardChevron => 28f * UiScale;
+
+    /// <summary>The height a card of <paramref name="width"/> needs for its title, description and spec line.</summary>
+    static float CardHeight(float width, string desc, string? spec)
+    {
+        float textW = width - CardPad * 2f - CardChevron;
+        float h = CardPad + ImGui.GetTextLineHeight() * CardTitleScale + CardGap + ImGui.CalcTextSize(desc, false, textW).Y;
+        if (spec is not null) h += CardGap + ImGui.CalcTextSize(spec, false, textW).Y;
+        return h + CardPad;
+    }
+
+    /// <summary>
+    /// A welcome card of <paramref name="size"/>: a rounded panel, its title (larger, faked
+    /// bold, with a badge after it when given), its description wrapped to the card from
+    /// the top, the spec line dimmed at the card's foot, and a chevron at the foot's right,
+    /// since every card leads on to the pages. The panel is an invisible button, so the
+    /// keyboard and the pad reach it like any button. Its colours are the theme's, as
+    /// every other window's: a frame, lit as a hovered frame and edged in the navigation
+    /// colour when hovered or focused. True when chosen.
+    /// </summary>
+    static bool Card(string id, string title, string? badge, string desc, string? spec, Vector2 size)
+    {
+        float s = UiScale;
+        float pad = CardPad, gap = CardGap;
+        float lineH = ImGui.GetTextLineHeight();
+        float titleH = lineH * CardTitleScale;
+        float textW = size.X - pad * 2f - CardChevron;
+
+        // One group, so the card is one item to SameLine after, whatever its text moved.
+        ImGui.BeginGroup();
+        bool clicked = ImGui.InvisibleButton(id, size);
+        bool lit = ImGui.IsItemHovered() || ImGui.IsItemFocused();
+        var min = ImGui.GetItemRectMin();
+        var max = ImGui.GetItemRectMax();
+        var draw = ImGui.GetWindowDrawList();
+        var font = ImGui.GetFont();
+        var style = ImGui.GetStyle();
+        uint Col(ImGuiCol c) => ImGui.ColorConvertFloat4ToU32(style.Colors[(int)c]);
+        float round = style.FrameRounding;
+
+        draw.AddRectFilled(min, max, Col(lit ? ImGuiCol.FrameBgHovered : ImGuiCol.FrameBg), round);
+        draw.AddRect(min, max, Col(lit ? ImGuiCol.NavHighlight : ImGuiCol.Border), round,
+            ImDrawFlags.None, (lit ? 2.5f : 1f) * s);
+
+        uint ink = Col(ImGuiCol.Text);
+        var origin = min + new Vector2(pad, pad);
+        float big = ImGui.GetFontSize() * CardTitleScale;
+        // Faked bold: the same text a pixel to the right.
+        draw.AddText(font, big, origin, ink, title);
+        draw.AddText(font, big, origin + new Vector2(s, 0f), ink, title);
+
+        if (badge is not null)
+        {
+            const float badgeScale = 0.8f;
+            float titleW = ImGui.CalcTextSize(title).X * CardTitleScale;
+            float bh = lineH * badgeScale + 4f * s;
+            float bw = ImGui.CalcTextSize(badge).X * badgeScale + 12f * s;
+            var at = new Vector2(origin.X + titleW + 10f * s, origin.Y + (titleH - bh) * 0.5f);
+            draw.AddRectFilled(at, at + new Vector2(bw, bh), Col(ImGuiCol.ButtonActive), round);
+            draw.AddText(font, ImGui.GetFontSize() * badgeScale, at + new Vector2(6f * s, 2f * s), ink, badge);
+        }
+
+        // The description under the title, and the spec line at the foot, dimmed as the
+        // rest of the page's secondary text. The wrap position is window-local, not screen.
+        ImGui.SetCursorScreenPos(new Vector2(origin.X, origin.Y + titleH + gap));
+        ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + textW);
+        ImGui.TextWrapped(desc);
+        if (spec is not null)
+        {
+            float specH = ImGui.CalcTextSize(spec, false, textW).Y;
+            ImGui.SetCursorScreenPos(new Vector2(origin.X, max.Y - pad - specH));
+            ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
+            ImGui.TextWrapped(spec);
+            ImGui.PopStyleColor();
+        }
+        ImGui.PopTextWrapPos();
+        ImGui.EndGroup();
+
+        float cx = max.X - pad - 6f * s, cy = max.Y - pad - lineH * 0.5f;
+        draw.AddTriangleFilled(new Vector2(cx, cy - 7f * s), new Vector2(cx + 6f * s, cy),
+            new Vector2(cx, cy + 7f * s), ink);
+        return clicked;
+    }
+
+    /// <summary>
+    /// A preset (tier 0, 1 or 2) as the starting point: its choices fill the pages, and
+    /// the player walks them from the display on, changing what they like.
+    /// </summary>
     void Pick(int tier)
     {
         (_display, _tiers, _pages) = Onboarding.Preset(_spec, tier);
-        _preset = true;
-        Go(Page.Summary);
+        _pageTouched = new bool[_spec.Pages.Count];
+        Go(Page.Display);
     }
 
     void Display()
@@ -362,17 +502,6 @@ internal sealed class OnboardingPopup : Popup
 
     void Summary()
     {
-        if (_preset)
-        {
-            // A preset's choices stay as they are; Adjust only opens them for changing.
-            if (_focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
-            if (ImGui.Button(Localization.T("verdite.setup.adjust"), new Vector2(-1f, 0f)))
-            {
-                _preset = false;
-                Go(Page.Display);
-            }
-            ImGui.Spacing();
-        }
         Heading("verdite.setup.summary");
         Dim("verdite.setup.summary.intro");
         ImGui.Spacing();
@@ -443,11 +572,15 @@ internal sealed class OnboardingPopup : Popup
         ImGui.ProgressBar(fraction, new Vector2(-1f, ImGui.GetFrameHeight() * 0.5f), "");
     }
 
+    /// <summary>
+    /// The buttons at the foot, at their natural width (at least 120 pixels) and right-aligned
+    /// as a group; on the left, the input prompt, dimmed. Waiting has neither.
+    /// </summary>
     void Footer()
     {
         var style = ImGui.GetStyle();
+        float s = UiScale;
         float avail = ImGui.GetContentRegionAvail().X;
-        float half = (avail - style.ItemSpacing.X) / 2f;
 
         (string? left, string? right) = _page switch
         {
@@ -459,18 +592,37 @@ internal sealed class OnboardingPopup : Popup
             Page.Report => (null, "verdite.setup.close"),
             _ => (null, null),
         };
+        if (left is null && right is null) return;
+
+        float Width(string key) => Math.Max(120f * s, ImGui.CalcTextSize(Localization.T(key)).X + style.FramePadding.X * 2f);
+        float leftW = left is null ? 0f : Width(left);
+        float rightW = right is null ? 0f : Width(right);
+        float group = leftW + (left is not null && right is not null ? style.ItemSpacing.X : 0f) + rightW;
+
+        ImGui.AlignTextToFramePadding();
+        ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
+        ImGui.TextUnformatted(Prompt());
+        ImGui.PopStyleColor();
+        ImGui.SameLine(avail - group);
 
         if (left is not null)
         {
-            if (ImGui.Button(Localization.T(left), new Vector2(half, 0f))) Back();
-            ImGui.SameLine();
+            if (ImGui.Button(Localization.T(left), new Vector2(leftW, 0f))) Back();
+            if (right is not null) ImGui.SameLine();
         }
-        else ImGui.Dummy(new Vector2(half, 0f));
         if (right is null) return;
-        ImGui.SameLine(avail - half + style.WindowPadding.X);
-        // Finish takes the focus on a summary with no Adjust above it, and Close on the report.
-        if (_focus && (_page == Page.Report || _page == Page.Summary && !_preset)) { ImGui.SetKeyboardFocusHere(); _focus = false; }
-        if (ImGui.Button(Localization.T(right), new Vector2(half, 0f))) Forward();
+        // Finish takes the focus on the summary, and Close on the report.
+        if (_focus && (_page == Page.Report || _page == Page.Summary)) { ImGui.SetKeyboardFocusHere(); _focus = false; }
+        if (ImGui.Button(Localization.T(right), new Vector2(rightW, 0f))) Forward();
+    }
+
+    /// <summary>The input prompt for the page's foot: Enter or A selects, Escape or B goes back, or skips on the welcome.</summary>
+    string Prompt()
+    {
+        string back = _page == Page.Welcome
+            ? Localization.T(_inGame ? "verdite.setup.cancel" : "verdite.setup.skip")
+            : Localization.T("verdite.setup.prompt.back");
+        return $"Enter / A: {Localization.T("verdite.setup.prompt.select")}    Esc / B: {back}";
     }
 
     void Back()
@@ -493,8 +645,7 @@ internal sealed class OnboardingPopup : Popup
                 else Go(Page.Tiers);
                 break;
             case Page.Summary:
-                if (_preset) ToWelcome();
-                else if (_spec.Pages.Count > 0) { _pageAt = _spec.Pages.Count - 1; Go(Page.Choice); }
+                if (_spec.Pages.Count > 0) { _pageAt = _spec.Pages.Count - 1; Go(Page.Choice); }
                 else Go(Page.Tiers);
                 break;
             case Page.Report: Close(); break;
@@ -706,9 +857,17 @@ internal sealed class OnboardingPopup : Popup
         }
     }
 
+    /// <summary>A page's heading: 1.5x, faked bold (drawn twice, a pixel apart), over its separator.</summary>
     static void Heading(string key)
     {
-        ImGui.TextUnformatted(Localization.T(key));
+        var draw = ImGui.GetWindowDrawList();
+        var at = ImGui.GetCursorScreenPos();
+        uint ink = ImGui.ColorConvertFloat4ToU32(ImGui.GetStyle().Colors[(int)ImGuiCol.Text]);
+        string text = Localization.T(key);
+        float size = ImGui.GetFontSize() * HeadingScale;
+        draw.AddText(ImGui.GetFont(), size, at, ink, text);
+        draw.AddText(ImGui.GetFont(), size, at + new Vector2(UiScale, 0f), ink, text);
+        ImGui.Dummy(new Vector2(0f, ImGui.GetTextLineHeight() * HeadingScale));
         ImGui.Separator();
         ImGui.Spacing();
     }
@@ -795,6 +954,11 @@ internal sealed class OnboardingPopup : Popup
           "pt-BR": "Antes de jogar, escolha como o jogo deve parecer, soar e ser controlado. Tudo aqui pode ser alterado depois nas configurações.",
           "es-419": "Antes de jugar, elige cómo debe verse, sonar y controlarse el juego. Todo esto se puede cambiar después en la configuración."
         },
+        "verdite.setup.welcome.start": {
+          "en": "Choose a starting point. Every choice it makes is shown on the pages that follow, where you can change any of them.",
+          "pt-BR": "Escolha um ponto de partida. Cada escolha dele aparece nas páginas seguintes, onde você pode mudar qualquer uma.",
+          "es-419": "Elige un punto de partida. Cada opción que hace se muestra en las páginas siguientes, donde puedes cambiar cualquiera."
+        },
         "verdite.setup.welcome.building": {
           "en": "The game is being built from your disc in the meantime. It starts once both are done.",
           "pt-BR": "Enquanto isso, o jogo está sendo construído a partir do seu disco. Ele inicia quando as duas coisas terminarem.",
@@ -802,41 +966,48 @@ internal sealed class OnboardingPopup : Popup
         },
         "verdite.setup.recommended": { "en": "Recommended", "pt-BR": "Recomendado", "es-419": "Recomendado" },
         "verdite.setup.recommended.desc": {
-          "en": "Everything the port adds, with the display suited to your monitor.",
-          "pt-BR": "Tudo o que o port acrescenta, com a tela adequada ao seu monitor.",
-          "es-419": "Todo lo que añade el port, con la pantalla adaptada a tu monitor."
+          "en": "Every enhancement the port adds: smoother frame rate, sharper textures and lighting, twin-stick controls, and better sound.",
+          "pt-BR": "Todas as melhorias que o port acrescenta: taxa de quadros mais suave, texturas e iluminação mais nítidas, controles de dois analógicos e um som melhor.",
+          "es-419": "Todas las mejoras que añade el port: una tasa de cuadros más fluida, texturas e iluminación más nítidas, controles de dos sticks y un mejor sonido."
         },
-        "verdite.setup.originalplus": { "en": "Original++", "pt-BR": "Original++", "es-419": "Original++" },
+        "verdite.setup.originalplus": { "en": "Balanced", "pt-BR": "Equilibrado", "es-419": "Equilibrado" },
         "verdite.setup.originalplus.desc": {
-          "en": "The PlayStation's look and feel, with what its hardware got wrong fixed, and the display suited to your monitor.",
-          "pt-BR": "A aparência e a sensação do PlayStation, com o que o hardware fazia errado corrigido, e a tela adequada ao seu monitor.",
-          "es-419": "El aspecto y la sensación de la PlayStation, con lo que el hardware hacía mal corregido, y la pantalla adaptada a tu monitor."
+          "en": "The PlayStation's look and feel, with its rendering artifacts (texture warping, vertex jitter) corrected, analog controls and enhanced sound.",
+          "pt-BR": "A aparência e a sensação do PlayStation, com os artefatos de renderização (distorção de texturas, tremor de vértices) corrigidos, controles analógicos e som aprimorado.",
+          "es-419": "El aspecto y la sensación de la PlayStation, con sus artefactos de renderizado (distorsión de texturas, temblor de vértices) corregidos, controles analógicos y sonido mejorado."
         },
         "verdite.setup.original": { "en": "Original", "pt-BR": "Original", "es-419": "Original" },
         "verdite.setup.original.desc": {
-          "en": "Every style as the PlayStation ran it, at {0}.",
-          "pt-BR": "Todos os estilos como o PlayStation os rodava, em {0}.",
-          "es-419": "Todos los estilos como los ejecutaba la PlayStation, a {0}."
+          "en": "The game as the PlayStation ran it: its picture, D-pad controls and sound.",
+          "pt-BR": "O jogo como o PlayStation o rodava: a imagem, os controles do direcional e o som.",
+          "es-419": "El juego tal como lo ejecutaba la PlayStation: su imagen, los controles de cruceta y el sonido."
         },
-        "verdite.setup.customise": { "en": "Customise…", "pt-BR": "Personalizar…", "es-419": "Personalizar…" },
+        "verdite.setup.customise": { "en": "Custom", "pt-BR": "Personalizado", "es-419": "Personalizado" },
         "verdite.setup.customise.desc": {
-          "en": "Choose the display and a style for each part yourself.",
-          "pt-BR": "Escolha a tela e um estilo para cada parte, por conta própria.",
-          "es-419": "Elige tú mismo la pantalla y un estilo para cada parte."
+          "en": "Start from your current settings.",
+          "pt-BR": "Comece pelas suas configurações atuais.",
+          "es-419": "Empieza desde tu configuración actual."
         },
-        "verdite.setup.adjust": { "en": "Adjust these choices…", "pt-BR": "Ajustar estas escolhas…", "es-419": "Ajustar estas opciones…" },
+        "verdite.setup.again.title": { "en": "Run Setup Again", "pt-BR": "Refazer configuração", "es-419": "Repetir configuración" },
+        "verdite.setup.again": {
+          "en": "Choose again how the game should look, sound and control. Your current settings are where each page starts.",
+          "pt-BR": "Escolha de novo como o jogo deve parecer, soar e ser controlado. Suas configurações atuais são o ponto de partida de cada página.",
+          "es-419": "Elige de nuevo cómo debe verse, sonar y controlarse el juego. Tu configuración actual es el punto de partida de cada página."
+        },
+        "verdite.setup.prompt.select": { "en": "Select", "pt-BR": "Selecionar", "es-419": "Seleccionar" },
+        "verdite.setup.prompt.back": { "en": "Back", "pt-BR": "Voltar", "es-419": "Atrás" },
         "verdite.setup.buildfailed": {
           "en": "The build failed. Finish setup to keep your choices; the reason follows.",
           "pt-BR": "A construção falhou. Conclua a configuração para manter suas escolhas; o motivo vem em seguida.",
           "es-419": "La construcción falló. Finaliza la configuración para conservar tus opciones; el motivo viene a continuación."
         },
         "verdite.setup.tiers.intro": {
-          "en": "Original is the game as the PlayStation ran it. Original++ keeps that look and feel and fixes what the hardware got wrong. Modern adds the port's enhancements.",
-          "pt-BR": "Original é o jogo como o PlayStation o rodava. Original++ mantém essa aparência e sensação e corrige o que o hardware fazia errado. Moderno acrescenta as melhorias do port.",
-          "es-419": "Original es el juego tal como lo ejecutaba la PlayStation. Original++ conserva ese aspecto y sensación y corrige lo que el hardware hacía mal. Moderno agrega las mejoras del port."
+          "en": "Original is the game as the PlayStation ran it. Balanced keeps that look and feel and fixes what the hardware got wrong. Modern adds the port's enhancements.",
+          "pt-BR": "Original é o jogo como o PlayStation o rodava. Equilibrado mantém essa aparência e sensação e corrige o que o hardware fazia errado. Moderno acrescenta as melhorias do port.",
+          "es-419": "Original es el juego tal como lo ejecutaba la PlayStation. Equilibrado conserva ese aspecto y sensación y corrige lo que el hardware hacía mal. Moderno agrega las mejoras del port."
         },
         "verdite.setup.tier.original": { "en": "Original", "pt-BR": "Original", "es-419": "Original" },
-        "verdite.setup.tier.originalplus": { "en": "Original++", "pt-BR": "Original++", "es-419": "Original++" },
+        "verdite.setup.tier.originalplus": { "en": "Balanced", "pt-BR": "Equilibrado", "es-419": "Equilibrado" },
         "verdite.setup.tier.modern": { "en": "Modern", "pt-BR": "Moderno", "es-419": "Moderno" },
         "verdite.setup.display": { "en": "Display", "pt-BR": "Tela", "es-419": "Pantalla" },
         "verdite.setup.display.intro": {

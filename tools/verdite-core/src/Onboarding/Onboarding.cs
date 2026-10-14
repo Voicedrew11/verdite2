@@ -410,6 +410,10 @@ internal sealed class OnboardingSpec
     /// <summary>The welcome's text, a localisation key; the setup's own when absent.</summary>
     public string? Welcome { get; set; }
 
+    /// <summary>The welcome's text when the game runs setup again (<c>welcomeAgain</c> in the JSON,
+    /// read case-insensitively); the setup's own re-run text when absent.</summary>
+    public string? WelcomeAgain { get; set; }
+
     /// <summary>The display step, asked before the tiers and outside them.</summary>
     public List<SetupField> Display { get; set; } = [];
 
