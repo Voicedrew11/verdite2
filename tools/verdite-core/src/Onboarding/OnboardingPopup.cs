@@ -9,8 +9,8 @@ namespace Verdite.Core;
 
 /// <summary>
 /// The setup's pages: a welcome with three presets (Original, Balanced, Modern)
-/// and Custom, the display step, the tiers (Basic or Advanced behind one switch),
-/// the game's own choice pages (if its spec has any), a summary. Every choice on the
+/// and Custom, the display step, a tiers page per category (a tier for each of its
+/// groups), the game's own choice pages (if its spec has any), a summary. Every choice on the
 /// welcome is a starting point, not an answer: a preset fills the pages with its
 /// choices and Custom with what the player has now, and the player walks them all
 /// to the summary either way. In the launcher (<see cref="Build"/> set) a strip at the foot follows
@@ -23,18 +23,23 @@ namespace Verdite.Core;
 /// navigation, switched on only while the popup is open (the runtime's windows
 /// never had it) and fed the pad's buttons here, since the runtime's ImGui backend
 /// feeds it only the keyboard. On top of that navigation, the pad has shortcuts of
-/// its own: Start is Next (Finish on the summary), Circle/B is Back, Triangle/Y
-/// switches Basic and Advanced, and left and right on a focused list or slider step
-/// its value without opening or grabbing it.
+/// its own: Start is Next (Finish on the summary), Circle/B is Back, and left and
+/// right on a focused list or slider step its value without opening or grabbing it.
+/// The keyboard has a Next of its own too, PageDown, and the foot's hints name only
+/// the device that was used last (<see cref="_padActive"/>).
 /// </summary>
 internal sealed class OnboardingPopup : Popup
 {
     public const int TierCount = 3;
+    /// <summary>The tier the welcome's badge and the tiers page's preset row mark as recommended.</summary>
+    const int RecommendedTier = 2;
     static readonly string[] TierKeys = ["verdite.setup.tier.original", "verdite.setup.tier.originalplus", "verdite.setup.tier.modern"];
 
     /// <summary>The welcome card's title, the heading and the badge, as multiples of the text size.</summary>
     const float CardTitleScale = 1.3f;
     const float HeadingScale = 1.5f;
+    /// <summary>A tiers page's group header, as a multiple of the text size: larger than the body, so the groups read as sections.</summary>
+    const float GroupScale = 1.22f;
 
     /// <summary>
     /// The popup's scale: 1 at 1080 pixels high, larger above it, so the text stays
@@ -64,12 +69,18 @@ internal sealed class OnboardingPopup : Popup
     readonly bool _inGame;
 
     Page _page;
-    bool _advanced;
     bool _focus;
+    /// <summary>
+    /// The device the player used last: a pad button pressed sets it, a key, a click or
+    /// a mouse move clears it. It picks which input hints the foot shows.
+    /// </summary>
+    bool _padActive;
     int[] _display = [];
     int[][] _tiers = [];
     int[] _startDisplay = [];
     int[][] _startTiers = [];
+    /// <summary>The tiers page on screen, an index into the spec's categories.</summary>
+    int _catAt;
     /// <summary>The choice page on screen, an index into the spec's pages.</summary>
     int _pageAt;
     SetupPageChoice[] _pages = [];
@@ -90,9 +101,9 @@ internal sealed class OnboardingPopup : Popup
     protected override void OnOpened()
     {
         Go(Page.Welcome);
-        _advanced = false;
         _result = null;
         Finished = false;
+        _padActive = false;
         // A first run starts the display on what suits the monitor; any other run
         // (from the game, after a version bump, forced) on what is set now, so
         // clicking through changes nothing the player chose.
@@ -131,6 +142,7 @@ internal sealed class OnboardingPopup : Popup
     protected override void Update()
     {
         if (!IsOpen) return;
+        ReadDevice();
         FeedPad();
         if (_page == Page.Waiting && (Build is null || Build().Done || Build().Error is not null)) Close();
     }
@@ -141,11 +153,16 @@ internal sealed class OnboardingPopup : Popup
     {
         float s = UiScale;
         ImGui.SetWindowFontScale(s);
+        _lastFocusId = _focusId;
+        _focusId = 0;
 
         var style = ImGui.GetStyle();
         float footer = ImGui.GetFrameHeightWithSpacing() + style.ItemSpacing.Y * 2f;
         if (Build is not null) footer += ImGui.GetTextLineHeightWithSpacing() + ImGui.GetFrameHeightWithSpacing();
 
+        // A visible scrollbar, so a page taller than the window says it scrolls. BeginChild reads
+        // the style, so it is pushed before and popped after the child is ended.
+        ImGui.PushStyleVar(ImGuiStyleVar.ScrollbarSize, 12f * s);
         bool open = ImGui.BeginChild("##page", new Vector2(0f, -footer));
         // The page is a window of its own, so its font scale is set again.
         ImGui.SetWindowFontScale(s);
@@ -155,7 +172,7 @@ internal sealed class OnboardingPopup : Popup
             {
                 case Page.Welcome: Welcome(); break;
                 case Page.Display: Display(); break;
-                case Page.Tiers: if (_advanced) Advanced(); else Basic(); break;
+                case Page.Tiers: Tiers(); break;
                 case Page.Choice: Choice(); break;
                 case Page.Summary: Summary(); break;
                 case Page.Waiting: Waiting(); break;
@@ -163,6 +180,7 @@ internal sealed class OnboardingPopup : Popup
             }
         }
         ImGui.EndChild();
+        ImGui.PopStyleVar();
 
         ImGui.Separator();
         if (Build is not null) Strip();
@@ -172,8 +190,7 @@ internal sealed class OnboardingPopup : Popup
 
     /// <summary>
     /// The page-wide keys. Escape and Circle/B step back, but never off the welcome,
-    /// where Back is skip; Start goes on, as Next or Finish; Triangle/Y switches Basic
-    /// and Advanced on the tiers page. None of them while a list was open or a slider
+    /// where Back is skip; Start and PageDown go on, as Next or Finish. Neither while a list was open or a slider
     /// held last frame: ImGui's navigation spends Circle/B closing or releasing it
     /// before this frame is drawn, so this frame alone cannot tell.
     /// </summary>
@@ -187,13 +204,8 @@ internal sealed class OnboardingPopup : Popup
         if (_page != Page.Welcome
             && (ImGui.IsKeyPressed(ImGuiKey.Escape, false) || ImGui.IsKeyPressed(ImGuiKey.GamepadFaceRight, false)))
             Back();
-        else if (ImGui.IsKeyPressed(ImGuiKey.GamepadStart, false))
+        else if (ImGui.IsKeyPressed(ImGuiKey.GamepadStart, false) || ImGui.IsKeyPressed(ImGuiKey.PageDown, false))
             Forward();
-        else if (_page == Page.Tiers && ImGui.IsKeyPressed(ImGuiKey.GamepadFaceUp, false))
-        {
-            _advanced = !_advanced;
-            _focus = true;
-        }
     }
 
     /// <summary>A list was open this frame, or (<see cref="_busy"/>) a list or a held slider last frame.</summary>
@@ -235,11 +247,12 @@ internal sealed class OnboardingPopup : Popup
 
         var spacing = ImGui.GetStyle().ItemSpacing;
         var avail = ImGui.GetContentRegionAvail();
+        static string? Badge(int tier) => tier == RecommendedTier ? Localization.T("verdite.setup.recommended") : null;
         var presets = new (string Id, int Tier, string Title, string? Badge, string Desc)[]
         {
-            ("##card.original", 0, Localization.T("verdite.setup.original"), null, Localization.T("verdite.setup.original.desc")),
-            ("##card.originalplus", 1, Localization.T("verdite.setup.originalplus"), null, Localization.T("verdite.setup.originalplus.desc")),
-            ("##card.modern", 2, Localization.T("verdite.setup.tier.modern"), Localization.T("verdite.setup.recommended"), Localization.T("verdite.setup.recommended.desc")),
+            ("##card.original", 0, Localization.T("verdite.setup.original"), Badge(0), Localization.T("verdite.setup.original.desc")),
+            ("##card.originalplus", 1, Localization.T("verdite.setup.originalplus"), Badge(1), Localization.T("verdite.setup.originalplus.desc")),
+            ("##card.modern", 2, Localization.T("verdite.setup.tier.modern"), Badge(2), Localization.T("verdite.setup.recommended.desc")),
         };
         string customDesc = Localization.T("verdite.setup.customise.desc");
         float customH = CardHeight(avail.X, customDesc, null);
@@ -368,7 +381,7 @@ internal sealed class OnboardingPopup : Popup
 
     void Display()
     {
-        Heading("verdite.setup.display");
+        Heading("verdite.setup.display", StepText());
         Dim("verdite.setup.display.intro");
         if (Onboarding.Monitor() is { } m)
             Dim(Localization.T("verdite.setup.monitor", m.W, m.H, Onboarding.Refresh()), key: false);
@@ -416,59 +429,179 @@ internal sealed class OnboardingPopup : Popup
     }
 
     /// <summary>
-    /// The tiers page's top: Basic or Advanced as a switch, a line on what the chosen
-    /// one means, and the intro. Both pages start with it.
+    /// A category's tiers page: its name as the heading, the intro, the preset row that
+    /// sets every group at once, then each of its groups with a tier of its own. The
+    /// columns are cut once for the whole page, from the keep column any group on it
+    /// needs, so every group's buttons line up down the page. The spacing is tighter
+    /// here than on the other pages, so the page's six Presentation rows fit a 1280 by
+    /// 800 window without scrolling.
     /// </summary>
-    void Switch()
+    void Tiers()
     {
-        float w = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) / 2f;
-        if (LitButton(Localization.T("verdite.setup.basic"), "switchBasic", !_advanced, new Vector2(w, 0f))) _advanced = false;
-        ImGui.SameLine();
-        if (LitButton(Localization.T("verdite.setup.advanced"), "switchAdvanced", _advanced, new Vector2(-1f, 0f))) _advanced = true;
-        ImGui.Spacing();
-        var names = string.Join(", ", _spec.Categories.Select(c => Localization.T(c.Label)));
-        Dim(Localization.T(_advanced ? "verdite.setup.advanced.desc" : "verdite.setup.basic.desc", names), key: false);
+        var cat = _spec.Categories[_catAt];
+        var style = ImGui.GetStyle();
+        Heading(cat.Label, StepText());
         Dim("verdite.setup.tiers.intro");
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(style.ItemSpacing.X, style.ItemSpacing.Y * 0.5f));
+        bool anyKeep = Enumerable.Range(0, cat.Groups.Count).Any(g => _startTiers[_catAt][g] < 0);
+        var grid = MakeTierGrid(ImGui.GetCursorPosX(), ImGui.GetContentRegionAvail().X, style.ItemSpacing.X, anyKeep);
+        StepFocus(cat);
+        if (PresetRow(cat, grid, anyKeep) is { } preset)
+            for (int g = 0; g < cat.Groups.Count; g++) _tiers[_catAt][g] = preset;
+        for (int g = 0; g < cat.Groups.Count; g++)
+        {
+            var group = cat.Groups[g];
+            ImGui.Dummy(new Vector2(0f, 4f * UiScale));
+            // The row's top, before its header, for the focus bar in the gutter.
+            float top = ImGui.GetCursorScreenPos().Y;
+            GroupHeader(group.Label);
+            var pick = TierRow(g, $"{cat.Id}.{group.Id}", _tiers[_catAt][g], group.Tiers,
+                               Spans(group), _startTiers[_catAt][g] < 0, grid, top);
+            if (pick is { } p) _tiers[_catAt][g] = p < 0 ? _startTiers[_catAt][g] : p;
+        }
+        // The focus moved left or right onto a single column: that column is the one Up and Down keep.
+        // A merged run covers several columns and leaves the preference where it was.
+        if (!_focused.IsNone && _focused.Span == 1 && _focused != _lastFocused) _prefColumn = _focused.Start;
+        _moveTo = TierCell.None;
+        ImGui.PopStyleVar();
     }
 
-    void Basic()
+    /// <summary>
+    /// A tiers button, as the keyboard or pad sees it: its row (-1 the preset row, else the
+    /// group's index), the first tier of its run (-1 for the keep button; a preset is its
+    /// own tier), and how many columns the run covers (0 for keep). <see cref="None"/> when
+    /// no tiers button has the focus.
+    /// </summary>
+    readonly record struct TierCell(int Row, int Start, int Span)
     {
-        Switch();
-        for (int c = 0; c < _spec.Categories.Count; c++)
-        {
-            var cat = _spec.Categories[c];
-            ImGui.Spacing();
-            ImGui.SeparatorText(Localization.T(cat.Label));
-            int now = _tiers[c].Distinct().Count() == 1 ? _tiers[c][0] : -1;
-            // Keep restores what the groups started at, so a category set by hand is kept.
-            bool started = _startTiers[c].Distinct().Count() != 1 || _startTiers[c][0] < 0;
-            var pick = TierRow(cat.Id, now, cat.Tiers, Enumerable.Range(0, TierCount).ToArray(), started, first: c == 0);
-            if (pick is { } p)
-            {
-                if (p < 0) Array.Copy(_startTiers[c], _tiers[c], _tiers[c].Length);
-                else Array.Fill(_tiers[c], p);
-            }
-        }
+        public static readonly TierCell None = new(int.MinValue, 0, 0);
+        public bool IsNone => Row == int.MinValue;
     }
 
-    void Advanced()
+    /// <summary>The tiers button the focus was on last frame, to tell a move from a stay.</summary>
+    TierCell _lastFocused = TierCell.None;
+    /// <summary>The tiers button the focus is on this frame, set as the buttons are drawn.</summary>
+    TierCell _focused = TierCell.None;
+    /// <summary>
+    /// The column Up and Down keep to. A single-column button that takes the focus by Left or
+    /// Right sets it, so a row's run covering this column is where Up and Down land; a merged
+    /// run does not, so crossing a "Balanced / Modern" run leaves Modern as the target.
+    /// </summary>
+    int _prefColumn = 2;
+    /// <summary>
+    /// The button Up or Down moved the focus to this frame, drawn as the keyboard focus
+    /// before it is. Set and consumed in one frame, so ImGui's own move in the same frame is overridden.
+    /// </summary>
+    TierCell _moveTo = TierCell.None;
+
+    /// <summary>
+    /// Reads Up and Down this frame, from the tiers button the focus was on last frame: the
+    /// row above or below takes the focus on the run that covers the preferred column. The
+    /// preset row's Up and the last group's Down are left to ImGui's navigation, as is any
+    /// press while an item is held.
+    /// </summary>
+    void StepFocus(SetupCategory cat)
     {
-        Switch();
-        for (int c = 0; c < _spec.Categories.Count; c++)
+        _lastFocused = _focused;
+        _focused = TierCell.None;
+        _moveTo = TierCell.None;
+        if (_lastFocused.IsNone || ImGui.IsAnyItemActive()) return;
+        int dir = ImGui.IsKeyPressed(ImGuiKey.GamepadDpadUp) || ImGui.IsKeyPressed(ImGuiKey.GamepadLStickUp) || ImGui.IsKeyPressed(ImGuiKey.UpArrow) ? -1
+            : ImGui.IsKeyPressed(ImGuiKey.GamepadDpadDown) || ImGui.IsKeyPressed(ImGuiKey.GamepadLStickDown) || ImGui.IsKeyPressed(ImGuiKey.DownArrow) ? 1
+            : 0;
+        int row = _lastFocused.Row + dir;
+        if (dir != 0 && row >= -1 && row < cat.Groups.Count) _moveTo = PreferredCell(cat, row);
+    }
+
+    /// <summary>The button of a row that covers the preferred column: the preset of that tier, or the run covering it.</summary>
+    TierCell PreferredCell(SetupCategory cat, int row)
+    {
+        if (row < 0) return new TierCell(-1, _prefColumn, 1);
+        var span = Spans(cat.Groups[row]);
+        if (_prefColumn >= span.Length) return TierCell.None;
+        int s = span[_prefColumn];
+        return new TierCell(row, s, span.Count(x => x == s));
+    }
+
+    /// <summary>Gives the keyboard focus to <paramref name="cell"/> when a move was set for it, just before it is drawn.</summary>
+    void Aim(TierCell cell)
+    {
+        if (_moveTo.Row != cell.Row || _moveTo.Start != cell.Start) return;
+        ImGui.SetKeyboardFocusHere();
+        _moveTo = TierCell.None;
+    }
+
+    /// <summary>
+    /// The preset row: Original, Balanced and Modern on the page's tier columns, each setting
+    /// every group on the page to its tier. Lit when every group is at that tier (the same
+    /// button, merged or not); when no preset is lit the groups are mixed, and a dim "Custom"
+    /// marks it, in the keep column when the page has one. Modern carries the recommended
+    /// note. The row takes the page's focus first, on Original. Returns the tier pressed, or null.
+    /// </summary>
+    int? PresetRow(SetupCategory cat, TierGrid grid, bool anyKeep)
+    {
+        var style = ImGui.GetStyle();
+        float top = ImGui.GetCursorScreenPos().Y;
+        float bottom = top;
+        var lit = Enumerable.Range(0, TierCount).Select(t => cat.Groups.Count > 0
+            && Enumerable.Range(0, cat.Groups.Count).All(g => Matches(cat.Groups[g], _tiers[_catAt][g], t))).ToArray();
+        bool mixed = !lit.Any(x => x);
+        int? pick = null;
+        bool placed = false;
+        void Place(Track at)
         {
-            var cat = _spec.Categories[c];
-            ImGui.Spacing();
-            ImGui.SeparatorText(Localization.T(cat.Label));
-            for (int g = 0; g < cat.Groups.Count; g++)
-            {
-                var group = cat.Groups[g];
-                ImGui.TextUnformatted(Localization.T(group.Label));
-                var pick = TierRow($"{cat.Id}.{group.Id}", _tiers[c][g], group.Tiers.Select(t => t.Desc).ToList(),
-                                   Spans(group), _startTiers[c][g] < 0, first: c == 0 && g == 0);
-                if (pick is { } p) _tiers[c][g] = p < 0 ? _startTiers[c][g] : p;
-                ImGui.Spacing();
-            }
+            if (placed) ImGui.SameLine();
+            placed = true;
+            ImGui.SetCursorPosX(at.X);
         }
+
+        if (mixed && anyKeep)
+        {
+            Place(grid.Keep);
+            ImGui.AlignTextToFramePadding();
+            ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
+            ImGui.TextUnformatted(Localization.T("verdite.setup.mixed"));
+            ImGui.PopStyleColor();
+        }
+        for (int t = 0; t < TierCount; t++)
+        {
+            Place(grid.Tiers[t]);
+            if (t == 0 && _focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
+            var cell = new TierCell(-1, t, 1);
+            Aim(cell);
+            string label = Localization.T(TierKeys[t]);
+            if (t == RecommendedTier) label += $" ({Localization.T("verdite.setup.recommended")})";
+            if (LitButton(label, $"{cat.Id}.preset{t}", lit[t], new Vector2(grid.Tiers[t].W, 0f), out bool focused)) pick = t;
+            if (focused) _focused = cell;
+            bottom = Math.Max(bottom, ImGui.GetItemRectMax().Y);
+        }
+        if (mixed && !anyKeep)
+        {
+            Dim("verdite.setup.mixed");
+            bottom = Math.Max(bottom, ImGui.GetItemRectMax().Y);
+        }
+        if (_focused.Row == -1) GutterBar(top, bottom);
+        return pick;
+    }
+
+    /// <summary>Whether a group is at tier <paramref name="t"/>: its own tier is set, and it is that tier's run, merged or not.</summary>
+    static bool Matches(SetupGroup group, int current, int t)
+    {
+        if (current < 0 || current >= group.Tiers.Count || t >= group.Tiers.Count) return false;
+        var span = Spans(group);
+        return span[current] == span[t];
+    }
+
+    /// <summary>
+    /// The focus marker in the left gutter of a tiers row: a bar beside it, from the top of
+    /// the row's header to the bottom of its descriptions, drawn when one of its buttons has
+    /// the focus. Positioned from the child window, so it follows the scroll.
+    /// </summary>
+    static void GutterBar(float top, float bottom)
+    {
+        float x = ImGui.GetWindowPos().X + ImGui.GetWindowContentRegionMin().X - 8f * UiScale;
+        uint ink = ImGui.ColorConvertFloat4ToU32(ImGui.GetStyle().Colors[(int)ImGuiCol.Text]);
+        ImGui.GetWindowDrawList().AddRectFilled(new Vector2(x, top), new Vector2(x + 3f * UiScale, bottom), ink);
     }
 
     /// <summary>
@@ -479,7 +612,7 @@ internal sealed class OnboardingPopup : Popup
     {
         var page = _spec.Pages[_pageAt];
         var choice = _pages[_pageAt];
-        Heading(page.Title);
+        Heading(page.Title, StepText());
         foreach (var body in page.Body)
         {
             Wrapped(body);
@@ -554,7 +687,7 @@ internal sealed class OnboardingPopup : Popup
 
     void Summary()
     {
-        Heading("verdite.setup.summary");
+        Heading("verdite.setup.summary", StepText());
         Dim("verdite.setup.summary.intro");
         ImGui.Spacing();
 
@@ -566,12 +699,6 @@ internal sealed class OnboardingPopup : Popup
         {
             var cat = _spec.Categories[c];
             ImGui.SeparatorText(Localization.T(cat.Label));
-            bool one = _tiers[c].Distinct().Count() == 1;
-            if (one && !_advanced)
-            {
-                Line(cat.Label, TierName(_tiers[c][0]));
-                continue;
-            }
             for (int g = 0; g < cat.Groups.Count; g++)
                 Line(cat.Groups[g].Label, GroupName(cat.Groups[g], _tiers[c][g]));
         }
@@ -626,7 +753,9 @@ internal sealed class OnboardingPopup : Popup
 
     /// <summary>
     /// The buttons at the foot, at their natural width (at least 120 pixels) and right-aligned
-    /// as a group; on the left, the input prompt, dimmed. Waiting has neither.
+    /// as a group; on the left, the input prompt, dimmed. Waiting has neither. Back is a plain
+    /// button; the right-hand one (Next, Finish or Close) is the primary, filled in the accent
+    /// colour a lit button takes, its label faked bold as a lit button's is, and unmarked.
     /// </summary>
     void Footer()
     {
@@ -665,20 +794,28 @@ internal sealed class OnboardingPopup : Popup
         if (right is null) return;
         // Finish takes the focus on the summary, and Close on the report.
         if (_focus && (_page == Page.Report || _page == Page.Summary)) { ImGui.SetKeyboardFocusHere(); _focus = false; }
-        if (ImGui.Button(Localization.T(right), new Vector2(rightW, 0f))) Forward();
+        if (LitButton(Localization.T(right), "footer.forward", true, new Vector2(rightW, 0f), out _, mark: false)) Forward();
     }
 
     /// <summary>
-    /// The input prompt for the page's foot: Enter or A selects, Escape or B goes back
-    /// (on the welcome only the button skips), Start does the right-hand button
-    /// (<paramref name="right"/>), and Y switches Basic and Advanced on the tiers page.
+    /// The input prompt for the page's foot, for the device used last (<see cref="_padActive"/>):
+    /// the keyboard's Enter, Escape and PageDown, or the pad's A, B and Start. Enter or A
+    /// selects, Escape or B goes back (on the welcome only the button skips), and the last
+    /// does the right-hand button (<paramref name="right"/>).
     /// </summary>
     string Prompt(string? right)
     {
-        var prompt = $"Enter / A: {Localization.T("verdite.setup.prompt.select")}";
-        if (_page != Page.Welcome) prompt += $"    Esc / B: {Localization.T("verdite.setup.prompt.back")}";
-        if (right is not null) prompt += $"    Start: {Localization.T(right)}";
-        if (_page == Page.Tiers) prompt += $"    Y: {Localization.T(_advanced ? "verdite.setup.basic" : "verdite.setup.advanced")}";
+        var prompt = _padActive
+            ? $"A: {Localization.T("verdite.setup.prompt.select")}"
+            : $"Enter: {Localization.T("verdite.setup.prompt.select")}";
+        if (_page != Page.Welcome)
+            prompt += _padActive
+                ? $"    B: {Localization.T("verdite.setup.prompt.back")}"
+                : $"    Esc: {Localization.T("verdite.setup.prompt.back")}";
+        if (right is not null)
+            prompt += _padActive
+                ? $"    Start: {Localization.T(right)}"
+                : $"    PgDn: {Localization.T(right)}";
         return prompt;
     }
 
@@ -696,20 +833,38 @@ internal sealed class OnboardingPopup : Popup
                 }
                 break;
             case Page.Display: ToWelcome(); break;
-            case Page.Tiers: Go(Page.Display); break;
+            case Page.Tiers:
+                if (_catAt > 0) { _catAt--; Go(Page.Tiers); }
+                else Go(Page.Display);
+                break;
             case Page.Choice:
                 if (_pageAt > 0) { _pageAt--; Go(Page.Choice); }
-                else Go(Page.Tiers);
+                else LastTiers();
                 break;
             case Page.Summary:
                 if (_spec.Pages.Count > 0) { _pageAt = _spec.Pages.Count - 1; Go(Page.Choice); }
-                else Go(Page.Tiers);
+                else LastTiers();
                 break;
             case Page.Report: Close(); break;
         }
     }
 
     void ToWelcome() => Go(Page.Welcome);
+
+    /// <summary>Back onto the last category's tiers page, or the display when the spec has none.</summary>
+    void LastTiers()
+    {
+        if (_spec.Categories.Count == 0) { Go(Page.Display); return; }
+        _catAt = _spec.Categories.Count - 1;
+        Go(Page.Tiers);
+    }
+
+    /// <summary>On past the tiers pages: the first choice page, else the summary.</summary>
+    void AfterTiers()
+    {
+        if (_spec.Pages.Count > 0) Enter(0);
+        else Go(Page.Summary);
+    }
 
     /// <summary>
     /// Enter a choice page going forward. Untouched by the player, a page with a
@@ -731,16 +886,21 @@ internal sealed class OnboardingPopup : Popup
     {
         _page = page;
         _focus = true;
+        // A page's tiers focus is its own: the last frame's button, and any move in flight, belong to the page left.
+        _focused = _lastFocused = _moveTo = TierCell.None;
     }
 
     void Forward()
     {
         switch (_page)
         {
-            case Page.Display: Go(Page.Tiers); break;
+            case Page.Display:
+                if (_spec.Categories.Count > 0) { _catAt = 0; Go(Page.Tiers); }
+                else AfterTiers();
+                break;
             case Page.Tiers:
-                if (_spec.Pages.Count > 0) Enter(0);
-                else Go(Page.Summary);
+                if (_catAt + 1 < _spec.Categories.Count) { _catAt++; Go(Page.Tiers); }
+                else AfterTiers();
                 break;
             case Page.Choice:
                 if (_pageAt + 1 < _spec.Pages.Count) Enter(_pageAt + 1);
@@ -794,55 +954,131 @@ internal sealed class OnboardingPopup : Popup
     /// <summary>
     /// The tiers as buttons, one per run of identical tiers (<paramref name="span"/>, see
     /// <see cref="Spans"/>), each run's names joined and the lit one marked; the run's
-    /// description wrapped under its button. A keep button comes first when
-    /// <paramref name="keep"/>; <paramref name="first"/> gives the row the page's focus.
+    /// description wrapped under its button, and the higher-GPU-cost note after it when
+    /// the run's first tier says so. A keep button comes first when
+    /// <paramref name="keep"/>. Every cell sits on the page's <paramref name="grid"/>
+    /// columns, not on the widths of its own row: a run's button spans from its first
+    /// tier's column to its last, and its description takes the same left edge and wrap
+    /// width. A description is dimmed unless its button is lit or has the focus. <paramref name="row"/>
+    /// is the group's index, and <paramref name="top"/> the screen Y of its header, for the focus bar.
     /// Returns the run's first tier when one is clicked, -1
     /// for keep, or null when nothing was.
     /// </summary>
-    int? TierRow(string id, int current, IReadOnlyList<string> descs, int[] span, bool keep, bool first = false)
+    int? TierRow(int row, string id, int current, IReadOnlyList<SetupTier> tiers, int[] span, bool keep, TierGrid grid, float top)
     {
-        // The row's first button takes the focus, once; the switch above never does.
-        if (first && _focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
         var style = ImGui.GetStyle();
-        float space = style.ItemSpacing.X;
         var starts = Enumerable.Range(0, span.Length).Where(t => span[t] == t).ToList();
-        int buttons = starts.Count + (keep ? 1 : 0);
-        float unit = (ImGui.GetContentRegionAvail().X - space * (buttons - 1)) / (span.Length + (keep ? 2f / 3f : 0f));
         int? pick = null;
-        var columns = new List<(float X, float W, int Start, bool Lit)>();
+        var cells = new List<(Track At, int Start, bool Lit, bool Focused)>();
+        bool placed = false;
+        // A cell goes on its column: SameLine after the one before it, then the cursor to its X.
+        void Place(Track at)
+        {
+            if (placed) ImGui.SameLine();
+            placed = true;
+            ImGui.SetCursorPosX(at.X);
+        }
 
         if (keep)
         {
-            if (LitButton(Localization.T("verdite.setup.keep"), $"{id}keep", current < 0, new Vector2(unit * 2f / 3f, 0f))) pick = -1;
-            ImGui.SameLine();
+            Place(grid.Keep);
+            var cell = new TierCell(row, -1, 0);
+            Aim(cell);
+            if (LitButton(Localization.T("verdite.setup.keep"), $"{id}keep", current < 0, new Vector2(grid.Keep.W, 0f), out bool kept)) pick = -1;
+            if (kept) _focused = cell;
         }
         foreach (int s in starts)
         {
             int count = span.Count(x => x == s);
-            float w = unit * count + space * (count - 1);
+            var at = new Track(grid.Tiers[s].X, grid.Tiers[s + count - 1].Right - grid.Tiers[s].X);
             bool lit = current >= 0 && current < span.Length && span[current] == s;
-            if (columns.Count > 0) ImGui.SameLine();
-            columns.Add((ImGui.GetCursorPosX(), w, s, lit));
+            var cell = new TierCell(row, s, count);
+            Place(at);
+            Aim(cell);
             var names = string.Join(" / ", Enumerable.Range(s, count).Select(t => Localization.T(TierKeys[t])));
-            if (LitButton(names, $"{id}{s}", lit, new Vector2(w, 0f))) pick = s;
+            if (LitButton(names, $"{id}{s}", lit, new Vector2(at.W, 0f), out bool focused)) pick = s;
+            if (focused) _focused = cell;
+            cells.Add((at, s, lit, focused));
         }
 
-        for (int k = 0; k < columns.Count; k++)
+        float bottom = top;
+        for (int k = 0; k < cells.Count; k++)
         {
-            var (x, w, s, lit) = columns[k];
-            if (k > 0) ImGui.SameLine(x);
-            else ImGui.SetCursorPosX(x);
+            var (at, s, lit, focused) = cells[k];
+            if (k > 0) ImGui.SameLine(at.X);
+            else ImGui.SetCursorPosX(at.X);
             ImGui.BeginGroup();
-            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + w);
-            if (!lit) ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
-            ImGui.TextWrapped(s < descs.Count ? Localization.T(descs[s]) : "");
-            if (!lit) ImGui.PopStyleColor();
+            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + at.W);
+            bool dimmed = !lit && !focused;
+            if (dimmed) ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
+            ImGui.TextWrapped(s < tiers.Count ? Localization.T(tiers[s].Desc) : "");
+            if (dimmed) ImGui.PopStyleColor();
+            if (s < tiers.Count && tiers[s].Cost)
+            {
+                ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
+                ImGui.TextWrapped(Localization.T("verdite.setup.gpucost"));
+                ImGui.PopStyleColor();
+            }
             ImGui.PopTextWrapPos();
             ImGui.EndGroup();
+            bottom = Math.Max(bottom, ImGui.GetItemRectMax().Y);
         }
 
-        if (current < 0) Dim("verdite.setup.custom");
+        if (current < 0)
+        {
+            Dim("verdite.setup.custom");
+            bottom = Math.Max(bottom, ImGui.GetItemRectMax().Y);
+        }
+        if (_focused.Row == row) GutterBar(top, bottom);
         return pick;
+    }
+
+    /// <summary>A column of a tiers page: its window-local left edge and its width, in whole pixels.</summary>
+    readonly record struct Track(float X, float W)
+    {
+        public float Right => X + W;
+    }
+
+    /// <summary>
+    /// The columns of a tiers page, shared by every row of it: the keep column (valid when
+    /// any group on the page has a keep button) and one column per tier.
+    /// </summary>
+    readonly record struct TierGrid(Track Keep, Track[] Tiers);
+
+    /// <summary>
+    /// The page's columns: from <paramref name="x0"/> (window-local), a keep column of two
+    /// thirds of a unit when <paramref name="keep"/>, then three equal tier columns, with
+    /// the item spacing between. Cut once per page, so a button in one row lines up with
+    /// the same button in every other row. Each edge is floored to a whole pixel, and a
+    /// merged button is the edge of its first column to the edge of its last, so the
+    /// shared edges agree to the pixel.
+    /// </summary>
+    static TierGrid MakeTierGrid(float x0, float avail, float gap, bool keep)
+    {
+        float keepUnits = keep ? 2f / 3f : 0f;
+        int gaps = TierCount + (keep ? 1 : 0) - 1;
+        float unit = (avail - gap * gaps) / (TierCount + keepUnits);
+        float x = x0;
+        var keepCol = new Track(0f, 0f);
+        if (keep)
+        {
+            keepCol = Snap(x, unit * keepUnits);
+            x += unit * keepUnits + gap;
+        }
+        var tiers = new Track[TierCount];
+        for (int t = 0; t < TierCount; t++)
+        {
+            tiers[t] = Snap(x, unit);
+            x += unit + gap;
+        }
+        return new TierGrid(keepCol, tiers);
+    }
+
+    /// <summary>A column from a window-local left edge and a width, with both edges floored to whole pixels.</summary>
+    static Track Snap(float x, float w)
+    {
+        float left = MathF.Floor(x), right = MathF.Floor(x + w);
+        return new Track(left, right - left);
     }
 
     /// <summary>
@@ -861,8 +1097,27 @@ internal sealed class OnboardingPopup : Popup
         a.Set.Count == b.Set.Count
         && a.Set.All(kv => b.Set.TryGetValue(kv.Key, out var v) && Onboarding.SameText(kv.Value, v));
 
-    /// <summary>A button, lit in the active colour when <paramref name="lit"/> and marked "> " so the state is not colour alone; true when clicked.</summary>
-    static bool LitButton(string label, string id, bool lit, Vector2 size)
+    /// <summary>
+    /// A button, lit in the active colour when <paramref name="lit"/> and marked "> " so the state is not colour alone; true when clicked.
+    /// The button has no label of its own: its text is drawn over it, twice a pixel apart
+    /// as the headings are, so the labels read as bolder than the descriptions under them.
+    /// The size is sized as ImGui sizes a button: a positive size is exact, and a zero or
+    /// negative width is the room left on the row less its magnitude (the Choice page's -1).
+    /// The focus is ImGui's own outline in the navigation colour, as the welcome's cards
+    /// show it, and an unlit button with it takes the hovered fill; the lit fill and "> "
+    /// stay the choice's alone. An inset border in the text colour was tried inside that
+    /// outline and drew two frames round one button. The overload with
+    /// <paramref name="focused"/> says whether it has the focus.
+    /// <paramref name="mark"/> false drops the "> " of a lit button, for a button that is lit
+    /// by its place rather than by a choice (the foot's Next).
+    /// </summary>
+    /// <summary>The button with the focus this frame, and last frame's, for <see cref="LitButton"/>'s hovered fill.</summary>
+    static uint _focusId, _lastFocusId;
+
+    static bool LitButton(string label, string id, bool lit, Vector2 size) =>
+        LitButton(label, id, lit, size, out _);
+
+    static bool LitButton(string label, string id, bool lit, Vector2 size, out bool focused, bool mark = true)
     {
         var style = ImGui.GetStyle();
         if (lit)
@@ -870,15 +1125,31 @@ internal sealed class OnboardingPopup : Popup
             ImGui.PushStyleColor(ImGuiCol.Button, style.Colors[(int)ImGuiCol.ButtonActive]);
             ImGui.PushStyleColor(ImGuiCol.ButtonHovered, style.Colors[(int)ImGuiCol.ButtonActive]);
         }
-        bool clicked = ImGui.Button($"{(lit ? "> " : "")}{label}##{id}", size);
+        float w = size.X > 0f ? size.X : Math.Max(4f, ImGui.GetContentRegionAvail().X + size.X);
+        float h = size.Y > 0f ? size.Y : ImGui.GetFrameHeight();
+        // Whether this button has the focus is known only once it is drawn, so the hovered
+        // fill follows the focus a frame late, as ImGui's own hover does.
+        bool lift = !lit && ImGui.GetID($"##{id}") == _lastFocusId;
+        if (lift) ImGui.PushStyleColor(ImGuiCol.Button, style.Colors[(int)ImGuiCol.ButtonHovered]);
+        bool clicked = ImGui.Button($"##{id}", new Vector2(w, h));
+        focused = ImGui.IsItemFocused();
+        if (focused) _focusId = ImGui.GetItemID();
+        if (lift) ImGui.PopStyleColor();
         if (lit) ImGui.PopStyleColor(2);
+
+        string text = lit && mark ? $"> {label}" : label;
+        var min = ImGui.GetItemRectMin();
+        var max = ImGui.GetItemRectMax();
+        var at = min + (max - min - ImGui.CalcTextSize(text)) * 0.5f;
+        var draw = ImGui.GetWindowDrawList();
+        uint ink = ImGui.ColorConvertFloat4ToU32(style.Colors[(int)ImGuiCol.Text]);
+        draw.AddText(at, ink, text);
+        draw.AddText(at + new Vector2(UiScale, 0f), ink, text);
         return clicked;
     }
 
     /// <summary>The text a display field shows when it keeps its current value.</summary>
     string KeepValue(SetupField field) => Localization.T("verdite.setup.keepvalue", Onboarding.Current(_spec, field) ?? "?");
-
-    static string TierName(int t) => t >= 0 && t < TierCount ? Localization.T(TierKeys[t]) : Localization.T("verdite.setup.keep");
 
     /// <summary>A group's tier by name: the names of its run when the tier is in one, "Keep as is" when it is set by hand.</summary>
     static string GroupName(SetupGroup group, int t)
@@ -915,19 +1186,82 @@ internal sealed class OnboardingPopup : Popup
         }
     }
 
-    /// <summary>A page's heading: 1.5x, faked bold (drawn twice, a pixel apart), over its separator.</summary>
-    static void Heading(string key)
+    /// <summary>
+    /// A page's heading: 1.5x, faked bold (drawn twice, a pixel apart), over its separator.
+    /// When <paramref name="right"/> is given (the step text), it is drawn at the text size,
+    /// dimmed, right-aligned and vertically centred on the heading's line.
+    /// </summary>
+    static void Heading(string key, string? right = null)
     {
         var draw = ImGui.GetWindowDrawList();
+        var style = ImGui.GetStyle();
         var at = ImGui.GetCursorScreenPos();
-        uint ink = ImGui.ColorConvertFloat4ToU32(ImGui.GetStyle().Colors[(int)ImGuiCol.Text]);
+        uint ink = ImGui.ColorConvertFloat4ToU32(style.Colors[(int)ImGuiCol.Text]);
         string text = Localization.T(key);
         float size = ImGui.GetFontSize() * HeadingScale;
         draw.AddText(ImGui.GetFont(), size, at, ink, text);
         draw.AddText(ImGui.GetFont(), size, at + new Vector2(UiScale, 0f), ink, text);
+        if (right is not null)
+        {
+            uint dim = ImGui.ColorConvertFloat4ToU32(style.Colors[(int)ImGuiCol.TextDisabled]);
+            float lineH = ImGui.GetTextLineHeight();
+            float w = ImGui.CalcTextSize(right).X;
+            // The heading's line is HeadingScale lines tall; the step's is one, so it sits a quarter line down.
+            float x = at.X + ImGui.GetContentRegionAvail().X - w;
+            float y = at.Y + (HeadingScale - 1f) * 0.5f * lineH;
+            draw.AddText(ImGui.GetFont(), ImGui.GetFontSize(), new Vector2(x, y), dim, right);
+        }
         ImGui.Dummy(new Vector2(0f, ImGui.GetTextLineHeight() * HeadingScale));
         ImGui.Separator();
         ImGui.Spacing();
+    }
+
+    /// <summary>
+    /// The "Step X of N" a page shows on its heading: the pages after the welcome, the
+    /// display as 1, each category's tiers page, each choice page, the summary as N.
+    /// Null on the welcome, the waiting page and the report, which have none.
+    /// </summary>
+    string? StepText()
+    {
+        int n = 2 + _spec.Categories.Count + _spec.Pages.Count;
+        int step = _page switch
+        {
+            Page.Display => 1,
+            Page.Tiers => 2 + _catAt,
+            Page.Choice => 2 + _spec.Categories.Count + _pageAt,
+            Page.Summary => n,
+            _ => 0,
+        };
+        return step == 0 ? null : Localization.T("verdite.setup.step", step, n);
+    }
+
+    /// <summary>
+    /// A tiers group's header: a short rule, the name at <see cref="GroupScale"/> (faked
+    /// bold, as <see cref="Heading"/> is), then a rule to the content's right edge, all
+    /// centred on the text's line. It replaces ImGui's SeparatorText, which drew the name at
+    /// the body size, where a group's name was lost among its descriptions.
+    /// </summary>
+    static void GroupHeader(string key)
+    {
+        var draw = ImGui.GetWindowDrawList();
+        var style = ImGui.GetStyle();
+        var at = ImGui.GetCursorScreenPos();
+        uint rule = ImGui.ColorConvertFloat4ToU32(style.Colors[(int)ImGuiCol.Separator]);
+        uint ink = ImGui.ColorConvertFloat4ToU32(style.Colors[(int)ImGuiCol.Text]);
+        string text = Localization.T(key);
+        float size = ImGui.GetFontSize() * GroupScale;
+        float h = ImGui.GetTextLineHeight() * GroupScale;
+        float mid = at.Y + h * 0.5f;
+        float dash = 16f * UiScale, gap = 8f * UiScale;
+        float textX = at.X + dash + gap;
+        float textEnd = textX + ImGui.CalcTextSize(text).X * GroupScale;
+        float right = at.X + ImGui.GetContentRegionAvail().X;
+
+        draw.AddLine(new Vector2(at.X, mid), new Vector2(textX - gap, mid), rule, UiScale);
+        draw.AddText(ImGui.GetFont(), size, new Vector2(textX, at.Y), ink, text);
+        draw.AddText(ImGui.GetFont(), size, new Vector2(textX + UiScale, at.Y), ink, text);
+        draw.AddLine(new Vector2(textEnd + gap, mid), new Vector2(right, mid), rule, UiScale);
+        ImGui.Dummy(new Vector2(0f, h));
     }
 
     static void Wrapped(string key) => ImGui.TextWrapped(Localization.T(key));
@@ -988,6 +1322,11 @@ internal sealed class OnboardingPopup : Popup
         }
     }
 
+    /// <summary>
+    /// Feeds the pad's buttons to ImGui's navigation, and marks the pad as the device in use
+    /// when one goes down. Runs after <see cref="ReadDevice"/>, so a pad press wins a frame
+    /// in which both came.
+    /// </summary>
     void FeedPad()
     {
         if (!_nav) return;
@@ -998,7 +1337,23 @@ internal sealed class OnboardingPopup : Popup
             if (down == _held[i]) continue;
             _held[i] = down;
             io.AddKeyEvent(PadKeys[i].Key, down);
+            if (down) _padActive = true;
         }
+    }
+
+    /// <summary>
+    /// Clears the pad as the device in use when the keyboard or the mouse acted this frame:
+    /// a key from Tab to the keypad's equals (the gamepad keys are not in that run, so a pad
+    /// never clears it), a mouse button clicked, or the mouse moved.
+    /// </summary>
+    void ReadDevice()
+    {
+        var io = ImGui.GetIO();
+        bool mouse = io.MouseDelta.LengthSquared() > 0f
+            || Enumerable.Range(0, 3).Any(b => ImGui.IsMouseClicked((ImGuiMouseButton)b));
+        bool keys = Enumerable.Range((int)ImGuiKey.Tab, (int)ImGuiKey.KeypadEqual - (int)ImGuiKey.Tab + 1)
+            .Any(k => ImGui.IsKeyPressed((ImGuiKey)k, false));
+        if (mouse || keys) _padActive = false;
     }
 
     /// <summary>The setup's own words, every key in the runtime's three languages.
@@ -1061,9 +1416,14 @@ internal sealed class OnboardingPopup : Popup
           "es-419": "La construcción falló. Finaliza la configuración para conservar tus opciones; el motivo viene a continuación."
         },
         "verdite.setup.tiers.intro": {
-          "en": "Original is the game as the PlayStation ran it. Balanced keeps that look and feel and fixes what the hardware got wrong. Modern adds the port's enhancements.",
-          "pt-BR": "Original é o jogo como o PlayStation o rodava. Equilibrado mantém essa aparência e sensação e corrige o que o hardware fazia errado. Moderno acrescenta as melhorias do port.",
-          "es-419": "Original es el juego tal como lo ejecutaba la PlayStation. Equilibrado conserva ese aspecto y sensación y corrige lo que el hardware hacía mal. Moderno agrega las mejoras del port."
+          "en": "Original is the game as the PlayStation ran it. Balanced keeps that look and feel and fixes what the hardware got wrong. Modern adds the port's enhancements. Where two tiers look the same, they share a button.",
+          "pt-BR": "Original é o jogo como o PlayStation o rodava. Equilibrado mantém essa aparência e sensação e corrige o que o hardware fazia errado. Moderno acrescenta as melhorias do port. Quando dois níveis parecem iguais, eles compartilham um botão.",
+          "es-419": "Original es el juego tal como lo ejecutaba la PlayStation. Equilibrado conserva ese aspecto y sensación y corrige lo que el hardware hacía mal. Moderno agrega las mejoras del port. Cuando dos niveles se ven igual, comparten un botón."
+        },
+        "verdite.setup.gpucost": {
+          "en": "Higher GPU cost.",
+          "pt-BR": "Maior custo de GPU.",
+          "es-419": "Mayor costo de GPU."
         },
         "verdite.setup.tier.original": { "en": "Original", "pt-BR": "Original", "es-419": "Original" },
         "verdite.setup.tier.originalplus": { "en": "Balanced", "pt-BR": "Equilibrado", "es-419": "Equilibrado" },
@@ -1085,23 +1445,12 @@ internal sealed class OnboardingPopup : Popup
           "es-419": "Mantener actual ({0})"
         },
         "verdite.setup.keep": { "en": "Keep as is", "pt-BR": "Manter como está", "es-419": "Dejar como está" },
-        "verdite.setup.basic": { "en": "Basic", "pt-BR": "Básico", "es-419": "Básico" },
-        "verdite.setup.basic.desc": {
-          "en": "One style each for {0}.",
-          "pt-BR": "Um estilo para cada: {0}.",
-          "es-419": "Un estilo para cada uno: {0}."
-        },
-        "verdite.setup.advanced": { "en": "Advanced", "pt-BR": "Avançado", "es-419": "Avanzado" },
-        "verdite.setup.advanced.desc": {
-          "en": "A style for each part of {0}, one by one.",
-          "pt-BR": "Um estilo para cada parte de {0}, uma por uma.",
-          "es-419": "Un estilo para cada parte de {0}, una por una."
-        },
         "verdite.setup.custom": {
           "en": "Custom: set by hand. Choose a style to replace it, or keep it as it is.",
           "pt-BR": "Personalizado: definido à mão. Escolha um estilo para substituí-lo, ou mantenha como está.",
           "es-419": "Personalizado: definido a mano. Elige un estilo para reemplazarlo, o déjalo como está."
         },
+        "verdite.setup.mixed": { "en": "Custom", "pt-BR": "Personalizado", "es-419": "Personalizado" },
         "verdite.setup.summary": { "en": "Ready", "pt-BR": "Pronto", "es-419": "Listo" },
         "verdite.setup.summary.intro": {
           "en": "These choices will be applied:",
@@ -1120,6 +1469,11 @@ internal sealed class OnboardingPopup : Popup
           "en": "Everything else has changed already. These take effect the next time the game starts:",
           "pt-BR": "Todo o resto já mudou. Estas entram em vigor na próxima vez que o jogo iniciar:",
           "es-419": "Todo lo demás ya cambió. Estas se aplican la próxima vez que inicie el juego:"
+        },
+        "verdite.setup.step": {
+          "en": "Step {0} of {1}",
+          "pt-BR": "Etapa {0} de {1}",
+          "es-419": "Paso {0} de {1}"
         },
         "verdite.setup.skip": { "en": "Skip setup", "pt-BR": "Pular configuração", "es-419": "Omitir configuración" },
         "verdite.setup.cancel": { "en": "Cancel", "pt-BR": "Cancelar", "es-419": "Cancelar" },
