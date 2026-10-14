@@ -167,7 +167,16 @@ they like. Its footer holds only Skip setup (launcher) or Cancel (in game):
 The summary's Back returns to the last page, never the welcome; the display's Back
 returns to the welcome, where another card starts the pages again from its own
 choices. Every page puts keyboard and pad focus on its first control: the
-welcome's first card, the summary's Finish, the report's Close. Basic (one
+welcome's first card, the summary's Finish, the report's Close. **A pad needs no
+trip to the footer**: Start is Next (Finish on the summary, Close on the report),
+Circle/B is Back, Triangle/Y switches Basic and Advanced on the tiers page, and
+left and right on a focused list or slider step its value in place, without
+opening the list or grabbing the slider (the arrow keys do the same). None of
+them fire on the frame after a list was open or a slider held, since ImGui spends
+Circle/B closing or releasing it first (by reading, B on a held slider could
+also leave the page before). Square/X is no longer fed to ImGui: held, it is ImGui's window
+switcher, which took the focus off the setup. The footer's prompt names the keys
+each page takes. Built, not yet driven with a pad. Basic (one
 style for each of Controls, Presentation and Gameplay) and Advanced (one for each
 group inside them) are a switch at the top of the tiers page. Every group has
 three tiers:
