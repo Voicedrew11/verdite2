@@ -130,8 +130,8 @@ public static class PortSettings
         Stored = Stored.Float, Ui = Ui.None,
     };
 
-    /// <summary>The setup's "20 fps (original)": the rate the PlayStation drew at.</summary>
-    public const double OriginalFps = 20;
+    /// <summary>The setup's "15 fps (original)": the rate the game was played at, the world's tick rate.</summary>
+    public const double OriginalFps = 15;
 
     /// <summary>The smoothing between ticks, a part of <see cref="FrameRateRow"/>: one
     /// switch for all five patches and their five keys, as the Settings window's
@@ -163,7 +163,7 @@ public static class PortSettings
 
     static string RateText(double v) => v <= 0 ? "UNCAPPED" : Number(v);
 
-    /// <summary>ORIGINAL is the PlayStation's 20 fps with no smoothing: a player who asks
+    /// <summary>ORIGINAL is the game's 15 fps with no smoothing: a player who asks
     /// for the original rate wants the original motion. Any other rate smooths. A rate
     /// with the smoothing off (the Settings window can still set it) shows "NO SMOOTH",
     /// half a step above the rate, so Left and Right each reach one.</summary>

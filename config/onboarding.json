@@ -184,9 +184,9 @@
       "options": [
         {
           "label": "kf2.setup.fps.original",
-          "match": 20,
+          "match": 15,
           "set": {
-            "kf2.framepacing.fps": "20"
+            "kf2.framepacing.fps": "15"
           }
         },
         {
@@ -756,9 +756,9 @@
       "es-419": "Con qué frecuencia se dibuja la imagen. El mundo siempre corre a la velocidad propia del juego."
     },
     "kf2.setup.fps.original": {
-      "en": "20 fps (original)",
-      "pt-BR": "20 fps (original)",
-      "es-419": "20 fps (original)"
+      "en": "15 fps (original)",
+      "pt-BR": "15 fps (original)",
+      "es-419": "15 fps (original)"
     },
     "kf2.setup.fps.uncapped": {
       "en": "Uncapped",
