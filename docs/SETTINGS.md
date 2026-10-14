@@ -149,23 +149,25 @@ mode.
 The first-run setup, shown by the launcher **while the game is being built** and
 holding the game back until both are done, and run again from the settings page's
 DISPLAY page (RUN SETUP, its last row, not a setting). The welcome has three
-presets as buttons in its body, and **Customise…** as a fourth. Its footer holds
-only Skip setup (launcher) or Cancel (in game):
+presets as cards in its body, and **Custom** as a fourth. **Every card is a starting
+point, not an answer**: each fills the pages with its choices, and the player walks
+them all (the display, the tiers, the turning page) to the summary, changing what
+they like. Its footer holds only Skip setup (launcher) or Cancel (in game):
 
-* **Recommended**: Modern in every group, with the display suggested from the
-  monitor (`Onboarding.Suggest`). Window mode has no suggestion and stays where it
-  starts.
+* **Modern** (badged Recommended): Modern in every group, with the display
+  suggested from the monitor (`Onboarding.Suggest`). Window mode has no suggestion
+  and stays where it starts.
 * **Original++**: Original++ in every group, with the display suggested from the
-  monitor, as Recommended.
+  monitor, as Modern.
 * **Original**: Original in every group, and each display field's `original`
   option: 4:3, 240p (1x) and 20 fps. Window mode is left alone.
-* **Customise…**: walks the display, then the tiers, then the turning page, then the
-  summary. It starts from what the player had set, not from a preset clicked earlier.
+* **Custom**: the pages start from what the player had set, not from a preset
+  clicked earlier.
 
-A preset goes to the summary. Its top button, **Adjust these choices…**, goes to
-the display page with the preset's choices kept. The summary's Back returns to
-the welcome. Every page puts keyboard and pad focus on its first control: the
-welcome's first button, the summary's Adjust or Finish, the report's Close. Basic (one
+The summary's Back returns to the last page, never the welcome; the display's Back
+returns to the welcome, where another card starts the pages again from its own
+choices. Every page puts keyboard and pad focus on its first control: the
+welcome's first card, the summary's Finish, the report's Close. Basic (one
 style for each of Controls, Presentation and Gameplay) and Advanced (one for each
 group inside them) are a switch at the top of the tiers page. Every group has
 three tiers:
@@ -416,3 +418,67 @@ the build.
 
 **Not judged:** none of it has been looked at or clicked through; measured only by
 the build.
+
+### Setup restyled (2026-10-13)
+
+From a critique of the welcome page opened by RUN SETUP (the items about the game
+drawn behind the popup were left alone):
+
+* **The welcome's choices are cards**, not two-line buttons: an invisible button
+  under a drawn panel, its title larger and drawn twice a pixel apart (the font has
+  no bold), its description wrapped under it, and a line of the preset's display
+  (`1440p / 16:9 / 60 fps`, the window left out and a trailing "(original)" dropped)
+  under that, the same form for all three presets. **A focused or hovered card is
+  lit and edged in gold**, so a pad or keyboard can see where it is; the first card
+  takes the focus on opening.
+* **The cards are Modern (with a Recommended badge), Original++, Original and
+  Custom**; Custom has a drawn chevron, since it leads to more pages. Original++
+  keeps its name. The descriptions now say what each preset does to the controls
+  and sound, not only the picture.
+* **A re-run says so**: in game the welcome is headed Run Setup Again and its text
+  is the spec's `welcomeAgain` (`kf2.setup.welcomeagain`), without the first run's
+  directions back to the page the player is on. The first run's directions read
+  "Port Settings > Display > Run Setup" and "Circle or B on the pad".
+* **Headings are 1.5x and drawn bold**; **the footer's buttons are their natural
+  width, right-aligned**, with the input prompt on the left (`Enter / A: Select
+  Esc / B: Back`, or Cancel/Skip on the welcome; fixed text, not the connected
+  pad's glyphs); **the welcome is centred** in the page on last frame's height.
+* **It scales with the output**: the popup's size and font are multiplied by
+  `max(1, height / 1080)`, on top of the runtime's UI scale, and still clamped to
+  the window by `Popup`. The base size is 1100 x 680.
+* **The presets are a grid** (same day): Modern, Original++ and Original side by
+  side, filling the page's height down to Custom, a full-width card at the foot.
+  Each card's description runs from the top and its display line sits at its foot,
+  with the chevron; the grid is never shorter than its tallest card's text, so a
+  small window scrolls the page instead of cutting a card. The welcome is no longer
+  centred: the grid fills it.
+* **The theme's colours**, as every other window in the port: a card is drawn in
+  `FrameBg` with a `Border` edge, and lit in `FrameBgHovered` with a `NavHighlight`
+  edge; the badge is `ButtonActive`. (A gold palette of the popup's own was tried
+  the same day and taken out: it matched no other window.)
+* **A preset is a template** (same day, after the first look): a card goes to the
+  display page with its choices filled in and the player walks every page to the
+  summary. The summary's Adjust these choices… is gone, and so is the shortcut from
+  a preset to the summary. Every card has the chevron, since every one leads on;
+  Custom's text is "Start from your current settings", and a line above the cards
+  says the pages that follow show and can change every choice.
+
+**Not judged:** measured only by both builds (game and launcher). The palette was
+looked at and rejected; the theme's colours on the cards, the fake bold, the badge,
+the grid's proportions at 1080p and 1440p, whether the page scrolls, and ImGui's own nav rectangle drawn over
+the lit edge have not been looked at.
+
+### Setup's middle tier is named Balanced (2026-10-13)
+
+* **The middle tier is shown as Balanced** (pt-BR and es-419 Equilibrado), in place of
+  Original++, in the setup's tier buttons, the welcome card and the game's own tier
+  texts ("As Balanced, ..."). Only the words changed: the localisation keys
+  (`verdite.setup.originalplus`, `verdite.setup.tier.originalplus`) and the shell's
+  `setup apply original++` / `setup preset original++` keep their old spelling.
+  The earlier sections above still say Original++.
+* **The welcome's grid runs Original, Balanced, Modern**, left to right; Modern,
+  badged Recommended, still takes the focus on opening.
+
+Refined was tried first the same day and dropped: it said the original was unrefined.
+
+**Not judged:** not looked at.

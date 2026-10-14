@@ -2,6 +2,7 @@
   "_comment": "The first-run setup's groups and tiers; read by Verdite Core's Onboarding (tools/verdite-core/src/Onboarding). See \"Onboarding\" in docs/SETTINGS.md.",
   "version": 1,
   "welcome": "kf2.setup.welcome",
+  "welcomeAgain": "kf2.setup.welcomeagain",
   "existing": "kf2.",
   "defaults": {
     "Borderless": "False",
@@ -863,9 +864,9 @@
       "es-419": "Texturas con perspectiva correcta, vértices subpíxel y búfer de profundidad; sin tramado; texels nítidos."
     },
     "kf2.setup.image.2": {
-      "en": "As Original++, with smooth 24-bit shading and 16x filtered, mipmapped textures.",
-      "pt-BR": "Como Original++, com sombreamento suave de 24 bits e texturas filtradas em 16x com mipmaps.",
-      "es-419": "Como Original++, con sombreado suave de 24 bits y texturas filtradas a 16x con mipmaps."
+      "en": "As Balanced, with smooth 24-bit shading and 16x filtered, mipmapped textures.",
+      "pt-BR": "Como Equilibrado, com sombreamento suave de 24 bits e texturas filtradas em 16x com mipmaps.",
+      "es-419": "Como Equilibrado, con sombreado suave de 24 bits y texturas filtradas a 16x con mipmaps."
     },
     "kf2.setup.lighting": {
       "en": "Lighting and fog",
@@ -883,9 +884,9 @@
       "es-419": "Luz por píxel, y niebla uniforme entre las baldosas y por distancia al ojo. Sin oclusión ambiental."
     },
     "kf2.setup.lighting.2": {
-      "en": "As Original++, with ambient occlusion darkening corners and creases.",
-      "pt-BR": "Como Original++, com oclusão de ambiente escurecendo cantos e frestas.",
-      "es-419": "Como Original++, con oclusión ambiental que oscurece esquinas y rincones."
+      "en": "As Balanced, with ambient occlusion darkening corners and creases.",
+      "pt-BR": "Como Equilibrado, com oclusão de ambiente escurecendo cantos e frestas.",
+      "es-419": "Como Equilibrado, con oclusión ambiental que oscurece esquinas y rincones."
     },
     "kf2.setup.water": {
       "en": "Water",
@@ -1028,9 +1029,14 @@
       "es-419": "Tu último guardado se recarga dos segundos después de morir."
     },
     "kf2.setup.welcome": {
-      "en": "Before you play, choose how King's Field should look, sound and control. Everything here can be changed later, and the setup can be run again from the game's menu (Circle on the pad, Tab on the keyboard): PORT SETTINGS > DISPLAY > RUN SETUP.",
-      "pt-BR": "Antes de jogar, escolha como King's Field deve parecer, soar e ser controlado. Tudo aqui pode ser alterado depois, e a configuração pode ser refeita pelo menu do jogo (Círculo no controle, Tab no teclado): PORT SETTINGS > DISPLAY > RUN SETUP.",
-      "es-419": "Antes de jugar, elige cómo debe verse, sonar y controlarse King's Field. Todo esto se puede cambiar después, y la configuración se puede repetir desde el menú del juego (Círculo en el mando, Tab en el teclado): PORT SETTINGS > DISPLAY > RUN SETUP."
+      "en": "Before you play, choose how King's Field should look, sound and control. Everything here can be changed later, and the setup can be run again from the game's menu (Circle or B on the pad, Tab on the keyboard): Port Settings > Display > Run Setup.",
+      "pt-BR": "Antes de jogar, escolha como King's Field deve parecer, soar e ser controlado. Tudo aqui pode ser alterado depois, e a configuração pode ser refeita pelo menu do jogo (Círculo ou B no controle, Tab no teclado): Port Settings > Display > Run Setup.",
+      "es-419": "Antes de jugar, elige cómo debe verse, sonar y controlarse King's Field. Todo esto se puede cambiar después, y la configuración se puede repetir desde el menú del juego (Círculo o B en el mando, Tab en el teclado): Port Settings > Display > Run Setup."
+    },
+    "kf2.setup.welcomeagain": {
+      "en": "Choose again how King's Field should look, sound and control. Each page starts from what you have set now.",
+      "pt-BR": "Escolha novamente como King's Field deve parecer, soar e ser controlado. Cada página começa com o que você definiu agora.",
+      "es-419": "Elige de nuevo cómo debe verse, sonar y controlarse King's Field. Cada página empieza con lo que tienes configurado ahora."
     },
     "kf2.setup.turning": {
       "en": "Turning and difficulty",
