@@ -261,6 +261,12 @@ KF2_RUMBLE=0 KF2_RUMBLE_HD=0             # no rumble as a bow is drawn and loose
 KF2_RUMBLE_PROBE=1                       # a line a second: the phase, the tension, waves asked, HD; 2 also a line each tick the bow's state changes
 KF2_RUMBLE_TEST=1                        # from 3 s in, the bow's rumble three times over without a bow
 KF2_GYROAIM=0 KF2_GYROAIM_PROBE=1        # no gyro aim with a drawn bow (on by default); its line a second
+KF2_ITEMTURN=0 KF2_ITEMTURN_GYRO=0       # a picked-up item and the menu's item preview not turned by the mouse, the right stick and the gyro / not by the gyro (both on; Gameplay ▸ Turn a held item, kf2.itemturn.on, kf2.itemturn.gyro)
+KF2_ITEMTURN_PROBE=1                     # a line a second while an item is held up or previewed: the turn, the spin held, which input moved it, the tilt axis against the camera's right
+KF2_ITEMTURN_TEST=<id>                   # hold up item <id> (decimal or 0x hex) through the game's pickup 10 s after the first area loads, the right stick full right and half down for the hold's second second (probe on); the hold waits for a button
+KF2_ITEMTURN_TEST=preview                # the same stick for the second second of the first menu preview drawn
+KF2_ITEMEYE=0                            # a picked-up item held where the game puts it: its origin below the eye line, so the item sits low and swings as it spins (on: the mesh's middle on the view's axis, the camera's eye in place of the routine's)
+KF2_ITEMEYE_PROBE=1                      # the pickup's targets, the held origin and the mesh's middle from the eye twice a second, and each held mesh's box
 KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
 KF2_MOUSE=0                              # mouse look off (always on otherwise, not a setting: kf2.mouse.on is no longer read; a click on the picture captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y

@@ -2052,3 +2052,21 @@ was that plus the setup's work (`src/Onboarding`, the launcher's hold on the bui
 **Corrected from 2026-10-09:** `ItemTurn` is not KF3's own. Turning a held-up item with
 the mouse, the right stick and the gyroscope, and the GYRO row that sets the item's gyro
 and the bow's together, are wanted here; KF2's pickup has not been found yet.
+
+### 2026-10-13: `ItemTurn` ported onto the menu's item preview
+
+**Corrected later the same day:** KF2 does hold a picked-up item up, through the same
+routine as KF3 (`func_8004831C`; GAME_INTERNALS, "The pickup holds the item up in a loop
+of its own"), and `ItemTurn` now turns that too, with Verdite3's `ItemEye` ported beside
+it and a correction for the item's own geometry that Verdite3 lacks (INPUT, "Turning a
+picked-up item", "The item held up at the eye"). The centring is a candidate to carry
+back to Verdite3, which had the same complaint. What follows was written before then.
+
+The one model found showing an item was the inventory's and the shops' preview
+(`func_8002156C`), so Verdite3's `ItemTurn` was ported onto that (`patches/ItemTurn.cs`; INPUT, "Turning the item preview"). The input half
+(stick, gyro, the rest threshold, the hold and resume) is Verdite3's almost line for
+line, and the rotation is PSY-Q's `RotMatrix` rather than KF3's own; the mouse is a drag
+on the model, since the menu's pointer is free, where Verdite3's is the captured look.
+The GYRO row now sets both gyro readers, as Verdite3's does. A candidate for Verdite Core
+once both are settled: the input and the matrix maths are game-agnostic, the hooks are not.
+

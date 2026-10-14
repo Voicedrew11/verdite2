@@ -311,6 +311,7 @@ The reverse-engineered game: main loop, player state, stats, death, movement, ar
 - Saving and loading
 - Debug tools
 - The Items tab gives through the game's own give, and the names are read live
+- The pickup holds the item up in a loop of its own
 - RETURN is the chooser's last item, and the port settings page takes it
 - Full-screen messages are pictures, and the world behind them is a 1x copy
 
@@ -362,6 +363,9 @@ Pad, analog sticks, keyboard layout, mouse look and the menu pointer.
 - The keyboard layout, and changing a default RecompOne provides
 - Mouse look
 - The menu pointer
+- Turning a picked-up item
+- The item held up at the eye
+- Turning the item preview
 
 ### [AUDIO.md](docs/AUDIO.md)
 

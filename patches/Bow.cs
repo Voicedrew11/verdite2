@@ -116,6 +116,8 @@ internal static class Bow
         ClipByte = ClipByte,
         Weapons = (BowId, ArbalestId),
         AttackHeld = m => (m.ReadU16(0x80199554) & m.ReadU32(0x8006E570)) != 0,
+        Busy = () => ItemTurn.Busy,
+        GyroWanted = () => ItemTurn.Enabled && ItemTurn.UseGyro,
         Attach = Install,
     };
 }

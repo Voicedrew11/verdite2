@@ -1204,6 +1204,33 @@ GyroAim.Install();
 Rumble.Configure(Kf2.Bow.Reads);
 Rumble.Install();
 
+// A picked-up item, and the menu's item preview, turned by hand: the mouse, the
+// right stick, or the pad's gyroscope (beside the bow's in the GYRO row). Verdite3's
+// ItemTurn, on the pickup func_8004831C and the preview func_8002156C; the game's
+// spin holds while the player turns it and comes back 1.5 s after.
+//
+//     KF2_ITEMTURN=0         the game's own spin only
+//     KF2_ITEMTURN_GYRO=0    the gyroscope does not turn it
+//     KF2_ITEMTURN_PROBE=1   a line a second while an item is held up or previewed
+//     KF2_ITEMTURN_TEST=id   hold up item id 10 s after the first area load, the right
+//                            stick full right and half down for the hold's second
+//                            second (=preview: the same stick on the first preview)
+//
+// See "Turning a picked-up item" and "Turning the item preview" in docs/INPUT.md.
+Kf2.ItemTurn.Configure();
+Kf2.ItemTurn.Install();
+
+// A picked-up item held at the centre of the view: the pickup aims at the eye
+// without its head bob, and the camera draws from the eye with it. Verdite3's
+// ItemEye, on func_80046C64.
+//
+//     KF2_ITEMEYE=0          the game's own target, to compare
+//     KF2_ITEMEYE_PROBE=1    each target, and the item in the camera's frame
+//
+// See "The item held up at the eye" in docs/INPUT.md.
+Kf2.ItemEye.Configure(Environment.GetEnvironmentVariable("KF2_ITEMEYE"));
+Kf2.ItemEye.Install();
+
 // The menu pointer: hover an in-game menu item and the game's own cursor moves to
 // it, left click confirms, right click backs out.
 //

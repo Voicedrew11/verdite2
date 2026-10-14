@@ -328,6 +328,10 @@ public static class LoopPacing
     /// would be overwritten with the ones this class had just set.</summary>
     static bool _inExtra;
 
+    /// <summary>A redraw of this class's is drawing: a hook that acts once per pass of
+    /// the loop (ItemTurn, ItemEye's probe) skips these.</summary>
+    internal static bool InRedraw => _inExtra;
+
     /// <summary>The two pointers the caller handed stage 13, recorded by
     /// <see cref="BeforeRenderer"/> on the loop's own frame and replayed on every
     /// redraw. See the class comment: getting these wrong is not a subtle
