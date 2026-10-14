@@ -37,7 +37,6 @@
     "kf2.audio.interp": "2",
     "kf2.audio.reverb": "1",
     "kf2.audio.positional": "2",
-    "kf2.map.on": "True",
     "kf2.gearcompare.enabled": "True",
     "kf2.autoreload.enabled": "True",
     "kf2.analog.accel": "False",
@@ -583,33 +582,6 @@
       "label": "kf2.setup.gameplay",
       "groups": [
         {
-          "id": "map",
-          "label": "kf2.setup.map",
-          "tiers": [
-            {
-              "label": "kf2.setup.map.0.name",
-              "desc": "kf2.setup.map.0",
-              "set": {
-                "kf2.map.on": "False"
-              }
-            },
-            {
-              "label": "kf2.setup.map.0.name",
-              "desc": "kf2.setup.map.1",
-              "set": {
-                "kf2.map.on": "False"
-              }
-            },
-            {
-              "label": "kf2.setup.map.2.name",
-              "desc": "kf2.setup.map.2",
-              "set": {
-                "kf2.map.on": null
-              }
-            }
-          ]
-        },
-        {
           "id": "gear",
           "label": "kf2.setup.gear",
           "tiers": [
@@ -948,26 +920,6 @@
       "pt-BR": "Jogabilidade",
       "es-419": "Jugabilidad"
     },
-    "kf2.setup.map": {
-      "en": "Map",
-      "pt-BR": "Mapa",
-      "es-419": "Mapa"
-    },
-    "kf2.setup.map.0": {
-      "en": "No map, as released.",
-      "pt-BR": "Sem mapa, como no lançamento.",
-      "es-419": "Sin mapa, como en el lanzamiento."
-    },
-    "kf2.setup.map.1": {
-      "en": "No map, as released.",
-      "pt-BR": "Sem mapa, como no lançamento.",
-      "es-419": "Sin mapa, como en el lanzamiento."
-    },
-    "kf2.setup.map.2": {
-      "en": "A map of the area that fills in as you go (M, or the pad's touchpad).",
-      "pt-BR": "Um mapa da área que se completa conforme você anda (M, ou o touchpad do controle).",
-      "es-419": "Un mapa del área que se completa mientras avanzas (M, o el panel táctil del control)."
-    },
     "kf2.setup.gear": {
       "en": "Comparing gear",
       "pt-BR": "Comparar equipamento",
@@ -1207,16 +1159,6 @@
       "en": "Wide view and far draw",
       "pt-BR": "Visão ampla e distante",
       "es-419": "Vista amplia y lejana"
-    },
-    "kf2.setup.map.0.name": {
-      "en": "No map",
-      "pt-BR": "Sem mapa",
-      "es-419": "Sin mapa"
-    },
-    "kf2.setup.map.2.name": {
-      "en": "Map that fills in",
-      "pt-BR": "Mapa que se completa",
-      "es-419": "Mapa que se completa"
     },
     "kf2.setup.gear.0.name": {
       "en": "Prompts as released",

@@ -1,3 +1,8 @@
+// ModCompiler compiles mods with no implicit usings, so every namespace the
+// file needs is named here -- including System.
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using ImGuiNET;
 
 namespace Kf2.Settings;
@@ -26,11 +31,12 @@ public sealed class MapButtonPage : IPatchPage
     // stores. Not every pad has every one of them -- a controller with no touchpad
     // never sends button 20 -- and nothing here can ask the pad what it has, so
     // they are offered as a list rather than probed.
+    // The touchpad is not offered: it opens the game's own map item (core's MapKey),
+    // and a second binding to it here would open both.
     static readonly string[] PadButtons =
-        ["Touchpad (DualSense / DualShock 4)", "L3 (left stick click)", "R3 (right stick click)",
-         "Select / Back", "None"];
+        ["L3 (left stick click)", "R3 (right stick click)", "Select / Back", "None"];
     static readonly int[] PadValues =
-        [Map.PadTouchpad, Map.PadL3, Map.PadR3, Map.PadSelect, Map.PadNone];
+        [Map.PadL3, Map.PadR3, Map.PadSelect, Map.PadNone];
 
     public void Draw()
     {
@@ -42,7 +48,7 @@ public sealed class MapButtonPage : IPatchPage
         if (ImGui.Combo("Open the full-screen map with", ref padIdx, PadButtons, PadButtons.Length))
             Map.SetPadButton(PadValues[padIdx]);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The pad button that opens the map. M on the keyboard always does too.");
+            ImGui.SetTooltip("The pad button that opens the map. G on the keyboard always does too.");
 
         ImGui.EndDisabled();
 

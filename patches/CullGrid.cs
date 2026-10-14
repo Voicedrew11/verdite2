@@ -127,7 +127,7 @@ public static class CullGrid
     /// describe **this** grid, 32 wide, while the legacy array is cropped from its
     /// cell (4,4) — so the two disagree by exactly that crop, and anything reading
     /// the array by way of the mirror words inherits the disagreement. Only
-    /// patches/MapFog.cs does, and only because it must read the array the game's
+    /// mods/map/MapFog.cs does, and only because it must read the array the game's
     /// own walker reads rather than this class's private one.
     /// </summary>
     public static int LegacyBias => _mode == Mode.On ? (Span - LegacySpan) / 2 : 0;

@@ -1355,7 +1355,7 @@ public static class MenuMouse
     ///
     /// The position comes from ImGui's own IO rather than from a new host API:
     /// it is in the same screen space as <c>OutputView</c>, it is a plain field
-    /// read so it costs nothing per call, and patches/MapPanel.cs already reads
+    /// read so it costs nothing per call, and mods/map/MapPanel.cs already reads
     /// it. It carries the last presented frame's value, which is the right one --
     /// every menu loop presents through `func_800226A8`, and the panels draw
     /// inside that `VSync`.
@@ -1413,7 +1413,7 @@ public static class MenuMouse
     /// <summary>
     /// The pointer in the game's own pixels, or nowhere.
     ///
-    /// **OutputView directly, and deliberately not MapRender.Picture**: that
+    /// **OutputView directly, and deliberately not GamePicture.Get**: that
     /// helper falls back to the whole viewport when the panel drew no picture,
     /// which is right for something that has to be drawn somewhere and wrong for
     /// a coordinate conversion. A hit test would rather answer "nowhere" than

@@ -313,21 +313,6 @@ public static class PortSettings
         Stored = Stored.Float, Ui = Ui.None, Min = EnemyTurn.Min, Max = EnemyTurn.Max,
     };
 
-    /// <summary>The map, a part of <see cref="MapRow"/>.</summary>
-    static readonly PortSetting MapOn = Switch(Map.OnKey, "KF2_MAP", "Map",
-        null, null, () => Map.Enabled, Map.SetEnabled, true);
-
-    /// <summary>The fog of war, a part of <see cref="MapRow"/>.</summary>
-    static readonly PortSetting MapFogOn = Switch(MapFog.OnKey, "KF2_MAP_FOG", "Map fills in as you go",
-        null, null, () => MapFog.Enabled, MapFog.SetEnabled, true);
-
-    /// <summary>OFF, the WHOLE AREA, or filled in AS YOU GO; the map is the master, as in
-    /// the Settings window's <c>MapPage</c>, and OFF leaves the kept fog choice.</summary>
-    public static readonly PortSetting MapRow = Combine("row.map", Gameplay, "MAP", [MapOn, MapFogOn],
-        [0, 1, 2], Named([0, 1, 2], "OFF", "WHOLE AREA", "AS YOU GO"),
-        get => get(MapOn) == 0 ? 0 : get(MapFogOn) != 0 ? 2 : 1,
-        (v, _) => v <= 0 ? [0, Unchanged] : v >= 2 ? [1, 1] : [1, 0]);
-
     /// <summary>Verdite Core's pause while the window is in the background; the
     /// Settings window's Gameplay tab only.</summary>
     public static readonly PortSetting FocusPauseOn = Switch(FocusPause.OnKey, "KF2_FOCUS_PAUSE", "Pause in the background",
@@ -471,7 +456,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRateRow,
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
-        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapRow,
+        AutoReloadOn, GearCompareOn, EnemyTurnSpeed,
         ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
         Positional,
     ];
@@ -483,7 +468,7 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapOn, MapFogOn, FocusPauseOn,
+        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, FocusPauseOn,
         Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];

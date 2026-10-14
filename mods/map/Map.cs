@@ -1,8 +1,17 @@
+// ModCompiler compiles mods with no implicit usings, so every namespace the
+// file needs is named here -- including System.
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.IO;
+using System.Numerics;
+using System.Text;
 using RecompOne.Runtime.Config;
 using RecompOne.Runtime.Events;
 using RecompOne.Runtime.Host.Window;
 using RecompOne.Runtime.Memory;
 using Silk.NET.Input;
+using Verdite.Core;
 using HostWindow = RecompOne.Runtime.Host.HostWindow;
 
 namespace Kf2;
@@ -10,7 +19,7 @@ namespace Kf2;
 /// <summary>
 /// A dynamic map: where you are, drawn from the game's own floor plan.
 ///
-///     KF2_MAP=0                the whole feature off (on by default)
+///     KF2_MAP=0                the whole feature off (on by default, once the mod is enabled)
 ///     KF2_MAP_MINIMAP=1        the corner minimap on (off by default)
 ///     KF2_MAP_PROBE=1          dump the 80x80 grid as ASCII on each area load
 ///
@@ -290,8 +299,10 @@ public static class Map
     public const int PadSelect = 4;  // SDL_CONTROLLER_BUTTON_BACK
 
     /// <summary>The pad button that opens and closes the full-screen map.
-    /// Touchpad by default; <see cref="PadNone"/> is off.</summary>
-    public static int PadButton = PadTouchpad;
+    /// R3 by default: the touchpad opens the game's own map item (core's MapKey), so
+    /// it is not offered as this mod's default, and R3 is a button the game reads
+    /// nothing from. <see cref="PadNone"/> is off.</summary>
+    public static int PadButton = PadR3;
 
     static bool? _forcedOn, _forcedMinimap;
 
@@ -399,8 +410,33 @@ public static class Map
             _probe = true;
     }
 
+    static Action? _onReady;
+    static Action<KeyboardEvent>? _onKey;
+    static Action<ControllerEvent>? _onPad;
+    static Action<OverlayLoadedEvent>? _onOverlay;
+    static bool _installed;
+
+    /// <summary>
+    /// The ready-time half of <see cref="Install"/>: the saved settings, the panels and the
+    /// console line. **The map mod calls this from its first VSync**, not from a
+    /// RuntimeReadyEvent listener: that event is dispatched by Runtime.Initialize,
+    /// before ModLoader.LoadAll, so a listener on it would never run for a mod.
+    /// The first VSync is the earliest point on the UI thread that the panels and
+    /// the Localization merge can be set up.
+    /// </summary>
+    public static void RunReady() => _onReady?.Invoke();
+
+    /// <summary>
+    /// The listeners, the pause predicate and the state the mod's ready half reads.
+    /// Called once from the mod's OnLoad. Everything it adds is undone by
+    /// <see cref="Uninstall"/>, except the pause predicate, which cannot be taken
+    /// back: it is guarded by <see cref="Enabled"/>, which the mod clears first.
+    /// </summary>
     public static void Install()
     {
+        if (_installed) return;
+        _installed = true;
+
         Enabled = _forcedOn ?? true;
         Minimap = _forcedMinimap ?? false;
         Pause   = _forcedPause ?? true;
@@ -410,16 +446,18 @@ public static class Map
         Floor   = _forcedFloor ?? -1;
         PlayerMark = (_forcedArrow ?? false) ? 1 : 0;
 
-        // ConfigManager.Load runs inside HostWindow.Initialize, which is after
-        // Program.cs — so the saved settings can only be read here, and an env var
-        // beats them for the run. RuntimeReadyEvent is also the first moment
-        // PanelManager and the ImGui context exist, which is why registration
-        // shares the listener.
-        Event.AddListener<RuntimeReadyEvent>(_ =>
+        // ConfigManager.Load runs inside HostWindow.Initialize, which is before the
+        // mod loads, so the saved settings are read in RunReady. An env var beats
+        // them for the run.
+        _onReady = () =>
         {
             var view = RecompOne.Runtime.Runtime.View;
             Enabled       = _forcedOn ?? view.GetBool(OnKey, true);
-            PadButton     = view.GetInt(PadButtonKey, PadTouchpad);
+            PadButton     = view.GetInt(PadButtonKey, PadR3);
+
+            // The touchpad is the game's own map item's (core's MapKey), so a value
+            // saved from an older build that bound it to this map is read as R3.
+            if (PadButton == PadTouchpad) PadButton = PadR3;
 
             // Registered whether or not the feature is on, so the switch under
             // Gameplay is not a dead control for the rest of the session. Enabled
@@ -427,20 +465,20 @@ public static class Map
             RegisterUi();
 
             Console.WriteLine(Enabled
-                ? $"[KF2] map: on, M or {PadName(PadButton)} opens the full-screen map, " +
-                  $"N toggles the minimap, Shift+M the tile readout " +
+                ? $"[KF2] map: on, G or {PadName(PadButton)} opens the full-screen map, " +
+                  $"N toggles the minimap, Shift+G the tile readout " +
                   $"(minimap {(Minimap ? "on" : "off")}, " +
                   $"{(Pause ? "the world pauses while it is up" : "the world keeps running")}" +
                   $"{(_probe ? ", probing" : "")})"
                 : "[KF2] map: off");
-        });
+        };
 
         // **Opening the full-screen map stops the world.** The predicate rather
         // than a call from ToggleFullscreen, because the panel closes by more
-        // than one route -- M, the pad button, and the Gameplay switch that turns
+        // than one route -- G, the pad button, and the Gameplay switch that turns
         // the whole map off -- and a latch missed by one of them is a game that
-        // never resumes. See
-        // FramePacing.PauseWhen and Map.Pause.
+        // never resumes. See FramePacing.PauseWhen and Map.Pause. Several callers
+        // OR together, so this does not displace FocusPause's predicate.
         //
         // Gated on InGame as well as on the panel: the map can be opened at the
         // title screen, where it draws nothing, and pausing there would freeze the
@@ -460,24 +498,29 @@ public static class Map
         // calls it every frame**: 5,673 calls in 40 seconds at 144 fps. Hooking
         // it turned a four-a-second grid copy into a per-frame one and dumped the
         // probe 5,673 times. The copy is cheap and self-correcting instead.
-        Event.AddListener<OverlayLoadedEvent>(_ => Invalidate());
+        _onOverlay = _ => Invalidate();
+        Event.AddListener(_onOverlay);
 
         // The hotkeys come off the event bus rather than being polled, for the
         // reason Verdite Core's Mouse records: every hook this port owns is in the
         // walking-around part of the game, so a polled toggle would be dead in the
         // in-game menu, on the title screen and through a load. PadReadEvent is
-        // emphatically not the bus for this — that call is polled hundreds of
+        // emphatically not the bus for this -- that call is polled hundreds of
         // thousands of times a second.
-        Event.AddListener<KeyboardEvent>(e =>
+        //
+        // **M is not taken.** It opens the game's own map item (core's MapKey), and
+        // so does the pad's touchpad. G is the full-screen map here, Shift+G the
+        // docked readout, N the minimap.
+        _onKey = e =>
         {
             if (!Enabled || !e.Pressed || PopupManager.AnyOpen || HotkeyGate.Typing || Remaster.Editor.Open) return;
 
-            // M is the *player's* map -- the full-screen one -- and Shift+M is the
-            // docked instrument with the ten-byte hover readout. They were one key
-            // when there was one viewport; the shift is read at the moment the key
-            // arrives because KeyboardEvent carries no modifier state, and
-            // HostWindow.IsKeyDown is the public forwarder for asking.
-            if (e.Key == (int)Key.M)
+            // G is the *player's* map -- the full-screen one -- and Shift+G is the
+            // docked instrument with the ten-byte hover readout. The shift is read
+            // at the moment the key arrives because KeyboardEvent carries no
+            // modifier state, and HostWindow.IsKeyDown is the public forwarder for
+            // asking.
+            if (e.Key == (int)Key.G)
             {
                 if (HostWindow.IsKeyDown(Key.ShiftLeft) || HostWindow.IsKeyDown(Key.ShiftRight))
                     ToggleMap();
@@ -485,7 +528,8 @@ public static class Map
                     ToggleFullscreen();
             }
             else if (e.Key == (int)Key.N) SetMinimap(!Minimap);
-        });
+        };
+        Event.AddListener(_onKey);
 
         // The pad's own way in. ControllerEvent is the raw host gamepad, dispatched
         // from InputManager.PollGamepadEvents *before* anything maps it to the PSX
@@ -494,7 +538,7 @@ public static class Map
         // slot for it and nothing downstream will ever see it. The event bus only
         // dispatches ControllerEvent while something listens, so this listener is
         // also what turns that dispatch on.
-        Event.AddListener<ControllerEvent>(e =>
+        _onPad = e =>
         {
             // Any pad opens it: ControllerEvent.Device is SDL's joystick *instance
             // id*, not a 0-based player number, so there is nothing here to compare
@@ -504,7 +548,33 @@ public static class Map
             if (!Enabled || !e.Pressed || PadButton == PadNone) return;
             if (e.Button != PadButton || PopupManager.AnyOpen) return;
             ToggleFullscreen();
-        });
+        };
+        Event.AddListener(_onPad);
+    }
+
+    /// <summary>Takes back what <see cref="Install"/> put on the event bus, and closes
+    /// the panels. The pause predicate stays, and answers false from here on.</summary>
+    public static void Uninstall()
+    {
+        if (!_installed) return;
+        _installed = false;
+
+        if (_onKey != null) Event.RemoveListener(_onKey);
+        if (_onPad != null) Event.RemoveListener(_onPad);
+        if (_onOverlay != null) Event.RemoveListener(_onOverlay);
+        _onKey = null;
+        _onPad = null;
+        _onOverlay = null;
+        _onReady = null;
+
+        SetEnabled(false);
+        if (_registered)
+        {
+            PanelManager.Unregister(MapPanel.Instance);
+            PanelManager.Unregister(MapOverlay.Instance);
+            PanelManager.Unregister(MapFullscreen.Instance);
+            _registered = false;
+        }
     }
 
     /// <summary>What a pad button is called in the console line and the settings
@@ -555,12 +625,12 @@ public static class Map
         // else's game, and a "Game" heading beside System, Mods and Debug reads
         // as part of the machine rather than part of King's Field. Panels do not
         // auto-populate the bar anyway -- MainMenuBar declares every built-in one
-        // by hand -- so both maps are reached the way a player reaches them: M
-        // and the pad's touchpad button for the full-screen one, Shift+M for the
-        // docked instrument.
+        // by hand -- so both maps are reached the way a player reaches them: G
+        // and the pad button for the full-screen one, Shift+G for the docked
+        // instrument.
 
         // The probe opens both maps as well as dumping the grid. A headless run
-        // cannot press M, so without this their draw paths are never exercised by
+        // cannot press G, so without this their draw paths are never exercised by
         // anything that is not a person at the keyboard -- and the full-screen
         // one is where the new arithmetic is, since it fits a scale to the area's
         // occupied extent rather than being handed a zoom.
@@ -589,7 +659,7 @@ public static class Map
         if (p != null) p.IsOpen = !p.IsOpen;
     }
 
-    /// <summary>The full-screen map: what M and the pad button open.</summary>
+    /// <summary>The full-screen map: what G and the pad button open.</summary>
     public static void ToggleFullscreen()
         => MapFullscreen.Instance.IsOpen = !MapFullscreen.Instance.IsOpen;
 

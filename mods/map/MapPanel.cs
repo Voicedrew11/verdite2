@@ -1,3 +1,8 @@
+// ModCompiler compiles mods with no implicit usings, so every namespace the
+// file needs is named here -- including System.
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using ImGuiNET;
 using RecompOne.Runtime.Host.Window;
@@ -12,7 +17,7 @@ namespace Kf2;
 /// A title bar, a toolbar, a zoom slider and ten hex bytes on hover are for
 /// settling what a tile record means, not for reading a route with a controller in
 /// your hands — so this one keeps the chrome and the full-screen view has none.
-/// Shift+M opens it; M and the pad's touchpad button open the other one. Neither
+/// Shift+G opens it; G and the pad button open the other one. Neither
 /// is in the menu bar: the port's chrome carries no heading of its own over the
 /// game.
 ///

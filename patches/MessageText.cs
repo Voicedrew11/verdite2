@@ -330,7 +330,7 @@ public sealed class MessageText : IFloatingPanel
         float alpha = Math.Clamp(_bright / (float)FullBright, 0f, 1f);
         if (alpha <= 0f) return;
 
-        MapRender.Picture(out var g0, out var g1);
+        GamePicture.Get(out var g0, out var g1);
         float scale = (g1.Y - g0.Y) / 240f;
         float cx = (g0.X + g1.X) * 0.5f;
         Vector2 Game(float x, float y) => new(cx + (x - 160f) * scale, g0.Y + y * scale);

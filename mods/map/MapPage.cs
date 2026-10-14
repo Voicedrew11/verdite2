@@ -1,3 +1,8 @@
+// ModCompiler compiles mods with no implicit usings, so every namespace the
+// file needs is named here -- including System.
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using ImGuiNET;
 
 namespace Kf2.Settings;
@@ -29,7 +34,7 @@ namespace Kf2.Settings;
 /// same — three entries, and the fourth state stops being reachable:
 ///
 /// <list type="table">
-/// <item><term>Off</term><description>no map at all; M and the pad button do nothing</description></item>
+/// <item><term>Off</term><description>no map at all; G and the pad button do nothing</description></item>
 /// <item><term>Whole area</term><description>the floor plan the moment you walk in</description></item>
 /// <item><term>Fill in as you go</term><description>fog of war — only what you had a clear view of</description></item>
 /// </list>
@@ -73,7 +78,7 @@ public sealed class MapPage : IPatchPage
 
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("A map of the area you are in: the whole floor plan, or only where " +
-                             "you have been. M opens it; the world stops while it is up.");
+                             "you have been. G opens it; the world stops while it is up.");
     }
 
     /// <summary>The state the two patches are actually in, folded onto the three

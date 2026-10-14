@@ -3946,11 +3946,40 @@ for this: it is full at its seven.
 
 ## A dynamic map
 
-`patches/Map.cs`, `patches/MapMarkers.cs`, `patches/MapRender.cs`,
-`patches/MapFullscreen.cs`, `patches/MapPanel.cs`, `patches/MapOverlay.cs`,
-`patches/settings/MapPage.cs`.
+**Now the map mod, `mods/map` (id `kf2.map`).** It was a patch until the port's
+other features outgrew it being on by default. It is off until it is enabled in
+the Mods panel (`mods.kf2.map.enabled` in `interface.ini`), and while it is off
+none of its hooks, panels or settings exist. Its code moved unchanged in logic
+from `patches/Map*.cs`, `patches/settings/Map*.cs`; what the core keeps is
+`patches/GamePicture.cs` (the game picture's rectangle, which the message text
+also draws into), `patches/AppExit.cs` (the fog store's flush on exit), the
+`AgentServer.FastVerbs` extension point (the `map` shell verb), and
+`PatchSettings.Unregister` and `InputSection.GamepadExtras` (the mod's Gameplay
+combo and pad-button choice).
 
-    KF2_MAP=0             the whole feature off (on by default)
+**The keys moved.** `G` opens the full-screen map, `Shift+G` the docked readout,
+`N` the minimap as before, and the pad's default is `R3`. **`M` and the pad's
+touchpad are not the map's**: they open the game's own map item through core's
+`MapKey`, and the mod binds neither. The touchpad is not offered in the mod's pad
+choice either, and a saved touchpad value is read as `R3`.
+
+The mod's first-frame work (the saved settings, the panels, the Gameplay combo and
+the Input pad choice) runs from its first `VSync`, not from `RuntimeReadyEvent`:
+that event is dispatched before `ModLoader.LoadAll`, so a listener on it never runs
+for a mod. Its environment switches read only with the mod enabled, which is why
+`docs/ENV_VARS.md` says so beside each one.
+
+Verified (2026-10-14): the mod compiles at run time and loads with
+`[Mods] kf2.map v1.0: 0 hook(s)` and `[KF2] map: on, G or R3 opens the full-screen
+map ...`; `map on` drops the tick rate to 0.0 ticks/s and `map off` restores 15.0
+(`KF2_FPS_PROBE=1`); `key G` opens and closes the map; with the mod disabled the
+game boots to slot 2 in area 1 and `map` is an unknown command. Not judged by eye.
+
+`mods/map/` holds `Map.cs`, `MapMarkers.cs`, `MapRender.cs`, `MapFullscreen.cs`,
+`MapPanel.cs`, `MapOverlay.cs`, `MapFog.cs`, `MapMod.cs` (the entry point),
+`MapPage.cs` and `MapButtonPage.cs`.
+
+    KF2_MAP=0             the whole feature off (on by default; read with the mod enabled)
     KF2_MAP_MINIMAP=1     the corner minimap on (off, and not a setting)
     KF2_MAP_PAUSE=0       the world keeps running under the full map (not a setting)
     KF2_MAP_FLOOR=lower   pin a stacked half instead of following the player
@@ -3967,9 +3996,9 @@ in this port that knew where you were was a debug instrument — `kf2debug`'s Wa
 tab, `KF2_SHELL`'s `state`, the `[KF2-AGENT]` beacon. A patch rather than a mod
 for auto reload's reason: it is a thing the port itself should offer, so it
 should not be able to be absent or silently disabled, and its knobs go under
-Gameplay beside it. **The pad's touchpad button opens the full-screen map**, `M`
-does the same from the keyboard, `N` toggles the corner minimap, and `Shift+M`
-opens the docked panel with the per-tile readout.
+Gameplay beside it. (Under the mod, `G` opens the full-screen map, `N` toggles
+the corner minimap, and `Shift+G` opens the docked panel with the per-tile readout;
+see the note at the top of this section.)
 
 ### The floor plan is already in RAM, and it is not polygon soup
 
