@@ -331,6 +331,52 @@ public static class RetainedMap
         }
         RetainedScene.SetStatic(_tris.AsSpan(0, _n));
         RetainedPlanes.Finish();
+        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_SEAMS") is { Length: > 0 } tj) SeamCensus(tj);
+    }
+
+    // KF2_GPUWORLD_SEAMS=x,z,radius[,ymax]: after a build, every map edge near (x,z) that only
+    // one triangle uses, and every vertex lying on another triangle's edge.
+    static void SeamCensus(string arg)
+    {
+        var a = arg.Split(',');
+        double cx = double.Parse(a[0]), cz = double.Parse(a[1]), r = double.Parse(a[2]);
+        double ymax = a.Length > 3 ? double.Parse(a[3]) : double.MaxValue;
+        bool Near(in RetainedScene.Vertex v) => Math.Abs(v.X - cx) <= r && Math.Abs(v.Z - cz) <= r && v.Y <= ymax;
+        var edges = new Dictionary<(long, long, long, long, long, long), int>();
+        var points = new HashSet<(long, long, long)>();
+        (long, long, long) K(in RetainedScene.Vertex v) => ((long)Math.Round(v.X), (long)Math.Round(v.Y), (long)Math.Round(v.Z));
+        for (int i = 0; i + 2 < _n; i += 3)
+        {
+            if (!Near(_tris[i]) && !Near(_tris[i + 1]) && !Near(_tris[i + 2])) continue;
+            for (int k = 0; k < 3; k++)
+            {
+                var p = K(_tris[i + k]); var q = K(_tris[i + (k + 1) % 3]);
+                points.Add(p);
+                var e = p.CompareTo(q) < 0 ? (p.Item1, p.Item2, p.Item3, q.Item1, q.Item2, q.Item3)
+                                           : (q.Item1, q.Item2, q.Item3, p.Item1, p.Item2, p.Item3);
+                edges[e] = edges.TryGetValue(e, out int n) ? n + 1 : 1;
+            }
+        }
+        int open = 0, tj = 0;
+        foreach (var (e, n) in edges)
+        {
+            if (n != 1) continue;
+            open++;
+            double ex = e.Item4 - e.Item1, ey = e.Item5 - e.Item2, ez = e.Item6 - e.Item3;
+            double len2 = ex * ex + ey * ey + ez * ez;
+            string on = "";
+            foreach (var p in points)
+            {
+                double px = p.Item1 - e.Item1, py = p.Item2 - e.Item2, pz = p.Item3 - e.Item3;
+                double t = (px * ex + py * ey + pz * ez) / len2;
+                if (t <= 1e-4 || t >= 1 - 1e-4) continue;
+                double dx = px - t * ex, dy = py - t * ey, dz = pz - t * ez;
+                double d = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (d < 16) { on += $" [{p.Item1},{p.Item2},{p.Item3} t={t:F3} off={d:F2}]"; tj++; }
+            }
+            Console.WriteLine($"[KF2] seam: open edge ({e.Item1},{e.Item2},{e.Item3})-({e.Item4},{e.Item5},{e.Item6}){on}");
+        }
+        Console.WriteLine($"[KF2] seam: {edges.Count} edges near, {open} open, {tj} vertices on an open edge");
     }
 
     /// <summary>A mesh whose header points inside RAM and has a believable count.</summary>
@@ -480,6 +526,23 @@ public static class RetainedMap
         }
     }
 
+    /// <summary>A tile's mesh reaches 10 units past its cell on each side, so two
+    /// neighbours overlap by 20. Flat, the overlap hides the seam; on a slope it
+    /// staggers the two faces vertically (10 units at a 1:2 grade), and a sight line
+    /// grazing the ceiling passes between them: a hairline of background along the
+    /// seam. A corner exactly 10 off a cell boundary is put on it, so the two edges
+    /// are one. Translucent faces too, so a grate or the water stays on the wall it
+    /// met; the swell's corners are interior, never on a boundary.
+    /// <c>KF2_GPUWORLD_WELD=0</c> to compare. See "Hairlines in sloped ceilings" in
+    /// docs/GPU_RENDERER.md.</summary>
+    static readonly bool Weld = Environment.GetEnvironmentVariable("KF2_GPUWORLD_WELD")?.Trim() != "0";
+
+    static float Welded(float w)
+    {
+        float m = w - MathF.Round(w / 2048f) * 2048f;
+        return MathF.Abs(m) == 10f ? w - m : w;
+    }
+
     static void Emit(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
                      Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, Span<uint> lw, Span<short> nz,
                      uint swell, int a, int b, int c)
@@ -497,6 +560,7 @@ public static class RetainedMap
         var v = t;
         if ((swell >> k & 1u) != 0) v.Flags |= RetainedScene.FlagSwell;
         v.X = px[k]; v.Y = py[k]; v.Z = pz[k];
+        if (Weld) { v.X = Welded(v.X); v.Z = Welded(v.Z); }
         v.U = uv[k] & 0xFF; v.V = uv[k] >> 8;
         if (RecordsOn)
         {

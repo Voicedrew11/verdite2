@@ -1747,3 +1747,53 @@ one a map change. The two left 1.87 and 1.92 s into area 1 are two rewrites by t
 tick apart. 144.0 fps at 19.9 ticks/s, every present wide. No settle gate was needed, so
 Verdite3's `061691e` (packets while a new map settles) has nothing to guard here. Not
 judged by eye: the water's swell and ripples on an area's first frames.
+
+## Hairlines in sloped ceilings (2026-10-14)
+
+Reported at area 1, (104248, -12800, 27898) facing yaw 2066: a 1 px line of
+background along each seam of the sloped ceiling over the stairs, and "everywhere
+with flat sloped geometry above your head".
+
+**The gap is in the game's mesh, not the renderer.** The static map is built
+from integer world corners, non-indexed, with no per-face rounding, and `WorldVs`
+is `invariant`, so two faces that name the same corner meet exactly. The census
+(`KF2_GPUWORLD_SEAMS=104248,27898,3500,-12801`) showed the faces do not name the
+same corner: a tile's mesh reaches 10 units past its cell on every side, so two
+neighbours overlap by 20.
+
+```
+tile A: (102656,-14976,24586)-(104458,-14976,24586)   z = 12*2048 + 10
+tile B: (102656,-14976,24566)-(104458,-14976,24566)   z = 12*2048 - 10, same y
+```
+
+Flat, the overlap hides the seam. On the 1:2 slope, B is 10 units higher than A
+across the overlap, and a sight line grazing the ceiling passes under B's end and
+over A's start into the void behind. At 320x240 that sliver is under a pixel and
+whole-pixel corners hid it; at the render scale it is a line.
+
+**The fix** (`RetainedMap.Welded`, in `Put`): a corner exactly 10 units off a cell
+boundary in X or Z is put on the boundary, so the two edges are one edge. Every
+face is welded, translucent ones too, so a grate or the water stays on the wall it
+met (the swell moves only interior corners, never one on a boundary).
+`RetainedPlanes` and `WaterSwell.IsFree` still see the game's corners.
+`KF2_GPUWORLD_WELD=0` is the comparison. Only the GPU world gets it; with
+`gpuworld off` the packets still carry the game's corners.
+
+What was measured, over the map of each of areas 0-6 (a one-off audit, not kept):
+
+- The weld is a function of position, so two faces that shared an edge before
+  share it after; it can close an edge, never open one. Edges one triangle uses
+  fell 70-90% in every area (area 1: 62752 to 11090).
+- No face flipped, none bent by more than 5 degrees; 74 slivers (areas 0 and 2)
+  went flat, each 20 units wide across a boundary whose two sides now meet.
+- 26 pairs of coplanar faces newly overlap, all on diagonal geometry at
+  y = -27199 (areas 0 and 2), by at most a 10-unit sliver. Not seen.
+- The picture: 24 views each (8 yaws, 3 pitches) at the report's spot and at the
+  entry of areas 0-5, paused, weld off and on, counting background pixels in
+  lines 1-3 px wide. At the report's spot every view with any (288-810) has 0.
+  Over all 168, 174385 to 171859; each view that rose was looked at, and the
+  difference was a particle, a creature or a projectile that moved between the
+  two runs, not geometry. Areas 6 and 7 never took the `view` (the warp did not
+  settle in time) and are unmeasured.
+
+**Mechanism and the reported spot measured; the picture elsewhere not judged.**
