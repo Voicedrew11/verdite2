@@ -127,10 +127,13 @@ Start the game from the same shell you run that in, or the diagnostic socket in
 
 ### Driving the game without a human
 
-- **The attract demo is a free live session**: leave the port at the title and it
-  walks itself into an area about a minute later, with a character, an HP bar and
-  (eventually) a death. `AutoReload.Simulate()` kills on demand from there, and the
-  death clock at `0x8019951A` can be pinned to hold any frame of the death sequence.
+- **The title's attract footage is a movie, not a live scene**: `OPEN.EXE` plays a
+  streamed MDEC video, so none of the port's enhancements reach it. Early sessions
+  recorded a live demo walking into `fdat05` a minute after boot, but two measured
+  idle runs (110 s and ~165 s) never left `overlay open`, so do not rely on it; get
+  a live session with `KF2_AUTOSTART`. In an area, `AutoReload.Simulate()` kills on
+  demand, and the death clock at `0x8019951A` can be pinned to hold any frame of the
+  death sequence.
 - **`KF2_AUTOSTART=<1..3>`** — an agent left at the title waits forever (the boot
   menus take no input by the usual routes, and `KF2_AUTOPAD` only arms once an area
   has loaded). This drives the pad through `PAD_dr`: Start, Cross into a New Game

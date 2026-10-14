@@ -132,12 +132,15 @@ something to say about *how* to use them:
   standalone stdio server exposing those six verbs as typed tools to any MCP
   host (`KF2_MCP_ENDPOINT` overrides the endpoint). See "The MCP layer" in
   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
-- **The attract demo is a free live session.** Leave the port at the title and it
-  walks itself into an area about a minute later, with a character, an HP bar and
-  eventually a death — which is how in-game behaviour gets tested without a human
-  driving the menus. `AutoReload.Simulate()` kills on demand from there, and the
-  death clock at `0x8019951A` can be pinned to hold any frame of the death
-  sequence still. See "Auto reload" in
+- **The title's attract footage is a movie, not a live scene.** `OPEN.EXE`
+  plays a streamed MDEC video (its decodes are counted in [RUNTIME.md](RUNTIME.md)), so none of the port's enhancements reach it. Early
+  sessions recorded a live demo that walked into `fdat05` about a minute after boot,
+  and used it to test in-game behaviour without a human. It has not been
+  reproduced: an idle run of 110 s and one of ~165 s (`KF2_AGENT=1`, 2026-10-14)
+  never left `overlay open`. For a live session use `KF2_AUTOSTART`. Once in an
+  area, `AutoReload.Simulate()` kills on demand, and the death clock at
+  `0x8019951A` can be pinned to hold any frame of the death sequence still. See
+  "Auto reload" and "The wall is the title, not the Continue menu" in
   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 ### Crash reports carry the port's place
