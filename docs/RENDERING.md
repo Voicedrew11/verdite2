@@ -1700,6 +1700,22 @@ replacement texture's mip chain after the mask's discard, now read at the top. A
 reviewed exception carries `// derivatives-ok: <why>` on its line. What it does
 not see: a derivative under a branch on a per-pixel value without any discard.
 
+It now checks more of what one driver forgives and another does not, each rule
+with its own `// <rule>-ok: <why>` marker: builtins outside their domain
+(`pow`, `sqrt`, `inversesqrt`, `log2`, `acos`, `smoothstep`'s edges...), a
+signed `%` and an integer division by a variable, a local read before it is
+written, a fragment output left unwritten on a path out of `main`, and every
+program the runtime links (pairs read from the `GlShaders.Build*` calls) for a
+fragment input with no vertex output, a type or interpolation mismatch, or a
+uniform of two types; `--glslang` also links each pair with `-l`. The first run
+reported 16; one was real: the authored lights' highlight took `pow(0, shin)`
+with `shin` 0 at roughness 1 (undefined, NaN on some drivers), and its base is
+now floored at `1e-6`, which changes nothing else. The other 15 were proved in
+range from the C# that uploads them (spot cones ordered by `Lights.cs`, the
+ripple length floored at 16, the depth cue's equal pair returned early, a
+neighbour half id never 0) and marked. Measured: lint clean, every stage
+compiles and every program links under glslang. Not run in the game.
+
 - **Not yet seen on Windows:** whether the lines are gone. `KF2_AO_NORMALS=0` (or
   *SSAO* off) making them vanish on the old build would confirm the diagnosis.
 
