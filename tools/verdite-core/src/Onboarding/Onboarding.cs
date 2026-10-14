@@ -515,6 +515,10 @@ internal sealed class SetupGroup
 
 internal sealed class SetupTier
 {
+    /// <summary>A localisation key, the tier's short name on a tiers page's selector (Original, Balanced);
+    /// absent, the selector names the run of identical tiers by their names joined.</summary>
+    public string? Label { get; set; }
+
     public string Desc { get; set; } = "";
 
     /// <summary>Shows the setup's higher-GPU-cost note after the description.</summary>
