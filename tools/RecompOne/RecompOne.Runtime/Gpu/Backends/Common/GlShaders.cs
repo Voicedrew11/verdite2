@@ -325,7 +325,7 @@ internal static class GlShaders
                 // so weighting on the flat direction would leave every floor in the
                 // game unshaded.
                 vec3 hdir = normalize(vec3(dir.x, best, dir.y));
-                occ += max(0.0, dot(nUp, hdir)) * (best / sqrt(1.0 + best * best));
+                occ += max(0.0, dot(nUp, hdir)) * (best / sqrt(1.0 + best * best)); // domain-ok: 1 + best^2 >= 1
             }
             return occ / 8.0;
         }
@@ -418,7 +418,7 @@ internal static class GlShaders
             for (int i = 0; i < uSamples; i++) {
                 float t = (float(i) + 0.5) / float(uSamples);
                 float ang = a0 + float(i) * GOLDEN;
-                vec2 off = vec2(cos(ang), sin(ang)) * sqrt(t) * rUv;
+                vec2 off = vec2(cos(ang), sin(ang)) * sqrt(t) * rUv; // domain-ok: t = (i + 0.5) / uSamples > 0
 
                 float sd = depthAt(vUv + off);
                 // The far plane is the absence of a surface, not a surface a long
@@ -1094,7 +1094,7 @@ internal static class GlShaders
                     : uFogCurve == 3 ? ir0 * 0.5
                     : ir0;
             if (uAtmosOn != 0 && uAtmosShape != vec2(1.0) && w > 0.0)
-                w = 4096.0 * min(pow(min(w / 4096.0, 1.0), uAtmosShape.x), uAtmosShape.y);
+                w = 4096.0 * min(pow(min(w / 4096.0, 1.0), uAtmosShape.x), uAtmosShape.y); // domain-ok: w > 0 is tested, so the base is in (0, 1]
             return clamp(1.0 - w / 4096.0, 0.0, 1.0);
         }
 
@@ -1410,7 +1410,7 @@ internal static class GlShaders
             gMetalDark = 0.5 * mat.a;
             // Schlick, running from F0 looking straight down to the material's
             // reflectivity at a grazing angle.
-            float w = f0 + (max(refl, f0) - f0) * pow(1.0 - cosv, 5.0);
+            float w = f0 + (max(refl, f0) - f0) * pow(1.0 - cosv, 5.0); // domain-ok: cosv is clamped to [0, 1]
 
             vec3 pc;
             bool planarHit = planarAt(p, rough, pc) || retPlanarAt(p, rough, pc);
@@ -2289,7 +2289,7 @@ internal static class GlShaders
         // One directional wave's slope. Deep water: a wave's period goes as the root
         // of its length.
         vec2 waveTerm(vec2 p, vec2 dir, float len, float amp) {
-            float w = 6.2831853 / (2.4 * sqrt(len / 700.0));
+            float w = 6.2831853 / (2.4 * sqrt(len / 700.0)); // domain-ok: uWaveParams.y is uploaded as max(16, Scale)
             return dir * (amp * cos(6.2831853 / len * dot(dir, p) - w * uWaveTime));
         }
 
@@ -2417,14 +2417,14 @@ internal static class GlShaders
                 float r2 = uLightPos[i].w * uLightPos[i].w;
                 float d2 = dot(l, l);
                 if (d2 >= r2) continue;
-                vec3 dir = d2 > 0.0 ? l * inversesqrt(d2) : -n;
+                vec3 dir = d2 > 0.0 ? l * inversesqrt(d2) : -n; // domain-ok: d2 > 0 is tested
                 float q = 1.0 - d2 / r2;
-                float spot = smoothstep(uLightDir[i].w, uLightCol[i].w, dot(-dir, uLightDir[i].xyz));
+                float spot = smoothstep(uLightDir[i].w, uLightCol[i].w, dot(-dir, uLightDir[i].xyz)); // domain-ok: Lights.cs keeps outer < inner, and a point is (-2, -1)
                 float ndl = max(dot(n, dir), 0.0);
-                if (ndl > 0.0 && uLightShadow[i] >= 0) ndl *= shadowAt(uLightShadow[i], -l, n, sqrt(d2));
+                if (ndl > 0.0 && uLightShadow[i] >= 0) ndl *= shadowAt(uLightShadow[i], -l, n, sqrt(d2)); // domain-ok: d2 = dot(l, l) >= 0
                 sum += uLightCol[i].rgb * (ndl * q * q * spot);
                 if (spec > 0.0 && ndl > 0.0)
-                    hi += uLightCol[i].rgb * (spec * norm * pow(max(dot(n, normalize(dir + eye)), 0.0), shin) * ndl * q * q * spot);
+                    hi += uLightCol[i].rgb * (spec * norm * pow(max(dot(n, normalize(dir + eye)), 1e-6), shin) * ndl * q * q * spot);
             }
             return sum;
         }
@@ -2509,7 +2509,7 @@ internal static class GlShaders
                  : 0.0;
             // 0074. The authored curve over the game's.
             if (uAtmosOn != 0 && uAtmosShape != vec2(1.0) && w > 0.0)
-                w = 4096.0 * min(pow(min(w / 4096.0, 1.0), uAtmosShape.x), uAtmosShape.y);
+                w = 4096.0 * min(pow(min(w / 4096.0, 1.0), uAtmosShape.x), uAtmosShape.y); // domain-ok: w > 0 is tested, so the base is in (0, 1]
             return w;
         }
 
@@ -2733,7 +2733,7 @@ internal static class GlShaders
                 if (vDepth > 0.0 && gWave.z > 0 && abs(det) > 1e-6) {
                     float len = uWaveParams.y;
                     float fw = max(length(wx), length(wy));
-                    float fade = 1.0 - smoothstep(len * 0.03, len * 0.09, fw);
+                    float fade = 1.0 - smoothstep(len * 0.03, len * 0.09, fw); // domain-ok: len >= 16, so the edges are ordered
                     vec2 sl = waveSlope(wp.xz, len) * fade * (1.0 - gPlain);
                     // The inverse of [wx wy], then the UV's own derivatives.
                     vec2 push = sl * uWaveParams.x;
@@ -2790,7 +2790,7 @@ internal static class GlShaders
                 if (major > 0.0 && uMipOn > 0.5 && vRepClut == 0 && (vTex.y & 0x40000000u) != 0u) {
                     float n = clamp(ceil(major / max(minor, 1e-4)), 1.0, max(uAniso, 1.0));
                     float maxLod = float((vTex.y >> 16) & 15u);
-                    float lod = min(log2(max(major / n, minor)), maxLod);
+                    float lod = min(log2(max(major / n, minor)), maxLod); // domain-ok: major > 0 is tested and n >= 1
                     if (lod > 0.0) {
                         vec4 acc = mipFootprint(axis, n, lod, rMin, rMax,
                             vec2(float(vTex.y & 255u), float((vTex.y >> 8) & 255u)) * 8.0,
