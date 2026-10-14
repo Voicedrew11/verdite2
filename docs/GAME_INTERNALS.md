@@ -2121,6 +2121,57 @@ exception and every name decoding. **What has not been looked at is the game's
 own inventory screen**: that the menu lists those 98 items, with those names, and
 that using or equipping one behaves, is a thing a person has to see.
 
+### The maps
+
+Read 2026-10-14 off `generated/game.cs` and the GAME.EXE name table, and run.
+
+**The items.** Names from the table at `0x80065B24 + id * 0x18`: `0x43` PIRATE'S MAP,
+`0x44` MINER'S MAP, `0x45` NECRON'S MAP, `0x46` GOLD COIN, `0x47` BLOOD STONE (the first
+of the ids the use routine handles). Held like any item: one count byte at
+`0x8009B52C + id` (see "The inventory is one byte per item").
+
+**The ITEM page** `func_80019204` (in-game menu screen 0, from the 7-arm table at
+`0x80011098`) lists the held ids through `func_80019444` and runs what is picked. Ids
+`0x43`..`0x45` do not go to the use routine: the page calls the map viewer directly,
+`func_80019B54(id)`, after `func_80022D80`, and follows it with `func_80022DC4(0x12)`.
+Every other id goes to `func_800197D4(id)`, the use routine (potions, stones, level-up
+at `0x4A` through `func_800244CC`, and so on).
+
+**The viewer** `func_80019B54(id)`: the picture index is `0x1E0 + (id - 0x43) * 8` plus
+the byte at `0x8017E065`; it loads the picture (`func_80017F1C`, `func_800177D0`,
+`func_800183A0`, the TIM through `func_80035684`), draws a two-field loop with the
+menu's frame head and presenter, and returns after `PadRead` reports any button,
+unloading through `func_800177F8`. There is no CD callback in the path that was
+found: the picture was loaded and shown with no wait for a read, unlike KF3's viewer.
+
+**The wrapping.** `MapKey` calls the menu's enter `func_80022754` first (it saves the
+world's descriptors and grabs the displayed frame), then `func_80022D80`, the viewer,
+`func_80022DC4(0x12)` and the menu's leave `func_800228C8`, so `MenuWorld` draws the
+world live behind the picture as it does for the ITEM page. Not yet confirmed: whether
+the enter and leave are strictly necessary (the viewer ran without them in no test).
+
+**The port's map key** (`patches/MapKey.cs`, `KF2_MAPKEY`): M, or the touchpad (SDL
+button 20). Taken in a post on stage 3 (`func_8002A550`) on a world tick
+(`FramePacing.FirstWalkOfTick`). Refused, with a log line, when max HP `0x80199426` is
+zero, the state byte `0x801994E1` is `0x11` (dead), an overlay loaded less than 1 s ago
+(the "area loading" test here is a heuristic, not a flag of the game's), or
+`MenuWorld.MessageLive` is set (a message box's fade, which is the only message flag the
+port has; a message's own modal loop also keeps stage 3 from running). A press older than
+0.5 s is dropped. It opens the first map held in id order, or logs "no map held". While
+the picture is up, M or the touchpad again holds Circle through `PadReadEvent`.
+
+**Measured** 2026-10-14, slot 2 (area 1, fdat05), with `KF2_MAPKEY_GIVE=0x43`, which
+gives PIRATE'S MAP through the game's own `func_80048178` (`held=1`), and
+`KF2_MAPKEY_TEST=8`: `map key: map item 0x43, area 1` opened the picture, the agent
+beacon stopped while it was up (the stage is inside the viewer), and
+`KF2_MAPKEY_CLOSE=5` closed it (`map key: closed`), after which the beacon resumed and
+`goto 74500 -14848 74986` moved the player from x 73709 to 74500. The real key and the
+touchpad were not pressed; the shell's `press` cannot close the viewer, since its
+command is drained by the stage-3 hook the viewer blocks. **Not measured**: the three
+maps' pictures and whether each is the right one for the area; whether a second map
+changes the picture; the refusals (logged, not run); a map opened in another area. **Not
+judged by eye**: whether the right picture is shown and how it looks.
+
 ## Full-screen messages are pictures, and the world behind them is a 1x copy
 
 Signs and NPC dialogue do not go through the font drawer `func_80021FCC` at all.

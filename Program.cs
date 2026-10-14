@@ -1079,6 +1079,16 @@ Kf2.Map.Configure(Environment.GetEnvironmentVariable("KF2_MAP"),
 Kf2.MapMarkers.Configure(Environment.GetEnvironmentVariable("KF2_MAP_MARKERS"));
 Kf2.Map.Install();
 
+// M, or the touchpad, opens the game's own map item (PIRATE'S, MINER'S or NECRON'S
+// MAP) through the ITEM page's viewer, as using it there does. Off with KF2_MAPKEY=0;
+// KF2_MAPKEY_TEST=<seconds> opens it that many seconds into the first area. See
+// "The maps" in docs/GAME_INTERNALS.md.
+Kf2.MapKey.Configure(Environment.GetEnvironmentVariable("KF2_MAPKEY"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_TEST"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_GIVE"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_CLOSE"));
+Kf2.MapKey.Install();
+
 // Fog of war for that map: the tiles the player has actually seen, remembered per
 // save slot and kept between sessions in a file beside the memory card. It is the
 // game's own 24x24 visibility grid at 0x80192EAC -- occlusion already flooded --
