@@ -328,6 +328,12 @@ public static class PortSettings
         get => get(MapOn) == 0 ? 0 : get(MapFogOn) != 0 ? 2 : 1,
         (v, _) => v <= 0 ? [0, Unchanged] : v >= 2 ? [1, 1] : [1, 0]);
 
+    /// <summary>Verdite Core's pause while the window is in the background; the
+    /// Settings window's Gameplay tab only.</summary>
+    public static readonly PortSetting FocusPauseOn = Switch(FocusPause.OnKey, "KF2_FOCUS_PAUSE", "Pause in the background",
+        null, null, () => FocusPause.Enabled, FocusPause.SetEnabled, true,
+        tip: "The game stops and goes quiet while its window is not the one in front.");
+
     // ---- Controls ----
 
     /// <summary>2D is the twin sticks, the left one walking and strafing; 3D is one
@@ -406,9 +412,29 @@ public static class PortSettings
     public static readonly PortSetting MouseSens = SensRow("row.mousesens", ControlsPage, "MOUSE SENS", MouseTurn, MouseLookSens,
         [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5], usable: () => Mouse.Enabled);
 
+    public static readonly PortSetting ItemTurnOn = Switch(ItemTurn.OnKey, "KF2_ITEMTURN", "Turn a held item",
+        null, null, () => ItemTurn.Enabled, ItemTurn.SetEnabled, true,
+        tip: "When you pick up an item, move the mouse or push the right stick to turn it; in the inventory and the shops, drag its model or push the right stick. It spins again when you let go.");
+    public static readonly PortSetting ItemTurnGyro = Switch(ItemTurn.GyroKey, "KF2_ITEMTURN_GYRO", "Gyro turns it too",
+        null, null, () => ItemTurn.UseGyro, ItemTurn.SetGyro, true,
+        tip: "Turn and tip the pad and the item turns with it. Needs a pad with a gyroscope, such as a DualShock 4, DualSense or Switch Pro.",
+        usable: () => ItemTurn.Enabled);
     public static readonly PortSetting GyroAimOn = Switch(GyroAim.OnKey, "KF2_GYROAIM", "Gyro aims a drawn bow",
-        ControlsPage, "GYRO", () => GyroAim.Enabled, GyroAim.SetEnabled, true,
+        null, null, () => GyroAim.Enabled, GyroAim.SetEnabled, true,
         tip: "While a bow or the arbalest is drawn, turn and tip the pad to aim. Needs a pad with a gyroscope, such as a DualShock 4, DualSense or Switch Pro.");
+
+    /// <summary>Both readers of the pad's gyroscope at once, as Verdite3's row: turning
+    /// a held item (picked up or previewed) and aiming a drawn bow. The item's needs item turning on, which
+    /// it is by default.</summary>
+    public static readonly PortSetting Gyro = Combine("row.gyro", ControlsPage, "GYRO", [ItemTurnGyro, GyroAimOn],
+        [0, 1], v => v == 0 ? "OFF" : v == 1 ? "ON" : "CUSTOM",
+        get => (get(ItemTurnGyro), get(GyroAimOn)) switch
+        {
+            (0, 0) => 0,
+            (1, 1) => 1,
+            _ => Custom,
+        },
+        (v, _) => v >= 1 ? [1, 1] : [0, 0]);
     public static readonly PortSetting RumbleOn = Switch(Rumble.OnKey, "KF2_RUMBLE", "Rumble",
         null, null, () => Rumble.Enabled, Rumble.SetEnabled, true,
         tip: "The pad rumbles as you draw a bow and let the arrow fly.");
@@ -446,7 +472,7 @@ public static class PortSettings
         TextureFilter, PerPixel, AmbientOcclusionRow, ShadingRow,
         RenderDist, FogMode, Water,
         AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapRow,
-        ControlsRow, InvertedCamera, StickSens, MouseSens, GyroAimOn, RumbleRow,
+        ControlsRow, InvertedCamera, StickSens, MouseSens, Gyro, RumbleRow,
         Positional,
     ];
 
@@ -457,8 +483,8 @@ public static class PortSettings
         Display, Resolution, Aspect, HudAnchor, FrameRate, Smoothing,
         Mipmaps, Anisotropy, PerPixel, Ao, AoQuality, NoDitherOn, TrueColorOn,
         RenderDist, FogMode, MurkyWater, WaterWaves, Planar,
-        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapOn, MapFogOn,
-        Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, GyroAimOn, RumbleOn, RumbleHd,
+        AutoReloadOn, GearCompareOn, EnemyTurnSpeed, MapOn, MapFogOn, FocusPauseOn,
+        Controls, StickAccel, InvertedCamera, StickTurn, StickLook, MouseTurn, MouseLookSens, ItemTurnOn, ItemTurnGyro, GyroAimOn, RumbleOn, RumbleHd,
         Positional,
     ];
 

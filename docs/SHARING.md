@@ -2019,3 +2019,54 @@ unpacked over an older one compiles only what it shipped). Verdite3 was already 
   otherwise than the GTE.
 - `4362046`, billboards turned to the eye: KF3's own.
 - `b20242e`, spell effects' palette: cannot happen here (2026-10-09).
+
+### 2026-10-13: the tag is the version, as Verdite3's
+
+Verdite3's `de8a476`/`06c982d` brought over: `VERSION` is gone, and the version is
+the newest `vMAJOR.MINOR.PATCH` tag `HEAD` contains, by the rule Verdite Core
+already applied (a file, `VERDITE_VERSION`, the tags, `0.0.0`); nothing in the
+core changed. CI checks out with `fetch-depth: 0` and refuses a `VERSION` file;
+`release.yml` takes `VERDITE_VERSION` from the pushed tag in place of asserting
+the two equal. `release.sh` now only tags. Measured: `version.sh` prints `0.4.0`
+off `v0.4.0`, and the launcher builds as `0.4.0+dae2255b9`. See "Versioning" in
+`PACKAGING.md`.
+
+### 2026-10-13: Verdite Core pushed at `1301748`, and Verdite3 given it
+
+The fork was at `9d6bac8`, Verdite3 exactly on it; this repo's `tools/verdite-core`
+was that plus the setup's work (`src/Onboarding`, the launcher's hold on the build,
+`MouseGame.OnIsSetting`/`LeadIsSetting`), 1,570 lines, nothing of the fork's undone.
+
+- **`--push-core` would refuse again, as on 2026-10-11**: the join `76671b4` reaches
+  `v0.5.0-staging` only through a merge's second parent (`53fcacc`, the onboarding
+  merge), and the script looks along first parents only. Its checks were run by hand
+  instead: no mixed commit since `76671b4` (`4f13c17`, `65159be`, core only), and
+  `git subtree split` gives `1301748`, whose tree equals this repo's prefix and which
+  contains `9d6bac8`. Pushed as that commit: a fast-forward of the fork by 6. A
+  `--pull-core` after any staging merge would put a join back on the first-parent line.
+- Verdite3 pulled it (`f5b9f0b`, PR #6 there, not merged); its launcher and game build
+  with 0 errors, not booted. It has no `onboarding.json`, so it shows no setup, and its
+  mouse look and lead stay settings (both flags default true).
+- Not judged by eye: the setup's popup.
+
+**Corrected from 2026-10-09:** `ItemTurn` is not KF3's own. Turning a held-up item with
+the mouse, the right stick and the gyroscope, and the GYRO row that sets the item's gyro
+and the bow's together, are wanted here; KF2's pickup has not been found yet.
+
+### 2026-10-13: `ItemTurn` ported onto the menu's item preview
+
+**Corrected later the same day:** KF2 does hold a picked-up item up, through the same
+routine as KF3 (`func_8004831C`; GAME_INTERNALS, "The pickup holds the item up in a loop
+of its own"), and `ItemTurn` now turns that too, with Verdite3's `ItemEye` ported beside
+it and a correction for the item's own geometry that Verdite3 lacks (INPUT, "Turning a
+picked-up item", "The item held up at the eye"). The centring is a candidate to carry
+back to Verdite3, which had the same complaint. What follows was written before then.
+
+The one model found showing an item was the inventory's and the shops' preview
+(`func_8002156C`), so Verdite3's `ItemTurn` was ported onto that (`patches/ItemTurn.cs`; INPUT, "Turning the item preview"). The input half
+(stick, gyro, the rest threshold, the hold and resume) is Verdite3's almost line for
+line, and the rotation is PSY-Q's `RotMatrix` rather than KF3's own; the mouse is a drag
+on the model, since the menu's pointer is free, where Verdite3's is the captured look.
+The GYRO row now sets both gyro readers, as Verdite3's does. A candidate for Verdite Core
+once both are settled: the input and the matrix maths are game-agnostic, the hooks are not.
+

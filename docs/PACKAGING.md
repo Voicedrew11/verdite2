@@ -225,30 +225,38 @@ must read 20.0 ticks/s. Measured: 144.0 fps drawn, 19.9-20.0 ticks/s.
 
 ## Versioning
 
-**The version is one line in `VERSION` at the repository root, and everything
-else reads it.** That is the whole design, and it is a design rather than a
-convention because five things have to agree about the number and only one of
-them can parse XML: the launcher's assembly version, the AppImage's file name,
-the Windows zip's, the Inno installer's, and the tag the release is cut on. The
-number used to live in `<Version>` in `Verdite2.Launcher.csproj`, which the
-AppImage script scraped with `grep -oP`, the Windows script parsed as XML, and
-`verdite2.iss` simply **duplicated as a literal fallback** — three readers, one
-of which could silently disagree.
-
-`MAJOR.MINOR.PATCH`, no suffix. CI refuses anything else.
+**The version is the newest `vMAJOR.MINOR.PATCH` tag that `HEAD` contains, and a
+release is that tag and nothing else.** Five things have to agree about the
+number: the launcher's assembly version, the AppImage's file name, the Windows
+zip's, the Inno installer's, and the tag the release is cut on. Verdite Core
+resolves it by one rule, in `scripts/version.sh`, `Launcher.targets` and
+`build-windows.ps1` alike (its README, "Packaging"): a `VERSION` file at the
+root first, which is why CI refuses one here; then `VERDITE_VERSION`, which
+`release.yml` sets from the tag it was pushed for; then the tags; then `0.0.0`.
 
 | what | how it gets the number |
 |---|---|
-| the assembly | core's `Launcher.targets` reads `VERSION` into `<Version>` |
-| `Verdite2-<v>-x86_64.AppImage` | `build-appimage.sh` reads `VERSION` |
-| `Verdite2-<v>-win-x64.zip` | `build-windows.ps1` reads `VERSION` |
+| the assembly | core's `Launcher.targets`, by the rule above, into `<Version>` |
+| `Verdite2-<v>-x86_64.AppImage` | `build-appimage.sh`, through `version.sh` |
+| `Verdite2-<v>-win-x64.zip` | `build-windows.ps1`, by the same rule |
 | `…-win-x64-setup.exe` | the script exports `VERDITE_VERSION`; core's `verdite.iss` **errors** if it is unset |
-| the git tag | `release.yml` asserts `v$(cat VERSION)` equals the tag it was triggered by |
+| the git tag | it *is* the number; `release.yml` refuses one that is not `vMAJOR.MINOR.PATCH` |
 
-That last row is the one that matters most, and it closes a failure that is
-invisible until somebody has downloaded it: a `v0.2.0` tag on a tree that still
-says `0.1.0` would publish `0.1.0` files under a `0.2.0` release, with nothing in
-the process disagreeing.
+Until 0.5.0 the number was a `VERSION` file, bumped by a commit that the tag then
+went on, with `release.yml` asserting the two equal, because a `v0.2.0` tag on a
+tree that still said `0.1.0` would have published `0.1.0` files under a `0.2.0`
+release. With the tag as the only source there is nothing for it to disagree
+with. Verdite3 has worked this way since its first release ("The tag is the
+version" in its `PACKAGING.md`).
+
+- A build between releases carries the last release's number and the commit
+  after it (`0.4.0+<sha>`); it is never announced as an update to itself.
+- How far to move the number is the person tagging's call. `release.sh` refuses
+  one that is not above the newest tag, because the update check never announces
+  a lower one.
+- The clone needs its tags: CI checks out with `fetch-depth: 0`, and a shallow or
+  tagless checkout builds as `0.0.0`. `bash tools/verdite-core/scripts/version.sh`
+  prints what a build here would call itself.
 
 ### The number is not the build
 
@@ -269,22 +277,21 @@ config, and `BuildKey` hashes those directly.
 ### Cutting one
 
 ```bash
-bash scripts/release.sh 0.2.0        # bumps VERSION, commits, tags. Does not push.
-git push origin HEAD && git push origin v0.2.0
+bash scripts/release.sh 0.5.0        # tags HEAD. Commits nothing, does not push.
+git push origin HEAD && git push origin v0.5.0
 ```
 
 The script refuses a malformed number, a dirty tree, a tag that already exists
-and a bump to the version already in the file. It does not push, because pushing
+and a number not above the newest tag. It does not push, because pushing
 the tag is what publishes the draft release and that is a decision rather than a
-step. The workflow builds both platforms, asserts the tag against `VERSION`, and
+step. The workflow builds both platforms, named by the tag, and
 opens a **draft** with the commits since the previous tag appended to the body.
 
 ### Previews
 
 A preview is a build handed to testers: a commit, not a version, and no promise
-of which release it becomes. When one proves a release, `release.sh` bumps
-`VERSION` on top of that commit and tags it, so the release is what was tested
-plus the one-line bump. There is one preview at a time, the **rolling `preview`
+of which release it becomes. When one proves a release, `release.sh` tags that
+commit, so the release is exactly what was tested. There is one preview at a time, the **rolling `preview`
 prerelease**, replaced whole each time:
 
 ```bash
@@ -308,8 +315,8 @@ Verdite Project Discord, and back up `carda.sav` and `cardb.sav` first, from
 `Verdite2-preview-linux-x86_64.zip`, `Verdite2-preview-win-x64.zip` and
 `Verdite2-preview-win-x64-setup.zip`, so
 `…/releases/download/preview/<name>` never changes; the files inside, and the
-title, carry the commit. The build calls itself `VERSION`'s number and the commit
-(`0.4.0+<sha>`, `Ver.Full`): `VERSION` is not bumped for a preview.
+title, carry the commit. The build calls itself the last release's number and the
+commit (`0.4.0+<sha>`, `Ver.Full`): a preview makes no tag.
 
 - **The `PREVIEW_PASSWORD` secret has to be set by hand, once, before the first
   preview**: `gh secret set PREVIEW_PASSWORD` (or the repository's Settings ▸
@@ -320,7 +327,7 @@ title, carry the commit. The build calls itself `VERSION`'s number and the commi
   `releases/latest`, which the update check reads, name only a published full
   release, so no player is told about a preview.
 - **`preview` is no version.** `release.yml` starts on `v*` tags alone, so the tag
-  moving starts nothing, and `VERSION` is the number. A clone that fetched the tag
+  moving starts nothing, and `version.sh` reads `vMAJOR.MINOR.PATCH` alone. A clone that fetched the tag
   keeps a stale copy when it moves; `git tag -d preview` drops it.
 - **It goes when the release does.** `preview-cleanup.yml` deletes the prerelease
   and its tag when a full release is *published* (not when its draft is opened),
@@ -434,7 +441,7 @@ a path from before the subtree; core's reads `tools/RecompOne/patches/assets/`.
 
 Neither needs the disc. `.github/workflows/release.yml` runs both on a `v*` tag
 and opens a draft release; it asserts that `generated/` and `disc/` are absent,
-and that the tag matches `VERSION`, before it packages anything.
+and that the tag is `vMAJOR.MINOR.PATCH`, before it packages anything.
 
 **The release workflow has never run.** The tag pushed to test it was
 `test-win-0.1.0`, which does not match the `tags: ['v*']` trigger, so only `ci`

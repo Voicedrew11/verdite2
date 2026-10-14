@@ -371,6 +371,135 @@ loose read off the game as above, and the rumble's phases followed them (nock, d
 tension 0.59, full draw, loosed); the test cycle asks about 60 waves a second. **No pad
 was attached: nothing was felt, and the gyro never ran** (`pad gyro off`).
 
+## Turning a picked-up item
+
+Verdite3's `ItemTurn`, on the same routine: KF2 holds a picked-up item up exactly as
+KF3 does (GAME_INTERNALS, "The pickup holds the item up in a loop of its own"), and
+the 2026-10-13 port, which found only the menu's preview, turned the wrong model
+(`patches/ItemTurn.cs`, `KF2_ITEMTURN`, on, one switch with the preview's).
+
+- **Mouse look**, the captured look's motion (`Mouse.TakeLook`), right turning the near
+  side right and down tipping it down; what is left when the pickup returns is thrown
+  away, so the view does not jump.
+- **The right stick**, shaped as the look shapes it, about a half turn a second.
+- **The gyroscope** (`KF2_ITEMTURN_GYRO`), under the same 0.05 rad/s rest threshold.
+- The yaw goes on the record's own, about the vertical; the tilt goes about the
+  camera's right, outside it (`Ry'(view) Rx(pitch) Ry'(-view)`, before the game's
+  `func_80014FE0`), so the item tips toward and away from the eye however far it has
+  spun. A quarter turn of tilt at most either way.
+- The game's spin (`+0x40` on record `+0x26` a pass) holds while the player turns it:
+  a pre on stage 13 at `Stage13.HookOrder.World`, on the hold's call (return
+  `0x8004870C`) and not loop pacing's redraws, takes the step back, before the
+  smoother samples the record. It spins again 1.5 s after the last input. When the
+  game turns the item back (`0x800488A8`) and flies it off (`0x80048984`), the
+  player's turn eases out over 80 ms.
+
+**The turn is drawn, not written.** `ModelWalk.Ordinary` asks `ItemTurn.Present` for
+the rotation it is about to hand the submitter (sp+0x38, y with the walk's `0x800`),
+every drawn frame, after the smoother. The record keeps the game's angles, so its
+turn back and its comparisons are untouched.
+
+**Measured** (`KF2_AUTOSTART=2 KF2_ITEMTURN_TEST=0x10 KF2_ITEMTURN_PROBE=1
+KF2_FPS=144`): the held item drawn 144-145 times a second; the test's stick turned it
+a half turn (yaw 2048) and tipped it a quarter (tilt 1024) in its second; the spin held
+(15 steps taken back) and came back after 1.5 s; the tilt axis against the view
+matrix's right row reads 1.000. **Not yet tried**: mouse look on a held item, the gyro,
+and how any of it looks. The scripted Cross from `KF2_AUTOPAD` never dismissed the hold
+in three tries (16 s, 200 ms and 1000 ms), which is unexplained; the pad path in the
+loop is untouched, so a real press needs trying.
+
+## The item held up at the eye
+
+The user's report was KF3's: a picked-up item is not presented at the centre of the
+screen. Two causes, and `patches/ItemEye.cs` (`KF2_ITEMEYE`, on) takes both.
+
+**The eye.** `func_80046C64(x, y, z, pitch, yaw, def+0xC, def+0xE, out)` aims the
+item at an offset from the player's position with `0x640` off y, which is the eye
+without the head bob (`0x80199548`) or the landing dip (`0x8019954C`); the pickup's
+stage 13 calls hand a rotation and no position, so the camera keeps the last frame's
+eye. A post on its three calls inside the pickup (returns `0x8004857C`, `0x80048610`,
+`0x80048830`) moves the out VECTOR by the camera block's eye less the assumed one, as
+Verdite3's does. Slot 2 has the head bob option (`u8 0x801994E0`) off, so it moved by
+(0, 0, 0) there; with the bob on it is the whole of KF3's fix.
+
+**The geometry, which KF3's fix did not reach.** The game puts the item's *origin*
+on its target, and an item's mesh stands on its origin: every one measured runs y
+from its height up to 0, and some sit behind it in depth.
+
+| item | origin from the eye | mesh y | middle z | middle from the eye | below the centre |
+|---|---|---|---|---|---|
+| 0 | (1, 419, 1465) | -644..0 | 0 | (1, 98, 1452) | 13 px |
+| 0x10 | (1, 729, 1311) | -1120..0 | -68 | (-48, 172, 1242) | 28 px |
+| 0x30 | (0, 749, 1781) | -1331..0 | -55 | (-39, 86, 1717) | 10 px |
+| 0x50 | (1, 289, 943) | -425..0 | 0 | (1, 77, 935) | 16 px |
+
+So the middle of what is drawn sat 10 to 28 game pixels (of 240) below the picture's
+centre, and an item with its middle off the spin axis swung round it as it spun.
+`ItemEye.Place`, called by `ModelWalk.Ordinary` after `ItemTurn.Present`, moves the
+record's position for that submit alone, so the middle of the mesh's box, scaled and
+turned as the submitter will turn it, sits on the view's axis at the origin's
+distance; `Restore` puts it back as soon as `func_80032588` returns. The box is the
+rigid sub-model's (clip byte `0x80` and up) from the bank `0x8018E19C` points at,
+28 bytes a header at `table + 0xC`, cached by vertex address. The bank is
+`func_80032CD8`'s return, and the table is the bank plus its u32 at `+8`
+(`func_80034834`, which the submitter calls); `0x8018E19C` itself is still the
+previous model's when the walk is about to submit, which a first try read, and every
+item then measured as the same 60-vertex mesh. It is blended in over
+the fly-in (`t` is `s0 - 0x200` at the call from `0x8004868C`) and out over the
+fly-back (`0x80048984`), whole for the hold and the turn back, the weight taken on
+the loop's own pass and carried between them by `FramePacing.LogicPhase`, as the
+record is.
+
+**Measured** (`KF2_AUTOSTART=2 KF2_ITEMTURN_TEST=<id> KF2_ITEMEYE_PROBE=1`, the four
+items above): the mesh's middle drawn at (0, 0, z) from the eye on every probe line,
+z the origin's distance. For 0x10 at 144 fps, through the spin and the stick's half
+turn and quarter tip: (0, 0, 1309) throughout, where without the move it ran from
+(-48, 172) to (35, 172) through the spin and to (-61, 815) tipped. **Not measured**: the blend over the fly-in and out
+(the probe prints only the full hold), and items with an animated mesh, which are
+left where the game puts them. **Not judged**: how any of it looks, including whether
+the game's distance is right for a long item once it is centred (item 0x10 is 1120
+tall at 1309, about 170 of the picture's 240 game pixels).
+
+## Turning the item preview
+
+The menu's preview, in the inventory and the shops, turns too
+(`patches/ItemTurn.cs`, the same switch as a picked-up item's).
+
+- **Drag it with the mouse**: a left press over the model grabs it until the button
+  comes up; right brings the side nearest the eye right, down brings it down, a half
+  turn for 128 game pixels. MenuMouse asks `ItemTurn.Grab` before it takes a press as a
+  click, so a press on the model is not the off-the-list back-out, and hover stands
+  still for the drag and until the pointer next moves, so a drag across the list does
+  not pick each row it passes. The model's box is the vertex cache (`0x8018EB94`)
+  `func_800346CC`'s transform just wrote, kept as a square round its centre as large
+  as it has been for this item, plus 6 pixels.
+- **The right stick**, shaped as the look shapes it (`Analog.RightStick`), about a half
+  turn a second at full deflection, with the stick sensitivities and inversions.
+- **The gyroscope** (`KF2_ITEMTURN_GYRO`, on): the item turns as the pad does, under a
+  rest threshold of 0.05 rad/s. The GYRO row on PORT SETTINGS sets it and the bow's gyro
+  aim together, as Verdite3's does, and shows CUSTOM when they differ.
+- The game's spin holds while the player turns it and comes back 1.5 s after, from
+  where they left it; the tilt is kept, a quarter turn at most either way. A new item
+  (`func_80022CAC`) resets the turn with the game's own pose, and so does a preview
+  that has not been drawn for 250 ms.
+
+**The turn is drawn, not written.** The pose is a block the game keeps at `0x8006E934`
+(GAME_INTERNALS, "The menu's item preview is a pose block and one routine"). A pre on
+`func_8002156C` writes the angles to draw, the game's with the player's turn added, and
+the step to take (0 while turning); the post puts the game's own angles back, stepped
+as the game would have stepped them. The yaw goes about the screen's vertical and the
+tilt about its right, both outside the game's rotation, and the product is read back
+into the three angles PSY-Q's `RotMatrix` takes (`Rx(x) Ry(y) Rz(z)`); the light matrix
+the routine builds from that rotation follows it.
+
+**Measured** (`KF2_ITEMTURN_TEST=1` with `KF2_AUTOSTART=2`, the menu opened and USE ITEM
+clicked over the shell): the preview drawn 60 times a second at 158,119 ±52 game pixels;
+the test's stick turned it a half turn and tipped it a quarter in its second, the spin
+held, and came back 1.5 s later; the matrix `RotMatrix` built from the written angles is
+within 8/4096 of the one meant (the sine table's rounding; the wrong convention reads in
+the thousands). **Not yet tried**: a drag with a real mouse, the gyro, and how any of it
+looks.
+
 ## The Input pane is the port's
 
 `patches/settings/InputSection.cs` and `patches/settings/BindingTable.cs`. One

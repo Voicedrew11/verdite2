@@ -155,6 +155,10 @@ public static class Stage13
         /// menu's record of the world's state.</summary>
         public const int Frame = 0;
 
+        /// <summary>Before the smoothers sample the world: <see cref="ItemTurn"/> takes
+        /// back the pickup's spin step here, so the carry never sees it.</summary>
+        public const int World = -100;
+
         /// <summary><see cref="LoopPacing"/>'s redraws. Each redraw runs every hook
         /// again, so it must start after every post that puts back what a carry moved,
         /// or it carries from carried values.</summary>

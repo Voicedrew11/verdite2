@@ -961,6 +961,52 @@ loads the entry's preview. `func_80022CAC` **always returns 0**, so the
 10 visible from 0, rows at x 42 y 44, 236 × 14; a sub-list on the same page is 3
 entries, 4 visible, rows at x 42 y 164, the same size.
 
+### The menu's item preview is a pose block and one routine
+
+`func_80022CAC(item)` loads an item's model into bank 3 (`func_8002E5E8(3, …)`) and
+resets its pose; `func_8002156C(item)`, which every page that shows an item calls once
+a menu frame, steps and draws it. Both do nothing while `u8[0x801994DF]` is zero, and
+the draw nothing for item `0xFF`.
+
+| address | what | reset to |
+|---|---|---|
+| `0x8006E934`, `36`, `38` | translation, three s16 | `0, 0, 1000` |
+| `0x8006E93C`, `3E`, `40` | rotation x, y, z, s16 | `0, 0, 0` |
+| `0x8006E944` | the spin's step, u32, added to y each draw | `4` |
+
+The draw adds the step to y, masks all three to `0xFFF`, builds the rotation with
+`RotMatrix` (PSY-Q's, `Rx(x) Ry(y) Rz(z)`), the light matrix as a fixed matrix times
+it and a colour matrix of all `0x1000`, and draws model 0 of bank 3 through
+`func_800346CC` with back colour 60, `H` 200. Its camera is the identity, so the model
+sits at the screen's centre: measured at 158,119 ±52 game pixels in the USE ITEM list.
+`patches/ItemTurn.cs` turns it (INPUT, "Turning the item preview").
+
+### The pickup holds the item up in a loop of its own
+
+Read for `patches/ItemTurn.cs` and `patches/ItemEye.cs` (2026-10-13). Picking an item
+up is `func_8004831C(record, id)`, the same routine as KF3's, a loop that draws its own
+frames through stage 13 (`func_800342D8`, called with `a0 = 0` and `a1 = 0x80199504`,
+the view's rotation and no position, so the camera keeps the last frame's eye).
+
+| what | where |
+|---|---|
+| the record | `a0`, or made fresh when `a0 = 0` (`func_80037114`, `func_800362C8`); kept at the routine's `sp+0x80` |
+| the item | record `+6`, the definition index: `0x80175914 + id * 0x18` |
+| the item's rotation | three s16 at record `+0x24` (x), `+0x26` (y), `+0x28` (z); the object walk hands the submitter y `+ 0x800`, and builds the matrix with `func_80014FE0`, `Ry'(y) Rx(x) Rz(z)`, `Ry'(t) = [[c,0,-s],[0,1,0],[s,0,c]]` |
+| the target | `func_80046C64(x, y, z, pitch, yaw, def+0xC, def+0xE, out)`: the offset turned by the view, plus the player's position (`0x801994EC`), less `0x640` on y; no head bob. Called from `0x8004857C` (a fresh record, into `+0x14`), `0x80048610` (one in the world, the fly-in's end) and `0x80048830` (the fly-out once given) |
+| the view's pitch | `0x80199504`, clamped to ±`0x100` for the aim |
+| the fly-in | stage 13 from `0x8004868C`; `s0` steps by `0x200` to `0x1000` before each call, so the call's `t` is `s0 - 0x200` |
+| the hold | stage 13 from `0x8004870C`; record `+0x26 += 0x40` a pass; leaves on a new press read with `PadRead(1)` once `s3` reaches `0x100` |
+| the give | `func_80048178(id)` |
+| the turn back | stage 13 from `0x800488A8` |
+| the fly-back or fly-out | stage 13 from `0x80048984`, `t` as the fly-in's |
+
+An item's mesh stands on its origin (y from its height up to 0), which is why the game's
+target puts the middle of the item below the eye line (INPUT, "The item held up at the
+eye"). Its sub-model is the clip byte (record `+1`) less `0x80`; the bank is
+`func_80032CD8(model + 0x100)`'s return, and `func_80034834` makes the bank plus its u32
+at `+8` the current table (`0x8018E19C`) inside the submit.
+
 ### RETURN is the chooser's last item, and the port settings page takes it
 
 Read for `patches/SettingsPage.cs` (2026-10-09). The in-game menu `func_80018E80`

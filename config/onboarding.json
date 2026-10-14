@@ -13,6 +13,7 @@
     "kf2.rumble.on": "True",
     "kf2.rumble.hd": "True",
     "kf2.gyroaim.on": "True",
+    "kf2.itemturn.gyro": "True",
     "kf2.perspective.on": "True",
     "kf2.subpixel.on": "True",
     "kf2.zbuffer.on": "True",
@@ -323,7 +324,8 @@
               "set": {
                 "kf2.rumble.on": "False",
                 "kf2.rumble.hd": null,
-                "kf2.gyroaim.on": "False"
+                "kf2.gyroaim.on": "False",
+                "kf2.itemturn.gyro": "False"
               }
             },
             {
@@ -331,7 +333,8 @@
               "set": {
                 "kf2.rumble.on": null,
                 "kf2.rumble.hd": "False",
-                "kf2.gyroaim.on": "False"
+                "kf2.gyroaim.on": "False",
+                "kf2.itemturn.gyro": "False"
               }
             },
             {
@@ -339,7 +342,8 @@
               "set": {
                 "kf2.rumble.on": null,
                 "kf2.rumble.hd": null,
-                "kf2.gyroaim.on": null
+                "kf2.gyroaim.on": null,
+                "kf2.itemturn.gyro": null
               }
             }
           ]

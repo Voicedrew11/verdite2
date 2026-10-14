@@ -810,6 +810,11 @@ public static class Analog
         return MathF.Sign(v) * MathF.Pow(Math.Clamp((a - deadzone) / (1f - deadzone), 0f, 1f), curve);
     }
 
+    /// <summary>The right stick shaped as the look shapes it, for a turn that is not
+    /// the view's (ItemTurn).</summary>
+    internal static (float X, float Y) RightStick =>
+        Shape(Controller.RightX, Controller.RightY, LookDeadzone, LookCurve);
+
     /// <summary>
     /// The two sticks as the hooks see them, raw and before any deadzone: the
     /// settings page draws this so a deadzone can be set against the pad in hand

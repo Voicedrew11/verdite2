@@ -261,6 +261,12 @@ KF2_RUMBLE=0 KF2_RUMBLE_HD=0             # no rumble as a bow is drawn and loose
 KF2_RUMBLE_PROBE=1                       # a line a second: the phase, the tension, waves asked, HD; 2 also a line each tick the bow's state changes
 KF2_RUMBLE_TEST=1                        # from 3 s in, the bow's rumble three times over without a bow
 KF2_GYROAIM=0 KF2_GYROAIM_PROBE=1        # no gyro aim with a drawn bow (on by default); its line a second
+KF2_ITEMTURN=0 KF2_ITEMTURN_GYRO=0       # a picked-up item and the menu's item preview not turned by the mouse, the right stick and the gyro / not by the gyro (both on; Gameplay ▸ Turn a held item, kf2.itemturn.on, kf2.itemturn.gyro)
+KF2_ITEMTURN_PROBE=1                     # a line a second while an item is held up or previewed: the turn, the spin held, which input moved it, the tilt axis against the camera's right
+KF2_ITEMTURN_TEST=<id>                   # hold up item <id> (decimal or 0x hex) through the game's pickup 10 s after the first area loads, the right stick full right and half down for the hold's second second (probe on); the hold waits for a button
+KF2_ITEMTURN_TEST=preview                # the same stick for the second second of the first menu preview drawn
+KF2_ITEMEYE=0                            # a picked-up item held where the game puts it: its origin below the eye line, so the item sits low and swings as it spins (on: the mesh's middle on the view's axis, the camera's eye in place of the routine's)
+KF2_ITEMEYE_PROBE=1                      # the pickup's targets, the held origin and the mesh's middle from the eye twice a second, and each held mesh's box
 KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
 KF2_MOUSE=0                              # mouse look off (always on otherwise, not a setting: kf2.mouse.on is no longer read; a click on the picture captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
@@ -285,6 +291,7 @@ KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, 
 KF2_SETTINGSPAGE_PROBE=1                 # PORT SETTINGS in the in-game menu: a line for each open, page, step, save and discard (docs/SETTINGS.md); RUN SETUP and setup closing too
 VERDITE2_SETUP=1                         # the launcher shows the first-run setup even when it is not due (a player with settings is never due); "Onboarding" in docs/SETTINGS.md
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
+KF2_FOCUS_PAUSE=0                        # keep running and sounding while the window has no focus (on by default, off for a run KF2_SHELL, KF2_AUTOPAD, KF2_AUTOSTART or KF2_AGENT drives; Gameplay ▸ Pause in the background, kept as kf2.focuspause.on; the variable wins)
 KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
 KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second
 KF2_ENEMYTURN=2                          # 1-8: how fast creatures turn at the player, a multiple of the game's own (speed x k, acceleration x k^2); Gameplay ▸ Enemy turn speed, kept as kf2.enemyturn; the variable wins

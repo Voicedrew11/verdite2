@@ -855,10 +855,15 @@ public static class ModelWalk
         c.RA = 0x8003380Cu;
         KingsField2.func_80032CD8(c, mem);
         if (c.V0 == 0u) return;
+        uint bank = c.V0;
 
         mem.WriteU16(sp + 0x38u, mem.ReadU16(rec + 0x24u));
         mem.WriteU16(sp + 0x3Au, (ushort)(mem.ReadU16(rec + 0x26u) + 0x800u));
         mem.WriteU16(sp + 0x3Cu, mem.ReadU16(rec + 0x28u));
+        // A picked-up item held up is drawn with the player's turn added, about the
+        // middle of its mesh, on the view's axis.
+        if (ItemTurn.Shows(rec)) ItemTurn.Present(mem, sp + 0x38u);
+        bool centred = ItemEye.Place(mem, rec, sp + 0x38u, mem.ReadU8(rec + 1u), bank);
 
         uint assembler = mem.ReadU8(rec + 2u);
         if ((mem.ReadU8(rec + 3u) & 1u) != 0u)
@@ -881,8 +886,9 @@ public static class ModelWalk
         c.A2 = rec + 0x14u;
         c.A3 = sp + 0x38u;
         c.RA = 0x800338C0u;
-        if (MirrorOnlySubmit(c, mem)) return;
+        if (MirrorOnlySubmit(c, mem)) { if (centred) ItemEye.Restore(mem); return; }
         KingsField2.func_80032588(c, mem);
+        if (centred) ItemEye.Restore(mem);
         mem.WriteU8(rec + 3u, (byte)(mem.ReadU8(rec + 3u) | 0x80u));
     }
 

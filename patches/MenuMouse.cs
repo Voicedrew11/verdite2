@@ -1393,12 +1393,21 @@ public static class MenuMouse
         }
 
         bool left = Down(HostMouseButton.Left), right = Down(HostMouseButton.Right);
-        if (left && !_leftWas) { _clickLeft = true; _movedAt = Environment.TickCount64; _padOwns = false; }
+        bool press = left && !_leftWas;
         if (right && !_rightWas) { _clickRight = true; _movedAt = Environment.TickCount64; _padOwns = false; }
         _leftWas = left;
         _rightWas = right;
 
         Point(pos);
+
+        // A press on the item preview is a drag of it (ItemTurn), not a click: off
+        // the list's rows it would otherwise be a back-out.
+        if (press && !ItemTurn.Grab(_gameX, _gameY))
+        {
+            _clickLeft = true;
+            _movedAt = Environment.TickCount64;
+            _padOwns = false;
+        }
     }
 
     /// <summary>
@@ -1565,7 +1574,10 @@ public static class MenuMouse
 
     /// <summary>Whether hover is allowed to move anything: the pointer has moved
     /// recently and the pad has not moved the cursor since.</summary>
-    static bool HoverLive() => !_padOwns && Environment.TickCount64 - _movedAt < IdleMs;
+    // Not while the item preview is dragged, nor after until the pointer moves
+    // again: a drag across the list would pick each row it passed.
+    static bool HoverLive() => !_padOwns && !ItemTurn.Dragging && _movedAt > ItemTurn.ReleasedAt
+                               && Environment.TickCount64 - _movedAt < IdleMs;
 
     static bool Down(HostMouseButton b) => HostWindow.MouseAvailable && HostWindow.IsMouseButtonDown(b);
 
