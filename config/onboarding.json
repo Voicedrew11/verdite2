@@ -849,19 +849,19 @@
       "es-419": "Imagen"
     },
     "kf2.setup.image.0": {
-      "en": "Wobbling polygons, warping textures, and the console's dither pattern, as the PlayStation drew them.",
-      "pt-BR": "Polígonos que oscilam, texturas que se deformam e o padrão de pontilhado do console, como o PlayStation os desenhava.",
-      "es-419": "Polígonos que se tambalean, texturas que se deforman y el patrón de tramado de la consola, tal como los dibujaba la PlayStation."
+      "en": "As the PlayStation drew it: no perspective correction (textures warp), no sub-pixel precision (polygons wobble), no Z-buffer, dithered 15-bit colour, unfiltered textures.",
+      "pt-BR": "Como o PlayStation desenhava: sem correção de perspectiva (texturas se deformam), sem precisão subpixel (polígonos oscilam), sem Z-buffer, cor de 15 bits com pontilhado, texturas sem filtro.",
+      "es-419": "Como la dibujaba la PlayStation: sin corrección de perspectiva (las texturas se deforman), sin precisión subpíxel (los polígonos se tambalean), sin Z-buffer, color de 15 bits con tramado, texturas sin filtrar."
     },
     "kf2.setup.image.1": {
-      "en": "Steady polygons and textures that no longer warp, with no dither. Textures stay sharp and pixelated.",
-      "pt-BR": "Polígonos estáveis e texturas que não se deformam mais, sem pontilhado. As texturas continuam nítidas e pixeladas.",
-      "es-419": "Polígonos estables y texturas que ya no se deforman, sin tramado. Las texturas siguen nítidas y pixeladas."
+      "en": "Perspective-correct textures, sub-pixel precision and a Z-buffer; no dither. Colour stays 15-bit and textures unfiltered.",
+      "pt-BR": "Texturas com correção de perspectiva, precisão subpixel e Z-buffer; sem pontilhado. A cor continua em 15 bits e as texturas sem filtro.",
+      "es-419": "Texturas con corrección de perspectiva, precisión subpíxel y Z-buffer; sin tramado. El color sigue en 15 bits y las texturas sin filtrar."
     },
     "kf2.setup.image.2": {
-      "en": "Steady polygons with no dither, smoother colour gradients, and filtered textures that stay clean at a distance.",
-      "pt-BR": "Polígonos estáveis sem pontilhado, transições de cor mais suaves e texturas filtradas que continuam limpas à distância.",
-      "es-419": "Polígonos estables sin tramado, degradados de color más suaves y texturas filtradas que se mantienen limpias a distancia."
+      "en": "Perspective-correct textures, sub-pixel precision, a Z-buffer and no dither, plus 24-bit colour, 16x anisotropic filtering and mipmaps.",
+      "pt-BR": "Texturas com correção de perspectiva, precisão subpixel, Z-buffer e sem pontilhado, mais cor de 24 bits, filtragem anisotrópica 16x e mipmaps.",
+      "es-419": "Texturas con corrección de perspectiva, precisión subpíxel, Z-buffer y sin tramado, más color de 24 bits, filtrado anisotrópico 16x y mipmaps."
     },
     "kf2.setup.lighting": {
       "en": "Lighting and fog",
@@ -869,19 +869,19 @@
       "es-419": "Iluminación y niebla"
     },
     "kf2.setup.lighting.0": {
-      "en": "Light and fog worked out at each polygon's corners, as the console did.",
-      "pt-BR": "Luz e névoa calculadas nos cantos de cada polígono, como o console fazia.",
-      "es-419": "Luz y niebla calculadas en las esquinas de cada polígono, como lo hacía la consola."
+      "en": "Light and fog worked out at each polygon's corners, as the console did. No ambient occlusion, no light from spells.",
+      "pt-BR": "Luz e névoa calculadas nos cantos de cada polígono, como o console fazia. Sem oclusão de ambiente, sem luz das magias.",
+      "es-419": "Luz y niebla calculadas en las esquinas de cada polígono, como lo hacía la consola. Sin oclusión ambiental, sin luz de los hechizos."
     },
     "kf2.setup.lighting.1": {
-      "en": "Smooth lighting across every surface, and fog that fades evenly with distance.",
-      "pt-BR": "Iluminação suave em todas as superfícies, e névoa que se dissipa uniformemente com a distância.",
-      "es-419": "Iluminación suave en todas las superficies, y niebla que se desvanece de forma uniforme con la distancia."
+      "en": "Per-pixel lighting, light and fog blended across tile edges, and fog by distance from the eye. No ambient occlusion, no light from spells.",
+      "pt-BR": "Iluminação por pixel, luz e névoa misturadas entre os blocos, e névoa pela distância do olho. Sem oclusão de ambiente, sem luz das magias.",
+      "es-419": "Iluminación por píxel, luz y niebla mezcladas entre baldosas, y niebla por distancia al ojo. Sin oclusión ambiental, sin luz de los hechizos."
     },
     "kf2.setup.lighting.2": {
-      "en": "Smooth lighting and even fog, with soft shadowing in corners and creases, and spells that light up what they pass.",
-      "pt-BR": "Iluminação suave e neblina uniforme, com sombreamento suave nos cantos e vincos, e magias que iluminam por onde passam.",
-      "es-419": "Iluminación suave y niebla uniforme, con sombras suaves en esquinas y pliegues, y hechizos que iluminan lo que atraviesan."
+      "en": "Per-pixel lighting, blended light and fog, and fog by distance from the eye, plus ambient occlusion (medium) and spells that light their surroundings.",
+      "pt-BR": "Iluminação por pixel, luz e névoa misturadas e névoa pela distância do olho, mais oclusão de ambiente (média) e magias que iluminam o entorno.",
+      "es-419": "Iluminación por píxel, luz y niebla mezcladas y niebla por distancia al ojo, más oclusión ambiental (media) y hechizos que iluminan su entorno."
     },
     "kf2.setup.water": {
       "en": "Water",
@@ -889,19 +889,19 @@
       "es-419": "Agua"
     },
     "kf2.setup.water.0": {
-      "en": "Flat water, as released.",
-      "pt-BR": "Água plana, como no lançamento.",
-      "es-419": "Agua plana, como en el lanzamiento."
+      "en": "Flat water, as released: no waves, no reflections.",
+      "pt-BR": "Água plana, como no lançamento: sem ondas, sem reflexos.",
+      "es-419": "Agua plana, como en el lanzamiento: sin olas, sin reflejos."
     },
     "kf2.setup.water.1": {
-      "en": "Flat water, as released.",
-      "pt-BR": "Água plana, como no lançamento.",
-      "es-419": "Agua plana, como en el lanzamiento."
+      "en": "Flat water, as released: no waves, no reflections.",
+      "pt-BR": "Água plana, como no lançamento: sem ondas, sem reflexos.",
+      "es-419": "Agua plana, como en el lanzamiento: sin olas, sin reflejos."
     },
     "kf2.setup.water.2": {
-      "en": "Water with waves and reflections.",
-      "pt-BR": "Água com ondas e reflexos.",
-      "es-419": "Agua con olas y reflejos."
+      "en": "Waves (a swell and ripples) and planar reflections of the world in the water.",
+      "pt-BR": "Ondas (ondulação e marolas) e reflexos planares do mundo na água.",
+      "es-419": "Olas (oleaje y ondas) y reflejos planos del mundo en el agua."
     },
     "kf2.setup.motion": {
       "en": "Motion",
@@ -909,19 +909,19 @@
       "es-419": "Movimiento en pantalla"
     },
     "kf2.setup.motion.0": {
-      "en": "The world moves in the game's own 15 steps a second, however fast the picture is drawn.",
-      "pt-BR": "O mundo se move nos 15 passos por segundo do próprio jogo, não importa a taxa de quadros.",
-      "es-419": "El mundo se mueve en los 15 pasos por segundo propios del juego, sin importar la velocidad de fotogramas."
+      "en": "No smoothing: the camera, creatures, animation and scrolling textures move in the game's own 15 steps a second.",
+      "pt-BR": "Sem suavização: a câmera, as criaturas, a animação e as texturas que rolam se movem nos 15 passos por segundo do próprio jogo.",
+      "es-419": "Sin suavizado: la cámara, las criaturas, la animación y las texturas que se desplazan se mueven en los 15 pasos por segundo propios del juego."
     },
     "kf2.setup.motion.1": {
-      "en": "Movement is smoothed between the world's 15 steps a second, at any frame rate.",
-      "pt-BR": "O movimento é suavizado entre os 15 passos do mundo por segundo, em qualquer taxa de quadros.",
-      "es-419": "El movimiento se suaviza entre los 15 pasos del mundo por segundo, a cualquier velocidad de fotogramas."
+      "en": "The camera, creatures, animation and scrolling textures interpolated between the game's 15 steps a second. The picture trails the game by up to one step.",
+      "pt-BR": "A câmera, as criaturas, a animação e as texturas que rolam interpoladas entre os 15 passos por segundo do jogo. A imagem fica até um passo atrás do jogo.",
+      "es-419": "La cámara, las criaturas, la animación y las texturas que se desplazan interpoladas entre los 15 pasos por segundo del juego. La imagen va hasta un paso detrás del juego."
     },
     "kf2.setup.motion.2": {
-      "en": "Movement is smoothed between the world's 15 steps a second, at any frame rate.",
-      "pt-BR": "O movimento é suavizado entre os 15 passos do mundo por segundo, em qualquer taxa de quadros.",
-      "es-419": "El movimiento se suaviza entre los 15 pasos del mundo por segundo, a cualquier velocidad de fotogramas."
+      "en": "The camera, creatures, animation and scrolling textures interpolated between the game's 15 steps a second. The picture trails the game by up to one step.",
+      "pt-BR": "A câmera, as criaturas, a animação e as texturas que rolam interpoladas entre os 15 passos por segundo do jogo. A imagem fica até um passo atrás do jogo.",
+      "es-419": "La cámara, las criaturas, la animación y las texturas que se desplazan interpoladas entre los 15 pasos por segundo del juego. La imagen va hasta un paso detrás del juego."
     },
     "kf2.setup.audio": {
       "en": "Sound",
@@ -929,19 +929,19 @@
       "es-419": "Sonido"
     },
     "kf2.setup.audio.0": {
-      "en": "The console's soft filter and reverb; sound effects panned as released.",
-      "pt-BR": "O filtro suave e a reverberação do console; efeitos sonoros posicionados como no lançamento.",
-      "es-419": "El filtro suave y la reverberación de la consola; efectos de sonido ubicados como en el lanzamiento."
+      "en": "The console's Gaussian interpolation and its reverb; no 3D positioning of sound effects.",
+      "pt-BR": "A interpolação gaussiana e a reverberação do console; sem posicionamento 3D dos efeitos sonoros.",
+      "es-419": "La interpolación gaussiana y la reverberación de la consola; sin posicionamiento 3D de los efectos de sonido."
     },
     "kf2.setup.audio.1": {
-      "en": "Sharper, cleaner resampling; the console's own reverb and panning.",
-      "pt-BR": "Reamostragem mais nítida e limpa; a reverberação e o posicionamento do próprio console.",
-      "es-419": "Remuestreo más nítido y limpio; la reverberación y la ubicación propias de la consola."
+      "en": "Sinc interpolation (sharper); the console's reverb, and no 3D positioning.",
+      "pt-BR": "Interpolação sinc (mais nítida); a reverberação do console, e sem posicionamento 3D.",
+      "es-419": "Interpolación sinc (más nítida); la reverberación de la consola, y sin posicionamiento 3D."
     },
     "kf2.setup.audio.2": {
-      "en": "Sharper resampling, a denser reverb and 3D sound for headphones.",
-      "pt-BR": "Reamostragem mais nítida, reverberação mais densa e som 3D para fones de ouvido.",
-      "es-419": "Remuestreo más nítido, una reverberación más densa y sonido 3D para audífonos."
+      "en": "Sinc interpolation, an enhanced reverb, and 3D positioned sound effects set for headphones.",
+      "pt-BR": "Interpolação sinc, reverberação aprimorada e efeitos sonoros posicionados em 3D, ajustados para fones de ouvido.",
+      "es-419": "Interpolación sinc, reverberación mejorada y efectos de sonido posicionados en 3D, ajustados para audífonos."
     },
     "kf2.setup.gameplay": {
       "en": "Gameplay",
@@ -1094,9 +1094,9 @@
       "es-419": "Vista"
     },
     "kf2.setup.view.0": {
-      "en": "The HUD in the middle of the picture, and the game's own view distance.",
-      "pt-BR": "O HUD no meio da imagem, e a distância de visão do próprio jogo.",
-      "es-419": "El HUD en el centro de la imagen, y la distancia de visión propia del juego."
+      "en": "The HUD in the middle of the picture, and the game's own view distance (10.5 tiles).",
+      "pt-BR": "O HUD no meio da imagem, e a distância de visão do próprio jogo (10,5 blocos).",
+      "es-419": "El HUD en el centro de la imagen, y la distancia de visión propia del juego (10,5 baldosas)."
     },
     "kf2.setup.view.2": {
       "en": "The HUD at the edges of a wide picture, and the world drawn out to 15 tiles.",
@@ -1104,9 +1104,9 @@
       "es-419": "El HUD en los bordes de una imagen ancha, y el mundo dibujado hasta 15 baldosas."
     },
     "kf2.setup.view.1": {
-      "en": "The HUD in the middle of the picture, and the game's own view distance.",
-      "pt-BR": "O HUD no meio da imagem, e a distância de visão do próprio jogo.",
-      "es-419": "El HUD en el centro de la imagen, y la distancia de visión propia del juego."
+      "en": "The HUD in the middle of the picture, and the game's own view distance (10.5 tiles).",
+      "pt-BR": "O HUD no meio da imagem, e a distância de visão do próprio jogo (10,5 blocos).",
+      "es-419": "El HUD en el centro de la imagen, y la distancia de visión propia del juego (10,5 baldosas)."
     },
     "kf2.setup.movement.0.name": {
       "en": "D-pad only",

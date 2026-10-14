@@ -547,3 +547,20 @@ From a review of the Presentation page, all on the tiers pages unless named:
 
 Both assemblies build. **Seen once** (the focus border, dropped); **not judged**: the
 rest, and whether Presentation fits at 1280x800. **Not run**: the column walk.
+
+### Presentation's descriptions name what they set (2026-10-14)
+
+The plain-words copy of the Presentation tiers described looks ("smooth and
+filtered", "soft shadowing") and left out what each tier actually writes. Every
+description now names its settings, in all three languages: Image the
+perspective correction, sub-pixel precision, Z-buffer, dither, 15- or 24-bit
+colour, 16x anisotropic filtering and mipmaps; Lighting per-pixel lighting, the
+blended light and fog, fog by distance, ambient occlusion (medium) and the spells'
+light, and what the lower tiers leave off; Water the swell, ripples and planar
+reflections; Motion what is interpolated and that the picture trails the game by
+up to one 15 Hz step; Sound Gaussian or sinc interpolation, the console's or the
+enhanced reverb, and 3D positioning for headphones; View the stock 10.5-tile
+distance. Names and tiers' `set` are unchanged.
+
+**Not judged:** the longer text has not been looked at; whether Presentation still
+fits without its scrollbar at 1280x800 is unseen.
