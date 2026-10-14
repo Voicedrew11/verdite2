@@ -200,7 +200,10 @@ After the tiers comes **the turning page** (`pages` in the spec, `"id": "turning
 before the summary. It asks how the player turns, and how fast the creatures turn
 toward them: three options (tank controls, twin stick, and twin stick with
 acceleration), and an **Enemy turn speed** slider from x1 to x8 under them, with
-the original's x1 labelled. Each option writes `kf2.controls` and `kf2.analog.accel`;
+the original's x1 labelled. It is laid out as the tier pages are: a Controls row with
+the same stepper and only the chosen option's description, and an Enemy turn
+speed row whose slider spans the same width, its tip shown under it. A page that
+starts with no option set lists Keep as is first. Each option writes `kf2.controls` and `kf2.analog.accel`;
 the accelerated option also moves the slider to x2.2, since holding the right stick
 out speeds the turn up to that much. Its presets follow the tier the player chose:
 Original and Original++ pick tank controls at x1, Modern picks twin stick with
