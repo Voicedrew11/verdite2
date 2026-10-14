@@ -25,6 +25,7 @@
     "kf2.perpixel.on": "True",
     "kf2.evenfog.on": "True",
     "kf2.fog": "2",
+    "kf2.projectilelights.on": "True",
     "kf2.ao.on": "True",
     "kf2.waves.on": "True",
     "kf2.ssr.planar": "True",
@@ -413,7 +414,8 @@
                 "kf2.perpixel.on": "False",
                 "kf2.evenfog.on": "False",
                 "kf2.fog": "0",
-                "kf2.ao.on": "False"
+                "kf2.ao.on": "False",
+                "kf2.projectilelights.on": "False"
               }
             },
             {
@@ -423,7 +425,8 @@
                 "kf2.perpixel.on": null,
                 "kf2.evenfog.on": null,
                 "kf2.fog": null,
-                "kf2.ao.on": "False"
+                "kf2.ao.on": "False",
+                "kf2.projectilelights.on": "False"
               }
             },
             {
@@ -434,7 +437,8 @@
                 "kf2.perpixel.on": null,
                 "kf2.evenfog.on": null,
                 "kf2.fog": null,
-                "kf2.ao.on": null
+                "kf2.ao.on": null,
+                "kf2.projectilelights.on": null
               }
             }
           ]
@@ -875,9 +879,9 @@
       "es-419": "Iluminación suave en todas las superficies, y niebla que se desvanece de forma uniforme con la distancia."
     },
     "kf2.setup.lighting.2": {
-      "en": "Smooth lighting and even fog, with soft shadowing in corners and creases.",
-      "pt-BR": "Iluminação suave e neblina uniforme, com sombreamento suave nos cantos e vincos.",
-      "es-419": "Iluminación suave y niebla uniforme, con sombras suaves en esquinas y pliegues."
+      "en": "Smooth lighting and even fog, with soft shadowing in corners and creases, and spells that light up what they pass.",
+      "pt-BR": "Iluminação suave e neblina uniforme, com sombreamento suave nos cantos e vincos, e magias que iluminam por onde passam.",
+      "es-419": "Iluminación suave y niebla uniforme, con sombras suaves en esquinas y pliegues, y hechizos que iluminan lo que atraviesan."
     },
     "kf2.setup.water": {
       "en": "Water",

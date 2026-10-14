@@ -247,6 +247,9 @@ KF2_REMASTER_SHADOWS=0                 # no shadows from the authored lights (on
 KF2_REMASTER_SHADOW_MODELS=0           # only the map casts: creatures and objects stay out of the lights' cubemaps (they cast by default)
 KF2_REMASTER_SHADOW_SIZE=1024          # a shadow cubemap face's size in texels (64-4096)
 KF2_REMASTER_SHADOW_BIAS=6 KF2_REMASTER_SHADOW_OFFSET=1.5 KF2_REMASTER_SHADOW_SOFT=1.25   # compare bias in world units; normal offset and filter spread in texels (the `light shadows tune` verb sets them live)
+KF2_PROJECTILE_LIGHTS=0|1              # magic projectiles give off light in their own colour, over the saved Video ▸ Enhancements ▸ Glowing spells (on by default); needs no remaster pack and works with KF2_REMASTER=0; the `projectiles` verb switches it for the session
+KF2_PROJECTILE_LIGHTS_PROBE=1          # a line per effect mesh the first time it is decided: faces, share added, mean colour, glows or not
+KF2_PROJECTILE_LIGHTS_RADIUS=5120 KF2_PROJECTILE_LIGHTS_INTENSITY=1.5   # each projectile light's reach in world units (a tile is 2048) and its strength
 KF2_LIGHTCENSUS=1                      # who reads and writes the area's light records, by stage, every 5 s (slow: every RAM access takes the slow path; run with KF2_PRIMBUF=1)
 KF2_FACE_PROBE=1                       # every tile face given one of the ids 4-7 by its key; checks the subdivider's face order and a pick from the frame's triangles against the GPU's ids (needs a reflection or the murk on, and KF2_SSR_PROBE=1; overrides any authored material)
 KF2_TEXCENSUS=1                        # the texture-key census: keys, art, overlapping rects, dynamic places, what a pack covers, uploads, every 5 s; the `textures` shell verb saves it (0073)

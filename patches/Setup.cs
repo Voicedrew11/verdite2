@@ -146,6 +146,7 @@ public static class Setup
         [NoDither.OnKey] = new(t => NoDither.SetEnabled(B(t, true)), () => Text(NoDither.Enabled), "KF2_NODITHER"),
         [TrueColor.OnKey] = new(t => TrueColor.SetEnabled(B(t, true)), () => Text(TrueColor.Enabled), "KF2_TRUECOLOR"),
         [EvenFog.OnKey] = new(t => EvenFog.Enabled = B(t, true), () => Text(EvenFog.Enabled), "KF2_EVENFOG"),
+        [ProjectileLights.OnKey] = new(t => ProjectileLights.Set(B(t, ProjectileLights.DefaultOn)), () => Text(ProjectileLights.On), "KF2_PROJECTILE_LIGHTS"),
         [FrameSmoothing.OnKey] = new(t => FrameSmoothing.SetEnabled(B(t, true)), () => Text(FrameSmoothing.Enabled), "KF2_SMOOTH"),
         [FrameSmoothing.PosKey] = new(t => FrameSmoothing.SetPosition(B(t, true)), () => Text(FrameSmoothing.Position), "KF2_SMOOTH_POS"),
         [ObjectSmoothing.OnKey] = new(t => ObjectSmoothing.SetEnabled(B(t, true)), () => Text(ObjectSmoothing.Enabled), "KF2_SMOOTH_OBJECTS"),

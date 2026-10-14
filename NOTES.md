@@ -273,6 +273,8 @@ Recovering the depth and the sub-pixel fraction the GP0 packet threw away: persp
 - The reflections see past the camera's cull
 - The enhancement distance: past it, the game's own look
 - Fog by distance from the eye
+- Magic projectiles give off light
+- A light goes out instead of off
 
 ### [WIDESCREEN.md](docs/WIDESCREEN.md)
 

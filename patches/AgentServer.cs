@@ -118,6 +118,7 @@ public static class AgentServer
         "map [on|off|toggle] - the full-screen map, which pauses the world unless KF2_MAP_PAUSE=0",
         "goto <x> <y> <z> [yaw [pitch]] - put the player at a position in this area, and face yaw (0x1000 a turn) and pitch",
         "view [<x> <y> <z> <pitch> <yaw> <roll> | off] - the camera the last frame was drawn from, a digest of its cull grid and the cells it draws; with a camera, draw every frame from it until 'view off'",
+        "projectiles [on|off|spell <n>] - magic projectiles' lights: alone, their state; on/off for the session (not saved); spell <n> selects spell n for the cast button and fills MP, a test aid",
         "waves [on|off | swell|swellsize|ripple|ripplesize|shade|speed <value>] - the water waves: their state, the switch, or one setting (not saved)",
         "gpuworld [on|off | surfaces on|off | water on|off | models on|off|hide|show | records on|off | scene | perpixel on|off] - the world drawn on the GPU (0085): its state, the switch, whether the map reaches the normal and surface buffers, whether its water and the object walk's models are drawn there too, models taken and not drawn (what they cover), whether the map is lit in the shader from the light records, the last walk's models and the camera's forward, or per-pixel lighting (not saved)",
         "pause [on|off] - hold the world still (the stage gate, as the full map does), for comparing pictures",
@@ -337,6 +338,7 @@ public static class AgentServer
                      || parts[0].Equals("waves", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("gpuworld", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("murk", StringComparison.OrdinalIgnoreCase)
+                     || parts[0].Equals("projectiles", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("aim", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("settings", StringComparison.OrdinalIgnoreCase)
                      || parts[0].Equals("setup", StringComparison.OrdinalIgnoreCase)
@@ -372,6 +374,7 @@ public static class AgentServer
             case "gpuworld":
             case "capture":
             case "murk":
+            case "projectiles":
             case "viewfrac":
             case "pause":
             case "aspect":
@@ -486,6 +489,7 @@ public static class AgentServer
         "pause" => DoPause(cmd.Arg1),
         "aspect" => Widescreen.Shell(cmd.Arg1),
         "murk" => Murk.Shell(cmd.Arg1),
+        "projectiles" => ProjectileLights.Shell(cmd.Arg1),
         "viewfrac" => CameraBlock.Shell(cmd.Arg1),
         "scale" => DoScale(cmd.Arg1),
         "settings" => DoSettings(cmd.Arg1),

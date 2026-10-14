@@ -618,6 +618,7 @@ public static class ModelWalk
         _sceneCount = 0;
         _mirrorOnly = false;
         _walkOwns = true;
+        ProjectileLights.BeginWalk();
         _liveCreatures = _liveObjects = _liveEffects = _liveSprites = 0;
 
         Memset(c, mem, sp + 0x58u, 0x20u, 0x800331F0u);
@@ -661,6 +662,7 @@ public static class ModelWalk
 
         WalkCalls++;
         _lastCount = _sceneCount;
+        ProjectileLights.EndWalk();
         Report();
     }
 
@@ -1015,6 +1017,7 @@ public static class ModelWalk
 
             _kind = ModelKind.Effect; _slot = i; _record = rec;
             _effects++;
+            ProjectileLights.Seen(mem, rec);
             c.A0 = mem.ReadU8(rec + 0xAu);
             c.A1 = mem.ReadU8(rec + 3u) + 0x28u;
             c.A2 = rec + 0x14u;
@@ -1130,7 +1133,7 @@ public static class ModelWalk
         uint pos = c.A2;
         uint rotPtr = c.A3;
         uint depth = mem.ReadU32(arg + 0x30u);
-        uint assembler = mem.ReadU8(arg + 0x2Cu);
+        uint assembler = mem.ReadU8(arg + 0x2Cu), rawPick = assembler;
         uint scale = mem.ReadU32(arg + 0x10u);
         uint clipByte = mem.ReadU16(arg + 0x1Cu);
         uint light2 = mem.ReadU8(arg + 0x24u);
@@ -1283,6 +1286,7 @@ public static class ModelWalk
         }
 
         Record(mem, pos, model, (byte)(assembler & 0xFFu), light);
+        if (_kind == ModelKind.Effect) ProjectileLights.Learn(mem, model, clipByte & 0xFFu, rawPick, sub, assembler & 0xFFu);
 
         // The remaster's material for this model, sealed into every packet it makes.
         _model = _walkOwns ? model : -1;
