@@ -5160,7 +5160,10 @@ when you fail at it, and the shorter block first.
 four states carrying three meanings and fog-on-with-the-map-off is nobody's
 answer — the same sentence, and the same fix, as "Two shading checkboxes were one
 question asked twice" above. One combo: `Off` / `Whole area` / `Fill in as you
-go`. `kf2.map.on` and `kf2.map.fog` are both still written and both still read,
+go`. (Since the map became the `kf2.map` mod, enabling the mod is the on switch: the
+combo is `Whole area` / `Fill in as you go`, and `kf2.map.on` is no longer read, so a
+player who had turned the old core map off does not enable the mod and get nothing.)
+`kf2.map.on` and `kf2.map.fog` were both still written and both still read,
 `KF2_MAP` and `KF2_MAP_FOG` are untouched, and the map is the master on read-back
 — the state only `KF2_MAP=0 KF2_MAP_FOG=1` can reach opens as `Off` rather than
 earning an entry, and one click on any entry leaves the pair consistent.

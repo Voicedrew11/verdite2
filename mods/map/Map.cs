@@ -452,7 +452,10 @@ public static class Map
         _onReady = () =>
         {
             var view = RecompOne.Runtime.Runtime.View;
-            Enabled       = _forcedOn ?? view.GetBool(OnKey, true);
+            // The mod being enabled is the switch now, so kf2.map.on is not read:
+            // a player who turned the core's map off before would otherwise
+            // enable the mod and get nothing. KF2_MAP=0 is the comparison.
+            Enabled       = _forcedOn ?? true;
             PadButton     = view.GetInt(PadButtonKey, PadR3);
 
             // The touchpad is the game's own map item's (core's MapKey), so a value

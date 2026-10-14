@@ -31,11 +31,10 @@ namespace Kf2.Settings;
 /// were two ticks, and two ticks cross into four states carrying three meanings:
 /// fog on with the map off is nobody's answer to anything. That is the argument
 /// <see cref="ShadingPage"/> made about dither and true colour, and the fix is the
-/// same — three entries, and the fourth state stops being reachable:
+/// same — two entries now that the mod being enabled is the on switch:
 ///
 /// <list type="table">
-/// <item><term>Off</term><description>no map at all; G and the pad button do nothing</description></item>
-/// <item><term>Whole area</term><description>the floor plan the moment you walk in</description></item>
+/// /// <item><term>Whole area</term><description>the floor plan the moment you walk in</description></item>
 /// <item><term>Fill in as you go</term><description>fog of war — only what you had a clear view of</description></item>
 /// </list>
 ///
@@ -50,7 +49,8 @@ namespace Kf2.Settings;
 /// Both patches keep their own key (<c>kf2.map.on</c>, <c>kf2.map.fog</c>) and
 /// their own environment variable (<c>KF2_MAP</c>, <c>KF2_MAP_FOG</c>), so merging
 /// the control strands no config and takes no comparison off the console. The map
-/// is read as the master — off means Off, whatever the fog says — and any click
+/// was read as the master; since the map became a mod, enabling it is the switch and
+/// only the fog's key is written. Formerly any click
 /// writes both patches, harmonising the pair.
 /// </summary>
 public sealed class MapPage : IPatchPage
@@ -63,11 +63,10 @@ public sealed class MapPage : IPatchPage
 
     public int Order => 10;
 
-    const int Off = 0;
-    const int Whole = 1;
-    const int Fog = 2;
+    const int Whole = 0;
+    const int Fog = 1;
 
-    static readonly string[] Labels = ["Off", "Whole area", "Fill in as you go"];
+    static readonly string[] Labels = ["Whole area", "Fill in as you go"];
 
     public void Draw()
     {
@@ -81,24 +80,12 @@ public sealed class MapPage : IPatchPage
                              "you have been. G opens it; the world stops while it is up.");
     }
 
-    /// <summary>The state the two patches are actually in, folded onto the three
-    /// entries. The map wins, so the fourth state — only reachable from
-    /// <c>KF2_MAP=0 KF2_MAP_FOG=1</c> — opens as Off rather than earning an entry
-    /// of its own; one click on any entry then makes the pair consistent.</summary>
-    static int Index()
-    {
-        if (!Map.Enabled) return Off;
-        return MapFog.Enabled ? Fog : Whole;
-    }
+    static int Index() => MapFog.Enabled ? Fog : Whole;
 
-    /// <summary>Both patches and both keys, from the one combo. Each patch's own
-    /// <c>SetEnabled</c> is what decides, so the key is written from what the patch
-    /// ended up with rather than from what was asked for.</summary>
+    /// <summary>The fog's patch and key. The map has no Off here: disabling the mod
+    /// in the Mods panel is how it is turned off, and kf2.map.on is no longer read.</summary>
     static void Apply(int index)
     {
-        Map.SetEnabled(index != Off);
-        PatchSettings.Set(Map.OnKey, Map.Enabled);
-
         MapFog.SetEnabled(index == Fog);
         PatchSettings.Set(MapFog.OnKey, MapFog.Enabled);
     }

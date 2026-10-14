@@ -89,7 +89,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | GAMEPLAY | RELOAD ON DEATH | OFF, ON | `kf2.autoreload.enabled` |
 | | COMPARE GEAR | OFF, ON | `kf2.gearcompare.enabled` |
 | | ENEMY TURN | ORIGINAL, X1.25 … X8 | `kf2.enemyturn` (PATCHES_AND_MODS, "Enemies turn faster"); tracking while standing stays in the Settings window |
-| | MAP | OFF, WHOLE AREA, AS YOU GO | the map mod's own page (`mods/map`, `MapPage`), present only with `kf2.map` enabled in the Mods panel: `kf2.map.on` and `kf2.map.fog`, the map the master; OFF leaves the fog choice. Not a PORT SETTINGS row any more |
+| | MAP | WHOLE AREA, AS YOU GO | the map mod's own page (`mods/map`, `MapPage`), present only with `kf2.map` enabled in the Mods panel: `kf2.map.fog`; enabling the mod is the on switch, so `kf2.map.on` is no longer read. Not a PORT SETTINGS row any more |
 | CONTROLS | CONTROLS | 2D, 2D ACCEL, 3D | `kf2.controls` (`True` is 3D) and `kf2.analog.accel`: the setup's turning page as a row; 3D clears the acceleration, as the setup's tank option does (INPUT, "2D and 3D controls") |
 | | INVERTED CAMERA | OFF, ON | `kf2.analog.invertpitch`; dimmed in 3D |
 | | STICK SENS | X0.5 … X3 | `kf2.analog.turn` and `kf2.analog.pitch`, both to the step; a pair set apart shows CUSTOM |
