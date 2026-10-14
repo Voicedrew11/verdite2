@@ -154,7 +154,7 @@ point, not an answer**: each fills the pages with its choices, and the player wa
 them all (the display, the tiers, the turning page) to the summary, changing what
 they like. Its footer holds only Skip setup (launcher) or Cancel (in game):
 
-* **Modern** (badged Recommended): Modern in every group, with the display
+* **Modern**: Modern in every group, with the display
   suggested from the monitor (`Onboarding.Suggest`). Window mode has no suggestion
   and stays where it starts.
 * **Original++**: Original++ in every group, with the display suggested from the
@@ -177,9 +177,16 @@ also leave the page before). Square/X is no longer fed to ImGui: held, it is ImG
 switcher, which took the focus off the setup. The footer's prompt names the keys
 each page takes. Built, not yet driven with a pad. The tiers are **a page per
 category** (Controls, then Presentation, then Gameplay), each headed by the
-category's name and listing a tier for every group in it; Next and Back step from
-one category's page to the next, and Back on the first returns to the display.
-Every group has three tiers:
+category's name. Under the heading, a **Set everything to:** row holds the three
+tiers as buttons (lit when every group on the page is at that tier; no tier is
+marked recommended, there or on the welcome), and under it each group is **one
+row**: its name, then a stepper (`<`, a list, `>`) whose options are named by what
+they do ("Steady, sharp pixels", "Waves and reflections"), not by tier, each
+tier's `label` in the spec, with the chosen option's description under it and
+"Higher GPU cost" at the row's right when it has one. Left and right on the
+focused list step it; the arrows are mouse targets only, so the pad's focus stays
+on the lists. Next and Back step from one category's page to the next, and Back
+on the first returns to the display. Every group has three tiers:
 
 * **Original**: the game as the PlayStation ran it.
 * **Original++**: that look and feel, with what the hardware got wrong fixed, and
@@ -260,14 +267,13 @@ tuned to it) and why the port's faster turn needs faster creatures.
   extra position or list entry before the options, "Keep current (72)". That is
   where the control starts and what it leaves alone until it is moved; the handle
   and the label agree.
-* **Every tier's description is shown**, under its button: the chosen one in full
-  colour, the others dimmed. The chosen button is also marked "> " (the font has
-  no bullet glyph), so the choice is not colour alone. **Tiers that write the same
-  keys are one button**, named with a slash ("Original / Original++"), its text the
+* **Only the chosen option's description is shown**, under its row's stepper; the
+  player compares by stepping, not by reading three columns. **Tiers that write
+  the same keys are one option**, named by the first tier's `label`, its text the
   first tier's: water and the map (Original and Original++), and motion, comparing
   gear and death (Original++ and Modern). The spec keeps the two texts identical so
   they cannot drift. A group or category that starts Custom gets a **Keep as is**
-  button before the tiers, which puts back what it started at.
+  option before the tiers, which puts back what it started at.
 * **A key every tier writes alike is a mistake in the spec**, logged at load:
   `null` in all three would put the player's own value back to the default
   whichever tier they chose, and read the group as Custom until then. That was

@@ -292,18 +292,21 @@
           "label": "kf2.setup.movement",
           "tiers": [
             {
+              "label": "kf2.setup.movement.0.name",
               "desc": "kf2.setup.movement.0",
               "set": {
                 "kf2.analog.on": "False"
               }
             },
             {
+              "label": "kf2.setup.movement.1.name",
               "desc": "kf2.setup.movement.1",
               "set": {
                 "kf2.analog.on": null
               }
             },
             {
+              "label": "kf2.setup.movement.1.name",
               "desc": "kf2.setup.movement.2",
               "set": {
                 "kf2.analog.on": null
@@ -316,6 +319,7 @@
           "label": "kf2.setup.haptics",
           "tiers": [
             {
+              "label": "kf2.setup.haptics.0.name",
               "desc": "kf2.setup.haptics.0",
               "set": {
                 "kf2.rumble.on": "False",
@@ -325,6 +329,7 @@
               }
             },
             {
+              "label": "kf2.setup.haptics.1.name",
               "desc": "kf2.setup.haptics.1",
               "set": {
                 "kf2.rumble.on": null,
@@ -334,6 +339,7 @@
               }
             },
             {
+              "label": "kf2.setup.haptics.2.name",
               "desc": "kf2.setup.haptics.2",
               "set": {
                 "kf2.rumble.on": null,
@@ -355,6 +361,7 @@
           "label": "kf2.setup.image",
           "tiers": [
             {
+              "label": "kf2.setup.image.0.name",
               "desc": "kf2.setup.image.0",
               "set": {
                 "kf2.perspective.on": "False",
@@ -367,6 +374,7 @@
               }
             },
             {
+              "label": "kf2.setup.image.1.name",
               "desc": "kf2.setup.image.1",
               "set": {
                 "kf2.perspective.on": null,
@@ -379,6 +387,7 @@
               }
             },
             {
+              "label": "kf2.setup.image.2.name",
               "desc": "kf2.setup.image.2",
               "cost": true,
               "set": {
@@ -398,6 +407,7 @@
           "label": "kf2.setup.lighting",
           "tiers": [
             {
+              "label": "kf2.setup.lighting.0.name",
               "desc": "kf2.setup.lighting.0",
               "set": {
                 "kf2.perpixel.on": "False",
@@ -407,6 +417,7 @@
               }
             },
             {
+              "label": "kf2.setup.lighting.1.name",
               "desc": "kf2.setup.lighting.1",
               "set": {
                 "kf2.perpixel.on": null,
@@ -416,6 +427,7 @@
               }
             },
             {
+              "label": "kf2.setup.lighting.2.name",
               "desc": "kf2.setup.lighting.2",
               "cost": true,
               "set": {
@@ -432,6 +444,7 @@
           "label": "kf2.setup.water",
           "tiers": [
             {
+              "label": "kf2.setup.water.0.name",
               "desc": "kf2.setup.water.0",
               "set": {
                 "kf2.waves.on": "False",
@@ -439,6 +452,7 @@
               }
             },
             {
+              "label": "kf2.setup.water.0.name",
               "desc": "kf2.setup.water.1",
               "set": {
                 "kf2.waves.on": "False",
@@ -446,6 +460,7 @@
               }
             },
             {
+              "label": "kf2.setup.water.2.name",
               "desc": "kf2.setup.water.2",
               "cost": true,
               "set": {
@@ -460,6 +475,7 @@
           "label": "kf2.setup.motion",
           "tiers": [
             {
+              "label": "kf2.setup.motion.0.name",
               "desc": "kf2.setup.motion.0",
               "set": {
                 "kf2.smoothing.on": "False",
@@ -470,6 +486,7 @@
               }
             },
             {
+              "label": "kf2.setup.motion.1.name",
               "desc": "kf2.setup.motion.1",
               "set": {
                 "kf2.smoothing.on": null,
@@ -480,6 +497,7 @@
               }
             },
             {
+              "label": "kf2.setup.motion.1.name",
               "desc": "kf2.setup.motion.2",
               "set": {
                 "kf2.smoothing.on": null,
@@ -496,6 +514,7 @@
           "label": "kf2.setup.audio",
           "tiers": [
             {
+              "label": "kf2.setup.audio.0.name",
               "desc": "kf2.setup.audio.0",
               "set": {
                 "kf2.audio.interp": "0",
@@ -504,6 +523,7 @@
               }
             },
             {
+              "label": "kf2.setup.audio.1.name",
               "desc": "kf2.setup.audio.1",
               "set": {
                 "kf2.audio.interp": null,
@@ -512,6 +532,7 @@
               }
             },
             {
+              "label": "kf2.setup.audio.2.name",
               "desc": "kf2.setup.audio.2",
               "set": {
                 "kf2.audio.interp": null,
@@ -526,6 +547,7 @@
           "label": "kf2.setup.view",
           "tiers": [
             {
+              "label": "kf2.setup.view.0.name",
               "desc": "kf2.setup.view.0",
               "set": {
                 "kf2.widescreen.hud": null,
@@ -533,6 +555,7 @@
               }
             },
             {
+              "label": "kf2.setup.view.0.name",
               "desc": "kf2.setup.view.1",
               "set": {
                 "kf2.widescreen.hud": null,
@@ -540,6 +563,7 @@
               }
             },
             {
+              "label": "kf2.setup.view.2.name",
               "desc": "kf2.setup.view.2",
               "set": {
                 "kf2.widescreen.hud": "True",
@@ -559,18 +583,21 @@
           "label": "kf2.setup.map",
           "tiers": [
             {
+              "label": "kf2.setup.map.0.name",
               "desc": "kf2.setup.map.0",
               "set": {
                 "kf2.map.on": "False"
               }
             },
             {
+              "label": "kf2.setup.map.0.name",
               "desc": "kf2.setup.map.1",
               "set": {
                 "kf2.map.on": "False"
               }
             },
             {
+              "label": "kf2.setup.map.2.name",
               "desc": "kf2.setup.map.2",
               "set": {
                 "kf2.map.on": null
@@ -583,18 +610,21 @@
           "label": "kf2.setup.gear",
           "tiers": [
             {
+              "label": "kf2.setup.gear.0.name",
               "desc": "kf2.setup.gear.0",
               "set": {
                 "kf2.gearcompare.enabled": "False"
               }
             },
             {
+              "label": "kf2.setup.gear.1.name",
               "desc": "kf2.setup.gear.1",
               "set": {
                 "kf2.gearcompare.enabled": null
               }
             },
             {
+              "label": "kf2.setup.gear.1.name",
               "desc": "kf2.setup.gear.2",
               "set": {
                 "kf2.gearcompare.enabled": null
@@ -607,18 +637,21 @@
           "label": "kf2.setup.death",
           "tiers": [
             {
+              "label": "kf2.setup.death.0.name",
               "desc": "kf2.setup.death.0",
               "set": {
                 "kf2.autoreload.enabled": "False"
               }
             },
             {
+              "label": "kf2.setup.death.1.name",
               "desc": "kf2.setup.death.1",
               "set": {
                 "kf2.autoreload.enabled": null
               }
             },
             {
+              "label": "kf2.setup.death.1.name",
               "desc": "kf2.setup.death.2",
               "set": {
                 "kf2.autoreload.enabled": null
@@ -822,9 +855,9 @@
       "es-419": "Polígonos estables y texturas que ya no se deforman, sin tramado. Las texturas siguen nítidas y pixeladas."
     },
     "kf2.setup.image.2": {
-      "en": "As Balanced, with smoother colour gradients and filtered textures that stay clean at a distance.",
-      "pt-BR": "Como Equilibrado, com transições de cor mais suaves e texturas filtradas que continuam limpas à distância.",
-      "es-419": "Como Equilibrado, con degradados de color más suaves y texturas filtradas que se mantienen limpias a distancia."
+      "en": "Steady polygons with no dither, smoother colour gradients, and filtered textures that stay clean at a distance.",
+      "pt-BR": "Polígonos estáveis sem pontilhado, transições de cor mais suaves e texturas filtradas que continuam limpas à distância.",
+      "es-419": "Polígonos estables sin tramado, degradados de color más suaves y texturas filtradas que se mantienen limpias a distancia."
     },
     "kf2.setup.lighting": {
       "en": "Lighting and fog",
@@ -842,9 +875,9 @@
       "es-419": "Iluminación suave en todas las superficies, y niebla que se desvanece de forma uniforme con la distancia."
     },
     "kf2.setup.lighting.2": {
-      "en": "As Balanced, with soft shadowing in corners and creases.",
-      "pt-BR": "Como Equilibrado, com sombreamento suave nos cantos e vincos.",
-      "es-419": "Como Equilibrado, con sombras suaves en esquinas y pliegues."
+      "en": "Smooth lighting and even fog, with soft shadowing in corners and creases.",
+      "pt-BR": "Iluminação suave e neblina uniforme, com sombreamento suave nos cantos e vincos.",
+      "es-419": "Iluminación suave y niebla uniforme, con sombras suaves en esquinas y pliegues."
     },
     "kf2.setup.water": {
       "en": "Water",
@@ -1070,6 +1103,136 @@
       "en": "The HUD in the middle of the picture, and the game's own view distance.",
       "pt-BR": "O HUD no meio da imagem, e a distância de visão do próprio jogo.",
       "es-419": "El HUD en el centro de la imagen, y la distancia de visión propia del juego."
+    },
+    "kf2.setup.movement.0.name": {
+      "en": "D-pad only",
+      "pt-BR": "Só o direcional",
+      "es-419": "Solo la cruceta"
+    },
+    "kf2.setup.movement.1.name": {
+      "en": "Analog sticks",
+      "pt-BR": "Analógicos",
+      "es-419": "Palancas analógicas"
+    },
+    "kf2.setup.haptics.0.name": {
+      "en": "No rumble or gyro",
+      "pt-BR": "Sem vibração nem giroscópio",
+      "es-419": "Sin vibración ni giroscopio"
+    },
+    "kf2.setup.haptics.1.name": {
+      "en": "Plain rumble",
+      "pt-BR": "Vibração simples",
+      "es-419": "Vibración simple"
+    },
+    "kf2.setup.haptics.2.name": {
+      "en": "HD rumble and gyro aim",
+      "pt-BR": "Vibração HD e mira por giroscópio",
+      "es-419": "Vibración HD y mira por giroscopio"
+    },
+    "kf2.setup.image.0.name": {
+      "en": "Wobbling, warping, dithered",
+      "pt-BR": "Oscilante, deformada, pontilhada",
+      "es-419": "Oscilante, deformada, con tramado"
+    },
+    "kf2.setup.image.1.name": {
+      "en": "Steady, sharp pixels",
+      "pt-BR": "Pixels nítidos e estáveis",
+      "es-419": "Píxeles nítidos y estables"
+    },
+    "kf2.setup.image.2.name": {
+      "en": "Smooth and filtered",
+      "pt-BR": "Suave e filtrado",
+      "es-419": "Suave y filtrado"
+    },
+    "kf2.setup.lighting.0.name": {
+      "en": "Corner lighting",
+      "pt-BR": "Luz nos cantos",
+      "es-419": "Luz en las esquinas"
+    },
+    "kf2.setup.lighting.1.name": {
+      "en": "Smooth lighting and fog",
+      "pt-BR": "Luz e névoa suaves",
+      "es-419": "Luz y niebla suaves"
+    },
+    "kf2.setup.lighting.2.name": {
+      "en": "Smooth, with soft shadows",
+      "pt-BR": "Suave, com sombras suaves",
+      "es-419": "Suave, con sombras suaves"
+    },
+    "kf2.setup.water.0.name": {
+      "en": "Flat water",
+      "pt-BR": "Água plana",
+      "es-419": "Agua plana"
+    },
+    "kf2.setup.water.2.name": {
+      "en": "Waves and reflections",
+      "pt-BR": "Ondas e reflexos",
+      "es-419": "Olas y reflejos"
+    },
+    "kf2.setup.motion.0.name": {
+      "en": "Unsmoothed",
+      "pt-BR": "Sem suavização",
+      "es-419": "Sin suavizado"
+    },
+    "kf2.setup.motion.1.name": {
+      "en": "Smoothed",
+      "pt-BR": "Suavizado",
+      "es-419": "Suavizado"
+    },
+    "kf2.setup.audio.0.name": {
+      "en": "Console sound",
+      "pt-BR": "Som do console",
+      "es-419": "Sonido de consola"
+    },
+    "kf2.setup.audio.1.name": {
+      "en": "Sharper resampling",
+      "pt-BR": "Reamostragem nítida",
+      "es-419": "Remuestreo nítido"
+    },
+    "kf2.setup.audio.2.name": {
+      "en": "3D sound and dense reverb",
+      "pt-BR": "Som 3D e reverberação densa",
+      "es-419": "Sonido 3D y reverberación densa"
+    },
+    "kf2.setup.view.0.name": {
+      "en": "HUD in the middle",
+      "pt-BR": "HUD no centro",
+      "es-419": "HUD en el centro"
+    },
+    "kf2.setup.view.2.name": {
+      "en": "Wide view and far draw",
+      "pt-BR": "Visão ampla e distante",
+      "es-419": "Vista amplia y lejana"
+    },
+    "kf2.setup.map.0.name": {
+      "en": "No map",
+      "pt-BR": "Sem mapa",
+      "es-419": "Sin mapa"
+    },
+    "kf2.setup.map.2.name": {
+      "en": "Map that fills in",
+      "pt-BR": "Mapa que se completa",
+      "es-419": "Mapa que se completa"
+    },
+    "kf2.setup.gear.0.name": {
+      "en": "Prompts as released",
+      "pt-BR": "Avisos originais",
+      "es-419": "Avisos originales"
+    },
+    "kf2.setup.gear.1.name": {
+      "en": "Full stat comparison",
+      "pt-BR": "Comparação completa de atributos",
+      "es-419": "Comparación completa de atributos"
+    },
+    "kf2.setup.death.0.name": {
+      "en": "No auto reload",
+      "pt-BR": "Sem recarga automática",
+      "es-419": "Sin recarga automática"
+    },
+    "kf2.setup.death.1.name": {
+      "en": "Reload last save",
+      "pt-BR": "Recarregar último save",
+      "es-419": "Recargar último guardado"
     }
   }
 }
