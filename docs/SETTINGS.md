@@ -78,7 +78,7 @@ HUD to OFF, pointing at row 1 moved it back, a click at (5,230) opened the quest
 | | RESOLUTION | 240P … 1920P | `RenderScale` 1..8 |
 | | ASPECT | 4/3, 16/10, 16/9, 21/9 | `kf2.widescreen.aspect` |
 | | HUD AT EDGES | OFF, ON | `kf2.widescreen.hud`, dimmed at 4/3 |
-| | FRAME RATE | ORIGINAL, 30 … 360, UNCAPPED | `kf2.framepacing.fps` and the five `kf2.smoothing.*` keys: ORIGINAL is the setup's 20 fps with the smoothing off, any other rate smooths; a rate with the smoothing off (the Settings window) shows `NO SMOOTH` |
+| | FRAME RATE | ORIGINAL, 30 … 360, UNCAPPED | `kf2.framepacing.fps` and the five `kf2.smoothing.*` keys: ORIGINAL is the setup's 15 fps with the smoothing off, any other rate smooths; a rate with the smoothing off (the Settings window) shows `NO SMOOTH` |
 | GRAPHICS | TEXTURE FILTER | OFF, TRILINEAR, 2X … 16X | `kf2.mipmaps.on` and `kf2.aniso.level` |
 | | PER-PIXEL LIGHT | OFF, ON | `kf2.perpixel.on` |
 | | AMB. OCCLUSION | OFF, LOW, MEDIUM, HIGH | `kf2.ao.on` and `kf2.ao.quality` |
@@ -162,7 +162,7 @@ they like. Its footer holds only Skip setup (launcher) or Cancel (in game):
 * **Original++**: Original++ in every group, with the display suggested from the
   monitor, as Modern.
 * **Original**: Original in every group, and each display field's `original`
-  option: 4:3, 240p (1x) and 20 fps. Window mode is left alone.
+  option: 4:3, 240p (1x) and 15 fps. Window mode is left alone.
 * **Custom**: the pages start from what the player had set, not from a preset
   clicked earlier.
 
@@ -242,14 +242,14 @@ tuned to it) and why the port's faster turn needs faster creatures.
 
 ### What setup writes, and when
 
-* **Due** while `verdite.setup` in `interface.ini` is below the spec's `version`,
-  **except for a player who already has settings**: no flag, and any stored key
-  under the spec's `existing` prefix (`kf2.`). The game writes `kf2.keys.layout`
-  on its first boot, so anyone who has ever played is not asked; their settings
-  are theirs, and RUN SETUP is there. So a fresh install sees it once, and a
-  player who finished or skipped it (the flag) sees it again when `version` is
-  raised; a player who predates setup is never asked. `VERDITE2_SETUP=1` shows it
-  regardless.
+* **Due** while `verdite.setup` in `interface.ini` is below the spec's `version`:
+  anyone who has never seen it (no flag) is asked, settings or not, and a player
+  who finished or skipped it sees it again when `version` is raised. A player who
+  already has settings (a stored key under the spec's `existing` prefix, `kf2.`;
+  the game writes `kf2.keys.layout` on its first boot) was once excused, so a
+  player who had run a build from before setup never saw it; now those settings
+  only decide where the display step starts (`FirstRun`: theirs, not the
+  monitor's suggestion). `VERDITE2_SETUP=1` shows it regardless.
 * The page's own rules: a value equal to its declared default **removes** the key,
   and a key already meaning the value is left alone. `null` in a tier is the
   default, so Modern writes nothing and removes what Original wrote.
