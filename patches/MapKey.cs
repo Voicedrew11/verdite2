@@ -105,7 +105,7 @@ public static class MapKey
         Event.AddListener<KeyboardEvent>(e =>
         {
             if (e.Key != (int)Key.M || e.Repeat) return;
-            if (e.Pressed && (PopupManager.AnyOpen || HotkeyGate.Editing)) return;
+            if (e.Pressed && (PopupManager.AnyOpen || HotkeyGate.Typing)) return;
             Press(e.Pressed);
         });
         Event.AddListener<ControllerEvent>(e =>
