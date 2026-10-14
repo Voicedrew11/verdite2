@@ -471,12 +471,9 @@ internal sealed class OnboardingPopup : Popup
     }
 
     /// <summary>
-    /// A group's selector: a "&lt;" and a ">" either side of a combo, the combo's options the
-    /// group's runs of identical tiers (see <see cref="Spans"/>) by name, "Keep as is" first when
-    /// <paramref name="keep"/>. Left and right step it in place, as <see cref="Step"/> steps any
-    /// focused combo, and the arrows stop at the ends rather than wrap. The arrows are mouse
-    /// targets only (<see cref="StepArrow"/>), so the keyboard and the pad keep their focus on the
-    /// combo. The chosen run's GPU cost note is drawn after the right arrow, into the room
+    /// A group's selector: a <see cref="Stepper"/> whose options are the group's runs of identical
+    /// tiers (see <see cref="Spans"/>) by name, "Keep as is" first when <paramref name="keep"/>.
+    /// The chosen run's GPU cost note is drawn after the right arrow, into the room
     /// <see cref="CostWidth"/> keeps there. Returns the option picked (a run's first tier, or -1
     /// for keep), or null when none was; <paramref name="focused"/> says whether the combo has the focus.
     /// </summary>
@@ -492,35 +489,8 @@ internal sealed class OnboardingPopup : Popup
         string Name(int o) => o < 0 ? Localization.T("verdite.setup.keep")
             : group.Tiers[o].Label is { } key ? Localization.T(key) : GroupName(group, o);
 
-        float arrow = ImGui.GetFrameHeight();
-        float gap = style.ItemSpacing.X;
-        float comboW = Math.Max(60f * UiScale, ImGui.GetContentRegionAvail().X - (arrow + gap) * 2f - CostWidth());
-        int delta = 0;
-        if (StepArrow(true, at > 0, arrow)) delta = -1;
-        ImGui.SameLine();
-        ImGui.SetNextItemWidth(comboW);
-        bool listed = ImGui.BeginCombo($"##{id}", Name(options[at]));
-        focused = ImGui.IsItemFocused();
-        if (!listed && Step() is var step && step != 0) delta = step;
-        int? pick = null;
-        if (listed)
-        {
-            _comboOpen = true;
-            foreach (int value in options)
-            {
-                bool selected = value == options[at];
-                if (ImGui.Selectable(Name(value), selected) && !selected) pick = value;
-                if (selected) ImGui.SetItemDefaultFocus();
-            }
-            ImGui.EndCombo();
-        }
-        ImGui.SameLine();
-        if (StepArrow(false, at < options.Count - 1, arrow)) delta = 1;
-        if (pick is null && delta != 0)
-        {
-            int to = Math.Clamp(at + delta, 0, options.Count - 1);
-            if (to != at) pick = options[to];
-        }
+        int? index = Stepper(id, options.Select(Name).ToList(), at, out focused, CostWidth());
+        int? pick = index is { } i ? options[i] : null;
 
         if (current >= 0 && current < group.Tiers.Count && group.Tiers[span[current]].Cost)
         {
@@ -529,6 +499,50 @@ internal sealed class OnboardingPopup : Popup
             ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
             ImGui.TextUnformatted(Localization.T("verdite.setup.gpucost"));
             ImGui.PopStyleColor();
+        }
+        return pick;
+    }
+
+    /// <summary>
+    /// A stepper: a "&lt;" and a ">" either side of a combo that shows <paramref name="names"/>[<paramref name="at"/>],
+    /// which lists every name when opened. It draws from the cursor to the content's right edge
+    /// less <paramref name="reserveRight"/>, so a caller that puts a note after it keeps that room.
+    /// Left and right step it in place, as <see cref="Step"/> steps any focused combo, and the
+    /// arrows stop at the ends rather than wrap. The arrows are mouse targets only
+    /// (<see cref="StepArrow"/>), so the keyboard and the pad keep their focus on the combo.
+    /// Returns the index picked, or null when none was; <paramref name="focused"/> says whether the combo has the focus.
+    /// </summary>
+    int? Stepper(string id, IReadOnlyList<string> names, int at, out bool focused, float reserveRight)
+    {
+        var style = ImGui.GetStyle();
+        float arrow = ImGui.GetFrameHeight();
+        float gap = style.ItemSpacing.X;
+        float comboW = Math.Max(60f * UiScale, ImGui.GetContentRegionAvail().X - (arrow + gap) * 2f - reserveRight);
+        int delta = 0;
+        if (StepArrow(true, at > 0, arrow)) delta = -1;
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(comboW);
+        bool listed = ImGui.BeginCombo($"##{id}", names[at]);
+        focused = ImGui.IsItemFocused();
+        if (!listed && Step() is var step && step != 0) delta = step;
+        int? pick = null;
+        if (listed)
+        {
+            _comboOpen = true;
+            for (int i = 0; i < names.Count; i++)
+            {
+                bool selected = i == at;
+                if (ImGui.Selectable(names[i], selected) && !selected) pick = i;
+                if (selected) ImGui.SetItemDefaultFocus();
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.SameLine();
+        if (StepArrow(false, at < names.Count - 1, arrow)) delta = 1;
+        if (pick is null && delta != 0)
+        {
+            int to = Math.Clamp(at + delta, 0, names.Count - 1);
+            if (to != at) pick = to;
         }
         return pick;
     }
@@ -614,8 +628,14 @@ internal sealed class OnboardingPopup : Popup
     }
 
     /// <summary>
-    /// One of the spec's choice pages: its heading and paragraphs, its label, an option
-    /// button each (the chosen one lit, its description under it), then its slider.
+    /// One of the spec's choice pages: its heading and paragraphs, then two rows on one label
+    /// column, cut at 30% of the width as a tiers page's is, so the stepper and the slider start
+    /// at the same X and end at the same right edge. The options row is the page's label and a
+    /// <see cref="Stepper"/> over the options, with the chosen option's description under it, wrapped
+    /// to the stepper's width. "Keep as is" is listed first while the page starts unset, which the
+    /// summary names too, and a pick of it leaves the option unset. The slider row is its label and
+    /// the slider, with its tip under it, dimmed. The page's first focus goes to the stepper, or to
+    /// the slider when there are no options, and the focused row gets the gutter bar.
     /// </summary>
     void Choice()
     {
@@ -627,36 +647,53 @@ internal sealed class OnboardingPopup : Popup
             Wrapped(body);
             ImGui.Spacing();
         }
-        ImGui.SeparatorText(Localization.T(page.Label));
         var style = ImGui.GetStyle();
-        for (int o = 0; o < page.Options.Count; o++)
+        // Both rows share one label column, cut once for the page from the width it has.
+        float labelW = ImGui.GetContentRegionAvail().X * 0.30f;
+
+        if (page.Options.Count > 0)
         {
-            var option = page.Options[o];
-            bool lit = choice.Option == o;
-            // The page's first button takes the focus, once; a page with no options gives it to the slider.
-            if (o == 0 && _focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
-            if (LitButton(OptionLabel(option), $"{page.Id}{o}", lit, new Vector2(-1f, 0f)))
+            var values = new List<int>();
+            if (_startPages[_pageAt].Option < 0) values.Add(-1);
+            values.AddRange(Enumerable.Range(0, page.Options.Count));
+            var names = values.Select(o => o < 0 ? Localization.T("verdite.setup.keep") : OptionLabel(page.Options[o])).ToList();
+            int at = Math.Max(0, values.IndexOf(choice.Option));
+
+            float top = ImGui.GetCursorScreenPos().Y;
+            ImGui.AlignTextToFramePadding();
+            ImGui.TextUnformatted(Localization.T(page.Label));
+            ImGui.SameLine(labelW);
+            // The page's first widget: the stepper's combo takes the focus when the page opens.
+            if (_focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
+            if (Stepper($"{page.Id}.options", names, at, out bool focused, 0f) is { } pick)
             {
+                int o = values[pick];
                 choice.Option = o;
                 _pageTouched[_pageAt] = true;
-                if (option.Value is { } v) choice.Value = v;
+                if (o >= 0 && page.Options[o].Value is { } v) choice.Value = v;
             }
-            if (option.Desc is { } desc)
-            {
-                if (!lit) ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
-                ImGui.TextWrapped(Localization.T(desc));
-                if (!lit) ImGui.PopStyleColor();
-            }
-            ImGui.Spacing();
+
+            // Under the stepper: the chosen option's description, at the stepper's left edge.
+            int now = choice.Option;
+            ImGui.SetCursorPosX(labelW);
+            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X);
+            if (now >= 0 && now < page.Options.Count && page.Options[now].Desc is { } desc) ImGui.TextWrapped(Localization.T(desc));
+            ImGui.PopTextWrapPos();
+            if (focused) GutterBar(top, ImGui.GetItemRectMax().Y);
         }
 
         if (page.Slider is { } s)
         {
-            ImGui.Spacing();
+            ImGui.Dummy(new Vector2(0f, 4f * UiScale));
+            float top = ImGui.GetCursorScreenPos().Y;
+            ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted(Localization.T(s.Label));
+            ImGui.SameLine(labelW);
             float v = (float)ValueOf(s, choice);
             // At the minimum the slider shows its label, not the number.
             string format = s.MinLabel is { } low && v <= s.Min + 1e-6 ? Localization.T(low).Replace("%", "%%") : s.Format;
+            // The slider spans the stepper's row: from the label column to the content's right edge.
+            ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X);
             if (_focus) { ImGui.SetKeyboardFocusHere(); _focus = false; }
             if (ImGui.SliderFloat($"##{page.Id}.slider", ref v, (float)s.Min, (float)s.Max, format,
                                   ImGuiSliderFlags.AlwaysClamp | ImGuiSliderFlags.NoInput))
@@ -665,13 +702,25 @@ internal sealed class OnboardingPopup : Popup
                 choice.Value = Math.Clamp(d, s.Min, s.Max);
                 _pageTouched[_pageAt] = true;
             }
+            bool focused = ImGui.IsItemFocused();
             if (Step() is var step && step != 0)
             {
                 double by = s.Step > 0 ? s.Step : (s.Max - s.Min) / 20.0;
                 choice.Value = Math.Clamp(Math.Round(v / by) * by + step * by, s.Min, s.Max);
                 _pageTouched[_pageAt] = true;
             }
-            if (s.Tip is { } tip && ImGui.IsItemHovered()) ImGui.SetTooltip(Localization.T(tip));
+
+            // Under the slider: its tip, dimmed, at the slider's left edge.
+            if (s.Tip is { } tip)
+            {
+                ImGui.SetCursorPosX(labelW);
+                ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X);
+                ImGui.PushStyleColor(ImGuiCol.Text, style.Colors[(int)ImGuiCol.TextDisabled]);
+                ImGui.TextWrapped(Localization.T(tip));
+                ImGui.PopStyleColor();
+                ImGui.PopTextWrapPos();
+            }
+            if (focused) GutterBar(top, ImGui.GetItemRectMax().Y);
         }
     }
 
