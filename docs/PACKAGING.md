@@ -38,6 +38,30 @@ and `patches/` through the SDK's default globs, which is what makes iteration
 incremental and is why nothing about the developer workflow changed. The launcher
 compiles neither: it carries them as *payload* and compiles them at first run.
 
+**The launcher's code is Verdite Core's** (`tools/verdite-core/launcher/`, since
+2026-10-05), shared with Verdite3. `Verdite2.Launcher/` holds only a csproj that
+names the executable and imports `Launcher.targets`, and a `Program.cs` that hands
+`Launcher.Run` this port's record: `Verdite2`/`verdite2`, *King's Field*,
+`SLUS-00158`, the `SLUS-00255` message, `kf2.json`, `KingsField2`,
+`Voicedrew11/verdite2`, and which overlays are play. Everything below that names a
+launcher file (`Paths`, `DiscCheck`, `BuildKey`, `Recompile`, `GameCompile`,
+`UpdateCheck`, the popups) means core's copy; Verdite Core's README describes the
+split. Two things are derived there rather than written here: the disc files the
+check requires and the build key hashes are every overlay `file` in `kf2.json`,
+each at least as long as its furthest `offset + skip + size` (the same
+`SYSTEM.CNF`, `SLUS_001.58`, three `.EXE`s at `0x800` and `FDAT.T` from its last
+slice that were listed by hand), and the localisation keys are `verdite.build.*`
+and `verdite.update.*` with the port's name filled in.
+
+Measured on the move, an AppImage built by core's script and run on an empty data
+folder (`VERDITE2_DATA`) with `VERDITE2_UPDATE_CHECK=force`: `[Verdite2]
+0.3.3+8debecd66`, `update available: v0.4.0 (running 0.3.3)` and `update.json`
+written, the game recompiled and compiled into `builds/306e49d40b6983fc/`, then
+`open → game → fdat02 → fdat05`, slot 2 at HP 46/86, 144.0 fps at 19.9 ticks/s,
+`wide 288`, and the same `[KF2]` lines as the developer build. Given
+`SLUS-00255`, it refuses with the same message. **Not run:** the Windows package
+(no `pwsh` here; the stub builds as `Verdite2.exe` from core's project).
+
 `.github/workflows/ci.yml` asserts the difference on every push, because it is
 easy to break by accident and impossible to notice locally, where `generated/`
 exists.
@@ -48,7 +72,11 @@ Beside the executable, `content/`:
 
 - `content/config/` — `kf2.json` and the thirteen funcmaps. Addresses, names and
   sizes; no disc bytes.
-- `content/src/` — `Program.cs` and `patches/**`, as source text.
+- `content/src/` — `Program.cs`, `patches/**` and Verdite Core's C#
+  (`tools/verdite-core/src/**`, under `content/src/verdite-core/`), as source text.
+  `Sources.All()` walks it recursively, so `GameCompile` compiles core and
+  `BuildKey` hashes it: a core change rebuilds the game like a patch change.
+  (Core's `launcher/` is the launcher itself, not payload.)
 - `content/mods/` — copied into the data directory the first time each file is
   seen. `.mods-seeded` records the relative paths that have ever been seeded,
   rather than being a bare "seeding has happened" marker: a mod the player has
@@ -63,12 +91,12 @@ runtime. About 109 MB laid out, 41 MB as an AppImage.
 On Windows those DLLs live in `bin/`, not next to the thing the player
 double-clicks. A self-contained apphost will not start unless its managed
 assembly and `hostfxr` sit beside it, so the published tree goes in `bin/` and
-`packaging/windows/Stub/` is a few-KB .NET Framework 4.8 executable at the
-install root that launches `bin\Verdite2.exe`. Shortcuts, Inno's icon and
-`UninstallDisplayIcon` all point at the stub. The stub is a nested project, so
-building it leaves `obj/` AssemblyInfo under the game project's tree;
-`KingsField2Recomp.csproj` removes `packaging/**` for the same CS0579 reason it
-removes `tools/**`. `Paths.Install` looks one directory up when `content/` is
+a few-KB .NET Framework 4.8 executable at the install root
+(`tools/verdite-core/packaging/windows/Stub/`, built under the launcher's name)
+launches `bin\Verdite2.exe`. Shortcuts, Inno's icon and `UninstallDisplayIcon`
+all point at the stub. It is a nested project, so building it leaves `obj/`
+AssemblyInfo under the game project's tree, inside `tools/**`, which
+`KingsField2Recomp.csproj` removes for that CS0579 reason. `Paths.Install` looks one directory up when `content/` is
 not next to the apphost, which is how a developer run and the AppImage (payload
 still beside the executable) keep working. The zip and the install directory look like:
 
@@ -109,6 +137,12 @@ this.
    native file dialog and saves the accepted path. It needed nothing but the
    validator.
 
+   The launcher overrides the picker's title and text. This is the first thing a
+   new player sees, so it says "Choose your disc", that the game is built from the
+   player's own copy, and names the disc (a .cue or .chd, the serial); the runtime's
+   wording is for a disc that has gone missing. Cancel on the picker during the boot
+   wait quits the launcher, rather than leaving an empty window waiting forever.
+
 4. A cue on the command line — the developer form, `Verdite2 other.cue` — is
    settled **here**, before the key, and is validated like any other disc. It has
    to be: the generated dispatch tables bake absolute LBAs from one mastering, so
@@ -140,6 +174,24 @@ this.
 
 8. `AssemblyLoadContext.Default.LoadFromAssemblyPath`, then the assembly's entry
    point with the cue as `argv[0]`.
+
+While steps 5-7 run, a player who has not done the first-run setup gets that
+instead of the build popup, with the build as a strip at its foot. Step 8 waits
+for both. See "Onboarding" in `docs/SETTINGS.md`.
+
+**An install unpacked over an older one builds only what it shipped** (Verdite Core's
+`9d6bac8`, taken 2026-10-11). Verdite3 0.1.1 unpacked over 0.1.0 failed to compile:
+0.1.1 had moved fourteen patches into Verdite Core, the old copies stayed in
+`content/src/patches`, and step 5's key and step 7's compile took every `.cs` under
+`content/`. The launcher's build now writes `content/manifest.txt`, every payload file
+it staged, and the launcher hashes and compiles only what it lists, naming anything
+else at startup (`ignoring N file(s) under content/ this release did not ship`); an
+install with no manifest builds from everything, as before. The Windows installer
+(core's `verdite.iss`) also clears `content\` and `bin\` before an upgrade. Measured
+here on a publish: the manifest's 227 lines are exactly the files under `content/`
+(`content/config/onboarding.json` among them), and an `#error` file planted in
+`content/src/patches/` was set aside. CI checks both on every push, as Verdite3's
+does. **Not run:** an upgrade over a real older Verdite2 release, on either platform.
 
 Measured on a 16-thread machine: **12.7 s** from launching the AppImage to a
 built `KingsField2.dll` and a running game, of which the recompile is 0.85 s and
@@ -173,30 +225,38 @@ must read 20.0 ticks/s. Measured: 144.0 fps drawn, 19.9-20.0 ticks/s.
 
 ## Versioning
 
-**The version is one line in `VERSION` at the repository root, and everything
-else reads it.** That is the whole design, and it is a design rather than a
-convention because five things have to agree about the number and only one of
-them can parse XML: the launcher's assembly version, the AppImage's file name,
-the Windows zip's, the Inno installer's, and the tag the release is cut on. The
-number used to live in `<Version>` in `Verdite2.Launcher.csproj`, which the
-AppImage script scraped with `grep -oP`, the Windows script parsed as XML, and
-`verdite2.iss` simply **duplicated as a literal fallback** — three readers, one
-of which could silently disagree.
-
-`MAJOR.MINOR.PATCH`, no suffix. CI refuses anything else.
+**The version is the newest `vMAJOR.MINOR.PATCH` tag that `HEAD` contains, and a
+release is that tag and nothing else.** Five things have to agree about the
+number: the launcher's assembly version, the AppImage's file name, the Windows
+zip's, the Inno installer's, and the tag the release is cut on. Verdite Core
+resolves it by one rule, in `scripts/version.sh`, `Launcher.targets` and
+`build-windows.ps1` alike (its README, "Packaging"): a `VERSION` file at the
+root first, which is why CI refuses one here; then `VERDITE_VERSION`, which
+`release.yml` sets from the tag it was pushed for; then the tags; then `0.0.0`.
 
 | what | how it gets the number |
 |---|---|
-| the assembly | the csproj reads `../VERSION` into `<Version>` |
-| `Verdite2-<v>-x86_64.AppImage` | `build-appimage.sh` reads `VERSION` |
-| `Verdite2-<v>-win-x64.zip` | `build-windows.ps1` reads `VERSION` |
-| `…-win-x64-setup.exe` | the script exports `VERDITE2_VERSION`; the `.iss` **errors** if it is unset |
-| the git tag | `release.yml` asserts `v$(cat VERSION)` equals the tag it was triggered by |
+| the assembly | core's `Launcher.targets`, by the rule above, into `<Version>` |
+| `Verdite2-<v>-x86_64.AppImage` | `build-appimage.sh`, through `version.sh` |
+| `Verdite2-<v>-win-x64.zip` | `build-windows.ps1`, by the same rule |
+| `…-win-x64-setup.exe` | the script exports `VERDITE_VERSION`; core's `verdite.iss` **errors** if it is unset |
+| the git tag | it *is* the number; `release.yml` refuses one that is not `vMAJOR.MINOR.PATCH` |
 
-That last row is the one that matters most, and it closes a failure that is
-invisible until somebody has downloaded it: a `v0.2.0` tag on a tree that still
-says `0.1.0` would publish `0.1.0` files under a `0.2.0` release, with nothing in
-the process disagreeing.
+Until 0.5.0 the number was a `VERSION` file, bumped by a commit that the tag then
+went on, with `release.yml` asserting the two equal, because a `v0.2.0` tag on a
+tree that still said `0.1.0` would have published `0.1.0` files under a `0.2.0`
+release. With the tag as the only source there is nothing for it to disagree
+with. Verdite3 has worked this way since its first release ("The tag is the
+version" in its `PACKAGING.md`).
+
+- A build between releases carries the last release's number and the commit
+  after it (`0.4.0+<sha>`); it is never announced as an update to itself.
+- How far to move the number is the person tagging's call. `release.sh` refuses
+  one that is not above the newest tag, because the update check never announces
+  a lower one.
+- The clone needs its tags: CI checks out with `fetch-depth: 0`, and a shallow or
+  tagless checkout builds as `0.0.0`. `bash tools/verdite-core/scripts/version.sh`
+  prints what a build here would call itself.
 
 ### The number is not the build
 
@@ -217,15 +277,75 @@ config, and `BuildKey` hashes those directly.
 ### Cutting one
 
 ```bash
-bash scripts/release.sh 0.2.0        # bumps VERSION, commits, tags. Does not push.
-git push origin HEAD && git push origin v0.2.0
+bash scripts/release.sh 0.5.0        # tags HEAD. Commits nothing, does not push.
+git push origin HEAD && git push origin v0.5.0
 ```
 
 The script refuses a malformed number, a dirty tree, a tag that already exists
-and a bump to the version already in the file. It does not push, because pushing
+and a number not above the newest tag. It does not push, because pushing
 the tag is what publishes the draft release and that is a decision rather than a
-step. The workflow builds both platforms, asserts the tag against `VERSION`, and
+step. The workflow builds both platforms, named by the tag, and
 opens a **draft** with the commits since the previous tag appended to the body.
+
+### Previews
+
+A preview is a build handed to testers: a commit, not a version, and no promise
+of which release it becomes. When one proves a release, `release.sh` tags that
+commit, so the release is exactly what was tested. There is one preview at a time, the **rolling `preview`
+prerelease**, replaced whole each time:
+
+```bash
+git push origin main
+bash scripts/prerelease.sh      # builds HEAD as GitHub has it; replaces `preview`
+bash scripts/prerelease.sh --no-wait
+```
+
+The script refuses a detached `HEAD`, a dirty tree, a `HEAD` that is not what
+`origin` has for the branch, and a repository without the secret (listing
+secrets needs admin access; without it, the script warns and goes on). It starts
+`release.yml` by hand (`gh workflow run release.yml -f preview=true`); the build
+job runs as for a release, and its tag check is skipped, since that step runs on
+a `v*` tag alone and a run started by hand has none. The `preview` job then zips
+each package with the `PREVIEW_PASSWORD` repository secret (AES-256, so 7-Zip or
+WinRAR opens them and Windows Explorer does not) and deletes and recreates the
+`preview` prerelease at that commit, with fixed notes: the password is had on the
+Verdite Project Discord, and back up `carda.sav` and `cardb.sav` first, from
+`%LOCALAPPDATA%\Verdite2` on Windows and `~/.local/share/verdite2` on Linux
+(`$XDG_DATA_HOME/verdite2` if that is set; see "First run"). The assets are always
+`Verdite2-preview-linux-x86_64.zip`, `Verdite2-preview-win-x64.zip` and
+`Verdite2-preview-win-x64-setup.zip`, so
+`…/releases/download/preview/<name>` never changes; the files inside, and the
+title, carry the commit. The build calls itself the last release's number and the
+commit (`0.4.0+<sha>`, `Ver.Full`): a preview makes no tag.
+
+- **The `PREVIEW_PASSWORD` secret has to be set by hand, once, before the first
+  preview**: `gh secret set PREVIEW_PASSWORD` (or the repository's Settings ▸
+  Secrets ▸ Actions). The script checks for it, and the job fails before zipping
+  anything without it. The password is the secret, never the repository, which is
+  public; setting it again changes it.
+- **It is never GitHub's "Latest".** A prerelease cannot be: the badge, and
+  `releases/latest`, which the update check reads, name only a published full
+  release, so no player is told about a preview.
+- **`preview` is no version.** `release.yml` starts on `v*` tags alone, so the tag
+  moving starts nothing, and `version.sh` reads `vMAJOR.MINOR.PATCH` alone. A clone that fetched the tag
+  keeps a stale copy when it moves; `git tag -d preview` drops it.
+- **It goes when the release does.** `preview-cleanup.yml` deletes the prerelease
+  and its tag when a full release is *published* (not when its draft is opened),
+  so a preview stays up until the release is live. A `release` event runs the
+  workflow as the release's tagged commit has it, so it acts only for a release
+  tagged on a commit that contains `preview-cleanup.yml`. It deletes the preview
+  whatever commit it was built from, a newer one too; that is the design (one
+  preview, gone with the release), not an oversight.
+- **The old preview is deleted before the new one is made**, so its links 404
+  while the new zips upload, and stay that way if the upload fails, until the job
+  is rerun. A failure before that (a missing installer, an unset secret) leaves
+  the old preview up. The job also deletes a `preview` tag left without its
+  release, which `gh release create` would otherwise reuse at its old commit,
+  and a `concurrency` group queues a second preview behind the first.
+- Ported from Verdite3, where it was called `rc` until 2026-10-08 and renamed
+  because it is handed out for any fix worth testing, not only a commit meant to
+  ship. **Never run here yet**: the workflow files parse and the script passes
+  `bash -n`, and that is all.
 
 ## Telling the player about a new release
 
@@ -242,10 +362,10 @@ release exists to update to.
   `api.github.com/repos/Voicedrew11/verdite2/releases/latest`, which leaves out
   drafts and prereleases, so the draft `release.yml` opens is announced only
   once it is published.
-- **It reaches the network at most once a day.** `update.json` in the data
+- **It reaches the network at most once an hour** (once a day until 2026-10-10, Verdite Core's `26aabe4`: a release published after a player's launch went unannounced for up to 24 hours). `update.json` in the data
   directory keeps the last answer (`checked`, `tag`, `url`) and any version the
   player skipped (`skipped`). Between checks the cached answer is used, so a
-  player who launches twice in a day still sees the notice. Offline or
+  player who launches twice in an hour still sees the notice. Offline or
   rate-limited, it prints one `[Verdite2] update check failed:` line, leaves
   `checked` alone so the next launch tries again, and **still announces the cached
   answer**: a release already known is not forgotten because the network is down.
@@ -276,7 +396,7 @@ release exists to update to.
 - It is on by default. *Check for updates at launch* is a checkbox at the foot of
   Settings ▸ Interface (`SettingsRegistry.Extend("interface", …)`, saved under
   `Verdite2.UpdateCheck` in the view config). `VERDITE2_UPDATE_CHECK=0` turns it
-  off from the environment. `=force` ignores the daily limit; a skipped version
+  off from the environment. `=force` ignores the hourly limit; a skipped version
   stays skipped. To see a skipped release again, delete `skipped` from
   `update.json`.
 
@@ -311,9 +431,17 @@ bash packaging/linux/build-appimage.sh      # dist/Verdite2-<v>-x86_64.AppImage
 pwsh packaging/windows/build-windows.ps1    # dist/…-win-x64.zip and the installer
 ```
 
+Both are one-line wrappers of Verdite Core's scripts
+(`tools/verdite-core/packaging/`), which read this port's names from
+`packaging/package.env` (`NAME`, `APP_ID`, and `INNO_APP_ID`, the installer's
+`{9F1F0C1E-…}`, which must never change, and `INNO_PRIVILEGES=lowest`, the
+per-user install "The shortcuts wear it too" needs); `scripts/release.sh` is the same.
+The Windows script used to copy the font licence from `patches/recompone/assets/`,
+a path from before the subtree; core's reads `tools/RecompOne/patches/assets/`.
+
 Neither needs the disc. `.github/workflows/release.yml` runs both on a `v*` tag
 and opens a draft release; it asserts that `generated/` and `disc/` are absent,
-and that the tag matches `VERSION`, before it packages anything.
+and that the tag is `vMAJOR.MINOR.PATCH`, before it packages anything.
 
 **The release workflow has never run.** The tag pushed to test it was
 `test-win-0.1.0`, which does not match the `tags: ['v*']` trigger, so only `ci`
@@ -326,21 +454,24 @@ Trimming is off and must stay off: `MonoMod.RuntimeDetour` builds detours at run
 time, `ModCompiler` hands Roslyn the loaded assemblies, and
 `patches/AutoStart.cs` reflects over runtime internals.
 
-`packaging/shared/verdite2.png` and `.ico` are the shipping mark (a green
-verdite orb). The PNG is 256×256; the ICO holds 16/32/48/256. See
-`packaging/shared/README.md`.
+The port ships no mark (since 2026-10-11; a green verdite orb until then). See
+"The icon comes off the disc" and `packaging/shared/README.md`.
 
 ## The icon comes off the disc
 
 The window wears the game's **own memory-card icon** — the teal helm with the two
 red gems that a King's Field save shows in the PlayStation's card browser — read
-out of the player's image at boot by `patches/CardIcon.cs`. The orb stays the
-shipped mark and is the fallback: `Program.cs` sets it from the PNG first, and
-this replaces it only when a disc answers. That division is not a preference. The
-artifact is built in CI with no disc, so anything baked into `verdite2.ico`, the
-AppImage or the `.desktop` file has to be the port's own work; the game's art can
-only ever appear on a machine that already has the disc, which is the same line
-`generated/` is on.
+out of the player's image at boot by Verdite Core's `CardIcon` (where it is on this
+disc: `patches/CardIconSource.cs`). It is the port's **only** icon. The artifact
+is built in CI with no disc, so nothing baked into an executable, the AppImage or
+the `.desktop` file can be the game's art, which is the same line `generated/` is
+on; so since 2026-10-11 the port ships **no mark at all**, as Verdite3 has since
+2026-10-08. The executables have no icon resource, the AppImage a transparent
+square (core's `build-appimage.sh`, since appimagetool refuses an AppDir with
+none), and until a run has read the disc once there is no icon. Until then the
+fallback was a green verdite orb (`verdite2.png`, `verdite2.ico`), which
+`Program.cs` set first and which also stood as the launcher's, the game's and the
+Windows stub's `ApplicationIcon`, so a shortcut showed it until the game rewrote it.
 
 **Where it is.** 16×16 at 4bpp with a 16-entry BGR555 CLUT, in `CD/COM/FDAT.T` at
 file offset `0x14D210` — the CLUT, then at `0x14D240` the three animation frames
@@ -360,7 +491,20 @@ the archive if that fails. Nothing of the disc is in the port's source, and a
 differently mastered dump is a scan rather than a miss. The pixels are in
 `FDAT.T` only; `GAME.EXE` has the palette and not the picture.
 
-**The sizes are exact multiples.** 16, 32, 48, 64, 128 and 256, each a
+**When it is read.** With a disc on the command line (the launcher always passes
+one, and so does a run from the checkout) the icon is read at once, before
+`Entry.Run`. With none — `KingsField2.exe` opened on its own — the disc is not
+known yet: `settings.json` is loaded by the window, which `Entry.Run` makes, and
+a first run's disc only once the picker answers. `CardIcon` read an empty
+`CdPath` there and returned without a word, so Windows showed the shipped mark. It now
+waits for the first overlay to load and sets the icon on the window's thread
+(`GpuJobs.Run`). Not yet measured in Verdite2: the Verdite3 fix was measured
+under Wine, and the no-argument case here is unverified until someone runs it
+with no argument and sees the icon.
+
+**The sizes are exact multiples** (the decode and the scale are Verdite Core's
+`WindowIcon`, since 2026-10-05; `CardIcon` keeps where the icon is). 16, 32, 48,
+64, 128 and 256, each a
 nearest-neighbour scale of the same 16 pixels, handed to GLFW together
 (`tools/RecompOne/patches/0061`, which is what made `SetWindowIcon` take more than
 one). A desktop asking for any of those gets pixel art it does not resample;
@@ -368,8 +512,35 @@ before that, one image meant the window manager smoothing a 16×16 up or a 256×
 down, which is exactly what makes this kind of icon look like a photograph of
 itself.
 
-`KF2_ICON=orb` keeps the shipped mark, `KF2_ICON=off` clears it, `KF2_ICON=1` or
-`=2` picks another of the three frames (they differ by a one-pixel bob).
+`KF2_ICON=off` clears it, `KF2_ICON=1` or `=2` picks another of the three frames
+(they differ by a one-pixel bob). `KF2_ICON=orb` is still read by core, and with no
+mark shipped it now means no icon.
+
+## The shortcuts wear it too
+
+Explorer draws a shortcut with the icon embedded in its target, and the target is
+the release's `Verdite2.exe`, which carries no icon (Windows draws its plain program icon). Verdite Core's
+`ShortcutIcon` (ported from Verdite3 `dc4a6d1`, `6603075`) is already called by
+`WindowIcon.Apply`: once the disc is read it writes the same sizes into `icon.ico`
+in the data directory and points every Desktop, Start menu and pinned taskbar
+shortcut whose target is this process, or the stub above `bin\`, at it, and keeps
+`icon.png` for the next run, which `CardIcon` sets at boot
+(`WindowIcon.ApplySaved`) until the disc is read again.
+
+That reached only a shortcut the player pinned. The installer was per-machine, so
+its Start menu and desktop shortcuts were in the all-users folders, which the game
+cannot write. Since 2026-10-09 it is **per-user** (`INNO_PRIVILEGES=lowest`): it
+installs under `%LOCALAPPDATA%\Programs\Verdite2` with the shortcuts in the
+player's own folders. **An upgrade from a per-machine install (v0.4.0 and before)
+is a second install**, since Inno looks for a previous one in HKCU only: the old
+copy in `Program Files` and its orb shortcuts stay until it is uninstalled, which
+the release notes have to say. Since 2026-10-11 the orb is gone from Verdite2
+too, so a shortcut the game has not reached shows Windows's plain program icon,
+as in Verdite3.
+
+Not measured in Verdite2: Verdite3's run under Wine rewrote two shortcuts
+(`icon: 2 shortcut(s) now wear icon.ico`); here nothing has run on Windows, and
+the installer has not been built per-user.
 
 ## Wayland takes the icon from the desktop entry
 
@@ -388,13 +559,14 @@ on the wire, and two things have to be true.
 **The window has to say what it is.** Measured with `WAYLAND_DEBUG=1`, GLFW sent
 `set_title("KingsField2")` and **no `set_app_id` at all** — the default is the
 empty string. KWin therefore had nothing to match, and no icon could have appeared
-whatever the port did: not the card icon, and not the orb the AppImage installs
+whatever the port did: not the card icon, and not the orb the AppImage then installed
 either, which is a packaging bug that was invisible for as long as nobody looked.
 `tools/RecompOne/patches/0061` hints `GLFW_WAYLAND_APP_ID` (and the X11 class beside it)
 from `Runtime.AppId`, which `Program.cs` and the launcher both set to `verdite2`
 before the window is made. After: `xdg_toplevel#45.set_app_id("verdite2")`.
 
-**And something has to be there to match.** `patches/DesktopEntry.cs` writes the
+**And something has to be there to match.** `DesktopEntry` (Verdite Core's
+`src/`, since 2026-10-05; `Program.cs` gives it the entry's name and comment) writes the
 six sizes to `$XDG_DATA_HOME/icons/hicolor/NxN/apps/verdite2.png`. The theme is
 the right home for them rather than one big PNG in the data directory, for two
 reasons: the lookup picks the exact size the desktop asks for, so 32 and 48 px are
@@ -406,7 +578,10 @@ XDG data directory**, which is the source-tree case; an installed or
 appimaged-integrated build already has one. `Exec` prefers `$APPIMAGE` over
 `Environment.ProcessPath`, because an AppImage's apphost lives in a mount point
 that stops existing when it exits. A file already byte-identical is not rewritten,
-so an ordinary boot touches nothing. `KF2_ICON_INSTALL=0` writes none of it.
+so an ordinary boot touches nothing — **per runtime**: the system `dotnet` and the
+AppImage's bundled runtime compress the same pixels to different PNG bytes
+(measured 2026-10-05, pixels identical), so alternating a developer run and the
+AppImage rewrites the six files each time. `KF2_ICON_INSTALL=0` writes none of it.
 
 **This is how every AppImage does it, too** — it is just usually somebody else
 doing the writing. An AppImage carries its `.desktop` and its hicolor icons

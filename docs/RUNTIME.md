@@ -781,6 +781,22 @@ The logged sizes are the mechanism; that the menu bar is back on screen was not
 looked at by eye here. X11 and Windows were not run — both raise the event, as far
 as is known, and the check does nothing when the sizes agree.
 
+## The menu bar starts hidden
+
+The ImGui menu bar along the top of the window starts hidden every session,
+whatever the last one saved; F1 still shows it. The
+runtime keeps the switch as `HideTopBar` in `interface.ini` and restores it at
+start, so a player who once opened the bar to change a setting found it there at
+every boot after, over the picture. `Program.cs` sets
+`ConfigManager.View.HideTopBar = true` from a one-time `RuntimeReadyEvent`
+listener (after `ConfigManager.Load` has read the file, and once only: a hard
+reset raises the event again, and a bar opened since is the player's), and says
+so in one line, `[KF2] top bar: hidden at startup (F1 shows it)`. Ported from
+Verdite3, which does the same. Measured: with `HideTopBar=False` in
+`interface.ini`, the boot prints the line (the switch is written just before it);
+the file itself is only rewritten when the interface is next
+saved. That the bar is off the screen at boot was not looked at by eye here.
+
 ## The scale can put the settings out of reach
 
 The other half of the same report, and the worse half: at a large enough

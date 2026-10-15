@@ -175,6 +175,27 @@ target/s` throughout. The same route covers the idle-target case above whenever
 the GPU is drawing the world. Mechanism measured; the picture after a switch is
 for a person to look at.
 
+### A still held for a button was reaped after five seconds
+
+Reported from play: **opening the game's own map item, black bars appear outside
+the 4:3 area after a few seconds** (King's Field III does not do it). The map item
+draws its board once and then waits on the pad without drawing; the host keeps
+presenting the last frame. `PresentDisplay` destroyed every render target not drawn
+for 300 frames, the displayed one included, so at 60 presents a second the only
+wide target went five seconds in and every present after was the 1x VRAM fallback
+at 4:3. It is the same failure `MenuWorld.MessageFade` worked around for signs by
+drawing the world while it waits; the map item had no such workaround.
+
+Fixed in the runtime (`0110`): a target containing the display rect is never
+reaped for idleness, which covers any loop of this shape, not one routine at a
+time. Measured with a sign on the game's own loop (`KF2_MENUWORLD=0
+KF2_MESSAGETEXT_TEST=3:0 KF2_PRESENT_PROBE=2`): before, `rt0 none … idle 300` and
+`vram fallback 125` every 2 s from five seconds in; after, `wide 125, vram fallback
+0` for the whole wait. Play unchanged (144.0 fps drawn at 15.0 ticks/s, `wide`
+throughout a warp). **The map item itself was not reached by the shell, and the
+picture has not been looked at**: the edges keep the last world frame drawn before
+the board, which is what the margin held before the bars appeared.
+
 ### The margin's only clear is the game's own, and the merge narrowed it
 
 **The `isbg` background clear in `LibGpu.PutDrawEnv` is the one thing that paints
@@ -245,6 +266,65 @@ wrong now costs one small triangle in a corner instead of the whole frame after 
 **The anchoring is off and is no longer a setting** — `KF2_WIDESCREEN_HUD=1` is the
 only way to reach it, and with it off this replacement defers to the original at
 every aspect. See "Three checkboxes that were not choices".
+
+**Superseded**: the HUD is now moved by its records, not found in the primitive
+stream; see the next section.
+
+## The HUD is moved by its records
+
+With a menu open, the anchored HUD flashed (issue #46). The rule above is a guess
+about the frame's shape, and `MenuWorld` broke it twice: it draws the world into a
+table of its own linked *in front of* the menu's, so whatever stage 13 drew is no
+longer in the last 128 entries, and the last entries are now the menu's own, whose
+boxes in the two corners the rule then moved. Which frame got which depended on
+which walk drew it.
+
+Stage 13 in C# made the real answer reachable. The HUD is **fourteen models the HUD
+builder `func_80031D5C` draws from the records at `0x80067774`** (see "Stage 13's
+HUD block, and the compass needle" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), and
+each record's `+0x10..+0x14` is the translation the builder hands `SetTransMatrix`.
+The HUD's transform (`func_8002E910`) is orthographic, so that X is the screen X.
+Measured in `fdat02` and `fdat05`: **record 0, the compass, at x 290; records 1-13,
+the HP/MP panel, at x 5..76** — the "equipment icons" cluster of the old dump was
+the compass. A pre-hook on the builder adds the margin to each record's X (minus
+left of 160, plus right of it), and its post-hook puts every X back, so nothing
+downstream is told: the transform, the vertex map and the assembler see a HUD the
+game placed there, and the menu's primitives are never touched. Stage 13's frame and
+`MenuWorld`'s pass both draw the HUD through that one call, so both are moved the
+same way. The `DrawOTag` replacement's numbered walk now runs only for
+`KF2_WIDESCREEN_PROBE=2`, which prints the entry. A moved HUD primitive no longer
+sets `GpuHle.PortWidenedPrim`, so the backend's margin latch counts it as content
+the game drew; the HUD is only drawn in GAME.EXE's areas, where the world has
+latched the margin from the first frame.
+
+Measured, 16:9, `KF2_WIDESCREEN_HUD=1 KF2_WIDESCREEN_PROBE=1`, slot 2 in `fdat05`,
+the menu opened and closed with `press Circle`:
+
+* The builder runs about 1,850 times a second in stage 13's frames and 120 in the
+  menu's passes, and all 14 records are moved on each call.
+* **2960 bytes of HUD packets a frame anchored and not** (the same run without
+  `KF2_WIDESCREEN_HUD`), so nothing is culled for sitting in the margin.
+* **With the menu open the game hides every HUD record** (`+0` not 1, all fourteen),
+  and the builder adds 0 bytes in a pass. So the menu shows no HUD to move, and
+  hiding it there needs no code of the port's: the game does it already.
+
+**Still to be looked at**: where the panel and the compass land at 16:9 and 21:9,
+and whether anything flashes now at a menu's first and last frames. The anchoring
+stays off until it has been.
+
+## The HUD at the edges is a setting again
+
+It went out of the window as one of "Three checkboxes that were not choices",
+because it moved what the game placed deliberately by a rule that could be wrong.
+Moved by its records, it is a choice like the aspect, so it is back as Video ▸
+*HUD at the screen edges*, under the aspect, dimmed at 4:3 and **off by default**
+(not judged by eye). It saves to a new key, `kf2.widescreen.hud`: the old
+checkbox's `kf2.widescreen.anchorhud` defaulted on and has not been read since it
+went, so a value saved there is not a choice anyone made of this control.
+`KF2_WIDESCREEN_HUD` wins over the saved value for a run. It takes effect on the
+next frame the builder runs, since it only decides whether the pre-hook moves the
+records.
+
 ## The screen-space effects are 320 wide too, and one drawer makes all of them
 
 The first of the two things the census could not see, reported from a real
@@ -421,7 +501,8 @@ runs when the HUD is anchored**, so with the anchoring off it is a straight call
 the original at every aspect. That is the same path 4:3 has always taken, and it is
 why the replacement's obligation to pass the source address to `WriteGp0` — the one
 that keeps perspective correction alive — now only matters under
-`KF2_WIDESCREEN_HUD=1`.
+`KF2_WIDESCREEN_HUD=1`. (Since "The HUD is moved by its records", the walk runs only
+for `KF2_WIDESCREEN_PROBE=2`, and the anchoring does not walk at all.)
 
 ## The cull the margin runs into: a 24×24 tile grid, and a trapezoid drawn on it
 

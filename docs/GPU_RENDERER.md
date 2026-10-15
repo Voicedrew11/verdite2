@@ -659,6 +659,49 @@ The colour pass still gets no early Z (the shader writes `gl_FragDepth`); a dept
 pass of its own program with the depth in `gl_FragCoord.z` would need the colour pass
 to agree on that depth, and was not tried. Judged from play: the seams are gone.
 
+#### Walls that wobbled up close at hard angles (issue #52, 2026-10-06)
+
+**Mechanism measured; judged by eye: the walls no longer wobble.**
+
+Reported from play: walls wobble when seen up close at very hard angles, stairways
+most of all; the picture showed a wall split along a straight diagonal, a lighter
+triangle of another face over it. It was `0051`'s tolerance, which the map's
+opaque range took on 2026-10-01 ("The map's seams fought again", above): one unit
+plus half the fragment's own depth change across a pixel. On a face seen nearly
+edge-on, half a pixel spans hundreds of units, so the face passed the test against
+surfaces that far in front of it, and being drawn later (the map's build order) it
+painted over them. Stairs are faces close together seen at grazing angles, so they
+show it most, and the depth change per pixel moves with the view, which is the
+wobble. Verdite3 found the same with a doorway's wall and bounded the term in the
+runtime (`0087`, "The tolerance on faces seen edge-on" in Verdite3's
+`docs/GPU_RENDERER.md`); nothing here set it, so the term stayed unbounded.
+
+`GpuWorld.Configure` now sets `RetainedScene.DepthCapPixels` to 1: a fragment is
+pulled towards the camera by at most the bias plus one game pixel's world width at
+its own depth (z / H). A coplanar partner's offset is a unit or two of world, so a
+seam is still owned as before. `KF2_GPUWORLD_DEPTHCAP=0` is the comparison and
+`gpuworld depthcap <pixels>` sets it live; `KF2_GPUWORLD_TOLERANCE_PROBE=1` arms
+`0087`'s probe and `gpuworld tolerance` reads it.
+
+**Measured**: slot 2, area 1, 16:9, paused; 40 views from 100-2,500 units around the
+area's objects, creatures and the spawn, eye height, pitch -400 to 400, every
+heading. The same 40 views at each cap, counts of samples that pass only by more
+than each distance:
+
+| pass | cap | samples | > 16 | > 64 | > 512 |
+|---|---|---|---|---|---|
+| map | 0 (before) | 8.72e9 | 73,089 | 9,386 | 4,113 |
+| map | 1 | 8.64e9 | 55,603 | **0** | **0** |
+| instances | 0 | 5.20e8 | 2,192 | 1,076 | 0 |
+| instances | 1 | 5.17e8 | 518 | **0** | 0 |
+
+The picture differs in 20 of the 40 views. What stays under 16 units is the
+coplanar overlap the tolerance exists for. Before this was found, two other suspects
+were measured and ruled out for the GPU world: no packet quad drew one triangle
+corrected and the other affine (0 in 150 views), and no packet reached the GPU with a
+corner clamped at the GTE's ±1024 (0 in 60 views; 16,206 with `gpuworld off`, the
+game's own unclipped far assemblers). Judged from play: the wobble is gone.
+
 ### Step 3: models
 
 A mesh cache: each model uploaded once when it becomes resident, invalidated when
@@ -913,6 +956,15 @@ as it reached the recompiled one (385 and 387 weights carried in the same window
 Verify with `KF2_SMOOTH_ANIM=0`, since both runs call the clock and its hooks carry
 only the first.
 
+**LO and HI are left differently** (2026-10-02, once `Differential` came from Verdite
+Core and began comparing them). With `KF2_SMOOTH_ANIM=0`, from `KF2_AUTOSTART=2`
+through `fdat02` to `fdat05`: 0 RAM, scratchpad or GTE mismatches, and 17 and 67
+register mismatches in the two windows after an area loads, all on one model
+(`a0=801711AC a1=8E`), all LO/HI only: the recompiled routine leaves `lo FFFFFD08
+hi 2F7`, ours `lo 2F8 hi 0`. No caller reads LO or HI without writing them first, so
+nothing downstream can see it; it is a difference in the transcription, not yet
+looked into.
+
 **The pose left for the GPU.** For a lit model placed in the world that the renderer
 may draw from its mesh, the submitter sets `MoPose.Defer`, and the blender does
 everything but the copy and the decode: the pose is kept (the keyframe's address, the
@@ -948,6 +1000,40 @@ off and on; no GL error under `KF2_GLDEBUG=1`.
 **Not checked:** the arm (outside the object walk; its blender call decodes as
 before; since drawn by the renderer, "Step 3, the fourth slice"); a pose stream that
 revisits a vertex, which the store refuses and none has been seen to use.
+
+**A rigid model drew the last MO pose.** Reported from play as a vertex explosion in
+area 1, at (39494, -12800, 70626) facing yaw 1961, pitch 4020: object model 359 at
+(37888, -14100, 61760), a rigid sub-model (its clip byte `>= 0x80`), drawn as a fan of
+long faces. A pose stays pending after the submit that deferred it: the store has it,
+and nothing needs it in RAM. A rigid submit does not call the blender, so it found the
+previous MO object's pose (record `0x8017B718`) still pending, and `Instance` took the
+pending pose on that flag alone. `MoPose.Store` refused only on the vertex count, and
+both models have 77 vertices, so model 359 was drawn every frame with the other
+object's keyframe and deltas. When the counts differed, the store refused and the model
+fell back to having its vertices copied into the frame every frame. That was correct but
+cost an upload every frame, and it happened 910 times in the first seconds at that spot.
+**Fixed** by `MoPose.PendingAt(verts)`: a submit draws the pending pose only while its
+vertex base still names the posed buffer, which only the blender sets. `Store` takes the
+base and refuses otherwise, and the sky's `TrySpecial` asks the same thing. A rigid
+model after an MO one now goes to `StoreRigid`.
+
+**Why the pose check never saw it.** `KF2_GPUWORLD_POSECHECK=1` decoded every stored
+pose into RAM through `Materialize`, which ended the pending state. With the check
+on, the next submit therefore never found a stale pose, so the check removed the very
+condition it was there to catch. It now decodes with `Materialize(check: true)` and
+leaves the pose pending, so the run it checks is the run without it. Also,
+`KF2_GPUWORLD_MESHCHECK=1` turns the deferral off entirely (`!RetainedModels.Checking`),
+so a run with both checks never exercised the deferred path at all. Measured at that
+spot:
+
+| | poses on against off, paused | the pose check |
+|---|---|---|
+| before | 11.4% of the picture, max 171, the centre 685×968 | 0 apart (blind); with the check amended, 116,116 of 1,879,072 apart |
+| after | bit-identical, three frames | 0 of 2,050,367 apart; areas 0-7 toured, 0 of 21,148,051 |
+
+Found and fixed on `main` (20 Hz), then on `v0.5.0-staging` at 15 Hz: there, before, 11.4% of the picture, max 162; after, bit-identical, 0 of 1,973,466 apart at the spot and 0 of 15,227,551 over areas 0-7; 165.1 fps drawn at 14.9-15.0 ticks/s. **Not checked by eye:** the object
+itself after the fix. The pictures compare equal to the copy path, which is the game's
+own pose.
 
 #### Step 3, the fourth slice
 
@@ -1332,6 +1418,17 @@ beyond that, the murk and a reflection on a blended model face, was not seen in 
 **Not checked:** an authored material on a model's blended face, and a model's face on the water's
 texture standing level in water.
 
+**Verdite3's pink spells cannot happen here** (checked 2026-10-09, against
+Verdite3 `b20242e`). There, the effect loop set the lit assembler's CLUT offset
+from scratchpad `+0x84`, outside the face data, so a mesh cached with the faces'
+base CLUTs drew Fire Ball in the wrong palette. This game's lit assembler has no
+such offset: `PolyAssemblerLit` writes each packet's CLUT straight from the face
+(`f + 2`), and `KF2_POLYASM=verify` diffs it against `func_8002F214`/`func_8002EAEC`.
+So a palette change here can only be a rewrite of the face words, and
+`TryInstance` checks every cached mesh against a hash of those words
+(`FaceHash`) before it draws one and rebuilds on a mismatch. Read, not run: no
+spell has been cast with the meshes on to look at.
+
 ### Step 4: the old world path off
 
 The walks stop building triangles. `PolyAssembler`, `TileWalk` and `ModelWalk`
@@ -1598,3 +1695,169 @@ the 2D.
 - No gameplay change: collision, the map block and saves are untouched
   (`savecheck`).
 - A new runtime mechanism gets a new patch number; a fix to one amends it.
+
+## Models clipped at the near plane (2026-10-09)
+
+Verdite3 found a tree's billboard, looked up at from close by, drawn as a long sheared
+slab: a retained model's face is kept by the lit assembler's tests alone (facing, mean
+table depth), and a corner the GTE's divide saturates (nearer than H/2, or off the
+divide's range) was placed where the packets place it, at the ends of its range. Runtime
+`0103` (`RetainedScene.ModelNearClip`) keeps such a face by its plane against the eye and
+draws it in the true projection, clipped at the GPU's near plane, as a `Tile` instance
+already was. Not the sky, nor the arm.
+
+**On by default here too** (the user's decision, matching Verdite3);
+`KF2_GPUWORLD_MODELCLIP=0` and `gpuworld modelclip off` are the draw as before.
+`KF2_GPUWORLD_CLIP_PROBE=1` counts, every 5 s, the main view's instanced model faces
+kept by depth and those with a corner the GTE cannot project (the forced-blend twin's
+apart), on the CPU from each submit's GTE in integer arithmetic; the shader decides in
+floats, so a corner within a unit of H/2 or the screen limit may be counted on the other
+side. The counts are taken before the instance is added, so an instance the store refuses
+is still counted.
+
+Measured: `KF2_AUTOSTART=2` (fdat05, area 1, standing at the save): 223,650 faces kept
+by depth in 5 s, none with a corner the GTE cannot project, so standing there nothing
+changes. Not measured walking into models, and **not judged by eye**: models close to the
+eye (creatures, doors, trees from below) with the switch on and off.
+
+## The GPU world at a crossing (2026-10-09)
+
+Verdite3 fixed two crossing defects in its own retained renderer: models lost for a frame
+because the world was reset at the area module's load, which landed between its walk and
+its `DrawOTag` (`c84d822`), and the map rebuilt three to five times an arrival (`46edd23`).
+Measured here with `KF2_GPUWORLD_PROBE=1 KF2_CROSSPROBE=1`, `KF2_AUTOSTART=2`, then
+`warp 3`, `warp 1`, `warp 4`, `warp 2` and `load 2`; the probe now prints a line a load
+(where it landed against stage 13 and the frame, and what the frame drew from the emptied
+store) and a `mapprobe` line a build.
+
+- **No frame loses its models.** Every load (fdat02, 05, 11, 14, 08) landed outside stage
+  13 with no frame walked and not yet drawn; arm lost, arm missed and sky missed 0 over
+  the next three frames. The reset at the load (`GpuWorld`'s `ForgetMeshes`) stays.
+- **The map was built twice for every change.** `TileWalk` ran `RetainedMap.AtWalk` before
+  `Waves.AtWalk`, and the map's hash carries the water's rects
+  (`SurfaceMaterial.RectN`, read at `DrawOTag`) and the swell's generation: an arrival
+  built with no rects and the old swell, then again 25 ms later; every map change the
+  game made in an area was followed one walk later by a build for the swell. Each is
+  12-32 ms on the game thread. `RetainedMap.AtWalk` now reads the rects
+  (`Reflections.ReadRects`) and classifies the swell (`Waves.BeforeMap`) before it hashes;
+  the swell is still published into the frame by `Waves.AtWalk`.
+
+Over the same route, 33 builds before and 17 after: one an arrival (12-32 ms, by area) and
+one a map change. The two left 1.87 and 1.92 s into area 1 are two rewrites by the game a
+tick apart. 144.0 fps at 19.9 ticks/s, every present wide. No settle gate was needed, so
+Verdite3's `061691e` (packets while a new map settles) has nothing to guard here. Not
+judged by eye: the water's swell and ripples on an area's first frames.
+
+## Hairlines in sloped ceilings (2026-10-14)
+
+Reported at area 1, (104248, -12800, 27898) facing yaw 2066: a 1 px line of
+background along each seam of the sloped ceiling over the stairs, and "everywhere
+with flat sloped geometry above your head".
+
+**The gap is in the game's mesh, not the renderer.** The static map is built
+from integer world corners, non-indexed, with no per-face rounding, and `WorldVs`
+is `invariant`, so two faces that name the same corner meet exactly. The census
+(`KF2_GPUWORLD_SEAMS=104248,27898,3500,-12801`) showed the faces do not name the
+same corner: a tile's mesh reaches 10 units past its cell on every side, so two
+neighbours overlap by 20.
+
+```
+tile A: (102656,-14976,24586)-(104458,-14976,24586)   z = 12*2048 + 10
+tile B: (102656,-14976,24566)-(104458,-14976,24566)   z = 12*2048 - 10, same y
+```
+
+Flat, the overlap hides the seam. On the 1:2 slope, B is 10 units higher than A
+across the overlap, and a sight line grazing the ceiling passes under B's end and
+over A's start into the void behind. At 320x240 that sliver is under a pixel and
+whole-pixel corners hid it; at the render scale it is a line.
+
+**The fix** (`RetainedMap.Welded`, in `Put`): a corner exactly 10 units off a cell
+boundary in X or Z is put on the boundary, so the two edges are one edge. Every
+face is welded, translucent ones too, so a grate or the water stays on the wall it
+met (the swell moves only interior corners, never one on a boundary).
+`RetainedPlanes` and `WaterSwell.IsFree` still see the game's corners.
+`KF2_GPUWORLD_WELD=0` is the comparison. Only the GPU world gets it; with
+`gpuworld off` the packets still carry the game's corners.
+
+What was measured, over the map of each of areas 0-6 (a one-off audit, not kept):
+
+- The weld is a function of position, so two faces that shared an edge before
+  share it after; it can close an edge, never open one. Edges one triangle uses
+  fell 70-90% in every area (area 1: 62752 to 11090).
+- No face flipped, none bent by more than 5 degrees; 74 slivers (areas 0 and 2)
+  went flat, each 20 units wide across a boundary whose two sides now meet.
+- 26 pairs of coplanar faces newly overlap, all on diagonal geometry at
+  y = -27199 (areas 0 and 2), by at most a 10-unit sliver. Not seen.
+- The picture: 24 views each (8 yaws, 3 pitches) at the report's spot and at the
+  entry of areas 0-5, paused, weld off and on, counting background pixels in
+  lines 1-3 px wide. At the report's spot every view with any (288-810) has 0.
+  Over all 168, 174385 to 171859; each view that rose was looked at, and the
+  difference was a particle, a creature or a projectile that moved between the
+  two runs, not geometry. Areas 6 and 7 never took the `view` (the warp did not
+  settle in time) and are unmeasured.
+
+**Mechanism and the reported spot measured; the picture elsewhere not judged.**
+
+## Hairlines in leaning walls (2026-10-14)
+
+Reported after the weld above: the same hairline in "horizontal walls that are
+sloped". Found by dumping every map build's triangles (`KF2_GPUWORLD_DUMPMAP=dir`,
+a CSV per build) and pairing, offline, every opaque edge one triangle uses with a
+parallel one within 40 units. Two kinds were left.
+
+**A leaning wall's corner piece.** A wall that runs level but leans (z = 2048 at
+the foot, 2304 at the top, in area 0 at x 106496-110592) turns its corners with a
+45-degree piece. That piece overlaps the cell boundary by 10 like everything else,
+but along its own diagonal run: the weld put X on the boundary and left Z where it
+was, 10 units off the straight run's corner (`(108544, -18496, 2166)` against
+`2176`), so the two faces met at the foot and the top and parted by 10 between.
+
+`RetainedMap.WeldFace` keeps the axis snap for every face and, for a wall whose
+normal is within 30 degrees of level and *exactly* 45 degrees in plan, records
+where its corner should slide along the run instead. A first try that slid any
+diagonal face moved irregular rock and the floor fans at a cell corner and opened
+3-5 times the edges it closed; exactly 45 keeps the rocks out. The slide is kept
+by the game's corner (`_slide`), not the face, so the ceiling and floor that share
+the wall's top and foot move with it (sliding per face opened their edge to the
+wall, `flat/wall` at 7 units, 278 in area 0). And it is taken only onto a corner
+something else is at: one the axis snap put there (the straight run) or another
+wall's slide (two corner pieces meeting). Where the neighbour across is itself
+overlapped and square, the snap already met it, and sliding would part them.
+
+**The overlap on a 45-degree sloped ceiling.** The vaulted ceilings' diagonal
+pieces sit 20 units (15-28 perpendicular) off the square piece beside them, on no
+cell boundary, so no boundary rule sees them. `RetainedMap.CloseSeams`, after the
+weld: two parallel edges each used by one opaque face, end for end within 32
+units, on an edge longer than 64, have their corners merged by position (union
+find, each group to its least corner), so every face at a corner moves with it.
+It can only close an edge. 25 units left the 28-unit class open; 48 also merged
+a leaning wall's mid-height corners that the game itself puts 40 units apart, and
+was not taken.
+
+Measured over the map of areas 0-7 against the earlier weld: opaque edges one
+triangle uses, and of those the ones the offline pairing finds a parallel partner
+for within 40 units, not vertical (the seams; the rest are mostly the map's real
+silhouettes):
+
+| area | open, before | open, after | seams, before | seams, after |
+|---|---|---|---|---|
+| 0 | 6268 | 4553 | 666 | 176 |
+| 1 | 11090 | 6012 | 326 | 9 |
+| 2 | 15630 | 10570 | 334 | 5 |
+| 3 | 10636 | 6731 | 653 | 10 |
+| 4 | 6108 | 5596 | 0 | 0 |
+| 5 | 13252 | 3616 | 1 | 1 |
+| 6 | 9433 | 3833 | 98 | 2 |
+| 7 | 596 | 596 | 0 | 0 |
+
+No face degenerated. What is left in the pairing: area 0's leaning walls on the stair at x 112640, whose mid-height
+corners the game's own mesh puts 40 units apart (`(-18489, 22390)` against
+`(-18450, 22408)`), a 1-unit sliver where a slope meets a wall (2-4 an area), and
+a 35-unit step on a few ramp ends. `KF2_GPUWORLD_WELD=0` turns off the weld, the
+slide and the merge together.
+
+The merge costs 21-51 ms a map build (areas 0, 1, 2, 5), on a build of about 120;
+it runs only when the map's hash changes. `KF2_FPS=144 KF2_FPS_PROBE=1` after it:
+144.0 fps drawn at 14.9-15.0 ticks/s.
+
+**Mechanism measured over every area's mesh; the picture not judged.**

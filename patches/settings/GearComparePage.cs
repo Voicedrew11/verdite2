@@ -15,6 +15,8 @@ public sealed class GearComparePage : IPatchPage
 
     public int Order => 25;
 
+    public IReadOnlyList<string> Patches => ["kf2.gearcompare"];
+
     public void Draw()
     {
         bool on = GearCompare.Enabled;

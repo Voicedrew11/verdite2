@@ -103,7 +103,7 @@ public static class Host
         EditorCamera.Poll();
         Faces.Recording = Editor.Open || FaceProbe.On;
         Faces.Wanted = Faces.Recording || Surfaces.PerFace;
-        if (!Enabled && !Editor.Open) return;
+        if (!Enabled && !Editor.Open) { Lights.Bare(); return; }
         var m = RecompOne.Runtime.Runtime.Mem;
         if (m == null) return;
         Identity.Poll(m);

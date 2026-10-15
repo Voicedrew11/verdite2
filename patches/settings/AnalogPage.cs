@@ -24,6 +24,7 @@ public sealed class AnalogPage : IPatchPage
 {
     public string Id => "analog";
     public string Title => "Analog sticks";
+    public IReadOnlyList<string> Patches => ["kf2.analog"];
 
     public void Draw()
     {
@@ -36,20 +37,36 @@ public sealed class AnalogPage : IPatchPage
 
         ImGui.BeginDisabled(!Analog.Enabled);
 
+        // 3D controls (Gameplay ▸ Controls) are one stick: the right stick's rows are
+        // dimmed there, since nothing reads them, and so are the move deadzone and
+        // the strafe inversion, which 3D's left stick does not use either.
+        bool tank = Analog.Tank;
+        if (tank) Note("3D controls (Settings ▸ Gameplay ▸ Controls): the left stick walks and turns, " +
+                       "and the right stick is not used. Its settings below are for 2D.");
+
+        ImGui.BeginDisabled(tank);
         Check("Right stick turns and looks", Analog.LookKey, ref Analog.AnalogLook);
-        Check("Left stick walks and strafes", Analog.MoveKey, ref Analog.AnalogMove);
+        ImGui.EndDisabled();
+        Check(tank ? "Left stick walks and turns" : "Left stick walks and strafes", Analog.MoveKey, ref Analog.AnalogMove);
 
         ImGui.Spacing();
         Slider("Turn sensitivity", Analog.TurnSensKey, ref Analog.TurnSens, 0.1f, 3f,
-               "Past 1.0 the camera is driven faster than any button on the pad can turn it: the " +
-               "game's own per-frame limit only exists in the branches that read a button.");
-        Slider("Look sensitivity", Analog.PitchSensKey, ref Analog.PitchSens, 0.1f, 3f);
+               "1.0 is the original's speed: a full push turns as fast as the D-pad does, and eases " +
+               "in and out as it does. Past 1.0 the camera turns faster than the game ever let it, " +
+               "which changes how its fights play. In 3D it is the left stick's turn.");
+        ImGui.BeginDisabled(tank);
+        Slider("Look sensitivity", Analog.PitchSensKey, ref Analog.PitchSens, 0.1f, 3f,
+               "1.0 looks up and down as fast as L2 and R2 do. Past it is faster than the original.");
+        ImGui.EndDisabled();
         Slider("Move sensitivity", Analog.MoveSensKey, ref Analog.MoveSens, 0.1f, 1.5f,
                "Walking is the game's own speed at full deflection. Above 1.0 would ask for a walk " +
                "faster than it has an animation for.");
 
         if (ImGui.TreeNode("Fine tuning"))
         {
+            // 3D reads the left stick on a fixed 0.3 cross of its own
+            // (Analog.TankDeadzone), so the move deadzone is 2D's too.
+            ImGui.BeginDisabled(tank);
             Slider("Look deadzone", Analog.LookDeadKey, ref Analog.LookDeadzone, 0f, 0.5f,
                    "How far the stick must move before anything happens. Set it just past where " +
                    "the readout below rests with your hands off the pad.");
@@ -57,31 +74,48 @@ public sealed class AnalogPage : IPatchPage
             Slider("Look curve", Analog.LookCurveKey, ref Analog.LookCurve, 1f, 3f,
                    "1.0 is linear. Higher gives finer aim near centre and the same speed at the " +
                    "edge, at the cost of a slower response in between.");
+            ImGui.EndDisabled();
             Slider("Move curve", Analog.MoveCurveKey, ref Analog.MoveCurve, 1f, 3f);
 
             ImGui.Spacing();
+            ImGui.BeginDisabled(tank);
             Check("Look acceleration", Analog.AccelKey, ref Analog.LookAccel,
                   "Holding the stick out keeps speeding the camera up for the first half second, " +
-                  "the way a modern shooter's does. Fine aim near centre is unaffected — the ramp " +
-                  "only starts past 80% deflection.");
+                  "the way a modern shooter's does, to past twice the original's turn. Fine aim " +
+                  "near centre is unaffected — the ramp only starts past 80% deflection.");
             ImGui.BeginDisabled(!Analog.LookAccel);
             Slider("Acceleration x", Analog.AccelMaxKey, ref Analog.LookAccelMax, 1f, 4f);
             Slider("Acceleration time (s)", Analog.AccelTimeKey, ref Analog.LookAccelTime, 0.1f, 2f);
             ImGui.EndDisabled();
 
             ImGui.Spacing();
+            Check("Stick eases in and out", Analog.EaseKey, ref Analog.StickEase,
+                  "On is the original: the view takes four or five ticks to reach full speed and " +
+                  "to stop, as it does on a held D-pad or L2/R2. Off is direct: the view turns at " +
+                  "the stick's speed at once and stops dead on release. The top speed is the " +
+                  "original's either way.");
+            ImGui.BeginDisabled(!Analog.StickEase);
             Check("Camera stops on release", Analog.StopKey, ref Analog.CameraInstantStop,
-                  "The game ramps a released look velocity down over about a third of a second, " +
-                  "which reads as inertia on a stick. Off restores that ramp. Walking momentum is " +
-                  "the game's own and is not affected either way.");
+                  "Off is the original: the view eases to a stop over a fifth to half a second, as it " +
+                  "does when a D-pad or L2/R2 button is let go. On stops it dead, which can read better " +
+                  "on a stick. Walking momentum is the game's own and is not affected either way. " +
+                  "3D's turn always eases to a stop as the D-pad's does.");
+            ImGui.EndDisabled();
+            ImGui.EndDisabled();
 
             ImGui.Spacing();
             Note("Which way \"+\" points is the game's convention, not the port's — flip an axis " +
                  "here if it runs backwards.");
+            // Look Y is the right stick's (and Gameplay's INVERTED CAMERA), so 2D's.
+            ImGui.BeginDisabled(tank);
             Check("Invert look Y", Analog.InvertPitchKey, ref Analog.InvertPitch);
+            ImGui.EndDisabled();
             ImGui.SameLine();
             Check("Invert turn", Analog.InvertTurnKey, ref Analog.InvertTurn);
+            // 3D's left stick does not strafe; L1 and R1 are buttons.
+            ImGui.BeginDisabled(tank);
             Check("Invert strafe", Analog.InvertStrafeKey, ref Analog.InvertStrafe);
+            ImGui.EndDisabled();
             ImGui.SameLine();
             Check("Invert forward", Analog.InvertFwdKey, ref Analog.InvertForward);
 

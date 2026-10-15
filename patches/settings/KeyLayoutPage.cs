@@ -41,10 +41,10 @@ public sealed class KeyLayoutPage : IPatchPage
         // Cross. The boot line KeyLayout.Install prints was right the whole time,
         // which is what it was checked against.
         Tip("W and S walk, A and D strafe, the arrows walk and turn, Space attacks, F uses, " +
-            "Q casts and Tab opens the menu. Looking up and down is the mouse's alone — no keys " +
+            "Q casts and Tab or Escape opens the menu. Looking up and down is the mouse's alone — no keys " +
             "are bound to it. Writes the sixteen bindings in the table below; the arrows keep " +
-            "walking through a second binding the table cannot show, so the in-game menu still " +
-            "moves on them.");
+            "walking, and Escape opens and backs out of the menu, through second bindings the " +
+            "table cannot show.");
 
         ImGui.SameLine();
 

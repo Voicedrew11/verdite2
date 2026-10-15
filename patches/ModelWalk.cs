@@ -618,6 +618,7 @@ public static class ModelWalk
         _sceneCount = 0;
         _mirrorOnly = false;
         _walkOwns = true;
+        ProjectileLights.BeginWalk();
         _liveCreatures = _liveObjects = _liveEffects = _liveSprites = 0;
 
         Memset(c, mem, sp + 0x58u, 0x20u, 0x800331F0u);
@@ -661,6 +662,7 @@ public static class ModelWalk
 
         WalkCalls++;
         _lastCount = _sceneCount;
+        ProjectileLights.EndWalk();
         Report();
     }
 
@@ -855,10 +857,15 @@ public static class ModelWalk
         c.RA = 0x8003380Cu;
         KingsField2.func_80032CD8(c, mem);
         if (c.V0 == 0u) return;
+        uint bank = c.V0;
 
         mem.WriteU16(sp + 0x38u, mem.ReadU16(rec + 0x24u));
         mem.WriteU16(sp + 0x3Au, (ushort)(mem.ReadU16(rec + 0x26u) + 0x800u));
         mem.WriteU16(sp + 0x3Cu, mem.ReadU16(rec + 0x28u));
+        // A picked-up item held up is drawn with the player's turn added, about the
+        // middle of its mesh, on the view's axis.
+        if (ItemTurn.Shows(rec)) ItemTurn.Present(mem, sp + 0x38u);
+        bool centred = ItemEye.Place(mem, rec, sp + 0x38u, mem.ReadU8(rec + 1u), bank);
 
         uint assembler = mem.ReadU8(rec + 2u);
         if ((mem.ReadU8(rec + 3u) & 1u) != 0u)
@@ -881,8 +888,9 @@ public static class ModelWalk
         c.A2 = rec + 0x14u;
         c.A3 = sp + 0x38u;
         c.RA = 0x800338C0u;
-        if (MirrorOnlySubmit(c, mem)) return;
+        if (MirrorOnlySubmit(c, mem)) { if (centred) ItemEye.Restore(mem); return; }
         KingsField2.func_80032588(c, mem);
+        if (centred) ItemEye.Restore(mem);
         mem.WriteU8(rec + 3u, (byte)(mem.ReadU8(rec + 3u) | 0x80u));
     }
 
@@ -1009,6 +1017,7 @@ public static class ModelWalk
 
             _kind = ModelKind.Effect; _slot = i; _record = rec;
             _effects++;
+            ProjectileLights.Seen(mem, rec);
             c.A0 = mem.ReadU8(rec + 0xAu);
             c.A1 = mem.ReadU8(rec + 3u) + 0x28u;
             c.A2 = rec + 0x14u;
@@ -1124,7 +1133,7 @@ public static class ModelWalk
         uint pos = c.A2;
         uint rotPtr = c.A3;
         uint depth = mem.ReadU32(arg + 0x30u);
-        uint assembler = mem.ReadU8(arg + 0x2Cu);
+        uint assembler = mem.ReadU8(arg + 0x2Cu), rawPick = assembler;
         uint scale = mem.ReadU32(arg + 0x10u);
         uint clipByte = mem.ReadU16(arg + 0x1Cu);
         uint light2 = mem.ReadU8(arg + 0x24u);
@@ -1277,6 +1286,7 @@ public static class ModelWalk
         }
 
         Record(mem, pos, model, (byte)(assembler & 0xFFu), light);
+        if (_kind == ModelKind.Effect) ProjectileLights.Learn(mem, model, clipByte & 0xFFu, rawPick, sub, assembler & 0xFFu);
 
         // The remaster's material for this model, sealed into every packet it makes.
         _model = _walkOwns ? model : -1;

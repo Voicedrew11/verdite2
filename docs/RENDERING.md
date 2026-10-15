@@ -893,6 +893,10 @@ the sub-pixel fraction still come from the address map.
   `ZBuffer.cs`). Their addresses' old records are dropped so a stale one cannot
   match. With no depth they keep painter's order, which is what they had on the
   console.
+- **The menu's item preview** (`InPreview`, a pre/post on `func_800346CC` in
+  `ZBuffer.cs`) was not barred: its faces went through the lit assembler and were
+  tested against the world, so it crossed what stood behind it. It now keeps
+  painter's order, drawn over the world as on the console.
 
 **The skybox needs no special case under this source.** It never passes through
 these assemblers, so it records nothing and draws first in painter's order, and
@@ -1004,7 +1008,7 @@ packet that is anything else. **Moving a translucent packet past an opaque one i
 exact whichever is nearer**: the test decides what the opaque one covers, and the
 translucent one then blends over what is behind it and is rejected by what is in
 front. Everything the depth buffer does not order is a barrier: the HUD, the arm,
-the fades, a non-polygon command, a packet without a record, the table's first slot
+the item preview, the fades, a non-polygon command, a packet without a record, the table's first slot
 (the skybox's, which is never tested), and a blended model the port calls solid (the secret door, which writes depth). So nothing is ever moved
 past something it was not already ordered against by the test, and two blended
 surfaces keep the order the table gave them. It runs only while the Z-buffer tests
@@ -1662,6 +1666,58 @@ not that it is a visible upgrade on its own. The visible one is `0059` below.
 
 - **Never looked at by eye:** whether that sub-1% of pixels — the edges — reads
   cleaner. The numbers now say how little of the picture is in question.
+
+#### A dark line along every edge on Windows (2026-10-14)
+
+Reported from a Windows machine: thin dark lines between every vertex, looking
+like occlusion; Linux (Mesa) never showed them. `NormalFs` took `dFdx(p)`/`dFdy(p)`
+*after* its discards (the distance dither, a transparent texel, the water slice)
+and a `return`. A derivative is the difference across a 2×2 quad, and GLSL leaves
+it undefined once any pixel of the quad has left by `discard` or `return`. Inside
+a triangle every quad pixel is real; on an edge some are helpers, whose
+interpolants are extrapolated past the polygon, so a helper reads a texel beyond
+the polygon's rectangle, finds it transparent and discards. Mesa keeps a discarded
+helper computing and the difference came out right; a Windows driver need not, so
+every edge pixel got a garbage normal and the occlusion pass shaded it. The texture
+derivatives at the top of the shader already said "taken here, in uniform control
+flow"; the position's had been added later, below the discards.
+
+Every derivative is now taken at the top of `main`, before anything can leave, in
+`NormalFs`, `PrimFs` (the texel rounding, `authored()`'s normal, the wave field's
+footprint) and `PrimFs120`. Measured: builds, every shader links, the paused frame
+renders stably on Mesa. A pixel-for-pixel comparison against the old shaders was
+not possible (two runs of the same build already hash differently).
+
+`tools/RecompOne/scripts/shader_lint.py` now holds the rule: it pulls every stage
+out of `GlShaders.cs` as the runtime compiles it (the `.Replace` snippets spliced
+in) and fails on a `dFdx`/`dFdy`/`fwidth`, or an implicit-LOD lookup on a sampler
+with a mip chain (its `MIPMAPPED`, kept in step with the runtime's
+`GenerateMipmap`s), textually after a `discard`, a `return` or a call that can
+discard, following calls into helpers; `--glslang` also compiles every stage with
+`glslangValidator`. CI runs both. Against the shaders before this fix it reports
+the `NormalFs` derivative and eleven more; it also found `PrimFs120` reading the
+replacement texture's mip chain after the mask's discard, now read at the top. A
+reviewed exception carries `// derivatives-ok: <why>` on its line. What it does
+not see: a derivative under a branch on a per-pixel value without any discard.
+
+It now checks more of what one driver forgives and another does not, each rule
+with its own `// <rule>-ok: <why>` marker: builtins outside their domain
+(`pow`, `sqrt`, `inversesqrt`, `log2`, `acos`, `smoothstep`'s edges...), a
+signed `%` and an integer division by a variable, a local read before it is
+written, a fragment output left unwritten on a path out of `main`, and every
+program the runtime links (pairs read from the `GlShaders.Build*` calls) for a
+fragment input with no vertex output, a type or interpolation mismatch, or a
+uniform of two types; `--glslang` also links each pair with `-l`. The first run
+reported 16; one was real: the authored lights' highlight took `pow(0, shin)`
+with `shin` 0 at roughness 1 (undefined, NaN on some drivers), and its base is
+now floored at `1e-6`, which changes nothing else. The other 15 were proved in
+range from the C# that uploads them (spot cones ordered by `Lights.cs`, the
+ripple length floored at 16, the depth cue's equal pair returned early, a
+neighbour half id never 0) and marked. Measured: lint clean, every stage
+compiles and every program links under glslang. Not run in the game.
+
+- **Not yet seen on Windows:** whether the lines are gone. `KF2_AO_NORMALS=0` (or
+  *SSAO* off) making them vanish on the old build would confirm the diagnosis.
 
 ### Occluders the camera cannot see (`0059`)
 
@@ -3170,6 +3226,68 @@ Its cost was not measured with an edge in view.
 Looked at, both switches on, at the arch near save 3: "looks good". Both still ship
 off, as enhancements of the game's own behaviour.
 
+## Fog by distance from the eye
+
+The game's fog is worked out at a face's corners, and the GPU world's map, from
+`MainFogFromZ`, is fogged at each pixel's view depth instead. Both take the cue from
+the view depth, Z, not from the distance to the eye. Z is the distance along the
+view axis, so at the side of a wide picture, or below a camera tipped down, a point
+has the same Z as one straight ahead that is nearer to the eye. It is fogged as if it
+were nearer than it is. The fog also moves as the view turns: a wall darkens as it
+comes to the centre of the picture.
+
+The fix is runtime patch `0100` (`GteDepth.RadialFog`). The GTE is left alone; the
+shaders that recover a pixel's view position take the cue at the eye's distance
+instead of SZ: the retained world, the packets that carry a depth, the neighbour
+blend and the reflection pass's own fog (the murk's colour, a reflection's longer
+path). The planar mirror takes it at the mirrored eye's distance, which is the path
+through the water. At the picture's centre the two agree, so nothing changes there;
+off the centre there is more fog than the game's, because the point is now as far
+as it is.
+
+It is one choice of three, not two switches. Distance is per pixel too, and distance
+over corner fog only half works: a colour fogged at its corners can only be refogged
+by the ratio of depth to distance (`0068`'s level rescale), an approximation. So the
+setting is a single `kf2.fog` (int), read from the environment as `KF2_FOG`:
+
+- `0`, `corners` (`KF2_FOG=corners`): the game's fog, worked out at the corners and
+  spread across the face (`RetainedScene.MainFogFromZ` off). The old spelling was
+  `KF2_GPUWORLD_FOGZ=0`, which still works.
+- `1`, `depth` (`KF2_FOG=depth`): the GPU world's map fogged at each pixel's view
+  depth (`MainFogFromZ` on). **The default**, which is what the port did before this
+  choice existed.
+- `2`, `distance` (`KF2_FOG=distance`, or `radial`): patch `0100` as above.
+
+Settings window: Video ▸ Enhancements ▸ *Fog*, a dropdown after *Even fog and
+lighting*. In-game: PORT SETTINGS ▸ WORLD ▸ FOG, after RENDER DISTANCE, with CORNERS,
+PIXEL DEPTH and DISTANCE. No recompile.
+
+### Measured
+
+The mechanism, not the picture. Slot 2 restored, the world paused with `pause on`
+and the mode stepped through the `settings` verb, `snap hash` on the presented
+frame under each mode after warping:
+
+| area | corners | pixel depth | distance |
+|---|---|---|---|
+| 2 | `aa514e62d201f370` | `46cf78accf6b62c2` | `790bb7688d5cc469` |
+| 5 | `3902d5f9eaca864a` | `f1ebc5c5160029b8` | `29d5012a787d9edc` |
+| 6 | `8a43aa02e788fe61` | `77423e9d56a022d0` | `bc3ab396cbc205d7` |
+
+Three pictures in each; at the save's own spot in area 1 all three hash the same
+(nothing in view is far enough to fog). The boot reads `[KF2] fog: by pixel depth`
+and `0 default(s) wrong`; 144.0 fps drawn at 20.0 ticks/s. How much the fog moves
+over a turn, and the cost, were not measured here (Verdite3's figures, in its
+`WIDESCREEN.md` under "Radial fog", are for its game: the fog's movement over a
+turn of 11.25° fell from as much as 1.72 to at most 0.25, about 0.08 ms a frame).
+
+### For the user to judge
+
+In a foggy area at 16:9, turning in place: whether walls still brighten towards the
+picture's edges; whether the corners are darker than the game's; the edge of the
+render distance at the sides; looking down at the floor; water's reflections and
+murk.
+
 ## Dithering: one flag, and it lives in the draw environment
 
 The 4x4 crosshatch over every shaded surface is the GPU's ordered dither, and the
@@ -4416,3 +4534,77 @@ census reads a cut pixel as a surface with no geometry normal, which is why its
 
 **Not judged by eye**: where the change of look sits, and whether a tile's fade
 reads as a band.
+
+## Magic projectiles give off light
+
+**Mechanism measured, and the picture judged good by the user (2026-10-14). On by
+default**: Video ▸ Enhancements ▸ *Glowing spells* (`kf2.projectilelights.on`, dimmed
+without per-pixel lighting or Fast geometry), the first-run setup's *Lighting and fog*
+group (Original and Original++ off, Modern on), `KF2_PROJECTILE_LIGHTS=0|1` over the
+saved value, or the `projectiles on|off` shell verb for the session.
+`patches/ProjectileLights.cs`, fed by `ModelWalk` and published through
+`Remaster.Lights`.
+
+A spell is an effect: stage 5's table at `0x8019CC6C` (128 x `0x48`), drawn by the
+object walk's third loop, which hands the submitter the model `u8[+0x3] + 0x28`, the
+clip byte `u8[+0x4]` and the assembler `u8[+0x9]`. **What the game itself draws as
+light is the test**: an effect whose faces are mostly *added* to the picture, blend
+mode 1 (or 3, the quarter add), by the forced-blend assembler (`pick < 0xFE`,
+mode `pick & 3`) or by the mesh's own semi-transparent faces in their page's mode.
+Anything drawn by the lit or clipped assembler as opaque faces is left dark, which is
+what keeps an arrow or a rock out without naming either: it is a solid model the
+GTE lights. An averaged face (smoke, mist) and a subtracted one (a darkening effect)
+give no light either. The colour is the mean of the added texels, read off the CPU's
+copy of VRAM (`Gpu.Vram`) through each face's CLUT, transparent texel 0 left out,
+normalised to its brightest channel; a mesh whose mean is under 0.2 lights nothing.
+
+**The decision is made where the mesh is known, and the light where the effect is
+seen.** The submitter (`RunSubmit`) has the selected model table, so it measures the
+mesh once per (face list, count, assembler) and remembers the answer against the
+record's three bytes; that happens for the eye's submits and for the planar walk's
+replay alike. The effect walk then adds a light for every record it will draw, in the
+eye's view or only the mirror's, whose three bytes were found to glow. That split is
+not a nicety: at area 1's start, facing the lake, every effect of a cast was culled
+from the eye's view and kept only for the reflection (`ModelWalk._mirrorOnly`), so a
+light hung on the eye's submits never appeared there. A projectile's first frame has
+no light, since the mesh is measured as it is drawn.
+
+**A bolt is a head and a trail**, each a record: spell 0's blue bolt is six. Records
+nearer than a tile of one colour are one light at their centroid, and past six lights
+a frame the nearest two are merged until six remain, so a scattering spell (spell 9
+spread to 21) leaves the authored lights their slots. A merged light is up to 1.5x
+brighter. Lights rank with the authored ones, ahead of the tile and model glows.
+
+**It needs no pack and no remaster.** `Lights.Bare` runs from `Host`'s frame with the
+remaster off (and when it is on but the area has not settled), enabling
+`RemasterUniforms` with nothing but the projectiles in the list; with a pack applied
+they join its lights. Like every authored light, it needs per-pixel lighting and Fast
+geometry. Flicker is fixed (up to 20% dimmer, about 6 Hz, on the world tick).
+
+Measured (area 2, slot 3, each spell selected with the test aid `projectiles spell
+<n>`, which also fills MP; the cast waits on the charge at `0x80199434`, about 20 s
+to 5000): every additive effect mesh met glowed, in its own colour (blue `54`, `73`;
+green `71`; white `72`; orange and yellow `48`, `55`-`58`, `60`, `74`, `79`, `85`);
+the two effect meshes drawn by the lit assembler, `72` as opaque and `49` (160 opaque
+faces), were left dark. With the remaster off and on, the shader drew lit batches
+while a bolt flew; 144.0 fps drawn at 15.0 ticks/s with six lights up. **Not seen:**
+the picture; an enemy's projectile; the player's arrows (expected to be opaque lit
+models and so dark, but no arrow was fired); whether the radius (5120, 2.5 tiles) and
+strength (1.5) suit.
+
+### A light goes out instead of off
+
+A light used to vanish on the frame its last effect record did: a bolt striking a
+wall, or a spell's last spark expiring, cut the lit room to dark at once. Now
+`EndWalk` keeps the last walk's lights, and one that no light of this walk continues
+(the same colour, within 4096 units, so a moving bolt is followed from frame to frame)
+fades out where it was last seen over `FadeSeconds` (0.35 s, on the wall clock, eased
+as (1-t)²), multiplied into its strength in `Lights`. A fading light whose effect
+comes back is live again and drops its fade; the fading ones take only the slots the
+live ones leave of the six; an area change or switching the lights off forgets them.
+The `projectiles` verb reports `fading`.
+
+Measured (area 2, slot 3, spell 0, the effect table and the verb sampled every 20 ms):
+the last effect record went at 5.83 s after the cast, its light was reported fading
+from then, and was gone at 6.18 s. The fade itself has not been judged by eye.
+

@@ -113,8 +113,8 @@ frame costs three vblanks; since the game's speed *is* its frame rate, 20 is the
 speed it was played at. The port's HLE GPU makes the two-vblank deadline every
 time and never bands down, so the gate is now **skipped at every rate, not only
 above 30** — it decides the render rate and the world rate together and knows one
-answer for both. The world runs on `FramePacing.LogicHz` instead, 20 by default
-and 30 as a setting. See "The reference band is 3 vblanks, not 2" in
+answer for both. The world runs on `FramePacing.LogicHz` instead, 15 by default
+(not a setting; `KF2_TICKRATE`). See "The reference band is 4 vblanks" in
 [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
 
 `0x801B6CAC` is bumped by the same callback and never reset by anything.
@@ -122,8 +122,8 @@ and 30 as a setting. See "The reference band is 3 vblanks, not 2" in
 **With the gate skipped, a rendered frame costs exactly one `VSync` call** — the
 presenter's, which `func_8002E0FC` makes immediately *before* its `DrawOTag`. That
 is what the port's frame boundary is keyed on, and since the gate is now skipped at
-every rate it is the only case that arises: a `2` on `mods/framestats`' calls-per-
-frame count means the gate is back. (The ordering is why it also worked while the
+every rate it is the only case that arises: two `VSync` calls per
+frame (what the removed `mods/framestats` counted) means the gate is back. (The ordering is why it also worked while the
 gate still ran below 30 — the presenter's call landed before the ordering table and
 the gate's spin calls after it, so the count at the boundary was non-zero exactly
 once per table either way.) See "Any frame rate" in
@@ -960,6 +960,85 @@ loads the entry's preview. `func_80022CAC` **always returns 0**, so the
 **Measured**, off `KF2_MENUMOUSE_PROBE=1` in area 1: the inventory is 10 entries,
 10 visible from 0, rows at x 42 y 44, 236 × 14; a sub-list on the same page is 3
 entries, 4 visible, rows at x 42 y 164, the same size.
+
+### The menu's item preview is a pose block and one routine
+
+`func_80022CAC(item)` loads an item's model into bank 3 (`func_8002E5E8(3, …)`) and
+resets its pose; `func_8002156C(item)`, which every page that shows an item calls once
+a menu frame, steps and draws it. Both do nothing while `u8[0x801994DF]` is zero, and
+the draw nothing for item `0xFF`.
+
+| address | what | reset to |
+|---|---|---|
+| `0x8006E934`, `36`, `38` | translation, three s16 | `0, 0, 1000` |
+| `0x8006E93C`, `3E`, `40` | rotation x, y, z, s16 | `0, 0, 0` |
+| `0x8006E944` | the spin's step, u32, added to y each draw | `4` |
+
+The draw adds the step to y, masks all three to `0xFFF`, builds the rotation with
+`RotMatrix` (PSY-Q's, `Rx(x) Ry(y) Rz(z)`), the light matrix as a fixed matrix times
+it and a colour matrix of all `0x1000`, and draws model 0 of bank 3 through
+`func_800346CC` with back colour 60, `H` 200. Its camera is the identity, so the model
+sits at the screen's centre: measured at 158,119 ±52 game pixels in the USE ITEM list.
+`patches/ItemTurn.cs` turns it (INPUT, "Turning the item preview").
+
+### The pickup holds the item up in a loop of its own
+
+Read for `patches/ItemTurn.cs` and `patches/ItemEye.cs` (2026-10-13). Picking an item
+up is `func_8004831C(record, id)`, the same routine as KF3's, a loop that draws its own
+frames through stage 13 (`func_800342D8`, called with `a0 = 0` and `a1 = 0x80199504`,
+the view's rotation and no position, so the camera keeps the last frame's eye).
+
+| what | where |
+|---|---|
+| the record | `a0`, or made fresh when `a0 = 0` (`func_80037114`, `func_800362C8`); kept at the routine's `sp+0x80` |
+| the item | record `+6`, the definition index: `0x80175914 + id * 0x18` |
+| the item's rotation | three s16 at record `+0x24` (x), `+0x26` (y), `+0x28` (z); the object walk hands the submitter y `+ 0x800`, and builds the matrix with `func_80014FE0`, `Ry'(y) Rx(x) Rz(z)`, `Ry'(t) = [[c,0,-s],[0,1,0],[s,0,c]]` |
+| the target | `func_80046C64(x, y, z, pitch, yaw, def+0xC, def+0xE, out)`: the offset turned by the view, plus the player's position (`0x801994EC`), less `0x640` on y; no head bob. Called from `0x8004857C` (a fresh record, into `+0x14`), `0x80048610` (one in the world, the fly-in's end) and `0x80048830` (the fly-out once given) |
+| the view's pitch | `0x80199504`, clamped to ±`0x100` for the aim |
+| the fly-in | stage 13 from `0x8004868C`; `s0` steps by `0x200` to `0x1000` before each call, so the call's `t` is `s0 - 0x200` |
+| the hold | stage 13 from `0x8004870C`; record `+0x26 += 0x40` a pass; leaves on a new press read with `PadRead(1)` once `s3` reaches `0x100` |
+| the give | `func_80048178(id)` |
+| the turn back | stage 13 from `0x800488A8` |
+| the fly-back or fly-out | stage 13 from `0x80048984`, `t` as the fly-in's |
+
+An item's mesh stands on its origin (y from its height up to 0), which is why the game's
+target puts the middle of the item below the eye line (INPUT, "The item held up at the
+eye"). Its sub-model is the clip byte (record `+1`) less `0x80`; the bank is
+`func_80032CD8(model + 0x100)`'s return, and `func_80034834` makes the bank plus its u32
+at `+8` the current table (`0x8018E19C`) inside the submit.
+
+### RETURN is the chooser's last item, and the port settings page takes it
+
+Read for `patches/SettingsPage.cs` (2026-10-09). The in-game menu `func_80018E80`
+draws group 0 with `func_800208D8(0, 8, cursor, confirmed)` (returns `0x80018EE4`
+and `0x8001906C`) and steps it with `func_8001EA14(cursor, 7, &sel, &confirmed)`,
+`&cancel` at its `sp+0x10` (return `0x80018FFC`; the menu's locals are `sel`
+`sp+0x18`, `confirmed` `sp+0x1C`, `cancel` `sp+0x20`, `-99` until cancelled). Group
+0 has no header and eight items, `USE ITEM` .. `OPTION` and `RETURN` at X 31, Y
+19 + 26*i; `RETURN` is the record at `0x80064DB4`.
+
+**`RETURN` has no arm in the dispatch.** The chooser treats Cross on the last index
+as a cancel: it sets `confirmed = 1`, leaves `sel` at -1 and writes `cancel = -1`,
+which closes the menu exactly as Circle does (Circle and Start leave `confirmed` at
+0). The jump table at `0x80011098` covers `sel` 0..6 only. Every list in the game
+ends this way (`DATA`, `OPTION`, the shops), so a list's last record is a cancel
+and not a choice.
+
+So the page needs no dispatch arm: a pre on `func_800208D8` writes `PORT SETTINGS`
+over the record each time group 0 is drawn, and a post on the chooser (order 100,
+after `MenuMouse`'s) that sees `V0 == 7`, `confirmed == 1` and `cancel == -1` puts
+`cancel` back to -99, clears `confirmed` and runs the page between the menu's
+frames. The page's records are built on the guest stack and drawn with the list's
+own routines: box `func_800218B4(0x80064C20, rec)`, cursor
+`func_80021A84(0x80064BFC, rec)`, label `func_80021E10(0x80064BF0, rec)`, a header
+at OPTION's (17, 19), rows from (31, 45), values at OPTION's value column X 180.
+Its pad is the chooser's (`func_80022E90`, `func_80022E58`) against the action-mask
+words; its sounds `func_80022DC4` 0x10 (move), 0x11 (change), 0x12 (back).
+
+The label font is KF3's layout: `,` `'` `/` `!` `?` sit at `0x31`, `0x32`, `0x35`,
+`0x38`, `0x3A` in this game's own strings (`SEATH'S`, `HP/MP`, `FORMAT?`).
+**Digits at `0x20`..`0x29` are assumed from KF3** and appear in no record of this
+game's; the page's numbers (`1440P`, `144`, `16/9`) are the first to use them.
 
 ### The two-line prompt keeps its cursor nowhere
 
@@ -1809,7 +1888,8 @@ bits — `Up`/`Down` for forward, `L1`/`R1` for strafe, which is where the shipp
 WASD layout puts W/S and A/D — so a keyboard, a pad and any rebinding all reach
 it with no second table. The pad's shoulders fly up and down instead of
 strafing, read straight off the pad through `0062`'s `IsPadButtonDown` so that
-one bit cannot mean two things at once; the mute key toggles the flight.
+one bit cannot mean two things at once. The mute key was the flight's toggle; it
+is film mode now (below), and the flight's own toggle is F3 alone.
 
 ### The cinematic camera has to recover the turn as a difference
 
@@ -1858,6 +1938,23 @@ running away past a limit the base cannot follow while it sits at it.
 While it is on, the hotkey toasts (`Hotkeys.Notify`) and the pointer-capture
 glyph (`MouseIndicator.Suppressed`, driven from the `Cinematic` setter) stay
 silent, so a filmed flythrough has nothing fading in over the picture.
+
+(Removed from Verdite Core on 2026-10-09: there is no glyph left to suppress, and the `Cinematic` setter no longer touches it. See "A click captures, and the menu suspends it" in `docs/INPUT.md`.)
+
+**It holds instant mouse look off.** The look filter eases toward the angle the
+game integrated, and the port's mouse lead draws the view *past* that angle by
+the motion the tick has not spent yet; one smooths what the other jumps, and the
+two together judder. The `Cinematic` setter raises `FrameSmoothing.LeadSuppressed`
+(and `Noclip.Reset` lowers it, with `_cinematic`, so an unload mid-film leaves
+neither behind); the saved setting is left alone. See "The mouse leads the tick"
+in `docs/INPUT.md`.
+
+**Film mode is V**, or the pad's spare button (SDL `Misc1`, a DualSense's mute
+key): the cinematic camera, `Enemies ignore you` and noclip all on, or all off
+when all three already are; any mix of them turns all three on. No toast either
+way, since one would land in the shot. V is bound by neither RecompOne's stock
+keymap nor the port's WASD layout. Ported from Verdite3's debug mod.
+`KF2_DEBUG_FILMMODE_PROBE=<seconds>` presses it on a timer and prints the flags.
 
 Off by default, and it stays a debug-mod option rather than a port setting: the
 mechanism is measured, the picture is a matter of taste and has not been judged.
@@ -1918,6 +2015,25 @@ is the trap in this area: the obvious "enemies ignore you" implementations —
 feeding stage 4 a decoy player position, or refusing `func_80015620` — go
 through the acquire test and so make creatures **disappear** instead.
 
+**The arrival flag `0x8019941E`, and why pacing does not lose it here.** An unaware
+creature (state 0) found already inside its *inner* radius, `desc+0xA << 11`, is
+parked in state 2 (not drawn) until the player leaves the hold radius, unless the
+byte at `0x8019941E` is set; with it set, it wakes as if approached. The loader
+(stage 7, `func_8001689C`) sets it after an area load; the main loop clears it
+inline, `sb $0` between stages 5 and 6 (`0x80013940`/`0x80013950`), every
+iteration. Verdite3 lost its copy of this flag under frame pacing (its
+`2853787`): the store is not a stage call, so an untimed iteration after a load
+cleared it before the next tick's stage 4 read it, and an NPC by an entrance never
+woke. KF2 has the same shape and does not lose it. Measured 2026-10-11 with a
+probe on the stage gate (since removed), 44 warps through every area but 7 at
+144 fps: every time the flag was set (68, a warp sometimes loads twice), a ticked
+stage 4 saw it on the first iteration after the load and none was cleared unseen,
+with load pacing on and with `KF2_LOADPACING=0`; holding it changed nothing. The reason is `AdvanceLogicClock`: the load's own frame
+gap is always longer than a tick (67 ms), and over 250 ms grants one outright, so
+the iteration after a load always ticks. If that rule changes, or a load could
+ever finish inside a tick, this flag needs holding across untimed iterations as
+Verdite3 does (save it at stage 5's call, write it back at stage 6's).
+
 **The think is where the player actually enters, and it enters as one scalar.**
 `func_8003A3FC` is five instructions and two calls: the horizontal distance to
 the player out of `func_800154E4`, handed straight to `func_8003A300`. That one
@@ -1934,6 +2050,59 @@ scorer — and activation, animation, drawing, collision and damage are all
 untouched because none of them consult the picker. The same rule table is the
 one `func_8003A448` walks for hit reactions, which is the walk
 `patches/HitGuard.cs` fences.
+
+### The creature turn is one routine
+
+`func_8003C8D8(rec, target, maxSpeed, accel)` turns a creature, and nothing else
+in the motion code does. It reads the yaw at `rec+0x42` and the turn velocity at
+`rec+0x58` (an `s16`, zeroed by the spawn `func_80039B70`):
+
+- yaw already on the target: the velocity is zeroed and nothing moves;
+- otherwise the velocity gains `accel` toward the target (the shorter way round,
+  by `func_80015364`: `(a - b) & 0xFFF < 0x801`) and is clamped to `±maxSpeed`,
+  then added to the yaw;
+- a step that carries the yaw past the target puts it on the target, so the turn
+  never oscillates. The test looks a half turn either side, so it holds for a step
+  under `0x800`.
+
+There is no deceleration: the velocity is still at speed when the yaw lands, and
+the next call zeroes it. Its callers:
+
+| caller | target | `maxSpeed` | `accel` |
+|---|---|---|---|
+| `func_8003DEBC` at `0x8003F2F4` | `func_80015394(rec+0x50, rec+0x54)`, the heading of a motion vector | `rule+0x16` | `desc+0x4` |
+| `func_8003DEBC` at `0x8003FD50` | `rec+0x20` | `rule+0x10` | `desc+0x4` |
+| `func_8003CA08(target, ..., speed, ...; accel on the stack)` | its `a0` | its `a2` | its first stack word |
+| `func_8003CCAC` | `*(s16*)(a0 + 2)` | its `a2` | its first stack word |
+
+`func_8003CA08` is the common one: seven calls from `func_8003DEBC` plus one from
+`func_8003CA78`, and two each from the `fdat02` and `fdat11` modules; `fdat23`
+calls `func_8003C8D8` itself. From `func_8003DEBC` it is mostly given `rec+0x64` as the
+target, `rule+0xE` as the speed and `desc+0x4` as the acceleration. Here `rule` is
+the installed rule (`rec+0x60`), `desc` the type's descriptor (`0x801758EC`), and
+`rec+0xE` the action the switch at `0x800120D8` dispatches on. `rec+0x64` is
+either a wander heading, `rand >> 3` (`0x8003E448`, in action `0x01`, the walk the
+census sees most), or the player's bearing taken on the tick of the turn
+(`func_80015394` called at `0x8003E6F8` and `0x8003F000`).
+
+**`func_80015394(dx, dz)` is `-atan2(dx, dz)`** in a turn of 4096, through
+`catan`: the game's yaw runs clockwise seen from above. A player's `goto` with yaw
+`y` walks along bearing `-y`, which is the same fact seen from the other side.
+
+**What else the turn needs to know.** A creature's HP is the `u16` at `rec+0x1A`:
+`func_8003A9CC` subtracts the hit from it, and on a killing hit writes 0 and installs
+the rule of kind 3 through `func_8003A490(rec, 3)`. Stage 4 bumps a run count at
+`0x80175908` once at the end of every run; it is the word the think's
+`counter & 3` test reads. Action `0x19` (`0x8003FA14`) is driven by an animation
+counter at `rec+0x70` and never turns; a creature stands in it for seconds between
+chases. Actions `0xF0` and up are past the 32-entry table at `0x800120D8` and go to
+`0x800400E4`.
+
+Measured in area 1 (see "Enemies turn faster" in
+[PATCHES_AND_MODS.md](PATCHES_AND_MODS.md)): accelerations 3-4 a tick, speeds 4-52,
+against the player's own `0x1C` moving and `0x23` standing. So a creature's quarter
+turn from rest takes about 22 ticks, 1.5 s at 15 Hz, and the acceleration rather
+than the top speed is what makes it slow.
 
 ### Editing the character: the split is the design
 
@@ -2016,6 +2185,57 @@ exception and every name decoding. **What has not been looked at is the game's
 own inventory screen**: that the menu lists those 98 items, with those names, and
 that using or equipping one behaves, is a thing a person has to see.
 
+### The maps
+
+Read 2026-10-14 off `generated/game.cs` and the GAME.EXE name table, and run.
+
+**The items.** Names from the table at `0x80065B24 + id * 0x18`: `0x43` PIRATE'S MAP,
+`0x44` MINER'S MAP, `0x45` NECRON'S MAP, `0x46` GOLD COIN, `0x47` BLOOD STONE (the first
+of the ids the use routine handles). Held like any item: one count byte at
+`0x8009B52C + id` (see "The inventory is one byte per item").
+
+**The ITEM page** `func_80019204` (in-game menu screen 0, from the 7-arm table at
+`0x80011098`) lists the held ids through `func_80019444` and runs what is picked. Ids
+`0x43`..`0x45` do not go to the use routine: the page calls the map viewer directly,
+`func_80019B54(id)`, after `func_80022D80`, and follows it with `func_80022DC4(0x12)`.
+Every other id goes to `func_800197D4(id)`, the use routine (potions, stones, level-up
+at `0x4A` through `func_800244CC`, and so on).
+
+**The viewer** `func_80019B54(id)`: the picture index is `0x1E0 + (id - 0x43) * 8` plus
+the byte at `0x8017E065`; it loads the picture (`func_80017F1C`, `func_800177D0`,
+`func_800183A0`, the TIM through `func_80035684`), draws a two-field loop with the
+menu's frame head and presenter, and returns after `PadRead` reports any button,
+unloading through `func_800177F8`. There is no CD callback in the path that was
+found: the picture was loaded and shown with no wait for a read, unlike KF3's viewer.
+
+**The wrapping.** `MapKey` calls the menu's enter `func_80022754` first (it saves the
+world's descriptors and grabs the displayed frame), then `func_80022D80`, the viewer,
+`func_80022DC4(0x12)` and the menu's leave `func_800228C8`, so `MenuWorld` draws the
+world live behind the picture as it does for the ITEM page. Not yet confirmed: whether
+the enter and leave are strictly necessary (the viewer ran without them in no test).
+
+**The port's map key** (`patches/MapKey.cs`, `KF2_MAPKEY`): M, or the touchpad (SDL
+button 20). Taken in a post on stage 3 (`func_8002A550`) on a world tick
+(`FramePacing.FirstWalkOfTick`). Refused, with a log line, when max HP `0x80199426` is
+zero, the state byte `0x801994E1` is `0x11` (dead), an overlay loaded less than 1 s ago
+(the "area loading" test here is a heuristic, not a flag of the game's), or
+`MenuWorld.MessageLive` is set (a message box's fade, which is the only message flag the
+port has; a message's own modal loop also keeps stage 3 from running). A press older than
+0.5 s is dropped. It opens the first map held in id order, or logs "no map held". While
+the picture is up, M or the touchpad again holds Circle through `PadReadEvent`.
+
+**Measured** 2026-10-14, slot 2 (area 1, fdat05), with `KF2_MAPKEY_GIVE=0x43`, which
+gives PIRATE'S MAP through the game's own `func_80048178` (`held=1`), and
+`KF2_MAPKEY_TEST=8`: `map key: map item 0x43, area 1` opened the picture, the agent
+beacon stopped while it was up (the stage is inside the viewer), and
+`KF2_MAPKEY_CLOSE=5` closed it (`map key: closed`), after which the beacon resumed and
+`goto 74500 -14848 74986` moved the player from x 73709 to 74500. The real key and the
+touchpad were not pressed; the shell's `press` cannot close the viewer, since its
+command is drained by the stage-3 hook the viewer blocks. **Not measured**: the three
+maps' pictures and whether each is the right one for the area; whether a second map
+changes the picture; the refusals (logged, not run); a map opened in another area. **Not
+judged by eye**: whether the right picture is shown and how it looks.
+
 ## Full-screen messages are pictures, and the world behind them is a 1x copy
 
 Signs and NPC dialogue do not go through the font drawer `func_80021FCC` at all.
@@ -2077,3 +2297,33 @@ target, or redraw with stage 13 as `LoopPacing` does. The text: a replacement pe
 (file, entry), drawn where quads 3-4 go. Nothing in the runtime draws a port
 texture into the GL frame; the map draws through ImGui over `OutputView`, which only
 blends by alpha, so a replacement there would be pre-composited.
+
+## The bow and the arbalest
+
+Found 2026-10-09 for rumble and gyro aim (Verdite3's `d6ee250`, `1d84575`). The bow is
+`func_800271D0`'s branch for weapons 16 (BOW) and 17 (ARBALEST): the equipped weapon is
+`u8 0x801994AF` (`0xFF` none). Stage 3 runs `func_800271D0` once a tick, whatever the
+weapon, and not under a menu.
+
+| address | what |
+|---|---|
+| `u8 0x801994AF` | the equipped weapon id |
+| `s16 0x801994A4` | the swing clock: -1 idle, the draw, then the loose |
+| `u8 0x801994AE` | for a bow, 0 drawn, 1 loosed |
+| `u16 0x8019942E` | the draw's power, 0..5000, climbing once the clock passes the record's `+0x1E` |
+| `u32 0x801994A0` | the nocked arrow's object, 0 none |
+| `u8 0x8009B5A1`, `0x8009B5A2` | ARROW FOR THE BOW (117) and ELF'S BOLT (118) held |
+
+The press (`func_800262C8(0)`, from stage 3's just-pressed Square) sets the clip byte to
+0 and the clock to 0. While the clip byte is 0 the bow is drawn: on the clock's first
+tick an arrow is nocked (one of 117 for the bow, 118 for the arbalest), and each tick
+adds the weapon record's `+0x1C` (`0x12C` for the bow) until the clock holds at `0x0FFF`,
+full draw, for as long as Square is held. Letting go looses it: the clip byte 1 and the
+clock back to 0, then stepped `0x190` a tick to -1.
+
+Measured (`KF2_AUTOSTART=2`, the bow and five arrows given and equipped through
+`func_80026210` by a temporary hook, Square held 2.5 s over the shell): the clock 300,
+600 ... 4095 a tick with the arrows 5 to 4, the power from 867 to 5000 past clock 2700;
+on release clip 1, the clock 0, 400 ... 4000, then -1; the next press nocked again
+(arrows 3).
+

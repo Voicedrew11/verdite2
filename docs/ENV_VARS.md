@@ -16,7 +16,7 @@ KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec  # or KF2_LOG=all; wired up in Program.cs
 KF2_CDTRACE=1                          # stack trace on first CD register access (patch 0002)
 KF2_AUTOPAD=8:Start:400,20:Circle:200  # scripted pad input: seconds:button:holdMs
 KF2_FPS=120                            # 60 (default), any number, or off; see "Any frame rate"
-KF2_TICKRATE=30                        # ticks a second the world runs at (20, and no longer a setting)
+KF2_TICKRATE=20                        # ticks a second the world runs at (15, and no longer a setting); 20 and 30 are the comparisons
 KF2_FPS_GATE=80037C0C+8002A550+80040348+80046A60+8004910C+80033FBC+8002DC78  # what is ticked
 KF2_FPS_LOGIC=full                     # no gating; scale the movement deltas instead
 KF2_FPS_PROBE=1                        # a line a second: fps drawn, presents, ticks taken, what each smoother is doing; a `no boundary` line while the watchdog paces
@@ -25,7 +25,8 @@ KF2_PROFILE_OUT=profile.csv            # every frame's sections as CSV; scripts/
 KF2_PROFILE_SPIKE=12                   # a console line for each frame over 12 ms of work, with its top sections
 KF2_PROFILE_FUNCS=stages               # time the thirteen main-loop stages, or name functions: game:80040348+800342D8
 KF2_PREJIT=0                           # compile each method on its first call again (it is warmed on a background thread by default)
-KF2_PREJIT_PROBE=1                     # a line per overlay as it is warmed, and what each cost
+KF2_PREJIT_PROBE=1                     # a line per batch (overlay, patches, runtime, generics) as its last method is done, and when
+KF2_PREJIT_THREADS=n                   # threads for that pass, taking from one ordered list (a quarter of the cores, 1-4)
 KF2_FRAMEVIEW=panel                    # open the frame viewer at boot (Shift+F toggles it)
 KF2_FRAMEVIEW_CAPTURE=20,40            # capture stage 13 at these seconds after boot; a summary on the console
 KF2_FRAMEVIEW_OUT=dir                  # also write each capture's commands and calls as CSV there
@@ -35,7 +36,8 @@ KF2_MESSAGETEXT=1                      # sign and dialogue text drawn as text on
 KF2_MESSAGETEXT_PROBE=1                # each message's (file, entry), its decoded lines or why it was left alone, and what the panel drew
 KF2_MESSAGETEXT_TEST=3:0,6:360         # open these messages from the main loop 10 s in; KF2_AUTOPAD dismisses them
 KF2_MENUWORLD=0                        # a menu, shop, sign or dialogue pastes the frozen 320-wide frame again (the world is drawn live by default)
-KF2_MENUWORLD_PROBE=1                  # world passes a second, primitive bytes used, overflows, sessions refused; a line per message fade
+KF2_MENUWORLD_PROBE=1                  # world passes a second, primitive bytes used, overflows, sessions refused; a line per message fade: its step draws, VSyncs and ms, apart from frames held for the button
+KF2_MESSAGE_FADE=2                     # 1-4: vblanks each step of a sign's or message's fade is shown for, where MenuWorld draws it; 1 is the game's own. Gameplay > Message fade length, kept as kf2.messagefade; the variable wins
 KF2_LOOPPACING=0                       # loops that render their own frames back on the render rate (on by default)
 KF2_LOOPPACING=pace                    # hold such a loop but do not redraw: right speed, tick-rate picture
 KF2_LOOPPACING=nocarry                 # redraw, but do not carry a view the loop pans itself
@@ -71,13 +73,15 @@ KF2_SMOOTH_FLUID_PROBE=1               # live slots, dest rects, leftover V shif
 KF2_HITGUARD=0                         # let the hit path's reaction lookup fault (it is fenced by default; docs/TODO.md #14)
 KF2_WALLGUARD=0                        # the recompiled wall slide alone: standing inside map collision freezes the game (guarded by default; "The wall slide never leaves a wall it starts in" in docs/GAME_INTERNALS.md)
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
+KF2_HANG=15                            # seconds without a frame before a hang report is written to crashes/; 0 turns the watchdog off (15 by default; "Crash reports carry the port's place" in docs/DEVELOPMENT.md)
+KF2_FAULT=hook                         # hook, crash or hang, optionally :seconds after the first area (20): makes that report on purpose, to test the paths; never for play; hook@<mod id> (hook@kf2.zbuffer) makes the hook that patch's, so it is turned off and its settings page greys (off by default)
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_TEXPROBE=1                         # textured vs flat prims a second, and a per-page VRAM census, into texprobe.log
 KF2_WIDESCREEN=4:3 KF2_WIDESCREEN_PROBE=1  # aspect (16:9 by default), and the margin census
 KF2_WIDESCREEN_PROBE=2                   # the census plus every wide primitive, once per shape
 KF2_WIDESCREEN_EFFECTS=0                 # leave the death fade and damage flash 320 wide (stretched by default)
-KF2_WIDESCREEN_HUD=1                     # anchor the HP/MP panel and icons to the new edges (off; no longer a setting)
+KF2_WIDESCREEN_HUD=1                     # anchor the HP/MP panel and the compass to the new edges, by the HUD records' X; wins over Video's *HUD at the screen edges* (off)
 KF2_WIDESCREEN_CULL=0                    # leave the game's view cone at its 4:3 shape (widened by default)
 KF2_WIDESCREEN_CULL=1.5                  # pin a widening factor instead of the aspect's
 KF2_WIDESCREEN_CULL_PROBE=1              # tiles lit, and what the 24x24 grid clipped
@@ -118,6 +122,8 @@ KF2_STAGE13_NEEDLE=0                     # step the compass needle's spring ever
 KF2_STAGE13_PROBE=1                      # frames drawn and needle steps a second
 KF2_CAMERABLOCK=0                        # the recompiled camera block func_8002E22C instead of the C# one (on by default)
 KF2_CAMERABLOCK=verify                   # run both on every call and compare RAM, registers and the GTE; the recompiled result stands
+KF2_VIEW_FRACTION=0                      # the view's matrices built at the whole angles the smoothing and the mouse lead round to, not a fraction of a unit past them (on by default; the viewfrac verb); see "The view turns by a fraction of a unit"
+KF2_VIEW_FRACTION_PROBE=1                # a line a second: frames blended, and how far each frame's drawn yaw step is from the steady one, read back out of the view matrix
 KF2_GTE_FAST=0                           # the GTE's general path for the lighting, depth-cue, RotTrans and RotTransPers ops (0047)
 KF2_GTE_LIGHTCACHE=0                     # light every normal afresh instead of remembering its matrix products
 KF2_VIEWCLIP=0 KF2_VIEWCLIP_PROBE=1      # the game's view-space clip volume, and where it cuts
@@ -143,6 +149,7 @@ KF2_PERPIXEL_PROBE=2                   # also the shader's formula at every reco
 KF2_EVENFOG=0                          # the game's fog and light edges (even fog and lighting is on by default; needs Fast geometry)
 KF2_EVENFOG_BLEND=0                    # no fog blend: the game's hard fog edge between records
 KF2_EVENLIGHT=0                        # no light blend: the game's hard colour matrix and back colour edge
+KF2_FOG=distance                       # the fog: corners (the game's), depth (each pixel's view depth) or distance (from the eye, 0100; the default since 2026-10-09); or 0, 1, 2, and `radial` is distance; unset, Video ▸ Enhancements ▸ Fog
 KF2_SUBPIXEL=0                         # whole-pixel vertex positions (sub-pixel is on by default)
 KF2_SUBPIXEL_PROBE=1                   # how far vertices actually move, in pixels; also polygons drawn back to front, faces the fractional cull changed, and the HUD's vertices placed with a fraction
 KF2_SUBPIXEL_CULL=0                    # cull the C# assemblers' faces on whole pixels again, as the game does (fractional corners by default under sub-pixel)
@@ -204,10 +211,17 @@ KF2_RETAINED_PROBE=1                   # the mesh and its check against the GTE'
 KF2_RETAINED_LIT=0                     # leave authored lights and glows out of the reflections (in by default)
 KF2_RETAINED_MIPS=0                    # no mip atlas in the reflections, only the anisotropic taps (on by default)
 KF2_GPUWORLD=0                         # the map's opaque faces drawn on the GPU from the retained scene, not assembled by the game's code (on by default; 0 never; unset, Video ▸ Frame pacing ▸ GPU geometry; the `gpuworld on|off` shell verb; GL core only; 0085)
-KF2_GPUWORLD_PROBE=1                   # a line every 2 s: draws, walks that missed the map, triangles a draw, halves left whole and kept for their water, the water's slices, empty calls and calls that waited, and the draw's CPU time by part; the models taken, culled and drawn, and their light runs; light generations a frame and map builds; the surface buffer read back against the frame's depth (needs a reflection or the murk on)
+KF2_GPUWORLD_PROBE=1                   # a line every 2 s: draws, walks that missed the map, triangles a draw, halves left whole and kept for their water, the water's slices, empty calls and calls that waited, and the draw's CPU time by part; the models taken, culled and drawn, and their light runs; light generations a frame and map builds; the surface buffer read back against the frame's depth (needs a reflection or the murk on): behind it, an opaque surface in front of it (`ahead`, which must stay near 0: an opaque surface in front of the depth is the occlusion's box round a billboard), none
 KF2_GPUWORLD_SURFACES=0                # leave the GPU-drawn map out of the occlusion's normals and the surface buffer (a comparison; the `gpuworld surfaces off` verb)
-KF2_GPUWORLD_FOGZ=0                    # fog the GPU-drawn map from the corners' screen-affine cue again, not each pixel's depth (a comparison: a floor clipped at the eye fogs to black)
+KF2_GPUWORLD_FOGZ=0                    # the old spelling of KF2_FOG=corners: fog the GPU-drawn map from the corners' screen-affine cue again, not each pixel's depth (a comparison: a floor clipped at the eye fogs to black)
 KF2_GPUWORLD_NEAR=16                   # the GPU-drawn map's near plane in view depth (16; the game's clipper keeps everything past 0)
+KF2_GPUWORLD_DEPTHCAP=1                # 0087: the ceiling on 0051's slope term in the GPU world, in game pixels at the fragment's depth (1; 0 unbounded, the comparison: a face seen edge-on drew over what stood hundreds of units in front, issue #52)
+KF2_GPUWORLD_WELD=1                   # the map's corners 10 units off a cell boundary put on it (along a leaning wall's run at 45 degrees), and parallel one-face edges within 32 units merged, closing the overlap's hairlines in sloped ceilings and leaning walls (0 the comparison)
+KF2_GPUWORLD_SEAMS=x,z,r[,ymax]       # after each map build, every map edge within r of (x,z) that one triangle uses, and the vertices lying on it
+KF2_GPUWORLD_DUMPMAP=dir               # each map build's triangles to dir/map_NNN_TABLE.csv (x,y,z,flags a corner), and the seam corners the build merged
+KF2_GPUWORLD_TOLERANCE_PROBE=1         # 0087's probe: per map and model colour pass, the samples that pass only by more than 0.25/1/4/16/64/512 units; read with `gpuworld tolerance` (occlusion queries, a stall each)
+KF2_GPUWORLD_MODELCLIP=0               # 0103 off, the comparison: a retained model's corner the GTE cannot project (nearer than H/2, or off the divide's range) placed at the divide's saturated ends again, as the packets place it, so a large face reaching past the eye draws as a sheared slab; on by default (such a face is clipped at the near plane); also `gpuworld modelclip on|off`
+KF2_GPUWORLD_CLIP_PROBE=1              # a line every 5 s: the main view's instanced model faces kept by depth, and those with a corner the GTE cannot project (the ones 0103 clips), the forced-blend twin's apart; taken on the CPU from each submit's GTE; also in the `gpuworld` state (clipFaces, clipped, clipTwinFaces, clipTwinClipped)
 KF2_GPUWORLD_WATER=0                   # leave the map's water on the packets under the GPU world renderer (a comparison; the `gpuworld water off` verb)
 KF2_GPUWORLD_MODELS=0                  # leave the object walk's models on the packets under the GPU world renderer (a comparison; the `gpuworld models off` verb)
 KF2_GPUWORLD_MIRROR=0                  # leave the planar walk's mirror on its packets under the GPU world renderer (a comparison; the `gpuworld mirror off` verb; `gpuworld mirror hide` leaves it undrawn)
@@ -237,24 +251,61 @@ KF2_REMASTER_SHADOWS=0                 # no shadows from the authored lights (on
 KF2_REMASTER_SHADOW_MODELS=0           # only the map casts: creatures and objects stay out of the lights' cubemaps (they cast by default)
 KF2_REMASTER_SHADOW_SIZE=1024          # a shadow cubemap face's size in texels (64-4096)
 KF2_REMASTER_SHADOW_BIAS=6 KF2_REMASTER_SHADOW_OFFSET=1.5 KF2_REMASTER_SHADOW_SOFT=1.25   # compare bias in world units; normal offset and filter spread in texels (the `light shadows tune` verb sets them live)
+KF2_PROJECTILE_LIGHTS=0|1              # magic projectiles give off light in their own colour, over the saved Video ▸ Enhancements ▸ Glowing spells (on by default); needs no remaster pack and works with KF2_REMASTER=0; the `projectiles` verb switches it for the session
+KF2_PROJECTILE_LIGHTS_PROBE=1          # a line per effect mesh the first time it is decided: faces, share added, mean colour, glows or not
+KF2_PROJECTILE_LIGHTS_RADIUS=5120 KF2_PROJECTILE_LIGHTS_INTENSITY=1.5   # each projectile light's reach in world units (a tile is 2048) and its strength
 KF2_LIGHTCENSUS=1                      # who reads and writes the area's light records, by stage, every 5 s (slow: every RAM access takes the slow path; run with KF2_PRIMBUF=1)
 KF2_FACE_PROBE=1                       # every tile face given one of the ids 4-7 by its key; checks the subdivider's face order and a pick from the frame's triangles against the GPU's ids (needs a reflection or the murk on, and KF2_SSR_PROBE=1; overrides any authored material)
 KF2_TEXCENSUS=1                        # the texture-key census: keys, art, overlapping rects, dynamic places, what a pack covers, uploads, every 5 s; the `textures` shell verb saves it (0073)
 KF2_TEXKEY=face                        # key a replacement on the face's texture rectangle, not the image the game uploaded it as; =triangle each triangle's own UVs, as upstream does
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
-KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report
+KF2_ANALOG_ACCEL=1 KF2_ANALOG_INSTANTSTOP=1  # the stick faster than the original: look acceleration (to 2.2x the D-pad's rate) and a dead stop on release (both off by default)
+KF2_ANALOG_EASE=0                        # the right stick at the original's speed without its ease: full speed at once, a dead stop on release (on by default; 2D only)
+KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report (in 3D, also the left stick's turn: wanted, driven, the ramp)
+KF2_TANK=1                               # 3D controls: the left stick walks and turns, L1/R1 strafe, the right stick is not read (0 forces 2D; unset, Gameplay ▸ Controls, PORT SETTINGS ▸ GAMEPLAY ▸ CONTROLS)
+KF2_RUMBLE=0 KF2_RUMBLE_HD=0             # no rumble as a bow is drawn and loosed; two motors on a Switch pad or a DualSense too (both on by default)
+KF2_RUMBLE_PROBE=1                       # a line a second: the phase, the tension, waves asked, HD; 2 also a line each tick the bow's state changes
+KF2_RUMBLE_TEST=1                        # from 3 s in, the bow's rumble three times over without a bow
+KF2_GYROAIM=0 KF2_GYROAIM_PROBE=1        # no gyro aim with a drawn bow (on by default); its line a second
+KF2_ITEMTURN=0 KF2_ITEMTURN_GYRO=0       # a picked-up item and the menu's item preview not turned by the mouse, the right stick and the gyro / not by the gyro (both on; Gameplay ▸ Turn a held item, kf2.itemturn.on, kf2.itemturn.gyro)
+KF2_ITEMTURN_PROBE=1                     # a line a second while an item is held up or previewed: the turn, the spin held, which input moved it, the tilt axis against the camera's right
+KF2_ITEMTURN_TEST=<id>                   # hold up item <id> (decimal or 0x hex) through the game's pickup 10 s after the first area loads, the right stick full right and half down for the hold's second second (probe on); the hold waits for a button
+KF2_ITEMTURN_TEST=preview                # the same stick for the second second of the first menu preview drawn
+KF2_ITEMEYE=0                            # a picked-up item held where the game puts it: its origin below the eye line, so the item sits low and swings as it spins (on: the mesh's middle on the view's axis, the camera's eye in place of the routine's)
+KF2_ITEMEYE_PROBE=1                      # the pickup's targets, the held origin and the mesh's middle from the eye twice a second, and each held mesh's box
 KF2_KEYS=stock                           # RecompOne's own key bindings; the port ships WASD
-KF2_MOUSE=0                              # mouse look off (it is on by default; Escape captures the pointer)
+KF2_MOUSE=0                              # mouse look off (always on otherwise, not a setting: kf2.mouse.on is no longer read; a click on the picture captures the pointer)
 KF2_MOUSE_TURN=1.0 KF2_MOUSE_LOOK=1.0 KF2_MOUSE_INVERTY=1   # its sensitivities and look-Y
 KF2_MOUSE_BUTTONS=Square,Triangle,Cross  # left, right, middle, as pad buttons
-KF2_MOUSE_KEY=Escape                     # the key that captures and releases
-KF2_MOUSE_LEAD=0                         # mouse look waits for the tick, as with Gameplay ▸ Instant mouse look off (on by default); =1 forces it on
-KF2_MENUMOUSE=0                          # the menu pointer off (on by default)
+KF2_MOUSE_KEY=F9                         # a key that captures and releases besides the click; None (the default) for none, and Escape takes Escape from the menu
+KF2_MOUSE_LEAD=0                         # mouse look waits for the tick (always on otherwise; not a setting, kf2.mouse.lead no longer read)
+# Mouse aim is not a setting (INPUT, "Mouse aim is not a setting"): these KF2_MOUSE_AIM* variables are the comparison and the only way to turn it on. No saved kf2.mouse.aim* key is read.
+KF2_MOUSE_AIM=1                         # the mouse moves a reticle and the player turns toward it, instead of the view (1 on, 0 off; off by default)
+KF2_MOUSE_AIM_RING=32                   # mouse aim's commit ring, in angle units: the reticle wanders inside it without turning the player (default 32, about 2.8 deg; 0 turns every offset into a turn, as before)
+KF2_MOUSE_AIM_HEAD=1                    # mouse aim's head look: the view is drawn at the facing plus the reticle, so it follows the hand while the body turns toward it (1 on, 0 off)
+KF2_MOUSE_AIM_HOLD=1                    # mouse aim's held view: the picture holds still while the body turns, the facing's dot travels to the circle, and the view recentres once the turn lands (head look wins if both are on)
+KF2_MOUSE_AIM_SENS=1.0                  # scales the hand's motion before it reaches mouse aim's reticle, on top of the turn sensitivity (0.1 to 4, default 1.0)
+KF2_MOUSE_AIM_SETTLE=3                  # ticks a small aim must hold still inside the ring before it is carried out (default 3; 0 is off, and a small aim then never turns the player)
+KF2_MOUSE_AIM_PROBE=1                   # one line a tick while mouse aim's reticle or a step is not at rest: offset, step, velocity, yield, measured turn, still count
+KF2_MOUSE_AIM_MARKS=aiming              # when mouse aim's dot, line and circle are drawn: off, aiming (only during a turn or with the circle off the middle; the default) or always
+KF2_MOUSE_AIM_LINE=0                    # leave out mouse aim's line from the middle to the circle (1 draws it, the default)
+KF2_MOUSE_AIM_DOT=0                     # leave out mouse aim's dot, the facing (1 draws it, the default)
+KF2_MOUSE_AIM_EASE=0                    # mouse aim's turn without the D-pad's ease: full rate at once, stopping dead on the reticle (1 eases, the default)
+KF2_DEBUG_FILMMODE_PROBE=5               # mods/kf2debug: toggle film mode (V) every 5 s and print the three flags and FrameSmoothing.LeadSuppressed
+KF2_MENUMOUSE=0                          # the menu pointer off (always on otherwise, not a setting: kf2.menumouse.on is no longer read)
 KF2_MENUMOUSE_PROBE=1                    # the layout table, the pointer's row, and what it did
+KF2_SETTINGSPAGE_PROBE=1                 # PORT SETTINGS in the in-game menu: a line for each open, page, step, save and discard (docs/SETTINGS.md); RUN SETUP and setup closing too
+VERDITE2_SETUP=1                         # the launcher shows the first-run setup even when it is not due (a player with settings is never due); "Onboarding" in docs/SETTINGS.md
 KF2_AUTORELOAD=1 KF2_AUTORELOAD_SLOT=0   # reload the last save on death
+KF2_FOCUS_PAUSE=0                        # keep running and sounding while the window has no focus (on by default, off for a run KF2_SHELL, KF2_AUTOPAD, KF2_AUTOSTART or KF2_AGENT drives; Gameplay ▸ Pause in the background, kept as kf2.focuspause.on; the variable wins)
 KF2_GEARCOMPARE=0                        # no stat comparison on the equip and buy prompts (on by default; Gameplay ▸ Compare gear)
 KF2_GEARCOMPARE=verify                   # draw each panel through the recompiled menu routines too and compare every byte; a line a second
+KF2_ENEMYTURN=2                          # 1-8: how fast creatures turn at the player, a multiple of the game's own (speed x k, acceleration x k^2); Gameplay ▸ Enemy turn speed, kept as kf2.enemyturn; the variable wins
+KF2_ENEMYTURN_TRACK=0                    # an engaged creature standing still is not turned at the player each tick (on by default; inert at x1); Gameplay ▸ Track you while standing, kept as kf2.enemyturn.track
+KF2_ENEMYTURN_ALL=1                      # scale every creature turn, wandering too, not only turns at the player -- comparison only
+KF2_ENEMYTURN_PROBE=1                    # every 5 s, a census of func_8003C8D8's callers: calls, turning, at the player, speed, acceleration, peak velocity, actions, types
+KF2_ENEMYTURN_PROBE=2                    # also a line a tick for each active creature within 12000: action, rule, HP, facing off the player, velocity, distance, and turned / tracked / standing
 KF2_AUTORELOAD_DELAY=2.0                 # seconds of the death first (2.0; no longer a setting)
 KF2_AUTOSTART=2                          # boot straight into save slot 1..3, past the title menus
 KF2_AUTOSTART=new                        # the same, but stay in the New Game (fdat02, which has scrolling water)
@@ -263,24 +314,29 @@ KF2_ENDINGEXIT=0                         # leave "The End" hanging, as the origi
 KF2_AGENT=1                              # [KF2-AGENT] state lines on stdout: overlay, inGame, HP/MP/area/slot
 KF2_SHELL=1                              # TCP 127.0.0.1:27900 line protocol: state|nearby|load|warp|press|kill|goto|view
 KF2_UISCALE=1                            # force the interface scale, and save it
-KF2_ICON=orb                             # the shipped verdite mark as the window icon (the game's memory-card icon, off the disc, by default)
-KF2_ICON=off                             # no window icon at all
+KF2_ICON=off                             # no icon at all (the game's memory-card icon, off the disc, by default; the port ships no other)
 KF2_ICON=1                               # which of the card icon's three frames (0)
-KF2_ICON_INSTALL=0                       # do not write the icon into the desktop's icon theme (Linux; it is what a Wayland compositor reads)
-KF2_MAP=0                                # the map off entirely (on by default); M opens it
-KF2_MAP_MINIMAP=1                        # the corner minimap on (off; no longer a setting); N toggles it
-KF2_MAP_MARKERS=1                        # creatures, objects, effects and sprites on (off; no longer a setting)
-KF2_MAP_STYLE=blueprint                  # the port's original blueprint plan (the game's own map; no longer a setting)
-KF2_MAP_SHADE=1                          # colour each tile by its height byte (off; no longer a setting)
-KF2_MAP_WALLS=1                          # tint the tiles whose +4 bit 0x80 is set (off; no longer a setting)
-KF2_MAP_PAUSE=0                          # leave the world running while the full map is up (it pauses; no longer a setting)
-KF2_MAP_FLOOR=lower                      # pin a stacked half instead of following the player (no longer a setting)
-KF2_MAP_ARROW=1                          # the player as an arrow with a heading, not a dot (no longer a setting)
-KF2_MAP_PROBE=1                          # dump the 80x80 tile grid as ASCII, its occupied extent and a marker census, and open both maps
-KF2_MAP_FOG=0                            # fog of war off: the whole floor plan (on by default)
-KF2_MAP_FOG_LOS=0                        # its line-of-sight gate off (on; no longer a setting)
-KF2_MAP_FOG_PROBE=1                      # tiles seen, tiles lit now, tiles refused, records, flushes
-KF2_MAP_FOG_PROBE=2                      # also the raw 24x24 grid, the gate's verdict and its walls
+KF2_ICON_INSTALL=0                       # do not write the icon into the desktop's icon theme (Linux; it is what a Wayland compositor reads), and point no Windows shortcut at icon.ico
+# The KF2_MAP* switches below belong to the kf2.map mod (mods/map, off until enabled in the
+# Mods panel): they are read in its OnLoad and have no effect with the mod disabled.
+KF2_MAP=0                                # (kf2.map mod, read only when it is enabled) the map off entirely (on by default); G opens it
+KF2_MAPKEY=0                             # core (not the mod): M and the touchpad do not open the game's own map item (PIRATE'S, MINER'S, NECRON'S); on by default
+KF2_MAPKEY_TEST=8                        # open the held map eight seconds into the first area, as a press would
+KF2_MAPKEY_GIVE=0x43                     # test only: give that item (0-0x77) once through the game's own give, for a save with no map
+KF2_MAPKEY_CLOSE=5                       # test only: close the viewer by itself five seconds after it opens (the shell's press cannot reach it)
+KF2_MAP_MINIMAP=1                        # (kf2.map mod, read only when it is enabled) the corner minimap on (off; no longer a setting); N toggles it
+KF2_MAP_MARKERS=1                        # (kf2.map mod, read only when it is enabled) creatures, objects, effects and sprites on (off; no longer a setting)
+KF2_MAP_STYLE=blueprint                  # (kf2.map mod, read only when it is enabled) the port's original blueprint plan (the game's own map; no longer a setting)
+KF2_MAP_SHADE=1                          # (kf2.map mod, read only when it is enabled) colour each tile by its height byte (off; no longer a setting)
+KF2_MAP_WALLS=1                          # (kf2.map mod, read only when it is enabled) tint the tiles whose +4 bit 0x80 is set (off; no longer a setting)
+KF2_MAP_PAUSE=0                          # (kf2.map mod, read only when it is enabled) leave the world running while the full map is up (it pauses; no longer a setting)
+KF2_MAP_FLOOR=lower                      # (kf2.map mod, read only when it is enabled) pin a stacked half instead of following the player (no longer a setting)
+KF2_MAP_ARROW=1                          # (kf2.map mod, read only when it is enabled) the player as an arrow with a heading, not a dot (no longer a setting)
+KF2_MAP_PROBE=1                          # (kf2.map mod, read only when it is enabled) dump the 80x80 tile grid as ASCII, its occupied extent and a marker census, and open both maps
+KF2_MAP_FOG=0                            # (kf2.map mod, read only when it is enabled) fog of war off: the whole floor plan (on by default)
+KF2_MAP_FOG_LOS=0                        # (kf2.map mod, read only when it is enabled) its line-of-sight gate off (on; no longer a setting)
+KF2_MAP_FOG_PROBE=1                      # (kf2.map mod, read only when it is enabled) tiles seen, tiles lit now, tiles refused, records, flushes
+KF2_MAP_FOG_PROBE=2                      # (kf2.map mod, read only when it is enabled) also the raw 24x24 grid, the gate's verdict and its walls
 KF2_SPU_INTERP=sinc                      # voice interpolation: gauss (the console's), cubic, sinc (default); also XA
 KF2_REVERB=hardware                      # legacy, hardware (the console's resampling FIR), enhanced (FDN, default)
 KF2_AUDIO_PROBE=1                        # voices, clamps, mixer cost, underruns, levels, reverb preset, device rate

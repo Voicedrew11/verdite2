@@ -42,8 +42,8 @@ SIGS="$TOOLS/RecompOne.Recompiler/AutoConfigure/signatures/psyq.json"
 
 usage() {
     cat <<'USAGE'
-usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork]
-                      [--pull-core [ref]] [--push-core] [--no-build]
+usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork] [--rejoin-fork]
+                      [--pull-core [ref]] [--push-core] [--rejoin-core] [--no-build]
 
   (no flags)        build the recompiler
   --signatures      fetch AutoConfigure/signatures/psyq.json (15.7 MB, gitignored;
@@ -51,9 +51,14 @@ usage: setup_tools.sh [--signatures] [--pull-fork [ref]] [--push-fork]
   --pull-fork [ref] pull the RecompOne fork into tools/RecompOne as one squash
                     subtree commit; ref defaults to main
   --push-fork       push tools/RecompOne's subtree commits to the RecompOne fork;
-                    refuses if one of them also touches files outside it
+                    refuses a mixed commit, a commit the fork already has under
+                    another hash, and a push that is not a fast-forward
+  --rejoin-fork     when tools/RecompOne equals the fork, mark HEAD as that commit
+                    (a two-parent rejoin), so the next split starts there
   --pull-core [ref] the same for Verdite Core into tools/verdite-core
   --push-core       the same for Verdite Core
+  --rejoin-core     the same for Verdite Core
+                    (DRY_RUN=1 with either push: report what it would push, and stop)
   --sync-upstream   removed; prints where harvesting moved and exits 2
   --no-build        skip the build
 USAGE
@@ -71,8 +76,8 @@ require_subtree() {
     esac
 }
 
-SYNC=0 SIGNATURES=0 BUILD=1 PULL=0 PUSH=0 PULL_REF="$FORK_BRANCH"
-CORE_PULL=0 CORE_PUSH=0 CORE_REF="$CORE_BRANCH"
+SYNC=0 SIGNATURES=0 BUILD=1 PULL=0 PUSH=0 REJOIN=0 PULL_REF="$FORK_BRANCH"
+CORE_PULL=0 CORE_PUSH=0 CORE_REJOIN=0 CORE_REF="$CORE_BRANCH"
 while [ $# -gt 0 ]; do
     case "$1" in
         --signatures)    SIGNATURES=1 ;;
@@ -84,6 +89,7 @@ while [ $# -gt 0 ]; do
             esac
             ;;
         --push-fork)     PUSH=1 ;;
+        --rejoin-fork)   REJOIN=1 ;;
         --pull-core)
             CORE_PULL=1
             case "${2:-}" in
@@ -92,6 +98,7 @@ while [ $# -gt 0 ]; do
             esac
             ;;
         --push-core)     CORE_PUSH=1 ;;
+        --rejoin-core)   CORE_REJOIN=1 ;;
         --sync-upstream) SYNC=1 ;;
         --no-build)      BUILD=0 ;;
         -h|--help)       usage; exit 0 ;;
@@ -140,42 +147,238 @@ pull_subtree() {
         -m "Pull $1 from $4 at $3"
 }
 
-# push_subtree PREFIX URL BRANCH
+# split_subtree PREFIX: `git subtree split` of HEAD, printed; dies loudly.
+#
+# The split reads every rejoin in the history and caches the shared commit each
+# names; two naming one commit kill it ("cache for X already exists!"). The
+# one-parent rejoins of 2026 (131853f, 447557c) name the commits a two-parent
+# rejoin made later at the same point would name too, so for the split only, each
+# rejoin older than another naming the same commit is replaced by a copy without
+# the trailers, through replace refs in a namespace of its own (GIT_REPLACE_REF_BASE),
+# removed after. Nothing in the history changes.
+split_subtree() {
+    local prefix="$1" ns="refs/subtree-split-$$/" c b s seen=" " out rc
+    while read -r c; do
+        b="$(git -C "$ROOT" log -1 --format=%B "$c")"
+        grep -q "^git-subtree-dir: $prefix/*\$" <<<"$b" || continue
+        s="$(sed -n 's/^git-subtree-split: *//p' <<<"$b" | head -1)"
+        [ -n "$s" ] || continue
+        if [[ "$seen" == *" $s "* ]]; then
+            local copy
+            copy="$(GIT_AUTHOR_NAME="$(git -C "$ROOT" log -1 --format=%an "$c")" \
+                GIT_AUTHOR_EMAIL="$(git -C "$ROOT" log -1 --format=%ae "$c")" \
+                GIT_AUTHOR_DATE="$(git -C "$ROOT" log -1 --format=%ad --date=raw "$c")" \
+                GIT_COMMITTER_NAME="$(git -C "$ROOT" log -1 --format=%cn "$c")" \
+                GIT_COMMITTER_EMAIL="$(git -C "$ROOT" log -1 --format=%ce "$c")" \
+                GIT_COMMITTER_DATE="$(git -C "$ROOT" log -1 --format=%cd --date=raw "$c")" \
+                git -C "$ROOT" commit-tree "$c^{tree}" $(git -C "$ROOT" log -1 --format=%P "$c" | sed 's/[^ ]*/-p &/g') \
+                    -m "$(grep -v '^git-subtree-' <<<"$b")")"
+            git -C "$ROOT" update-ref "${ns}$c" "$copy"
+            echo "    (split: hiding the older rejoin $(git -C "$ROOT" log -1 --format='%h %s' "$c" | cut -c1-70))" >&2
+        fi
+        seen+="$s "
+    done < <(git -C "$ROOT" log --format=%H --grep='^git-subtree-mainline:' HEAD)
+    local err; err="$(mktemp)"
+    out="$(GIT_REPLACE_REF_BASE="$ns" git -C "$ROOT" subtree split --prefix="$prefix" HEAD 2>"$err")"; rc=$?
+    git -C "$ROOT" for-each-ref --format='delete %(refname)' "$ns" | git -C "$ROOT" update-ref --stdin
+    local split; split="$(tail -1 <<<"$out")"
+    if [ $rc -ne 0 ] || ! git -C "$ROOT" rev-parse -q --verify "$split^{commit}" >/dev/null; then
+        echo "git subtree split of $prefix failed:" >&2
+        tr '\r' '\n' < "$err" | grep -v '^[0-9]*/[0-9]* ' | tail -5 >&2
+        rm -f "$err"; exit 1
+    fi
+    rm -f "$err"
+    echo "$split"
+}
+
+# push_subtree PREFIX URL BRANCH NAME
+#
+# The push is `git subtree split` and a plain push of the result, checked first;
+# it refuses rather than publishing something wrong. Every check is made on what
+# the split would actually publish (the shared branch..the split), each commit
+# found again here by its author, author time and subject:
+#
+# - A commit the shared branch already has under another hash is refused. The
+#   split rebuilds history the joins do not reach, and from a branch that
+#   merged others it rebuilt 56 commits of tools/RecompOne from before the
+#   subtree existed, with the trees already equal (RECOMPONE_FORK.md, "The push
+#   checks what it would publish").
+# - A commit that touches the prefix must touch nothing else here, or the split
+#   carries a half-commit to the shared repo. This is the original of each
+#   commit to be pushed, wherever it sits: a pull merged after it does not hide
+#   it, as "since the last join" did.
+# - The shared branch must be an ancestor of the split, or the push is not a
+#   fast-forward: the shared repo has commits this copy lacks, so pull first.
+# - A one-parent commit carrying a rejoin's trailers since the last joins is
+#   refused: git subtree takes it for a rejoin and the next pull fails with
+#   "Needed a single revision" (RECOMPONE_FORK.md, "The pull that found a
+#   one-parent rejoin"). The joins are every pull merge in HEAD's history, on any
+#   parent line, not only the first: a pull made on a branch later merged into
+#   another sits on that merge's second parent.
+#
+# Nothing is pushed when the prefix's tree already equals the shared branch's.
+# With DRY_RUN=1 it reports what it would push and stops. After a push it rejoins
+# at the pushed commit, a local commit on HEAD (rejoin_subtree).
 push_subtree() {
     require_subtree
-    # A commit that touches the prefix must touch nothing else, or the split
-    # carries a half-commit to the shared repo. Check every one since the last
-    # join. The last join is the newest add/pull merge on the first-parent line:
-    # its second parent is a squash commit naming the prefix.
-    join=""
-    while read -r c _ p2; do
-        if git -C "$ROOT" log -1 --format=%B "$p2" | grep -q "^git-subtree-dir: $1/*\$"; then
-            join="$c"; break
-        fi
-    done < <(git -C "$ROOT" log --first-parent --merges --format='%H %P' HEAD)
-    if [ -z "$join" ]; then
-        echo "no $1 subtree join found on the first-parent line; refusing to push." >&2
+    local prefix="$1" url="$2" branch="$3" name="$4"
+    local joins=() c p1 rest p bad=0
+    while read -r c p1 rest; do
+        for p in $rest; do
+            if git -C "$ROOT" log -1 --format=%B "$p" | grep -q "^git-subtree-dir: $prefix/*\$"; then
+                joins+=("$c"); break
+            fi
+        done
+    done < <(git -C "$ROOT" log --merges --format='%H %P' HEAD)
+    if [ ${#joins[@]} -eq 0 ]; then
+        echo "no $prefix subtree join found in HEAD's history; refusing to push." >&2
         exit 1
     fi
-    mixed=0
-    for c in $(git -C "$ROOT" rev-list --no-merges "$join..HEAD" -- "$1"); do
-        if git -C "$ROOT" diff-tree --no-commit-id --name-only -r "$c" | grep -qv "^$1/"; then
-            echo "mixed commit: $(git -C "$ROOT" log -1 --format='%h %s' "$c")" >&2
-            mixed=1
+    while read -r c p1 rest; do
+        [ -n "$c" ] && [ -z "$rest" ] || continue
+        local body; body="$(git -C "$ROOT" log -1 --format=%B "$c")"
+        if grep -q "^git-subtree-mainline:" <<<"$body" && grep -q "^git-subtree-dir: $prefix/*\$" <<<"$body"; then
+            echo "one-parent rejoin: $(git -C "$ROOT" log -1 --format='%h %s' "$c")" >&2
+            bad=1
         fi
-    done
-    if [ "$mixed" = 1 ]; then
-        echo "split those into a $1 commit and a game commit, then push." >&2
+    done < <(git -C "$ROOT" log --format='%H %P' HEAD --not "${joins[@]}")
+
+    local remote split
+    git -C "$ROOT" fetch -q "$url" "$branch"
+    remote="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+    if [ "$(git -C "$ROOT" rev-parse "HEAD:$prefix")" = "$(git -C "$ROOT" rev-parse "$remote^{tree}")" ]; then
+        echo "==> $prefix already equals $url $branch (${remote:0:7}); nothing to push."
+        return 0
+    fi
+    split="$(split_subtree "$prefix")" || exit 1
+    if ! git -C "$ROOT" merge-base --is-ancestor "$remote" "$split"; then
+        echo "$url $branch (${remote:0:7}) has commits $prefix lacks; pull them first." >&2
         exit 1
     fi
-    echo "==> pushing $1 to $2 $3 (this publishes to the shared repo)"
-    git -C "$ROOT" subtree push --prefix="$1" "$2" "$3"
+
+    # What the split would publish, each found again here.
+    local tmp; tmp="$(mktemp -d)"
+    git -C "$ROOT" log --no-merges --format='%at %ae %s' "$remote" | sort -u > "$tmp/published"
+    git -C "$ROOT" log --no-merges --format='%at %ae %s%x09%H' HEAD -- "$prefix" > "$tmp/local"
+    local key orig n=0
+    while IFS= read -r line; do
+        c="${line%%$'\t'*}"; key="${line#*$'\t'}"
+        n=$((n + 1))
+        if grep -qxF -- "$key" "$tmp/published"; then
+            echo "already in $branch under another hash: $(git -C "$ROOT" log -1 --format='%h %s' "$c" | cut -c1-90)" >&2
+            bad=1; continue
+        fi
+        orig="$(awk -F'\t' -v k="$key" '$1 == k { print $2; exit }' "$tmp/local")"
+        if [ -z "$orig" ]; then
+            echo "no commit here matches split commit $(git -C "$ROOT" log -1 --format='%h %s' "$c" | cut -c1-80)" >&2
+            bad=1
+        elif git -C "$ROOT" diff-tree --no-commit-id --name-only -r "$orig" | grep -qv "^$prefix/"; then
+            echo "mixed commit: $(git -C "$ROOT" log -1 --format='%h %s' "$orig" | cut -c1-90)" >&2
+            bad=1
+        fi
+    done < <(git -C "$ROOT" log --no-merges --format='%H%x09%at %ae %s' "$remote..$split")
+    rm -rf "$tmp"
+    if [ "$bad" = 1 ]; then
+        echo "refusing to push $prefix. Split a mixed commit into a $prefix commit and a" >&2
+        echo "game commit; make a rejoin a real merge; see docs/RECOMPONE_FORK.md. A commit" >&2
+        echo "already there under another hash is history the split rebuilt: when the" >&2
+        echo "prefix equals the shared branch, --rejoin-fork / --rejoin-core marks it." >&2
+        exit 1
+    fi
+
+    echo "==> $n commit(s) to push to $url $branch, ${remote:0:7}..${split:0:7}:"
+    git -C "$ROOT" log --format='    %h %s' "$remote..$split" | cut -c1-100
+    if [ "${DRY_RUN:-0}" = 1 ]; then
+        echo "==> DRY_RUN=1: not pushed."
+        return 0
+    fi
+    echo "==> pushing (this publishes to the shared repo)"
+    git -C "$ROOT" push "$url" "$split:refs/heads/$branch"
+    rejoin_subtree "$prefix" "$url" "$branch" "$name"
+}
+
+# rejoin_subtree PREFIX URL BRANCH NAME
+#
+# Marks HEAD as equal to the shared branch, for both halves of git subtree:
+#
+# - The split starts there. It walks every commit that touches the prefix and no
+#   rejoin covers; from a branch that merged others it rebuilt pre-subtree
+#   history, which the push then refuses ("already in BRANCH under another hash").
+# - The next pull's squash starts there. A pull squashes from the newest join's
+#   commit, so after a push it would carry the pushed commits back as a change, and
+#   conflicted with any later edit of the same lines.
+#
+# A rejoin is a TWO-parent commit: HEAD, and a squash commit whose tree is the
+# shared branch's, made here if no pull made one (its parent the newest squash).
+# git subtree pull takes a rejoin's second parent for the squash and fails on a
+# one-parent one ("Needed a single revision"; RECOMPONE_FORK.md). Made only when
+# the prefix equals the shared branch; the tree is HEAD's, so no file changes.
+# Skipped when the newest join already names the shared commit and the split
+# already stops there. A push that publishes makes one after it.
+rejoin_subtree() {
+    require_subtree
+    local prefix="$1" url="$2" branch="$3" name="$4" remote head sq c b newest="" prev="" old
+    if git -C "$ROOT" rev-parse -q --verify MERGE_HEAD >/dev/null; then
+        echo "a merge is in progress; finish it before a rejoin." >&2
+        exit 1
+    fi
+    git -C "$ROOT" fetch -q "$url" "$branch"
+    remote="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
+    head="$(git -C "$ROOT" rev-parse HEAD)"
+    if [ "$(git -C "$ROOT" rev-parse "HEAD:$prefix")" != "$(git -C "$ROOT" rev-parse "$remote^{tree}")" ]; then
+        echo "$prefix differs from $url $branch (${remote:0:7}); pull or push first, then rejoin." >&2
+        exit 1
+    fi
+    # The newest join's commit, the newest squash, and one with the shared tree.
+    sq=""
+    while read -r c; do
+        b="$(git -C "$ROOT" log -1 --format=%B "$c")"
+        [ -n "$newest" ] || newest="$(sed -n 's/^git-subtree-split: *//p' <<<"$b" | head -1)"
+        grep -q "^git-subtree-mainline:" <<<"$b" && continue
+        [ -n "$prev" ] || prev="$c"
+        if [ "$(git -C "$ROOT" rev-parse "$c^{tree}")" = "$(git -C "$ROOT" rev-parse "$remote^{tree}")" ]; then
+            sq="$c"; break
+        fi
+    done < <(git -C "$ROOT" log --format=%H --grep="^git-subtree-dir: $prefix/*\$" HEAD)
+    local split; split="$(split_subtree "$prefix")" || exit 1
+    if [ "$split" = "$remote" ] && [ "$(git -C "$ROOT" rev-parse -q --verify "$newest^{commit}")" = "$remote" ]; then
+        echo "==> $prefix is already joined at ${remote:0:7}; no rejoin needed."
+        return 0
+    fi
+    if [ -z "$sq" ]; then
+        old="$(git -C "$ROOT" log -1 --format=%B "$prev" | sed -n 's/^git-subtree-split: *//p' | head -1)"
+        sq="$(git -C "$ROOT" commit-tree "$remote^{tree}" ${prev:+-p "$prev"} -F - <<EOF
+Squashed '$prefix/' changes from ${old:0:7}..${remote:0:7}
+
+$(git -C "$ROOT" log --format='%h %s' "${old:+$old..}$remote" | head -50)
+
+git-subtree-dir: $prefix
+git-subtree-split: $remote
+EOF
+)"
+    fi
+    c="$(git -C "$ROOT" commit-tree "HEAD^{tree}" -p HEAD -p "$sq" -F - <<EOF
+Rejoin $prefix at $name's ${remote:0:7}
+
+$prefix here equals $name's ${remote:0:7}, so a subtree split and the next
+pull's squash start at ${head:0:10}. A real merge: the second parent is the
+squash commit ${sq:0:10}, as git subtree pull needs.
+
+git-subtree-dir: $prefix
+git-subtree-mainline: $head
+git-subtree-split: $remote
+EOF
+)"
+    git -C "$ROOT" update-ref -m "rejoin $prefix" HEAD "$c" "$head"
+    echo "==> rejoined $prefix at ${remote:0:7}: $(git -C "$ROOT" log -1 --format='%h %s' "$c")"
 }
 
 [ "$PULL" = 1 ] && pull_subtree tools/RecompOne "$FORK_URL" "$PULL_REF" "the fork"
-[ "$PUSH" = 1 ] && push_subtree tools/RecompOne "$FORK_URL" "$FORK_BRANCH"
+[ "$PUSH" = 1 ] && push_subtree tools/RecompOne "$FORK_URL" "$FORK_BRANCH" "the fork"
+[ "$REJOIN" = 1 ] && rejoin_subtree tools/RecompOne "$FORK_URL" "$FORK_BRANCH" "the fork"
 [ "$CORE_PULL" = 1 ] && pull_subtree tools/verdite-core "$CORE_URL" "$CORE_REF" "Verdite Core"
-[ "$CORE_PUSH" = 1 ] && push_subtree tools/verdite-core "$CORE_URL" "$CORE_BRANCH"
+[ "$CORE_PUSH" = 1 ] && push_subtree tools/verdite-core "$CORE_URL" "$CORE_BRANCH" "Verdite Core"
+[ "$CORE_REJOIN" = 1 ] && rejoin_subtree tools/verdite-core "$CORE_URL" "$CORE_BRANCH" "Verdite Core"
 
 if [ "$BUILD" = 1 ]; then
     echo "==> building recompiler"

@@ -8,6 +8,18 @@ using Recompiled;
 // file takes that role instead so startup stays hand-editable. Custom init and
 // patching hooks go here, before Entry.Run.
 
+Verdite.Core.Game.Configure(tag: "KF2");
+
+// Crash, fault and hang reports carry this port's version, place and switches,
+// and KF2_FAULT makes each kind on purpose to test its path. KF2_HANG=seconds
+// without a frame before a hang report (15; 0 turns the watchdog off). See "Crash
+// reports carry the port's place" in docs/DEVELOPMENT.md.
+//
+//     KF2_HANG=15                 seconds without a frame before a hang report
+//     KF2_FAULT=hook|crash|hang[:s]  makes that report s seconds (20) after the first area
+Verdite.Core.CrashReports.Configure(Verdite.Core.Game.Env("HANG"), "Verdite2", Kf2.AgentBeacon.Snapshot, 0x800140AC);
+Verdite.Core.CrashReports.InstallFault(Verdite.Core.Game.Env("FAULT"));
+
 // Diagnostics. The runtime's log channels are plain static bools with no CLI of
 // their own, so expose them through an env var:
 //     KF2_LOG=bios,cd,gpu,dma,sdk,spu,mdec   (or KF2_LOG=all)
@@ -201,6 +213,19 @@ RecompOne.Runtime.Runtime.Defaults(v =>
     v.Default("Background", "#000000");
 });
 
+// The top menu bar starts hidden whatever the last session saved; F1 shows it.
+// Once, at the first ready: a hard reset raises the event again, and a bar the
+// player has opened since is theirs. See "The menu bar starts hidden" in
+// docs/RUNTIME.md.
+bool topBarHidden = false;
+RecompOne.Runtime.Events.Event.AddListener<RecompOne.Runtime.Events.RuntimeReadyEvent>(_ =>
+{
+    if (topBarHidden) return;
+    topBarHidden = true;
+    RecompOne.Runtime.Config.ConfigManager.View.HideTopBar = true;
+    Console.WriteLine("[KF2] top bar: hidden at startup (F1 shows it)");
+});
+
 // Frame pacing. The game's speed is its frame rate, so the rate the port draws at
 // and the rate the game's own clock runs at are two different numbers here:
 //
@@ -259,11 +284,14 @@ Kf2.TintHold.Install();
 //     KF2_PROFILE_SPIKE=12      a console line per frame over 12 ms of work
 //     KF2_PROFILE_FUNCS=stages  time all thirteen main-loop stages, or name
 //                               functions: game:80040348+800342D8
-Kf2.FrameProfiler.Configure(Environment.GetEnvironmentVariable("KF2_PROFILE"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_OUT"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_SPIKE"),
-                            Environment.GetEnvironmentVariable("KF2_PROFILE_FUNCS"));
-Kf2.FrameProfiler.Install();
+Verdite.Core.FrameProfiler.Configure(Environment.GetEnvironmentVariable("KF2_PROFILE"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_OUT"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_SPIKE"),
+                                     Environment.GetEnvironmentVariable("KF2_PROFILE_FUNCS"),
+                                     Kf2.ProfilerKnown.Table);
+Verdite.Core.FrameProfiler.Install();
+Verdite.Core.ProfilerPanel.Configure(() => Kf2.FramePacing.Enabled ? 1000.0 / Kf2.FramePacing.TargetFps : 0,
+                                     defaultProbe: "game:80040348", stages: 13);
 
 // The frame viewer: capture one run of stage 13 and scrub it a GP0 command at a
 // time, replayed on a detached software GPU -- who emitted each primitive, what it
@@ -304,8 +332,11 @@ Kf2.MenuPacing.Install();
 //
 //     KF2_MENUWORLD=0         the game's frozen copy -- comparison only
 //     KF2_MENUWORLD_PROBE=1   world passes a second, primitive bytes, overflows
+//     KF2_MESSAGE_FADE=1..4   vblanks each step of a sign's fade is shown for; 1 is
+//                             the game's own. Gameplay > Message fade length
 Kf2.MenuWorld.Configure(Environment.GetEnvironmentVariable("KF2_MENUWORLD"),
-                        Environment.GetEnvironmentVariable("KF2_MENUWORLD_PROBE"));
+                        Environment.GetEnvironmentVariable("KF2_MENUWORLD_PROBE"),
+                        Environment.GetEnvironmentVariable("KF2_MESSAGE_FADE"));
 Kf2.MenuWorld.Install();
 
 // Sign and dialogue text drawn as text on an opaque box, decoded from the message's
@@ -773,7 +804,7 @@ Kf2.RetainedMap.Install();
 //     KF2_GPUWORLD=1          on; 0 never; unset, the saved setting
 //     KF2_GPUWORLD_PROBE=1    draws, misses, halves left whole and kept; the surface buffer against the depth
 //     KF2_GPUWORLD_SURFACES=0 leave the map out of the normal and surface buffers (the comparison)
-//     KF2_GPUWORLD_FOGZ=0     the map's fog from the corners' screen-affine cue (the comparison)
+//     KF2_GPUWORLD_FOGZ=0     the same as KF2_FOG=corners (see below)
 //     KF2_GPUWORLD_NEAR=16    the map's near plane
 Kf2.GpuWorld.Configure(Environment.GetEnvironmentVariable("KF2_GPUWORLD"),
                        Environment.GetEnvironmentVariable("KF2_GPUWORLD_PROBE"),
@@ -802,6 +833,13 @@ Kf2.Remaster.Lights.ConfigureShadows(Environment.GetEnvironmentVariable("KF2_REM
                                      Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_OFFSET"),
                                      Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_SOFT"),
                                      Environment.GetEnvironmentVariable("KF2_REMASTER_SHADOW_MODELS"));
+// Magic projectiles give off light in their own colour, through the lights above,
+// with or without the remaster, fading out once their effect is gone. On by default
+// (judged), Video ▸ Enhancements ▸ Glowing spells.
+Kf2.ProjectileLights.Configure(Environment.GetEnvironmentVariable("KF2_PROJECTILE_LIGHTS"),
+                               Environment.GetEnvironmentVariable("KF2_PROJECTILE_LIGHTS_PROBE"),
+                               Environment.GetEnvironmentVariable("KF2_PROJECTILE_LIGHTS_RADIUS"),
+                               Environment.GetEnvironmentVariable("KF2_PROJECTILE_LIGHTS_INTENSITY"));
 Kf2.Remaster.Host.Install();
 // Phase 4's texture-key census: which replacement keys an area draws, and which a
 // pack covers. KF2_TEXKEY=triangle keys each triangle on its own UVs, as upstream does.
@@ -897,6 +935,15 @@ Kf2.EvenFog.Configure(Environment.GetEnvironmentVariable("KF2_EVENFOG"),
                       Environment.GetEnvironmentVariable("KF2_EVENLIGHT"));
 Kf2.EvenFog.Install();
 
+// The fog's distance cue, one choice of three (PORT SETTINGS ▸ WORLD ▸ Fog): at the
+// corners (the game's), by pixel depth, or by distance from the eye. Pixel depth is
+// the default. See "Fog by distance from the eye" in docs/RENDERING.md.
+//
+//     KF2_FOG=corners|depth|distance   0, 1 or 2; unset, the saved setting, else depth
+//     KF2_GPUWORLD_FOGZ=0              the old spelling of KF2_FOG=corners, still honoured
+Kf2.Fog.Configure(Environment.GetEnvironmentVariable("KF2_FOG"));
+Kf2.Fog.Install();
+
 // Voice interpolation and reverb (tools/RecompOne/patches/0043); see docs/AUDIO.md.
 //
 //     KF2_SPU_INTERP=gauss|cubic|sinc      KF2_REVERB=legacy|hardware|enhanced
@@ -975,96 +1022,19 @@ Kf2.AutoReload.Configure(Environment.GetEnvironmentVariable("KF2_AUTORELOAD"),
                          Environment.GetEnvironmentVariable("KF2_AUTORELOAD_SLOT"));
 Kf2.AutoReload.Install();
 
-// The map. King's Field is a maze, the original shipped no automap, and every
-// other thing in this port that knows where you are is a debug instrument. The
-// floor plan is already in RAM and is not polygon soup: the area loader copies
-// 64,000 bytes to 0x801C8484, an 80x80 grid of 10-byte tile records, two stacked
-// 5-byte floors each, a tile spanning 2048 world units. So the map is a read --
-// no hook, no write to game memory, and with the panels closed it costs a bool
-// test a frame:
-//
-//     KF2_MAP=0             the whole feature off (on by default)
-//     KF2_MAP_MINIMAP=1     the corner minimap on (off by default)
-//     KF2_MAP_PROBE=1       dump the 80x80 grid as ASCII on each area load
-//     KF2_MAP_PAUSE=0       leave the world running while the full map is up
-//                           (it pauses by default)
-//
-// Three comparisons for what are no longer settings. The map is drawn the way
-// the game's own map screen is, with no height ramp and no wall tint on it: the
-// argument for that picture is that it belongs, so offering the debugger's one
-// beside it asks the player to settle what the port is for. The blueprint is
-// still the picture the fog, the extents and the markers were judged against,
-// so it stays reachable:
-//
-//     KF2_MAP_STYLE=blueprint   the port's original blueprint plan
-//     KF2_MAP_SHADE=1           colour each tile by its height byte
-//     KF2_MAP_WALLS=1           tint the tiles whose +4 bit 0x80 is set
-//     KF2_MAP_FLOOR=lower       pin a stacked half instead of following the player
-//     KF2_MAP_ARROW=1           the player as an arrow with a heading, not a dot
-//
-// KF2_MAP_MINIMAP and KF2_MAP_PAUSE are in that list now too. The minimap's
-// picture has never been judged by eye, which is the port's standing reason for a
-// default and a poor reason for a settings block, so its six knobs went with its
-// checkbox and N toggles it for the session. The pause is not a preference: the
-// full map is a screen with no chrome and no input, opened in a corridor.
-//
-// A patch rather than a mod for auto reload's reason -- it is something the port
-// itself should offer, so it should not be able to be absent -- and its knobs are
-// under Gameplay beside it. The minimap defaults off because the mechanism is
-// measured and the picture is not.
-Kf2.Map.Configure(Environment.GetEnvironmentVariable("KF2_MAP"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_MINIMAP"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_PROBE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_PAUSE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_STYLE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_SHADE"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_WALLS"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_FLOOR"),
-                  Environment.GetEnvironmentVariable("KF2_MAP_ARROW"));
+// The dynamic map is not core any more: it is the kf2.map mod (mods/map), loaded
+// by ModLoader and off until it is enabled in the Mods panel. Its environment
+// switches (KF2_MAP*) read only with the mod enabled; docs/ENV_VARS.md has them.
 
-// The other half of that map: what is *in* the area rather than what shape it is.
-// The four world tables the renderer walks -- creatures, props, effects,
-// billboards -- read at their own liveness tests and drawn where the game says
-// they stand:
-//
-//     KF2_MAP_MARKERS=1     the marker layer on (off, and no longer a setting)
-//
-// **Off, and the save points are the exception rather than part of it.** A live
-// read of where every creature, prop, effect and torch is standing is an
-// instrument, not a map, and King's Field's difficulty is not knowing what is
-// round the corner. A save point is the opposite case -- the one object in a
-// maze a player wants a map to find, and the game names it itself (definition
-// kind 0x0E) -- so it is drawn always and independently, which is why
-// MapMarkers.Refresh stands down only when both are off.
-// KF2_MAP_PROBE=1 also dumps a per-table census and a histogram of the object
-// table's type byte, which is what would let those types be paired with nouns.
-Kf2.MapMarkers.Configure(Environment.GetEnvironmentVariable("KF2_MAP_MARKERS"));
-Kf2.Map.Install();
-
-// Fog of war for that map: the tiles the player has actually seen, remembered per
-// save slot and kept between sessions in a file beside the memory card. It is the
-// game's own 24x24 visibility grid at 0x80192EAC -- occlusion already flooded --
-// ORed into an 80x80 bitset, sampled on the vblank rather than through a hook, so
-// it accumulates with the map closed and at the same 60 Hz whatever the render
-// rate is:
-//
-//     KF2_MAP_FOG=1         fog on for the run (off by default)
-//     KF2_MAP_FOG_PROBE=1   a line a second: tiles seen, lit, rejected, flushes
-//     KF2_MAP_FOG_LOS=0     the line-of-sight gate off (on by default)
-//
-// The cull grid is a *culling* test, so it is allowed to over-report and does:
-// its flood lights a cell when either of its two ring parents is lit, which
-// spreads 45 degrees a ring and paints rooms through the wall beside a doorway.
-// A cell is therefore checked against a recursive symmetric shadowcast out of
-// the player's own tile before it is written, and only the intersection is
-// remembered.
-//
-// Off by default for the sub-pixel reason: the mechanism is measured and the
-// picture has never been looked at.
-Kf2.MapFog.Configure(Environment.GetEnvironmentVariable("KF2_MAP_FOG"),
-                     Environment.GetEnvironmentVariable("KF2_MAP_FOG_PROBE"),
-                     Environment.GetEnvironmentVariable("KF2_MAP_FOG_LOS"));
-Kf2.MapFog.Install();
+// M, or the touchpad, opens the game's own map item (PIRATE'S, MINER'S or NECRON'S
+// MAP) through the ITEM page's viewer, as using it there does. Off with KF2_MAPKEY=0;
+// KF2_MAPKEY_TEST=<seconds> opens it that many seconds into the first area. See
+// "The maps" in docs/GAME_INTERNALS.md.
+Kf2.MapKey.Configure(Environment.GetEnvironmentVariable("KF2_MAPKEY"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_TEST"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_GIVE"),
+                     Environment.GetEnvironmentVariable("KF2_MAPKEY_CLOSE"));
+Kf2.MapKey.Install();
 
 // Auto start, and the agent beacon -- the pair that lets an automated tester get
 // into the game and know it got there. Scripted input cannot drive the boot menus
@@ -1102,6 +1072,20 @@ Kf2.AgentBeacon.Install();
 Kf2.AgentServer.Configure(Environment.GetEnvironmentVariable("KF2_SHELL"));
 Kf2.AgentServer.Install();
 
+// The window losing focus pauses the game and silences it, as a desktop game
+// does: Verdite Core's FocusPause decides when, and the stage gate held shut
+// (FramePacing.PauseWhen, the full map's pause) is how. On by default; a run a
+// program drives (the four switches above and KF2_AUTOPAD) has no one to focus the
+// window, so there it is off unless asked for.
+//
+//     KF2_FOCUS_PAUSE=0   keep running in the background
+//
+// See "Pausing when the window loses focus" in docs/PATCHES_AND_MODS.md.
+FocusPause.Configure(driven: new[] { "KF2_SHELL", "KF2_AUTOPAD", "KF2_AUTOSTART", "KF2_AGENT" }
+    .Any(v => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(v))));
+FocusPause.Install();
+Kf2.FramePacing.PauseWhen(() => FocusPause.Active);
+
 // Analog twin-stick control. Two pre-hooks on the game's own turn/look and
 // walk/strafe routines pre-load the velocities those routines are about to
 // accumulate, so the sticks pick the amount and the game's own movement code
@@ -1130,13 +1114,61 @@ Kf2.Analog.Install();
 //     KF2_MOUSE=1                              on; off by default
 //     KF2_MOUSE_TURN/LOOK=1.0                  sensitivities; INVERTY=1 flips look Y
 //     KF2_MOUSE_BUTTONS=Square,Triangle,Cross  left, right, middle, as pad buttons
-//     KF2_MOUSE_KEY=Escape                     the key that captures and releases
+//     KF2_MOUSE_KEY=F9                         a capture key besides the click; None by default
 //
 // Off by default, unlike the sticks: nothing is broken about playing this with the
 // keyboard, and a pointer that vanishes into the game unasked is worse than one
-// switch to find. Its settings sit under Input beside the stick ones.
-Kf2.Mouse.Configure();
-Kf2.Mouse.Install();
+// switch to find. Its settings sit under Input beside the stick ones. A click on
+// the picture captures; there is no capture key unless one was saved or set
+// (Escape opens the menu instead, KeyLayout), and a menu holds the pointer free
+// (Mouse.Suspend, from MenuMouse).
+Mouse.Configure(Kf2.Analog.MouseValues);
+Mouse.Install();
+
+// Mouse aim: the mouse moves a reticle and the player turns toward it at the
+// D-pad's own rate, spent inside the same look hook. Off by default.
+//
+//     KF2_MOUSE_AIM=1                          on
+Kf2.MouseAim.Configure();
+Kf2.MouseAim.Install();
+
+// The bow and the arbalest, read off func_800271D0 once a tick: the pad's
+// gyroscope aims a drawn bow, spent inside Analog's look hook beside the right
+// stick (KF2_GYROAIM, on; runtime 0102), and the pad rumbles as it is drawn and
+// loosed, two motors or HD on a Switch pad or a DualSense by USB (KF2_RUMBLE,
+// KF2_RUMBLE_HD, both on; runtime 0104, 0105). See "Gyro aim with a drawn bow" and
+// "Rumble" in docs/INPUT.md, "The bow and the arbalest" in docs/GAME_INTERNALS.md.
+GyroAim.Configure(Kf2.Bow.Reads);
+GyroAim.Install();
+Rumble.Configure(Kf2.Bow.Reads);
+Rumble.Install();
+
+// A picked-up item, and the menu's item preview, turned by hand: the mouse, the
+// right stick, or the pad's gyroscope (beside the bow's in the GYRO row). Verdite3's
+// ItemTurn, on the pickup func_8004831C and the preview func_8002156C; the game's
+// spin holds while the player turns it and comes back 1.5 s after.
+//
+//     KF2_ITEMTURN=0         the game's own spin only
+//     KF2_ITEMTURN_GYRO=0    the gyroscope does not turn it
+//     KF2_ITEMTURN_PROBE=1   a line a second while an item is held up or previewed
+//     KF2_ITEMTURN_TEST=id   hold up item id 10 s after the first area load, the right
+//                            stick full right and half down for the hold's second
+//                            second (=preview: the same stick on the first preview)
+//
+// See "Turning a picked-up item" and "Turning the item preview" in docs/INPUT.md.
+Kf2.ItemTurn.Configure();
+Kf2.ItemTurn.Install();
+
+// A picked-up item held at the centre of the view: the pickup aims at the eye
+// without its head bob, and the camera draws from the eye with it. Verdite3's
+// ItemEye, on func_80046C64.
+//
+//     KF2_ITEMEYE=0          the game's own target, to compare
+//     KF2_ITEMEYE_PROBE=1    each target, and the item in the camera's frame
+//
+// See "The item held up at the eye" in docs/INPUT.md.
+Kf2.ItemEye.Configure(Environment.GetEnvironmentVariable("KF2_ITEMEYE"));
+Kf2.ItemEye.Install();
 
 // The menu pointer: hover an in-game menu item and the game's own cursor moves to
 // it, left click confirms, right click backs out.
@@ -1167,6 +1199,23 @@ Kf2.MenuMouse.Install();
 Kf2.GearCompare.Configure(Environment.GetEnvironmentVariable("KF2_GEARCOMPARE"));
 Kf2.GearCompare.Install();
 
+// Enemies turn faster: every creature turn goes through func_8003C8D8, whose top
+// speed and acceleration a pre-hook scales when the turn is at the player (a chase,
+// not a wander). x1, the game's own, by default;
+// Gameplay ▸ Enemy turn speed.
+//
+//     KF2_ENEMYTURN=1..8      the multiplier
+//     KF2_ENEMYTURN_TRACK=0   no turning at the player while a creature stands (on;
+//                             inert at x1). Gameplay > Track you while standing
+//     KF2_ENEMYTURN_ALL=1     scale every turn, not only turns at the player -- comparison
+//     KF2_ENEMYTURN_PROBE=1   a census of the turn's callers every 5 s
+//     KF2_ENEMYTURN_PROBE=2   also a line a tick for each active creature in reach
+Kf2.EnemyTurn.Configure(Environment.GetEnvironmentVariable("KF2_ENEMYTURN"),
+                        Environment.GetEnvironmentVariable("KF2_ENEMYTURN_TRACK"),
+                        Environment.GetEnvironmentVariable("KF2_ENEMYTURN_ALL"),
+                        Environment.GetEnvironmentVariable("KF2_ENEMYTURN_PROBE"));
+Kf2.EnemyTurn.Install();
+
 // Widescreen. The runtime already renders a margin either side of the display
 // buffer and presents the whole thing at Display.WideAspect, so setting that one
 // number is the entire hookup; the replacement of DrawOTag here is only for the
@@ -1176,11 +1225,10 @@ Kf2.GearCompare.Install();
 //     KF2_WIDESCREEN=16:9       aspect for the run; "1.777" and "off" also parse
 //     KF2_WIDESCREEN_PROBE=1    the margin census, on the console
 //     KF2_WIDESCREEN_EFFECTS=0  leave the death fade and the damage flash 320 wide
-//     KF2_WIDESCREEN_HUD=1      anchor the HP/MP panel and the icons to the new
-//                               edges -- off, and no longer a setting: it is the
-//                               one thing widescreen does that moves something the
-//                               game placed deliberately, and where it lands has
-//                               never been looked at by eye
+//     KF2_WIDESCREEN_HUD=1      anchor the HP/MP panel and the compass to the new
+//                               edges; wins over Video's "HUD at the screen edges"
+//                               for the run (off by default: it moves something
+//                               the game placed deliberately)
 //
 // A patch rather than a mod because an aspect ratio is a picture the port should
 // be able to offer without a package having to load, and Video is where a player
@@ -1368,7 +1416,12 @@ Kf2.MoPose.Install();
 //     KF2_STAGE13_PROBE=1      frames drawn and needle steps a second
 //     KF2_CAMERABLOCK=0        the recompiled camera block
 //     KF2_CAMERABLOCK=verify   run both on every call and compare RAM, registers, GTE
-Kf2.CameraBlock.Configure(Environment.GetEnvironmentVariable("KF2_CAMERABLOCK"));
+//     KF2_VIEW_FRACTION=0      the view's matrices built at the whole angles the smoothing
+//                              rounds to, not a fraction of a unit past them (on; the viewfrac verb)
+//     KF2_VIEW_FRACTION_PROBE=1  how evenly the drawn yaw steps through a turn, a line a second
+Kf2.CameraBlock.Configure(Environment.GetEnvironmentVariable("KF2_CAMERABLOCK"),
+                          Environment.GetEnvironmentVariable("KF2_VIEW_FRACTION"),
+                          Environment.GetEnvironmentVariable("KF2_VIEW_FRACTION_PROBE"));
 Kf2.CameraBlock.Install();
 Kf2.Stage13.Configure(Environment.GetEnvironmentVariable("KF2_STAGE13"),
                       Environment.GetEnvironmentVariable("KF2_STAGE13_NEEDLE"),
@@ -1412,6 +1465,21 @@ Kf2.BootExe.Install();
 // plays rather than how the machine behaves.
 Kf2.Settings.PatchSettings.Install();
 
+// The port settings as a page of the game's own menu: PORT SETTINGS, in place of
+// RETURN at the bottom of the in-game menu. KF2_SETTINGSPAGE_PROBE=1 logs what it
+// did. See "The port settings page" in docs/GAME_INTERNALS.md.
+Kf2.SettingsPage.Configure(Environment.GetEnvironmentVariable("KF2_SETTINGSPAGE_PROBE"));
+Kf2.SettingsPage.Install();
+
+// The first-run setup run again from that page (RUN SETUP, on DISPLAY), its
+// choices applied live where a setter exists. The launcher shows the same setup
+// at first run, from config/onboarding.json. See "Onboarding" in docs/SETTINGS.md.
+Kf2.Setup.Install();
+
+// The port settings the page draws from, and the one writer of interface.ini's
+// keys it changes (docs/SETTINGS.md). Last, so its boot check follows every start-up.
+Kf2.PortSettings.Install();
+
 // Compile the recompiled code ahead of the game running it. QuickJit is off (a
 // tier-up loses a MonoMod detour), so every function is compiled by the full JIT
 // on its first call -- which for an area change is 234 methods inside one frame,
@@ -1419,11 +1487,13 @@ Kf2.Settings.PatchSettings.Install();
 // lot on a background thread while the title is up. Installed last, so the
 // patches' own attach listeners have run before the first method is prepared.
 //
-//     KF2_PREJIT=0        leave every method to its first call -- the comparison
-//     KF2_PREJIT_PROBE=1  a line per overlay as it is warmed
-Kf2.Prejit.Configure(Environment.GetEnvironmentVariable("KF2_PREJIT"),
-                     Environment.GetEnvironmentVariable("KF2_PREJIT_PROBE"));
-Kf2.Prejit.Install();
+//     KF2_PREJIT=0            leave every method to its first call -- the comparison
+//     KF2_PREJIT_PROBE=1      a line per batch as the pass reaches its end
+//     KF2_PREJIT_THREADS=n    threads for the pass (a quarter of the cores, 1-4)
+Verdite.Core.Prejit.Configure(Verdite.Core.Game.Env("PREJIT"),
+                              Verdite.Core.Game.Env("PREJIT_PROBE"),
+                              Verdite.Core.Game.Env("PREJIT_THREADS"));
+Verdite.Core.Prejit.Install("Kf2");
 
 // What each drawn frame's ordering table actually got, across an area crossing.
 // Luminance cannot answer this -- a door into an unlit corridor is dark whether or
@@ -1457,23 +1527,19 @@ Kf2.CrashDump.Configure(Environment.GetEnvironmentVariable("KF2_CRASHDUMP"));
 // entry" in docs/PACKAGING.md -- and it has to be set before the window is made.
 RecompOne.Runtime.Runtime.AppId = "verdite2";
 
-foreach (var icon in new[]
-{
-    Path.Combine("packaging", "shared", "verdite2.png"),
-    Path.Combine(AppContext.BaseDirectory, "verdite2.png"),
-})
-{
-    if (!File.Exists(icon)) continue;
-    RecompOne.Runtime.Runtime.SetIcon(File.ReadAllBytes(icon));
-    break;
-}
+// What a desktop entry written for this run calls the port (Verdite Core's
+// DesktopEntry writes one only when no packager has).
+Verdite.Core.DesktopEntry.Name = "Verdite2";
+Verdite.Core.DesktopEntry.GenericName = "King's Field";
+Verdite.Core.DesktopEntry.Comment = "A PC port of King's Field (SLUS-00158). Requires your own disc image.";
 
-// And over it, the game's own memory-card icon off the player's disc, which the
-// release cannot carry. The orb above is the fallback.
+// The icon, everywhere: the game's own memory-card icon off the player's disc,
+// which the release cannot carry, so the port ships no mark at all. Until a run
+// has read it once there is none.
 //
-//     KF2_ICON=orb      keep the shipped mark
 //     KF2_ICON=off      no icon at all
-Kf2.CardIcon.Install(args.Length > 0 ? args[0] : null);
+//     KF2_ICON=0|1|2    a frame of its three (0 by default)
+Verdite.Core.CardIcon.Install(args.Length > 0 ? args[0] : null, 0, Kf2.CardIconSource.Read);
 
 var memory = new PSMemory(Kf2.PrimBuffer.RamSize);
 try
@@ -1482,16 +1548,18 @@ try
 }
 catch (Exception e)
 {
-    // Dump first, then rethrow: the runtime still prints its own trace, and the
-    // state that explains it goes out immediately above it rather than being lost.
+    // The game state goes out first (CrashDump), then the report to crashes/ with
+    // the window kept up until the player closes it (runtime 0107): a player who
+    // starts the game from a launcher has no stderr to read the exception from.
     Kf2.CrashDump.Dump(e, memory);
-    throw;
+    Console.Error.WriteLine($"[KF2] the game has crashed: {e}");
+    RecompOne.Runtime.Runtime.HoldAfterCrash(RecompOne.Runtime.Diagnostics.CrashReport.Write("crash", e));
+    return 1;
 }
 finally
 {
-    // The map's fog store. It flushes on a timer and on ProcessExit, but a run
-    // that ends by throwing runs neither, and the exploration since the last
-    // flush is worth more than the ten lines this costs.
-    Kf2.MapFog.Flush();
+    // Whatever a mod keeps (the map mod's fog of war is saved between sessions)
+    // is written before the process leaves, including a run that ends by throwing.
+    Kf2.AppExit.Run();
 }
 return 0;

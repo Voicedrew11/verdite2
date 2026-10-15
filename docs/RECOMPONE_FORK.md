@@ -49,7 +49,9 @@ workflow every gift from upstream becomes permanent debt.**
     game takes the result with `bash scripts/setup_tools.sh --pull-fork`.
   - `bash scripts/setup_tools.sh --pull-fork [ref]` is
     `git subtree pull --prefix=tools/RecompOne --squash <FORK_URL> <ref>`
-    (`main` by default); `--push-fork` is the matching `git subtree push`. The
+    (`main` by default); `--push-fork` is the matching `git subtree push`, checked
+    first and refused rather than sent wrong, and `--rejoin-fork` marks HEAD as
+    the fork's commit (see "The push checks what it would publish"). The
     fork URL and branch are defined in one place at the top of `setup_tools.sh`,
     overridable with `VERDITE_FORK_URL` and `VERDITE_FORK_BRANCH` (a local path,
     for testing). `git subtree` is a separate package on some distros, so the
@@ -270,3 +272,114 @@ game that is switched over the same way needs the same trailers on its add
 commit, and the first `--push-fork` from it should be checked for exactly that:
 `git rev-list --count <fork-branch> ^<fork-commit-added>` is the number of
 commits being sent, and none of them may be a game commit.
+
+## The pull that found a one-parent rejoin
+
+On 2026-10-09 `bash scripts/setup_tools.sh --pull-fork` failed with
+`fatal: Needed a single revision`, before anything was merged.
+
+The cause is commit `c47daf6`, the rejoin written when `tools/RecompOne` was
+first brought back to the fork's `f02f484`. It carries the `git-subtree-mainline`
+and `git-subtree-split` trailers of a rejoin, but it has **one parent**, not two.
+`git subtree` takes a commit with a mainline trailer for a rejoin, and its
+`find_latest_squash` then runs `git rev-parse --verify <commit>^2`, which does
+not exist for a one-parent commit. The pull stops there, so `--pull-fork` could
+not take any later fork commit.
+
+The fix was a squash commit made by hand and a real merge onto it:
+
+- `git commit-tree <fork main>^{tree} -p 18e4cfe` makes the squash. `18e4cfe` is
+  the previous squash, and its tree equals `f02f484`'s, so the new commit's
+  parent is the last squash the subtree actually has. The commit carries
+  `git-subtree-dir: tools/RecompOne` and `git-subtree-split: <fork main sha>`.
+- `git merge --no-ff -Xsubtree=tools/RecompOne` joins it, so the newest join in
+  history is an ordinary squash merge with the squash commit as its second parent.
+
+After that `git subtree pull --squash` finds this join first and reports
+`Subtree is already at commit 09f3f09`, and `--pull-fork` works again. The pull
+that moved the subtree from `f02f484` to `09f3f09` brings the fork's patches `0090`-`0109`, the amendment to `0045`, and Silk.NET 2.23.0,
+which fixes the Wayland Alt+Tab `Key.Unknown` crash (Verdite2 issue #48).
+
+**The rule that follows:** a rejoin is never written as a one-parent commit.
+If one is needed, it is a real merge whose second parent is the squash or split
+commit. A commit that has the trailers and one parent looks like a rejoin to
+`git subtree` and breaks the next pull.
+
+The pull was checked against a build from before it. `generated/` is
+byte-identical to the earlier recompile. The acceptance run (`KF2_AUTOSTART=2`,
+`KF2_FPS=144`) reached open, game, fdat02 and fdat05, with slot 2 at hp 46/86 in
+area 1 and 144.0 fps drawn at 19.9 to 20.0 ticks/s. The present probe read
+`[present] wide 288, plain 0, vram fallback 0`, the perspective probe 100.0% hit
+at 18720 caught/s, and gpuworld ran active with 0 missed. No hook failed. The
+numbers are the same as the baseline run of the pre-pull build.
+
+Not judged by eye: the HUD and menu palettes, which the wrapped image loads
+(`0092`) now feed; far depthless scenery under the retained world (`0096`);
+see-through HUD over water (`0099`); models clipped at the near plane (`0103`).
+
+## The push checks what it would publish
+
+`--push-fork` and `--push-core` (`push_subtree` in `setup_tools.sh`) were a bare
+`git subtree push`. On 2026-10-11 a dry run of the checks below, from
+`v0.5.0-staging`, found two things it would have sent wrong:
+
+- **56 commits of `tools/RecompOne` from before the subtree existed**, rebuilt
+  under new hashes with trees the fork already had. `git subtree split` walks
+  every commit that touches the prefix and that no join covers, and the only
+  rejoin (`131853f`) covers its own first-parent line, not the branches merged
+  in after it that had touched `tools/RecompOne` before the switch-over.
+- **A mixed commit**, `1138329`, which touched the prefix and game files, so the
+  split would have published half of it.
+
+So the push now splits first and checks the split, `remote..split`, each commit
+found again here by author, author time and subject. Any failure refuses the
+whole push:
+
+- a commit the shared branch already has under another hash (the rebuilt
+  history);
+- an original that touches anything outside the prefix (a mixed commit), wherever
+  it sits: a pull merged after it does not hide it;
+- a shared branch that is not an ancestor of the split (it has commits this copy
+  lacks: pull first);
+- a one-parent commit with a rejoin's trailers since the last joins (the
+  previous section). The joins are every pull merge on any parent line, since a
+  pull made on a branch later merged sits on that merge's second parent.
+
+Nothing is sent when the prefix already equals the shared branch, `DRY_RUN=1`
+stops after listing what would go, and a split that fails prints git's error
+instead of exiting 1 with nothing said.
+
+**`--rejoin-fork` / `--rejoin-core`** clear the rebuilt history. Where the prefix
+equals the shared branch, it writes a two-parent commit, HEAD and a squash commit
+whose tree is the shared branch's (made, with the newest squash as its parent, if
+no pull made one), with `git-subtree-mainline: HEAD` and `git-subtree-split:
+<shared commit>`. The split stops there and the next pull squashes from there.
+The tree is HEAD's, so no file changes. It is skipped when the newest join
+already names the shared commit and the split already stops at it. **A push that
+publishes makes one after it**, a local commit on HEAD: otherwise the next pull
+squashes from the commit before the push, carries the pushed commits back as a
+change, and conflicts with any later edit of the same lines (it did, in the
+test).
+
+**Two rejoins naming one commit kill the split**: `git subtree split` caches the
+commit each rejoin names and dies on the second (`fatal: cache for 09f3f09...
+already exists!`). That is what a two-parent rejoin at `09f3f09` met in the
+one-parent `131853f`, and Verdite Core has the same shape in `447557c` at
+`b74cab8`. The history is not rewritten for it; for the split only, each older
+rejoin naming a commit a newer one names is seen as a copy without the trailers,
+through replace refs in a namespace of the push's own (`GIT_REPLACE_REF_BASE`),
+deleted after.
+
+Tested on 2026-10-11 against bare clones of both shared repos
+(`VERDITE_FORK_URL`/`VERDITE_CORE_URL` pointed at them), in a worktree:
+
+- without a rejoin, the push refuses the rebuilt commits;
+- `--rejoin-fork`, then again (skipped), then `--pull-fork` (already at `09f3f09`);
+- a trial commit pushed as exactly one commit, and the push rejoined after it;
+- a commit added on the remote refused as "pull them first"; the pull then merged
+  with no conflict, and a second push sent one commit, a fast-forward;
+- a mixed commit refused;
+- `--push-core` from the same tree lists the trial and the three setup commits of
+  `onboarding` that Verdite Core does not have yet.
+
+Nothing was pushed to either shared repo.

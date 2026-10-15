@@ -8,7 +8,7 @@ lives here — frame pacing and auto reload.
 
 | file | what it does | detail |
 |---|---|---|
-| `FramePacing.cs` | paces the picture, and holds the world to 20 Hz | this file |
+| `FramePacing.cs` | paces the picture, and holds the world to 15 Hz | this file |
 | `MenuPacing.cs`, `LoopPacing.cs` | run a loop that renders its own frames at the world's rate, and fill the gap by redrawing | this file |
 | `LoadPacing.cs` | makes a `VSync(0)` inside a disc wait cost a vblank again, so the loading screen's figure walks at the console's rate | this file |
 | `MenuWorld.cs` | draws the world live behind a menu or a shop instead of the frozen 320-wide copy | this file |
@@ -19,6 +19,7 @@ lives here — frame pacing and auto reload.
 | `PolyAssembler.cs`, `PolyAssemblerLit.cs` | `func_80030540`, the polygon assembler, `func_8002FECC`/`func_8002E650`, the far map tiles' assembler and its vertex transform, and `func_8002F214`/`func_8002EAEC`, the models' lit assembler, rewritten in C# as replace hooks | this file |
 | `AutoReload.cs` | reloads the last save on death | this file |
 | `GearCompare.cs`, `MenuDraw.cs` | shows the stats an equip or a purchase would change beside the prompt, drawn with the game's menu primitives in C# | this file |
+| `EnemyTurn.cs` | scales how fast a creature turns at the player (Gameplay ▸ *Enemy turn speed*) | this file |
 | `Map.cs`, `MapMarkers.cs`, `MapRender.cs`, `MapPanel.cs`, `MapOverlay.cs`, `MapFog.cs` | the area's floor plan, what is standing in it, and the tiles you have seen | this file |
 | `NoDither.cs` | clears the GPU dither bit | [RENDERING.md](RENDERING.md) |
 | `Perspective.cs`, `Subpixel.cs`, `ZBuffer.cs` | switches and probes over the GTE depth mechanisms | [RENDERING.md](RENDERING.md) |
@@ -392,6 +393,20 @@ and the software rasterizer is always 15-bit, so a note under `Smooth (24-bit)`
 saying so looked right — but the Graphics backend combo offers `auto`, `gl45`,
 `gl33` and `gl21`, all four of them GL, and `GlBackendKind` has no software
 entry. The note would be for a state the pane cannot produce.
+
+**The dither off switch is the runtime's mask now.** `NoDither` used to clear
+bit 9 of each GP0(E1) word in guest RAM, around every `PutDrawEnv` and every
+`DrawOTag`, by walking the whole ordering table a second time before each call
+and putting the words back after. It now sets `Gpu.SuppressDither` (RecompOne
+patch `0094`), which the GPU's draw-mode decode honours on both render paths, so
+nothing is written to the game's memory and the table walk runs only under
+`KF2_NODITHER_PROBE`. Verdite3 measured the old walk and the table clear it forced
+at 0.1 ms of a 1 ms frame (its commit `3b3efa3`). Here, standing in fdat05 at
+`KF2_FPS=off` (default Shading, Smooth), the median uncapped rate went from
+1165-1180 fps to 1206 fps across two runs each, about 0.02 ms a frame; that run
+also carried the `Prejit` change, so it is not this change alone. The picture in
+each position has not been looked at since. The three Shading positions are unchanged: `Dither` has
+the mask off, `None` and `Smooth` have it on, and `Smooth` adds `TrueColor`.
 
 ### The rate became a setting, so every hook is installed whatever it is set to
 
@@ -978,6 +993,40 @@ fastest band, never above it, and without the banding that made the original's
 speed wander. No game knowledge, no constants touched — and it is strictly more
 consistent than hardware ever was. **Done**; see below.
 
+### The reference band is 4 vblanks
+
+**This overturns the section above in its number, not its reasoning.** The
+reasoning stands: the gate's `2` is a ceiling, the console missed it under load,
+and the band it landed in is the speed the game was built at. Which band was the
+open part, and it is now **15, four vblanks**: `FramePacing.LogicHz` defaults to
+15, and 20 and 30 are comparisons under `KF2_TICKRATE`.
+
+* **The evidence is by ear, not a counter.** Played at 15, a door's sound fits its
+  motion; the sound is on the SPU's wall clock and the door moves per tick, so the
+  rate at which they agree is the rate the two were authored against. That is the
+  user's judgement in play, not a measurement, and which door, and how far off it
+  was at 20, is not recorded.
+* **Not yet checked** the same way: any other sound against motion (a lever, a
+  drawbridge, a creature's attack), or the cutscenes in `OPEN.EXE`. The JP
+  executable's gate literal is still unread (see above).
+* **What moves with it.** Everything the world steps per tick runs at three
+  quarters of the 20 Hz speed: walking, turning (the D-pad, L2/R2 and the stick
+  alike, 37°/s walking and 46°/s standing, 42°/s looking), creatures, timers, the
+  death clock (65 ticks, 4.33 s). The mouse and the gyro do not: they ask for an
+  amount, not a speed. The render rate does not either; 60 is four pictures a tick.
+* **What the port had hard-coded at 20, and now follows the tick rate**: the
+  pulse and flicker clock of authored lights and glows (`Lights`, `Surfaces`, which
+  divided ticks by 20 to get seconds, so an authored 1 Hz pulse stays 1 Hz), and
+  the map markers' sampling period (`MapMarkers.PeriodMs`, one sample a tick).
+  Everything else read `LogicHz` already.
+* **Measured**: `KF2_FPS=144 KF2_FPS_PROBE=1 KF2_PRESENT_PROBE=1`, slot 2: 144.0 fps
+  drawn, 144.0 presents/s, 15.0 ticks/s (one-second windows reading 14.9, 15.0 and
+  now and then 15.9, about 15.0 on average), every hook attached. **Not looked at**:
+  the smoothing at four pictures a tick, by eye.
+
+Measurements elsewhere in these documents that say 20 Hz were taken at 20 and are
+left as they were.
+
 ### The floor, as built
 
 `patches/FramePacing.cs`, attached as a post hook on `DrawOTag` in all three
@@ -1130,7 +1179,7 @@ gate's spin calls land after it. After the fix, every rate from 30 to 144 measur
 **30.0-30.3 world ticks a second and a rendered rate equal to the number asked
 for**.
 
-`mods/framestats` carried the same guard and so reported the vblank-bearing subset
+`mods/framestats` (since removed) carried the same guard and so reported the vblank-bearing subset
 as its frame rate; it now uses the call boundary too, and a `0:` band in its
 vblanks-per-frame histogram is the correct answer for a frame shorter than a
 vblank.
@@ -1320,7 +1369,7 @@ together and the read-back cannot separate them; what it is for is a patch whose
 sites are *different functions* — `AnimSmoothing`'s five, `FramePacing`'s
 per-overlay roles — and every claim printed to the console.
 
-`patches/HookAttach.cs` holds both halves: `OnOverlayLoad(label, attach, hint)` is
+`HookAttach` (Verdite Core's, `tools/verdite-core/src/HookAttach.cs`, since 2026-10-02) holds both halves: `OnOverlayLoad(label, attach, hint)` is
 the retry latch set from the pass's own success and capped at `MaxTries` (3 — a
 miss is nearly always a miss for good, since every overlay is registered before the
 first load, so this only has to cover a transient), and `Installed(target)` is the
@@ -1423,8 +1472,8 @@ So **it is now skipped at every rate**, and two consequences follow:
 * **A rendered frame carries exactly one `VSync` call at every rate** — the
   presenter's — because the gate's spin calls were the second one. The frame
   boundary is therefore the same shape at 20 fps as at 144, which is the simpler
-  of the two cases it used to have to handle. `mods/framestats` reading `2` on
-  calls/frame now means the gate is back.
+  of the two cases it used to have to handle. Two `VSync` calls per frame
+  (what the removed `mods/framestats` counted) now means the gate is back.
 
 `0x801B6CAC` and the vblank callback `func_80017850` are untouched: only the spin
 is skipped, so the CD timeout riding on that counter is unaffected.
@@ -3328,8 +3377,8 @@ to print "0 of N carried (phase idle)" whether the phase was zero or the player
 was simply standing still, and the second reads as a broken logic clock when it is
 nothing of the kind.
 
-The measurement to run it against is `mods/framestats`, restored for this work and
-now reporting **two** histograms: vblanks per frame (how long the frame took) and
+The measurement to run it against was `mods/framestats` (since removed), restored for this work and
+reporting **two** histograms: vblanks per frame (how long the frame took) and
 `VSync` calls per frame (how many times the game asked). Since `0021` those are
 different numbers, and conflating them is what made the first pass at frame pacing
 read as circular.
@@ -3529,6 +3578,35 @@ TIM does not already show. Placement and the fade were never judged. Behind it i
 when `MenuWorld` is on ("Messages draw the world live"), and the dim is then this
 panel's; with it off, the game's 1x `MoveImage` copy.
 
+## Pausing when the window loses focus
+
+Click away from the window and the game stands still and goes quiet, as a desktop
+game does; click back and it carries on from the same tick. Verdite Core's
+`FocusPause` (`tools/verdite-core/src/FocusPause.cs`) decides when -- the switch,
+`HostWindow.FocusChanged` (runtime `0101`), and the sound -- and the port decides
+how: `Program.cs` hands `FocusPause.Active` to `FramePacing.PauseWhen`, the stage
+gate held shut that the full-screen map already pauses with ("Opening the map
+stops the world"). Nothing is written to game memory, and stage 13 still draws, so
+the window keeps its picture.
+
+- **The sound is the SPU's two gains**, voices and CD audio, set to nothing and put
+  back from the runtime's own audio settings (`ConfigManager.Game.SpuVolume`,
+  `XaVolume`), so the player's volume is never what moves. The game's sequencer
+  keeps running under it: the music has moved on by the time the window comes back.
+- **What the stage gate does not hold is only muted**: `OPEN.EXE`'s intro, `END.EXE`,
+  and anything else outside the gated main loop run on in silence.
+- **A run a program drives is not paused.** `KF2_SHELL`, `KF2_AUTOPAD`,
+  `KF2_AUTOSTART` or `KF2_AGENT` set means nobody is there to give the window
+  focus, so the pause is off for that run and the saved key is not read;
+  `KF2_FOCUS_PAUSE=1` turns it back on.
+- On by default; Gameplay ▸ *Pause in the background* (`kf2.focuspause.on`), not a
+  PORT SETTINGS row. `[KF2] focus lost: paused` and `focus back: resumed` are
+  printed as it happens.
+
+Measured: a focused boot into slot 2 with `KF2_FOCUS_PAUSE=1` holds 15.0 ticks/s,
+so the pause is not taken while the window has focus. **Not yet seen**: the pause
+and the silence on an actual focus loss, which needs someone to click away.
+
 ## Auto reload
 
 `patches/AutoReload.cs` reloads the last save when the player dies. King's Field
@@ -3554,6 +3632,22 @@ death from any other reason that byte could hold `0x11`, then starts a clock. Th
 reload fires once, after a configurable delay (default 2 s) during which the
 game's own death sequence plays.
 
+
+### The fade's length
+
+Ported from Verdite3 (`f8f7fbb`, 2026-10-09): Gameplay ▸ *Message fade length*, x1 to x4
+(`kf2.messagefade`, `KF2_MESSAGE_FADE`, the variable wins). `MessageFade` draws each
+brightness that many times; each draw ends in the presenter's `VSync(0)`, so it is that
+many vblanks a step, and the pad is still read once a step, as the game reads it. Only a
+message `MenuWorld` takes is held; one left to the game's loop keeps the game's speed.
+x1 is the default, the game's own.
+
+Measured (`KF2_AUTOSTART=2 KF2_MESSAGETEXT_TEST=3:0 KF2_MENUWORLD_PROBE=1`, Cross over
+the shell): at x1 the fade-in was 10 step draws, 10 `VSync`s, 143 ms, and the fade-out
+7, 7, 117 ms, so a step is one vblank here as in Verdite3; at x2, 20 and 14 `VSync`s,
+310 and 233 ms. A fade-out that runs out returns the button test's state, -1 until every
+button is up and -2 after, so a longer fade-out can return -2 where a short one returned
+-1, as the game's own would at that length. **Not judged by eye.**
 ### The game is already reloading, and it wins the race
 
 The thing that nearly sank this, and the reason the delay is not just a sleep.
@@ -3751,13 +3845,141 @@ slot 2. The panel itself was judged by eye as the mod; the prompt is not reachab
 from the command channel (`press` does not reach the menu's Up/Down), so the
 patch's picture and its verify line on a real prompt are the user's to check.
 
+## Enemies turn faster
+
+`patches/EnemyTurn.cs` is Gameplay ▸ *Enemy turn speed*, a multiplier from x1
+(the game's own, the default) to x8 in quarter steps, with *Track you while
+standing* under it (on, dimmed and inert at x1). It is there because the mouse
+lets a player turn in a frame, where the D-pad turns `0x1C` a tick, and a creature
+that turns at the pad's pace can be circled forever. The slider applies on the next
+tick, so it can be moved in a fight. `KF2_ENEMYTURN` sets it from the console (and
+wins over the saved `kf2.enemyturn`).
+
+**One hook covers every caller.** All creature turning goes through
+`func_8003C8D8(rec, target, maxSpeed, accel)` (see "The creature turn is one
+routine" in [GAME_INTERNALS.md](GAME_INTERNALS.md)), so a pre-hook rewrites `a2`
+and `a3` and lets it run. Nothing is stored and nothing is restored: the arguments
+are the only thing changed, and they are read fresh on every call.
+
+**Speed times k, acceleration times k squared.** A turn starts from rest and gains
+`accel` a tick until it reaches `maxSpeed`, and the creatures measured have an
+acceleration of 3 or 4 a tick against a top speed of 4 to 52. A short turn is
+therefore limited by the acceleration (`sqrt(2 angle / accel)` ticks; a quarter
+turn from rest is about 22 ticks, 1.5 s) and a long one by the top speed (`angle /
+maxSpeed`). Scaling both by k would make a short turn only `sqrt(k)` faster; scaling
+the acceleration by k² and the speed by k makes a turn of any size k times faster,
+which is what "x2" should mean. A step is capped at `0x400`: the routine's
+overshoot test looks a half turn either side of the target, so a step near `0x800`
+could pass the target unseen. A zero stays zero (`0x8003EB18` calls it with no
+speed, to stand still).
+
+**Only a turn at the player is scaled.** The chase writes its heading as
+`rec+0x64 = func_80015394(player - creature)` on the tick it turns (the calls at
+`0x8003E6F8` and `0x8003F000`, both feeding `func_8003CA08`), while a wander
+heading is `rand >> 3` (`0x8003E448`). So a target within 16 (1.4°) of the
+player's bearing is taken as a chase and anything else keeps the game's pace; a
+creature milling about at x3 otherwise snaps from heading to heading. The window
+was `0x80` (11°) first, and 5-15% of wander turns passed it; the trace below
+measured the chase's target within 3 of the bearing.
+`func_80015394` is `-atan2(dx, dz)`, not `atan2`: the first version of the gate
+used the latter and matched none of the chase's calls. `KF2_ENEMYTURN_ALL=1`
+scales every turn, as a comparison.
+
+Measured with `KF2_ENEMYTURN_PROBE=1`, slot 2 in area 1, walking the player
+toward the creatures east of where it loads (the census names the wrapper's own
+caller):
+
+| site | action | at x1 | at x3 |
+|---|---|---|---|
+| `0x8003E750` via `func_8003CA08` | `0x05` | every call at the player; speed 11, accel 4, \|vel\| ≤ 11 | every call scaled; \|vel\| ≤ 33 |
+| `0x8003E418` via `func_8003CA08` | `0x01` | 0-8% at the player; speed 4-52, accel 3-4, \|vel\| ≤ 52 | 5-15% scaled; \|vel\| ≤ 52 in most windows, up to 156 when one is |
+
+and `KF2_FPS=144 KF2_FPS_PROBE=1` still reads 144.0 fps drawn at 15.0 ticks/s.
+The census never caught `func_8003DEBC`'s two direct calls, `func_8003CCAC`, or the
+area modules' calls, because no fight was reached: the agent's player could not
+get into reach of a creature in area 1. Those calls are covered by the same hook
+and gate, but not measured.
+
+**At x4 they turned at the player only every so often**, as played, and that was
+not the one-in-four think. `KF2_ENEMYTURN_PROBE=2` prints a line a tick for each
+active creature within 12000: its action, HP, how far its facing is off the
+player, and whether it turned. The type-10 creature by save 2 chases (action
+`0x05`) for 3-4 ticks at the player, then stands in action `0x19` for 5-16 s, and
+`0x19` never calls the turn: its facing held 25-145 off the player until the next
+chase re-aimed it. (`0x19`, at `0x8003FA14`, is driven by an animation counter at
+`rec+0x70`; what it is in play is not identified.) The chase's own speed is low as
+well: `rule+0xE` is 11 there, 44 at x4, 58°/s, which is why the ceiling went from
+x4 to x8.
+
+**So a standing creature is tracked.** Once a tick (a post on stage 4, telling a
+tick from a gated frame by stage 4's own run count at `0x80175908`), each active
+creature that is engaged, did not move since the last tick, was not turned by the
+game this tick, is alive (`rec+0x1A`, its HP, not 0: a killing hit sets it to 0 and
+installs the death rule) and is in an action of the motion routine's table (below
+`0x20`; slots in `0xF0` are left alone) is put through `func_8003C8D8` itself, at the
+player's bearing, speed 16 and its type's acceleration, with the CPU context
+snapshotted and restored around it. The call goes through the hook, so it is scaled
+like any turn at the player: 64 a tick at x4.
+
+*Engaged* is from the game's own chase turn until the creature's next own turn
+elsewhere (a wander) or it goes inactive; a turn of the port's is marked by its
+return address and neither engages nor releases. Without it, the idle type-2
+creatures 7000-13000 away in action `0x00` were tracked too, and everything active
+in the area turned to watch the player. A 20 s timer was tried before the event and
+ran out on the type-10 creature still standing at the player in `0x19`.
+
+Measured, x4, the same walk: the type-10 creature chases, then holds its facing
+within 0-1 of the player through every `0x19` (three cycles); the type-2 creatures
+idle and wander at the game's pace, untracked; the `0xF0` slots untouched; 144.0
+fps drawn at 15.0 ticks/s. A wander turn between chases releases it, so it stood
+untracked from t25 to t147 after one, as designed.
+
+**The mechanism is measured; the feel is not judged.** It ships at x1. What a
+person has to check is whether x2-x8 makes a fight harder to circle without making
+creatures look like they snap; whether tracking through `0x19` reads as aggression
+or as a creature sliding round on its feet (it turns the facing, not the
+animation's footing); whether an NPC, if any is in this table, now turns to follow
+the player; and whether a creature that loses the player still turns at the game's
+pace. A creature whose descriptor has `desc+0x34 & 0x10000` already faces the
+player outright every tick. The in-game PORT SETTINGS ▸ GAMEPLAY page has no row
+for this: it is full at its seven.
+
 ## A dynamic map
 
-`patches/Map.cs`, `patches/MapMarkers.cs`, `patches/MapRender.cs`,
-`patches/MapFullscreen.cs`, `patches/MapPanel.cs`, `patches/MapOverlay.cs`,
-`patches/settings/MapPage.cs`.
+**Now the map mod, `mods/map` (id `kf2.map`).** It was a patch until the port's
+other features outgrew it being on by default. It is off until it is enabled in
+the Mods panel (`mods.kf2.map.enabled` in `interface.ini`), and while it is off
+none of its hooks, panels or settings exist. Its code moved unchanged in logic
+from `patches/Map*.cs`, `patches/settings/Map*.cs`; what the core keeps is
+`patches/GamePicture.cs` (the game picture's rectangle, which the message text
+also draws into), `patches/AppExit.cs` (the fog store's flush on exit), the
+`AgentServer.FastVerbs` extension point (the `map` shell verb), and
+`PatchSettings.Unregister` and `InputSection.GamepadExtras` (the mod's Gameplay
+combo and pad-button choice).
 
-    KF2_MAP=0             the whole feature off (on by default)
+**The keys moved.** `G` opens the full-screen map, `Shift+G` the docked readout,
+`N` the minimap as before, and the pad's default is `R3`. **`M` and the pad's
+touchpad are not the map's**: they open the game's own map item through core's
+`MapKey`, and the mod binds neither. The touchpad is not offered in the mod's pad
+choice either, and a saved touchpad value is read as `R3`.
+
+The mod's first-frame work (the saved settings, the panels, the Gameplay combo and
+the Input pad choice) runs from its first `VSync`, not from `RuntimeReadyEvent`:
+that event is dispatched before `ModLoader.LoadAll`, so a listener on it never runs
+for a mod. Its environment switches read only with the mod enabled, which is why
+`docs/ENV_VARS.md` says so beside each one.
+
+Verified (2026-10-14): the mod compiles at run time and loads with
+`[Mods] kf2.map v1.0: 0 hook(s)` and `[KF2] map: on, G or R3 opens the full-screen
+map ...`; `map on` drops the tick rate to 0.0 ticks/s and `map off` restores 15.0
+(`KF2_FPS_PROBE=1`); `key G` opens and closes the map; with the mod disabled the
+game boots to slot 2 in area 1 and `map` is an unknown command. Not judged by eye.
+
+`mods/map/` holds `Map.cs`, `MapMarkers.cs`, `MapRender.cs`, `MapFullscreen.cs`,
+`MapPanel.cs`, `MapOverlay.cs`, `MapFog.cs`, `MapMod.cs` (the entry point),
+`MapPage.cs` and `MapButtonPage.cs`.
+
+    KF2_MAP=0             the whole feature off (on by default; read with the mod enabled)
     KF2_MAP_MINIMAP=1     the corner minimap on (off, and not a setting)
     KF2_MAP_PAUSE=0       the world keeps running under the full map (not a setting)
     KF2_MAP_FLOOR=lower   pin a stacked half instead of following the player
@@ -3774,9 +3996,9 @@ in this port that knew where you were was a debug instrument — `kf2debug`'s Wa
 tab, `KF2_SHELL`'s `state`, the `[KF2-AGENT]` beacon. A patch rather than a mod
 for auto reload's reason: it is a thing the port itself should offer, so it
 should not be able to be absent or silently disabled, and its knobs go under
-Gameplay beside it. **The pad's touchpad button opens the full-screen map**, `M`
-does the same from the keyboard, `N` toggles the corner minimap, and `Shift+M`
-opens the docked panel with the per-tile readout.
+Gameplay beside it. (Under the mod, `G` opens the full-screen map, `N` toggles
+the corner minimap, and `Shift+G` opens the docked panel with the per-tile readout;
+see the note at the top of this section.)
 
 ### The floor plan is already in RAM, and it is not polygon soup
 
@@ -4938,7 +5160,10 @@ when you fail at it, and the shorter block first.
 four states carrying three meanings and fog-on-with-the-map-off is nobody's
 answer — the same sentence, and the same fix, as "Two shading checkboxes were one
 question asked twice" above. One combo: `Off` / `Whole area` / `Fill in as you
-go`. `kf2.map.on` and `kf2.map.fog` are both still written and both still read,
+go`. (Since the map became the `kf2.map` mod, enabling the mod is the on switch: the
+combo is `Whole area` / `Fill in as you go`, and `kf2.map.on` is no longer read, so a
+player who had turned the old core map off does not enable the mod and get nothing.)
+`kf2.map.on` and `kf2.map.fog` were both still written and both still read,
 `KF2_MAP` and `KF2_MAP_FOG` are untouched, and the map is the master on read-back
 — the state only `KF2_MAP=0 KF2_MAP_FOG=1` can reach opens as `Off` rather than
 earning an entry, and one click on any entry leaves the pair consistent.
@@ -5008,7 +5233,7 @@ menu. It cannot, and the reason took several runs to pin down:
 - **Writing `Controller.State` does not reach the boot menus.** It advanced
   OPEN.EXE's title but did nothing at GAME.EXE's menu. The path that reaches the
   game *wherever it is* is `PAD_dr` — a `PadReadEvent` listener, exactly what
-  `patches/Mouse.cs` uses "so the buttons work in its menus". The buffer is
+  Verdite Core's Mouse uses "so the buttons work in its menus". The buffer is
   active-low and its two button bytes are swapped against `Controller`'s layout,
   so a pressed `Controller` bit is injected as `e.Buttons &= ~((b>>8)|(b<<8))`.
 - **The start menu (`func_8001B35C`) is a blocking poll loop**, so the per-frame
@@ -5106,6 +5331,11 @@ capture               arm the frame capture (FrameCapture.Arm) for the next run
 murk [on|off|tilt X]  the murk, and the steepest a murked surface may lean
 aspect [4:3|16:9|R]   the widescreen aspect, through Widescreen.SetAspect as the
                       settings window changes it (not saved)
+scale [1..8]          the render scale, through GlVram.Requested as the window's
+                      slider sets it, taken at the next present (fork 0097; not
+                      saved); alone, the current scale, the one still pending
+                      ("requested", 0 once taken) and the largest the GL context
+                      allows ("max")
 ```
 
 A socket rather than stdin because stdout already carries the beacon and the

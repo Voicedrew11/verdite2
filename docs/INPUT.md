@@ -54,13 +54,12 @@ after the game's own accumulate, so the clamp branch is not taken.
 
 Four things worth keeping:
 
-* **The camera accelerates while the stick is held out.** A d-pad is down or it
-  is not, so the game has no notion of a ramp; a stick held at the edge for half
-  a second should be sweeping faster than one just pushed. The patch ramps a
-  look-speed multiplier to 2.2× over half a second past 80% deflection and drops
-  it three times faster, which — with the cap lifted above — is what took the
-  camera from "stiff" to something like a modern shooter's. Fine aim near centre
-  is untouched, because the ramp never starts there.
+* **The camera can accelerate while the stick is held out, and by default does
+  not.** The patch can ramp a look-speed multiplier to 2.2× over half a second past
+  80% deflection and drop it three times faster — with the cap lifted below, the
+  camera goes from "stiff" to something like a modern shooter's. It was the
+  default once, and is off now (`KF2_ANALOG_ACCEL`, Fine tuning ▸ *Look
+  acceleration*): see "The stick turns at the original's speed" below.
 * **The fractional carry is not optional.** A small deflection rounds to a zero
   step every tick; without carrying the remainder the player simply does not move
   below about a third of stick. The world ticking at 20 rather than 30 makes this
@@ -81,26 +80,77 @@ Four things worth keeping:
   and asserting nothing lands on `target` however large it is, while writing
   `target - accel` and asserting the button is capped at the game's own rate.
   That is the whole difference between a camera that tops out at the d-pad's
-  74°/s and one that does not, and it costs one branch in `Drive`. Confirmed in
+  rate (37°/s walking, 46°/s standing, at the 15 Hz world) and one that does not, and it costs one branch in `Drive`. Confirmed in
   play: mean yaw steps of 39 against a frame rate limit of 28, and a `turnVel` of
   37 sitting in memory, which no button can produce. Nothing else gameplay-side
   reads the turn masks — the only other readers are the control-config screen —
   so dropping the button for a frame is free.
 * **A released velocity ramps down, and on a stick that reads as inertia.** The
   game drops nothing: pitch decays by 3 a frame from a limit of 32, so releasing
-  the stick keeps the view moving for about eleven frames — a third of a second,
-  some 16°. That is reasonable for a button, which cannot be released halfway,
-  and wrong for a stick, and it showed up *only* on pitch because the leak fix
-  above was already zeroing turn whenever the left stick moved. The patch therefore
-  drives a released camera axis to zero for one frame and then hands it back, so
-  L2/R2 and the D-pad still work. Movement is deliberately left alone: its
-  ramp-down is the walking momentum the game has always had.
+  the stick keeps the view moving for about eleven ticks — over half a second at
+  the 20 Hz world, some 16°. *Camera stops on release* (`KF2_ANALOG_INSTANTSTOP`)
+  drives a released camera axis to zero for one tick and then hands it back, so
+  L2/R2 and the D-pad still work. It was the default once and is off now: the
+  ease is the original's. Movement is left alone either way: its ramp-down is the
+  walking momentum the game has always had.
 * **Sticks idle means the patch is idle.** Both hooks return before touching memory, which
   is what keeps D-pad and keyboard play identical to having it switched off — which is why it can default to on.
 * **The look hook is now shared with the mouse.** `Mouse.TakeLook` hands
   `BeforeLook` a step in the same yaw units and this class writes the word, so
   two devices cannot fight over one velocity; the look hook therefore also runs
   with the sticks switched off. See "Mouse look" below.
+
+### The stick turns at the original's speed
+
+The defaults turned the view more than twice as fast as the game can: look
+acceleration took a full stick to 2.2× the D-pad's rate (about 107°/s walking,
+against the D-pad's 49°/s, at the 20 Hz world then), the stick started and stopped the view dead, and the
+sensitivity slider went to 3.0 through the overspeed branch above. The game's
+fights are built on how fast the player turns — a creature cannot reach a player
+who circles it faster than the D-pad allows — and players said so.
+
+So by default a stick now turns as the D-pad does, and looks as L2/R2 do:
+
+* **The speed at full deflection is the game's own**: the turn rate at
+  `0x8019955C` (28 walking, 35 standing, halved by SLOW, all decided by stage 3),
+  and 32 a tick for the look. A partial push asks for a share of it, through the
+  deadzone and the curve, so the stick still aims finely and can never beat the
+  button.
+* **It eases in and out by the game's own step** (`Analog.Ramp`): `rate >> 2` a
+  tick for the turn (four or five ticks to full) and 3 for the look (eleven), up and
+  down, which is what the button branches and the released branch of
+  `func_80028DB8` do to a held and a let-go button. It carries on from the game's
+  velocity when the stick takes over from a D-pad turn or its decay, but not from a
+  step the mouse drove. 3D's left-stick turn was already ramped and now shares it.
+* **Faster is opt-in.** Look acceleration and the instant stop are off, and the
+  sensitivities default to 1.0; the sliders still go to 3.0. A config saved
+  before this is brought to the new defaults once (`kf2.analog.defaults` = 2):
+  acceleration and the instant stop off, a turn or look sensitivity above 1.0 put
+  back to 1.0, and a console line saying how many were reset. A variable set in the
+  environment still wins; it never touched the store.
+
+Measured with a scripted right stick (slot 2, standing, rate 35, 2D): full right
+turned 8, 16, 24, 32, then 35 a tick, and on release 27, 19, 11, 3, 0; a push to
+byte 200 (about 0.57) held 13-14 a tick; full up looked 3, 6 … 30, then 32 a tick,
+and decayed by 3 to 0 on release. The same steps as a held D-pad and L2/R2. The
+mouse is not changed. **Not felt on a pad.**
+
+### The stick can turn at that speed without the ease
+
+The ease is the original's, and it is also drag: a button cannot be half pressed,
+so four or five ticks in and out is how the game softens a d-pad, and on a stick it
+reads as the view lagging the thumb. *Stick eases in and out* (`StickEase`,
+`kf2.analog.ease`, `KF2_ANALOG_EASE=0`; Input ▸ Gamepad ▸ Fine tuning) turns it off:
+the stick's turn and look are what its position asks at once, through the same
+deadzone, curve and cap, and a released stick stops dead the tick after, as the
+instant stop does (whose checkbox is dimmed, having nothing to add). On is the
+default and is the mode above, unchanged. It is 2D's right stick only: 3D's
+left-stick turn is the D-pad's, and keeps its ease.
+
+Measured the same way, with the ease off: full right turned 35 a tick from the first
+tick and 0 the tick after release; byte 200 held 13-14 a tick from the first; full
+up looked 32 a tick from the first, and stopped the tick after release. With it on,
+the run above repeated step for step. **Not felt on a pad.**
 
 `KF2_ANALOG_PROBE=1` reports the velocities, the yaw and pitch steps, the walk
 speed and turn rate next to the stick deflection that produced them, and dumps
@@ -272,6 +322,184 @@ Cheap next step: reproduce with `KF2_ANALOG_PROBE=1`, which already reports the
 control state, and read `0x8019955C` / `0x80199558` / `0x801994E1` at the moment
 it breaks. All three candidates are one memory read apart.
 
+### 2D and 3D controls
+
+Ported from Verdite3 (`c355bd2`, `6f6f479`, 2026-10-09). *Controls* (Gameplay, and
+CONTROLS on PORT SETTINGS ▸ CONTROLS; `kf2.controls`, `KF2_TANK`) chooses 2D, the twin
+sticks above, or 3D: one stick, as tank controls are. In 3D the left stick walks
+forward and back and turns as the D-pad does, L1 and R1 strafe, L2 and R2 look, and the
+right stick is not read at all (the right-stick rows of Input ▸ Analog dim, and so does
+INVERTED CAMERA).
+
+- **Each axis has its own deadzone, 0.3** (a cross, not a circle), so a thumb a little
+  off forward walks straight and a sideways push turns in place. 0.3 of the byte is well
+  inside the runtime's own stick-to-D-pad threshold, so a stick inside it never reaches
+  the game as a D-pad turn either.
+- **The turn is squared** and scaled to the game's own rate (`0x8019955C`) times the turn
+  sensitivity, and moves toward the stick's by `rate >> 2` a tick from the current
+  `TurnVel`, as a held D-pad's turn ramps.
+- **Release is the D-pad's**: the stick back inside its deadzone leaves the velocity to
+  the game's decay instead of the right stick's instant stop.
+
+Measured with a synthetic stick (`KF2_TANK=1 KF2_ANALOG_PROBE=1`, slot 2, a temporary
+hook writing `Controller.LeftX/Y` and `RightX/Y`; rate 35): left full right turned at
+-35 a tick (yaw 2639 → 1299 in 2 s); 0.12 right, inside the deadzone, released to 0 and
+did not turn; the right stick full right and up moved nothing; left up with 0.16 right
+walked at 200 with no turn; 0.5 right turned at -3 (0.29² × 35). 144.0 fps at 20.0
+ticks/s. **Not felt on a pad.**
+
+## Rumble and gyro aim with a drawn bow
+
+Ported from Verdite3 (`d6ee250`, `1d84575`, `e75ad1f`, 2026-10-09) onto this game's bow
+("The bow and the arbalest" in `docs/GAME_INTERNALS.md`); `Bow` in `patches/Rumble.cs`
+reads it after `func_800271D0`, once a tick.
+
+- **Rumble** (`Rumble`, `KF2_RUMBLE`, `KF2_RUMBLE_HD`, on): a click as the arrow is
+  nocked, a creak rising with the tension (the clock over `0x0FFF`), a strain with a slow
+  tremble at full draw, and a twang on the loose as strong as the draw was, dying in a
+  fifth of a second. Two motors on any pad (runtime `0104`), HD on a Switch Pro or a
+  single Joy-Con, the actuators of a DualSense over USB (`0105`). The world stopped (the
+  weapon routine silent for 150 ms) stops it. `KF2_RUMBLE_TEST=1` plays the bow three
+  times over from 3 s in, without one; `KF2_RUMBLE_PROBE=1|2`.
+- **Gyro aim** (`GyroAim`, `KF2_GYROAIM`, on, so a pad with a gyroscope streams it from
+  boot, runtime `0102`): while the bow is drawn the pad's rate is integrated each vblank
+  and spent in `Analog.BeforeLook` beside the stick's share, as the mouse's is, one to
+  one; tipping takes the mouse's Y inversion. `KF2_GYROAIM_PROBE=1`.
+
+PORT SETTINGS > CONTROLS > GYRO (OFF, ON) and RUMBLE (OFF, ON, HD). Measured: the draw and
+loose read off the game as above, and the rumble's phases followed them (nock, drawing at
+tension 0.59, full draw, loosed); the test cycle asks about 60 waves a second. **No pad
+was attached: nothing was felt, and the gyro never ran** (`pad gyro off`).
+
+## Turning a picked-up item
+
+Verdite3's `ItemTurn`, on the same routine: KF2 holds a picked-up item up exactly as
+KF3 does (GAME_INTERNALS, "The pickup holds the item up in a loop of its own"), and
+the 2026-10-13 port, which found only the menu's preview, turned the wrong model
+(`patches/ItemTurn.cs`, `KF2_ITEMTURN`, on, one switch with the preview's).
+
+- **Mouse look**, the captured look's motion (`Mouse.TakeLook`), right turning the near
+  side right and down tipping it down; what is left when the pickup returns is thrown
+  away, so the view does not jump.
+- **The right stick**, shaped as the look shapes it, about a half turn a second.
+- **The gyroscope** (`KF2_ITEMTURN_GYRO`), under the same 0.05 rad/s rest threshold.
+- The yaw goes on the record's own, about the vertical; the tilt goes about the
+  camera's right, outside it (`Ry'(view) Rx(pitch) Ry'(-view)`, before the game's
+  `func_80014FE0`), so the item tips toward and away from the eye however far it has
+  spun. A quarter turn of tilt at most either way.
+- The game's spin (`+0x40` on record `+0x26` a pass) holds while the player turns it:
+  a pre on stage 13 at `Stage13.HookOrder.World`, on the hold's call (return
+  `0x8004870C`) and not loop pacing's redraws, takes the step back, before the
+  smoother samples the record. It spins again 1.5 s after the last input. When the
+  game turns the item back (`0x800488A8`) and flies it off (`0x80048984`), the
+  player's turn eases out over 80 ms.
+
+**The turn is drawn, not written.** `ModelWalk.Ordinary` asks `ItemTurn.Present` for
+the rotation it is about to hand the submitter (sp+0x38, y with the walk's `0x800`),
+every drawn frame, after the smoother. The record keeps the game's angles, so its
+turn back and its comparisons are untouched.
+
+**Measured** (`KF2_AUTOSTART=2 KF2_ITEMTURN_TEST=0x10 KF2_ITEMTURN_PROBE=1
+KF2_FPS=144`): the held item drawn 144-145 times a second; the test's stick turned it
+a half turn (yaw 2048) and tipped it a quarter (tilt 1024) in its second; the spin held
+(15 steps taken back) and came back after 1.5 s; the tilt axis against the view
+matrix's right row reads 1.000. **Not yet tried**: mouse look on a held item, the gyro,
+and how any of it looks. The scripted Cross from `KF2_AUTOPAD` never dismissed the hold
+in three tries (16 s, 200 ms and 1000 ms), which is unexplained; the pad path in the
+loop is untouched, so a real press needs trying.
+
+## The item held up at the eye
+
+The user's report was KF3's: a picked-up item is not presented at the centre of the
+screen. Two causes, and `patches/ItemEye.cs` (`KF2_ITEMEYE`, on) takes both.
+
+**The eye.** `func_80046C64(x, y, z, pitch, yaw, def+0xC, def+0xE, out)` aims the
+item at an offset from the player's position with `0x640` off y, which is the eye
+without the head bob (`0x80199548`) or the landing dip (`0x8019954C`); the pickup's
+stage 13 calls hand a rotation and no position, so the camera keeps the last frame's
+eye. A post on its three calls inside the pickup (returns `0x8004857C`, `0x80048610`,
+`0x80048830`) moves the out VECTOR by the camera block's eye less the assumed one, as
+Verdite3's does. Slot 2 has the head bob option (`u8 0x801994E0`) off, so it moved by
+(0, 0, 0) there; with the bob on it is the whole of KF3's fix.
+
+**The geometry, which KF3's fix did not reach.** The game puts the item's *origin*
+on its target, and an item's mesh stands on its origin: every one measured runs y
+from its height up to 0, and some sit behind it in depth.
+
+| item | origin from the eye | mesh y | middle z | middle from the eye | below the centre |
+|---|---|---|---|---|---|
+| 0 | (1, 419, 1465) | -644..0 | 0 | (1, 98, 1452) | 13 px |
+| 0x10 | (1, 729, 1311) | -1120..0 | -68 | (-48, 172, 1242) | 28 px |
+| 0x30 | (0, 749, 1781) | -1331..0 | -55 | (-39, 86, 1717) | 10 px |
+| 0x50 | (1, 289, 943) | -425..0 | 0 | (1, 77, 935) | 16 px |
+
+So the middle of what is drawn sat 10 to 28 game pixels (of 240) below the picture's
+centre, and an item with its middle off the spin axis swung round it as it spun.
+`ItemEye.Place`, called by `ModelWalk.Ordinary` after `ItemTurn.Present`, moves the
+record's position for that submit alone, so the middle of the mesh's box, scaled and
+turned as the submitter will turn it, sits on the view's axis at the origin's
+distance; `Restore` puts it back as soon as `func_80032588` returns. The box is the
+rigid sub-model's (clip byte `0x80` and up) from the bank `0x8018E19C` points at,
+28 bytes a header at `table + 0xC`, cached by vertex address. The bank is
+`func_80032CD8`'s return, and the table is the bank plus its u32 at `+8`
+(`func_80034834`, which the submitter calls); `0x8018E19C` itself is still the
+previous model's when the walk is about to submit, which a first try read, and every
+item then measured as the same 60-vertex mesh. It is blended in over
+the fly-in (`t` is `s0 - 0x200` at the call from `0x8004868C`) and out over the
+fly-back (`0x80048984`), whole for the hold and the turn back, the weight taken on
+the loop's own pass and carried between them by `FramePacing.LogicPhase`, as the
+record is.
+
+**Measured** (`KF2_AUTOSTART=2 KF2_ITEMTURN_TEST=<id> KF2_ITEMEYE_PROBE=1`, the four
+items above): the mesh's middle drawn at (0, 0, z) from the eye on every probe line,
+z the origin's distance. For 0x10 at 144 fps, through the spin and the stick's half
+turn and quarter tip: (0, 0, 1309) throughout, where without the move it ran from
+(-48, 172) to (35, 172) through the spin and to (-61, 815) tipped. **Not measured**: the blend over the fly-in and out
+(the probe prints only the full hold), and items with an animated mesh, which are
+left where the game puts them. **Not judged**: how any of it looks, including whether
+the game's distance is right for a long item once it is centred (item 0x10 is 1120
+tall at 1309, about 170 of the picture's 240 game pixels).
+
+## Turning the item preview
+
+The menu's preview, in the inventory and the shops, turns too
+(`patches/ItemTurn.cs`, the same switch as a picked-up item's).
+
+- **Drag it with the mouse**: a left press over the model grabs it until the button
+  comes up; right brings the side nearest the eye right, down brings it down, a half
+  turn for 128 game pixels. MenuMouse asks `ItemTurn.Grab` before it takes a press as a
+  click, so a press on the model is not the off-the-list back-out, and hover stands
+  still for the drag and until the pointer next moves, so a drag across the list does
+  not pick each row it passes. The model's box is the vertex cache (`0x8018EB94`)
+  `func_800346CC`'s transform just wrote, kept as a square round its centre as large
+  as it has been for this item, plus 6 pixels.
+- **The right stick**, shaped as the look shapes it (`Analog.RightStick`), about a half
+  turn a second at full deflection, with the stick sensitivities and inversions.
+- **The gyroscope** (`KF2_ITEMTURN_GYRO`, on): the item turns as the pad does, under a
+  rest threshold of 0.05 rad/s. The GYRO row on PORT SETTINGS sets it and the bow's gyro
+  aim together, as Verdite3's does, and shows CUSTOM when they differ.
+- The game's spin holds while the player turns it and comes back 1.5 s after, from
+  where they left it; the tilt is kept, a quarter turn at most either way. A new item
+  (`func_80022CAC`) resets the turn with the game's own pose, and so does a preview
+  that has not been drawn for 250 ms.
+
+**The turn is drawn, not written.** The pose is a block the game keeps at `0x8006E934`
+(GAME_INTERNALS, "The menu's item preview is a pose block and one routine"). A pre on
+`func_8002156C` writes the angles to draw, the game's with the player's turn added, and
+the step to take (0 while turning); the post puts the game's own angles back, stepped
+as the game would have stepped them. The yaw goes about the screen's vertical and the
+tilt about its right, both outside the game's rotation, and the product is read back
+into the three angles PSY-Q's `RotMatrix` takes (`Rx(x) Ry(y) Rz(z)`); the light matrix
+the routine builds from that rotation follows it.
+
+**Measured** (`KF2_ITEMTURN_TEST=1` with `KF2_AUTOSTART=2`, the menu opened and USE ITEM
+clicked over the shell): the preview drawn 60 times a second at 158,119 ±52 game pixels;
+the test's stick turned it a half turn and tipped it a quarter in its second, the spin
+held, and came back 1.5 s later; the matrix `RotMatrix` built from the written angles is
+within 8/4096 of the one meant (the sine table's rounding; the wrong convention reads in
+the thousands). **Not yet tried**: a drag with a real mouse, the gyro, and how any of it
+looks.
+
 ## The Input pane is the port's
 
 `patches/settings/InputSection.cs` and `patches/settings/BindingTable.cs`. One
@@ -396,7 +624,9 @@ fix, and whether the action column is worth its width.
 
 ## The keyboard layout, and changing a default RecompOne provides
 
-`patches/KeyLayout.cs`. RecompOne's default keyboard bindings are a *console's*
+`patches/KeyLayout.cs` (the table, `Version`, `Superseded` and the store) and, since
+2026-10-02, Verdite Core's `KeyLayoutApply` (the default, the migration and the
+arrows' second key, shared with Verdite3). RecompOne's default keyboard bindings are a *console's*
 defaults spelled on a keyboard — face buttons on Z X A S, shoulders on Q W E R,
 the D-pad on the arrows. That is the right generic answer for a runtime that has
 to run any PS1 game and the wrong one for this one, because King's Field walks
@@ -506,9 +736,12 @@ it for this pair specifically: `0x8006E590` reads `0x1000`, which is
 
 ## Mouse look
 
-`patches/Mouse.cs` steers with the mouse, and presses pad buttons with its
-buttons. It is **on by default** and its knobs are under Input, below the stick
-ones. Capture is still Escape, so the pointer does not disappear into the game
+Verdite Core's Mouse steers with the mouse, and presses pad buttons with its
+buttons. It is **always on, and not a setting** (2026-10-13, the user's call: a mouse is
+used or it is not, and the original experience is on a pad anyway); `kf2.mouse.on` is no
+longer read (`MouseGame.OnIsSetting` false) and `KF2_MOUSE=0` is the comparison. The
+menu pointer is the same (`kf2.menumouse.on` no longer read, `KF2_MENUMOUSE=0`). Its
+knobs are under Input, below the stick ones. Capture is still Escape, so the pointer does not disappear into the game
 until the player asks.
 
 **The look half is not a hook.** A mouse and a stick are two ways of asking for
@@ -545,8 +778,8 @@ variant of the pad one.
 
 Yaw is 12 bits to the circle (`yaw & 0xFFF`), and the game's own numbers confirm
 it: the D-pad's turn rate is `0x1C` **a logic tick**, which is 74°/s against the
-30 Hz world this was measured with and 49°/s against the 20 Hz one the port now
-defaults to. It is a tick rate and not a frame rate: drawing faster does not turn
+30 Hz world this was measured with, 49°/s against the 20 Hz one the port had
+next, and 37°/s against the 15 Hz one it now defaults to. It is a tick rate and not a frame rate: drawing faster does not turn
 faster. Pitch is in the same units, held
 inside ±`0x2BC` — about 62° either side of level.
 
@@ -662,7 +895,8 @@ and come back, so the notification fires often and every firing is a modal-looki
 card reporting a state the player has just this moment asked for. There is nothing
 in it to read.
 
-`patches/MouseIndicator.cs` is what replaced it: a white pixel-art mouse in the
+`MouseIndicator` (Verdite Core's since 2026-10-02, `tools/verdite-core/src/`,
+its rectangle set to `MapRender.Picture` by `Mouse.Install`) is what replaced it: a white pixel-art mouse in the
 top right of the game picture, faded in over 140 ms, held for 1.1 s and faded out
 over 420 ms. **The glyph carries the state and the fade carries the change** —
 captured is a solid mouse, released is the same silhouette with a two-cell
@@ -672,6 +906,8 @@ hollow pair would have; that was the choice between them. A one-cell black shado
 sits under the white, because the picture behind it is whatever the dungeon
 happens to be and a torch-lit wall is bright enough to lose a white shell — and
 the cut only reads as a cut if something separates the two halves.
+
+(Removed from Verdite Core on 2026-10-09; see "A click captures, and the menu suspends it".)
 
 Three things follow the map's viewports rather than being invented again. It is
 an `IFloatingPanel` anchored to **`MapRender.Picture`**, the game picture rather
@@ -700,6 +936,8 @@ console line at boot and in the settings page.
 outright while it is on (`MouseIndicator.Suppressed`, both ends gated so nothing
 queues underneath and switching on mid-fade hides it at once), since a flythrough
 being filmed must not have announcements fading in over the picture.
+
+(Removed from Verdite Core on 2026-10-09; see "A click captures, and the menu suspends it".)
 
 **Never judged by eye**: whether the top right is where the eye is, whether 1.75 s
 total is long enough to notice and short enough not to nag, and whether the cut
@@ -745,8 +983,9 @@ claims — so anything else held masks it. `InputManager.IsPadButtonDown(button,
 pad)` asks about one binding in the same encoding the rest of that class uses, so
 the triggers (100/101) and the stick directions (102–109) answer through it too,
 and `HostWindow` forwards it. `mods/kf2debug` is the only caller: the mute key
-toggles noclip, so a player on a pad never reaches for F3. Input only, so no
-recompile.
+is film mode, as V is (the cinematic camera, enemies ignoring you and noclip,
+together; noclip alone stays on F3), so a player filming on a pad never reaches
+for the keyboard. Input only, so no recompile.
 
 ### What is measured, and what is not
 
@@ -848,9 +1087,11 @@ back:
 * **With smoothing off it still leads**: the view is the tick's angle plus the
   pending sum. At the tick rate there is no frame between ticks and nothing to do.
 
-It is **Instant mouse look** under Gameplay (`MouseLeadPage`, saved as
-`kf2.mouse.lead`), on by default and dimmed while mouse look is off;
-`KF2_MOUSE_LEAD=0` or `=1` overrides the saved choice. `KF2_SMOOTH_PROBE=1` adds a line: frames
+It is always on, and not a setting (2026-10-13, the user's call: a player using a mouse
+wants it, and one who is not never meets it). It was **Instant mouse look** under
+Gameplay (`MouseLeadPage`, saved as `kf2.mouse.lead`); the page is gone and the key is
+no longer read (`MouseGame.LeadIsSetting` false; Verdite3 still keeps it), so nobody is
+stranded off by a value with no control. `KF2_MOUSE_LEAD=0` is the comparison. `KF2_SMOOTH_PROBE=1` adds a line: frames
 led, how far ahead of the tick, and the mean |applied − asked| per tick, which
 is the number that says whether the tick agreed with the picture.
 
@@ -870,12 +1111,358 @@ settles back by **1 unit** (0.09°) at the next tick on about one stop in ten,
 because the game truncates its step and carries the fraction while the picture
 rounds. Pacing held at 144.0 fps drawn and 20.0 ticks/s.
 
+#### The carry is part of the lead
+
+Reported from play afterwards: instant mouse look *snaps a tiny amount*, well
+under a degree, and reads as jutter. The wart above was not only at a stop. The
+tick spends `trunc(pending + carry)` (`Analog.Step`) and keeps the rest in
+`_turnCarry`/`_pitchCarry`; the lead showed `pending` alone, so at **every**
+tick of a turn the view moved by the old carry less the new one, anywhere in
+±1 unit (0.09°), with no pattern, twenty times a second. And the pitch was
+rounded twice, once in `MouseLead` before the limit and again with the lerp,
+where the yaw is rounded once.
+
+Now `Analog.MouseCarry` gives the lead the carry, and the lead shows `pending +
+carry`, the exact amount the next tick will add. For a mouse turn alone the drawn
+view is then continuous across the tick: before it, `cur + P + c₀`; after it,
+`cur + trunc(P + c₀) + c₁ + P′ = cur + P + c₀ + P′`. The pitch stays fractional
+until the one rounding on the carried frame, as the yaw does. The carry is only
+the mouse's while every step that touched it was the mouse's alone: a step with a
+stick, the gyro or the tank turn in it hides the carry until a mouse-only step
+shows it again, so a stick never leads by it. Switching from one to the other
+still costs one jump of up to a unit, once.
+
+What is left is the game's own grid: the angle is a whole 12-bit unit when the
+camera block builds its matrix (`CameraBlock.Camera` is `short`), so a slow pan
+still steps 0.088° at a time, 1, 2, 1, 2 units a frame. The next section builds
+the matrix from a fractional angle.
+
+**Mechanism from the code; a boot at 144 fps held 144.0 fps drawn at 20.0
+ticks/s. Nothing measured with a moving mouse.**
+Verdite3 has the same handoff error (`MouseLook._fracTurn` is not in its lead),
+and rounds the lerp and the lead apart as well; not changed there yet.
+
+Judged by eye afterwards, with a mouse: **no perceptible difference**. It is kept
+because it is right and costs nothing; the error it removed is the size of the
+grid step, which still shows either way.
+
+#### The view turns by a fraction of a unit
+
+The whole-unit grid above, taken out. `FrameSmoothing` computes the frame's yaw and
+pitch exactly (`yawD * frac + yawLead`, or the lead alone in `LeadOnly`) and rounds
+them into the composed angles, which stage 8 hands to stage 13 unchanged
+(GAME_INTERNALS, "Stage 8 is the render camera"). It now publishes what the
+rounding took off, `CameraBlock.SetFraction`, keyed on the whole angles it wrote,
+and clears it at every stage 8 that sets none.
+
+`CameraBlock.Run` builds the view matrix as `func_80015048` always has, from
+`(pitch, -yaw, roll)`: `Ry`, `Rz`, a GTE `MulMatrix`, then `Rx` (`func_80014E90`) and
+`MulMatrix2`. When the stored angles are the published ones it first builds the
+neighbours, the whole angle one past in pitch, in yaw and in both, with the same
+two routines into scratch under its frame, and the pitch-only matrix one past in
+pitch; then the routine's own build, last, so the GTE is left as it always was; then
+blends: bilinear in pitch and yaw for the view, linear in pitch for the pitch-only
+one. The entries are 4.12, so a unit of yaw moves an entry by up to about 6, and
+the blend resolves about a sixth of a unit. At a whole angle the blend is the
+routine's matrix bit for bit. Nothing derives a translation from the angles: the
+walks place everything relative to the camera (`TileWalk.Place`, the object walk's
+own subtraction) and rotate it by this matrix, so the translation follows.
+
+Everything downstream reads the matrix out of RAM, so nothing else changed: the
+packets through the GTE, the GPU world (`RetainedMap.ReadView`), the occlusion's
+world term, the lights, the planar cull. The planar walk's mirror is built at the
+same fraction with its pitch mirrored (`CameraBlock.Build(..., (-fp, fy))`), or the
+reflection would step on the grid under a world that does not. The cull grid, the
+compass's error and the sky's yaw still read the whole angle, under a unit off,
+which nothing draws. A build from any other angles (an override, the editor's
+camera, a verify run of the camera block) gets no fraction.
+
+**Measured** (`KF2_VIEW_FRACTION_PROBE=1`, the drawn yaw read back out of the matrix
+with `atan2(R02, R00)`, which roll 0 leaves the yaw's alone): a held D-pad Left at
+144 fps, turning 4.86 units a frame, each frame's step was off the steady one (the
+mean of the eight around it) by **0.28-0.32 units with the blend off and 0.13-0.15
+with it on**, the whole-unit angle in the same frames still 0.23-0.29. What is left
+is mostly the phase: the smoothing's `LogicPhase` is wall-clock, so a frame drawn
+late takes a longer step, and the metric's own window crosses ticks. 144.0 fps
+drawn at 20.0 ticks/s, presents reaching the screen; `KF2_STAGE13=verify` with it
+on, turning, 288 calls and 0 mismatches.
+
+**Judged by eye**, in play with a mouse: *better*, so it is **on by default**
+(`KF2_VIEW_FRACTION=0` to compare, or `viewfrac on|off|toggle` on the command
+channel within one session). Not a setting.
+
 **Judged by eye**, in play on a real mouse: reported as feeling *freaking
 fantastic*, which is why it is on by default. That verdict is on ordinary
 walking and looking. **Not yet tried by hand**: turning while a menu, a dialogue
 or a scripted sequence opens (the look routine never spends that motion, so it
 shows for up to three ticks and is then dropped), the mouse and a stick or turn
 key at once, turning across an area load or a death, and the head bob.
+
+**The debug mod's cinematic camera holds it off.** That camera's look filter
+(`mods/kf2debug/Noclip.cs`, "The cinematic camera has to recover the turn as a
+difference" in `docs/GAME_INTERNALS.md`) eases the view toward the angle the game
+integrated, and the lead jumps the drawn view past that angle by the mouse's
+unspent motion: one smooths what the other leaps over, and together they judder.
+So `FrameSmoothing.LeadSuppressed`, a public static a mod may raise, makes
+`MouseLead` answer nothing, exactly as with the setting off (no `Mouse.Poll`
+there, no `LeadOnly`, and the last tick's measured share dropped so it is not
+carried into the frames after the lead comes back). The `Cinematic` setter raises
+and lowers it, and the mod's `Noclip.Reset` lowers it, so unloading mid-film
+leaves the lead as the player set it. **The saved `kf2.mouse.lead` is never
+touched.** Ported from Verdite3's `ViewSmoothing.LeadSuppressed`. Measured: the
+flag follows the camera (`KF2_DEBUG_FILMMODE_PROBE`, below under the debug
+tools); **not judged by eye**: that the judder is gone with a real mouse in a
+cinematic flythrough.
+
+### Mouse aim: the hand points, the player turns
+
+Mouse aim is War Thunder's mouse aim, suggested by a player: the mouse moves an
+on-screen reticle, and the player turns toward it rather than the view turning
+by however far the hand moved. Ordinary mouse look out-turns anything the D-pad
+can do, and the game's fights are built on how fast the player turns (see "The
+stick turns at the original's speed" above), so a hand that sweeps the view
+round in a flick takes the fight away from the stick. Mouse aim keeps the
+original's turn speed and lets the hand choose the direction.
+
+The reticle is an offset from the facing, in the game's 12-bit angle units. The
+mouse adds to it, and each tick the look hook takes a step toward it. The step is
+the D-pad's: at most the walking or standing turn rate, changing by at most its
+acceleration (rate>>2), and pitch uses the look's own 32 and 3. The step brakes on
+the discrete stopping distance (see "Mouse aim made the player feel sick" and
+"Seven changes after the first play" below), so it does not overshoot,
+and it is truncated to whole units and taken off the offset, so the reticle and
+the turn stay in step. The step is handed to `Analog.BeforeLook` as the mouse's
+amount, so the pad word, the release and the carry are the ones mouse look
+already uses. Pushed against the edge of the picture the reticle keeps the turn
+at full speed, so a turn round is a hand held at the edge.
+
+The reticle is held on the picture: inside 90% of the half-width (widescreen
+margin included) and of the half-height, as angles off the GTE's projection
+distance, and inside the game's pitch limit. It is relative to the facing rather
+than a world direction, so a warp, a load or a death leaves it where it was on
+the screen and does not pull the player round to an old heading. Releasing the
+pointer resets it. While mouse aim is on, Instant mouse look has no effect, since the view is the
+player's facing and there is nothing to lead. The one exception is head look,
+which leads the view by the reticle itself (see "Seven changes after the first
+play" below). `MouseAimOverlay` draws the marks from the motion the host has
+delivered by stage 8, the point where the lead used to be taken.
+
+The controls are Input ▸ Mouse ▸ *Mouse aim*, with *View* (turns with you, follows the mouse or holds still; follows the mouse is head
+look) and *Aim sensitivity* under it. In PORT SETTINGS ▸ GAMEPLAY, the MOUSE LOOK
+row is OFF, LOOK or AIM: the page holds seven rows, so aim is a third value of the
+mouse row rather than a row of its own (`KF2_MOUSE_AIM`). Head look is not on that
+row; it is only in Input ▸ Mouse.
+
+**Mechanism from the code, and a boot with it on**: slot 2 restored, 144.0 fps
+drawn at 15.0 ticks/s, presents reaching the screen. The controller was
+simulated (a full-rate turn eases in over four ticks, holds 28 a tick, brakes and
+lands without overshoot; the last braking step drops from 13 to 0, faster than
+the D-pad's release). **Nothing moved with a mouse, and not judged by eye**: whether
+the ease feels right, the reticle's size and colours, and the D-pad or a stick
+turning while the reticle pulls (the offset is relative, so a key turn leaves the
+reticle where it is on the screen and it keeps pulling).
+
+#### Mouse aim made the player feel sick
+
+Reported from the first play with a mouse: mouse aim was "a little nauseating".
+Three causes were found in the code and fixed, none of which lets the player turn
+faster than the D-pad:
+
+- **The reticle shook at 15 Hz.** The view is drawn a tick behind
+  (`lerp(prev, cur, frac)`, see `FrameSmoothing`), but each tick took its whole
+  step off the offset at once. So between ticks the reticle drifted with the view,
+  then snapped back by the step: about 28 units, roughly 2.5 deg or 10 game pixels,
+  fifteen times a second during a turn. The step is now remembered, and every drawn
+  frame adds back the part of it the interpolated view has not reached
+  (`step * (1 - frac)`, the same correction instant mouse look applies with
+  `_tickYaw * keep`). The reticle stays fixed in the world while the view glides
+  onto it. That part is the step asked for, not the turn the game measured, so at
+  the pitch limit, where the game turns less than asked, it is off by the
+  difference.
+- **The turn stopped with a jolt.** The brake aimed at the continuous stopping
+  speed, sqrt(2a|d|), which brakes a tick late, so a turn ended by dropping 12 to
+  15 units in one tick where the D-pad's ease allows 7 (`28, 25, 18, 3`;
+  `21, 15, 3`; `7, 13`, then stop). `Toward` now aims at the largest whole speed
+  whose run braking by `a` a tick (v + (v-a) + ...) still fits the remaining
+  distance. Simulated over 24 distances and both turn rates, plus pitch, with the
+  target moving mid-turn: no step changes by more than the acceleration, nothing
+  overshoots, and nothing is left over. A full turn of 200 is now
+  `7, 14, 21, 28, 28, 28, 28, 22, 15, 8, 1`.
+- **Hand tremor turned the camera.** Any offset was a turn, so a few units of
+  tremor kept the view making small corrections nobody asked for. The reticle now
+  moves freely inside a ring (`KF2_MOUSE_AIM_RING`, 32 units, about 2.8 deg; 0 is
+  the old behaviour), and the player stays still. Once the reticle leaves the ring
+  the turn is committed, and it runs until it lands on the reticle, even if the
+  hand comes back inside, as a D-pad tap is a whole turn.
+
+**Measured**: builds clean; slot 2 restored with aim on, 144.0 fps drawn at 15.0
+ticks/s, presents reaching the screen. The occasional second at 15.9 ticks/s is
+there with aim off too. **Not judged with a mouse**: whether it still makes the
+player feel sick, and whether 32 is the right ring.
+
+#### Seven changes after the first play
+
+The fixes above were checked in the code and on a simulated controller, not with a
+mouse. To test the aim without one, the shell gained an `aim` verb, and the changes
+below were made against what it measured.
+
+- **The `aim` shell verb and `KF2_MOUSE_AIM_PROBE=1`.** `aim` alone reports the
+  state. `aim <dyaw> <dpitch> [ms]` moves the reticle by angle units (4096 a turn,
+  +dyaw is Left, +dpitch is down), spread evenly over `ms`, capturing the pointer if
+  it is not already. `aim on|off` sets the setting, unsaved, and `aim head on|off`
+  sets head look. The motion enters `MouseAim` directly (`MouseAim.Inject`), after
+  the sensitivity, so it tests the aim and everything after it (`Analog`'s step,
+  the game's turn) and not core's mouse sampling. The probe prints a line a tick
+  while the reticle or a step is not at rest: the offset, the step, the velocity,
+  whether it is steering, which axes are yielding, the measured turn and the still
+  count.
+- **A small aim is carried out** (`KF2_MOUSE_AIM_SETTLE`, 3 ticks; 0 is off). Before
+  this, the reticle could sit up to 32 units off the facing forever, inside the
+  ring, and the attacks went along the facing. Now a hand that holds still (under
+  half a unit a tick) for 3 ticks, with the reticle a unit or more off, commits the
+  turn. Tremor keeps the hand moving, so it does not settle; a deliberate small aim
+  does.
+- **One device turns at a time.** A right stick, the 3D left stick, the gyro, a
+  stick's ramp-down, or the D-pad's turn or look buttons in the pad word yields that
+  axis. The reticle keeps following the hand relative to the facing, but the aim
+  takes no step on a yielding axis, so the player never turns at the sum of two
+  rates. A held D-pad button takes the axis without the mouse's release tick, which
+  had zeroed the velocity and cleared the button for a tick before the game's own
+  branch turned again, so the turn continues from the aim's velocity on the game's
+  own ease.
+- **The turn is measured, not assumed.** Once a tick, at the first walk of the tick
+  (`FramePacing.FirstWalkOfTick`), `MouseAim` reads what the game turned for the
+  mouse (`Mouse.SpentThisFrame`) and gives the reticle back what it did not turn:
+  Analog's step carry, the overspeed ceiling, the pitch limit. A difference over 64
+  units is taken as a warp or a load and ignored. The unreached step drawn on the
+  reticle is the measured one.
+- **The overlay.** A small dot at the middle (1.5 game pixels), a thin line (0.75
+  px) from it to the circle's centre, brighter while a turn is under way, and a
+  thinner circle (6 px radius, 1 px stroke, a dark 0.75 px outline). A dead ring is
+  drawn faintly round the middle, at the ring's angle off the projection distance.
+  Once the circle has sat centred for a second, everything eases down to 30% over
+  half a second. The request was "instead of a big crosshair, a small dot, a thin
+  line connecting the center of the circle to the middle of the screen, and a
+  thinner circle."
+- **Aim sensitivity** (`kf2.mouse.aimsens`, `KF2_MOUSE_AIM_SENS`, 0.1 to 4, default
+  1.0). It scales the hand's motion before the reticle, on top of the turn
+  sensitivity. A sensitivity set for mouse look throws the reticle to the picture's
+  edge, so the two are separate.
+- **Head look** (Input ▸ Mouse ▸ *View follows the mouse*, `kf2.mouse.aimhead`,
+  `KF2_MOUSE_AIM_HEAD`, off). The view is drawn at the facing plus the reticle
+  (`MouseAim.HeadLead`, through `FrameSmoothing.MouseLead`'s lead, so the cull
+  follows as it does for instant mouse look). The picture follows the hand one to
+  one, while the body, which walks and attacks, turns toward it at the D-pad's
+  rate. The circle then marks where the body faces (the negated offset) and the dot
+  is the aim. The lead is zero whenever the reticle is not drawn: menus, loads, the
+  paused map. The view's freedom is held to the picture's 90%, the neck limit, since
+  the circle has to stay on screen. The reason is that the remaining likely cause of
+  the sickness was the view moving without the hand. The tick-rate path of
+  `FrameSmoothing` (`!FramePacing.Extrapolating`) used to return before `MouseLead`,
+  so the reticle was drawn only per tick there and head look would have been lost;
+  it now runs `MouseAim.Frame` and the head lead there too.
+
+**Measured**: slot 2 restored with `KF2_AUTOSTART=2`, area 1, `KF2_FPS=144`,
+standing turn rate 35, acceleration 8.
+
+- `aim 200 0`: steps 8, 16, 24, 32, 35, 33, 25, 17, 9, 1; yaw 2639 to 2839, exactly
+  200; the measured turn equal to the asked turn every tick.
+- `aim 20 0` (inside the 32 ring): three still ticks, then 8, 10, 2; yaw 2839 to
+  2859.
+- `aim 0 -900`: held at the picture's pitch reach, pitch 26 to -296 (3800); a
+  remainder of 0.8 units is left, which counts as landed.
+- `aim 400 0 300`, with `press Right 600` 0.4 s in: the aim steps 8 to 35, then nine
+  ticks yield with the offset held at 250, then 8, 16, 24, 32, 35, 35, 35, 28, 20,
+  12 to land. The D-pad reversed the aim's 35 on its own ease (27, 19, 11, 3, -5,
+  -13, -21, -29, -35: -43 units net); yaw 2859 to 3216.
+- Head look, `aim 300 0`: 150 ms later the body's yaw was 3240 and the frame's
+  camera (the `view` verb) 3516; 3 s later both were 3516.
+- Pacing throughout: 144.0 fps drawn, 144.0 presents a second, 14.9 to 15.0 ticks a
+  second of 15 Hz; no faults.
+
+**Not judged with a mouse or by eye**: whether the overlay reads well, whether 3
+settle ticks is right, whether the yield feels right, whether head look removes the
+sickness, whether the arm (drawn in view space, so it points where the view looks,
+not where the body faces) is confusing in head look, and the range of the aim
+sensitivity.
+
+#### The marks held the eye
+
+Reported from play with the overlay above: "abstract tunneling where I can't stop
+looking at the overlay". The marks sat at the middle of the picture all the time,
+and the line and the circle moved with every small motion of the hand, so there
+was always something there pulling the eye in, and the faint dead ring was one more
+thing at the centre.
+
+The marks now show only while they say something: a turn under way, or the circle
+off the middle by more than half the dead ring, so tremor inside the ring shows
+nothing. They fade in over 0.1 s, hold 0.15 s once that is over, and fade out
+completely over 0.35 s. The dead ring is no longer drawn, and every stroke is
+dimmer (circle 0.5, dot 0.5, line 0.2, 0.35 while steering; the circle 5 game
+pixels, its stroke 0.75). Input ▸ Mouse ▸ *Aim marks* chooses Off, While aiming
+(the default) or Always, which is the earlier behaviour fading to 30% when idle
+(`kf2.mouse.aimmarks`, `KF2_MOUSE_AIM_MARKS=off|aiming|always`). Off suits head look,
+where the middle of the picture is the aim. *Connecting line*, under it, leaves the
+line out (`kf2.mouse.aimline`, `KF2_MOUSE_AIM_LINE=0`), so only the dot and the circle
+are drawn. *Centre dot* leaves the dot out the same way (`kf2.mouse.aimdot`,
+`KF2_MOUSE_AIM_DOT=0`).
+
+**Measured**: builds; slot 2 with aim on, `aim 300 0`, then head look and
+`aim -300 0`, back to yaw 2639; 144.0 fps drawn at 15.0 ticks/s; no faults.
+**Not judged**: whether it still holds the eye.
+
+#### The view can hold still while the body turns
+
+Asked for from play: "instead of the cursor moving to the center, the center should
+move to the cursor". In plain mouse aim the view is the facing, so a turn slides the
+whole picture under the circle and the eye follows the circle back to the middle.
+Input ▸ Mouse ▸ *View* now offers three answers to what the view does while the body
+turns: *Turns with you* (as before), *Follows the mouse* (head look) and *Holds still*
+(`kf2.mouse.aimhold`, `KF2_MOUSE_AIM_HOLD`, the shell's `aim hold on|off`; head look
+wins if both keys are set).
+
+Held, the camera keeps its world angle while the body turns under it: MouseAim keeps
+the camera's angle off the facing (`_camYaw`, `_camPitch`), takes the body's step off
+it each tick, and the view is drawn off the facing by it through the same lead head
+look uses (`MouseAim.ViewLead`), interpolated with the body's step so the picture is
+still on every drawn frame. The dot, the facing, leaves the middle and travels to the
+circle. Two things turn the camera: the facing reaching the reticle's reach of the
+picture drags it along, and once the turn has landed it comes back onto the facing at
+the D-pad's rate and ease, as a second turn. The circle is held on the picture round
+where the camera points, not round the facing. The marks show while the view is
+still off the facing. Which of the two catch-ups is wanted, or both, was a guess.
+
+**Measured** (slot 2, area 1, standing rate 35, `aim hold on`, the `view` verb's
+camera against `state`'s yaw every 0.2 s): `aim 300 0`: the body 2639, 2719, 2824,
+2915, 2939 with the camera at 2639 throughout, then the camera 2649, 2739, 2852,
+2931, 2939. `aim 1200 0 2500`: the gap opened to about 490 units, the reach, and held
+there while the camera was dragged, then closed when the hand stopped. 144.0 fps drawn
+at 15.0 ticks/s, no faults. **Not judged**: whether it is more comfortable, and the
+recentre's speed.
+
+#### The turn without the ease
+
+Reported from play with every view: "it doesn't feel good but it's technically
+right". The D-pad's ease takes about four ticks to reach full speed and as many to
+stop, a quarter of a second each way at 15 Hz, which reads as weight on a D-pad and
+as lag under a hand. Input ▸ Mouse ▸ *Ease the turn* (`kf2.mouse.aimease`,
+`KF2_MOUSE_AIM_EASE=0`, the shell's `aim ease on|off`; on by default) turns it off:
+`Toward` then steps the whole way at the full rate, the last step whatever is left,
+so a turn starts at once and stops dead on the reticle. The top speed is still the
+D-pad's. The held view's recentre goes through `Toward` too, so it follows the switch.
+
+**Measured** (slot 2, standing rate 35): `aim 200 0` with the ease off is 35, 35, 35,
+35, 35, 25, six ticks against the eased ten, yaw 2639 to 2839; with the view held,
+`aim -150 0` is -35 four times and -10, and the camera ends on the facing at 2689.
+144.0 fps drawn at 14.9-15.0 ticks/s. **Not judged**: how it feels.
+
+### Mouse aim is not a setting (2026-10-13)
+
+Mouse aim was removed from the settings window, the game's PORT SETTINGS page and
+the first-run setup. Its saved keys (`kf2.mouse.aim*`) are no longer read, so a
+value saved earlier has no control to show it and is ignored. The
+`KF2_MOUSE_AIM*` environment variables remain as the comparison, and are now the
+only way to turn it on. Mouse look and the menu pointer are unchanged.
 
 ### The mouse was sampled at two points
 
@@ -904,6 +1491,40 @@ captured, so it costs nothing otherwise; the pad read's pump is left as it was.
 
 Mechanism measured; **whether it now feels right at 60 fps is for a real mouse
 to judge**.
+
+### Escape, the menu's second key
+
+Ported from Verdite3 (`c4e6677`, 2026-10-09). A desktop game's Escape opens its menu and
+backs out of it, and Circle does both here: the in-game menu's button (`0x8006E56C`, an
+edge in `func_80029CBC`) and the cancel every chooser tests through `func_80022E58`. The
+runtime's table holds one key a button and Tab has Circle, so `KeyLayout` presses Circle
+inside `PAD_dr` (a `PadReadEvent`, the bit active low) while Escape is held, as the
+arrows press Up and Down. Decided once, on the press; refused while Escape is the
+player's own capture key, a popup is open, text or the remaster editor has the
+keyboard, or the port's layout is not in place.
+
+**A click captures, and there is no capture key by default**: `Analog.MouseValues`
+hands core's `Mouse` `DefaultCaptureKey: Key.Unknown` ("None"). A key saved before
+(`kf2.mouse.key`, Escape included) is kept and still toggles, and then Escape stays the
+capture key and does not open the menu. The Mouse page's line says which is in force.
+
+The shell's `key <name> [ms]` dispatches a host `KeyboardEvent` down and up; it reaches
+the port's key listeners, not the binding table. It lets the key up on a `VSync` or a pad
+read: the menu's wait for every button to come up (`func_80022EFC`) spins on the pad with
+no `VSync`, and a key released only on `VSync` held Escape, and the game, there for good.
+Measured (`KF2_AUTOSTART=2`, `key Escape` twice): the menu opened (the pointer's group 0,
+8 rows), Circle was pressed for 150 ms each time, the second closed it, and the world ran
+on at 144.0 fps, 20.0 ticks/s. Not checked: the shops and the title's menus by key, and
+how it feels.
+
+## The map key
+
+M, or the touchpad, opens the game's own map item when one is held (`patches/MapKey.cs`,
+`KF2_MAPKEY=0` to leave them alone). It is taken in a post on stage 3, on a tick, and
+the picture closes on any pad button; M or the touchpad again holds Circle to close it.
+Mechanism measured with `KF2_MAPKEY_TEST` and `KF2_MAPKEY_CLOSE` (see "The maps" in
+[GAME_INTERNALS.md](GAME_INTERNALS.md)); the real key and touchpad presses were not
+driven, and whether the picture is the right one is not judged.
 
 ## The menu pointer
 
@@ -1125,6 +1746,15 @@ picture, which is right for something that has to be drawn *somewhere* and wrong
 for a coordinate conversion: a hit test would rather answer "nowhere" than answer
 confidently against a rectangle the game is not in.
 
+**A pointer over a panel floating in front of the picture is off it** (2026-10-09,
+from Verdite3 `4654755`). The rectangle alone held under any ImGui window in front
+of the game, so in a menu a click on such a panel was the menu's: it confirmed the
+row under it or, clear of the boxes, backed out, and the last leave then
+recaptured the pointer. `Point` now asks `OutputView.Covered` (fork `0029`) after
+the rectangle, as Verdite Core's `Mouse` already does for the capturing click: no
+hover, and the click is the panel's. To be judged in play: in a menu, a click on a
+floating panel over the picture neither moves the menu nor captures.
+
 ### Whichever device moved last owns the cursor
 
 Hover takes the cursor only once the pointer has **moved**, and hands it back the
@@ -1140,9 +1770,13 @@ Opening the menu also **gives the pointer back** if mouse look had it: under
 `CursorMode.Raw` GLFW reports an unbounded virtual position, so there is no "over
 the picture" while it is locked, and no visible cursor to point with either. It
 is retaken on the way out. Both ends go through `Mouse.SetCaptured`, so the glyph
-in `patches/MouseIndicator.cs` announces them, and the `PadReadEvent` button
+in `MouseIndicator` (Verdite Core's) announces them, and the `PadReadEvent` button
 listener detaches with the capture — which is what keeps a menu click from also
 arriving as a Square.
+
+(The glyph named here was removed from Verdite Core on 2026-10-09, and the menu now
+suspends the capture through `Mouse.Suspend`; see "A click captures, and the menu
+suspends it".)
 
 ### The wheel owns the page, not the cursor
 
@@ -1273,3 +1907,34 @@ far has opened a yes/no prompt with the pointer over it.
 `func_800208D8` and then read the pad themselves rather than calling
 `func_8001EA14`, so they are a fourth shape, with a fourth place the cursor could
 be living. Neither has been identified by what it is on screen.
+
+## A click captures, and the menu suspends it
+
+On 2026-10-09 Verdite Core changed how the pointer is taken. `MouseIndicator` is
+gone from `tools/verdite-core/src/`, and with it the glyph described above. A
+click on the game picture now captures the pointer, as a desktop game does; the
+capture is released on focus loss and when a panel opens. Nothing announces a
+capture any more, since the click is the announcement.
+
+A game screen that wants a pointer holds it free with `Mouse.Suspend(true)` and
+gives it back with `Mouse.Suspend(false)`. The suspension also gives back a
+pointer that the suspension itself took, so the end of it leaves the state the
+screen found.
+
+The port's use of this is in `patches/MenuMouse.cs`. Its `BeforeMenu` and
+`AfterMenu` now call `Mouse.Suspend(true)` and `Mouse.Suspend(false)`
+unconditionally, in place of its own `_tookCapture` flag and `Mouse.SetCaptured`
+pair. A click in the in-game menu therefore does not capture the pointer, and the
+menu keeps the pointer free for its point-and-click. Mouse look still captures
+on a click outside a menu, and Escape still toggles the capture (`MouseGame.DefaultCaptureKey`
+is left at its default).
+
+Two other ends of the old glyph went with it. `Program.cs` no longer sets
+`MouseIndicator.Picture`, and the debug mod's `Noclip` no longer sets
+`MouseIndicator.Suppressed` from its `Cinematic` setter, since there is no glyph
+to mute.
+
+**Not judged by eye yet**: whether a click that captures is expected by a player
+who has only seen the old glyph, whether a capture released by a panel opening
+reads as the pointer being handed back, and whether the menu feels right with the
+pointer free throughout. None of this has been run through a person.

@@ -100,9 +100,10 @@ the first argument or the runtime will prompt for a disc.
 **csproj gotcha:** the RecompOne checkout is nested inside this project
 directory, so the SDK's default item globs would compile RecompOne's own sources
 and its `obj/` AssemblyInfo files (CS0579 duplicate-attribute errors). Hence the
-`<Compile Remove="tools/**" />`. The same trap is `mcp/`, `Verdite2.Launcher/`,
-and `packaging/windows/Stub/` (a net48 project whose `obj/` appears the moment
-anyone has built the Windows package). Conversely, `generated/` and `patches/`
+`<Compile Remove="tools/**" />`, which also covers Verdite Core's Windows stub
+(`tools/verdite-core/packaging/windows/Stub/`, a net48 project whose `obj/` appears
+the moment anyone has built the Windows package). The same trap is `mcp/` and
+`Verdite2.Launcher/`. Conversely, `generated/` and `patches/`
 need *no* explicit include — adding one causes NETSDK1022.
 
 
@@ -131,13 +132,56 @@ something to say about *how* to use them:
   standalone stdio server exposing those six verbs as typed tools to any MCP
   host (`KF2_MCP_ENDPOINT` overrides the endpoint). See "The MCP layer" in
   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
-- **The attract demo is a free live session.** Leave the port at the title and it
-  walks itself into an area about a minute later, with a character, an HP bar and
-  eventually a death — which is how in-game behaviour gets tested without a human
-  driving the menus. `AutoReload.Simulate()` kills on demand from there, and the
-  death clock at `0x8019951A` can be pinned to hold any frame of the death
-  sequence still. See "Auto reload" in
+- **The title's attract footage is a movie, not a live scene.** `OPEN.EXE`
+  plays a streamed MDEC video (its decodes are counted in [RUNTIME.md](RUNTIME.md)), so none of the port's enhancements reach it. Early
+  sessions recorded a live demo that walked into `fdat05` about a minute after boot,
+  and used it to test in-game behaviour without a human. It has not been
+  reproduced: an idle run of 110 s and one of ~165 s (`KF2_AGENT=1`, 2026-10-14)
+  never left `overlay open`. For a live session use `KF2_AUTOSTART`. Once in an
+  area, `AutoReload.Simulate()` kills on demand, and the death clock at
+  `0x8019951A` can be pinned to hold any frame of the death sequence still. See
+  "Auto reload" and "The wall is the title, not the Continue menu" in
   [PATCHES_AND_MODS.md](PATCHES_AND_MODS.md).
+
+### Crash reports carry the port's place
+
+A crash, a hook's fault or a 15 s hang writes a report to `crashes/` beside the
+cards, `<time>-<kind>.log`, with the 2 MB of game RAM beside it as
+`<time>-<kind>.ram.bin` (runtime `0107`; the newest 20 are kept). The report
+carries the exception and its managed stack, the port's version, the player's
+state (the agent beacon's `Snapshot`), every `kf2.*` setting and every set
+`KF2_*` variable (`patches/CrashReports.cs`), the CPU registers, the last 64
+indirect calls, the overlays, the hooks turned off (`0108`) and the console's last
+300 lines. `patches/CrashDump.cs` still prints the game's own state to stderr at a
+crash; those lines are in the report's console section, so the two overlap there.
+
+A crash keeps the window up with the report's path until the player closes it
+(`Runtime.HoldAfterCrash`, from `Program.cs`'s catch round `Entry.Run`, which now
+returns 1 instead of rethrowing). `KF2_HANG=seconds` sets the hang watchdog (15;
+`0` turns it off). `KF2_FAULT=hook|crash|hang[:seconds]` makes each report on
+purpose, that many seconds (20) after the first area, to test the paths: `hook`
+throws from a hook and should turn that hook off with a notice, `crash` throws
+from the game's own routine, `hang` spins on a hardware register. `hook@<mod id>`
+(`hook@kf2.zbuffer`) makes the throwing hook that patch's, so that patch is the one
+turned off.
+
+A patch turned off for a fault is off until a restart, and its page in the
+Settings window says so (2026-10-09, from Verdite3 `2208c09`): each page names
+the mod ids of the patches it needs (`IPatchPage.Patches`), and a page naming one
+`HookManager.Faulted` has named is drawn greyed under "Failed: off until the game
+restarts.", writing nothing, so the kept setting returns at the next boot
+(`[KF2] settings: <id> failed; greyed until a restart: <pages>`). A page whose
+controls belong to more than one patch (Audio, Mouse, Reflections, Shading,
+Remaster) names none, rather than greying what still works; the controls show
+the kept value, not what runs; the game menu's PORT SETTINGS page does not mark
+it. Measured with `KF2_AUTOSTART=1 KF2_FAULT=hook@kf2.zbuffer:5`: the fault
+report, `kf2.zbuffer is turned off for this session`, the settings line naming
+the `zbuffer` page, and the game running on to the end of the 60 s run. The
+greyed page itself is not yet seen.
+
+Not yet run in Verdite2: this is ported from Verdite3, where the three
+`KF3_FAULT` paths were measured, and no report has been written by this code in
+Verdite2 yet. Run each `KF2_FAULT` value once before relying on it.
 
 ### The GL backend reported nothing
 
@@ -553,7 +597,7 @@ Not counted: VRAM uploads, writebacks, the interface and the swap. A query cover
 the wall time of the GPU work inside it, so a GPU that starves inside a submit
 counts the bubble.
 
-**Each query is charged to the frame that issued it** (`patches/GpuFrames.cs`): a
+**Each query is charged to the frame that issued it** (`tools/verdite-core/src/GpuFrames.cs`): a
 frame keeps the range of presents it issued (`GpuTimes.Issued`), the runtime raises
 `GpuTimes.Resolved` for each query as it is read, and a frame is complete once
 `GpuTimes.Complete` has passed its last present, about three frames later. The CSV
@@ -667,6 +711,48 @@ because MonoMod prepares its target when it installs the detour: there is nothin
 to gain, and one less thing to be doing concurrently with a detour being written.
 A method that will not prepare is counted and skipped — it is a method that
 compiles on its first call, which is where it started.
+
+### Compiling ahead on several threads
+
+`patches/Prejit.cs` now takes its work from one ordered list on several threads:
+a quarter of the cores, at most four, overridable with `KF2_PREJIT_THREADS`. The
+list is flattened once at `main`, and each thread takes the next method from its
+head, so the order is still the one above (area modules, patches, runtime,
+generics, `game`, `main`, `end`, `open`). Three other things changed in the same
+pass, all ported from Verdite3 (its "The stutters" and "Compiling ahead: `Prejit`"
+in its `DEVELOPMENT.md`):
+
+- **Constructors** are compiled too (`GetConstructors`, static ones included),
+  since `GetMethods` leaves them out and a type's first use compiled its `.cctor`
+  on the game thread.
+- **Value-type generics** the port's fields close over (`Dictionary<…, Mesh>`,
+  `List<Vertex>`) are found through the fields of this assembly and the runtime
+  and compiled as their own batch, because a value-type instantiation shares no
+  code with any other.
+- **Verdite Core's namespace** (`Verdite.Core`) is warmed with the port's own
+  `Kf2` namespace, in the same batch: it compiles into this assembly as source,
+  so it was being JITted on first call like everything else. Verdite3 does the
+  same.
+
+The `KF2_PREJIT_PROBE` line is now one per batch, printed by the thread that
+finishes the batch's last method, and says when the batch was done rather than
+what it cost, since several batches overlap.
+
+Verdite3 measured the threads and the ordering on its own game: one thread took
+**8.9 s** over 7751 methods, still in `game` when an autostart reached its first
+area; four threads took **2.7-2.9 s**, done about 1.7 s before the area. Its
+constructors took the method count from 7754 to 8326, and the generics added 6200
+methods for about 0.2 s.
+
+**Measured here on 2026-10-09** (16 threads, so four prejit threads; two
+`KF2_AUTOSTART=2` boots each way, `KF2_FPS=off`): the old pass compiled **9935
+methods in 5844-5926 ms**, 210 left to their hook, 13 refused; this one compiles
+**20320 in 1873-1891 ms**, 416 left to their hook, 225 refused. The pass now ends
+before the autostart reaches its area (11.6 s from launch, unchanged). The refusals
+are `PrepareMethod` throwing on a constructor or a closed generic it cannot
+prepare, caught and counted. What is not measured yet is the JIT left on the game
+thread in the first frame of an area, the `KF2_PREJIT=0` / on comparison of the
+section above; that is the number this change exists to move.
 
 ## Watching a frame being built
 

@@ -15,6 +15,7 @@ public sealed class ZBufferPage : IPatchPage
     public string Id => "zbuffer";
     public string Title => "Enhancements";
     public int Order => 27;
+    public IReadOnlyList<string> Patches => ["kf2.zbuffer"];
 
     const string Strings = """
     {

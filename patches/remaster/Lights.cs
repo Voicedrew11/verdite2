@@ -66,6 +66,9 @@ public sealed class Lights : IRemasterFeature
     /// an authored light.</summary>
     static byte[] _frameSrc = new byte[64];
 
+    /// <summary>Whether a candidate is a projectile's, which ranks with the authored.</summary>
+    static bool[] _frameBolt = new bool[64];
+
     /// <summary>The tile glows' materials, beside <see cref="_derived"/>.</summary>
     static byte[] _derivedSrc = [];
 
@@ -82,6 +85,7 @@ public sealed class Lights : IRemasterFeature
     public static long Ticks => _ticks;
 
     int _version = -1, _settle = -1, _surfaces = -1, _switches = -1;
+    bool _bolts;
 
     /// <summary>How far past the eye a light may sit and still reach the draw window:
     /// twelve tiles each way.</summary>
@@ -160,14 +164,15 @@ public sealed class Lights : IRemasterFeature
         bool want = _on && Host.Enabled && Identity.Settled;
         if (!want)
         {
-            if (_lights.Length > 0 || RemasterUniforms.Enabled) Clear();
+            Bare();
             _version = _settle = _surfaces = -1;
             return;
         }
         // Derived lights follow the surfaces, which follow the tile table.
         if (_version == Pack.Version && _settle == Identity.Settles && _surfaces == Surfaces.Serial
-            && _switches == _shadowSwitches) return;
+            && _switches == _shadowSwitches && _bolts == ProjectileLights.On) return;
         _switches = _shadowSwitches;
+        _bolts = ProjectileLights.On;
         _version = Pack.Version;
         _settle = Identity.Settles;
         _surfaces = Surfaces.Serial;
@@ -180,8 +185,28 @@ public sealed class Lights : IRemasterFeature
         _version = _settle = _surfaces = -1;
     }
 
+    static bool _bare;
+
+    /// <summary>No pack applied: only the projectiles' lights, if they are on. Called
+    /// with the remaster off too.</summary>
+    public static void Bare()
+    {
+        // The projectiles' switch is their own: not the remaster's, nor the pack lights'.
+        bool on = ProjectileLights.On;
+        if (_lights.Length > 0 || _derived.Length > 0 || RemasterUniforms.Enabled != on || _bare != on)
+        {
+            Clear();
+            _bare = on;
+            if (!on) return;
+            RemasterUniforms.Enabled = true;
+            PolyAssembler.KeepForLights = true;
+            PolyAssembler.Keep();
+        }
+    }
+
     static void Clear()
     {
+        _bare = false;
         _lights = [];
         _derived = [];
         _derivedSrc = [];
@@ -209,7 +234,7 @@ public sealed class Lights : IRemasterFeature
         Refused = null;
         _lights = Pack.Lights(area).Where(l => !l.Off && l.Radius > 0f && l.Intensity != 0f).ToArray();
         _derived = Runtime.Mem is { } mem ? TileGlow(mem, out _derivedSrc) : [];
-        bool any = _lights.Length > 0 || _derived.Length > 0 || Surfaces.ModelsGiveLight;
+        bool any = _lights.Length > 0 || _derived.Length > 0 || Surfaces.ModelsGiveLight || ProjectileLights.On;
         RemasterUniforms.Enabled = any;
         RetainedScene.ShadowsWanted = _shadows && _lights.Any(l => l.Shadows);
         ClearSlots();
@@ -396,13 +421,13 @@ public sealed class Lights : IRemasterFeature
             float r = l.Radius;
             // Behind the eye, or past the draw window in any direction.
             if (p.Z + r < 0f || p.Length() - r > Reach) { culled++; continue; }
-            _order[n++] = (MathF.Max(p.Length() - r, 0f) + (i < _lights.Length ? 0f : DerivedRank), i);
+            _order[n++] = (MathF.Max(p.Length() - r, 0f) + (i < _lights.Length || _frameBolt[i] ? 0f : DerivedRank), i);
         }
         Array.Sort(_order, 0, n, Comparer<(float Key, int Index)>.Create((a, b) => a.Key.CompareTo(b.Key)));
         int sent = Math.Min(n, RemasterUniforms.MaxLights);
         culled += n - sent;
 
-        double t = _ticks / 20.0;
+        double t = _ticks / FramePacing.LogicHz;
         for (int k = 0; k < sent; k++)
         {
             ref readonly var l = ref _frame[_order[k].Index];
@@ -509,10 +534,16 @@ public sealed class Lights : IRemasterFeature
     static int Gather()
     {
         int n = 0;
-        void Add(in Pack.Light l, byte from)
+        void Add(in Pack.Light l, byte from, bool bolt = false)
         {
-            if (n == _frame.Length) { Array.Resize(ref _frame, n * 2); Array.Resize(ref _frameSrc, n * 2); }
+            if (n == _frame.Length)
+            {
+                Array.Resize(ref _frame, n * 2);
+                Array.Resize(ref _frameSrc, n * 2);
+                Array.Resize(ref _frameBolt, n * 2);
+            }
             _frameSrc[n] = from;
+            _frameBolt[n] = bolt;
             _frame[n++] = l;
         }
         foreach (var l in _lights) Add(l, 0);
@@ -527,6 +558,19 @@ public sealed class Lights : IRemasterFeature
                 models++;
             }
         ModelLights = models;
+        int bolts = 0;
+        if (ProjectileLights.On)
+            foreach (ref readonly var p in ProjectileLights.Frame)
+            {
+                // A trail of several is a little brighter than a lone spark; a light whose
+                // effect is gone is going out.
+                float k = ProjectileLights.Intensity * MathF.Min(1f, p.Brightness * 2f) * MathF.Min(1.5f, 1f + 0.1f * (p.Count - 1)) * p.Fade;
+                Add(new Pack.Light("projectile", false, p.Position, p.Colour, k, ProjectileLights.Radius,
+                                   Vector3.Zero, 0f, 0f, ProjectileLights.Flicker, ProjectileLights.FlickerHz, false, Shadows: false),
+                    0, bolt: true);
+                bolts++;
+            }
+        ProjectileLights.Sent = bolts;
         return n;
     }
 
@@ -564,7 +608,7 @@ public sealed class Lights : IRemasterFeature
 
     public string Probe()
         => Refused != null ? $"lights refused: {Refused}"
-         : $"lights {Authored} authored, {Derived} from tile glow, {ModelLights} from model glow, {Sent} sent, {Culled} culled; " +
+         : $"lights {Authored} authored, {Derived} from tile glow, {ModelLights} from model glow, {ProjectileLights.Sent} from projectiles, {Sent} sent, {Culled} culled; " +
            $"{RemasterUniforms.Uploads} upload(s), {RemasterUniforms.LitBatches} lit batch(es)" +
            $"; {RemasterUniforms.ShadowsReady} shadow cubemap(s) ready, {RemasterUniforms.ShadowRenders} drawn, " +
            $"{RemasterUniforms.ShadowTriangles} triangle(s) into them; models {(RetainedScene.ShadowModels ? "cast" : "do not cast")}, " +

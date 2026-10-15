@@ -1,0 +1,7 @@
+{
+  "id": "kf2.map",
+  "name": "Dynamic map",
+  "version": "1.0",
+  "author": "KFII-PC",
+  "description": "A map of the area you are in, drawn from the game's own floor plan: a full-screen map on G (the pad's R3 by default) that pauses the world while it is up, a docked readout on Shift+G, a minimap on N, and fog of war that fills in as you explore. Off until you turn it on. The game's own map item is still M, and it is not this mod's."
+}

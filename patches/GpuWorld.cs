@@ -101,7 +101,21 @@ public static class GpuWorld
         RetainedScene.MainSurfaces = surfaces?.Trim() != "0";
         if (float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_NEAR"), System.Globalization.CultureInfo.InvariantCulture, out float near))
             RetainedScene.MainNear = Math.Max(near, 0.01f);
-        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_FOGZ")?.Trim() == "0") RetainedScene.MainFogFromZ = false;
+        // 0087. The ceiling on 0051's slope term, in game pixels at the fragment's depth:
+        // a face seen edge-on is pulled towards the camera by at most one pixel's world
+        // width, not half its own depth change across a pixel, which on a stair or a
+        // doorway's wall up close is hundreds of units and drew it over what stands in
+        // front. KF2_GPUWORLD_DEPTHCAP=0 leaves the term unbounded, as it was.
+        RetainedScene.DepthCapPixels = float.TryParse(Environment.GetEnvironmentVariable("KF2_GPUWORLD_DEPTHCAP"),
+            System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float cap) && cap >= 0f ? cap : 1f;
+        RetainedScene.ToleranceProbe = Environment.GetEnvironmentVariable("KF2_GPUWORLD_TOLERANCE_PROBE")?.Trim() is "1";
+        // 0103. A model's face with a corner the GTE cannot project (nearer than H/2, or
+        // off the divide's range) is clipped at the near plane and drawn in the true
+        // projection, not placed at the divide's saturated ends: a large face reaching
+        // past the eye (a tree's billboard looked up at) drew as a long sheared slab.
+        // KF2_GPUWORLD_MODELCLIP=0 places such corners as the packets do, to compare.
+        RetainedScene.ModelNearClip = Environment.GetEnvironmentVariable("KF2_GPUWORLD_MODELCLIP")?.Trim() != "0";
+        RetainedModels.ClipProbe = Environment.GetEnvironmentVariable("KF2_GPUWORLD_CLIP_PROBE")?.Trim() is "1";
         if (!string.IsNullOrWhiteSpace(on)) _forced = on.Trim() is "1" or "on";
         _probe = probe?.Trim() is not (null or "" or "0");
     }
@@ -116,8 +130,70 @@ public static class GpuWorld
                               (_on && Blocker is { } why ? $", standing down: {why}" : ""));
         });
         // A model bank of the next area may put other meshes at the same addresses.
-        Event.AddListener<OverlayLoadedEvent>(_ => RetainedModels.ForgetMeshes());
+        Event.AddListener<OverlayLoadedEvent>(e =>
+        {
+            if (_probe) NoteLoad(e.Name);
+            RetainedModels.ForgetMeshes();
+        });
     }
+
+    // ---- the crossing, for the probe -------------------------------------------------
+
+    static long _drawsAtFrame;
+    static string? _loadName;
+    static int _loadSerial, _loadGen, _loadIns, _loadSky, _loadFrames;
+    static bool _loadPending, _loadArm, _loadInRenderer;
+    static long _loadDraws, _loadArmLost, _loadArmMissed, _loadSkyMissed;
+
+    /// <summary>Where an overlay load lands against the retained frame. A frame the walk
+    /// has begun and the backend not yet drawn holds instances, sky and arm made from
+    /// the store the load empties, and the backend skips each one whose generation is
+    /// not the store's. Read back a few frames later (<see cref="ReportLoad"/>).</summary>
+    static void NoteLoad(string name)
+    {
+        var f = RetainedScene.Find(RetainedScene.Serial);
+        _loadName = name;
+        _loadSerial = RetainedScene.Serial;
+        _loadGen = RetainedScene.MeshGeneration;
+        _loadPending = Active && RetainedScene.MainSerial == RetainedScene.Serial && RetainedScene.MainDraws == _drawsAtFrame;
+        _loadIns = f?.Instances.Count ?? 0;
+        _loadSky = f?.Sky.Count ?? 0;
+        _loadArm = f?.HasArm ?? false;
+        _loadInRenderer = CrossProbe.InRenderer;
+        _loadDraws = RetainedScene.MainDraws;
+        _loadArmLost = RetainedModels.ArmLost;
+        _loadArmMissed = RetainedScene.ArmMissed;
+        _loadSkyMissed = RetainedScene.SkyMissed;
+        _loadFrames = 0;
+    }
+
+    /// <summary>From <see cref="AtFrame"/>: the loaded frame's instances by the store
+    /// they were made from, and what the backend skipped since the load.</summary>
+    static void ReportLoad()
+    {
+        if (_loadName == null || ++_loadFrames < 3) return;
+        var f = RetainedScene.Find(_loadSerial);
+        int before = 0, after = 0, skyBefore = 0;
+        if (f != null)
+        {
+            foreach (var m in f.Instances)
+                if (m.MeshGen == _loadGen) before++; else after++;
+            foreach (var m in f.Sky)
+                if (m.MeshGen == _loadGen) skyBefore++;
+        }
+        bool armBefore = f is { HasArm: true } && f.Arm.MeshGen == _loadGen;
+        Console.WriteLine($"[KF2] gpu world: {_loadName} loaded {(_loadInRenderer ? "inside" : "outside")} stage 13, frame {_loadSerial} " +
+                          $"{(_loadPending ? "walked and not yet drawn" : "not pending")}; at the load {_loadIns} instance(s), {_loadSky} sky, " +
+                          $"arm {(_loadArm ? "placed" : "none")}; the frame finished with {before} instance(s) from the emptied store and {after} from the new, " +
+                          $"{skyBefore} sky and {(armBefore ? "the" : "no")} arm from the emptied store" +
+                          $"{(f == null ? " (frame gone)" : "")}; over 3 frames {RetainedScene.MainDraws - _loadDraws} draw(s), arm lost " +
+                          $"{RetainedModels.ArmLost - _loadArmLost}, arm missed {RetainedScene.ArmMissed - _loadArmMissed}, " +
+                          $"sky missed {RetainedScene.SkyMissed - _loadSkyMissed}");
+        _loadName = null;
+    }
+
+    /// <summary>The probe's switch, for the map's line a build.</summary>
+    public static bool Probing => _probe;
 
     public static void SetEnabled(bool on)
     {
@@ -165,8 +241,11 @@ public static class GpuWorld
         MirrorWaterActive = MirrorActive && _water;
         RetainedScene.MirrorWater = MirrorWaterActive;
         RetainedModels.AtFrame();
+        if (RetainedModels.ClipProbe) ClipReport();
+        _drawsAtFrame = RetainedScene.MainDraws;
         if (_probe)
         {
+            ReportLoad();
             // BK and LCM generations the last frame started (GteLightMap keeps eight).
             long g = GteLightMap.Generations - _gensAt;
             _gensAt = GteLightMap.Generations;
@@ -239,6 +318,10 @@ public static class GpuWorld
         var word = arg.Trim().ToLowerInvariant();
         if (word.StartsWith("blend only ") && int.TryParse(word.AsSpan(11), out int only)) { RetainedScene.BlendOnly = only; word = ""; }
         if (word.StartsWith("at ")) return At(word[3..]);
+        if (word.StartsWith("depthcap ") && float.TryParse(word.AsSpan(9), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out float depthCap) && depthCap >= 0f)
+        { RetainedScene.DepthCapPixels = depthCap; word = ""; }
+        if (word == "tolerance") return Tolerance();
         switch (word)
         {
             case "": break;
@@ -288,6 +371,8 @@ public static class GpuWorld
             case "models show": RetainedScene.MainModelsShown = true; break;
             case "perpixel on": GteLightMap.Enabled = true; break;
             case "perpixel off": GteLightMap.Enabled = false; break;
+            case "modelclip on": RetainedScene.ModelNearClip = true; break;
+            case "modelclip off": RetainedScene.ModelNearClip = false; break;
             case "scene":
             {
                 // The last walk's submits, and the frame's forward in world axes (row 2 of R).
@@ -325,12 +410,30 @@ public static class GpuWorld
                     $"\"bk\":[{m.Bk0},{m.Bk1},{m.Bk2}],\"mirrored\":{(m.Mirrored ? "true" : "false")}}}";
                 return $"{{\"ok\":true,\"main\":[{string.Join(",", f.Instances.Select(One))}],\"mirror\":[{string.Join(",", f.MirrorInstances.Select(One))}]}}";
             }
-            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|cell on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|scene|instances|perpixel on|off]\"}";
+            default: return "{\"ok\":false,\"error\":\"gpuworld [on|off|surfaces on|off|water on|off|models on|off|hide|show|meshes on|off|poses on|off|tile on|off|cell on|off|arm on|off|sky on|off|hide|show|blend on|off|hide|show|blend surfaces on|off|records on|off|mirror on|off|hide|show|mirror blend on|off|modelclip on|off|scene|instances|perpixel on|off|depthcap <pixels>|tolerance]\"}";
         }
         return $"{{\"ok\":true,\"on\":{(_on ? "true" : "false")},\"active\":{(Active ? "true" : "false")}," +
                $"\"surfaces\":{(RetainedScene.MainSurfaces ? "true" : "false")},\"water\":{(_water ? "true" : "false")}," +
                $"\"records\":{(RetainedMap.RecordsOn ? "true" : "false")},\"models\":{(_models ? "true" : "false")},\"meshes\":{(RetainedModels.MeshesOn ? "true" : "false")},\"poses\":{(RetainedModels.PosesOn ? "true" : "false")},\"arm\":{(RetainedModels.ArmOn ? "true" : "false")},\"tile\":{(RetainedModels.TileOn ? "true" : "false")},\"mirrorBlend\":{(RetainedModels.MirrorBlendOn ? "true" : "false")},\"sky\":{(RetainedModels.SkyOn ? "true" : "false")},\"blend\":{(RetainedModels.BlendOn ? "true" : "false")},\"mirror\":{(_mirror ? "true" : "false")}," +
+               $"\"depthCap\":{RetainedScene.DepthCapPixels.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
+               $"\"modelClip\":{(RetainedScene.ModelNearClip ? "true" : "false")},\"clipFaces\":{RetainedModels.ClipFaces},\"clipped\":{RetainedModels.Clipped}," +
+               $"\"clipTwinFaces\":{RetainedModels.ClipTwinFaces},\"clipTwinClipped\":{RetainedModels.ClipTwinClipped}," +
                $"\"draws\":{RetainedScene.MainDraws},\"missed\":{RetainedScene.MainMissed}}}";
+    }
+
+    /// <summary>`gpuworld tolerance`: the tolerance probe's running counts (0087,
+    /// KF2_GPUWORLD_TOLERANCE_PROBE=1), per pass (the map, the frame's posed models, the
+    /// instances): the samples, and those that passed only by more than each of
+    /// <see cref="RetainedScene.ToleranceCaps"/> units.</summary>
+    static string Tolerance()
+    {
+        var caps = RetainedScene.ToleranceCaps;
+        string Pass(int p) => $"{{\"samples\":{RetainedScene.ToleranceSamples[p]},\"behind\":[" +
+                              string.Join(",", Enumerable.Range(0, caps.Length).Select(k => RetainedScene.ToleranceBehind[p * caps.Length + k])) + "]}";
+        return $"{{\"ok\":true,\"probe\":{(RetainedScene.ToleranceProbe ? "true" : "false")}," +
+               $"\"depthCap\":{RetainedScene.DepthCapPixels.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
+               $"\"caps\":[{string.Join(",", caps.Select(c => c.ToString(System.Globalization.CultureInfo.InvariantCulture)))}]," +
+               $"\"map\":{Pass(0)},\"models\":{Pass(1)},\"instances\":{Pass(2)}}}";
     }
 
     /// <summary>`gpuworld at X Y`: the static map triangles that cover game pixel (X, Y)
@@ -389,6 +492,29 @@ public static class GpuWorld
     static long _bNoted, _bSorted, _bDrawn, _bRuns, _sIns, _sDrawn, _sFaces, _wRuns;
     static long _pPosed, _pRigid, _pDeferred, _pMat, _pTexels;
     static long _mModels, _mFaces, _mCulled, _mOut, _mTris, _mGroups, _mNrm, _mTile, _mClip, _mSat;
+
+    static double _clipAt;
+
+    /// <summary><c>KF2_GPUWORLD_CLIP_PROBE=1</c>: every 5 s, the running counts of the
+    /// main view's instanced model faces kept by depth, and of those with a corner the
+    /// GTE cannot project, which 0103 clips at the near plane (the lit route and the
+    /// forced-blend twin's, apart).</summary>
+    static void ClipReport()
+    {
+        double now = Environment.TickCount64 / 1000.0;
+        if (now < _clipAt) return;
+        _clipAt = now + 5.0;
+        static string Pct(long part, long all) => all == 0 ? "0.00" : (100.0 * part / all).ToString("F2", System.Globalization.CultureInfo.InvariantCulture);
+        // The window's own counts, so a `gpuworld modelclip` toggle reads under its label.
+        long faces = RetainedModels.ClipFaces - _clipFaces, clipped = RetainedModels.Clipped - _clipped;
+        long twin = RetainedModels.ClipTwinFaces - _clipTwin, twinClipped = RetainedModels.ClipTwinClipped - _clipTwinClipped;
+        (_clipFaces, _clipped, _clipTwin, _clipTwinClipped) = (RetainedModels.ClipFaces, RetainedModels.Clipped, RetainedModels.ClipTwinFaces, RetainedModels.ClipTwinClipped);
+        Console.WriteLine($"[KF2] clip probe: near clip {(RetainedScene.ModelNearClip ? "on" : "off")}; last 5 s: " +
+                          $"faces kept by depth {faces}, a corner the GTE cannot project {clipped} " +
+                          $"({Pct(clipped, faces)}%); forced-blend twin {twin}, {twinClipped} ({Pct(twinClipped, twin)}%)");
+    }
+
+    static long _clipFaces, _clipped, _clipTwin, _clipTwinClipped;
 
     static void Report()
     {
@@ -505,6 +631,7 @@ public static class GpuWorld
         Console.WriteLine($"[KF2] gpu world: surfaces: {RetainedScene.MainNormalTriangles - _nrmTris} map triangle(s) into the normal pass; " +
                           (RetainedScene.SurfaceChecks == 0 ? "no readback (needs the surface buffer: a reflection or the murk on)" :
                            $"of {px} pixel(s) with a depth, {(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceBehind / px):F2}% whose surface lies behind it, " +
+                           $"{(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceAhead / px):F2}% ({RetainedScene.SurfaceAhead}) with an opaque surface in front of it, " +
                            $"{(px == 0 ? 0 : 100.0 * RetainedScene.SurfaceMissing / px):F2}% with none; by id none/opaque/water/overlay/authored/blended " +
                            string.Join("/", RetainedScene.SurfaceIds)));
         Array.Clear(RetainedScene.SurfaceIds);
@@ -521,7 +648,7 @@ public static class GpuWorld
         _mModelTris = RetainedScene.MirrorModelTriangles; _mMirModels = RetainedModels.MirrorModels;
         _mWater = RetainedScene.MirrorWaterTriangles;
         MirrorSkipped = MirrorKept = 0;
-        RetainedScene.SurfaceDepthPixels = RetainedScene.SurfaceBehind = RetainedScene.SurfaceMissing = RetainedScene.SurfaceChecks = 0;
+        RetainedScene.SurfaceDepthPixels = RetainedScene.SurfaceBehind = RetainedScene.SurfaceAhead = RetainedScene.SurfaceMissing = RetainedScene.SurfaceChecks = 0;
         RetainedScene.SurfaceCheck = true;
         Skipped = Kept = 0;
     }

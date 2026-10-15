@@ -24,6 +24,9 @@ public static partial class PolyAssembler
     /// <summary>Set while the first-person arm draws.</summary>
     public static bool InArm;
 
+    /// <summary>Set while func_800346CC draws a menu's item model.</summary>
+    public static bool InPreview;
+
     /// <summary>Set while func_80032588 submits a model. A blended packet of a door
     /// is solid (<c>GtePacketDepth.Rec.Solid</c>, <c>ModelWalk.SolidKind</c>); every
     /// other blended model, the water and the glows included, is not.</summary>
@@ -49,7 +52,7 @@ public static partial class PolyAssembler
     /// <summary>Corners kept unrounded, and corners left at the game's whole Z.</summary>
     public static long DepthUnrounded, DepthWhole;
 
-    static bool DepthOn() => GtePacketDepth.Active && !InHud && !InArm;
+    static bool DepthOn() => GtePacketDepth.Active && !InHud && !InArm && !InPreview;
 
     /// <summary>The transforms, after both cache words are written; <paramref name="src"/>
     /// is the SVECTOR RotTransPers just projected.</summary>

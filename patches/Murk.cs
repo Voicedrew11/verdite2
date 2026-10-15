@@ -7,7 +7,7 @@ namespace Kf2;
 /// Murky water: water darkens with the distance the view ray runs through it to the
 /// floor, so a shallow edge stays clear and a deep pool goes dark.
 ///
-///     KF2_MURK=1              on (off by default)
+///     KF2_MURK=1              on; off by default, and the setup leaves it off
 ///     KF2_MURK_DISTANCE=2654  the distance through water that takes 63% of the way to the murk
 ///     KF2_MURK_TILT=0.75      the cosine a murked surface may lean to (0 murks any, as before)
 ///
@@ -25,7 +25,7 @@ public static class Murk
     public const string RKey = "kf2.murk.r", GKey = "kf2.murk.g", BKey = "kf2.murk.b";
 
     public const float DefaultDistance = 1886f;
-    public const bool DefaultOn = true;
+    public const bool DefaultOn = false;
     public const float DefaultR = 0.03f, DefaultG = 0.05f, DefaultB = 0.06f;
 
     static bool? _forced;

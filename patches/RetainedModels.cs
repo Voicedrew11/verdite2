@@ -648,6 +648,80 @@ static class RetainedModels
         }
     }
 
+    // ---- 0103: the near clip's probe -----------------------------------------------
+
+    /// <summary><c>KF2_GPUWORLD_CLIP_PROBE=1</c>: of the main view's instanced model
+    /// faces the shader keeps by depth, those with a corner the GTE cannot project
+    /// (nearer than H/2, past 32767, or off the divide's range), which 0103 clips at the
+    /// near plane instead of placing that corner at the divide's saturated ends. Taken on
+    /// the CPU from the submit's own GTE (rotation, translation, H, the offsets) and the
+    /// posed vertices the instance draws; the lit route's faces (opaque, and blended
+    /// where the backend draws them) and the forced-blend twin's (effects, billboards)
+    /// apart; the clipped assembler's (a Tile instance, clipped anyway), the arm, the
+    /// sky and the mirror left out. Running counts, never reset.</summary>
+    public static bool ClipProbe;
+    public static long ClipFaces, Clipped, ClipTwinFaces, ClipTwinClipped;
+
+    static void CountClips(Mesh mesh, in RetainedScene.ModelInstance ins, ReadOnlySpan<short> posed, int pose, bool morph,
+                           int weight, bool twin, bool gpuBlend)
+    {
+        var m = ins;
+        ReadGteMatrix(ref m);
+        float h = Gte.ReadControl(26) & 0xFFFF, ofx = (int)Gte.ReadControl(24) / 65536f, ofy = (int)Gte.ReadControl(25) / 65536f;
+        var corners = RetainedScene.MeshCorners;
+        Span<bool> ok = stackalloc bool[4];
+        for (int i = 0; i < mesh.FaceAt.Length; i++)
+        {
+            int c = mesh.FaceAt[i];
+            // The lit route draws its opaque faces always, its blended ones only on the
+            // backend's blend; the twin draws every face blended.
+            if (c < 0 || !twin && mesh.FaceSemi[i] && !gpuBlend) continue;
+            ref var k = ref corners[c];
+            int n = mesh.FaceN[i] == 6 ? 4 : 3;
+            int sum = 0;
+            for (int j = 0; j < n; j++)
+            {
+                int vertex = (int)(j switch { 0 => (uint)k.Dqa, 1 => (uint)k.Dqb, 2 => (uint)k.Curve, _ => k.Rgbc });
+                Posed(posed, pose, morph, weight, vertex, out int x, out int y, out int z);
+                int ex = ((m.V00 * x + m.V01 * y + m.V02 * z) >> 12) + m.Vtx;
+                int ey = ((m.V10 * x + m.V11 * y + m.V12 * z) >> 12) + m.Vty;
+                int ez = ((m.V20 * x + m.V21 * y + m.V22 * z) >> 12) + m.Vtz;
+                sum += Math.Clamp(ez, 0, 65535) >> 2;
+                // modelProjects: in front of H/2, within the divide's range, on the screen's.
+                bool projects = ez > h * 0.5f && ez <= 32767;
+                if (projects)
+                {
+                    float sx = ofx + h * ex / ez, sy = ofy + h * ey / ez;
+                    projects = sx >= -1024f && sx <= 1023f && sy >= -1024f && sy <= 1023f;
+                }
+                ok[j] = projects;
+            }
+            // modelFaceKept's depth test: the corners' mean SZ over four against the range.
+            int mz = n == 4 ? sum >> 2 : sum / 3;
+            if (mz <= 0 || mz < ins.Near || mz >= ins.Far) continue;
+            bool clipped = !ok[0] || !ok[1] || !ok[2] || n == 4 && !ok[3];
+            if (twin) { ClipTwinFaces++; if (clipped) ClipTwinClipped++; }
+            else { ClipFaces++; if (clipped) Clipped++; }
+        }
+    }
+
+    /// <summary>Posed vertex <paramref name="i"/>: the frame's copy, a rigid model's in
+    /// the pose store, or an MO keyframe and its delta there blended by the weight, as
+    /// the vertex shader's <c>modelPosed</c> takes it.</summary>
+    static void Posed(ReadOnlySpan<short> posed, int pose, bool morph, int weight, int i, out int x, out int y, out int z)
+    {
+        var store = RetainedScene.PoseStore;
+        if (pose == 0) { int a = i * 4; x = posed[a]; y = posed[a + 1]; z = posed[a + 2]; }
+        else if (!morph) { int a = (pose - 1 + i) * 4; x = store[a]; y = store[a + 1]; z = store[a + 2]; }
+        else
+        {
+            int k = (pose - 1 + 2 * i) * 4, d = k + 4;
+            x = (short)(store[k] + (short)((store[d] * weight) >> 12));
+            y = (short)(store[k + 1] + (short)((store[d + 1] * weight) >> 12));
+            z = (short)(store[k + 2] + (short)((store[d + 2] * weight) >> 12));
+        }
+    }
+
     // ---- 0085: the sky (Step 3's sixth slice) ---------------------------------------
 
     /// <summary>The objects of kind 0xF0 drawn from their meshes; off, on the packets
@@ -707,10 +781,11 @@ static class RetainedModels
         bool morph = false;
         if (PosesOn)
         {
-            if (MoPose.Pending) morph = (pose = MoPose.Store(mem, vertices, out weight)) != 0;
+            if (MoPose.PendingAt(verts)) morph = (pose = MoPose.Store(mem, verts, vertices, out weight)) != 0;
             else if (verts != PosedBuffer) pose = MoPose.StoreRigid(mem, verts, vertices);
         }
-        if (pose == 0 || MoPose.Checking) MoPose.Materialize(null, mem);
+        if (pose == 0) MoPose.Materialize(null, mem);
+        else if (MoPose.Checking) MoPose.Materialize(null, mem, check: true);
         int vb = 0;
         if (pose == 0)
         {
@@ -945,10 +1020,11 @@ static class RetainedModels
         bool morph = false;
         if (PosesOn)
         {
-            if (MoPose.Pending) morph = (pose = MoPose.Store(mem, vertices, out weight)) != 0;
+            if (MoPose.PendingAt(verts)) morph = (pose = MoPose.Store(mem, verts, vertices, out weight)) != 0;
             else if (verts != PosedBuffer) pose = MoPose.StoreRigid(mem, verts, vertices);
         }
-        if (!whole || pose == 0 || MoPose.Checking) MoPose.Materialize(null, mem);
+        if (!whole || pose == 0) MoPose.Materialize(null, mem);
+        else if (MoPose.Checking) MoPose.Materialize(null, mem, check: true);
         if (pose != 0 && MoPose.Checking) MoPose.Check(mem, pose, morph, weight, verts, vertices);
         int vb = 0;
         var posed = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(
@@ -1023,6 +1099,7 @@ static class RetainedModels
         else
         {
             if (gpuBlend) ReadGteMatrix(ref m);
+            if (ClipProbe && !mirror && !tile) CountClips(mesh, m, posed, pose, morph, weight, twinRoute, gpuBlend);
             RetainedScene.AddInstance(m, mirror);
             if (gpuBlend) NoteBlended(mesh, m, posed, pose, morph, weight, (int)bias, twin, tile, mirror);
         }

@@ -20,6 +20,7 @@ public sealed class PerspectivePage : IPatchPage
     public string Id => "perspective";
     public string Title => "Enhancements";
     public int Order => 20;
+    public IReadOnlyList<string> Patches => ["kf2.perspective"];
 
     public void Draw()
     {

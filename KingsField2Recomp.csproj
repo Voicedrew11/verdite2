@@ -8,7 +8,6 @@
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <AssemblyName>KingsField2</AssemblyName>
         <RootNamespace>KingsField2</RootNamespace>
-        <ApplicationIcon>packaging/shared/verdite2.ico</ApplicationIcon>
         <!--
           QuickJit off: every method with no precompiled code is JIT-compiled once,
           fully optimised, and never tiered up. Tier-up recompiles a method, and
@@ -43,6 +42,18 @@
         <Compile Remove="tools/**" />
         <EmbeddedResource Remove="tools/**" />
         <None Remove="tools/**" />
+    </ItemGroup>
+
+    <!--
+      Verdite Core's C# compiles into this assembly as source, like patches/. The
+      include comes after the tools/** remove above, which still keeps RecompOne's
+      own sources out. Its namespace is a global using, so callers name its types
+      as they named the port's own copies; GameCompile.GlobalUsings must say the
+      same, or the difference exists only in the release.
+    -->
+    <ItemGroup>
+        <Compile Include="tools/verdite-core/src/**/*.cs" />
+        <Using Include="Verdite.Core" />
     </ItemGroup>
 
     <!--
@@ -101,12 +112,11 @@
     </ItemGroup>
 
     <!--
-      packaging/windows/Stub/ is a nested net48 project. Building it (the Windows
-      package script does) leaves AssemblyInfo.cs under its obj/, and the default
-      glob compiles that into this assembly — CS0579, the same trap tools/**,
-      mcp/** and Verdite2.Launcher/** are removed for. Its Program.cs would also
-      become a second Main. The rest of packaging/ is scripts and icons, so the
-      remove is the whole tree.
+      packaging/ is scripts, icons and package.env; the nested net48 stub it once
+      held is now Verdite Core's (tools/verdite-core/packaging/windows/Stub/, under
+      the tools/** remove). The remove stays so that nothing staged here can become
+      a source of this assembly: a project's obj/ AssemblyInfo.cs is CS0579, the
+      same trap tools/**, mcp/** and Verdite2.Launcher/** are removed for.
     -->
     <ItemGroup>
         <Compile Remove="packaging/**" />

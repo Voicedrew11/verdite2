@@ -324,13 +324,15 @@ public static class PlanarWalk
         int replayed = 0;
         try
         {
-            // The mirrored camera, built by the routine that builds the real one.
+            // The mirrored camera, built by the routine that builds the real one, at
+            // the main view's fraction of a unit with its pitch mirrored too.
+            var (fp, fy) = CameraBlock.FractionOf(cam);
             CameraBlock.Build(c, mem, cam with
             {
                 Y = mirroredY,
                 Pitch = (short)-cam.Pitch,
                 Roll = (short)-cam.Roll,
-            });
+            }, (-fp, fy));
 
             // Kept above the water, in the mirrored view: with R' that view's
             // rotation, a view position's world Y is R'^T row 1 . p + Y'.

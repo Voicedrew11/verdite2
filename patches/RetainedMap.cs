@@ -85,8 +85,16 @@ public static class RetainedMap
                               (Enabled ? $", planar {(RetainedScene.Planar ? "on" : "off")}, " +
                                          $"cubemap {(RetainedScene.Cube ? $"{RetainedScene.CubeSize}px" : "off")}" : ""));
         });
-        Event.AddListener<OverlayLoadedEvent>(_ => { _hash = 0; _lightHash = 0; });
+        Event.AddListener<OverlayLoadedEvent>(e =>
+        {
+            _hash = 0; _lightHash = 0;
+            _loadName = e.Name; _loadAt = Interrupts.ClockMs;
+        });
     }
+
+    // The probe's: the last overlay load, which each build is timed from.
+    static string _loadName = "boot";
+    static double _loadAt;
 
     public static void SetEnabled(bool on)
     {
@@ -133,6 +141,9 @@ public static class RetainedMap
     public static void AtWalk(CpuContext c, PSMemory mem)
     {
         if (!Ready) return;
+        // What the hash carries of the water, read now rather than later in the frame.
+        Reflections.ReadRects(mem);
+        Waves.BeforeMap(mem);
         // The corners carry EvenFog's blends, so switching them is a rebuild too. Lit
         // from the records (0085), a record the game rewrites is only an upload.
         Hash(mem);
@@ -149,6 +160,10 @@ public static class RetainedMap
             _buildMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
             _builds++;
             _lastWhy = _why;
+            if (GpuWorld.Probing)
+                Console.WriteLine($"[KF2] mapprobe: build {_builds}, {_buildMs:F2} ms, {_n / 3} triangle(s), for " +
+                                  $"{(_why.Length > 0 ? _why : "the load's reset ")}" +
+                                  $"{Interrupts.ClockMs - _loadAt:F0} ms after {_loadName}");
         }
         else if (lights)
         {
@@ -268,6 +283,7 @@ public static class RetainedMap
 
     static RetainedScene.Vertex[] _tris = new RetainedScene.Vertex[1 << 16];
     static int _n;
+    static (int X, int Y, int Z)[] _raw = new (int, int, int)[1 << 16];
     static readonly Gte.State _gteSaved = new();
     static readonly Dictionary<int, (float Dqa, float Dqb)> _cue = new();
 
@@ -284,6 +300,7 @@ public static class RetainedMap
     static void Build(CpuContext c, PSMemory mem)
     {
         _n = 0;
+        _slide.Clear();
         _checkPacked = false;
         _halves = _faces = _skippedModels = _lightBlended = _fogBlended = _corners = 0;
         _cue.Clear();
@@ -314,8 +331,86 @@ public static class RetainedMap
             Gte.Load(_gteSaved);
             c.Restore(snap);
         }
+        if (Weld && _slide.Count > 0)
+        {
+            // A slide is taken only onto a corner something else is at: one the axis snap
+            // put there (the straight run beside the wall) or another wall's slide (two
+            // corner pieces meeting). Elsewhere the axis snap already meets the neighbour.
+            var corners = new HashSet<(int, int, int)>(_n);
+            for (int i = 0; i < _n; i++) corners.Add(((int)_tris[i].X, (int)_tris[i].Y, (int)_tris[i].Z));
+            var met = new Dictionary<(int, int, int), int>();
+            foreach (var (from, at) in _slide)
+                if (!float.IsNaN(at.X)) { var key = ((int)at.X, from.Item2, (int)at.Z); met[key] = met.GetValueOrDefault(key) + 1; }
+            foreach (var (key, count) in met) if (count > 1) corners.Add(key);
+            for (int i = 0; i < _n; i++)
+                if (_slide.TryGetValue(_raw[i], out var to) && !float.IsNaN(to.X)
+                    && corners.Contains(((int)to.X, _raw[i].Y, (int)to.Z)))
+                { _tris[i].X = to.X; _tris[i].Z = to.Z; }
+        }
+        _seamsMoved = 0;
+        var seamsAt = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (Weld) CloseSeams();
+        _seamsMs = System.Diagnostics.Stopwatch.GetElapsedTime(seamsAt).TotalMilliseconds;
         RetainedScene.SetStatic(_tris.AsSpan(0, _n));
         RetainedPlanes.Finish();
+        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_SEAMS") is { Length: > 0 } tj) SeamCensus(tj);
+        if (Environment.GetEnvironmentVariable("KF2_GPUWORLD_DUMPMAP") is { Length: > 0 } dir) DumpMap(dir);
+    }
+
+    // KF2_GPUWORLD_DUMPMAP=dir: each build's triangles as x,y,z,flags per corner (CSV), for offline seam work.
+    static void DumpMap(string dir)
+    {
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, $"map_{_builds:D3}_{_table:X8}.csv");
+        using var w = new StreamWriter(path);
+        for (int i = 0; i < _n; i++)
+            w.WriteLine($"{_tris[i].X},{_tris[i].Y},{_tris[i].Z},{_tris[i].Flags}");
+        Console.WriteLine($"[KF2] dumpmap: {_n / 3} triangles, {_seamsMoved} seam corners merged in {_seamsMs:F1} ms -> {path}");
+    }
+
+    // KF2_GPUWORLD_SEAMS=x,z,radius[,ymax]: after a build, every map edge near (x,z) that only
+    // one triangle uses, and every vertex lying on another triangle's edge.
+    static void SeamCensus(string arg)
+    {
+        var a = arg.Split(',');
+        double cx = double.Parse(a[0]), cz = double.Parse(a[1]), r = double.Parse(a[2]);
+        double ymax = a.Length > 3 ? double.Parse(a[3]) : double.MaxValue;
+        bool Near(in RetainedScene.Vertex v) => Math.Abs(v.X - cx) <= r && Math.Abs(v.Z - cz) <= r && v.Y <= ymax;
+        var edges = new Dictionary<(long, long, long, long, long, long), int>();
+        var points = new HashSet<(long, long, long)>();
+        (long, long, long) K(in RetainedScene.Vertex v) => ((long)Math.Round(v.X), (long)Math.Round(v.Y), (long)Math.Round(v.Z));
+        for (int i = 0; i + 2 < _n; i += 3)
+        {
+            if (!Near(_tris[i]) && !Near(_tris[i + 1]) && !Near(_tris[i + 2])) continue;
+            for (int k = 0; k < 3; k++)
+            {
+                var p = K(_tris[i + k]); var q = K(_tris[i + (k + 1) % 3]);
+                points.Add(p);
+                var e = p.CompareTo(q) < 0 ? (p.Item1, p.Item2, p.Item3, q.Item1, q.Item2, q.Item3)
+                                           : (q.Item1, q.Item2, q.Item3, p.Item1, p.Item2, p.Item3);
+                edges[e] = edges.TryGetValue(e, out int n) ? n + 1 : 1;
+            }
+        }
+        int open = 0, tj = 0;
+        foreach (var (e, n) in edges)
+        {
+            if (n != 1) continue;
+            open++;
+            double ex = e.Item4 - e.Item1, ey = e.Item5 - e.Item2, ez = e.Item6 - e.Item3;
+            double len2 = ex * ex + ey * ey + ez * ez;
+            string on = "";
+            foreach (var p in points)
+            {
+                double px = p.Item1 - e.Item1, py = p.Item2 - e.Item2, pz = p.Item3 - e.Item3;
+                double t = (px * ex + py * ey + pz * ez) / len2;
+                if (t <= 1e-4 || t >= 1 - 1e-4) continue;
+                double dx = px - t * ex, dy = py - t * ey, dz = pz - t * ez;
+                double d = Math.Sqrt(dx * dx + dy * dy + dz * dz);
+                if (d < 16) { on += $" [{p.Item1},{p.Item2},{p.Item3} t={t:F3} off={d:F2}]"; tj++; }
+            }
+            Console.WriteLine($"[KF2] seam: open edge ({e.Item1},{e.Item2},{e.Item3})-({e.Item4},{e.Item5},{e.Item6}){on}");
+        }
+        Console.WriteLine($"[KF2] seam: {edges.Count} edges near, {open} open, {tj} vertices on an open edge");
     }
 
     /// <summary>A mesh whose header points inside RAM and has a believable count.</summary>
@@ -365,6 +460,7 @@ public static class RetainedMap
         Span<uint> uv = stackalloc uint[4], col = stackalloc uint[4];
         Span<float> qa = stackalloc float[4], qb = stackalloc float[4], qc = stackalloc float[4];
         Span<short> lx = stackalloc short[4], lz = stackalloc short[4], nzs = stackalloc short[4];
+        Span<float> ex = stackalloc float[4], ez = stackalloc float[4];
         Span<uint> lw = stackalloc uint[4];
         for (int f = 0; f < (int)count; f++)
         {
@@ -451,12 +547,14 @@ public static class RetainedMap
                     Rect = rect, Flags = flags, Rgbc = rgbc & 0xFFFFFFu,
                 };
                 // A quad is the strip 0,1,2 then 1,2,3, as the GPU draws it.
-                Emit(t, px, py, pz, uv, col, qa, qb, qc, lw, nzs, swell, 0, 1, 2);
+                px.CopyTo(ex); pz.CopyTo(ez);
+                if (Weld) WeldFace(px, py, pz, ex, ez, corners);
+                Emit(t, ex, py, ez, px, pz, uv, col, qa, qb, qc, lw, nzs, swell, 0, 1, 2);
                 if (corners == 4)
                 {
                     var tail = t;
                     tail.Flags |= RetainedScene.FlagQuadTail;
-                    Emit(tail, px, py, pz, uv, col, qa, qb, qc, lw, nzs, swell, 1, 3, 2);
+                    Emit(tail, ex, py, ez, px, pz, uv, col, qa, qb, qc, lw, nzs, swell, 1, 3, 2);
                 }
                 RetainedPlanes.Note(px, py, pz, corners, semi, mat, tpage, rect);
                 _faces++;
@@ -465,17 +563,149 @@ public static class RetainedMap
         }
     }
 
-    static void Emit(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
+    /// <summary>A tile's mesh reaches 10 units past its cell on each side, so two
+    /// neighbours overlap by 20. Flat, the overlap hides the seam; on a slope it
+    /// staggers the two faces vertically (10 units at a 1:2 grade), and a sight line
+    /// grazing the ceiling passes between them: a hairline of background along the
+    /// seam. A corner exactly 10 off a cell boundary is put on it, so the two edges
+    /// are one. Translucent faces too, so a grate or the water stays on the wall it
+    /// met; the swell's corners are interior, never on a boundary.
+    /// <c>KF2_GPUWORLD_WELD=0</c> to compare. See "Hairlines in sloped ceilings" in
+    /// docs/GPU_RENDERER.md.</summary>
+    static readonly bool Weld = Environment.GetEnvironmentVariable("KF2_GPUWORLD_WELD")?.Trim() != "0";
+
+    static float Overlap(float w)
+    {
+        float m = w - MathF.Round(w / 2048f) * 2048f;
+        return MathF.Abs(m) == 10f ? m : 0f;
+    }
+
+    /// <summary>The weld: a corner 10 off a cell boundary is put on it, the axis alone,
+    /// which on a face square to the grid keeps it on its face. A wall at 45 degrees in
+    /// plan (a leaning wall's corner piece) has to slide the corner along its own run
+    /// instead, onto the corner the straight run beside it has: snapping the axis alone
+    /// left it 10 units off that corner, and on a leaning wall that is a hairline. It
+    /// slides only onto a corner the game's mesh has, or onto another wall's slide. The slide is kept by the game's corner, not the face (<see cref="_slide"/>), so the
+    /// ceiling and floor that share the wall's top and foot move with it and the weld
+    /// stays a function of position. A corner off in both axes is a cell corner and
+    /// snaps in both. See "Hairlines in leaning walls" in docs/GPU_RENDERER.md.</summary>
+    static void WeldFace(Span<float> px, Span<float> py, Span<float> pz, Span<float> ex, Span<float> ez, int corners)
+    {
+        float ax = px[1] - px[0], ay = py[1] - py[0], az = pz[1] - pz[0];
+        float bx = px[2] - px[0], by = py[2] - py[0], bz = pz[2] - pz[0];
+        float nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+        float len = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
+        // The normal within 30 degrees of level and exactly 45 in plan, so a rock face,
+        // irregular, keeps the axis snap. Its run is (-nz, nx).
+        bool diagonal = len > 0f && MathF.Abs(ny) < 0.5f * len && nx != 0f && MathF.Abs(nx) == MathF.Abs(nz);
+        for (int k = 0; k < corners; k++)
+        {
+            float mx = Overlap(px[k]), mz = Overlap(pz[k]);
+            ex[k] -= mx; ez[k] -= mz;
+            if (!diagonal || (mx != 0f) == (mz != 0f)) continue;
+            (float X, float Z) to = mx != 0f ? (px[k] - mx, MathF.Round(pz[k] + mx * nx / nz))
+                                             : (MathF.Round(px[k] + mz * nz / nx), pz[k] - mz);
+            var key = ((int)px[k], (int)py[k], (int)pz[k]);
+            // Two walls that disagree about a corner leave it on the axis snap.
+            if (_slide.TryGetValue(key, out var had) && had != to) to = (float.NaN, float.NaN);
+            _slide[key] = to;
+        }
+    }
+
+    /// <summary>A seam the boundary weld cannot see: two parallel edges each used by one
+    /// opaque face, lying within <see cref="SeamReach"/> of each other end for end, on an
+    /// edge longer than twice that. The game's overlap on a 45-degree sloped ceiling sits
+    /// 20 units off the square piece beside it and on no cell boundary; on a slope the
+    /// two stagger like the overlap the weld closes, and a grazing sight line passes
+    /// between them. Their corners are merged by position (each to the least of its
+    /// group), so every face at a corner moves with it and the pass can only close an
+    /// edge. See "Hairlines in leaning walls" in docs/GPU_RENDERER.md.</summary>
+    const float SeamReach = 32f;
+
+    static void CloseSeams()
+    {
+        static (int, int, int) Key(in RetainedScene.Vertex v) => ((int)MathF.Round(v.X), (int)MathF.Round(v.Y), (int)MathF.Round(v.Z));
+        static ((int, int, int), (int, int, int)) Edge((int, int, int) p, (int, int, int) q) => p.CompareTo(q) < 0 ? (p, q) : (q, p);
+        var uses = new Dictionary<((int, int, int), (int, int, int)), int>();
+        for (int i = 0; i + 2 < _n; i += 3)
+        {
+            if ((_tris[i].Flags & RetainedScene.FlagSemi) != 0) continue;
+            var a = Key(_tris[i]); var b = Key(_tris[i + 1]); var c = Key(_tris[i + 2]);
+            if (a == b || b == c || a == c) continue;
+            foreach (var e in (ReadOnlySpan<((int, int, int), (int, int, int))>)[Edge(a, b), Edge(b, c), Edge(c, a)])
+                uses[e] = uses.GetValueOrDefault(e) + 1;
+        }
+        static (int, int, int) Cell((int X, int Y, int Z) p) => (p.X >> 6, p.Y >> 6, p.Z >> 6);
+        var grid = new Dictionary<(int, int, int), List<((int, int, int), (int, int, int))>>();
+        foreach (var (e, n) in uses)
+        {
+            if (n != 1) continue;
+            foreach (var p in (ReadOnlySpan<(int, int, int)>)[e.Item1, e.Item2])
+            {
+                if (!grid.TryGetValue(Cell(p), out var list)) grid[Cell(p)] = list = new();
+                list.Add(e);
+            }
+        }
+        static float Dist((int X, int Y, int Z) p, (int X, int Y, int Z) q)
+        { float x = p.X - q.X, y = p.Y - q.Y, z = p.Z - q.Z; return MathF.Sqrt(x * x + y * y + z * z); }
+        var parent = new Dictionary<(int, int, int), (int, int, int)>();
+        (int, int, int) Find((int, int, int) p) { while (parent.TryGetValue(p, out var q) && q != p) p = q; return p; }
+        void Union((int, int, int) a, (int, int, int) b)
+        {
+            a = Find(a); b = Find(b);
+            if (a == b) return;
+            if (a.CompareTo(b) < 0) (a, b) = (b, a);
+            parent[a] = b;
+        }
+        var near = new HashSet<((int, int, int), (int, int, int))>();
+        foreach (var (e, n) in uses)
+        {
+            if (n != 1) continue;
+            var (p0, p1) = e;
+            near.Clear();
+            foreach (var p in (ReadOnlySpan<(int X, int Y, int Z)>)[p0, p1])
+                for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++)
+                    if (grid.TryGetValue(((p.X >> 6) + dx, (p.Y >> 6) + dy, (p.Z >> 6) + dz), out var list))
+                        foreach (var f in list) near.Add(f);
+            foreach (var f in near)
+            {
+                if (f.CompareTo(e) <= 0) continue;
+                foreach (var (a, b) in (ReadOnlySpan<((int, int, int), (int, int, int))>)[(f.Item1, f.Item2), (f.Item2, f.Item1)])
+                {
+                    float d0 = Dist(p0, a), d1 = Dist(p1, b);
+                    if (d0 <= SeamReach && d1 <= SeamReach && (d0 > 0f || d1 > 0f) && Dist(a, b) > 2f * SeamReach)
+                    { Union(p0, a); Union(p1, b); }
+                }
+            }
+        }
+        if (parent.Count == 0) return;
+        for (int i = 0; i < _n; i++)
+        {
+            var k = Key(_tris[i]);
+            if (!parent.ContainsKey(k)) continue;
+            var (x, y, z) = Find(k);
+            _tris[i].X = x; _tris[i].Y = y; _tris[i].Z = z;
+        }
+        _seamsMoved = parent.Count;
+    }
+
+    static int _seamsMoved;
+    static double _seamsMs;
+
+    /// <summary>The game's corners a 45-degree wall slides, and where to.</summary>
+    static readonly Dictionary<(int, int, int), (float X, float Z)> _slide = new();
+
+    static void Emit(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<float> rx, Span<float> rz, Span<uint> uv,
                      Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, Span<uint> lw, Span<short> nz,
                      uint swell, int a, int b, int c)
     {
-        if (_n + 3 > _tris.Length) Array.Resize(ref _tris, _tris.Length * 2);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, lw, nz, swell, a);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, lw, nz, swell, b);
-        Put(t, px, py, pz, uv, col, qa, qb, qc, lw, nz, swell, c);
+        if (_n + 3 > _tris.Length) { Array.Resize(ref _tris, _tris.Length * 2); Array.Resize(ref _raw, _tris.Length); }
+        Put(t, px, py, pz, rx, rz, uv, col, qa, qb, qc, lw, nz, swell, a);
+        Put(t, px, py, pz, rx, rz, uv, col, qa, qb, qc, lw, nz, swell, b);
+        Put(t, px, py, pz, rx, rz, uv, col, qa, qb, qc, lw, nz, swell, c);
     }
 
-    static void Put(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<uint> uv,
+    static void Put(in RetainedScene.Vertex t, Span<float> px, Span<float> py, Span<float> pz, Span<float> rx, Span<float> rz, Span<uint> uv,
                     Span<uint> col, Span<float> qa, Span<float> qb, Span<float> qc, Span<uint> lw, Span<short> nz,
                     uint swell, int k)
     {
@@ -491,6 +721,7 @@ public static class RetainedMap
         }
         else { v.R = col[k] & 0xFF; v.G = (col[k] >> 8) & 0xFF; v.B = (col[k] >> 16) & 0xFF; }
         v.Dqa = qa[k]; v.Dqb = qb[k]; v.Curve = qc[k];
+        _raw[_n] = ((int)rx[k], (int)py[k], (int)rz[k]);
         _tris[_n++] = v;
     }
 

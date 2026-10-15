@@ -1,0 +1,92 @@
+// ModCompiler compiles mods with no implicit usings, so every namespace the
+// file needs is named here -- including System.
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using ImGuiNET;
+
+namespace Kf2.Settings;
+
+/// <summary>
+/// The map, under **Gameplay** rather than Video — **one combo where there were
+/// two checkboxes**.
+///
+/// A map is not a choice about how the picture is made — it is a thing the game
+/// did not have and now does, which is the same test auto reload passes and the
+/// reason the port added the Gameplay section at all.
+///
+/// **This page carried eleven controls, then two, and now draws one widget.**
+/// Everything that went went for one of two reasons: it was not a choice (the
+/// style, the height ramp, the sight-blocking tint, the marker layer, the save
+/// points, the pause, the floor, the player marker), or it belongs somewhere else
+/// (the pad button, now under Input with the other bindings). The corner minimap
+/// and its six knobs are gone for a third reason — the picture has never been
+/// judged by eye, so it is a comparison rather than a feature, and N still opens
+/// it for the session. See "Five map controls that were not choices" and "What the
+/// Map page is down to" in docs/PATCHES_AND_MODS.md; the mechanism is
+/// patches/Map.cs and the three viewports are patches/MapFullscreen.cs,
+/// patches/MapPanel.cs and patches/MapOverlay.cs.
+///
+/// **What is left is one question, so it is asked once.** The map and fog of war
+/// were two ticks, and two ticks cross into four states carrying three meanings:
+/// fog on with the map off is nobody's answer to anything. That is the argument
+/// <see cref="ShadingPage"/> made about dither and true colour, and the fix is the
+/// same — two entries now that the mod being enabled is the on switch:
+///
+/// <list type="table">
+/// /// <item><term>Whole area</term><description>the floor plan the moment you walk in</description></item>
+/// <item><term>Fill in as you go</term><description>fog of war — only what you had a clear view of</description></item>
+/// </list>
+///
+/// Fog keeps its place among them because it is a real choice: a player who wants
+/// the whole floor plan is not asking for a defect. What used to be indented under
+/// it does not appear here at all — "only what you could see" is the shadowcast
+/// gate, and without it the fog paints rooms through the wall beside a doorway
+/// into a store that never forgets, which is a defect rather than a taste, so it
+/// is on and KF2_MAP_FOG_LOS=0 is the comparison. Forget and Reveal are
+/// instruments and live on the docked MapPanel with the others.
+///
+/// Both patches keep their own key (<c>kf2.map.on</c>, <c>kf2.map.fog</c>) and
+/// their own environment variable (<c>KF2_MAP</c>, <c>KF2_MAP_FOG</c>), so merging
+/// the control strands no config and takes no comparison off the console. The map
+/// was read as the master; since the map became a mod, enabling it is the switch and
+/// only the fog's key is written. Formerly any click
+/// writes both patches, harmonising the pair.
+/// </summary>
+public sealed class MapPage : IPatchPage
+{
+    public string Id => "map";
+
+    /// <summary>No heading of its own: the section's rule already says Gameplay,
+    /// and two rules in a row over one combo is a rule for its own sake.</summary>
+    public string Title => "";
+
+    public int Order => 10;
+
+    const int Whole = 0;
+    const int Fog = 1;
+
+    static readonly string[] Labels = ["Whole area", "Fill in as you go"];
+
+    public void Draw()
+    {
+        int index = Index();
+
+        ImGui.SetNextItemWidth(260);
+        if (ImGui.Combo("Map", ref index, Labels, Labels.Length)) Apply(index);
+
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("A map of the area you are in: the whole floor plan, or only where " +
+                             "you have been. G opens it; the world stops while it is up.");
+    }
+
+    static int Index() => MapFog.Enabled ? Fog : Whole;
+
+    /// <summary>The fog's patch and key. The map has no Off here: disabling the mod
+    /// in the Mods panel is how it is turned off, and kf2.map.on is no longer read.</summary>
+    static void Apply(int index)
+    {
+        MapFog.SetEnabled(index == Fog);
+        PatchSettings.Set(MapFog.OnKey, MapFog.Enabled);
+    }
+}

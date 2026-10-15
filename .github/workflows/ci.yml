@@ -14,7 +14,18 @@ jobs:
   no-disc-build:
     runs-on: ubuntu-latest
     steps:
+      # Every tag, since the version is the newest one HEAD contains.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # The runtime's GLSL: no derivative after a discard or a return (undefined,
+      # and a Windows driver drew a dark line along every polygon edge on it),
+      # and every stage through the reference compiler. Needs no GPU and no disc.
+      - name: Lint the shaders
+        run: |
+          sudo apt-get install -y -qq glslang-tools >/dev/null
+          python3 tools/RecompOne/scripts/shader_lint.py --glslang
 
       - uses: actions/setup-dotnet@v4
         with:
@@ -23,17 +34,16 @@ jobs:
       # RecompOne is a git subtree of the fork; this builds it, and clones nothing.
       - run: bash scripts/setup_tools.sh
 
-      # The version is one number in one file and five things read it. This
-      # catches the two ways that stops being true: a malformed VERSION (which
-      # would name every artifact something a tag can never match) and a literal
-      # <Version> creeping back into the csproj beside the file it reads.
+      # The version is the newest vMAJOR.MINOR.PATCH tag, and five things read it.
+      # This catches the two ways that stops being true: a VERSION file coming
+      # back (Verdite Core reads one ahead of the tags) and a literal <Version>
+      # creeping into the csproj.
       - name: Assert one source of the version
         run: |
-          v="$(tr -d '[:space:]' < VERSION)"
-          echo "VERSION=$v"
-          echo "$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "VERSION is not MAJOR.MINOR.PATCH"; exit 1; }
+          test ! -e VERSION || { echo "VERSION exists; the tags are the version"; exit 1; }
           grep -q '<Version>[0-9]' Verdite2.Launcher/Verdite2.Launcher.csproj \
-            && { echo "the csproj declares a literal version; VERSION is the source"; exit 1; } || true
+            && { echo "the csproj declares a literal version; the tags are the source"; exit 1; } || true
+          echo "version=$(bash tools/verdite-core/scripts/version.sh)"
 
       - name: Build the launcher with no disc
         run: dotnet build Verdite2.Launcher/Verdite2.Launcher.csproj -c Release
@@ -42,17 +52,45 @@ jobs:
       # its files after and what the launcher prints at startup.
       - name: Assert the build carries it
         run: |
-          v="$(tr -d '[:space:]' < VERSION)"
+          v="$(bash tools/verdite-core/scripts/version.sh)"
           dll=Verdite2.Launcher/bin/Release/net10.0/Verdite2.dll
           got=$(strings "$dll" | grep -oE "^$v\+[0-9a-f]{9}$" | head -1)
           echo "informational version: ${got:-<none>}"
           test -n "$got" || { echo "the assembly does not carry $v plus a commit"; exit 1; }
 
+      # A release unpacked over an older one keeps the files the new one deleted,
+      # and Verdite3 0.1.1 over 0.1.0 failed to compile on them. The launcher
+      # builds only what content/manifest.txt lists (Verdite Core's
+      # launcher/Build/Payload.cs); these hold that in place on what is shipped,
+      # the publish: the manifest names exactly the files under content/, and a
+      # file planted there is set aside, not compiled. The launcher is killed by
+      # the timeout at the disc picker; the line is printed before the window.
+      - name: Publish the launcher
+        run: dotnet publish Verdite2.Launcher/Verdite2.Launcher.csproj -c Release -o out
+
+      - name: Assert the manifest lists exactly the shipped content
+        working-directory: out
+        run: |
+          test -s content/manifest.txt || { echo "the publish has no content/manifest.txt"; exit 1; }
+          diff <(tr '\\' / < content/manifest.txt | grep '^content/' | sort -u) \
+               <(find content -type f ! -path content/manifest.txt | sort) \
+            || { echo "content/manifest.txt does not match content/"; exit 1; }
+
+      - name: Assert a file left by an older release is not built
+        run: |
+          echo '#error left by an older release' > out/content/src/patches/Stale.cs
+          VERDITE2_DATA="$RUNNER_TEMP/data" VERDITE2_UPDATE_CHECK=0 \
+            timeout 30 dotnet out/Verdite2.dll > launch.log 2>&1 || true
+          head -20 launch.log
+          grep -qx '\[Verdite2\]   src/patches/Stale.cs' launch.log \
+            || { echo "the launcher did not set aside a file the release did not ship"; exit 1; }
+
       # The Windows package's root exe is this stub, not the self-contained
       # apphost. Catch a broken stub on every push rather than on the release
-      # job that actually publishes the zip.
+      # job that actually publishes the zip. It has no icon: the port ships no
+      # mark, and the game points the shortcuts at the card icon it reads.
       - name: Build the Windows stub
-        run: dotnet build packaging/windows/Stub/Verdite2.Stub.csproj -c Release
+        run: dotnet build tools/verdite-core/packaging/windows/Stub/Verdite.Stub.csproj -c Release -p:StubName=Verdite2
 
       # KingsField2Recomp.csproj is deliberately NOT built here: it compiles
       # generated/ and so cannot build without the disc, by design.

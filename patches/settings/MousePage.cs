@@ -9,9 +9,9 @@ namespace Kf2.Settings;
 ///
 /// Two things on this page are not settings and are the reason it is shaped the
 /// way it is. The **capture line** says whether the pointer is locked right now
-/// and which key changes that: mouse look does nothing at all until it is, so a
-/// player who switched it on and saw no change needs that sentence before they
-/// need a sensitivity. And the **buttons** are named as pad buttons rather than
+/// and how that changes: mouse look does nothing at all until it is, so a player
+/// who switched it on and saw no change needs that sentence before they need a
+/// sensitivity. And the **buttons** are named as pad buttons rather than
 /// as actions, because that is what they are — the game's own control-config
 /// screen decides what Cross does, and this page would be lying if it said
 /// "Attack". The Gamepad tab's table now names the *defaults* in a column of its
@@ -30,14 +30,8 @@ public sealed class MousePage : IPatchPage
 
     public void Draw()
     {
-        bool was = Mouse.Enabled;
-        Check("Mouse look", Mouse.OnKey, ref Mouse.Enabled,
-              "Turns and looks with the mouse, through the same per-frame velocities the sticks " +
-              "drive — so the game's own movement code, collision and pitch limit are untouched. " +
-              "The pointer has to be captured before anything happens, and the mouse buttons only " +
-              "reach the game while it is.");
-        if (was && !Mouse.Enabled) Mouse.SetCaptured(false);
-
+        // Mouse look is always on and not a setting (KF2_MOUSE=0 the comparison), so
+        // the page dims only when that variable turned it off.
         ImGui.BeginDisabled(!Mouse.Enabled);
 
         Slider("Turn sensitivity", Mouse.TurnKey, ref Mouse.TurnSens, 0.1f, 5f,
@@ -61,26 +55,40 @@ public sealed class MousePage : IPatchPage
 
         ImGui.EndDisabled();
 
-        ImGui.Spacing();
-        // Outside the disabled block on purpose: this one needs no capture and so
-        // no mouse look. A player who leaves mouse look off still has a pointer
-        // in the menus, and burying the switch under a feature it does not depend
-        // on would hide that.
-        Check("Menu pointer", MenuMouse.OnKey, ref MenuMouse.Enabled,
-              "Point at an item in the in-game menu and the game's own cursor moves to it; " +
-              "left click confirms, right click backs out. It takes the cursor only once the " +
-              "mouse has moved, and hands it straight back when the pad or the keyboard moves " +
-              "it. Needs no captured pointer.");
-
         if (!HostWindow.MouseAvailable)
             Note("No mouse is attached to the window, so nothing here will do anything.");
         else if (!Mouse.Enabled)
-            Note("Mouse look is off; the pointer stays a pointer.");
+            Note("Mouse look is off (KF2_MOUSE=0); the pointer stays a pointer.");
         else
-            Note(Mouse.Captured
-                ? $"The pointer is captured — press {Mouse.CaptureKey} to get it back."
-                : $"The pointer is free — press {Mouse.CaptureKey} with the game in front to capture it. " +
-                  "Opening any of these settings gives it back on its own.");
+            Note(CaptureLine());
+    }
+
+    /// <summary>
+    /// How the pointer is let go and taken back, as it stands: Escape opens the
+    /// game's menu only with the port's layout in place and Escape not the capture
+    /// key (<see cref="KeyLayout"/>); a capture key saved before the click took
+    /// capture over is kept, and still toggles.
+    /// </summary>
+    static string CaptureLine()
+    {
+        var key = Mouse.CaptureKey;
+        bool hasKey = key != Silk.NET.Input.Key.Unknown;
+        bool escapeMenus = key != Silk.NET.Input.Key.Escape && KeyLayout.IsApplied();
+
+        if (Mouse.Captured)
+            return hasKey
+                ? $"The pointer is captured — press {Mouse.KeyName(key)} to get it back, or switch to another window." +
+                  (escapeMenus ? " Escape opens the game's menu, which gives it back too." : "")
+                : escapeMenus
+                    ? "The pointer is captured — Escape opens the game's menu, which gives it back, " +
+                      "and so does switching to another window."
+                    : "The pointer is captured — the game's menu gives it back, and so does switching " +
+                      "to another window.";
+
+        return "The pointer is free — click the game to capture it" +
+               (hasKey ? $", or press {Mouse.KeyName(key)}" : "") +
+               ". The game's menu, these settings and switching to another window give it back; " +
+               "closing the game's menu captures it again.";
     }
 
     /// <summary>
@@ -94,7 +102,8 @@ public sealed class MousePage : IPatchPage
     }
 
     /// <summary>
-    /// The capture key, as a short list rather than as a binding widget: the
+    /// The capture key, None by default since a click captures, as a short list
+    /// rather than as a binding widget: the
     /// runtime's own "press a key" capture belongs to its pad-binding table and is
     /// internal to it, and a page that offers every key on the keyboard would let
     /// someone bind capture to a key the game already uses and lock themselves in.
@@ -102,7 +111,7 @@ public sealed class MousePage : IPatchPage
     static void CaptureKey()
     {
         var keys = Mouse.CaptureKeys;
-        var names = keys.Select(k => k.ToString()).ToArray();
+        var names = keys.Select(Mouse.KeyName).ToArray();
         int index = Array.IndexOf(keys, Mouse.CaptureKey);
         if (index < 0) index = 0;
 
@@ -111,9 +120,10 @@ public sealed class MousePage : IPatchPage
             Mouse.CaptureKey = keys[index];
             PatchSettings.Set(Mouse.CaptureKeyKey, (int)Mouse.CaptureKey);
         }
-        Tip("Locks the pointer to the window and hides it, and gives it back again. " +
-            "The game's own keyboard controls are Z X A S Q W E R F G, Enter, right shift and " +
-            "the arrows; F1 and F11 belong to the port.");
+        Tip("A key that locks the pointer and gives it back, besides the click. None by default: " +
+            "Escape opens the game's menu, which already gives it back. The list is deliberately " +
+            "short — a key the game's controls or the port's shortcuts already use would let " +
+            "someone lock themselves in. Escape here takes it from the menu.");
     }
 
     static void Check(string label, string key, ref bool value, string? tip = null)
