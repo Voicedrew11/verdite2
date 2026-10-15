@@ -1797,3 +1797,67 @@ What was measured, over the map of each of areas 0-6 (a one-off audit, not kept)
   settle in time) and are unmeasured.
 
 **Mechanism and the reported spot measured; the picture elsewhere not judged.**
+
+## Hairlines in leaning walls (2026-10-14)
+
+Reported after the weld above: the same hairline in "horizontal walls that are
+sloped". Found by dumping every map build's triangles (`KF2_GPUWORLD_DUMPMAP=dir`,
+a CSV per build) and pairing, offline, every opaque edge one triangle uses with a
+parallel one within 40 units. Two kinds were left.
+
+**A leaning wall's corner piece.** A wall that runs level but leans (z = 2048 at
+the foot, 2304 at the top, in area 0 at x 106496-110592) turns its corners with a
+45-degree piece. That piece overlaps the cell boundary by 10 like everything else,
+but along its own diagonal run: the weld put X on the boundary and left Z where it
+was, 10 units off the straight run's corner (`(108544, -18496, 2166)` against
+`2176`), so the two faces met at the foot and the top and parted by 10 between.
+
+`RetainedMap.WeldFace` keeps the axis snap for every face and, for a wall whose
+normal is within 30 degrees of level and *exactly* 45 degrees in plan, records
+where its corner should slide along the run instead. A first try that slid any
+diagonal face moved irregular rock and the floor fans at a cell corner and opened
+3-5 times the edges it closed; exactly 45 keeps the rocks out. The slide is kept
+by the game's corner (`_slide`), not the face, so the ceiling and floor that share
+the wall's top and foot move with it (sliding per face opened their edge to the
+wall, `flat/wall` at 7 units, 278 in area 0). And it is taken only onto a corner
+something else is at: one the axis snap put there (the straight run) or another
+wall's slide (two corner pieces meeting). Where the neighbour across is itself
+overlapped and square, the snap already met it, and sliding would part them.
+
+**The overlap on a 45-degree sloped ceiling.** The vaulted ceilings' diagonal
+pieces sit 20 units (15-28 perpendicular) off the square piece beside them, on no
+cell boundary, so no boundary rule sees them. `RetainedMap.CloseSeams`, after the
+weld: two parallel edges each used by one opaque face, end for end within 32
+units, on an edge longer than 64, have their corners merged by position (union
+find, each group to its least corner), so every face at a corner moves with it.
+It can only close an edge. 25 units left the 28-unit class open; 48 also merged
+a leaning wall's mid-height corners that the game itself puts 40 units apart, and
+was not taken.
+
+Measured over the map of areas 0-7 against the earlier weld: opaque edges one
+triangle uses, and of those the ones the offline pairing finds a parallel partner
+for within 40 units, not vertical (the seams; the rest are mostly the map's real
+silhouettes):
+
+| area | open, before | open, after | seams, before | seams, after |
+|---|---|---|---|---|
+| 0 | 6268 | 4553 | 666 | 176 |
+| 1 | 11090 | 6012 | 326 | 9 |
+| 2 | 15630 | 10570 | 334 | 5 |
+| 3 | 10636 | 6731 | 653 | 10 |
+| 4 | 6108 | 5596 | 0 | 0 |
+| 5 | 13252 | 3616 | 1 | 1 |
+| 6 | 9433 | 3833 | 98 | 2 |
+| 7 | 596 | 596 | 0 | 0 |
+
+No face degenerated. What is left in the pairing: area 0's leaning walls on the stair at x 112640, whose mid-height
+corners the game's own mesh puts 40 units apart (`(-18489, 22390)` against
+`(-18450, 22408)`), a 1-unit sliver where a slope meets a wall (2-4 an area), and
+a 35-unit step on a few ramp ends. `KF2_GPUWORLD_WELD=0` turns off the weld, the
+slide and the merge together.
+
+The merge costs 21-51 ms a map build (areas 0, 1, 2, 5), on a build of about 120;
+it runs only when the map's hash changes. `KF2_FPS=144 KF2_FPS_PROBE=1` after it:
+144.0 fps drawn at 14.9-15.0 ticks/s.
+
+**Mechanism measured over every area's mesh; the picture not judged.**
