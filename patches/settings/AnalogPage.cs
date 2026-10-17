@@ -90,9 +90,9 @@ public sealed class AnalogPage : IPatchPage
 
             ImGui.Spacing();
             Check("Stick eases in and out", Analog.EaseKey, ref Analog.StickEase,
-                  "On is the original: the view takes four or five ticks to reach full speed and " +
-                  "to stop, as it does on a held D-pad or L2/R2. Off is direct: the view turns at " +
-                  "the stick's speed at once and stops dead on release. The top speed is the " +
+                  "Off is direct: the view turns at the stick's speed at once and stops dead on " +
+                  "release. On is the original: the view takes four or five ticks to reach full " +
+                  "speed and to stop, as it does on a held D-pad or L2/R2. The top speed is the " +
                   "original's either way.");
             ImGui.BeginDisabled(!Analog.StickEase);
             Check("Camera stops on release", Analog.StopKey, ref Analog.CameraInstantStop,

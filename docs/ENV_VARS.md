@@ -261,7 +261,7 @@ KF2_TEXKEY=face                        # key a replacement on the face's texture
 KF2_ANALOG=0                             # twin-stick control off (it is on by default)
 KF2_ANALOG_TURN=1.0 KF2_ANALOG_MOVE=1.0 KF2_ANALOG_DEADZONE=0.15  # its sensitivities
 KF2_ANALOG_ACCEL=1 KF2_ANALOG_INSTANTSTOP=1  # the stick faster than the original: look acceleration (to 2.2x the D-pad's rate) and a dead stop on release (both off by default)
-KF2_ANALOG_EASE=0                        # the right stick at the original's speed without its ease: full speed at once, a dead stop on release (on by default; 2D only)
+KF2_ANALOG_EASE=1                        # the right stick eases in and out as the D-pad does (off by default since 0.5.1: full speed at once, a dead stop on release; 2D only)
 KF2_ANALOG_INVERTY=1 KF2_ANALOG_PROBE=1  # look-Y inversion, and the control-state report (in 3D, also the left stick's turn: wanted, driven, the ramp)
 KF2_TANK=1                               # 3D controls: the left stick walks and turns, L1/R1 strafe, the right stick is not read (0 forces 2D; unset, Gameplay ▸ Controls, PORT SETTINGS ▸ GAMEPLAY ▸ CONTROLS)
 KF2_RUMBLE=0 KF2_RUMBLE_HD=0             # no rumble as a bow is drawn and loosed; two motors on a Switch pad or a DualSense too (both on by default)
