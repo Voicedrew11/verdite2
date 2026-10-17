@@ -20,7 +20,7 @@ namespace Kf2;
 ///     KF2_ANALOG_CURVE/MOVECURVE=1.35/1.0       response curves
 ///     KF2_ANALOG_ACCEL=1 ACCELMAX=2.2 ACCELTIME=0.5   the look ramp
 ///     KF2_ANALOG_INSTANTSTOP=1                  camera stops on release
-///     KF2_ANALOG_EASE=0                         the right stick neither eases in nor out
+///     KF2_ANALOG_EASE=1                         the right stick eases in and out, as the D-pad (off by default)
 ///     KF2_ANALOG_INVERTY/INVERTTURN/INVERTSTRAFE/INVERTFWD=1
 ///     KF2_ANALOG_PROBE=1        the control-state report; see AnalogProbe
 ///
@@ -225,8 +225,9 @@ public static class Analog
     // capped at the D-pad's rate and L2/R2's, and a released stick stops dead, so
     // CameraInstantStop says nothing. The speed is the original's either way; only
     // the drag a held button has, four or five ticks in and out, is gone. 2D only:
-    // 3D's left-stick turn is the D-pad's, ease and all.
-    public static bool StickEase = true;
+    // 3D's left-stick turn is the D-pad's, ease and all. Off by default since 0.5.1:
+    // on a stick the ease read as the view lagging the thumb.
+    public static bool StickEase = false;
 
     // Which camera axes the sticks were driving last frame, so the release can be
     // handed back to the D-pad and L2/R2 after exactly one zeroing frame, and the
@@ -261,8 +262,9 @@ public static class Analog
     /// <summary>Raised whenever the shipped defaults change in a way a saved value
     /// should not survive. 2: the stick turns at the D-pad's rate, so look
     /// acceleration and the instant stop went off and sensitivities above 1.0 were
-    /// put back to 1.0, once.</summary>
-    const int DefaultsVersion = 2;
+    /// put back to 1.0, once. 3: the stick's ease went off by default, and a saved
+    /// "on" was turned off, once.</summary>
+    const int DefaultsVersion = 3;
     const string DefaultsKey = "kf2.analog.defaults";
 
     /// <summary>Keys a KF2_ANALOG* variable set, which the saved settings must
@@ -416,11 +418,12 @@ public static class Analog
         if (view.Has(StopKey) && view.GetBool(StopKey, false)) { view.SetBool(StopKey, false); reset++; }
         if (view.Has(TurnSensKey) && view.GetFloat(TurnSensKey, 1f) > 1f) { view.SetFloat(TurnSensKey, 1f); reset++; }
         if (view.Has(PitchSensKey) && view.GetFloat(PitchSensKey, 1f) > 1f) { view.SetFloat(PitchSensKey, 1f); reset++; }
+        if (view.Has(EaseKey) && view.GetBool(EaseKey, false)) { view.SetBool(EaseKey, false); reset++; }
         view.SetInt(DefaultsKey, DefaultsVersion);
         RecompOne.Runtime.Runtime.SaveView();
         if (reset > 0)
-            Console.WriteLine($"[KF2] analog: the stick now turns at the D-pad's rate; {reset} saved " +
-                              "setting(s) that turned it faster were reset (Input ▸ Gamepad to change them back)");
+            Console.WriteLine($"[KF2] analog: {reset} saved setting(s) were put back to the current " +
+                              "defaults (Input ▸ Gamepad to change them back)");
     }
 
     static void Attach()

@@ -140,12 +140,13 @@ mouse is not changed. **Not felt on a pad.**
 The ease is the original's, and it is also drag: a button cannot be half pressed,
 so four or five ticks in and out is how the game softens a d-pad, and on a stick it
 reads as the view lagging the thumb. *Stick eases in and out* (`StickEase`,
-`kf2.analog.ease`, `KF2_ANALOG_EASE=0`; Input ▸ Gamepad ▸ Fine tuning) turns it off:
-the stick's turn and look are what its position asks at once, through the same
-deadzone, curve and cap, and a released stick stops dead the tick after, as the
-instant stop does (whose checkbox is dimmed, having nothing to add). On is the
-default and is the mode above, unchanged. It is 2D's right stick only: 3D's
-left-stick turn is the D-pad's, and keeps its ease.
+`kf2.analog.ease`, `KF2_ANALOG_EASE`; Input ▸ Gamepad ▸ Fine tuning) is **off by
+default since 0.5.1**: the stick's turn and look are what its position asks at once,
+through the same deadzone, curve and cap, and a released stick stops dead the tick
+after, as the instant stop does (whose checkbox is dimmed, having nothing to add).
+On (`KF2_ANALOG_EASE=1`) is the mode above, unchanged. It is 2D's right stick only:
+3D's left-stick turn is the D-pad's, and keeps its ease. A config that saved it on
+before 0.5.1 is turned off once, by `Analog.MigrateDefaults` (`DefaultsVersion` 3).
 
 Measured the same way, with the ease off: full right turned 35 a tick from the first
 tick and 0 the tick after release; byte 200 held 13-14 a tick from the first; full
