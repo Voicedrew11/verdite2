@@ -2048,6 +2048,16 @@ Four files in the directory have no entry below:
   every 2 s from five seconds into the message; after, `wide 125, vram fallback 0`
   for the whole wait. The map item itself not reached by the shell; **not looked
   at.** **No recompile.**
+- `0111-headless-turbo.patch` — a run nobody watches. `Runtime.Headless` (the game
+  sets it; KF2 from `KF2_HEADLESS`) takes `HostWindow` down the path it already had
+  for a failed GL start: no window, no context, `_headless` set. `Audio` opens no
+  device. `ConfigManager.SaveView` returns before asking ImGui for its ini when
+  there is no context, which was a native fault (a settings migration saved the
+  view at boot). `FrameClock` drops its ceiling while `Interrupts.Turbo` is set, so
+  turbo is no longer held to the target rate by the present. `Gpu.NoRaster` skips
+  the software rasterizer's pixels and nothing before them; headless, that was half
+  a frame. Measured in KF2: about 650 frames a second for one run, 430-850 each
+  with six at once, against 250 rasterizing. **No recompile.**
 
 ## Package bumps
 
