@@ -75,6 +75,17 @@ KF2_WALLGUARD=0                        # the recompiled wall slide alone: standi
 KF2_CRASHDUMP=0                        # no game-state dump on an unhandled exception (it dumps by default)
 KF2_HANG=15                            # seconds without a frame before a hang report is written to crashes/; 0 turns the watchdog off (15 by default; "Crash reports carry the port's place" in docs/DEVELOPMENT.md)
 KF2_FAULT=hook                         # hook, crash or hang, optionally :seconds after the first area (20): makes that report on purpose, to test the paths; never for play; hook@<mod id> (hook@kf2.zbuffer) makes the hook that patch's, so it is turned off and its settings page greys (off by default)
+KF2_HEADLESS=1                         # no window, no GL context, no audio device (0111); the game, the C# patches and the software GPU all run; see "Fuzzing headless playthroughs" in docs/DEVELOPMENT.md
+KF2_HEADLESS_RASTER=1                  # headless, still rasterize in the software GPU (skipped by default: half a headless frame, and nobody sees it)
+KF2_TURBO=1                            # every frame a tick and nothing waits: the vblank wait forced, no floor, no ceiling, MenuPacing/LoadPacing/LoopPacing off; for KF2_FUZZ, never for play
+KF2_FUZZ=1234                          # play by itself from this seed (patches/Fuzz.cs): seeded pad policy, macros, invariants; KF2_AUTOSTART gets it into an area. scripts/fuzz.py runs many
+KF2_FUZZ_FRAMES=20000                  # frames of play before it exits 0 (20000)
+KF2_FUZZ_STOP=1                        # exit 3 at the first invariant violation instead of going on
+KF2_FUZZ_GODMODE=1                     # top HP up every frame, so a run explores instead of reloading
+KF2_FUZZ_MACROS=0                      # no warp, load or goto macros: pad input alone
+KF2_FUZZ_REPLAY=path                   # press a recording's buttons and run its macros on their frames instead of the policy (approximate)
+KF2_FUZZ_OUT=path                      # where the recording goes (fuzz-input.log in the working directory)
+KF2_FUZZ_STATUS=1000                   # frames between [KF2-FUZZ] status lines
 KF2_HITPROBE=1                         # census what the hit check saw; =2 every call
 KF2_DRAWCENSUS=1                       # which renderer routine drew how much of the frame; =2 names the models
 KF2_TEXPROBE=1                         # textured vs flat prims a second, and a per-page VRAM census, into texprobe.log

@@ -73,6 +73,9 @@ public static class AutoStart
     // One shot per GAME.EXE, reset when GAME.EXE (re)loads since that is a fresh
     // title.
     static bool _fired;
+
+    /// <summary>The slot (or the New Game) is loaded, for the boot since GAME.EXE last arrived.</summary>
+    public static bool Fired => _fired;
     static int _ticks;
 
     // The overlay up now, tracked for the input driver and the load gate.

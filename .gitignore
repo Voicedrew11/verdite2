@@ -61,3 +61,6 @@ scratch/
 # Release artefacts.
 dist/
 dump/
+
+# scripts/fuzz.py: one directory per run, and the report.
+/fuzz/

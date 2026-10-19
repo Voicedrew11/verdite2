@@ -183,6 +183,7 @@ Build it, run it, and measure what it did.
 - Diagnostics
 - The GL backend reported nothing
 - For a hang, take the managed stack of the live process
+- Fuzzing headless playthroughs
 - Compile a mod without launching the game
 - Getting pixels out without a screenshot
 - Profiling a frame

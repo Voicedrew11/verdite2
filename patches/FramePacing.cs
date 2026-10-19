@@ -797,6 +797,32 @@ public static class FramePacing
     /// vblank grid is not a thing the game was ever asked to do.</summary>
     static double ClampLogic(double hz) => Math.Clamp(hz, 5.0, 60.0);
 
+    /// <summary>
+    /// `KF2_TURBO=1`: every frame boundary is a tick and nothing waits -- not
+    /// <see cref="Floor"/>, not the vblank (the runtime's <c>Interrupts.Turbo</c>
+    /// forces it), not the present's ceiling. The world runs as fast as the host
+    /// can step it, for runs nobody watches (the fuzzer's). The stage gate's own
+    /// watchdog and the hang watchdog stay on the wall clock. See "Fuzzing
+    /// headless playthroughs" in docs/DEVELOPMENT.md.
+    /// </summary>
+    public static bool Turbo { get; private set; }
+
+    /// <summary>
+    /// Raised on the game thread at each frame boundary, after the tick decision.
+    /// <c>VSyncEvent</c> is not a frame: on the port's timeline it is the emulated
+    /// vblank, a wall-clock 60 Hz, which under <see cref="Turbo"/> is a small
+    /// fraction of the frames drawn. <see cref="Fuzz"/> steps on this.
+    /// </summary>
+    public static event Action? Boundary;
+
+    public static void ConfigureTurbo(string? on)
+    {
+        Turbo = on?.Trim().ToLowerInvariant() is "1" or "on" or "true" or "yes";
+        if (!Turbo) return;
+        RecompOne.Runtime.Interrupts.Turbo = true;
+        Console.WriteLine("[KF2] pacing: turbo -- a tick every frame, nothing waits");
+    }
+
     /// <summary>Rates below this are the game's own slow bands and are allowed;
     /// above it is a host frame rate. The ceiling is arbitrary and only exists so
     /// that a typed-in number cannot ask for a zero-length frame.</summary>
@@ -1094,6 +1120,7 @@ public static class FramePacing
 
         AdvanceLogicClock(now);
         if (_tickThisFrame) _windowTicks++;
+        Boundary?.Invoke();
 
         // How long this frame is allowed to be is no longer the render rate alone:
         // a frame the main loop did not produce belongs to a loop of the game's own
@@ -1133,6 +1160,14 @@ public static class FramePacing
         }
 
         if (!Gating)
+        {
+            _logicCredit = 0.0;
+            _logicClockMs = nowMs;
+            _tickThisFrame = true;
+            return;
+        }
+
+        if (Turbo)
         {
             _logicCredit = 0.0;
             _logicClockMs = nowMs;
@@ -1312,6 +1347,8 @@ public static class FramePacing
     /// </summary>
     static void Sentinel()
     {
+        // Turbo's presents are uncapped on purpose.
+        if (Turbo) return;
         double now = _clock.Elapsed.TotalMilliseconds;
         if (_sentinelStartMs < 0.0) { ResetSentinel(now); return; }
 
@@ -1411,6 +1448,7 @@ public static class FramePacing
     /// </summary>
     static void Floor(double min)
     {
+        if (Turbo) return;
         double now = _clock.Elapsed.TotalMilliseconds;
 
         // More than a frame of debt means the game stopped drawing rather than ran
