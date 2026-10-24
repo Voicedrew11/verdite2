@@ -335,7 +335,12 @@ for long enough to find the process.
   port's (`AreaWarp`) and lands a level 6 save in an area it would reach much
   later, so whether a player can reach the same state is open; the crash itself
   is in the port's code, not the game's. It has a row in the open questions of
-  [TODO.md](TODO.md).
+  [TODO.md](TODO.md). **Diagnosed 2026-10-24** (issue #79, the same fault in the
+  boss gauntlet): the game's model heap overran its end once it was packed with
+  nothing evictable, and the walk had pinned models only the mirror sees. The
+  "crash in the port's code" was the game's own data, overwritten. See "The model
+  heap overran its end" in [GAME_INTERNALS.md](GAME_INTERNALS.md). The fuzzer now
+  reports `heap-full` when `HeapGuard` has to fence it.
 - **Seed 1024 crashed in the game's own code** (`func_80017764` under
   `func_80032CD8`, reading `0x3B2E13F4`) about 25 frames after a random `goto`
   put the player at an area exit and `fdat08` loaded; it crashes the same with

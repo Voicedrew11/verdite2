@@ -63,6 +63,8 @@ public static class Fuzz
     const long PadStall = 20000;
     static long _padReads;
 
+    static long _heapOverruns;
+
     /// <summary>Emulated vblanks (a wall-clock 60 Hz) with no frame before the same.</summary>
     const long VbStall = 15;
     static long _vblanks;
@@ -421,6 +423,14 @@ public static class Fuzz
     {
         ushort maxHp = m.ReadU16(MaxHp);
         if (maxHp == 0) return;   // between areas, or reloading
+
+        // The model heap's invariant (HeapGuard): no compaction has had to keep its
+        // end, which is the game asking for more models than the heap holds.
+        if (HeapGuard.Overruns != _heapOverruns)
+        {
+            _heapOverruns = HeapGuard.Overruns;
+            Violation("heap-full", $"area={m.ReadU8(Area)}");
+        }
 
         bool dead = m.ReadU8(State) == StateDead;
         if (dead && !_wasDead) { _deaths++; Say($"death frame={_frame} area={m.ReadU8(Area)}"); }

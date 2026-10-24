@@ -232,6 +232,7 @@ what it is) live there, not here.
 | `EndingHold`, `BootExe` | hold "The End", any button returns to the title | on | RUNTIME, "The ending screen" |
 | `HitGuard` | fences the final-boss hit-path fault | on | TODO, "The crash on the final boss's last hit" |
 | `WallGuard` | replaces the wall slide `func_80028080`: if the player already stands in map collision (bit `0x2`) its retries end in a loop with no call that never exits, and stage 3 calls it every tick, so the game froze; the guard tests the spot first and nudges the player to the nearest free one | on | GAME_INTERNALS, "The wall slide never leaves a wall it starts in" |
+| `HeapGuard` | replaces the model heap's compaction `func_80017580`: with nothing evictable it wrote a free header over the heap's `0xFF` end, and the next model was loaded past it, over the HUD's static models (a crash in the HUD builder) or into a block that walks onto itself (a hang); the guard puts the end back and the allocation is refused; the fuzzer's `heap-full` | on | GAME_INTERNALS, "The model heap overran its end" |
 | `AudioQuality`, `AudioProbe` | voice interpolation and reverb (`0043`); probe and WAV dump | sinc, enhanced reverb | AUDIO, "Voice interpolation", "An enhanced reverb sized from the game's registers" |
 | `PositionalAudio` | 3D sound effects re-aimed every frame, for speakers or headphones (`0044`) | headphones | AUDIO, "Positional audio" |
 

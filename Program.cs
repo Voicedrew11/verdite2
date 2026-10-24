@@ -612,6 +612,16 @@ Kf2.HitGuard.Install();
 Kf2.WallGuard.Configure(Environment.GetEnvironmentVariable("KF2_WALLGUARD"));
 Kf2.WallGuard.Install();
 
+// The model heap's compaction, func_80017580, writes a free header over the
+// heap's 0xFF end when nothing in it can be evicted, and the next model is then
+// loaded past the end: over the HUD's models (a crash in the HUD builder) or into
+// a block that walks onto itself (a hang). The guard puts the end back. See "The
+// model heap overran its end" in docs/GAME_INTERNALS.md.
+//
+//     KF2_HEAPGUARD=0     the recompiled routine alone: the overrun back -- comparison only
+Kf2.HeapGuard.Configure(Environment.GetEnvironmentVariable("KF2_HEAPGUARD"));
+Kf2.HeapGuard.Install();
+
 // Dithering. Clearing the GPU's dither bit is one pre/post hook pair on each of
 // PutDrawEnv and DrawOTag, and it is a patch rather than a mod because it is a
 // picture the port should be able to offer without a package having to load: the
